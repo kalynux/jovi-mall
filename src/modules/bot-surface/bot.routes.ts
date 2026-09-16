@@ -15,7 +15,7 @@ import { BotTicketController } from './controllers/bot-ticket.controller';
 import { BotFileController } from './controllers/bot-file.controller';
 import { BotCatalogController } from './controllers/bot-catalog.controller';
 import { BotProductDisplayController } from './controllers/bot-product-display.controller';
-import { BotPurchaseController } from './controllers/bot-purchase.controller';
+import { BotActionController } from './controllers/bot-action.controller';
 import { BotCheckoutController } from './controllers/bot-checkout.controller';
 import { BotBookingController } from './controllers/bot-booking.controller';
 import { BotPaymentMethodController } from './controllers/bot-payment-method.controller';
@@ -160,24 +160,24 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
     // ── Product cards ────────────────────────────────────────────────────────
     catalog_show_products: BotProductDisplayController.show,
     /**
-     * ⚠ **The tap-code door, re-pointed from `BotProductDisplayController` on 2026-09-16.**
+     * ⚠ **The tap-code door — now a DISPATCHER, not any stream's controller** (2026-09-16).
      *
-     * Every button this surface draws posts its token here, and the token vocabulary grew from
-     * four verbs to twenty across several workstreams. One controller answering all of them had
-     * to be either the product-display controller — which would couple it to orders, checkout
-     * and the basket — or the one that owns the purchase ladder, which is where most of the
-     * verbs already live.
+     * History, because the route has moved twice in a day: it began as
+     * `BotProductDisplayController.action`, was re-pointed at the purchase stream's controller
+     * when the vocabulary grew from four verbs to twenty, and is now `BotActionController`.
      *
-     * The deciding property is the STALE TOKEN. An unmapped or lapsed tap must be answered in
-     * exactly ONE place, because Telegram reports nothing for a callback nobody handles: the
-     * customer taps and the world is silent. Two doors would be two answers to that, and one of
-     * them would eventually be "nothing".
+     * The second move is the one worth understanding. A single `switch` inside ONE stream's
+     * controller meant an order button, a payment-result button and a support button all had to
+     * be added by editing the purchase stream's file — and in one working tree with no branching,
+     * two sessions editing one file is a lost write, not a merge conflict. So the door now does
+     * only the two jobs that must happen exactly once — **parse the token, and refuse an unknown
+     * verb** — and routes every verb to a handler its owning stream exports.
      *
-     * ⚠ `more:` still pages the product display — this controller calls
-     * `productDisplayService`, it does not reimplement it. Reading another stream's service is
-     * expected; editing it is not.
+     * The deciding property is unchanged: an unmapped or lapsed tap is answered in ONE place,
+     * because Telegram reports nothing for a callback nobody handles and the customer's tap would
+     * otherwise be met with silence.
      */
-    catalog_display_action: BotPurchaseController.action,
+    catalog_display_action: BotActionController.dispatch,
 
     // ── The in-app screens ───────────────────────────────────────────────────
     inapp_open_listing: BotInAppController.listing,

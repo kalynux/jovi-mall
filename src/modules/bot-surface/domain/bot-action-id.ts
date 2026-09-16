@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { BotOnboardingStep } from './bot-onboarding';
 
 /**
@@ -97,6 +98,21 @@ export const BOT_ACTION_VERBS = Object.freeze([
      * disagreeing with the model's version on the day one of them changes.
      */
     'cart',
+    // ── Payment results ──────────────────────────────────────────────────────
+    /**
+     * `pay:st:<transactionId>` — Check status · `pay:rt:<transactionId>` — Try again.
+     *
+     * ⚠ **The TOKEN carries a transaction id; the matching ROUTES do not.** A route's caller is a
+     * model, which invents ids it has never seen. A token's id is minted by this service into a
+     * button and returns byte-identical. And a token MUST carry one, because a button outlives the
+     * payment it was drawn for: "Try again" under last week's failure, tapped after two newer
+     * checkouts, must not re-charge whichever basket is newest.
+     *
+     * ⚠ **`pay:rt` re-opens a CHARGE for orders that already exist; it never re-places an order.**
+     * Creating orders clears the basket, so by the time a payment fails there is no basket left to
+     * check out.
+     */
+    'pay',
     // ── Support, reviews, preferences ────────────────────────────────────────
     'tkt',
     'rate',
@@ -282,25 +298,82 @@ export function nextPageActionId(setId: string): string {
  *
  * ⚠ **The context is REQUIRED and that is the whole design.** A bare `yes` is a tap with no
  * memory of what it agreed to, arriving at a stateless layer — precisely what this file's
- * header says a token must never be. `yes:close-account` says what was agreed; `yes` says a
- * customer pressed something, once, about something.
+ * header says a token must never be. `yes:close` says what was agreed; `yes` says a customer
+ * pressed something, once, about something.
+ *
+ * ⚠ **The context is also the ROUTING KEY.** `yes` and `no` are shared by several streams, so the
+ * dispatcher routes them by the pair `yes:<context>` (`domain/bot-action-dispatch.ts`), and each
+ * context has exactly one owning stream — two claiming one stops the process at boot. So a
+ * context is a name in a namespace every stream shares, not a private label: pick one that says
+ * what is being confirmed, and ask the registry's owner before using it.
+ *
+ * `ref` is what the confirmation is ABOUT — an order id, or `<orderId>:<shipmentId>`. Passed
+ * separately rather than concatenated by the caller, so a context can never be malformed into
+ * swallowing part of its reference. ⚠ Byte budget: with a two-id ref the context gets 10
+ * characters before the token passes Telegram's 64.
  */
-export function confirmActionId(context: string): string {
-    return token('yes', context);
+export function confirmActionId(context: string, ref?: string): string {
+    return token('yes', ref ? `${context}:${ref}` : context);
 }
 
-export function declineActionId(context: string): string {
-    return token('no', context);
+export function declineActionId(context: string, ref?: string): string {
+    return token('no', ref ? `${context}:${ref}` : context);
 }
 
-/** `cat:<categoryId>` — a category pick, which then opens the in-app listing. */
-export function categoryActionId(categoryId: string): string {
-    return token('cat', categoryId);
+/**
+ * A short, fixed-length stand-in for a category NAME: the first 16 hex characters of its SHA-256.
+ *
+ * ── ⚠ WHY A CATEGORY IS NAMED BY A DIGEST, NOT BY AN ID ─────────────────────
+ * **This platform has no category ids.** `Product.category` is a plain indexed string — there is no
+ * Category collection, model or taxonomy — and `listCategories()` answers only a name and a count.
+ * So the only thing a caller could put in a token is the name, and a name is free text up to 200
+ * characters, where every accented letter is two bytes. `cat:` plus
+ * « Électroménager, électronique et équipements de la maison » is EXACTLY 64 bytes; one more
+ * character and `token()` throws — while BUILDING the reply, so the whole turn fails rather than
+ * one button. The first person to add a long French or Arabic category would have broken category
+ * browsing for everyone who saw that list.
+ *
+ * A digest fits for any name, any length, any script (`cat:` + 16 = 20 bytes), and survives the
+ * category list re-ordering — it is sorted by product count, so a position would not.
+ *
+ * ⚠ **Resolving one means RECOMPUTING this over the current category list** and matching. A
+ * category that has since disappeared resolves to nothing, which the handler must answer as
+ * "gone", never as an error. Hashed exactly as stored — no trimming, no case-folding — because the
+ * match is against the same string `listCategories()` returns. 64 bits across one catalogue's
+ * categories makes a collision not a practical concern, and one would open a real category rather
+ * than fail.
+ */
+export function categoryDigest(categoryName: string): string {
+    return createHash('sha256').update(categoryName, 'utf8').digest('hex').slice(0, 16);
+}
+
+/**
+ * `cat:<digest>` — a category pick, which then opens the in-app listing.
+ *
+ * ⚠ **Takes the category NAME and digests it here**, so no caller can pass the wrong thing: not a
+ * raw name (which would throw past 64 bytes on a long one), and not a hand-made digest that could
+ * drift from `categoryDigest`. The builder and the digest live in one file so the two ends of the
+ * token cannot disagree.
+ */
+export function categoryActionId(categoryName: string): string {
+    return token('cat', categoryDigest(categoryName));
 }
 
 /** `ord:<orderId>` — pick one order out of the five the chat listed. */
 export function orderActionId(orderId: string): string {
     return token('ord', orderId);
+}
+
+/**
+ * `ord:<orderId>:cancel` — the Cancel button on an order card, which puts up the are-you-sure.
+ *
+ * ⚠ **A literal suffix on `ord`, deliberately NOT `no:ord:<id>`.** That shape was considered and
+ * withdrawn: a `no:` meaning "yes, I want to cancel" is a trap for the next reader, and it needed
+ * a paragraph to defend. The are-you-sure that follows answers with `yes:cnc` / `no:cnc`, where
+ * the context really does name what is being agreed to. 35 bytes.
+ */
+export function orderCancelActionId(orderId: string): string {
+    return token('ord', `${orderId}:cancel`);
 }
 
 /**
@@ -319,13 +392,49 @@ export function shipmentActionId(orderId: string, shipmentId: string): string {
     return token('shp', `${orderId}:${shipmentId}`);
 }
 
+/**
+ * `shp:<orderId>` — every parcel on one order. The two-id form above is ONE parcel.
+ *
+ * ⚠ **Arity is what tells the two apart, inside the owning handler — not a sub-key.** `shp` has one
+ * owner, so the dispatcher routes it by the verb alone; only verbs several streams share get a
+ * sub-key. This is the order card's "Shipments" button, which used to emit `track:<orderId>` —
+ * and `track` now means the tracking LINK, so an old card tapped today reaches a different answer.
+ * 28 bytes.
+ */
+export function orderShipmentsActionId(orderId: string): string {
+    return token('shp', orderId);
+}
+
 export function codCodeActionId(orderId: string, shipmentId: string): string {
     return token('code', `${orderId}:${shipmentId}`);
 }
 
-/** `track:<orderId>` — the live tracking status. */
+/**
+ * `track:<orderId>` — the order's parcel status in one line, plus a Track LINK to the storefront's
+ * tracking page.
+ *
+ * ⚠ **Changed meaning (2026-09-16): this used to open the parcel LIST**, which is now
+ * `shp:<orderId>`. It points at the same tracking page the "order shipped" notification already
+ * sends customers to, so one tracking view serves every door. And it is a tap that REPLIES with a
+ * link rather than being a link itself, which is what lets a cash-on-delivery parcel card carry
+ * both Get code and Track: WhatsApp cannot put a reply button and a URL button in one message.
+ */
 export function trackActionId(orderId: string): string {
     return token('track', orderId);
+}
+
+/**
+ * `pay:st:<transactionId>` — Check status, and `pay:rt:<transactionId>` — Try again.
+ *
+ * `pay` has one owner, so `st` and `rt` are told apart inside its handler rather than by a
+ * dispatcher sub-key. Worst case `pay:rt:` + a 24-hex id is 31 bytes.
+ */
+export function paymentStatusActionId(transactionId: string): string {
+    return token('pay', `st:${transactionId}`);
+}
+
+export function paymentRetryActionId(transactionId: string): string {
+    return token('pay', `rt:${transactionId}`);
 }
 
 /** `tkt:<ticketId>` — pick a support ticket to reply to, attach to, or close. */

@@ -92,6 +92,10 @@ const UNMUTABLE: CustomerNotificationType[] = [
     // about "order progress" silencing it would leave somebody who just tried to pay
     // believing the payment worked — the precise silence this situation was added to end.
     'order.payment_failed',
+    // The same silence one product type over, and unmutable for the same two reasons: it is
+    // money, and it answers something the customer did minutes ago. An online booking payment
+    // was never announced in either direction until 2026-09-16.
+    'booking.payment_failed',
     // The three GAP-012 support situations, and NOT on the counterparty argument the rest
     // of this list rests on — a support request is the customer's own. Narrower: all three
     // are the ANSWER to a question they asked, and `awaiting_customer` is the platform
@@ -111,6 +115,9 @@ const EXPECTED_WA_PARAMS: Record<CustomerNotificationType, number> = {
     'booking.completed': 4,
     'booking.reminder': 4,
     'booking.payment.received': 4,
+    // currency + amount + serviceName, and deliberately NO startAt: the same sentence must be true
+    // for a balance paid after the appointment, where a time reads as a future visit.
+    'booking.payment_failed': 3,
     'booking.balance.due': 5,
     'booking.refunded': 3,
     'booking.refund.pending': 3,
@@ -181,15 +188,16 @@ function main(): void {
 
     console.log('\n── Catalog ↔ model enum (the drift that bit the agent stack) ──');
 
-    // 23 = the 18 this stack shipped with, plus GAP-012's three `ticket.*`, the card
-    // payment page, and `order.payment_failed` — the silence that used to follow a declined
-    // charge. The literal is kept rather than derived: this assertion's whole job is
-    // to notice a situation appearing on one side and not the other, and `catalog.length
-    // === model.length` would pass happily while both drifted away from what anybody meant.
-    assert('catalog and model enum list the same 23 situations', () => {
+    // 24 = the 18 this stack shipped with, plus GAP-012's three `ticket.*`, the card
+    // payment page, `order.payment_failed` — the silence that used to follow a declined
+    // charge — and `booking.payment_failed`, the same silence for an appointment. The literal
+    // is kept rather than derived: this assertion's whole job is to notice a situation appearing
+    // on one side and not the other, and `catalog.length === model.length` would pass happily
+    // while both drifted away from what anybody meant.
+    assert('catalog and model enum list the same 24 situations', () => {
         const catalog = Object.keys(CUSTOMER_NOTIFICATION_CATALOG).sort();
         const model = [...CUSTOMER_NOTIFICATION_TYPES].sort();
-        return catalog.length === 23 && JSON.stringify(catalog) === JSON.stringify(model);
+        return catalog.length === 24 && JSON.stringify(catalog) === JSON.stringify(model);
     });
 
     // The aggregate enum is spread from CUSTOMER_AGGREGATE_TYPES rather than hand-kept —

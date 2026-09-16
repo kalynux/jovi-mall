@@ -1,15 +1,30 @@
 /**
- * Publish the WhatsApp Flows — the step that is gated on a working number.
+ * Publish the WhatsApp Flows — an owner decision, taken at the end of the plan.
+ *
+ * ── THE NUMBER IS NOT THE BLOCKER ANY MORE ──────────────────────────────────
+ * ⚠ **This header used to say the sending number's display name "has never been approved",
+ * which stopped being true on 2026-09-16.** The platform moved to +237 652 705 926, and a
+ * read-only Graph lookup that day returned `name_status: APPROVED`, `status: CONNECTED`,
+ * `code_verification_status: VERIFIED`, quality `GREEN`. Anyone reading the old sentence would
+ * have taken a solved problem for the blocker. Check it yourself with
+ * `GET /{phone_number_id}?fields=verified_name,name_status,status` before trusting this one
+ * either.
+ *
+ * What actually stands between this script and a live Flow:
+ *   1. **The owner's go-ahead.** The plan is finished locally first, and publishing is theirs.
+ *   2. **`WHATSAPP_FLOW_PRIVATE_KEY` and `WHATSAPP_APP_SECRET`**, set together (see
+ *      `.env.example`: the key without the secret leaves an unrate-limited CPU cost open).
+ *   3. **The endpoint reachable from the internet**, because publishing runs Meta's health
+ *      check against it.
+ *   4. **The automation layer routing `interactive.nfm_reply`**, or a finished form reports
+ *      into silence.
  *
  * ── WHY THIS IS A SCRIPT AND EXISTS BEFORE IT CAN BE RUN ────────────────────
- * Publishing a Flow is a sequence of four Graph calls that must happen in order, and it
- * cannot be rehearsed on this platform today: the sending number's display name has never
- * been approved, so nothing about the WhatsApp account is usable yet. The temptation is to
- * leave publishing as "a thing somebody does in the Flow Builder when the number clears" —
- * and that is how a gated final step becomes an afternoon of discovering that the public key
- * upload is a *separate* call from the Flow creation, that a Flow cannot be published until
- * its endpoint answers a health check, and that the endpoint cannot answer one until the key
- * is uploaded.
+ * Publishing a Flow is a sequence of Graph calls that must happen in order. Left as "a thing
+ * somebody does in the Flow Builder", it becomes an afternoon of discovering that the public key
+ * upload is a *separate* call from the Flow creation, that a Flow can't be published until its
+ * endpoint answers a health check, and that the endpoint can't answer one until the key is
+ * uploaded.
  *
  * So the order is written down here, executable, with a dry run that proves everything it can
  * prove offline.
@@ -86,20 +101,26 @@ function reportReadiness(): boolean {
 /**
  * Validate every definition offline.
  *
- * ⚠ **The same rules `test:whatsapp-flows` § 8 asserts**, repeated here on purpose rather
- * than imported: this script is what somebody runs at the moment of publishing, possibly
- * months later and under pressure, and it should refuse a broken definition itself rather
- * than assume a suite was run. Both catch an unrouted screen, which Meta accepts and then
- * renders as nothing.
+ * ⚠ **The structural rules `test:whatsapp-flows` § 8 asserts**, repeated here on purpose
+ * rather than imported: this script is what somebody runs at the moment of publishing, possibly
+ * months later and under pressure, and it should refuse a broken definition itself rather than
+ * assume a suite was run.
+ *
+ * ⚠ **It used to demand exactly one terminal screen, and Meta has no such rule.** Meta's Flow
+ * JSON reference: "Multiple screens can be marked as terminal". Every form here now has at least
+ * two, so the old check would have refused all three.
  */
 function validate(): boolean {
     console.log('\n▶ Definitions');
     let ok = true;
 
     for (const [kind, name, definition] of FLOWS) {
+        const ids = new Set(definition.screens.map((s) => s.id));
         const unrouted = definition.screens
             .filter((s) => !Object.prototype.hasOwnProperty.call(definition.routing_model, s.id))
             .map((s) => s.id);
+        const badRoutes = Object.entries(definition.routing_model).flatMap(([from, tos]) =>
+            tos.filter((to) => !ids.has(to) || to === from).map((to) => `${from}→${to}`));
         const terminals = definition.screens.filter((s) => s.terminal).length;
         const missingExample = definition.screens.flatMap((s) =>
             Object.entries(s.data ?? {})
@@ -107,8 +128,9 @@ function validate(): boolean {
                 .map(([field]) => `${s.id}.${field}`));
 
         const faults = [
-            ...unrouted.map((s) => `screen '${s}' is not in the routing model (it would render as nothing)`),
-            ...(terminals === 1 ? [] : [`${terminals} terminal screens, expected exactly 1`]),
+            ...unrouted.map((s) => `screen '${s}' is not declared in the routing model`),
+            ...badRoutes.map((r) => `route ${r} targets a missing screen or itself`),
+            ...(terminals >= 1 ? [] : ['no terminal screen: at least one is required']),
             ...missingExample.map((f) => `${f} has no __example__`),
         ];
 
@@ -191,7 +213,8 @@ async function main(): Promise<void> {
     if (!has('--publish')) {
         console.log('\n▶ Next');
         console.log('  This was a rehearsal. Nothing was published.');
-        console.log('  When the number is working:');
+        console.log('  When the owner approves publishing, with the key, app secret and a');
+        console.log('  public endpoint in place:');
         console.log('    1. npm run flows:publish -- --upload-key');
         console.log('    2. npm run flows:publish -- --publish pl');
         console.log('    3. put the returned id in WHATSAPP_FLOW_ID_PRODUCT_LISTING and redeploy');

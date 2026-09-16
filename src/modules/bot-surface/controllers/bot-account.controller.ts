@@ -9,9 +9,15 @@ import { connectionService, ConnectionMapper } from '../../channel-connections';
 import { AccountClosureService } from '../../users/account-closure.service';
 import { AccountClosureRepository } from '../../users/account-closure.repository';
 import { UserRepository } from '../../users/user.repository';
+import { ERROR_CATEGORIES } from '../../../core/error-category';
 import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
 import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { botChrome } from '../domain/bot-chrome-copy';
+import { customerMessageFor } from '../domain/bot-error-copy';
+import { confirmActionId, declineActionId } from '../domain/bot-action-id';
+import { unknownBotAction, type BotActionHandlers, type ParsedBotAction } from '../domain/bot-action-dispatch';
+import { mintConfirmationRef, verifyConfirmationRef } from '../domain/bot-confirmation-ref';
+import type { ResolvedBotCaller } from '../services/bot-identity.service';
 import { toBotConnectionDto } from '../dto/bot-projections';
 import { BotAccountCloseSchema, BotConnectionParamSchema, BotNoArgsSchema } from '../validators/bot.validators';
 import { ACCOUNT_CLOSURE_CONFIRMATION } from '../../users/user.validator';
@@ -144,35 +150,11 @@ export class BotAccountController {
     static closePreview = asyncHandler(async (req: Request, res: Response) => {
         BotNoArgsSchema.parse(req.body ?? {});
         const caller = botCallerOf(req);
+        const language = botResponseLanguageOf(req);
 
-        const user = await userRepo.findById(caller.userId);
-        if (!user) throw createAppError(ERROR_CODES.USER_NOT_FOUND, 404);
-
-        const blockingRoles = (user.roles ?? []).filter((role) => role !== 'customer');
-        const activeOrderCount = await closureRepo.countActiveOrders(caller.customerId);
-
-        sendSuccess(res, {
-            canClose: blockingRoles.length === 0 && activeOrderCount === 0,
-            /** Roles beyond `customer`. Non-empty means closure is refused outright. */
-            blockingRoles,
-            /** Orders still moving. Closure waits until this is zero. */
-            activeOrderCount,
-            /**
-             * ⚠ **The sentence the customer must read before confirming**, localised. It is
-             * `data`, not `reply`: a preview is not itself a turn the platform is entitled to
-             * speak — the flow decides when to show it, beside its own confirm button.
-             */
-            consequence: botChrome('accountClosurePrompt', botResponseLanguageOf(req)),
-            /**
-             * The token the flow sends back on `account_close`. Named rather than documented
-             * only in the catalogue, so a flow reading this response has the exact string.
-             *
-             * ⚠ **Untranslated on purpose** — it is an id, not a sentence, exactly as
-             * `bot-action-id.ts` argues a determined answer must be. What the customer reads
-             * is `consequence` above; what they tap sends this.
-             */
-            confirmWith: ACCOUNT_CLOSURE_CONFIRMATION,
-        });
+        const preview = await readClosurePreview(caller, language);
+        setClosureReply(req, caller, preview, language);
+        sendSuccess(res, preview);
     });
 
     /**
@@ -201,19 +183,160 @@ export class BotAccountController {
      */
     static close = asyncHandler(async (req: Request, res: Response) => {
         BotAccountCloseSchema.parse(req.body ?? {});
-        const caller = botCallerOf(req);
-
-        /**
-         * Read the language BEFORE the closure. `botResponseLanguageOf` reads what the
-         * identity middleware stamped, so it survives — but the profile it was read from is
-         * about to be anonymised, and depending on a value that is being deleted in the same
-         * request is a dependency worth not having.
-         */
-        const language = botResponseLanguageOf(req);
-
-        const { closedAt } = await accountClosureService.close(caller.userId, caller.customerId);
-
-        setBotReply(req, { kind: 'text', text: botChrome('accountClosed', language) });
-        sendSuccess(res, { closed: true, closedAt });
+        await closeAndReply(req, res, botCallerOf(req));
     });
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Closure — the preview, the two buttons, and the tap that acts on them
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface ClosurePreview {
+    canClose: boolean;
+    /** Roles beyond `customer`. Non-empty means closure is refused outright. */
+    blockingRoles: string[];
+    /** Orders still moving. Closure waits until this is zero. */
+    activeOrderCount: number;
+    /** The sentence the customer must read before confirming, localised. */
+    consequence: string;
+    /**
+     * The token a flow sends back on `account_close`. Untranslated on purpose — it is an id,
+     * not a sentence. Kept for callers already using the literal path; the buttons below do
+     * not use it.
+     */
+    confirmWith: string;
+}
+
+/**
+ * ⚠ **The blockers are computed by the same repository calls `close` uses**, not by a second
+ * reading of the rule. A preview that disagreed with the verb would be worse than no preview:
+ * it would promise a closure that then refuses, or refuse one that would have worked.
+ */
+async function readClosurePreview(caller: ResolvedBotCaller, language: string | null): Promise<ClosurePreview> {
+    const user = await userRepo.findById(caller.userId);
+    if (!user) throw createAppError(ERROR_CODES.USER_NOT_FOUND, 404);
+
+    const blockingRoles = (user.roles ?? []).filter((role) => role !== 'customer');
+    const activeOrderCount = await closureRepo.countActiveOrders(caller.customerId);
+
+    return {
+        canClose: blockingRoles.length === 0 && activeOrderCount === 0,
+        blockingRoles,
+        activeOrderCount,
+        consequence: botChrome('accountClosurePrompt', language),
+        confirmWith: ACCOUNT_CLOSURE_CONFIRMATION,
+    };
+}
+
+/**
+ * ⭐ **The preview SPEAKS now, and carries the two buttons** — which reverses this route's
+ * original "data, not reply" rule, for the reason the atlas gave: the most consequential action
+ * on the surface had no Confirm button, so whatever sat in front of it had to improvise one out
+ * of what the customer typed.
+ *
+ * ⚠ **"Keep my account" comes FIRST, and carries no reference.** It is the answer that costs
+ * nothing, so it is the one nearest the thumb; declining needs no protection, and refusing a
+ * stale decline would refuse the one answer that is always safe.
+ *
+ * ⚠ **The confirm carries a reference** (`bot-confirmation-ref.ts`) bound to this account, this
+ * conversation's channel and ten minutes. A button scrolled past three weeks ago cannot close
+ * anything.
+ *
+ * ⚠ **When closure is not possible there are NO buttons** — the sentence says why, using the
+ * very refusal copy `close` would raise, so the preview and the verb cannot tell a customer two
+ * different things.
+ *
+ * ⚠ Reaches the customer on the FLOW paths only (a tap, a command). When the model calls
+ * `account_close_preview` over MCP the reply lands in its context and is not sent — the n8n gap
+ * recorded as A5. Setting it here anyway means that path lights up with no second change.
+ */
+function setClosureReply(
+    req: Request,
+    caller: ResolvedBotCaller,
+    preview: ClosurePreview,
+    language: string | null,
+): void {
+    if (!preview.canClose) {
+        const code = preview.blockingRoles.length > 0
+            ? ERROR_CODES.ACCOUNT_CLOSURE_ROLE_NOT_ELIGIBLE
+            : ERROR_CODES.ACCOUNT_CLOSURE_ORDERS_IN_FLIGHT;
+        setBotReply(req, {
+            kind: 'text',
+            text: customerMessageFor(code, ERROR_CATEGORIES.BUSINESS_RULE, language),
+        });
+        return;
+    }
+
+    const ref = mintConfirmationRef('close', { userId: caller.userId, channel: caller.channel });
+    setBotReply(req, {
+        kind: 'text',
+        text: preview.consequence,
+        actions: [
+            { id: declineActionId('close'), label: botChrome('declineButton', language) },
+            { id: confirmActionId(`close:${ref}`), label: botChrome('confirmButton', language) },
+        ],
+    });
+}
+
+/**
+ * The irreversible part, shared by the literal-confirm route and the button.
+ *
+ * `AccountClosureService.close` re-checks both blockers inside its own transaction, so a tap
+ * that arrives after an order was placed is refused there, with its own customer sentence.
+ */
+async function closeAndReply(req: Request, res: Response, caller: ResolvedBotCaller): Promise<void> {
+    /**
+     * Read the language BEFORE the closure. `botResponseLanguageOf` reads what the identity
+     * middleware stamped, so it survives — but the profile it was read from is about to be
+     * anonymised, and depending on a value that is being deleted in the same request is a
+     * dependency worth not having.
+     */
+    const language = botResponseLanguageOf(req);
+
+    const { closedAt } = await accountClosureService.close(caller.userId, caller.customerId);
+
+    setBotReply(req, { kind: 'text', text: botChrome('accountClosed', language) });
+    sendSuccess(res, { closed: true, closedAt });
+}
+
+/**
+ * `yes:close:<ref>` — the Confirm button.
+ *
+ * ⚠ **A stale or unverifiable reference ASKS AGAIN rather than refusing.** The customer who
+ * tapped is the account's own conversation (the dispatcher resolved them), and they could get
+ * a fresh confirm by asking; answering with the consequence and new buttons is that, one step
+ * shorter, and it re-states what the tap would do before anything happens.
+ */
+async function confirmCloseTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    const caller = botCallerOf(req);
+    const verdict = verifyConfirmationRef(action.argument, 'close', {
+        userId: caller.userId,
+        channel: caller.channel,
+    });
+
+    if (verdict !== 'valid') {
+        const language = botResponseLanguageOf(req);
+        const preview = await readClosurePreview(caller, language);
+        setClosureReply(req, caller, preview, language);
+        sendSuccess(res, { closed: false, confirmation: verdict, ...preview });
+        return;
+    }
+
+    await closeAndReply(req, res, caller);
+}
+
+/** `no:close` — Keep my account. Changes nothing, whenever it is tapped. */
+async function keepAccountTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    botCallerOf(req);
+    if (action.argument !== '') throw unknownBotAction();
+    sendSuccess(res, { closed: false, kept: true });
+}
+
+/**
+ * The keys this stream answers, for the dispatcher's registry. Exported as a map, never
+ * registered from here — see `bot-action.controller.ts`.
+ */
+export const ACCOUNT_ACTION_HANDLERS: BotActionHandlers = Object.freeze({
+    'yes:close': confirmCloseTap,
+    'no:close': keepAccountTap,
+});

@@ -611,6 +611,61 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
         button: BOOKING_BUTTON
     },
 
+    /**
+     * ⚠ **The silence `order.payment_failed` closed, one product type over.** An online booking
+     * payment was never announced either way: success published an event only the vendor heard,
+     * and a failure published nothing. The customer turned up for an appointment the vendor saw as
+     * unpaid, having been told nothing at all.
+     *
+     * ⚠ **ONE sentence, true for the original price AND for a balance paid later** — which is why
+     * it carries no `{{startAt}}` and no "see you then". A balance is paid after the appointment
+     * has happened, and a line about the future would be false for exactly the payment that most
+     * needs to be clear. (`booking.payment.received` has that problem, which is why balances do
+     * not reuse it — see the handler.)
+     *
+     * The same three rules as the order entry, each load-bearing:
+     *   - **It never says cancelled** — a failed charge cancels nothing.
+     *   - **It blames nobody** — the usual causes are an unapproved prompt and a timeout.
+     *   - **It names the amount and the service**, and says nothing was charged, which is the
+     *     customer's actual first question.
+     *
+     * ⚠ **A WhatsApp TEMPLATE, because it fires outside the 24-hour window**: the charge is
+     * approved on a handset minutes after the customer last wrote. Generated locally only; nothing
+     * is submitted to Meta from here.
+     */
+    'booking.payment_failed': {
+        base: {
+            en: {
+                subject: 'Payment did not go through for {{serviceName}}',
+                body: 'We could not take the {{currency}} {{amountFormatted}} for your {{serviceName}} booking. Nothing has been charged — open the booking to try again.'
+            },
+            fr: {
+                subject: 'Paiement non abouti pour {{serviceName}}',
+                body: "Nous n'avons pas pu encaisser les {{currency}} {{amountFormatted}} pour votre réservation {{serviceName}}. Rien n'a été débité — ouvrez la réservation pour réessayer."
+            },
+            pt: {
+                subject: 'O pagamento não foi concluído para {{serviceName}}',
+                body: 'Não conseguimos cobrar os {{currency}} {{amountFormatted}} da sua reserva de {{serviceName}}. Nada foi debitado — abra a reserva para tentar de novo.'
+            },
+            es: {
+                subject: 'El pago no se completó para {{serviceName}}',
+                body: 'No pudimos cobrar los {{currency}} {{amountFormatted}} de tu reserva de {{serviceName}}. No se ha cobrado nada — abre la reserva para intentarlo otra vez.'
+            },
+            ar: {
+                subject: 'لم يتم الدفع لحجز {{serviceName}}',
+                body: 'لم نتمكن من تحصيل {{currency}} {{amountFormatted}} لحجز {{serviceName}}. لم يُخصم أي مبلغ — افتح الحجز لإعادة المحاولة.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_booking_payment_failed',
+                bodyParams: ['{{currency}}', '{{amountFormatted}}', '{{serviceName}}']
+            }
+        },
+        button: BOOKING_BUTTON
+    },
+
     // The platform never charges this silently — this message IS the request, so
     // it has to explain WHY more is owed, not just that it is.
     'booking.balance.due': {

@@ -4,15 +4,12 @@ import { asyncHandler } from '../../../../api/middlewares/async-handler';
 import { sendSuccess } from '../../../../core/responses';
 import { createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
-import {
-    PublicProductDetailDto,
-    PublicVariantDto,
-} from '../../../catalog/dto/public-product.dto';
-import { publicCatalogService } from '../../../catalog/services/public-catalog.service';
-import { botChrome } from '../../domain/bot-chrome-copy';
-import { formatBotPrice, toPublicMediaUrl } from '../../domain/product-card';
-import { resolvePurchaseAffordance } from '../../domain/purchase-affordance';
-import { inAppSurfaceStore } from '../../services/inapp-surface.store';
+import { toBotCopyLanguage } from '../../domain/bot-error-copy';
+import { __IN_APP_SCREEN_PATH } from '../../domain/inapp-url';
+import { InAppSurfaceSession, inAppSurfaceStore } from '../../services/inapp-surface.store';
+import { browserImageUrl } from './browser-image-url';
+import { readProductDetail } from './product-detail.read';
+import { readSimilarProductIds } from './similar-products.read';
 
 /**
  * `inAppProductDetail` — the screen's read side.
@@ -37,6 +34,13 @@ import { inAppSurfaceStore } from '../../services/inapp-surface.store';
  * customer would see one word on the chat card and another on the screen for one product.
  * `test:inapp-catalog` § 1 scans the page for the four English rung words with comments
  * stripped, for exactly that reason.
+ *
+ * ── ⚠ THE READ IS NOT HERE — IT IS IN `product-detail.read.ts` ──────────────
+ * The picker, the per-variant affordance, the service price and the city-only store line are
+ * decided ONCE, in `readProductDetail`, because a WhatsApp Flow draws the same product and must
+ * not hold a second opinion about any of them. This file is the Telegram Mini App's RENDERING of
+ * that read: it resolves the handle, keeps the session alive, applies the **browser's** image
+ * rule, and projects exactly the fields `pd.html` names — nothing else.
  *
  * ── THE SPECIFICATION IS THE PAGE ───────────────────────────────────────────
  * The response shape is written out as a contract in the opening comment of `public/pd.html`.
@@ -63,216 +67,127 @@ export class ProductDetailController {
          * bucket for unknown, lapsed, malformed and wrong-kind: all four have the same remedy,
          * and separating them would confirm that a handle the caller does not own is real.
          */
-        const session = await inAppSurfaceStore.read('pd', handle);
-        if (!session) {
-            throw createAppError(
-                ERROR_CODES.BOT_PRODUCT_LIST_EXPIRED,
-                404,
-                'That product is no longer held',
-            );
-        }
+        const session = await readDetailSession(handle);
 
         /**
          * ⚠ **A product that has gone since the screen was opened is a 404, not an empty
-         * screen.** `getProductById` raises `CATALOG_PRODUCT_NOT_FOUND` for an unpublished,
-         * suspended or deleted product, and the page renders that refusal as its failed state
-         * with the sentence attached. Swallowing it into a blank detail view would show a
-         * customer a product page for something that is not for sale.
+         * screen.** `readProductDetail` lets `CATALOG_PRODUCT_NOT_FOUND` through for an
+         * unpublished, suspended or deleted product, and the page renders that refusal as its
+         * failed state with the sentence attached.
+         *
+         * ⚠ **The similar-items check runs beside it and can NEVER fail this read.** It decides
+         * only whether a Similar-items button is drawn. A ranking that cannot be computed — a
+         * cache or database wobble in a different module — must cost the customer that one
+         * optional button, not the product page they opened. So its failure is swallowed to
+         * `false` here, where a missing button is the right outcome; the tap endpoint below
+         * makes the opposite call, because there the customer explicitly asked.
          */
-        const product = await publicCatalogService.getProductById(session.productId);
+        const [detail, hasSimilar] = await Promise.all([
+            readProductDetail(session.productId, session.language),
+            readSimilarProductIds(session.productId)
+                .then((ids) => ids.length > 0)
+                .catch(() => false),
+        ]);
 
+        /**
+         * ⚠ **Extended here, and deliberately NOT in `readProductDetail`** — a Flow calling the
+         * same read must never extend an in-app session as a side effect of fetching data.
+         */
         void inAppSurfaceStore.touch('pd', handle).catch(() => undefined);
 
         /**
-         * ⚠ **Computed ONCE and used for both halves, because the page matches them
-         * POSITIONALLY.** `pd.html` builds the customer's selection as one value per entry of
-         * `options`, in order, and compares it against each variant's `valueIds` index by
-         * index. So the two arrays are one data structure in two pieces: derive `valueIds`
-         * from the product's full option list while sending a filtered `options`, and every
-         * comparison silently misaligns — no variant ever matches, the button never enables,
-         * and nothing fails anywhere for somebody to find.
+         * ⚠ **Exactly the fields `pd.html`'s contract names, and no more.** The read also carries
+         * `productId`, a per-variant `label` and the picture as a stored file (`image`); those
+         * exist for a Flow that lists variants flat and needs image bytes. The page uses none of
+         * them, and a projection that grows by spreading is how a field meant for one renderer
+         * ends up published to every browser.
          */
-        const picker = selectableOptions(product);
-
         sendSuccess(res, {
-            title: product.title,
-            storeName: product.store.name,
-            /**
-             * ⚠ **City only — a ship-from address stays private.** `business_addresses[]` are
-             * the places a vendor ships from: a home or a warehouse, with a street line and
-             * exact coordinates. The public detail DTO already publishes nothing but the city
-             * for that reason, and this projection must not reach past it.
-             */
-            storeCity: product.store.city,
-            imageUrl: heroImageUrl(product),
-            description: product.description || null,
-            /**
-             * The option id is the join key this file needs and the page does not — it
-             * selects by value id and matches positionally — so it is dropped here rather
-             * than published. The contract in `pd.html` says `{ name, values }`.
-             */
-            options: picker.map(({ name, values }) => ({ name, values })),
-            variants: product.variants.map((variant) =>
-                toVariantRow(variant, picker, product, session.language),
-            ),
-            defaultVariantId: product.defaultVariantId,
+            title: detail.title,
+            storeName: detail.storeName,
+            storeCity: detail.storeCity,
+            imageUrl: browserImageUrl(detail.imageSourceUrl),
+            description: detail.description,
+            options: detail.options,
+            variants: detail.variants.map((variant) => ({
+                variantId: variant.variantId,
+                valueIds: variant.valueIds,
+                priceText: variant.priceText,
+                inStock: variant.inStock,
+                affordance: variant.affordance,
+            })),
+            defaultVariantId: detail.defaultVariantId,
+            /** Draw the Similar-items button? False when there is nothing to show, or no way to ask. */
+            hasSimilar,
+        });
+    });
+
+    /**
+     * `POST /api/bot/miniapp/s/pd/:handle/similar` — open a grid of products similar to this one.
+     *
+     * ⚠ **A POST that mints a session, for the reason `/s/pl/:handle/open` gives.** The listing
+     * screen needs its own `pl` handle and only the server can mint one, so the page asks and is
+     * handed back a URL. Nothing here touches a cart, a price or an order.
+     *
+     * ⚠ **The shelf is PINNED, not re-queried.** The similar products are resolved now and their
+     * ids stored in the listing session, so the grid shows exactly the shelf the button promised.
+     * A listing that re-ran "similar" on every page could reshuffle under the customer as a
+     * ranking cache expired. Each product is still re-read live per page, so prices are current.
+     *
+     * ⚠ **Every failure here IS surfaced, unlike on the data read.** There, a failed similar-items
+     * check just means no button. Here the customer pressed it, and a silent nothing would read as
+     * a broken button. An empty shelf is not a failure: `url: null`, and the page says so — but
+     * the page only draws the button when `hasSimilar` was true, so that answer is a race rather
+     * than the ordinary case.
+     */
+    static similar = asyncHandler(async (req: Request, res: Response) => {
+        const { handle } = HandleSchema.parse(req.params);
+        const session = await readDetailSession(handle);
+
+        const productIds = await readSimilarProductIds(session.productId);
+        if (productIds.length === 0) {
+            sendSuccess(res, { url: null });
+            return;
+        }
+
+        /**
+         * The listing session inherits everything that makes it this customer's — owner, customer,
+         * conversation, language — from the detail session that asked. Nothing is read from the
+         * request, so nothing a caller sends can address the listing at somebody else.
+         */
+        const listingHandle = await inAppSurfaceStore.mint({
+            kind: 'pl',
+            owner: session.owner,
+            customerId: session.customerId,
+            channel: session.channel,
+            externalId: session.externalId,
+            language: session.language,
+            query: { q: null, category: null, storeSlug: null, productIds },
+        });
+
+        /**
+         * ⚠ A same-origin path, for the reason `/s/pl/:handle/open` records: the page is already
+         * open inside the Telegram WebView, and an absolute URL built from configuration could
+         * navigate the customer to a different host and lose the WebView's context.
+         */
+        sendSuccess(res, {
+            url: `${__IN_APP_SCREEN_PATH}/pl/${listingHandle}?lang=${toBotCopyLanguage(session.language)}`,
         });
     });
 }
 
 /**
- * The picker, with every value no surviving variant can reach removed.
+ * Resolve a detail handle, or refuse the way the chat would have.
  *
- * ── ⚠ WHY THIS FILTER EXISTS, AND WHAT IT LOOKS LIKE WITHOUT IT ────────────
- * `toPublicProductDetailDto` filters **variants** to the sellable ones — active and not
- * deleted — but builds `options[].values` from *every* option value on the product. The two
- * are not filtered together, and for a storefront that is fine: it can grey a chip out.
- *
- * Here it produces a dead end a customer cannot read. Archive the red T-shirt and "Red" still
- * draws as a chip; tapping it selects an option combination no variant matches, so the page's
- * `currentVariant()` answers null and the button falls back to **"Pick an option first"** — to
- * somebody who has just picked one. They tap it again, get the same sentence, and conclude the
- * screen is broken.
- *
- * So a value is offered only if some sellable variant actually carries it. An option left with
- * no values at all is dropped entirely rather than rendered as an empty row.
- *
- * ⚠ **This does NOT make every remaining combination reachable, and it cannot.** A product
- * genuinely sold in Red-S and Blue-L has four chips and two valid pairings; picking Red then L
- * is a real "that combination is not available", not a defect. The page has no words for that
- * case — `inAppCopy` has no key for it — so it still shows "Pick an option first", which is
- * wrong but rare. Raised with the stream that owns the copy table rather than papered over
- * here, because inventing the sentence locally would put screen copy outside the one table
- * that a boot assertion proves complete in five languages.
+ * ⚠ The kind is named on the read, so a `pl` or `co` handle pasted onto this path refuses rather
+ * than opening this screen with another screen's session. One refusal bucket for unknown, lapsed,
+ * malformed and wrong-kind: all four have the same remedy, and separating them would confirm that
+ * a handle the caller does not own is real.
  */
-function selectableOptions(product: PublicProductDetailDto): PickerOption[] {
-    const reachable = new Set(product.variants.flatMap((v) => v.optionValueIds));
-
-    return product.options
-        .map((option) => ({
-            id: option.id,
-            name: option.name,
-            values: option.values
-                .filter((value) => reachable.has(value.id))
-                .map((value) => ({ id: value.id, label: value.value })),
-        }))
-        .filter((option) => option.values.length > 0);
-}
-
-/**
- * One option as the picker will draw it. `id` is the join key used to order a variant's
- * `valueIds`; it is stripped before the response, which identifies options by position.
- */
-interface PickerOption {
-    id: string;
-    name: string;
-    values: Array<{ id: string; label: string }>;
-}
-
-/**
- * One variant → one row the picker can select and the button can act on.
- *
- * ⚠ **`valueIds` is ordered to match `options`, and the page depends on that exactly.** It
- * compares the customer's chosen value per option, positionally, against this array — so an
- * order that came back in the variant's own sequence rather than the product's would silently
- * match the wrong variant, or none. `PublicVariantDto.options` is pre-joined with its
- * `optionId`, which is what makes the re-ordering possible here rather than in the browser.
- *
- * ⚠ **Keyed on ids, never on `optionSignature`.** Renaming an option value is a documented
- * *safe* operation that deliberately does not rewrite that string, so a lookup built from
- * displayed text stops finding variants that exist.
- */
-function toVariantRow(
-    variant: PublicVariantDto,
-    picker: PickerOption[],
-    product: PublicProductDetailDto,
-    language: string | null,
-): {
-    variantId: string;
-    valueIds: string[];
-    priceText: string;
-    inStock: boolean;
-    affordance: { verb: string; label: string; enabled: boolean };
-} {
-    const byOptionId = new Map(variant.options.map((o) => [o.optionId, o.valueId]));
-
-    /**
-     * ⚠ **Resolved per VARIANT, not per product, and that is the whole reason the detail screen
-     * exists.** A product may sell one variant at a fixed price and another with a bargaining
-     * window open, so the list row's answer — which reports its *default* variant — cannot be
-     * applied across the picker. `PublicVariantDto.negotiable` is the per-variant predicate,
-     * published for exactly this.
-     */
-    const affordance = resolvePurchaseAffordance({
-        type: product.type,
-        negotiable: variant.negotiable,
-        inStock: variant.inStock,
-        variantId: variant.id,
-    });
-
-    return {
-        variantId: variant.id,
-        /**
-         * ⚠ Ordered by the **picker** the page was actually sent, never by the product's full
-         * option list — see the note where `picker` is computed. The two disagree whenever an
-         * option was dropped for having no reachable values, and a positional comparison
-         * against the wrong array matches nothing while failing nowhere.
-         */
-        valueIds: picker.map((option) => byOptionId.get(option.id) ?? ''),
-        priceText: priceTextOf(variant),
-        inStock: variant.inStock,
-        /**
-         * ⚠ **Verbatim, and translated here rather than in the page.** `labelKey` is resolved
-         * through `botChrome()` against the session's language — the same call the chat card
-         * makes — so the word on the button is the same word in both places. The page is told,
-         * never asked.
-         *
-         * `verb` travels for the page's own use (it is what tells a renderer that this is a
-         * conversation rather than a basket), and is **never** sent back on the write: the
-         * page posts a variant id and the server re-resolves the rung.
-         */
-        affordance: {
-            verb: affordance.verb,
-            label: botChrome(affordance.labelKey, language),
-            enabled: affordance.enabled,
-        },
-    };
-}
-
-/**
- * A variant's price, formatted server-side.
- *
- * ⚠ **A SERVICE variant's `price` is a UNIT RATE, not a total**, and printing it as "the
- * price" misquotes the customer. The DTO ships two derived fields beside it for exactly this —
- * `priceFrom` (the least a booking of the minimum duration can cost) and `priceUnit` (a label
- * such as "per 60 min") — and the documented rendering is "from {priceFrom} · {priceUnit}".
- * Rendering `price` alone here would quote a 60-minute rate to somebody booking 90 minutes.
- *
- * ⚠ **The page does no money maths at all** — `test:inapp-catalog` § 1 refuses `toFixed`,
- * `parseFloat` and `Intl.NumberFormat` in a page. Everything above happens on this side.
- */
-function priceTextOf(variant: PublicVariantDto): string {
-    if (variant.service) {
-        return `${formatBotPrice(variant.service.priceFrom, variant.currency)} · ${variant.service.priceUnit}`;
+async function readDetailSession(handle: string): Promise<Extract<InAppSurfaceSession, { kind: 'pd' }>> {
+    const session = await inAppSurfaceStore.read('pd', handle);
+    if (!session) {
+        throw createAppError(ERROR_CODES.BOT_PRODUCT_LIST_EXPIRED, 404, 'That product is no longer held');
     }
-    return formatBotPrice(variant.price, variant.currency);
-}
-
-/**
- * The hero picture, for a **browser** rather than for a platform's fetcher.
- *
- * ⚠ **The reachability rule is the wrong test on this surface, and falling back past it is
- * deliberate** — the same reasoning the listing records. `toPublicMediaUrl` exists because
- * Telegram and Meta fetch media server-side, so a private-host URL is a rejected *send*. Here
- * the fetcher is the customer's own phone inside a WebView, which on a development machine can
- * reach exactly the host that rule rejects. The origin rewrite is kept, because it is what
- * makes the URL correct in production; the rejection is not.
- *
- * ⚠ **No placeholder, unlike a chat card.** A card with a hole in it reads as a broken bot, so
- * `toBotProductCard` substitutes a stand-in. A screen has layout: `pd.html` renders an empty
- * hero frame, which reads as a product with no photograph — which is what it is.
- */
-function heroImageUrl(product: PublicProductDetailDto): string | null {
-    const raw = product.images[0]?.url ?? null;
-    return toPublicMediaUrl(raw) ?? raw;
+    return session;
 }

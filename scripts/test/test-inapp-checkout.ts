@@ -62,8 +62,26 @@ function assert(name: string, fn: () => boolean): void {
     }
 }
 
-const PUBLIC_DIR = path.join(__dirname, '../../src/modules/bot-surface/miniapp/public');
-const STORE_SRC = path.join(__dirname, '../../src/modules/bot-surface/services/inapp-surface.store.ts');
+/**
+ * Where the SOURCE SCANS read from — the real tree, unless a proof harness redirects them.
+ *
+ * ⚠ **This exists so a guard can be PROVEN to bite, not merely observed to pass.** A mutation
+ * harness copies the scanned files to a scratch directory, breaks one rule or converts the line
+ * endings, and runs THIS suite against the copy — so the proof exercises the real assertions
+ * rather than a re-implementation of them, which could be right while the suite is wrong.
+ *
+ * ⚠ **Only file reads move.** Every `import` still resolves against the real tree, so the
+ * behavioural assertions (masking, the catalogue) are unaffected, and a redirected run says so
+ * loudly on its first line so it can never be mistaken for a real one.
+ */
+const SCAN_ROOT = process.env.INAPP_CHECKOUT_SCAN_ROOT
+    ? path.resolve(process.env.INAPP_CHECKOUT_SCAN_ROOT)
+    : path.join(__dirname, '../..');
+if (process.env.INAPP_CHECKOUT_SCAN_ROOT) {
+    console.log(`\n⚠ SCANS REDIRECTED to ${SCAN_ROOT} — this is a proof run, not a real one.`);
+}
+const PUBLIC_DIR = path.join(SCAN_ROOT, 'src/modules/bot-surface/miniapp/public');
+const STORE_SRC = path.join(SCAN_ROOT, 'src/modules/bot-surface/services/inapp-surface.store.ts');
 
 const page = (): string => fs.readFileSync(path.join(PUBLIC_DIR, 'co.html'), 'utf8');
 /** Comments explain the rules; the scans below must read the CODE, not the explanation. */
@@ -78,32 +96,45 @@ const code = (): string => page().replace(/<!--[\s\S]*?-->/g, '').replace(/\/\*[
 //  delete the comment that makes the code legible.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SCREEN_SRC = path.join(
-    __dirname,
-    '../../src/modules/bot-surface/miniapp/surfaces/checkout.controller.ts',
-);
-const CHAT_SRC = path.join(
-    __dirname,
-    '../../src/modules/bot-surface/controllers/bot-checkout.controller.ts',
-);
+const SCREEN_SRC = path.join(SCAN_ROOT, 'src/modules/bot-surface/miniapp/surfaces/checkout.controller.ts');
+const CHAT_SRC = path.join(SCAN_ROOT, 'src/modules/bot-surface/controllers/bot-checkout.controller.ts');
+
+/**
+ * ⛔ **Line endings are normalised FIRST, and without it every bounded scan below was unbounded.**
+ *
+ * This machine runs `core.autocrlf=true`, the repo has no `.gitattributes`, and — measured — the
+ * blobs themselves carry CRLF. So every source file here reads as `\r\n`, and a span bounded at
+ * `'\n}\n'` never finds its end: `indexOf` answers -1, the slice silently runs to end-of-file, and
+ * an absence check becomes true of the whole remainder of the file instead of one function. It
+ * was found because a rewritten guard FAILED on correct code (its "one method" span contained two
+ * other methods' calls); how many assertions had been passing on the wrong span before that is
+ * exactly the question this line makes unnecessary to answer.
+ */
+const lf = (src: string): string => src.replace(/\r\n/g, '\n');
 
 const stripTs = (src: string): string =>
-    src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    lf(src).replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
-const ORCHESTRATOR_SRC = path.join(
-    __dirname,
-    '../../src/modules/payments/services/payment-orchestrator.service.ts',
-);
-const NOTIFY_HANDLER_SRC = path.join(
-    __dirname,
-    '../../src/modules/notifications/services/customer-notification-event-handler.service.ts',
-);
-const NOTIFY_CONSUMER_SRC = path.join(
-    __dirname,
-    '../../src/modules/notifications/customer-notification-event-consumer.ts',
-);
+/** § 1's `code()` for the page, with line endings normalised for § 2's bounded scans. */
+const pageCode = (): string => lf(code());
 
-const screenCode = (): string => stripTs(fs.readFileSync(SCREEN_SRC, 'utf8'));
+const ORCHESTRATOR_SRC = path.join(SCAN_ROOT, 'src/modules/payments/services/payment-orchestrator.service.ts');
+const NOTIFY_HANDLER_SRC = path.join(SCAN_ROOT, 'src/modules/notifications/services/customer-notification-event-handler.service.ts');
+const NOTIFY_CONSUMER_SRC = path.join(SCAN_ROOT, 'src/modules/notifications/customer-notification-event-consumer.ts');
+
+const MASKING_SRC = path.join(SCAN_ROOT, 'src/modules/bot-surface/miniapp/surfaces/checkout-masking.ts');
+
+/**
+ * ⚠ **The screen's scope is the controller AND every module the checkout logic was extracted
+ * into, read together.** A "must NOT" scan over one file passes vacuously the day the code it
+ * guards moves to another — backend-fc hit exactly that when extracting their reads: three
+ * absence checks stayed green only because their subject had left the file. So the scope grows
+ * with every extraction, and `the checkout logic is actually in scope` (§ 5, first) fails before
+ * any absence check can pass on an empty subject.
+ */
+const SCREEN_SCOPE = [SCREEN_SRC, MASKING_SRC];
+const screenCode = (): string =>
+    SCREEN_SCOPE.map((file) => stripTs(fs.readFileSync(file, 'utf8'))).join('\n');
 const chatCode = (): string => stripTs(fs.readFileSync(CHAT_SRC, 'utf8'));
 const orchestratorCode = (): string => stripTs(fs.readFileSync(ORCHESTRATOR_SRC, 'utf8'));
 const notifyHandlerCode = (): string => stripTs(fs.readFileSync(NOTIFY_HANDLER_SRC, 'utf8'));
@@ -257,25 +288,151 @@ function main(): void {
     console.log('\n── 5 · The write spends the handle, and spends it FIRST ──');
 
     /**
+     * ⛔ **SCOPE, FIRST — every absence check in §§ 5–8 depends on this passing.** Each named
+     * export must be present in the scanned text, or a "must NOT" below is true of nothing. If
+     * this fails after an extraction, add the new module to `SCREEN_SCOPE`; do not delete it.
+     */
+    assert('⛔ the checkout logic is actually in scope for the scans below', () => {
+        const src = screenCode();
+        const required = [
+            'export async function readCheckoutView(',
+            'export async function placeCheckout(',
+            'export class CheckoutController',
+            'export function maskAddress(',
+            'export function accountIdentifier(',
+            'export async function storedPayerNumber(',
+            'function mobileMoneyGateway(',
+        ];
+        const missing = required.filter((needle) => !src.includes(needle));
+        if (missing.length > 0) console.error(`      out of scope: ${missing.join(', ')}`);
+        return SCREEN_SCOPE.every((file) => fs.existsSync(file)) && missing.length === 0;
+    });
+
+    /**
      * ⚠ **`consume` on the write, `read` on the page.** The page reads on every open and every
      * refresh; the one call that creates an order must not repeat. If this inverts, a refreshed
      * tab places a second order against the same basket and nothing anywhere notices — this
      * mount has no `Idempotency-Key`, because a browser sends what the page sends.
      */
-    assert('⛔ `place` consumes the handle and `data` only reads it', () => {
+    /**
+     * ⚠ **Each scan names the ONE function it is true of, both ends.** The rules live in the
+     * exported core now (`readCheckoutView`, `placeCheckout`), shared by the Telegram page and
+     * the WhatsApp form. An earlier version of this assertion sliced the HTTP handler to the
+     * class close — correct then, and silently scanning an empty wrapper the day the rules moved.
+     */
+    assert('⛔ `placeCheckout` consumes the handle and `readCheckoutView` only reads it', () => {
         const src = screenCode();
-        /**
-         * ⚠ Bounded at the CLASS CLOSE, not at end-of-file. `readCheckout` is a module-level
-         * helper below the class and it legitimately calls `read` — a slice running to the end
-         * of the file swallows it and reports the handler as reading, which is how this
-         * assertion failed the first time it ran against correct code.
-         */
-        const place = src.slice(src.indexOf('static place')).split(/\n\}\n/)[0];
-        const data = src.slice(src.indexOf('static data'), src.indexOf('static place'));
+        const fn = (sig: string): string => {
+            const start = src.indexOf(sig);
+            return start < 0 ? '' : src.slice(start, src.indexOf('\n}\n', start));
+        };
+        const place = fn('export async function placeCheckout(');
+        const read = fn('export async function readCheckoutView(');
         return place.includes("inAppSurfaceStore.consume('co'")
             && !place.includes('inAppSurfaceStore.read(')
-            && data.includes('readCheckout(')
-            && !data.includes('inAppSurfaceStore.consume(');
+            && read.includes("inAppSurfaceStore.read('co'")
+            && !read.includes('inAppSurfaceStore.consume(');
+    });
+
+    /**
+     * ⭐ **One read, one set of rules, two renderings.** The page's HTTP handlers must be thin
+     * wrappers over the exported core, or the WhatsApp form — which calls the core directly —
+     * inherits rules the page does not have, or the other way round.
+     */
+    assert('⛔ the HTTP handlers are thin wrappers — the rules live only in the exported core', () => {
+        const src = screenCode();
+        const start = src.indexOf('export class CheckoutController {');
+        const cls = src.slice(start, src.indexOf('\n}\n', start));
+        return start > 0
+            && cls.includes('readCheckoutView(')
+            && cls.includes('placeCheckout(')
+            && !cls.includes('inAppSurfaceStore.')
+            && !cls.includes('createOrdersFromCart(')
+            && !cls.includes('initiatePaymentForCart(');
+    });
+
+    /**
+     * ⛔ **The cheap, deterministic refusals come BEFORE the spend** — a mistyped number and a
+     * deployment with no gateway must not cost a customer their handle — and everything that
+     * takes time comes after it.
+     */
+    assert('⛔ number and gateway are checked before `consume`; orders and charge after it', () => {
+        const src = screenCode();
+        const start = src.indexOf('export async function placeCheckout(');
+        const place = src.slice(start, src.indexOf('\n}\n', start));
+        const at = (needle: string): number => place.indexOf(needle);
+        const spend = at("inAppSurfaceStore.consume('co'");
+        return spend > 0
+            && at('validatedPayerNumber(phone)') > 0 && at('validatedPayerNumber(phone)') < spend
+            && at('mobileMoneyGateway()') > 0 && at('mobileMoneyGateway()') < spend
+            && at('createOrdersFromCart(') > spend
+            && at('initiatePaymentForCart(') > spend;
+    });
+
+    /**
+     * ⛔ **Every refusal after the spend says so.** A caller deciding whether a retry is honest
+     * cannot tell from the status — a 400 comes from the typed number (before) or from order
+     * creation (after) — so the whole post-spend block is wrapped and re-marked.
+     */
+    assert('⛔ everything after `consume` is inside the block that marks refusals spent', () => {
+        const src = screenCode();
+        const start = src.indexOf('export async function placeCheckout(');
+        const place = src.slice(start, src.indexOf('\n}\n', start));
+        const spend = place.indexOf("inAppSurfaceStore.consume('co'");
+        const tryAt = place.indexOf('try {', spend);
+        const catchAt = place.indexOf('} catch (error) {', tryAt);
+        const body = place.slice(tryAt, catchAt);
+        return tryAt > spend
+            && body.includes('createOrdersFromCart(')
+            && body.includes('initiatePaymentForCart(')
+            && place.slice(catchAt).includes('throw markedSpent(error)');
+    });
+
+    /**
+     * ⚠ **Measured: the platform phone schema REFUSES `''`.** A WhatsApp text input left empty
+     * submits exactly that, so without folding it first "use the number on my account" — the
+     * common case, and the one that discloses nothing — becomes a 400 on the form while it works
+     * on the page, which sends `null`.
+     */
+    assert('⛔ an empty or blank number means "use my account\'s", on both doors', () => {
+        const src = screenCode();
+        const start = src.indexOf('function validatedPayerNumber(');
+        const fn = src.slice(start, src.indexOf('\n}\n', start));
+        const fold = fn.indexOf("phone.trim().length === 0) return null");
+        const validate = fn.indexOf('OptionalPhoneNumberSchema.safeParse(');
+        return fold > 0 && validate > fold && fn.includes('spent: false');
+    });
+
+    /**
+     * ⛔ **ABSENT MEANS SPENT, on the page.** Only an explicit `spent === false` on a 400 may
+     * unlatch the Pay button. The platform strips `details` from gateway and internal errors and
+     * a lost response has no body — so reading "no flag" as "not spent" is how one tap places
+     * two orders.
+     */
+    assert('⛔ the page unlatches ONLY on a 400 or 422 that says explicitly the handle was not spent', () => {
+        const c = pageCode();
+        /**
+         * ⚠ The DECLARATION `var placed = false;` is excluded — it contains the same text and is
+         * not an unlatch. The first draft of this scan counted it and failed against correct code.
+         */
+        const unlatches = [...c.matchAll(/(?<!var )placed = false;/g)];
+        const unlatch = unlatches[0]?.index ?? -1;
+        const guard = c.lastIndexOf('if (', unlatch);
+        const condition = c.slice(guard, c.indexOf('{', guard));
+        /**
+         * ⚠ **The status set is pinned EXACTLY, not merely checked to contain 400.** An earlier
+         * version passed for any condition that mentioned 400 — so adding `|| res.status === 503`
+         * (no gateway configured: a retry no tap can ever fix) would have stayed green. The only
+         * status comparison allowed is strict equality, and the set is exactly {400, 422}.
+         */
+        const statuses = [...condition.matchAll(/res\.status\s*===\s*(\d{3})/g)].map((m) => m[1]).sort();
+        const otherComparisons = /res\.status\s*(!==|!=|>=|<=|>|<|==(?!=))/.test(condition);
+        return unlatch > 0
+            && unlatches.length === 1
+            && statuses.join(',') === '400,422'
+            && !otherComparisons
+            && condition.includes('spent === false')
+            && !/spent\s*!==\s*true/.test(c);
     });
 
     /**
@@ -350,17 +507,29 @@ function main(): void {
 
     /**
      * ⚠ **NotchPay first is a REFUNDABILITY rule, not alphabetical order.** It is the gateway an
-     * administrator can reverse a payment through; My-CoolPay has no refund API at all. The two
-     * doors onto this charge must agree, or one basket gets two charges with different
+     * administrator can reverse a payment through; My-CoolPay has no refund API at all. Every
+     * door onto a mobile-money charge must agree, or one basket gets two charges with different
      * reversibility depending on which door the customer came through.
+     *
+     * ⚠ **Asserted as ONE DEFINITION, not as copies that agree.** This used to check that the
+     * screen and the chat each put NotchPay first — i.e. it blessed two copies of the rule, one
+     * of which carried a docstring claiming the copies "word a refusal differently" (they threw the
+     * identical error). The copy is gone; the chat imports the screen's. A third door (the booking
+     * pay screen) imports it too, so agreement is by construction rather than by inspection.
      */
-    assert('⛔ screen and chat prefer the same gateway, refundable one first', () => {
-        const order = (src: string): boolean => {
-            const notch = src.indexOf("'NOTCHPAY'");
-            const cool = src.indexOf("'MYCOOLPAY'");
-            return notch > 0 && cool > notch;
-        };
-        return order(screenCode()) && order(chatCode());
+    assert('⛔ the gateway preference is defined ONCE, refundable one first, and imported by the chat', () => {
+        const screen = screenCode();
+        const chat = chatCode();
+        const start = screen.indexOf('export function mobileMoneyGateway(');
+        const rule = start < 0 ? '' : screen.slice(start, screen.indexOf('\n}\n', start));
+        const notch = rule.indexOf("'NOTCHPAY'");
+        const cool = rule.indexOf("'MYCOOLPAY'");
+        return start > 0
+            && notch > 0 && cool > notch
+            && (screen.match(/function mobileMoneyGateway\(/g) ?? []).length === 1
+            && !/function mobileMoneyGateway\(/.test(chat)
+            && !chat.includes("'NOTCHPAY'") && !chat.includes("'MYCOOLPAY'")
+            && /import \{[^}]*\bmobileMoneyGateway\b[^}]*\} from '\.\.\/miniapp\/surfaces\/checkout\.controller'/.test(chat);
     });
 
     /** COD takes no payment and produces a delivery code; it does not come through this screen. */
@@ -562,7 +731,7 @@ function main(): void {
      * because the page cannot tell a download from a parcel.
      */
     assert('⛔ a digital basket is not headed "Deliver to"', () => {
-        const pageSrc = code();
+        const pageSrc = pageCode();
         return pageSrc.includes('data.address.digital')
             && pageSrc.includes('copy.checkoutDigitalDelivery')
             && screenCode().includes('digital: true');
@@ -575,7 +744,7 @@ function main(): void {
      * that was already failing.
      */
     assert('⛔ the page\'s English fallback covers every key the page reads', () => {
-        const pageSrc = page();
+        const pageSrc = lf(page());
         const used = [...new Set([...pageSrc.matchAll(/\bcopy\.([a-zA-Z]+)/g)].map((m) => m[1]))];
         const fallback = pageSrc.slice(pageSrc.indexOf('var FALLBACK = {'), pageSrc.indexOf('function boot'));
         /**
@@ -610,11 +779,113 @@ function main(): void {
      * says the items are waiting. Placing a second set would double the basket and the stock
      * hold, and the customer would find out when asked to pay twice.
      */
+    /**
+     * ⚠ **Sliced to the ONE function that does the work, both ends named.** An earlier version
+     * sliced from `static retryPayment` to end-of-file — which passed only because it swallowed
+     * the `retryCharge` helper below the class once the route became a one-line delegation. A
+     * scan whose span is "everything after here" is true of whatever happens to follow.
+     */
     assert('⛔ the retry opens a charge and creates no second order', () => {
         const src = chatCode();
-        const retry = src.slice(src.indexOf('static retryPayment'));
-        return retry.includes('initiatePaymentForCart(')
-            && !retry.includes('createOrdersFromCart(');
+        const start = src.indexOf('async function retryCharge(');
+        const retry = src.slice(start, src.indexOf('\n}\n', start));
+        return start > 0
+            && retry.includes('initiatePaymentForCart(')
+            && !retry.includes('createOrdersFromCart(')
+            // Both the route and the tap reach it — one implementation, two doors.
+            && /static retryPayment[\s\S]*?retryCharge\(req, res, null, phone\)/.test(src)
+            && src.includes('retryCharge(req, res, transactionId, null)');
+    });
+
+    console.log('\n── 11 · Check status · Try again — the taps ──');
+
+    /**
+     * ⛔ **A button outlives the payment it was drawn for.** A "Try again" tapped under last
+     * week's failure, by a customer who has checked out twice since, must not re-charge whichever
+     * basket is newest. So a tap carries the transaction id and resolves THAT payment or nothing.
+     * The ROUTE takes no id for the opposite reason — its caller is a model, which invents ids.
+     */
+    assert('⛔ both taps resolve the payment they were drawn under, owner-scoped', () => {
+        const src = chatCode();
+        const start = src.indexOf('async function resolveCheckoutPayment(');
+        const resolver = src.slice(start, src.indexOf('\n}\n', start));
+        return start > 0
+            && /_id:\s*transactionId,\s*userId:\s*customerId/.test(resolver)
+            && src.includes('reportPayment(req, res, transactionId)');
+    });
+
+    assert('⛔ the route takes no transaction id — a model would invent one', () => {
+        const src = chatCode();
+        return src.includes('reportPayment(req, res, null)')
+            && /const NoArgsSchema = z\.object\(\{\}\)\.strict\(\)/.test(src);
+    });
+
+    /** 31 bytes against Telegram's 64 — and a malformed argument is a stale TOKEN, not a 404. */
+    assert('⛔ tap tokens are `pay:st:<id>` / `pay:rt:<id>` and a malformed one gets the dispatcher\'s refusal', () => {
+        const src = chatCode();
+        const start = src.indexOf('export async function paymentTap(');
+        const tap = start < 0 ? '' : src.slice(start, src.indexOf('\n}\n', start));
+        const worst = `pay:rt:${'f'.repeat(24)}`;
+        return start > 0
+            && tap.includes("which === 'st'")
+            && tap.includes("which === 'rt'")
+            && Buffer.byteLength(worst, 'utf8') <= 64
+            && /\^\[0-9a-fA-F\]\{24\}\$/.test(tap)
+            // The dispatcher's ONE refusal factory — never a hand-built BOT_ACTION_TOKEN_UNKNOWN.
+            && (tap.match(/throw unknownBotAction\(\)/g) ?? []).length === 2
+            && !tap.includes('BOT_ACTION_TOKEN_UNKNOWN');
+    });
+
+    /**
+     * ⛔ **THROW, never `next` — the dispatcher's contract.** Its `asyncHandler` is the one error
+     * path. A handler that caught and called `next` would hand one failure to two error paths,
+     * and a handler that awaited another route's `asyncHandler`-wrapped static would resolve
+     * before the work finished while that wrapper's own `.catch(next)` swallowed the error — a
+     * tap that produces no message and no log line.
+     *
+     * ⚠ The earlier shape of this controller did exactly the first of those (`next(error)` inside
+     * a prefix matcher), copied from a sibling stream before the contract was settled.
+     */
+    assert('⛔ the tap handler THROWS its refusals and never touches `next` or a wrapped static', () => {
+        const src = chatCode();
+        const start = src.indexOf('export async function paymentTap(');
+        const tap = start < 0 ? '' : src.slice(start, src.indexOf('\n}\n', start));
+        const signature = tap.slice(0, tap.indexOf('{'));
+        return start > 0
+            && /action:\s*ParsedBotAction/.test(signature)
+            && !/\bnext\b/.test(tap)
+            && !tap.includes('catch (')
+            && !tap.includes('BotCheckoutController.')
+            && !src.includes('handleBotCheckoutTap');
+    });
+
+    /**
+     * ⚠ **"Try again" on a basket that has since been paid is good news, not a refusal.** And
+     * only that one code is caught — a catch-all here would turn a real gateway refusal into a
+     * cheerful "settled".
+     */
+    assert('⛔ a retry that finds the basket already paid reports SETTLED, and catches nothing else', () => {
+        const src = chatCode();
+        const start = src.indexOf('async function retryCharge(');
+        const retry = src.slice(start, src.indexOf('\n}\n', start));
+        const catches = retry.match(/catch \(error\)/g) ?? [];
+        return catches.length === 1
+            && retry.includes('error.code === ERROR_CODES.PAYMENT_ORDER_ALREADY_PAID')
+            && retry.includes("toPaymentReport(transaction, 'SUCCEEDED')")
+            && retry.includes('throw error;');
+    });
+
+    /**
+     * ⛔ **Two doors onto one charge must refuse the same inputs.** The chat retry once validated
+     * a typed number with a 6–20 character length check, which put it in front of NotchPay and
+     * My-CoolPay unvalidated — the exact defect `payment.validators.ts` was written to close.
+     */
+    assert('⛔ a number typed in chat is validated with the same E.164 schema as the screen', () => {
+        const chat = chatCode();
+        const retrySchema = chat.slice(chat.indexOf('const RetrySchema'), chat.indexOf('.strict();', chat.indexOf('const RetrySchema')));
+        return retrySchema.includes('OptionalPhoneNumberSchema')
+            && !/z\.string\(\)\.trim\(\)\.min\(6\)/.test(retrySchema)
+            && screenCode().includes('OptionalPhoneNumberSchema');
     });
 
     /**
@@ -623,8 +894,33 @@ function main(): void {
      * different handsets for one customer — discovered by them, while trying to pay.
      */
     assert('⛔ the chat and the screen resolve the payable number the same way', () =>
-        chatCode().includes("import { storedPayerNumber } from '../miniapp/surfaces/checkout.controller'")
+        /import \{[^}]*\bstoredPayerNumber\b[^}]*\} from '\.\.\/miniapp\/surfaces\/checkout\.controller'/.test(chatCode())
         && !chatCode().includes('gateway_customer_id'));
+
+    /**
+     * ⛔ **A number no mobile network can be worked out for is refused BEFORE it costs anything.**
+     * NotchPay resolves the network from the prefix inside the gateway — after the spend and after
+     * the orders exist — so without this a number outside `cm-operator.ts`'s table cost the
+     * customer their screen AND left an unpaid order and a stock hold behind. The typed number is
+     * checked before the spend; the account's, which needs the session, before the orders.
+     */
+    assert('⛔ the mobile network is checked before the spend (typed) and before the orders (account)', () => {
+        const src = screenCode();
+        const start = src.indexOf('export async function placeCheckout(');
+        const place = start < 0 ? '' : src.slice(start, src.indexOf('\n}\n', start));
+        const spend = place.indexOf("inAppSurfaceStore.consume('co'");
+        const typed = place.indexOf('assertNetworkChargeable(gateway, typedNumber, false)');
+        const account = place.indexOf('assertNetworkChargeable(gateway, payerNumber, true)');
+        const orders = place.indexOf('createOrdersFromCart(');
+        const checkAt = src.indexOf('function assertNetworkChargeable(');
+        const check = checkAt < 0 ? '' : src.slice(checkAt, src.indexOf('\n}\n', checkAt));
+        return spend > 0
+            && typed > 0 && typed < spend
+            && account > spend && account < orders
+            && check.includes("gateway !== 'NOTCHPAY'")
+            && check.includes('resolveCameroonOperator(')
+            && check.includes('ERROR_CODES.PAYMENT_OPERATOR_UNDETERMINED');
+    });
 
     console.log('\n── 10 · ⭐ The trigger — the silence at the moment the order is lost ──');
 
@@ -668,14 +964,40 @@ function main(): void {
      * be moving. `releaseDeadAttempt` is reached only from inside a NEW attempt, so a customer
      * pressing pay would be told their payment failed as they pressed it.
      */
+    /**
+     * ⚠ **REWRITTEN because the first version was VACUOUS, proven by mutation.** It sliced the
+     * orchestrator from one method name to the next and asserted an absence. Renaming
+     * `recordFailedAttempt` AND making it notify — a real regression — still passed: `indexOf`
+     * returned -1, the slice became something else, and an absence is true of anything.
+     *
+     * Two changes make it unable to be true of nothing:
+     *   - **scope first** — each named method must be found, bounded at its own close, or the
+     *     assertion fails rather than passing;
+     *   - **the whole file, not just two spans** — every call anywhere must sit inside one of
+     *     the two SANCTIONED methods, so a renamed method, a new method or the OTP path cannot
+     *     notify without failing this, whatever it is called.
+     */
     assert('⛔ a merely-locally-failed attempt tells the customer NOTHING', () => {
         const src = orchestratorCode();
-        const span = (from: string, to: string): string =>
-            src.slice(src.indexOf(from), to ? src.indexOf(to) : undefined);
-        return !span('private async recordFailedAttempt', 'private async retireDeadAttempt')
-            .includes('handlePaymentFailure')
-            && !span('private async releaseDeadAttempt', 'private lastFailureWasRefused')
-                .includes('handlePaymentFailure');
+        const method = (sig: string): string | null => {
+            const start = src.indexOf(sig);
+            return start < 0 ? null : src.slice(start, src.indexOf('\n  }\n', start));
+        };
+        const record = method('private async recordFailedAttempt(');
+        const release = method('private async releaseDeadAttempt(');
+        const verify = method('async verifyPayment(');
+        const webhook = method('async applyWebhookEvent(');
+        if (!record || !release || !verify || !webhook) {
+            console.error('      a scanned method was not found — the absence checks would be vacuous');
+            return false;
+        }
+
+        const calls = (text: string): number => (text.match(/this\.handlePaymentFailure\(/g) ?? []).length;
+        const sanctioned = calls(verify) + calls(webhook);
+        return !record.includes('handlePaymentFailure')
+            && !release.includes('handlePaymentFailure')
+            && sanctioned === 2
+            && calls(src) === sanctioned;
     });
 
     assert('⛔ the customer stack SUBSCRIBES to it', () =>

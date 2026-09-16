@@ -1,145 +1,136 @@
-import type { FlowDefinition } from './flow-definition.types';
+import type { FlowDefinition, FlowScreen } from './flow-definition.types';
+import { FLOW_SCREEN_TITLE, NOTICE_SCREEN, noticeScreen } from './notice.screen';
 
 /**
  * The product detail, as a WhatsApp Flow — the port of the Telegram `pd` screen.
  *
- * ── ⚠ THE OPTION MATRIX CANNOT CROSS, AND THIS IS WHAT REPLACES IT ──────────
- * `pd.html` draws one chip row per option — Size, Colour — and matches the customer's
- * selections against `variants[].valueIds` **positionally** to find the variant, then updates
- * the price and enables the button. That algorithm is client-side array matching, and a Flow
- * screen cannot do it: a Flow renders declared data and submits a form, with no way to search
- * an array or recompute a price between taps.
+ * ── ⚠ THE OPTION MATRIX CANNOT CROSS, SO IT IS FLATTENED ────────────────────
+ * `pd.html` draws one chip row per option and matches the customer's selections against
+ * `variants[].valueIds` **positionally** to find the variant. A Flow screen can't search an
+ * array or reprice between taps, so the matrix becomes **one list of variants**, each named by
+ * `buildVariantDisplayName` (format "Size: M, Colour: Red") and priced in its own row. No
+ * positional matching exists on this channel at all, so the misalignment defect `pd.html`'s own
+ * comment warns about can't happen here.
  *
- * There were two ways across and the flatter one won:
+ *   | Telegram (`pd.html`)              | WhatsApp (this Flow)                             |
+ *   |-----------------------------------|--------------------------------------------------|
+ *   | chip rows per option              | one drop-down list of variants                    |
+ *   | price updates as you choose       | price shown per row                               |
+ *   | sold-out variant greyed           | the same, **disabled** (`enabled: false`)         |
+ *   | button label follows the variant  | one label, from the default variant's affordance  |
  *
- *   **(a) Keep the option chips and resolve server-side.** Dropdowns per option, footer fires
- *   `data_exchange`, the endpoint matches the variant and returns the screen again with a
- *   price. Faithful to Telegram, and it costs **an encrypted round trip per selection** on a
- *   mobile connection — with the screen re-rendering under the customer each time.
+ * ⚠ **`Dropdown`, not `RadioButtonsGroup`, because of a cap.** Meta caps a radio group at 20
+ * options and a drop-down at 200 (100 with images). A product with more than 20 variants would
+ * lose the rest silently, and silently dropping something a customer could buy is not a trade
+ * this platform makes. A drop-down takes one more tap to open. It never hides a variant.
  *
- *   **(b) Flatten the matrix into one list of variants.** One row per buyable variant, named
- *   by `buildVariantDisplayName` (*"Large · Blue"*), priced in its own description. One
- *   selection, no round trip, and — the part that decided it — **no positional matching
- *   anywhere**, so the defect `pd.html`'s own comment warns about (derive `valueIds` from the
- *   full option list while sending a filtered one, and every comparison silently misaligns,
- *   no variant ever matches, and nothing fails for anybody to find) cannot exist on this
- *   channel at all.
+ * ── ⚠ TWO PRODUCT SCREENS, ONE DEFINITION ───────────────────────────────────
+ * Meta's reference documents no `visible` property, so an `Image` can't be hidden when a
+ * product has no picture, and an `Image` with no bytes is not a valid component. So there are
+ * two screens, `PRODUCT` and `PRODUCT_NO_IMAGE`, and the endpoint picks one. Both are built by
+ * `productScreen()` below from **one** list of children, with the image prepended or not. Two
+ * hand-written screens would drift the first time one gained a caption.
  *
- * (b), and the option list is not sent to this screen at all. It is a real difference and it
- * is stated where somebody will look for it rather than discovered:
+ * ⚠ **The image is base64 bytes, never a URL.** Meta's component reference: `src` is "Base64
+ * of an image", "up to 300kb". The endpoint reads the bytes from storage only for a file whose
+ * `access` is `public`, and **before** encoding, so a `quota_blocked` picture can't reach a
+ * customer through the Flow after the platform stopped serving its address.
  *
- *   | Telegram (`pd.html`)              | WhatsApp (this Flow)                        |
- *   |-----------------------------------|---------------------------------------------|
- *   | chip rows per option              | one flat list of variants                    |
- *   | price updates as you choose       | price shown per row, all at once             |
- *   | out-of-stock variant shown greyed | **omitted, with a line saying how many**     |
- *   | button label follows the variant  | one label, from the default variant          |
- *
- * ⚠ **Out-of-stock variants are OMITTED rather than shown disabled**, and this one is worth
- * the owner's eye. A Flow cannot disable one row of a selector, so the alternatives were to
- * list a variant the customer can select and then refuse — telling somebody *after* they
- * chose that they cannot have it — or to leave it out. Leaving it out cannot produce a dead
- * selection, and the count is reported (`soldOutNote`) so *"the blue one is sold out"* is
- * still answerable. **A product with NO buyable variant must not open this Flow at all**; the
- * chat says so instead, where it can offer something else.
- *
- * ⚠ **One footer label, taken from the default variant's affordance.** The four labels —
- * Bargain · Add to cart · Buy now · Book — are resolved server-side from the product's type
- * and negotiability, which are product-level facts, so a per-variant label would differ only
- * in constructed cases. `affordance.enabled` is what decides whether the Flow opens.
+ * ── THE FOOTER WRITES, AND WHY THAT IS SAFE HERE ────────────────────────────
+ * The Telegram page performs the purchase itself (`POST /act`), so this Flow does too: the
+ * footer is a `data_exchange` and the endpoint calls the same purchase core. ⚠ **Meta retries
+ * an exchange on its own schedule**, which a browser does not, so the write must be idempotent
+ * per open Flow. See `screens/detail.adapter.ts`.
  */
+
+/** The data both product screens declare. `image` is present only on `PRODUCT`. */
+function productData(withImage: boolean): FlowScreen['data'] {
+    return {
+        ...(withImage
+            ? { image: { type: 'string' as const, __example__: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==' } }
+            : {}),
+        title: { type: 'string', __example__: 'Electric kettle 1.7L' },
+        /** Store name and city. ⚠ City only — a ship-from address is private. */
+        storeLine: { type: 'string', __example__: 'Chez Awa · Douala' },
+        description: { type: 'string', __example__: 'Stainless steel, auto shut-off.' },
+        chooseLabel: { type: 'string', __example__: 'Choose' },
+        variants: {
+            type: 'array',
+            items: {
+                type: 'object',
+                properties: {
+                    /** ⚠ The VARIANT id, unlike the listing, which sends a product id. */
+                    id: { type: 'string' },
+                    /** ⚠ Capped at 30 by Meta; the adapter truncates and repeats the full name below. */
+                    title: { type: 'string' },
+                    /** Price, and the full name when the title was cut, and "Out of stock". */
+                    description: { type: 'string' },
+                    enabled: { type: 'boolean' },
+                },
+            },
+            __example__: [
+                { id: '66f1a2b3c4d5e6f708192a40', title: 'Size: M, Colour: Red', description: '12 500 FCFA', enabled: true },
+                { id: '66f1a2b3c4d5e6f708192a41', title: 'Size: L, Colour: Red', description: '12 500 FCFA · Out of stock', enabled: false },
+            ],
+        },
+        /** Bargain · Add to cart · Buy now · Book. Resolved server-side, capped at 20 upstream. */
+        actionLabel: { type: 'string', __example__: 'Add to cart' },
+    };
+}
+
+function productScreen(id: string, withImage: boolean): FlowScreen {
+    return {
+        id,
+        title: FLOW_SCREEN_TITLE,
+        data: productData(withImage),
+        layout: {
+            type: 'SingleColumnLayout',
+            children: [
+                ...(withImage
+                    ? [{ type: 'Image', src: '${data.image}', height: 240, 'scale-type': 'contain' }]
+                    : []),
+                { type: 'TextHeading', text: '${data.title}' },
+                { type: 'TextCaption', text: '${data.storeLine}' },
+                { type: 'TextBody', text: '${data.description}' },
+                {
+                    type: 'Dropdown',
+                    name: 'variant',
+                    label: '${data.chooseLabel}',
+                    required: true,
+                    'data-source': '${data.variants}',
+                },
+                {
+                    type: 'Footer',
+                    label: '${data.actionLabel}',
+                    /**
+                     * ⚠ **`data_exchange`: the endpoint performs the purchase**, as `POST /act`
+                     * does for the Telegram page. The result is shown on the notice screen,
+                     * which is why that screen is this screen's only route.
+                     */
+                    'on-click-action': {
+                        name: 'data_exchange',
+                        payload: { variantId: '${form.variant}' },
+                    },
+                },
+            ],
+        },
+    };
+}
+
+export const PRODUCT_DETAIL_SCREEN = 'PRODUCT';
+export const PRODUCT_DETAIL_NO_IMAGE_SCREEN = 'PRODUCT_NO_IMAGE';
+
 export const PRODUCT_DETAIL_FLOW: FlowDefinition = {
     version: '6.0',
     data_api_version: '3.0',
-    routing_model: { PRODUCT: [] },
-
+    routing_model: {
+        [PRODUCT_DETAIL_SCREEN]: [NOTICE_SCREEN],
+        [PRODUCT_DETAIL_NO_IMAGE_SCREEN]: [NOTICE_SCREEN],
+        [NOTICE_SCREEN]: [],
+    },
     screens: [
-        {
-            id: 'PRODUCT',
-            title: 'Product',
-            terminal: true,
-
-            data: {
-                title: { type: 'string', __example__: 'Electric kettle 1.7L' },
-                /** Store name and city on one line. ⚠ City only — a ship-from address is private. */
-                storeLine: { type: 'string', __example__: 'Chez Awa · Douala' },
-                description: { type: 'string', __example__: 'Stainless steel, auto shut-off.' },
-                /**
-                 * ⚠ **Sent as a URL and fetched by META'S SERVERS, not the handset.** A
-                 * loopback, RFC1918 or carrier-NAT host is not a slow image — the fetch fails
-                 * and the component fails with it. `isReachableByPlatformServers` already
-                 * guards this for the chat cards and must guard it here too; an unreachable
-                 * image is sent as an empty string and the component is skipped.
-                 */
-                imageUrl: { type: 'string', __example__: '' },
-                variants: {
-                    type: 'array',
-                    items: {
-                        type: 'object',
-                        properties: {
-                            /** ⚠ The VARIANT id here — unlike the listing, which sends a product id. */
-                            id: { type: 'string', __example__: '' },
-                            /** `buildVariantDisplayName` — the same rule the Mini App uses. */
-                            title: { type: 'string', __example__: '' },
-                            /** The price, already formatted. Never a number: see `product-listing.flow.ts`. */
-                            description: { type: 'string', __example__: '' },
-                        },
-                    },
-                    __example__: [
-                        { id: '66f1a2b3c4d5e6f708192a40', title: '1.7L · Steel', description: '12 500 FCFA' },
-                        { id: '66f1a2b3c4d5e6f708192a41', title: '1.7L · Black', description: '12 500 FCFA' },
-                    ],
-                },
-                /**
-                 * *"2 options are sold out"*, or empty.
-                 *
-                 * ⚠ **Composed by the endpoint, in the customer's language, never assembled
-                 * here.** A Flow cannot pluralise or translate — `${data.x}` renders what it
-                 * is handed — and this platform keeps its copy in one place per audience.
-                 */
-                soldOutNote: { type: 'string', __example__: '' },
-                /** Bargain · Add to cart · Buy now · Book. Resolved server-side. */
-                actionLabel: { type: 'string', __example__: 'Add to cart' },
-            },
-
-            layout: {
-                type: 'SingleColumnLayout',
-                children: [
-                    { type: 'Image', src: '${data.imageUrl}', height: 240 },
-                    { type: 'TextHeading', text: '${data.title}' },
-                    { type: 'TextCaption', text: '${data.storeLine}' },
-                    { type: 'TextBody', text: '${data.description}' },
-                    {
-                        type: 'RadioButtonsGroup',
-                        name: 'variant',
-                        required: true,
-                        'data-source': '${data.variants}',
-                    },
-                    { type: 'TextCaption', text: '${data.soldOutNote}' },
-                    {
-                        type: 'Footer',
-                        /** ⚠ Dynamic, so one Flow serves all four purchase verbs. */
-                        label: '${data.actionLabel}',
-                        /**
-                         * ⚠ **`complete`, not `data_exchange`.** Adding to a basket is a WRITE,
-                         * and a write belongs on the bot surface behind its idempotency guard —
-                         * not inside a Flow exchange, which has no `Idempotency-Key` and whose
-                         * retries we do not control. The Flow reports the choice; the chat acts
-                         * on it. That is the same split `co` makes for the same reason, one
-                         * step earlier.
-                         */
-                        'on-click-action': {
-                            name: 'complete',
-                            payload: {
-                                screen: 'pd',
-                                variantId: '${form.variant}',
-                            },
-                        },
-                    },
-                ],
-            },
-        },
+        productScreen(PRODUCT_DETAIL_SCREEN, true),
+        productScreen(PRODUCT_DETAIL_NO_IMAGE_SCREEN, false),
+        noticeScreen('pd'),
     ],
 };
-
-export const PRODUCT_DETAIL_SCREEN = 'PRODUCT';

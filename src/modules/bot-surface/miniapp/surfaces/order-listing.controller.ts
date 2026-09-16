@@ -5,11 +5,16 @@ import { asyncHandler } from '../../../../api/middlewares/async-handler';
 import { sendSuccess } from '../../../../core/responses';
 import { createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
-import { FulfillmentStatus, OrderModel } from '../../../orders/order.model';
+import { OrderModel } from '../../../orders/order.model';
 import { CustomerOrderGroup, OrderRepository } from '../../../orders/order.repository';
 import { StoreRepository } from '../../../store/repositories/store.repository';
 import { aggregatePaymentStatus } from '../../controllers/bot-order.controller';
 import { formatBotPrice } from '../../domain/product-card';
+import {
+    botFulfillmentStateLabel,
+    botPaymentStateLabel,
+    toBotOrderPaymentState,
+} from '../../domain/bot-order-status-copy';
 import { BotCopyLanguage, toBotCopyLanguage } from '../../domain/bot-error-copy';
 import { InAppSurfaceSession, inAppSurfaceStore } from '../../services/inapp-surface.store';
 
@@ -201,8 +206,12 @@ interface OrderRow {
     orderNumber: string;
     /** The shop's business name, from the Store — never the vendor's display name. */
     storeName: string | null;
-    /** Already in the customer's language, or null when the status is not one we publish. */
-    statusText: string | null;
+    /**
+     * Already in the customer's language. An unrecognised status reads as the shared neutral
+     * "Status not available" — never the raw internal word, and never silence — which is the
+     * same floor the chat uses, so the two surfaces cannot disagree about it.
+     */
+    statusText: string;
 }
 
 /**
@@ -218,7 +227,7 @@ interface OrderGroupCard {
     cartId: string;
     dateText: string;
     totalText: string;
-    paymentText: string | null;
+    paymentText: string;
     /** The first few things bought, so a customer can recognise the checkout. */
     summaryText: string | null;
     orders: OrderRow[];
@@ -239,7 +248,7 @@ function toGroupCard(
         orders: group.orders.map((order) => ({
             orderNumber: order.orderNumber,
             storeName: storeNames.get(order.vendorId)?.name ?? null,
-            statusText: fulfilmentTextOf(order.fulfillmentStatus, language),
+            statusText: botFulfillmentStateLabel(order.fulfillmentStatus, language),
         })),
     };
 }
@@ -325,231 +334,53 @@ function formatDate(at: Date, language: BotCopyLanguage): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  The status vocabulary
+//  The status words — IMPORTED, and this screen holds no vocabulary of its own
 //
-//  ⚠ WHY IT LIVES HERE AND NOT IN `inapp-copy.ts`
+//  ⚠ **ONE table, in `domain/bot-order-status-copy.ts`, read by the chat and by this screen.**
+//  The chat order list is literally the first five rows of the list this screen continues, so
+//  a customer who taps "Load more" must not watch the same order change state. On 2026-09-16
+//  the two surfaces were found to word four of the nine fulfilment statuses differently —
+//  `pending` read "Order received" in chat and "Preparing" here — with each file total, each
+//  rationale sound, and no assertion able to see across them.
 //
-//  That table is Stream 0's and is read by five screens, and `assertInAppCopyComplete` runs at
-//  BOOT — a key added there mid-flight with one translation missing stops the server for every
-//  session in this tree. It is also the wrong table in kind: it words the page's *chrome*
-//  (loading, retry, headings), whereas these are labels for *data*, chosen per row from a
-//  database value. The page never maps a status to a word; it renders the word it is given, the
-//  same way it renders a price it did not compute.
+//  A guard comparing two tables would have caught the NEXT drift after somebody wrote it. One
+//  table cannot drift at all, so this file's copies were deleted and it imports the shared one.
+//  The collapse itself — seven words for nine statuses, `received` split from `preparing`,
+//  `partly_delivered` kept apart from "on its way", cash on delivery shown as a method — is
+//  documented there, beside the words, and is not repeated here to drift.
 //
-//  ⚠ Both maps are TOTAL over their status union, so a tenth fulfilment status is a compile
-//  error here rather than a row that inherits whatever the fallback happened to be. That is
-//  `customer-shipment.dto.ts`'s rule, and it is the rule because the fallback a person reaches
-//  for while adding a status is the permissive one.
+//  ⚠ **A domain file rather than a screen controller is the right home**, because two surfaces
+//  read it. Changing a word means changing it there, once, for both.
 // ─────────────────────────────────────────────────────────────────────────────
 
 type Copy = Record<BotCopyLanguage, string>;
 
-/**
- * The six words an order's progress collapses to.
- *
- * Nine internal fulfilment statuses, six customer words — the same collapse
- * `customer-shipment.dto.ts` performs on eleven shipment statuses, and for the same reason:
- * `partially_shipped` describes how many parcels a warehouse has released, which is the
- * platform's business rather than the customer's.
- *
- * ⚠ **`partially_delivered` keeps its own word rather than collapsing into "on its way".** A
- * customer who has already received half of a multi-vendor checkout must not be told nothing
- * has arrived; that is the one place this collapse would state something false.
- */
-type OrderProgress =
-    | 'preparing'
-    | 'shipped'
-    | 'partly_delivered'
-    | 'delivered'
-    | 'cancelled'
-    | 'returned';
-
-const PROGRESS_OF: Readonly<Record<FulfillmentStatus, OrderProgress>> = Object.freeze({
-    pending: 'preparing',
-    processing: 'preparing',
-    partially_shipped: 'shipped',
-    shipped: 'shipped',
-    partially_delivered: 'partly_delivered',
-    delivered: 'delivered',
-    // The vendor has closed the order out. To the customer that is the same fact as delivered,
-    // and "fulfilled" is a warehouse word.
-    fulfilled: 'delivered',
-    cancelled: 'cancelled',
-    returned: 'returned',
-});
-
-const PROGRESS_COPY: Readonly<Record<OrderProgress, Copy>> = Object.freeze({
-    preparing: {
-        en: 'Preparing',
-        fr: 'En préparation',
-        pt: 'Em preparação',
-        es: 'En preparación',
-        ar: 'قيد التحضير',
-    },
-    shipped: {
-        en: 'On its way',
-        fr: 'En route',
-        pt: 'A caminho',
-        es: 'En camino',
-        ar: 'في الطريق',
-    },
-    partly_delivered: {
-        en: 'Partly delivered',
-        fr: 'Partiellement livrée',
-        pt: 'Parcialmente entregue',
-        es: 'Entregado en parte',
-        ar: 'تم تسليم جزء منه',
-    },
-    delivered: {
-        en: 'Delivered',
-        fr: 'Livrée',
-        pt: 'Entregue',
-        es: 'Entregado',
-        ar: 'تم التسليم',
-    },
-    cancelled: {
-        en: 'Cancelled',
-        fr: 'Annulée',
-        pt: 'Cancelada',
-        es: 'Cancelado',
-        ar: 'ملغى',
-    },
-    returned: {
-        en: 'Returned',
-        fr: 'Retournée',
-        pt: 'Devolvida',
-        es: 'Devuelto',
-        ar: 'مُعاد',
-    },
-});
-
-/**
- * ⚠ **An unrecognised status renders NO word rather than a guessed one.**
- *
- * `CustomerOrderGroup` types this field as a plain `string` — it comes out of an aggregation
- * pipeline, not out of the schema's union — so the map above cannot be the only guard. A row
- * with a status we do not publish shows its date, its shop and its total and stays silent
- * about progress, which is honest. The alternative, defaulting to "Preparing", would tell a
- * customer with a cancelled order that their parcel is being packed.
- */
-function fulfilmentTextOf(status: string, language: BotCopyLanguage): string | null {
-    const progress = PROGRESS_OF[status as FulfillmentStatus] as OrderProgress | undefined;
-    return progress ? PROGRESS_COPY[progress][language] : null;
-}
-
-/**
- * The seven payment words.
- *
- * Keyed on `aggregatePaymentStatus`'s output rather than on `PaymentStatus`, because a checkout
- * group is several orders and they can disagree.
- *
- * ⚠ **Imported rather than re-implemented, and that is a deliberate refusal of a THIRD copy.**
- * `customer-order.controller.ts` already holds a private copy of this collapse beside the bot
- * surface's exported one. Two surfaces disagreeing about what "partly paid" means is a bug a
- * customer reports as the app contradicting the chat; three would be worse. The import costs a
- * module load that production already performs at boot.
- *
- * `'unknown'` — which that function returns only for an empty group, i.e. never in practice —
- * is deliberately absent, and falls through to no label at all.
- */
-type GroupPayment =
-    | 'paid'
-    | 'partially_paid'
-    | 'awaiting_payment'
-    | 'failed'
-    | 'refunded'
-    | 'disputed'
-    | 'mixed';
-
-const PAYMENT_COPY: Readonly<Record<GroupPayment, Copy>> = Object.freeze({
-    paid: {
-        en: 'Paid',
-        fr: 'Payée',
-        pt: 'Paga',
-        es: 'Pagado',
-        ar: 'مدفوع',
-    },
-    partially_paid: {
-        en: 'Partly paid',
-        fr: 'Partiellement payée',
-        pt: 'Parcialmente paga',
-        es: 'Pagado en parte',
-        ar: 'مدفوع جزئيًا',
-    },
-    awaiting_payment: {
-        en: 'Awaiting payment',
-        fr: 'En attente de paiement',
-        pt: 'A aguardar pagamento',
-        es: 'Pendiente de pago',
-        ar: 'في انتظار الدفع',
-    },
-    failed: {
-        en: 'Payment failed',
-        fr: 'Paiement échoué',
-        pt: 'Pagamento falhou',
-        es: 'Pago fallido',
-        ar: 'فشل الدفع',
-    },
-    refunded: {
-        en: 'Refunded',
-        fr: 'Remboursée',
-        pt: 'Reembolsada',
-        es: 'Reembolsado',
-        ar: 'تم الاسترداد',
-    },
-    disputed: {
-        en: 'Payment disputed',
-        fr: 'Paiement contesté',
-        pt: 'Pagamento contestado',
-        es: 'Pago en disputa',
-        ar: 'الدفع محل نزاع',
-    },
-    /**
-     * Reached when the orders in one checkout are in different unpaid states — one refunded and
-     * one failed, say. Worded as something to look at rather than as a verdict, because it is
-     * genuinely several facts and the chat is where a customer can ask which.
-     */
-    mixed: {
-        en: 'Payment needs attention',
-        fr: 'Paiement à vérifier',
-        pt: 'Pagamento a verificar',
-        es: 'Pago por revisar',
-        ar: 'الدفع يحتاج مراجعة',
-    },
-});
-
-/**
- * ⚠ **Cash on delivery is shown as a METHOD, not as a debt.**
- *
- * A COD order sits at `pending` until the agent collects, so the aggregate honestly reads
- * "awaiting payment" — which on a screen tells a customer who owes nothing yet that they are
- * behind on a payment. When every order in the checkout is cash on delivery and none has been
- * paid, the method is the truer thing to show.
- *
- * ⚠ **This is the method, never the code.** The delivery code is a credential disclosed once,
- * on request, through a route built for it; nothing on this screen's data path can even read
- * it — see the file header.
- */
-const CASH_ON_DELIVERY: Copy = Object.freeze({
-    en: 'Cash on delivery',
-    fr: 'Paiement à la livraison',
-    pt: 'Pagamento na entrega',
-    es: 'Pago contra entrega',
-    ar: 'الدفع عند الاستلام',
-});
-
 const CASH_ON_DELIVERY_METHOD = 'cash_on_delivery';
 
-function paymentTextOf(group: CustomerOrderGroup, language: BotCopyLanguage): string | null {
-    const aggregate = aggregatePaymentStatus(group.paymentStatuses);
-
+/**
+ * The payment word for a checkout group.
+ *
+ * ⚠ **`aggregatePaymentStatus` is imported rather than re-implemented** — a checkout group is
+ * several orders and they can disagree, and `customer-order.controller.ts` already holds a
+ * private second copy of that collapse. A third would be a third opinion about what "partly
+ * paid" means.
+ *
+ * ⚠ **Cash on delivery is shown as a METHOD, not as a debt**, when every order in the checkout is
+ * COD and none is paid: a COD order sits at `pending` until the agent collects, and "awaiting
+ * payment" would tell a customer who owes nothing yet that they are behind. The rule itself lives
+ * in `botPaymentStateLabel`; this only decides whether the checkout qualifies. It is the METHOD —
+ * the delivery code is a credential this screen's data path cannot even read (see the header).
+ */
+function paymentTextOf(group: CustomerOrderGroup, language: BotCopyLanguage): string {
     const allCash =
         group.orders.length > 0
         && group.orders.every((order) => order.paymentMethod === CASH_ON_DELIVERY_METHOD);
-    if (allCash && aggregate === 'awaiting_payment') return CASH_ON_DELIVERY[language];
 
-    const copy = PAYMENT_COPY[aggregate as GroupPayment] as Copy | undefined;
-    return copy ? copy[language] : null;
+    return botPaymentStateLabel(
+        toBotOrderPaymentState(aggregatePaymentStatus(group.paymentStatuses)),
+        language,
+        { cashOnDelivery: allCash },
+    );
 }
 
 /**
@@ -569,16 +400,14 @@ const ORDERS_EMPTY: Copy = Object.freeze({
     ar: 'ليس لديك طلبات بعد. اسألني في المحادثة وسأساعدك في العثور على شيء.',
 });
 
-/** ⚠ Exported for `test:inapp-orders` § 2, which pins both maps and the projection's shape. */
+/**
+ * ⚠ Exported for `test:inapp-orders` § 2. No status table is exported, because there is none
+ * here any more — the suite imports the shared one directly and checks this screen is wired to it.
+ */
 export const __ORDER_LISTING = Object.freeze({
     PAGE_SIZE,
     MAX_PAGE,
-    PROGRESS_OF,
-    PROGRESS_COPY,
-    PAYMENT_COPY,
-    CASH_ON_DELIVERY,
     ORDERS_EMPTY,
-    fulfilmentTextOf,
     paymentTextOf,
     summarise,
     toGroupCard,

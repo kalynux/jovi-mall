@@ -205,8 +205,93 @@ function main(): void {
             .replace(/^\s*\/\/[^\n]*$/gm, '');
 
     const SURFACES = path.join(__dirname, '../../src/modules/bot-surface/miniapp/surfaces');
-    const LISTING = codeOf(path.join(SURFACES, 'product-listing.controller.ts'));
-    const DETAIL = codeOf(path.join(SURFACES, 'product-detail.controller.ts'));
+
+    /**
+     * ⚠ **Each screen is scanned as its controller AND its read, together — and the reason is
+     * a vacuous pass, found by moving code.**
+     *
+     * The projections were extracted into `*.read.ts` so a WhatsApp Flow can call the same read.
+     * Re-running this suite straight after the move failed 13 positive assertions, which was
+     * expected. What was NOT expected is which ones still PASSED: "neither controller reaches for
+     * ICU", "does NOT pay for a second catalogue read", "the detail hardcodes no rung label".
+     * Every one of those passed **only because the logic it guards had left the file it scans.**
+     * An absence check over a file that no longer holds the code is true of any code at all.
+     *
+     * So a screen's scanned surface is everything that decides it. A future split into a third
+     * file must be added here, or these "must not" assertions go quietly green over code they no
+     * longer see — which is why the next assertion pins that the reads are actually in scope.
+     */
+    const LISTING_CONTROLLER = codeOf(path.join(SURFACES, 'product-listing.controller.ts'));
+    const LISTING_READ = codeOf(path.join(SURFACES, 'product-listing.read.ts'));
+    const DETAIL_CONTROLLER = codeOf(path.join(SURFACES, 'product-detail.controller.ts'));
+    const DETAIL_READ = codeOf(path.join(SURFACES, 'product-detail.read.ts'));
+    const LISTING = `${LISTING_CONTROLLER}\n${LISTING_READ}`;
+    const DETAIL = `${DETAIL_CONTROLLER}\n${DETAIL_READ}`;
+
+    assert('both screens\' reads are actually in the scanned surface — a missing read makes every "must not" below vacuous',
+        () => LISTING_READ.includes('export async function readListingPage')
+            && DETAIL_READ.includes('export async function readProductDetail'));
+
+    console.log('\n── ⚠ One read, two renderings — the reads stay channel-neutral ──');
+
+    /**
+     * ⚠ **The reads are imported by a WhatsApp Flow as well as by these controllers**, so
+     * anything request- or session-shaped inside them is a Mini App behaviour leaking into
+     * another channel. Two are specifically harmful:
+     *
+     *   - **`touch`** — a Flow fetching data would silently extend an `ia_` session's life;
+     *   - **Express** — and more generally a controller import, which is the path by which some
+     *     surface modules become unimportable under bare ts-node (they hang, producing no output).
+     */
+    assert('⛔ neither read touches Express, a handle, or the session store', () =>
+        [LISTING_READ, DETAIL_READ].every((read) =>
+            !read.includes("from 'express'")
+            && !read.includes('asyncHandler')
+            && !read.includes('inAppSurfaceStore')
+            && !read.includes('.touch(')));
+
+    assert('the Mini App controllers still extend their own sessions — it moved OUT of the read, not away', () =>
+        LISTING_CONTROLLER.includes("touch('pl'") && DETAIL_CONTROLLER.includes("touch('pd'"));
+
+    /**
+     * ⚠ **The picture is deliberately NOT resolved in a read**, because the right rule depends
+     * on who fetches it: a browser falls back to a raw URL a phone may reach, a platform needs a
+     * reachable one, and a WhatsApp Flow takes base64 bytes and no URL at all. A read that applied
+     * the browser's rule would hand a Flow a URL it cannot use.
+     */
+    assert('⛔ neither read applies an image-fetching rule', () =>
+        [LISTING_READ, DETAIL_READ].every((read) =>
+            !read.includes('toPublicMediaUrl') && !read.includes('browserImageUrl')));
+
+    assert('both Mini App controllers apply the BROWSER image rule to the raw source', () =>
+        LISTING_CONTROLLER.includes('browserImageUrl(') && DETAIL_CONTROLLER.includes('browserImageUrl('));
+
+    /**
+     * A Flow needs the picture's BYTES, which it reads through the storage provider by key —
+     * fetching our own public URL over HTTP would fail on a machine whose URL is a carrier-NAT
+     * address. So both reads also hand over the stored file's key, access, type and size.
+     */
+    assert('both reads hand over the picture as a stored file, not only a URL', () =>
+        LISTING_READ.includes('toImageSource(') && DETAIL_READ.includes('toImageSource('));
+
+    /**
+     * ⚠ A `RadioButtonsGroup` holds at most 20 options and the grid's default page is 24, so a
+     * Flow must be able to ask for fewer. A page size fixed inside the read would overflow it.
+     */
+    assert('the listing read takes the page size as a parameter, so a Flow can ask for 20', () =>
+        /pageSize\?:\s*number/.test(LISTING_READ) && LISTING_READ.includes('options.pageSize'));
+
+    /**
+     * ⚠ **The detail controller projects `pd.html`'s contract field by field and never spreads
+     * the read.** The read carries fields that exist for a Flow — `productId`, a per-variant
+     * `label`, the picture as a stored file — and a spread is how a field meant for one renderer
+     * ends up published to every browser.
+     */
+    assert('⛔ the detail controller does not spread the read into the browser response', () =>
+        !/\.\.\.\s*detail\b/.test(DETAIL_CONTROLLER) && !/\.\.\.\s*variant\b/.test(DETAIL_CONTROLLER));
+
+    assert('⛔ the stored-file image never reaches the browser — only the URL does', () =>
+        !/image:\s*detail\.image\b/.test(DETAIL_CONTROLLER) && !/\bimage:\s*product\.image\b/.test(LISTING_CONTROLLER));
 
     /**
      * ⚠ **Read as TEXT rather than imported, and that is a deliberate reversal.**
@@ -235,7 +320,13 @@ function main(): void {
     const DISPLAY_SERVICE = codeOf(
         path.join(__dirname, '../../src/modules/bot-surface/services/product-display.service.ts'));
 
-    const PAGE_SIZE = constant(LISTING, /\bPAGE_SIZE\s*=\s*(\d+)/);
+    /**
+     * `DEFAULT_LISTING_PAGE_SIZE` now, and it lives in the READ. Renamed when it moved, because a
+     * page size is a caller's parameter to that read — a WhatsApp Flow passes 20 — and this is only
+     * the default the Mini App uses. The "found" guard below is what reported the rename, by name,
+     * rather than four comparisons failing against NaN.
+     */
+    const PAGE_SIZE = constant(LISTING_READ, /\bDEFAULT_LISTING_PAGE_SIZE\s*=\s*(\d+)/);
     const CHAT_MAX = constant(DISPLAY_SERVICE, /\bBOT_DISPLAY_MAX_PRODUCTS\s*=\s*(\d+)/);
 
     /**
@@ -289,16 +380,89 @@ function main(): void {
     /**
      * ⚠ A card quotes a price a customer can hold us to, and a listing lives thirty minutes.
      * Page two must say what the product costs NOW, so nothing catalogue-shaped may be written
-     * back onto the session — the session holds the question and the catalogue answers it on
-     * every read.
+     * onto a session — the session holds the question and the catalogue answers it on every read.
      *
-     * The listing mints exactly once, and it is the DETAIL session `open` hands out; the detail
-     * screen mints nothing at all.
+     * ⚠ **This used to COUNT mints — "the listing mints exactly once, the detail screen mints
+     * nothing" — and that was a stand-in for the rule, not the rule.** It went red the day the
+     * detail screen gained Similar items, which mints a listing session pinning a set of product
+     * IDS: exactly the shape `InAppListingQuery.productIds` exists for, and no price in sight. A
+     * guard that fails on correct code teaches the next person to delete it.
+     *
+     * So it now checks what actually matters, per mint call: the object written carries **no
+     * catalogue-shaped key** — no price, no title, no stock, no picture, no variants. Ids are fine;
+     * figures are not. The call sites are extracted by brace-matching rather than a regex, because
+     * a nested `query: { … }` would end a non-greedy match early and hide the rest of the object.
      */
-    assert('⛔ neither screen writes catalogue data back onto a session', () => {
-        const mints = [...LISTING.matchAll(/inAppSurfaceStore\.mint\(/g)].length;
-        return mints === 1 && LISTING.includes("kind: 'pd'") && !DETAIL.includes('.mint(');
+    const mintCalls = (source: string): string[] => {
+        const calls: string[] = [];
+        const marker = 'inAppSurfaceStore.mint(';
+        let from = source.indexOf(marker);
+        while (from !== -1) {
+            const open = source.indexOf('{', from);
+            let depth = 0;
+            let end = open;
+            for (; end < source.length; end++) {
+                if (source[end] === '{') depth++;
+                else if (source[end] === '}' && --depth === 0) break;
+            }
+            calls.push(source.slice(open, end + 1));
+            from = source.indexOf(marker, end);
+        }
+        return calls;
+    };
+    const CATALOGUE_KEY = /\b(price|priceText|compareAtPrice|title|stock|inStock|variants|imageUrl|image|description)\s*:/;
+
+    assert('both screens actually mint — the scan below has calls to inspect (open, and similar items)', () =>
+        mintCalls(LISTING).length >= 1 && mintCalls(DETAIL).length >= 1);
+
+    assert('⛔ no session is ever written with catalogue data — ids only, never figures', () => {
+        const offending = [...mintCalls(LISTING), ...mintCalls(DETAIL)].filter((call) => CATALOGUE_KEY.test(call));
+        if (offending.length > 0) console.error(`      a mint writes catalogue data: ${offending[0].slice(0, 120)}`);
+        return offending.length === 0;
     });
+
+    /**
+     * ⚠ A Similar-items shelf is PINNED at the moment of asking. A listing that re-ran "similar"
+     * per page could reshuffle under the customer as the ranking cache expired.
+     */
+    assert('the similar-items listing is pinned by ids, not re-queried', () =>
+        mintCalls(DETAIL).some((call) => call.includes("kind: 'pl'") && call.includes('productIds')));
+
+    console.log('\n── ⚠ Similar items: one read, two opposite failure rules ──');
+
+    const SIMILAR_READ = codeOf(path.join(SURFACES, 'similar-products.read.ts'));
+
+    /**
+     * ⚠ **The product page must never fail because "similar" could not be computed.** That check
+     * only decides whether a button is drawn, and it reaches a ranking cache and an orders
+     * aggregation in another module. A wobble there must cost one optional button, not the page.
+     */
+    assert('⛔ the product data read swallows a similar-items failure into "no button"', () =>
+        /readSimilarProductIds\([^)]*\)\s*\.then\([\s\S]{0,120}?\)\s*\.catch\(\s*\(\)\s*=>\s*false\s*\)/.test(DETAIL_CONTROLLER));
+
+    /**
+     * ⚠ **…and the TAP must never swallow one.** There the customer pressed the button; a silent
+     * nothing reads as a broken control. So the `similar` handler has no catch of its own.
+     */
+    assert('⛔ the similar-items tap surfaces its failures rather than answering nothing', () => {
+        const start = DETAIL_CONTROLLER.indexOf('static similar');
+        const body = start === -1 ? '' : DETAIL_CONTROLLER.slice(start, DETAIL_CONTROLLER.indexOf('async function readDetailSession'));
+        return start !== -1 && body.includes('readSimilarProductIds(') && !body.includes('.catch(');
+    });
+
+    assert('an empty shelf answers a null url rather than opening an empty grid', () =>
+        /productIds\.length\s*===\s*0[\s\S]{0,80}url:\s*null/.test(DETAIL_CONTROLLER));
+
+    /**
+     * "Similar" is `relatedProductsService`'s ranking and nobody else's. A read that re-ranked or
+     * filtered on top would be a second definition of similar that the storefront does not share.
+     */
+    assert('the similar-items read defers entirely to the catalogue\'s own ranking', () =>
+        SIMILAR_READ.includes('relatedProductsService.forProduct(')
+        && !/\.(sort|filter)\(/.test(SIMILAR_READ));
+
+    assert('⛔ the similar-items read stays channel-neutral too', () =>
+        !SIMILAR_READ.includes("from 'express'") && !SIMILAR_READ.includes('inAppSurfaceStore'));
 
     console.log('\n── ⚠ The English FALLBACK covers every key the page reads ──');
 

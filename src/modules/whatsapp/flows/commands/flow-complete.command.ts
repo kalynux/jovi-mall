@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { CommandHandler } from '../../../command-bus/command-bus';
+import type { RenderableCommandResult } from '../../../command-bus/command-reply';
+import { inAppCopy } from '../../../bot-surface/miniapp/inapp-copy';
 import {
     InAppSurfaceKind,
     inAppSurfaceStore,
@@ -13,128 +15,168 @@ export const command_name = 'flow_complete';
  * ── ⛔ THE GAP THIS CLOSES: A FORM THAT SUBMITTED INTO SILENCE ──────────────
  * A Flow's result does **not** come back on the encrypted data endpoint. It arrives in the
  * conversation as an ordinary inbound message of type `interactive.nfm_reply`, and until this
- * command existed **nothing in any of the three repositories read that message type** —
- * verified by scanning all of `src/` for `nfm_reply`, `response_json` and `flow_reply`: zero
- * hits. So a customer could open a form, fill it in, press the final button, and the thread
- * would say nothing at all.
+ * command existed nothing in any of the three repositories read that message type.
  *
- * That was in nobody's scope: not Stream F's brief, not Streams A–E, not the deferred list.
- * It is here because it is meaningless anywhere else — the session identity a completion
- * carries is the in-app handle, and this module is what mints and reads those.
+ * ── WHAT EACH COMPLETION NEEDS FROM THE CHAT ────────────────────────────────
+ *   · **listing, a product chosen** → the chat opens that product's detail screen. This is the
+ *     one completion that asks for something next.
+ *   · **detail and checkout** → nothing. Their forms show the outcome on a closing screen
+ *     before they close (added to the basket, go to the chat to bargain, approve the payment on
+ *     your phone), and the payment result reaches the chat through the payment path. A second
+ *     "got that" here would talk over the message the customer is actually waiting for.
+ *   · **any notice screen** ("nothing here", "no saved address") → nothing, for the same reason.
  *
  * ── ⚠ THE TOKEN MAY ALREADY BE SPENT, AND THAT IS SUCCESS, NOT FAILURE ──────
- * **This is the single rule most likely to be got backwards, and getting it backwards makes
- * every successful checkout report a failure to the customer.**
+ * The checkout's terminal exchange spends its handle. Meta then sends the completion with the
+ * same `flow_token`, which is gone by design. Refusing an unresolvable token here would tell
+ * every customer whose order succeeded that it failed. So the Flow's own `screen` stamp decides
+ * which Flow finished, and a spent token is never an error.
  *
- * The checkout Flow's terminal exchange reaches the data endpoint, which calls
- * `inAppSurfaceStore.consume` — deliberately, because single use on the write is what stops a
- * double-tap placing two orders. Meta *then* sends the completion message carrying the same
- * `flow_token`. By that point the handle is gone, correctly and by design.
- *
- * So an unresolvable token here means one of two opposite things and cannot distinguish them:
- * a checkout that **worked**, or a stale forwarded message. The safe reading is the first,
- * because the second costs nothing and misreporting the first tells somebody their order
- * failed when their money has moved. Hence: the **params are the record** and the token is
- * only ever a correlation hint.
- *
- * ⚠ Do not "fix" this by refusing an unresolved token. The obvious hardening is exactly the
- * defect.
- *
- * ── WHY IT TRUSTS THE PARAMS, AND WHAT BOUNDS THAT ──────────────────────────
- * The params are whatever the endpoint put in `extension_message_response` — our own text,
- * round-tripped through Meta and the automation layer. They are not customer input and they
- * name no account: nothing here reads an id out of them and acts on it. The one thing this
- * command does with a resolvable token is confirm which **screen** completed, and a token
- * that resolves came from `inAppSurfaceStore`, which minted it against one conversation.
- *
- * ⚠ **It performs NO write of its own.** Nothing here places an order, spends a credential or
- * changes state — the endpoint already did whatever was going to be done, inside the
- * encrypted exchange, where the session was live. This command reports. A write here would be
- * a second, unauthenticated path to the same effect, reachable by replaying an old message.
+ * ── ⚠ IT MINTS A VIEW SESSION, AND ONLY UNDER THREE CONDITIONS ─────────────
+ * Opening the detail screen means minting a `pd` handle, which is a write. It is bounded
+ * tightly, because the completion message is relayed by the automation layer and could be
+ * replayed:
+ *   1. the **listing session is still live** (read, never consumed or touched), so a replay of
+ *      an old message mints nothing once its thirty minutes are up;
+ *   2. the **sender is the conversation that session was minted for**, so a completion that
+ *      arrives from anyone else opens nothing and says nothing;
+ *   3. the new session inherits the listing session's owner, customer, channel, conversation
+ *      and language. **None of those comes from the payload**, which is caller-supplied.
+ * A `pd` handle authorises viewing a product and starting a purchase from the form. It places
+ * nothing, pays nothing and adds nothing. **This command never consumes, never adds to a
+ * basket and never places an order**; that stays in the encrypted exchange, where the session
+ * is live and the retry guard sits.
  */
 
 /**
- * ⚠ **`.passthrough()`, not `.strict()`, and this is the one place on the bot side where that
- * is right.** Every Flow puts its own params in the completion, and they differ per screen; a
- * strict schema would have to name all of them and would reject a Flow published later. The
- * bot surface's envelope is `.strict()` for the opposite and stronger reason — there, an
- * unknown key could be a caller-supplied identity.
+ * ⚠ **`.passthrough()`, not `.strict()`, and this is the one place on the bot side where that is
+ * right.** Every Flow puts its own params in the completion; a strict schema would reject a
+ * Flow published later. The bot surface's envelope is `.strict()` for the opposite and stronger
+ * reason: there, an unknown key could be a caller-supplied identity. Nothing here reads an
+ * identity from the payload.
  */
 export const schema = z
     .object({
-        /**
-         * The `ia_…` handle the screen was opened with.
-         *
-         * ⚠ **Optional, because a spent handle is a normal outcome** (see the header) and
-         * because Meta is the party that echoes it — if routing drops it, the completion is
-         * still worth reporting. Never treat its absence as an authorisation failure.
-         */
+        /** The `ia_…` handle. Optional: a spent handle and a dropped field are both normal. */
         flow_token: z.string().optional(),
-        /** Which screen finished, stamped by the Flow definition itself. */
+        /** Which Flow finished, stamped by its definition. */
         screen: z.string().optional(),
     })
     .passthrough();
 
-export interface FlowCompleteReply {
+export interface FlowCompleteReply extends RenderableCommandResult {
     message: string;
-    /** The screen that completed, where it could be established. For the caller's routing. */
-    screen: InAppSurfaceKind | null;
-    /** The completion params, minus the token. Passed through for the caller to act on. */
+    /** Which Flow finished, where it could be established. Named apart from `screen`, which opens one. */
+    completedScreen: InAppSurfaceKind | null;
+    /** The completion params, minus the token. */
     params: Record<string, unknown>;
-}
-
-/**
- * Which kind a still-live handle belongs to.
- *
- * ⚠ **`read` demands the kind it expects and refuses a mismatch** — that check is the whole
- * reason a forwarded listing handle cannot be replayed against checkout, so it must not be
- * weakened. Asking each kind in turn preserves it exactly: every call is still kind-checked,
- * and the loop only discovers which check passes.
- *
- * `co` is deliberately **absent from the list**: a checkout handle is consumed by the write
- * that places the order, so it can never resolve here, and asking would spend a Redis round
- * trip to learn nothing. Its completion is identified by the params instead.
- */
-const RESOLVABLE_KINDS: readonly InAppSurfaceKind[] = ['pl', 'pd', 'ol', 'sl'];
-
-async function kindOf(handle: string): Promise<InAppSurfaceKind | null> {
-    for (const kind of RESOLVABLE_KINDS) {
-        if (await inAppSurfaceStore.read(kind, handle)) return kind;
-    }
-    return null;
 }
 
 const isKind = (value: string): value is InAppSurfaceKind =>
     value === 'pl' || value === 'pd' || value === 'ol' || value === 'sl' || value === 'co';
 
-export const handler: CommandHandler<z.infer<typeof schema>, FlowCompleteReply> = async (
-    payload,
-) => {
-    const { flow_token: flowToken, screen: declaredScreen, ...params } = payload;
+const OBJECT_ID = /^[0-9a-f]{24}$/i;
 
-    /**
-     * The Flow's own stamp is preferred over a store lookup, and deliberately so: it is
-     * present for **every** completion including a spent checkout, where the lookup cannot
-     * answer at all. The store is the fallback, for a completion whose routing lost the stamp.
-     */
-    let screen: InAppSurfaceKind | null =
-        declaredScreen && isKind(declaredScreen) ? declaredScreen : null;
+/** Digits only, so `+237 6…`, `2376…` and a bare-digits `wa_phone_id` compare equal. */
+const digitsOf = (value: string | null | undefined): string =>
+    typeof value === 'string' ? value.replace(/\D/g, '') : '';
 
-    if (!screen && flowToken) {
-        screen = await kindOf(flowToken);
+export type CompletionPlan =
+    | { kind: 'open_detail'; productId: string }
+    /** The listing session has lapsed: say so, in words, and open nothing. */
+    | { kind: 'expired' }
+    /** Nothing for the chat to add. */
+    | { kind: 'silent' };
+
+/**
+ * What a completion should lead to. **Pure**, so every branch is asserted without Redis.
+ *
+ * ⚠ **A sender mismatch is SILENT, not "expired".** Telling a stranger the listing lapsed would
+ * confirm that a handle they don't own was real. Silence tells them nothing.
+ */
+export function planCompletion(input: {
+    completedScreen: InAppSurfaceKind | null;
+    params: Record<string, unknown>;
+    /** `wa_phone_id` from the command CONTEXT, never from the payload. */
+    sender: string | null;
+    /** The live listing session, or null when it lapsed or there was no token. */
+    session: { channel: string; externalId: string } | null;
+}): CompletionPlan {
+    if (input.completedScreen !== 'pl') return { kind: 'silent' };
+    if (input.params.outcome === 'notice') return { kind: 'silent' };
+
+    const productId = input.params.productId;
+    if (typeof productId !== 'string' || !OBJECT_ID.test(productId)) return { kind: 'silent' };
+
+    if (!input.session) return { kind: 'expired' };
+
+    const sender = digitsOf(input.sender);
+    if (
+        input.session.channel !== 'whatsapp'
+        || sender === ''
+        || sender !== digitsOf(input.session.externalId)
+    ) {
+        return { kind: 'silent' };
     }
 
+    return { kind: 'open_detail', productId };
+}
+
+export const handler: CommandHandler<z.infer<typeof schema>, FlowCompleteReply> = async (
+    payload,
+    context,
+) => {
+    const { flow_token: flowToken, screen: declaredScreen, ...params } = payload;
+    const completedScreen: InAppSurfaceKind | null =
+        declaredScreen && isKind(declaredScreen) ? declaredScreen : null;
+
     /**
-     * ⚠ **English, like every other command reply on this surface, and for the stated
-     * reason** — `command-reply.ts` records that the command surface is English-only outbound
-     * because at command time there is often no account to read `preferred_language` from.
-     * Here there IS one, so this is the first command that could localise; doing it in
-     * isolation would put one localised sentence among four English ones. Flagged rather than
-     * half-done.
+     * Read only for a listing completion, and with the kind named: `read('pl', …)` refuses a
+     * `pd` or `co` handle by construction. It is `read`, never `touch`, so a completion can't
+     * extend a session's life.
      */
-    return {
-        message: 'Thanks — got that.',
-        screen,
+    const session =
+        completedScreen === 'pl' && flowToken
+            ? await inAppSurfaceStore.read('pl', flowToken)
+            : null;
+
+    const plan = planCompletion({
+        completedScreen,
         params,
+        sender: typeof context?.wa_phone_id === 'string' ? context.wa_phone_id : null,
+        session,
+    });
+
+    const base = { completedScreen, params };
+
+    if (plan.kind === 'silent') return { ...base, message: '' };
+
+    if (plan.kind === 'expired') {
+        // The session and its language are gone together, so this is English. See
+        // `flow-screens.ts` `tokenUnusable` for the same limit on the endpoint.
+        return { ...base, message: inAppCopy(null).expired };
+    }
+
+    const listing = session!;
+    const handle = await inAppSurfaceStore.mint({
+        kind: 'pd',
+        owner: listing.owner,
+        customerId: listing.customerId,
+        channel: listing.channel,
+        externalId: listing.externalId,
+        language: listing.language,
+        productId: plan.productId,
+    });
+
+    return {
+        ...base,
+        message: '',
+        language: listing.language,
+        /**
+         * The same inputs as the chat's own product door (`POST /inapp/products/:productId`):
+         * kind `pd`, the `openButton` label, and no storefront fallback, for that door's
+         * reason (a product URL needs two slugs this command doesn't hold).
+         */
+        screen: { kind: 'pd', handle, labelKey: 'openButton', fallbackPath: null },
     };
 };

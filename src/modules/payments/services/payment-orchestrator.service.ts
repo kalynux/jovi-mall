@@ -1564,11 +1564,56 @@ export class PaymentOrchestratorService {
             : [];
 
       /**
-       * ⚠ **No orders means this was not a customer order**, and the silence is correct: the
-       * same charge pipeline carries bookings, plan purchases and credit top-ups, each of which
-       * has its own story and its own audience. `handleOrderPaymentReceived` drops a payload
-       * with no `orderId` for exactly this reason; dropping it here rather than there keeps a
-       * booking failure from ever reaching a subscriber written about orders.
+       * ⭐ **A BOOKING charge that fails is announced too — and until this branch it was not.**
+       *
+       * This method used to return here for anything that was not an order, on the grounds that
+       * bookings have "their own story and their own audience". Nobody had written that story:
+       * a failed mobile-money payment for an appointment published nothing anywhere, so the
+       * customer was told nothing and turned up for a booking the vendor saw as unpaid. It is
+       * the order silence closed this morning, one product type over.
+       *
+       * ⚠ **The SAME event orders use, told apart by `aggregateType`** — exactly as
+       * `payment.received.*` already carries `aggregateType: 'booking'`. One failure event per
+       * payment, with each audience's handler filtering, rather than a second event name for the
+       * same fact. `purpose` separates the original price from a balance paid later; it is the
+       * field a consumer routes on.
+       *
+       * ⚠ **`userId` holds the USER id for a booking payment**, not the customer id — the
+       * asymmetry `BotCartController.getTransaction` documents. The customer handler resolves
+       * the customer from it.
+       *
+       * Plan purchases and credit top-ups still return silently below: they are not customer
+       * purchases and have their own billing notifications.
+       */
+      if (transaction.bookingId) {
+        const booking = await Booking.findById(transaction.bookingId).select('vendorId userId');
+        await eventBus.publish('payment.failed', {
+          eventType: 'payment.failed',
+          aggregateId: transaction.bookingId.toString(),
+          occurredAt: new Date(),
+          payload: {
+            aggregateType: 'booking',
+            bookingId: transaction.bookingId.toString(),
+            vendorId: booking?.vendorId?.toString(),
+            userId: transaction.userId?.toString() ?? booking?.userId?.toString(),
+            paymentId: transaction._id.toString(),
+            purpose: transaction.purpose ?? 'primary',
+            amount: transaction.amountSnapshot,
+            currency: transaction.currencySnapshot,
+            status: transaction.status
+          }
+        });
+        console.log(
+          `[PaymentOrchestrator] Emitted payment.failed for booking ${transaction.bookingId} on transaction ${transaction._id}`
+        );
+        return;
+      }
+
+      /**
+       * ⚠ **No orders and no booking means this was not a customer purchase**, and the silence is
+       * correct: the same charge pipeline carries plan purchases and credit top-ups, which have
+       * their own billing story. `handleOrderPaymentReceived` drops a payload with no `orderId`
+       * for the same reason.
        */
       if (orderIds.length === 0) return;
 
@@ -2051,7 +2096,23 @@ export class PaymentOrchestratorService {
           amount: paidAmount,
           currency: transaction.currencySnapshot,
           totalAmount,
-          aggregateType
+          aggregateType,
+          /**
+           * ⚠ **Booking payloads only — added so the CUSTOMER can be told.** This event was always
+           * published for an online booking payment, and only the vendor listened; the customer
+           * handler had no way to find the person (a booking payment's `userId` is the USER id) or
+           * to tell the original price from a balance paid after the appointment.
+           *
+           * ⚠ **A consumer must route on `purpose`, never on full vs partial.** The event name is
+           * chosen by comparing THIS payment with the original price, so a balance smaller than the
+           * price arrives as `partial` and one larger as `full`. Order payloads are unchanged.
+           */
+          ...(type === 'booking'
+            ? {
+                userId: transaction.userId?.toString(),
+                purpose: transaction.purpose ?? 'primary'
+              }
+            : {})
         }
       });
 

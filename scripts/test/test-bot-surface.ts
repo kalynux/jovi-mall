@@ -376,6 +376,78 @@ function stripComments(source: string): string {
         .replace(/(^|[^:])\/\/.*$/gm, '$1');
 }
 
+/**
+ * Where a cash-on-delivery code may leave this service, as a list of problems (empty = sound).
+ * A pure function of the sources so its bite can be proven against mutated copies.
+ */
+function codDisclosureProblems(
+    controllerSource: string,
+    otherModuleFiles: ReadonlyArray<{ name: string; body: string }>,
+): string[] {
+    const controller = stripComments(controllerSource.replace(/\r\n/g, '\n'));
+    const problems: string[] = [];
+
+    const regions = controller.split(
+        /(?=\n\s*(?:static [a-zA-Z]+ =|(?:export )?(?:async )?function [a-zA-Z]+))/,
+    );
+    const nameOf = (region: string): string =>
+        region.match(/(?:static ([a-zA-Z]+) =|(?:async )?function ([a-zA-Z]+))/)?.slice(1).find(Boolean) ?? '?';
+    const named = (name: string): string[] => regions.filter((r) => nameOf(r) === name);
+
+    const fetchesCode = (r: string): boolean =>
+        r.includes('getCodBlocksForOrders') || r.includes('resendCodeAsCustomer');
+    const answers = (r: string): boolean => r.includes('sendSuccess') || r.includes('setBotReply');
+
+    /** The only regions allowed to both fetch a code and answer with it. */
+    const DISCLOSERS = ['discloseCodCode', 'resendCodCode'];
+    /** The only two doors into `discloseCodCode`: the tool route and the chat tap. */
+    const DOORS = ['getCodCode', 'codCodeTap'];
+
+    // 1 · Non-vacuity — each discloser exists exactly once and still does the disclosing.
+    for (const name of DISCLOSERS) {
+        const found = named(name);
+        if (found.length !== 1) problems.push(`${name}: expected exactly one region, found ${found.length}`);
+        else if (!fetchesCode(found[0]) || !answers(found[0])) {
+            problems.push(`${name}: no longer both fetches a code and answers`);
+        }
+    }
+
+    // 2 · Both doors exist, go THROUGH the discloser, and fetch nothing themselves.
+    for (const name of DOORS) {
+        const found = named(name);
+        if (found.length !== 1) problems.push(`${name}: expected exactly one region, found ${found.length}`);
+        else {
+            if (!found[0].includes('discloseCodCode(')) problems.push(`${name}: does not call discloseCodCode`);
+            if (fetchesCode(found[0])) problems.push(`${name}: fetches a code itself instead of delegating`);
+        }
+    }
+
+    // 3 · No third door.
+    const callers = regions
+        .filter((r) => nameOf(r) !== 'discloseCodCode' && r.includes('discloseCodCode('))
+        .map(nameOf)
+        .sort();
+    if (callers.join(',') !== [...DOORS].sort().join(',')) {
+        problems.push(`discloseCodCode is called from [${callers.join(', ')}], expected exactly [${DOORS.join(', ')}]`);
+    }
+
+    // 4 · The real rule: anything else may READ a code block, never also answer.
+    const leaking = regions
+        .filter((r) => !DISCLOSERS.includes(nameOf(r)) && fetchesCode(r) && answers(r))
+        .map(nameOf);
+    if (leaking.length > 0) problems.push(`reads a code AND answers: ${leaking.join(', ')}`);
+
+    // 5 · The code may not be fetched anywhere else in the module — moving it out of this
+    //     file must not move it out of this guard's sight.
+    for (const file of otherModuleFiles) {
+        if (fetchesCode(stripComments(file.body.replace(/\r\n/g, '\n')))) {
+            problems.push(`fetches a delivery code outside the order controller: ${file.name}`);
+        }
+    }
+
+    return problems;
+}
+
 async function main(): Promise<void> {
     console.log('\n═══ test:bot-surface ═══════════════════════════════════════════════════════\n');
 
@@ -2426,7 +2498,11 @@ async function main(): Promise<void> {
     });
 
     assert('⚠ BOTH order reads strip the delivery code', () => {
-        const controller = read('modules/bot-surface/controllers/bot-order.controller.ts');
+        /**
+         * Comments stripped first: a comment QUOTING `stripDeliveryCodes(dto)` would otherwise
+         * satisfy this after the real call was deleted (found by backend-7b, 2026-09-16).
+         */
+        const controller = stripComments(read('modules/bot-surface/controllers/bot-order.controller.ts'));
         // `getGroup` maps over a list; `getOrder` applies it to one. Both must be present.
         return controller.includes('dtos.map(stripDeliveryCodes)')
             && controller.includes('stripDeliveryCodes(dto)');
@@ -2447,42 +2523,33 @@ async function main(): Promise<void> {
      * fails on correct code teaches the next person to weaken it, which is worse than no guard.
      *
      * So this now pins the property that actually matters — **the code may be READ anywhere it
-     * is needed to make a decision, and may leave this service only from the two dedicated
-     * handlers.** A helper that fetches a block and answers a yes/no question is legitimate and
+     * is needed to make a decision, and may leave this service only from its dedicated
+     * disclosers.** A helper that fetches a block and answers a yes/no question is legitimate and
      * stays legitimate; a helper that fetches one and then answers a request is not.
+     *
+     * ⚠ **REVISED AGAIN the same day, when the "Get code" BUTTON arrived.** A tap cannot await an
+     * `asyncHandler`-wrapped static (its `.catch(next)` swallows the error), so the route and
+     * the tap now share one plain function, `discloseCodCode`, and the list of names describes
+     * the DISCLOSER rather than the route. Renaming the shared function `getCodCode` to keep the
+     * old guard green was refused: passing by matching a string is exactly what this must not
+     * reward. The rules, each reported by name, live in `codDisclosureProblems` above — a pure
+     * function so its bite could be proven, and it was, against eleven mutated sources
+     * (a tap that fetches and replies itself, a third door, a renamed or silent discloser, a
+     * leaking exported helper, a fetch moved into another bot-surface file, CRLF endings).
      */
-    assert('⚠ only the dedicated route discloses a delivery code', () => {
-        const controller = stripComments(read('modules/bot-surface/controllers/bot-order.controller.ts'));
+    assert('⚠ only the dedicated disclosers let a delivery code out', () => {
+        const orderController = 'controllers/bot-order.controller.ts';
+        const others = moduleFiles().filter((f) => f.name.replace(/\\/g, '/') !== orderController);
 
-        /** Split on both handler and module-level function boundaries, not just `static `. */
-        const regions = controller
-            .split(/(?=\n\s*(?:static [a-zA-Z]+ =|(?:async )?function [a-zA-Z]+))/)
-            .filter((r) => r.includes('getCodBlocksForOrders') || r.includes('resendCodeAsCustomer'));
-
-        const nameOf = (region: string): string =>
-            region.match(/(?:static ([a-zA-Z]+) =|(?:async )?function ([a-zA-Z]+))/)?.slice(1).find(Boolean) ?? '?';
-
-        const DISCLOSING = ['getCodCode', 'resendCodCode'];
-
-        // Both dedicated handlers must still exist and still be the ones that fetch a code.
-        const names = regions.map(nameOf);
-        if (!DISCLOSING.every((n) => names.includes(n))) return false;
-
-        /**
-         * ⚠ **The real rule.** Any OTHER region may touch a code block, but must not also be
-         * the thing that answers the caller — no response body, no chat reply. That is the line
-         * between "read it to choose a button" and "read it to send it".
-         */
-        const leaking = regions
-            .filter((r) => !DISCLOSING.includes(nameOf(r)))
-            .filter((r) => r.includes('sendSuccess') || r.includes('setBotReply'))
-            .map(nameOf);
-
-        if (leaking.length > 0) {
-            console.error(`      a non-disclosing region both reads a code AND answers: ${leaking.join(', ')}`);
+        // Non-vacuity for rule 5: the walk must actually have found the module's files.
+        if (others.length < 20) {
+            console.error(`      the module walk found only ${others.length} other files`);
             return false;
         }
-        return true;
+
+        const problems = codDisclosureProblems(read(`modules/bot-surface/${orderController}`), others);
+        for (const problem of problems) console.error(`      ${problem}`);
+        return problems.length === 0;
     });
 
     assert('the route table imports nothing — maintenance mode reads it', () => {

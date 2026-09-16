@@ -19,6 +19,7 @@ import { assertBotChromeCopyFits } from './modules/bot-surface/domain/bot-chrome
 import { assertCommandCopyComplete } from './modules/bot-commands/domain/command-copy';
 import { assertMiniAppCopyComplete } from './modules/bot-surface/miniapp/miniapp-copy';
 import { assertInAppCopyComplete } from './modules/bot-surface/miniapp/inapp-copy';
+import { assertOrderStatusCopyComplete } from './modules/bot-surface/domain/bot-order-status-copy';
 import { initAggregationScheduler } from './core/jobs/aggregation-scheduler';
 import { awaitWorkerLocksReleased, locksHeldInProcess } from './core/jobs/worker-lock';
 import { stopAllWorkers } from './modules/dev-tools/worker-registry';
@@ -172,6 +173,11 @@ export async function startServer(): Promise<Server> {
     // characters; sharing one table would mean either exempting keys from that cap or
     // writing page copy to a chat button's budget. Same silence, same closure.
     assertInAppCopyComplete();
+    // And for the ORDER STATUS words and turns in chat. It checks CAPS ONLY, by design: every
+    // table there is a total Record over a closed union, so a missing status or language already
+    // fails the compiler. What the compiler cannot see is a turn label two characters over
+    // WhatsApp's button cap — silent forever, and delivered cut in half.
+    assertOrderStatusCopyComplete();
 
     // Database Connection
     //

@@ -39,6 +39,12 @@
   "no longer available", which reads as the shop losing an order.  The failure text sends the
   customer back to the chat, which can mint a fresh screen.
 
+  ⚠ **ONE exception, and it is the server's to grant, never the page's to infer.**  Every
+  refusal carries `details.spent`.  A mistyped number is refused BEFORE the spend, answers 400
+  with `spent: false`, and only that combination unlatches the button.  ABSENT MEANS SPENT: the
+  platform strips `details` from gateway and internal errors, and a lost response has no body,
+  so both stay latched — the direction that can never place an order twice.
+
   ── ⚠ IT REQUIRES AN EXISTING ADDRESS AND DELIBERATELY CAPTURES NONE ────────
   Collecting one here would drag the whole geocoding candidate flow — `geo-candidate.store.ts`,
   `geo_search_address`, the `gc_` picker — into a WebView, and the chat already does it well
@@ -293,6 +299,42 @@
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ phone: typed.length > 0 ? typed : null })
     }).then(function (res) {
+      var refusal = res.body && res.body.error;
+      /*
+       * ⚠ **THE ONE FAILURE AFTER WHICH THIS PAGE UNLATCHES — and every condition is required.**
+       *
+       * The server marks each refusal `details.spent`. A mistyped number is refused BEFORE the
+       * handle is spent, so a retry is honest, and without this the customer who typed their
+       * number without the country code lost the whole screen for a typo.
+       *
+       * ⛔ **ABSENT MEANS SPENT.** Only an explicit `spent === false` on a 400 unlatches. A
+       * gateway or internal error reaches this page with its `details` stripped by the platform,
+       * a lost response has no body at all, and a 404 spent nothing but has no handle left to
+       * retry against — every one of those stays latched, which is the direction that can never
+       * place an order twice.
+       *
+       * The sentence is the field's own label rather than the server's, because the server's is
+       * English and this is the customer's own language.
+       */
+      /*
+       * ⚠ **An ALLOWLIST of two statuses, never "any spent === false".** 400 is a malformed number
+       * and 422 is a number no mobile network can be worked out for — both refused before the
+       * spend, both fixed by typing a different number. A 404 also spends nothing but has no handle
+       * left to retry against, and a 503 means no gateway is configured, which no tap can change.
+       */
+      if ((res.status === 400 || res.status === 422)
+          && refusal && refusal.details && refusal.details.spent === false) {
+        placed = false;
+        el.pay.disabled = false;
+        el.phone.setAttribute("aria-invalid", "true");
+        el.phone.addEventListener("input", function () {
+          el.phone.removeAttribute("aria-invalid");
+          say("", false);
+        }, { once: true });
+        el.phone.focus();
+        say(copy.checkoutPhone, true);
+        return;
+      }
       if (!res.ok || !res.body || res.body.success === false) {
         /*
          * ⚠ No retry, and the button stays dead: the handle is spent even on a failure. The

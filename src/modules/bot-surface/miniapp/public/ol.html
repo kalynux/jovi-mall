@@ -205,12 +205,12 @@
    *         cartId:      string,
    *         dateText:    string,        // FORMATTED and localised server-side
    *         totalText:   string,        // FORMATTED server-side — no money maths here
-   *         paymentText: string | null, // already a word in the customer's language
+   *         paymentText: string,        // already a word in the customer's language
    *         summaryText: string | null, // "Blue sneakers · Leather belt +2"
    *         orders: [{
    *           orderNumber: string,
    *           storeName:   string | null,
-   *           statusText:  string | null   // null = a status we do not publish; say nothing
+   *           statusText:  string          // the SAME word the chat uses for this order
    *         }]
    *       }],
    *       emptyText: string,            // this screen's own empty sentence, localised
@@ -222,10 +222,15 @@
    * with one translation missing stops the server's boot for every session in this tree.  The
    * words that are specific to orders therefore travel with the orders.
    *
-   * ⚠ **A null `statusText` renders NOTHING rather than a guess.**  The controller publishes six
-   * customer-facing words for nine internal fulfilment states; anything it does not recognise is
-   * deliberately silent, because the default a person reaches for — "Preparing" — would tell a
-   * customer with a cancelled order that their parcel is being packed.
+   * ⚠ **Every status word comes from ONE table shared with the chat**, because the chat's order
+   * list is the first five rows of the list this screen continues — a customer who taps "Load
+   * more" must not watch the same order change state.  A status that table does not recognise
+   * arrives as its neutral "Status not available": never the raw internal word, never a guess
+   * such as "Preparing" (which would tell a customer with a cancelled order that their parcel is
+   * being packed), and the same on both surfaces.  This page maps nothing; it prints the word.
+   *
+   * The `|| ""` guards below are kept for an older server answering `null` mid-deploy, not
+   * because `null` is still a value this contract allows.
    */
   function draw(groups, append) {
     if (!append) el.groups.innerHTML = "";

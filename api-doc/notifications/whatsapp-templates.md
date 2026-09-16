@@ -775,10 +775,20 @@ name appears on this page, so a situation added without its approval copy fails 
 ### `customer_booking_payment_received`
 
 - **Situation:** `booking.payment.received`
-- **Body params:** `{{1}}`=currency, `{{2}}`=amountFormatted, `{{3}}`=serviceName
+- **Body params:** `{{1}}`=currency, `{{2}}`=amountFormatted, `{{3}}`=serviceName, `{{4}}`=startAt
 - **Button:** URL → `bookings/{{bookingId}}`
 
-⚠ **Rewritten, not derived.** The in-window copy names `{{startAt}}`, which is not a body param.
+⚠ **Corrected 2026-09-16: this line used to list THREE body params, and there are FOUR.** Measured
+against `whatsapp-template-payloads.json` — the file that was actually submitted — whose body for
+this template carries `{{1}}`–`{{4}}`, and against the catalogue's `bodyParams`, which sends four.
+A reader trusting the old line would "fix" the catalogue down to three, and a send whose parameter
+count disagrees with the approved template is refused by WhatsApp outright. The tables below are
+the in-window rendering and still omit the time; the approved template includes it.
+
+⚠ **Not reused for a BALANCE payment.** The copy ends *"see you then"*, which is false after the
+appointment has happened, and approved template text cannot be edited without a new approval. A
+balance payment stays unannounced pending the proactive-message design (see
+`booking.payment_failed` below, which was written to be true for both).
 
 | Lang | Header | Body | Button label |
 |---|---|---|---|
@@ -903,6 +913,34 @@ prompt and a timeout, neither of which is a judgement on the customer's money.
 | pt_PT | O pagamento não foi concluído para {{3}} | Não conseguimos cobrar os {{1}} {{2}} de {{3}}. Nada foi debitado e os seus artigos continuam à espera — abra a encomenda para tentar de novo. | Ver encomenda |
 | es | El pago no se completó para {{3}} | No pudimos cobrar los {{1}} {{2}} de {{3}}. No se ha cobrado nada y tus artículos siguen esperando — abre el pedido para intentarlo otra vez. | Ver pedido |
 | ar | لم يتم الدفع للطلب {{3}} | لم نتمكن من تحصيل {{1}} {{2}} للطلب {{3}}. لم يُخصم أي مبلغ ولا تزال منتجاتك في انتظارك — افتح الطلب لإعادة المحاولة. | عرض الطلب |
+
+### `customer_booking_payment_failed`
+
+⚠ **NEW — generated locally, NOT submitted.** Added 2026-09-16 to close the order silence one
+product type over: an online booking payment was never announced in either direction. Success
+published an event only the vendor stack heard, and failure published nothing, so a customer whose
+mobile-money prompt timed out turned up for an appointment the vendor saw as unpaid. Submission is
+the owner's decision at the end of the round.
+
+⚠ **One sentence, true for the original price AND a balance paid after the appointment** — which is
+why it carries no time and no "see you then". It never says the booking is cancelled (a failed
+charge cancels nothing) and blames nobody.
+
+- **Situation:** `booking.payment_failed`
+- **Fires:** only where the gateway gave a verdict — webhook, or verify (which the reconciliation
+  sweep uses) — on the transition into FAILED/CANCELLED. Never from the gateway-call catch, where a
+  timeout cannot be told from a refusal and a charge may still be live.
+- **Body params:** `{{1}}`=currency, `{{2}}`=amountFormatted, `{{3}}`=serviceName
+- **Button:** URL → `shop/account/bookings/{{bookingId}}` — the booking page, mirroring the order
+  entry's reasoning: at failure time there may be no valid token to mint a pay link from.
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Payment did not go through for {{3}} | We could not take the {{1}} {{2}} for your {{3}} booking. Nothing has been charged — open the booking to try again. | View booking |
+| fr | Paiement non abouti pour {{3}} | Nous n'avons pas pu encaisser les {{1}} {{2}} pour votre réservation {{3}}. Rien n'a été débité — ouvrez la réservation pour réessayer. | Voir la réservation |
+| pt_PT | O pagamento não foi concluído para {{3}} | Não conseguimos cobrar os {{1}} {{2}} da sua reserva de {{3}}. Nada foi debitado — abra a reserva para tentar de novo. | Ver reserva |
+| es | El pago no se completó para {{3}} | No pudimos cobrar los {{1}} {{2}} de tu reserva de {{3}}. No se ha cobrado nada — abre la reserva para intentarlo otra vez. | Ver reserva |
+| ar | لم يتم الدفع لحجز {{3}} | لم نتمكن من تحصيل {{1}} {{2}} لحجز {{3}}. لم يُخصم أي مبلغ — افتح الحجز لإعادة المحاولة. | عرض الحجز |
 
 ### `customer_order_shipped`
 

@@ -14,13 +14,17 @@ import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { botChrome } from '../domain/bot-chrome-copy';
 import { botStorefrontLink } from '../domain/bot-list-window';
 import { BotReplyIntent, BotReplyOption } from '../domain/channel-reply';
-import { cartViewActionId, openSurfaceActionId, parseBotActionId } from '../domain/bot-action-id';
+import { cartViewActionId, openSurfaceActionId } from '../domain/bot-action-id';
+import {
+    BotActionHandlers,
+    ParsedBotAction,
+    unknownBotAction,
+} from '../domain/bot-action-dispatch';
 import { inAppBaseUrl, inAppScreenUrl } from '../domain/inapp-url';
 import { PurchaseVerb, resolvePurchaseAffordance } from '../domain/purchase-affordance';
 import { inAppSurfaceStore } from '../services/inapp-surface.store';
 import { productDisplayService } from '../services/product-display.service';
 import { productDisplayStore } from '../services/product-display.store';
-import { BotDisplayActionSchema } from '../validators/bot.validators';
 
 const cartService = new CartService();
 const telegramBotService = new TelegramBotService();
@@ -61,170 +65,6 @@ const telegramBotService = new TelegramBotService();
  * `defaultVariantId` is exactly the id a chat card would have carried for it.
  */
 export class BotPurchaseController {
-    /**
-     * `POST /catalog/action` — the chat token door.
-     *
-     * ⚠ **This is the surface's SINGLE tap handler.** Every button this service draws on either
-     * channel comes back here — Telegram as `callback_query.data`, WhatsApp as
-     * `interactive.button_reply.id` — and the automation layer forwards the token verbatim and
-     * parses nothing (`bot-surface.md` § 14.6). So this handler owns the whole vocabulary,
-     * including the verbs whose features are not built yet.
-     *
-     * ⚠ **An unrecognised or unhandled token is a REFUSAL WITH A SENTENCE, never a 500 and
-     * never silence.** A button lives in a chat history for as long as the conversation does,
-     * so a customer tapping one whose verb a deploy has retired is an ordinary event.
-     * `BOT_ACTION_TOKEN_UNKNOWN` carries `error.customerMessage`, which is what turns the tap
-     * into a message rather than into nothing at all — Telegram reports no error for an
-     * unhandled callback, so without it the customer taps and the world is silent, forever.
-     */
-    static action = asyncHandler(async (req: Request, res: Response) => {
-        const { token } = BotDisplayActionSchema.parse(req.body ?? {});
-        const caller = botCallerOf(req);
-        const language = botResponseLanguageOf(req);
-        const envelope = req.bot!.envelope;
-
-        const parsed = parseBotActionId(token);
-        if (!parsed) {
-            throw createAppError(
-                ERROR_CODES.BOT_ACTION_TOKEN_UNKNOWN,
-                422,
-                'Unrecognised action token',
-            );
-        }
-
-        switch (parsed.verb) {
-            /**
-             * The four rungs. Every one of them carries ids and nothing else, and the rung is
-             * re-derived below — see the class header.
-             */
-            case 'add':
-            case 'buy':
-            case 'bargain':
-            case 'book': {
-                const ids = splitPurchaseToken(parsed.verb, parsed.argument);
-
-                const result = await executePurchase({
-                    userId: caller.userId,
-                    customerId: caller.customerId,
-                    channel: envelope.channel,
-                    externalId: envelope.externalId,
-                    language,
-                    productId: ids.productId,
-                    variantId: ids.variantId,
-                });
-
-                setBotReply(req, replyForPurchase(result, language));
-
-                sendSuccess(res, {
-                    outcome: result.outcome,
-                    /**
-                     * ⚠ **The rung the SERVER chose, not the one the button said**, so a model
-                     * narrating this turn describes what actually happened. A card drawn before
-                     * a bargaining window opened says `add` and this says `bargain`.
-                     */
-                    verb: result.verb,
-                    productId: result.productId,
-                    variantId: result.variantId,
-                    ...(result.outcome === 'checkout' ? { url: result.url } : {}),
-                });
-                return;
-            }
-
-            /**
-             * `next:<setId>` — the next five cards IN THE CHAT.
-             *
-             * ⚠ **Not the same button as `more:` below**, though the two ride on one message and
-             * share a set id. This one keeps the customer in the conversation; that one hands
-             * them a screen.
-             */
-            case 'next': {
-                await respondWithNextCards(req, res, caller.userId, parsed.argument);
-                return;
-            }
-
-            /**
-             * `more:<setId>` — open the held list as an in-app GRID.
-             *
-             * ⚠ **It falls back to the next page of chat cards when this deployment has no
-             * screen, and that fallback is the path that actually runs today.**
-             * `BOT_MINIAPP_BASE_URL` is unset in production, so `inAppScreenUrl` answers null —
-             * and `more:` buttons are already sitting in live chat histories where they mean
-             * "five more cards". Degrading those to a storefront link would take a working
-             * control in production and make it worse in order to serve a screen that is dark.
-             * So: a grid where there is one, the behaviour the button already had where there
-             * is not.
-             */
-            case 'more': {
-                if (await openHeldListing(req, caller.userId, parsed.argument)) {
-                    sendSuccess(res, { opened: 'listing' });
-                    return;
-                }
-                await respondWithNextCards(req, res, caller.userId, parsed.argument);
-                return;
-            }
-
-            /**
-             * `cart:view` — the basket.
-             *
-             * ⚠ **Answered as DATA with no `reply`, deliberately.** § 14.3's rule stands for a
-             * cart: one basket is something the model narrates, in the conversation it is
-             * already having. Rendering it here would make this file a second renderer of
-             * baskets with its own opinion about how to word a total.
-             */
-            case 'cart': {
-                const cart = await cartService.getCart(caller.customerId);
-                setBotReply(req, null);
-                sendSuccess(res, cart);
-                return;
-            }
-
-            /**
-             * `open:<surface>[:<ref>]` — leave the chat and draw this properly.
-             *
-             * ⚠ **Only the surfaces this controller RENDERS are handled here**, which today is
-             * `co` (the Checkout button on an added-to-cart message) and `pl` (Browse more).
-             * `pd`, `ol` and `sl` fall through to the unknown-token answer deliberately: they
-             * belong to the streams that draw them, and a sentence saying the button did not
-             * work is a better outcome than this file guessing at another screen's contract.
-             * Nothing renders them yet, so nothing here is reachable in normal use.
-             */
-            case 'open': {
-                const [surface] = parsed.argument.split(':');
-
-                if (surface === 'co') {
-                    await openCheckout(req, caller, envelope, language);
-                    sendSuccess(res, { opened: 'checkout' });
-                    return;
-                }
-
-                if (surface === 'pl') {
-                    await openBrowseListing(req, caller, envelope, language);
-                    sendSuccess(res, { opened: 'listing' });
-                    return;
-                }
-
-                throw createAppError(
-                    ERROR_CODES.BOT_ACTION_TOKEN_UNKNOWN,
-                    422,
-                    'Unrecognised action token',
-                );
-            }
-
-            /**
-             * ⚠ **Every other minted verb lands here, and that is the designed state.** The
-             * vocabulary was declared ahead of its handlers so the strings never change once
-             * they are in a chat history (`bot-action-id.ts`); until each feature ships, its
-             * token answers with a sentence. No button carrying one is drawn yet.
-             */
-            default:
-                throw createAppError(
-                    ERROR_CODES.BOT_ACTION_TOKEN_UNKNOWN,
-                    422,
-                    'Unrecognised action token',
-                );
-        }
-    });
-
     /**
      * `POST /api/bot/miniapp/s/pd/:handle/act` — the in-app detail screen's purchase button.
      *
@@ -306,6 +146,153 @@ const ScreenActSchema = z
     .object({ variantId: z.string().trim().regex(/^[0-9a-fA-F]{24}$/, 'variantId must be an id') })
     .strict();
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  The verbs this stream owns, as handlers for the tap-code dispatcher
+//
+//  ⚠ **This file no longer opens the tap door; it answers the verbs routed to it.** The door —
+//  parsing the token once and refusing an unknown verb in one place — is
+//  `bot-action.controller.ts`. Every handler below receives the token already parsed and must
+//  never re-read `req.body.token`, or it could disagree with the dispatcher about what was
+//  pressed. See `domain/bot-action-dispatch.ts` for the contract.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type PurchaseTapVerb = 'add' | 'buy' | 'bargain' | 'book';
+
+const isPurchaseTapVerb = (verb: string): verb is PurchaseTapVerb =>
+    verb === 'add' || verb === 'buy' || verb === 'bargain' || verb === 'book';
+
+/**
+ * `add:` · `buy:` · `bargain:` · `book:` — the four rungs.
+ *
+ * Every one of them carries ids and nothing else, and the rung is re-derived inside
+ * `executePurchase` — see the class header. The verb decides only how many ids to read.
+ */
+async function handlePurchaseTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    /**
+     * ⚠ Defensive, and it is what lets the type narrow. The registry only routes these four
+     * verbs here, so this is unreachable — unless somebody registers this handler under a fifth,
+     * in which case a refusal is the right answer and a crash is not.
+     */
+    if (!isPurchaseTapVerb(action.verb)) throw unknownBotAction();
+
+    const caller = botCallerOf(req);
+    const language = botResponseLanguageOf(req);
+    const envelope = req.bot!.envelope;
+    const ids = splitPurchaseToken(action.verb, action.argument);
+
+    const result = await executePurchase({
+        userId: caller.userId,
+        customerId: caller.customerId,
+        channel: envelope.channel,
+        externalId: envelope.externalId,
+        language,
+        productId: ids.productId,
+        variantId: ids.variantId,
+    });
+
+    setBotReply(req, replyForPurchase(result, language));
+
+    sendSuccess(res, {
+        outcome: result.outcome,
+        /**
+         * ⚠ **The rung the SERVER chose, not the one the button said**, so a model narrating this
+         * turn describes what actually happened. A card drawn before a bargaining window opened
+         * says `add` and this says `bargain`.
+         */
+        verb: result.verb,
+        productId: result.productId,
+        variantId: result.variantId,
+        ...(result.outcome === 'checkout' ? { url: result.url } : {}),
+    });
+}
+
+/**
+ * `next:<setId>` — the next five cards IN THE CHAT.
+ *
+ * ⚠ **Not the same button as `more:`**, though the two ride on one message and share a set id.
+ * This one keeps the customer in the conversation; that one hands them a screen.
+ */
+async function handleNextTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    await respondWithNextCards(req, res, botCallerOf(req).userId, action.argument);
+}
+
+/**
+ * `more:<setId>` — open the held list as an in-app GRID.
+ *
+ * ⚠ **It falls back to the next page of chat cards when this deployment has no screen, and that
+ * fallback is the path that actually runs today.** `BOT_MINIAPP_BASE_URL` is unset in
+ * production, and `more:` buttons are already sitting in live chat histories where they mean
+ * "five more cards". Degrading those to a storefront link would take a working control in
+ * production and make it worse in order to serve a screen that is dark.
+ */
+async function handleMoreTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    const owner = botCallerOf(req).userId;
+    if (await openHeldListing(req, owner, action.argument)) {
+        sendSuccess(res, { opened: 'listing' });
+        return;
+    }
+    await respondWithNextCards(req, res, owner, action.argument);
+}
+
+/**
+ * `cart:view` — the basket.
+ *
+ * ⚠ **Answered as DATA with no `reply`, deliberately.** § 14.3's rule stands for a cart: one
+ * basket is something the model narrates, in the conversation it is already having. Rendering it
+ * here would make this file a second renderer of baskets with its own opinion about how to word
+ * a total.
+ */
+async function handleCartTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    /** `cart:view` is the only argument minted. Anything else is not ours to guess at. */
+    if (action.argument !== 'view') throw unknownBotAction();
+
+    const cart = await cartService.getCart(botCallerOf(req).customerId);
+    setBotReply(req, null);
+    sendSuccess(res, cart);
+}
+
+/**
+ * `open:co` — the Checkout button on an added-to-cart message.
+ *
+ * ⚠ **Registered under the PAIR `open:co`, not under `open`.** `open` is shared by every stream
+ * that draws a screen, so the dispatcher routes it by surface; this stream owns exactly the two
+ * surfaces it renders a button for. The token carries no reference — a `co` session is ten minutes
+ * and single-use, so the server mints on the tap — which is why the argument must be empty.
+ */
+async function handleOpenCheckoutTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    if (action.argument !== '') throw unknownBotAction();
+
+    await openCheckout(req, botCallerOf(req), req.bot!.envelope, botResponseLanguageOf(req));
+    sendSuccess(res, { opened: 'checkout' });
+}
+
+/** `open:pl` — Browse more, on an added-to-cart message. The whole shelf; no reference. */
+async function handleOpenListingTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    if (action.argument !== '') throw unknownBotAction();
+
+    await openBrowseListing(req, botCallerOf(req), req.bot!.envelope, botResponseLanguageOf(req));
+    sendSuccess(res, { opened: 'listing' });
+}
+
+/**
+ * The verbs this stream answers, for the dispatcher's registry.
+ *
+ * ⚠ **Exported as a map rather than registered from here**, so the dispatcher's registry is the
+ * one place a reader can see every routed verb. A stream that registered itself would be a
+ * stream opening the dispatcher, which is exactly what the split exists to stop.
+ */
+export const PURCHASE_ACTION_HANDLERS: BotActionHandlers = Object.freeze({
+    add: handlePurchaseTap,
+    buy: handlePurchaseTap,
+    bargain: handlePurchaseTap,
+    book: handlePurchaseTap,
+    next: handleNextTap,
+    more: handleMoreTap,
+    cart: handleCartTap,
+    'open:co': handleOpenCheckoutTap,
+    'open:pl': handleOpenListingTap,
+});
+
 /**
  * Everything a minted screen session needs to name its owner and its conversation.
  *
@@ -314,7 +301,7 @@ const ScreenActSchema = z
  * the fuller shape would have meant inventing a product id at that call site, and an invented
  * value that is never read is the kind of thing somebody later starts reading.
  */
-interface SessionOwner {
+export interface SessionOwner {
     userId: string;
     customerId: string;
     channel: MessagingChannel;
@@ -324,14 +311,14 @@ interface SessionOwner {
 }
 
 /** Who is buying, and what. Both doors supply it; only its source differs. */
-interface PurchaseContext extends SessionOwner {
+export interface PurchaseContext extends SessionOwner {
     productId: string;
     /** Null when the token carried none — a `book:` tap. */
     variantId: string | null;
 }
 
 /** What one press resolved to. `url` is populated only for `checkout`. */
-interface PurchaseResult {
+export interface PurchaseResult {
     /** The rung the SERVER chose. Never the one the caller named. */
     verb: PurchaseVerb;
     outcome: 'cart' | 'checkout' | 'chat';
@@ -347,11 +334,34 @@ interface PurchaseResult {
  * Re-resolve the rung, then do it. **The one place the four rungs are executed.**
  *
  * Deliberately free of presentation: it decides and writes, and never touches a `reply`, a page
- * body or a messaging API. Its two callers differ entirely in how they answer, and folding
- * either one's rendering in here is how a chat turn and a screen turn start to disagree about
- * what a button did.
+ * body or a messaging API. Its callers differ entirely in how they answer, and folding any one's
+ * rendering in here is how a chat turn and a screen turn start to disagree about what a button
+ * did.
+ *
+ * ── ⚠ EXPORTED, FOR THREE DOORS — AND WHAT EACH CALLER OWNS ────────────────
+ * The chat tap, the Telegram detail screen, and the WhatsApp product-detail form all run THIS.
+ * "One read, one set of rules, several renderings" — never a copy of the rules. So:
+ *
+ *   - **`productId` comes from a SESSION or a TOKEN the service minted, never from a form or page
+ *     payload.** The handle names the product; a caller naming only the variant is what stops a
+ *     form buying something it was not opened for.
+ *   - **Refusals are THROWN, not returned** — an `AppError` for out of stock, the cart's own
+ *     rules, a product taken off sale. A caller off the bot surface renders the customer sentence
+ *     itself, from `bot-error-copy.ts` by code, so a refusal reads the same in every door.
+ *   - **This function NEVER pushes a message.** The Telegram push for `bargain` / `book` belongs to
+ *     the Telegram screen door, because only a Mini App cannot write to the chat.
+ *   - ⚠ **Idempotency is the CALLER's, and deliberately not a parameter here.** The three doors
+ *     retry differently: the chat route already demands an `Idempotency-Key`; the Telegram screen
+ *     repeats only on a human double tap; the WhatsApp form's platform retries on its own
+ *     schedule. A key here would make all three fabricate one and dedupe the chat path twice. A
+ *     caller with an automatic retrier claims before calling (`BotIdempotencyStore`: atomic claim,
+ *     success replayed, failure released) — which is as strong as a key inside this function,
+ *     since that would take the same Redis claim, just in this file. ⚠ Without that claim, a
+ *     retried `add` doubles a basket line, because the cart ADDS rather than sets.
+ *   - `url` on a `checkout` result is an in-app SCREEN address and means nothing to a caller that
+ *     is not one; such a caller shows `message` and ignores it.
  */
-async function executePurchase(ctx: PurchaseContext): Promise<PurchaseResult> {
+export async function executePurchase(ctx: PurchaseContext): Promise<PurchaseResult> {
     const { customerId, productId, language } = ctx;
 
     /**
@@ -509,13 +519,13 @@ function splitPurchaseToken(
     /** `book:<productId>` carries one id — a booking names a product and a slot, never a variant. */
     if (verb === 'book') {
         if (!isId(productId)) {
-            throw createAppError(ERROR_CODES.BOT_ACTION_TOKEN_UNKNOWN, 422, 'Malformed action token');
+            throw unknownBotAction();
         }
         return { productId: productId!, variantId: null };
     }
 
     if (!isId(productId) || !isId(variantId)) {
-        throw createAppError(ERROR_CODES.BOT_ACTION_TOKEN_UNKNOWN, 422, 'Malformed action token');
+        throw unknownBotAction();
     }
     return { productId: productId!, variantId: variantId! };
 }

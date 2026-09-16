@@ -12,8 +12,9 @@
  *     an entry in `scripts/copy-build-assets.ts`' manifest — a shared file, and one more
  *     thing to forget.
  *  2. **A definition that does not typecheck fails at PUBLISH time**, which on this platform
- *     is the most expensive place to fail: publishing needs a working WhatsApp number, and
- *     the number is dead. A typed module fails in the editor instead.
+ *     is the most expensive place to fail: publishing is an owner decision taken once, at the
+ *     end of the plan, against a live Business Account. A typed module fails in the editor
+ *     instead.
  *
  * ⚠ **This type is deliberately PERMISSIVE about components.** It pins the document's
  * skeleton — version, routing model, screens, their data contracts — and lets `children` be
@@ -57,10 +58,14 @@ export interface FlowScreen {
     /**
      * Whether finishing here ends the Flow.
      *
-     * ⚠ **A Flow must have exactly one terminal screen reachable from every path**, or Meta
-     * refuses to publish it. A browse screen that merely hands a choice back to the chat is
-     * still terminal — "terminal" means the Flow closes, not that the customer is finished
-     * shopping.
+     * ⚠ **At least one screen must be terminal, and SEVERAL MAY BE.** Meta's Flow JSON
+     * reference: "each Flow should have a terminal state" and "Multiple screens can be marked
+     * as terminal". The first version of this comment said *exactly one*, the suite and the
+     * publish script enforced it, and the forms were being designed around a rule Meta doesn't
+     * have. Because of it, the checkout had nowhere honest to put "you have no saved address".
+     *
+     * "Terminal" means the Flow closes, not that the customer has finished shopping. A browse
+     * screen that hands a choice back to the chat is terminal.
      */
     terminal?: boolean;
     /** What the endpoint must supply for this screen. */
@@ -83,9 +88,14 @@ export interface FlowDefinition {
     /**
      * Which screens can reach which.
      *
-     * ⚠ **A screen absent from this map is UNREACHABLE and Meta will not tell you at
-     * publish** — it validates the map, not the intent. A one-screen Flow still needs its
-     * screen present with an empty destination list.
+     * Meta's rules, from the Flow JSON reference: **required whenever an endpoint powers the
+     * Flow**; routes are forward-only; a route cannot point at its own screen; every route must
+     * end at a terminal screen; at most 10 branches.
+     *
+     * ⚠ **Declaring every screen as a key is a HOUSE rule, not Meta's.** An earlier comment
+     * here said a missing screen was "unreachable and Meta will not tell you". That was never
+     * verified, and Meta's reference says only screens with forward transitions need keys.
+     * The rule is kept because a complete map lets the suite check reachability locally.
      */
     routing_model: Record<string, string[]>;
     screens: FlowScreen[];

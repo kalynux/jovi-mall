@@ -1,6 +1,9 @@
 import { MessagingChannel } from '../channel-connections';
-import { botChrome } from '../bot-surface/domain/bot-chrome-copy';
+import { BotChromeKey, botChrome } from '../bot-surface/domain/bot-chrome-copy';
 import { BotChannelReply, BotReplyIntent, renderBotReply } from '../bot-surface/domain/channel-reply';
+import { inAppScreenUrl } from '../bot-surface/domain/inapp-url';
+import { botStorefrontLink } from '../bot-surface/domain/bot-list-window';
+import type { InAppSurfaceKind } from '../bot-surface/services/inapp-surface.store';
 
 /**
  * Turn a command result into a channel-ready request body.
@@ -33,11 +36,82 @@ import { BotChannelReply, BotReplyIntent, renderBotReply } from '../bot-surface/
  * `reply` for free instead of being the one that forgot.
  */
 
-/** The two fields every bot command result carries. Anything else is passed through. */
+/**
+ * An in-app screen a reply should open.
+ *
+ * The same four inputs `respondWithScreen` takes on the bot surface. The command has already
+ * minted `handle`; nothing here mints, reads or checks a session.
+ */
+export interface CommandScreen {
+    kind: InAppSurfaceKind;
+    /** An `ia_…` handle the command minted for THIS conversation. */
+    handle: string;
+    /** The button's label, from the chat chrome table. */
+    labelKey: BotChromeKey;
+    /** A storefront path to fall back to when no screen origin is configured, or null. */
+    fallbackPath: string | null;
+}
+
+/** The fields a bot command result may carry. Anything else is passed through. */
 export interface RenderableCommandResult {
     message?: unknown;
     /** `/login` and `/reset-password` set it on an unbound Telegram chat. */
     requestContact?: unknown;
+    /**
+     * Open an in-app screen under the message.
+     *
+     * ── WHY A COMMAND NEEDS THIS AT ALL ─────────────────────────────────────
+     * Until this field existed a command could answer with words or a contact keyboard and
+     * nothing else, so a customer who chose a product in the WhatsApp listing form was told
+     * "got that" and handed nothing to tap. The chat's own product door (`POST /inapp/products`)
+     * could open the detail screen; the command path couldn't.
+     */
+    screen?: CommandScreen | null;
+    /**
+     * The customer's language, when the command could establish it and the caller couldn't.
+     *
+     * The webhook controllers render with `language = null` because at `/connect` or an
+     * unresolved `/login` there is no account to read one from (see the note at the bottom of
+     * this file). A command that resolved an in-app session does know it, from the session, and
+     * a French customer shouldn't get an English button because the controller didn't. A
+     * language the CALLER supplies still wins: the bot surface's router resolves it from the
+     * account.
+     */
+    language?: string | null;
+}
+
+/**
+ * Compose the reply that opens an in-app screen: the screen button when a screen origin is
+ * configured, the storefront link when one isn't, and nothing when neither exists.
+ *
+ * ── ⚠ ONE COMPOSITION FOR BOTH DOORS ────────────────────────────────────────
+ * `respondWithScreen` on the bot surface makes exactly this decision for the chat's doors, and
+ * the command path makes it here. They must not become two copies. When the WhatsApp form is
+ * attached to the `inapp` intent, it has to be attached in ONE place, or the chat door would
+ * open a form and the command path would open a browser for the same screen. This function is
+ * that place, and `respondWithScreen` is meant to delegate to it.
+ *
+ * Pure: every input is a value. The URL helpers read configuration and nothing else.
+ */
+export function screenReplyIntent(input: {
+    kind: InAppSurfaceKind;
+    handle: string;
+    language: string | null;
+    labelKey: BotChromeKey;
+    fallbackPath: string | null;
+    /** The sentence above the button. Defaults to the chat's browse prompt, as the doors do. */
+    text?: string | null;
+}): BotReplyIntent | null {
+    const label = botChrome(input.labelKey, input.language);
+    const text = input.text?.trim() || botChrome('browseProductsPrompt', input.language);
+
+    const screenUrl = inAppScreenUrl(input.kind, input.handle, input.language);
+    if (screenUrl) return { kind: 'inapp', text, label, url: screenUrl };
+
+    const fallbackUrl = input.fallbackPath
+        ? botStorefrontLink(input.fallbackPath, input.language)
+        : null;
+    return fallbackUrl ? { kind: 'link', text, label, url: fallbackUrl } : null;
 }
 
 /**
@@ -75,6 +149,19 @@ export function commandReplyIntent(
     language: string | null = null,
 ): BotReplyIntent | null {
     const text = typeof result?.message === 'string' ? result.message.trim() : '';
+    const lang = language ?? (typeof result?.language === 'string' ? result.language : null);
+
+    /**
+     * ⚠ **A screen outranks a plain message, and it may arrive without one.** The screen carries
+     * its own default sentence, the same one the chat's doors use. If neither a screen origin
+     * nor a fallback exists, this falls through to the message alone rather than sending
+     * nothing, so a customer who finished a form still gets the words.
+     */
+    if (result?.screen) {
+        const screenIntent = screenReplyIntent({ ...result.screen, language: lang, text });
+        if (screenIntent) return screenIntent;
+    }
+
     if (!text) return null;
 
     /**
@@ -88,7 +175,7 @@ export function commandReplyIntent(
         return {
             kind: 'contact_request',
             text,
-            buttonLabel: botChrome('contactButton', language),
+            buttonLabel: botChrome('contactButton', lang),
         };
     }
 

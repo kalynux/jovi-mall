@@ -68,6 +68,19 @@ export function initializeCustomerNotificationEventConsumers(): void {
      */
     eventBus.subscribe('payment.failed', handler.handleOrderPaymentFailed.bind(handler));
 
+    /**
+     * ⭐ The BOOKING half of the same two events — one event per payment, each handler filtering
+     * on `aggregateType`, exactly as the order handlers above already do.
+     *
+     * An online booking payment was never announced to the customer in either direction: success
+     * was published and only the vendor stack listened, and failure was not published at all.
+     * Both subscriptions are needed for success because the event name compares the payment with
+     * the original price — the handler routes on `purpose`, never on full vs partial.
+     */
+    eventBus.subscribe('payment.received.full', handler.handleBookingPaymentReceived.bind(handler));
+    eventBus.subscribe('payment.received.partial', handler.handleBookingPaymentReceived.bind(handler));
+    eventBus.subscribe('payment.failed', handler.handleBookingPaymentFailed.bind(handler));
+
     // ── Delivery progress ───────────────────────────────────────────────────
     // Only four shipment statuses reach the customer (shipped / out for delivery /
     // delivered / failed). The handler drops the rest — `assigned`, `handing_over`

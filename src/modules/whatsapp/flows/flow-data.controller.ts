@@ -8,6 +8,7 @@ import {
 } from './domain/flow-protocol';
 import { flowAppSecret, verifyFlowSignature } from './domain/flow-signature';
 import { flowPrivateKey } from './flows.config';
+import { serveFlowScreen } from './flow-screens';
 
 /**
  * `POST /api/webhooks/whatsapp/flows` — the encrypted data endpoint.
@@ -157,46 +158,33 @@ export class FlowDataController {
             // ⚠ The health check resolves NO session. See `flow-protocol.ts`: requiring a
             // token here would fail every ping and make the Flow unpublishable, while looking
             // like correct authentication.
-            sendEncrypted(
-                res,
-                encryptFlowResponse(pingResponse(request.version), aesKey, initialVector),
-            );
+            sendEncrypted(res, encryptFlowResponse(pingResponse(), aesKey, initialVector));
             return;
         }
 
         if (request.kind === 'error') {
             console.warn(
-                `[WhatsAppFlows] client reported an error: ${request.errorKey ?? 'unspecified'}`,
+                `[WhatsAppFlows] client reported an error: ${request.errorKey ?? 'unspecified'}`
+                + (request.errorMessage ? ` — ${request.errorMessage}` : ''),
             );
-            // Acknowledged with a 200 on purpose — anything else makes Meta retry a report
+            // Acknowledged with a 200 on purpose: anything else makes Meta retry a report
             // of a failure.
-            sendEncrypted(
-                res,
-                encryptFlowResponse(
-                    errorAcknowledgement(request.version),
-                    aesKey,
-                    initialVector,
-                ),
-            );
+            sendEncrypted(res, encryptFlowResponse(errorAcknowledgement(), aesKey, initialVector));
             return;
         }
 
         /**
-         * ⚠ **No screen handlers are wired yet, and this refusal is deliberate rather than
-         * unfinished.** Two of the three screens this mirrors do not have their data
-         * contracts settled (their Mini App endpoints are unmounted), and a Flow's data model
-         * is validated by Meta **at publish time** — so a screen answered against a guessed
-         * shape has to be published twice.
+         * A screen. The product decisions live in `flow-screens.ts`; this file only encrypts
+         * the verdict and sets its status.
          *
-         * 427 rather than 400 because it is the honest one: the endpoint is reachable and
-         * working, and this particular session cannot be served. It ends the Flow cleanly on
-         * the handset instead of leaving it open against an endpoint that will never answer.
+         * ⚠ **A 427 is encrypted too.** Meta's reference endpoint sends its `{ error_msg }`
+         * through the same cipher as a 200, and the handset shows that sentence. A bare 427
+         * ends the Flow with nothing for the customer to act on.
          */
-        console.warn(
-            `[WhatsAppFlows] no handler for screen '${request.screen ?? 'INIT'}' `
-            + `(action '${request.action}')`,
-        );
-        res.status(STATUS.TOKEN_UNUSABLE).end();
+        const verdict = await serveFlowScreen(request);
+        res.status(verdict.status)
+            .type('text/plain')
+            .send(encryptFlowResponse(verdict.body, aesKey, initialVector));
     });
 }
 

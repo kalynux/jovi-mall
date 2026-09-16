@@ -1,93 +1,213 @@
 import { BOT_COPY_LANGUAGES, BotCopyLanguage, toBotCopyLanguage } from './bot-error-copy';
-import { CustomerShipmentStatus } from '../../orders/dto/customer-shipment.dto';
-import { FulfillmentStatus } from '../../orders/order.model';
+import type { CustomerShipmentStatus } from '../../orders/dto/customer-shipment.dto';
+import type { FulfillmentStatus } from '../../orders/order.model';
 
 /**
- * The words an ORDER is described with — its state, and the few turns only fulfilment needs.
+ * ⭐ **THE ONE TABLE for how an order's state is worded to a customer — read by the chat AND by
+ * the order-listing screen.**
  *
- * ── WHY THIS IS A FOURTH COPY TABLE AND NOT A GROWTH OF `bot-chrome-copy.ts` ─
- * Two reasons, and the second decided it.
+ * ── ⛔ WHY THERE IS ONE, AND WHY IT MUST STAY ONE ───────────────────────────
+ * The chat's order list is the first five rows of the list `miniapp/surfaces/
+ * order-listing.controller.ts` continues: a customer taps "Load more" and goes straight from one
+ * to the other. On 2026-09-16 each surface had its own table, written a day apart, and they
+ * disagreed in **four of nine** fulfilment statuses and in the payment wording too. Neither file
+ * was wrong read alone — both were total `Record`s over the union, both had a written rationale —
+ * and the worst disagreement was on `pending`, the state every new order is in: one said *"Order
+ * received"*, the other *"Preparing"*, which are two different claims about whether anybody has
+ * started work.
  *
- *   1. **Almost nothing here is chrome.** `bot-chrome-copy.ts` is explicit that it holds
- *      *"text that is rendered by the messaging client as a control"*, and that keeping it
- *      separate is what makes its caps checkable. A status label is a word inside a message
- *      body; mixing the two is what that file was split out to stop.
- *   2. ⚠ **Several sessions build on this surface in one working tree, and two sessions
- *      editing one file is a lost write rather than a merge conflict.** Stream 0 pre-declared
- *      the whole chrome vocabulary in one pass for exactly that reason. ~110 strings arriving
- *      into a table three other streams read would be the edit it was written to avoid.
+ * A guard comparing two tables was proposed and declined in favour of this (coordinator decision,
+ * 2026-09-16): **a guard catches a drift after somebody has written it; a single table cannot
+ * drift.** The screen imports from here and holds no copy of its own.
  *
- * ⚠ **The five fulfilment strings that ARE chrome live in `bot-chrome-copy.ts` and must not
- * be copied here** — `cancelOrderButton`, `confirmDeliveryPrompt`, `cancelOrderPrompt`,
- * `cancelReasonPrompt`, `handoverPrompt`. They are reached with `botChrome()`. Two tables
- * answering "what do we call cancelling an order" is the drift a single copy layer exists to
- * prevent, and it would be invisible: both would render, in different words, on different
- * turns.
+ * ⚠ **So never re-add a status word to a surface.** If a screen or a card needs a wording this
+ * file does not have, add it here, where both surfaces read it — and if two surfaces genuinely
+ * must say different things, write down why, because the next reader's instinct is to "fix" the
+ * difference in a direction picked at random.
  *
- * ── ⚠ THE TYPE SYSTEM DOES MOST OF THE CHECKING, DELIBERATELY ───────────────
- * `assertBotChromeCopyFits` has to walk its table at boot because that table is a flat object
- * of loose keys, so a missing language can only be found by looking. Every status table below
- * is a **total `Record` over a closed union** — `FulfillmentStatus`, `BotOrderPaymentState`,
- * `CustomerShipmentStatus` — so a missing status is a **compile error**, and a missing
- * language is one too. That is strictly stronger than a boot assert: it fails in the editor
- * of the person adding the status rather than in production.
+ * ── ⚠ AN INTERNAL VALUE NEVER REACHES THE CUSTOMER, EVEN WHEN IT IS UNKNOWN ──
+ * The statuses arrive as plain `string`s out of aggregations and DTOs, so a value that reached the
+ * database before the union did will one day arrive here. It gets `statusUnavailable` — a neutral
+ * sentence in the customer's language — and **never the raw token**. An earlier version of this
+ * file returned the token itself as its floor, so a customer would have read `partially_shipped`;
+ * that was exactly what the collapse below exists to prevent, arriving by the back door.
  *
- * `assertOrderStatusCopyComplete()` is exported anyway, because the one thing the compiler
- * cannot see is a string that is present but too long for the control it lands in.
+ * ── THE TYPE SYSTEM DOES MOST OF THE CHECKING ───────────────────────────────
+ * Every table is a **total `Record` over a closed union**, so a new status, bucket or language is a
+ * compile error in the editor of whoever adds it. `assertOrderStatusCopyComplete()` checks only
+ * what the compiler cannot see: a string too long for the control it lands in.
  *
- * ── ⛔ THE SEAM: THESE WORDS ARE SHARED WITH A FILE NOTHING CAN CHECK THEM AGAINST ──
- * **`miniapp/surfaces/order-listing.controller.ts` words the same nine fulfilment statuses for
- * the same customer, and the chat list below is the FIRST FIVE ROWS OF THE LIST THAT SCREEN
- * CONTINUES.** A customer taps "Load more" and goes straight from one table to the other.
- *
- * They diverged within a day of both being written (2026-09-16), in four of nine statuses, and
- * neither file was wrong when read alone — both are total `Record`s over the union, both carry
- * a written rationale, and both independently concluded that "fulfilled" is a warehouse word.
- * The worst of the four was `pending`, the state **every new order is in**: one table said
- * *"Order received"* and the other *"Preparing"*, which are two different claims about whether
- * anybody has started work.
- *
- * ⚠ **No assertion can see this.** The two tables are in different files owned by different
- * streams, keyed on different unions — one collapses nine statuses to six customer words, this
- * one does not collapse at all. A guard would have to know that the two describe one list, and
- * nothing in either file says so except this paragraph and its twin over there.
- *
- * ⚠ **So: changing a word here means changing it there, in the same change.** If the two ever
- * have to differ, write down why — because the next reader's first instinct will be to "fix"
- * the inconsistency, and they will pick a direction at random.
+ * ── ⚠ THIS FILE HAS NO RUNTIME IMPORTS BEYOND THE COPY LANGUAGES ────────────
+ * Both model imports are `import type`, erased at compile time, so any suite can import this file
+ * under bare `ts-node`. That matters here more than most places: anything that reaches `orders/`
+ * or `payments/` at runtime does work at import and hangs bare `ts-node` with no output.
  *
  * ── WHERE THE WORDING COMES FROM ────────────────────────────────────────────
- * ⚠ **The delivery states are worded to agree with
- * `notifications/catalog/customer-notification-catalog.ts`**, which already tells this same
- * customer "your order is on its way" and "out for delivery" in these same five languages. A
- * customer who reads a notification and then opens the chat must find the same word for the
- * same parcel — somebody who does not is not told we have two systems, they are told we do
- * not know where their parcel is. The notification catalogue is the senior of the two: it
- * shipped first, and a copy of it is sitting in their inbox.
+ * The delivery words agree with `notifications/catalog/customer-notification-catalog.ts`, which
+ * already tells this customer "on its way" and "out for delivery" in these five languages; that
+ * catalogue is the senior source, because a copy of it is sitting in their inbox.
  */
 
-type Copy = Record<BotCopyLanguage, string>;
+/** Five languages, one string each. Exported so a surface can type its own non-status copy. */
+export type BotOrderCopy = Record<BotCopyLanguage, string>;
+type Copy = BotOrderCopy;
+
+/** A copy entry in the customer's language, falling back to English and never to a key. */
+function pick(copy: Copy, language: string | null | undefined): string {
+    return copy[toBotCopyLanguage(language)] ?? copy.en;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Payment — ONE vocabulary, folded from the two the platform actually holds
+//  The floor under every status: what an unrecognised one reads as
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * ⚠ **True of every status it could stand in for, which is why it says so little.** It is shown
+ * for a value neither union knows — never for a real state — so it cannot guess at progress: a
+ * default of "Preparing" would tell somebody with a cancelled order that their parcel is being
+ * packed.
+ */
+export const ORDER_STATUS_UNAVAILABLE_COPY: Readonly<Copy> = Object.freeze({
+    en: 'Status not available',
+    fr: 'Statut indisponible',
+    pt: 'Estado indisponível',
+    es: 'Estado no disponible',
+    ar: 'الحالة غير متاحة',
+});
+
+export function botOrderStatusUnavailable(language: string | null | undefined): string {
+    return pick(ORDER_STATUS_UNAVAILABLE_COPY, language);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Fulfilment — nine statuses, seven words
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The seven words an order's progress collapses to.
+ *
+ * `partially_shipped` describes how many parcels a warehouse has released, which is the platform's
+ * business rather than the customer's, so it reads "On its way". `fulfilled` is a warehouse word
+ * for delivered-and-settled, so it reads "Delivered".
+ *
+ * ⚠ **`received` and `preparing` are DIFFERENT buckets, and must stay so.** `pending` is where every
+ * order starts — and where a cash-on-delivery order can sit untouched for days — while `processing`
+ * means somebody has started. One word for both is false in one direction or the other: "Preparing"
+ * asserts work nobody has done, "Order received" hides work that has begun. `test:inapp-orders`
+ * pins the two apart, so a future "tidy them into one" fails.
+ *
+ * ⚠ **`partly_delivered` keeps its own word.** A customer who already has half a multi-seller
+ * checkout must not be told nothing has arrived; that is the one place collapsing into "On its way"
+ * would state something false.
+ */
+export type BotOrderProgress =
+    | 'received'
+    | 'preparing'
+    | 'shipped'
+    | 'partly_delivered'
+    | 'delivered'
+    | 'cancelled'
+    | 'returned';
+
+/** ⚠ Total over `FulfillmentStatus`: a tenth fulfilment status is a compile error here. */
+export const ORDER_PROGRESS_OF: Readonly<Record<FulfillmentStatus, BotOrderProgress>> = Object.freeze({
+    pending: 'received',
+    processing: 'preparing',
+    partially_shipped: 'shipped',
+    shipped: 'shipped',
+    partially_delivered: 'partly_delivered',
+    delivered: 'delivered',
+    fulfilled: 'delivered',
+    cancelled: 'cancelled',
+    returned: 'returned',
+});
+
+export const ORDER_PROGRESS_COPY: Readonly<Record<BotOrderProgress, Copy>> = Object.freeze({
+    received: {
+        en: 'Order received',
+        fr: 'Commande reçue',
+        pt: 'Encomenda recebida',
+        es: 'Pedido recibido',
+        ar: 'تم استلام الطلب',
+    },
+    preparing: {
+        en: 'Preparing',
+        fr: 'En préparation',
+        pt: 'Em preparação',
+        es: 'En preparación',
+        ar: 'قيد التحضير',
+    },
+    /** ⚠ Worded to match `order.shipped`'s notification — "on its way", never "dispatched". */
+    shipped: {
+        en: 'On its way',
+        fr: 'En route',
+        pt: 'A caminho',
+        es: 'En camino',
+        ar: 'في الطريق',
+    },
+    partly_delivered: {
+        en: 'Partly delivered',
+        fr: 'Partiellement livrée',
+        pt: 'Parcialmente entregue',
+        es: 'Entregado en parte',
+        ar: 'تم تسليم جزء منه',
+    },
+    delivered: {
+        en: 'Delivered',
+        fr: 'Livrée',
+        pt: 'Entregue',
+        es: 'Entregado',
+        ar: 'تم التسليم',
+    },
+    cancelled: {
+        en: 'Cancelled',
+        fr: 'Annulée',
+        pt: 'Cancelada',
+        es: 'Cancelado',
+        ar: 'ملغى',
+    },
+    returned: {
+        en: 'Returned',
+        fr: 'Retournée',
+        pt: 'Devolvida',
+        es: 'Devuelto',
+        ar: 'مُعاد',
+    },
+});
+
+/**
+ * Which bucket a fulfilment status belongs to — or `null` for a value the union does not know.
+ *
+ * ⚠ **Takes a `string`, on purpose.** Callers read the status out of an aggregation or a DTO, where
+ * it is typed `string`; a narrow parameter would be satisfied by a cast at every call site, and a
+ * cast is what turns an unmapped value into `undefined`. The table stays total over the union, so
+ * this looseness weakens no compile-time guarantee.
+ */
+export function orderProgressOf(status: string | null | undefined): BotOrderProgress | null {
+    if (typeof status !== 'string') return null;
+    return (ORDER_PROGRESS_OF as Record<string, BotOrderProgress | undefined>)[status] ?? null;
+}
+
+/** How an order's progress is described. An unknown status reads as `statusUnavailable`. */
+export function botFulfillmentStateLabel(
+    status: string | null | undefined,
+    language: string | null | undefined,
+): string {
+    const progress = orderProgressOf(status);
+    return progress ? pick(ORDER_PROGRESS_COPY[progress], language) : botOrderStatusUnavailable(language);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Payment — one vocabulary, folded from the two the platform holds
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * What a customer is told about money, as a closed set.
  *
- * ⚠ **This is neither `PaymentStatus` nor `aggregatePaymentStatus`'s output — it is the two
- * of them folded.** The platform holds two payment vocabularies that overlap and disagree at
- * the edges:
- *
- *   - `PaymentStatus` on one order: `pending · AWAITING_PAYMENT · partially_paid · paid ·
- *     disputed · failed · refunded`. ⚠ **`pending` and `AWAITING_PAYMENT` are two spellings
- *     of one fact** — one of them even shouts — and a customer shown both would reasonably
- *     conclude they name two different things that have happened to their money.
- *   - `aggregatePaymentStatus` over a checkout group adds `mixed` and `unknown`, which
- *     describe the *group* rather than any payment.
- *
- * Folding once, here, is what stops the order list and the order card calling one state by
- * two names on two consecutive turns.
+ * ⚠ **The union of `PaymentStatus` and `aggregatePaymentStatus`'s output, folded.** `PaymentStatus`
+ * spells one fact twice — `pending` and `AWAITING_PAYMENT` — and a customer shown both would
+ * reasonably conclude two different things had happened to their money. `aggregatePaymentStatus`
+ * adds `mixed` and `unknown`, which describe a checkout GROUP rather than any one payment.
  */
 export type BotOrderPaymentState =
     | 'awaiting_payment'
@@ -102,15 +222,12 @@ export type BotOrderPaymentState =
 /**
  * Fold either vocabulary onto the one above.
  *
- * ⚠ **An unrecognised string becomes `unknown`, never `paid`.** This takes a plain `string`
- * because `aggregatePaymentStatus` is typed that way, so a status nobody has mapped yet will
- * eventually arrive here. Defaulting it to anything reassuring would answer *"what happened
- * to my money"* with a guess — the failure `aggregatePaymentStatus` guards against by putting
- * its empty case first, arriving by a second door.
+ * ⚠ **Anything unrecognised becomes `unknown`, never `paid`.** Defaulting to anything reassuring
+ * would answer *"what happened to my money"* with a guess — the failure `aggregatePaymentStatus`
+ * guards against by putting its empty case first.
  */
 export function toBotOrderPaymentState(raw: string | null | undefined): BotOrderPaymentState {
     switch (raw) {
-        // The two spellings of "we are still waiting for this money".
         case 'pending':
         case 'AWAITING_PAYMENT':
         case 'awaiting_payment':
@@ -132,164 +249,107 @@ export function toBotOrderPaymentState(raw: string | null | undefined): BotOrder
     }
 }
 
-const PAYMENT_STATE: Readonly<Record<BotOrderPaymentState, Copy>> = Object.freeze({
-    awaiting_payment: {
-        en: 'Not paid yet',
-        fr: 'Pas encore payée',
-        pt: 'Ainda não paga',
-        es: 'Aún sin pagar',
-        ar: 'لم تُدفع بعد',
-    },
-    partially_paid: {
-        en: 'Partly paid',
-        fr: 'Partiellement payée',
-        pt: 'Parcialmente paga',
-        es: 'Parcialmente pagada',
-        ar: 'مدفوعة جزئيًا',
-    },
-    paid: {
-        en: 'Paid',
-        fr: 'Payée',
-        pt: 'Paga',
-        es: 'Pagada',
-        ar: 'مدفوعة',
-    },
-    disputed: {
-        en: 'Payment disputed',
-        fr: 'Paiement contesté',
-        pt: 'Pagamento contestado',
-        es: 'Pago en disputa',
-        ar: 'الدفع محل نزاع',
-    },
-    failed: {
-        en: 'Payment failed',
-        fr: 'Paiement échoué',
-        pt: 'Pagamento falhou',
-        es: 'Pago fallido',
-        ar: 'فشل الدفع',
-    },
-    refunded: {
-        en: 'Refunded',
-        fr: 'Remboursée',
-        pt: 'Reembolsada',
-        es: 'Reembolsada',
-        ar: 'تم استردادها',
-    },
-    /**
-     * ⚠ **A checkout group whose orders disagree — and it must not read as a state of the
-     * money.** "Mixed" alone invites *"mixed with what?"*; naming the level the disagreement
-     * lives at is what makes it a fact the customer can act on.
-     */
-    mixed: {
-        en: 'Varies by order',
-        fr: 'Varie selon la commande',
-        pt: 'Varia por encomenda',
-        es: 'Varía según el pedido',
-        ar: 'يختلف حسب الطلب',
-    },
-    /**
-     * ⚠ **Reached only when there is nothing to report at all** — on this path, a group with
-     * no orders in it. It says so plainly rather than inventing a state, which is the same
-     * decision `aggregatePaymentStatus` makes by answering `unknown` for an empty group
-     * instead of letting `[].every(...)` report `paid`.
-     */
-    unknown: {
-        en: 'Not available',
-        fr: 'Non disponible',
-        pt: 'Indisponível',
-        es: 'No disponible',
-        ar: 'غير متاح',
-    },
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Fulfilment — the nine, worded for the person waiting rather than the warehouse
-// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * ⚠ **`unknown` has no entry: it reads as `statusUnavailable`**, through the same floor as an
+ * unrecognised fulfilment status. It is reached only for a group with no orders in it.
+ *
+ * Wording adopted verbatim from the order-listing screen when the two tables became this one; it
+ * had the better reasons, recorded on the entries below.
+ */
+export const ORDER_PAYMENT_COPY: Readonly<Record<Exclude<BotOrderPaymentState, 'unknown'>, Copy>> =
+    Object.freeze({
+        paid: {
+            en: 'Paid',
+            fr: 'Payée',
+            pt: 'Paga',
+            es: 'Pagado',
+            ar: 'مدفوع',
+        },
+        partially_paid: {
+            en: 'Partly paid',
+            fr: 'Partiellement payée',
+            pt: 'Parcialmente paga',
+            es: 'Pagado en parte',
+            ar: 'مدفوع جزئيًا',
+        },
+        awaiting_payment: {
+            en: 'Awaiting payment',
+            fr: 'En attente de paiement',
+            pt: 'A aguardar pagamento',
+            es: 'Pendiente de pago',
+            ar: 'في انتظار الدفع',
+        },
+        failed: {
+            en: 'Payment failed',
+            fr: 'Paiement échoué',
+            pt: 'Pagamento falhou',
+            es: 'Pago fallido',
+            ar: 'فشل الدفع',
+        },
+        refunded: {
+            en: 'Refunded',
+            fr: 'Remboursée',
+            pt: 'Reembolsada',
+            es: 'Reembolsado',
+            ar: 'تم الاسترداد',
+        },
+        disputed: {
+            en: 'Payment disputed',
+            fr: 'Paiement contesté',
+            pt: 'Pagamento contestado',
+            es: 'Pago en disputa',
+            ar: 'الدفع محل نزاع',
+        },
+        /**
+         * The orders in one checkout are in different states — one refunded and one failed, say.
+         * Worded as something to look at rather than as a verdict, because it is genuinely several
+         * facts and the chat is where a customer can ask which.
+         */
+        mixed: {
+            en: 'Payment needs attention',
+            fr: 'Paiement à vérifier',
+            pt: 'Pagamento a verificar',
+            es: 'Pago por revisar',
+            ar: 'الدفع يحتاج مراجعة',
+        },
+    });
 
 /**
- * ⚠ **A total map over `FulfillmentStatus`, so a tenth status is a compile error here.** The
- * rule `CUSTOMER_VISIBLE_STATUS` already follows in `customer-shipment.dto.ts`, for the same
- * reason: the alternative is a new internal state reaching a customer under whatever the
- * fallback happened to be.
+ * ⚠ **Cash on delivery is shown as a METHOD, not as a debt.**
  *
- * ⚠ **Unlike that map, this one collapses nothing — all nine are shown.** The shipment
- * vocabulary is collapsed 11 → 5 because most of those eleven describe dispatch machinery the
- * customer cannot act on. These nine are all facts about the customer's own order, and
- * `partially_shipped` against `shipped` is precisely the difference somebody with two parcels
- * needs to see.
+ * A COD order sits unpaid until the agent collects, so "awaiting payment" is technically honest and
+ * practically wrong: it tells somebody who owes nothing yet that they are behind on a payment. When
+ * the money is not due until the door, the method is the truer thing to say.
+ *
+ * ⚠ **The method, never the code.** The delivery code is a credential disclosed once, on request,
+ * through a route built for it.
  */
-const FULFILLMENT_STATE: Readonly<Record<FulfillmentStatus, Copy>> = Object.freeze({
-    pending: {
-        en: 'Order received',
-        fr: 'Commande reçue',
-        pt: 'Encomenda recebida',
-        es: 'Pedido recibido',
-        ar: 'تم استلام الطلب',
-    },
-    processing: {
-        en: 'Being prepared',
-        fr: 'En préparation',
-        pt: 'Em preparação',
-        es: 'En preparación',
-        ar: 'قيد التحضير',
-    },
-    partially_shipped: {
-        en: 'Part of it is on its way',
-        fr: 'Une partie est en route',
-        pt: 'Parte está a caminho',
-        es: 'Una parte va en camino',
-        ar: 'جزء منه في الطريق',
-    },
-    /** ⚠ Worded to match `order.shipped`'s notification — "on its way", never "dispatched". */
-    shipped: {
-        en: 'On its way',
-        fr: 'En route',
-        pt: 'A caminho',
-        es: 'En camino',
-        ar: 'في الطريق',
-    },
-    partially_delivered: {
-        en: 'Part of it has arrived',
-        fr: 'Une partie est arrivée',
-        pt: 'Parte já chegou',
-        es: 'Una parte ha llegado',
-        ar: 'وصل جزء منه',
-    },
-    delivered: {
-        en: 'Delivered',
-        fr: 'Livrée',
-        pt: 'Entregue',
-        es: 'Entregado',
-        ar: 'تم التسليم',
-    },
-    /**
-     * ⚠ **"Complete", not "Fulfilled".** `fulfilled` is the platform's word for *delivered,
-     * confirmed and settled*; to the customer the parcel simply arrived, and a second
-     * delivery-shaped word after "Delivered" reads as another state they are still waiting on
-     * rather than as the end of it.
-     */
-    fulfilled: {
-        en: 'Complete',
-        fr: 'Terminée',
-        pt: 'Concluída',
-        es: 'Completado',
-        ar: 'مكتمل',
-    },
-    cancelled: {
-        en: 'Cancelled',
-        fr: 'Annulée',
-        pt: 'Cancelada',
-        es: 'Cancelado',
-        ar: 'أُلغيت',
-    },
-    returned: {
-        en: 'Returned',
-        fr: 'Retournée',
-        pt: 'Devolvida',
-        es: 'Devuelto',
-        ar: 'أُعيدت',
-    },
+export const ORDER_CASH_ON_DELIVERY_COPY: Readonly<Copy> = Object.freeze({
+    en: 'Cash on delivery',
+    fr: 'Paiement à la livraison',
+    pt: 'Pagamento na entrega',
+    es: 'Pago contra entrega',
+    ar: 'الدفع عند الاستلام',
 });
+
+/**
+ * How an order's money is described.
+ *
+ * ⚠ **`cashOnDelivery` means EVERY order being described is cash on delivery** — one order for a
+ * chat card, all of a checkout's orders for a listing row. A group mixing prepaid and COD orders is
+ * not "cash on delivery", and saying so would hide the prepaid half's debt.
+ */
+export function botPaymentStateLabel(
+    state: BotOrderPaymentState,
+    language: string | null | undefined,
+    options: { cashOnDelivery?: boolean } = {},
+): string {
+    if (state === 'unknown') return botOrderStatusUnavailable(language);
+    if (options.cashOnDelivery && state === 'awaiting_payment') {
+        return pick(ORDER_CASH_ON_DELIVERY_COPY, language);
+    }
+    return pick(ORDER_PAYMENT_COPY[state], language);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Parcels — the five a customer is shown, and nothing behind them
@@ -298,27 +358,18 @@ const FULFILLMENT_STATE: Readonly<Record<FulfillmentStatus, Copy>> = Object.free
 /**
  * ⚠ **Keyed on `CustomerShipmentStatus`, the five — never on `ShipmentStatus`, the eleven.**
  *
- * The collapse is already made once, in `customer-shipment.dto.ts`, and it is a **disclosure**
- * decision rather than a display one: `handing_over` and `pending_agency_reassignment` say how
- * dispatch works and invite support contacts about states nobody can act on. A copy table
- * keyed on the eleven would quietly re-open that by giving four of them customer-facing words
- * — and it would look like thoroughness while doing it.
+ * The collapse is made once, in `customer-shipment.dto.ts`, and it is a **disclosure** decision:
+ * `handing_over` and `pending_agency_reassignment` say how dispatch works and invite support
+ * contacts about states nobody can act on. A table keyed on the eleven would quietly give four of
+ * them customer-facing words — and would look like thoroughness while doing it.
+ *
+ * ⚠ **`preparing` and `shipped` use the SAME strings as the order buckets of those names**, so a
+ * customer reading the order card and then a parcel card in one conversation sees one word for one
+ * state.
  */
 const SHIPMENT_STATE: Readonly<Record<CustomerShipmentStatus, Copy>> = Object.freeze({
-    preparing: {
-        en: 'Being prepared',
-        fr: 'En préparation',
-        pt: 'Em preparação',
-        es: 'En preparación',
-        ar: 'قيد التحضير',
-    },
-    shipped: {
-        en: 'On its way',
-        fr: 'En route',
-        pt: 'A caminho',
-        es: 'En camino',
-        ar: 'في الطريق',
-    },
+    preparing: ORDER_PROGRESS_COPY.preparing,
+    shipped: ORDER_PROGRESS_COPY.shipped,
     /** ⚠ Worded to match `order.out_for_delivery`'s notification. */
     out_for_delivery: {
         en: 'Out for delivery',
@@ -327,6 +378,7 @@ const SHIPMENT_STATE: Readonly<Record<CustomerShipmentStatus, Copy>> = Object.fr
         es: 'En reparto',
         ar: 'قيد التوصيل',
     },
+    /** ⚠ Masculine in French — `colis` — where the order bucket is feminine, `commande`. */
     delivered: {
         en: 'Delivered',
         fr: 'Livré',
@@ -337,8 +389,8 @@ const SHIPMENT_STATE: Readonly<Record<CustomerShipmentStatus, Copy>> = Object.fr
     /**
      * ⚠ **It names the ATTEMPT, not the parcel.** `delivery_failed` also covers the internal
      * `returned`, and "failed" said flatly reads as *your parcel is gone*. A failed attempt is
-     * usually followed by another one by the same agent — `failed` is not terminal and the
-     * agent keeps the parcel — so the wording has to leave that open.
+     * usually followed by another by the same agent — `failed` is not terminal — so the wording has
+     * to leave that open.
      */
     delivery_failed: {
         en: 'Delivery attempt failed',
@@ -349,8 +401,16 @@ const SHIPMENT_STATE: Readonly<Record<CustomerShipmentStatus, Copy>> = Object.fr
     },
 });
 
+/** How one parcel's progress is described. Narrowly typed: the DTO already holds the five. */
+export function botShipmentStateLabel(
+    status: CustomerShipmentStatus,
+    language: string | null | undefined,
+): string {
+    return pick(SHIPMENT_STATE[status], language);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-//  The few turns only fulfilment has
+//  The few turns only the chat's fulfilment flow has
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** The line above a list of the customer's orders. */
@@ -375,9 +435,8 @@ const WHICH_PARCEL: Copy = {
  * A parcel's name in a picker row, numbered by the caller.
  *
  * ⚠ **A number, not the tracking code.** `ACR-YYMMDD-HHMMSS-XXXXX` is 23 characters against
- * WhatsApp's 24-character row title: it fits by one character today and would be cut, in
- * silence, by any change to that generator. The code goes in the row's *description*, which
- * has 72.
+ * WhatsApp's 24-character row title: it fits by one and would be cut, in silence, by any change to
+ * that generator. The code goes in the row's description, which has 72.
  */
 const PARCEL_LABEL: Copy = {
     en: 'Parcel',
@@ -399,9 +458,9 @@ const DELIVERY_CONFIRMED: Copy = {
 /**
  * What to say when the customer answers **No** to "did your parcel arrive?".
  *
- * ⚠ **It must not offer anything the platform cannot do.** There is no report-a-missing-parcel
- * action on this surface, so this hands the turn back to the assistant — which can open a
- * support conversation — rather than promising an investigation that nothing starts.
+ * ⚠ **It offers nothing the platform cannot do.** There is no report-a-missing-parcel action on
+ * this surface, so it hands the turn back to the assistant — which can open a support conversation
+ * — rather than promising an investigation that nothing starts.
  */
 const DELIVERY_NOT_RECEIVED: Copy = {
     en: 'Understood — I have not marked it as received. Tell me what happened and I will get you help.',
@@ -414,11 +473,10 @@ const DELIVERY_NOT_RECEIVED: Copy = {
 /**
  * The line above the actions offered after a failed delivery attempt.
  *
- * ⚠ **It states the fact and stops.** `customer-shipment.dto.ts` publishes only *that* an
- * attempt failed — never `delivery_failures[].reason` or `.note`. The note is written by an
- * agent for their own agency ("gate locked, dog") and the reason is an internal enum; both are
- * already rephrased deliberately by the notification copy. Repeating either here would undo
- * that in the one place the customer would actually read it.
+ * ⚠ **It states the fact and stops.** `customer-shipment.dto.ts` publishes only *that* an attempt
+ * failed — never `delivery_failures[].reason` or `.note`. The note is written by an agent for their
+ * own agency ("gate locked, dog"); repeating it here would undo that in the one place the customer
+ * would actually read it.
  */
 const DELIVERY_FAILED_PROMPT: Copy = {
     en: 'The courier could not deliver this parcel. What would you like to do?',
@@ -432,16 +490,14 @@ const DELIVERY_FAILED_PROMPT: Copy = {
  * ⭐ **The two buttons that open a SUPPORT CONVERSATION rather than a feature.**
  *
  * Owner's decision, 2026-09-16, taken knowing the position: there is **no** delivery-reschedule
- * endpoint anywhere in the platform (`bookings_reschedule` is appointments, not parcels), and
- * the delivery address is snapshotted onto the order at checkout — so editing the saved address
- * book moves no parcel that is already out. The alternative considered and rejected was showing
- * Get help alone, which hides the two things the customer most likely wants and makes them
- * explain from scratch.
+ * endpoint anywhere in the platform (`bookings_reschedule` is appointments, not parcels), and the
+ * delivery address is snapshotted onto the order at checkout — so editing the saved address book
+ * moves no parcel already out. Rejected: Get help alone, which hides what the customer most likely
+ * wants and makes them explain from scratch.
  *
- * ⚠ **So the labels must not promise the action.** "Reschedule" claims the customer has just
- * chosen a new day; "Change address" claims a parcel has been redirected. These say what
- * actually happens next, which is that somebody is asked. Capped at 20 — WhatsApp's
- * reply-button title — exactly as `bot-chrome-copy.ts` caps its own.
+ * ⚠ **The labels must not promise the action.** "Reschedule" claims a new day has been chosen;
+ * "Change address" claims a parcel has been redirected. These say what actually happens next —
+ * somebody is asked. Capped at 20, WhatsApp's reply-button title.
  */
 const ASK_REDELIVERY_BUTTON: Copy = {
     en: 'Ask to redeliver',
@@ -460,10 +516,8 @@ const ASK_ADDRESS_FIX_BUTTON: Copy = {
 };
 
 /**
- * Everything above that is not keyed on a status, with the cap it has to satisfy.
- *
- * `null` means a body rather than a control — the same convention `bot-chrome-copy.ts`'s table
- * uses, so the two read the same way and neither teaches a second set of rules.
+ * The turn strings above, each with the cap it has to satisfy. `null` means a body rather than a
+ * control — the convention `bot-chrome-copy.ts` uses, so the two tables read the same way.
  */
 const ORDER_COPY = Object.freeze({
     whichOrder: { copy: WHICH_ORDER, cap: null },
@@ -479,76 +533,23 @@ const ORDER_COPY = Object.freeze({
 
 export type BotOrderCopyKey = keyof typeof ORDER_COPY;
 
-/**
- * One of the strings above, in the customer's language.
- *
- * Falls back to English rather than to the key, exactly as `botChrome` does — a customer shown
- * the word `whichParcel` has been shown an internal identifier, which is the failure the whole
- * copy layer exists to prevent.
- */
+/** One turn string, in the customer's language — falling back to English, never to the key. */
 export function botOrderCopy(key: BotOrderCopyKey, language: string | null | undefined): string {
-    const { copy } = ORDER_COPY[key];
-    return copy[toBotCopyLanguage(language)] ?? copy.en;
-}
-
-/** How this order's money is described. */
-export function botPaymentStateLabel(
-    state: BotOrderPaymentState,
-    language: string | null | undefined,
-): string {
-    const copy = PAYMENT_STATE[state];
-    return copy[toBotCopyLanguage(language)] ?? copy.en;
-}
-
-/**
- * How this order's progress is described.
- *
- * ⚠ **Takes a `string`, not a `FulfillmentStatus`, and the looseness is on purpose.** Every
- * caller reads the status off a DTO or an aggregation, where it is typed `string` — so a
- * parameter of the narrow type would be satisfied by a cast at each call site, and a cast is
- * exactly what turns an unmapped value into `undefined.en` and a 500 on "where is my order?".
- *
- * ⚠ **The compile-time guarantee is NOT weakened by this.** `FULFILLMENT_STATE` is still a
- * total `Record<FulfillmentStatus, Copy>`, so a tenth status added to the union still fails
- * `tsc` here. What this adds is a floor under data that reached the database before the union
- * did, which a cast would have hidden.
- */
-export function botFulfillmentStateLabel(
-    status: string,
-    language: string | null | undefined,
-): string {
-    const copy = FULFILLMENT_STATE[status as FulfillmentStatus];
-    if (!copy) return status;
-    return copy[toBotCopyLanguage(language)] ?? copy.en;
-}
-
-/**
- * How one parcel's progress is described.
- *
- * Narrowly typed, unlike the fulfilment label above, because `CustomerShipmentDto.status` is
- * already the five-member union — the collapse happened in the projection and nothing
- * downstream handles a raw `ShipmentStatus`. There is no cast at any call site to hide.
- */
-export function botShipmentStateLabel(
-    status: CustomerShipmentStatus,
-    language: string | null | undefined,
-): string {
-    const copy = SHIPMENT_STATE[status];
-    return copy[toBotCopyLanguage(language)] ?? copy.en;
+    return pick(ORDER_COPY[key].copy, language);
 }
 
 /**
  * Refuse to boot on a string a messaging client would truncate.
  *
- * ⚠ **Presence is NOT checked here, and that is not an omission — the compiler checks it.**
- * Every table in this file is a total `Record` over a closed union, so a missing status or a
- * missing language fails `tsc` in the editor of whoever added it. What `tsc` cannot see is a
+ * ⚠ **Presence is not checked here — the compiler checks it.** Every table is a total `Record`
+ * over a closed union, so a missing status or language fails `tsc`. What `tsc` cannot see is a
  * label two characters over WhatsApp's button cap, which is silent forever and arrives as
  * `Dirección incorrec…` to exactly the customers who read Spanish.
  *
- * The status tables are walked too, though every one of them is uncapped today: they land in
- * list-row *descriptions* (72 characters) now, and a later turn may well put one in a title. A
- * loop that already exists costs nothing and is one fewer thing for that person to remember.
+ * ⚠ **Only the turn strings carry a cap, so only they are walked.** The status words land in
+ * message bodies and in list-row DESCRIPTIONS (72 characters), where nothing on this surface is
+ * near the limit. The day a status word is put into a row title or a button, give it a cap here —
+ * an uncapped entry is never checked.
  *
  * A bare `Error` — this runs beside the other boot assertions, with no request in flight.
  */
@@ -571,10 +572,13 @@ export function assertOrderStatusCopyComplete(): void {
     }
 }
 
-/** ⚠ Exported for the fulfilment suite, which re-checks the caps the assert above enforces. */
+/** ⚠ Exported for suites, which re-check the caps and pin the tables. */
 export const __ORDER_COPY_TABLE = ORDER_COPY;
 export const __ORDER_STATUS_TABLES = Object.freeze({
-    payment: PAYMENT_STATE,
-    fulfillment: FULFILLMENT_STATE,
+    progressOf: ORDER_PROGRESS_OF,
+    progress: ORDER_PROGRESS_COPY,
+    payment: ORDER_PAYMENT_COPY,
+    cashOnDelivery: ORDER_CASH_ON_DELIVERY_COPY,
+    unavailable: ORDER_STATUS_UNAVAILABLE_COPY,
     shipment: SHIPMENT_STATE,
 });

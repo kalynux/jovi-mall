@@ -273,12 +273,72 @@ const STORES_HEADING: Copy = {
     ar: 'المتاجر',
 };
 
+// ── The WhatsApp forms (Stream F, 2026-09-16) ──────────────────────────────────
+//
+// ⚠ **These four land in WhatsApp Flow CONTROLS, which have hard character caps and fail at
+// PUBLISH when a label is over** — see `FLOW_CAPS` below. Every other string in this file is a web
+// page and wraps. The rest of what the forms show reuses keys already here (`listingHeading`,
+// `detailChoose`, `outOfStock`, `checkoutPay`, …), so a French customer sees the same words on the
+// Telegram screen and in the WhatsApp form.
+
+/** Footer button that opens the chosen product. `loadMore` and `detailChoose` are the wrong verbs. */
+const FLOW_OPEN_PRODUCT: Copy = {
+    en: 'View product',
+    fr: 'Voir le produit',
+    pt: 'Ver produto',
+    es: 'Ver producto',
+    ar: 'عرض المنتج',
+};
+
+/** Footer button closing a form back to the chat — on the empty, gone and done screens. */
+const FLOW_BACK_TO_CHAT: Copy = {
+    en: 'Back to chat',
+    fr: 'Retour à la discussion',
+    pt: 'Voltar à conversa',
+    es: 'Volver al chat',
+    ar: 'العودة إلى المحادثة',
+};
+
+/**
+ * The phone field's LABEL on the form.
+ *
+ * ⚠ **A separate key from `checkoutPhone`, because that one does not fit.** It is 22 characters in
+ * Portuguese and Spanish, and a WhatsApp text-input label caps at 20 and refuses to publish over
+ * it. Truncating mid-word was not an option. Longest here is 19.
+ */
+const FLOW_PHONE_LABEL: Copy = {
+    en: 'Mobile money number',
+    fr: 'Numéro mobile money',
+    pt: 'Nº de mobile money',
+    es: 'Nº de mobile money',
+    ar: 'رقم الهاتف للدفع',
+};
+
+/**
+ * The caption under that field.
+ *
+ * ⚠ **The country code is stated because nothing else on WhatsApp states it.** The platform's phone
+ * schema refuses a local number without `+237`; on the Telegram screen a keyboard hint helps, and in
+ * a WhatsApp form this sentence is the only thing between the customer and a refusal they cannot
+ * explain.
+ */
+const FLOW_PHONE_HINT: Copy = {
+    en: 'Leave this empty to use the number on your account. If you type one, include the country code, for example +237.',
+    fr: "Laissez vide pour utiliser le numéro de votre compte. Si vous en saisissez un, ajoutez l'indicatif du pays, par exemple +237.",
+    pt: 'Deixe em branco para usar o número da sua conta. Se escrever um, inclua o código do país, por exemplo +237.',
+    es: 'Déjalo vacío para usar el número de tu cuenta. Si escribes uno, incluye el código de país, por ejemplo +237.',
+    ar: 'اتركه فارغًا لاستخدام الرقم المسجل في حسابك. إذا كتبت رقمًا، فأضف رمز الدولة، مثل +237.',
+};
+
 /**
  * Every page string.
  *
- * ⚠ **No caps.** A screen is a web page and wraps; the cap machinery belongs to
- * `bot-chrome-copy.ts`, whose strings are chat controls. That asymmetry is the whole reason
- * these are two tables.
+ * ⚠ **No caps — except the keys that ALSO land in a WhatsApp form control.** A screen is a web page
+ * and wraps; the cap machinery for chat controls belongs to `bot-chrome-copy.ts`. That asymmetry is
+ * the whole reason these are two tables. But a WhatsApp Flow renders some of these same strings
+ * into controls with hard limits, and those few are listed in `FLOW_CAPS` rather than moved: a
+ * French customer must see the same word on the Telegram screen and in the WhatsApp form, which
+ * only one table can guarantee.
  */
 const PAGE = Object.freeze({
     loading: LOADING,
@@ -306,6 +366,11 @@ const PAGE = Object.freeze({
 
     ordersHeading: ORDERS_HEADING,
     storesHeading: STORES_HEADING,
+
+    flowOpenProduct: FLOW_OPEN_PRODUCT,
+    flowBackToChat: FLOW_BACK_TO_CHAT,
+    flowPhoneLabel: FLOW_PHONE_LABEL,
+    flowPhoneHint: FLOW_PHONE_HINT,
 });
 
 export type InAppCopyKey = keyof typeof PAGE;
@@ -333,21 +398,44 @@ export function inAppCopy(language: string | null | undefined): InAppCopy {
  * No cap check, unlike `assertBotChromeCopyFits` — there is no control here to overflow. A
  * bare `Error`: this runs beside the other boot assertions with no request in flight.
  */
+/**
+ * Character caps for the keys that ALSO land in a WhatsApp Flow control.
+ *
+ * ⚠ **This moves a failure from Meta's PUBLISH step to process start.** A Flow control label over
+ * its limit is refused when the Flow is published — which is a live-account action nobody runs
+ * locally, so the mistake would otherwise surface on deploy day, at the one step that cannot be
+ * rehearsed. Counted in CHARACTERS (code points), which is what the platform measures — not bytes.
+ *
+ *   35  a Footer label · 20  a TextInput label · 409  a TextCaption
+ *
+ * A key absent here is uncapped. The day another page string is put into a form control, give it a
+ * cap here — an uncapped entry is never checked.
+ */
+const FLOW_CAPS: Partial<Record<InAppCopyKey, number>> = Object.freeze({
+    flowOpenProduct: 35,
+    flowBackToChat: 35,
+    flowPhoneLabel: 20,
+    flowPhoneHint: 409,
+});
+
 export function assertInAppCopyComplete(): void {
     const gaps: string[] = [];
 
     for (const key of Object.keys(PAGE) as InAppCopyKey[]) {
+        const cap = FLOW_CAPS[key];
         for (const lang of BOT_COPY_LANGUAGES) {
             const value = PAGE[key][lang];
             if (typeof value !== 'string' || value.trim().length === 0) {
                 gaps.push(`${key}:${lang}`);
+            } else if (cap !== undefined && Array.from(value).length > cap) {
+                gaps.push(`${key}:${lang} is ${Array.from(value).length} characters, over the form cap of ${cap}`);
             }
         }
     }
 
     if (gaps.length > 0) {
         // eslint-disable-next-line no-restricted-syntax -- boot assertion, no request in flight
-        throw new Error(`[BotSurface] in-app copy is incomplete: ${gaps.join(', ')}`);
+        throw new Error(`[BotSurface] in-app copy is incomplete or over a form cap: ${gaps.join(', ')}`);
     }
 }
 

@@ -468,6 +468,77 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         es: 'Todavía tienes pedidos en camino. Puedo cerrar tu cuenta cuando hayan llegado — de lo contrario no tendríamos forma de contactarte sobre ellos.',
         ar: 'لا تزال لديك طلبات في الطريق. يمكنني إغلاق حسابك بعد وصولها — وإلا فلن تكون لدينا وسيلة للتواصل معك بشأنها.',
     },
+
+    // ── Orders — cancelling and confirming (Stream G, 2026-09-16) ────────────
+    // Each of these earned an entry by the file's own criterion: the category sentence was not
+    // merely vague but WRONG under a button. `business_rule`'s "not possible right now" says
+    // waiting helps, and for a paid or shipped order it never will. `conflict`'s "try again" is
+    // what a customer read after a DOUBLE TAP on Yes — the first tap succeeded, and trying again
+    // 409s again. ⚠ There is no refund tool on the bot surface, so none of these promises a refund
+    // flow; they offer support, which exists.
+    [ERROR_CODES.ORDER_CANCEL_REQUIRES_REFUND]: {
+        en: 'This order is already paid, so it cannot be cancelled here. Tell me what is wrong and I will get you help.',
+        fr: "Cette commande est déjà payée, elle ne peut donc pas être annulée ici. Dites-moi ce qui ne va pas et je vous trouve de l'aide.",
+        pt: 'Esta encomenda já está paga, por isso não pode ser cancelada aqui. Diga-me o que está errado e eu arranjo-lhe ajuda.',
+        es: 'Este pedido ya está pagado, así que no se puede cancelar aquí. Dime qué va mal y te consigo ayuda.',
+        ar: 'هذا الطلب مدفوع بالفعل، لذا لا يمكن إلغاؤه هنا. أخبرني بما هو الخطأ وسأوفّر لك المساعدة.',
+    },
+    [ERROR_CODES.ORDER_NOT_CANCELLABLE]: {
+        en: 'This order can no longer be cancelled. If something is wrong with it, tell me and I will get you help.',
+        fr: "Cette commande ne peut plus être annulée. Si quelque chose ne va pas, dites-le-moi et je vous trouve de l'aide.",
+        pt: 'Esta encomenda já não pode ser cancelada. Se algo estiver errado, diga-me e eu arranjo-lhe ajuda.',
+        es: 'Este pedido ya no se puede cancelar. Si algo va mal, dímelo y te consigo ayuda.',
+        ar: 'لم يعد من الممكن إلغاء هذا الطلب. إذا كان هناك خطأ ما، أخبرني وسأوفّر لك المساعدة.',
+    },
+    /** The SELLER's own cancellation policy refused it (`assertCancellationAllowed`). */
+    [ERROR_CODES.CANCELLATION_NOT_ALLOWED]: {
+        en: "The seller's cancellation policy does not allow cancelling this order. Tell me what is wrong and I will get you help.",
+        fr: "La politique d'annulation du vendeur ne permet pas d'annuler cette commande. Dites-moi ce qui ne va pas et je vous trouve de l'aide.",
+        pt: 'A política de cancelamento do vendedor não permite cancelar esta encomenda. Diga-me o que está errado e eu arranjo-lhe ajuda.',
+        es: 'La política de cancelación del vendedor no permite cancelar este pedido. Dime qué va mal y te consigo ayuda.',
+        ar: 'لا تسمح سياسة الإلغاء لدى البائع بإلغاء هذا الطلب. أخبرني بما هو الخطأ وسأوفّر لك المساعدة.',
+    },
+    /** The likeliest trigger is a double tap on Yes — so this states the outcome, never "try again". */
+    [ERROR_CODES.SHIPMENT_ALREADY_CONFIRMED]: {
+        en: 'You have already confirmed this parcel as received.',
+        fr: 'Vous avez déjà confirmé la réception de ce colis.',
+        pt: 'Já confirmou a receção desta encomenda.',
+        es: 'Ya has confirmado que recibiste este paquete.',
+        ar: 'لقد أكّدت بالفعل استلام هذا الطرد.',
+    },
+    [ERROR_CODES.ORDER_ALREADY_CANCELLED]: {
+        en: 'This order is already cancelled.',
+        fr: 'Cette commande est déjà annulée.',
+        pt: 'Esta encomenda já está cancelada.',
+        es: 'Este pedido ya está cancelado.',
+        ar: 'هذا الطلب ملغى بالفعل.',
+    },
+
+    // ── Payments (Stream D, 2026-09-16) ──────────────────────────────────────
+    /**
+     * ⚠ Names the field the way the checkout SCREEN does (`inapp-copy.ts` `checkoutPhone`), in all
+     * five languages, so a customer told about it in the chat and on the screen hears one word.
+     */
+    [ERROR_CODES.PAYMENT_PAYER_NUMBER_REQUIRED]: {
+        en: 'I need a mobile money number to take this payment. Send me the number you want to pay with.',
+        fr: "J'ai besoin d'un numéro mobile money pour ce paiement. Envoyez-moi le numéro avec lequel vous souhaitez payer.",
+        pt: 'Preciso de um número de mobile money para este pagamento. Envie-me o número com que quer pagar.',
+        es: 'Necesito un número de mobile money para este pago. Envíame el número con el que quieres pagar.',
+        ar: 'أحتاج إلى رقم محفظة محمولة لإتمام هذا الدفع. أرسل لي الرقم الذي تريد الدفع به.',
+    },
+    /**
+     * Raised seven times across the surface, and the category sentence — "I could not find that." —
+     * said neither WHAT was missing nor what to do under a payment button. ⚠ Not-found and
+     * not-yours answer identically on purpose: confirming that a transaction id exists IS the
+     * disclosure, so this copy must never hint which one it was.
+     */
+    [ERROR_CODES.PAYMENT_TRANSACTION_NOT_FOUND]: {
+        en: 'I could not find that payment on your account. Ask me about your latest order and I will look it up.',
+        fr: "Je n'ai pas trouvé ce paiement sur votre compte. Demandez-moi votre dernière commande et je la retrouverai.",
+        pt: 'Não encontrei esse pagamento na sua conta. Pergunte-me pela sua última encomenda e eu procuro-a.',
+        es: 'No encontré ese pago en tu cuenta. Pregúntame por tu último pedido y lo busco.',
+        ar: 'لم أجد هذا الدفع في حسابك. اسألني عن آخر طلب لك وسأبحث عنه.',
+    },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

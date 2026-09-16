@@ -2,22 +2,22 @@ import { Request, Response } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { sendSuccess } from '../../../core/responses';
-import { createAppError } from '../../../core/errors';
+import { AppError, createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
+import { OptionalPhoneNumberSchema } from '../../../core/validation/phone';
 import { CartService } from '../../cart/services/cart.service';
 import { CustomerModel, ICustomer } from '../../customers/customer.model';
 import { PaymentTransactionModel, IPaymentTransaction } from '../../payments/models/payment-transaction.model';
 import { PaymentOrchestratorService } from '../../payments';
-import { notchPayEnabled, myCoolPayEnabled } from '../../payments/config/payments.config';
-import { PaymentGatewayType } from '../../payments/models/payment-transaction.model';
 import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
 import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { botChrome } from '../domain/bot-chrome-copy';
+import { BotActionHandlers, ParsedBotAction, unknownBotAction } from '../domain/bot-action-dispatch';
 import { botStorefrontLink } from '../domain/bot-list-window';
 import { formatBotPrice } from '../domain/product-card';
 import { inAppBaseUrl, inAppScreenUrl } from '../domain/inapp-url';
 import { inAppSurfaceStore } from '../services/inapp-surface.store';
-import { storedPayerNumber } from '../miniapp/surfaces/checkout.controller';
+import { mobileMoneyGateway, storedPayerNumber } from '../miniapp/surfaces/checkout.controller';
 
 /**
  * The chat half of checkout — the door onto the screen, and the payment's answer afterwards.
@@ -179,10 +179,12 @@ export class BotCheckoutController {
      * the reconciliation sweep uses to close exactly that gap — this route just lets a customer
      * trigger it instead of waiting ten minutes for the cron.
      *
-     * ⚠ **It also needs no transaction id, and that is deliberate.** The id never reaches the
-     * chat: the screen's `place` answers a browser, and the browser closes. A model asked for
-     * one would invent it. So the caller's own most recent checkout payment is the answer,
-     * resolved here.
+     * ⚠ **The ROUTE takes no transaction id, and that is deliberate — do not "fix" it by adding
+     * the parameter.** The id never reaches the chat as text: the screen's `place` answers a
+     * browser, and the browser closes. A model asked for an id it has never seen will invent
+     * one. So the caller's own most recent checkout payment is the answer. The TAP
+     * (`pay:st:<id>`) is different and does carry one; see `paymentTap` for why that is not a
+     * contradiction.
      *
      * ⚠ **Owner-scoped, and repeated rather than inherited**, for the reason
      * `BotCartController.getTransaction` states: a bot request is not a session, so there is no
@@ -190,20 +192,7 @@ export class BotCheckoutController {
      */
     static paymentStatus = asyncHandler(async (req: Request, res: Response) => {
         NoArgsSchema.parse(req.body ?? {});
-        const caller = botCallerOf(req);
-
-        const transaction = await latestCheckoutPayment(caller.customerId);
-
-        /**
-         * ⚠ **A terminal transaction is NOT re-verified.** `verifyPayment` returns early on one
-         * anyway, but asking is a gateway call per impatient customer for an answer that cannot
-         * change. Settled is settled.
-         */
-        const verified = isTerminal(transaction.status)
-            ? { status: transaction.status }
-            : await paymentOrchestrator.verifyPayment(transaction._id.toString());
-
-        sendSuccess(res, toPaymentReport(transaction, verified.status));
+        await reportPayment(req, res, null);
     });
 
     /**
@@ -212,7 +201,8 @@ export class BotCheckoutController {
      * ⚠ **It re-opens a CHARGE; it does not re-place an ORDER.** The orders from the failed
      * attempt still exist and are still awaiting payment — which is the whole reason
      * `order.payment_failed`'s copy says the items are still waiting and must never read as a
-     * cancellation. Placing a second set would double the basket and double the stock hold.
+     * cancellation. It also CANNOT re-place one: `createOrdersFromCart` clears the basket as it
+     * creates the orders, so by the time a payment has failed there is no basket to check out.
      *
      * ⚠ **`initiatePaymentForCart` is what makes a retry safe, and none of it is reimplemented
      * here.** It answers with the LIVE attempt when one is still open (so an impatient customer
@@ -227,70 +217,222 @@ export class BotCheckoutController {
      */
     static retryPayment = asyncHandler(async (req: Request, res: Response) => {
         const { phone } = RetrySchema.parse(req.body ?? {});
-        const caller = botCallerOf(req);
+        await retryCharge(req, res, null, phone);
+    });
+}
 
-        const transaction = await latestCheckoutPayment(caller.customerId);
-        const cartId = transaction.cartId?.toString();
-        if (!cartId) {
-            throw createAppError(
-                ERROR_CODES.PAYMENT_CART_NOT_FOUND,
-                422,
-                'That payment was not for a checkout basket',
-            );
-        }
+/**
+ * A retry may name the wallet to charge. Absent means "the one on my account".
+ *
+ * ⚠ **The platform's own E.164 schema, the one the screen uses — never a length check.** An
+ * earlier version of this file accepted any 6–20 character string here, which put a typed
+ * number in front of NotchPay and My-CoolPay unvalidated: precisely the defect
+ * `payments/validators/payment.validators.ts` says it was written to close, reintroduced
+ * through a new door. Two doors onto one charge must refuse the same inputs.
+ */
+const RetrySchema = z
+    .object({ phone: OptionalPhoneNumberSchema.nullable().default(null) })
+    .strict();
 
-        const customer = await loadCustomer(caller.customerId);
-        const payerNumber = phone ?? (await storedPayerNumber(customer));
-        if (!payerNumber) {
-            throw createAppError(
-                ERROR_CODES.PAYMENT_REFERENCE_REQUIRED,
-                422,
-                'A mobile money number is needed to take this payment',
-            );
-        }
+// ─────────────────────────────────────────────────────────────────────────────
+//  The money turns — one implementation, reached by a ROUTE and by a TAP
+// ─────────────────────────────────────────────────────────────────────────────
 
-        const payment = await paymentOrchestrator.initiatePaymentForCart(
+/**
+ * Where a charge got to, reported as data for the model to narrate.
+ *
+ * `transactionId` null means "the caller's latest checkout payment" (the route); a string means
+ * "this one, if it is theirs" (the tap).
+ */
+async function reportPayment(
+    req: Request,
+    res: Response,
+    transactionId: string | null,
+): Promise<void> {
+    const caller = botCallerOf(req);
+    const transaction = await resolveCheckoutPayment(caller.customerId, transactionId);
+
+    /**
+     * ⚠ **A terminal transaction is NOT re-verified.** `verifyPayment` returns early on one
+     * anyway, but asking is a gateway call per impatient customer for an answer that cannot
+     * change. Settled is settled.
+     */
+    const verified = isTerminal(transaction.status)
+        ? { status: transaction.status }
+        : await paymentOrchestrator.verifyPayment(transaction._id.toString());
+
+    sendSuccess(res, toPaymentReport(transaction, verified.status));
+}
+
+/** Open a fresh charge for the orders a checkout payment covered. */
+async function retryCharge(
+    req: Request,
+    res: Response,
+    transactionId: string | null,
+    phone: string | null,
+): Promise<void> {
+    const caller = botCallerOf(req);
+    const transaction = await resolveCheckoutPayment(caller.customerId, transactionId);
+    const cartId = transaction.cartId?.toString();
+    /**
+     * ⚠ **Unreachable by construction, and kept as a belt**: `resolveCheckoutPayment` only ever
+     * returns a cart payment. It answers 404 — the one status this code has everywhere else — rather
+     * than the 422 it once had here, because one code at two statuses is two categories and
+     * `test:errors` refuses it.
+     */
+    if (!cartId) {
+        throw createAppError(
+            ERROR_CODES.PAYMENT_CART_NOT_FOUND,
+            404,
+            'That payment was not for a checkout basket',
+        );
+    }
+
+    const customer = await loadCustomer(caller.customerId);
+    const payerNumber = phone ?? (await storedPayerNumber(customer));
+    if (!payerNumber) {
+        throw createAppError(
+            ERROR_CODES.PAYMENT_REFERENCE_REQUIRED,
+            422,
+            'A mobile money number is needed to take this payment',
+        );
+    }
+
+    let payment: Awaited<ReturnType<PaymentOrchestratorService['initiatePaymentForCart']>>;
+    try {
+        payment = await paymentOrchestrator.initiatePaymentForCart(
             cartId,
             mobileMoneyGateway(),
             { phoneNumber: payerNumber, customerName: customer.name },
         );
+    } catch (error) {
+        /**
+         * ⚠ **"Try again" on a basket that has since been paid is GOOD NEWS, not a refusal.**
+         * A button sits in the chat history for as long as the conversation does, and the
+         * commonest reason a retry finds nothing to charge is that the customer already paid —
+         * by a later attempt, on the storefront, or because the webhook finally landed. Answering
+         * that with a 409 would tell them "that has already changed, let me check" about a
+         * payment that went through. So it is reported as settled.
+         *
+         * Only that one code is caught. Every other refusal is a real one and keeps its sentence.
+         */
+        if (error instanceof AppError && error.code === ERROR_CODES.PAYMENT_ORDER_ALREADY_PAID) {
+            sendSuccess(res, toPaymentReport(transaction, 'SUCCEEDED'));
+            return;
+        }
+        throw error;
+    }
 
-        sendSuccess(res, {
-            transactionId: payment.transactionId,
-            state: stateOf(payment.status),
-            /**
-             * ⚠ **Relayed verbatim and NOT translated, because it is the operator's word for
-             * what the gateway did.** `instructions` carries the USSD code and the "confirm the
-             * prompt on your phone" line the provider itself supplies, and it is the one thing
-             * in this response the customer genuinely has to act on. The model narrates it.
-             */
-            instructions: payment.instructions ?? null,
-        });
+    sendSuccess(res, {
+        transactionId: payment.transactionId,
+        state: stateOf(payment.status),
+        /**
+         * ⚠ **Relayed verbatim and NOT translated, because it is the operator's word for what
+         * the gateway did.** `instructions` carries the USSD code and the "confirm the prompt on
+         * your phone" line the provider itself supplies, and it is the one thing in this response
+         * the customer genuinely has to act on. The model narrates it.
+         */
+        instructions: payment.instructions ?? null,
     });
 }
 
-/** A retry may name the wallet to charge. Absent means "the one on my account". */
-const RetrySchema = z
-    .object({ phone: z.string().trim().min(6).max(20).nullable().default(null) })
-    .strict();
+// ─────────────────────────────────────────────────────────────────────────────
+//  The tap — Check status · Try again
+//
+//  Reached through `/catalog/action`. The dispatcher belongs to the switchboard (backend-89): it
+//  parses the token ONCE, refuses what nobody handles in ONE place, and calls the handler a
+//  stream registers for the key. This stream owns the plain verb `pay` outright, so the key is the
+//  verb alone and the handler tells `st` from `rt` itself (`bot-action-dispatch.ts`: a verb one
+//  stream owns is never sub-dispatched in the shared registry).
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * The caller's most recent checkout-group payment.
+ * `pay:st:<transactionId>` — Check status · `pay:rt:<transactionId>` — Try again.
+ *
+ * ── ⚠ THE TAP CARRIES A TRANSACTION ID; THE ROUTES DO NOT — NOT A CONTRADICTION ─
+ * The routes refuse an id because their caller is a MODEL, and a model asked for an id it has
+ * never seen invents one. A tap's id is minted by THIS service into a button and comes back
+ * byte-identical; nothing composes it.
+ *
+ * And the tap MUST carry one, for a reason the routes never meet: **a button outlives the payment
+ * it was drawn for.** A "Try again" tapped under last week's failure, by a customer who has checked
+ * out twice since, would re-charge whichever basket is newest if it resolved "the latest" —
+ * pushing a mobile-money prompt for a different order than the message on their screen names.
+ * With the id it acts on the payment it was drawn under, or on nothing.
+ *
+ * Shape: `pay:<st|rt>:<24-hex id>` — 31 bytes against Telegram's 64.
+ *
+ * ── ⚠ THE DISPATCHER'S CONTRACT: THROW, NEVER `next` ────────────────────────
+ * The dispatcher's `asyncHandler` is the one error path, so a refusal is THROWN and reaches the
+ * global handler exactly once. An earlier version of this handler caught its own errors and passed
+ * them to `next` — which, under this contract, would hand the same failure to two error paths.
+ *
+ * ⚠ **An argument this handler cannot read gets `unknownBotAction()`**, the dispatcher's own
+ * refusal factory, so a malformed `pay:` and a retired verb read identically to the customer and
+ * cannot drift. A well-formed id that points at nothing keeps `PAYMENT_TRANSACTION_NOT_FOUND`.
+ *
+ * ⚠ **No typed number on a tap, so the account's is charged.** A button cannot carry what the
+ * customer would have typed; one who needs a different wallet says so in words, which reaches
+ * `checkout_retry_payment` with `phone` set.
+ */
+export async function paymentTap(
+    req: Request,
+    res: Response,
+    action: ParsedBotAction,
+): Promise<void> {
+    const separator = action.argument.indexOf(':');
+    const which = separator < 0 ? action.argument : action.argument.slice(0, separator);
+    const transactionId = separator < 0 ? '' : action.argument.slice(separator + 1);
+
+    if (!/^[0-9a-fA-F]{24}$/.test(transactionId)) throw unknownBotAction();
+
+    if (which === 'st') {
+        await reportPayment(req, res, transactionId);
+        return;
+    }
+    if (which === 'rt') {
+        await retryCharge(req, res, transactionId, null);
+        return;
+    }
+    throw unknownBotAction();
+}
+
+/**
+ * This stream's entry in the tap-code registry. ONE map per stream (`bot-action-dispatch.ts`).
+ *
+ * ⚠ **Keyed by the plain verb `pay`, never `pay:st` / `pay:rt`.** One stream owns `pay`
+ * outright, so its argument grammar stays in `paymentTap` — sub-keying it in the shared registry
+ * would make the next change to that grammar somebody else's edit.
+ */
+export const CHECKOUT_ACTION_HANDLERS: BotActionHandlers = Object.freeze({
+    pay: paymentTap,
+});
+
+/**
+ * A checkout-group payment belonging to the caller: the one named, or their latest.
  *
  * ⚠ **`userId` holds the CUSTOMER id for an order or cart payment**, and the USER id only for a
- * booking one — the asymmetry `BotCartController.getTransaction` documents and accepts both
- * sides of. This query is cart-scoped, so only the customer id can ever match, and narrowing it
- * to that is what keeps one customer's "check my payment" from ever reaching another's record.
+ * booking one — the asymmetry `BotCartController.getTransaction` documents and accepts both sides
+ * of. This query is cart-scoped, so only the customer id can ever match, and narrowing it to that
+ * is what keeps one customer's "check my payment" from ever reaching another's record.
+ *
+ * ⚠ **A named id that is not the caller's answers exactly like one that does not exist.** A
+ * transaction id is the only thing between one customer and another's payment record, so
+ * confirming that an id is real is itself the disclosure.
  *
  * ⚠ **404 rather than an empty answer**, because "you have no payment" and "I could not find
- * yours" are the same sentence to a customer and only one of them is a state the model should
- * narrate as news.
+ * yours" are the same sentence to a customer and only one of them is news for the model to
+ * narrate.
  */
-async function latestCheckoutPayment(customerId: string): Promise<IPaymentTransaction> {
-    const transaction = await PaymentTransactionModel.findOne({
-        userId: customerId,
-        cartId: { $ne: null },
-    })
+async function resolveCheckoutPayment(
+    customerId: string,
+    transactionId: string | null,
+): Promise<IPaymentTransaction> {
+    const filter = transactionId
+        ? { _id: transactionId, userId: customerId, cartId: { $ne: null } }
+        : { userId: customerId, cartId: { $ne: null } };
+
+    const transaction = await PaymentTransactionModel.findOne(filter)
         .select('-rawGatewayPayloads')
         .sort({ createdAt: -1 })
         .exec();
@@ -299,7 +441,7 @@ async function latestCheckoutPayment(customerId: string): Promise<IPaymentTransa
         throw createAppError(
             ERROR_CODES.PAYMENT_TRANSACTION_NOT_FOUND,
             404,
-            'There is no recent checkout payment on this account',
+            'There is no such checkout payment on this account',
         );
     }
     return transaction;
@@ -362,26 +504,4 @@ function toPaymentReport(
         amountText: formatBotPrice(transaction.amountSnapshot, transaction.currencySnapshot),
         orderCount: transaction.orderIds?.length ?? 0,
     };
-}
-
-/**
- * Which mobile-money gateway a retry charges through.
- *
- * ⚠ **The same preference the screen applies, and it must stay the same.** NotchPay first
- * because it is the gateway an administrator can refund through; My-CoolPay has no refund API
- * at all. A retry that silently moved a customer to the other provider would mean two charges
- * for one basket with different reversibility, decided by which door they came through.
- *
- * ⚠ It is **not** copied from the screen's helper by accident — that one throws inside a
- * browser request and this one inside a chat turn, and the two mounts word a refusal
- * differently. The rule they share is the ORDER, which is one line and is stated in both.
- */
-function mobileMoneyGateway(): PaymentGatewayType {
-    if (notchPayEnabled()) return 'NOTCHPAY';
-    if (myCoolPayEnabled()) return 'MYCOOLPAY';
-    throw createAppError(
-        ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED,
-        503,
-        'No mobile money gateway is configured on this deployment',
-    );
 }

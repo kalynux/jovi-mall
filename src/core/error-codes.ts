@@ -188,6 +188,18 @@ export const ERROR_CODES = Object.freeze({
     PAYMENT_CART_NO_PAYABLE_ORDERS: 'PAYMENT_CART_NO_PAYABLE_ORDERS',
     PAYMENT_CART_MIXED_CURRENCY: 'PAYMENT_CART_MIXED_CURRENCY',
     PAYMENT_REFERENCE_REQUIRED: 'PAYMENT_REFERENCE_REQUIRED',
+    /**
+     * A mobile-money payment was asked for and there is no payer number to charge — none given,
+     * and none on the customer's account. 422, so `business_rule`: the customer can fix it by
+     * sending a number.
+     *
+     * ⚠ **Added 2026-09-16 because `PAYMENT_REFERENCE_REQUIRED` above was being BORROWED for this.**
+     * That code was declared and raised by nothing, and its name means a payment REFERENCE, not a
+     * phone number. A wrong name on a money refusal is exactly what a later reader "fixes" into a
+     * different bug. The borrowed code is kept declared and now raised by nothing again, pending a
+     * cleanup pass — do not delete it mid-round without checking `test:errors`.
+     */
+    PAYMENT_PAYER_NUMBER_REQUIRED: 'PAYMENT_PAYER_NUMBER_REQUIRED',
     PAYMENT_ORDER_IS_COD: 'PAYMENT_ORDER_IS_COD',
     STRIPE_WEBHOOK_SIGNATURE_INVALID: 'STRIPE_WEBHOOK_SIGNATURE_INVALID',
     /**

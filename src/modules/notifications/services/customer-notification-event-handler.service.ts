@@ -3,6 +3,8 @@ import { formatInTimeZone } from 'date-fns-tz';
 import { CustomerNotificationRepository } from '../repositories/customer-notification.repository';
 import { CustomerNotificationPreferenceRepository } from '../repositories/customer-notification-preference.repository';
 import { CustomerModel, ICustomer } from '../../customers/customer.model';
+import { Booking } from '../../booking/models/booking.model';
+import { ProductModel } from '../../catalog/models/product.model';
 import { connectionService } from '../../channel-connections';
 import { MailService } from '../../mail/mail.service';
 import { TelegramNotificationService } from '../../telegram/services/telegram-notification.service';
@@ -393,6 +395,17 @@ export class CustomerNotificationEventHandler {
         if (!customer) return;
         const lang = resolveLanguage(customer);
 
+        /**
+         * ⛔ **The payload is ENRICHED from the booking, and without it this message said "XAF 0".**
+         *
+         * `BookingService.markAsPaidByCash` — the only publisher of this event — sends no amount,
+         * no currency, no service name and no time. This handler used to fill those with
+         * `amount ?? 0` and an empty `startAt`, so the one booking payment confirmation that
+         * actually fired told a customer *"Payment received: XAF 0 … for your service on ."* Fields
+         * the publisher does send still win; the booking only fills the gaps.
+         */
+        const booking = await this.bookingContext(p.bookingId, customer, lang);
+
         await this.notify({
             situation,
             customerId: customer._id.toString(),
@@ -401,12 +414,154 @@ export class CustomerNotificationEventHandler {
             idempotencyKey: `customer.${situation}:${p.bookingId}`,
             context: {
                 bookingId: p.bookingId,
-                serviceName: p.productTitle ?? this.genericService(lang),
-                startAt: p.startAt ? this.formatMoment(p.startAt, customer, lang) : '',
-                currency: p.currency ?? 'XAF',
+                serviceName: p.productTitle ?? booking?.serviceName ?? this.genericService(lang),
+                startAt: p.startAt
+                    ? this.formatMoment(p.startAt, customer, lang)
+                    : booking?.startAt ?? '',
+                currency: p.currency ?? booking?.currency ?? 'XAF',
+                amountFormatted: this.formatAmount(p.amount ?? booking?.price ?? 0)
+            }
+        });
+    }
+
+    /**
+     * ⭐ An ONLINE booking payment went through — and until this handler existed, nobody told the
+     * customer.
+     *
+     * ── WHY A SUBSCRIBER, NOT A NEW PUBLISHER ─────────────────────────────────
+     * The orchestrator always published `payment.received.full` / `.partial` for a booking,
+     * carrying `aggregateType: 'booking'`; the vendor stack heard it and this stack returned on it.
+     * The gap was a missing subscriber. Publishing a second event for one payment would give two
+     * audiences two chances to disagree about it.
+     *
+     * ⚠ **Routed on `purpose`, never on full vs partial.** The event name compares THIS payment
+     * with the original price, so a balance arrives as `partial` when it is smaller and `full`
+     * when it is larger.
+     *
+     * ⚠ **A BALANCE payment is deliberately NOT announced here yet, and that is an open decision,
+     * not an oversight.** `booking.payment.received`'s approved copy ends *"Nothing else to do — see
+     * you then"*, which is false for a balance: a balance is paid AFTER the appointment happened.
+     * Reusing it would send a sentence about the future for a visit that is over, and its words
+     * live in a template Meta has already approved, so they cannot be edited here. Whether a
+     * balance gets its own message (and a new template to approve) belongs to the proactive-message
+     * design, where the template budget is decided once. Until then a balance payment stays silent
+     * rather than wrong.
+     *
+     * ⚠ **Shares its idempotency key with the cash path on purpose**
+     * (`customer.booking.payment.received:<bookingId>`): one booking is paid once, by one method,
+     * and must never be confirmed twice.
+     */
+    async handleBookingPaymentReceived(event: DomainEvent): Promise<void> {
+        const p = event.payload as {
+            aggregateType?: string;
+            bookingId?: string;
+            userId?: string;
+            purpose?: string;
+            amount?: number;
+            currency?: string;
+        };
+
+        if (p.aggregateType !== 'booking' || !p.bookingId) return;
+        if (p.purpose === 'booking_balance') return;
+
+        const customer = await this.resolveCustomerByUserId(undefined, p.userId);
+        if (!customer) return;
+        const lang = resolveLanguage(customer);
+        const booking = await this.bookingContext(p.bookingId, customer, lang);
+
+        await this.notify({
+            situation: 'booking.payment.received',
+            customerId: customer._id.toString(),
+            aggregateType: 'booking',
+            aggregateId: p.bookingId,
+            idempotencyKey: `customer.booking.payment.received:${p.bookingId}`,
+            context: {
+                bookingId: p.bookingId,
+                serviceName: booking?.serviceName ?? this.genericService(lang),
+                startAt: booking?.startAt ?? '',
+                currency: p.currency ?? booking?.currency ?? 'XAF',
+                amountFormatted: this.formatAmount(p.amount ?? booking?.price ?? 0)
+            }
+        });
+    }
+
+    /**
+     * ⭐ A mobile-money charge for a booking did not go through — the original price or a balance.
+     *
+     * The orchestrator publishes `payment.failed` with `aggregateType: 'booking'` ONLY where the
+     * gateway gave a verdict (webhook, verify / reconciliation sweep), on the transition into a dead
+     * status — never from the catch of the gateway call, where a timeout cannot be told from a
+     * refusal and a charge may still be live. Those exclusions are the orchestrator's and are
+     * pinned there; this handler trusts that anything reaching it is a real failure.
+     *
+     * ⚠ **Both purposes are announced**, unlike success: `booking.payment_failed`'s copy was
+     * written with no time and no "see you then", so the same sentence is true for a first payment
+     * and for a balance.
+     *
+     * ⚠ **The key separates the original price from a balance**, because they are different charges
+     * with different amounts and a customer can fail at both.
+     */
+    async handleBookingPaymentFailed(event: DomainEvent): Promise<void> {
+        const p = event.payload as {
+            aggregateType?: string;
+            bookingId?: string;
+            userId?: string;
+            purpose?: string;
+            amount?: number;
+            currency?: string;
+        };
+
+        if (p.aggregateType !== 'booking' || !p.bookingId) return;
+
+        const customer = await this.resolveCustomerByUserId(undefined, p.userId);
+        if (!customer) return;
+        const lang = resolveLanguage(customer);
+        const booking = await this.bookingContext(p.bookingId, customer, lang);
+        const isBalance = p.purpose === 'booking_balance';
+
+        await this.notify({
+            situation: 'booking.payment_failed',
+            customerId: customer._id.toString(),
+            aggregateType: 'booking',
+            aggregateId: p.bookingId,
+            idempotencyKey: `customer.booking.payment_failed:${p.bookingId}${isBalance ? ':balance' : ''}`,
+            context: {
+                bookingId: p.bookingId,
+                serviceName: booking?.serviceName ?? this.genericService(lang),
+                currency: p.currency ?? booking?.currency ?? 'XAF',
                 amountFormatted: this.formatAmount(p.amount ?? 0)
             }
         });
+    }
+
+    /**
+     * What a booking message needs to say about the booking itself, read from the booking.
+     *
+     * ⚠ **Null rather than a throw on any miss.** A notification must never fail because a product
+     * was since deleted or a booking id is stale; the callers fall back to the localized generic
+     * wording, which is what every other booking message here already does.
+     */
+    private async bookingContext(
+        bookingId: string,
+        customer: ICustomer,
+        lang: Language
+    ): Promise<{ serviceName: string | null; startAt: string; currency: string; price: number } | null> {
+        if (!mongoose.Types.ObjectId.isValid(bookingId)) return null;
+        const booking = await Booking.findById(bookingId)
+            .select('productId startAt currency priceSnapshot')
+            .lean();
+        if (!booking) return null;
+
+        const product = booking.productId
+            ? await ProductModel.findById(booking.productId).select('title').lean()
+            : null;
+
+        return {
+            serviceName: (product as { title?: string } | null)?.title ?? null,
+            startAt: booking.startAt ? this.formatMoment(booking.startAt, customer, lang) : '',
+            currency: booking.currency,
+            price: booking.priceSnapshot
+        };
     }
 
     // ─── Order events ────────────────────────────────────────────────────────

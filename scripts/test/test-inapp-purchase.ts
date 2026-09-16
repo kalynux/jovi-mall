@@ -28,10 +28,22 @@ import {
     buyNowActionId,
     openSurfaceActionId,
     cartViewActionId,
+    categoryActionId,
+    categoryDigest,
     parseBotActionId,
     __CALLBACK_DATA_BYTES,
 } from '../../src/modules/bot-surface/domain/bot-action-id';
 import { BOT_COPY_LANGUAGES } from '../../src/modules/bot-surface/domain/bot-error-copy';
+/**
+ * ⚠ The routing rules are imported and CALLED; the dispatcher is only ever read as text. It
+ * imports every stream's handlers, which reach `orders/` and `payments/`, and those hang bare
+ * `ts-node` at import with no output at all.
+ */
+import {
+    actionKeyOf,
+    mergeActionHandlers,
+    unknownBotAction,
+} from '../../src/modules/bot-surface/domain/bot-action-dispatch';
 
 let passed = 0;
 let failed = 0;
@@ -207,14 +219,95 @@ function main(): void {
      * second failure has already happened once on this surface (`test:inapp-checkout`'s
      * `GETDEL` scan, against the docstring that explains why `GETDEL` is unusable).
      */
-    const codeOf = (file: string): string =>
-        fs.readFileSync(file, 'utf8')
+    /**
+     * ⚠ **Line endings are normalised FIRST, once, before any scan sees the text.** This repo runs
+     * with `core.autocrlf=true`, so a Windows developer's fresh clone holds every file as `\r\n`
+     * while CI on Linux holds `\n`. A pattern that counts characters or anchors on `\n` then gives
+     * two different verdicts on identical code — and it has: one guard here went red on correct
+     * code under CRLF, because a 200-character window measured 196 with LF and 202 with CRLF. A
+     * guard that fails on correct code is a guard somebody weakens, so the fix belongs here rather
+     * than in each pattern. The CRLF proof is asserted below.
+     */
+    const normalise = (raw: string): string =>
+        raw.replace(/\r\n/g, '\n')
             .replace(/\/\*[\s\S]*?\*\//g, '')
             .replace(/^\s*\/\/[^\n]*$/gm, '');
 
-    const PURCHASE = codeOf(
-        path.join(__dirname, '../../src/modules/bot-surface/controllers/bot-purchase.controller.ts'),
-    );
+    const codeOf = (file: string): string => normalise(fs.readFileSync(file, 'utf8'));
+
+    const CONTROLLERS = path.join(__dirname, '../../src/modules/bot-surface/controllers');
+    const PURCHASE = codeOf(path.join(CONTROLLERS, 'bot-purchase.controller.ts'));
+    const DISPATCHER = codeOf(path.join(CONTROLLERS, 'bot-action.controller.ts'));
+    const CART = codeOf(path.join(CONTROLLERS, 'bot-cart.controller.ts'));
+
+    /**
+     * ⛔ **WHY THE GUARDS BELOW SCAN SEVERAL FILES TOGETHER, AND PROVE THEY BITE.**
+     *
+     * A "must NOT" scan is an absence check, and an absence check over a file that no longer holds
+     * the code it guards is true of ANY code. This suite's own subject moved: the token parse left
+     * the purchase controller for the dispatcher, and the "added to cart" reply lives in two
+     * controllers. Another stream's suite stayed green through exactly that kind of move this same
+     * afternoon, with three guards protecting nothing.
+     *
+     * So every guard whose forbidden thing could live in more than one file is `guardBites`:
+     *   1. the module it relies on is FOUND and holds the named thing (a positive anchor),
+     *   2. the forbidden pattern is absent across ALL the files scanned together, and
+     *   3. the same check CATCHES an in-memory mutant with the forbidden pattern injected.
+     *
+     * Step 3 is what a scan cannot fake: a guard that passes vacuously also passes the mutant, and
+     * then fails here.
+     */
+    const guardBites = (
+        name: string,
+        input: {
+            anchor: () => boolean;
+            sources: readonly string[];
+            forbidden: (source: string) => boolean;
+            mutant: string;
+        },
+    ): void => {
+        const joined = input.sources.join('\n');
+        assert(name, () =>
+            input.anchor()
+            && !input.forbidden(joined)
+            && input.forbidden(`${joined}\n${input.mutant}`));
+    };
+
+    /**
+     * Does this source take a purchase RUNG from the request? Two shapes, because the realistic
+     * mistake is the second one: property access (`req.body.verb`), and destructuring
+     * (`const { verb } = Schema.parse(req.body)`), where `verb` appears BEFORE the request.
+     */
+    const readsVerbFromRequest = (src: string): boolean =>
+        /req\.(body|query|params)[\s\S]{0,40}\.verb\b/.test(src)
+        || /verb:\s*(req|input|body)\./.test(src)
+        || /\{[^}]*\bverb\b[^}]*\}\s*=\s*[^;]*req\.(body|query|params)/.test(src);
+
+    console.log('\n── The modules the guards below depend on are where they think ──');
+
+    assert('the dispatcher module is found and holds the token door', () =>
+        DISPATCHER.includes('class BotActionController') && DISPATCHER.includes('static dispatch'));
+
+    assert('the purchase module is found and exports its handlers and the write core', () =>
+        PURCHASE.includes('export const PURCHASE_ACTION_HANDLERS')
+        && PURCHASE.includes('async function executePurchase('));
+
+    assert('the cart module is found and holds the typed-path reply', () =>
+        CART.includes('static addItem') && CART.includes('addedToCartActions('));
+
+    /**
+     * ⛔ **Every scan in this suite gives the SAME verdict on a Windows clone.** Rather than
+     * re-running each guard twice, this proves the thing they all depend on: the text every guard
+     * reads is byte-identical whether the file arrived as `\n` or as `\r\n`. If that holds, no
+     * pattern below can tell the two apart — including one written next year by somebody who has
+     * never heard of `core.autocrlf`.
+     */
+    assert('⛔ every scanned file reads identically as LF and as CRLF (a Windows clone stays green)', () =>
+        ['bot-purchase.controller.ts', 'bot-action.controller.ts', 'bot-cart.controller.ts'].every((name) => {
+            const lf = fs.readFileSync(path.join(CONTROLLERS, name), 'utf8').replace(/\r\n/g, '\n');
+            const crlf = lf.replace(/\n/g, '\r\n');
+            return crlf.includes('\r\n') && normalise(crlf) === normalise(lf);
+        }));
 
     console.log('\n── ⛔ The server re-resolves the rung. The verb is never trusted ──');
 
@@ -238,8 +331,20 @@ function main(): void {
      * body or a token argument compiles, runs, and produces a surface that looks identical
      * until somebody points it at a product whose rung has moved.
      */
-    assert('⛔ no rung is ever read from a request body', () =>
-        !/body[\s\S]{0,40}\.verb\b/.test(PURCHASE) && !/verb:\s*(req|input|body)\./.test(PURCHASE));
+    guardBites('⛔ no rung is read from a request, across the handlers AND the dispatcher — and the guard bites', {
+        anchor: () => PURCHASE.includes('resolvePurchaseAffordance({') && DISPATCHER.includes('actionKeyOf('),
+        sources: [PURCHASE, DISPATCHER],
+        forbidden: readsVerbFromRequest,
+        mutant: 'const rung = req.body.verb;',
+    });
+
+    /**
+     * ⚠ **The destructuring shape is the realistic one, and a property-access regex misses it** —
+     * `verb` comes BEFORE `req.body`. The original guard here could not see it at all.
+     */
+    assert('…and the same guard catches the DESTRUCTURING shape of that mistake', () =>
+        readsVerbFromRequest('const { productId, verb } = req.body ?? {};')
+        && readsVerbFromRequest('const { verb } = BotActSchema.parse(req.body);'));
 
     /**
      * ⚠ The token's verb may still decide HOW MANY IDS to expect — `book:<productId>` carries
@@ -293,11 +398,14 @@ function main(): void {
      * door quietly grows a fourth button — which the renderer then drops, on one door only —
      * or loses Checkout, with nothing failing anywhere.
      */
-    assert('⛔ the three buttons are built in exactly ONE place', () => {
-        const cart = codeOf(
-            path.join(__dirname, '../../src/modules/bot-surface/controllers/bot-cart.controller.ts'),
-        );
-        return !cart.includes('cartViewActionId(') && !cart.includes('openSurfaceActionId(');
+    guardBites('⛔ the three buttons are built in exactly ONE place — and the guard bites', {
+        anchor: () =>
+            PURCHASE.includes('export function addedToCartActions(')
+            && PURCHASE.includes('cartViewActionId()')
+            && CART.includes('addedToCartActions('),
+        sources: [CART, DISPATCHER],
+        forbidden: (src) => src.includes('cartViewActionId(') || src.includes("openSurfaceActionId('co')"),
+        mutant: "const actions = [{ id: cartViewActionId(), label: 'View cart' }];",
     });
 
     /**
@@ -307,9 +415,12 @@ function main(): void {
      * place that also trimmed would be two renderers disagreeing about what a customer saw —
      * and the disagreement would surface on the day one of them changed.
      */
-    assert('⛔ the controller enforces no WhatsApp button cap of its own', () =>
-        !PURCHASE.includes('WA_MAX_BUTTONS')
-        && !/actions[\s\S]{0,40}\.slice\(/.test(PURCHASE));
+    guardBites('⛔ no controller on either add path enforces a button cap of its own — and the guard bites', {
+        anchor: () => PURCHASE.includes('actions: addedToCartActions(') && CART.includes('actions: addedToCartActions('),
+        sources: [PURCHASE, CART, DISPATCHER],
+        forbidden: (src) => src.includes('WA_MAX_BUTTONS') || /actions[\s\S]{0,40}\.slice\(/.test(src),
+        mutant: 'setBotReply(req, { kind: "text", text, actions: addedToCartActions(language).slice(0, 3) });',
+    });
 
     /**
      * ⚠ **A checkout token carries NO handle**, and that is not a truncation. A `co` session
@@ -342,8 +453,12 @@ function main(): void {
         /mintCheckoutUrl\(ctx, cart\.cartId \?\? null\)/.test(PURCHASE)
         && /cartId,?\s*\n/.test(PURCHASE.slice(PURCHASE.indexOf('kind: \'co\''))));
 
-    assert('⛔ the cart id is never asserted or invented', () =>
-        !/cartId!/.test(PURCHASE) && !/cartId: ['"`]/.test(PURCHASE));
+    guardBites('⛔ the cart id is never asserted or invented — and the guard bites', {
+        anchor: () => PURCHASE.includes('mintCheckoutUrl(ctx, cart.cartId ?? null)'),
+        sources: [PURCHASE, DISPATCHER],
+        forbidden: (src) => /cartId!/.test(src) || /cartId:\s*['"`]/.test(src),
+        mutant: "await mintCheckoutUrl(ctx, cart.cartId!);",
+    });
 
     /**
      * ⚠ **The stamp is REQUIRED, not optional, so a third minter has to decide.** The frozen
@@ -386,8 +501,12 @@ function main(): void {
      * the haggle would reach the customer, engage nobody, and leave the conversation dead —
      * and it would look completely correct from this side, which is why it is pinned here.
      */
-    assert('⛔ the write path calls no negotiation service — it cannot start the agent', () =>
-        !PURCHASE.includes('negotiation') || !/import[^\n]*negotiation/.test(PURCHASE));
+    guardBites('⛔ neither the write path nor the dispatcher reaches for the negotiation module — and the guard bites', {
+        anchor: () => PURCHASE.includes("case 'bargain':") && PURCHASE.includes('bargainInvitePrompt'),
+        sources: [PURCHASE, DISPATCHER],
+        forbidden: (src) => /from\s+['"][^'"]*\/negotiation[/'"]/.test(src),
+        mutant: "import { negotiationService } from '../../negotiation/services/negotiation.service';",
+    });
 
     assert('bargain and book ask a question rather than announcing anything', () =>
         PURCHASE.includes("botChrome('bargainInvitePrompt'")
@@ -452,8 +571,12 @@ function main(): void {
      * three weeks later is not that conversation. `PriceResolverService` would peek it and
      * price the line at an agreement this customer never reached on this turn.
      */
-    assert('⛔ no button path presents a negotiation lock', () =>
-        !PURCHASE.includes('negotiationLockRef'));
+    guardBites('⛔ no BUTTON path presents a negotiation lock — and the guard bites', {
+        anchor: () => PURCHASE.includes('cartService.addToCart(') && DISPATCHER.includes('static dispatch'),
+        sources: [PURCHASE, DISPATCHER],
+        forbidden: (src) => src.includes('negotiationLockRef'),
+        mutant: 'await cartService.addToCart(customerId, productId, variantId, 1, undefined, negotiationLockRef);',
+    });
 
     /**
      * ⭐ **The other half of that rule, and it is the half that would rot silently.** A won
@@ -469,11 +592,17 @@ function main(): void {
      * the resolver sat unregistered for a day and every haggled add-to-cart answered 500.
      */
     assert('⛔ the TOOL path still spends a price lock — a won bargain must be redeemable', () => {
-        const cart = codeOf(
-            path.join(__dirname, '../../src/modules/bot-surface/controllers/bot-cart.controller.ts'),
-        );
-        return cart.includes('negotiationLockRef')
-            && /addToCart\([\s\S]{0,200}negotiationLockRef/.test(cart);
+        /**
+         * ⚠ **Read the call's own argument list, never a character window.** This used to be
+         * `addToCart\([\s\S]{0,200}negotiationLockRef`, and the real distance was 196: one more
+         * argument, or CRLF line endings, pushed a correct call past 200 and turned the guard red
+         * on code that was fine. Slicing from the call to its closing `);` asks the actual
+         * question — is the lock among this call's arguments — however the call is formatted.
+         */
+        const start = CART.indexOf('cartService.addToCart(');
+        if (start < 0) return false;
+        const call = CART.slice(start, CART.indexOf(');', start));
+        return call.includes('negotiationLockRef');
     });
 
     /**
@@ -519,13 +648,192 @@ function main(): void {
      * than with a log line. Fourteen verbs were minted ahead of their handlers, so this branch
      * is reachable today by design.
      */
-    assert('⛔ an unhandled token answers with a customer-facing refusal', () =>
-        PURCHASE.includes('BOT_ACTION_TOKEN_UNKNOWN'));
+    /**
+     * ⚠ **The refusal is DEFINED once, not merely raised from one place.** If the dispatcher and a
+     * handler each built their own error, the two would drift the first time somebody changed a
+     * status — and the customer would get two different answers to one event: they tapped
+     * something and it did nothing.
+     */
+    assert('⛔ THE refusal is one factory: BOT_ACTION_TOKEN_UNKNOWN at 422', () => {
+        const refusal = unknownBotAction();
+        return refusal.code === 'BOT_ACTION_TOKEN_UNKNOWN' && refusal.statusCode === 422;
+    });
 
-    assert('the refusal is the DEFAULT of the verb switch, not a list of known-bad tokens', () =>
-        /default:\s*\n\s*throw createAppError\(\s*\n?\s*ERROR_CODES\.BOT_ACTION_TOKEN_UNKNOWN/.test(
-            PURCHASE,
-        ));
+    guardBites('⛔ neither the dispatcher nor a handler builds its own unknown-token error — and the guard bites', {
+        anchor: () => PURCHASE.includes('unknownBotAction()') && DISPATCHER.includes('unknownBotAction()'),
+        sources: [PURCHASE, DISPATCHER],
+        forbidden: (src) => src.includes('BOT_ACTION_TOKEN_UNKNOWN'),
+        mutant: "throw createAppError(ERROR_CODES.BOT_ACTION_TOKEN_UNKNOWN, 422, 'Malformed');",
+    });
+
+    console.log('\n── ⭐ The tap-code dispatcher: one door, routed by key ──');
+
+    /**
+     * ⚠ **Every way a tap can route nowhere ends at the same refusal** — an unparseable token, an
+     * unknown verb, an unknown sub-key, and a key declared in the vocabulary whose handler has not
+     * landed yet. Fourteen verbs were minted ahead of their handlers, so the last of those is
+     * reachable by design.
+     */
+    assert('⛔ the dispatcher refuses an unparseable token AND an unhandled key, identically', () =>
+        /if \(!parsed\) throw unknownBotAction\(\)/.test(DISPATCHER)
+        && /if \(!handler\) throw unknownBotAction\(\)/.test(DISPATCHER));
+
+    assert('the dispatcher resolves the caller at the door, before parsing anything', () =>
+        DISPATCHER.indexOf('botCallerOf(req)') > -1
+        && DISPATCHER.indexOf('botCallerOf(req)') < DISPATCHER.indexOf('parseBotActionId(token)'));
+
+    /**
+     * ⚠ **The registry is merged by the guard, at import — which is boot.** A registry assembled by
+     * spreading would let the later stream silently win a key.
+     */
+    assert('⛔ the registry is built through mergeActionHandlers, never by spreading', () =>
+        DISPATCHER.includes('mergeActionHandlers([') && !/\.\.\.\w+_ACTION_HANDLERS/.test(DISPATCHER));
+
+    /**
+     * ⚠ **Handlers receive the token parsed and must never re-read it** — a handler that re-parsed
+     * could disagree with the dispatcher about which button was pressed.
+     */
+    /**
+     * ⚠ **Scans the HANDLERS only, and deliberately not the dispatcher** — reading the raw token
+     * is the dispatcher's one job, so including it would make this guard fail on correct code.
+     * Both shapes are forbidden: property access and destructuring.
+     */
+    guardBites('⛔ no purchase handler re-reads the raw token — and the guard bites', {
+        anchor: () => PURCHASE.includes('export const PURCHASE_ACTION_HANDLERS') && DISPATCHER.includes('parseBotActionId(token)'),
+        sources: [PURCHASE],
+        forbidden: (src) =>
+            /req\.body[\s\S]{0,20}\.token\b/.test(src)
+            || /\{[^}]*\btoken\b[^}]*\}\s*=\s*[^;]*req\.body/.test(src),
+        mutant: 'const { token } = BotDisplayActionSchema.parse(req.body ?? {});',
+    });
+
+    console.log('\n── ⛔ A category button can be built for ANY category name ──');
+
+    /**
+     * ⚠ **This platform has no category ids** — a category is free text on the product, up to 200
+     * characters. `cat:` plus « Électroménager, électronique et équipements de la maison » is
+     * exactly 64 bytes; one more character and building the token THROWS, while the reply is being
+     * built, so the whole turn fails rather than one button. The builder therefore digests the
+     * name. These prove it holds for a name far past that edge, in two scripts.
+     */
+    const LONG_CATEGORY =
+        'Électroménager, électronique et équipements de la maison, jardin et cuisine '
+        + 'ـ'.repeat(40);
+
+    assert('⛔ a category name far past 64 bytes still builds a token that fits', () => {
+        const token = categoryActionId(LONG_CATEGORY);
+        return Buffer.byteLength(LONG_CATEGORY, 'utf8') > 150
+            && Buffer.byteLength(token, 'utf8') <= __CALLBACK_DATA_BYTES
+            && Buffer.byteLength(token, 'utf8') === 20;
+    });
+
+    assert('the tap resolves back to the same category by recomputing the digest', () =>
+        parseBotActionId(categoryActionId(LONG_CATEGORY))?.argument === categoryDigest(LONG_CATEGORY));
+
+    /**
+     * ⚠ **Hashed exactly as stored — no case-folding.** The handler matches against the strings
+     * `listCategories()` returns, and those are grouped by exact value, so two spellings are two
+     * categories and must stay two digests.
+     */
+    assert('the digest is stable, and distinguishes spellings exactly as the catalogue does', () =>
+        categoryDigest('Mode') === categoryDigest('Mode')
+        && categoryDigest('Mode') !== categoryDigest('mode')
+        && /^[0-9a-f]{16}$/.test(categoryDigest('Mode')));
+
+    console.log('\n── ⭐ Shared verbs route by (verb, sub-key) — proven, not scanned ──');
+
+    /**
+     * These call the routing rules directly. `bot-action-dispatch.ts` imports nothing that reaches
+     * `orders/` or `payments/`, which is precisely why the rules live there rather than in the
+     * dispatcher: the dispatcher imports every stream's handlers and could never be loaded here.
+     */
+    const route = (token: string) => {
+        const parsed = parseBotActionId(token);
+        return parsed ? actionKeyOf(parsed) : null;
+    };
+
+    assert('a plain verb routes by the verb alone, argument untouched', () => {
+        const r = route(`ord:${OID}`);
+        return r?.key === 'ord' && r.action.argument === OID && r.action.subKey === undefined;
+    });
+
+    assert('`open` routes by SURFACE, and a reference-less surface gets an empty argument', () => {
+        const r = route('open:co');
+        return r?.key === 'open:co' && r.action.subKey === 'co' && r.action.argument === '';
+    });
+
+    /**
+     * ⚠ **Split at the FIRST colon only.** `yes:cd:<orderId>:<shipmentId>` must reach its handler
+     * with both ids intact — a split on every colon would hand it `<orderId>` and lose the parcel.
+     */
+    assert('`yes` routes by CONTEXT, and a reference holding colons reaches the handler intact', () => {
+        const r = route(`yes:cd:${OID}:${OID}`);
+        return r?.key === 'yes:cd' && r.action.subKey === 'cd' && r.action.argument === `${OID}:${OID}`;
+    });
+
+    assert('a verb one stream owns keeps its own argument grammar — `shp` is never sub-dispatched', () => {
+        const r = route(`shp:${OID}:${OID}`);
+        return r?.key === 'shp' && r.action.argument === `${OID}:${OID}`;
+    });
+
+    assert('an EMPTY sub-key produces a key no stream can register', () => route('yes::x')?.key === 'yes:');
+
+    const h = async (): Promise<void> => undefined;
+    const mergeThrows = (streams: Parameters<typeof mergeActionHandlers>[0]): string | null => {
+        try {
+            mergeActionHandlers(streams);
+            return null;
+        } catch (err) {
+            return (err as Error).message;
+        }
+    };
+
+    /**
+     * ⭐ **THE GUARD BITES — asked for by name, and proven by calling it.** Two streams claiming one
+     * PAIR is a silent overwrite: the later spread wins, and one stream's button quietly starts
+     * running the other stream's code. It must throw at boot, and it must NAME both streams and the
+     * pair, so whoever hits it knows what to fix without reading this file.
+     */
+    assert('⭐ ⛔ two streams claiming ONE PAIR throws, naming both streams and the pair', () => {
+        const message = mergeThrows([
+            ['orders', { 'yes:cd': h }],
+            ['account', { 'yes:cd': h }],
+        ]);
+        return message !== null
+            && message.includes('yes:cd')
+            && message.includes('orders')
+            && message.includes('account');
+    });
+
+    /**
+     * ⚠ **…and it must NOT bite on legitimate sharing**, which is the whole reason the guard moved
+     * from the verb to the pair. Confirming a delivery and closing an account share the word
+     * "yes"; refusing that would lock every stream after the first out of a universal verb.
+     */
+    assert('⛔ two streams claiming DIFFERENT pairs under one shared verb merges cleanly', () =>
+        mergeThrows([
+            ['orders', { 'yes:cd': h, 'open:ol': h }],
+            ['account', { 'yes:close': h }],
+            ['purchase', { 'open:co': h, 'open:pl': h }],
+        ]) === null);
+
+    assert('⛔ two streams claiming one PLAIN verb still throws', () =>
+        mergeThrows([['orders', { ord: h }], ['support', { ord: h }]])?.includes('ord') === true);
+
+    /**
+     * ⚠ **A bare shared verb would shadow every context under it.** The type forbids it; this is the
+     * runtime half, for a map built with a cast or assembled on the fly.
+     */
+    assert('⛔ registering a BARE shared verb throws', () =>
+        mergeThrows([['rogue', { yes: h } as never]]) !== null);
+
+    assert('an explicit undefined entry is not a claim', () =>
+        mergeThrows([['orders', { 'yes:cd': undefined }], ['account', { 'yes:cd': h }]]) === null);
+
+    assert('the purchase stream registers its two surfaces as PAIRS, never bare `open`', () =>
+        /'open:co':\s*handleOpenCheckoutTap/.test(PURCHASE)
+        && /'open:pl':\s*handleOpenListingTap/.test(PURCHASE)
+        && !/^\s*open:\s*\w+,?$/m.test(PURCHASE));
 
     /**
      * ⚠ **`more:` must not get WORSE where there is no screen, and today there is none.**

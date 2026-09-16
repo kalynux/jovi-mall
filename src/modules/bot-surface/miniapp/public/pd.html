@@ -201,8 +201,13 @@
    *         inStock:    boolean,
    *         affordance: { verb, label, enabled }   // verbatim; see SEAM 1 at the top
    *       }],
-   *       defaultVariantId: string | null
+   *       defaultVariantId: string | null,
+   *       hasSimilar:       boolean         // draw a Similar-items control; false = none, or cannot tell
    *   }}
+   *
+   *   POST ./similar  →  { success: true, data: { url: string | null } }
+   *     `url` is a same-origin listing of similar products, pinned at the moment of asking.
+   *     null = nothing similar after all (a race: `hasSimilar` was true when the page loaded).
    *
    * A product in `simple` mode has zero options and exactly one variant, so the picker draws
    * nothing and the button is live on arrival. That is the common case and it must stay the

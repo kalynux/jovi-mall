@@ -490,6 +490,25 @@ const BOOK_INVITE_PROMPT: Copy = {
 
 // ── Orders and fulfilment ────────────────────────────────────────────────────
 
+/**
+ * The sentence above "See all" when `open:ol` is tapped — the whole order history.
+ *
+ * ⚠ **Replaces `loadMoreRow` doing a body's job.** That key is a WhatsApp list ROW title capped at 24
+ * characters, and it was being used as the message text for the order-history button.
+ *
+ * ⚠ **True on BOTH paths, deliberately.** In production there is no screen origin, so this sits
+ * above a storefront link rather than a screen — "tap below to see" is honest either way, where
+ * "open your order screen" would be false in production today. Same shape as
+ * `BROWSE_PRODUCTS_PROMPT`.
+ */
+const VIEW_ORDERS_PROMPT: Copy = {
+    en: 'Tap below to see all your orders.',
+    fr: 'Appuyez ci-dessous pour voir toutes vos commandes.',
+    pt: 'Toque abaixo para ver todas as suas encomendas.',
+    es: 'Toca abajo para ver todos tus pedidos.',
+    ar: 'اضغط أدناه لرؤية جميع طلباتك.',
+};
+
 /** The order detail's second action. Destructive, so it opens a confirm rather than acting. */
 const CANCEL_ORDER_BUTTON: Copy = {
     en: 'Cancel order',
@@ -769,6 +788,7 @@ const CHROME = Object.freeze({
     bargainInvitePrompt: { copy: BARGAIN_INVITE_PROMPT, cap: null },
     bookInvitePrompt: { copy: BOOK_INVITE_PROMPT, cap: null },
     // ── Orders and fulfilment ────────────────────────────────────────────────
+    viewOrdersPrompt: { copy: VIEW_ORDERS_PROMPT, cap: null },
     cancelOrderButton: { copy: CANCEL_ORDER_BUTTON, cap: 20 },
     confirmDeliveryPrompt: { copy: CONFIRM_DELIVERY_PROMPT, cap: null },
     cancelOrderPrompt: { copy: CANCEL_ORDER_PROMPT, cap: null },

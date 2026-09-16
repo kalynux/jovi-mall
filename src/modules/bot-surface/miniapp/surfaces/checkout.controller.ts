@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../../../../api/middlewares/async-handler';
 import { sendSuccess } from '../../../../core/responses';
-import { createAppError } from '../../../../core/errors';
+import { AppError, createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
 import { OptionalPhoneNumberSchema } from '../../../../core/validation/phone';
 import { CartService, CartResponse } from '../../../cart/services/cart.service';
@@ -10,8 +10,9 @@ import { CustomerModel, ICustomer, ICustomerSavedAddress } from '../../../custom
 import { OrderService } from '../../../orders/order.service';
 import { cartQuoteService } from '../../../orders/services/cart-quote.service';
 import { PaymentOrchestratorService } from '../../../payments';
-import { PaymentGatewayType } from '../../../payments/models/payment-transaction.model';
+import { PaymentGatewayType, PaymentStatus } from '../../../payments/models/payment-transaction.model';
 import { notchPayEnabled, myCoolPayEnabled } from '../../../payments/config/payments.config';
+import { resolveCameroonOperator } from '../../../payments/domain/cm-operator';
 import { UserPaymentMethodRepository } from '../../../payment-methods/repositories/user-payment-method.repository';
 import { publicCatalogService } from '../../../catalog/services/public-catalog.service';
 import { maskPhone } from '../../dto/bot-projections';
@@ -32,10 +33,10 @@ import { accountIdentifier, maskAddress } from './checkout-masking';
  *   1. **A ten-minute life** — `TTL_SECONDS.co` in `inapp-surface.store.ts`, strictly the
  *      shortest of the five, and `touch` refuses `co` outright so a page left open cannot
  *      keep an order-placing credential alive.
- *   2. **Single use on the write** — `place` below calls `consume`, never `read`. This mount
- *      has no `Idempotency-Key` (it is browser traffic, and a browser sends what the page
- *      sends), so the store's Lua read-and-delete is the only thing standing between a
- *      double-tap and two orders.
+ *   2. **Single use on the write** — `placeCheckout` below calls `consume`, never `read`.
+ *      Neither door has an `Idempotency-Key` (the page is browser traffic; the WhatsApp form is
+ *      retried by Meta on its own schedule), so the store's Lua read-and-delete is the only
+ *      thing standing between a double-tap or a retry and two orders.
  *   3. **Nothing sensitive is projected in full** — the address comes back coarse (see
  *      `maskAddress`) and the mobile-money number never reaches the page at all: it is the
  *      field's *placeholder*, and an empty field means "use the number on my account".
@@ -59,32 +60,43 @@ import { accountIdentifier, maskAddress } from './checkout-masking';
  * `co.html`'s `explain()` maps those two statuses to `copy.expired` — *"ask me again in the
  * chat and I will open a fresh one"* — which is the page's own copy, in the customer's own
  * language, and is the only remedy that actually works for any of them. Every OTHER status
- * renders `error.message`, which is English. So a basket that has emptied is **410**, not the
+ * renders `error.message`, which is English. So a basket that has emptied is **404**, not the
  * 409 it would be on an API meant for machines. That is not a status-code flourish: it is the
  * difference between a French customer reading a French sentence and reading ours.
+ *
+ * ⚠ **One status per error code, platform-wide — `test:errors` enforces it.** The basket-gone
+ * refusal was first raised as `CART_EMPTY_CHECKOUT` at 410, but that code is 400 everywhere else,
+ * and a code that means two categories breaks every dashboard that groups by it. It now shares the
+ * screen's handle-gone code at 404, which the page and the WhatsApp form both treat exactly as they
+ * treated 410. Both move to the switchboard's screen-session code when it lands.
  */
-
-const HandleSchema = z.object({ handle: z.string().trim().min(3).max(64) });
 
 /**
- * What the page submits.
- *
- * ⚠ **`phone` is nullable and null is the COMMON case**, not an omission — it means "charge
- * the number already on my account", which is the whole reason the number is shown as a
- * placeholder rather than a value. A typed number is validated with the platform's own E.164
- * schema, so a mistyped one is refused here rather than by a gateway.
+ * The HTTP body the page submits. Shape only — the VALUE of `phone` is validated inside
+ * `placeCheckout`, so the page and the WhatsApp form are refused by one rule, not two.
  */
-const PlaceSchema = z
-    .object({ phone: OptionalPhoneNumberSchema.nullable().default(null) })
-    .strict();
+const PlaceBodySchema = z.object({ phone: z.unknown().optional() }).strict();
 
 const cartService = new CartService();
 const orderService = new OrderService();
 const paymentOrchestrator = new PaymentOrchestratorService();
 const paymentMethods = new UserPaymentMethodRepository();
 
-/** One line as the page draws it. Every money value is already a string. */
-interface CheckoutLine {
+// ─────────────────────────────────────────────────────────────────────────────
+//  THE CHECKOUT CORE — exported, transport-neutral, and the ONLY implementation
+//
+//  ⭐ **One read, one set of rules, two renderings.** The Telegram page (`co.html`, through the
+//  controller below) and the WhatsApp form (`whatsapp/flows`, backend-ed's adapter) both call
+//  these two functions. Neither may copy the projection or re-derive a rule, because every rule
+//  here is one of the four protections that keep a `co` handle from placing an order against a
+//  stranger's address — and a second copy is a copy that eventually lacks one.
+//
+//  Nothing below touches `req` or `res`. A refusal is an `AppError` carrying a status and
+//  `details.spent`; each transport maps those to its own answer.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** One line as a screen draws it. Every money value is already a string. */
+export interface CheckoutLine {
     title: string;
     variantLabel: string | null;
     quantity: number;
@@ -92,110 +104,147 @@ interface CheckoutLine {
     imageUrl: string | null;
 }
 
-export class CheckoutController {
-    /**
-     * `GET /api/bot/miniapp/s/co/:handle/data` — the basket, the total, and where it is going.
-     *
-     * ⚠ **Read live on every open, and NOTHING is cached onto the session.** The `co` session
-     * holds an owner, a conversation and a cart id — no prices, no lines, no total. A held
-     * total is a total that can disagree with the basket by the time somebody pays, and the
-     * disagreement would be discovered by the customer at the moment of the charge.
-     * `InAppSurfaceSession`'s own docstring states this; it is restated here because this is
-     * the file that would break it.
-     *
-     * ⚠ **Repeatable.** The page reads on every open and every retry, which is why this uses
-     * `read` and only `place` uses `consume`.
-     */
-    static data = asyncHandler(async (req: Request, res: Response) => {
-        const { handle } = HandleSchema.parse(req.params);
-        const session = await readCheckout(handle);
+/**
+ * What a checkout screen shows. The page's opening comment is the contract for the first four
+ * fields; `language` is here for a renderer that words its own labels.
+ */
+export interface CheckoutView {
+    lines: CheckoutLine[];
+    /** The one figure the customer is agreeing to pay. The screen adds nothing up. */
+    totalText: string;
+    /** ⚠ MASKED. `null` is the no-address state; `digital` swaps the heading. */
+    address: { text: string; digital?: true } | null;
+    /** ⚠ Never the full number — a placeholder, and empty means "use this one". */
+    payment: { phoneMasked: string | null };
+    language: string | null;
+}
 
+/**
+ * What placing a checkout answers.
+ *
+ * ⚠ **No amount, no address and no order numbers**, deliberately. The screen's only job after
+ * this is to say "approve the payment on your phone" and close; everything the customer needs
+ * next arrives in the chat, where it can be worded in their language and carry buttons. A
+ * receipt rendered on a screen that is about to close is a receipt nobody reads.
+ */
+export interface CheckoutPlaced {
+    orderCount: number;
+    transactionId: string;
+    status: PaymentStatus;
+}
+
+/**
+ * The checkout a handle opens, read live.
+ *
+ * ⚠ **Repeatable — `read`, never `consume`.** A screen reads on every open and every refresh,
+ * and a WhatsApp form's INIT exchange may be retried by Meta on its own schedule.
+ *
+ * ⚠ **Read live on every call, and NOTHING is cached onto the session.** The `co` session holds
+ * an owner, a conversation and a cart id — no prices, no lines, no total. A held total is a total
+ * that can disagree with the basket by the time somebody pays, discovered by the customer at the
+ * moment of the charge.
+ *
+ * Refuses with **404** — the handle is unknown, lapsed, malformed or the wrong kind, or the
+ * basket has gone or been replaced since. Both carry `details.spent: false` — a read spends
+ * nothing — and are told apart by their message.
+ */
+export async function readCheckoutView(handle: string): Promise<CheckoutView> {
+    const session = await inAppSurfaceStore.read('co', plausibleHandle(handle));
+    if (!session) throw handleGone(false);
+
+    const cart = await cartService.getCart(session.customerId);
+    assertBasketStillThere(cart, session, false);
+
+    const customer = await loadCustomer(session.customerId);
+
+    /**
+     * ⚠ **The total is the SERVER's figure.** It comes from `cartQuoteService`, the service the
+     * storefront cart and `cart_quote` call, so delivery, the vendor-absorbed fee, tax and
+     * discount are decided in one place. A screen that summed the lines would be a second
+     * implementation of all four, in the one place nothing tests.
+     *
+     * ⚠ **Quoted WITHOUT an address id, deliberately.** Passing one makes `quoteForCustomer`
+     * validate it and throw `ORDER_DELIVERY_ADDRESS_REQUIRED` — which would turn the no-address
+     * state, a real state with a real instruction, into an error. The address is resolved
+     * separately and reported as data.
+     */
+    const quote = await cartQuoteService.quoteForCustomer(session.customerId);
+
+    return {
+        lines: await toCheckoutLines(cart),
+        totalText: formatBotPrice(quote.total, quote.currency),
+        address: await resolveDestination(cart, customer),
+        payment: { phoneMasked: await maskedPayerNumber(customer) },
+        language: session.language,
+    };
+}
+
+/**
+ * Spend the handle, create the orders, open the charge.
+ *
+ * ── ⚠ `details.spent` IS ON EVERY REFUSAL, AND ABSENT MEANS SPENT ───────────
+ * A caller deciding whether a retry is honest must know whether the handle survived, and the
+ * status code cannot say: a 400 can come from the typed number (before the spend) or from order
+ * creation (after it). So every `AppError` thrown here carries the answer.
+ *
+ * ⚠ **Treat a missing flag as `true`.** Over HTTP the platform strips `details` from every
+ * external-service and internal error, so a 502 reaches a browser with no flag at all — and
+ * anything that is not an `AppError` never had one. The safe reading of silence is "the order
+ * may exist": send the customer to the chat, which knows the truth.
+ *
+ * ── THE ORDER OF THE WORK IS THE PROTECTION ─────────────────────────────────
+ *   1. **Validate the number, then check a gateway exists** — neither needs the session, both
+ *      are deterministic, and a refusal here must not cost the customer their handle.
+ *   2. **`consume`** — before anything that takes time. A double-tap, a refreshed tab, a
+ *      forwarded URL and a Meta retry all find the handle gone, and no `Idempotency-Key`
+ *      reaches this code from either transport, so the store's Lua read-and-delete is the only
+ *      guard there is.
+ *   3. **Everything else**, with every refusal marked spent.
+ *
+ * ⚠ **The ADDRESS is never an argument.** `createOrdersFromCart` resolves it from the customer's
+ * own saved addresses, so neither transport can send a delivery somewhere other than the address
+ * the screen showed.
+ *
+ * @param phone Whatever the screen submitted. `null`, `undefined`, `''` and whitespace all mean
+ *   "use the number on my account"; anything else must be a valid phone number.
+ */
+export async function placeCheckout(handle: string, phone: unknown): Promise<CheckoutPlaced> {
+    const typedNumber = validatedPayerNumber(phone);
+    const gateway = mobileMoneyGateway();
+    if (typedNumber) assertNetworkChargeable(gateway, typedNumber, false);
+
+    const session = await inAppSurfaceStore.consume('co', plausibleHandle(handle));
+    if (!session) throw handleGone(false);
+
+    try {
         const cart = await cartService.getCart(session.customerId);
-        assertBasketStillThere(cart, session);
+        assertBasketStillThere(cart, session, true);
 
         const customer = await loadCustomer(session.customerId);
-
-        /**
-         * ⚠ **The total is the SERVER's figure and the page adds nothing up.** It comes from
-         * `cartQuoteService`, which is the same service the storefront cart and
-         * `cart_quote` call — so delivery, the vendor-absorbed fee, tax and discount are
-         * decided in one place. A WebView that summed the lines would be a second
-         * implementation of all four, in the one place nothing tests.
-         *
-         * ⚠ **Quoted WITHOUT an address id, deliberately.** Passing one makes `quoteForCustomer`
-         * validate it and throw `ORDER_DELIVERY_ADDRESS_REQUIRED` — which would turn the
-         * no-address state, a real state with a real instruction, into an error page. The
-         * address is resolved separately below and reported as data.
-         */
-        const quote = await cartQuoteService.quoteForCustomer(session.customerId);
-
-        sendSuccess(res, {
-            lines: await toCheckoutLines(cart),
-            totalText: formatBotPrice(quote.total, quote.currency),
-            address: await resolveDestination(cart, customer),
-            payment: { phoneMasked: await maskedPayerNumber(customer) },
-        });
-    });
-
-    /**
-     * `POST /api/bot/miniapp/s/co/:handle/place` — create the orders and open the charge.
-     *
-     * ⚠ **`consume` FIRST, before anything else that could take time.** A double-tap, a
-     * refreshed tab and a forwarded URL must all find the handle gone, and the window in which
-     * two requests can both see it live is exactly the work done before this line. The body is
-     * parsed above it because a Zod failure is deterministic and places nothing — burning a
-     * handle on a malformed request would cost a customer their checkout for a typo.
-     *
-     * ⚠ **The ADDRESS IS RESOLVED SERVER-SIDE AND THE PAGE NEVER SENDS ONE.** `co.html` has
-     * exactly one input and it is `type="tel"` (`test:inapp-checkout` § 1 asserts the count),
-     * so there is no address field to trust — and `createOrdersFromCart` re-resolves it from
-     * the customer's own saved addresses regardless, which is what keeps this screen and the
-     * storefront agreeing about where a delivery goes.
-     *
-     * ⚠ **Nothing below may report "not placed".** Once `consume` has returned, the order may
-     * exist whatever fails afterwards; the page's own catch says the same thing and sends the
-     * customer to the chat, which knows the truth.
-     */
-    static place = asyncHandler(async (req: Request, res: Response) => {
-        const { handle } = HandleSchema.parse(req.params);
-        const { phone } = PlaceSchema.parse(req.body ?? {});
-
-        const session = await inAppSurfaceStore.consume('co', handle);
-        if (!session) {
-            throw createAppError(
-                ERROR_CODES.BOT_PRODUCT_LIST_EXPIRED,
-                404,
-                'That checkout is no longer held',
-            );
-        }
-
-        const cart = await cartService.getCart(session.customerId);
-        assertBasketStillThere(cart, session);
-
-        /**
-         * ⚠ **Resolved BEFORE the orders exist, so a customer with no payable number is
-         * refused while there is still nothing to refuse.** The alternative ordering — create
-         * the orders, then discover there is nothing to charge — leaves a thirty-minute stock
-         * hold and an unpaid order behind a page that has already closed.
-         */
-        const customer = await loadCustomer(session.customerId);
-        const payerNumber = phone ?? (await storedPayerNumber(customer));
+        const payerNumber = typedNumber ?? (await storedPayerNumber(customer));
         if (!payerNumber) {
             throw createAppError(
                 ERROR_CODES.PAYMENT_REFERENCE_REQUIRED,
                 422,
                 'A mobile money number is needed to take this payment',
+                { spent: true },
             );
         }
 
-        const gateway = mobileMoneyGateway();
+        /**
+         * ⚠ **Checked again for the ACCOUNT's number, and BEFORE the orders exist.** The typed
+         * number was checked before the spend; the account's can only be known after it, because
+         * the customer comes from the session. Past this point the handle is gone either way —
+         * but refusing here rather than inside the gateway is the difference between "go back to
+         * the chat" and "go back to the chat, and there is now an unpaid order and a thirty-minute
+         * stock hold behind you that you never asked for".
+         */
+        assertNetworkChargeable(gateway, payerNumber, true);
 
         /**
-         * ⚠ **`'online'`, never `'cash_on_delivery'`, and the screen offers no choice.** Mobile
-         * money is the only live method here, and a COD checkout is a different conversation:
-         * it takes no payment, produces a delivery code per shipment, and is refused outright
-         * by `initiatePaymentForCart`. Adding a method picker to this screen would mean the
-         * page deciding something that changes what the customer owes at the door.
+         * ⚠ **`'online'`, never `'cash_on_delivery'`, and no screen offers a choice.** Mobile money
+         * is the only live method here; a COD checkout takes no payment, produces a delivery code
+         * per shipment, and is refused outright by `initiatePaymentForCart`.
          */
         const { cartId, orders } = await orderService.createOrdersFromCart(
             session.customerId,
@@ -204,65 +253,163 @@ export class CheckoutController {
         );
 
         /**
-         * ⚠ **The charge is opened here and its RESULT is not waited for**, because there is
-         * nothing to wait for: a mobile-money push is approved on a handset minutes later, on
-         * a device that is not this browser. The page says so before this call (`checkoutWatchChat`)
-         * and closes; the chat delivers the outcome.
-         *
-         * A failure of THIS call is a failure to open the charge, not a failed payment — the
-         * orders exist and are awaiting payment either way, which is why it is allowed to
-         * propagate: the page renders it, and the customer is sent back to the chat where the
-         * order can be paid again. It must never be swallowed into a success.
+         * ⚠ **The charge is opened and its RESULT is not waited for** — a mobile-money push is
+         * approved on a handset minutes later, on a device that is not this screen. A failure of
+         * THIS call is a failure to open the charge, not a failed payment: the orders exist and
+         * await payment either way, and the chat can take the payment again.
          */
         const payment = await paymentOrchestrator.initiatePaymentForCart(cartId, gateway, {
             phoneNumber: payerNumber,
             customerName: customer.name,
         });
 
-        sendSuccess(res, {
-            /**
-             * ⚠ **No amount, no address and no order numbers come back here.** The page's only
-             * job after this call is to say "approve the payment on your phone" and close —
-             * everything a customer needs to know next arrives in the chat, where it can be
-             * worded in their language and carry buttons. A receipt rendered on a page that is
-             * about to close is a receipt nobody reads.
-             */
+        return {
             orderCount: orders.length,
             transactionId: payment.transactionId,
             status: payment.status,
+        };
+    } catch (error) {
+        throw markedSpent(error);
+    }
+}
+
+export class CheckoutController {
+    /** `GET /api/bot/miniapp/s/co/:handle/data` — the page's read. A thin wrapper; see `readCheckoutView`. */
+    static data = asyncHandler(async (req: Request, res: Response) => {
+        const view = await readCheckoutView(String(req.params.handle ?? ''));
+        /** The page's contract is the four fields; `language` came in through the copy call. */
+        sendSuccess(res, {
+            lines: view.lines,
+            totalText: view.totalText,
+            address: view.address,
+            payment: view.payment,
         });
+    });
+
+    /** `POST /api/bot/miniapp/s/co/:handle/place` — the page's write. A thin wrapper; see `placeCheckout`. */
+    static place = asyncHandler(async (req: Request, res: Response) => {
+        const { phone } = PlaceBodySchema.parse(req.body ?? {});
+        sendSuccess(res, await placeCheckout(String(req.params.handle ?? ''), phone));
     });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  The rules the core applies
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
- * Resolve a checkout handle, or refuse the way every other screen does.
+ * A handle, or a value that cannot match one.
  *
- * ⚠ **The kind is named on the read.** `read('co', …)` refuses a `pl` or `pd` handle by
- * construction — and that is the load-bearing direction: a listing handle is handed out
- * freely, appears in a chat and may be forwarded, so it must not be replayable against the one
- * endpoint that can spend money.
- *
- * One refusal bucket for unknown, lapsed, malformed and wrong-kind: all four have the same
- * remedy, and separating them would confirm to a caller that a handle it does not own is real.
+ * ⚠ **Not a refusal.** An absurd value is simply absent — the store answers null for anything
+ * without its prefix — so a malformed handle and a lapsed one are the same 404, which is the
+ * position every handle on this surface takes: distinguishing them would confirm to a caller
+ * that a handle it does not own is real.
  */
-async function readCheckout(handle: string): Promise<Extract<InAppSurfaceSession, { kind: 'co' }>> {
-    const session = await inAppSurfaceStore.read('co', handle);
-    if (!session) {
+function plausibleHandle(handle: string): string {
+    return typeof handle === 'string' && handle.length <= 128 ? handle.trim() : '';
+}
+
+/**
+ * The typed payer number, `null` for "use my account's", or a refusal the customer can fix.
+ *
+ * ⚠ **Empty and whitespace-only strings fold to `null` FIRST — measured, not assumed.** The
+ * platform phone schema refuses `''`, and a WhatsApp text input left empty submits exactly that.
+ * Without the fold, "use the number on my account" — the common case, and the one that discloses
+ * nothing — would be refused as an invalid number on the form while working on the page, which
+ * sends `null`.
+ *
+ * ⚠ **Raised as an `AppError` with `spent: false`, never as a raw `ZodError`.** A `ZodError` has
+ * no `details` a caller could read, and this is the one refusal after which a retry is both
+ * honest and useful.
+ */
+function validatedPayerNumber(phone: unknown): string | null {
+    if (phone === null || phone === undefined) return null;
+    if (typeof phone === 'string' && phone.trim().length === 0) return null;
+
+    const parsed = OptionalPhoneNumberSchema.safeParse(phone);
+    if (!parsed.success) {
         throw createAppError(
-            ERROR_CODES.BOT_PRODUCT_LIST_EXPIRED,
-            404,
-            'That checkout is no longer held',
+            ERROR_CODES.VALIDATION_ERROR,
+            400,
+            'That is not a valid mobile money number — include the country code',
+            { spent: false, field: 'phone' },
         );
     }
-    return session;
+    return parsed.data ?? null;
+}
+
+/**
+ * Refuse a number the chosen gateway cannot route to a mobile network — before it costs anything.
+ *
+ * ── WHY THIS IS CHECKED HERE WHEN THE GATEWAY CHECKS IT ANYWAY ──────────────
+ * NotchPay needs the network (MTN or Orange) to open a charge, and works it out inside
+ * `NotchPayGateway.initiatePayment` from the number's prefix. That is **after** the handle is spent
+ * and **after** `createOrdersFromCart` — so a number in a prefix range `cm-operator.ts` does not
+ * list cost the customer their checkout screen AND left an unpaid order with a stock hold behind
+ * it. `resolveCameroonOperator` is pure, so the same verdict can be reached before either.
+ * (Found by backend-4d.)
+ *
+ * ⚠ **Only for NotchPay.** My-CoolPay derives the network server-side and needs nothing from us, so
+ * refusing a number it would have accepted would be a regression dressed as a check.
+ *
+ * ⚠ **The SAME resolver and the SAME code the gateway uses** — `PAYMENT_OPERATOR_UNDETERMINED`,
+ * 422 — so a customer meets one refusal whichever side of the spend it lands on, and nobody later
+ * "unifies" two vocabularies for one condition.
+ *
+ * ⚠ **EXPORTED for the booking pay screen (`bp`)**, which opens a NotchPay charge with exactly the
+ * same gap. `spent` is the caller's to state: pass `false` for a check made before anything
+ * irreversible happened, `true` otherwise — the flag is what a screen reads to decide whether a
+ * retry is honest.
+ */
+export function assertNetworkChargeable(gateway: PaymentGatewayType, payerNumber: string, spent: boolean): void {
+    if (gateway !== 'NOTCHPAY') return;
+    if (resolveCameroonOperator(payerNumber)) return;
+    throw createAppError(
+        ERROR_CODES.PAYMENT_OPERATOR_UNDETERMINED,
+        422,
+        'Could not determine the mobile network for this number.',
+        { spent, field: 'phone' },
+    );
+}
+
+/** The handle-gone refusal, one wording for the read and the write. */
+function handleGone(spent: boolean): AppError {
+    return createAppError(
+        ERROR_CODES.BOT_PRODUCT_LIST_EXPIRED,
+        404,
+        'That checkout is no longer held',
+        { spent },
+    );
+}
+
+/**
+ * Mark a refusal as having happened after the handle was spent.
+ *
+ * ⚠ **Only an `AppError` can carry the flag**, so anything else is rethrown untouched — and a
+ * caller reading no flag treats it as spent, which is the rule on `placeCheckout` and the reason
+ * this function does not need to invent one.
+ */
+function markedSpent(error: unknown): unknown {
+    if (!(error instanceof AppError)) return error;
+    if (error.details?.spent === true) return error;
+    return new AppError(
+        error.message,
+        error.statusCode,
+        error.code,
+        error.isOperational,
+        { ...(error.details ?? {}), spent: true },
+    );
 }
 
 /**
  * Refuse a checkout whose basket has gone or been replaced since the screen opened.
  *
- * ⚠ **410, and the status is the whole point** — see the header. `co.html` renders 404 and 410
+ * ⚠ **404, and the status is the whole point** — see the header. `co.html` renders 404 (and 410)
  * as `copy.expired`, which says "ask me again in the chat and I will open a fresh one" in the
  * customer's own language. Any other status would render our English.
+ *
+ * ⚠ **Not `CART_EMPTY_CHECKOUT`**, which this once raised at 410: that code is 400 on the quote
+ * path, and one code at two statuses is two categories — `test:errors` refuses it.
  *
  * ⚠ **This compares the basket's IDENTITY, not its contents**, and the limit is worth stating.
  * `clearCart` deletes the document, so a basket emptied and rebuilt gets a new id and is caught
@@ -275,12 +422,13 @@ async function readCheckout(handle: string): Promise<Extract<InAppSurfaceSession
 function assertBasketStillThere(
     cart: CartResponse,
     session: Extract<InAppSurfaceSession, { kind: 'co' }>,
+    spent: boolean,
 ): void {
     if (cart.items.length === 0 || !cart.cartId) {
-        throw createAppError(ERROR_CODES.CART_EMPTY_CHECKOUT, 410, 'That basket is no longer there');
+        throw createAppError(ERROR_CODES.BOT_PRODUCT_LIST_EXPIRED, 404, 'That basket is no longer there', { spent });
     }
     if (session.cartId && session.cartId !== cart.cartId) {
-        throw createAppError(ERROR_CODES.CART_EMPTY_CHECKOUT, 410, 'That basket has been replaced');
+        throw createAppError(ERROR_CODES.BOT_PRODUCT_LIST_EXPIRED, 404, 'That basket has been replaced', { spent });
     }
 }
 
@@ -407,8 +555,13 @@ async function resolveDestination(
  * one tap and no disclosure: the customer sees enough to confirm it is the right wallet, the
  * page never holds the number, and submitting the field empty means "use that one". A forwarded
  * URL therefore discloses a masked tail and cannot be used to learn a payable number.
+ *
+ * ⚠ **EXPORTED for the booking pay screen (`bp`), which must show the SAME masked number** for the
+ * same customer. A second masking of the payer number would let one customer see two different
+ * placeholders for one wallet depending on whether they are buying a product or paying for an
+ * appointment — and would be the first step to the two charging different handsets.
  */
-async function maskedPayerNumber(customer: ICustomer): Promise<string | null> {
+export async function maskedPayerNumber(customer: ICustomer): Promise<string | null> {
     const stored = await storedPayerNumber(customer);
     return stored ? maskPhone(stored) : null;
 }
@@ -463,8 +616,13 @@ export async function storedPayerNumber(customer: ICustomer): Promise<string | n
  * Neither configured is a **configuration** state rather than a fault, and it is refused as
  * such: the deployment cannot take mobile money, and no amount of retrying by the customer
  * changes that.
+ *
+ * ⚠ **EXPORTED, and it must stay THE answer to "which gateway takes a mobile-money charge".** The
+ * chat's retry (`bot-checkout.controller.ts`) and the booking pay screen (`bp`) both import it.
+ * Three copies of one preference is how a customer ends up with two charges for one basket — or
+ * one basket and one appointment — under different refund rules, decided by which door they used.
  */
-function mobileMoneyGateway(): PaymentGatewayType {
+export function mobileMoneyGateway(): PaymentGatewayType {
     if (notchPayEnabled()) return 'NOTCHPAY';
     if (myCoolPayEnabled()) return 'MYCOOLPAY';
     throw createAppError(

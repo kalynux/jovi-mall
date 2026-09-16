@@ -1,4 +1,4 @@
-import { NextFunction, Request, Response } from 'express';
+import { Request, Response } from 'express';
 import { Types } from 'mongoose';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { sendSuccess } from '../../../core/responses';
@@ -18,6 +18,7 @@ import { VendorRepository } from '../../vendors/vendor.repository';
 import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
 import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { openInAppScreen } from './bot-inapp.controller';
+import { BotActionHandlers, ParsedBotAction, unknownBotAction } from '../domain/bot-action-dispatch';
 import { stripDeliveryCodes } from '../dto/bot-projections';
 import { botChrome } from '../domain/bot-chrome-copy';
 import { BotReplyOption } from '../domain/channel-reply';
@@ -28,6 +29,8 @@ import {
     declineActionId,
     openSurfaceActionId,
     orderActionId,
+    orderCancelActionId,
+    orderShipmentsActionId,
     shipmentActionId,
     ticketActionId,
     trackActionId,
@@ -39,7 +42,7 @@ import {
     botShipmentStateLabel,
     toBotOrderPaymentState,
 } from '../domain/bot-order-status-copy';
-import { windowForChat } from '../domain/bot-list-window';
+import { botStorefrontLink, windowForChat } from '../domain/bot-list-window';
 import {
     BotCartIdParamSchema,
     BotCodCodeSchema,
@@ -64,7 +67,8 @@ const vendorRepository = new VendorRepository();
  * on the customer API it rides along on every order read because a browser is showing it
  * to its owner on a screen they opened. Here the same field would land in a model's
  * context on every "where is my order?", and from there into a transcript nobody is
- * guarding. Disclosure happens once, deliberately, through `/orders/:orderId/cod-code`.
+ * guarding. Disclosure happens only when asked for by name — the `/orders/:orderId/cod-code`
+ * route or the Get code button, both through the one guarded `discloseCodCode`.
  *
  * ⚠ GAP-001 names only the GROUP read; this strips the single-order read too, because
  * both are built by `customerOrderViewService.toDtos` and leaving one open makes closing
@@ -208,6 +212,7 @@ export class BotOrderController {
                                   currency: dto.currency,
                                   fulfillmentStatus: dto.fulfillmentStatus,
                                   paymentStatus: dto.paymentStatus,
+                                  paymentMethod: dto.paymentMethod,
                               },
                               language,
                           ),
@@ -239,14 +244,7 @@ export class BotOrderController {
     static getOrder = asyncHandler(async (req: Request, res: Response) => {
         const { orderId } = BotOrderParamSchema.parse(req.params);
         BotNoArgsSchema.parse(req.body ?? {});
-        const caller = botCallerOf(req);
-
-        const order = await resolveOwnedOrder(caller.customerId, orderId);
-        const [dto] = await customerOrderViewService.toDtos([order]);
-
-        setOrderCardReply(req, dto);
-
-        sendSuccess(res, stripDeliveryCodes(dto));
+        await showOrderCard(req, res, orderId);
     });
 
     /**
@@ -262,51 +260,15 @@ export class BotOrderController {
      * enforced in the service before the agent is looked up — so there is nothing here to
      * project away.
      *
-     * ⚠ **This is where the Shipments button lands, and the button's TOKEN is `track:`.** The
-     * label says "Shipments" and the verb says "track" because the tool catalogue already
-     * calls this read *"the answer to 'where is my order'"* — there is no live-position route
-     * on this surface, so tracking a parcel and listing it are one action. Naming them
-     * separately would have minted a verb with nowhere to go.
+     * ⚠ **The Shipments button on the order card lands here too, as `shp:<orderId>`.** Tracking
+     * is a different button and a different destination — `track:<orderId>` answers with the
+     * storefront's live tracking page — so a customer who wants the map and a customer who wants
+     * to pick a parcel are never sent through each other.
      */
     static listShipments = asyncHandler(async (req: Request, res: Response) => {
         const { orderId } = BotOrderParamSchema.parse(req.params);
         BotNoArgsSchema.parse(req.body ?? {});
-        const caller = botCallerOf(req);
-
-        const order = await resolveOwnedOrder(caller.customerId, orderId);
-        const shipments = await orderService.listShipmentsForCustomer(
-            caller.customerId,
-            order._id.toString(),
-        );
-
-        const language = botResponseLanguageOf(req);
-
-        /**
-         * ⚠ **One parcel is shown, not offered.** A picker with a single row asks the customer
-         * to choose between one thing — two taps to reach a card they could have been handed.
-         * With none (a digital order, or a physical one not yet dispatched) there is nothing to
-         * draw at all and the model says where the order has got to instead.
-         */
-        if (shipments.length === 1) {
-            await setShipmentCardReply(req, order, shipments[0], language);
-        } else {
-            setBotReply(
-                req,
-                shipments.length === 0
-                    ? null
-                    : {
-                          kind: 'choice',
-                          text: botOrderCopy('whichParcel', language),
-                          options: shipments.map((shipment, index) =>
-                              parcelRow(order._id.toString(), shipment, index, language),
-                          ),
-                          listButton: botChrome('chooseListButton', language),
-                          sectionTitle: botChrome('chooseSectionTitle', language),
-                      },
-            );
-        }
-
-        sendSuccess(res, shipments);
+        await showShipments(req, res, orderId);
     });
 
     /**
@@ -318,65 +280,14 @@ export class BotOrderController {
      * "where is my order?". The catalogue marks this `flow_only` for the same reason — the
      * model is never given it as a tool to reach for.
      *
-     * A code is only meaningful while its collection is `pending`; the underlying block
-     * omits it otherwise, and that is what makes a collected shipment answer without one
-     * rather than replaying a spent secret.
-     *
-     * `shipmentId` is required only when the order has more than one parcel. With one
-     * parcel there is nothing to disambiguate, and demanding an id the customer does not
-     * have would make the common case unreachable.
-     *
-     * ⚠ **THE REPLY CARRIES THE CODE AND NOTHING ELSE — there is deliberately no Resend
-     * button.** Owner's decision: a replacement code is issued by the delivery agent from
-     * their own app, which keeps one issuing path. A second one here would let a customer
-     * invalidate, from a chat, the code the agent is holding at the door.
+     * ⚠ **A door, not the discloser.** The work is `discloseCodCode`, shared with the Get code
+     * button; this validates the request and fetches nothing itself, which the guard in
+     * `test:bot-surface` enforces.
      */
     static getCodCode = asyncHandler(async (req: Request, res: Response) => {
         const { orderId } = BotOrderParamSchema.parse(req.params);
         const { shipmentId } = BotCodCodeSchema.parse(req.body ?? {});
-        const caller = botCallerOf(req);
-
-        const order = await resolveOwnedOrder(caller.customerId, orderId);
-
-        const blocks = await cashCollectionService.getCodBlocksForOrders([order._id.toString()], true);
-        const collections = (blocks.get(order._id.toString()) ?? []) as Array<Record<string, unknown>>;
-
-        if (collections.length === 0) {
-            throw createAppError(ERROR_CODES.COD_COLLECTION_NOT_FOUND, 404, undefined, {
-                orderId: order._id.toString(),
-            });
-        }
-
-        const match = shipmentId
-            ? collections.find((c) => c.shipmentId === shipmentId)
-            : collections.length === 1
-                ? collections[0]
-                : null;
-
-        if (!match) {
-            throw createAppError(ERROR_CODES.COD_COLLECTION_NOT_FOUND, 404, undefined, {
-                orderId: order._id.toString(),
-                // Naming the count rather than the ids: the flow's next move is to ask which
-                // parcel, and it gets the ids from `/shipments` where they belong.
-                shipmentCount: collections.length,
-                reason: shipmentId ? 'no_such_shipment' : 'shipment_id_required',
-            });
-        }
-
-        /**
-         * ⚠ **No reply is set when the collection carries no code**, which is what a already-
-         * collected shipment looks like. Rendering the chrome around an absent secret would
-         * produce a message announcing a code and then not showing one.
-         */
-        const code = typeof match.deliveryCode === 'string' ? match.deliveryCode : null;
-        setBotReply(
-            req,
-            code
-                ? { kind: 'text', text: `${botChrome('getCodeButton', botResponseLanguageOf(req))}: ${code}` }
-                : null,
-        );
-
-        sendSuccess(res, match);
+        await discloseCodCode(req, res, orderId, shipmentId);
     });
 
     /**
@@ -422,22 +333,7 @@ export class BotOrderController {
      */
     static confirmShipmentDelivery = asyncHandler(async (req: Request, res: Response) => {
         const { orderId, shipmentId } = BotOrderShipmentParamSchema.parse(req.params);
-        const caller = botCallerOf(req);
-
-        const order = await resolveOwnedOrder(caller.customerId, orderId);
-        const result = await shipmentService.confirmDeliveryByCustomer(
-            caller.customerId,
-            order._id.toString(),
-            shipmentId,
-            caller.userId,
-        );
-
-        setBotReply(req, {
-            kind: 'text',
-            text: botOrderCopy('deliveryConfirmed', botResponseLanguageOf(req)),
-        });
-
-        sendSuccess(res, result);
+        await confirmParcelDelivery(req, res, orderId, shipmentId);
     });
 
     /**
@@ -464,228 +360,296 @@ export class BotOrderController {
     static cancel = asyncHandler(async (req: Request, res: Response) => {
         const { orderId } = BotOrderParamSchema.parse(req.params);
         const { reason } = BotOrderCancelSchema.parse(req.body ?? {});
-        const caller = botCallerOf(req);
-
-        const order = await resolveOwnedOrder(caller.customerId, orderId);
-
-        const vendor = await vendorRepository.findById(order.vendor_id.toString());
-        await orderService.assertCancellable(order, {
-            actorType: 'customer',
-            vendorPolicy: vendor?.policies?.cancellation_policy ?? null,
-        });
-
-        await orderService.cancelOrder(order, {
-            actorType: 'customer',
-            actorId: caller.customerId,
-            reason: reason ?? 'Cancelled by customer',
-        });
-
-        /**
-         * ⚠ **Only ask for the reason when the customer did not already give one.** A model
-         * that passed `reason` has just relayed what the customer said; asking again would make
-         * the platform look as though it had not been listening.
-         */
-        setBotReply(
-            req,
-            reason
-                ? null
-                : { kind: 'text', text: botChrome('cancelReasonPrompt', botResponseLanguageOf(req)) },
-        );
-
-        sendSuccess(res, {
-            order_id: order._id.toString(),
-            fulfillment_status: order.fulfillment_status,
-        }, { message: 'Order cancelled' });
+        await cancelOwnedOrder(req, res, orderId, reason);
     });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Taps that are not routes
+//  The work a route and a tap share
 //
-//  ⚠ **Every verb below already has a documented request mapping to `/catalog/action`
-//  (`bot-surface.md` § 14.7), and the dispatcher that owns that route delegates to here.**
-//  These are handlers rather than routes on purpose: adding a route means editing
-//  `bot-route-table.ts`, `bot.routes.ts` and `catalog.json` in lockstep, and
-//  `assertHandlersCoverRoutes()` runs at module import — so one stream adding one row breaks
-//  `npm run dev` for every session at once. Stream 0 declared the routes; streams fill bodies.
+//  ⚠ **A route and a tap call the SAME plain function — never each other.** The routes above are
+//  wrapped in `asyncHandler`, which returns before the work finishes and catches its own errors
+//  into `next`. A tap handler awaiting one resolves early and swallows every refusal: a tap that
+//  produces no message and no log line. That exact mistake was made once on this surface. So the
+//  work lives here as plain async functions that THROW, and both doors await them.
+//
+//  ⚠ **The delivery code follows the same rule, and a guard pins exactly how.** The disclosure
+//  lives in ONE function, `discloseCodCode`, with exactly two doors: the `getCodCode` route and
+//  the `codCodeTap` button. `test:bot-surface` asserts that shape by name — the discloser exists
+//  once and both fetches and answers, each door calls it and fetches nothing itself, no third
+//  caller exists, and no other file under `bot-surface/` fetches a code at all.
+//
+//  ⚠ **So a new way to show a code is a guard change, not a new caller.** Before 2026-09-16 the
+//  guard named the ROUTE as the discloser; sharing the body with a tap made that list false, and
+//  the guard was changed deliberately by its owner rather than satisfied by reusing the old name
+//  for a new function — a guard passed by matching a string protects nothing.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * What a tap handler is handed: the request, the response, the token's argument — the part
- * after the prefix this handler claimed — and Express's `next`.
+ * ⛔ **THE one place a delivery code leaves this service** (besides `resendCodCode`, which issues a
+ * new one) — for `POST /orders/:orderId/cod-code` and `code:<orderId>:<shipmentId>`.
  *
- * ── ⚠ WHY `next` IS CARRIED RATHER THAN STUBBED ─────────────────────────────
- * Several taps below delegate to a route handler on the class above, and those are wrapped in
- * `asyncHandler`, whose entire job is `Promise.resolve(fn(...)).catch(next)`. Hand one a `next`
- * that does nothing and **every error inside it is swallowed**: no response is written, the
- * request hangs until the automation layer times out, and the customer is told nothing at all.
- * Telegram reports nothing for a callback that produced no message, so the symptom is a button
- * that works for most orders and is silent for the one that failed.
+ * The code is a payment credential: the secret the customer hands the agent to prove they paid.
+ * Every other read on this surface strips it, precisely so that it is disclosed only when asked for
+ * by name, once. See the header and `getCodCode`.
  *
- * That is the precise failure mode this whole surface is built to refuse — see
- * `bot-reply.middleware.ts`, which exists so that *"every bot response carries a sendable
- * body"* is true by construction. Passing the real `next` puts the error back on the global
- * handler, which words it and lets the reply interceptor render it.
+ * A code is meaningful only while its collection is `pending`; the underlying block omits it
+ * otherwise, which is what makes a collected parcel answer without one rather than replaying a spent
+ * secret.
+ *
+ * ⚠ **The reply carries the code and nothing else — no Resend button.** Owner's decision: a
+ * replacement is issued by the agent from their app, which keeps one issuing path; a second here
+ * would let a customer invalidate, from a chat, the code the agent is holding at the door.
  */
-export type BotOrderTapHandler = (
+async function discloseCodCode(
     req: Request,
     res: Response,
-    next: NextFunction,
-    argument: string,
-) => Promise<void>;
-
-/**
- * ⚠ **The token prefixes this controller claims, LONGEST FIRST.**
- *
- * `yes` and `no` are shared verbs — account closure uses `yes:close-account` and belongs to a
- * different stream — so this map cannot be keyed on the verb alone. It is keyed on the prefix
- * INCLUDING the context, and `handleBotOrderTap` matches the longest one, so a future
- * `yes:cancel-subscription` cannot be swallowed by a shorter entry here.
- */
-const ORDER_TAP_PREFIXES = Object.freeze({
-    /** The parcel card. No route serves one parcel, so this is the only door to it. */
-    'shp': showShipmentTap,
-    /** "Yes, it arrived" and "no, it did not". */
-    'yes:cd': confirmDeliveryTap,
-    'no:cd': declineDeliveryTap,
-    /**
-     * ⚠ **`no:ord` is the REQUEST to cancel and `no:cnc` is the refusal to; they are not a
-     * pair and must not be read as one.**
-     *
-     * The rule that makes them consistent is `bot-action-id.ts`'s own: **the context names
-     * what is being agreed to or declined.** `no:ord:<id>` declines the ORDER — the Cancel
-     * button on the card. `yes:cnc:<id>` / `no:cnc:<id>` answer the CANCELLATION — the
-     * are-you-sure that `no:ord` puts up.
-     *
-     * Written this way rather than by minting a `cnc` verb because the verb set is closed and
-     * every addition has to be documented, mapped and taught to the automation layer; a verb
-     * that means "start cancelling" would buy one turn and cost that everywhere.
-     */
-    'no:ord': askCancelTap,
-    'yes:cnc': confirmCancelTap,
-    'no:cnc': declineCancelTap,
-    /** Open a support conversation about this order or parcel. */
-    'tkt:new': supportRequestTap,
-    /** The whole order history, drawn properly. The last row of the chat list. */
-    'open:ol': orderHistoryTap,
-    /** The order card, the parcel list, the delivery code. */
-    'ord': orderCardTap,
-    'track': shipmentsTap,
-    'code': codCodeTap,
-} as const);
-
-/** ⚠ Exported so the dispatcher can declare which tokens reach this controller. */
-export const BOT_ORDER_TAP_PREFIXES: readonly string[] = Object.freeze(
-    Object.keys(ORDER_TAP_PREFIXES).sort((a, b) => b.length - a.length),
-);
-
-/**
- * Handle a tap this controller owns, or report that it does not own it.
- *
- * ⚠ **Returns `false` rather than throwing on a token that is not ours**, so the dispatcher
- * keeps exactly one place that words *"I did not understand that"*. Two refusals for one
- * unknown token is how a customer gets told twice, in different words, that a button is stale.
- */
-export async function handleBotOrderTap(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-    token: string,
-): Promise<boolean> {
-    for (const prefix of BOT_ORDER_TAP_PREFIXES) {
-        if (token === prefix || token.startsWith(`${prefix}:`)) {
-            const argument = token.slice(prefix.length + 1);
-            await ORDER_TAP_PREFIXES[prefix as keyof typeof ORDER_TAP_PREFIXES](
-                req,
-                res,
-                next,
-                argument,
-            );
-            return true;
-        }
-    }
-    return false;
-}
-
-/** `ord:<orderId>` — the order card. */
-async function orderCardTap(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-    argument: string,
-): Promise<void> {
-    req.params = { ...req.params, orderId: argument };
-    req.body = {};
-    await BotOrderController.getOrder(req, res, next);
-}
-
-/** `track:<orderId>` — this order's parcels. See `listShipments` for why the verb is `track`. */
-async function shipmentsTap(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-    argument: string,
-): Promise<void> {
-    req.params = { ...req.params, orderId: argument };
-    req.body = {};
-    await BotOrderController.listShipments(req, res, next);
-}
-
-/** `code:<orderId>:<shipmentId>` — disclose the delivery code for one parcel. */
-async function codCodeTap(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-    argument: string,
-): Promise<void> {
-    const [orderId, shipmentId] = splitIds(argument, 2);
-    req.params = { ...req.params, orderId };
-    req.body = { shipmentId };
-    await BotOrderController.getCodCode(req, res, next);
-}
-
-/** `yes:cd:<orderId>:<shipmentId>` — the parcel arrived. */
-async function confirmDeliveryTap(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-    argument: string,
-): Promise<void> {
-    const [orderId, shipmentId] = splitIds(argument, 2);
-    req.params = { ...req.params, orderId, shipmentId };
-    req.body = {};
-    await BotOrderController.confirmShipmentDelivery(req, res, next);
-}
-
-/**
- * `no:ord:<orderId>` — the Cancel button on the order card. Puts up the are-you-sure.
- *
- * ⚠ **It cancels nothing, and it checks nothing either.** The eligibility rules live in
- * `assertCancellable` and stay there; this turn only asks. A customer who taps Yes meets the
- * full check a moment later and is told, in their own language, if the order has moved on
- * since the card was drawn — which a chat card, sitting in a history, always might have.
- *
- * ⚠ **The order is loaded anyway, and only to prove ownership.** Rendering a cancellation
- * prompt for an id the caller does not own would confirm the id is real before refusing, which
- * is exactly what `resolveOwnedOrder` exists to prevent.
- */
-async function askCancelTap(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-    argument: string,
+    orderRef: string,
+    shipmentId: string | undefined,
 ): Promise<void> {
     const caller = botCallerOf(req);
+
+    const order = await resolveOwnedOrder(caller.customerId, orderRef);
+
+    const blocks = await cashCollectionService.getCodBlocksForOrders([order._id.toString()], true);
+    const collections = (blocks.get(order._id.toString()) ?? []) as Array<Record<string, unknown>>;
+
+    if (collections.length === 0) {
+        throw createAppError(ERROR_CODES.COD_COLLECTION_NOT_FOUND, 404, undefined, {
+            orderId: order._id.toString(),
+        });
+    }
+
+    /**
+     * `shipmentId` is required only when the order has more than one parcel. With one there is
+     * nothing to disambiguate, and demanding an id the customer does not have would make the common
+     * case unreachable. A tap always carries one.
+     */
+    const match = shipmentId
+        ? collections.find((c) => c.shipmentId === shipmentId)
+        : collections.length === 1
+            ? collections[0]
+            : null;
+
+    if (!match) {
+        throw createAppError(ERROR_CODES.COD_COLLECTION_NOT_FOUND, 404, undefined, {
+            orderId: order._id.toString(),
+            // Naming the count rather than the ids: the flow's next move is to ask which parcel,
+            // and it gets the ids from `/shipments` where they belong.
+            shipmentCount: collections.length,
+            reason: shipmentId ? 'no_such_shipment' : 'shipment_id_required',
+        });
+    }
+
+    /**
+     * ⚠ **No reply when the collection carries no code**, which is what an already-collected parcel
+     * looks like. Chrome around an absent secret would announce a code and then not show one; with
+     * no reply the model says, from the block, that it has been collected.
+     */
+    const code = typeof match.deliveryCode === 'string' ? match.deliveryCode : null;
+    setBotReply(
+        req,
+        code
+            ? { kind: 'text', text: `${botChrome('getCodeButton', botResponseLanguageOf(req))}: ${code}` }
+            : null,
+    );
+
+    sendSuccess(res, match);
+}
+
+/** The order card — for `POST /orders/:orderId`, `ord:<orderId>` and `no:cnc:<orderId>`. */
+async function showOrderCard(req: Request, res: Response, orderRef: string): Promise<void> {
+    const caller = botCallerOf(req);
+
+    const order = await resolveOwnedOrder(caller.customerId, orderRef);
+    const [dto] = await customerOrderViewService.toDtos([order]);
+
+    setOrderCardReply(req, dto);
+
+    sendSuccess(res, stripDeliveryCodes(dto));
+}
+
+/** The parcels on one order — for `POST /orders/:orderId/shipments` and `shp:<orderId>`. */
+async function showShipments(req: Request, res: Response, orderRef: string): Promise<void> {
+    const caller = botCallerOf(req);
     const language = botResponseLanguageOf(req);
-    const order = await resolveOwnedOrder(caller.customerId, argument);
+
+    const order = await resolveOwnedOrder(caller.customerId, orderRef);
+    const shipments = await orderService.listShipmentsForCustomer(
+        caller.customerId,
+        order._id.toString(),
+    );
+
+    /**
+     * ⚠ **One parcel is shown, not offered.** A picker with a single row asks the customer to
+     * choose between one thing — two taps to reach a card they could have been handed. With none
+     * (a digital order, or a physical one not yet dispatched) there is nothing to draw, and the
+     * model says where the order has got to instead.
+     */
+    if (shipments.length === 1) {
+        await setShipmentCardReply(req, order, shipments[0], language);
+    } else {
+        setBotReply(
+            req,
+            shipments.length === 0
+                ? null
+                : {
+                      kind: 'choice',
+                      text: botOrderCopy('whichParcel', language),
+                      options: shipments.map((shipment, index) =>
+                          parcelRow(order._id.toString(), shipment, index, language),
+                      ),
+                      listButton: botChrome('chooseListButton', language),
+                      sectionTitle: botChrome('chooseSectionTitle', language),
+                  },
+        );
+    }
+
+    sendSuccess(res, shipments);
+}
+
+/** Confirm one parcel — for the confirm-delivery route and `yes:cd:<orderId>:<shipmentId>`. */
+async function confirmParcelDelivery(
+    req: Request,
+    res: Response,
+    orderRef: string,
+    shipmentId: string,
+): Promise<void> {
+    const caller = botCallerOf(req);
+
+    const order = await resolveOwnedOrder(caller.customerId, orderRef);
+    const result = await shipmentService.confirmDeliveryByCustomer(
+        caller.customerId,
+        order._id.toString(),
+        shipmentId,
+        caller.userId,
+    );
+
+    setBotReply(req, {
+        kind: 'text',
+        text: botOrderCopy('deliveryConfirmed', botResponseLanguageOf(req)),
+    });
+
+    sendSuccess(res, result);
+}
+
+/** Cancel an order — for `POST /orders/:orderId/cancel` and `yes:cnc:<orderId>`. */
+async function cancelOwnedOrder(
+    req: Request,
+    res: Response,
+    orderRef: string,
+    reason: string | undefined,
+): Promise<void> {
+    const caller = botCallerOf(req);
+
+    const order = await resolveOwnedOrder(caller.customerId, orderRef);
+
+    const vendor = await vendorRepository.findById(order.vendor_id.toString());
+    await orderService.assertCancellable(order, {
+        actorType: 'customer',
+        vendorPolicy: vendor?.policies?.cancellation_policy ?? null,
+    });
+
+    await orderService.cancelOrder(order, {
+        actorType: 'customer',
+        actorId: caller.customerId,
+        reason: reason ?? 'Cancelled by customer',
+    });
+
+    /**
+     * ⚠ **Only ask for the reason when the customer did not already give one.** A model that
+     * passed `reason` has just relayed what the customer said; asking again would make the
+     * platform look as though it had not been listening. A TAP never carries one — the Yes button
+     * is the decision, and the words come next, typed (owner's decision).
+     */
+    setBotReply(
+        req,
+        reason
+            ? null
+            : { kind: 'text', text: botChrome('cancelReasonPrompt', botResponseLanguageOf(req)) },
+    );
+
+    sendSuccess(res, {
+        order_id: order._id.toString(),
+        fulfillment_status: order.fulfillment_status,
+    }, { message: 'Order cancelled' });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Taps — what this stream answers when a customer presses one of its buttons
+//
+//  Routed by `bot-action.controller.ts`, which parses the token once and calls whatever is
+//  registered for its key (`domain/bot-action-dispatch.ts` is the contract). This file never
+//  opens the dispatcher, and the dispatcher never learns what an order is.
+//
+//  ⚠ **Every handler validates its OWN argument and refuses a malformed one with
+//  `unknownBotAction()`** — the refusal the dispatcher gives an unknown verb — so a mangled `shp:`
+//  and a retired `zzz:` read identically to the customer.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const OBJECT_ID = /^[0-9a-fA-F]{24}$/;
+
+/**
+ * An argument that must be exactly `count` ObjectIds, or a refusal.
+ *
+ * ⚠ **Refused as a TOKEN, never as a Zod failure.** A validation error would describe fields the
+ * customer never sent; the token refusal says what actually happened — they pressed something
+ * this service cannot read.
+ */
+function idsOf(argument: string, count: number): string[] {
+    const parts = argument.split(':');
+    if (parts.length !== count || !parts.every((part) => OBJECT_ID.test(part))) {
+        throw unknownBotAction();
+    }
+    return parts;
+}
+
+/**
+ * `ord:<orderId>` — the order card · `ord:<orderId>:cancel` — the are-you-sure.
+ *
+ * ⚠ **Two shapes of one verb, told apart here rather than in the registry.** The dispatch contract
+ * keeps a verb one stream owns keyed by the verb alone; sub-dispatching it would put this stream's
+ * argument grammar into a shared file where the next change to it is somebody else's edit.
+ */
+async function orderTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    const [orderId, view, ...extra] = action.argument.split(':');
+    if (!OBJECT_ID.test(orderId ?? '') || extra.length > 0) throw unknownBotAction();
+
+    if (view === undefined) {
+        await showOrderCard(req, res, orderId);
+        return;
+    }
+    if (view === 'cancel') {
+        await askToCancel(req, res, orderId);
+        return;
+    }
+    throw unknownBotAction();
+}
+
+/**
+ * The are-you-sure before a cancellation.
+ *
+ * ⚠ **It cancels nothing and checks nothing.** Eligibility lives in `assertCancellable` and stays
+ * there; this turn only asks. A customer who taps Yes meets the full check a moment later and is
+ * told, in their own language, if the order has moved on since the card was drawn — which a card
+ * sitting in a chat history always might have.
+ *
+ * ⚠ **The order is loaded anyway, only to prove ownership.** Rendering a prompt for an id the caller
+ * does not own would confirm the id is real before refusing — what `resolveOwnedOrder` prevents.
+ */
+async function askToCancel(req: Request, res: Response, orderRef: string): Promise<void> {
+    const caller = botCallerOf(req);
+    const language = botResponseLanguageOf(req);
+
+    const order = await resolveOwnedOrder(caller.customerId, orderRef);
     const orderId = order._id.toString();
 
     setBotReply(req, {
         kind: 'choice',
         text: botChrome('cancelOrderPrompt', language),
         options: [
-            { id: confirmActionId(`cnc:${orderId}`), label: botChrome('confirmButton', language) },
-            { id: declineActionId(`cnc:${orderId}`), label: botChrome('declineButton', language) },
+            { id: confirmActionId('cnc', orderId), label: botChrome('confirmButton', language) },
+            { id: declineActionId('cnc', orderId), label: botChrome('declineButton', language) },
         ],
         listButton: botChrome('chooseListButton', language),
         sectionTitle: botChrome('chooseSectionTitle', language),
@@ -694,41 +658,40 @@ async function askCancelTap(
     sendSuccess(res, { orderId, orderNumber: order.order_number, awaitingConfirmation: true });
 }
 
-/** `yes:cnc:<orderId>` — cancel it. The reason is asked for afterwards; see `cancel`. */
-async function confirmCancelTap(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-    argument: string,
-): Promise<void> {
-    req.params = { ...req.params, orderId: argument };
-    req.body = {};
-    await BotOrderController.cancel(req, res, next);
+/** `shp:<orderId>` — every parcel on the order · `shp:<orderId>:<shipmentId>` — one parcel. */
+async function shipmentTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    if (!action.argument.includes(':')) {
+        const [orderId] = idsOf(action.argument, 1);
+        await showShipments(req, res, orderId);
+        return;
+    }
+
+    const [orderId, shipmentId] = idsOf(action.argument, 2);
+    await showShipment(req, res, orderId, shipmentId);
 }
 
 /**
- * `shp:<orderId>:<shipmentId>` — one parcel, with whatever it can actually offer.
+ * One parcel, with whatever it can actually offer.
  *
- * ⚠ **The only handler here that reads raw shipment fields**, and it publishes none of them —
- * see this file's header. `handing_over` and `delivery_failures[].reason` choose the wording
- * and the buttons; the response body is the ordinary customer projection.
+ * ⚠ **The only path that reads raw shipment fields**, and it publishes none of them — see this
+ * file's header. `handing_over` and `delivery_failures[].reason` choose the wording and the
+ * buttons; the response body is the ordinary customer projection.
  */
-async function showShipmentTap(
+async function showShipment(
     req: Request,
     res: Response,
-    next: NextFunction,
-    argument: string,
+    orderRef: string,
+    shipmentId: string,
 ): Promise<void> {
-    const [orderId, shipmentId] = splitIds(argument, 2);
     const caller = botCallerOf(req);
     const language = botResponseLanguageOf(req);
 
-    const order = await resolveOwnedOrder(caller.customerId, orderId);
+    const order = await resolveOwnedOrder(caller.customerId, orderRef);
     const shipments = await orderService.listShipmentsForCustomer(
         caller.customerId,
         order._id.toString(),
     );
-    const shipment = shipments.find((s) => s.id === shipmentId);
+    const shipment = shipments.find((candidate) => candidate.id === shipmentId);
     if (!shipment) {
         throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404, undefined, { shipmentId });
     }
@@ -738,114 +701,159 @@ async function showShipmentTap(
 }
 
 /**
+ * `track:<orderId>` — the order's state and the storefront's live tracking page.
+ *
+ * ⚠ **A TAP that answers with a link, rather than a link on the card, for one reason.** A cash-on-
+ * delivery parcel card already carries Get code, and WhatsApp cannot put a reply button and a URL
+ * button in one message. So there Track has to be a reply button too, and this is where it lands.
+ * A card with no other control carries the link directly (`setShipmentCardReply`).
+ *
+ * Degrades to the state alone when this deployment has no storefront to link to — a sentence,
+ * never a button with an empty target.
+ */
+async function trackTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    const [orderRef] = idsOf(action.argument, 1);
+    const caller = botCallerOf(req);
+    const language = botResponseLanguageOf(req);
+
+    const order = await resolveOwnedOrder(caller.customerId, orderRef);
+    const orderId = order._id.toString();
+    const url = orderTrackingUrl(orderId, language);
+    const text = `${order.order_number}\n${botFulfillmentStateLabel(order.fulfillment_status, language)}`;
+
+    setBotReply(
+        req,
+        url
+            ? { kind: 'link', text, label: botChrome('trackButton', language), url }
+            : { kind: 'text', text },
+    );
+
+    sendSuccess(res, { orderId, orderNumber: order.order_number, trackingUrl: url });
+}
+
+/**
+ * `code:<orderId>:<shipmentId>` — the Get code button on a cash-on-delivery parcel card.
+ *
+ * ⚠ **One of exactly two doors onto the disclosure, and it fetches nothing itself** — the guard in
+ * `test:bot-surface` fails if it ever does. Validating the argument is all it owns.
+ */
+async function codCodeTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    const [orderId, shipmentId] = idsOf(action.argument, 2);
+    await discloseCodCode(req, res, orderId, shipmentId);
+}
+
+/** `yes:cd:<orderId>:<shipmentId>` — the parcel arrived. */
+async function confirmDeliveryTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    const [orderId, shipmentId] = idsOf(action.argument, 2);
+    await confirmParcelDelivery(req, res, orderId, shipmentId);
+}
+
+/**
  * `no:cd:<orderId>:<shipmentId>` — the parcel did NOT arrive.
  *
- * ⚠ **It writes nothing, and that is the whole point of having it.** The alternative to a No
- * button is a customer typing "no" in one of five languages at a parser that does not have a
- * table for it — and the alternative to *this* handler is no No button at all, which turns a
- * two-way question into a control that can only agree.
+ * ⚠ **It writes nothing, and that is the whole point of having it.** Without it there is no No
+ * button, and a two-way question becomes a control that can only agree.
  */
-async function declineDeliveryTap(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-    argument: string,
-): Promise<void> {
-    const [orderId, shipmentId] = splitIds(argument, 2);
+async function declineDeliveryTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    const [orderRef, shipmentId] = idsOf(action.argument, 2);
     const caller = botCallerOf(req);
-    await resolveOwnedOrder(caller.customerId, orderId);
+    const order = await resolveOwnedOrder(caller.customerId, orderRef);
 
     setBotReply(req, {
         kind: 'text',
         text: botOrderCopy('deliveryNotReceived', botResponseLanguageOf(req)),
     });
 
-    sendSuccess(res, { confirmed: false, orderId, shipmentId });
+    sendSuccess(res, { confirmed: false, orderId: order._id.toString(), shipmentId });
 }
 
-/** `no:cnc:<orderId>` — leave the order alone. Returns the customer to the card they came from. */
-async function declineCancelTap(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-    argument: string,
-): Promise<void> {
-    req.params = { ...req.params, orderId: argument };
-    req.body = {};
-    await BotOrderController.getOrder(req, res, next);
+/** `yes:cnc:<orderId>` — cancel it. The reason is asked for next, as typed text. */
+async function confirmCancelTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    const [orderId] = idsOf(action.argument, 1);
+    await cancelOwnedOrder(req, res, orderId, undefined);
+}
+
+/** `no:cnc:<orderId>` — leave it alone. Back to the card the customer came from. */
+async function declineCancelTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    const [orderId] = idsOf(action.argument, 1);
+    await showOrderCard(req, res, orderId);
 }
 
 /**
- * `tkt:new:<topic>:<orderId>[:<shipmentId>]` — open a support conversation about a delivery.
+ * `tkt:new:<topic>:<orderId>` — a support conversation about a delivery.
  *
- * ⚠ **It creates no ticket, and that is deliberate.** `bot-ticket.controller.ts` is the one
- * door onto ticket creation and belongs to another stream; a second one here would be a second
- * set of rules about importance, category and attachments, disagreeing with the first the day
- * either changes. What this does is answer with the topic named and **no reply**, which hands
- * the turn to the model — the documented meaning of an absent `reply` — so the customer is
- * asked for the detail a ticket actually needs before one is opened.
+ * ⚠ **`tkt:<ticketId>` is refused for now.** Support is this stream's this round, so the whole verb
+ * is claimed here rather than split later — but ticket detail is not built yet, and nothing emits
+ * that shape, so no button reaches the refusal.
  *
- * ⚠ **Two of the three topics exist because the FEATURE does not.** Owner's decision,
- * 2026-09-16, taken on the facts: there is no delivery-reschedule endpoint anywhere in the
- * platform, and the delivery address is snapshotted onto the order at checkout, so editing the
- * saved address book redirects no parcel already out. The customer gets a person instead of a
- * button that lies. If either capability is ever built, this is the call site to revisit.
+ * ⚠ **It creates no ticket.** `bot-ticket.controller.ts` is the one door onto ticket creation; a
+ * second here would be a second set of rules about category and importance. This answers with the
+ * topic named and **no reply**, which hands the turn to the model — the documented meaning of an
+ * absent `reply` — so the customer is asked for what a ticket needs before one is opened.
+ *
+ * ⚠ **Two of the three topics exist because the FEATURE does not.** Owner's decision, 2026-09-16:
+ * no delivery-reschedule endpoint exists anywhere, and the delivery address is snapshotted onto the
+ * order at checkout. The customer gets a person instead of a button that lies. If either capability
+ * is ever built, this is the call site to revisit.
  */
-async function supportRequestTap(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-    argument: string,
-): Promise<void> {
-    const [topic, orderId, shipmentId] = argument.split(':');
-    const caller = botCallerOf(req);
+async function ticketTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    const [head, topic, orderRef, ...extra] = action.argument.split(':');
+    const supportTopic = SUPPORT_TOPICS[topic as keyof typeof SUPPORT_TOPICS];
+    if (head !== 'new' || !supportTopic || !OBJECT_ID.test(orderRef ?? '') || extra.length > 0) {
+        throw unknownBotAction();
+    }
 
-    const order = await resolveOwnedOrder(caller.customerId, orderId ?? '');
+    const caller = botCallerOf(req);
+    const order = await resolveOwnedOrder(caller.customerId, orderRef);
 
     // No reply: the turn belongs to the model, which asks what happened and opens the ticket.
     setBotReply(req, null);
 
     sendSuccess(res, {
         supportRequest: true,
-        topic: SUPPORT_TOPICS[topic as keyof typeof SUPPORT_TOPICS] ?? 'delivery_problem',
+        topic: supportTopic,
         orderId: order._id.toString(),
         orderNumber: order.order_number,
-        shipmentId: shipmentId ?? null,
     });
 }
+
+/**
+ * The three delivery topics, as the model is told about them.
+ *
+ * ⚠ **Short in the token, explicit in the body.** Telegram truncates a token past 64 bytes with no
+ * error, and `tkt:new:redelivery:<orderId>` would leave little room; the model never sees the
+ * abbreviation.
+ */
+const SUPPORT_TOPICS = Object.freeze({
+    rd: 'redelivery_requested',
+    ad: 'delivery_address_wrong',
+    hp: 'delivery_problem',
+});
 
 /**
  * `open:ol` — the whole order history, on a screen.
  *
  * ── ⚠ THE DEGRADATION IS THE PATH THAT ACTUALLY RUNS ────────────────────────
- * The order-listing SCREEN is a later milestone and `BOT_MINIAPP_BASE_URL` is unset in
- * production, so `inAppScreenUrl` answers null and this returns the storefront's own orders
- * page. That is not a fallback to sketch in — it is what every customer gets today, and it is
- * why the row is safe to render at all.
+ * `BOT_MINIAPP_BASE_URL` is unset in production, so `inAppScreenUrl` answers null and this returns
+ * the storefront's own orders page. That is what every customer gets today, and it is why the row
+ * is safe to render at all.
  *
- * ⚠ **`openInAppScreen` rather than a hand-rolled mint, and that is not stylistic.** The five
- * fields that bind a screen session to a conversation — owner, customer, channel, external id,
- * language — are read there from the request envelope and from nowhere else, so a session can
- * only ever be addressed at the chat that asked for it. Three hand-written copies of that is
- * three chances to get the owner binding wrong, which is the security property of the whole
- * in-app surface.
+ * ⚠ **`openInAppScreen` rather than a hand-rolled mint.** The five fields binding a screen session
+ * to a conversation are read there from the request envelope and nowhere else, so a session can
+ * only be addressed at the chat that asked for it. That binding is the security property of the
+ * whole in-app surface; it is written once.
  *
- * ⚠ **`fallbackPath` is the same `/shop/account/orders` that `windowForChat({surface:
- * 'orders'})` builds**, by way of the same `SURFACE_PATHS` table, so the row's destination
- * cannot drift from the `moreUrl` reported in `meta` on the turn that drew it.
+ * ⚠ **`fallbackPath` is the same `/shop/account/orders` that `windowForChat({ surface: 'orders' })`
+ * builds**, via the same table, so the row's destination cannot drift from the `moreUrl` reported on
+ * the turn that drew it.
  *
- * ⚠ **`textKey` is `loadMoreRow` and it is the wrong SHAPE of string for a body** — it is a
- * row title. It is used because the chrome table has no orders-screen sentence and
- * `respondWithScreen`'s default is `browseProductsPrompt`, whose own docstring says an order
- * screen introduced with "here are some products" is worse than no sentence at all. Terse and
- * true beats fluent and wrong; a proper key is requested of Stream 0.
+ * ⚠ **`textKey` is `loadMoreRow`, a row title doing a body's job.** The chrome table has no
+ * orders-screen sentence yet and `respondWithScreen`'s default introduces products. A proper key is
+ * requested of the switchboard.
  */
-async function orderHistoryTap(
-    req: Request,
-    res: Response,
-    _next: NextFunction,
-    _argument: string,
-): Promise<void> {
+async function orderHistoryTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    if (action.argument !== '') throw unknownBotAction();
+
     const handle = await openInAppScreen(req, {
         payload: { kind: 'ol' },
         fallbackPath: '/shop/account/orders',
@@ -857,16 +865,26 @@ async function orderHistoryTap(
 }
 
 /**
- * The three delivery topics, as the model is told about them.
+ * ⭐ **The keys this stream answers, for the dispatcher's registry.**
  *
- * ⚠ **Short in the token, explicit in the body.** The token is byte-budgeted — Telegram
- * truncates past 64 with no error — and `tkt:new:redelivery:<24>:<24>` would not fit. The
- * model never sees the abbreviation.
+ * One map, plain verbs and (verb, sub-key) pairs side by side, as `bot-action-dispatch.ts`
+ * requires. Exported rather than registered from here, so the registry stays the one place a reader
+ * can see every routed key.
+ *
+ * ⚠ **`code` reaches the delivery-code disclosure**, one of its two guarded doors — see "The work a
+ * route and a tap share" above before adding anything that shows a code.
  */
-const SUPPORT_TOPICS = Object.freeze({
-    rd: 'redelivery_requested',
-    ad: 'delivery_address_wrong',
-    hp: 'delivery_problem',
+export const ORDER_ACTION_HANDLERS: BotActionHandlers = Object.freeze({
+    ord: orderTap,
+    shp: shipmentTap,
+    code: codCodeTap,
+    track: trackTap,
+    tkt: ticketTap,
+    'yes:cd': confirmDeliveryTap,
+    'no:cd': declineDeliveryTap,
+    'yes:cnc': confirmCancelTap,
+    'no:cnc': declineCancelTap,
+    'open:ol': orderHistoryTap,
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -891,6 +909,8 @@ interface OrderRowInput {
     currency: string;
     fulfillmentStatus: string;
     paymentStatus: string;
+    /** Decides whether an unpaid order reads as a debt or as "cash on delivery". */
+    paymentMethod: string;
 }
 
 /**
@@ -902,12 +922,11 @@ interface OrderRowInput {
  * line, which is what `label` is for.
  */
 function orderRow(order: OrderRowInput, language: string | null): BotReplyOption {
-    const state = botFulfillmentStateLabel(
-        order.fulfillmentStatus as Parameters<typeof botFulfillmentStateLabel>[0],
-        language,
-    );
+    const state = botFulfillmentStateLabel(order.fulfillmentStatus, language);
     const money = formatBotPrice(order.total, order.currency);
-    const payment = botPaymentStateLabel(toBotOrderPaymentState(order.paymentStatus), language);
+    const payment = botPaymentStateLabel(toBotOrderPaymentState(order.paymentStatus), language, {
+        cashOnDelivery: order.paymentMethod === 'cash_on_delivery',
+    });
 
     return {
         id: orderActionId(order.id),
@@ -984,14 +1003,14 @@ function setOrderCardReply(req: Request, order: CustomerOrderDto): void {
 
     if (order.orderType === 'physical' && order.fulfillmentStatus !== 'cancelled') {
         actions.push({
-            id: trackActionId(order.id),
+            id: orderShipmentsActionId(order.id),
             label: botChrome('shipmentsButton', language),
         });
     }
 
     if (isCancellableFromChat(order)) {
         actions.push({
-            id: declineActionId(`ord:${order.id}`),
+            id: orderCancelActionId(order.id),
             label: botChrome('cancelOrderButton', language),
         });
     }
@@ -1045,11 +1064,10 @@ function orderCardText(order: CustomerOrderDto, language: string | null): string
         ? `${order.orderNumber} · ${order.store.name}`
         : order.orderNumber;
 
-    const state = botFulfillmentStateLabel(
-        order.fulfillmentStatus as Parameters<typeof botFulfillmentStateLabel>[0],
-        language,
-    );
-    const payment = botPaymentStateLabel(toBotOrderPaymentState(order.paymentStatus), language);
+    const state = botFulfillmentStateLabel(order.fulfillmentStatus, language);
+    const payment = botPaymentStateLabel(toBotOrderPaymentState(order.paymentStatus), language, {
+        cashOnDelivery: order.paymentMethod === 'cash_on_delivery',
+    });
     const money = formatBotPrice(order.total, order.currency);
 
     return `${heading}\n${state} · ${payment}\n${money}`;
@@ -1058,22 +1076,28 @@ function orderCardText(order: CustomerOrderDto, language: string | null): string
 /**
  * One parcel's card — and the only turn on this surface whose buttons depend on internal state.
  *
- * Four shapes, in priority order, and each one exists because the shape above it would offer
+ * Five shapes, in priority order, and each one exists because the shape above it would offer
  * the customer something useless:
  *
  *   1. **A failed attempt** — the three support actions. The failure REASON is read here and
  *      never published (see the file header); it decides whether asking for a redelivery is
  *      worth putting in front of somebody, because a parcel refused at the door is not a
  *      parcel that needs rescheduling.
- *   2. **Cash on delivery with a code still pending** — the code, and nothing else. Confirming
- *      a delivery that has not happened is not the next thing this customer needs.
- *   3. **At the door or just delivered, not yet confirmed** — the yes/no question.
- *   4. **Anything else** — the state, and no controls, because there is nothing to press.
+ *   2. **Cash on delivery with a code still pending** — the code. Confirming a delivery that
+ *      has not happened is not the next thing this customer needs, and on a COD parcel handing
+ *      over the code IS the confirmation.
+ *   3. **Prepaid, at the door, not yet confirmed** — the yes/no question. The gate is the
+ *      service's own two refusals restated; see the comment at the branch.
+ *   4. **Moving** — the state, the journey, and a Track link to the storefront tracking page.
+ *      A parcel mid-handover lands here and gets the handover sentence as well.
+ *   5. **Anything else** — preparing or delivered: the state and the journey, no controls,
+ *      because there is nothing to press.
  *
- * ⚠ **`completion.confirmedAt` is the confirmation gate, NOT `fulfillmentStatus`.** The DTO
- * says so explicitly: fulfilment does not move when a customer confirms, so a card gated on
- * the status offers Confirm delivery forever — and every tap after the first answers
- * `409 SHIPMENT_ALREADY_CONFIRMED`.
+ * ⚠ **`completion.confirmedAt` is NOT the confirmation gate, though the DTO warns about a
+ * neighbouring trap.** That warning is about the ORDER-level confirm and is right: fulfilment
+ * does not move when a customer confirms. But an order completes only when its LAST parcel is
+ * confirmed, so `confirmedAt` stays null while earlier parcels are already confirmed — gating a
+ * per-parcel question on it keeps offering the question to people who answered it.
  */
 async function setShipmentCardReply(
     req: Request,
@@ -1104,11 +1128,25 @@ async function setShipmentCardReply(
         && (await hasPendingCodCode(orderId, shipment.id));
 
     if (pendingCode) {
+        /**
+         * ⚠ **Track is a TAP here, not a link, and that is forced by WhatsApp.** This card already
+         * carries Get code, and one interactive message cannot hold both a reply button and a URL
+         * button. `track:<orderId>` answers with the same tracking page the link would have opened.
+         * Offered only when there is a storefront to link to — a Track tap that can only answer
+         * with a sentence is a button that looks broken.
+         *
+         * ⚠ **Get code gains no Resend** (owner's decision): a replacement code comes from the
+         * agent's app, which keeps one issuing path.
+         */
+        const trackable = orderTrackingUrl(orderId, language) !== null;
         setBotReply(req, {
             kind: 'text',
             text: `${state}\n${shipment.trackingNumber ?? ''}`.trim(),
             actions: [
                 { id: codCodeActionId(orderId, shipment.id), label: botChrome('getCodeButton', language) },
+                ...(trackable
+                    ? [{ id: trackActionId(orderId), label: botChrome('trackButton', language) }]
+                    : []),
             ],
         });
         return;
@@ -1147,11 +1185,11 @@ async function setShipmentCardReply(
             text: botChrome('confirmDeliveryPrompt', language),
             options: [
                 {
-                    id: confirmActionId(`cd:${orderId}:${shipment.id}`),
+                    id: confirmActionId('cd', `${orderId}:${shipment.id}`),
                     label: botChrome('confirmButton', language),
                 },
                 {
-                    id: declineActionId(`cd:${orderId}:${shipment.id}`),
+                    id: declineActionId('cd', `${orderId}:${shipment.id}`),
                     label: botChrome('declineButton', language),
                 },
             ],
@@ -1161,7 +1199,57 @@ async function setShipmentCardReply(
         return;
     }
 
-    setBotReply(req, { kind: 'text', text: await plainParcelText(order, shipment, state, language) });
+    const text = await plainParcelText(order, shipment, state, language);
+
+    /**
+     * ⭐ **A parcel that is MOVING gets the tracking page, one tap away.**
+     *
+     * This is where both of the atlas's Track asks land — "tracking = status in chat plus a link"
+     * and "handover = one sentence and a Track button". A handover collapses to `shipped` for the
+     * customer, so the parcel mid-handover reaches this branch and gets the sentence
+     * (`plainParcelText`) and the link together.
+     *
+     * ⚠ **A URL button here, not a tap-code.** This card has no other control to sit beside, so a
+     * `link` needs no dispatcher and costs no second round-trip. The cash-on-delivery card above
+     * is different — it already carries Get code, and WhatsApp cannot put a reply button and a
+     * URL button in one message — which is why `track:<orderId>` exists as a tap that REPLIES
+     * with this same link.
+     *
+     * ⚠ **Only while it moves.** A parcel still being prepared has no route to show, and a
+     * delivered one has nothing left to track; a Track button on either opens a page with nothing
+     * on it, which reads to the customer as the tracking being broken.
+     */
+    const url = shipment.status === 'shipped' || shipment.status === 'out_for_delivery'
+        ? orderTrackingUrl(orderId, language)
+        : null;
+
+    setBotReply(
+        req,
+        url
+            ? { kind: 'link', text, label: botChrome('trackButton', language), url }
+            : { kind: 'text', text },
+    );
+}
+
+/**
+ * The storefront's live tracking page for one order, in the customer's language — or null when
+ * this deployment has no storefront to link to.
+ *
+ * ⚠ **The SAME page the "your order has shipped" notification's Track button opens**
+ * (`customer-notification-catalog.ts`, `TRACK_BUTTON`). Verified in the storefront source rather
+ * than taken from that comment: `frontend/landing/src/app/[locale]/shop/account/orders/detail/
+ * [orderId]/tracking` exists. One tracking view whichever door the customer came in by — a chat
+ * link and a notification link that opened different pages would be two answers to "where is
+ * it".
+ *
+ * ⚠ **Per ORDER, not per parcel**, because that is how the page is built: an order's parcels
+ * can go to several places, and the page draws them together.
+ *
+ * ⚠ **`botStorefrontLink`, never concatenation** — it applies the `as-needed` locale prefix, and
+ * a bare path does not 404 for a French customer, it silently opens in English.
+ */
+function orderTrackingUrl(orderId: string, language: string | null): string | null {
+    return botStorefrontLink(`/shop/account/orders/detail/${orderId}/tracking`, language);
 }
 
 /**
@@ -1254,18 +1342,16 @@ async function plainParcelText(
  * ⭐ **The journey — what a "Track" button would have shown, rendered instead of hidden behind
  * one.**
  *
- * ── ⚠ WHY THERE IS NO TRACK BUTTON HERE ────────────────────────────────────
- * The brief asks for one on this card. `track:<orderId>` returns the parcel LIST, which is the
- * screen the customer tapped to *reach* this card — so the button would send them back where
- * they came from. A control that loops is the same failure as a control that does nothing; it
- * just takes one more tap to discover.
+ * ── WHY THE JOURNEY IS IN THE MESSAGE AS WELL AS BEHIND THE LINK ───────────
+ * A moving parcel's card also carries a Track link to the storefront tracking page — but a link
+ * costs a tap, a browser and a page load, and on a phone with poor data that is where a customer
+ * gives up. `CustomerShipmentDto.statusHistory` is already collapsed to the five customer words
+ * and already de-duplicated, so `picked_up → in_transit → handing_over` is one "On its way" line
+ * rather than three. The short answer to "where is it" is here; the map is one tap away.
  *
- * There is no live-position route on this surface at all (`api-doc/n8n/tools/catalog.json` says
- * the shipments read *is* "the answer to 'where is my order'"), so the live map a customer
- * imagines behind "Track" does not exist to link to. What does exist is
- * `CustomerShipmentDto.statusHistory` — already collapsed to the five customer words and
- * already de-duplicated, so `picked_up → in_transit → handing_over` is one "On its way" line
- * rather than three. That is the content of the missing screen, and it fits in the message.
+ * ⚠ **This comment once argued there should be no Track button at all**, because the only Track
+ * token then opened the parcel LIST — a loop back to where the customer came from. The fix was
+ * finding the real destination (verified in the storefront source), not deleting the button.
  *
  * ⚠ **Empty for a parcel that has only ever been in one state**, because a one-line "journey"
  * restates the status printed directly above it.
@@ -1350,15 +1436,6 @@ async function latestFailureReason(orderId: string, shipmentId: string): Promise
 
     const failures = shipment?.delivery_failures ?? [];
     return failures.length > 0 ? (failures[failures.length - 1].reason ?? null) : null;
-}
-
-/** Split a token argument into a fixed number of id segments, refusing anything else. */
-function splitIds(argument: string, count: number): string[] {
-    const parts = argument.split(':');
-    if (parts.length !== count || parts.some((p) => !/^[0-9a-fA-F]{24}$/.test(p))) {
-        throw createAppError(ERROR_CODES.BOT_ACTION_TOKEN_UNKNOWN, 422, 'Malformed action token');
-    }
-    return parts;
 }
 
 /**

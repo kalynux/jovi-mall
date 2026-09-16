@@ -390,12 +390,77 @@ function inlineButton(option: BotReplyOption): Record<string, unknown> {
     };
 }
 
+/**
+ * Is this Telegram conversation a ONE-TO-ONE chat with a person?
+ *
+ * ⚠ **Three controls this renderer draws are "available in private chats only"**, in the Bot
+ * API's own words: the inline `web_app` button (`inapp`, and `product_list`'s Mini App door),
+ * and the reply-keyboard `request_contact` and `request_location` buttons. Nothing on this
+ * surface used to know what kind of chat it was answering, so the day the bot answered in a
+ * group every one of those turns would have been refused by Telegram — and a refused control
+ * takes the sentence with it, which is the silence `inAppBaseUrl`'s HTTPS check exists to
+ * prevent, arriving from a direction that check cannot see.
+ *
+ * ── WHY THE CHAT ID IS ENOUGH, AND NO ENVELOPE FIELD WAS ADDED ──────────────
+ * Telegram's dialog-id scheme (core.telegram.org/api/bots/ids) puts the type in the SIGN. A
+ * user is `1 … 0xffffffffff`, and a private chat's id IS its user's id; a basic group, a
+ * supergroup, a channel and a monoforum are all negative. `recipient` is the `chat.id` of the
+ * conversation the update arrived on — the n8n adapter copies it verbatim for a message and
+ * for a tap (`cq.message.chat.id`), and the command path passes the webhook's `chat_id` — so
+ * the renderer already holds the answer.
+ *
+ * ⚠ **Anything that is not a plain positive integer counts as NOT private.** That fails
+ * towards the control that always arrives. A `web_app` button addressed to something that is
+ * not a numeric chat id would not be delivered anyway, so nothing is lost by refusing it.
+ *
+ * ── A TELEGRAM BUSINESS ACCOUNT IS NOT DETECTABLE HERE, AND DOES NOT NEED TO BE ──
+ * The Bot API also says `web_app` is "not supported for messages sent on behalf of a Telegram
+ * Business account". Such a chat is private — positive id — so the sign cannot see it. What
+ * makes a message "on behalf of" one is a `business_connection_id` in the body, and **this
+ * renderer never writes one**; the automation layer also subscribes to `message` and
+ * `callback_query` only, never `business_message`, so no turn arrives on a business connection
+ * at all (verified against the live `UP-wi-mall-tg-adapter`, 2026-09-16). If either ever
+ * changes, this predicate is where the second condition belongs.
+ */
+function telegramIsPrivateChat(chatId: string): boolean {
+    return /^[1-9]\d*$/.test(chatId);
+}
+
+/**
+ * The button that opens an in-app screen, as THIS chat can draw it.
+ *
+ * `web_app` only when both hold: the address is HTTPS and the chat is one-to-one. Otherwise an
+ * ordinary `url` button to the same address — the customer leaves for the browser, which is
+ * worse than the Mini App and far better than a message that never arrives. That fallback is
+ * real rather than a dead end because the screens are built to run with no Telegram runtime:
+ * every `Telegram.WebApp` touch in `miniapp/public/*.html` is guarded.
+ *
+ * ⚠ **Outside a private chat the link is visible to every member**, and the handle in it is
+ * that screen's whole authorisation. That adds nothing a group did not already have — its
+ * `chat_id` IS the identity this surface resolved, so any member is already acting as that
+ * customer — but it is why this must never be widened into "always a url button".
+ */
+function telegramScreenButton(label: string, url: string, chatId: string): Record<string, unknown> {
+    const text = truncate(label, TG_LIMITS.BUTTON_TEXT) as string;
+    return url.startsWith('https://') && telegramIsPrivateChat(chatId)
+        ? { text, web_app: { url } }
+        : { text, url };
+}
+
 function renderTelegram(intent: BotReplyIntent, chatId: string): BotChannelReply {
     switch (intent.kind) {
         case 'text':
             return telegramText(chatId, intent.text, intent.actions);
 
+        /**
+         * ⚠ **`request_contact` and `request_location` are private-chat controls too.** In a
+         * group the keyboard is dropped and the sentence goes alone, so the turn still arrives.
+         * The step cannot be completed there whatever is drawn — the contact guard compares the
+         * shared card's `user_id` with a chat id that belongs to the group — so the honest
+         * outcome is a message, not a button that makes Telegram refuse it.
+         */
         case 'contact_request':
+            if (!telegramIsPrivateChat(chatId)) return telegramText(chatId, intent.text);
             return {
                 channel: 'telegram',
                 method: 'sendMessage',
@@ -411,6 +476,7 @@ function renderTelegram(intent: BotReplyIntent, chatId: string): BotChannelReply
             };
 
         case 'location_request':
+            if (!telegramIsPrivateChat(chatId)) return telegramText(chatId, intent.text);
             return {
                 channel: 'telegram',
                 method: 'sendMessage',
@@ -478,11 +544,12 @@ function renderTelegram(intent: BotReplyIntent, chatId: string): BotChannelReply
          * `url` button: the customer leaves for the browser, which is worse than the Mini
          * App and far better than a message that never arrives. The caller should still pass
          * HTTPS — see `BOT_MINIAPP_BASE_URL` — this is the backstop, not the plan.
+         *
+         * ⚠ The same degradation applies OUTSIDE A PRIVATE CHAT, where Telegram refuses
+         * `web_app` whatever the scheme — see `telegramIsPrivateChat`.
          */
         case 'inapp': {
-            const button = intent.url.startsWith('https://')
-                ? { text: truncate(intent.label, TG_LIMITS.BUTTON_TEXT), web_app: { url: intent.url } }
-                : { text: truncate(intent.label, TG_LIMITS.BUTTON_TEXT), url: intent.url };
+            const button = telegramScreenButton(intent.label, intent.url, chatId);
 
             return {
                 channel: 'telegram',
@@ -820,6 +887,12 @@ function telegramCardKeyboard(
  * without one.** The caller is responsible for passing null when it has no HTTPS origin —
  * see `BOT_MINIAPP_BASE_URL` — and this falls back to cards rather than sending a keyboard
  * Telegram will reject.
+ *
+ * ⚠ **Outside a private chat the door stays ONE message but becomes a `url` button**
+ * (`telegramScreenButton`), rather than falling back to cards. Same shape as the `inapp`
+ * intent's degradation, so a chat type never changes how many messages a turn is; and the
+ * page works in an ordinary browser. The helper also re-checks HTTPS here, which this path
+ * used to leave entirely to the caller.
  */
 function telegramProductList(intent: ProductListIntent, chatId: string): BotChannelReply[] {
     const message = (text: string, markup: Record<string, unknown> | null): BotChannelReply => ({
@@ -835,14 +908,7 @@ function telegramProductList(intent: ProductListIntent, chatId: string): BotChan
     if (intent.miniAppUrl) {
         return [
             message(intent.text || intent.browsePrompt, {
-                inline_keyboard: [
-                    [
-                        {
-                            text: truncate(intent.labels.browse, TG_LIMITS.BUTTON_TEXT),
-                            web_app: { url: intent.miniAppUrl },
-                        },
-                    ],
-                ],
+                inline_keyboard: [[telegramScreenButton(intent.labels.browse, intent.miniAppUrl, chatId)]],
             }),
         ];
     }

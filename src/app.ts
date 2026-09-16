@@ -125,10 +125,17 @@ app.use(cors(buildCorsOptions()));
 // refuse every genuine callback — a failure that looks like a wrong secret and
 // is not.
 //
-// The predicate form rather than the equivalent `'*/*'` string is deliberate:
-// that literal contains the character sequence that ENDS a block comment, so it
-// silently breaks any comment-stripping source scanner reading this file —
-// including `test:payments`' own, which is what caught it.
+// The predicate form rather than the equivalent "every type" wildcard string
+// (star, slash, star) is deliberate: that literal contains the character
+// sequences that OPEN and END a block comment, so it silently breaks any
+// comment-stripping source scanner reading this file — including
+// `test:payments`' own, which is what caught it.
+//
+// ⚠ Do not quote that literal in THIS comment either. Until 2026-09-16 it was
+// quoted here; a stripper met the slash-star inside the quote, opened a block
+// comment, and ran it to the end of the WhatsApp Flows docstring below —
+// swallowing all three gateway paths, so `test:payments` failed on correct code.
+// The explanation of the trap had become the trap (found by backend-2d).
 app.use(
     [
         '/api/webhooks/stripe',

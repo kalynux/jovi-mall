@@ -33,6 +33,15 @@ import { BOT_COPY_LANGUAGES } from '../../src/modules/bot-surface/domain/bot-err
 import { __ORDER_LISTING } from '../../src/modules/bot-surface/miniapp/surfaces/order-listing.controller';
 import { __STORE_LISTING } from '../../src/modules/bot-surface/miniapp/surfaces/store-listing.controller';
 import { CustomerOrderGroup } from '../../src/modules/orders/order.repository';
+import {
+    ORDER_CASH_ON_DELIVERY_COPY,
+    ORDER_PAYMENT_COPY,
+    ORDER_PROGRESS_COPY,
+    ORDER_PROGRESS_OF,
+    ORDER_STATUS_UNAVAILABLE_COPY,
+    botFulfillmentStateLabel,
+    botPaymentStateLabel,
+} from '../../src/modules/bot-surface/domain/bot-order-status-copy';
 
 let passed = 0;
 let failed = 0;
@@ -291,12 +300,24 @@ function main(): void {
      * payment", which tells a customer who owes nothing yet that they are behind.
      */
     assert('cash on delivery is shown as a method, in all five languages', () =>
-        BOT_COPY_LANGUAGES.every((lang) => __ORDER_LISTING.CASH_ON_DELIVERY[lang].trim().length > 0));
+        BOT_COPY_LANGUAGES.every((lang) => ORDER_CASH_ON_DELIVERY_COPY[lang].trim().length > 0));
 
+    /**
+     * ⚠ Run against a real checkout rather than against the copy table, so it checks the WIRING —
+     * that this screen decides the checkout qualifies and hands that to the shared label — and not
+     * merely that the shared table has a string in it.
+     */
     assert('an all-COD checkout awaiting collection shows the method, not a debt', () => {
         const group = codGroup();
         return BOT_COPY_LANGUAGES.every((lang) =>
-            __ORDER_LISTING.paymentTextOf(group, lang) === __ORDER_LISTING.CASH_ON_DELIVERY[lang]);
+            __ORDER_LISTING.paymentTextOf(group, lang) === ORDER_CASH_ON_DELIVERY_COPY[lang]);
+    });
+
+    /** The other half: one prepaid order in the checkout and it is a payment state again. */
+    assert('a checkout that is not all cash on delivery is not described as one', () => {
+        const group = codGroup();
+        group.orders[1] = { ...group.orders[1], paymentMethod: 'online' };
+        return __ORDER_LISTING.paymentTextOf(group, 'en') !== ORDER_CASH_ON_DELIVERY_COPY.en;
     });
 
     console.log('\n── ⛔ A shop shows a CITY and never an address ──');
@@ -407,17 +428,64 @@ function main(): void {
             && page.includes('paymentText');
     });
 
-    console.log('\n── The status vocabulary is total, and silent where it is not ──');
+    console.log('\n── ONE status vocabulary, shared with the chat — and the guards cannot pass vacuously ──');
+
+    /**
+     * ⚠ **THE GUARD AGAINST A VACUOUS PASS COMES FIRST, and it is the reason this section was
+     * rewritten rather than repointed.**
+     *
+     * Until 2026-09-16 this screen held its own status tables and these assertions read them.
+     * Those tables were deleted in favour of the one in `domain/bot-order-status-copy.ts`, which the
+     * chat reads too. The hazard in that move is specific and already bit another stream today:
+     * a guard that scans a file for a rule passes FOREVER once the rule has left the file, because
+     * there is nothing left to find wrong. backend-fc's three "must not" scans stayed green for
+     * exactly that reason.
+     *
+     * So three things are pinned before any wording is: the shared module resolves and holds what
+     * this screen uses; this screen's CODE (comments stripped) actually calls it; and this screen
+     * holds no status table of its own that could quietly start disagreeing again.
+     */
+    assert('⛔ the shared status table is in scope — the import resolves and holds its exports', () =>
+        typeof botFulfillmentStateLabel === 'function'
+        && typeof botPaymentStateLabel === 'function'
+        && typeof ORDER_PROGRESS_OF === 'object'
+        && ORDER_PROGRESS_OF !== null
+        && Object.keys(ORDER_PROGRESS_OF).length === 9);
+
+    assert('⛔ this screen is wired to the shared labels and holds no status words of its own', () =>
+        ORDER_SRC.includes("from '../../domain/bot-order-status-copy'")
+        && /botFulfillmentStateLabel\(/.test(ORDER_SRC)
+        && /botPaymentStateLabel\(/.test(ORDER_SRC)
+        && !/Record<\s*FulfillmentStatus/.test(ORDER_SRC)
+        && !/'Order received'|'Preparing'|'On its way'|'Awaiting payment'/.test(ORDER_SRC));
+
+    /**
+     * ⚠ **Behavioural, not a scan, and it is the one that proves the point.** For every fulfilment
+     * status in every language, the row this screen builds says exactly what the chat says. The
+     * chat order list is the first five rows of the list this screen continues; a customer who taps
+     * "Load more" must not watch the same order change state, which is the defect that forced the
+     * single table in the first place.
+     */
+    assert('⛔ for every status in every language, this screen says exactly what the chat says', () => {
+        const statuses = Object.keys(ORDER_PROGRESS_OF);
+        return statuses.length === 9 && BOT_COPY_LANGUAGES.every((lang) =>
+            statuses.every((status) => {
+                const group = codGroup();
+                group.orders[0] = { ...group.orders[0], fulfillmentStatus: status };
+                const card = __ORDER_LISTING.toGroupCard(group, lang, new Map(), []);
+                return card.orders[0].statusText === botFulfillmentStateLabel(status, lang);
+            }));
+    });
+
+    console.log('\n── The status vocabulary is total, and neutral where it is not ──');
 
     /**
      * ⚠ **Read from the SOURCE rather than re-derived from the type**, the rule § 1 states about
-     * `BotInAppSurface`: a check that re-derives the list agrees with any change ever made to
-     * it. A tenth fulfilment status added to the order model with no customer word here must
-     * fail, because the alternative is an order row that silently says nothing about its
-     * progress — or worse, inherits a default.
+     * `BotInAppSurface`: a check that re-derives the list agrees with any change ever made to it.
+     * A tenth fulfilment status added to the order model with no customer word must fail here.
      *
-     * TypeScript catches this too (`PROGRESS_OF` is a total `Record`), which is why this is the
-     * belt rather than the braces. It is here because the same file records `'contract'` and the
+     * TypeScript catches this too (`ORDER_PROGRESS_OF` is a total `Record`), which is why this is
+     * the belt rather than the braces. It is here because the codebase records `'contract'` and the
      * agent `aggregateType` enum each having drifted past a hand-written literal once already.
      */
     assert('⛔ every fulfilment status in the order model has a customer word', () => {
@@ -427,14 +495,13 @@ function main(): void {
         if (!m) return false;
         const members = [...m[1].matchAll(/'([a-zA-Z_]+)'/g)].map((x) => x[1]);
         return members.length === 9
-            && members.every((s) => Object.prototype.hasOwnProperty.call(__ORDER_LISTING.PROGRESS_OF, s));
+            && members.every((s) => Object.prototype.hasOwnProperty.call(ORDER_PROGRESS_OF, s));
     });
 
     /**
-     * ⚠ **Every word the aggregate can produce has copy, EXCEPT `unknown`.** The payment label
-     * is keyed on `aggregatePaymentStatus`'s output rather than on `PaymentStatus`, because a
-     * checkout is several orders and they can disagree. `unknown` is returned only for an empty
-     * group — impossible in practice — and deliberately renders no label at all.
+     * ⚠ **Every verdict the checkout-group aggregate can return has a word, except `unknown`**,
+     * which reads as the shared neutral label instead. The aggregate is read from source for the
+     * same reason as above.
      */
     assert('⛔ every payment verdict the aggregate can return has copy, bar `unknown`', () => {
         const src = fs.readFileSync(
@@ -445,13 +512,14 @@ function main(): void {
         return verdicts.includes('unknown')
             && verdicts
                 .filter((v) => v !== 'unknown')
-                .every((v) => Object.prototype.hasOwnProperty.call(__ORDER_LISTING.PAYMENT_COPY, v));
+                .every((v) => Object.prototype.hasOwnProperty.call(ORDER_PAYMENT_COPY, v));
     });
 
-    assert('every status and payment word is present in all five languages', () =>
+    assert('every status, payment and fallback word is present in all five languages', () =>
         BOT_COPY_LANGUAGES.every((lang) =>
-            Object.values(__ORDER_LISTING.PROGRESS_COPY).every((c) => c[lang].trim().length > 0)
-            && Object.values(__ORDER_LISTING.PAYMENT_COPY).every((c) => c[lang].trim().length > 0)));
+            Object.values(ORDER_PROGRESS_COPY).every((c) => c[lang].trim().length > 0)
+            && Object.values(ORDER_PAYMENT_COPY).every((c) => c[lang].trim().length > 0)
+            && ORDER_STATUS_UNAVAILABLE_COPY[lang].trim().length > 0));
 
     assert('the shop badges and both empty states are present in all five languages', () =>
         BOT_COPY_LANGUAGES.every((lang) =>
@@ -459,25 +527,55 @@ function main(): void {
                 __ORDER_LISTING.ORDERS_EMPTY].every((c) => c[lang].trim().length > 0)));
 
     /**
-     * ⚠ **A status we do not publish renders NOTHING rather than a guess.** The aggregation
-     * pipeline types this field as a plain `string`, so the map cannot be the only guard. The
-     * default a person reaches for while adding a status is "Preparing" — which would tell a
+     * ⚠ **An unrecognised status reads as ONE neutral label, shared with the chat — never the raw
+     * internal word and never silence.** Both were in the tree until 2026-09-16: the chat showed
+     * the raw token (a customer reading "partially_shipped"), and this screen showed nothing. The
+     * coordinator decided the floor, and this pins it on THIS screen's row rather than only on the
+     * shared function, so a future local override is caught.
+     *
+     * The default a person reaches for while adding a status is "Preparing" — which would tell a
      * customer with a cancelled order that their parcel is being packed.
      */
-    assert('⛔ an unrecognised fulfilment status renders no word at all', () =>
-        __ORDER_LISTING.fulfilmentTextOf('quantum_superposition', 'en') === null
-        && __ORDER_LISTING.fulfilmentTextOf('', 'en') === null
-        && __ORDER_LISTING.fulfilmentTextOf('delivered', 'en') === 'Delivered');
+    assert('⛔ an unrecognised status reads as the shared neutral label — never the raw word, never silence', () => {
+        const group = codGroup();
+        group.orders[0] = { ...group.orders[0], fulfillmentStatus: 'quantum_superposition' };
+        const status = __ORDER_LISTING.toGroupCard(group, 'en', new Map(), []).orders[0].statusText;
+        return status === ORDER_STATUS_UNAVAILABLE_COPY.en
+            && !status.includes('quantum')
+            && botFulfillmentStateLabel('delivered', 'en') === 'Delivered';
+    });
 
     /**
-     * ⚠ **`partially_delivered` keeps its own word rather than collapsing into "on its way".**
-     * Nine internal statuses become six customer words, and this is the one place the collapse
-     * would state something false: a customer who has already received half of a multi-vendor
-     * checkout must not be told nothing has arrived.
+     * ⚠ **`pending` and `processing` are two buckets, and this pins the SPLIT, not a wording.**
+     *
+     * They shared one `preparing` bucket until 2026-09-16, which told a customer whose order nobody
+     * had touched that it was being prepared — on `pending`, the state every new order starts in and
+     * where a cash-on-delivery order can sit for days. The first fix proposed was to rename the
+     * shared bucket to "Order received", which would only have moved the false statement onto
+     * `processing`, the one state that does mean somebody has started.
+     *
+     * ⚠ **It is proven to bite** against two collapsed copies of the real table, so the check
+     * cannot pass because it has stopped checking anything.
+     */
+    const splitHolds = (map: Readonly<Record<string, string>>): boolean =>
+        map.pending === 'received' && map.processing === 'preparing';
+
+    assert('⛔ an untouched order says it was received, and only a started one says preparing', () =>
+        splitHolds(ORDER_PROGRESS_OF)
+        && !splitHolds({ ...ORDER_PROGRESS_OF, processing: 'received' })
+        && !splitHolds({ ...ORDER_PROGRESS_OF, pending: 'preparing' })
+        && botFulfillmentStateLabel('pending', 'en') === 'Order received'
+        && botFulfillmentStateLabel('processing', 'en') === 'Preparing'
+        && botFulfillmentStateLabel('pending', 'fr') === 'Commande reçue');
+
+    /**
+     * ⚠ **`partially_delivered` keeps its own word rather than collapsing into "on its way".** A
+     * customer who has already received half of a multi-vendor checkout must not be told nothing
+     * has arrived.
      */
     assert('⛔ a partly delivered checkout is not described as still travelling', () =>
-        __ORDER_LISTING.PROGRESS_OF.partially_delivered === 'partly_delivered'
-        && __ORDER_LISTING.PROGRESS_OF.partially_shipped === 'shipped');
+        ORDER_PROGRESS_OF.partially_delivered === 'partly_delivered'
+        && ORDER_PROGRESS_OF.partially_shipped === 'shipped');
 
     console.log('\n── The screens page past what a chat answer can carry ──');
 

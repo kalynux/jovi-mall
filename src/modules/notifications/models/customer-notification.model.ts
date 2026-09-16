@@ -43,8 +43,20 @@ export type CustomerNotificationType =
      * a status the platform holds against a customer nobody reminded.
      */
     | 'booking.reminder'
-    /** Payment for the booking succeeded. */
+    /** Payment for the booking succeeded — the original price, or a balance paid later. */
     | 'booking.payment.received'
+    /**
+     * A mobile-money charge for a booking did not go through — the original price or a balance.
+     *
+     * ⚠ **The same silence `order.payment_failed` closed, one product type over.** Until this
+     * existed an online booking payment was never announced at all: success published an event only
+     * the vendor heard, and failure published nothing. A customer who approved nothing, or whose
+     * prompt timed out, was told nothing and turned up for an appointment the vendor saw as unpaid.
+     *
+     * ⚠ **It must never imply the booking is cancelled.** Nothing about a failed charge cancels
+     * one; the copy says what happened and where to try again.
+     */
+    | 'booking.payment_failed'
     /**
      * The service ran longer (or cost more) than quoted and a balance is now
      * payable. Never silently charged — this message IS the request.
@@ -152,6 +164,7 @@ export const CUSTOMER_NOTIFICATION_TYPES: readonly CustomerNotificationType[] = 
     'booking.completed',
     'booking.reminder',
     'booking.payment.received',
+    'booking.payment_failed',
     'booking.balance.due',
     'booking.refunded',
     'booking.refund.pending',
