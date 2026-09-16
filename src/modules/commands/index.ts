@@ -3,6 +3,7 @@ import * as ConnectCommand from '../channel-connections/commands/connect.command
 import * as LoginCommand from '../messaging-login/commands/login.command';
 import * as LoginContactCommand from '../messaging-login/commands/login-contact.command';
 import * as ResetPasswordCommand from '../messaging-login/commands/reset-password.command';
+import * as FlowCompleteCommand from '../whatsapp/flows/commands/flow-complete.command';
 
 /**
  * Bot commands, registered at boot and dispatched by both webhooks.
@@ -54,4 +55,23 @@ export function register_all_commands(bus: CommandBus): void {
     ResetPasswordCommand.handler
   );
   console.log('✅ Registered Command:', ResetPasswordCommand.command_name);
+
+  /**
+   * ⚠ **`flow_complete` is a THIRD kind of command, and it is neither a slash command nor a
+   * credential.** Like `login_contact` it is dispatched by the automation layer on an inbound
+   * event rather than by anything a customer types — here, a WhatsApp Flow's completion
+   * message (`interactive.nfm_reply`). Unlike every other command on this bus, it mints
+   * nothing and writes nothing: the encrypted endpoint already did whatever was going to be
+   * done, while the session was live, and this only reports it back into the conversation.
+   *
+   * ⛔ **Until this registration existed, a customer could fill in a WhatsApp form, press the
+   * final button, and the thread would say nothing at all** — the completion message reached
+   * the webhook and matched no command. That gap was in nobody's scope.
+   */
+  bus.register(
+    FlowCompleteCommand.command_name,
+    FlowCompleteCommand.schema,
+    FlowCompleteCommand.handler
+  );
+  console.log('✅ Registered Command:', FlowCompleteCommand.command_name);
 }

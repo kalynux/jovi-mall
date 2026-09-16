@@ -130,7 +130,29 @@ app.use(cors(buildCorsOptions()));
 // silently breaks any comment-stripping source scanner reading this file —
 // including `test:payments`' own, which is what caught it.
 app.use(
-    ['/api/webhooks/stripe', '/api/webhooks/notchpay', '/api/webhooks/mycoolpay'],
+    [
+        '/api/webhooks/stripe',
+        '/api/webhooks/notchpay',
+        '/api/webhooks/mycoolpay',
+        /**
+         * WhatsApp Flows' encrypted data endpoint. Meta signs the body with
+         * `X-Hub-Signature-256`, so verifying it needs the bytes as sent.
+         *
+         * ⚠ **The only bad configuration is an app secret WITHOUT this mount**, and it fails
+         * closed and names the cause rather than doing the tempting thing: the controller
+         * refuses a body that arrived parsed instead of re-serialising it, because
+         * re-serialising verifies nothing, fails every genuine request, and reads as a wrong
+         * secret. With no secret set the endpoint never looks at the raw body at all.
+         *
+         * ⚠ **And the reverse pairing is the one that costs money.** `/api/webhooks/*` is
+         * exempt from rate limiting by design, and an RSA private-key decrypt is CPU-bound —
+         * so **flow keys set with `WHATSAPP_APP_SECRET` unset** lets an unauthenticated caller
+         * spend this box's CPU at will, on a host sized for the whole platform. The controller
+         * runs the cheap HMAC *before* any RSA work, so setting the app secret closes it for
+         * free. Set both or neither.
+         */
+        '/api/webhooks/whatsapp/flows',
+    ],
     express.raw({ type: () => true, limit: WEBHOOK_BODY_LIMIT })
 );
 

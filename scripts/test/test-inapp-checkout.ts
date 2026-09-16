@@ -514,9 +514,11 @@ function main(): void {
      */
     assert('⛔ the money reads set no reply; only the screen door does', () => {
         const src = chatCode();
-        const replies = (src.match(/setBotReply\(/g) ?? []).length;
         const door = src.slice(src.indexOf('static screen'), src.indexOf('static paymentStatus'));
-        return replies === 2 && (door.match(/setBotReply\(/g) ?? []).length === 2;
+        const all = (src.match(/setBotReply\(/g) ?? []).length;
+        const inDoor = (door.match(/setBotReply\(/g) ?? []).length;
+        // Every reply in the file is inside the door, and the door sets at least one.
+        return inDoor > 0 && all === inDoor;
     });
 
     /**
@@ -529,6 +531,77 @@ function main(): void {
         const src = chatCode();
         return src.includes("botStorefrontLink('/cart'")
             && /setBotReply\(req,\s*fallback\s*\?/.test(src);
+    });
+
+    /**
+     * ⛔ **The origin is checked BEFORE the handle is minted, and for `co` that ordering is the
+     * decision.** `BOT_MINIAPP_BASE_URL` is unset in production, so minting first means every
+     * single checkout turn creates a ten-minute ORDER-PLACING credential that is handed to
+     * nobody. Not a leak — nothing receives it and it expires — but it makes "how many live
+     * checkout handles exist" a number that means nothing, and that is the number somebody
+     * reaches for the first time this surface has an incident.
+     *
+     * ⚠ **Asked through `inAppBaseUrl()`, never a second read of the variable.** `inapp-url.ts`
+     * is its single reader and holds BOTH rules that decide the answer — HTTPS (Telegram
+     * refuses a `web_app` button on any other scheme, and refuses the whole message with it)
+     * and publicly reachable. A local `process.env` check would pass on an origin the renderer
+     * then rejects. Stream C calls the same function from its own minting paths.
+     */
+    assert('⛔ no checkout handle is minted when there is no screen to open', () => {
+        const src = chatCode();
+        const door = src.slice(src.indexOf('static screen'), src.indexOf('static paymentStatus'));
+        const guard = door.indexOf('if (!inAppBaseUrl())');
+        const mint = door.indexOf('inAppSurfaceStore.mint(');
+        return guard > 0 && mint > guard && !src.includes('process.env.BOT_MINIAPP_BASE_URL');
+    });
+
+    /**
+     * ⚠ **A digital basket changes the LABEL, not just the value.** Under "Deliver to", a masked
+     * email reads as an address the shop has mangled; under `checkoutDigitalDelivery` the same
+     * string answers the only question a download raises — WHICH account. The server flags it
+     * because the page cannot tell a download from a parcel.
+     */
+    assert('⛔ a digital basket is not headed "Deliver to"', () => {
+        const pageSrc = code();
+        return pageSrc.includes('data.address.digital')
+            && pageSrc.includes('copy.checkoutDigitalDelivery')
+            && screenCode().includes('digital: true');
+    });
+
+    /**
+     * ⚠ **The page's English table must cover EVERY key it reads.** `copy` is never null once
+     * boot has run — a failed copy call falls back to this table — so a key added to the page
+     * and not to the fallback produces `undefined` rendered as a label on exactly the request
+     * that was already failing.
+     */
+    assert('⛔ the page\'s English fallback covers every key the page reads', () => {
+        const pageSrc = page();
+        const used = [...new Set([...pageSrc.matchAll(/\bcopy\.([a-zA-Z]+)/g)].map((m) => m[1]))];
+        const fallback = pageSrc.slice(pageSrc.indexOf('var FALLBACK = {'), pageSrc.indexOf('function boot'));
+        /**
+         * ⚠ The declared keys are collected with ONE static pattern and compared as a SET,
+         * rather than searched for per key. Two reasons, and the second is the one that bites:
+         *
+         *   - a per-key `new RegExp` is banned repo-wide (regex injection + ReDoS);
+         *   - a substring check matches any LONGER key sharing the prefix — `retry` is inside
+         *     `retryLater`, `checkoutPa` inside `checkoutPay` — so a key that is missing from
+         *     the fallback reads as present because a different, longer one is there.
+         *
+         * ⚠ Appending a colon (`includes('retry:')`) narrows that one pair and does not fix the
+         * class, and the colon-less form is what somebody actually writes. A Set comparison has
+         * no such edge.
+         *
+         * ⚠ **Measured, not reasoned** — `'retryLater: "x"'.includes('retry')` is `true`. An
+         * earlier version of this comment illustrated the trap with `retry` inside
+         * `checkoutRetry`, which is FALSE: that key contains `Retry` with a capital R, so the
+         * substring never matched. A wrong example in a correct guard's comment is worse than
+         * no example, because the next reader verifies the comment, finds it false, and
+         * distrusts the guard.
+         */
+        const declared = new Set([...fallback.matchAll(/^\s*([a-zA-Z]+)\s*:/gm)].map((m) => m[1]));
+        const missing = used.filter((k) => !declared.has(k));
+        if (missing.length > 0) console.error(`      FALLBACK is missing: ${missing.join(', ')}`);
+        return missing.length === 0;
     });
 
     /**

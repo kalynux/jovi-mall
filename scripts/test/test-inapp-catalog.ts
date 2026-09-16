@@ -20,8 +20,6 @@ import { __SCREEN_KINDS } from '../../src/modules/bot-surface/miniapp/inapp-page
 import { __IN_APP_COPY, assertInAppCopyComplete, inAppCopy } from '../../src/modules/bot-surface/miniapp/inapp-copy';
 import { TTL_SECONDS, __IN_APP_HANDLE_PREFIX } from '../../src/modules/bot-surface/services/inapp-surface.store';
 import { BOT_COPY_LANGUAGES } from '../../src/modules/bot-surface/domain/bot-error-copy';
-import { BOT_DISPLAY_MAX_PRODUCTS } from '../../src/modules/bot-surface/services/product-display.service';
-import { __LISTING_PAGE_SIZE } from '../../src/modules/bot-surface/miniapp/surfaces/product-listing.controller';
 
 let passed = 0;
 let failed = 0;
@@ -210,6 +208,45 @@ function main(): void {
     const LISTING = codeOf(path.join(SURFACES, 'product-listing.controller.ts'));
     const DETAIL = codeOf(path.join(SURFACES, 'product-detail.controller.ts'));
 
+    /**
+     * ⚠ **Read as TEXT rather than imported, and that is a deliberate reversal.**
+     *
+     * These two numbers were `import`ed until backend-2d found what importing a surface
+     * controller costs: a controller that reaches `orders/` or `payments/` **cannot be
+     * imported under bare ts-node at all** — those modules do work at import time and never
+     * return, so the suite produces no output and reads as broken rather than as red.
+     *
+     * Neither of these two controllers reaches that far today, so the import worked. That is
+     * precisely the fragility: the suite would keep working until some transitive dependency
+     * grew an import nobody connected to this file, and then it would hang with no
+     * explanation. A regex over the source cannot hang.
+     */
+    /**
+     * ⚠ **The pattern is passed in as a LITERAL, never built from a string.** This repo bans
+     * `new RegExp()` outright (`no-restricted-syntax`), because every search path here is
+     * `$regex`-based and an unescaped term is injection plus ReDoS. The ban is a syntax rule
+     * rather than a taint check, so it catches a constructed pattern even where the input is a
+     * hardcoded name — which is correct, and cheaper to obey than to argue with.
+     */
+    const constant = (source: string, pattern: RegExp): number => {
+        const hit = pattern.exec(source);
+        return hit ? Number(hit[1]) : NaN;
+    };
+    const DISPLAY_SERVICE = codeOf(
+        path.join(__dirname, '../../src/modules/bot-surface/services/product-display.service.ts'));
+
+    const PAGE_SIZE = constant(LISTING, /\bPAGE_SIZE\s*=\s*(\d+)/);
+    const CHAT_MAX = constant(DISPLAY_SERVICE, /\bBOT_DISPLAY_MAX_PRODUCTS\s*=\s*(\d+)/);
+
+    /**
+     * ⚠ **Without this the whole section is worthless.** A regex that stops matching answers
+     * `NaN`, and every comparison below it — `>`, `<=`, `% 2 === 0` — is false for NaN, so the
+     * section would go red rather than silently green. But it would go red for the WRONG
+     * reason, pointing at a page size that never changed. This names the real fault.
+     */
+    assert('both constants were actually found in source — a NaN here would mislead every compare below',
+        () => Number.isInteger(PAGE_SIZE) && Number.isInteger(CHAT_MAX));
+
     console.log('\n── The grid pages past ten ──');
 
     /**
@@ -221,10 +258,10 @@ function main(): void {
      * this path holds the *query* precisely so it can page. Do not unify them.
      */
     assert('⛔ a page of the grid is larger than the chat rail\'s whole set', () =>
-        __LISTING_PAGE_SIZE > BOT_DISPLAY_MAX_PRODUCTS);
+        PAGE_SIZE > CHAT_MAX);
 
     assert('the page size fills a row evenly at 2, 3 and 4 columns', () =>
-        __LISTING_PAGE_SIZE % 2 === 0 && __LISTING_PAGE_SIZE % 3 === 0 && __LISTING_PAGE_SIZE % 4 === 0);
+        PAGE_SIZE % 2 === 0 && PAGE_SIZE % 3 === 0 && PAGE_SIZE % 4 === 0);
 
     /**
      * `LimitSchema` caps a public catalogue read at 100. A page size above it would not fail
@@ -232,7 +269,7 @@ function main(): void {
      * more than the contract allows.
      */
     assert('the page size stays inside the public catalogue\'s own limit', () =>
-        __LISTING_PAGE_SIZE <= 100);
+        PAGE_SIZE <= 100);
 
     /**
      * ⚠ **The last "Load more" must be an ENDING, not an ERROR.** The cursor is bounded, so a
@@ -262,6 +299,100 @@ function main(): void {
         const mints = [...LISTING.matchAll(/inAppSurfaceStore\.mint\(/g)].length;
         return mints === 1 && LISTING.includes("kind: 'pd'") && !DETAIL.includes('.mint(');
     });
+
+    console.log('\n── ⚠ The English FALLBACK covers every key the page reads ──');
+
+    /**
+     * ⚠ **The failure this catches lands at the WORST possible moment.** Each page falls back to
+     * an English table when the `/copy` call fails, so that it can still say "ask me again"
+     * rather than throwing while rendering the message explaining why it could not load. But
+     * nothing checked that the fallback covers every key the page reads — so adding a key and
+     * forgetting the fallback renders the string `undefined` as a label **on exactly the
+     * request that was already failing**. Found by backend-2d in `co.html`; both of these pages
+     * had the same exposure.
+     *
+     * ⚠ **TWO TRAPS IN WRITING THIS, both learned the expensive way:**
+     *
+     * 1. The obvious form is a `new RegExp` per key, and eslint refuses it repo-wide — a syntax
+     *    ban, not a taint check, so it fires even on a pattern built from a constant. One
+     *    static pattern collecting the declared keys is allowed and correct.
+     * 2. ⛔ **A substring check is actively WRONG here and fails in the direction that HIDES the
+     *    bug.** Searching the block for `retry` matches inside **`retryLater`** — any longer key
+     *    sharing the prefix — so a genuinely missing `retry` reports as present. Measured, not
+     *    assumed: `'retryLater: "x"'.includes('retry')` is `true`.
+     *
+     *    ⚠ Appending a colon narrows that particular case but does not fix the class, and it is
+     *    the form somebody writes without it. Collect the declared keys and compare as a **SET**.
+     *    (A related near-miss while writing this: `checkoutRetry` does *not* contain `retry` —
+     *    the capital R breaks it — so an example chosen by eye can fail to demonstrate the very
+     *    trap it is describing. The example above was run before it was written down.)
+     *
+     * Same family as the NaN trap above: a check that cannot tell whether it really ran is
+     * indistinguishable from one that passes.
+     */
+    const FALLBACK_BLOCK = /var FALLBACK = \{([\s\S]*?)\};/;
+    const DECLARED_KEY = /^\s*([a-zA-Z][a-zA-Z0-9]*)\s*:/gm;
+
+    const fallbackKeysOf = (kind: string): Set<string> => {
+        // Comments stripped first, so a key merely NAMED in prose cannot count as declared.
+        const code = readPage(kind).replace(/<!--[\s\S]*?-->/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+        const block = FALLBACK_BLOCK.exec(code);
+        if (!block) return new Set();
+        return new Set([...block[1].matchAll(DECLARED_KEY)].map((m) => m[1]));
+    };
+
+    const copyKeysReadBy = (kind: string): string[] => {
+        const code = readPage(kind).replace(/<!--[\s\S]*?-->/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+        return [...new Set([...code.matchAll(/\bcopy\.([a-zA-Z][a-zA-Z0-9]*)/g)].map((m) => m[1]))];
+    };
+
+    /**
+     * ⚠ Without this, an empty Set would satisfy "every read key is present" only if the page
+     * also read nothing — but a FALLBACK the regex stopped finding yields an empty Set and a
+     * loud failure below rather than a silent pass. This names the real fault instead.
+     */
+    assert('both pages actually declare a FALLBACK table the scan can find', () =>
+        MINE.every((kind) => fallbackKeysOf(kind).size > 0));
+
+    assert('⛔ every copy key a page reads has an English fallback', () =>
+        MINE.every((kind) => {
+            const declared = fallbackKeysOf(kind);
+            const missing = copyKeysReadBy(kind).filter((k) => !declared.has(k));
+            if (missing.length > 0) {
+                console.error(`      ${kind}.html would render "undefined" for: ${missing.join(', ')}`);
+            }
+            return missing.length === 0;
+        }));
+
+    /**
+     * The other direction is a smaller fault and still worth naming: a fallback key nothing
+     * reads is dead copy that will drift out of step with `inapp-copy.ts` unnoticed.
+     */
+    assert('and no fallback key is dead — every one of them is read', () =>
+        MINE.every((kind) => {
+            const read = new Set(copyKeysReadBy(kind));
+            const dead = [...fallbackKeysOf(kind)].filter((k) => !read.has(k));
+            if (dead.length > 0) console.error(`      ${kind}.html declares unread fallback keys: ${dead.join(', ')}`);
+            return dead.length === 0;
+        }));
+
+    console.log('\n── The shelf is named from what the customer asked for ──');
+
+    /**
+     * ⚠ **A shop is named from its PRODUCTS, never from its slug, and never by a lookup.**
+     * `headingFor` used to answer null for a store-scoped session, on the ground that
+     * `electro-shop-douala` is a database key rather than a shop's name. True — and it left a
+     * customer who opened a shop from the directory looking at a page headed "Browse".
+     *
+     * A store-scoped query returns only that store's products, so every card already carries
+     * the same `storeName`; taking it from the first row costs no extra read and cannot
+     * disagree with the cards underneath it.
+     */
+    assert('a store-scoped listing is headed with the shop\'s real name', () =>
+        LISTING.includes('products[0]?.storeName'));
+
+    assert('⛔ and it does NOT pay for a second catalogue read to get it', () =>
+        !LISTING.includes('getStoreBySlug') && !LISTING.includes('listStores'));
 
     console.log('\n── The handle is kind-checked on every read ──');
 

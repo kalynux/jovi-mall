@@ -193,7 +193,7 @@
    *         imageUrl:     string | null
    *       }],
    *       totalText: string,               // the one figure the customer is agreeing to pay
-   *       address:   { text: string } | null,   // ⚠ MASKED. null → the no-address state
+   *       address:   { text: string, digital?: true } | null,  // ⚠ MASKED. null → no-address
    *       payment:   { phoneMasked: string | null }
    *   }}
    *
@@ -235,7 +235,17 @@
       return;
     }
 
-    el.addressLabel.textContent = copy.checkoutAddress;
+    /*
+     * ⚠ **A DIGITAL basket is not delivered anywhere, so it does not say "Deliver to".** The
+     * value underneath is the customer's own masked email or phone, and under a delivery
+     * heading that reads as an address the shop has mangled. Under "Sent to your account" the
+     * same string answers the only question a download raises — WHICH account. The server
+     * flags it because the page cannot tell a download from a parcel; the page picks the word
+     * because the page owns the copy table.
+     */
+    el.addressLabel.textContent = data.address.digital
+      ? copy.checkoutDigitalDelivery
+      : copy.checkoutAddress;
     el.address.textContent = data.address.text;
 
     el.phoneLabel.textContent = copy.checkoutPhone;
@@ -341,6 +351,7 @@
     checkoutTotal: "Total",
     checkoutAddress: "Deliver to",
     checkoutNoAddress: "You have no saved delivery address yet. Close this and send me your address in the chat.",
+    checkoutDigitalDelivery: "Sent to your account",
     checkoutPhone: "Mobile money number",
     checkoutPay: "Pay now",
     checkoutWatchChat: "Approve the payment on your phone. I will tell you in the chat as soon as it lands."

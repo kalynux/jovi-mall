@@ -118,7 +118,7 @@ export class ProductListingController {
         void inAppSurfaceStore.touch('pl', handle).catch(() => undefined);
 
         sendSuccess(res, {
-            heading: headingFor(session.query),
+            heading: headingFor(session.query, products),
             products,
             /**
              * ⚠ **`page < MAX_PAGE` is not belt-and-braces — without it the last "Load more"
@@ -428,15 +428,30 @@ function cardImageUrl(item: PublicProductListItemDto): string | null {
 }
 
 /**
- * What the screen calls this shelf — the search term, the category, or nothing.
+ * What the screen calls this shelf — the search term, the category, the shop, or nothing.
  *
- * ⚠ **Never a translated string, and never invented.** It is echoed from what the customer
- * asked for, so it is already in their words; the screen's own heading comes from
- * `inAppCopy`. A store-slug session gets no heading rather than a slug rendered as prose —
- * `electro-shop-douala` is a database key, not a shop's name.
+ * ⚠ **Never a translated string, and never invented.** A search term and a category are
+ * echoed from what the customer asked for, so they are already in their words; the screen's
+ * own fallback heading comes from `inAppCopy`.
+ *
+ * ── ⚠ A SHOP IS NAMED FROM ITS PRODUCTS, NOT FROM ITS SLUG, AND NOT BY A LOOKUP ──
+ * An earlier version returned null for a store-scoped session, on the ground that
+ * `electro-shop-douala` is a database key rather than a shop's name — true, and it left a
+ * customer who opened a shop from the directory looking at a page headed "Browse".
+ *
+ * Resolving the slug would be a second catalogue read on every page. It is not needed: a
+ * store-scoped query returns **only that store's products**, so every card on the page already
+ * carries the same `storeName`. Taking it from the first row costs nothing and cannot disagree
+ * with the cards underneath it.
+ *
+ * Null when the page is empty — there is no row to take a name from, and the empty state says
+ * something truer than a heading would.
  */
-function headingFor(query: InAppListingQuery): string | null {
-    return query.q?.trim() || query.category?.trim() || null;
+function headingFor(query: InAppListingQuery, products: ListingCard[]): string | null {
+    const asked = query.q?.trim() || query.category?.trim();
+    if (asked) return asked;
+    if (query.storeSlug) return products[0]?.storeName?.trim() || null;
+    return null;
 }
 
 /** ⚠ Exported for `test:inapp-catalog` § 2, which asserts the grid pages past ten. */

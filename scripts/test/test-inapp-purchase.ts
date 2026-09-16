@@ -325,6 +325,55 @@ function main(): void {
         parseBotActionId(cartViewActionId())?.verb === 'cart'
         && parseBotActionId(openSurfaceActionId('co'))?.verb === 'open');
 
+    console.log('\n── The checkout session this stream mints ──');
+
+    /**
+     * ⚠ **The checkout screen's own guard depends on this stamp.** Its `place` handler compares
+     * `session.cartId` against the live basket and refuses with 410 when they differ. What that
+     * catches is narrow and real: `clearCart` DELETES the cart document, so a basket emptied and
+     * rebuilt inside the ten-minute window comes back with a NEW id — and without the stamp the
+     * customer pays for a basket they never reviewed on that screen.
+     *
+     * ⚠ **Coalesced, never asserted.** `CartResponse.cartId` is declared optional and built from
+     * `_id?.toString()`. A null skips a bonus guard; a GUESSED id refuses a customer at the
+     * moment of payment, on a handle that is already spent. Those costs are nowhere near equal.
+     */
+    assert('⛔ the checkout session is stamped with the basket it was opened for', () =>
+        /mintCheckoutUrl\(ctx, cart\.cartId \?\? null\)/.test(PURCHASE)
+        && /cartId,?\s*\n/.test(PURCHASE.slice(PURCHASE.indexOf('kind: \'co\''))));
+
+    assert('⛔ the cart id is never asserted or invented', () =>
+        !/cartId!/.test(PURCHASE) && !/cartId: ['"`]/.test(PURCHASE));
+
+    /**
+     * ⚠ **The stamp is REQUIRED, not optional, so a third minter has to decide.** The frozen
+     * session type permits null and the screen degrades correctly on one — which is exactly why
+     * an optional parameter would be dangerous here: it is how a new call site silently skips a
+     * guard it never knew existed. Same reasoning as `PickupLocationValidationService`'s
+     * required fourth argument.
+     */
+    assert('the stamp is a required parameter rather than an optional one', () =>
+        /mintCheckoutUrl\(\s*ctx: SessionOwner,\s*cartId: string \| null\s*\)/.test(PURCHASE));
+
+    /**
+     * ⭐ **The origin is checked BEFORE minting, and this is the assertion that keeps it there.**
+     * A handle minted for a screen nobody can open is a ten-minute order-placing credential
+     * sitting in Redis, handed to no one. Not a leak — nothing receives it — but it makes "how
+     * many live checkout handles exist" a number that means nothing, which is the number
+     * somebody reaches for first in an incident. In production today `BOT_MINIAPP_BASE_URL` is
+     * unset, so mint-then-discover would do this on EVERY checkout.
+     *
+     * ⚠ **Asked through `inAppBaseUrl()`, never by reading the variable again.** That function
+     * holds both rules that decide it — HTTPS, and an origin the platforms' servers can actually
+     * reach — and a second reader of `BOT_MINIAPP_BASE_URL` is precisely the drift `inapp-url.ts`
+     * was extracted to prevent. It also makes `test:env`'s source census still see one reader.
+     */
+    assert('⛔ no screen session is minted when there is nowhere to put it', () =>
+        /if \(!inAppBaseUrl\(\)\) return null;[\s\S]{0,400}inAppSurfaceStore\.mint/.test(PURCHASE));
+
+    assert('⛔ the origin is asked through the shared reader, never re-read from the env', () =>
+        PURCHASE.includes('inAppBaseUrl()') && !PURCHASE.includes('BOT_MINIAPP_BASE_URL'));
+
     console.log('\n── ⛔ Bargain and Book start a conversation, and write nothing ──');
 
     /**

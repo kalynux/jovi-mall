@@ -35,6 +35,27 @@ import { FulfillmentStatus } from '../../orders/order.model';
  * `assertOrderStatusCopyComplete()` is exported anyway, because the one thing the compiler
  * cannot see is a string that is present but too long for the control it lands in.
  *
+ * ── ⛔ THE SEAM: THESE WORDS ARE SHARED WITH A FILE NOTHING CAN CHECK THEM AGAINST ──
+ * **`miniapp/surfaces/order-listing.controller.ts` words the same nine fulfilment statuses for
+ * the same customer, and the chat list below is the FIRST FIVE ROWS OF THE LIST THAT SCREEN
+ * CONTINUES.** A customer taps "Load more" and goes straight from one table to the other.
+ *
+ * They diverged within a day of both being written (2026-09-16), in four of nine statuses, and
+ * neither file was wrong when read alone — both are total `Record`s over the union, both carry
+ * a written rationale, and both independently concluded that "fulfilled" is a warehouse word.
+ * The worst of the four was `pending`, the state **every new order is in**: one table said
+ * *"Order received"* and the other *"Preparing"*, which are two different claims about whether
+ * anybody has started work.
+ *
+ * ⚠ **No assertion can see this.** The two tables are in different files owned by different
+ * streams, keyed on different unions — one collapses nine statuses to six customer words, this
+ * one does not collapse at all. A guard would have to know that the two describe one list, and
+ * nothing in either file says so except this paragraph and its twin over there.
+ *
+ * ⚠ **So: changing a word here means changing it there, in the same change.** If the two ever
+ * have to differ, write down why — because the next reader's first instinct will be to "fix"
+ * the inconsistency, and they will pick a direction at random.
+ *
  * ── WHERE THE WORDING COMES FROM ────────────────────────────────────────────
  * ⚠ **The delivery states are worded to agree with
  * `notifications/catalog/customer-notification-catalog.ts`**, which already tells this same

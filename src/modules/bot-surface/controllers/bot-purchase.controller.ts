@@ -15,7 +15,7 @@ import { botChrome } from '../domain/bot-chrome-copy';
 import { botStorefrontLink } from '../domain/bot-list-window';
 import { BotReplyIntent, BotReplyOption } from '../domain/channel-reply';
 import { cartViewActionId, openSurfaceActionId, parseBotActionId } from '../domain/bot-action-id';
-import { inAppScreenUrl } from '../domain/inapp-url';
+import { inAppBaseUrl, inAppScreenUrl } from '../domain/inapp-url';
 import { PurchaseVerb, resolvePurchaseAffordance } from '../domain/purchase-affordance';
 import { inAppSurfaceStore } from '../services/inapp-surface.store';
 import { productDisplayService } from '../services/product-display.service';
@@ -453,7 +453,13 @@ async function executePurchase(ctx: PurchaseContext): Promise<PurchaseResult> {
          */
         case 'add':
         case 'buy': {
-            await cartService.addToCart(customerId, productId, variant!.id, 1);
+            /**
+             * ⚠ **The returned cart is KEPT, and it used to be discarded.** It is what lets the
+             * checkout session below be stamped with the basket it was opened for, without a
+             * second read — this path has just written to that cart, so it holds the freshest
+             * answer anybody can get.
+             */
+            const cart = await cartService.addToCart(customerId, productId, variant!.id, 1);
 
             if (affordance.verb === 'add') {
                 return {
@@ -475,7 +481,7 @@ async function executePurchase(ctx: PurchaseContext): Promise<PurchaseResult> {
              * NAMED — a turn the model can complete through `checkout_create_orders` — and never
              * to a button with an empty target, which is the one control that costs an order.
              */
-            const url = await mintCheckoutUrl(ctx);
+            const url = await mintCheckoutUrl(ctx, cart.cartId ?? null);
             return {
                 ...base,
                 outcome: url ? 'checkout' : 'cart',
@@ -579,16 +585,38 @@ export function addedToCartActions(language: string | null): BotReplyOption[] {
 /**
  * Mint the checkout screen's session and return its URL, or null when there is no screen.
  *
- * ⚠ **`cartId` is left null deliberately.** The session type permits it precisely because a
- * checkout screen must quote LIVE money — a held total is a total that can disagree with the
- * basket by the time somebody pays — so the screen reads the cart itself.
+ * ⚠ **The `cartId` is STAMPED, and it is the checkout screen's own guard that needs it.** Its
+ * `place` handler compares the stamp against the live basket and refuses with 410 when they
+ * differ. What that catches is narrow and real: `clearCart` DELETES the cart document, so a
+ * basket emptied and rebuilt inside the ten-minute window comes back with a NEW id — and
+ * without the stamp the customer pays for a basket they never reviewed on that screen.
+ *
+ * ⚠ **Required, not optional, so a new call site has to DECIDE.** The frozen session type
+ * permits null and the screen degrades correctly on one (it skips the comparison), but an
+ * optional parameter is how a third minter silently skips a guard it never knew about. This is
+ * the same reason `PickupLocationValidationService` takes its depot ids as a required fourth
+ * argument rather than an optional one.
+ *
+ * ⚠ **Coalesced, NEVER asserted, and never guessed.** `CartResponse.cartId` is declared
+ * optional and built from `_id?.toString()`. In practice a non-empty basket always carries one
+ * — `getCart` returns the bare `{ userId, items: [], totalItems: 0 }` shape only when there is
+ * no cart document at all — but a guessed id is far worse than a null here: a null skips a
+ * bonus guard, while a wrong one refuses a customer at the moment of payment on a handle that
+ * is already spent.
  */
-async function mintCheckoutUrl(ctx: SessionOwner): Promise<string | null> {
+async function mintCheckoutUrl(ctx: SessionOwner, cartId: string | null): Promise<string | null> {
     /**
      * ⚠ **The origin is checked BEFORE minting.** A handle minted for a screen nobody can open
-     * is a live order-placing credential sitting in Redis with no way to reach it.
+     * is a live order-placing credential sitting in Redis with no way to reach it — not a leak,
+     * since nothing ever receives it, but it makes "how many live checkout handles exist" a
+     * number that means nothing, which is the number somebody reaches for first in an incident.
+     *
+     * `inAppBaseUrl()` is the whole question in one call: it reads the variable once, refuses
+     * anything that is not HTTPS, and requires an origin the platforms' servers can actually
+     * reach. Asking it directly rather than probing `inAppScreenUrl` with a dummy handle keeps
+     * the single reader of `BOT_MINIAPP_BASE_URL` that `inapp-url.ts` was extracted to be.
      */
-    if (!inAppBaseUrlAvailable('co', ctx.language)) return null;
+    if (!inAppBaseUrl()) return null;
 
     const handle = await inAppSurfaceStore.mint({
         kind: 'co',
@@ -597,20 +625,9 @@ async function mintCheckoutUrl(ctx: SessionOwner): Promise<string | null> {
         channel: ctx.channel,
         externalId: ctx.externalId,
         language: ctx.language,
-        cartId: null,
+        cartId,
     });
     return inAppScreenUrl('co', handle, ctx.language);
-}
-
-/**
- * Is there anywhere to put a screen of this kind?
- *
- * A probe rather than a second reading of the environment: `inAppScreenUrl` already holds the
- * two rules that decide it (HTTPS, and reachable from the public internet), and a second reader
- * of `BOT_MINIAPP_BASE_URL` is exactly the drift `inapp-url.ts` was extracted to prevent.
- */
-function inAppBaseUrlAvailable(kind: 'co' | 'pl', language: string | null): boolean {
-    return inAppScreenUrl(kind, 'probe', language) !== null;
 }
 
 /** `open:co` — start a checkout. */
@@ -620,13 +637,27 @@ async function openCheckout(
     envelope: { channel: MessagingChannel; externalId: string },
     language: string | null,
 ): Promise<void> {
-    const url = await mintCheckoutUrl({
-        userId: caller.userId,
-        customerId: caller.customerId,
-        channel: envelope.channel,
-        externalId: envelope.externalId,
-        language,
-    });
+    /**
+     * ⚠ **One read, and only when there is a screen to open.** Unlike the `buy` path, nothing
+     * was just added here — this is Checkout pressed on a basket that already exists — so the
+     * cart has to be fetched to stamp it. The origin check is repeated ahead of the read rather
+     * than left to `mintCheckoutUrl`, because in production today there IS no screen, and a
+     * database read to build a session nobody can open is work done for nothing on every tap.
+     */
+    const cartId = inAppBaseUrl()
+        ? (await cartService.getCart(caller.customerId)).cartId ?? null
+        : null;
+
+    const url = await mintCheckoutUrl(
+        {
+            userId: caller.userId,
+            customerId: caller.customerId,
+            channel: envelope.channel,
+            externalId: envelope.externalId,
+            language,
+        },
+        cartId,
+    );
 
     const text = botChrome('payPrompt', language);
     const label = botChrome('checkoutButton', language);
@@ -655,7 +686,7 @@ async function openBrowseListing(
     const text = botChrome('browseProductsPrompt', language);
     const label = botChrome('browseMoreButton', language);
 
-    if (inAppBaseUrlAvailable('pl', language)) {
+    if (inAppBaseUrl()) {
         const handle = await inAppSurfaceStore.mint({
             kind: 'pl',
             owner: caller.userId,
@@ -688,7 +719,7 @@ async function openBrowseListing(
 async function openHeldListing(req: Request, owner: string, setId: string): Promise<boolean> {
     const set = await productDisplayStore.read(owner, setId);
     if (!set) return false;
-    if (!inAppBaseUrlAvailable('pl', set.language)) return false;
+    if (!inAppBaseUrl()) return false;
 
     const handle = await inAppSurfaceStore.mint({
         kind: 'pl',

@@ -60,6 +60,8 @@ import {
 } from '../../src/modules/whatsapp/flows/domain/flow-protocol';
 import { verifyFlowSignature } from '../../src/modules/whatsapp/flows/domain/flow-signature';
 import { PRODUCT_LISTING_FLOW } from '../../src/modules/whatsapp/flows/definitions/product-listing.flow';
+import { PRODUCT_DETAIL_FLOW } from '../../src/modules/whatsapp/flows/definitions/product-detail.flow';
+import { CHECKOUT_FLOW } from '../../src/modules/whatsapp/flows/definitions/checkout.flow';
 import { handler as flowCompleteHandler } from '../../src/modules/whatsapp/flows/commands/flow-complete.command';
 
 let passed = 0;
@@ -442,35 +444,44 @@ async function main(): Promise<void> {
         && !/process\.env\.WHATSAPP_FLOW_PUBLIC_KEY\b/.test(config));
 
     // ═════════════════════════════════════════════════════════════════════════
-    section('8 · The published Flow definition — what Meta validates at publish time');
+    section('8 · The published Flow definitions — what Meta validates at publish time');
 
-    const flow = PRODUCT_LISTING_FLOW;
+    const ALL_FLOWS = [
+        ['product-listing', PRODUCT_LISTING_FLOW],
+        ['product-detail', PRODUCT_DETAIL_FLOW],
+        ['checkout', CHECKOUT_FLOW],
+    ] as const;
 
-    assert('it declares a data_api_version — without one the Flow is static',
-        typeof flow.data_api_version === 'string' && flow.data_api_version !== '');
+    for (const [label, definition] of ALL_FLOWS) {
+        assert(`${label}: declares a data_api_version — without one the Flow is static`,
+            typeof definition.data_api_version === 'string' && definition.data_api_version !== '');
 
-    /**
-     * ⚠ A screen absent from the routing model is UNREACHABLE, and Meta validates the map
-     * rather than the intent — so it publishes happily and renders nothing.
-     */
-    for (const s of flow.screens) {
-        assert(`⚠ screen '${s.id}' appears in the routing model — absent means unreachable`,
-            Object.prototype.hasOwnProperty.call(flow.routing_model, s.id));
+        /**
+         * ⚠ A screen absent from the routing model is UNREACHABLE, and Meta validates the map
+         * rather than the intent — so it publishes happily and renders nothing.
+         */
+        const unrouted = definition.screens
+            .filter((s) => !Object.prototype.hasOwnProperty.call(definition.routing_model, s.id))
+            .map((s) => s.id);
+        assert(`${label}: ⚠ every screen is in the routing model — absent means unreachable`,
+            unrouted.length === 0, unrouted.join(', '));
+
+        assert(`${label}: exactly one terminal screen`,
+            definition.screens.filter((s) => s.terminal).length === 1);
+
+        /**
+         * ⚠ Every declared data field needs an `__example__`: the Builder previews from it AND
+         * Meta validates the endpoint's real response against the declared types at publish.
+         */
+        const missingExample = definition.screens.flatMap((s) =>
+            Object.entries(s.data ?? {})
+                .filter(([, f]) => f.__example__ === undefined)
+                .map(([name]) => `${s.id}.${name}`));
+        assert(`${label}: ⚠ every declared data field carries an __example__`,
+            missingExample.length === 0, missingExample.join(', '));
     }
 
-    assert('exactly one terminal screen',
-        flow.screens.filter((s) => s.terminal).length === 1);
-
-    /**
-     * ⚠ Every declared data field needs an `__example__`: the Builder previews from it AND
-     * Meta validates the endpoint's real response against the declared types at publish.
-     */
-    const fieldsWithoutExample = flow.screens.flatMap((s) =>
-        Object.entries(s.data ?? {})
-            .filter(([, f]) => f.__example__ === undefined)
-            .map(([name]) => `${s.id}.${name}`));
-    assert('⚠ every declared data field carries an __example__',
-        fieldsWithoutExample.length === 0, fieldsWithoutExample.join(', '));
+    const flow = PRODUCT_LISTING_FLOW;
 
     /**
      * ⚠ The field names are the seam with the Telegram screen. `pl.html` reads `data.heading`
@@ -503,11 +514,86 @@ async function main(): Promise<void> {
     assert('⚠ it hands back a productId, never a variantId',
         'productId' in (footer?.['on-click-action']?.payload as Record<string, unknown>));
 
-    const definitionSource = stripComments(
-        readSrc('definitions/product-listing.flow.ts'),
+    for (const [label] of ALL_FLOWS) {
+        const source = stripComments(readSrc(`definitions/${label}.flow.ts`));
+        assert(`${label}: ⚠ no money maths in a definition — prices arrive formatted`,
+            !/toFixed|parseFloat|Intl\.NumberFormat/.test(source));
+    }
+
+    // ── checkout: the four protections, each pinned on its own ───────────────
+    const review = CHECKOUT_FLOW.screens.find((s) => s.id === 'REVIEW');
+    const inputs = (review?.layout.children ?? []).filter(
+        (c) => c.type === 'TextInput' || c.type === 'TextArea' || c.type === 'DatePicker',
     );
-    assert('⚠ no money maths in a definition — prices arrive already formatted',
-        !/toFixed|parseFloat|Intl\.NumberFormat/.test(definitionSource));
+
+    /**
+     * ⛔ `co.html` has exactly one input and it is a phone. An address field here would be a
+     * box whose contents are ignored — `createOrdersFromCart` re-resolves the destination from
+     * the customer's own saved addresses regardless — which is worse than no box, because a
+     * customer would believe they had changed where their parcel goes.
+     */
+    assert('⛔ checkout has EXACTLY ONE input, and it is a phone number',
+        inputs.length === 1
+        && (inputs[0] as { 'input-type'?: string })['input-type'] === 'phone',
+        `${inputs.length} inputs: ${inputs.map((i) => i.name).join(', ')}`);
+
+    assert('⛔ no address field of any kind on the checkout screen',
+        !JSON.stringify(review).toLowerCase().includes('address"')
+        || !inputs.some((i) => String(i.name).toLowerCase().includes('address')));
+
+    /**
+     * ⚠ The masked number is helper text under an EMPTY input, so the common case discloses
+     * nothing. A `value` or an `init-value` would put the number into the form.
+     */
+    const phoneInput = inputs[0] as Record<string, unknown>;
+    assert('⚠ the masked number is helper text, never the input\'s value',
+        phoneInput['helper-text'] === '${data.phoneMasked}'
+        && !('value' in phoneInput) && !('init-value' in phoneInput));
+
+    assert('⚠ the phone field is OPTIONAL — empty means "use my account number"',
+        phoneInput.required === false);
+
+    const checkoutFooter = (review?.layout.children ?? []).find((c) => c.type === 'Footer') as
+        | { 'on-click-action'?: { name?: string } } | undefined;
+
+    /**
+     * ⚠ Checkout is the one Flow that writes, so its terminal action must reach the endpoint.
+     * A `complete` here would close the Flow without ever placing the order.
+     */
+    assert('⛔ checkout\'s footer is a data_exchange — a complete would place no order',
+        checkoutFooter?.['on-click-action']?.name === 'data_exchange');
+
+    /**
+     * ⚠ The other two must NOT write from inside a Flow: a write belongs behind the bot
+     * surface's idempotency guard, and a Flow exchange has no Idempotency-Key.
+     */
+    for (const [label, definition] of [
+        ['product-listing', PRODUCT_LISTING_FLOW],
+        ['product-detail', PRODUCT_DETAIL_FLOW],
+    ] as const) {
+        const f = definition.screens[0].layout.children.find((c) => c.type === 'Footer') as
+            | { 'on-click-action'?: { name?: string } } | undefined;
+        assert(`${label}: ⚠ completes rather than exchanging — it reports, it does not write`,
+            f?.['on-click-action']?.name === 'complete');
+    }
+
+    /**
+     * ⚠ The detail screen sends a VARIANT id where the listing sends a PRODUCT id. Swapping
+     * them is silent: both are ObjectIds and both resolve to something.
+     */
+    const detailFooter = PRODUCT_DETAIL_FLOW.screens[0].layout.children.find(
+        (c) => c.type === 'Footer',
+    ) as { 'on-click-action'?: { payload?: Record<string, unknown> } } | undefined;
+    assert('⚠ the detail screen hands back a variantId, where the listing hands a productId',
+        'variantId' in (detailFooter?.['on-click-action']?.payload ?? {}));
+
+    /**
+     * ⚠ The detail screen carries NO option list — the matrix is flattened into variants
+     * precisely so no positional matching exists on this channel. An `options` field
+     * reappearing means somebody reintroduced it.
+     */
+    assert('⚠ the detail screen declares no option matrix — variants are flat',
+        !('options' in (PRODUCT_DETAIL_FLOW.screens[0].data ?? {})));
 
     // ═════════════════════════════════════════════════════════════════════════
     section('9 · The completion command — the rule that inverts into a bug');
@@ -556,6 +642,24 @@ async function main(): Promise<void> {
      */
     assert('⚠ it resolves by asking each kind, never by reading kind-agnostically',
         /inAppSurfaceStore\.read\(kind,/.test(commandSource));
+
+    /**
+     * ⛔ **A command nobody registers is unreachable, and that is the exact defect this whole
+     * piece of work exists to close.** The completion message would arrive at the webhook,
+     * match no command, and be dropped — which is indistinguishable from the gap that was
+     * there before: a customer fills in a form, presses the final button, and the thread says
+     * nothing.
+     *
+     * Asserted by source scan rather than by dispatching, because importing the bus here would
+     * pull the whole command graph into a suite that is meant to need no Redis and no DB.
+     */
+    const registry = fs.readFileSync(
+        path.join(__dirname, '..', '..', 'src', 'modules', 'commands', 'index.ts'),
+        'utf8',
+    );
+    assert('⛔ flow_complete is REGISTERED on the bus — unregistered means silently dropped',
+        /FlowCompleteCommand\.command_name/.test(stripComments(registry))
+        && /flows\/commands\/flow-complete\.command/.test(registry));
 
     // ═════════════════════════════════════════════════════════════════════════
     console.log('\n────────────────────────────────────────────────────────────');

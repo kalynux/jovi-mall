@@ -123,7 +123,7 @@ export class StoreListingController {
             shops: data.map(toShopCard),
             labels: { verified: VERIFIED[language], closed: CLOSED[language] },
             emptyText: SHOPS_EMPTY[language],
-            cursor: page * PAGE_SIZE < meta.total ? String(page + 1) : null,
+            cursor: nextCursor(page, meta.total),
         });
     });
 
@@ -224,11 +224,49 @@ async function readStoreSession(
  * mints is addressed at the session's own owner, so a later cart write lands in that customer's
  * own basket. The grid's `assertOfferable` states the same residual for the same reason.
  *
- * `getStoreBySlug` raises `STORE_NOT_FOUND` itself, which is the honest answer and the one the
- * public route already gives.
+ * ⚠ **The 404 `getStoreBySlug` raises is re-thrown as a 422, and that is a correctness fix
+ * rather than a preference.** Letting it through was wrong in a way only visible on the page:
+ * `sl.html`'s `explain()` maps EVERY 404 to "This page is no longer available — ask me again in
+ * the chat", because on every other path a 404 here means the handle has lapsed. So a single
+ * shop being unpublished between the directory rendering and the customer tapping it told them
+ * the whole screen was dead, and sent them back to the chat to reopen a directory that was
+ * working perfectly.
+ *
+ * 422 is the grid's posture for exactly this ("that item is not on this list"), and it is what
+ * makes the two 404-shaped faults distinguishable to a page that can only see a status code.
+ * The message is written here rather than inherited, so the customer is told about the shop.
+ *
+ * ⚠ The code's registry name is product-flavoured — the same mismatch the lapsed-handle code
+ * has, and the same one the coordinator is scheduling a generic replacement for. The status and
+ * the message are what the page and the customer actually see.
  */
 async function assertOfferable(storeSlug: string): Promise<void> {
-    await publicCatalogService.getStoreBySlug(storeSlug);
+    try {
+        await publicCatalogService.getStoreBySlug(storeSlug);
+    } catch {
+        throw createAppError(
+            ERROR_CODES.BOT_PRODUCT_NOT_IN_LIST,
+            422,
+            'That shop is not available any more',
+        );
+    }
+}
+
+/**
+ * The next page's cursor, or null when there is not one this endpoint would accept.
+ *
+ * ⚠ **`MAX_PAGE` belongs in this condition as well as in the schema, and leaving it out was a
+ * real defect.** `CursorSchema` refuses anything above `MAX_PAGE`, so a cursor of `MAX_PAGE + 1`
+ * is a page the customer can be OFFERED and this endpoint will then refuse: "Load more"
+ * appears, the tap 400s, and the page says "Something went wrong" — a customer told the screen
+ * is broken when they have simply reached the end of it.
+ *
+ * The two places answer different questions: the schema bounds what a caller may ask for, this
+ * bounds what we may offer. A bound only on the refusing side turns a natural end into a fault.
+ */
+function nextCursor(page: number, total: number): string | null {
+    if (page >= MAX_PAGE) return null;
+    return page * PAGE_SIZE < total ? String(page + 1) : null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -348,4 +386,5 @@ export const __STORE_LISTING = Object.freeze({
     SHOPS_EMPTY,
     toShopCard,
     headingFor,
+    nextCursor,
 });

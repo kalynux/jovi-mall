@@ -134,7 +134,7 @@ export class OrderListingController {
                 toGroupCard(group, language, storeNames, titles.get(group.cartId) ?? []),
             ),
             emptyText: ORDERS_EMPTY[language],
-            cursor: page * PAGE_SIZE < meta.total ? String(page + 1) : null,
+            cursor: nextCursor(page, meta.total),
         });
     });
 }
@@ -169,6 +169,27 @@ async function readOrderSession(
         );
     }
     return session;
+}
+
+/**
+ * The next page's cursor, or null when there is not one this endpoint would accept.
+ *
+ * ⚠ **`MAX_PAGE` is in this condition as well as in the schema, and leaving it out was a real
+ * defect rather than a tidiness point.** `CursorSchema` refuses anything above `MAX_PAGE`, so a
+ * cursor of `MAX_PAGE + 1` is a page the customer can be OFFERED and this endpoint will then
+ * refuse: "Load more" appears, the tap 400s, and the page renders "Something went wrong" — a
+ * customer told the screen is broken when they have simply reached the end of it.
+ *
+ * The ceiling has to be stated in both places because they answer different questions: the
+ * schema bounds what a caller may ask for, and this bounds what we may offer. A bound that
+ * exists only on the refusing side turns a natural end into a fault.
+ *
+ * ⚠ **The same shape exists wherever a page number is both capped and advertised.** It was
+ * found here and reported to the coordinator rather than fixed across other streams' files.
+ */
+function nextCursor(page: number, total: number): string | null {
+    if (page >= MAX_PAGE) return null;
+    return page * PAGE_SIZE < total ? String(page + 1) : null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -561,4 +582,5 @@ export const __ORDER_LISTING = Object.freeze({
     paymentTextOf,
     summarise,
     toGroupCard,
+    nextCursor,
 });

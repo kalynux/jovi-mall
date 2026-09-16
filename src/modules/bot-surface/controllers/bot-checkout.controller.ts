@@ -15,7 +15,7 @@ import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { botChrome } from '../domain/bot-chrome-copy';
 import { botStorefrontLink } from '../domain/bot-list-window';
 import { formatBotPrice } from '../domain/product-card';
-import { inAppScreenUrl } from '../domain/inapp-url';
+import { inAppBaseUrl, inAppScreenUrl } from '../domain/inapp-url';
 import { inAppSurfaceStore } from '../services/inapp-surface.store';
 import { storedPayerNumber } from '../miniapp/surfaces/checkout.controller';
 
@@ -96,6 +96,44 @@ export class BotCheckoutController {
             );
         }
 
+        const text = botChrome('browseProductsPrompt', language);
+        const label = botChrome('checkoutButton', language);
+
+        /**
+         * ⚠ **THE ORIGIN IS CHECKED BEFORE ANYTHING IS MINTED, and for `co` that ordering is
+         * the decision rather than a micro-optimisation.**
+         *
+         * The other in-app doors mint first and discover afterwards that there is nowhere to
+         * send the customer, which for a listing handle is harmless. This handle can place an
+         * order and start a payment. `BOT_MINIAPP_BASE_URL` is **unset in production**, so
+         * minting first would mean every single checkout turn creating a ten-minute
+         * order-placing credential that is handed to nobody and reachable by no one.
+         *
+         * That is not a leak — nothing receives it and it expires — and it is still worth
+         * refusing, for a reason backend-89 put better than the wasted work: **"how many live
+         * checkout handles exist" stops meaning anything**, and that is the number somebody
+         * reaches for the first time this surface has an incident.
+         *
+         * ⚠ **`inAppBaseUrl()`, never a second read of the variable.** `inapp-url.ts` was
+         * extracted to be its single reader and it holds BOTH rules that decide the answer —
+         * HTTPS (Telegram refuses a `web_app` button on any other scheme, and refuses the whole
+         * message with it) and publicly reachable (a Tailscale or loopback origin opens for
+         * nobody but the developer who set it). A local `process.env` check here would pass on
+         * an origin the renderer then rejects. Stream C calls the same function from its own
+         * two minting paths, which is what keeps the two doors agreeing.
+         */
+        if (!inAppBaseUrl()) {
+            const fallback = botStorefrontLink('/cart', language);
+            /**
+             * ⚠ **Never a dead button.** With no storefront either, the reply is cleared and
+             * the model answers in its own words — the rule `/payments/:id/pay-link` already
+             * follows, because a control with an empty target is worse than no control.
+             */
+            setBotReply(req, fallback ? { kind: 'link', text, label, url: fallback } : null);
+            sendSuccess(res, { handle: null, opened: 'storefront', itemCount: cart.totalItems });
+            return;
+        }
+
         /**
          * ⚠ **`cartId` is recorded so the screen can tell "this basket" from "a basket".**
          * `clearCart` deletes the document, so a basket emptied and rebuilt gets a new id — and
@@ -113,23 +151,20 @@ export class BotCheckoutController {
         });
 
         /**
-         * ⚠ **The degradation is the path that RUNS today**, not a fallback to sketch in:
-         * `BOT_MINIAPP_BASE_URL` is unset in production, so `inAppScreenUrl` answers null and
-         * every one of these turns hands back the storefront cart instead. It must therefore
-         * leave the customer somewhere real — and never render a control with an empty target,
-         * which is the rule `/payments/:id/pay-link` already follows.
+         * ⚠ **Still checked, and not redundantly.** `inAppBaseUrl` answered above, so this can
+         * only be null if the environment changed between the two calls — but the alternative
+         * is composing the URL by hand from a base this file would then have to know the shape
+         * of, which is the second reader the guard above exists to avoid.
          */
         const screenUrl = inAppScreenUrl('co', handle, language);
-        const text = botChrome('browseProductsPrompt', language);
-        const label = botChrome('checkoutButton', language);
-
-        if (screenUrl) {
-            setBotReply(req, { kind: 'inapp', text, label, url: screenUrl });
-        } else {
+        if (!screenUrl) {
             const fallback = botStorefrontLink('/cart', language);
             setBotReply(req, fallback ? { kind: 'link', text, label, url: fallback } : null);
+            sendSuccess(res, { handle: null, opened: 'storefront', itemCount: cart.totalItems });
+            return;
         }
 
+        setBotReply(req, { kind: 'inapp', text, label, url: screenUrl });
         sendSuccess(res, { handle, opened: 'checkout', itemCount: cart.totalItems });
     });
 

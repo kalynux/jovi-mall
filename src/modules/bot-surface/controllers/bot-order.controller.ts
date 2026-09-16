@@ -5,9 +5,9 @@ import { sendSuccess } from '../../../core/responses';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { escapeRegex } from '../../../core/utils/regex.util';
-import { IOrder, OrderModel } from '../../orders/order.model';
+import { FulfillmentStatus, IOrder, OrderModel } from '../../orders/order.model';
 import { OrderRepository } from '../../orders/order.repository';
-import { OrderService } from '../../orders/order.service';
+import { CANCELLABLE_FULFILLMENT_STATES, OrderService } from '../../orders/order.service';
 import { customerOrderViewService } from '../../orders/services/customer-order-view.service';
 import { CustomerOrderDto } from '../../orders/dto/customer-order.dto';
 import { CustomerShipmentDto } from '../../orders/dto/customer-shipment.dto';
@@ -1018,7 +1018,14 @@ function setOrderCardReply(req: Request, order: CustomerOrderDto): void {
  * show one on an order that certainly cannot be. The reverse would be a control that refuses.
  */
 function isCancellableFromChat(order: CustomerOrderDto): boolean {
-    if (order.fulfillmentStatus !== 'pending' && order.fulfillmentStatus !== 'processing') {
+    /**
+     * ⚠ **Imported, not retyped.** `CANCELLABLE_FULFILLMENT_STATES` is exported by
+     * `order.service.ts` and is the same list `assertCancellable` tests against, so the button
+     * and the rule cannot drift apart. A hand-written `'pending' || 'processing'` here would be
+     * a second copy of a vocabulary — and the day a third state becomes cancellable, the only
+     * symptom would be a button that never appears for it.
+     */
+    if (!CANCELLABLE_FULFILLMENT_STATES.includes(order.fulfillmentStatus as FulfillmentStatus)) {
         return false;
     }
     // `assertCancellable` refuses `paid` with ORDER_CANCEL_REQUIRES_REFUND, and refuses every
@@ -1107,9 +1114,32 @@ async function setShipmentCardReply(
         return;
     }
 
+    /**
+     * ⚠ **THE GATE IS THE SERVICE'S OWN TWO REFUSALS, RESTATED — not a guess at them.**
+     * `confirmDeliveryByCustomer` accepts a shipment in exactly one state and from exactly one
+     * kind of order, and offering the question anywhere else is a button that can only fail:
+     *
+     *   - **`out_for_delivery` and nothing else.** That customer word maps from the internal
+     *     `agent_delivered` alone — the agent says they handed it over and the customer has not
+     *     agreed yet. `delivered` is the state AFTER confirmation, so including it offers the
+     *     question to somebody who has already answered it, and every tap answers
+     *     `409 SHIPMENT_ALREADY_CONFIRMED`.
+     *   - **Never cash on delivery.** The service refuses those outright with *"confirmed by
+     *     giving the agent your delivery code, not by confirming here"*. On a COD parcel the
+     *     handing over of the code IS the confirmation, which is why the branch above — the
+     *     code — is the whole of what a COD customer is offered.
+     *
+     * ⚠ **`completion.confirmedAt` was the wrong gate and is deliberately not used here.** The
+     * DTO's warning about it is about the ORDER-level confirmation, and it is right about that:
+     * fulfilment does not move when a customer confirms, so an order-level control gated on
+     * `fulfillmentStatus` offers itself forever. But an order completes only when its LAST
+     * parcel is confirmed — so on a three-parcel order `confirmedAt` stays null after the first
+     * two, and gating on it would keep offering the question for parcels already confirmed.
+     * Per-parcel state is what answers a per-parcel question.
+     */
     const awaitingConfirmation =
-        (shipment.status === 'out_for_delivery' || shipment.status === 'delivered')
-        && order.completion?.confirmed_at == null;
+        shipment.status === 'out_for_delivery'
+        && order.payment_method !== 'cash_on_delivery';
 
     if (awaitingConfirmation) {
         setBotReply(req, {
@@ -1206,13 +1236,73 @@ async function plainParcelText(
     language: string | null,
 ): Promise<string> {
     const lines = [state];
-    if (shipment.trackingNumber) lines.push(shipment.trackingNumber);
+
+    const marks = [shipment.trackingNumber, shipment.agencyName].filter(Boolean);
+    if (marks.length > 0) lines.push(marks.join(' · '));
 
     if (await isHandingOver(order._id.toString(), shipment.id)) {
-        lines.push(botChrome('handoverPrompt', language));
+        lines.push('', botChrome('handoverPrompt', language));
     }
 
+    const journey = parcelJourney(shipment, language);
+    if (journey.length > 0) lines.push('', ...journey);
+
     return lines.join('\n');
+}
+
+/**
+ * ⭐ **The journey — what a "Track" button would have shown, rendered instead of hidden behind
+ * one.**
+ *
+ * ── ⚠ WHY THERE IS NO TRACK BUTTON HERE ────────────────────────────────────
+ * The brief asks for one on this card. `track:<orderId>` returns the parcel LIST, which is the
+ * screen the customer tapped to *reach* this card — so the button would send them back where
+ * they came from. A control that loops is the same failure as a control that does nothing; it
+ * just takes one more tap to discover.
+ *
+ * There is no live-position route on this surface at all (`api-doc/n8n/tools/catalog.json` says
+ * the shipments read *is* "the answer to 'where is my order'"), so the live map a customer
+ * imagines behind "Track" does not exist to link to. What does exist is
+ * `CustomerShipmentDto.statusHistory` — already collapsed to the five customer words and
+ * already de-duplicated, so `picked_up → in_transit → handing_over` is one "On its way" line
+ * rather than three. That is the content of the missing screen, and it fits in the message.
+ *
+ * ⚠ **Empty for a parcel that has only ever been in one state**, because a one-line "journey"
+ * restates the status printed directly above it.
+ */
+function parcelJourney(shipment: CustomerShipmentDto, language: string | null): string[] {
+    const history = shipment.statusHistory ?? [];
+    if (history.length < 2) return [];
+
+    return history.map(
+        (entry) => `${botShipmentStateLabel(entry.status, language)} — ${formatBotDate(entry.at, language)}`,
+    );
+}
+
+/**
+ * A date, in the customer's language.
+ *
+ * ⚠ **ICU here and deliberately NOT for money** — `formatBotPrice` avoids `Intl.NumberFormat`
+ * because it renders XAF with a narrow no-break space whose code point differs between Node
+ * builds. Neither hazard applies to a date, and a hand-rolled calendar in five languages is not
+ * something this stream should be writing.
+ *
+ * ⚠ **Deliberately identical to `formatDate` in `miniapp/surfaces/order-listing.controller.ts`**
+ * — same `dateStyle`, same fallback — because that screen and this card describe the same
+ * parcels to the same person. It is copied rather than imported only because that one is module
+ * private; it is four lines and reported to Stream 0 rather than quietly forked.
+ *
+ * ⚠ **No `timeZone` is pinned**, so this renders in the server's zone, which is what every
+ * other date this platform shows a customer already does. Pinning one here would make this card
+ * disagree with the emails about the same delivery.
+ */
+function formatBotDate(at: string, language: string | null): string {
+    try {
+        return new Intl.DateTimeFormat(language ?? 'en', { dateStyle: 'medium' }).format(new Date(at));
+    } catch {
+        // A locale ICU does not carry is not worth losing the line over.
+        return new Date(at).toISOString().slice(0, 10);
+    }
 }
 
 /**

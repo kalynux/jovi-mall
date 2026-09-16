@@ -502,6 +502,46 @@ function main(): void {
         __ORDER_LISTING.MAX_PAGE > 0 && __STORE_LISTING.MAX_PAGE > 0
         && ORDER_SRC.includes('.max(MAX_PAGE)') && STORE_SRC.includes('.max(MAX_PAGE)'));
 
+    /**
+     * ⚠ **THE CEILING MUST BE ON THE OFFERING SIDE AS WELL AS THE REFUSING SIDE.** Found on
+     * 2026-09-16, after the screens had already shipped.
+     *
+     * The first version advertised `page + 1` whenever more rows existed, and the cursor schema
+     * refuses anything above `MAX_PAGE`. So at the last page the customer is shown "Load more",
+     * the tap is rejected as a validation error, and the page renders "Something went wrong" —
+     * a customer told the screen is broken when they have merely reached the end of it.
+     *
+     * Reaching it needs four thousand checkouts or four thousand eight hundred shops, which is
+     * why it survived review: it is invisible until the one customer who has that much history
+     * meets it, and they meet it as a fault. Both bounds are pinned here because the two answer
+     * different questions — what may be ASKED FOR, and what may be OFFERED — and a bound that
+     * exists only on the refusing side turns a natural end into an error.
+     */
+    assert('⛔ neither screen offers a page its own schema would refuse', () =>
+        [__ORDER_LISTING, __STORE_LISTING].every((s) => {
+            const huge = s.PAGE_SIZE * (s.MAX_PAGE + 50);
+            return s.nextCursor(s.MAX_PAGE, huge) === null
+                && s.nextCursor(s.MAX_PAGE - 1, huge) === String(s.MAX_PAGE)
+                && s.nextCursor(1, s.PAGE_SIZE) === null
+                && s.nextCursor(1, s.PAGE_SIZE + 1) === '2';
+        }));
+
+    /**
+     * ⚠ **A vanished shop must not read as a dead screen.** Also found after shipping.
+     *
+     * `sl.html`'s `explain()` maps every 404 to "This page is no longer available — ask me again
+     * in the chat", because on every other path a 404 means the handle has lapsed. Letting
+     * `getStoreBySlug`'s own 404 through therefore told a customer whose screen was working
+     * perfectly to close it, because one shop had been unpublished since the page rendered.
+     *
+     * 422 is the grid's posture for "that item is not on this list", and it is the only thing
+     * that makes the two 404-shaped faults distinguishable to a page that can see a status code
+     * and nothing else.
+     */
+    assert('⛔ a shop that has gone is refused as 422, never as the screen having lapsed', () =>
+        /catch\s*\{[\s\S]*?BOT_PRODUCT_NOT_IN_LIST[\s\S]*?422/.test(STORE_SRC)
+        && STORE_SRC.includes('getStoreBySlug'));
+
     console.log('\n── The row a customer actually reads ──');
 
     /**

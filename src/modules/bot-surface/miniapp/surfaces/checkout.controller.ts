@@ -381,9 +381,16 @@ async function primaryImageUrls(productIds: string[]): Promise<Map<string, strin
 async function resolveDestination(
     cart: CartResponse,
     customer: ICustomer,
-): Promise<{ text: string } | null> {
+): Promise<{ text: string; digital?: true } | null> {
+    /**
+     * ⚠ **`digital` changes the LABEL, not just the value**, which is why it is on the wire at
+     * all. Under "Deliver to", a masked email reads as somebody's address having been mangled;
+     * under `checkoutDigitalDelivery` — *"Sent to your account"* — the same string answers the
+     * only question a download raises, which is *which* account. The page owns that choice
+     * because the page owns the copy table; this flag is the one fact it cannot derive.
+     */
     if (cart.productType === 'digital') {
-        return { text: accountIdentifier(customer) };
+        return { text: accountIdentifier(customer), digital: true };
     }
 
     const addresses = customer.saved_addresses ?? [];
