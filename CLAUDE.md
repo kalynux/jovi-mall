@@ -2188,7 +2188,7 @@ traffic cannot exhaust the global counter for the signed-in users behind the sam
 The agent app is **not on Google Play**, so an agent installs it by downloading an APK from the
 marketing site. One row per published build (`app_releases`), two unauthenticated reads under
 `/api/public/app`, one PUBLIC storage tree (`app-releases`). Contract:
-`api-doc/public/app-downloads.md`. Suite: `npm run test:app-releases` (56, no DB, no network).
+`api-doc/public/app-downloads.md`. Suite: `npm run test:app-releases` (63, no DB, no network).
 
 **The write path is a script, not a route** — `npm run app:publish -- --apk <path>`. Publishing
 uploads ~79 MB and then asserts "this is what an agent should install"; neither half belongs
