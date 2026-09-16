@@ -22,6 +22,29 @@ export interface BookProductResult {
 }
 
 /**
+ * How far BEFORE the caller's `from` availability is computed, before being cut back to it.
+ *
+ * ⚠ **This is what makes a slot a fixed thing rather than a function of the question.** The
+ * rule windows are clipped to the range they are computed over (`clipWindow`), and slots are
+ * laid back-to-back from each window's START. Computed over exactly [from, to], a window already
+ * in progress at `from` is re-anchored AT `from` — so asking at 14:37:12 offered 14:37:12–15:37:12,
+ * and asking a minute later offered a different set. With the offered set depending on the
+ * caller's clock, "is this a slot we offer" had no answer, and the booking path never asked it.
+ *
+ * Forty-eight hours is longer than any window a weekly rule can produce — an overnight rule ends
+ * at most 24 hours after its own start — so every window that can reach [from, to] is computed
+ * from its real start. Slots then anchor to the shop's opening time, or to the end of an earlier
+ * appointment plus its buffer, exactly as before, and never to the caller.
+ */
+export const AVAILABILITY_LOOKBEHIND_MS = 48 * 60 * 60 * 1000;
+
+/** A slot the caller named that the service really offers, as instants. */
+export interface OfferedSlot {
+  start: Date;
+  end: Date;
+}
+
+/**
  * ProductBookingService - Product-centric orchestration for service bookings
  * 
  * This service provides a product-focused interface for booking operations,
@@ -106,13 +129,21 @@ export class ProductBookingService {
     const isCapacity = serviceConfig.bookingMode === 'capacity';
     const seats = isCapacity ? (serviceConfig.maxBookings ?? 1) : 1;
 
+    /**
+     * ⚠ **Computed from `computeFrom`, then cut back to [fromDate, toDate] in step 4.** See
+     * `AVAILABILITY_LOOKBEHIND_MS`. Bookings, calendar busy time and rule windows must ALL use the
+     * widened start: an appointment that ended just before `fromDate` is what anchors the next slot
+     * after it, so leaving it out would move the grid as surely as the clipping did.
+     */
+    const computeFrom = new Date(fromDate.getTime() - AVAILABILITY_LOOKBEHIND_MS);
+
     // The product's OWN bookings decide its occupancy — for every mode, not just
     // capacity. Reading occupancy from Google Calendar alone meant a `manual`
     // booking (which writes no calendar event until the vendor approves it) never
     // blocked its own slot, so the same hour could be sold without limit.
     const bookedWindows = await this.bookingService.findActiveBookingWindows(
       productId,
-      fromDate,
+      computeFrom,
       toDate
     );
 
@@ -127,7 +158,7 @@ export class ProductBookingService {
     const availableWindows = await this.availabilityService.getAvailability(
       productId,
       product.vendorId,
-      fromDate,
+      computeFrom,
       toDate,
       {
         ownBookedWindows,
@@ -137,10 +168,22 @@ export class ProductBookingService {
       }
     );
 
-    // Step 3: Generate bookable slots
-    const slots = this.slotGenerator.generateSlots(
+    // Step 3: Generate bookable slots, from each window's REAL start.
+    const generated = this.slotGenerator.generateSlots(
       availableWindows,
       serviceConfig.durationMinutes
+    );
+
+    /**
+     * Step 4: keep only the slots that lie wholly inside what was asked for.
+     *
+     * The same membership the clipping produced before — a slot starting at or after `fromDate`
+     * and ending at or before `toDate` — with the one difference that matters: a window in
+     * progress at `fromDate` now offers the shop's own grid (15:00, 16:00, …) rather than a grid
+     * starting at whatever instant the caller happened to ask.
+     */
+    const slots = generated.filter(
+      (slot) => slot.start.getTime() >= fromDate.getTime() && slot.end.getTime() <= toDate.getTime()
     );
 
     if (!isCapacity) {
@@ -202,10 +245,19 @@ export class ProductBookingService {
     const serviceConfig = serviceVariant.serviceConfig!;
     const bookingMode = serviceConfig.bookingMode;
 
-    // Step 2: Parse slot to get timing
-    const { start, end } = this.slotGenerator.parseSlotId(slotId);
+    /**
+     * Step 2: the slot must be one this service really offers — BEFORE anything is priced.
+     *
+     * ⚠ **The price below is prorated from the interval**, `price / durationMinutes × minutes`,
+     * and until 2026-09-16 the interval came straight out of a caller-supplied slot id checked
+     * for its FORMAT only. A one-minute slot of a one-hour service was priced, snapshotted and
+     * charged at a sixtieth; a slot at 3am, on a closed day, in the past or eight hours long was
+     * booked as readily as a real one. `assertOfferedSlot` is what stops that, and
+     * `test:booking-slot-offer` pins that no price is resolved before it has run.
+     */
+    const { start, end } = await this.assertOfferedSlot(productId, slotId);
 
-    // Step 3: Resolve price
+    // Step 3: Resolve price — only ever from an interval the service offers.
     const price = await this.priceResolver.resolvePrice(
       product,
       { start, end },
@@ -253,8 +305,67 @@ export class ProductBookingService {
    * @returns true if the hold was acquired, false if already held (exclusive mode).
    */
   async lockSlot(productId: string, slotId: string, userId: string, ttlSeconds?: number): Promise<boolean> {
+    /**
+     * ⚠ **A hold is validated exactly as a booking is.** A fabricated slot that could merely be
+     * HELD still blocks real customers from that interval for the life of the hold — the
+     * "block a shop's whole day" case, fifteen minutes at a time and renewable. Every door that
+     * holds a slot reaches this method (the storefront's lock route and the bot's create and
+     * reschedule), so checking here closes all of them without opening a route file.
+     */
+    await this.assertOfferedSlot(productId, slotId);
+
     const scopeToOwner = await this.isCapacityProduct(productId);
     return this.slotLockFacade.lockSlot(slotId, userId, ttlSeconds, scopeToOwner);
+  }
+
+  /**
+   * The slot a caller named, as instants — but only if this service really offers it right now.
+   *
+   * ── WHAT "OFFERS" MEANS, AND WHY IT IS THE AVAILABILITY READ ITSELF ──────────
+   * A slot is offered when `getAvailability` would list it: inside the shop's published rules,
+   * clear of its other commitments and its buffers, not full, and the exact length the service is
+   * sold in. That read already encodes every one of those rules, so this asks it rather than
+   * writing a second opinion about any of them. It only became possible to ask once availability
+   * stopped depending on the caller's clock — see `AVAILABILITY_LOOKBEHIND_MS`.
+   *
+   * Asked over exactly [start, end]: with the grid fixed, the only slot that can lie wholly inside
+   * that range is one that starts at `start` and ends at `end`, so an exact match is the whole test.
+   * A real slot shifted by a minute, shortened, lengthened or moved off the grid finds nothing.
+   *
+   * ── THE REFUSAL ─────────────────────────────────────────────────────────────
+   * Every failure is `BOOKING_SLOT_UNAVAILABLE` 409 — true in each case from where the customer
+   * stands, and already handled by every client as "pick another time". A malformed id is still
+   * `parseSlotId`'s 400. `details.reason` distinguishes them for whoever reads the log.
+   *
+   * ⚠ **Also refuses a product the storefront would not show**, because the availability read
+   * does: a draft, a suspended or a deleted service answers 404 here as it does to a browser.
+   *
+   * @param now Injectable for the suites; production passes nothing.
+   */
+  async assertOfferedSlot(productId: string, slotId: string, now: Date = new Date()): Promise<OfferedSlot> {
+    const { start, end } = this.slotGenerator.parseSlotId(slotId);
+
+    const refuse = (reason: 'inverted' | 'not_future' | 'not_offered'): never => {
+      throw createAppError(
+        ERROR_CODES.BOOKING_SLOT_UNAVAILABLE,
+        409,
+        'That time is not available. Please choose another slot.',
+        { slotId, reason }
+      );
+    };
+
+    // Cheap structural refusals first: neither needs a read, and an inverted interval would
+    // otherwise reach the availability computation as a range that ends before it starts.
+    if (end.getTime() <= start.getTime()) refuse('inverted');
+    if (start.getTime() <= now.getTime()) refuse('not_future');
+
+    const offered = await this.getAvailability(productId, start, end);
+    const match = offered.some(
+      (slot) => slot.start.getTime() === start.getTime() && slot.end.getTime() === end.getTime()
+    );
+    if (!match) refuse('not_offered');
+
+    return { start, end };
   }
 
   /**

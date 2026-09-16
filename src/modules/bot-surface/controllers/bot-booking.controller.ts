@@ -273,12 +273,9 @@ export class BotBookingController {
          * unrelated id lock a stranger's appointment time for fifteen minutes.
          */
         const existing = await bookingService.getUserBooking(bookingId, caller.userId);
+        const productId = referencedIdOf(existing.productId);
 
-        const held = await productBookingService.lockSlot(
-            existing.productId.toString(),
-            slotId,
-            caller.userId,
-        );
+        const held = await productBookingService.lockSlot(productId, slotId, caller.userId);
         if (!held) {
             throw createAppError(ERROR_CODES.BOOKING_SLOT_LOCKED, 409, undefined, { slotId });
         }
@@ -291,11 +288,7 @@ export class BotBookingController {
             sendSuccess(res, toBotBookingDto(booking));
         } catch (error) {
             try {
-                await productBookingService.unlockSlot(
-                    existing.productId.toString(),
-                    slotId,
-                    caller.userId,
-                );
+                await productBookingService.unlockSlot(productId, slotId, caller.userId);
             } catch {
                 // The TTL is the backstop.
             }
@@ -455,6 +448,30 @@ export class BotBookingController {
         );
         sendSuccess(res, toBotBookingDto(booking));
     });
+}
+
+/**
+ * The id behind a reference, whether or not it was populated.
+ *
+ * ⚠ **`getUserBooking` POPULATES `productId`, and `String()` of a populated document is NOT its
+ * id.** On Mongoose 8 a document's `toString()` is its inspected contents —
+ * `"{ title: 'Haircut', type: 'service', _id: new ObjectId('…') }"` — so the reschedule route
+ * used to hand that whole string to `lockSlot` and `unlockSlot` as a product id.
+ * `resolveCapacity` answers null for an invalid id, so the hold was taken UNSCOPED, while
+ * `rescheduleBooking` resolved the real product and asserted the SCOPED key a group class
+ * uses: every chat reschedule of a group class was refused with `BOOKING_SLOT_NOT_LOCKED` —
+ * KI-1, back on this one door. A one-person appointment worked only because both sides
+ * happened to agree on the unscoped key.
+ *
+ * Since `lockSlot` now validates the slot against the product's real availability, the same
+ * string would have made EVERY chat reschedule fail. Taking the id explicitly closes both, and
+ * `test:booking-slot-offer` pins this against an in-memory populated document.
+ */
+export function referencedIdOf(ref: unknown): string {
+    if (ref !== null && typeof ref === 'object' && '_id' in ref) {
+        return String((ref as { _id: unknown })._id);
+    }
+    return String(ref);
 }
 
 /**

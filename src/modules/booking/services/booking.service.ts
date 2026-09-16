@@ -461,6 +461,10 @@ export class BookingService {
       );
     }
 
+    // Step 0: the new time must be one THIS side may move to, before any hold is asserted or
+    // any occupancy counted. See `assertRescheduleTarget` for the two rules and why they differ.
+    const { start, end } = await this.assertRescheduleTarget(booking, newSlotId, actor);
+
     // Step 1: Is this a group service? Everything below branches on the answer, and the
     // FIRST thing it decides is which Redis key the hold lives under.
     //
@@ -476,8 +480,7 @@ export class BookingService {
 
     await this.slotLockService.assertLocked(newSlotId, lockOwnerId, scopeToOwner);
 
-    // Step 2: Parse new slot
-    const { start, end } = this.slotGenerator.parseSlotId(newSlotId);
+    // Step 2: the new interval is the one Step 0 validated — never re-parsed from the raw id.
 
     const previousStartAt = booking.startAt;
     const previousEndAt = booking.endAt;
@@ -577,6 +580,64 @@ export class BookingService {
     await this.emitBookingRescheduledEvent(booking, previousStartAt);
 
     return booking;
+  }
+
+  /**
+   * Where a booking may be moved to, by who is moving it.
+   *
+   * ── A CUSTOMER moves only to a time the service really offers ────────────────
+   * The same check a new booking passes (`ProductBookingService.assertOfferedSlot`): inside the
+   * shop's published hours, free, the length the service is sold in, and in the future. Until
+   * 2026-09-16 this method checked the slot id's FORMAT only, so a customer could move an
+   * appointment onto 3am, onto a closed day, or onto an eight-hour interval that blocked the
+   * shop's whole day.
+   *
+   * ⚠ **Validated with the booking being moved still counted as busy, deliberately.** That is
+   * exactly the availability the customer was shown when they picked the new time — the
+   * storefront and the chat both read it with this booking in place — so every time a customer
+   * could have been offered passes, and nothing they could not have been offered does. Excluding
+   * the booking would have re-anchored the grid around the gap it leaves and validated a
+   * different set of slots from the one on their screen.
+   *
+   * ── A SHOP may move outside its published hours, at the SAME LENGTH ─────────
+   * Owner's decision, 2026-09-16: it is the shop's own calendar and its call — a regular who can
+   * only come at 7pm, a closure moved at short notice. What a shop may NOT do is change the
+   * length: the price was fixed on the original interval, and a longer one is also how a single
+   * booking blocks a whole day. Overlap is refused below by the same checks every move passes.
+   *
+   * ⚠ **An absent `actor` gets the CUSTOMER rule.** Every caller passes one today; a future caller
+   * that forgets must not inherit the looser rule by omission.
+   *
+   * ⚠ **The product booking service is imported lazily**, because it imports THIS class: a static
+   * import here is a module cycle, and a cycle resolved at load time hands one of the two modules
+   * an `undefined`. Resolved at call time, both are loaded. `test:booking-slot-offer` pins that
+   * the customer branch really calls the check, so this indirection cannot quietly become a no-op.
+   */
+  private async assertRescheduleTarget(
+    booking: IBooking,
+    newSlotId: string,
+    actor?: { role: 'vendor' | 'customer'; id: string }
+  ): Promise<{ start: Date; end: Date }> {
+    if (actor?.role === 'vendor') {
+      const { start, end } = this.slotGenerator.parseSlotId(newSlotId);
+      const length = end.getTime() - start.getTime();
+      const current = booking.endAt.getTime() - booking.startAt.getTime();
+
+      if (length <= 0 || length !== current) {
+        throw createAppError(
+          ERROR_CODES.BOOKING_INVALID_SLOT_ID,
+          400,
+          'A rescheduled appointment must keep its original length.',
+          { slotId: newSlotId, reason: length <= 0 ? 'inverted' : 'length_changed' }
+        );
+      }
+      return { start, end };
+    }
+
+    const { productBookingService } = await import(
+      '../../catalog/domain/services/booking/product-booking.instance'
+    );
+    return productBookingService.assertOfferedSlot(booking.productId.toString(), newSlotId);
   }
 
   /**
