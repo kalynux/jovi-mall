@@ -73,6 +73,7 @@ import { FileModel } from '../src/modules/catalog/models/file.model';
 import { FileReferenceModel } from '../src/modules/catalog/models/file-reference.model';
 import { geoCandidateStore } from '../src/modules/bot-surface/services/geo-candidate.store';
 import { botIdempotencyStore } from '../src/modules/bot-surface/services/bot-idempotency.store';
+import { INBOUND_FILE_HANDLE_LENGTH } from '../src/modules/bot-surface/services/inbound-file.store';
 import { BOT_ROUTES } from '../src/modules/bot-surface/domain/bot-route-table';
 import {
     closeRedisClients,
@@ -1945,7 +1946,9 @@ async function main(): Promise<void> {
             const res = await call(
                 'POST',
                 `/api/internal/bot/tickets/${ticketId}/attachments`,
-                { ref: 'att_' + 'A'.repeat(43) },
+                // The CURRENT shape, so the refusal is the owner/existence check and never a
+                // length one — a forgery of the wrong length could pass for the wrong reason.
+                { ref: 'att_' + 'A'.repeat(INBOUND_FILE_HANDLE_LENGTH - 'att_'.length) },
                 { idempotencyKey: idem('attach-forged') },
             );
             return res.status === 404 && errorCode(res) === 'BOT_INBOUND_FILE_EXPIRED';

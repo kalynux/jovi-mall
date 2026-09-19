@@ -7,6 +7,7 @@ import { BotDisplayActionSchema } from '../validators/bot.validators';
 import { PURCHASE_ACTION_HANDLERS } from './bot-purchase.controller';
 import { ORDER_ACTION_HANDLERS } from './bot-order.controller';
 import { CHECKOUT_ACTION_HANDLERS } from './bot-checkout.controller';
+import { ACCOUNT_ACTION_HANDLERS } from './bot-account.controller';
 
 /**
  * THE TAP-CODE DISPATCHER — `POST /catalog/action`, the surface's single tap handler.
@@ -48,6 +49,14 @@ const HANDLERS = mergeActionHandlers([
     ['orders', ORDER_ACTION_HANDLERS],
     /** pay (pay:st Check status · pay:rt Try again) */
     ['checkout', CHECKOUT_ACTION_HANDLERS],
+    /**
+     * yes:close · no:close
+     *
+     * ⚠ **Registered a round late, and the gap is the lesson.** The close preview drew both
+     * buttons from 6b2a47d while this line was missing, so each tap answered the unknown-token
+     * sentence. Nothing proved a DRAWN key was ROUTED — only that no key was routed twice.
+     */
+    ['account', ACCOUNT_ACTION_HANDLERS],
 ]);
 
 export class BotActionController {

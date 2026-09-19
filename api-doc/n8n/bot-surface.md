@@ -1538,7 +1538,8 @@ is a new value in this field rather than a new branch in your workflow.
 | every **contact-change** write (§ 15) | text — what moved, what has not yet, and what the customer must do next |
 | `/connections/:channel` (disconnect) | text — that the app is no longer connected |
 | `/account/close` | text — the anonymise-and-retain promise, in the past tense. The last thing the platform says to that customer as themselves |
-| ⭐ `/catalog/display` · `/catalog/action` | **product cards** — a Mini App button, a carousel, or one image message per product. The one turn that renders to SEVERAL messages: see § 14.8 |
+| ⭐ `/catalog/display` | **product cards** — a Mini App button, a carousel, or one image message per product. The one turn that renders to SEVERAL messages: see § 14.8 |
+| ⭐ `/catalog/action` — **every tap** | whatever that button calls for: product cards for `next:` / `more:`, an order card, a parcel card, a yes/no question, a screen button, or **nothing** where the model should speak. One row per token in § 14.9 |
 
 Everything else — a cart, an order list, **one** product, a support context — is **data for
 your model to narrate**, and deliberately carries no `reply`. This service words the turns
@@ -1650,39 +1651,38 @@ address?"* — and the option lives in the control beside it.
 #### The token vocabulary
 
 An action id is `<verb>:<argument>`, self-describing because a tap arrives with no memory of
-the turn that produced it. **Each verb has exactly one mapping, and it is this table:**
+the turn that produced it. **There are exactly two mappings, and this is the whole table:**
 
 | token | you POST | with body |
 |---|---|---|
 | `skip:<step>` | `/identity/onboarding` | `{ "step": "<step>", "action": "skip" }` |
-| `add:<productId>:<variantId>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
-| `buy:<productId>:<variantId>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
-| `more:<setId>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
-| `next:<setId>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
-| `bargain:<productId>:<variantId>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
-| `book:<productId>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
-| `open:pl:<ref>` · `open:pd:<productId>` · `open:ol` · `open:sl` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
-| `cat:<categoryId>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
-| `yes:<context>` · `no:<context>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
-| `ord:<orderId>` · `shp:<orderId>:<shipmentId>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
-| `code:<orderId>:<shipmentId>` · `track:<orderId>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
-| `tkt:<ticketId>` · `rate:<orderId>:<stars>` · `lang:<code>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
+| **every other token** | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
+
+Which tokens exist, which are live, and what each one answers is **§ 14.9**, one row per
+token. It is written for a reader debugging a turn. Your flow does not need it: a flow that
+follows the two rows above handles a verb added next month without a change.
 
 ⚠ **Every verb EXCEPT `skip:` posts to `/catalog/action`, and you never parse any of them.**
 The rule below about the three product verbs now covers the rest: one route is the surface's
 single tap handler, so a verb added next month needs no change in the automation layer at all.
 The route's name is historical — it is not a catalogue-only door.
 
-⚠ **THE VOCABULARY IS DECLARED AHEAD OF ITS HANDLERS, AND HERE IS WHAT THAT MEANS FOR YOU.**
-`skip · add · buy · more` work today. The other fourteen are the frozen token shapes for
-buttons still being built, published now so the strings never change once they are in a chat
-history. Until each one's handler ships, `/catalog/action` answers
-`BOT_ACTION_TOKEN_UNKNOWN` (422) — which carries `error.customerMessage`, so a tap produces a
-sentence rather than silence.
+⚠ **`skip:` goes to `/identity/onboarding` ALWAYS, including a stale one tapped after
+onboarding finished.** `/catalog/action` has no handler for it and answers with the
+unknown-button sentence. Do not decide in the flow whether a skip is stale. That would need
+the flow to remember onboarding state between turns, and it keeps none.
+⚠ **The onboarding route does not yet treat a stale skip safely, and that is being fixed on
+this side.** Today a Skip tapped on a step the customer has since *answered* re-records that
+step as skipped (the value they gave is kept; the checklist row changes). The fix makes a
+skip of an already-answered step change nothing. It lands before your change does, so the
+rule above does not move.
 
-**No button carrying an unhandled verb is rendered yet**, so this is not reachable in normal
-use; it is the contract you can build against. Handle it exactly as the paragraph at the end of
-this table already says: relay the customer message, and do not guess at the token.
+⚠ **THE VOCABULARY IS DECLARED AHEAD OF ITS HANDLERS.** A token shape is frozen before any
+button carrying it is drawn, because a button stays in a chat history for good. A token that
+is declared but not yet routed answers `BOT_ACTION_TOKEN_UNKNOWN` (422) with
+`error.customerMessage`, so a tap produces a sentence rather than silence. § 14.9 lists which
+are which. **No button carrying an unrouted token is drawn.** If one ever is, relay the
+customer message and do not guess at the token.
 
 ⚠ **`next:` and `more:` are DIFFERENT and both ride on one message.** `next:` sends the next
 five cards *into the chat*; `more:` opens the in-app listing screen. They share a `<setId>`
@@ -1936,6 +1936,66 @@ that lives thirty minutes, and a lapsed one answers `404 BOT_PRODUCT_LIST_EXPIRE
 - ⚠ **`BOT_MINIAPP_BASE_URL` must be `https://`.** Telegram refuses a `web_app` button on any
   other scheme and refuses the entire message with it. The backend checks the scheme and falls
   back to photo cards rather than sending a message Telegram will drop.
+
+### 14.9 · ⭐ Every tap, and what it answers
+
+Every button this service draws comes back through `POST /catalog/action`. That route parses
+the token once, sends it to the one handler registered for it, and refuses anything nobody
+handles with `BOT_ACTION_TOKEN_UNKNOWN` (422). The refusal carries `error.customerMessage`, so
+the customer gets a sentence.
+
+**How a token finds its handler.** Most verbs have one owner and route by the verb alone
+(`ord:…`, `pay:…`). Three verbs are shared by several features and route by the verb **plus
+its first argument**: `open:<screen>`, `yes:<context>`, `no:<context>`. So `yes:cd:…` and
+`yes:close:…` reach different handlers. You never need to know this; it explains why an
+unfamiliar `yes:` context is refused rather than guessed at.
+
+⚠ **Every tap is a mutating call.** It needs an `Idempotency-Key` like any other write (§ 4),
+because several taps write: `add:` and `buy:` add a basket line, `yes:cnc:` cancels an order,
+`yes:close:` closes an account. The key should be the same on a redelivery of one tap and
+different for two taps. The platform's own id for that tap has exactly that property:
+Telegram's `callback_query.id`, WhatsApp's inbound message `id`. A human pressing twice is two
+taps and gets two answers. A webhook redelivered by the platform is one tap and gets its first
+answer again.
+
+**Reading the tables.** *Reply* is what the platform sends; "**none**" means there is no
+`reply` and the turn is the model's (§ 14.2). *data* is `body.data`. The rule for what reaches
+the model is at the end of this section.
+
+#### Account
+
+| token | drawn on | what it does | reply | data |
+|---|---|---|---|---|
+| `yes:close:<ref>` | **Confirm**, under the close-account question (`account_close_preview`) | **Closes the account. It cannot be undone.** `<ref>` is a signed reference bound to this account and this channel for ten minutes. A stale or foreign one closes nothing: it asks the question again with fresh buttons | the account-closed sentence, which is the last thing the platform says to this customer as themselves | `{ closed: true, closedAt }`. On a stale ref: `{ closed: false, confirmation, …preview }` and the question again |
+| `no:close` | **Keep my account**, beside it | changes nothing, however old the button | **none** | `{ closed: false, kept: true }` |
+
+⚠ **The question draws no buttons at all when the account cannot be closed** (another role on
+the account, or orders still moving). The sentence says why, in the same words the close
+itself would refuse with.
+
+#### Buying and the basket
+
+| token | drawn on | what it does | reply | data |
+|---|---|---|---|---|
+| `add:<productId>:<variantId>` | **Add to cart**, on a product card | puts one of that variant in the basket | "Added" with **View cart · Checkout · Browse more** | `{ outcome, verb, productId, variantId }` |
+| `buy:<productId>:<variantId>` | **Buy now**, on a product card | puts one in the basket and points at checkout. **It places no order**: checkout needs an address and a payment method (§ 14.8) | the same three buttons. A digital item on a deployment with screens gets one **Checkout** screen button instead | the same, plus `url` when `outcome` is `checkout` — ⛔ never relay it |
+| `bargain:<productId>:<variantId>` | **Bargain**, on a card whose variant is negotiable | **writes nothing.** It asks the customer for their offer. The customer's answer, as an ordinary message, is what starts the haggle; nothing on this side can start it | the product name and the question, no buttons | as `add:` |
+| `book:<productId>` | **Book**, on a service's card | **writes nothing.** It asks for a day and a time | the product name and the question, no buttons | as `add:`, `variantId` may be null |
+| `more:<setId>` | **See more**, under a page of cards | opens the list the cards came from as a screen. Without screens (production today) it sends the next five cards instead | a screen button, or the next cards (`replies`) | `{ opened: "listing" }`, or `{ shown, total, hasMore }` |
+| `next:<setId>` | *nothing draws it yet* | the next five cards, in the chat | the cards (`replies`) | `{ shown, total, hasMore }` |
+| `cart:view` | **View cart**, after an add | reads the basket | **none**: the model narrates the basket, as it does for `cart_get` | the basket, the same shape as `cart_get` |
+| `open:co` | **Checkout**, after an add | starts a checkout **for whoever tapped**. The token carries no handle: the screen session is created on the tap, lives ten minutes, and is spent by placing the order | a screen button; without screens a storefront link to the basket; with neither, **none** | `{ opened: "checkout" }` |
+| `open:pl` | **Browse more**, after an add | the whole shelf as a screen | a screen button; else a storefront link to the shop; else **none** | `{ opened: "listing" }` |
+
+⚠ **The server decides what a purchase button does, not the button.** A card drawn last month
+says "Add to cart". If the seller has since opened a price negotiation on that variant, the
+tap starts a haggle. If the variant has sold out, the tap is refused with
+`CATALOG_VARIANT_INSUFFICIENT_STOCK`. `data.verb` is what actually happened; narrate that,
+not the label the customer pressed.
+
+⚠ **`add:` and `buy:` never expire. `more:` and `next:` expire after thirty minutes**, with
+`404 BOT_PRODUCT_LIST_EXPIRED` and a sentence inviting a fresh search. The first two name
+products; the second two name a held list.
 
 ---
 

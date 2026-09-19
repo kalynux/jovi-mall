@@ -25,6 +25,7 @@ import {
     CONFIRMATION_REF_TTL_SECONDS,
     mintConfirmationRef,
     verifyConfirmationRef,
+    type BotConfirmationPurpose,
 } from '../../src/modules/bot-surface/domain/bot-confirmation-ref';
 
 let passed = 0;
@@ -372,6 +373,108 @@ function main(): void {
         confirmRef.includes('timingSafeEqual(presented, expected)')
         && /hkdfSync\([^)]*\$\{purpose\}/.test(confirmRef)
         && !/createHmac\(\s*'sha256'\s*,\s*secret\b/.test(confirmRef));
+
+    /**
+     * Known answers, one per purpose, taken from the construction as committed in `6b2a47d`.
+     * ⚠ **These are the property that a button already sitting in a customer's chat still works
+     * after a deploy.** A change to the salt, the field order, the separator or the encoding
+     * changes every MAC, and every Confirm button in flight answers "expired or invalid" for ten
+     * minutes. If that is ever intended, it is a new construction: bump `v1` and replace these.
+     */
+    assert('⛔ each purpose mints exactly the committed known answer (the construction has not drifted)', () => {
+        const KNOWN: [BotConfirmationPurpose, string, string][] = [
+            ['close', '', 'tlghso.XX2IAmoVBrtteslEJULGkg'],
+            ['unlink', 'whatsapp', 'tlghso.HAPBhITMVGDRwUS7mx4FDg'],
+            ['cancel', '66f0a1b2c3d4e5f60123abcd', 'tlghso.KXKH8As18gmxouYWJ_2cug'],
+            ['ticket-close', '66f0a1b2c3d4e5f60123dcba', 'tlghso.6sp3l90ONQEJr0HLTrDzbg'],
+        ];
+        return KNOWN.every(([purpose, scope, want]) => mintConfirmationRef(purpose, ME, scope, T0, SECRET) === want);
+    });
+
+    console.log('\n── The two confirms the ORDERS stream draws: cancel an order, close a ticket ──');
+
+    /**
+     * `cancel` and `ticket-close` are scoped to ONE order / ONE ticket. Without the scope, the
+     * reference from "cancel order A?" would confirm cancelling order B for the same customer —
+     * the button would be bound to the person and not to the thing.
+     */
+    const ORDER_A = '66f0a1b2c3d4e5f60123abcd';
+    const ORDER_B = '66f0a1b2c3d4e5f60123abce';
+    for (const [purpose, verb] of [['cancel', 'yes:cnc'], ['ticket-close', 'yes:tcl']] as const) {
+        const minted = mintConfirmationRef(purpose, ME, ORDER_A, T0, SECRET);
+        const judge = (p: BotConfirmationPurpose, scope: string, subject = ME) =>
+            verifyConfirmationRef(minted, p, subject, scope, T0 + 1000, SECRET);
+
+        assert(`${purpose}: valid for the one ${purpose === 'cancel' ? 'order' : 'ticket'} it was minted for`, () =>
+            judge(purpose, ORDER_A) === 'valid');
+
+        assert(`⛔ ${purpose}: another ${purpose === 'cancel' ? 'order' : 'ticket'} of the SAME customer → invalid`, () =>
+            judge(purpose, ORDER_B) === 'invalid');
+
+        assert(`⛔ ${purpose}: an EMPTY scope → invalid (an unscoped verify cannot accept a scoped ref)`, () =>
+            judge(purpose, '') === 'invalid');
+
+        assert(`⛔ ${purpose}: another customer, or the other app → invalid`, () =>
+            judge(purpose, ORDER_A, { ...ME, userId: '66f0a1b2c3d4e5f601234568' }) === 'invalid'
+            && judge(purpose, ORDER_A, { ...ME, channel: 'whatsapp' }) === 'invalid');
+
+        assert(`⛔ ${purpose}: presented on any OTHER purpose, same scope → invalid`, () =>
+            (['close', 'unlink', 'cancel', 'ticket-close'] as const)
+                .filter((other) => other !== purpose)
+                .every((other) => judge(other, ORDER_A) === 'invalid'));
+
+        /**
+         * The orders stream pins 62 bytes for its token; this pins the other half — that the
+         * reference itself is the length that arithmetic assumes. A 24-hex Mongo id is the
+         * longest scope either verb carries.
+         */
+        assert(`${verb}:<24-hex id>:<ref> is 62 bytes — inside Telegram's 64, with the ref's 29`, () => {
+            const token = `${verb}:${ORDER_A}:${minted}`;
+            return minted.length === 29 && Buffer.byteLength(token, 'utf8') === 62;
+        });
+    }
+
+    console.log('\n── Every source file stays TEXT to git ──');
+
+    /**
+     * ⚠ **A raw control byte in a source file can make git store it as BINARY**, and a binary
+     * file shows no diff — a reviewer reading the commit sees "Binary files differ" and nothing
+     * else. `bot-confirmation-ref.ts` shipped that way in `6b2a47d`: a literal NUL typed as the
+     * MAC's field separator, 5741 bytes in, inside the first 8000 bytes git inspects. A second
+     * one sat in `core/geocoding/geocoding.cache.ts` as the search key's separator; it was past
+     * byte 8000, so git still diffed it — until any edit above it shortened the file enough.
+     * The escape `'\u0000'` is the same character at runtime and plain text on disk; both fixes
+     * were proved byte-identical in what they produce (refs above, cache keys by comparison).
+     *
+     * **The span is every `.ts` file under `src/` and `scripts/`**, not one stream's files — the
+     * second instance was in a file no stream owns, which a per-stream scan would never have
+     * reached. Forbidden: 0x00–0x08, 0x0B, 0x0C, 0x0E–0x1F. Allowed: tab, line feed, carriage
+     * return (`core.autocrlf=true` puts CRs in every file here).
+     *
+     * Non-vacuity comes first: the walk must have read hundreds of files, including both files
+     * the defect was found in.
+     */
+    const ROOT = path.resolve(__dirname, '../..');
+    const walk = (dir: string): string[] =>
+        fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true }).flatMap((e) =>
+            e.isDirectory()
+                ? (e.name === 'node_modules' ? [] : walk(`${dir}/${e.name}`))
+                : e.name.endsWith('.ts') ? [`${dir}/${e.name}`] : []);
+    const scanned = ['src', 'scripts'].flatMap(walk);
+    const FOUND_IN = ['src/modules/bot-surface/domain/bot-confirmation-ref.ts', 'src/core/geocoding/geocoding.cache.ts'];
+    const controlBytes = (relative: string): number[] =>
+        [...fs.readFileSync(path.join(ROOT, relative))]
+            .map((byte, at) => (byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d ? at : -1))
+            .filter((at) => at >= 0);
+
+    assert('the scan read ≥ 800 .ts files under src/ + scripts/, both files the defect was found in among them', () =>
+        scanned.length >= 800 && FOUND_IN.every((f) => scanned.includes(f)));
+
+    assert('⛔ no .ts file under src/ or scripts/ holds a raw control byte (a NUL can hide a whole file\'s diff)', () => {
+        const dirty = scanned.filter((f) => controlBytes(f).length > 0);
+        if (dirty.length) console.error(`     ${dirty.map((f) => `${f} @ byte ${controlBytes(f).slice(0, 3).join(',')}`).join('\n     ')}`);
+        return dirty.length === 0;
+    });
 
     console.log(
         failed === 0

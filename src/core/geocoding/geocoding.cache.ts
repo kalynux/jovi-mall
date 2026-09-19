@@ -175,7 +175,7 @@ export function buildSearchKey(
         [...countryCodes].map((c) => c.toLowerCase()).sort().join(','),
         (language ?? '').toLowerCase(),
         String(limit ?? ''),
-    ].join(' ');
+    ].join('\u0000');
     return `geo:s:${KEY_VERSION}:${createHash('sha256').update(parts).digest('hex').slice(0, 32)}`;
 }
 
