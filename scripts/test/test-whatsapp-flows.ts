@@ -71,9 +71,9 @@ import { PRODUCT_DETAIL_FLOW } from '../../src/modules/whatsapp/flows/definition
 import { CHECKOUT_FLOW } from '../../src/modules/whatsapp/flows/definitions/checkout.flow';
 import { TICKET_FORM_FLOW } from '../../src/modules/whatsapp/flows/definitions/ticket-form.flow';
 import {
-    bookingListFlow,
-    bookingPayFlow,
-    bookingSlotFlow,
+    BOOKING_LIST_FLOW,
+    BOOKING_PAY_FLOW,
+    BOOKING_SLOT_FLOW,
 } from '../../src/modules/whatsapp/flows/definitions/booking.flow';
 import { FLOW_SCREEN_TITLE, NOTICE_SCREEN } from '../../src/modules/whatsapp/flows/definitions/notice.screen';
 import { FLOW_LISTING_PAGE_SIZE, toListingScreen } from '../../src/modules/whatsapp/flows/screens/listing.adapter';
@@ -572,23 +572,32 @@ async function main(): Promise<void> {
      * mistake in its shape still fails here rather than at publish, which is the one step this
      * platform cannot rehearse.
      */
-    /**
-     * ⚠ **The three booking forms are built with a PLACEHOLDER kind**, because `bl`, `bk` and `bp`
-     * are not in `InAppSurfaceKind` yet — the bookings stream requests them when its core lands.
-     * The kind only stamps which form closed, so every structural rule below is exercised exactly
-     * as it will be; the day those kinds exist each builder becomes one exported constant.
-     */
-    const PLACEHOLDER_KIND = 'tf' as const;
     /** `[label, definition, the file it lives in]` — the three booking forms share one file. */
     const ALL_FLOWS = [
         ['product-listing', PRODUCT_LISTING_FLOW, 'product-listing.flow.ts'],
         ['product-detail', PRODUCT_DETAIL_FLOW, 'product-detail.flow.ts'],
         ['checkout', CHECKOUT_FLOW, 'checkout.flow.ts'],
         ['ticket-form', TICKET_FORM_FLOW, 'ticket-form.flow.ts'],
-        ['booking-list', bookingListFlow(PLACEHOLDER_KIND), 'booking.flow.ts'],
-        ['booking-slot', bookingSlotFlow(PLACEHOLDER_KIND), 'booking.flow.ts'],
-        ['booking-pay', bookingPayFlow(PLACEHOLDER_KIND), 'booking.flow.ts'],
+        ['booking-list', BOOKING_LIST_FLOW, 'booking.flow.ts'],
+        ['booking-slot', BOOKING_SLOT_FLOW, 'booking.flow.ts'],
+        ['booking-pay', BOOKING_PAY_FLOW, 'booking.flow.ts'],
     ] as const;
+
+    /**
+     * ⚠ **Each booking form stamps its OWN kind.** The stamp is what tells the chat which form
+     * finished; a form stamping another's kind would have the chat answer for the wrong screen.
+     * They were built with a placeholder for a day, before the kinds existed — this is what
+     * replaced it.
+     */
+    const stampOf = (definition: typeof BOOKING_LIST_FLOW): unknown => {
+        const notice = definition.screens.find((s) => s.id === NOTICE_SCREEN);
+        const footer = notice?.layout.children.find((c) => c.type === 'Footer') as
+            | { 'on-click-action'?: { payload?: Record<string, unknown> } } | undefined;
+        return footer?.['on-click-action']?.payload?.screen;
+    };
+    assert('⛔ each booking form stamps its own screen kind — bl, bk, bp',
+        stampOf(BOOKING_LIST_FLOW) === 'bl' && stampOf(BOOKING_SLOT_FLOW) === 'bk'
+        && stampOf(BOOKING_PAY_FLOW) === 'bp');
 
     /** Every `${data.x}` string anywhere under a node, with the component it sits on. */
     const bindingsIn = (node: unknown, on = ''): Array<{ field: string; key: string; type: string }> => {
@@ -827,10 +836,10 @@ async function main(): Promise<void> {
     assert('⛔ the ticket form is NOT in the publish list while its seam is unbuilt',
         /PRODUCT_LISTING_FLOW/.test(publishSource) && !/TICKET_FORM_FLOW/.test(publishSource));
     assert('⛔ nor are the three booking forms, whose reads and screen kinds do not exist yet',
-        !/bookingListFlow|bookingSlotFlow|bookingPayFlow/.test(publishSource));
+        !/BOOKING_LIST_FLOW|BOOKING_SLOT_FLOW|BOOKING_PAY_FLOW/.test(publishSource));
 
     // ── the booking forms: the cap is what shaped them ───────────────────────
-    const slotFlow = bookingSlotFlow(PLACEHOLDER_KIND);
+    const slotFlow = BOOKING_SLOT_FLOW;
     const dayScreen = slotFlow.screens.find((s) => s.id === 'DAY');
     const timesScreen = slotFlow.screens.find((s) => s.id === 'TIMES');
     /**
@@ -852,7 +861,7 @@ async function main(): Promise<void> {
             { 'on-click-action'?: { payload?: Record<string, unknown> } })?.['on-click-action']?.payload)
             === JSON.stringify({ slotId: '${form.slot}' }));
 
-    const payScreen = bookingPayFlow(PLACEHOLDER_KIND).screens.find((s) => s.id === 'PAY');
+    const payScreen = BOOKING_PAY_FLOW.screens.find((s) => s.id === 'PAY');
     const payInputs = (payScreen?.layout.children ?? []).filter((c) =>
         ['TextInput', 'TextArea', 'DatePicker', 'Dropdown', 'RadioButtonsGroup', 'CheckboxGroup', 'OptIn']
             .includes(String(c.type)));
@@ -967,14 +976,23 @@ async function main(): Promise<void> {
         && plan({ completedScreen: 'pd', params: { outcome: 'something-new' } }).kind === 'silent');
     assert('the closed set is exactly the four the screens can stamp',
         JSON.stringify([...FLOW_OUTCOMES].sort()) === JSON.stringify(['added', 'asked', 'notice', 'placed']));
+    // ── the question a bargain or a booking asks, carried into the chat ──────
     /**
-     * ⚠ PENDING, and asserted so it cannot be forgotten: `asked` (bargain / booking) needs the
-     * chat to carry the question, because on WhatsApp it is visible only on a screen that has
-     * closed. It stays SILENT until `purchaseInvitePrompt` is extracted, so that the question is
-     * built in ONE place rather than copied — requested from the switchboard.
+     * ⛔ THE OTHER HALF OF THE SAME GAP, now closed. These two rungs WRITE NOTHING — they start a
+     * conversation — and the agent wakes on the customer's next message. On WhatsApp the question
+     * lived only on the closing screen, so it died with it.
      */
-    assert('⚠ `asked` is silent FOR NOW — pending the one-construction invite prompt (see the comment)',
-        plan({ completedScreen: 'pd', params: { outcome: 'asked' } }).kind === 'silent');
+    const asked = (over: Partial<Parameters<typeof planCompletion>[0]> = {}) => plan({
+        completedScreen: 'pd', params: { screen: 'pd', outcome: 'asked' },
+        session: { ...live, productId: pid }, ...over,
+    });
+    assert('⛔ a bargain or booking form → the chat carries the question, naming that product',
+        JSON.stringify(asked()) === JSON.stringify({ kind: 'invite_reply', productId: pid }));
+    assert('⚠ a lapsed session cannot name the product, so it says the page is gone …',
+        asked({ session: null }).kind === 'expired'
+        && asked({ session: live }).kind === 'expired');
+    assert('⛔ … and a completion from another conversation says nothing at all',
+        asked({ sender: '237600000000' }).kind === 'silent');
     assert('a listing completion with no valid product id opens nothing',
         plan({ params: { productId: 'not-an-id' } }).kind === 'silent');
 
@@ -1019,9 +1037,29 @@ async function main(): Promise<void> {
      * comment says so.
      */
     assert('⛔ the added-to-cart buttons come from the shared list, not a second copy',
-        /import \{ addedToCartActions \} from/.test(commandSource)
+        /addedToCartActions,/.test(commandSource)
         && /actions: addedToCartActions\(language\)/.test(commandSource)
         && !/cartViewActionId\(|openSurfaceActionId\(/.test(commandSource));
+
+    /**
+     * ⛔ ONE CONSTRUCTION of the invite sentence, shared with the chat tap. A second copy here is
+     * how the two channels start asking the same question in two different ways — and it is the
+     * reason this branch waited for the extraction instead of being written twice.
+     */
+    assert('⛔ the bargain / booking question is purchaseInvitePrompt, never built here',
+        /purchaseInvitePrompt\(product\.title, verb, language\)/.test(commandSource)
+        && !/bargainInvitePrompt|bookInvitePrompt/.test(commandSource)
+        && !/\\n\\n/.test(commandSource));
+
+    /**
+     * ⛔ THE RUNG IS RE-RESOLVED FROM THE LIVE PRODUCT, never taken from the stamp — the rule the
+     * whole purchase surface is built on, and the reason a closed bargaining window produces no
+     * invite rather than an invitation the platform would then refuse.
+     */
+    assert('⛔ it re-reads the product and refuses to invite on any rung but bargain or book',
+        /readProductDetail\(plan\.productId, language\)/.test(commandSource)
+        && /verb !== 'bargain' && verb !== 'book'/.test(commandSource)
+        && !/params\.verb|params\.outcome === 'asked'/.test(commandSource));
 
     /**
      * ⚠ The DECISION must stay in a module this suite can import. The handler reaches a

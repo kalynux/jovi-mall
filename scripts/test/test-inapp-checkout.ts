@@ -151,10 +151,42 @@ function main(): void {
      */
     assert('⛔ checkout lives 10 minutes, not 30', () => TTL_SECONDS.co === 600);
 
-    assert('⛔ checkout is strictly the shortest-lived of the five', () =>
+    /**
+     * ⚠ **This said "strictly the shortest-lived of THE FIVE" and went red when there were
+     * eight** — not because anything regressed, but because `bp` (the booking pay screen) was
+     * added at checkout's exact ten minutes, deliberately and for checkout's own reason: it is
+     * also a credential that moves money. A count in an assertion is a fact about the world on
+     * the day it was written.
+     *
+     * So the property is restated as what was actually meant, and it no longer carries a
+     * number:
+     *
+     *  1. **Nothing outlives checkout downwards** — no handle anywhere is shorter-lived, so
+     *     checkout sits at the floor.
+     *  2. **Every handle that is NOT a payment credential is STRICTLY longer.** A tie is
+     *     allowed only for another credential that can move money, which is the one case where
+     *     ten minutes is the right answer rather than a drift toward it.
+     *
+     * Read together these still refuse the thing the original guarded: a browsing screen
+     * quietly acquiring a checkout-length life, or checkout acquiring a browsing-length one.
+     */
+    const PAYMENT_HANDLES: (keyof typeof TTL_SECONDS)[] = ['co', 'bp'];
+
+    assert('⛔ no handle is shorter-lived than checkout', () =>
         (Object.keys(TTL_SECONDS) as (keyof typeof TTL_SECONDS)[])
-            .filter((k) => k !== 'co')
+            .every((k) => TTL_SECONDS[k] >= TTL_SECONDS.co));
+
+    assert('⛔ every NON-payment handle is strictly longer-lived than checkout', () =>
+        (Object.keys(TTL_SECONDS) as (keyof typeof TTL_SECONDS)[])
+            .filter((k) => !PAYMENT_HANDLES.includes(k))
             .every((k) => TTL_SECONDS[k] > TTL_SECONDS.co));
+
+    // The tie above is a claim about `bp`, so it is pinned rather than assumed: if `bp` ever
+    // stops being a payment credential, the exemption above must go with it.
+    assert('⛔ the only handle tying checkout\'s life is the booking PAY screen', () =>
+        (Object.keys(TTL_SECONDS) as (keyof typeof TTL_SECONDS)[])
+            .filter((k) => k !== 'co' && TTL_SECONDS[k] === TTL_SECONDS.co)
+            .join(',') === 'bp');
 
     console.log('\n── 2 · Single use on the write that places the order ──');
 

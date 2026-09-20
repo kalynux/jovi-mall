@@ -128,18 +128,22 @@ export class BotInAppController {
         });
 
         /**
-         * ⚠ **No storefront fallback path is composed here, and that is not an omission.** A
-         * product's public URL is `/shop/stores/<storeSlug>/products/<productSlug>` — two
-         * slugs this route does not hold and would have to fetch. The card that offered this
-         * button already carries `detailUrl` built from exactly those slugs, so the customer
-         * has a working link either way; inventing a second, id-shaped one here would produce
-         * a 404 in a chat window, discovered by the customer.
+         * ⚠ **This used to pass `null` and say that no id-shaped product URL existed. That was
+         * WRONG, and the cost was silence.** The canonical URL does need two slugs
+         * (`/shop/stores/<storeSlug>/products/<productSlug>`) which this route does not hold —
+         * but the storefront also serves a **by-id redirect stub**, `/shop/p/<productId>`, which
+         * `bot-booking.controller.ts` has linked to all along and which the discovery stream
+         * uses for the same fallback. Verified: `frontend/landing/src/app/[locale]/shop/p`.
+         *
+         * With `BOT_MINIAPP_BASE_URL` unset — production today — `respondWithScreen` had no
+         * screen AND no fallback, so it rendered **no control at all**: the one door whose whole
+         * job is "open this product" answered with a bare sentence.
          */
         respondWithScreen(req, {
             kind: 'pd',
             handle,
             language,
-            fallbackPath: null,
+            fallbackPath: `/shop/p/${productId}`,
             labelKey: 'openButton',
         });
 

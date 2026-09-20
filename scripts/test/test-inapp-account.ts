@@ -21,6 +21,7 @@
 import fs from 'fs';
 import path from 'path';
 import { renderBotReplies, type BotReplyIntent } from '../../src/modules/bot-surface/domain/channel-reply';
+import type { BotProductCard } from '../../src/modules/bot-surface/domain/product-card';
 import {
     CONFIRMATION_REF_TTL_SECONDS,
     mintConfirmationRef,
@@ -182,14 +183,48 @@ function main(): void {
      * not a dead end. Pinned here because the whole degradation rests on it: a page that threw
      * without `Telegram.WebApp` would make this fallback a blank screen.
      */
-    assert('⚠ …and that link is a real door: every screen page guards its Telegram runtime', () => {
+    /**
+     * ⚠ **This assertion used to pin a LITERAL and it failed on correct code.** It required the
+     * exact string `(window.Telegram && window.Telegram.WebApp) || null`, so the bookings
+     * stream's new `bl.html` and `bk.html` — which write `window.Telegram && window.Telegram
+     * .WebApp` and use the handle only inside `if (tg)` — were reported as unguarded. They are
+     * not: both forms short-circuit, and the only difference is whether the falsy value is
+     * `undefined` or `null`.
+     *
+     * A guard that fails on correct code teaches the next person to weaken it, so this now
+     * asserts the PROPERTY the door depends on — that no page ever dereferences the runtime
+     * without short-circuiting first — and accepts either idiom. The claim and the span are the
+     * same text at last: every `Telegram.WebApp` occurrence in every page.
+     */
+    assert('⚠ …and that link is a real door: no screen page dereferences Telegram without a guard', () => {
         const dir = path.join(SRC, 'modules/bot-surface/miniapp/public');
         const pages = fs.readdirSync(dir).filter((f) => f.endsWith('.html'));
-        return pages.length > 0
-            && pages.every((page) => {
-                const html = fs.readFileSync(path.join(dir, page), 'utf8');
-                return !html.includes('Telegram.WebApp') || html.includes('(window.Telegram && window.Telegram.WebApp) || null');
-            });
+
+        const unguarded: string[] = [];
+        let touched = 0;
+
+        for (const page of pages) {
+            /**
+             * ⚠ **Comments are stripped first, and that is not tidiness.** Several pages
+             * DOCUMENT this very rule — `ol.html` says "Every `Telegram.WebApp` touch is
+             * guarded" in its header — and a scan that reads prose as code reports the
+             * sentence describing the guard as a breach of it.
+             */
+            const html = stripComments(
+                fs.readFileSync(path.join(dir, page), 'utf8').replace(/<!--[\s\S]*?-->/g, ''),
+            );
+            for (const line of html.split('\n')) {
+                if (!line.includes('Telegram.WebApp')) continue;
+                touched++;
+                const shortCircuited = /window\.Telegram\s*&&\s*window\.Telegram\.WebApp/.test(line)
+                    || /window\.Telegram\?\.WebApp/.test(line);
+                if (!shortCircuited) unguarded.push(`${page}: ${line.trim().slice(0, 60)}`);
+            }
+        }
+
+        if (unguarded.length) console.error(`     ↳ ${unguarded.join('\n       ')}`);
+        // Non-vacuity: the pages exist and at least one really does touch the runtime.
+        return pages.length > 0 && touched > 0 && unguarded.length === 0;
     });
 
     assert('product list with a screen, in a supergroup → ONE message, Browse as a url button', () => {
@@ -789,6 +824,220 @@ function main(): void {
             const readAt = stripped.lastIndexOf('wasComplete =', at);
             return readAt > 0 && readAt < at;
         });
+    });
+
+    console.log('\n── The account menu: eight rows, and every one of them goes somewhere ──');
+
+    /**
+     * ⭐ **THE FAILURE THIS EXISTS TO CATCH, and it is the one this whole effort keeps finding:
+     * a button that is drawn, validated, and routed nowhere.** A menu is the worst place for it
+     * — the customer reads eight rows and presses the one they came for, so a dead row is found
+     * by a person rather than by a suite. `yes:close` shipped drawn-but-unrouted for a round and
+     * answered every tap with the unknown-token sentence.
+     *
+     * ⚠ **Compared as SETS, never by substring.** `'addr'` is a substring of `'address'` and
+     * `'pay'` of `'payment'`, so an `includes` check passes on a menu row pointing at a section
+     * that does not exist. Both sides are also asserted non-empty first: a regex that stops
+     * matching yields an empty set, and "every member of an empty set is registered" is
+     * vacuously true — the guard would pass hardest exactly when it had stopped working.
+     */
+    const account = read('modules/bot-surface/controllers/bot-account.controller.ts');
+
+    const registryFrom = account.indexOf('const ACCOUNT_SECTIONS');
+    const registryTo = account.indexOf('async function menuSection', registryFrom);
+    const registry = registryFrom >= 0 && registryTo > registryFrom
+        ? stripComments(account.slice(registryFrom, registryTo)) : '';
+
+    const menuFrom = account.indexOf('async function menuSection');
+    const menuTo = account.indexOf('async function accountTap', menuFrom);
+    const menu = menuFrom >= 0 && menuTo > menuFrom
+        ? stripComments(account.slice(menuFrom, menuTo)) : '';
+
+    /** `conn: connectionsSection,` and `lang: async (…)` — the keys the dispatcher can reach. */
+    const registered = new Set(
+        [...registry.matchAll(/^\s{8}(\w+):/gm)].map((m) => m[1]),
+    );
+    /** `['prof', 'accountRowProfile'],` — the sections the menu points at. */
+    const drawn = [...menu.matchAll(/\['(\w+)',\s*'accountRow/g)].map((m) => m[1]);
+
+    assert('the scan found both spans, and neither set is empty', () =>
+        registered.size >= 8 && drawn.length > 0);
+
+    assert('the menu draws exactly EIGHT rows — the owner\'s one list of eight', () =>
+        drawn.length === 8);
+
+    assert('⛔ every menu row names a REGISTERED section (set membership, never substring)', () => {
+        const dead = drawn.filter((section) => !registered.has(section));
+        if (dead.length) console.error(`     ↳ rows routed nowhere: ${dead.join(', ')}`);
+        return dead.length === 0;
+    });
+
+    assert('the eight are the agreed ones, in the agreed order', () =>
+        drawn.join(',') === 'prof,addr,pay,ntf,inbox,conn,lang,close');
+
+    /**
+     * ⚠ A menu of eight cannot be buttons: WhatsApp renders at most three reply buttons and
+     * drops the rest without an error. This is the assertion that stops somebody "simplifying"
+     * it into a text message with actions.
+     */
+    assert('⛔ the menu is a CHOICE, not a text with actions — WhatsApp caps buttons at three', () =>
+        /kind: 'choice'/.test(menu) && !/actions:/.test(menu));
+
+    console.log('\n── Notification switches: a target state, never a toggle ──');
+
+    const notify = read('modules/bot-surface/controllers/bot-notification.controller.ts');
+    const switchesFrom = notify.indexOf('function setNotifySettingsReply(');
+    const switchesTo = notify.indexOf('function setChannelChoiceReply(', switchesFrom);
+    const switches = switchesFrom >= 0 && switchesTo > switchesFrom
+        ? stripComments(notify.slice(switchesFrom, switchesTo)) : '';
+
+    assert('the scan found the switch-drawing span', () =>
+        switches.includes('NOTIFY_SWITCHES.map'));
+
+    /**
+     * ⛔ The same defect as the stale Skip, one surface along. A chat keeps its buttons for
+     * ever, so a token that says "flip it" acts on whatever the state happens to be when it is
+     * finally pressed — including after the customer changed it on the website. A token that
+     * says "make it off" is idempotent and says what the customer chose.
+     */
+    assert('⛔ each switch row carries the OPPOSITE state as a target, not a toggle', () =>
+        /on \? 'off' : 'on'/.test(switches)
+        && !/toggle/i.test(switches));
+
+    assert('the four switches are the real preference keys, not invented ones', () => {
+        const keys = [...notify.matchAll(/\{ key: '(\w+)', copy: '\w+' \}/g)].map((m) => m[1]);
+        return keys.join(',') === 'orderUpdates,bookingUpdates,bookingReminders,marketing';
+    });
+
+    console.log('\n── A sold-out card: two rescue buttons, and the service card left alone ──');
+
+    /**
+     * The renderer half of the discovery stream's out-of-stock fix. Their half nulls the buy
+     * tokens and sets these two; this draws them. Both halves are needed for the path to work,
+     * and only this one is mine — so these assertions are about what the RENDERER does with a
+     * card, never about when the card is built that way.
+     */
+    const soldOutCard: BotProductCard = {
+        productId: 'p1', variantId: null, title: 'Blue lamp', priceText: '12 000 FCFA',
+        storeName: 'Akwa Lights', inStock: false, imageUrl: null,
+        detailUrl: 'https://wi-mall.com/shop/p/p1',
+        addToken: null, buyToken: null,
+        similarToken: 'sim:p1', saveToken: 'save:p1',
+    };
+
+    const soldOutIntent = (cards: readonly BotProductCard[], hasMore = false): BotReplyIntent => ({
+        kind: 'product_list',
+        text: '',
+        browsePrompt: 'Here is what I found.',
+        cards,
+        miniAppUrl: null,
+        hasMore,
+        moreToken: hasMore ? 'more:s1' : null,
+        labels: { ...LABELS, similarItems: 'Similar items', saveForLater: 'Save for later' },
+    });
+
+    assert('Telegram: a sold-out card draws Similar items and Save for later, above Details', () => {
+        const [reply] = renderBotReplies(soldOutIntent([soldOutCard]), 'telegram', PRIVATE);
+        const rows = (reply.body.reply_markup as Markup).inline_keyboard!;
+        return rows[0][0].callback_data === 'sim:p1'
+            && rows[0][1].callback_data === 'save:p1'
+            && rows[1][0].url === 'https://wi-mall.com/shop/p/p1';
+    });
+
+    /**
+     * ⛔ The service card. It has no buy tokens either, so it reaches the same no-buy branch —
+     * but WhatsApp will not mix a URL button with reply buttons, and its `cta_url` Details link
+     * is the ONLY route into the booking flow. A reply button here closes that door silently.
+     */
+    const serviceCard = { ...soldOutCard, similarToken: null, saveToken: null };
+
+    assert('⛔ WhatsApp: a SERVICE card keeps its cta_url Details link and gains no buttons', () => {
+        const [reply] = renderBotReplies(soldOutIntent([serviceCard]), 'whatsapp', '237600000000');
+        const interactive = (reply.body as Record<string, any>).interactive;
+        return interactive.type === 'cta_url'
+            && interactive.action.parameters.url === 'https://wi-mall.com/shop/p/p1';
+    });
+
+    assert('WhatsApp: a sold-out card trades the link for the two taps — and keeps the URL in the body', () => {
+        const [reply] = renderBotReplies(soldOutIntent([soldOutCard]), 'whatsapp', '237600000000');
+        const interactive = (reply.body as Record<string, any>).interactive;
+        const ids = interactive.action.buttons.map((b: any) => b.reply.id);
+        return interactive.type === 'button'
+            && ids.join(',') === 'sim:p1,save:p1'
+            && interactive.body.text.includes('https://wi-mall.com/shop/p/p1');
+    });
+
+    assert('⛔ WhatsApp: with "See more" the last card is at the cap of three, and nothing is dropped', () => {
+        const [reply] = renderBotReplies(soldOutIntent([soldOutCard], true), 'whatsapp', '237600000000');
+        const buttons = (reply.body as Record<string, any>).interactive.action.buttons;
+        return buttons.length === 3 && buttons[2].reply.id === 'more:s1';
+    });
+
+    /**
+     * ⚠ The two labels are OPTIONAL on the intent, so a caller can set the tokens and forget the
+     * copy. Without this rule that renders a button captioned "undefined" to a customer.
+     */
+    assert('⛔ a token with no label draws NO button, never one captioned "undefined"', () => {
+        const noLabels = { ...soldOutIntent([soldOutCard]), labels: LABELS } as BotReplyIntent;
+        const [tg] = renderBotReplies(noLabels, 'telegram', PRIVATE);
+        const json = JSON.stringify(tg.body);
+        return !json.includes('undefined') && !json.includes('sim:p1');
+    });
+
+    console.log('\n── The seam: every label the renderer can draw is one the producer supplies ──');
+
+    /**
+     * ⭐ **A FIXTURE THAT SUPPLIES THE INPUT THE PRODUCER FORGOT IS A TEST OF THE RENDERER, NOT
+     * OF THE FEATURE.** This guard exists because of a defect in the five assertions above it.
+     *
+     * The sold-out card buttons had every piece: tokens minted by `product-card.ts`, taps routed
+     * by the dispatcher, handlers answering them, copy in five languages — and they NEVER DREW,
+     * because the render arm is guarded on `intent.labels.similarItems` and no producer set it.
+     * Nothing threw. The assertions above passed because each builds its own intent by hand, so
+     * they proved the renderer CAN draw the buttons and never that anything DOES.
+     *
+     * A renderer test checks its own input; a producer test checks its own output; **the seam
+     * between them was asserted by neither.** So this asserts the seam itself, and derives both
+     * sides from source rather than from a list somebody maintains: any future optional label
+     * with no producer goes red the day it is written.
+     *
+     * ⚠ **Span**: the reads are every `intent.labels.<key>` in `channel-reply.ts`; the writes are
+     * the keys of the ONE `labels: { … }` object in `product-display.service.ts`, sliced by
+     * brace depth from its opening. Both sets are asserted non-empty first — a regex that stops
+     * matching yields an empty set, and "every member of an empty set is produced" is vacuously
+     * true, which is the failure that would make this guard pass hardest once it had stopped
+     * working.
+     */
+    const replyModule = read('modules/bot-surface/domain/channel-reply.ts');
+    const displayService = read('modules/bot-surface/services/product-display.service.ts');
+
+    const labelsRead = new Set([...replyModule.matchAll(/intent\.labels\.(\w+)/g)].map((m) => m[1]));
+
+    const labelsAt = displayService.indexOf('labels: {');
+    let depth = 0;
+    let labelsEnd = labelsAt;
+    for (let i = displayService.indexOf('{', labelsAt); i < displayService.length && labelsAt >= 0; i++) {
+        if (displayService[i] === '{') depth++;
+        else if (displayService[i] === '}') {
+            depth--;
+            if (depth === 0) { labelsEnd = i; break; }
+        }
+    }
+    const labelsSet = new Set(
+        [...stripComments(displayService.slice(labelsAt, labelsEnd + 1)).matchAll(/^\s+(\w+):/gm)]
+            .map((m) => m[1]),
+    );
+
+    assert('the scan found both sides — neither set is empty', () =>
+        labelsRead.size >= 5 && labelsSet.size >= 5);
+
+    assert('⛔ every label the renderer can draw is one the producer actually supplies', () => {
+        const orphans = [...labelsRead].filter((key) => !labelsSet.has(key));
+        if (orphans.length) {
+            console.error(`     ↳ the renderer draws from labels nothing produces: ${orphans.join(', ')}`);
+            console.error('       those controls can never appear, and nothing throws');
+        }
+        return orphans.length === 0;
     });
 
     console.log('\n── Every source file stays TEXT to git ──');

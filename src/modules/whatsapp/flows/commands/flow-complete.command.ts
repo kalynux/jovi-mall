@@ -3,7 +3,11 @@ import { CommandHandler } from '../../../command-bus/command-bus';
 import type { RenderableCommandResult } from '../../../command-bus/command-reply';
 import { botChrome } from '../../../bot-surface/domain/bot-chrome-copy';
 import type { BotReplyOption } from '../../../bot-surface/domain/channel-reply';
-import { addedToCartActions } from '../../../bot-surface/controllers/bot-purchase.controller';
+import {
+    addedToCartActions,
+    purchaseInvitePrompt,
+} from '../../../bot-surface/domain/purchase-chat-copy';
+import { readProductDetail } from '../../../bot-surface/miniapp/surfaces/product-detail.read';
 import { inAppCopy } from '../../../bot-surface/miniapp/inapp-copy';
 import {
     InAppSurfaceKind,
@@ -37,13 +41,11 @@ export const command_name = 'flow_complete';
  * cannot both fire for one press. Telegram's screens push into the thread themselves; WhatsApp's
  * forms answer here. Each plan below resolves to at most one intent.
  *
- * ⚠ **STILL MISSING, and it is the other half of the same gap**: the bargain and booking rungs
- * ask a QUESTION the customer answers by typing, and on WhatsApp that question is visible only
- * on a screen that has closed. The closing screen already stamps `asked` for it. The chat cannot
- * answer it yet because the sentence is built inside `executePurchase` and there is no pure
- * function to call; the extraction is requested (see `flow-outcome.ts`). Until it lands, an
- * `asked` completion is SILENT — the customer keeps the words they read on the screen, and
- * nothing false is said.
+ *   · **the product form, having asked a question** (a bargain, a booking) → the chat carries that
+ *     question into the conversation. It writes nothing; the automation layer's agent wakes on the
+ *     customer's next message, so a question left on a closed screen is a conversation that never
+ *     starts. ⚠ The rung is re-resolved from the live product first: a bargaining window that has
+ *     since closed produces no invite at all.
  *
  * ── ⚠ THE TOKEN MAY ALREADY BE SPENT, AND THAT IS SUCCESS, NOT FAILURE ──────
  * The checkout's terminal exchange spends its handle. Meta then sends the completion with the
@@ -155,6 +157,45 @@ export const handler: CommandHandler<z.infer<typeof schema>, FlowCompleteReply> 
             actions: addedToCartActions(language),
             language,
         };
+    }
+
+    /**
+     * ⛔ **The question, carried into the conversation where it can be answered.**
+     *
+     * ── ⚠ THE RUNG IS RE-RESOLVED, NEVER TAKEN FROM THE STAMP ───────────────
+     * The completion travels out through Meta and back through the automation layer, so by the
+     * time it arrives its payload is caller-supplied — and the product may have moved on anyway.
+     * So the live catalogue is read and the affordance resolved again, exactly as the write path
+     * does. **A product whose bargaining window has since closed produces NO invite**: asking a
+     * customer to make an offer on something that is no longer negotiable would invite them into
+     * a conversation the platform would then refuse.
+     *
+     * ⚠ **`purchaseInvitePrompt` is the ONE construction of this sentence**, shared with the chat
+     * tap. The title sits on its own line above a fixed sentence, so no translation has to decide
+     * where a product name belongs in its own word order.
+     *
+     * ⚠ **A read failure says nothing rather than something wrong.** The customer has the words
+     * on the screen they just closed; an invented sentence would be worse than silence.
+     */
+    if (plan.kind === 'invite_reply') {
+        try {
+            const product = await readProductDetail(plan.productId, language);
+            const offered =
+                product.variants.find((variant) => variant.variantId === product.defaultVariantId)
+                ?? product.variants.find((variant) => variant.affordance.enabled)
+                ?? null;
+            const verb = offered?.affordance.verb;
+
+            if (verb !== 'bargain' && verb !== 'book') return { ...base, message: '' };
+
+            return {
+                ...base,
+                message: purchaseInvitePrompt(product.title, verb, language),
+                language,
+            };
+        } catch {
+            return { ...base, message: '' };
+        }
     }
 
     const listing = session!;

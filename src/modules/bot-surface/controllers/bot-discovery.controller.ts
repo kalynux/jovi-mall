@@ -53,6 +53,16 @@ const BotProductParamSchema = z.object({ productId: z.string().trim().min(1).max
 /** How many categories a chat may offer before "See all" is the better answer. */
 const CATEGORY_CHOICES = 5;
 
+/**
+ * WhatsApp's list-row title cap — the number this whole disambiguation exists because of.
+ *
+ * ⚠ Repeated here rather than imported from the renderer for the reason `bot-action-id.ts` repeats
+ * Telegram's callback cap: this file decides what a row SAYS, and the renderer decides how a
+ * channel draws it. `test:inapp-discovery` asserts the two numbers agree, which is what stops the
+ * duplication becoming a divergence.
+ */
+const WA_ROW_TITLE_CAP = 24;
+
 export class BotDiscoveryController {
     /**
      * `POST /catalog/categories` — the shop's categories, as buttons.
@@ -83,9 +93,21 @@ export class BotDiscoveryController {
         }
 
         const shown = categories.slice(0, CATEGORY_CHOICES);
+        const names = shown.map((category) => category.name);
         const options: BotReplyOption[] = shown.map((category) => ({
             id: categoryActionId(category.name),
+            /** Telegram draws the whole name. */
             label: category.name,
+            /**
+             * ⛔ **A WhatsApp list row title is cut at 24 characters and a category name is FREE
+             * TEXT up to 200**, so two categories sharing a long opening render as one row twice:
+             * "Électroménager et petit…" and "Électroménager et gros …". The customer picks at
+             * random. In English the same two names fit, which is why every check any of us ran
+             * passed.
+             */
+            shortLabel: distinguishingPart(category.name, names),
+            /** The full name, where a WhatsApp row has 72 characters for it. */
+            description: category.name,
         }));
 
         /**
@@ -172,6 +194,70 @@ function reviewSummaryText(summary: Awaited<ReturnType<typeof readProductReviewS
         lines.push('', `“${quote.body}”`);
     }
     return lines.join('\n');
+}
+
+/**
+ * The part of `name` that tells it apart from the others it is shown beside.
+ *
+ * ── WHY A COMMON PREFIX IS DROPPED RATHER THAN THE NAME TRUNCATED ───────────
+ * A row title is cut at 24 characters on WhatsApp, and category names are free text: the ones a
+ * shop actually writes share their opening far more often than their ending —
+ * *"Électroménager et petit matériel"* beside *"Électroménager et gros matériel"*. Cutting the
+ * front off both leaves two identical rows; cutting the shared opening leaves "petit matériel" and
+ * "gros matériel", which is the whole distinction in the first few characters.
+ *
+ * ⚠ **Word-aligned, or it produces worse nonsense than it fixes** — a prefix cut mid-word turns
+ * "électroménager" into "ménager" and reads as a different category.
+ *
+ * ⚠ **Only when it actually helps.** With a single category, with names that share no opening word,
+ * or when the remainder would be too short to mean anything, the full name is returned and the
+ * renderer truncates as before: a shortened label that says less than the truncation it replaced is
+ * not an improvement. The full name is in the row's description either way.
+ */
+export function distinguishingPart(name: string, siblings: readonly string[]): string {
+    /**
+     * ⛔ **Scoped to the siblings this name would ACTUALLY COLLIDE with at the cap, and the first
+     * version of this was wrong in a way that only showed up in a real shop.** It asked whether
+     * EVERY other name shared the opening, so a single unrelated category vetoed the trimming for
+     * the pair that actually collided:
+     *
+     *     Produits de beauté et soins du visage  →  "Produits de beauté et s…"
+     *     Produits de beauté et soins du corps   →  "Produits de beauté et s…"   ⛔ still identical
+     *     Chaussures                             →  "Chaussures"
+     *
+     * It passed every two-row test and failed wherever a shop has twenty categories and two of them
+     * are similar — which is everywhere. Found by rendering it rather than reading it (backend-d5).
+     *
+     * ⚠ Compared by CODE POINT, not by `slice`, because these names are the ones with accents and
+     * Arabic in them, and the whole defect is about what survives the cut.
+     */
+    const cut = (value: string): string => [...value].slice(0, WA_ROW_TITLE_CAP).join('');
+    const others = siblings.filter((sibling) => sibling !== name && cut(sibling) === cut(name));
+
+    /**
+     * Nothing collides, so nothing needs trimming. A pair that differs inside the first
+     * twenty-four characters is already two distinct rows, and shortening it further would only be
+     * cosmetic — at the cost of a rule that is harder to predict from the outside.
+     */
+    if (others.length === 0) return name;
+
+    const words = name.split(/\s+/);
+    let shared = 0;
+
+    while (shared < words.length - 1) {
+        const candidate = words.slice(0, shared + 1).join(' ');
+        const everyoneStartsWithIt = others.every(
+            (sibling) => sibling === candidate || sibling.startsWith(`${candidate} `),
+        );
+        if (!everyoneStartsWithIt) break;
+        shared += 1;
+    }
+
+    if (shared === 0) return name;
+
+    const remainder = words.slice(shared).join(' ').trim();
+    /** Three characters is the floor: below it the row says less than a truncated name would. */
+    return remainder.length >= 3 ? remainder : name;
 }
 
 /** The shape check, answered as NOT FOUND so a caller cannot learn its id was well-formed. */
@@ -273,14 +359,12 @@ async function handleSimilarTap(req: Request, res: Response, action: ParsedBotAc
         req,
         page.intent.kind === 'product_list'
             /**
-             * ⚠ **`moreProductsPrompt` is a STAND-IN and is worth replacing.** "Here are some
-             * more." is true after this tap and slightly off — the customer asked for things LIKE
-             * the one they were looking at, not more of a list. A `similarItemsPrompt` key is
-             * requested in the phase-2 contract batch; when it lands this is a one-word change.
-             * Using an existing sentence meanwhile is deliberate: the alternative is a controller
-             * that cannot compile, which turns the shared gate red for every session.
+             * ⚠ **A tap needs its own sentence and it must be the RIGHT one.** This briefly used
+             * `moreProductsPrompt` ("Here are some more.") while its own key was in the contract
+             * queue — true after this tap, and subtly wrong: the customer asked for things LIKE the
+             * one they were looking at, not more of a list.
              */
-            ? { ...page.intent, text: botChrome('moreProductsPrompt', language) }
+            ? { ...page.intent, text: botChrome('similarItemsPrompt', language) }
             : page.intent,
     );
     sendSuccess(res, { shown: page.cards.length, total: page.total });

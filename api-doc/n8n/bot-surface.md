@@ -2088,6 +2088,68 @@ are NOT routed today.** They have builders and no handler, so a tap on one answe
 `BOT_ACTION_TOKEN_UNKNOWN`. Nothing draws them, and nothing should until this section gains a
 row for them.
 
+#### Browsing and bargaining
+
+| token | drawn on | what it does | reply | data |
+|---|---|---|---|---|
+| `cat:<digest>` | a category choice | opens that category as a grid. ⚠ The argument is a DIGEST of the category name, not an id — this platform has no category ids, and a long French or Arabic name would blow the 64-byte token | a screen button, or the cards | `{ opened: "listing", category }` |
+| `sim:<productId>` | an out-of-stock card, where the buy buttons are gone | products like that one | the similar cards, or the sentence saying there are none | `{ shown, total }` |
+| `save:<productId>` | an out-of-stock card | keeps it in the customer's saved items | one sentence. ⛔ **It promises no restock message** — nothing on this platform can send one, which is why the button says Save for later and not Notify me | `{ saved: true }` |
+| `open:pd:<productId>` | the reviews summary | opens the product screen at its reviews | a screen button; else the storefront product page | `{ handle, opened: "product" }` |
+| `deal:<sessionId>:<round>` | a bargained counter-offer | accepts **that round's** price and puts the item in the basket at it | the agreed sentence + the same three buttons an ordinary add gets | `{ locked, price }` |
+
+⚠ **A category that has emptied since the button was drawn opens EVERYTHING and says so**, rather
+than refusing: the customer asked to browse, and an empty answer to "show me shoes" is worse than
+a wider one that explains itself.
+
+⛔ **`deal:` carries a REFERENCE and a ROUND, never a price.** The price is read from the
+negotiation record for that round and re-judged on the press; a price in the token would let
+anyone lock any figure. The round is what makes "the exact price you were shown" true — a press
+on an offer the agent has since replaced is answered as superseded, with the latest offer's
+button, and never silently locked at a price the customer never saw.
+
+⚠ **Every refusal on that token answers with a sentence and the right next button** — superseded,
+expired, window moved, already ordered. ⛔ An expired deal must never read as though it never
+happened.
+
+#### Reviews
+
+Three arities of one verb, told apart by how many parts the argument has — the same way
+`shp:<orderId>` and `shp:<orderId>:<shipmentId>` differ.
+
+| token | drawn on | what it does | reply | data |
+|---|---|---|---|---|
+| `rate:<orderId>` | the delivered notification, and the order card once the order is confirmed | the invitation — asks for the stars | the question, with **five star options** | `{ orderId, awaitingStars: true }` |
+| `rate:<orderId>:<stars>` | a star option | with ONE product on the order, writes the review; with several, asks which | the thank-you, or the which-product question | `{ reviewId }`, or the products to choose from |
+| `rate:<orderId>:<stars>:<productId>` | that question's rows | writes the review for that product at those stars | the thank-you | `{ reviewId }` |
+
+⚠ **Stars first, product second, and the order is the point.** The stars are the impulse at the
+moment a delivery lands; a follow-up question costs the rating. A single-product order — the
+common case — is one tap after the invitation and no question at all.
+
+⚠ **The star options carry no copy in any language.** Their labels are the stars themselves
+(★★★★★ … ★): language-neutral, five characters, inside WhatsApp's row-title cap.
+
+⚠ **`reviews_create` stays `flow_only`** — the tap calls the service directly rather than going
+through the model, the same posture as the download tap. A model does not get to write a review.
+
+#### Digital downloads
+
+| token | drawn on | what it does | reply | data |
+|---|---|---|---|---|
+| `dl:<entitlementId>` | a row of the purchased-library choice | mints a **single-use, 15-minute** download link and answers with a LINK BUTTON | the sentence stating the expiry, with the button. Where no HTTPS origin is configured it says so and mints nothing | `{ entitlementId, delivered }`. ⛔ the URL is never in the data for you to relay |
+
+⛔ **The link NEVER appears in message text, and this is mechanical rather than stylistic.**
+Telegram and WhatsApp PRE-FETCH a URL that appears in text to build a preview, and the token IS
+the authorisation and is spent by the first GET — whoever makes it. A pasted link is therefore
+burned by the preview crawler before the customer taps it: they get a dead link and the log
+records a successful download. **Never offer a download link yourself; you cannot mint one.**
+
+⚠ **The token names the ENTITLEMENT, never the link.** A chat message lives for ever and a link
+lives fifteen minutes, so a URL baked into a button would be dead for almost everyone who ever
+pressed it. The server mints on the press — the rule `open:co` follows for checkout and `deal:`
+for a price.
+
 #### Payments
 
 | token | drawn on | what it does | reply | data |

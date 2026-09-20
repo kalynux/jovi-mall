@@ -35,7 +35,7 @@ import {
 } from '../catalog/customer-notification-catalog';
 import type { ShipmentFailureReason } from '../../shipments/shipment.model';
 import { ChannelText } from '../catalog/notification-catalog';
-import { Language, resolveLanguage, META_LANGUAGE_CODE, DEFAULT_LANGUAGE } from '../catalog/notification-i18n';
+import { Language, resolveLanguage, templateLanguage, DEFAULT_LANGUAGE } from '../catalog/notification-i18n';
 import { RenderContext, toTelegramNotificationBody, toWhatsAppNotificationBody } from '../catalog/message-renderer';
 import { DomainEvent } from '../../../core/events/event-bus';
 import { createAppError } from '../../../core/errors';
@@ -1567,7 +1567,18 @@ export class CustomerNotificationEventHandler {
                 message: {
                     type: 'template',
                     name: customerWhatsAppTemplateName(situation),
-                    language: META_LANGUAGE_CODE[lang],
+                    /**
+                     * ⛔ **`templateLanguage`, never `META_LANGUAGE_CODE[lang]`.** Our templates
+                     * are approved in English and French only, so naming the customer's own
+                     * language here asks Meta for a template that does not exist for `pt`, `es`
+                     * or `ar` — the send is refused, the refusal is caught below and written to
+                     * the row as a delivery error, and **the customer is told nothing**. Outside
+                     * the 24-hour window a template is the only way to reach them, so that is
+                     * total silence on exactly the messages that matter most.
+                     *
+                     * The fallback to English is explicit and named — see `templateLanguage`.
+                     */
+                    language: templateLanguage(lang),
                     components
                 },
                 meta: {

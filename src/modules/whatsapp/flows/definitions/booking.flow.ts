@@ -6,15 +6,16 @@ import { FLOW_SCREEN_TITLE, NOTICE_SCREEN, noticeScreen } from './notice.screen'
  * Bookings, as WhatsApp Flows — the ports of the `bl` (list), `bk` (pick a slot) and `bp` (pay)
  * screens.
  *
- * ── ⚠ DRAFTS, AND NOT PUBLISHABLE — TWICE OVER ─────────────────────────────
- * Neither half exists yet: the bookings stream is extracting `readBookingSlots` and
- * `confirmBooking` as this is written, and the three screen KINDS (`bl`, `bk`, `bp`) are not in
- * `InAppSurfaceKind` yet either. So these are **builders that take the kind**, not finished
- * definitions — the day those kinds land, each becomes one exported constant and nothing else
- * changes. `test:whatsapp-flows` instantiates them with a placeholder kind and holds them to
- * every structural rule today, and they are absent from `scripts/publish-whatsapp-flows.ts`,
- * which the suite also asserts: a Flow published before its read exists opens a form that cannot
- * be sent.
+ * ── ⚠ DRAFTS: SHAPED, KINDED, AND STILL NOT PUBLISHABLE ────────────────────
+ * The three screen KINDS landed on 2026-09-20, so these are finished definitions stamping their
+ * real kinds rather than the builders they were for a day. What does NOT exist yet is the half
+ * that fills them: the bookings stream is building `readBookingDays`, `readBookingSlots` and
+ * `confirmBooking`. So they stay absent from `scripts/publish-whatsapp-flows.ts`, which the suite
+ * asserts — a Flow published before its read exists opens a form that cannot be sent, and
+ * publishing is the one step this platform cannot rehearse.
+ *
+ * They are held to every structural rule from today, which is the point of landing them early:
+ * a mistake in a shape fails here, not at publish.
  *
  * ── THE ONE RULE THAT SHAPED ALL THREE ──────────────────────────────────────
  * A Flow screen is a FORM, and single choice caps at **20** options as a radio group, 200 as a
@@ -244,6 +245,16 @@ export function bookingSlotFlow(kind: InAppSurfaceKind): FlowDefinition {
  * ⚠ **The result does not come back here.** No form can hold a session open while a mobile-money
  * push is approved on a handset, so this closes with "approve it on your phone, I'll tell you in
  * the chat" and the payment path delivers the outcome.
+ *
+ * ── ⛔ ONE PAYMENT PATH, DECLINED DELIBERATELY — NOT AN OVERSIGHT ───────────
+ * "Pay at the shop" was considered for this round and **the owner declined it on 2026-09-20**:
+ * every appointment stays paid when it is made. So this screen has no second branch, and that is
+ * a decision rather than a gap.
+ *
+ * ⚠ **Adding one later is not a small change.** A Flow's screens and its `routing_model` are
+ * frozen at publish, so a branch introduced afterwards is a new version and a resubmission — the
+ * one step this platform cannot rehearse. Anyone reading the single path as something to "finish"
+ * should reopen the decision with the owner first, not the file.
  */
 export function bookingPayFlow(kind: InAppSurfaceKind): FlowDefinition {
     return {
@@ -299,3 +310,14 @@ export function bookingPayFlow(kind: InAppSurfaceKind): FlowDefinition {
         ],
     };
 }
+
+/**
+ * The three, stamping their real kinds.
+ *
+ * ⚠ **Built from the functions above rather than written out**, so the kind a form stamps and the
+ * kind whose session opens it cannot drift apart — and so the suite exercises exactly what a
+ * handset would be sent.
+ */
+export const BOOKING_LIST_FLOW: FlowDefinition = bookingListFlow('bl');
+export const BOOKING_SLOT_FLOW: FlowDefinition = bookingSlotFlow('bk');
+export const BOOKING_PAY_FLOW: FlowDefinition = bookingPayFlow('bp');

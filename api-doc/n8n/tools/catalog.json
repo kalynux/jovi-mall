@@ -3678,6 +3678,101 @@
       ]
     },
     {
+      "name": "orders_record_cancellation_reason",
+      "version": 1,
+      "title": "Record why the customer cancelled",
+      "tier": "core",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Attach the customer's own words about why they cancelled an order to that order's history, where the shop and support can read them.",
+      "when_to_use": "Immediately after a cancellation, when the customer tells you what went wrong. The cancel tap answers with no reply and you ask for the reason; this is where their answer goes. Send their words, not a summary.",
+      "when_not_to_use": "Never to cancel anything — use orders_cancel for that. Not for a complaint about an order that is still live: that is a support request. Not twice for one order; a second call is refused.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/orders/{orderId}/cancellation-reason"
+      },
+      "doc": "n8n/bot-surface.md#149-every-tap-and-what-it-answers",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "orderId",
+          "reason"
+        ],
+        "properties": {
+          "orderId": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "The order they cancelled, as the catalogue returned it."
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "The customer's own words, relayed rather than summarised."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "orderId"
+        ],
+        "body": [
+          "reason"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "recorded"
+        ]
+      },
+      "errors": [
+        {
+          "code": "ORDER_CANCELLATION_REASON_NOT_CANCELLED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "That order is not cancelled, so there is no cancellation to explain.",
+          "customer_action": "explain"
+        },
+        {
+          "code": "ORDER_CANCELLATION_REASON_ALREADY_RECORDED",
+          "status": 409,
+          "category": "conflict",
+          "when": "A reason is already on that order. One note per cancellation.",
+          "customer_action": "explain"
+        },
+        {
+          "code": "ORDER_CANCELLATION_REASON_WINDOW_CLOSED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The cancellation was more than a day ago. A chat thread lives for ever; this window does not.",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "idempotency": "Send an Idempotency-Key. A replay is additionally refused by the 409 above, so one cancellation can never collect two different stories.",
+      "requires_confirmation": false,
+      "risk": "low",
+      "audit": false,
+      "requires_customer_role": true,
+      "side_effects": [
+        "Writes one note onto the order's timeline, attributed to the customer."
+      ],
+      "platform_notes": {
+        "telegram": "Answers as data with no `reply`. Acknowledge it in your own words — briefly; the customer has just told you something they are unhappy about.",
+        "whatsapp": "Answers as data with no `reply`. Acknowledge it in your own words — briefly; the customer has just told you something they are unhappy about."
+      },
+      "context_resolution": {
+        "subject": "order",
+        "policy": "explicit_only",
+        "must_echo": false,
+        "notes": "The order is the one just cancelled in this conversation; never guess at another."
+      }
+    },
+    {
       "name": "profile_get_summary",
       "version": 1,
       "title": "The customer's profile, in brief",
@@ -5765,6 +5860,63 @@
       }
     },
     {
+      "name": "inapp_open_orders",
+      "version": 1,
+      "title": "Open the order history",
+      "tier": "extended",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Open the customer's own order history as a scrollable screen, newest first, each order showing its number, its state and what it cost.",
+      "when_to_use": "When the customer wants to look THROUGH their orders — \"show me my orders\", \"what have I bought\", \"my past orders\" — rather than asking about one of them.",
+      "when_not_to_use": "Not when they asked about ONE order: use orders_get_order, or orders_list_groups for the five most recent as a chat list they can tap. Not for a delivery question about a specific parcel — use orders_list_shipments.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/inapp/orders"
+      },
+      "doc": "n8n/bot-surface.md#19-the-in-app-screens",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {}
+      },
+      "request": {
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "opened"
+        ],
+        "never_relay": [
+          "handle"
+        ]
+      },
+      "errors": [],
+      "mutating": true,
+      "idempotent": false,
+      "idempotency": "Each call mints a fresh screen session. Send an Idempotency-Key so a retried chat message reuses one screen instead of leaving a trail of live ones.",
+      "requires_confirmation": false,
+      "risk": "low",
+      "audit": false,
+      "requires_customer_role": true,
+      "side_effects": [
+        "Mints a short-lived screen session the customer’s browser can open."
+      ],
+      "platform_notes": {
+        "telegram": "A Mini App button. This tool answers with a ready-made `reply` — send it unmodified. Do not also describe the button in your own words; the customer would get the sentence twice.",
+        "whatsapp": "A cta_url button to the storefront orders page until a WhatsApp Flow is published. This tool answers with a ready-made `reply` — send it unmodified. Do not also describe the button in your own words; the customer would get the sentence twice."
+      },
+      "context_resolution": {
+        "subject": "none",
+        "policy": "not_applicable",
+        "must_echo": false,
+        "notes": "The screen always shows the caller’s own orders and takes no id, so there is nothing to resolve and nothing a customer could aim at somebody else."
+      }
+    },
+    {
       "name": "inapp_open_product",
       "version": 1,
       "title": "Open one product, with its options",
@@ -6291,7 +6443,7 @@
       "service": "jovi-mall",
       "surface": "bot_internal",
       "description": "Everything the customer bought as a download, and whether each one can still be downloaded.",
-      "when_to_use": "When the customer asks about a file they bought.",
+      "when_to_use": "When the customer asks about a file they bought. This tool answers with a ready-made `reply` listing the downloadable items as buttons — send it unmodified and write nothing of your own alongside it. Never offer a download link yourself: you cannot mint one, and a link in message text is consumed by the chat app's link preview before the customer taps it.",
       "when_not_to_use": "Not for physical orders.",
       "operation": {
         "method": "POST",

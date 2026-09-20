@@ -23,8 +23,11 @@
  *
  * Run: npm run test:customer-notifications
  */
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
+import { parseBotActionId } from '../../src/modules/bot-surface/domain/bot-action-id';
+import { actionKeyOf } from '../../src/modules/bot-surface/domain/bot-action-dispatch';
+import { parseTicketTap } from '../../src/modules/bot-surface/domain/bot-ticket-actions';
 import {
     CUSTOMER_NOTIFICATION_CATALOG,
     assertCustomerCatalogComplete,
@@ -49,7 +52,13 @@ import {
 } from '../../src/modules/notifications/models/customer-notification.model';
 import { AGENT_NOTIFICATION_TYPES } from '../../src/modules/notifications/models/agent-notification.model';
 import { AGENT_NOTIFICATION_CATALOG } from '../../src/modules/notifications/catalog/agent-notification-catalog';
-import { SUPPORTED_LANGUAGES, Language } from '../../src/modules/notifications/catalog/notification-i18n';
+import {
+    SUPPORTED_LANGUAGES,
+    Language,
+    TEMPLATE_LANGUAGES,
+    META_LANGUAGE_CODE,
+    templateLanguage
+} from '../../src/modules/notifications/catalog/notification-i18n';
 
 let passed = 0;
 let failed = 0;
@@ -718,10 +727,19 @@ function main(): void {
         return true;
     });
 
-    // The split is the design, not an accident: a button that merely repeats the URL
-    // costs a Meta re-approval in stage 2 and buys the customer nothing.
-    assert('exactly 13 of the 25 situations carry a quick reply', () =>
-        withActions.length === 13);
+    /**
+     * ⚠ **This was "exactly 13 of the 25" — the THIRD expired count in this file in one day**,
+     * after "the five shortest-lived" and "the owner's three buttons". Every time, a number was
+     * a date-stamped observation wearing the clothes of a rule; every time, it went red for a
+     * CORRECT change. Here three buttons were withdrawn because their handlers do not exist.
+     *
+     * The two properties actually meant, neither of which a withdrawal can falsify:
+     */
+    assert('some situation carries quick replies (otherwise every check below is vacuous)', () =>
+        withActions.length > 0);
+
+    assert('⛔ a situation with quick replies always has a link button too', () =>
+        withActions.every((s) => CUSTOMER_NOTIFICATION_CATALOG[s].button !== undefined));
 
     assert('⚠ every label fits WhatsApp\'s 20-character reply-button cap, in all five languages', () => {
         for (const situation of withActions) {
@@ -832,15 +850,44 @@ function main(): void {
     assert('a RESOLVED request does offer it', () =>
         renderCustomerQuickReplies('ticket.resolved', 'en', { reopenableTicketId: ID }).length === 1);
 
-    assert('the owner\'s three delivery-failure buttons all render, and name no action we cannot do', () => {
+    /**
+     * ⚠ **This said "the owner's THREE buttons" and went red at two** — the second time today a
+     * count inside an assertion has expired, and I wrote the first one up. The count was never
+     * the property: what matters is that every button renders, that none promises an action the
+     * platform cannot perform, and that the whole message fits what WhatsApp will draw.
+     *
+     * The third button went because it was a duplicate of the link, and the remaining two now
+     * use the tickets stream's existing `rd` / `ad` tokens — a four-segment argument is refused
+     * by their parser, so the shape matters as much as the count did not.
+     */
+    assert('every delivery-failure button renders, and none names an action we cannot perform', () => {
         const out = renderCustomerQuickReplies('order.delivery_failed', 'en', { orderId: ID });
-        if (out.length !== 3) return false;
-        // No reschedule and no redirect — the owner's constraint. A label naming either
-        // would promise a customer something the platform deliberately does not offer.
+        if (out.length === 0) return false;
+        // No reschedule and no redirect — the owner's constraint. There is no reschedule
+        // endpoint anywhere and the address is snapshotted at checkout, so either label
+        // would promise something the platform cannot keep.
         return !out.some(b => /reschedul|redirect|change (the )?(date|address)/i.test(b.label));
     });
 
-    console.log('\n── Quick replies: what must NOT change ──');
+    /**
+     * ⛔ The shape the tickets parser actually accepts: `tkt` + at most three argument
+     * segments. A four-segment token is refused outright, and because Telegram reports
+     * nothing for an unhandled callback, the failure would be invisible from this side — the
+     * customer taps "I was not there" on a failed-delivery message and is told "I did not
+     * understand that".
+     */
+    assert('⛔ no `tkt` token exceeds the three segments the tickets parser accepts', () => {
+        const all = (Object.keys(CUSTOMER_NOTIFICATION_CATALOG) as CustomerNotificationType[])
+            .flatMap(s => CUSTOMER_NOTIFICATION_CATALOG[s].actions ?? []);
+        const tktTokens = all.filter(a => a.token.startsWith('tkt:'));
+        if (tktTokens.length === 0) return false; // the scan must find something
+        return tktTokens.every(a => a.token.split(':').length - 1 <= 3);
+    });
+
+    assert('the failed-delivery buttons use the tickets stream\'s CLAIMED tokens', () => {
+        const out = renderCustomerQuickReplies('order.delivery_failed', 'en', { orderId: ID });
+        return out.map(b => b.token.split(':').slice(0, 3).join(':')).join(' ') === 'tkt:new:rd tkt:new:ad';
+    });
 
     /**
      * Scans read from here, so a mutation harness can point them at a deliberately
@@ -853,6 +900,212 @@ function main(): void {
     const scanRoot = process.env.CUSTOMER_NOTIFICATIONS_SCAN_ROOT || join(__dirname, '../..');
     if (process.env.CUSTOMER_NOTIFICATIONS_SCAN_ROOT) console.log('  (SCANS REDIRECTED)');
     const readSource = (rel: string) => readFileSync(join(scanRoot, rel), 'utf8').replace(/\r\n/g, '\n');
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Template languages — the silent gap between what we speak and what Meta cleared
+    // ─────────────────────────────────────────────────────────────────────────
+    console.log('\n── Template languages: no customer may fall off the end ──');
+
+    const payloads = JSON.parse(
+        readFileSync(join(__dirname, '../../api-doc/notifications/whatsapp-template-payloads.json'), 'utf8')
+    ) as { languages: string[]; payloads: Array<{ name: string; language: string }> };
+
+    // A scan that finds nothing satisfies every "every X is Y" check below.
+    assert('the submitted payload set was actually read', () =>
+        Array.isArray(payloads.payloads) && payloads.payloads.length > 0);
+
+    /**
+     * ⛔ **THE ASSERTION THAT CATCHES THE SILENCE.** Every language a customer can hold must
+     * resolve to a template language that is genuinely in the submitted set. Before
+     * `templateLanguage` existed, `pt`/`es`/`ar` resolved to themselves, Meta refused the send,
+     * and the customer got nothing outside the 24-hour window.
+     *
+     * It also catches two things nobody has to remember: a sixth bot language added later, and
+     * a template set submitted in French but NOT English — which would leave the fallback
+     * itself unsendable.
+     */
+    /** The property, as a function of the resolver — so the same check can be run against a broken one. */
+    const everyLanguageSendable = (resolve: (lang: Language) => string): boolean => {
+        const submitted = new Set(payloads.payloads.map(p => p.language));
+        return SUPPORTED_LANGUAGES.every(lang => submitted.has(resolve(lang)));
+    };
+
+    assert('⛔ every bot language resolves to a submitted template — including the FALLBACK itself', () =>
+        everyLanguageSendable(templateLanguage));
+
+    assert('⛔ the approved-language constant matches what the generator submitted', () => {
+        const submitted = new Set(payloads.payloads.map(p => p.language));
+        const declared = new Set(TEMPLATE_LANGUAGES.map(l => META_LANGUAGE_CODE[l]));
+        return [...declared].every(l => submitted.has(l)) && declared.size === submitted.size;
+    });
+
+    // The fallback is English BY NAME, not "the platform default" and not "whichever approved
+    // language sorts first" — both would drift without failing.
+    assert('⛔ an unapproved language falls back to ENGLISH specifically', () =>
+        templateLanguage('ar') === 'en' && templateLanguage('es') === 'en' && templateLanguage('pt') === 'en');
+
+    assert('an approved language is left alone', () =>
+        templateLanguage('fr') === 'fr' && templateLanguage('en') === 'en');
+
+    /**
+     * ⭐ PROOF, reproducing the ACTUAL defect rather than a hypothetical: before
+     * `templateLanguage` existed the send path used `META_LANGUAGE_CODE[lang]` directly, so a
+     * customer's own language was asked of Meta whether or not it had ever been approved.
+     * Running the same property against that resolver must FAIL — if it passes, the assertion
+     * above is not testing anything.
+     */
+    assert('PROOF: the pre-fix resolver (the customer\'s own language) FAILS this check', () =>
+        everyLanguageSendable((lang) => META_LANGUAGE_CODE[lang]) === false);
+
+    /**
+     * And the case the owner's decision makes reachable: a set submitted in French but not
+     * English would leave the FALLBACK ITSELF unsendable, which is worse than the gap it
+     * closes — every unapproved language would resolve to a template that does not exist.
+     */
+    assert('PROOF: a fallback language missing from the submitted set is caught', () => {
+        const frenchOnly = new Set(['fr']);
+        return SUPPORTED_LANGUAGES.every(lang => frenchOnly.has(templateLanguage(lang))) === false;
+    });
+
+    /**
+     * ⛔ **No notification stack may name the recipient's own language at a template send.**
+     * All four carried the identical line and all four are fixed; this is what stops the fifth
+     * one being written, or one of these being "tidied" back to the direct lookup.
+     *
+     * ⚠ Scoped to `notifications/**` on purpose. Two sites OUTSIDE it have the same defect —
+     * `cod/services/delivery-code.service.ts` and
+     * `phone-verification/services/phone-verification.service.ts` — and neither is this
+     * stream's to edit. They are reported, not silently swept in, and the second is the more
+     * serious: a phone-verification OTP is out of window BY NATURE, since the number being
+     * verified may never have messaged us.
+     */
+    /**
+     * ⛔ **ALL SIX TEMPLATE SEND SITES, not just the notification stacks.** Every one carried
+     * the identical line, and the two outside `notifications/**` were the worse of the six:
+     *
+     *  - `phone-verification` — a **sign-up** defect, not a notification one. That message is
+     *    outside the 24-hour window BY NATURE (the number being verified may never have written
+     *    to us), so there is no free-form fallback: a Portuguese-, Spanish- or Arabic-speaking
+     *    person could never verify a phone number at all, every time, on every stack.
+     *  - `cod/delivery-code` — reached ONLY when the free-form send already failed on
+     *    `WHATSAPP_POLICY_VIOLATION`, so again no third chance: the delivery code never
+     *    arrived and an agent turned up with a parcel the customer could not confirm.
+     *
+     * The list is explicit rather than a directory walk: a walk that stops matching finds
+     * nothing and passes.
+     */
+    const TEMPLATE_SEND_SITES: readonly string[] = [
+        'src/modules/notifications/services/customer-notification-event-handler.service.ts',
+        'src/modules/notifications/services/vendor-notification-event-handler.service.ts',
+        'src/modules/notifications/services/agency-notification-event-handler.service.ts',
+        'src/modules/notifications/services/agent-notification-event-handler.service.ts',
+        'src/modules/cod/services/delivery-code.service.ts',
+        'src/modules/phone-verification/services/phone-verification.service.ts',
+    ];
+
+    assert('⛔ no template send names the recipient\'s own language, on ANY of the six sites', () =>
+        TEMPLATE_SEND_SITES.every((rel) => !/language:\s*META_LANGUAGE_CODE\[/.test(readSource(rel))));
+
+    assert('all six sites were actually read, and each resolves through templateLanguage', () =>
+        TEMPLATE_SEND_SITES.every((rel) => /templateLanguage\(/.test(readSource(rel))));
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  ⛔ THE SECOND AXIS: a token must PARSE, not merely be fully substituted
+    // ─────────────────────────────────────────────────────────────────────────
+    console.log('\n── Quick replies: every token reaches a handler ──');
+
+    /**
+     * ⛔ **THE ASSERTION WHOSE ABSENCE LET TEN DEAD BUTTONS SHIP-READY.**
+     *
+     * The completeness check above verifies that every PLACEHOLDER is supplied, and it is
+     * right about the failure it was written for — `pay:rt:` rendering as `pay:rt:` with an
+     * empty id. But **a token with every placeholder filled and a verb nobody handles passes
+     * it perfectly.** The check never parsed the token, so `bk:cancel:<id>`, `rate:<id>`,
+     * `tkt:reply:<id>` and five others read as healthy: well-formed, fully substituted,
+     * pointing at nothing.
+     *
+     * Two things had to be true and only one was checked. The other half:
+     *
+     *  1. the token parses under `parseBotActionId`, and its `(verb, sub-key)` is a key some
+     *     stream's handler map actually registers;
+     *  2. for `tkt`, the ARGUMENT additionally satisfies `parseTicketTap` — a claimed verb
+     *     with a legal-looking argument is exactly what no check on this side could see, and
+     *     it is how the failed-delivery pair nearly shipped.
+     *
+     * ⚠ **Claimed keys are read as TEXT, never imported.** Importing a controller under bare
+     * ts-node does real work at module scope and never returns, which is why every `test:inapp-*`
+     * suite scans instead. The parsers themselves are pure domain modules and ARE imported —
+     * so the grammar is the real one, not a second copy of it that could drift.
+     */
+    const claimedActionKeys = (): Set<string> => {
+        const dir = join(scanRoot, 'src/modules/bot-surface/controllers');
+        const keys = new Set<string>();
+        for (const file of readdirSync(dir)) {
+            if (!file.endsWith('.ts')) continue;
+            const src = readFileSync(join(dir, file), 'utf8').replace(/\r\n/g, '\n');
+            const maps = src.matchAll(/export const [A-Z_]+_ACTION_HANDLERS[^=]*=\s*Object\.freeze\(\{([\s\S]*?)\n\}\);/g);
+            for (const map of maps) {
+                for (const entry of map[1].matchAll(/^\s{4}'?([a-zA-Z:]+)'?\s*:/gm)) keys.add(entry[1]);
+            }
+        }
+        return keys;
+    };
+
+    const keys = claimedActionKeys();
+
+    // A scan that stops matching yields an empty set, and "every token is in the set" is then
+    // vacuously... false, which is safe — but an empty set would also make the guard useless
+    // in the other direction, so its size is pinned.
+    assert('the dispatcher registry scan found the claimed keys', () =>
+        keys.size >= 20 && keys.has('pay') && keys.has('tkt') && keys.has('ord'));
+
+    const catalogueTokens = (): Array<{ situation: string; token: string }> =>
+        (Object.keys(CUSTOMER_NOTIFICATION_CATALOG) as CustomerNotificationType[]).flatMap((s) =>
+            (CUSTOMER_NOTIFICATION_CATALOG[s].actions ?? []).map((a) => ({
+                situation: s,
+                // Every placeholder filled with a plausible id, which is the state the
+                // renderer would actually emit.
+                token: a.token.replace(/\{\{\s*\w+\s*\}\}/g, ID),
+            }))
+        );
+
+    assert('the token census found tokens to check', () => catalogueTokens().length > 0);
+
+    assert('⛔ every quick-reply token PARSES and its verb is registered by some stream', () => {
+        const dead = catalogueTokens().filter(({ token }) => {
+            const parsed = parseBotActionId(token);
+            if (!parsed) return true;
+            return !keys.has(actionKeyOf(parsed).key);
+        });
+        if (dead.length > 0) {
+            console.error(`     ↳ unreachable: ${dead.map((d) => `${d.token} (${d.situation})`).join(', ')}`);
+        }
+        return dead.length === 0;
+    });
+
+    assert('⛔ every `tkt` token additionally satisfies the TICKET parser', () => {
+        const dead = catalogueTokens()
+            .filter(({ token }) => token.startsWith('tkt:'))
+            .filter(({ token }) => parseTicketTap(token.slice('tkt:'.length)) === null);
+        if (dead.length > 0) {
+            console.error(`     ↳ refused by parseTicketTap: ${dead.map((d) => `${d.token} (${d.situation})`).join(', ')}`);
+        }
+        return dead.length === 0;
+    });
+
+    /**
+     * PROOF that both halves bite, using the real dead tokens this check was written after —
+     * one per failure mode. If either passes, the assertion above is not doing its job.
+     */
+    assert('PROOF: an unregistered verb is caught (`rate:` — declared, handled by nobody)', () => {
+        const parsed = parseBotActionId(`rate:${ID}`);
+        return parsed === null || !keys.has(actionKeyOf(parsed).key);
+    });
+
+    assert('PROOF: a claimed verb with an illegal argument is caught (`tkt:reply:<id>`)', () =>
+        parseTicketTap(`reply:${ID}`) === null);
+
+    console.log('\n── Quick replies: what must NOT change ──');
 
     const handlerSource = readSource('src/modules/notifications/services/customer-notification-event-handler.service.ts');
     const telegramSource = readSource('src/modules/telegram/services/telegram-bot.service.ts');
@@ -899,11 +1152,14 @@ function main(): void {
             && /\} else if \(button\) \{[\s\S]*?WaServiceMessage\.ctaUrl\(/.test(inWindow);
     });
 
-    assert('the 12 situations without a quick reply still resolve a URL button', () => {
+    // The fourth expired count, same day, same shape — the number was never the property.
+    // What matters is that a situation carrying no tap still gives the customer a way to look
+    // at the thing, which is exactly what makes a withdrawal safe.
+    assert('⛔ every situation without a quick reply still resolves a URL button', () => {
         const ctx = { orderId: ID, bookingId: ID, ticketId: ID, payToken: 'tok' };
         const none = (Object.keys(CUSTOMER_NOTIFICATION_CATALOG) as CustomerNotificationType[])
             .filter(s => !(CUSTOMER_NOTIFICATION_CATALOG[s].actions?.length));
-        return none.length === 12
+        return none.length > 0
             && none.every(s => renderCustomerButton(s, 'en', ctx, 'https://wi-mall.com') !== null);
     });
 

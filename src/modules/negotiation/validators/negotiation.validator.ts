@@ -90,5 +90,8 @@ export const NegotiationRecordSchema = z
     })
     .strict();
 
+/** The messaging identity, derived from the schema so the two can never drift. */
+export type NegotiationIdentity = z.infer<typeof NegotiationIdentitySchema>;
+
 export type NegotiationContextInput = z.infer<typeof NegotiationContextSchema>;
 export type NegotiationRecordInput = z.infer<typeof NegotiationRecordSchema>;

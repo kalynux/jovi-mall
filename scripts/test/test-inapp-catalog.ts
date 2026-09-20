@@ -170,6 +170,14 @@ function main(): void {
     /**
      * ⚠ A WebView that computes money is a second implementation of delivery fees, discounts
      * and the negotiated price lock, in the one place nothing tests. Prices arrive formatted.
+     *
+     * ⚠ **The name says "money"; the claim is wider — NO SCREEN COMPUTES A VALUE ANOTHER SURFACE
+     * ALSO COMPUTES.** It caught a rating average being rounded here with `toFixed`, which is not
+     * money at all: three surfaces draw that rating (a chat message, this screen, a WhatsApp Flow
+     * later), and three roundings of 4.25 is how one product reads 4.3 in one place and 4.2 in
+     * another. The fix was the same as for a price — render it once on the server and send the
+     * string (`ratingDisplay` in `product-reviews.read.ts`). Read the guard that way before
+     * deciding some new number is exempt from it.
      */
     assert('⛔ no screen does money arithmetic', () =>
         MINE.every((kind) => {

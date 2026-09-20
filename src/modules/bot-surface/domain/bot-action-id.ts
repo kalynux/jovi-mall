@@ -124,6 +124,17 @@ export const BOT_ACTION_VERBS = Object.freeze([
     'save',
     /** `deal:<sessionId>:<round>` — take the price the agent offered in that round. */
     'deal',
+    // ── Digital delivery ─────────────────────────────────────────────────────
+    /**
+     * `dl:<entitlementId>` — download the file this entitlement grants.
+     *
+     * ⛔ **A BUTTON rather than a link in text, and the reason is mechanical.** A download URL
+     * is public (the token IS the authorisation), SINGLE-USE and fifteen minutes long — and
+     * both chat apps PRE-FETCH a URL that appears in message text to build a preview. A pasted
+     * link is therefore spent by the preview crawler before the customer can tap it: they get
+     * a dead link and the log records a successful download. A link button is not pre-fetched.
+     */
+    'dl',
     // ── The account surface ──────────────────────────────────────────────────
     /**
      * `acct:<section>[:<id>[:<op>]]` — every door on the account surface, under ONE verb with
@@ -297,7 +308,13 @@ export function cartViewActionId(): string {
  * session is minted server-side, kind-checked on read, and **spent** by the write that places
  * the order. This type governs which screens a tap can ASK for, not what a tap can carry.
  */
-export type BotInAppSurface = 'pd' | 'pl' | 'ol' | 'sl' | 'co';
+/**
+ * ⚠ **`bl` is the only one of the three bookings kinds a BUTTON can name.** `bk` and `bp` are
+ * minted server-side on the tap that opens them — a picker handle holds a slot and a payment
+ * handle moves money, and neither may sit in a chat history waiting to be pressed. Same rule
+ * `open:co` follows.
+ */
+export type BotInAppSurface = 'pd' | 'pl' | 'ol' | 'sl' | 'co' | 'bl' | 'bk' | 'bp';
 
 export function openSurfaceActionId(surface: BotInAppSurface, ref?: string): string {
     return token('open', ref ? `${surface}:${ref}` : surface);
@@ -513,6 +530,45 @@ export function saveForLaterActionId(productId: string): string {
  */
 export function lockInOfferActionId(sessionId: string, round: number): string {
     return token('deal', `${sessionId}:${round}`);
+}
+
+/**
+ * `rate:<orderId>` · `rate:<orderId>:<stars>` · `rate:<orderId>:<stars>:<productId>`
+ *
+ * ⭐ **The one verb in this file whose grammar was still free to choose.** The rule above — a
+ * verb's meaning is frozen forever, because a button lives in a chat history indefinitely — did
+ * not apply here: `rateActionId` had never been called from anywhere, so no `rate:` button has
+ * ever reached a customer and there was no history to protect. Read the freezing rule as still
+ * absolute for every other verb; this was a one-time window.
+ *
+ * Told apart by ARITY, exactly as `shp:<orderId>` and `shp:<orderId>:<shipmentId>` are:
+ *   `rate:<orderId>`                        the invitation — asks for the stars.      29 B
+ *   `rate:<orderId>:<stars>`                one product on the order → the review is  31 B
+ *                                           created; several → asks which.
+ *   `rate:<orderId>:<stars>:<productId>`    that product, at those stars.             56 B
+ *
+ * ⚠ **Stars before product, and the order matters.** The stars are the impulse at the moment a
+ * delivery lands, and the comment on `rateActionId` is right that a follow-up question costs the
+ * rating. A single-product order — the common case — is one tap after the invitation.
+ */
+export function rateInviteActionId(orderId: string): string {
+    return token('rate', orderId);
+}
+
+export function rateProductActionId(orderId: string, stars: 1 | 2 | 3 | 4 | 5, productId: string): string {
+    return token('rate', `${orderId}:${stars}:${productId}`);
+}
+
+/**
+ * `dl:<entitlementId>` — download the file this entitlement grants. 27 bytes.
+ *
+ * ⛔ **The token names the ENTITLEMENT, never the download link.** A link is single-use and
+ * lives 15 minutes; a chat message lives forever, so a minted URL baked into a button would be
+ * dead for almost everyone who ever tapped it. The server mints on the press — the same rule
+ * `open:co` follows for checkout, and `deal:` for a price.
+ */
+export function downloadActionId(entitlementId: string): string {
+    return token('dl', entitlementId);
 }
 
 /**

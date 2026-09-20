@@ -459,6 +459,43 @@
      "timeout": 20000
     }
    }
+  },
+  "read bargain flag": {
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "onError": null,
+   "parameters": {
+    "mode": "runOnceForEachItem",
+    "jsCode": "// Is this customer mid-haggle, and did they just agree a price?\n//\n// TWO independent things, read from two keys, and they are not the same question. The\n// FLAG says a negotiation is open, so this turn belongs to the seller. The LOCK says one\n// just closed, so this turn belongs to the assistant — with a price to honour.\n//\n// Neither carries the vendor's floor or the asking price. The lock carries a reference,\n// the variant it is bound to and what was agreed; nothing about the vendor's margin.\n//\n// ⚠ The n8n Redis node's `set` exposes NO TTL. That is measured, not assumed: it is the\n// same limitation that put wi-mall-product-search's query cache in Postgres. So the\n// `expiresAt` inside each value is the authority — a lapsed one is treated as absent\n// here. Trusting a key's existence alone would hold a customer in bargaining mode for\n// good if a close were ever missed, and would offer a long-dead price forever.\nconst inbound = $('Inbound').item.json;\nconst sync = $('sync identity').item.json;\n\nconst rawFlag = $('check bargain').item.json.bargainFlag;\nconst rawLock = $input.item.json.priceLock;\n\nfunction parse(raw) {\n  try { return raw ? JSON.parse(String(raw)) : null; } catch (e) { return null; }\n}\nfunction unexpired(v) {\n  return !!v && !!v.expiresAt && new Date(v.expiresAt).getTime() > Date.now();\n}\n\nconst flag = parse(rawFlag);\nconst live = !!flag && !!flag.variantId && unexpired(flag);\n\n// A photo, a location pin or a shared contact mid-haggle is not a haggle. The bargaining\n// agent has seven tools and none of them touches a file, an address or an order, so those\n// turns stay with the main agent — and the flag stays set, so the next typed message goes\n// back to the negotiation where it left off.\nconst bargaining = live && inbound.kind === 'text';\n\n// The agreed price, rendered for the system prompt. Deliberately DATA and no instruction:\n// what to do with it is written once, statically, in the prompt itself, so this line does\n// not become a second place the rule lives.\n//\n// ⚠ THREE states, not two, and the third is why this is no longer a ternary. A lapsed\n// lock used to render identically to no lock at all — both 'none' — so the assistant\n// could not tell \"we agreed 16,000 and it ran out\" from \"no negotiation ever happened\".\n// Measured 2026-09-08: a customer came back 76 minutes after a deal, was told the bot had\n// no record of it and never confirms prices that way, and was asked whether the figure\n// came from a screenshot somewhere else. It had agreed the price itself, 20 minutes\n// before the lock lapsed. Both records had gone: this one by design, the chat transcript\n// because its Redis TTL was an hour.\n//\n// The lapsed branch carries the price and the variant so the assistant can name what\n// expired, and deliberately NOT the ref. A lapsed ref is refused at consume (plan D-10),\n// so handing it over buys a guaranteed 4xx and hands a model a credential it cannot spend.\nconst EXPIRED_GRACE_MS = 24 * 60 * 60 * 1000;\n\nconst lock = parse(rawLock);\nconst lockExpiryMs = (lock && lock.expiresAt) ? new Date(lock.expiresAt).getTime() : 0;\nconst sinceExpiryMs = lockExpiryMs ? (Date.now() - lockExpiryMs) : -1;\n\n// ⚠ The grace horizon is not cosmetic. The lock key has no Redis TTL of its own — see the\n// note above — so it survives until something overwrites it. Without a bound, a customer\n// who haggled once in March is told about that deal every turn, forever.\nconst lapsed = !!lock\n  && lockExpiryMs > 0\n  && sinceExpiryMs > 0\n  && sinceExpiryMs < EXPIRED_GRACE_MS;\n\nlet agreedPrice = 'none';\nif (lock && lock.ref && unexpired(lock)) {\n  agreedPrice = 'ref ' + String(lock.ref)\n    + ' · variantId ' + String(lock.variantId || 'unknown')\n    + ' · quantity ' + String(lock.quantity || 1);\n} else if (lapsed) {\n  agreedPrice = 'expired'\n    + ' · unitPrice ' + String(lock.unitPrice || 'unknown')\n    + ' · variantId ' + String(lock.variantId || 'unknown')\n    + ' · quantity ' + String(lock.quantity || 1)\n    + ' · expiredMinutesAgo ' + String(Math.max(1, Math.round(sinceExpiryMs / 60000)));\n}\n\nreturn { json: {\n  bargaining: bargaining,\n  agreedPrice: agreedPrice,\n  mode: 'turn',\n  channel: inbound.channel,\n  externalId: inbound.externalId,\n  messageId: inbound.messageId,\n  text: inbound.text,\n  language: (sync && sync.data && sync.data.customer && sync.data.customer.language) || inbound.language || 'fr',\n  variantId: live ? flag.variantId : null,\n  productId: live ? (flag.productId || null) : null,\n  quantity: live ? (Number(flag.quantity) > 0 ? Math.trunc(Number(flag.quantity)) : 1) : 1,\n} };\n"
+   }
+  },
+  "check bargain": {
+   "type": "n8n-nodes-base.redis",
+   "typeVersion": 1,
+   "onError": "continueRegularOutput",
+   "parameters": {
+    "operation": "get",
+    "propertyName": "bargainFlag",
+    "key": "=wi-mall:bargain:{{ $('Inbound').item.json.channel }}:{{ $('Inbound').item.json.externalId }}",
+    "keyType": "string",
+    "options": {
+     "dotNotation": false
+    }
+   }
+  },
+  "check price lock": {
+   "type": "n8n-nodes-base.redis",
+   "typeVersion": 1,
+   "onError": "continueRegularOutput",
+   "parameters": {
+    "operation": "get",
+    "propertyName": "priceLock",
+    "key": "=wi-mall:bargain:lock:{{ $('Inbound').item.json.channel }}:{{ $('Inbound').item.json.externalId }}",
+    "keyType": "string",
+    "options": {
+     "dotNotation": false
+    }
+   }
   }
  }
 }

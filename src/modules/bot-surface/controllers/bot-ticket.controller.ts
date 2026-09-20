@@ -50,6 +50,7 @@ import {
     botTicketStateLabel,
     ticketAcceptsWriting,
 } from '../domain/bot-ticket-copy';
+import { requestRow } from '../domain/bot-ticket-rows';
 import {
     BotNoArgsSchema,
     BotTicketCreateSchema,
@@ -190,10 +191,12 @@ export class BotTicketController {
     static close = asyncHandler(async (req: Request, res: Response) => {
         const { ticketId } = BotTicketParamSchema.parse(req.params);
         BotNoArgsSchema.parse(req.body ?? {});
-        const caller = botCallerOf(req);
-
-        const ticket = await ticketService.closeTicket(ticketId, caller.userId, ActorRole.CUSTOMER);
-        sendSuccess(res, ticket);
+        /**
+         * ⚠ **No reply: a tool call belongs to the assistant, which says what it did.** The BUTTON
+         * path speaks (`yes:tcl`), because there the platform asked the question and a tap that
+         * produced no message reads as nothing having happened. One function, two turns.
+         */
+        await closeOwnRequest(req, res, ticketId, { speak: false });
     });
 
     /**
@@ -460,7 +463,7 @@ function requestListReply(
         kind: 'choice',
         text: botTicketCopy('whichTicket', language),
         options: [
-            ...items.map((ticket) => requestRow(ticket, language)),
+            ...items.map((ticket) => requestRow(rowFactsOf(ticket), language)),
             {
                 id: supportFormActionId(),
                 label: botTicketCopy('newRequestRow', language),
@@ -469,26 +472,6 @@ function requestListReply(
         ],
         listButton: botChrome('chooseListButton', language),
         sectionTitle: botChrome('chooseSectionTitle', language),
-    };
-}
-
-/**
- * One request as a row.
- *
- * ⚠ **The subject is the title and the STATE is the description**, which is the atlas's own wording
- * for this row — a customer picking between requests recognises them by what they are about, and
- * needs the state to know which one is waiting on them. A WhatsApp row title holds 24 characters, so
- * `shortLabel` carries the subject alone while Telegram gets the whole line.
- */
-function requestRow(ticket: Record<string, unknown>, language: string | null): BotReplyOption {
-    const subject = textOf(ticket.subject) || botTicketCopy('newRequestRow', language);
-    const state = botTicketStateLabel(textOf(ticket.status), language);
-
-    return {
-        id: ticketCardActionId(idOf(ticket)),
-        label: `${subject} · ${state}`,
-        shortLabel: subject,
-        description: state,
     };
 }
 
@@ -797,7 +780,7 @@ export function whichRequestForFileReply(
         text: botTicketCopy('whichTicketForFile', language),
         options: [
             ...open.map((ticket) => ({
-                ...requestRow(ticket, language),
+                ...requestRow(rowFactsOf(ticket), language),
                 id: attachToTicketActionId(idOf(ticket), attachmentRef),
             })),
             {
@@ -822,4 +805,18 @@ export function whichRequestForFileReply(
  */
 function asRow(ticket: unknown): Record<string, unknown> {
     return ticket as Record<string, unknown>;
+}
+
+/**
+ * A request as the row builder wants it: three named strings out of a document or a projection.
+ *
+ * ⚠ **Named here rather than inside the pure builder**, so that module depends on no Mongoose shape
+ * and a suite can hand it literals.
+ */
+function rowFactsOf(ticket: Record<string, unknown>): {
+    id: string;
+    subject: string;
+    status: string;
+} {
+    return { id: idOf(ticket), subject: textOf(ticket.subject), status: textOf(ticket.status) };
 }

@@ -1,5 +1,37 @@
 # WhatsApp Templates
 
+> ⛔ **INCIDENT, FOUND AND FIXED 2026-09-20 — THE TEMPLATES ARE APPROVED IN TWO LANGUAGES AND THE
+> CODE ASKED FOR FIVE.** Every template send named the recipient's own language
+> (`META_LANGUAGE_CODE[lang]`). Templates are approved in `en` and `fr` only, so for anyone whose
+> language was **Portuguese, Spanish or Arabic** the send asked Meta for a template that does not
+> exist and was refused.
+>
+> **Six sites carried the identical line**, and the two worst were not notifications at all:
+>
+> | Site | Consequence for a pt / es / ar user |
+> |---|---|
+> | `phone-verification.service.ts` | ⛔ **Could never verify a phone number. Ever.** That message is outside the 24-hour window **by nature** — the number being verified may never have written to us — so there is no free-form fallback. This was a **sign-up** defect on every stack, surfacing as a generic `PHONE_VERIFICATION_DELIVERY_FAILED` 502 that reads like a provider outage. |
+> | `cod/delivery-code.service.ts` | The COD delivery code never arrived. Reached **only** after the free-form send already failed on `WHATSAPP_POLICY_VIOLATION`, so there was no third chance: an agent arrives with a parcel the customer cannot confirm. |
+> | the four notification stacks (customer, vendor, agency, agent) | No WhatsApp notification outside the window — for customers **and** for vendors, agencies and agents. |
+>
+> ⚠ **Why it was invisible.** `template-registry.ts` registers every template in **all five**
+> languages, so the code's own model of the world said the template existed. The refusal came
+> back from Meta at send time, was caught, and was written to the notification row as a delivery
+> error. Nothing alerted. ⚠ **That registry is still wrong** and is a separate change.
+>
+> **The fix**: `templateLanguage(lang)` in `notifications/catalog/notification-i18n.ts` — an
+> explicit, named fallback to **English**, applied at all six sites, with `TEMPLATE_LANGUAGES`
+> declaring what is actually approved. `test:customer-notifications` asserts that every one of
+> the five bot languages resolves to a template that is genuinely in the submitted set —
+> including the fallback itself, which catches the case of a set submitted in French but not
+> English. ⚠ The fallback is the **literal** `'en'`, deliberately not `DEFAULT_LANGUAGE`: they
+> are the same value today and different ideas, and since French is approved, changing the
+> platform default would have moved this fallback with nothing going red.
+>
+> The accepted cost, decided by the owner: an Arabic-reading customer gets an English delivery
+> notice. **In-chat copy, email, Telegram and the in-app inbox remain five languages** — they
+> need nobody's approval.
+
 > ✅ **The WABA holds 190 templates** — the 94 notification names in `en` and `fr` (submitted
 > 2026-09-14) plus the phone-verification pair (submitted and **approved** 2026-09-15). This
 > replaces the "holds ZERO templates" measurement that stood here on 2026-09-14.

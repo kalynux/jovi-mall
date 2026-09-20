@@ -413,7 +413,91 @@ NEW['core:drop duplicate reply'] = [
   "return out.map(function (j) { return { json: { role: j.role || 'model', reply: j.reply } }; });",
 ].join('\n');
 
-module.exports = { NEW, live, liveWaNormalize };
+// ── § 8 · bargaining: the routing keys follow the buttons ─────────────────────
+const liveBargain = JSON.parse(fs.readFileSync(path.join(__dirname, 'live-bargain-nodes.json'), 'utf8')).nodes;
+
+// `bargain key change?` — a Switch with two rules and a fallback that does nothing.
+// ⚠ Both read the RESPONSE, never the tapped token: `verb` is the rung the server RE-RESOLVED,
+// so a card drawn while a product was negotiable answers `verb: "add"` once the vendor closes
+// the window, and only the response knows that.
+NEW['core:bargain key change?.closed'] =
+  "={{ $json.data?.negotiation?.closed === true }}";
+NEW['core:bargain key change?.reopen'] =
+  "={{ $json.data?.outcome === 'chat' && $json.data?.verb === 'bargain' && !!$json.data?.variantId }}";
+
+// What `set bargain flag (tap)` writes. It must satisfy `read bargain flag`, which lives in a
+// DIFFERENT node and demands `variantId` and an unexpired `expiresAt` — nothing compares the two.
+NEW['core:set bargain flag (tap).value'] =
+  "={{ JSON.stringify({ variantId: $('product action').first().json.data.variantId, productId: $('product action').first().json.data.productId, quantity: 1, expiresAt: $now.plus({ minutes: 30 }).toISO() }) }}";
+
+// § 8.4 · `decide send` prefers the gate's channel-ready body when it sent one.
+NEW['bargain:decide send'] = patch('bargain:decide send', liveBargain['decide send'].parameters.jsCode, [
+  [
+    "let text = null;\nlet handBack = false;",
+    "let text = null;\n" +
+    "// ⭐ THE GATE MAY NOW SEND A BODY RATHER THAN A SENTENCE. `data.outbound` is a channel-ready\n" +
+    "// reply in the bot surface's own shape (same renderer), carrying the approved sentence PLUS\n" +
+    "// one 'Lock it in' button, so a customer can accept by pressing instead of typing. It is a\n" +
+    "// SIBLING of `data.reply`, never a replacement: `reply` keeps its exact meaning and value, and\n" +
+    "// a gate that sends no `outbound` (a model-closed turn, a `revise` verdict) behaves as before.\n" +
+    "//\n" +
+    "// ⚠ D-4 is untouched. What goes out is still the GATE's words, never the model's -- this only\n" +
+    "// changes whether they arrive as a plain message or as a message with a button.\n" +
+    "let outbound = null;\n" +
+    "let handBack = false;",
+  ],
+  [
+    "    text = String(echo.data.reply || '').trim();\n",
+    "    text = String(echo.data.reply || '').trim();\n" +
+    "    const ob = echo.data.outbound;\n" +
+    "    if (ob && ob.channel && ob.method && ob.body) { outbound = ob; }\n",
+  ],
+  [
+    "let reply = null;\nif (text) {\n",
+    "let reply = null;\n" +
+    "if (outbound) {\n" +
+    "  // Already rendered by the backend for this channel. Sent verbatim, like every other reply.\n" +
+    "  reply = outbound;\n" +
+    "} else if (text) {\n",
+  ],
+]);
+
+// § 8.5 · the alternatives the bargainer handed back, drawn by the MAIN agent.
+NEW['core:alternatives handed back?'] =
+  "={{ Array.isArray($json.handoff?.productIds) && $json.handoff.productIds.length > 0 }}";
+
+// ⚠ Patched INTO the § 6 result, not beside it: `compose agent input` is ONE node and the
+// deployed body carries both changes. There is deliberately no "§ 6 only" variant to test
+// against — a harness that proved a body nobody deploys would be proving the wrong subject.
+NEW['core:compose agent input'] = patch('core:compose agent input (handoff)', NEW['core:compose agent input'], [
+  [
+    "const agentInput = [note, typed || spoken].filter(Boolean).join(' ').trim();",
+    "// ⭐ THE SELLER SUGGESTED OTHER PRODUCTS, AND ONLY THE MAIN AGENT CAN DRAW THEM.\n" +
+    "// The bargaining sub-agent holds the pen for this turn -- it has already answered the\n" +
+    "// customer about the price -- but the card echo belongs to this rail, and one sender per\n" +
+    "// turn is the rule the whole bargaining design rests on. So it hands back product ids and\n" +
+    "// the main agent draws them; its own sentence is suppressed downstream for a bargained\n" +
+    "// turn, while the cards survive. That is what keeps one voice and still shows the products.\n" +
+    "//\n" +
+    "// ⚠ The ids are filtered to the 24-character shape before they reach the model: they come\n" +
+    "// from another workflow's output, and nothing else here validates them.\n" +
+    "if ($('hand to bargainer').isExecuted) {\n" +
+    "  const handoff = ($('hand to bargainer').item.json || {}).handoff;\n" +
+    "  const ids = (handoff && Array.isArray(handoff.productIds))\n" +
+    "    ? handoff.productIds.filter(function (id) { return typeof id === 'string' && /^[0-9a-f]{24}$/i.test(id); }).slice(0, 10)\n" +
+    "    : [];\n" +
+    "  if (ids.length > 0) {\n" +
+    "    note = note + ' [The seller has ALREADY replied to this customer about the price. They also suggested these products: '\n" +
+    "      + ids.join(', ')\n" +
+    "      + '. Call Show-Products with exactly those ids, in that order, and write nothing of your own: the seller has the floor this turn. Never mention a price, a discount or the seller.]';\n" +
+    "  }\n" +
+    "}\n" +
+    "\n" +
+    "const agentInput = [note, typed || spoken].filter(Boolean).join(' ').trim();",
+  ],
+]);
+
+module.exports = { NEW, live, liveBargain, liveWaNormalize };
 
 if (require.main === module) {
   fs.mkdirSync(path.join(__dirname, 'new'), { recursive: true });

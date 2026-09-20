@@ -29,6 +29,7 @@ import { BotAccountCloseSchema, BotConnectionParamSchema, BotNoArgsSchema } from
 import { addressSection, languageChoiceTap, setLanguageTap } from './bot-profile.controller';
 import { contactSection } from './bot-contact.controller';
 import { paymentSection } from './bot-payment-method.controller';
+import { inboxSection, notifySection } from './bot-notification.controller';
 import { ACCOUNT_CLOSURE_CONFIRMATION } from '../../users/user.validator';
 
 /**
@@ -515,7 +516,54 @@ const ACCOUNT_SECTIONS: Readonly<Record<string, (req: Request, res: Response, re
         pay: paymentSection,
         prof: profileSection,
         close: closeSection,
+        inbox: inboxSection,
+        ntf: notifySection,
+        menu: menuSection,
     });
+
+/**
+ * The account menu — the owner's ONE list of eight.
+ *
+ * ⚠ **A `choice`, and it could not have been anything else.** Eight actions as buttons is
+ * impossible on WhatsApp, which renders at most three reply buttons and drops the rest in
+ * silence; a choice becomes a list of up to ten rows there and a column on Telegram. This is
+ * why the eight row titles are capped at 24 rather than a button's 20.
+ *
+ * ⚠ **Every row points at a section that EXISTS**, which is why this landed last. A menu is
+ * the one place where a row that routes nowhere is guaranteed to be found by a customer rather
+ * than by a test — they read the list and press the thing they came for. The eight are
+ * `prof · addr · pay · ntf · inbox · conn · lang · close`, and each has a handler above.
+ */
+async function menuSection(req: Request, res: Response, rest: string): Promise<void> {
+    if (rest !== '') throw unknownBotAction();
+
+    botCallerOf(req);
+    const language = botResponseLanguageOf(req);
+
+    const rows: readonly [string, Parameters<typeof botChrome>[0]][] = [
+        ['prof', 'accountRowProfile'],
+        ['addr', 'accountRowAddresses'],
+        ['pay', 'accountRowPayments'],
+        ['ntf', 'accountRowNotifySettings'],
+        ['inbox', 'accountRowInbox'],
+        ['conn', 'accountRowChannels'],
+        ['lang', 'accountRowLanguage'],
+        ['close', 'accountRowClose'],
+    ];
+
+    setBotReply(req, {
+        kind: 'choice',
+        text: botChrome('accountMenuPrompt', language),
+        options: rows.map(([section, copy]) => ({
+            id: accountActionId(section),
+            label: botChrome(copy, language),
+        })),
+        listButton: botChrome('chooseListButton', language),
+        sectionTitle: botChrome('chooseSectionTitle', language),
+    });
+
+    sendSuccess(res, { sections: rows.map(([section]) => section) });
+}
 
 /**
  * `acct:prof` — what we hold about this customer.

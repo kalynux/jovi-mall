@@ -5,7 +5,7 @@ import { normalizePhoneNumber } from '../../../core/validation/phone';
 import { getWhatsAppMessagingService } from '../../whatsapp/services/whatsapp-messaging.service';
 import { WaServiceMessage } from '../../whatsapp/builders/service-message.builder';
 import { WhatsappService } from '../../whatsapp/whatsapp.service';
-import { META_LANGUAGE_CODE } from '../../notifications/catalog/notification-i18n';
+import { templateLanguage } from '../../notifications/catalog/notification-i18n';
 import { PHONE_VERIFICATION_CONFIG, OTP_LIMITS } from '../config/phone-verification.config';
 import { generateOtp, judgeOtp, mayResend } from '../domain/otp';
 import { clearOtp, putOtp, readOtp, recordFailedAttempt, OtpRecord } from './otp.store';
@@ -301,20 +301,45 @@ export class PhoneVerificationService {
         name: string,
         components: TemplateComponent[],
     ): Promise<boolean> {
+        /**
+         * ⛔ **`templateLanguage(lang)`, NOT `META_LANGUAGE_CODE[lang]` — and this one was not a
+         * notification bug, it was a SIGN-UP bug.**
+         *
+         * Our WhatsApp templates are approved in English and French only. This line used to name
+         * the user's own language, so for anyone whose language is Portuguese, Spanish or Arabic
+         * it asked Meta for a template that does not exist, and the send was refused.
+         *
+         * ⚠ **A phone-verification message is outside the 24-hour window BY NATURE** — the whole
+         * point is to reach a number that may never have written to us, so there is no free-form
+         * fallback to rescue it. The template is the only path. The consequence was therefore not
+         * a missed notification: **a Portuguese-, Spanish- or Arabic-speaking person could never
+         * verify a phone number at all, on any stack, every time.** It reached the caller as a
+         * generic `PHONE_VERIFICATION_DELIVERY_FAILED` 502 that reads like a provider outage.
+         *
+         * ⚠ It was invisible for the usual second reason: `template-registry.ts` registers every
+         * template in all five languages, so the code's own model said the template existed.
+         *
+         * Found 2026-09-20 while applying the same fix to the four notification stacks; all six
+         * sites carried the identical line. The language fallback is explicit and named — see
+         * `templateLanguage`. ⚠ Note this is a DIFFERENT fallback from the template-name fallback
+         * this method already serves: that one tries another template, this one picks the
+         * language the template actually exists in. Both can fire on one send.
+         */
+        const language = templateLanguage(lang);
         try {
             const result = await getWhatsAppMessagingService().send({
                 to: phone,
                 type: 'template',
-                message: { type: 'template', name, language: META_LANGUAGE_CODE[lang], components },
+                message: { type: 'template', name, language, components },
                 meta: {},
             });
             if (!result?.success) {
-                console.warn(`[PhoneVerification] template '${name}' [${META_LANGUAGE_CODE[lang]}] was refused`);
+                console.warn(`[PhoneVerification] template '${name}' [${language}] was refused`);
             }
             return Boolean(result?.success);
         } catch (error) {
             console.warn(
-                `[PhoneVerification] template '${name}' [${META_LANGUAGE_CODE[lang]}] raised: `
+                `[PhoneVerification] template '${name}' [${language}] raised: `
                 + `${error instanceof Error ? error.message : String(error)}`,
             );
             return false;

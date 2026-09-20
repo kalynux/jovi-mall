@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { Types } from 'mongoose';
+import { z } from 'zod';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { sendSuccess } from '../../../core/responses';
 import { createAppError } from '../../../core/errors';
@@ -7,6 +8,7 @@ import { ERROR_CODES } from '../../../core/error-codes';
 import { escapeRegex } from '../../../core/utils/regex.util';
 import { FulfillmentStatus, IOrder, OrderModel } from '../../orders/order.model';
 import { OrderRepository } from '../../orders/order.repository';
+import { OrderTimelineRepository } from '../../orders/order-timeline.repository';
 import { CANCELLABLE_FULFILLMENT_STATES, OrderService } from '../../orders/order.service';
 import { customerOrderViewService } from '../../orders/services/customer-order-view.service';
 import { CustomerOrderDto } from '../../orders/dto/customer-order.dto';
@@ -42,6 +44,11 @@ import {
 } from '../domain/bot-ticket-actions';
 import { mintConfirmationRef, verifyConfirmationRef } from '../domain/bot-confirmation-ref';
 import {
+    CANCELLATION_REASON_METADATA_KEY,
+    CancellationReasonRefusal,
+    judgeCancellationReason,
+} from '../domain/bot-cancellation-reason';
+import {
     confirmTicketCloseTap,
     declineTicketCloseTap,
     ticketTap,
@@ -64,7 +71,24 @@ import {
     BotOrderShipmentParamSchema,
 } from '../validators/bot.validators';
 
+/**
+ * The body of the cancellation-reason write.
+ *
+ * ⚠ **Declared HERE rather than in `bot.validators.ts`, exactly as the checkout screen declares its
+ * own.** It is one field on one route belonging to one stream, and the switchboard's validator file is
+ * a shared file — a contract request for two lines buys nothing. 500 characters is a typed sentence or
+ * two, which is what the prompt asks for; anything longer is a support conversation, and there is one
+ * of those a button away.
+ */
+const CancellationReasonBodySchema = z
+    .object({ reason: z.string().trim().min(1).max(500) })
+    .strict();
+
+/** How much of an order's history the cancellation-reason rule is shown. See its call site. */
+const TIMELINE_ROWS_CONSULTED = 100;
+
 const orderRepository = new OrderRepository();
+const timelineRepository = new OrderTimelineRepository();
 const orderService = new OrderService();
 const shipmentService = new ShipmentService();
 const vendorRepository = new VendorRepository();
@@ -127,6 +151,86 @@ export class BotOrderController {
      */
     static list = asyncHandler(async (req: Request, res: Response) => {
         await listOwnOrders(req, res, BotOrderListSchema.parse(req.body ?? {}));
+    });
+
+    /**
+     * `POST /orders/:orderId/cancellation-reason` — the words the customer typed after cancelling.
+     *
+     * ── ⚠ THE GAP THIS CLOSES, AND IT WAS LIVE ──────────────────────────────
+     * "Yes, cancel" cancels the order and the bot then asks *"what went wrong? Tell me in your own
+     * words and I will pass it on"* — and **nothing recorded the answer**. The order carries the fixed
+     * literal "Cancelled by customer" and the customer's sentence went nowhere. The owner's decision is
+     * that a cancellation reason is TYPED, never picked, so the typed words have to reach the order.
+     *
+     * ⚠ **It is a SECOND, later write, and cancelling never waits for it.** A customer who says nothing
+     * has still cancelled. Every rule about whether the words may be recorded is in
+     * `domain/bot-cancellation-reason.ts`, pure, so all three refusals can be asserted without a
+     * database — each of them needs a cancelled order, a timeline and a clock.
+     *
+     * ⚠ **The assistant calls this with the customer's OWN sentence**, which is why the description is
+     * stored verbatim rather than summarised: a vendor reading the order's history is reading what the
+     * customer said, not a paraphrase of it.
+     */
+    static recordCancellationReason = asyncHandler(async (req: Request, res: Response) => {
+        const { orderId } = BotOrderParamSchema.parse(req.params);
+        const { reason } = CancellationReasonBodySchema.parse(req.body ?? {});
+        const caller = botCallerOf(req);
+
+        const order = await resolveOwnedOrder(caller.customerId, orderId);
+        const orderKey = order._id.toString();
+
+        /**
+         * ⚠ **The whole (bounded) timeline, because the rule reads two different things from it** —
+         * when the cancellation happened, and whether a reason is already on it. `findByOrder` caps at
+         * 100 and an order's history is far shorter; a cancelled order's is a handful of rows.
+         */
+        const timeline = await timelineRepository.findByOrder(orderKey, {
+            page: 1,
+            limit: TIMELINE_ROWS_CONSULTED,
+            sort: { created_at: -1 },
+        });
+
+        const verdict = judgeCancellationReason({
+            fulfillmentStatus: order.fulfillment_status,
+            events: timeline.data.map((event) => ({
+                eventType: event.event_type,
+                metadata: event.metadata,
+                actorType: event.actor_type,
+                createdAt: event.created_at,
+            })),
+            fallbackAt: order.updated_at ?? order.created_at,
+        });
+
+        if (!verdict.ok) throw cancellationReasonRefusal(verdict.refusal);
+
+        /**
+         * ⚠ **`note.added`, attributed to the customer, and FLAGGED as a cancellation reason.** The
+         * flag is what makes the note self-describing — without it a later reader has to infer from
+         * position that a sentence explains a cancellation — and it is what the one-reason-per-
+         * cancellation rule counts.
+         */
+        await timelineRepository.appendEvent({
+            orderId: orderKey,
+            eventType: 'note.added',
+            description: reason,
+            metadata: {
+                [CANCELLATION_REASON_METADATA_KEY]: true,
+                cancelledAt: verdict.cancelledAt.toISOString(),
+            },
+            actorType: 'customer',
+            actorId: caller.userId,
+        });
+
+        setBotReply(req, {
+            kind: 'text',
+            text: botOrderCopy('cancelReasonRecorded', botResponseLanguageOf(req)),
+        });
+
+        sendSuccess(res, {
+            orderId: orderKey,
+            orderNumber: order.order_number,
+            recorded: true,
+        });
     });
 
     /** `POST /orders/groups/:cartId` — one checkout group in detail. */
@@ -594,9 +698,25 @@ async function cancelOwnedOrder(
             : { kind: 'text', text: botChrome('cancelReasonPrompt', botResponseLanguageOf(req)) },
     );
 
+    /**
+     * ⚠ **`awaitingCancellationReason` is what makes the typed reason reachable at all**, and it is a
+     * flag for the AUTOMATION LAYER rather than for a customer.
+     *
+     * The prompt above is deterministic, so this turn is answered without the assistant — which means
+     * the assistant does not know an order was just cancelled, and the customer's next message ("the
+     * shop never replied") arrives as ordinary text with nothing to attach it to. Chat is stateless
+     * between turns, so the only thing that can carry that knowledge forward is the automation layer
+     * passing this data to the assistant for the turn AFTER this one.
+     *
+     * ⚠ **Until it does, the words are asked for and not recorded** — the cancellation itself is
+     * unaffected, which is why the prompt stays deterministic rather than being handed to a model that
+     * would currently answer an empty input with a greeting. The requirement is with the deploy-day
+     * n8n change set; `orders_record_cancellation_reason` is the tool it names.
+     */
     sendSuccess(res, {
         order_id: order._id.toString(),
         fulfillment_status: order.fulfillment_status,
+        awaitingCancellationReason: !reason,
     }, { message: 'Order cancelled' });
 }
 
@@ -1530,4 +1650,34 @@ export function aggregatePaymentStatus(statuses: string[]): string {
     if (statuses.some((s) => s === 'paid' || s === 'partially_paid')) return 'partially_paid';
     if (statuses.every((s) => s === 'AWAITING_PAYMENT' || s === 'pending')) return 'awaiting_payment';
     return 'mixed';
+}
+
+/**
+ * The three ways recording a cancellation reason can be refused, as codes a chat can explain.
+ *
+ * ⚠ **One refusal per situation, and none of them reuses `ORDER_ALREADY_CANCELLED`.** That code means
+ * "you cannot cancel this, it is already cancelled" — the opposite of what two of these say — and a
+ * code that means two things breaks every dashboard that groups by it. The messages here are for an
+ * operator; the customer reads `error.customerMessage`.
+ */
+function cancellationReasonRefusal(refusal: CancellationReasonRefusal) {
+    if (refusal === 'already_recorded') {
+        return createAppError(
+            ERROR_CODES.ORDER_CANCELLATION_REASON_ALREADY_RECORDED,
+            409,
+            'A cancellation reason is already recorded for this order',
+        );
+    }
+    if (refusal === 'window_closed') {
+        return createAppError(
+            ERROR_CODES.ORDER_CANCELLATION_REASON_WINDOW_CLOSED,
+            422,
+            'Too long after the cancellation to record a reason for it',
+        );
+    }
+    return createAppError(
+        ERROR_CODES.ORDER_CANCELLATION_REASON_NOT_CANCELLED,
+        422,
+        'This order is not cancelled, so there is no cancellation to explain',
+    );
 }

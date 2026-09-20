@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { botChrome } from '../domain/bot-chrome-copy';
+import { recoveryFor } from '../domain/bot-recovery-actions';
 import {
     BotChannelReply,
     BotReplyIntent,
@@ -109,7 +110,35 @@ function errorReply(req: Request, error: Record<string, unknown>): BotChannelRep
         );
     }
 
-    return renderBotReply({ kind: 'text', text }, channel, externalId);
+    /**
+     * ⭐ **THE WAY OUT** (atlas phase 11). Every refusal above this line was a correct sentence
+     * and a chat window with nothing in it; `recoveryFor` decides which of the buttons this
+     * surface already has can honestly be offered for this particular refusal.
+     *
+     * ⚠ **The table lives in its own file, and that is deliberate rather than tidiness.** This
+     * middleware is read by every stream, so a table here would be a merge surface for all of
+     * them; there it is one owner's file and this stays an import and one call.
+     *
+     * ⚠ **It still words nothing** — the rule at the top of this function holds. `recovery.text`
+     * is `error.customerMessage` unchanged for every code but one, and that one
+     * (`SYSTEM_MAINTENANCE_ACTIVE`) resolves out of `bot-error-copy.ts` like all the rest, so
+     * there is still exactly one copy table on the failure path.
+     */
+    const recovery = recoveryFor({
+        code: typeof code === 'string' ? code : null,
+        category: typeof error.category === 'string' ? error.category : null,
+        details: (error.details ?? undefined) as Record<string, unknown> | undefined,
+        text,
+        language: req.bot!.language,
+    });
+
+    return renderBotReply(
+        recovery.actions.length > 0
+            ? { kind: 'text', text: recovery.text, actions: recovery.actions }
+            : { kind: 'text', text: recovery.text },
+        channel,
+        externalId,
+    );
 }
 
 /** The body to send, with `reply` merged in — or the body unchanged when there is none. */

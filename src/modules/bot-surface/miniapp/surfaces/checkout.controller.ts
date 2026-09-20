@@ -617,6 +617,18 @@ export async function storedPayerNumber(customer: ICustomer): Promise<string | n
  * such: the deployment cannot take mobile money, and no amount of retrying by the customer
  * changes that.
  *
+ * ⚠ **`PAYMENT_GATEWAY_NOT_CONFIGURED` at 500, NOT `PAYMENT_GATEWAY_NOT_SUPPORTED` at 503**, and
+ * the pair of changes is one decision. `..._NOT_SUPPORTED` means *"that gateway is not on
+ * offer"* — a rule, about a gateway the caller named. This is the opposite situation: nobody
+ * named a gateway, and the deployment has none. Borrowing the other code made an operator read a
+ * missing secret as a customer asking for something unavailable.
+ *
+ * The **500 is load-bearing too**: at 503 the category rule yields `external_service`
+ * (`error-category.ts`), which sends whoever is on call to look at NotchPay — a third party that
+ * is perfectly healthy and simply absent from our `.env`. At 500 it derives to `internal`, our
+ * own fault, which is what it is. No override row is needed: `PAYMENT_` is not an integration
+ * prefix, so the status rule alone gets this right.
+ *
  * ⚠ **EXPORTED, and it must stay THE answer to "which gateway takes a mobile-money charge".** The
  * chat's retry (`bot-checkout.controller.ts`) and the booking pay screen (`bp`) both import it.
  * Three copies of one preference is how a customer ends up with two charges for one basket — or
@@ -626,8 +638,8 @@ export function mobileMoneyGateway(): PaymentGatewayType {
     if (notchPayEnabled()) return 'NOTCHPAY';
     if (myCoolPayEnabled()) return 'MYCOOLPAY';
     throw createAppError(
-        ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED,
-        503,
+        ERROR_CODES.PAYMENT_GATEWAY_NOT_CONFIGURED,
+        500,
         'No mobile money gateway is configured on this deployment',
     );
 }

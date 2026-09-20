@@ -48,6 +48,7 @@
  */
 import 'dotenv/config';
 import { flowPublicKeyPem, flowsConfigured, flowIdFor } from '../src/modules/whatsapp/flows/flows.config';
+import { flowAppSecret } from '../src/modules/whatsapp/flows/domain/flow-signature';
 import { PRODUCT_LISTING_FLOW } from '../src/modules/whatsapp/flows/definitions/product-listing.flow';
 import { PRODUCT_DETAIL_FLOW } from '../src/modules/whatsapp/flows/definitions/product-detail.flow';
 import { CHECKOUT_FLOW } from '../src/modules/whatsapp/flows/definitions/checkout.flow';
@@ -88,8 +89,33 @@ function reportReadiness(): boolean {
     line('Business account id', WABA_ID || '(unset)');
     line('Access token', ACCESS_TOKEN ? `set, ${ACCESS_TOKEN.length} chars` : '(unset)');
     line('Flow private key', flowsConfigured() ? 'set and parseable' : '(unset or unparseable)');
+    line('App secret', flowAppSecret() ? `set, ${flowAppSecret().length} chars` : '(unset)');
 
     if (!flowsConfigured()) problems.push('WHATSAPP_FLOW_PRIVATE_KEY is unset or will not parse');
+
+    /**
+     * ⛔ **The app secret is checked HERE even though the endpoint treats it as optional**, and
+     * the difference between those two positions is the whole point.
+     *
+     * The endpoint must tolerate an unset secret: a deployment with no Flows is a valid
+     * deployment, and a development box has no business holding one. But **publishing is the
+     * moment that stops being true.** With no secret the endpoint verifies no signature at all —
+     * it decrypts whatever arrives and answers it — and Meta's health check passes either way, so
+     * the Flow goes live, works perfectly, and nothing ever says that the one thing proving a
+     * request came from Meta is switched off.
+     *
+     * ⚠ **This block used to say nothing about it while the file's own header told you to set it**
+     * — a readiness report that is silent about a control it names elsewhere is worse than one
+     * that omits it entirely, because it reads as "checked and fine". Raised by the deploy-day
+     * runbook review, which asked exactly the right question: what does this print when the key is
+     * there and the secret is not?
+     */
+    if (!flowAppSecret()) {
+        problems.push(
+            'WHATSAPP_APP_SECRET is unset — the endpoint would accept ANY request it can decrypt, '
+            + 'unsigned, and Meta\'s health check would still pass. Set it before publishing.',
+        );
+    }
     if (!ACCESS_TOKEN) problems.push('WHATSAPP_ACCESS_TOKEN is unset');
     if (!PHONE_NUMBER_ID) problems.push('WHATSAPP_PHONE_NUMBER_ID is unset — needed for the key upload');
     if (!WABA_ID) problems.push('WHATSAPP_BUSINESS_ACCOUNT_ID is unset — needed to create a Flow');
@@ -280,7 +306,15 @@ async function main(): Promise<void> {
         /**
          * ⚠ **Publishing runs Meta's health check against the live endpoint.** If it fails,
          * the endpoint is unreachable, the key is wrong, or the ping answer is not exactly
-         * `{version, data:{status:"active"}}` — in that order of likelihood.
+         * `{ data: { status: 'active' } }` — in that order of likelihood.
+         *
+         * ⛔ **This comment used to show that shape WITH a `version` field, and that was wrong in
+         * the one way that costs a deploy day.** Meta's guide calls it the "Required response body
+         * (exact)": `data.status` and not one field more, and `domain/flow-protocol.ts` records
+         * adding a `version` as a mistake this endpoint already made and removed. A reader
+         * debugging a failed publish against this comment would have "fixed" the correct answer
+         * into the broken one — the code was always right, only the comment lied. The protocol
+         * module is the source; this line is a pointer to it. (Found by the deploy-day spec.)
          */
         await graph(`${flowId}/publish`, { method: 'POST' });
         console.log(`  ✅ published`);

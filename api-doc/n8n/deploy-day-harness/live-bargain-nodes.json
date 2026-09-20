@@ -1,0 +1,111 @@
+{
+ "_source": {
+  "workflow": "UP-wi-mall-bargain",
+  "id": "lJdli0uwOtWBGx5R",
+  "versionId": "e2c94ead-740b-4f52-baba-066faa7e440f",
+  "activeVersionId": "e2c94ead-740b-4f52-baba-066faa7e440f",
+  "updatedAt": "2026-09-15T02:18:17.547Z",
+  "takenOn": "2026-09-19",
+  "reverifiedOn": "2026-09-20"
+ },
+ "nodes": {
+  "set bargain flag": {
+   "type": "n8n-nodes-base.redis",
+   "typeVersion": 1,
+   "onError": "continueRegularOutput",
+   "parameters": {
+    "operation": "set",
+    "key": "=wi-mall:bargain:{{ $('Inbound').first().json.channel }}:{{ $('Inbound').first().json.externalId }}",
+    "value": "={{ JSON.stringify({ variantId: $('pick variant').first().json.variantId, productId: $('pick variant').first().json.productId, quantity: $('pick variant').first().json.quantity, sessionId: $json.data.sessionId, expiresAt: $json.data.expiresAt }) }}"
+   }
+  },
+  "decide send": {
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "onError": null,
+   "parameters": {
+    "jsCode": "// THE SEND DECISION — AND D-4 IS ENFORCED HERE, NOT BY ASKING THE MODEL NICELY.\n//\n// The gate returns the approved sentence verbatim. What goes to the customer is THAT,\n// read from the Redis echo, and not whatever the model happened to write as its final\n// answer. So a price the cart could not honour is never spoken — even by a model that,\n// having been refused, went on to say the refused number anyway.\n//\n// Five outcomes, and only two of them send anything:\n//   approved       -> send the gate's sentence. A lock may have been minted with it, and\n//                     a lock is the end of the haggle: execution (cart, address, payment)\n//                     is the main agent's job and its tools.\n//   revise (last)  -> send NOTHING, hand back. The model was refused and stopped without\n//                     a valid re-draft. The session STAYS OPEN: one bad draft is not the\n//                     end of a haggle, and the next message comes back here.\n//   call_failed    -> the gate refused the CALL (session expired, unknown, variant no\n//                     longer negotiable). Close the session and hand back.\n//   no gate at all -> a turn with no price in it: a product question, a greeting, a\n//                     delivery detail. The playbook routes those around the gate, so the\n//                     model's own words go. #HANDBACK# means it has left the subject.\n//   unavailable    -> no playbook, or the agent errored. Hand back with the session\n//                     INTACT; the main agent serves this turn at the asking price, which\n//                     is the plan's own designed degradation.\nconst inbound = $('Inbound').first().json || {};\nconst messageId = String(inbound.messageId || '');\n\nlet echo = null;\nif ($('read gate echo').isExecuted) {\n  const raw = $('read gate echo').first().json.gateEcho;\n  if (raw) {\n    try { echo = JSON.parse(String(raw)); } catch (e) { echo = null; }\n  }\n}\n// A key left behind by an earlier turn is not this turn's verdict. The stamp is what lets\n// the key be conversation-scoped instead of turn-scoped, which matters because the n8n\n// Redis node cannot expire it: one key read-and-deleted beats one key per turn forever.\nif (echo && String(echo.__messageId || '') !== messageId) { echo = null; }\n\nlet text = null;\nlet handBack = false;\nlet closeSession = false;\nlet lockIssued = false;\nlet verdict = 'none';\n\n// THE AGREED PRICE, ON ITS WAY TO THE BASKET.\n//\n// The gate's `lock.ref` is a single-use claim on the price this customer just agreed. The\n// bargaining MODEL never sees it (`shape tool result` strips it) and does not need it — it\n// has no cart tools. wi-mall-core's main agent does: it is the one that fills the basket,\n// and without the ref the customer is charged the shelf price and the whole negotiation is\n// silently undone at the till.\n//\n// ⚠ It is bound server-side to (customer, variant, quantity), single-use, and re-validated\n// when it is spent, so a leaked ref buys its own owner their own agreed price and nobody\n// else anything. That is what makes it safe to hand across — strictly weaker than the\n// botToken the same system prompt already carries.\nlet lockRef = null;\nlet lockUnitPrice = null;\nlet lockExpiresAt = null;\n\nif (echo && echo.success === true && echo.data) {\n  verdict = String(echo.data.verdict || '');\n  if (verdict === 'approved') {\n    text = String(echo.data.reply || '').trim();\n    lockIssued = !!echo.data.lock;\n    closeSession = lockIssued;\n    if (echo.data.lock) {\n      lockRef = echo.data.lock.ref || null;\n      lockUnitPrice = echo.data.lock.unitPrice != null ? echo.data.lock.unitPrice : null;\n      lockExpiresAt = echo.data.lock.expiresAt || null;\n    }\n  } else {\n    handBack = true;\n  }\n} else if (echo && echo.success !== true) {\n  verdict = 'call_failed';\n  handBack = true;\n  closeSession = true;\n} else if ($('Bargain Agent').isExecuted) {\n  const agentJson = $('Bargain Agent').first().json || {};\n  // The agent's ERROR output carries no `output` at all. Reading that as an empty answer\n  // would end a negotiation the customer is still in the middle of, on the strength of a\n  // model timeout, so it is a transient failure and the session survives it.\n  if (agentJson.output === undefined || agentJson.output === null || agentJson.error !== undefined) {\n    verdict = 'unavailable';\n    handBack = true;\n  } else {\n    const out = String(agentJson.output).trim();\n    if (out === '' || out === '#HANDBACK#') {\n      verdict = 'handback';\n      handBack = true;\n      closeSession = true;\n    } else {\n      verdict = 'unpriced';\n      text = out;\n    }\n  }\n} else {\n  verdict = 'unavailable';\n  handBack = true;\n}\n\nif (text && text.length > 4000) { text = text.slice(0, 3997) + '…'; }\n\nlet reply = null;\nif (text) {\n  reply = inbound.channel === 'telegram'\n    ? { channel: 'telegram', method: 'sendMessage', body: { chat_id: String(inbound.externalId), text: text } }\n    : { channel: 'whatsapp', method: 'messages', body: {\n        messaging_product: 'whatsapp', recipient_type: 'individual',\n        to: String(inbound.externalId), type: 'text', text: { body: text } } };\n}\n\nreturn [{ json: {\n  handled: reply != null,\n  handBack: handBack,\n  closeSession: closeSession,\n  lockIssued: lockIssued,\n  verdict: verdict,\n  reply: reply,\n  lockRef: lockRef,\n  lockUnitPrice: lockUnitPrice,\n  lockExpiresAt: lockExpiresAt,\n  // The line the lock is bound to. Taken from the envelope rather than from the gate,\n  // which does not echo them — so a model that pivoted to a different variant mid-haggle\n  // produces a hint that is wrong here. Harmless: the server re-checks the binding and\n  // refuses a mismatch, and the main agent is told to retry without the ref.\n  lockVariantId: inbound.variantId || null,\n  lockQuantity: Number(inbound.quantity) > 0 ? Math.trunc(Number(inbound.quantity)) : 1,\n} }];"
+   }
+  },
+  "send guard": {
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 2.3,
+   "onError": null,
+   "parameters": {
+    "conditions": {
+     "options": {
+      "caseSensitive": true,
+      "leftValue": "",
+      "typeValidation": "loose",
+      "version": 3
+     },
+     "combinator": "and",
+     "conditions": [
+      {
+       "id": "has-reply",
+       "leftValue": "={{ $('decide send').first().json.reply != null }}",
+       "rightValue": "",
+       "operator": {
+        "type": "boolean",
+        "operation": "true",
+        "singleValue": true
+       }
+      }
+     ]
+    },
+    "looseTypeValidation": true,
+    "options": {}
+   }
+  },
+  "send telegram": {
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.5,
+   "onError": null,
+   "parameters": {
+    "method": "POST",
+    "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/{{ $('decide send').first().json.reply.method }}",
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify($('decide send').first().json.reply.body) }}",
+    "options": {
+     "response": {
+      "response": {
+       "neverError": true
+      }
+     },
+     "timeout": 20000
+    }
+   }
+  },
+  "send whatsapp": {
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.5,
+   "onError": null,
+   "parameters": {
+    "method": "POST",
+    "url": "=https://graph.facebook.com/v18.0/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/{{ $('decide send').first().json.reply.method }}",
+    "authentication": "genericCredentialType",
+    "genericAuthType": "httpBearerAuth",
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify($('decide send').first().json.reply.body) }}",
+    "options": {
+     "response": {
+      "response": {
+       "neverError": true
+      }
+     },
+     "timeout": 20000
+    }
+   }
+  },
+  "return to core": {
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "onError": null,
+   "parameters": {
+    "jsCode": "// What wi-mall-core does next. `handled: false` means this turn was NOT answered here\n// and the main agent should take it — in the same execution, so the customer waits once.\n//\n// TWO callers now, and they read different fields:\n//\n//   `turn` — reached from wi-mall-core's `hand to bargainer`. Reads `handled`, and its true\n//            branch simply ends the turn.\n//   `open` — reached from the `open_negotiation` TOOL. Since 2026-09-08 the open branch\n//            chains straight into a full bargaining turn rather than stopping at\n//            `shape handover`, so this value lands in the MAIN AGENT's context.\n//\n// ⚠ That second caller is why the shape below matters. It carries the same three flags\n// `shape handover` returns and NOT ONE NUMBER — no price, no floor, no counter, not even the\n// session id. negotiation-tools.md: nothing downstream of these responses may forward the\n// window to the main agent. An allowlist, not a redaction; add a field here only after\n// checking it against that rule.\n//\n// `alreadyAnswered` is what the main agent's prompt keys `#ANSWERED#` on: the customer has\n// already received the bargainer's sentence from inside this tool call, so anything the agent\n// says now would be a second message. wi-mall-core does not trust it on its own — `echo\n// answered` is the mechanical half of that pair.\nconst d = $('decide send').first().json || {};\nconst opened = String(($('Inbound').first().json || {}).mode || '') === 'open';\nconst handled = d.handled === true;\n\nconst out = {\n  handled: handled,\n  handBack: d.handBack === true,\n  verdict: d.verdict || 'none',\n  lockIssued: d.lockIssued === true,\n};\n\nif (opened) {\n  // Reaching here in open mode means the variant resolved AND the session opened: both\n  // failure branches stop at `shape handover` and never come this way.\n  out.handedOver = true;\n  out.negotiable = true;\n  out.reason = 'ready';\n  out.alreadyAnswered = handled;\n}\n\nreturn [{ json: out }];"
+   }
+  }
+ }
+}

@@ -41,9 +41,12 @@ import {
     trackActionId,
 } from '../../src/modules/bot-surface/domain/bot-action-id';
 import { actionKeyOf } from '../../src/modules/bot-surface/domain/bot-action-dispatch';
+import { judgeCancellationReason } from '../../src/modules/bot-surface/domain/bot-cancellation-reason';
 import {
     attachToTicketActionId,
     longestConfirmationRefLength,
+    parseTicketTap,
+    ticketTokenBudgetProblems,
     orderCancelConfirmActionId,
     orderCancelDeclineActionId,
     supportFormActionId,
@@ -58,6 +61,25 @@ import {
     ticketReplyActionId,
 } from '../../src/modules/bot-surface/domain/bot-ticket-actions';
 import { INBOUND_FILE_HANDLE_LENGTH } from '../../src/modules/bot-surface/services/inbound-file.store';
+import {
+    FLOW_OPTION_TITLE_MAX,
+    assertTicketCopyComplete,
+    botTicketReplyButton,
+    botTicketStateLabel,
+    ticketAcceptsWriting,
+} from '../../src/modules/bot-surface/domain/bot-ticket-copy';
+import {
+    buildContacts,
+    buildTicketFormView,
+    subjectKeyOfTopic,
+    ticketFormChoices,
+    ticketSubjectFor,
+    ticketTypeFor,
+} from '../../src/modules/bot-surface/miniapp/surfaces/ticket-form.view';
+import {
+    requestRow,
+    shortRequestReference,
+} from '../../src/modules/bot-surface/domain/bot-ticket-rows';
 import { BOT_COPY_LANGUAGES } from '../../src/modules/bot-surface/domain/bot-error-copy';
 import {
     ORDER_CASH_ON_DELIVERY_COPY,
@@ -112,6 +134,20 @@ const TICKET_CONTROLLER_PATH = path.join(
 );
 
 const TICKET_CONTROLLER = fs.readFileSync(TICKET_CONTROLLER_PATH, 'utf8').replace(/\r\n/g, '\n');
+
+/**
+ * The support form's I/O half, scanned as a THIRD span.
+ *
+ * ⚠ It reaches the ticket service and — through the support ladder — `orders/`, so importing it would
+ * hang this suite with no output. Its PURE half (`ticket-form.view.ts`) is imported instead, which is
+ * the whole reason the form is split across two files.
+ */
+const FORM_READ_PATH = path.join(
+    __dirname,
+    '../../src/modules/bot-surface/miniapp/surfaces/ticket-form.read.ts',
+);
+
+const FORM_READ = fs.readFileSync(FORM_READ_PATH, 'utf8').replace(/\r\n/g, '\n');
 
 /** Block and line comments removed, so a guard cannot be satisfied by a sentence about the code. */
 function stripComments(source: string): string {
@@ -226,6 +262,9 @@ function registeredKeys(source: string): string[] {
 }
 
 const O = '0123456789abcdef01234567';
+
+/** A realistic id, for substituting into another stream's token templates (§ 8). */
+const ID = O;
 
 /**
  * A file handle and a confirmation reference at their REAL lengths, so the cap assertions below are
@@ -596,6 +635,10 @@ function main(): void {
             && botFulfillmentStateLabel('', lang) === ORDER_STATUS_UNAVAILABLE_COPY[lang]
             && toBotOrderPaymentState(undefined) === 'unknown'));
 
+    supportSection();
+    cancellationReasonSection();
+    crossStreamSection();
+
     // ─────────────────────────────────────────────────────────────────────────
     console.log('\n────────────────────────────────────────────────────────────────────────────');
     console.log(`  ${passed} passed, ${failed} failed`);
@@ -604,3 +647,658 @@ function main(): void {
 }
 
 main();
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  § 6 · Support requests — the grammar, the wording, and the form's projection
+//
+//  ⚠ **The ticket controller and the form's I/O half are SCANNED, never imported**: both reach
+//  `tickets/` and, through the support ladder, `orders/` — which do work at import and hang bare
+//  `ts-node` with no output at all. The pure halves (`bot-ticket-actions`, `bot-ticket-copy`,
+//  `ticket-form.view`) are imported, because that is what they exist for.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function supportSection(): void {
+    console.log('\n══ § 6 · Support requests ══');
+
+    // ── The tap grammar ──────────────────────────────────────────────────────
+
+    assert('every shape of the `tkt` argument parses to what it means', () => {
+        const table: Array<readonly [argument: string, kind: string]> = [
+            [O, 'show'],
+            [`${O}:rp`, 'reply'],
+            [`${O}:ph`, 'photo'],
+            [`${O}:cl`, 'close'],
+            [`${O}:${HANDLE}`, 'attach'],
+            ['list', 'list'],
+            ['new', 'new'],
+            [`new:${HANDLE}`, 'new'],
+            [`new:rd:${O}`, 'new'],
+            [`new:ad:${O}`, 'new'],
+            [`new:hp:${O}`, 'new'],
+        ];
+        const wrong = table.filter(([argument, kind]) => (parseTicketTap(argument)?.kind ?? null) !== kind);
+        if (wrong.length) console.error(`     ↳ ${wrong.map(([a]) => a).join(', ')}`);
+        return wrong.length === 0;
+    });
+
+    assert('a delivery topic keeps its order and its code; a file row keeps its handle', () => {
+        const topic = parseTicketTap(`new:ad:${O}`);
+        const file = parseTicketTap(`${O}:${HANDLE}`);
+        const carried = parseTicketTap(`new:${HANDLE}`);
+        return topic?.kind === 'new' && topic.topic === 'ad' && topic.orderId === O
+            && file?.kind === 'attach' && file.ticketId === O && file.attachmentRef === HANDLE
+            && carried?.kind === 'new' && carried.attachmentRef === HANDLE && carried.orderId === null;
+    });
+
+    /**
+     * ⚠ **The shape a TEMPLATE produces when its order id is missing**, reported by the notifications
+     * stream: `renderTemplate` fills an unsupplied placeholder with an empty string, so
+     * `tkt:new:rd:{{orderId}}` with no id becomes `tkt:new:rd:` — a well-formed token pointing at
+     * nothing, which arrives here as a two-segment argument. Their renderer drops such a button
+     * before it is sent; this is the second line, and it must refuse rather than open a form about
+     * no order.
+     */
+    assert('⛔ a delivery topic with no order id is refused, not opened against nothing', () =>
+        parseTicketTap('new:rd:') === null
+            && parseTicketTap('new:rd') === null
+            && parseTicketTap('new:ad:') === null);
+
+    assert('⛔ a malformed argument is null — never a guess', () => {
+        const refused = [
+            '',
+            'list:x',
+            `${O}:xx`,
+            `${O}:rp:extra`,
+            `new:zz:${O}`,
+            'new:rd:not-an-order',
+            `${O}:att_has:colon`,
+            'newish',
+            O.slice(0, 20),
+        ];
+        const accepted = refused.filter((argument) => parseTicketTap(argument) !== null);
+        if (accepted.length) console.error(`     ↳ accepted: ${accepted.join(', ')}`);
+        return accepted.length === 0;
+    });
+
+    // ── The byte budget ──────────────────────────────────────────────────────
+
+    assert('the byte budget holds for the handles and references this service mints', () =>
+        ticketTokenBudgetProblems({
+            handleLength: INBOUND_FILE_HANDLE_LENGTH,
+            confirmationRefLength: longestConfirmationRefLength(),
+        }).length === 0);
+
+    /**
+     * ⚠ **The bite-proof for the reason the handle was shortened at all.** At the old 32-byte handle
+     * (47 characters) a "which request is this file for?" row is 76 bytes, and Telegram truncates an
+     * oversized `callback_data` in SILENCE — the button simply does nothing, forever, with no error on
+     * either side. So this is the guard that must fail if anybody raises `HANDLE_BYTES` back.
+     */
+    assert('⛔ it BITES: the old 47-character handle is named as too long for a `tkt` row', () => {
+        const problems = ticketTokenBudgetProblems({
+            handleLength: 47,
+            confirmationRefLength: longestConfirmationRefLength(),
+        });
+        const named = problems.some((line) => line.includes('tkt:<ticketId>:<att_>') && line.includes('76 bytes'));
+        if (!named) console.error(`     ↳ reported instead: ${problems.join('; ') || '(nothing)'}`);
+        return named;
+    });
+
+    assert('⛔ it BITES: a confirmation reference twice its length is named too', () => {
+        const problems = ticketTokenBudgetProblems({
+            handleLength: INBOUND_FILE_HANDLE_LENGTH,
+            confirmationRefLength: longestConfirmationRefLength() * 2,
+        });
+        return problems.some((line) => line.includes('yes:tcl')) && problems.some((line) => line.includes('yes:cnc'));
+    });
+
+    // ── The wording ──────────────────────────────────────────────────────────
+
+    /**
+     * ⭐ **The rule this section exists for.** Four internal waiting states must be indistinguishable
+     * to a customer: telling somebody their complaint is "waiting on the agency" invites them to chase
+     * a party about a conversation they cannot see, and discloses how the platform is organised. Same
+     * rule as `handing_over` on the order side.
+     */
+    assert('⛔ which desk holds a request never reaches the customer — four states read alike', () => {
+        const holders = ['waiting_on_admin', 'waiting_on_vendor', 'waiting_on_agency', 'waiting_on_agent'];
+        return BOT_COPY_LANGUAGES.every((language) => {
+            const inProgress = botTicketStateLabel('in_progress', language);
+            return holders.every((status) => botTicketStateLabel(status, language) === inProgress);
+        });
+    });
+
+    assert('⚠ an unknown status reads as the neutral sentence, never as the raw token', () =>
+        BOT_COPY_LANGUAGES.every((language) => {
+            const label = botTicketStateLabel('teleported', language);
+            return label === ORDER_STATUS_UNAVAILABLE_COPY[language] && !label.includes('teleported');
+        }));
+
+    assert('the one state a customer can act on says so, and changes the button', () =>
+        BOT_COPY_LANGUAGES.every((language) =>
+            botTicketReplyButton('waiting_on_customer', language)
+                !== botTicketReplyButton('open', language)));
+
+    assert('a CLOSED request accepts no writing; every other state does', () =>
+        ticketAcceptsWriting('closed') === false
+            && ['open', 'in_progress', 'waiting_on_customer', 'waiting_on_admin', 'resolved']
+                .every((status) => ticketAcceptsWriting(status)));
+
+    assert('every capped support string fits its control, in all five languages', () => {
+        assertTicketCopyComplete();
+        return true;
+    });
+
+    /**
+     * ⚠ **Meta's cap, not ours.** The eight subjects are drawn as a WhatsApp Flow
+     * `RadioButtonsGroup`, whose option title is cut at 30 characters — invisible on the Telegram
+     * page we develop against, and first seen by a WhatsApp customer as a half-word.
+     */
+    assert('⚠ every subject label fits a WhatsApp Flow option title', () => {
+        const over = ticketFormChoices(null).length === 0;
+        const long = BOT_COPY_LANGUAGES.flatMap((language) =>
+            ticketFormChoices(language).filter((choice) => choice.label.length > FLOW_OPTION_TITLE_MAX));
+        if (long.length) console.error(`     ↳ ${long.map((c) => c.label).join(', ')}`);
+        return !over && long.length === 0;
+    });
+
+    // ── What a submission becomes ────────────────────────────────────────────
+
+    assert('a delivery topic refines the ticket type, and only while the subject stays delivery', () =>
+        ticketTypeFor('delivery', 'rd') === 'DELIVERY_DELAY'
+            && ticketTypeFor('delivery', 'ad') === 'ADDRESS_CHANGE'
+            && ticketTypeFor('delivery', 'hp') === 'SHIPPING_ISSUE'
+            && ticketTypeFor('delivery', null) === 'SHIPPING_ISSUE'
+            // The customer changed the subject: the topic must not survive it.
+            && ticketTypeFor('payment', 'rd') === 'PAYMENT_ISSUE');
+
+    assert('the subject line names the subject and what it is about, and fits the column', () => {
+        const withOrder = ticketSubjectFor('delivery', 'rd', 'ORD-2026-000123 — Maison Bella', 'en');
+        const without = ticketSubjectFor('other', null, null, 'en');
+        const huge = ticketSubjectFor('order', null, 'x'.repeat(400), 'en');
+        return withOrder.includes('ORD-2026-000123')
+            && without.length > 0
+            && !without.includes('null')
+            && huge.length <= 200;
+    });
+
+    // ── The form's projection ────────────────────────────────────────────────
+
+    /**
+     * ⛔ **A LEAK assertion, and the pin the coordinator asked for.** The form may show only what the
+     * support ladder already returns to a customer: a party's name and the contact details that party
+     * published. A shop's ship-from address is private — the store screens show a city and no more —
+     * and a support form is exactly the screen where somebody would helpfully add one. So the ladder
+     * answer below carries fields the form must drop, and the serialised view is asserted to contain
+     * none of them.
+     */
+    assert('⛔ the form projects the ladder\'s contacts and NOTHING else — no ids, no address', () => {
+        const contacts = buildContacts({
+            vendor: {
+                name: 'Maison Bella',
+                supportWhatsapp: '+237600000001',
+                supportPhone: null,
+                supportEmail: 'help@maisonbella.example',
+                // Everything below is on the real ladder answer or on the store, and must not travel.
+                storeSlug: 'maison-bella',
+                vendorId: '64vendor0000000000000001',
+                shipFromAddress: 'PRIVATE ship-from line, Akwa, Douala',
+            } as unknown as Parameters<typeof buildContacts>[0]['vendor'],
+            agency: {
+                name: 'Douala Express',
+                supportWhatsapp: null,
+                supportPhone: '+237600000002',
+                supportEmail: null,
+                id: '64agency0000000000000001',
+            } as unknown as Parameters<typeof buildContacts>[0]['agency'],
+        });
+
+        const serialised = JSON.stringify(
+            buildTicketFormView({
+                language: 'fr',
+                about: 'ORD-2026-000123 — Maison Bella',
+                contacts,
+                topic: 'rd',
+                hasAttachment: true,
+            }),
+        );
+
+        const leaked = ['maison-bella', '64vendor', '64agency', 'PRIVATE ship-from', 'shipFromAddress']
+            .filter((needle) => serialised.includes(needle));
+        if (leaked.length) console.error(`     ↳ leaked: ${leaked.join(', ')}`);
+
+        const keys = contacts.flatMap((contact) => Object.keys(contact)).sort();
+        const allowed = ['email', 'name', 'party', 'phone', 'whatsapp'];
+        const extra = [...new Set(keys)].filter((key) => !allowed.includes(key));
+        if (extra.length) console.error(`     ↳ extra keys: ${extra.join(', ')}`);
+
+        return leaked.length === 0 && extra.length === 0 && contacts.length === 2;
+    });
+
+    assert('a party that published no way to reach it is left out, not drawn empty', () => {
+        const contacts = buildContacts({
+            vendor: { name: 'Silent Shop', supportWhatsapp: null, supportPhone: null, supportEmail: null },
+            agency: { name: 'Douala Express', supportWhatsapp: null, supportPhone: '+237600000002', supportEmail: null },
+        });
+        return contacts.length === 1 && contacts[0].party === 'carrier';
+    });
+
+    assert('the form pre-selects a subject only when a topic opened it', () => {
+        const prefilled = buildTicketFormView({
+            language: 'en', about: null, contacts: [], topic: 'ad', hasAttachment: false,
+        });
+        const bare = buildTicketFormView({
+            language: 'en', about: null, contacts: [], topic: null, hasAttachment: false,
+        });
+        return prefilled.selectedKey === 'delivery'
+            && bare.selectedKey === null
+            && subjectKeyOfTopic(null) === null;
+    });
+
+    /**
+     * ⚠ **The file is reported as present and NOT described.** A WhatsApp Flow can only carry an image
+     * as base64 in its response, and the handle is single-use — so naming the file would mean spending
+     * it to read its name. The customer sent the photo one message ago.
+     */
+    assert('⚠ a carried file is reported as present, with nothing about the file', () => {
+        const view = buildTicketFormView({
+            language: 'en', about: null, contacts: [], topic: null, hasAttachment: true,
+        });
+        const serialised = JSON.stringify(view.attachment);
+        return view.attachment !== null
+            && !/att_|fileName|url|mime/i.test(serialised)
+            && buildTicketFormView({
+                language: 'en', about: null, contacts: [], topic: null, hasAttachment: false,
+            }).attachment === null;
+    });
+
+    // ── The support controller and the form's I/O, scanned ───────────────────
+
+    assertBitesIn(
+        TICKET_CONTROLLER,
+        '⛔ Reply sets NO reply and hands the turn over — the assistant files the next message',
+        (source) => {
+            const region = regionOf(source, 'askForReply') ?? '';
+            return region.includes('setBotReply(req, null)')
+                && region.includes('awaitingReply: true')
+                && !/kind: 'text'/.test(region);
+        },
+        (src) => src.replace(
+            '    setBotReply(req, null);\n    sendSuccess(res, {\n        ticketId,',
+            "    setBotReply(req, { kind: 'text', text: 'Type your reply' });\n    sendSuccess(res, {\n        ticketId,",
+        ),
+    );
+
+    assertBitesIn(
+        TICKET_CONTROLLER,
+        '⛔ the follower check runs BEFORE the handle is spent, and a failed attach restores it',
+        (source) => {
+            const attach = regionOf(source, 'attachInboundFile') ?? '';
+            const restore = regionOf(source, 'attachOrRestore') ?? '';
+            const checkAt = attach.indexOf('loadOwnRequest');
+            const consumeAt = attach.indexOf('inboundFileStore.consume');
+            return checkAt >= 0 && consumeAt > checkAt && restore.includes('inboundFileStore.restore');
+        },
+        // Spend the handle first: a wrong request id would then also cost the customer their photo.
+        (src) => src.replace(
+            '    await loadOwnRequest(ticketId, caller.userId);\n\n    const file = await inboundFileStore.consume(caller.userId, ref);',
+            '    const file = await inboundFileStore.consume(caller.userId, ref);\n    await loadOwnRequest(ticketId, caller.userId);',
+        ),
+    );
+
+    assertBitesIn(
+        TICKET_CONTROLLER,
+        '⛔ closing is confirmed for THIS request — the reference is verified against its own id',
+        (source) => {
+            const tap = regionOf(source, 'confirmTicketCloseTap') ?? '';
+            const ask = regionOf(source, 'askToClose') ?? '';
+            const verify = callArguments(tap, 'verifyConfirmationRef');
+            const mint = callArguments(ask, 'mintConfirmationRef');
+            return verify.includes("'ticket-close'") && verify.includes('split.id')
+                && mint.includes("'ticket-close'") && mint.includes('ticketId')
+                && tap.includes("verdict !== 'valid'");
+        },
+        (src) => src.replace(
+            "        'ticket-close',\n        { userId: caller.userId, channel: caller.channel },\n        split.id,",
+            "        'ticket-close',\n        { userId: caller.userId, channel: caller.channel },\n        '',",
+        ),
+    );
+
+    assertBitesIn(
+        TICKET_CONTROLLER,
+        '⚠ the file picker never offers a CLOSED request — a row that could only refuse',
+        (source) => {
+            const region = regionOf(source, 'whichRequestForFileReply') ?? '';
+            return region.includes('ticketAcceptsWriting') && region.includes('slice(0, 4)');
+        },
+        (src) => src.replace(
+            'const open = tickets.filter((ticket) => ticketAcceptsWriting(textOf(ticket.status))).slice(0, 4);',
+            'const open = tickets.slice(0, 4);',
+        ),
+    );
+
+    assertBitesIn(
+        FORM_READ,
+        '⛔ the form SPENDS its handle on submit and only READS it to draw — one request per form',
+        (source) => {
+            const submit = regionOf(source, 'submitTicketForm') ?? '';
+            const read = regionOf(source, 'readSession') ?? '';
+            return submit.includes("inAppSurfaceStore.consume('tf'")
+                && !submit.includes("inAppSurfaceStore.read('tf'")
+                && read.includes("inAppSurfaceStore.read('tf'");
+        },
+        (src) => src.replace("inAppSurfaceStore.consume('tf'", "inAppSurfaceStore.read('tf'"),
+    );
+
+    /**
+     * ⚠ **After the handle is spent, naming the subject may not throw.** The customer has just typed
+     * their problem; losing it to a lookup that decorates a subject line would send them back to the
+     * chat to retype it. The READ path deliberately does throw, which is why this reads the submit
+     * path's own helper.
+     */
+    assertBitesIn(
+        FORM_READ,
+        '⛔ a failed subject lookup degrades after the spend — it never costs the customer their words',
+        (source) => {
+            const helper = regionOf(source, 'aboutForSubject') ?? '';
+            const submit = regionOf(source, 'submitTicketForm') ?? '';
+            return helper.includes('try {')
+                && helper.includes('catch')
+                && helper.includes('return null')
+                && submit.includes('aboutForSubject(session)')
+                // The ladder itself is still called unguarded on the READ path.
+                && !submit.includes('resolveSubject(session)');
+        },
+        (src) => src.replace('        const about = await aboutForSubject(session);', '        const about = (await resolveSubject(session)).about;'),
+    );
+
+    assertBitesIn(
+        FORM_READ,
+        '⚠ what a request is ABOUT comes from the session\'s own order, never from the ladder\'s guess',
+        (source) => {
+            const region = regionOf(source, 'resolveSubject') ?? '';
+            return /about: session\.form\.orderId \? context\.subject\.label : null/.test(region);
+        },
+        (src) => src.replace(
+            'about: session.form.orderId ? context.subject.label : null,',
+            'about: context.subject.label,',
+        ),
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  § 7 · The typed cancellation reason
+//
+//  ⚠ **The rule is pure, which is the only reason these three refusals are testable at all**: each
+//  needs a cancelled order, a timeline and a clock, and nobody reproduces that combination by hand.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function cancellationReasonSection(): void {
+    console.log('\n══ § 7 · The typed cancellation reason ══');
+
+    const CANCELLED_AT = new Date('2026-09-20T10:00:00.000Z');
+    const cancellation = {
+        eventType: 'fulfillment.updated',
+        metadata: { newStatus: 'cancelled', reason: 'Cancelled by customer' },
+        actorType: 'customer',
+        createdAt: CANCELLED_AT,
+    };
+    const reasonNote = {
+        eventType: 'note.added',
+        metadata: { cancellationReason: true },
+        actorType: 'customer',
+        createdAt: new Date(CANCELLED_AT.getTime() + 60_000),
+    };
+
+    const judge = (input: Partial<Parameters<typeof judgeCancellationReason>[0]>) =>
+        judgeCancellationReason({
+            fulfillmentStatus: 'cancelled',
+            events: [cancellation],
+            fallbackAt: CANCELLED_AT,
+            now: new Date(CANCELLED_AT.getTime() + 60_000),
+            ...input,
+        });
+
+    assert('a cancelled order with nothing recorded accepts the words, dated from the cancellation', () => {
+        const verdict = judge({});
+        return verdict.ok === true && verdict.cancelledAt.getTime() === CANCELLED_AT.getTime();
+    });
+
+    assert('⛔ an order that is NOT cancelled is refused — there is no cancellation to explain', () =>
+        ['pending', 'processing', 'shipped', 'delivered', 'fulfilled', 'returned'].every((status) => {
+            const verdict = judge({ fulfillmentStatus: status });
+            return verdict.ok === false && verdict.refusal === 'not_cancelled';
+        }));
+
+    /**
+     * ⚠ **One reason per cancellation.** The assistant may retry, a tap may be replayed, and a thread
+     * of contradictory sentences in an order's history is worse than one sentence.
+     */
+    assert('⛔ a second reason is refused, not appended', () => {
+        const verdict = judge({ events: [cancellation, reasonNote] });
+        return verdict.ok === false && verdict.refusal === 'already_recorded';
+    });
+
+    assert('⛔ words typed more than a day later are refused — a chat thread lives forever', () => {
+        const late = judge({ now: new Date(CANCELLED_AT.getTime() + 25 * 60 * 60 * 1000) });
+        const justInside = judge({ now: new Date(CANCELLED_AT.getTime() + 23 * 60 * 60 * 1000) });
+        return late.ok === false && late.refusal === 'window_closed' && justInside.ok === true;
+    });
+
+    /**
+     * ⚠ **A note that is not FLAGGED does not count as a reason**, which is what makes the flag
+     * load-bearing rather than decorative: without it, any customer note on a cancelled order would
+     * block the one this route exists to write.
+     */
+    assert('an unflagged note on the order does not count as the reason', () => {
+        const other = { ...reasonNote, metadata: { note: 'something else' } };
+        return judge({ events: [cancellation, other] }).ok === true;
+    });
+
+    assert('with no cancellation event in the timeline the clock falls back, and the rule still runs', () => {
+        const verdict = judge({ events: [], fallbackAt: CANCELLED_AT });
+        const stale = judge({
+            events: [],
+            fallbackAt: new Date(CANCELLED_AT.getTime() - 48 * 60 * 60 * 1000),
+        });
+        return verdict.ok === true && stale.ok === false && stale.refusal === 'window_closed';
+    });
+
+    assert('a timeline with an unreadable date is refused rather than trusted', () => {
+        const broken = { ...cancellation, createdAt: 'not a date' };
+        const verdict = judgeCancellationReason({
+            fulfillmentStatus: 'cancelled',
+            events: [broken],
+            fallbackAt: 'also not a date',
+            now: new Date(),
+        });
+        return verdict.ok === false && verdict.refusal === 'not_cancelled';
+    });
+
+    /**
+     * ⭐ **THE FRENCH CASE, and it is the whole reason this assertion exists.** The row builder's
+     * first version titled a row with the customer's own subject, which WhatsApp cuts at 24
+     * characters — so two requests read "Ma commande est arrivée…" / "Ma commande est arrivée…" and
+     * the customer tapped at random. In English the same two subjects fit and read differently, which
+     * is why every check passed.
+     *
+     * The rule this pins, for any row built from data: **the title must be short and distinguishing,
+     * and the case must be French or Arabic.**
+     */
+    assert('⛔ two long FRENCH subjects are still told apart at WhatsApp\'s 24-character title', () => {
+        const rows = [
+            { id: '64000000000000000000a1b2', subject: 'Ma commande est arrivée abîmée', status: 'open' },
+            { id: '64000000000000000000d4e5', subject: 'Ma commande est arrivée incomplète', status: 'open' },
+        ].map((request) => requestRow(request, 'fr'));
+
+        const WA_TITLE = 24;
+        const WA_DESCRIPTION = 72;
+        const titles = rows.map((row) => (row.shortLabel ?? row.label).slice(0, WA_TITLE));
+        const descriptions = rows.map((row) => (row.description ?? '').slice(0, WA_DESCRIPTION));
+
+        if (titles[0] === titles[1]) console.error(`     ↳ both titles read "${titles[0]}"`);
+        if (descriptions[0] === descriptions[1]) console.error(`     ↳ both descriptions read "${descriptions[0]}"`);
+
+        return titles[0] !== titles[1]
+            && titles.every((title) => title.length <= WA_TITLE)
+            // The distinguishing words survive the cut, which is why the state comes second.
+            && descriptions[0] !== descriptions[1]
+            && descriptions[0].includes('abîmée')
+            && descriptions[1].includes('incomplète');
+    });
+
+    assert('the reference is the request\'s own id, shortened — stable, and never empty', () =>
+        shortRequestReference('64000000000000000000a1b2') === '#00A1B2'
+            && shortRequestReference('64000000000000000000d4e5') === '#00D4E5'
+            && shortRequestReference('') === '#');
+
+    // ── The handler, scanned ─────────────────────────────────────────────────
+
+    assertBites(
+        '⛔ the reason is judged BEFORE it is written — no refusal can leave a note behind',
+        (source) => {
+            const region = regionOf(source, 'recordCancellationReason') ?? '';
+            const judgedAt = region.indexOf('judgeCancellationReason(');
+            const refusedAt = region.indexOf('cancellationReasonRefusal(');
+            const wroteAt = region.indexOf('timelineRepository.appendEvent(');
+            return judgedAt >= 0 && refusedAt > judgedAt && wroteAt > refusedAt;
+        },
+        /**
+         * Delete the refusal altogether: the words would then be written whatever the rule said.
+         *
+         * ⚠ The first version of this mutation replaced the throw with an unused arrow function that
+         * still MENTIONED `cancellationReasonRefusal`, and the guard passed — the same "my scan and my
+         * claim are about different spans" failure as the signed-cancel guard, one level up. A guard
+         * that reads for a call must be broken by REMOVING the call, not by disarming it.
+         */
+        (src) => src.replace(
+            '        if (!verdict.ok) throw cancellationReasonRefusal(verdict.refusal);\n',
+            '',
+        ),
+    );
+
+    assertBites(
+        '⛔ the note is the customer\'s own words, attributed to them, and FLAGGED as a reason',
+        (source) => {
+            const write = callArguments(regionOf(source, 'recordCancellationReason') ?? '', 'appendEvent');
+            return write.includes("eventType: 'note.added'")
+                && write.includes('description: reason')
+                && write.includes("actorType: 'customer'")
+                && write.includes('CANCELLATION_REASON_METADATA_KEY');
+        },
+        // Summarise instead of recording: the vendor would read the platform's words, not the customer's.
+        (src) => src.replace('            description: reason,', "            description: 'Cancelled by customer',"),
+    );
+
+    assert('each refusal carries its OWN code and status — none reuses ORDER_ALREADY_CANCELLED', () => {
+        const region = regionOf(CONTROLLER, 'cancellationReasonRefusal') ?? '';
+        return region.includes('ORDER_CANCELLATION_REASON_ALREADY_RECORDED')
+            && region.includes('409')
+            && region.includes('ORDER_CANCELLATION_REASON_WINDOW_CLOSED')
+            && region.includes('ORDER_CANCELLATION_REASON_NOT_CANCELLED')
+            && region.includes('422')
+            && !region.includes('ORDER_ALREADY_CANCELLED');
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  § 8 · Buttons ANOTHER stream draws with this stream's verbs
+//
+//  ⭐ **THE RULE THIS SECTION MECHANISES** (round 2, after a live near-miss): a stream drawing a
+//  button whose verb another stream claims cannot detect a mismatch. The notifications stream's
+//  token was well-formed, its label was right, its suite was green — and the argument shape was
+//  wrong against a parser it does not own. Telegram reports NOTHING for an unhandled callback, so
+//  the first evidence would have been a customer tapping "I was not there" on a failed-delivery
+//  message and being told "I did not understand that": a silent failure on the message least able
+//  to afford one.
+//
+//  So the CLAIMING stream asserts it, here, against their landed literals — never against what was
+//  agreed in a message. If they add a shape, this fails; if the catalogue moves, the emptiness
+//  check below fails rather than passing vacuously.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function crossStreamSection(): void {
+    console.log('\n══ § 8 · Buttons another stream draws with this stream\'s verbs ══');
+
+    const CATALOG_PATH = path.join(
+        __dirname,
+        '../../src/modules/notifications/catalog/customer-notification-catalog.ts',
+    );
+
+    const catalog = fs.readFileSync(CATALOG_PATH, 'utf8').replace(/\r\n/g, '\n');
+    const keys = registeredKeys(CONTROLLER);
+
+    /** Every `token: '<literal>'` in their catalogue, whatever verb it carries. */
+    const drawn = [...stripComments(catalog).matchAll(/token:\s*'([^']+)'/g)].map((m) => m[1]);
+
+    /** The ones this stream has to route: a verb, or a (verb, sub-key) pair, that I registered. */
+    const mine = drawn.filter((token) => {
+        const parsed = parseBotActionId(token.replace(/\{\{[^}]+\}\}/g, ID));
+        return parsed !== null && keys.includes(actionKeyOf(parsed).key);
+    });
+
+    assert('the scan found their catalogue and some of my verbs in it', () => {
+        if (drawn.length === 0) console.error('     ↳ no `token:` literals at all — has the catalogue moved?');
+        if (mine.length === 0) console.error(`     ↳ ${drawn.length} tokens, none of them mine — check the verbs`);
+        return drawn.length > 0 && mine.length > 0;
+    });
+
+    /**
+     * ⚠ **Every one of their tokens must parse AND reach a handler of mine, with a realistic id.**
+     * `parseBotActionId` alone is not enough: a token can be a legal verb with an argument my own
+     * grammar refuses, which is exactly the four-segment shape that nearly shipped.
+     */
+    assert('every button they draw with my verbs parses, routes, and fits Telegram\'s cap', () => {
+        const broken = mine.filter((token) => {
+            const filled = token.replace(/\{\{[^}]+\}\}/g, ID);
+            const parsed = parseBotActionId(filled);
+            if (!parsed) return true;
+
+            const { key, action } = actionKeyOf(parsed);
+            if (!keys.includes(key)) return true;
+            if (Buffer.byteLength(filled, 'utf8') > __CALLBACK_DATA_BYTES) return true;
+
+            // For the verb whose whole grammar is this stream's, the ARGUMENT must read too.
+            if (parsed.verb === 'tkt' && parseTicketTap(action.argument) === null) return true;
+            return false;
+        });
+
+        if (broken.length) console.error(`     ↳ would reach the unknown-action refusal: ${broken.join(', ')}`);
+        return broken.length === 0;
+    });
+
+    /**
+     * ⚠ **An UNSUPPLIED placeholder must be refused, not mis-routed.** `renderTemplate` fills a
+     * missing key with an empty string, so `tkt:new:rd:{{orderId}}` with no order becomes
+     * `tkt:new:rd:` — a well-formed token pointing at nothing. Their renderer drops such a button
+     * before it is sent; this asserts the second line, which is that my parser refuses it rather
+     * than opening a form about no order.
+     */
+    assert('⛔ with its placeholder unfilled, every one of their tokens is REFUSED', () => {
+        const withPlaceholders = mine.filter((token) => /\{\{/.test(token));
+        if (withPlaceholders.length === 0) {
+            console.error('     ↳ none of their tokens carries a placeholder — has the shape changed?');
+            return false;
+        }
+
+        const accepted = withPlaceholders.filter((token) => {
+            const empty = token.replace(/\{\{[^}]+\}\}/g, '');
+            const parsed = parseBotActionId(empty);
+            if (!parsed) return false;
+            if (!keys.includes(actionKeyOf(parsed).key)) return false;
+            return parsed.verb !== 'tkt' || parseTicketTap(actionKeyOf(parsed).action.argument) !== null;
+        });
+
+        if (accepted.length) console.error(`     ↳ accepted with nothing to act on: ${accepted.join(', ')}`);
+        return accepted.length === 0;
+    });
+
+    /**
+     * ⚠ **The shape that nearly shipped, pinned by name.** Four segments after `tkt:new` is refused,
+     * and it must stay refused: the notifications stream has its own pin that no ticket token exceeds
+     * three segments, and this is the other half of that pair.
+     */
+    assert('⛔ the four-segment shape that nearly shipped is still refused', () =>
+        parseTicketTap(`new:dlv:${ID}:absent`) === null
+            && parseTicketTap(`new:dlv:${ID}:address`) === null);
+}

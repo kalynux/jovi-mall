@@ -20,6 +20,33 @@ function nodeAccessor(nodes) {
   };
 }
 
+/**
+ * `$now`, as n8n exposes it: a Luxon DateTime, not a JS Date.
+ *
+ * ⚠ **`toISO()` emits a ZONE OFFSET**, not a `Z`; `toUTC().toISO()` is what emits `Z`. That
+ * distinction is not pedantry here — it once made every automation failure report on this
+ * platform refuse with `400 AUTOMATION_REPORT_MALFORMED` for eight days, against a validator
+ * that accepted only `Z`. The stub keeps the difference rather than smoothing it away.
+ */
+function luxonNow(atMs) {
+  const shift = (d) => (d.milliseconds || 0) + (d.seconds || 0) * 1000 + (d.minutes || 0) * 60000
+    + (d.hours || 0) * 3600000 + (d.days || 0) * 86400000;
+  const make = (ms) => ({
+    plus: (d = {}) => make(ms + shift(d)),
+    minus: (d = {}) => make(ms - shift(d)),
+    toMillis: () => ms,
+    toUTC: () => ({ toISO: () => new Date(ms).toISOString(), toMillis: () => ms }),
+    toISO: () => {
+      const offsetMinutes = -new Date(ms).getTimezoneOffset();
+      const sign = offsetMinutes >= 0 ? '+' : '-';
+      const pad = (n) => String(Math.floor(Math.abs(n))).padStart(2, '0');
+      const local = new Date(ms + offsetMinutes * 60000).toISOString().slice(0, 23);
+      return `${local}${sign}${pad(offsetMinutes / 60)}:${pad(offsetMinutes % 60)}`;
+    },
+  });
+  return make(atMs === undefined ? Date.now() : atMs);
+}
+
 /** Run a Code node. mode 'all' returns an item array; mode 'each' runs per input item. */
 function runCode(jsCode, { nodes = {}, input = [], mode = 'all' } = {}) {
   const $ = nodeAccessor(nodes);
@@ -27,14 +54,14 @@ function runCode(jsCode, { nodes = {}, input = [], mode = 'all' } = {}) {
     return input.map((item) => {
       const $input = { item, first: () => item, all: () => [item] };
       // eslint-disable-next-line no-new-func
-      const fn = new Function('$', '$input', '$json', jsCode);
-      return fn($, $input, item.json);
+      const fn = new Function('$', '$input', '$json', '$now', jsCode);
+      return fn($, $input, item.json, luxonNow());
     });
   }
   const $input = { first: () => input[0], all: () => input, get item() { return input[0]; } };
   // eslint-disable-next-line no-new-func
-  const fn = new Function('$', '$input', '$json', jsCode);
-  return fn($, $input, input[0] ? input[0].json : undefined);
+  const fn = new Function('$', '$input', '$json', '$now', jsCode);
+  return fn($, $input, input[0] ? input[0].json : undefined, luxonNow());
 }
 
 /** Evaluate a stored n8n expression (`={{ … }}`) as the node would. */
@@ -43,8 +70,8 @@ function evalExpr(expr, { nodes = {}, json = {}, env = {} } = {}) {
   if (!m) throw new Error('not a single {{ }} expression: ' + String(expr).slice(0, 80));
   const $ = nodeAccessor(nodes);
   // eslint-disable-next-line no-new-func
-  const fn = new Function('$', '$json', '$env', '$execution', `return (${m[1]});`);
-  return fn($, json, env, { id: 'sim' });
+  const fn = new Function('$', '$json', '$env', '$execution', '$now', `return (${m[1]});`);
+  return fn($, json, env, { id: 'sim' }, luxonNow());
 }
 
 let passed = 0;
@@ -64,4 +91,4 @@ function report() {
   return failed;
 }
 
-module.exports = { runCode, evalExpr, check, report, j: (json) => ({ json }) };
+module.exports = { runCode, evalExpr, luxonNow, check, report, j: (json) => ({ json }) };

@@ -131,6 +131,16 @@ export function ticketAcceptsWriting(status: string | null | undefined): boolean
  * a request to the wrong desk. The eight map onto real `TicketType` values, so nothing downstream
  * learns a new vocabulary.
  */
+/**
+ * A WhatsApp Flow option title, capped by Meta at 30 characters.
+ *
+ * ⚠ **Not ours to raise.** It is the `RadioButtonsGroup` limit the forms stream builds against
+ * (2026-09-20), and it binds the subject labels below because the same eight choices are drawn as a
+ * Flow on WhatsApp and as radio rows on the Telegram page. The page would show a longer label
+ * happily, which is exactly why this is asserted rather than trusted.
+ */
+export const FLOW_OPTION_TITLE_MAX = 30;
+
 export type BotTicketSubjectKey =
     | 'order'
     | 'delivery'
@@ -595,6 +605,22 @@ export function assertTicketCopyComplete(): void {
         for (const language of BOT_COPY_LANGUAGES) {
             if (copy[language].length > cap) {
                 gaps.push(`${key}:${language} is ${copy[language].length} chars, cap is ${cap}`);
+            }
+        }
+    }
+
+    /**
+     * ⚠ **The eight subjects are capped by META, not by us** — a WhatsApp Flow renders them as a
+     * `RadioButtonsGroup`, whose option title is cut at `FLOW_OPTION_TITLE_MAX`. The Telegram page has
+     * room for all of them, so this limit is invisible on the channel we develop against and would
+     * first be seen by a WhatsApp customer, as a half-word. Longest today is the French "Un problème
+     * avec une commande" at 29.
+     */
+    for (const key of Object.keys(SUBJECT_COPY) as BotTicketSubjectKey[]) {
+        for (const language of BOT_COPY_LANGUAGES) {
+            const label = SUBJECT_COPY[key][language];
+            if (label.length > FLOW_OPTION_TITLE_MAX) {
+                gaps.push(`subject ${key}:${language} is ${label.length} chars, cap is ${FLOW_OPTION_TITLE_MAX}`);
             }
         }
     }

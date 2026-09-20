@@ -23,7 +23,17 @@ export type CompletionPlan =
      * the moment it closes.
      */
     | { kind: 'added_to_cart' }
-    /** The listing session has lapsed: say so, in words, and open nothing. */
+    /**
+     * The form asked a QUESTION the customer answers by typing — a bargain or a booking — and on
+     * WhatsApp that question was visible only on a screen that has now closed. The chat carries it
+     * into the conversation, where it can still be answered.
+     *
+     * ⚠ **The product is named, not the verb.** Which rung the product is on is re-resolved from
+     * the live catalogue when the answer is composed: a bargaining window that closed in the
+     * meantime must not be invited into.
+     */
+    | { kind: 'invite_reply'; productId: string }
+    /** The session has lapsed: say so, in words, and open nothing. */
     | { kind: 'expired' }
     /** Nothing for the chat to add. */
     | { kind: 'silent' };
@@ -37,6 +47,8 @@ const OBJECT_ID = /^[0-9a-f]{24}$/i;
 export interface CompletionSession {
     channel: string;
     externalId: string;
+    /** Present on a `pd` session: the product the form was opened for. */
+    productId?: string;
 }
 
 /**
@@ -63,6 +75,23 @@ export function planCompletion(input: {
      * was live and the retry guard held; what is left is telling the conversation.
      */
     if (input.completedScreen === 'pd') {
+        /**
+         * ⛔ **The question the customer must answer by typing.** A bargain or a booking writes
+         * nothing: it starts a conversation, and the automation layer's agent wakes on the
+         * customer's NEXT INBOUND MESSAGE and on nothing else. On Telegram that question is pushed
+         * into the thread; on WhatsApp it existed only on the closing screen, so it died with it —
+         * and a question nobody can see is a question nobody answers.
+         *
+         * ⚠ **Both bounds are required here**, unlike an add. The answer names a product, so a
+         * lapsed session (no product to name) says the page is gone, and a completion from
+         * another conversation says nothing at all.
+         */
+        if (outcome === 'asked') {
+            if (!input.session?.productId) return { kind: 'expired' };
+            if (!fromThisConversation(input.session, input.sender)) return { kind: 'silent' };
+            return { kind: 'invite_reply', productId: input.session.productId };
+        }
+
         if (outcome !== 'added') return { kind: 'silent' };
 
         /**

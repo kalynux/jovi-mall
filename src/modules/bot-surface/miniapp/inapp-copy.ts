@@ -163,6 +163,63 @@ const DETAIL_NO_REVIEWS: Copy = {
     ar: 'لا توجد تقييمات بعد.',
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  Bookings — the three screens' own headings and buttons
+//
+//  ⚠ **Chrome only.** Every row's text — day labels, times, prices — is formatted by the
+//  bookings core, so there is no second formatter here and no way for a screen to disagree
+//  with the chat about when an appointment is.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const BOOKINGS_HEADING: Copy = {
+    en: 'Your bookings',
+    fr: 'Vos réservations',
+    pt: 'As suas reservas',
+    es: 'Tus reservas',
+    ar: 'حجوزاتك',
+};
+
+const BOOKING_OPEN: Copy = {
+    en: 'Open',
+    fr: 'Ouvrir',
+    pt: 'Abrir',
+    es: 'Abrir',
+    ar: 'فتح',
+};
+
+const BOOKING_WHEN: Copy = {
+    en: 'When would you like to come?',
+    fr: 'Quand souhaitez-vous venir ?',
+    pt: 'Quando gostaria de vir?',
+    es: '¿Cuándo quieres venir?',
+    ar: 'متى تود الحضور؟',
+};
+
+const BOOKING_SEE_TIMES: Copy = {
+    en: 'See times',
+    fr: 'Voir les horaires',
+    pt: 'Ver horários',
+    es: 'Ver horarios',
+    ar: 'عرض الأوقات',
+};
+
+/** ⚠ Fitted to 20 rather than the control's 30 — the forms stream's deliberate margin. */
+const BOOKING_PICK_TIME: Copy = {
+    en: 'Pick a time',
+    fr: 'Choisissez un horaire',
+    pt: 'Escolha um horário',
+    es: 'Elige un horario',
+    ar: 'اختر وقتًا',
+};
+
+const BOOKING_CONFIRM: Copy = {
+    en: 'Confirm',
+    fr: 'Confirmer',
+    pt: 'Confirmar',
+    es: 'Confirmar',
+    ar: 'تأكيد',
+};
+
 const DETAIL_DESCRIPTION: Copy = {
     en: 'Description',
     fr: 'Description',
@@ -400,6 +457,13 @@ const PAGE = Object.freeze({
     detailReviews: DETAIL_REVIEWS,
     detailMoreReviews: DETAIL_MORE_REVIEWS,
     detailNoReviews: DETAIL_NO_REVIEWS,
+
+    bookingsHeading: BOOKINGS_HEADING,
+    bookingOpen: BOOKING_OPEN,
+    bookingWhen: BOOKING_WHEN,
+    bookingSeeTimes: BOOKING_SEE_TIMES,
+    bookingPickTime: BOOKING_PICK_TIME,
+    bookingConfirm: BOOKING_CONFIRM,
 
     checkoutHeading: CHECKOUT_HEADING,
     checkoutTotal: CHECKOUT_TOTAL,

@@ -280,11 +280,15 @@ const ADDRESS_WRONG_LABEL: Record<Language, string> = {
     en: 'My address is wrong', fr: 'Adresse incorrecte', pt: 'Morada errada', es: 'Dirección errónea', ar: 'العنوان خاطئ'
 };
 
-const WHERE_NOW_LABEL: Record<Language, string> = {
-    en: 'Where is it now', fr: 'Où est-il ?', pt: 'Onde está?', es: '¿Dónde está?', ar: 'أين هو الآن'
-};
+/*
+ * ⚠ **"Where is it now" is deliberately absent.** It was drafted for
+ * `order.delivery_failed` and removed before it shipped: that situation's link button is
+ * `TRACK_BUTTON`, which already opens tracking and already says "Track delivery", so the tap
+ * button was a second control for one intent. Recorded rather than silently deleted, because
+ * the obvious next idea for a delivery message is a "where is it" button — and the answer is
+ * that the message already has one.
+ */
 
-const CANCEL_BOOKING: QuickReplyDef = { token: 'bk:cancel:{{bookingId}}', label: CANCEL_BOOKING_LABEL };
 const TRY_PAYMENT_AGAIN: QuickReplyDef = { token: 'pay:rt:{{transactionId}}', label: TRY_AGAIN_LABEL };
 
 // ─── Composed lines ──────────────────────────────────────────────────────────
@@ -526,8 +530,7 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
                 bodyParams: ['{{vendorName}}', '{{serviceName}}', '{{startAt}}']
             }
         },
-        button: BOOKING_BUTTON,
-        actions: [CANCEL_BOOKING]
+        button: BOOKING_BUTTON
     },
 
     // Both the old and the new time, always. A message carrying only the new one
@@ -564,8 +567,21 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
         },
         button: BOOKING_BUTTON,
         actions: [
-            { token: 'yes:bkmove:{{bookingId}}', label: THAT_WORKS_LABEL },
-            { token: 'tkt:new:bk:{{bookingId}}', label: ASK_TO_CHANGE_LABEL }
+            /**
+             * ⛔ **"That works" (`yes:bkmove:`) WITHDRAWN** — `yes` is sub-dispatched and no
+             * stream registers `bkmove`, so the tap reached the unknown-action refusal. The
+             * token shape is correct, so this is a registration away: re-add it unchanged the
+             * moment the bookings owner claims the key.
+             *
+             * ⚠ **"Ask to change" carries `tkt:new`, NOT `tkt:new:bk:<bookingId>`.** The
+             * ticket parser's topic codes are `rd`/`ad`/`hp` and its third segment must be an
+             * ORDER id, so a booking topic does not exist — and passing a booking id where an
+             * order id is expected would have been worse than a refusal, since it parses.
+             * `tkt:new` opens the support form with nothing pre-selected: it loses the
+             * pre-fill, not the button. It also carries no placeholder, so it can never render
+             * empty.
+             */
+            { token: 'tkt:new', label: ASK_TO_CHANGE_LABEL }
         ]
     },
 
@@ -636,8 +652,7 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
                 bodyParams: ['{{serviceName}}', '{{vendorName}}', '{{currency}}', '{{finalPriceFormatted}}']
             }
         },
-        button: BOOKING_BUTTON,
-        actions: [{ token: 'rate:bk:{{bookingId}}', label: LEAVE_REVIEW_LABEL }]
+        button: BOOKING_BUTTON
     },
 
     // The message that stops a `no-show` being recorded against someone who
@@ -673,8 +688,7 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
                 bodyParams: ['{{serviceName}}', '{{vendorName}}', '{{startAt}}', '{{whenPhrase}}']
             }
         },
-        button: BOOKING_BUTTON,
-        actions: [CANCEL_BOOKING]
+        button: BOOKING_BUTTON
     },
 
     'booking.payment.received': {
@@ -1193,8 +1207,18 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
         },
         button: ORDER_BUTTON,
         actions: [
-            { token: 'rate:{{orderId}}', label: LEAVE_REVIEW_LABEL },
-            { token: 'tkt:new:ord:{{orderId}}', label: SOMETHING_WRONG_LABEL }
+            /**
+             * ⛔ **"Leave a review" WITHDRAWN, and it was half of a bigger hole.** `rate` is a
+             * declared verb that NO stream registers, and there is no review path behind it at
+             * all: `reviews_create` is `flow_only` so the model cannot call it, and its route
+             * has never had a caller of any kind. The platform was offering to take a review it
+             * had no way to accept — here and on `booking.completed`. Withdrawn on both until
+             * the chain exists; the review path itself belongs to the discovery stream.
+             *
+             * ⚠ **`hp`, not `ord`.** Topic codes are `rd`/`ad`/`hp` only; `hp` is the
+             * SHIPPING_ISSUE topic the in-chat "Get help" button already uses.
+             */
+            { token: 'tkt:new:hp:{{orderId}}', label: SOMETHING_WRONG_LABEL }
         ]
     },
 
@@ -1229,10 +1253,31 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
             }
         },
         button: TRACK_BUTTON,
+        /**
+         * The owner's three asks, as TWO buttons — and both halves of that are decisions.
+         *
+         * ⚠ **"Where is it now" was REMOVED as a duplicate, not dropped as an ask.** This
+         * situation's link button is `TRACK_BUTTON`, which already opens the tracking page and
+         * already says "Track delivery". A tap button beside it going to the same place is two
+         * controls for one intent — and it mattered here because WhatsApp renders at most one
+         * link plus two taps, so the duplicate was the thing squeezing out a real ask.
+         *
+         * ⚠ **`tkt:new:rd:` / `tkt:new:ad:`, NOT a four-segment `tkt:new:dlv:<order>:<reason>`.**
+         * The tickets stream owns the `tkt` verb, and its parser accepts three segments at most
+         * — a four-segment argument is refused outright, so the earlier shape would have reached
+         * the dispatcher's unknown-action answer. On a message about a FAILED DELIVERY, "I did
+         * not understand that" is the worst possible reply, and Telegram reports nothing for an
+         * unhandled callback, so it would have been invisible from this side.
+         *
+         * The labels stayed: they say what HAPPENED rather than naming an action the platform
+         * cannot promise. There is no reschedule endpoint anywhere and the delivery address is
+         * snapshotted onto the order at checkout, so a button reading "Reschedule" or "Change
+         * address" would be a promise we cannot keep. `rd` files DELIVERY_DELAY, `ad` files
+         * ADDRESS_CHANGE, and both pre-fill the order.
+         */
         actions: [
-            { token: 'tkt:new:dlv:{{orderId}}:absent', label: NOT_THERE_LABEL },
-            { token: 'tkt:new:dlv:{{orderId}}:address', label: ADDRESS_WRONG_LABEL },
-            { token: 'track:{{orderId}}', label: WHERE_NOW_LABEL }
+            { token: 'tkt:new:rd:{{orderId}}', label: NOT_THERE_LABEL },
+            { token: 'tkt:new:ad:{{orderId}}', label: ADDRESS_WRONG_LABEL }
         ]
     },
 
@@ -1345,7 +1390,13 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
             }
         },
         button: TICKET_BUTTON,
-        actions: [{ token: 'tkt:reply:{{ticketId}}', label: REPLY_HERE_LABEL }]
+        /**
+         * ⚠ **`tkt:<id>:rp`, NOT `tkt:reply:<id>` — the two the other way round.** The ticket
+         * parser requires a 24-hex id as the FIRST segment and reads a sub-word second
+         * (`rp`/`ph`/`cl`), so the reversed form returned null and the tap was refused. This
+         * is the shape `ticketReplyActionId` builds and the one the request card already draws.
+         */
+        actions: [{ token: 'tkt:{{ticketId}}:rp', label: REPLY_HERE_LABEL }]
     },
 
     'ticket.awaiting_customer': {
@@ -1379,7 +1430,13 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
             }
         },
         button: TICKET_BUTTON,
-        actions: [{ token: 'tkt:reply:{{ticketId}}', label: REPLY_HERE_LABEL }]
+        /**
+         * ⚠ **`tkt:<id>:rp`, NOT `tkt:reply:<id>` — the two the other way round.** The ticket
+         * parser requires a 24-hex id as the FIRST segment and reads a sub-word second
+         * (`rp`/`ph`/`cl`), so the reversed form returned null and the tap was refused. This
+         * is the shape `ticketReplyActionId` builds and the one the request card already draws.
+         */
+        actions: [{ token: 'tkt:{{ticketId}}:rp', label: REPLY_HERE_LABEL }]
     },
 
     // `{{reopenLine}}` is substituted by the handler, already localized, because
@@ -1421,7 +1478,19 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
             }
         },
         button: TICKET_BUTTON,
-        actions: [{ token: 'tkt:reopen:{{reopenableTicketId}}', label: NOT_SORTED_LABEL }]
+        /**
+         * ⚠ **`tkt:<id>`, because there is NO REOPEN SHAPE AT ALL.** This was not a misspelling:
+         * `TicketTap` has seven kinds and reopen is not among them, so the feature behind the
+         * button did not exist. Opening the request card is the honest answer — the card carries
+         * the request's state and its own controls, including Reply, which is how a resolved
+         * request is actually reopened (`ticketReopenLine` says exactly that).
+         *
+         * ⚠ **`{{reopenableTicketId}}` is kept deliberately.** It is set only for a RESOLVED
+         * request and never a closed one, so the button still appears exactly where the copy
+         * promises a reply will be read, and vanishes at a door the platform has shut. Both are
+         * still driven by one boolean.
+         */
+        actions: [{ token: 'tkt:{{reopenableTicketId}}', label: NOT_SORTED_LABEL }]
     }
 };
 

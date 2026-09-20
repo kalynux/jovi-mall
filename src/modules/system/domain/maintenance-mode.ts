@@ -192,6 +192,25 @@ export function evaluateMaintenance(
    * authorization, and every watcher is dropped. A chat bot has no such property. A customer
    * told "we are briefly down for maintenance" has been correctly served.
    *
+   * ⚠ **THAT LAST SENTENCE WAS FALSE FOR AS LONG AS IT STOOD, AND IS ONLY TRUE NOW** (fixed
+   * 2026-09-20, atlas phase 11). Nobody told the customer anything. This gate is mounted in
+   * `app.ts` **above** `app.use('/api', …)`, and it refuses with `next(error)` — which skips
+   * forward to the error handler without ever entering `/api`. So `bot.routes.ts` never ran:
+   * `attachBotReply` was never installed, so the body carried no `reply` for the automation
+   * layer to send, and `requireBotIdentity` never ran, so `req.bot` was undefined and the
+   * error handler produced no `customerMessage` either. A shopper who wrote to the shop
+   * during a window got **silence**, and this comment asserted they had been served.
+   *
+   * What makes it true: `attachBotEnvelope` and a third `attachBotReply` mount now sit ahead
+   * of this gate for bot paths only, so a refusal here is addressed and worded — mode-aware,
+   * via `bot-recovery-actions.ts`, which reads the `mode` this function returns off
+   * `error.details`. Pinned by `test:dead-ends` § 4.
+   *
+   * 📌 Kept rather than deleted, because the shape is the lesson: a comment asserting a
+   * customer was served, sitting directly above code that served nobody, is the effort's
+   * failure mode 3 — and the only thing that ever catches one is somebody reading carefully
+   * and not believing what they read.
+   *
    * The rule needs its own branch only because of one thing: **this surface's reads are
    * POSTs**. The identity envelope is a body, and putting a messaging identifier in a query
    * string writes a real person's phone number into every access log on the path — so `GET`

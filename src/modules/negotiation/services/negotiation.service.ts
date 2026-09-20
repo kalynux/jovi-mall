@@ -27,6 +27,8 @@ import {
     AcceptOfferOutcome,
     MONGO_OFFER_ACCEPTANCE,
 } from './offer-acceptance.service';
+import { buildCounterOfferOutbound } from './offer-outbound.service';
+import type { BotChannelReply } from '../../bot-surface/domain/channel-reply';
 
 /**
  * How many times `record` re-reads after losing its compare-and-set.
@@ -90,6 +92,19 @@ export type NegotiationRecordResult =
         reply: string;
         agreedPrice: number;
         lock: { ref: string; unitPrice: number; expiresAt: Date } | null;
+        /**
+         * ⭐ **The same turn as a channel-ready body, carrying a "Lock it in · 18 000 XAF" button.**
+         *
+         * Present only on an approved turn that did NOT lock — a standing offer is the only thing a
+         * customer can accept. Null when the deal just closed, and null when the body could not be
+         * built at all, in which case the caller sends `reply` exactly as it always has.
+         *
+         * ⚠ **A sibling of `reply`, never a replacement.** The live bargaining flow sends
+         * `data.reply` (a string) and must keep working; a flow that knows about this field prefers
+         * it. Widening `reply` itself would have broken the automation layer for every existing
+         * turn, which is the same reasoning that gave the bot surface `replies` beside `reply`.
+         */
+        outbound: BotChannelReply | null;
       }
     | {
         verdict: 'revise';
@@ -318,6 +333,28 @@ export class NegotiationService {
                 await negotiationProfileRepository.recordAgreement(caller.customerId);
             }
 
+            /**
+             * ⭐ **A standing offer is sent with the price ON a button.** Only a turn that did NOT
+             * close the deal gets one: a lock means the haggle is over, and a "Lock it in" button
+             * under a message confirming an agreement would invite a customer to accept something
+             * they have already accepted.
+             *
+             * ⚠ **`reply` is untouched and remains the contract.** `outbound` is a sibling the
+             * bargaining flow prefers when present and falls back from when absent, so an
+             * automation layer that knows nothing about it keeps working exactly as it does today.
+             */
+            const outbound = input.lock
+                ? null
+                : await buildCounterOfferOutbound({
+                      identity: input.identity,
+                      customerId: caller.customerId,
+                      sessionId: session._id.toString(),
+                      round: readAtRound + 1,
+                      reply: input.reply,
+                      unitPrice: input.agentProposedPrice,
+                      currency: session.currency,
+                  });
+
             return {
                 verdict: 'approved',
                 sessionId: session._id.toString(),
@@ -325,6 +362,7 @@ export class NegotiationService {
                 reply: input.reply,
                 agreedPrice: input.agentProposedPrice,
                 lock,
+                outbound,
             };
         }
 

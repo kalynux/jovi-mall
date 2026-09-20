@@ -267,6 +267,16 @@ export type BotReplyIntent =
               addToCart: string;
               seeMore: string;
               details: string;
+              /**
+               * The two an out-of-stock card offers instead of a buy row.
+               *
+               * ⚠ **OPTIONAL, deliberately.** Every stream that composes a `product_list` builds
+               * this object, so a required field here would fail the build in all of them at
+               * once for a feature only the discovery stream draws. A button renders only when
+               * its token AND its label are present — see `telegramCardKeyboard`.
+               */
+              similarItems?: string;
+              saveForLater?: string;
           };
           /**
            * The approved WhatsApp carousel template, when the deployment has one.
@@ -860,6 +870,29 @@ function telegramCardKeyboard(
             { text: truncate(intent.labels.addToCart, TG_LIMITS.BUTTON_TEXT), callback_data: card.addToken },
         ]);
     }
+
+    /**
+     * The out-of-stock row: Similar items · Save for later.
+     *
+     * ⚠ **Each button needs BOTH its token and its label**, and that is not belt-and-braces. The
+     * two labels are optional on `labels` — making them required would fail the build in every
+     * stream that composes a `product_list` — so a caller that sets the tokens and forgets the
+     * copy would otherwise draw a button captioned `undefined`.
+     *
+     * ⚠ **This row is keyed on the TOKENS, never on "this card has no buy row".** A service has
+     * no buy row either, by design, and `product-card.ts` gives it neither token — see the
+     * WhatsApp side, where confusing the two closes the booking door.
+     */
+    const rescue = [
+        ...(card.similarToken && intent.labels.similarItems
+            ? [{ text: truncate(intent.labels.similarItems, TG_LIMITS.BUTTON_TEXT), callback_data: card.similarToken }]
+            : []),
+        ...(card.saveToken && intent.labels.saveForLater
+            ? [{ text: truncate(intent.labels.saveForLater, TG_LIMITS.BUTTON_TEXT), callback_data: card.saveToken }]
+            : []),
+    ];
+    if (rescue.length > 0) rows.push(rescue);
+
     if (card.detailUrl) {
         rows.push([
             { text: truncate(intent.labels.details, TG_LIMITS.BUTTON_TEXT), url: card.detailUrl },
@@ -961,8 +994,19 @@ function telegramProductList(intent: ProductListIntent, chatId: string): BotChan
 
 /** One product's body text on WhatsApp. `*bold*` is WhatsApp's own markup, not Markdown. */
 function whatsappCardBody(card: BotProductCard): string {
+    /**
+     * ⚠ **The link joins the body on the out-of-stock path only**, because that is the one path
+     * where a card carries reply buttons INSTEAD of the `cta_url` Details link — Meta will not
+     * mix the two — and dropping it outright would leave the product page unreachable on the
+     * channel most customers are on. Every other card still gets Details as a proper button, so
+     * adding the URL there would be the same link twice.
+     */
+    const detailLine = card.similarToken && card.saveToken && card.detailUrl
+        ? `\n${card.detailUrl}`
+        : '';
+
     return truncate(
-        `*${card.title}*\n${card.priceText}\n${card.storeName}`,
+        `*${card.title}*\n${card.priceText}\n${card.storeName}${detailLine}`,
         WA_LIMITS.INTERACTIVE_BODY,
     ) as string;
 }
@@ -1113,6 +1157,49 @@ function whatsappProductList(intent: ProductListIntent, to: string): BotChannelR
                 },
             });
         }
+
+        /**
+         * ⭐ **The out-of-stock pair, and the one place this renderer trades something away.**
+         *
+         * Meta will not mix a URL button with reply buttons in one interactive message, so a
+         * card that offers Similar items and Save for later CANNOT also keep the `cta_url`
+         * Details link below. The link loses: the product cannot be bought from that page
+         * either, while Similar items is the one control that still helps. Agreed with the
+         * discovery stream, who proposed it and owns the tokens.
+         *
+         * ⚠ **The link is moved, not dropped** — `whatsappCardBody` appends `card.detailUrl`
+         * whenever a card takes this path, so the page is still reachable as text. Most clients
+         * make it tappable; the ones that do not still show something a person can copy, which
+         * beats the link not being there.
+         *
+         * ⚠ **Keyed on the tokens.** The `buttons.length === 0` branch below is NOT the
+         * out-of-stock branch — a SERVICE reaches it too, with no buy tokens by design, and
+         * Details is where its booking flow lives. `product-card.ts` gives a service neither
+         * token, which is what keeps that door open.
+         */
+        const soldOutPair = card.similarToken && card.saveToken;
+        if (soldOutPair && intent.labels.similarItems && intent.labels.saveForLater) {
+            buttons.push({
+                type: 'reply',
+                reply: {
+                    id: card.similarToken,
+                    title: truncate(intent.labels.similarItems, WA_LIMITS.BUTTON_REPLY_TITLE),
+                },
+            });
+            buttons.push({
+                type: 'reply',
+                reply: {
+                    id: card.saveToken,
+                    title: truncate(intent.labels.saveForLater, WA_LIMITS.BUTTON_REPLY_TITLE),
+                },
+            });
+        }
+        /**
+         * ⚠ **A sold-out card on the last page is EXACTLY at Meta's cap of three**: Similar
+         * items + Save for later + See more. Nothing is dropped today, and the guard below is
+         * what keeps it that way — but the next person to add a card button will silently cost
+         * the last card its "See more" rather than get an error. Count before adding one.
+         */
         if (last && intent.hasMore && intent.moreToken && buttons.length < WA_MAX_BUTTONS) {
             buttons.push({
                 type: 'reply',

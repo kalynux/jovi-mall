@@ -29,6 +29,7 @@
  * Run:
  *   npm run seed:negotiation-playbook
  *   npm run seed:negotiation-playbook -- --dry-run
+ *   npm run verify:negotiation-playbook        (--check: read-only, exits 1 on drift)
  */
 import 'dotenv/config'; // load .env (MONGO_URI etc.) before anything reads it
 import mongoose from 'mongoose';
@@ -37,6 +38,11 @@ import { join } from 'path';
 
 import { parsePlaybook } from '../../src/modules/negotiation/domain/playbook-document';
 import { negotiationPlaybookRepository } from '../../src/modules/negotiation/repositories/negotiation-playbook.repository';
+import {
+    describePlaybookDrift,
+    isPlaybookDrift,
+    playbookDrift,
+} from '../../src/modules/negotiation/domain/playbook-drift';
 
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/jovi-mall';
 
@@ -59,6 +65,9 @@ const PLAYBOOK_PATH = join(
 
 const DRY_RUN = process.argv.includes('--dry-run');
 
+/** Read-only, and the only mode that FAILS: the deployment-day check. */
+const CHECK = process.argv.includes('--check');
+
 async function main(): Promise<void> {
     const raw = readFileSync(PLAYBOOK_PATH, 'utf8');
     const parsed = parsePlaybook(raw);
@@ -78,7 +87,30 @@ async function main(): Promise<void> {
         console.log('  live       : none published');
     }
 
-    if (live && live.checksum === parsed.checksum) {
+    /**
+     * ⭐ **One rule for "is the live playbook this build's?", shared with `--check`.** If the check
+     * decided drift differently from the seed, it would pass things the seed would republish and
+     * fail things it would leave alone — so the comparison lives in `playbookDrift` and both call it.
+     */
+    const verdict = playbookDrift(parsed.checksum, live ? { version: live.version, checksum: live.checksum } : null);
+
+    /**
+     * `--check` — READ ONLY, and it EXITS NON-ZERO on drift.
+     *
+     * ⛔ **This exists because the model reads its instructions from Mongo, not from this file.** A
+     * deployment that ships new instructions and skips the seed leaves the bargaining agent running
+     * the old ones, behaving subtly differently, with nothing anywhere going red. `--dry-run`
+     * already prints the comparison, but it exits 0 whatever it finds, so nothing can gate on it.
+     * This is the same shape as a price stated in copy beside a number in a service: two records of
+     * one fact, with nothing to notice them disagreeing.
+     */
+    if (CHECK) {
+        console.log(`\n${describePlaybookDrift(verdict)}`);
+        if (isPlaybookDrift(verdict)) process.exitCode = 1;
+        return;
+    }
+
+    if (verdict.status === 'current') {
         console.log('\nUnchanged — nothing to publish.');
         return;
     }

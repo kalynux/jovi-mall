@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>wi-mall</title>
+<!--
+  The support form — who it is about, who else could help, what happened.  Screen kind `tf`.
+
+  ⚠ **THE FILENAME IS THE ROUTE** — `inapp-page.controller.ts` sends `public/<kind>.html`.
+
+  Endpoints:  `GET  /api/bot/miniapp/s/tf/:handle/data`
+              `POST /api/bot/miniapp/s/tf/:handle/submit`
+
+  ── ⚠ THE SUBMIT SPENDS THE HANDLE, SO THERE IS NO RETRY ON IT ──────────────
+  `submitTicketForm` calls `consume`, not `read`: a double tap, a refreshed tab and a forwarded
+  URL all find the form gone, which is what makes two identical requests in support's queue
+  impossible.  This mount has no `Idempotency-Key` — a browser sends what the page sends — so the
+  store's read-and-delete is the only guard there is, and a retry button here would spend a dead
+  handle and report "no longer available", which reads as the platform losing a complaint.
+
+  ⚠ **ONE exception, and it is the server's to grant.**  Every refusal carries `details.spent`.
+  A submission with nothing written is refused BEFORE the spend (`400`, `spent: false`), and only
+  that combination unlatches the button.  ABSENT MEANS SPENT: the platform strips `details` from
+  internal and gateway errors, and a lost response has no body at all, so both stay latched — the
+  direction that cannot open a second request.
+
+  ── ⚠ THE WORDS ARE THE SERVER'S, INCLUDING THE FORM'S OWN LABELS ───────────
+  Every string on this page comes from `data.copy` (the form's vocabulary, from
+  `bot-ticket-copy.ts`) or from the shared `/copy` table (loading, expired, failed, retry).  The
+  page holds no English.  That is also what lets the WhatsApp Flow render the same form from the
+  same read: one set of words, two renderings.
+
+  ── ⚠ IT SHOWS ONLY WHAT THE SUPPORT LADDER ALREADY TELLS A CUSTOMER ────────
+  The contacts are a shop's or a delivery company's PUBLISHED support details, exactly as
+  `POST /support/context` returns them.  No address is ever shown — a shop's ship-from address is
+  private, the store screens show a city and no more, and a form is exactly where somebody would
+  helpfully add one.
+
+  ── ⚠ THE ANSWER ARRIVES IN THE CHAT ────────────────────────────────────────
+  Support replies in the conversation, so this page promises that and closes.  A request's own
+  thread lives in the chat, where the customer can reply to it — not on a page that is about to
+  disappear.
+-->
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/api/bot/miniapp/shell.css">
+<style>
+  /* Screen-specific only. Anything another screen would also want belongs in shell.css. */
+  .block { margin-block-start: 18px; }
+  .block__label { font-size: 12px; color: var(--muted); margin-block-end: 6px; }
+  .choice { display: block; padding: 10px 12px; border-radius: 10px; background: var(--card); margin-block-end: 6px; }
+  .choice input { margin-inline-end: 10px; }
+  .links { display: flex; flex-wrap: wrap; gap: 8px; }
+  .links a { padding: 6px 10px; border-radius: 999px; background: var(--card); text-decoration: none; color: inherit; font-size: 13px; }
+  textarea { width: 100%; min-height: 120px; resize: vertical; }
+  .count { text-align: end; font-size: 12px; color: var(--muted); margin-block-start: 4px; }
+</style>
+</head>
+<body>
+  <header class="screen__head">
+    <h1 class="screen__title" id="title"></h1>
+  </header>
+
+  <main class="screen__body" id="body">
+    <div class="state" id="state"><p class="state__text" id="stateText"></p></div>
+
+    <div id="sheet" hidden>
+      <div class="block" id="aboutBlock" hidden>
+        <div class="block__label" id="aboutLabel"></div>
+        <div class="panel"><div class="panel__value" id="about"></div></div>
+      </div>
+
+      <div class="block" id="contactsBlock" hidden>
+        <div class="block__label" id="contactsLabel"></div>
+        <div id="contacts"></div>
+      </div>
+
+      <div class="block">
+        <div class="block__label" id="typeLabel"></div>
+        <div id="choices"></div>
+      </div>
+
+      <div class="block field">
+        <label class="block__label" for="description" id="descriptionLabel"></label>
+        <textarea id="description" name="description"></textarea>
+        <div class="count" id="count"></div>
+        <div class="block__label" id="attachment" hidden></div>
+      </div>
+    </div>
+  </main>
+
+  <footer class="screen__foot" id="foot" hidden>
+    <button class="btn btn--primary btn--block" id="send"></button>
+    <div class="note" id="note"></div>
+  </footer>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ── Telegram, entirely optional ──────────────────────────────────────── */
+  var tg = (window.Telegram && window.Telegram.WebApp) || null;
+  if (tg) {
+    try {
+      tg.ready();
+      tg.expand();
+      var p = tg.themeParams || {};
+      var root = document.documentElement.style;
+      if (p.bg_color) root.setProperty("--bg", p.bg_color);
+      if (p.text_color) root.setProperty("--fg", p.text_color);
+      if (p.hint_color) root.setProperty("--muted", p.hint_color);
+      if (p.secondary_bg_color) root.setProperty("--card", p.secondary_bg_color);
+      if (p.button_color) root.setProperty("--accent", p.button_color);
+      if (p.button_text_color) root.setProperty("--accent-fg", p.button_text_color);
+    } catch (e) { /* an old client, or one reporting no theme. Keep our own colours. */ }
+  }
+
+  var base = window.location.pathname.replace(/\/+$/, "");
+  var lang = new URLSearchParams(window.location.search).get("lang") || "";
+
+  var el = {
+    title: document.getElementById("title"),
+    state: document.getElementById("state"),
+    stateText: document.getElementById("stateText"),
+    sheet: document.getElementById("sheet"),
+    aboutBlock: document.getElementById("aboutBlock"),
+    aboutLabel: document.getElementById("aboutLabel"),
+    about: document.getElementById("about"),
+    contactsBlock: document.getElementById("contactsBlock"),
+    contactsLabel: document.getElementById("contactsLabel"),
+    contacts: document.getElementById("contacts"),
+    typeLabel: document.getElementById("typeLabel"),
+    choices: document.getElementById("choices"),
+    descriptionLabel: document.getElementById("descriptionLabel"),
+    description: document.getElementById("description"),
+    count: document.getElementById("count"),
+    attachment: document.getElementById("attachment"),
+    foot: document.getElementById("foot"),
+    send: document.getElementById("send"),
+    note: document.getElementById("note")
+  };
+
+  /** The shared chrome table: loading, expired, failed, retry. */
+  var copy = null;
+  /** The form's own vocabulary, from this screen's data. */
+  var form = null;
+  /** ⚠ Latches true on the first submit and clears only on a refusal the server marks unspent. */
+  var sending = false;
+  var sent = false;
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  /**
+   * ⚠ **`retry` is offered for a failed READ only, never for a failed SUBMIT.** Reading is
+   * repeatable; submitting spends the handle.
+   */
+  function state(text, retry) {
+    el.sheet.hidden = true;
+    el.foot.hidden = true;
+    el.state.hidden = false;
+    el.stateText.textContent = text;
+
+    var old = el.state.querySelector("button");
+    if (old) old.remove();
+    if (retry && copy && !sent) {
+      var b = document.createElement("button");
+      b.className = "btn";
+      b.textContent = copy.retry;
+      b.addEventListener("click", load);
+      el.state.appendChild(b);
+    }
+  }
+
+  function say(text, bad) {
+    el.note.textContent = text || "";
+    el.note.className = bad ? "note note--bad" : "note";
+  }
+
+  function json(url, init) {
+    return fetch(url, init).then(function (r) {
+      return r.json()
+        .catch(function () { return null; })
+        .then(function (b) { return { status: r.status, ok: r.ok, body: b }; });
+    });
+  }
+
+  /**
+   * ⚠ **404 and 410 are the one refusal a customer can act on**, and the remedy is always the
+   * same: ask again in the chat and a fresh form opens. Every other status renders the server's
+   * own sentence, which carries `customerMessage` in the customer's language.
+   */
+  function explain(res) {
+    if (res.status === 404 || res.status === 410) return copy.expired;
+    var e = res.body && res.body.error;
+    return (e && (e.customerMessage || e.message)) || copy.failed;
+  }
+
+  /** Whether a refusal left the handle alive. ABSENT MEANS SPENT — see the note at the top. */
+  function unspent(res) {
+    var e = res.body && res.body.error;
+    return Boolean(e && e.details && e.details.spent === false);
+  }
+
+  function contactLinks(contact) {
+    var links = [];
+    if (contact.whatsapp) {
+      links.push('<a href="https://wa.me/' + esc(String(contact.whatsapp).replace(/[^0-9]/g, "")) + '">'
+        + esc(form.whatsappLabel) + "</a>");
+    }
+    if (contact.phone) links.push('<a href="tel:' + esc(contact.phone) + '">' + esc(form.callLabel) + "</a>");
+    if (contact.email) links.push('<a href="mailto:' + esc(contact.email) + '">' + esc(form.emailLabel) + "</a>");
+    return links.join("");
+  }
+
+  function draw(data) {
+    form = data.copy;
+
+    el.title.textContent = form.title;
+    el.typeLabel.textContent = form.typeLabel;
+    el.descriptionLabel.textContent = form.descriptionLabel;
+    el.description.setAttribute("placeholder", form.descriptionHint);
+    el.description.setAttribute("maxlength", String((data.limits && data.limits.description) || 700));
+    el.send.textContent = form.submitButton;
+
+    if (data.about) {
+      el.aboutLabel.textContent = form.aboutLabel;
+      el.about.textContent = data.about;
+      el.aboutBlock.hidden = false;
+    }
+
+    /* The shop's and the delivery company's own published contacts — never an address. */
+    if (data.contacts && data.contacts.length) {
+      el.contactsLabel.textContent = form.directContactsLabel;
+      el.contacts.innerHTML = data.contacts.map(function (contact) {
+        return '<div class="block">'
+          + '<div class="block__label">' + esc(contact.party === "shop" ? form.shopLabel : form.carrierLabel)
+          + " · " + esc(contact.name) + "</div>"
+          + '<div class="links">' + contactLinks(contact) + "</div>"
+          + "</div>";
+      }).join("");
+      el.contactsBlock.hidden = false;
+    }
+
+    el.choices.innerHTML = (data.choices || []).map(function (choice) {
+      var checked = data.selectedKey === choice.key ? " checked" : "";
+      return '<label class="choice"><input type="radio" name="subject" value="' + esc(choice.key) + '"'
+        + checked + ">" + esc(choice.label) + "</label>";
+    }).join("");
+
+    if (data.attachment) {
+      el.attachment.textContent = form.attachmentLabel;
+      el.attachment.hidden = false;
+    }
+
+    count();
+    el.state.hidden = true;
+    el.sheet.hidden = false;
+    el.foot.hidden = false;
+  }
+
+  function count() {
+    var max = el.description.getAttribute("maxlength") || "700";
+    el.count.textContent = el.description.value.length + " / " + max;
+  }
+
+  function chosen() {
+    var picked = el.choices.querySelector('input[name="subject"]:checked');
+    return picked ? picked.value : null;
+  }
+
+  function load() {
+    state(copy ? copy.loading : "", false);
+
+    json(base + "/copy?lang=" + encodeURIComponent(lang))
+      .then(function (res) {
+        copy = (res.body && res.body.data && res.body.data.copy) || copy;
+        var direction = res.body && res.body.data && res.body.data.direction;
+        if (direction) document.documentElement.setAttribute("dir", direction);
+        return json(base + "/data");
+      })
+      .then(function (res) {
+        if (!res.ok || !res.body || !res.body.data) {
+          state(explain(res), res.status !== 404 && res.status !== 410);
+          return;
+        }
+        draw(res.body.data);
+      })
+      .catch(function () { state(copy ? copy.failed : "", true); });
+  }
+
+  el.description.addEventListener("input", count);
+
+  el.send.addEventListener("click", function () {
+    if (sending || sent) return;
+
+    var subject = chosen();
+    /*
+     * ⚠ **Both fields are checked here as well as on the server, and this is the one place on
+     * this surface where that is worth doing.** The handle is spent by the POST, so a refusal the
+     * page could have foreseen costs the customer their whole form. The sentence is the server's
+     * (`descriptionRequired`); the check is the page's.
+     */
+    if (!subject || !el.description.value.trim()) {
+      say(form.descriptionRequired, true);
+      return;
+    }
+
+    sending = true;
+    el.send.disabled = true;
+    say("");
+
+    json(base + "/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ subject: subject, description: el.description.value.trim() })
+    }).then(function (res) {
+      sending = false;
+
+      if (res.ok) {
+        sent = true;
+        el.sheet.hidden = true;
+        el.foot.hidden = true;
+        el.state.hidden = false;
+        el.stateText.textContent = form.sentTitle + "\n\n" + form.sentBody;
+        if (tg) setTimeout(function () { try { tg.close(); } catch (e) { /* an old client */ } }, 2500);
+        return;
+      }
+
+      say(explain(res), true);
+      /* Unlatched ONLY when the server says the form survived. */
+      if (unspent(res)) el.send.disabled = false;
+    }).catch(function () {
+      /*
+       * ⚠ **A lost response is treated as SENT**, and stays latched. The request may well exist;
+       * a second tap would be the one thing this design refuses to risk.
+       */
+      sending = false;
+      say(copy ? copy.failed : "", true);
+    });
+  });
+
+  load();
+}());
+</script>
+</body>
+</html>

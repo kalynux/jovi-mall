@@ -506,7 +506,24 @@ async function main(): Promise<void> {
      * validate first, so this cannot pass by a door merely existing.
      */
     await assert('⛔ exactly two doors take a hold, and each validates before it takes one', () => {
-        const callers = productionCallers(/slotLockService\.lock\(|slotLockFacade\.lockSlot\(/);
+        const takesAHold = /slotLockService\.lock\(|slotLockFacade\.lockSlot\(/;
+        const callers = productionCallers(takesAHold);
+
+        /**
+         * ⚠ **Counted per CALL SITE, not per file — the unit counted must be the unit claimed.**
+         * The file list alone would let a THIRD door appear inside `booking.service.ts` — a new
+         * method calling the lock primitive with no rule in front of it — while this assertion
+         * stayed green, because the file was already on the list. That is the span error this
+         * project keeps meeting, in a new disguise: the claim was about DOORS and the count was
+         * about FILES. Found by the mutant "B8 a THIRD hold door appears".
+         */
+        const sites = callers.map((file) => (
+            (fs.readFileSync(path.join(__dirname, '../../src', file), 'utf8')
+                .replace(/\/\*[\s\S]*?\*\//g, '')
+                .replace(/^\s*\/\/[^\n]*$/gm, '')
+                .match(new RegExp(takesAHold.source, 'g')) ?? []).length
+        ));
+        if (sites.some((n) => n !== 1)) return false;
         const holdBody = methodBody(BS, /async holdSlotForReschedule\(/);
         const lockBody2 = methodBody(
             codeOf('modules/catalog/domain/services/booking/ProductBookingService.ts'),

@@ -127,6 +127,7 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
     orders_list_shipments: BotOrderController.listShipments,
     orders_get_cod_code: BotOrderController.getCodCode,
     orders_cancel: BotOrderController.cancel,
+    orders_record_cancellation_reason: BotOrderController.recordCancellationReason,
     orders_resend_cod_code: BotOrderController.resendCodCode,
     orders_confirm_shipment_delivery: BotOrderController.confirmShipmentDelivery,
 

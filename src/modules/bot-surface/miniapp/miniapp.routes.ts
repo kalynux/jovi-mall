@@ -4,6 +4,8 @@ import { MiniAppController } from './miniapp.controller';
 import { InAppPageController } from './inapp-page.controller';
 import { ProductListingController } from './surfaces/product-listing.controller';
 import { ProductDetailController } from './surfaces/product-detail.controller';
+import { TicketFormController } from './surfaces/ticket-form.controller';
+import { BookingScreensController } from './surfaces/booking.controller';
 import { CheckoutController } from './surfaces/checkout.controller';
 import { OrderListingController } from './surfaces/order-listing.controller';
 import { StoreListingController } from './surfaces/store-listing.controller';
@@ -159,6 +161,19 @@ router.post('/s/pl/:handle/open', ProductListingController.open);
 router.get('/s/pd/:handle/data', ProductDetailController.data);
 
 /**
+ * The two sections beside the product itself.
+ *
+ * ⚠ **`similar` is a POST and `reviews` is a GET, and that asymmetry is deliberate rather than
+ * sloppy**: opening the similar grid MINTS a listing session — a credential — while reading
+ * reviews mints nothing and pages with a query string.
+ *
+ * ⚠ **The page treats a failed reviews fetch as "no section"**, so a bad minute on this read
+ * costs a customer the reviews and never the product page.
+ */
+router.post('/s/pd/:handle/similar', ProductDetailController.similar);
+router.get('/s/pd/:handle/reviews', ProductDetailController.reviews);
+
+/**
  * The purchase button on the detail screen was pressed.
  *
  * ⚠ **Stream C's handler on Stream B's screen, and the split is the whole design.** The screen
@@ -170,6 +185,31 @@ router.get('/s/pd/:handle/data', ProductDetailController.data);
  * product, discarding whatever the page thought it was. A page is a thing a customer can edit.
  */
 router.post('/s/pd/:handle/act', BotPurchaseController.screenAct);
+
+/**
+ * Bookings — the list, and the picker that becomes an appointment.
+ *
+ * ⚠ **`confirm` SPENDS its handle** (201), so a double tap cannot take two slots. The two
+ * reads are repeatable: `slotData` with no `?date` answers the days that HAVE times, and with
+ * `?date=YYYY-MM-DD` answers that day's times.
+ *
+ * ⚠ **The pay screen (`bp`) is deliberately NOT mounted here yet** — the bookings stream sends
+ * it as its own request when the screen lands. A mounted route beats a reserved one: a route
+ * pointing at a handler that does not exist stops the server for every session at boot.
+ */
+router.get('/s/bl/:handle/data', BookingScreensController.listData);
+router.get('/s/bk/:handle/data', BookingScreensController.slotData);
+router.post('/s/bk/:handle/confirm', BookingScreensController.confirm);
+
+/**
+ * The support form — one screen that opens a request.
+ *
+ * ⚠ **Mounted as a PAIR, and `submit` SPENDS its handle** (`consume`, not `read`) exactly as
+ * `/s/co/:handle/place` does — so a double tap cannot open two support requests for one
+ * problem. Reading the form is repeatable; sending it happens once.
+ */
+router.get('/s/tf/:handle/data', TicketFormController.data);
+router.post('/s/tf/:handle/submit', TicketFormController.submit);
 
 /**
  * Checkout — the basket, the masked address, and the write that places the order.

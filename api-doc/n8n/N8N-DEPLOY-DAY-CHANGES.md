@@ -36,10 +36,11 @@ These are also the **rollback versions** (§ 12).
 | **5** | a message a tool prepared **never reaches the customer** | it is sent; the model's sentence is kept, or suppressed when the tool says so | ✅ specified · proven · ❓ one backend flag |
 | **6** | a file's own question ("which request is this for?") is composed and **never sent** | sent, and the model is told not to race it | ✅ specified · proven · ⏳ copy |
 | **7** | — | **nothing to change**: template taps already arrive as ordinary taps | ✅ measured |
-| **8** | a deal closed by a button leaves the haggle open; **every Bargain button is a dead end** | the routing keys follow the buttons; the counter-offer can carry one | ⚠ **live gap** · specified · ⏳ proof |
+| **8** | a deal closed by a button leaves the haggle open; **every Bargain button is a dead end** | the routing keys follow the buttons; the counter-offer can carry one | ⚠ **live gap** · specified · proven |
 | **9** | the model cannot call the two new discovery doors at all | regenerate and republish the MCP server — the delta is **2** (`catalog_browse_categories`, `catalog_product_reviews_summary`) and may grow again before deploy day | ⚠ **required now** · re-measure |
 | **10** | a refused bargaining message = the customer gets **nothing**, and the board stays clean | it fails the run and is reported; the Graph version gets one home | ⚠ found while reading |
 | **12.5** | — | ⛔ **not an n8n change**: re-seed the bargaining playbook into the production database, or the model never sees round 2's two new instructions | ✅ verified |
+| **13** | WhatsApp forms exist but no customer can open one | publish the three ready Flows — ⛔ **strictly AFTER the deploy**, because Meta health-checks the live endpoint before it will publish | ✅ runbook · owner's call |
 
 **Open, and owed by others:** the `replyStandsAlone` flag and its name (backend-dc) · `/record`'s
 `outbound` body (backend-27) · the file question's wording and the
@@ -603,10 +604,13 @@ today.
 
 ### 6.1 · What it is
 
-When a customer sends a photo, `upload inbound file` stores it and hands the model a one-use
-reference. In phase 8 that route may also answer with a **question** — *"Which request is this
-for?"*, with the customer's open requests as buttons plus "New request" — whenever they have an
-open ticket. Nothing in n8n would send it: the upload's response is read for its `ref` only.
+**Built as of 2026-09-20** (orders/support stream). When a customer sends a photo,
+`upload inbound file` stores it and hands the model a one-use reference. That route now also
+answers with a **question** — *"Which request is this file for?"*, listing up to four open
+requests plus "New request" — but **only when the customer has at least one open request**; with
+none there is no reply and nothing changes. Each row's token attaches the file directly, and the
+handle is single-use with a restore on a failed attach, so a tap is safe. Nothing in n8n would
+send that question: the upload's response is read for its `ref` only.
 
 ### 6.2 · The change
 
@@ -624,7 +628,8 @@ Two small ones, both inside nodes § 5 already touches:
 the loser is told to send the file again — backend-3e's warning, and the reason the two halves
 are one change.
 
-⏳ The exact wording of the note is the orders stream's to confirm when the route lands.
+✅ **The note's wording is confirmed by the orders stream** (2026-09-20): if that reply is sent,
+the model must be told the customer has already been asked, so that it does not also attach.
 
 ### 6.3 · Proof
 
@@ -793,21 +798,61 @@ ids. The bargainer hands those ids back on its return to core as `handoff: { pro
 and the **main agent** draws them with `catalog_show_products`, whose Redis card echo is the path
 already working in production.
 
-n8n's half: `bargain handled?`'s true output is a dead end today; when the return carries
-`handoff.productIds`, the turn continues to the agent path instead, with the ids handed to the
-model in its input note (the same mechanism `compose agent input` already uses for a file).
+n8n's half, and **the field's name is this document's to choose** (backend-27 left it so):
+the sub-workflow returns `handoff: { productIds: [...] }`.
+
+- **New node `alternatives handed back?`** (IF, `={{ Array.isArray($json.handoff?.productIds) &&
+  $json.handoff.productIds.length > 0 }}`) on `bargain handled?`'s true output, which is a dead
+  end today: **true** continues to the agent path (`is media?`), **false** ends the turn exactly
+  as now.
+- **`compose agent input`** adds the ids to the model's note, with the instruction to draw them
+  with `Show-Products` **in that order and write nothing of its own** — the seller has the floor.
+- ⚠ **The ids are filtered to the 24-character shape and capped at ten** before they reach the
+  model. They arrive from another workflow's output and nothing else here validates them; an
+  unfiltered list is prompt text supplied by a different system.
 
 ⭐ **The existing bargain echo is what makes this safe**, and it is the part neither side could
 see alone: on a bargained turn the agent's own sentence is suppressed (§ 5) while cards survive,
 so the bargainer keeps the pen and the customer still gets the alternatives as real cards with
 their buy buttons. **One sender per turn** holds.
 
-### 8.6 · Proof and status
+### 8.6 · Proof
 
-⏳ **Not yet in the harness** — 8.1–8.3 are proven the moment the response shapes are fixed
-(they are pure conditions over a response body, and the harness already runs conditions that
-way); 8.4 and 8.5 wait on backend-27's `/record` change and the return field. Written now
-because 8.2 is a **live gap**, and because it decides how the tap path is wired in § 1.
+Harness § 11, rows `§ 8`, `§ 8.4` and `§ 8.5`: **38 checks, 0 failed** (added once backend-27
+fixed the response shapes).
+
+**8.1–8.3 — which branch each real response takes**, including the two traps that make the rule
+read the *response* rather than the token: a Bargain card whose window the vendor has since
+closed answers `verb: "add"` and writes nothing, and a `book:` tap answers `variantId: null` and
+writes nothing. The two rules are also asserted to be mutually exclusive.
+
+⭐ **The cross-workflow pin, and it is the one only a harness catches.** What
+`set bargain flag (tap)` writes and what `read bargain flag` demands live in **different nodes,
+and nothing compares them** — the same shape as this platform's shared-secret mismatches. So the
+written value is fed to the **live reader**, which must answer `bargaining: true` with the
+variant, product and quantity carried through. Also pinned there: a flag without `variantId` is
+**refused** by that reader (which is why 8.2 declines to write one), an expired flag reads as
+absent, and a tap mid-haggle still does not reach the bargainer because the reader wants typed
+text.
+
+And the reason the lock is deleted, proven rather than asserted: a lock left behind by a button
+close is still handed to the model as a spendable `ref`.
+
+**8.4 — `decide send`**: with `outbound` the customer gets the gate's sentence *with* the
+button; with none, or a malformed one, the output is **byte-identical to today**. All five other
+verdict paths (revise, failed gate call, no gate, `#HANDBACK#`, agent error) are byte-identical
+too, and a mutant that sends the gate's body on a `revise` verdict is caught.
+
+**8.5 — the hand-back**: the routing condition over real returns, the note (ids in order, "write
+nothing of your own", never mention a price), junk ids from another workflow refused, the
+ten-id cap, and three unchanged cases. ⭐ And the property the whole hand-back rests on, proven
+against the two nodes that actually decide it rather than asserted: **on a bargained turn the
+cards go out and the agent's own line does not** — one sender keeps the pen, and the customer
+still sees the alternatives as real cards.
+
+⏳ **Still waiting on the backend**: `/record`'s `outbound` field itself, and the sub-workflow
+actually returning `handoff` (both backend-27). The n8n rules for each are written and proven
+above; neither needs re-work when the fields land.
 
 ### 8.7 · Rollback
 
@@ -928,7 +973,7 @@ expiry, never merely preserve the literal.
 
 ## 11 · Proof — the offline harness
 
-**`api-doc/n8n/deploy-day-harness/`** · `node run.js` · **141 checks, 0 failed** (2026-09-20).
+**`api-doc/n8n/deploy-day-harness/`** · `node run.js` · **179 checks, 0 failed** (2026-09-20).
 No n8n, no network, no database.
 
 ⚠ **That number is a measurement, not a property — re-run it, never quote it.** § 1's corpus is
@@ -941,8 +986,12 @@ not move would be the bug.
 
 | File | |
 |---|---|
-| `live-core-nodes.json` | the **live** parameters of the 18 core nodes this set touches, taken from `UP-wi-mall-core` version `1997c757` (`versionId === activeVersionId`, 2026-09-19) — provenance recorded in the file's `_source` |
+| `live-core-nodes.json` | the **live** parameters of the 21 core nodes this set touches, from `UP-wi-mall-core` `1997c757` — provenance in the file's `_source` |
 | `live-wa-normalize.json` | the **live** `normalize` code from `UP-wi-mall-wa-adapter` `218fc514` |
+| `live-bargain-nodes.json` | the **live** `decide send` and its send path, from `UP-wi-mall-bargain` `e2c94ead` |
+
+✅ **All three re-verified against the instance on 2026-09-20**: every workflow still sits at the
+version these snapshots came from, `versionId === activeVersionId`, with no staged draft.
 | `n8n-sim.js` | a small stand-in for the n8n runtime: `$()`, `$input`, `$json`, both Code-node modes, and expression evaluation. Strict where it matters — `$('X')` on a node that did not run **throws**, as n8n does |
 | `build-new.js` | builds every new node body **from the live one by anchored replacement**, and throws unless each anchor matches **exactly once** |
 | `test-s1-s2 … test-s6.js` | the proofs, by section |
@@ -963,7 +1012,10 @@ live pair over A3's own sixteen scenarios.
 | § 4 · taps → assistant | 15 | before/after on a real tap |
 | § 5 · A5 | 31 | **16 A3-equivalence** + 15 new |
 | § 6 · file question | 8 | |
-| **total** | **141** | at this measurement |
+| § 8 · bargaining keys | 17 | includes the cross-workflow pin against the **live reader** |
+| § 8.4 · the gate's body | 9 | five verdict paths byte-identical |
+| § 8.5 · the hand-back | 12 | one sender keeps the pen, proven |
+| **total** | **179** | at this measurement |
 
 ### 11.3 · Three guards that must bite, and do
 
@@ -1021,7 +1073,7 @@ session's draft: if `versionId !== activeVersionId` when you start, stop and ask
 | Draft | Expected |
 |---|---|
 | wa-adapter | exactly **1 node modified** (`normalize`, `jsCode` only). Nothing added, nothing removed, no connection change |
-| core | **10 nodes modified** — `route turn` (rule 3 only), `detect command`, `run command` (`jsonBody` only), `command reply`, `compose agent input`, `compose agent reply`, `drop duplicate reply`, `AI Agent` (one option), `send telegram` + `send whatsapp` (`options.batching` removed, `onError` added — nothing else) — and **11 added**: `ends silently?`, `compose tap input`, `expand replies`, `send loop`, `note refused send`, `any send refused?`, `bargain key change?` and the four Redis nodes (`clear bargain flag (tap)`, `clear price lock (tap)`, `clear price lock (reopen)`, `set bargain flag (tap)`), plus the rewiring in §§ 2.2, 3.2, 4.2, 8.3. **No node removed** |
+| core | **10 nodes modified** — `route turn` (rule 3 only), `detect command`, `run command` (`jsonBody` only), `command reply`, `compose agent input`, `compose agent reply`, `drop duplicate reply`, `AI Agent` (one option), `send telegram` + `send whatsapp` (`options.batching` removed, `onError` added — nothing else) — and **12 added**: `ends silently?`, `compose tap input`, `expand replies`, `send loop`, `note refused send`, `any send refused?`, `bargain key change?`, `alternatives handed back?` and the four Redis nodes (`clear bargain flag (tap)`, `clear price lock (tap)`, `clear price lock (reopen)`, `set bargain flag (tap)`), plus the rewiring in §§ 2.2, 3.2, 4.2, 8.3. **No node removed** |
 | bargain | **3 nodes modified** (`decide send`, `send telegram`, `send whatsapp`) |
 | mcp | `nodesModified: []` — see § 9.2 |
 
@@ -1072,7 +1124,7 @@ npm run seed:negotiation-playbook
 - Superseded versions are kept, so this is revertible from the history rather than by re-running
   an older file.
 
-### 12.6 · Rollback
+### 12.6 · Rollback (n8n)
 
 Each workflow independently, by `restore_workflow_version` then publish, then confirm
 `activeVersionId` moved back:
@@ -1090,3 +1142,179 @@ Nothing here writes to a database, and the only Redis keys touched are the two b
 **Two partial rollbacks are useful on their own**: turning `returnIntermediateSteps` off disables
 § 5 alone (nothing is collected, the turn composes as today), and disconnecting `bargain key
 change?` disables § 8.1–8.3 alone (it is a dead-end branch).
+
+---
+
+## 13 · Publishing the WhatsApp Flows
+
+**Not an n8n change, and strictly AFTER the deploy.** It is here because it is a deploy-day
+sequence that exists nowhere as a runbook: two lines in the plan and a "Next" block printed by
+`scripts/publish-whatsapp-flows.ts` (backend-88's file — coordinate any wording that touches the
+script with that stream; this runbook is this document's).
+
+⛔ **Why it cannot be part of the deploy: Meta calls our server before it will publish.** The
+`/publish` call runs a health check against the live endpoint, so the service must already be
+deployed, holding the key and the app secret, and reachable at the public address. Publishing
+first and deploying after is not a slower order — it is a refusal.
+
+⛔ **And it is the one step this platform cannot rehearse.** A published Flow is visible to
+customers and is superseded, never deleted.
+
+### 13.1 · Preconditions
+
+| | Proved by |
+|---|---|
+| The **owner's go-ahead** | — it is their call, not a technical gate |
+| `WHATSAPP_FLOW_PRIVATE_KEY` **and** `WHATSAPP_APP_SECRET`, set **together** | the rehearsal's readiness block, which **refuses `--publish` without either** — see the ⛔ below |
+| `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_BUSINESS_ACCOUNT_ID` | same block — ⚠ each missing one produces a Graph error that sounds like a *different* problem: a missing WABA id reads as "Flow not found", a missing token as a permissions failure on an object that is fine |
+| `POST /api/webhooks/whatsapp/flows` reachable from the internet | Meta's health check, at the moment of publishing — there is no earlier proof |
+| n8n routing `interactive.nfm_reply` (**§ 2 of this document**) | otherwise a customer fills in a form, presses the final button, and the thread says nothing |
+
+⛔ **The app secret is what authenticates a request as Meta's, and without it nothing is
+authenticated** — the endpoint decrypts and answers *any* request it can decrypt, unsigned. The
+unrate-limited CPU cost `.env.example` warns about is the secondary consequence; this is the
+first one, and it is why the step is a refusal rather than a warning.
+
+📌 **This precondition was written before the check existed, and writing it is what produced
+it.** The readiness block listed five values and checked four: with the key present and the
+secret absent it printed a clean report, published happily, and the Flow went live with request
+authentication silently switched off — Meta's health check passes either way, because a
+signature is never verified. backend-88 fixed the **code** rather than the sentence (verified in
+`scripts/publish-whatsapp-flows.ts`), and it now prints an `App secret` line and refuses:
+
+```
+  App secret                   (unset)
+  ⚠ WHATSAPP_APP_SECRET is unset — the endpoint would accept ANY request it can decrypt,
+    unsigned, and Meta's health check would still pass. Set it before publishing.
+```
+
+⚠ The endpoint's runtime tolerance is deliberately unchanged, and it is a real branch rather
+than an oversight: `verifyFlowSignature` refuses an empty secret outright, so the controller's
+`if (appSecret !== '')` is what decides the unconfigured case, and it decides to answer anyway.
+A deployment with no Flows is still valid and a development box has no business holding the
+secret. **Publishing is the moment that stops being true.**
+
+⭐ **The decision lived in two places and was written down in neither** — tolerant at runtime,
+strict at publish — and that is exactly how the gap survived. Both halves are now stated at the
+branch itself (making the runtime branch refuse would break every local run; making the
+publisher tolerant would put an unauthenticated endpoint in front of a screen that can place an
+order), so this section and that comment say the same thing from the two ends.
+
+⭐ **And the question that found it is worth more than the fix, because it generalises:** not
+*"is the readiness block right?"*, which reads as fine and returns a confirmation — but
+**"what does it print in the one state nobody tests?"** Ask the second form of anything on this
+list.
+
+⚠ **The sending number is no longer the blocker** — that changed on 2026-09-16 (name `APPROVED`,
+status `CONNECTED`, quality `GREEN` on +237 652 705 926). Check it rather than trusting either
+sentence: `GET /{phone_number_id}?fields=verified_name,name_status,status`.
+
+### 13.2 · Step 1 — rehearse, which sends nothing
+
+```bash
+npm run flows:publish            # dry run IS the default: no outward call at all
+```
+
+It validates all three definitions offline (routing model, no unrouted screen, no route to a
+missing screen or to itself, at least one terminal screen, an `__example__` on every data
+field), derives the public key, and prints exactly what would be sent where. **A definition with
+a fault stops here and nothing is sent.**
+
+⭐ **The readiness block is a gate, not a display.** If `--publish` is passed while any of the
+**five** values above is missing — the private key, the app secret, the access token, the phone
+number id or the Business Account id — the script refuses (*"`--publish` was passed but the
+readiness checks above did not pass"*) and sends nothing. So a half-configured deployment cannot
+get half-way through publishing a Flow.
+
+### 13.3 · Step 2 — upload the public key, which is a call on the PHONE NUMBER
+
+```bash
+npm run flows:publish -- --upload-key
+```
+
+⚠ **The step most often missed, because nothing about creating a Flow mentions it.** It is
+`POST /{phone_number_id}/whatsapp_business_encryption` — not on the Business Account, not on the
+Flow. Without it Meta has no key to encrypt with, every request fails the unwrap, and the
+endpoint correctly answers **421 forever**, because there is no key to re-fetch.
+
+⭐ **The public half is DERIVED from the private key, never configured separately.** So what Meta
+holds is provably the counterpart of what the endpoint decrypts with. A separately-configured
+pair that does not match decrypts nothing while both halves look perfectly well-formed, and the
+symptom is identical to having no key at all.
+
+### 13.4 · Step 3 — publish, one screen at a time, in this order
+
+```bash
+npm run flows:publish -- --publish pl     # then pd, then co
+```
+
+**`pl` first, and prove it end to end before the next.** The listing carries no money and no
+address, so it is the cheapest place to discover a signature or handshake fault. Discovering one
+on checkout is a worse day.
+
+Each publish is three Graph calls, and the middle one has a trap:
+
+1. `POST /{waba_id}/flows` → `{ name, categories: ['OTHER'] }`, which returns the id.
+2. `POST /{flow_id}/assets` — ⚠ **the definition goes as a FILE** (`asset_type: FLOW_JSON`,
+   field `file`), not as a JSON body. Posting it as the body is the obvious wrong version and
+   Meta rejects it with a message about assets. Validation errors here stop that screen and
+   nothing is published.
+3. `POST /{flow_id}/publish` — **this is where Meta's health check runs.** A failure means, in
+   this order of likelihood: the endpoint is unreachable, the key is wrong, or the ping answer
+   is not exactly what Meta requires.
+
+⚠ **The ping answer is exactly `{ data: { status: "active" } }` and not one field more.** Meta
+calls it the "Required response body (exact)", and a `version`, a `screen` or anything else
+fails the check without saying which field was wrong.
+
+📌 **The source of truth for that shape is `flow-protocol.ts`**, which records adding a
+`version` as a mistake it already made and removed. The publisher script's comment used to show
+that wrong shape — a false example inside a correct guard, which would have led somebody
+debugging a failed publish to "fix" the right answer into the broken one. ✅ Corrected by
+backend-88, with what was wrong named in the text so the correction cannot be mistaken for a
+rewording. Keep reading the shape from the protocol module even so: one module owns it.
+
+### 13.5 · Step 4 — the id goes back into the deployment, and the service restarts
+
+Each publish prints the variable to set. The screen answers only after a restart:
+
+| Screen | Variable |
+|---|---|
+| `pl` · product listing | `WHATSAPP_FLOW_ID_PRODUCT_LISTING` |
+| `pd` · product detail | `WHATSAPP_FLOW_ID_PRODUCT_DETAIL` |
+| `co` · checkout | `WHATSAPP_FLOW_ID_CHECKOUT` |
+
+**There are exactly three, and for every other screen the script prints the literal
+`(no variable — this screen has no Flow)`** — the honest state rather than an omission. The
+variable to set is printed after each publish, so it is read from the run rather than from this
+table.
+
+### 13.6 · ⛔ What must NOT be published, and why it is absent rather than commented out
+
+The **support form** (`tf`) and the **three booking screens** (`bl`, `bk`, `bp`) are finished
+definitions held to every structural rule — and they are deliberately **absent from the
+publisher's list**, which the suite asserts.
+
+**A Flow published before its read exists opens a screen that cannot be sent.** The support
+form waits on the ticket read and submit core; the booking screens waited on `readBookingDays`,
+`readBookingSlots` and `confirmBooking` — **that core landed on 2026-09-20 and they now need
+only their screen copy**, which is precisely when this list is most likely to be got wrong.
+
+⛔ **Move a form out of this list only when backend-88 says so explicitly. Never infer it from a
+file appearing, from a read landing, or from a definition validating.** All three are true of a
+form that still cannot be sent, and the assertion in `test:whatsapp-flows` that keeps these out
+of the publisher exists so the rule cannot rot into a habit.
+
+### 13.7 · After each publish — and the rollback
+
+1. The Graph call returned a Flow id, and the readiness block shows the screen as
+   `published as <id>` on the next rehearsal run.
+2. A real WhatsApp customer opens that screen from a chat door and it renders.
+3. They complete it, and **§ 2's routing carries the completion back** — a listing choice opens
+   the detail screen; a closing screen says nothing, deliberately.
+4. The execution that sent it recorded what it sent, not merely `success` (ADR-022).
+
+**Rollback is superseding, never deleting.** A published Flow is visible to customers; the
+recovery is to publish a corrected version of the same Flow. An id already handed out in a chat
+must keep resolving — which is also why publishing `pl` alone, and living with it for a while,
+costs nothing and proves the whole chain.

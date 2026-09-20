@@ -6,6 +6,9 @@ import { requestIdMiddleware } from './api/middlewares/request-id.middleware';
 import { requestContextMiddleware } from './api/middlewares/request-context.middleware';
 import { healthRoutes } from './api/routes/health.routes';
 import { maintenanceModeMiddleware } from './api/middlewares/maintenance-mode.middleware';
+import { attachBotReply } from './modules/bot-surface/middlewares/bot-reply.middleware';
+import { attachBotEnvelope } from './modules/bot-surface/middlewares/bot-envelope-precheck.middleware';
+import { BOT_SURFACE_PREFIX } from './modules/bot-surface/domain/bot-route-table';
 import { httpMetricsMiddleware } from './modules/system/metrics/http-metrics.middleware';
 import { metricsRoutes } from './modules/system/metrics/metrics.routes';
 import { errorHandlerMiddleware } from './api/middlewares/error-handler.middleware';
@@ -216,6 +219,23 @@ app.use('/metrics', metricsRoutes);
 //    which by definition has no authenticated caller to key on. Layer B, mounted at the
 //    tail of `requireAuth`, is where the per-role ceilings live.
 app.use(globalRateLimiter);
+
+// ─── The bot surface, addressed BEFORE the gate ──────────────────────────────
+//
+// ⛔ These two exist because the gate above refuses with `next(error)`, which skips forward
+// to the error handler WITHOUT entering `/api` — so `bot.routes.ts` never ran, `attachBotReply`
+// was never installed, `requireBotIdentity` never stamped `req.bot`, and a shopper who wrote
+// to the shop during a maintenance window got SILENCE. See `maintenance-mode.ts`, where the
+// comment that claimed otherwise is corrected.
+//
+// ⚠ Mounted on the BOT PREFIX ONLY, never app-wide: every other route's body must stay
+// byte-identical, and that is asserted rather than assumed.
+// ⚠ `attachBotEnvelope` cannot throw — any failure leaves `req.bot` undefined, which is
+// precisely today's behaviour, so the degrade is to the old path and not to a new one.
+// ⚠ This is `attachBotReply`'s THIRD mount and it is safe for the reason the other two are:
+// it never overwrites a body that already carries `reply`.
+app.use(BOT_SURFACE_PREFIX, attachBotReply);
+app.use(BOT_SURFACE_PREFIX, attachBotEnvelope);
 
 // ─── Maintenance gate ────────────────────────────────────────────────────────
 //

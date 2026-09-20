@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>wi-mall</title>
+<!--
+  Your appointments.  Screen kind `bl`.
+
+  ⚠ **THE FILENAME IS THE ROUTE** — `inapp-page.controller.ts` sends `public/<kind>.html`.
+
+  Endpoint:  `GET /api/bot/miniapp/s/bl/:handle/data`   (repeatable; spends nothing)
+
+  ── ⚠ EVERY WORD AND EVERY TIME COMES FROM THE SERVER ───────────────────────
+  This page formats nothing.  `title` and `description` per row, and the screen's own labels in
+  `copy`, all arrive built — in the customer's language and in the SHOP's timezone, because the
+  appointment happens there and availability was authored in it.  The same read draws the
+  WhatsApp form, so a time formatted here would be a second opinion on the channel nobody can
+  open in a browser.
+
+  ── ⚠ THE ROW TITLE CARRIES THE TIME, AND THAT IS NOT COSMETIC ──────────────
+  Two appointments for one service differ by nothing else.  `fitBookingRowTitle` shortens the
+  SERVICE and keeps the time whole, and its tests are French and Arabic — in English a
+  right-truncated row still reads distinctly, which is exactly how three live lists shipped
+  showing a French customer two identical rows.
+
+  ── WHAT THIS SCREEN DOES NOT DO ────────────────────────────────────────────
+  It cancels nothing.  Cancelling an appointment is a decision with money attached and it stays
+  in the chat, where the refund rules can be explained and confirmed.  This page lists, and
+  hands a row back to the conversation.
+-->
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/api/bot/miniapp/shell.css">
+<style>
+  /* Screen-specific only. Anything another screen would also want belongs in shell.css. */
+  .rows { display: flex; flex-direction: column; gap: 8px; }
+  .row { padding: 12px; border-radius: 12px; background: var(--card); }
+  .row__title { font-weight: 600; }
+  .row__sub { font-size: 13px; color: var(--muted); margin-block-start: 2px; }
+</style>
+</head>
+<body>
+  <header class="screen__head">
+    <h1 class="screen__title" id="title"></h1>
+  </header>
+
+  <main class="screen__body">
+    <div class="state" id="state"><p class="state__text" id="stateText"></p></div>
+    <div class="rows" id="rows" hidden></div>
+  </main>
+
+<script>
+(function () {
+  "use strict";
+
+  var tg = window.Telegram && window.Telegram.WebApp;
+  if (tg) { tg.ready(); tg.expand(); }
+
+  var parts = window.location.pathname.split("/").filter(Boolean);
+  var handle = parts[parts.length - 1];
+  var base = "/api/bot/miniapp/s/bl/" + encodeURIComponent(handle);
+  var lang = new URLSearchParams(window.location.search).get("lang") || "en";
+
+  var el = {
+    title: document.getElementById("title"),
+    state: document.getElementById("state"),
+    stateText: document.getElementById("stateText"),
+    rows: document.getElementById("rows")
+  };
+
+  var copy = null;
+
+  function esc(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
+  function json(url, options) {
+    return fetch(url, options || {}).then(function (response) {
+      return response.json().catch(function () { return null; }).then(function (body) {
+        return { ok: response.ok, status: response.status, body: body };
+      });
+    });
+  }
+
+  function state(text, isError) {
+    el.stateText.textContent = text;
+    el.state.hidden = false;
+    el.state.className = isError ? "state state--error" : "state";
+    el.rows.hidden = true;
+  }
+
+  /**
+   * ⚠ **A lapsed handle is explained, never retried.** 410 and 404 mean the screen's session is
+   * gone, and a retry button on a dead handle asks the customer to press something that cannot
+   * work. The chat can open a fresh one; this page says so.
+   */
+  function explain(res) {
+    if (res.status === 410 || res.status === 404) return copy.expired;
+    return copy.failed;
+  }
+
+  function draw(bookings) {
+    if (bookings.length === 0) {
+      state(copy.listEmpty || FALLBACK.listEmpty, false);
+      return;
+    }
+
+    el.rows.innerHTML = bookings.map(function (booking) {
+      return '<div class="row">'
+        + '<div class="row__title">' + esc(booking.title) + "</div>"
+        + (booking.description ? '<div class="row__sub">' + esc(booking.description) + "</div>" : "")
+        + "</div>";
+    }).join("");
+
+    el.state.hidden = true;
+    el.rows.hidden = false;
+  }
+
+  function load() {
+    state(copy.loading, false);
+    json(base + "/data", { headers: { Accept: "application/json" } }).then(function (res) {
+      if (!res.ok || !res.body || res.body.success === false || !res.body.data) {
+        state(explain(res), true);
+        return;
+      }
+      /* The screen's own words travel WITH the data — see `bot-booking-copy.ts`. */
+      var data = res.body.data;
+      if (data.copy) { copy = Object.assign({}, copy, data.copy); }
+      el.title.textContent = copy.listTitle || FALLBACK.listTitle;
+      draw(data.bookings || []);
+    }).catch(function () {
+      state(copy.failed, true);
+    });
+  }
+
+  /**
+   * ⚠ **English only as a last resort, and only for the four words that must exist before any
+   * request has succeeded.** A page whose handle has lapsed still has to say so, and it cannot
+   * learn the language from the call that just failed.
+   */
+  var FALLBACK = {
+    loading: "Loading…",
+    failed: "Something went wrong. Close this and ask me again in the chat.",
+    expired: "This page is no longer available. Ask me again in the chat.",
+    listTitle: "Your appointments",
+    listEmpty: "You have no appointments yet."
+  };
+
+  json("/api/bot/miniapp/copy?lang=" + encodeURIComponent(lang), { headers: { Accept: "application/json" } })
+    .then(function (res) { copy = (res.body && res.body.data && res.body.data.copy) || FALLBACK; })
+    .catch(function () { copy = FALLBACK; })
+    .then(function () {
+      document.documentElement.lang = lang;
+      document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
+      load();
+    });
+})();
+</script>
+</body>
+</html>

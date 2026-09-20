@@ -5,6 +5,10 @@ import { CustomerNotificationService } from '../../notifications/services/custom
 import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
 import { botStorefrontLink, windowForChat } from '../domain/bot-list-window';
 import { toBotNotificationDto } from '../dto/bot-projections';
+import { setBotReply } from '../middlewares/bot-reply.middleware';
+import { botChrome } from '../domain/bot-chrome-copy';
+import { accountActionId } from '../domain/bot-action-id';
+import { unknownBotAction } from '../domain/bot-action-dispatch';
 import {
     BotNoArgsSchema,
     BotNotificationListSchema,
@@ -170,4 +174,218 @@ export class BotNotificationController {
 
         sendSuccess(res, prefs, { message: 'Notification preferences updated' });
     });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `acct:inbox` and `acct:ntf` — the inbox, and the settings as a chat list
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** How many the inbox row shows. The owner's number, and inside every channel's row cap. */
+const INBOX_ROWS = 5;
+
+/**
+ * `acct:inbox` — the five most recent · `acct:inbox:read` — mark them all read.
+ *
+ * ⚠ **This reply RENDERS the notifications rather than handing them to the model, and that is
+ * a consequence of it carrying a button.** A reply stands alone — the automation layer
+ * suppresses the model's own sentence when one is set — so a reply that said only "here are
+ * your notifications" and offered Mark all read would show the customer a button and none of
+ * the notifications it refers to. Either the model narrates and there is no button, or this
+ * renders and there is. The button is worth more than the prose.
+ *
+ * ⚠ **The unread marker is a bullet, not a word.** "unread" in five languages is two more copy
+ * keys for something a dot says better and shorter, inside a row title capped at 24.
+ */
+export async function inboxSection(req: Request, res: Response, rest: string): Promise<void> {
+    const caller = botCallerOf(req);
+    const language = botResponseLanguageOf(req);
+
+    if (rest === 'read') {
+        const updated = await service.markAllAsRead(caller.customerId);
+        setBotReply(req, { kind: 'text', text: botChrome('allMarkedRead', language) });
+        sendSuccess(res, { updated });
+        return;
+    }
+    if (rest !== '') throw unknownBotAction();
+
+    const result = await service.listNotifications(
+        caller.customerId,
+        { page: 1, limit: INBOX_ROWS },
+        {},
+    );
+
+    const rows = result.notifications.map((n) =>
+        toBotNotificationDto(n, (path) => botStorefrontLink(path, language)));
+
+    /**
+     * Nothing at all: no reply, so the model says "nothing new" in the customer's own words.
+     * The same rule as an empty address book — there is no control to draw over an empty list.
+     */
+    if (rows.length === 0) {
+        sendSuccess(res, rows, { meta: { unreadCount: result.unreadCount } });
+        return;
+    }
+
+    const lines = rows.map((n) => `${n.isRead ? '◦' : '•'} ${n.title}`);
+
+    setBotReply(req, {
+        kind: 'text',
+        text: `${botChrome('inboxPrompt', language)}\n\n${lines.join('\n')}`,
+        ...(result.unreadCount > 0
+            ? {
+                  actions: [{
+                      id: accountActionId('inbox', 'read'),
+                      label: botChrome('markAllReadButton', language),
+                  }],
+              }
+            : {}),
+    });
+    sendSuccess(res, rows, { meta: { unreadCount: result.unreadCount } });
+}
+
+/**
+ * The four switches, in the order they are drawn. The keys are the real preference names,
+ * read from `BotNotificationPreferencesSchema` rather than invented.
+ */
+const NOTIFY_SWITCHES = Object.freeze([
+    { key: 'orderUpdates', copy: 'notifyRowOrderUpdates' },
+    { key: 'bookingUpdates', copy: 'notifyRowBookingUpdates' },
+    { key: 'bookingReminders', copy: 'notifyRowBookingReminders' },
+    { key: 'marketing', copy: 'notifyRowMarketing' },
+] as const);
+
+const NOTIFY_CHANNELS = Object.freeze(['email', 'telegram', 'whatsapp', 'none'] as const);
+type NotifyChannel = (typeof NOTIFY_CHANNELS)[number];
+
+/** Which secondary channel is on, as one value. At most one ever is. */
+function currentChannel(prefs: {
+    emailEnabled: boolean; telegramEnabled: boolean; whatsappEnabled: boolean;
+}): NotifyChannel {
+    if (prefs.emailEnabled) return 'email';
+    if (prefs.telegramEnabled) return 'telegram';
+    if (prefs.whatsappEnabled) return 'whatsapp';
+    return 'none';
+}
+
+/**
+ * The settings, as one list: where to send, then the four switches.
+ *
+ * ⚠ **Each switch row carries the OPPOSITE of its current state, never a toggle.** A toggle
+ * token flips whatever the state happens to be when the button is finally pressed, and a chat
+ * keeps its buttons for ever — so a row tapped twice, or tapped after the setting was changed
+ * on the website, lands somewhere nobody chose. A target state is idempotent: pressing an old
+ * "turn off" again turns it off again. It is the stale-Skip defect in another costume.
+ *
+ * ⚠ **State shows as ✓ / ✗ rather than a word**, which is why the five row copy keys are
+ * capped at 22 and not 24: the marker has to fit inside a WhatsApp row title, and a truncated
+ * marker would make every switch read as ON.
+ */
+function setNotifySettingsReply(
+    req: Request,
+    language: string | null,
+    prefs: {
+        emailEnabled: boolean; telegramEnabled: boolean; whatsappEnabled: boolean;
+        preferences: Record<string, boolean>;
+    },
+    justChanged: boolean,
+): void {
+    const rows = [
+        {
+            id: accountActionId('ntf', 'ch'),
+            label: botChrome('notifyRowChannel', language),
+        },
+        ...NOTIFY_SWITCHES.map((sw) => {
+            const on = prefs.preferences?.[sw.key] === true;
+            return {
+                id: accountActionId('ntf', sw.key, on ? 'off' : 'on'),
+                label: `${botChrome(sw.copy, language)} ${on ? '✓' : '✗'}`,
+            };
+        }),
+    ];
+
+    setBotReply(req, {
+        kind: 'choice',
+        text: botChrome(justChanged ? 'notifyUpdated' : 'notifySettingsPrompt', language),
+        options: rows,
+        listButton: botChrome('chooseListButton', language),
+        sectionTitle: botChrome('chooseSectionTitle', language),
+    });
+}
+
+/** The channel chooser — four options, the current one marked. */
+function setChannelChoiceReply(req: Request, language: string | null, current: NotifyChannel): void {
+    const label = (channel: NotifyChannel): string => {
+        if (channel === 'email') return botChrome('notifyChannelEmail', language);
+        if (channel === 'none') return botChrome('notifyChannelNone', language);
+        // Brand names, identical in all five languages — the rule the language endonyms follow.
+        return channel === 'telegram' ? 'Telegram' : 'WhatsApp';
+    };
+
+    setBotReply(req, {
+        kind: 'choice',
+        text: botChrome('notifyChannelPrompt', language),
+        options: NOTIFY_CHANNELS.map((channel) => ({
+            id: accountActionId('ntf', 'ch', channel),
+            label: channel === current ? `${label(channel)} ✓` : label(channel),
+            shortLabel: label(channel),
+        })),
+        listButton: botChrome('chooseListButton', language),
+        sectionTitle: botChrome('chooseSectionTitle', language),
+    });
+}
+
+/**
+ * `acct:ntf` · `acct:ntf:ch` · `acct:ntf:ch:<channel>` · `acct:ntf:<key>:<on|off>`.
+ *
+ * ⚠ **An unverified channel is REFUSED by the service** (`CUSTOMER_NOTIFICATION_CHANNEL_NOT_VERIFIED`)
+ * and that refusal is left to surface rather than pre-empted here. Its customer copy names the
+ * remedy — connect that channel — which is more use than a row this surface quietly declined
+ * to draw.
+ */
+export async function notifySection(req: Request, res: Response, rest: string): Promise<void> {
+    const caller = botCallerOf(req);
+    const language = botResponseLanguageOf(req);
+
+    if (rest === '') {
+        const prefs = await service.getPreferences(caller.customerId);
+        setNotifySettingsReply(req, language, prefs, false);
+        sendSuccess(res, prefs);
+        return;
+    }
+
+    if (rest === 'ch') {
+        const prefs = await service.getPreferences(caller.customerId);
+        setChannelChoiceReply(req, language, currentChannel(prefs));
+        sendSuccess(res, { channel: currentChannel(prefs) });
+        return;
+    }
+
+    if (rest.startsWith('ch:')) {
+        const channel = rest.slice(3);
+        if (!(NOTIFY_CHANNELS as readonly string[]).includes(channel)) throw unknownBotAction();
+
+        const prefs = await service.updatePreferences(caller.customerId, {
+            emailEnabled: channel === 'email',
+            telegramEnabled: channel === 'telegram',
+            whatsappEnabled: channel === 'whatsapp',
+        });
+
+        setNotifySettingsReply(req, language, prefs, true);
+        sendSuccess(res, prefs);
+        return;
+    }
+
+    const colon = rest.indexOf(':');
+    const key = colon < 0 ? '' : rest.slice(0, colon);
+    const target = colon < 0 ? '' : rest.slice(colon + 1);
+
+    if (!NOTIFY_SWITCHES.some((s) => s.key === key)) throw unknownBotAction();
+    if (target !== 'on' && target !== 'off') throw unknownBotAction();
+
+    const prefs = await service.updatePreferences(caller.customerId, {
+        preferences: { [key]: target === 'on' },
+    });
+
+    setNotifySettingsReply(req, language, prefs, true);
+    sendSuccess(res, prefs);
 }

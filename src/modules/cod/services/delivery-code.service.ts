@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { WhatsAppServiceMessenger } from '../../whatsapp/services/whatsapp-service-messenger';
 import { getWhatsAppMessagingService } from '../../whatsapp/services/whatsapp-messaging.service';
 import { TemplateComponent } from '../../whatsapp/types/whatsapp-message.types';
-import { Language, META_LANGUAGE_CODE } from '../../notifications/catalog/notification-i18n';
+import { Language, templateLanguage } from '../../notifications/catalog/notification-i18n';
 
 /**
  * DeliveryCodeService - generation, hashing and customer delivery of the COD
@@ -98,7 +98,23 @@ export class DeliveryCodeService {
       message: {
         type: 'template',
         name: 'cod_delivery_code',
-        language: META_LANGUAGE_CODE[language],
+        /**
+         * ⛔ **`templateLanguage(language)`, NOT `META_LANGUAGE_CODE[language]`.** Templates
+         * are approved in English and French only, so naming the customer's own language
+         * asked Meta for a template that does not exist for `pt`, `es` or `ar` and the send
+         * was refused.
+         *
+         * ⚠ **This is the path taken precisely BECAUSE the free-form text already failed** —
+         * the code above only reaches here on `WHATSAPP_POLICY_VIOLATION`, meaning the
+         * customer is outside the 24-hour window. So there was no third chance: for those
+         * three languages the delivery code simply never arrived, and an agent turned up
+         * with a parcel the customer could not confirm.
+         *
+         * One of six sites that carried this identical line (four notification stacks, this,
+         * and phone verification — where the same defect made it impossible to verify a
+         * number at all). Fallback is explicit and named; see `templateLanguage`.
+         */
+        language: templateLanguage(language),
         components,
       },
       meta: {

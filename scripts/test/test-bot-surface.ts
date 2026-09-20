@@ -448,6 +448,157 @@ function codDisclosureProblems(
     return problems;
 }
 
+/** Repo-root-relative read, for the contract documents that live outside `src/`. */
+function readRepo(relative: string): string {
+    return fs.readFileSync(path.join(SRC, '..', relative), 'utf8');
+}
+
+/**
+ * Every `.ts` under `src/` except one, comment-stripped — the haystack for "is this builder
+ * ever CALLED".
+ *
+ * ⚠ Stripped for the dangerous direction, not for tidiness. A commented-out call would read
+ * as a drawn button and demand a handler that nothing needs; worse, a handler map quoted
+ * inside a docstring would read as ROUTED and hide a real gap. Comments must not be able to
+ * satisfy a coverage claim.
+ */
+function sourcesExcept(excludeSuffix: string): string[] {
+    const out: string[] = [];
+    const walk = (dir: string): void => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) walk(full);
+            else if (entry.name.endsWith('.ts') && !full.replace(/\\/g, '/').endsWith(excludeSuffix)) {
+                out.push(stripComments(fs.readFileSync(full, 'utf8').replace(/\r\n/g, '\n')));
+            }
+        }
+    };
+    walk(SRC);
+    return out;
+}
+
+/**
+ * ⭐ EVERY DRAWN BUTTON REACHES A HANDLER, AND EVERY ROUTED KEY IS DOCUMENTED.
+ *
+ * Written by the switchboard session and proven on six mutants before it arrived here; the
+ * adaptation to this suite's readers, the comment stripping and the haystack size check are
+ * this file's. Pure in its two inputs, like `codDisclosureProblems` above, so its bite is
+ * provable against mutated copies rather than asserted.
+ *
+ * ── WHY IT EXISTS ───────────────────────────────────────────────────────────────────────
+ * `mergeActionHandlers` already refuses a key claimed TWICE. Nothing checked the opposite and
+ * far more common case: a key claimed by NOBODY. The close-account buttons shipped drawn and
+ * unrouted, so every tap answered "I did not understand that" — invisible to every test,
+ * because each half was correct on its own. Telegram reports no error for an unhandled
+ * callback, so nothing anywhere would have said so.
+ *
+ * ── THE THREE SETS, ALL DERIVED ─────────────────────────────────────────────────────────
+ *   DRAWN       every builder in `bot-action-id.ts` that some other file actually calls
+ *   ROUTED      every key in a handler map THE DISPATCHER ITSELF NAMES
+ *   DOCUMENTED  every backticked token in a § 14.9 table row
+ *
+ * ⚠ ROUTED is read out of the dispatcher's own merge call rather than from a list kept here,
+ * so a stream added next month is covered without anybody remembering to widen this. A
+ * hardcoded list is how a check quietly stops covering half the surface.
+ *
+ * ── TWO PARSER TRAPS, both of which make this UNDER-report if got wrong ─────────────────
+ *   1. A doc row carries SEVERAL tokens in one cell. One token per row reports the rest as
+ *      undocumented.
+ *   2. An escaped `\|` inside a token truncates the cell if you cut at the first `|`. Split
+ *      on UNESCAPED pipes only.
+ *
+ * ── NON-VACUITY COMES FIRST ─────────────────────────────────────────────────────────────
+ * Every scan throws when it finds nothing. An empty ROUTED set satisfies "every routed key is
+ * documented" for free, which is the shape that passes hardest once it has stopped working.
+ */
+function botActionCoverage(
+    readSource: (repoRelative: string) => string,
+    otherSources: ReadonlyArray<string>,
+): {
+        problems: string[];
+        routed: Map<string, string>;
+        documented: Set<string>;
+        drawn: Map<string, string>;
+    } {
+    const CONTROLLERS = 'src/modules/bot-surface/controllers';
+    /**
+     * `skip:` is the one drawn verb that is NOT a dispatcher key: it belongs to
+     * `/identity/onboarding` (§ 14.6). Named, so the exception stays one line rather than a
+     * widened rule.
+     */
+    const NOT_DISPATCHED = new Set(['skip']);
+    const code = (rel: string): string => stripComments(readSource(rel).replace(/\r\n/g, '\n'));
+    const problems: string[] = [];
+
+    // ── ROUTED ──────────────────────────────────────────────────────────────────────────
+    const dispatcher = code(`${CONTROLLERS}/bot-action.controller.ts`);
+    const wired = [...dispatcher.matchAll(/\[\s*'([a-z]+)'\s*,\s*([A-Z_]+)\s*\]/g)].map((m) => [m[1], m[2]]);
+    if (wired.length === 0) throw new Error('coverage scan: no handler maps parsed out of the dispatcher');
+
+    const routed = new Map<string, string>();
+    for (const [stream, mapName] of wired) {
+        const imported = dispatcher.match(
+            new RegExp(`import\\s*\\{[^}]*\\b${mapName}\\b[^}]*\\}\\s*from\\s*'\\./([^']+)'`),
+        );
+        if (!imported) throw new Error(`coverage scan: ${mapName} is merged but not imported`);
+        const src = code(`${CONTROLLERS}/${imported[1]}.ts`);
+        const at = src.indexOf(`export const ${mapName}`);
+        if (at < 0) throw new Error(`coverage scan: ${mapName} not found in its own file`);
+        const body = src.slice(at, src.indexOf('});', at));
+        const keys = [...body.matchAll(/^\s*'?([a-z]+(?::[a-z]+)?)'?\s*:/gm)].map((m) => m[1]);
+        if (keys.length === 0) throw new Error(`coverage scan: no keys parsed out of ${mapName}`);
+        keys.forEach((k) => routed.set(k, stream));
+    }
+
+    // ── DOCUMENTED — prose, so comments are NOT stripped here ───────────────────────────
+    const doc = readSource('api-doc/n8n/bot-surface.md').replace(/\r\n/g, '\n');
+    const section149 = doc.slice(doc.indexOf('### 14.9'), doc.indexOf('## 15 ·'));
+    if (!section149.includes('#### Account')) throw new Error('coverage scan: § 14.9 did not parse');
+    const keyOf = (token: string): string => {
+        const parts = token.replace(/\\\|/g, '|').split(':');
+        return ['open', 'yes', 'no'].includes(parts[0]) ? `${parts[0]}:${parts[1]}` : parts[0];
+    };
+    const documented = new Set<string>();
+    for (const line of section149.split('\n')) {
+        if (!line.startsWith('| `')) continue;
+        const firstCell = line.split(/(?<!\\)\|/)[1] ?? '';                          // trap 2
+        for (const m of firstCell.matchAll(/`([^`]+)`/g)) documented.add(keyOf(m[1])); // trap 1
+    }
+    if (documented.size === 0) throw new Error('coverage scan: no tokens parsed out of the § 14.9 tables');
+
+    // ── DRAWN ───────────────────────────────────────────────────────────────────────────
+    const idFile = code('src/modules/bot-surface/domain/bot-action-id.ts');
+    const builders = [...idFile.matchAll(/export function (\w+)\([\s\S]*?return token\('([a-z]+)'/g)]
+        .map((m) => [m[1], m[2]]);
+    if (builders.length < 10) throw new Error('coverage scan: builder scan found too few builders');
+
+    const everythingElse = otherSources.join('\n');
+    if (everythingElse.length < 200_000) {
+        throw new Error('coverage scan: the call-site haystack is too small to be the whole tree');
+    }
+    const drawn = new Map<string, string>();
+    for (const [fn, verb] of builders) {
+        if (new RegExp(`\\b${fn}\\(`).test(everythingElse)) drawn.set(verb, fn);
+    }
+    if (drawn.size === 0) throw new Error('coverage scan: no builder call sites found anywhere');
+
+    // ── The two failures ────────────────────────────────────────────────────────────────
+    const isRouted = (verb: string): boolean =>
+        routed.has(verb) || [...routed.keys()].some((k) => k.startsWith(`${verb}:`));
+
+    for (const [verb, fn] of drawn) {
+        if (!isRouted(verb) && !NOT_DISPATCHED.has(verb)) {
+            problems.push(`DRAWN BUT NOT ROUTED: ${fn}() emits "${verb}:" and no handler map claims it`);
+        }
+    }
+    for (const [key, stream] of routed) {
+        if (!documented.has(key)) {
+            problems.push(`ROUTED BUT UNDOCUMENTED: "${key}" (${stream}) has no § 14.9 row`);
+        }
+    }
+    return { problems, routed, documented, drawn };
+}
+
 async function main(): Promise<void> {
     console.log('\n═══ test:bot-surface ═══════════════════════════════════════════════════════\n');
 
@@ -2979,9 +3130,9 @@ async function main(): Promise<void> {
      * above is a one-way guard — they all pass on an EMPTY emission, which is exactly the
      * failure mode of a filter that has become too broad. Only a count catches that.
      */
-    assert('the generator emits 56 tools — update this when one lands', () => {
-        if (emitted.length !== 56) console.error(`     ↳ emitted ${emitted.length}`);
-        return emitted.length === 56;
+    assert('the generator emits 58 tools — update this when one lands', () => {
+        if (emitted.length !== 58) console.error(`     ↳ emitted ${emitted.length}`);
+        return emitted.length === 58;
     });
 
     /**
@@ -4234,6 +4385,28 @@ async function main(): Promise<void> {
             && tool.status === 'available'
             && tool.tier !== 'flow_only'
             && isModelFacing(tool);
+    });
+
+    // ═════════════════════════════════════════════════════════════════════════
+    section('20 · Every drawn button reaches a handler, and every routed key is documented');
+    // ═════════════════════════════════════════════════════════════════════════
+
+    const ID_FILE = 'bot-surface/domain/bot-action-id.ts';
+
+    /**
+     * Non-vacuity, stated as its own assertion rather than hidden inside the next one.
+     * All three sets are derived from the tree, so all three can silently become empty —
+     * and an empty set makes "every X is Y" true for nothing.
+     */
+    assert('the tap-code scan found the dispatcher, the § 14.9 tables and the builders', () => {
+        const { routed, documented, drawn } = botActionCoverage(readRepo, sourcesExcept(ID_FILE));
+        return routed.size > 20 && documented.size > 20 && drawn.size > 10;
+    });
+
+    assert('⛔ every DRAWN button reaches a handler, and every ROUTED key has a § 14.9 row', () => {
+        const { problems } = botActionCoverage(readRepo, sourcesExcept(ID_FILE));
+        problems.forEach((p) => console.error(`      ${p}`));
+        return problems.length === 0;
     });
 
     // ═════════════════════════════════════════════════════════════════════════

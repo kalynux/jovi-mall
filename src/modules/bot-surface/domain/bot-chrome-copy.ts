@@ -982,6 +982,112 @@ const WELCOME_PROMPT: Copy = {
     ar: 'كل شيء جاهز. ماذا تريد أن تفعل؟',
 };
 
+/**
+ * The button under a booking receipt, and the only chat copy the bookings screens need here —
+ * their receipt sentences live in that stream's own copy file, so one definition serves the
+ * chat, the screen and the WhatsApp form without passing through this registry.
+ *
+ * Emits `open:bl`.
+ */
+const MY_BOOKINGS_BUTTON: Copy = {
+    en: 'My bookings',
+    fr: 'Mes réservations',
+    pt: 'As minhas reservas',
+    es: 'Mis reservas',
+    ar: 'حجوزاتي',
+};
+
+// ── Reviews ──────────────────────────────────────────────────────────────────
+/**
+ * ⚠ **The star options themselves need NO copy**, and that is the point of asking with stars:
+ * ★★★★★ … ★ is language-neutral, five characters, and inside WhatsApp's 24-character row title.
+ * Only the three sentences around them are words.
+ */
+const RATE_PROMPT: Copy = {
+    en: 'How was it?',
+    fr: "Alors, ça s'est bien passé ?",
+    pt: 'Então, correu bem?',
+    es: '¿Qué tal fue?',
+    ar: 'كيف كانت تجربتك؟',
+};
+
+/** Asked only when the order held SEVERAL products — one product is one tap, never a question. */
+const RATE_WHICH_PRODUCT_PROMPT: Copy = {
+    en: 'Which one are you rating?',
+    fr: 'Lequel notez-vous ?',
+    pt: 'Qual está a avaliar?',
+    es: '¿Cuál estás valorando?',
+    ar: 'أيّ منتج تقيّمه؟',
+};
+
+const RATE_THANKS_PROMPT: Copy = {
+    en: 'Thank you — your review is in.',
+    fr: 'Merci — votre avis est enregistré.',
+    pt: 'Obrigado — a sua opinião foi registada.',
+    es: 'Gracias — tu opinión quedó registrada.',
+    ar: 'شكرًا لك — تم تسجيل تقييمك.',
+};
+
+// ── Digital downloads ────────────────────────────────────────────────────────
+
+const DOWNLOAD_BUTTON: Copy = {
+    en: 'Download',
+    fr: 'Télécharger',
+    pt: 'Transferir',
+    es: 'Descargar',
+    ar: 'تنزيل',
+};
+
+const DOWNLOADS_PROMPT: Copy = {
+    en: 'Which one would you like to download?',
+    fr: 'Lequel voulez-vous télécharger ?',
+    pt: 'Qual deseja transferir?',
+    es: '¿Cuál quieres descargar?',
+    ar: 'أيّها تريد تنزيله؟',
+};
+
+const NO_DOWNLOADS_PROMPT: Copy = {
+    en: 'You have nothing to download yet.',
+    fr: "Vous n'avez encore rien à télécharger.",
+    pt: 'Ainda não tem nada para transferir.',
+    es: 'Todavía no tienes nada que descargar.',
+    ar: 'لا يوجد لديك ما تنزّله بعد.',
+};
+
+/**
+ * ⭐ **The expiry is stated IN WORDS, and the number is baked into the sentence rather than
+ * interpolated** — this table has no placeholders, by the decision `bargainInvitePrompt`
+ * records. The discovery stream's suite pins the service's fifteen-minute TTL against these
+ * five sentences, so changing the service turns a test red instead of turning the copy
+ * quietly false.
+ *
+ * ⚠ It says *tap it now* because the link is single-use and short-lived, and because a
+ * customer who saves it for later finds it dead.
+ */
+const DOWNLOAD_READY_PROMPT: Copy = {
+    en: 'Here it is. The link opens once and expires in 15 minutes — tap it now.',
+    fr: "Le voici. Le lien s'ouvre une seule fois et expire dans 15 minutes — appuyez maintenant.",
+    pt: 'Aqui está. O link abre uma única vez e expira em 15 minutos — toque agora.',
+    es: 'Aquí está. El enlace se abre una sola vez y caduca en 15 minutos — tócalo ahora.',
+    ar: 'تفضل. يفتح الرابط مرة واحدة فقط وتنتهي صلاحيته خلال 15 دقيقة — اضغط الآن.',
+};
+
+/**
+ * ⚠ **The honest answer when the file cannot be handed over at all**, which is a CONFIGURATION
+ * state rather than a fault: the service returns a relative path and the tap must make it
+ * absolute from `API_PUBLIC_URL`, so an unset or non-HTTPS origin leaves no way to deliver it.
+ * Telegram refuses an inline URL button on a non-HTTPS scheme and drops the WHOLE message, and
+ * the URL cannot go in the text because the chat app's link preview would spend the single-use
+ * token before the customer tapped it. So the tap mints nothing and says this.
+ */
+const DOWNLOAD_UNAVAILABLE_PROMPT: Copy = {
+    en: "I can't hand you that download right now. Tell me and I'll get it sorted.",
+    fr: 'Je ne peux pas vous remettre ce téléchargement pour le moment. Dites-le-moi et je règle ça.',
+    pt: 'Não consigo entregar essa transferência de momento. Diga-me e eu trato disso.',
+    es: 'Ahora mismo no puedo entregarte esa descarga. Dímelo y lo soluciono.',
+    ar: 'لا يمكنني تسليمك هذا الملف الآن. أخبرني وسأتولى الأمر.',
+};
+
 // ── The sign-in message ──────────────────────────────────────────────────────
 /**
  * ⭐ **Six fixed phrases that an assembler stacks around three values** — the site, the code and
@@ -1461,6 +1567,19 @@ const CHROME = Object.freeze({
     cancelReasonPrompt: { copy: CANCEL_REASON_PROMPT, cap: null },
     handoverPrompt: { copy: HANDOVER_PROMPT, cap: null },
     ordersScreenPrompt: { copy: ORDERS_SCREEN_PROMPT, cap: null },
+    myBookingsButton: { copy: MY_BOOKINGS_BUTTON, cap: 20 },
+
+    // ── Reviews ──────────────────────────────────────────────────────────────
+    ratePrompt: { copy: RATE_PROMPT, cap: null },
+    rateWhichProductPrompt: { copy: RATE_WHICH_PRODUCT_PROMPT, cap: null },
+    rateThanksPrompt: { copy: RATE_THANKS_PROMPT, cap: null },
+
+    // ── Digital downloads ────────────────────────────────────────────────────
+    downloadButton: { copy: DOWNLOAD_BUTTON, cap: 20 },
+    downloadsPrompt: { copy: DOWNLOADS_PROMPT, cap: null },
+    noDownloadsPrompt: { copy: NO_DOWNLOADS_PROMPT, cap: null },
+    downloadReadyPrompt: { copy: DOWNLOAD_READY_PROMPT, cap: null },
+    downloadUnavailablePrompt: { copy: DOWNLOAD_UNAVAILABLE_PROMPT, cap: null },
     supportFormPrompt: { copy: SUPPORT_FORM_PROMPT, cap: null },
 
     // ── Discovery and bargaining (Stream B) ──────────────────────────────────

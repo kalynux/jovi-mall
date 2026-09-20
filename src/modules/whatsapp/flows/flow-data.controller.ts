@@ -87,6 +87,28 @@ export class FlowDataController {
         }
 
         const appSecret = flowAppSecret();
+        /**
+         * ── ⚠ AN UNSET SECRET SKIPS VERIFICATION ENTIRELY, AND THAT IS A CHOICE ─────
+         * `verifyFlowSignature` refuses an empty secret outright, so this branch is what
+         * decides the unconfigured case — and it decides to answer anyway. That is right
+         * HERE: a deployment with no Flows is a valid deployment, a development box has no
+         * business holding a production app secret, and the alternative (refusing every
+         * request) would make the endpoint impossible to exercise locally.
+         *
+         * ⛔ **Publishing is the moment that stops being acceptable, and the guard is in the
+         * PUBLISHER rather than here.** With no secret this endpoint decrypts whatever
+         * arrives and answers it, unsigned — and Meta's health check passes either way, so a
+         * Flow published in that state goes live, works perfectly, and nothing ever says that
+         * the one thing proving a request came from Meta is switched off. On 2026-09-20 the
+         * publisher's readiness block was found to be silent about it while the script's own
+         * header told you to set it; `scripts/publish-whatsapp-flows.ts` now refuses
+         * `--publish` without it.
+         *
+         * ⚠ So the two positions are deliberate and must stay apart: **tolerant at runtime,
+         * strict at publish.** Making this branch refuse would break every local run; making
+         * the publisher tolerant would put an unauthenticated endpoint in front of a screen
+         * that can place an order.
+         */
         if (appSecret !== '') {
             /**
              * ⚠ **THE MISSING RAW-BODY MOUNT DETECTS ITSELF HERE, AND THAT IS THE POINT.**

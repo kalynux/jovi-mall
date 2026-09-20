@@ -65,6 +65,28 @@ function assert(name: string, fn: () => boolean): void {
 }
 
 const PUBLIC_DIR = path.join(__dirname, '../../src/modules/bot-surface/miniapp/public');
+
+/**
+ * Every source file of the bot surface, concatenated, for the one question that needs it: does
+ * anything actually DRAW a button for this screen?
+ *
+ * ⚠ **Read once and searched as text.** Several of these files reach `orders/` and `payments/` and
+ * cannot be imported under bare `ts-node` at all — and the question is about a call site's existence,
+ * which text answers exactly.
+ */
+const SRC = (function readBotSurface(): string {
+    const root = path.join(__dirname, '../../src/modules/bot-surface');
+    const out: string[] = [];
+    const walk = (dir: string): void => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const at = path.join(dir, entry.name);
+            if (entry.isDirectory()) walk(at);
+            else if (entry.name.endsWith('.ts')) out.push(fs.readFileSync(at, 'utf8'));
+        }
+    };
+    walk(root);
+    return out.join('\n').replace(/\r\n/g, '\n');
+}());
 /**
  * ⚠ `as const` rather than `InAppSurfaceKind[]`, and the difference is load-bearing:
  * `openSurfaceActionId` takes `BotInAppSurface`, which is now all FIVE screen kinds. `co`
@@ -128,18 +150,77 @@ function main(): void {
     });
 
     /**
-     * ⚠ **Read from the SOURCE, not re-derived from the type**, for the reason
-     * `test-notification-deeplinks.ts` gives about its own hardcoded literal: a check that
-     * re-derives the list agrees with any change ever made to it. Adding a sixth openable
-     * surface must fail here and be an explicit decision.
+     * ⚠ **This asserted a hand-typed list of FIVE, and there are NINE screen kinds now** (corrected
+     * 2026-09-20). The literal was defended as an explicit-decision gate — "adding a sixth openable
+     * surface must fail here" — and that argument is sound about a *count* and wrong about this list:
+     * a pin somebody has to retype is a guard that goes green by being edited, and four kinds were
+     * added by three streams in one day.
+     *
+     * What replaces it is the invariant the literal was standing in for, derived and therefore never
+     * stale: **every surface a tap can OPEN must be a real screen kind, with a lifetime and a page.**
+     * That is the wiring which actually breaks — `flows.config.ts` was broken twice today by a kind
+     * added in one place and not another — and no count appears in it.
+     *
+     * ⚠ **The check is deliberately ONE-DIRECTIONAL.** Not every kind is openable by a tap: the
+     * support form (`tf`) is reached through `tkt:new`, and a booking payment screen is reached from a
+     * booking, not from a verb. Asserting the reverse would fail on screens that are correct.
+     *
+     * ⚠ **A scan that matches nothing must FAIL**, which is why the emptiness check is first: an
+     * `every` over an empty list is vacuously true, and that is how this kind of guard stops working
+     * silently.
      */
-    assert('the openable surfaces are exactly the five screen kinds', () => {
+    assert('every openable surface is a real screen kind, with a lifetime and a page', () => {
         const src = fs.readFileSync(
             path.join(__dirname, '../../src/modules/bot-surface/domain/bot-action-id.ts'), 'utf8');
         const m = src.match(/export type BotInAppSurface\s*=\s*([^;]+);/);
         if (!m) return false;
-        const members = [...m[1].matchAll(/'([a-z]+)'/g)].map((x) => x[1]).sort();
-        return JSON.stringify(members) === JSON.stringify(['co', 'ol', 'pd', 'pl', 'sl']);
+
+        const openable = [...m[1].matchAll(/'([a-z]+)'/g)].map((x) => x[1]).sort();
+        if (openable.length === 0) return false;
+
+        const kinds = (__SCREEN_KINDS as readonly string[]).slice();
+        const notAKind = openable.filter((kind) => !kinds.includes(kind));
+        const noLifetime = openable.filter(
+            (kind) => !(typeof TTL_SECONDS[kind as keyof typeof TTL_SECONDS] === 'number'),
+        );
+
+        if (notAKind.length) console.error(`     ↳ openable but not a screen kind: ${notAKind.join(', ')}`);
+        if (noLifetime.length) console.error(`     ↳ openable with no TTL: ${noLifetime.join(', ')}`);
+
+        /**
+         * ⚠ **A missing PAGE is only a fault for a surface something actually DRAWS**, and getting
+         * this wrong is how a guard starts failing on correct code — which teaches the next person to
+         * weaken it. Declaring a kind and its token ahead of its page is the established pattern
+         * here: `ol` and `sl` shipped that way for a whole milestone, `inapp-page.controller.ts`
+         * answers a missing file with a deliberate 503, and `bp` is dark today by the bookings
+         * stream's own decision. What is NOT acceptable is a button a customer can press that opens
+         * that 503 — so the gate is "drawn, and no page", found by looking for the draw site.
+         */
+        /**
+         * ⚠ **A screen is reached two ways, and both count as "drawn".** A tap-code carries
+         * `openSurfaceActionId('<kind>')`; a route mints a session directly with `kind: '<kind>',` in
+         * an `openInAppScreen` payload — which is how the store directory and the order history are
+         * opened, and how the support form is. The comma is what separates a payload from the store's
+         * own type union (`kind: 'sl';`), and without that distinction every declared kind would count
+         * as drawn and this gate would assert nothing.
+         */
+        const drawn = openable.filter(
+            (kind) => SRC.includes(`openSurfaceActionId('${kind}'`) || SRC.includes(`kind: '${kind}',`),
+        );
+        const drawnWithNoPage = drawn.filter(
+            (kind) => !fs.existsSync(path.join(PUBLIC_DIR, `${kind}.html`)),
+        );
+        if (drawnWithNoPage.length) {
+            console.error(`     ↳ a button opens it and there is no page: ${drawnWithNoPage.join(', ')}`);
+        }
+
+        // Reported, never asserted: both of these are legitimate states — see the notes above.
+        const notDrawnYet = openable.filter((kind) => !drawn.includes(kind));
+        if (notDrawnYet.length) console.log(`     ↳ openable, nothing draws it yet: ${notDrawnYet.join(', ')}`);
+        const unopenable = kinds.filter((kind) => !openable.includes(kind));
+        if (unopenable.length) console.log(`     ↳ reached without a verb: ${unopenable.join(', ')}`);
+
+        return notAKind.length === 0 && noLifetime.length === 0 && drawnWithNoPage.length === 0;
     });
 
     /**

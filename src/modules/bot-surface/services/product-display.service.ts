@@ -276,6 +276,18 @@ export class ProductDisplayService {
                     addToCart: botChrome('addToCartButton', set.language),
                     seeMore: botChrome('seeMoreButton', set.language),
                     details: botChrome('detailsButton', set.language),
+                    /**
+                     * ⚠ **The two an out-of-stock card offers in place of a buy row — and they
+                     * are the reason this object is asserted against the renderer.** They are
+                     * OPTIONAL on the intent, so their absence compiled and drew nothing: the
+                     * tokens were minted, the taps routed, the handlers answered, the copy
+                     * existed in five languages, and the buttons never appeared, because the
+                     * render arm is guarded on the label. Nothing threw.
+                     * `test:inapp-account` now fails if a label the renderer can draw is one
+                     * this object does not supply.
+                     */
+                    similarItems: botChrome('similarItemsButton', set.language),
+                    saveForLater: botChrome('saveForLaterButton', set.language),
                 },
                 carousel: cards.length === WA_CAROUSEL_CARDS ? carouselTemplate() : null,
                 /**

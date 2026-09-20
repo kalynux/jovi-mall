@@ -519,8 +519,24 @@ const ASK_ADDRESS_FIX_BUTTON: Copy = {
  * The turn strings above, each with the cap it has to satisfy. `null` means a body rather than a
  * control — the convention `bot-chrome-copy.ts` uses, so the two tables read the same way.
  */
+/**
+ * What to say once the customer's typed reason is on the order.
+ *
+ * ⚠ **It promises only what happened.** The words are recorded on the order's own history, where the
+ * shop reads them — it is not a support request, nobody has undertaken to reply, and saying "we will
+ * look into it" would be the platform speaking for a vendor who has not been asked.
+ */
+const CANCEL_REASON_RECORDED: Copy = {
+    en: 'Thank you — I have added that to the order, so the shop can see why.',
+    fr: "Merci — je l'ai ajouté à la commande, pour que la boutique sache pourquoi.",
+    pt: 'Obrigado — adicionei isso à encomenda, para a loja saber o motivo.',
+    es: 'Gracias — lo he añadido al pedido, para que la tienda sepa el motivo.',
+    ar: 'شكرًا — أضفت ذلك إلى الطلب حتى يعرف المتجر السبب.',
+};
+
 const ORDER_COPY = Object.freeze({
     whichOrder: { copy: WHICH_ORDER, cap: null },
+    cancelReasonRecorded: { copy: CANCEL_REASON_RECORDED, cap: null },
     whichParcel: { copy: WHICH_PARCEL, cap: null },
     // Half of a WhatsApp list row title (24) once a number is appended: `Paquete 2`.
     parcelLabel: { copy: PARCEL_LABEL, cap: 18 },

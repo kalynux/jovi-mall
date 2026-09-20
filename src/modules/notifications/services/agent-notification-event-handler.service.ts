@@ -32,7 +32,7 @@ import {
 } from '../catalog/agent-notification-catalog';
 import type { ContractTransition, StatusRequestState, TermsProposalState } from '../../agents';
 import { ChannelText } from '../catalog/notification-catalog';
-import { Language, resolveLanguage, META_LANGUAGE_CODE } from '../catalog/notification-i18n';
+import { Language, resolveLanguage, templateLanguage } from '../catalog/notification-i18n';
 import { RenderContext, toTelegramNotificationBody, toWhatsAppNotificationBody } from '../catalog/message-renderer';
 import { DomainEvent } from '../../../core/events/event-bus';
 import { createAppError } from '../../../core/errors';
@@ -1131,7 +1131,18 @@ export class AgentNotificationEventHandler {
                 message: {
                     type: 'template',
                     name: agentWhatsAppTemplateName(situation),
-                    language: META_LANGUAGE_CODE[lang],
+                    /**
+                     * ⛔ **`templateLanguage`, never `META_LANGUAGE_CODE[lang]`.** Templates are
+                     * approved in English and French ONLY, so naming the recipient's own language
+                     * asks Meta for a template that does not exist for `pt`, `es` or `ar`: the
+                     * send is refused, the refusal is caught below and written to the row as a
+                     * delivery error, and **the recipient is told nothing**. Outside the 24-hour
+                     * window a template is the only way to reach them.
+                     *
+                     * Fixed across all four stacks in one change — the customer stack was found
+                     * first and these three carried the identical line.
+                     */
+                    language: templateLanguage(lang),
                     components
                 },
                 meta: {

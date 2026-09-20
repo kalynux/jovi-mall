@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>wi-mall</title>
+<!--
+  Pick a time — a day, then that day's times.  Screen kind `bk`.
+
+  ⚠ **THE FILENAME IS THE ROUTE** — `inapp-page.controller.ts` sends `public/<kind>.html`.
+
+  Endpoints:  `GET  /api/bot/miniapp/s/bk/:handle/data[?date=YYYY-MM-DD]`  (repeatable)
+              `POST /api/bot/miniapp/s/bk/:handle/confirm`                 (SPENDS the handle)
+
+  ── ⚠ TWO STEPS, AND THE SHAPE IS NOT A PREFERENCE ──────────────────────────
+  A WhatsApp form draws a single-choice list of at most 20 options, so a fortnight of slots
+  cannot be one screen there.  Both channels therefore ask a day first and then that day's
+  times, from the same read — the alternative is a Telegram page whose shape the WhatsApp half
+  cannot reproduce.  Only days that HAVE times are offered, so there is no "nothing that day"
+  path to design.
+
+  ── ⚠ THE CONFIRM SPENDS THE HANDLE, SO THERE IS NO RETRY ON IT ─────────────
+  `confirmBooking` calls `consume`, not `read`: a double tap, a refreshed tab and a forwarded
+  URL all find the screen gone.  That is what makes two appointments from one press impossible,
+  and it is why the button latches on the first press and never unlatches itself.
+
+  ── ⚠ THIS PAGE VALIDATES NOTHING ABOUT THE TIME ────────────────────────────
+  It sends back the opaque slot id it was given.  The server re-checks it against live
+  availability through the same door every other booking uses — a caller-supplied interval
+  priced pro rata is the defect this whole module was rebuilt around.
+
+  ── ⚠ IT MAY BE MOVING AN APPOINTMENT RATHER THAN MAKING ONE ────────────────
+  `moving` says which, and only the session knows: it is what the tap minted, not something the
+  page or the form is told.  The notice above the days is the only difference the customer sees,
+  and saying nothing there is how somebody ends up believing they booked a second appointment.
+-->
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/api/bot/miniapp/shell.css">
+<style>
+  /* Screen-specific only. Anything another screen would also want belongs in shell.css. */
+  .notice { padding: 10px 12px; border-radius: 10px; background: var(--card); font-size: 13px; margin-block-end: 12px; }
+  .block__label { font-size: 12px; color: var(--muted); margin-block-end: 6px; }
+  .opts { display: flex; flex-direction: column; gap: 6px; }
+  .opt { display: flex; justify-content: space-between; gap: 12px; align-items: center;
+         padding: 12px; border-radius: 12px; background: var(--card); width: 100%;
+         border: 0; color: inherit; font: inherit; text-align: start; cursor: pointer; }
+  .opt[aria-pressed="true"] { outline: 2px solid currentColor; }
+  .opt__sub { font-size: 12px; color: var(--muted); }
+  .foot { display: flex; gap: 8px; margin-block-start: 16px; }
+  .foot button { flex: 1; }
+</style>
+</head>
+<body>
+  <header class="screen__head">
+    <h1 class="screen__title" id="title"></h1>
+  </header>
+
+  <main class="screen__body">
+    <div class="state" id="state"><p class="state__text" id="stateText"></p></div>
+
+    <div id="sheet" hidden>
+      <div class="notice" id="notice" hidden></div>
+      <div class="block__label" id="label"></div>
+      <div class="opts" id="opts"></div>
+      <div class="foot" id="foot" hidden>
+        <button type="button" class="btn btn--ghost" id="back"></button>
+        <button type="button" class="btn btn--primary" id="confirm"></button>
+      </div>
+    </div>
+  </main>
+
+<script>
+(function () {
+  "use strict";
+
+  var tg = window.Telegram && window.Telegram.WebApp;
+  if (tg) { tg.ready(); tg.expand(); }
+
+  var parts = window.location.pathname.split("/").filter(Boolean);
+  var handle = parts[parts.length - 1];
+  var base = "/api/bot/miniapp/s/bk/" + encodeURIComponent(handle);
+  var lang = new URLSearchParams(window.location.search).get("lang") || "en";
+
+  var el = {
+    title: document.getElementById("title"),
+    state: document.getElementById("state"),
+    stateText: document.getElementById("stateText"),
+    sheet: document.getElementById("sheet"),
+    notice: document.getElementById("notice"),
+    label: document.getElementById("label"),
+    opts: document.getElementById("opts"),
+    foot: document.getElementById("foot"),
+    back: document.getElementById("back"),
+    confirm: document.getElementById("confirm")
+  };
+
+  var copy = null;
+  var chosenDate = null;
+  var chosenSlot = null;
+  /** ⚠ Latches on the first press of Confirm and is never cleared — the handle is spent. */
+  var sent = false;
+
+  function esc(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
+  function json(url, options) {
+    return fetch(url, options || {}).then(function (response) {
+      return response.json().catch(function () { return null; }).then(function (body) {
+        return { ok: response.ok, status: response.status, body: body };
+      });
+    });
+  }
+
+  function state(text, isError) {
+    el.stateText.textContent = text;
+    el.state.hidden = false;
+    el.state.className = isError ? "state state--error" : "state";
+    el.sheet.hidden = true;
+  }
+
+  function explain(res) {
+    if (res.status === 410 || res.status === 404) return copy.expired;
+    return copy.failed;
+  }
+
+  function showDays(data) {
+    chosenDate = null;
+    chosenSlot = null;
+    el.title.textContent = copy.pickTitle || FALLBACK.pickTitle;
+    el.notice.hidden = !data.moving;
+    el.notice.textContent = data.moving ? (copy.movingNotice || "") : "";
+    el.label.textContent = copy.pickDay || FALLBACK.pickDay;
+    el.foot.hidden = true;
+
+    el.opts.innerHTML = (data.days || []).map(function (day) {
+      return '<button type="button" class="opt" data-date="' + esc(day.date) + '">'
+        + "<span>" + esc(day.label) + "</span>"
+        + '<span class="opt__sub">' + esc(day.description) + "</span>"
+        + "</button>";
+    }).join("");
+
+    el.state.hidden = true;
+    el.sheet.hidden = false;
+  }
+
+  function showTimes(data) {
+    chosenSlot = null;
+    el.label.textContent = copy.pickTime || FALLBACK.pickTime;
+    el.foot.hidden = false;
+    el.back.textContent = copy.back || FALLBACK.back;
+    el.confirm.textContent = copy.confirm || FALLBACK.confirm;
+    el.confirm.disabled = true;
+
+    el.opts.innerHTML = (data.slots || []).map(function (slot) {
+      return '<button type="button" class="opt" aria-pressed="false" data-slot="' + esc(slot.slotId) + '">'
+        + "<span>" + esc(slot.label) + "</span>"
+        + (slot.spotsRemaining === null || slot.spotsRemaining === undefined
+          ? ""
+          : '<span class="opt__sub">' + esc(String(slot.spotsRemaining)) + "</span>")
+        + "</button>";
+    }).join("");
+
+    el.state.hidden = true;
+    el.sheet.hidden = false;
+  }
+
+  function load(date) {
+    state(copy.loading, false);
+    var url = base + "/data" + (date ? "?date=" + encodeURIComponent(date) : "");
+    json(url, { headers: { Accept: "application/json" } }).then(function (res) {
+      if (!res.ok || !res.body || res.body.success === false || !res.body.data) {
+        state(explain(res), true);
+        return;
+      }
+      var data = res.body.data;
+      if (data.copy) { copy = Object.assign({}, copy, data.copy); }
+      if (date) { showTimes(data); } else { showDays(data); }
+    }).catch(function () {
+      state(copy.failed, true);
+    });
+  }
+
+  el.opts.addEventListener("click", function (event) {
+    var button = event.target.closest ? event.target.closest(".opt") : null;
+    if (!button) return;
+
+    if (button.getAttribute("data-date")) {
+      chosenDate = button.getAttribute("data-date");
+      load(chosenDate);
+      return;
+    }
+
+    chosenSlot = button.getAttribute("data-slot");
+    Array.prototype.forEach.call(el.opts.querySelectorAll(".opt"), function (other) {
+      other.setAttribute("aria-pressed", other === button ? "true" : "false");
+    });
+    el.confirm.disabled = false;
+  });
+
+  el.back.addEventListener("click", function () { if (!sent) load(null); });
+
+  /**
+   * ⚠ **One press, and the button never comes back.** The confirm spends the handle server-side,
+   * so a second press could only ever meet a dead screen — and a button that re-enables after a
+   * refusal invites exactly that. A refusal is explained; it is not made retryable here.
+   */
+  el.confirm.addEventListener("click", function () {
+    if (sent || !chosenSlot) return;
+    sent = true;
+    el.confirm.disabled = true;
+    el.back.disabled = true;
+
+    json(base + "/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ slotId: chosenSlot })
+    }).then(function (res) {
+      if (!res.ok || !res.body || res.body.success === false) {
+        state(explain(res), true);
+        return;
+      }
+      /* The receipt is the chat's, not this page's: it stays, and this screen is closing. */
+      state(copy.sent || FALLBACK.sent, false);
+      if (tg) { setTimeout(function () { tg.close(); }, 1200); }
+    }).catch(function () {
+      state(copy.failed, true);
+    });
+  });
+
+  var FALLBACK = {
+    loading: "Loading…",
+    failed: "Something went wrong. Close this and ask me again in the chat.",
+    expired: "This page is no longer available. Ask me again in the chat.",
+    pickTitle: "Pick a time",
+    pickDay: "Choose a day",
+    pickTime: "Choose a time",
+    confirm: "Confirm",
+    back: "Back",
+    sent: "Done — I have told you in the chat."
+  };
+
+  json("/api/bot/miniapp/copy?lang=" + encodeURIComponent(lang), { headers: { Accept: "application/json" } })
+    .then(function (res) { copy = (res.body && res.body.data && res.body.data.copy) || FALLBACK; })
+    .catch(function () { copy = FALLBACK; })
+    .then(function () {
+      document.documentElement.lang = lang;
+      document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
+      load(null);
+    });
+})();
+</script>
+</body>
+</html>

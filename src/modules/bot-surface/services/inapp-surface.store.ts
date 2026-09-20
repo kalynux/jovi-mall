@@ -69,7 +69,13 @@ export type InAppSurfaceKind =
     /** Checkout — cart, address, delivery, payment. The sensitive one. */
     | 'co'
     /** Ticket form — one screen to open a support request. */
-    | 'tf';
+    | 'tf'
+    /** Bookings list — this customer's own appointments. */
+    | 'bl'
+    /** Booking picker — choose a time and confirm, for a new booking or a move. */
+    | 'bk'
+    /** Booking payment — pay a booking's deposit or its balance. */
+    | 'bp';
 
 /**
  * Per-kind lifetimes.
@@ -93,6 +99,15 @@ export const TTL_SECONDS: Readonly<Record<InAppSurfaceKind, number>> = Object.fr
      * short life answer different risks, and only the first one applies to a support request.
      */
     tf: 30 * 60,
+    bl: 30 * 60,
+    /**
+     * ⚠ **Fifteen minutes, and `touch` may NOT extend it** (see the signature below). A slot
+     * picker whose life renews while somebody stares at it is an open-ended hold on a shop's
+     * calendar; the expiry is what gives the time back to other customers.
+     */
+    bk: 15 * 60,
+    /** Checkout's ten minutes, for checkout's reason: it is a credential that moves money. */
+    bp: 10 * 60,
 });
 
 const HANDLE_PREFIX = 'ia_';
@@ -185,7 +200,24 @@ export type InAppSurfaceSession =
               topic: 'rd' | 'ad' | 'hp' | null;
               attachmentRef: string | null;
           };
-      });
+      })
+    /** The customer's own appointments. Base fields only, exactly like `ol`; it writes nothing. */
+    | (InAppSessionBase & { kind: 'bl' })
+    /**
+     * Pick a time and confirm. `bookingId` null means a NEW booking; set means moving that one.
+     *
+     * ⚠ **The handle authorises ONE booking or ONE move** — `consume` on the confirm, so a
+     * double tap cannot take two slots. Reading the picker stays repeatable.
+     */
+    | (InAppSessionBase & { kind: 'bk'; productId: string; bookingId: string | null })
+    /**
+     * Pay a booking's deposit or its balance.
+     *
+     * ⛔ **It holds NO amount, deliberately.** The figure is re-resolved at pay, so a held one
+     * can never disagree with what is charged — the same rule that keeps prices off the
+     * checkout session.
+     */
+    | (InAppSessionBase & { kind: 'bp'; bookingId: string; purpose: 'primary' | 'balance' });
 
 /** What `mint` is given: everything but the expiry, which only this store may set. */
 export type InAppSessionInput =
@@ -194,7 +226,10 @@ export type InAppSessionInput =
     | Omit<Extract<InAppSurfaceSession, { kind: 'ol' }>, 'expiresAt'>
     | Omit<Extract<InAppSurfaceSession, { kind: 'sl' }>, 'expiresAt'>
     | Omit<Extract<InAppSurfaceSession, { kind: 'co' }>, 'expiresAt'>
-    | Omit<Extract<InAppSurfaceSession, { kind: 'tf' }>, 'expiresAt'>;
+    | Omit<Extract<InAppSurfaceSession, { kind: 'tf' }>, 'expiresAt'>
+    | Omit<Extract<InAppSurfaceSession, { kind: 'bl' }>, 'expiresAt'>
+    | Omit<Extract<InAppSurfaceSession, { kind: 'bk' }>, 'expiresAt'>
+    | Omit<Extract<InAppSurfaceSession, { kind: 'bp' }>, 'expiresAt'>;
 
 const unexpired = (expiresAt: string): boolean => {
     const at = Date.parse(expiresAt);
@@ -283,7 +318,14 @@ export class InAppSurfaceStore {
      * screen re-reads live on every page — so the two may move as one, and leaving them to
      * disagree would make `expiresAt` the thing that silently kills a live session.
      */
-    async touch(kind: Exclude<InAppSurfaceKind, 'co'>, handle: string): Promise<boolean> {
+    /**
+     * ⚠ **`co`, `bk` and `bp` are excluded, and each for its own reason.** A checkout and a
+     * booking payment are credentials that move money, so their ten minutes must be ten
+     * minutes. A booking PICKER is excluded for a different reason that matters just as much:
+     * a slot picker whose life renews while somebody stares at it is an open-ended hold on a
+     * shop's calendar, and the expiry is what gives the time back to other customers.
+     */
+    async touch(kind: Exclude<InAppSurfaceKind, 'co' | 'bk' | 'bp'>, handle: string): Promise<boolean> {
         const record = await this.load(handle);
         if (!record || record.kind !== kind) return false;
 

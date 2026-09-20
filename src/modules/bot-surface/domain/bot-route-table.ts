@@ -176,6 +176,17 @@ export const BOT_ROUTES: readonly BotRouteSpec[] = Object.freeze([
     // Discloses a payment credential and changes nothing. The RESEND below is the write.
     { tool: 'orders_get_cod_code', method: 'POST', path: '/orders/:orderId/cod-code', mutating: false, requiresCustomerRole: true },
     { tool: 'orders_cancel', method: 'POST', path: '/orders/:orderId/cancel', mutating: true, requiresCustomerRole: true },
+    /**
+     * The customer's own words about why they cancelled, recorded one turn AFTER the
+     * cancellation — the tap is the decision and the reason is typed next, so the model files
+     * what they say.
+     *
+     * ⚠ **Mutating, so it needs an `Idempotency-Key` like every other write** — and the
+     * handler additionally refuses a second note outright (`ORDER_CANCELLATION_REASON_ALREADY_
+     * RECORDED`, 409), because a replayed tool call must not append a second, contradictory
+     * story to one order's history.
+     */
+    { tool: 'orders_record_cancellation_reason', method: 'POST', path: '/orders/:orderId/cancellation-reason', mutating: true, requiresCustomerRole: true },
     { tool: 'orders_resend_cod_code', method: 'POST', path: '/orders/:orderId/shipments/:shipmentId/resend-delivery-code', mutating: true, requiresCustomerRole: true },
     { tool: 'orders_confirm_shipment_delivery', method: 'POST', path: '/orders/:orderId/shipments/:shipmentId/confirm-delivery', mutating: true, requiresCustomerRole: true },
 

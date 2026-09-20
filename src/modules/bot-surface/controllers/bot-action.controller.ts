@@ -10,6 +10,7 @@ import { CHECKOUT_ACTION_HANDLERS } from './bot-checkout.controller';
 import { ACCOUNT_ACTION_HANDLERS } from './bot-account.controller';
 import { DISCOVERY_ACTION_HANDLERS } from './bot-discovery.controller';
 import { BARGAIN_ACTION_HANDLERS } from './bot-negotiation.controller';
+import { DIGITAL_ACTION_HANDLERS } from './bot-catalog.controller';
 
 /**
  * THE TAP-CODE DISPATCHER — `POST /catalog/action`, the surface's single tap handler.
@@ -73,6 +74,15 @@ const HANDLERS = mergeActionHandlers([
     ['discovery', DISCOVERY_ACTION_HANDLERS],
     /** deal — accepting a price the bargaining agent offered in one numbered round. */
     ['bargain', BARGAIN_ACTION_HANDLERS],
+    /**
+     * dl — hand over a purchased file.
+     *
+     * ⚠ **Registered the moment the button existed, and the guard is why.** `test-bot-surface`
+     * § 20 reported `downloadActionId() emits "dl:" and no handler map claims it` while this
+     * line was missing — a live, in-flight instance of the close-account defect, caught before
+     * a customer met it rather than after.
+     */
+    ['digital', DIGITAL_ACTION_HANDLERS],
 ]);
 
 export class BotActionController {

@@ -34,6 +34,13 @@ import {
 } from '../../src/modules/negotiation/services/offer-acceptance.service';
 import { INegotiationLock } from '../../src/modules/negotiation/models/negotiation-session.model';
 import { toBotProductCard } from '../../src/modules/bot-surface/domain/product-card';
+import { counterOfferIntent } from '../../src/modules/negotiation/services/offer-outbound.service';
+import { downloadActionId } from '../../src/modules/bot-surface/domain/bot-action-id';
+import { botChrome } from '../../src/modules/bot-surface/domain/bot-chrome-copy';
+import { BotReplyOption, renderBotReply } from '../../src/modules/bot-surface/domain/channel-reply';
+import { downloadOptions } from '../../src/modules/bot-surface/controllers/bot-catalog.controller';
+import { WA_LIMITS } from '../../src/modules/whatsapp/constants/whatsapp-limits';
+import { distinguishingPart } from '../../src/modules/bot-surface/controllers/bot-discovery.controller';
 
 const originalConsole = {
     log: console.log.bind(console),
@@ -670,6 +677,355 @@ async function main(): Promise<void> {
         );
     });
 
+    originalConsole.log('\n── 7 · ⭐ The counter-offer carries the price ON its button ─────────────');
+
+    /**
+     * ⚠ **Without this the "Lock it in" press is unreachable.** The gate returns its approved
+     * sentence as a plain string and the bargaining flow sends exactly that — so unless the gate
+     * also hands back a channel-ready body, no button is ever drawn and every branch tested above
+     * is dead code. This is the half that makes the feature exist for a customer at all.
+     */
+    const OFFER = {
+        sessionId: SESSION,
+        round: 3,
+        reply: 'Pour vous, 41 000 et on ne bouge plus.',
+        unitPrice: 41000,
+        currency: 'XAF',
+    };
+
+    await assert('the button names the price, in the customer’s own language', () => {
+        const intent = counterOfferIntent({ ...OFFER, language: 'fr' });
+        if (intent.kind !== 'text' || !intent.actions?.length) throw new Error('no button');
+        const button = intent.actions[0];
+        eq(button.id, `deal:${SESSION}:3`, 'token');
+        eq(button.label, 'Je valide · 41 000 XAF', 'label');
+        eq(intent.text, OFFER.reply, 'the approved sentence is sent unchanged');
+    });
+
+    await assert('⛔ the WhatsApp short label fits 20 characters at a NINE-DIGIT price', () => {
+        for (const language of ['ar', 'fr', 'pt', 'es', 'en']) {
+            const intent = counterOfferIntent({ ...OFFER, unitPrice: 999999999, language });
+            if (intent.kind !== 'text' || !intent.actions?.length) throw new Error('no button');
+            const short = intent.actions[0].shortLabel ?? intent.actions[0].label;
+            if (short.length > 20) {
+                throw new Error(`"${short}" is ${short.length} chars in ${language} — WhatsApp cuts at 20`);
+            }
+            if (!short.includes('999')) throw new Error('the price left the button');
+        }
+    });
+
+    await assert('⛔ the token fits Telegram’s 64-byte callback cap at every realistic round', () => {
+        for (const round of [1, 99, 999]) {
+            const intent = counterOfferIntent({ ...OFFER, round, language: 'ar' });
+            if (intent.kind !== 'text' || !intent.actions?.length) throw new Error('no button');
+            const bytes = Buffer.byteLength(intent.actions[0].id, 'utf8');
+            if (bytes > 64) throw new Error(`token is ${bytes} bytes at round ${round}`);
+        }
+    });
+
+    await assert('⛔ a turn that CLOSED the deal carries no button — nothing is left to accept', () => {
+        const record = serviceSrc.slice(serviceSrc.indexOf('async record('));
+        const body = record.slice(0, record.indexOf('async acceptOffer('));
+        if (!/const outbound = input\.lock/.test(body)) {
+            throw new Error('a locking turn would be sent with a Lock it in button under it');
+        }
+        if (!body.includes('outbound,')) throw new Error('the body is built and never returned');
+    });
+
+    await assert('⭐ MUTANT — the no-button-on-a-closed-deal scan catches the inversion', () => {
+        bites(
+            'button on a closed deal',
+            serviceSrc.replace('const outbound = input.lock', 'const outbound = false'),
+            (src) => {
+                const record = src.slice(src.indexOf('async record('));
+                const body = record.slice(0, record.indexOf('async acceptOffer('));
+                if (!/const outbound = input\.lock/.test(body)) throw new Error('found');
+            },
+        );
+    });
+
+
+    originalConsole.log('\n── 8 · ⭐ Digital downloads — a bearer URL that must never be pre-fetched ──');
+
+    /**
+     * ⛔ **THE DEFECT THIS CLOSED:** a customer could not download a file they had paid for.
+     * `digital_create_download_link` is tier `flow_only` — deliberately, because a model holding a
+     * bearer URL is a model that can put it in a sentence — and no flow was ever built to call it.
+     * Built, mounted, validated, documented, reachable by nobody: failure mode 1.
+     *
+     * ⛔ **AND THE HAZARD THAT DECIDED THE SHAPE:** the URL is public (the token IS the auth),
+     * single-use (read-and-deleted atomically on the first GET, by whoever makes it) and lives 15
+     * minutes. Telegram and WhatsApp PRE-FETCH URLs in message TEXT to build a preview, so a pasted
+     * link is spent by a robot before the customer taps it — they get a dead link and the log
+     * records a successful download. Hence a link BUTTON, which is not pre-fetched.
+     */
+    const catalogSrc = stripComments(read(SRC, 'modules', 'bot-surface', 'controllers', 'bot-catalog.controller.ts'));
+    const downloadSrc = read(SRC, 'modules', 'digital-delivery', 'services', 'download-link.service.ts');
+
+    await assert('the download tap fits Telegram’s callback cap', () => {
+        const id = downloadActionId('68b0000000000000000000e1');
+        eq(id, 'dl:68b0000000000000000000e1', 'token');
+        const bytes = Buffer.byteLength(id, 'utf8');
+        if (bytes > 64) throw new Error(`${bytes} bytes`);
+    });
+
+    await assert('⛔ the link is handed over as a BUTTON — never inside the message text', () => {
+        const handler = catalogSrc.slice(catalogSrc.indexOf('async function handleDownloadTap'));
+        const body = handler.slice(0, handler.indexOf('function downloadOrigin'));
+        if (!body.includes("kind: 'link'")) {
+            throw new Error('the reply is not a link intent — a URL in text is spent by the link preview');
+        }
+        if (/text:\s*`/.test(body)) {
+            throw new Error('the message text is composed with a template literal — the URL may be inside it');
+        }
+    });
+
+    await assert('⛔ the minted URL never reaches the JSON body either', () => {
+        const handler = catalogSrc.slice(catalogSrc.indexOf('async function handleDownloadTap'));
+        const body = handler.slice(0, handler.indexOf('function downloadOrigin'));
+        const success = body.slice(body.lastIndexOf('sendSuccess(res, {'));
+        if (/\burl\b/.test(success.slice(0, success.indexOf('});')))) {
+            throw new Error('the download URL is published in the response body, where a model can read it');
+        }
+    });
+
+    await assert('⛔ HTTPS only — Telegram drops the whole message on any other scheme', () => {
+        const origin = catalogSrc.slice(catalogSrc.indexOf('function downloadOrigin'));
+        if (!origin.includes("'https:'")) {
+            throw new Error('the origin is not restricted to HTTPS');
+        }
+        if (!origin.includes('process.env.API_PUBLIC_URL')) {
+            throw new Error('the origin is not read as a spelled-out env access — test:env cannot see it');
+        }
+    });
+
+    /**
+     * ⭐ **THE DRIFT PIN.** The expiry is stated to the customer IN WORDS, in five languages, with
+     * the number baked into each sentence (this copy table has no placeholders, by an earlier
+     * decision). So the sentence and the service's TTL are two records of one fact, and nothing
+     * would otherwise notice them disagreeing — the customer would simply be told the wrong number.
+     */
+    await assert('⭐ the "15 minutes" the customer is told IS the service’s TTL', () => {
+        const ttl = /15 \* 60 \* 1000/.test(downloadSrc);
+        if (!ttl) {
+            throw new Error('the service no longer mints a 15-minute link — the five sentences now lie');
+        }
+        for (const language of ['en', 'fr', 'pt', 'es', 'ar']) {
+            const sentence = botChrome('downloadReadyPrompt', language);
+            if (!sentence.includes('15')) {
+                throw new Error(`the ${language} sentence does not state the 15-minute expiry`);
+            }
+        }
+    });
+
+    await assert('⭐ MUTANT — the drift pin bites when the service changes its TTL', () => {
+        bites('ttl moved', downloadSrc.replace('15 * 60 * 1000', '30 * 60 * 1000'), (src) => {
+            if (!/15 \* 60 \* 1000/.test(src)) throw new Error('found');
+        });
+    });
+
+    await assert('every download label fits WhatsApp’s 20-character button title', () => {
+        for (const language of ['en', 'fr', 'pt', 'es', 'ar']) {
+            const label = botChrome('downloadButton', language);
+            if (label.length > 20) throw new Error(`${language}: "${label}" is ${label.length}`);
+        }
+    });
+
+    await assert('⛔ only a row that can actually be downloaded becomes a button', () => {
+        /**
+         * ⚠ **The span is the WHOLE method, and the first version of this got it wrong.** Slicing
+         * to the first `});` stopped at the `windowForChat({…})` call — several statements before
+         * the filter it was meant to inspect — so the scan reported the filter missing from code
+         * that has it. The honest boundary is the next method in the file.
+         */
+        const listing = catalogSrc.slice(catalogSrc.indexOf('static listEntitlements'));
+        const body = listing.slice(0, listing.indexOf('static createDownloadLink'));
+        if (body.length === 0 || body.length === listing.length) {
+            throw new Error('the method boundary moved — this scan is no longer looking at listEntitlements');
+        }
+        if (!/entitlements\.filter\(\(entitlement\) => entitlement\.canDownload\)/.test(body)) {
+            throw new Error('the picker is not filtered on canDownload — it would offer taps that refuse');
+        }
+        if (!/downloadable\.slice\(0, BOT_CHAT_LIST_MAX\)/.test(body)) {
+            throw new Error('the picker is filtered AFTER windowing — a downloadable row can fall out of view');
+        }
+    });
+
+    await assert('⭐ MUTANT — the canDownload scan catches a picker that offers everything', () => {
+        const check = (src: string): void => {
+            const listing = src.slice(src.indexOf('static listEntitlements'));
+            const body = listing.slice(0, listing.indexOf('static createDownloadLink'));
+            if (!/entitlements\.filter\(\(entitlement\) => entitlement\.canDownload\)/.test(body)) {
+                throw new Error('found');
+            }
+        };
+
+        // The plausible mistake: dropping the filter so every owned row becomes a button — which
+        // offers taps that can only answer "you have used all the downloads for that item".
+        bites(
+            'unfiltered picker',
+            catalogSrc.replace('entitlements.filter((entitlement) => entitlement.canDownload)', 'entitlements.slice()'),
+            check,
+        );
+
+        // ⚠ And the scan must still pass on the real file, so the mutant above proves something.
+        check(catalogSrc);
+    });
+
+    originalConsole.log('\n── 9 · ⛔ Row titles that collide after the channel cuts them ───────────');
+
+    /**
+     * ⭐ **THE RULE THIS SECTION ENFORCES, binding for the rest of the round: a row title built
+     * from DATA needs a `shortLabel`, and its test case must be French or Arabic, never English.**
+     *
+     * Two live defects were found this way, both by RENDERING rather than reading, and both
+     * invisible in English — which is why every check any of us ran had passed:
+     *   · two modules of one course →  "Cours de couture profes…" twice, for PAID content
+     *   · two categories           →  "Électroménager et petit…" / "Électroménager et gros …"
+     * A customer picks one at random. Below, every case goes through the REAL renderer and asserts
+     * on the row titles WhatsApp would actually draw.
+     */
+    const waRows = (options: readonly BotReplyOption[]): Array<{ title: string; description?: string }> => {
+        const body = renderBotReply(
+            {
+                kind: 'choice',
+                text: 'x',
+                options,
+                listButton: 'Choose',
+                sectionTitle: 'Items',
+            },
+            'whatsapp',
+            '237600000000',
+        ).body as Record<string, any>;
+
+        const rows = body.interactive?.action?.sections?.[0]?.rows;
+        if (!Array.isArray(rows)) throw new Error('the renderer did not draw a list — no rows to check');
+        return rows;
+    };
+
+    const titlesDistinct = (options: readonly BotReplyOption[]): boolean => {
+        const titles = waRows(options).map((row) => row.title);
+        return new Set(titles).size === titles.length;
+    };
+
+    await assert('⛔ FRENCH — two modules of one course are told apart in the row title', () => {
+        const options = downloadOptions([
+            { id: '68b0000000000000000000d1', productTitle: 'Cours de couture professionnelle', variantName: 'Module 1' },
+            { id: '68b0000000000000000000d2', productTitle: 'Cours de couture professionnelle', variantName: 'Module 2' },
+        ]);
+        if (!titlesDistinct(options)) {
+            throw new Error(`identical rows: ${waRows(options).map((r) => r.title).join(' | ')}`);
+        }
+        // And the product's full name is still on the row, where there is room for it.
+        eq(waRows(options)[0].description, 'Cours de couture professionnelle', 'description');
+    });
+
+    await assert('⛔ FRENCH — the last-resort numbering survives the cut when nothing distinguishes', () => {
+        // Neither a variant nor a file name: the fallback lands on the product title for both.
+        const options = downloadOptions([
+            { id: '68b0000000000000000000d1', productTitle: 'Cours de couture professionnelle' },
+            { id: '68b0000000000000000000d2', productTitle: 'Cours de couture professionnelle' },
+        ]);
+        const titles = waRows(options).map((row) => row.title);
+        if (new Set(titles).size !== titles.length) throw new Error(`identical rows: ${titles.join(' | ')}`);
+        if (!titles[1].endsWith('(2)')) throw new Error(`the number did not survive: "${titles[1]}"`);
+        for (const title of titles) {
+            if ([...title].length > 24) throw new Error(`"${title}" is ${[...title].length} code points`);
+        }
+    });
+
+    await assert('⛔ ARABIC — a long shared prefix still yields distinct rows', () => {
+        const options = downloadOptions([
+            { id: '68b0000000000000000000d1', productTitle: 'دورة الخياطة الاحترافية الكاملة', variantName: 'الوحدة الأولى' },
+            { id: '68b0000000000000000000d2', productTitle: 'دورة الخياطة الاحترافية الكاملة', variantName: 'الوحدة الثانية' },
+        ]);
+        if (!titlesDistinct(options)) {
+            throw new Error(`identical rows: ${waRows(options).map((r) => r.title).join(' | ')}`);
+        }
+    });
+
+    await assert('⛔ FRENCH — colliding categories are trimmed to what differs', () => {
+        const names = ['Produits de beauté et soins du visage', 'Produits de beauté et soins du corps'];
+        eq(distinguishingPart(names[0], names), 'visage', 'first');
+        eq(distinguishingPart(names[1], names), 'corps', 'second');
+    });
+
+    /**
+     * ⛔ **THE REGRESSION THAT MATTERS, and the reason the first version of this helper was wrong.**
+     * It asked whether EVERY sibling shared the opening, so one unrelated category vetoed the
+     * trimming for the pair that actually collided — it passed every two-row test and failed in any
+     * real shop. Found by backend-d5, by rendering it.
+     */
+    await assert('⛔ an UNRELATED category no longer vetoes the trimming (the real-shop case)', () => {
+        const names = [
+            'Produits de beauté et soins du visage',
+            'Produits de beauté et soins du corps',
+            'Chaussures',
+        ];
+        eq(distinguishingPart(names[0], names), 'visage', 'first');
+        eq(distinguishingPart(names[1], names), 'corps', 'second');
+        eq(distinguishingPart(names[2], names), 'Chaussures', 'the unrelated one is untouched');
+
+        const options: BotReplyOption[] = names.map((name) => ({
+            id: `cat:${name.length}`,
+            label: name,
+            shortLabel: distinguishingPart(name, names),
+            description: name,
+        }));
+        if (!titlesDistinct(options)) {
+            throw new Error(`identical rows: ${waRows(options).map((r) => r.title).join(' | ')}`);
+        }
+    });
+
+    await assert('names that do not collide at the cap are left whole', () => {
+        const names = ['Chaussures', 'Téléphones'];
+        eq(distinguishingPart(names[0], names), 'Chaussures', 'untrimmed');
+        eq(distinguishingPart('Chaussures', ['Chaussures']), 'Chaussures', 'a lone name');
+    });
+
+    await assert('⚠ a trimmed part is never cut mid-word, and never shrinks to noise', () => {
+        // Word-aligned: cutting "électroménager" to "ménager" would read as a different category.
+        const names = ['Grand électroménager de cuisine', 'Grand électroménager de salon'];
+        for (const name of names) {
+            const part = distinguishingPart(name, names);
+            if (part.includes('ménager') && !part.includes('électroménager')) {
+                throw new Error(`cut mid-word: "${part}"`);
+            }
+        }
+        // A remainder under three characters is not worth the loss of context.
+        const pair = ['Téléphones et accessoires A', 'Téléphones et accessoires B'];
+        for (const name of pair) {
+            eq(distinguishingPart(name, pair), name, 'too short to help — keep the whole name');
+        }
+    });
+
+    await assert('⭐ MUTANT — dropping the shortLabel brings the collision straight back', () => {
+        const options = downloadOptions([
+            { id: '68b0000000000000000000d1', productTitle: 'Cours de couture professionnelle', variantName: 'Module 1' },
+            { id: '68b0000000000000000000d2', productTitle: 'Cours de couture professionnelle', variantName: 'Module 2' },
+        ]).map((option) => ({ id: option.id, label: option.label, description: option.description }));
+
+        if (titlesDistinct(options)) {
+            throw new Error('without shortLabel the rows are still distinct — this test cannot bite');
+        }
+    });
+
+    /**
+     * ⚠ **Compared as NUMBERS, not scanned as text.** The first version of this looked for
+     * `LIST_ROW_TITLE: 24` in the renderer, where the constant is only ever *used* — it is defined
+     * in `whatsapp-limits.ts` — so the guard reported a divergence that did not exist. A scan that
+     * names the wrong file is indistinguishable from a real finding, which is the whole hazard.
+     */
+    await assert('the row-title cap these controllers assume IS WhatsApp’s own', () => {
+        eq(WA_LIMITS.LIST_ROW_TITLE, 24, 'the platform cap');
+
+        for (const file of ['bot-discovery.controller.ts', 'bot-catalog.controller.ts']) {
+            const src = stripComments(read(SRC, 'modules', 'bot-surface', 'controllers', file));
+            const declared = /WA_ROW_TITLE_CAP = (\d+)/.exec(src);
+            if (!declared) throw new Error(`${file} no longer declares the cap it disambiguates against`);
+            eq(Number(declared[1]), WA_LIMITS.LIST_ROW_TITLE, `${file} cap`);
+        }
+    });
     originalConsole.log('\n════════════════════════════════════════════════════════════════════════════');
     originalConsole.log(`  ${passed} passed, ${failed} failed`);
     originalConsole.log('════════════════════════════════════════════════════════════════════════════\n');

@@ -61,9 +61,14 @@ function privateKeyPassphrase(): string {
  * screen, where a missing single id degrades exactly one.
  *
  * ⚠ **The keys are `InAppSurfaceKind`, so a screen and its Flow name the same thing.** `ol`,
- * `sl` and `tf` are declared with no variable because their forms are not built yet — a
- * Flow cannot exist before the screen it mirrors, and leaving them out of the type would
- * mean editing this map when they land.
+ * `sl`, `tf` and the three booking kinds are declared with no variable because their forms are
+ * not published yet — a Flow cannot exist before the screen it mirrors, and leaving them out of
+ * the type would mean editing this map when they land.
+ *
+ * ⚠ **`tf`, `bl`, `bk` and `bp` have DRAFT definitions already** (`ticket-form.flow.ts`,
+ * `booking.flow.ts`), deliberately absent from `publish-whatsapp-flows.ts` until the reads they
+ * project exist. A draft with no id here is exactly right: nothing can reach Meta, and the id
+ * appears the day the Flow is published.
  *
  * ⚠ **The map is TOTAL over the kinds on purpose, and that is what makes it useful.** When
  * another stream adds a screen kind, this file stops compiling until somebody decides whether
@@ -77,6 +82,9 @@ const FLOW_ID_READERS: Readonly<Record<InAppSurfaceKind, () => string>> = Object
     ol: () => '',
     sl: () => '',
     tf: () => '',
+    bl: () => '',
+    bk: () => '',
+    bp: () => '',
 });
 
 let cachedKey: KeyObject | null = null;

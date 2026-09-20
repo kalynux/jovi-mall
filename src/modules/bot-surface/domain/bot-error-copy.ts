@@ -169,6 +169,47 @@ const CATEGORY_COPY: Readonly<Record<ErrorCategory, Copy>> = Object.freeze({
  * "token", no field name, no collection. A sentence a customer cannot act on is a sentence
  * that should have been left to the category fallback.
  */
+
+/**
+ * The maintenance window, in the two shapes a customer can actually be in.
+ *
+ * ⚠ **`MAINTENANCE_GENERAL` is used TWICE ON PURPOSE** — as the `SYSTEM_MAINTENANCE_ACTIVE`
+ * entry in the table below, and as what `maintenanceMessageFor` returns for a full stop. One
+ * constant, so the sentence a direct reader of `customerMessage` sees and the sentence the
+ * composed reply carries cannot drift apart. It is worded to be **true in every kind of
+ * window**, which is what makes it safe as the fallback when the mode cannot be read.
+ *
+ * `MAINTENANCE_READONLY` is the only refinement, and it is worth having because it is the
+ * difference between a customer leaving and a customer browsing: a read-only window blocks
+ * writes and leaves every read working, so "the shop is closed" would be simply false.
+ *
+ * ⚠ **Neither sentence names a duration**, and that is the lesson of
+ * `BOT_CONTACT_CODE_RESEND_TOO_SOON` above applied in advance: a window's end is an operator's
+ * guess carried in `Retry-After`, and a sentence promising "five minutes" starts lying the
+ * moment a migration runs long — in the direction nobody notices, because the customer who
+ * came back and found it still closed does not report it.
+ */
+const MAINTENANCE_GENERAL: Copy = {
+    en: 'We are doing a little maintenance right now. Please try again in a few minutes.',
+    fr: 'Nous effectuons une petite maintenance en ce moment. Réessayez dans quelques minutes.',
+    pt: 'Estamos a fazer uma pequena manutenção neste momento. Tente novamente daqui a alguns minutos.',
+    es: 'Estamos haciendo un pequeño mantenimiento en este momento. Inténtalo de nuevo en unos minutos.',
+    ar: 'نجري بعض أعمال الصيانة في الوقت الحالي. حاول مرة أخرى بعد بضع دقائق.',
+};
+
+const MAINTENANCE_READONLY: Copy = {
+    en: 'We are doing a little maintenance, so I cannot place orders or save changes right now. You can still browse and check your orders.',
+    fr: "Nous effectuons une petite maintenance : je ne peux ni enregistrer de commande ni sauvegarder de modification pour le moment. Vous pouvez toujours parcourir la boutique et consulter vos commandes.",
+    pt: 'Estamos a fazer uma pequena manutenção, por isso não posso registar encomendas nem guardar alterações neste momento. Pode continuar a ver a loja e as suas encomendas.',
+    es: 'Estamos haciendo un pequeño mantenimiento, así que ahora no puedo registrar pedidos ni guardar cambios. Puedes seguir viendo la tienda y tus pedidos.',
+    ar: 'نجري بعض أعمال الصيانة، لذلك لا يمكنني تسجيل الطلبات أو حفظ التغييرات الآن. لا يزال بإمكانك تصفح المتجر ومراجعة طلباتك.',
+};
+
+const MAINTENANCE_COPY: Readonly<Record<'readonly' | 'down', Copy>> = Object.freeze({
+    readonly: MAINTENANCE_READONLY,
+    down: MAINTENANCE_GENERAL,
+});
+
 const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
     // ── Registration and onboarding (GAP-002) ────────────────────────────────
     [ERROR_CODES.BOT_IDENTITY_UNRESOLVED]: {
@@ -264,6 +305,86 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         pt: 'Essa lista já não está disponível. Diga-me o que procura e volto a pesquisar.',
         es: 'Esa lista ya no está disponible. Dime qué buscas y vuelvo a buscar.',
         ar: 'لم تعد هذه القائمة متاحة. أخبرني بما تبحث عنه وسأبحث من جديد.',
+    },
+    /**
+     * ⚠ **This table held NO review copy at all**, so every review refusal reached a customer as
+     * the category fallback — and the two that matter most are indistinguishable there. *"You
+     * have already reviewed this"* and *"you cannot review this yet"* are different answers to
+     * different questions, and a customer was getting neither.
+     *
+     * ⚠ `REVIEW_NOT_ELIGIBLE` names the CONDITION rather than the rule: the platform waits for
+     * the delivery to be confirmed, so the sentence says when the customer may come back rather
+     * than that they are not allowed.
+     */
+    [ERROR_CODES.REVIEW_ALREADY_EXISTS]: {
+        en: 'You have already reviewed this one.',
+        fr: 'Vous avez déjà donné votre avis sur cet article.',
+        pt: 'Já deixou a sua opinião sobre este artigo.',
+        es: 'Ya has valorado este artículo.',
+        ar: 'لقد قيّمت هذا المنتج من قبل.',
+    },
+    [ERROR_CODES.REVIEW_NOT_ELIGIBLE]: {
+        en: 'You can review this once the order has been confirmed as delivered.',
+        fr: 'Vous pourrez donner votre avis une fois la commande confirmée comme livrée.',
+        pt: 'Poderá avaliar assim que a encomenda for confirmada como entregue.',
+        es: 'Podrás valorarlo cuando el pedido esté confirmado como entregado.',
+        ar: 'يمكنك التقييم بعد تأكيد تسليم الطلب.',
+    },
+    [ERROR_CODES.REVIEW_SUBJECT_NOT_FOUND]: {
+        en: 'I could not find what that review was for.',
+        fr: "Je n'ai pas trouvé l'article concerné par cet avis.",
+        pt: 'Não encontrei o artigo a que essa opinião se refere.',
+        es: 'No encontré el artículo al que se refiere esa valoración.',
+        ar: 'لم أجد المنتج الذي يخصّه هذا التقييم.',
+    },
+    [ERROR_CODES.REVIEW_SUBJECT_NOT_REVIEWABLE]: {
+        en: 'That one cannot be reviewed.',
+        fr: 'Cet article ne peut pas être noté.',
+        pt: 'Esse artigo não pode ser avaliado.',
+        es: 'Ese artículo no se puede valorar.',
+        ar: 'لا يمكن تقييم هذا المنتج.',
+    },
+    [ERROR_CODES.REVIEW_ROLE_NOT_ALLOWED]: {
+        en: 'Only the customer who bought it can review it.',
+        fr: "Seul le client qui l'a acheté peut donner un avis.",
+        pt: 'Só o cliente que o comprou pode avaliá-lo.',
+        es: 'Solo el cliente que lo compró puede valorarlo.',
+        ar: 'يمكن فقط للعميل الذي اشتراه أن يقيّمه.',
+    },
+    /**
+     * ⚠ **Four refusals about a file the customer OWNS, which until now read
+     * *"You do not have access to that"*** — the `authorization` category fallback, and the
+     * one sentence guaranteed to make somebody who paid for a download think they were
+     * cheated. All four are 403s the digital service raises by name.
+     */
+    [ERROR_CODES.DIGITAL_DOWNLOAD_LIMIT_EXCEEDED]: {
+        en: 'You have used all the downloads for that item.',
+        fr: 'Vous avez utilisé tous les téléchargements de cet article.',
+        pt: 'Já usou todas as transferências desse artigo.',
+        es: 'Has usado todas las descargas de ese artículo.',
+        ar: 'لقد استهلكت جميع مرات تنزيل هذا المنتج.',
+    },
+    [ERROR_CODES.DIGITAL_ENTITLEMENT_EXPIRED]: {
+        en: 'Your access to that download has expired.',
+        fr: 'Votre accès à ce téléchargement a expiré.',
+        pt: 'O seu acesso a essa transferência expirou.',
+        es: 'Tu acceso a esa descarga ha caducado.',
+        ar: 'انتهت صلاحية وصولك إلى هذا التنزيل.',
+    },
+    /** ⚠ Invites the customer to say what happened: a revocation is usually somebody's mistake. */
+    [ERROR_CODES.DIGITAL_ENTITLEMENT_REVOKED]: {
+        en: 'That download is no longer available. Tell me what happened and I will pass it on.',
+        fr: "Ce téléchargement n'est plus disponible. Dites-moi ce qui s'est passé et je transmettrai.",
+        pt: 'Essa transferência já não está disponível. Diga-me o que aconteceu e eu transmito.',
+        es: 'Esa descarga ya no está disponible. Cuéntame qué pasó y lo transmito.',
+        ar: 'لم يعد هذا التنزيل متاحًا. أخبرني بما حدث وسأنقل ذلك.',
+    },
+    [ERROR_CODES.DIGITAL_ENTITLEMENT_NOT_FOUND]: {
+        en: 'I could not find that purchase.',
+        fr: "Je n'ai pas trouvé cet achat.",
+        pt: 'Não encontrei essa compra.',
+        es: 'No encontré esa compra.',
+        ar: 'لم أجد هذه العملية.',
     },
     /**
      * ⚠ **THE FIRST SENTENCE IN THIS TABLE TO NAME A NUMBER, and it is a deliberate exception
@@ -600,6 +721,20 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         es: 'No pude identificar el operador de mobile money de ese número. Revísalo o envíame otro número.',
         ar: 'لم أتمكن من تحديد شبكة المحفظة المحمولة لهذا الرقم. تحقق منه أو أرسل لي رقمًا آخر.',
     },
+
+    /**
+     * A maintenance window.
+     *
+     * ⚠ **Deliberately the NEUTRAL sentence, and it is the same constant `maintenanceMessageFor`
+     * returns for a full stop.** One sentence in one place, so the two cannot drift.
+     *
+     * The mode-specific refinement happens in `bot-recovery-actions.ts`, which has the
+     * `details.mode` this function is not given. A reader of `customerMessage` alone therefore
+     * gets a sentence that is **true in every kind of window** rather than one that is precise
+     * in one and false in the other — which matters because the automation layer may read that
+     * field directly, without the `reply` this surface composes beside it.
+     */
+    [ERROR_CODES.SYSTEM_MAINTENANCE_ACTIVE]: MAINTENANCE_GENERAL,
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -629,6 +764,28 @@ export function customerMessageFor(
 }
 
 /**
+ * The maintenance sentence for the window the platform is actually in.
+ *
+ * ⚠ **A separate function rather than a `mode` parameter on `customerMessageFor`**, because
+ * the error handler that calls that one has no mode to pass — the mode reaches the bot surface
+ * on `error.details`, which only the reply composer reads. Widening the general resolver for a
+ * single code would put an always-undefined argument at 623 call sites.
+ *
+ * ⚠ **This is not a second copy table on the failure path.** It resolves out of the same file,
+ * against the same five languages, under the same boot assertion — which is the property that
+ * matters, since the failure it prevents is a customer reading two different apologies for one
+ * fault.
+ */
+export function maintenanceMessageFor(
+    mode: 'readonly' | 'down',
+    language: string | null | undefined,
+): string {
+    const lang = toBotCopyLanguage(language);
+    const copy = MAINTENANCE_COPY[mode] ?? MAINTENANCE_COPY.down;
+    return copy[lang] ?? copy[DEFAULT_LANGUAGE];
+}
+
+/**
  * Refuse to boot on a half-translated entry.
  *
  * The same startup completeness assert all four notification stacks run, and for the same
@@ -652,6 +809,14 @@ export function assertBotErrorCopyComplete(): void {
 
     for (const [category, copy] of Object.entries(CATEGORY_COPY)) check(`category ${category}`, copy);
     for (const [code, copy] of Object.entries(CODE_COPY)) check(`code ${code}`, copy as Copy);
+    /**
+     * ⚠ **The maintenance copy is asserted TOO, and it would not be otherwise** — it is reached
+     * through `maintenanceMessageFor` rather than through either table, so the two loops above
+     * walk straight past it. A sentence outside the boot assert is one a customer discovers is
+     * missing on the worst possible day, which for this particular sentence is *during an
+     * outage*.
+     */
+    for (const [mode, copy] of Object.entries(MAINTENANCE_COPY)) check(`maintenance ${mode}`, copy);
 
     if (gaps.length > 0) {
         // eslint-disable-next-line no-restricted-syntax -- boot assertion, no request in flight
@@ -660,4 +825,4 @@ export function assertBotErrorCopyComplete(): void {
 }
 
 /** Exported for `test:bot-surface`, which asserts coverage and the no-code-leaks rule. */
-export const __BOT_ERROR_COPY = Object.freeze({ CATEGORY_COPY, CODE_COPY });
+export const __BOT_ERROR_COPY = Object.freeze({ CATEGORY_COPY, CODE_COPY, MAINTENANCE_COPY });
