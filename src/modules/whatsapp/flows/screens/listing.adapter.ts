@@ -1,5 +1,6 @@
 import type { ListingPage } from '../../../bot-surface/miniapp/surfaces/product-listing.read';
 import { screenResponse, type FlowResponseBody } from '../domain/flow-protocol';
+import type { FlowOutcome } from '../domain/flow-outcome';
 import { PRODUCT_LISTING_SCREEN } from '../definitions/product-listing.flow';
 import { NOTICE_SCREEN } from '../definitions/notice.screen';
 import type { FlowCopy } from './flow-copy';
@@ -14,11 +15,24 @@ import { FLOW_CAPS, fitText, joinFitted, wouldCut } from './flow-text';
  */
 export const FLOW_LISTING_PAGE_SIZE = FLOW_CAPS.radioOptions;
 
-/** The answer when a screen has nothing to show: one sentence and a way back to the chat. */
-export function noticeResponse(message: string, copy: FlowCopy): FlowResponseBody {
+/**
+ * The closing screen: one sentence, a way back to the chat, and what happened.
+ *
+ * ⚠ **`outcome` is what the CHAT reads when the form closes** (`domain/flow-outcome.ts`), and it
+ * defaults to "nothing happened" — which is right for every state this screen was first written
+ * for: an empty shelf, a lapsed handle, a refusal. Only a screen that actually changed something
+ * passes another value, and there are exactly two: the basket gained an item, or the customer
+ * was asked a question they answer by typing.
+ */
+export function noticeResponse(
+    message: string,
+    copy: FlowCopy,
+    outcome: FlowOutcome = 'notice',
+): FlowResponseBody {
     return screenResponse(NOTICE_SCREEN, {
         message: fitText(message, FLOW_CAPS.body),
         closeLabel: fitText(copy.flowBackToChat, FLOW_CAPS.footerLabel),
+        outcome,
     });
 }
 

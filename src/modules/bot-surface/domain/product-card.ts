@@ -1,5 +1,10 @@
 import { PublicProductListItemDto } from '../../catalog/dto/public-product.dto';
-import { addToCartActionId, buyNowActionId } from './bot-action-id';
+import {
+    addToCartActionId,
+    buyNowActionId,
+    saveForLaterActionId,
+    similarItemsActionId,
+} from './bot-action-id';
 import { botStorefrontLink } from './bot-list-window';
 
 /**
@@ -75,6 +80,27 @@ export interface BotProductCard {
      */
     addToken: string | null;
     buyToken: string | null;
+    /**
+     * What an OUT-OF-STOCK card offers instead of the buy buttons: products like this one, and
+     * saving it for later.
+     *
+     * ⚠ **Optional, and that is a compatibility decision rather than a design one.** A required
+     * field would break every hand-built `BotProductCard` literal in the suites the moment it
+     * landed, in files other streams own. `toBotProductCard` always sets both — null when there is
+     * nothing to offer — so the absence only ever means "built by hand, long ago".
+     *
+     * ⛔ **Never set on a SERVICE, and the renderer depends on that.** A service has no buy tokens
+     * by design (it is booked, not carted), so it takes the renderer's no-buttons path, where
+     * WhatsApp draws a `cta_url` card whose Details link is the only route to the booking flow.
+     * Putting a reply button on that card would replace the link — Meta permits a URL button or
+     * reply buttons in one interactive message, never both — and silently close the booking door.
+     *
+     * ⚠ **Two buttons is the whole budget.** With "See more" on the last card of a page that is
+     * exactly WhatsApp's cap of three; the renderer drops the overflow rather than erroring, so a
+     * third card button added later would silently cost the last card its "See more".
+     */
+    similarToken?: string | null;
+    saveToken?: string | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -253,8 +279,29 @@ export function toBotProductCard(
      * so it is shown, and shown without buy buttons. The check is on the type rather than on
      * a try-and-see, because the failure is a 400 the customer reads as the shop being
      * broken, and it happens on every tap rather than occasionally.
+     *
+     * ── ⛔ AND OUT OF STOCK IS THE SAME ARGUMENT, WHICH THIS FILE USED TO MISS ──
+     * Until 2026-09-20 stock was not considered here at all, so an out-of-stock product drew
+     * **Buy now** and **Add to cart** like any other. Both taps then died in `executePurchase`,
+     * which re-resolves the affordance, finds it disabled and answers
+     * `CATALOG_VARIANT_INSUFFICIENT_STOCK` — a pair of buttons that could only ever fail, on every
+     * tap, for as long as the card sat in the chat history. (The design notes for this round
+     * asserted the card "correctly drops them"; it did not. Measured, then fixed.)
+     *
+     * A sold-out card now carries what is actually useful instead: **Similar items** and **Save
+     * for later**. ⛔ A service gets neither — see `similarToken` for why that would close the
+     * booking door on WhatsApp.
      */
-    const buyable = item.type !== 'service' ? defaultVariantId : null;
+    const sellable = item.type !== 'service' ? defaultVariantId : null;
+    const buyable = item.inStock ? sellable : null;
+
+    /**
+     * ⚠ **Only for something that could have been bought but cannot be right now.** A service is
+     * excluded above; an in-stock product keeps its buy buttons and needs no consolation prize.
+     * `saveToken` needs no variant — the wishlist holds products — but it is gated on the same
+     * condition so the two buttons always appear together, as one designed pair.
+     */
+    const soldOut = item.type !== 'service' && !item.inStock;
 
     return {
         productId: item.id,
@@ -270,5 +317,7 @@ export function toBotProductCard(
         ),
         addToken: buyable ? addToCartActionId(item.id, buyable) : null,
         buyToken: buyable ? buyNowActionId(item.id, buyable) : null,
+        similarToken: soldOut ? similarItemsActionId(item.id) : null,
+        saveToken: soldOut ? saveForLaterActionId(item.id) : null,
     };
 }

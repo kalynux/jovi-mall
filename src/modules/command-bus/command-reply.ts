@@ -1,6 +1,11 @@
 import { MessagingChannel } from '../channel-connections';
 import { BotChromeKey, botChrome } from '../bot-surface/domain/bot-chrome-copy';
-import { BotChannelReply, BotReplyIntent, renderBotReply } from '../bot-surface/domain/channel-reply';
+import {
+    BotChannelReply,
+    BotReplyIntent,
+    BotReplyOption,
+    renderBotReply,
+} from '../bot-surface/domain/channel-reply';
 import { inAppScreenUrl } from '../bot-surface/domain/inapp-url';
 import { botStorefrontLink } from '../bot-surface/domain/bot-list-window';
 import type { InAppSurfaceKind } from '../bot-surface/services/inapp-surface.store';
@@ -67,6 +72,16 @@ export interface RenderableCommandResult {
      * could open the detail screen; the command path couldn't.
      */
     screen?: CommandScreen | null;
+    /**
+     * Buttons beside the message.
+     *
+     * ⚠ **For a command whose answer has known next steps** — today, a WhatsApp form that added
+     * to the basket, which must offer the same three controls the chat's own "added to cart"
+     * offers. The command supplies the list; nothing here composes one, and no channel cap is
+     * applied here either: `channel-reply.ts` drops a fourth button before it reaches Meta, in
+     * the one place that knows each channel's limits.
+     */
+    actions?: readonly BotReplyOption[];
     /**
      * The customer's language, when the command could establish it and the caller couldn't.
      *
@@ -179,7 +194,17 @@ export function commandReplyIntent(
         };
     }
 
-    return { kind: 'text', text };
+    /**
+     * ⚠ **Buttons ride the `text` intent, not a `choice`.** `choice` means *pick one of these and
+     * nothing else*; this is *here is what happened, and here are the three things you probably
+     * want next* — the customer may still type instead, which on this surface they often do.
+     * The same distinction the chat's own "added to cart" turn draws.
+     */
+    const actions = Array.isArray(result?.actions) && result.actions.length > 0
+        ? (result.actions as readonly BotReplyOption[])
+        : null;
+
+    return actions ? { kind: 'text', text, actions } : { kind: 'text', text };
 }
 
 /**

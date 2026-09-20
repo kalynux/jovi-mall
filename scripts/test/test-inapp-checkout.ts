@@ -898,6 +898,34 @@ function main(): void {
         && !chatCode().includes('gateway_customer_id'));
 
     /**
+     * ⚠ **A missing payer number has its own code, and the borrowed one must not come back.**
+     * Both doors raised `PAYMENT_REFERENCE_REQUIRED` for this until 2026-09-19 — a code whose name
+     * means a payment REFERENCE, which a later reader would reasonably "fix" into some other bug.
+     * (That the screen's refusal reads as SPENT is not re-pinned here: it is raised after
+     * `consume`, and section 5's "everything after `consume` is inside the block that marks refusals
+     * spent" already covers every refusal in that span, this one included. Requiring the literal
+     * `{ spent: true }` at this site would fail the day somebody removed a redundant flag.)
+     */
+    assert('⛔ a missing payer number is refused under its own name, never the borrowed reference code', () => {
+        const refusal = (src: string, from: string): string | null => {
+            const start = from ? src.indexOf(from) : 0;
+            if (start < 0) return null;
+            const at = src.indexOf('ERROR_CODES.PAYMENT_PAYER_NUMBER_REQUIRED', start);
+            return at < 0 ? null : src.slice(at, src.indexOf(');', at));
+        };
+        const chat = refusal(chatCode(), '');
+        const screen = refusal(screenCode(), 'export async function placeCheckout(');
+        if (!chat || !screen) {
+            console.error('      a payer-number refusal was not found — nothing below would be about it');
+            return false;
+        }
+        return /^ERROR_CODES\.PAYMENT_PAYER_NUMBER_REQUIRED,\s*422,/.test(chat)
+            && /^ERROR_CODES\.PAYMENT_PAYER_NUMBER_REQUIRED,\s*422,/.test(screen)
+            && !chatCode().includes('PAYMENT_REFERENCE_REQUIRED')
+            && !screenCode().includes('PAYMENT_REFERENCE_REQUIRED');
+    });
+
+    /**
      * ⛔ **A number no mobile network can be worked out for is refused BEFORE it costs anything.**
      * NotchPay resolves the network from the prefix inside the gateway — after the spend and after
      * the orders exist — so without this a number outside `cm-operator.ts`'s table cost the
@@ -1037,6 +1065,147 @@ function main(): void {
             src.indexOf('async handleOrderCancelled'),
         );
         return !handler.includes('reason') && !handler.includes('gatewayMessage');
+    });
+
+    console.log('\n── 10b · The same silence for a BOOKING — and the same exclusions ──');
+
+    /**
+     * ⭐ **A failed mobile-money payment for an appointment told the customer nothing** until
+     * 2026-09-16: `handlePaymentFailure` returned early on anything that was not an order. The fix
+     * put a booking branch INSIDE that method, so a booking inherits every exclusion § 10 pins —
+     * the call sites are the webhook and the verify path, never the catch of the gateway call.
+     *
+     * ⚠ **What § 10 cannot see, and these can.** § 10 counts calls to `handlePaymentFailure`. It
+     * says nothing about an event published BESIDE it — a `payment.failed` with
+     * `aggregateType: 'booking'` published straight from `initiateBookingPayment`'s catch passes
+     * every § 10 assertion, and tells somebody their appointment payment failed while their
+     * handset may still be prompting them. So the rule pinned here is about the EVENT: every
+     * failure-named publish in the orchestrator sits inside the one sanctioned method.
+     *
+     * ⚠ Each assertion bounds its own span and FAILS when the span is not found — an absence
+     * check over a span that does not exist is true of nothing, and passes hardest when broken.
+     */
+    const orchestratorMethod = (src: string, sig: string): string | null => {
+        const start = src.indexOf(sig);
+        if (start < 0) return null;
+        const end = src.indexOf('\n  }\n', start);
+        return end < 0 ? null : src.slice(start, end);
+    };
+    const handlerMethod = (src: string, sig: string): string | null => {
+        const start = src.indexOf(sig);
+        if (start < 0) return null;
+        const end = src.indexOf('\n    }\n', start);
+        return end < 0 ? null : src.slice(start, end);
+    };
+
+    assert('⛔ every failure-named event the orchestrator publishes comes from handlePaymentFailure — none beside it', () => {
+        const src = orchestratorCode();
+        const start = src.indexOf('private async handlePaymentFailure(');
+        const end = start < 0 ? -1 : src.indexOf('\n  }\n', start);
+        if (start < 0 || end < 0) {
+            console.error('      handlePaymentFailure was not found — the containment check would be vacuous');
+            return false;
+        }
+        const failures = [...src.matchAll(/eventBus\.publish\(\s*'([^']+)'/g)]
+            .filter((m) => /fail/i.test(m[1]));
+        const outside = failures.filter((m) => m.index! < start || m.index! > end);
+        if (outside.length > 0) {
+            console.error(`      published outside the sanctioned method: ${outside.map((m) => m[1]).join(', ')}`);
+        }
+        return failures.length === 2
+            && failures.every((m) => m[1] === 'payment.failed')
+            && outside.length === 0;
+    });
+
+    assert('⛔ the booking branch is inside the sanctioned method, and returns before the order branch', () => {
+        const fail = orchestratorMethod(orchestratorCode(), 'private async handlePaymentFailure(');
+        if (!fail) return false;
+        const from = fail.indexOf('if (transaction.bookingId) {');
+        const to = fail.indexOf('if (orderIds.length === 0) return;');
+        if (from < 0 || to < 0 || from > to) {
+            console.error('      the booking branch was not found ahead of the order branch');
+            return false;
+        }
+        const branch = fail.slice(from, to);
+        const publish = branch.indexOf("eventBus.publish('payment.failed'");
+        return publish > 0
+            && branch.includes("aggregateType: 'booking'")
+            && branch.includes('purpose: transaction.purpose')
+            && branch.indexOf('return;', publish) > publish
+            && !branch.includes('orderId:');
+    });
+
+    /**
+     * ⚠ **The two booking payment-start methods write a local FAILED from the catch of the
+     * gateway call, and that is exactly where a timeout cannot be told from a refusal.** The
+     * customer is in that request and is answered by its 502. Pinned by name, with the local
+     * write asserted present, so the absence below is about the span that holds the catch.
+     */
+    assert('⛔ neither booking payment-start method announces a failure — the customer is in that request', () => {
+        const src = orchestratorCode();
+        const methods = [
+            orchestratorMethod(src, 'async initiateBookingPayment('),
+            orchestratorMethod(src, 'async initiateBookingBalancePayment('),
+        ];
+        if (methods.some((m) => m === null)) {
+            console.error('      a booking payment-start method was not found — the absence check would be vacuous');
+            return false;
+        }
+        return methods.every((m) =>
+            m!.includes('await this.recordFailedAttempt(transaction, error)')
+            && m!.includes('ERROR_CODES.PAYMENT_INITIATION_FAILED, 502')
+            && !m!.includes('handlePaymentFailure')
+            && !/publish\(\s*'[^']*fail/i.test(m!));
+    });
+
+    assert('⛔ the customer stack SUBSCRIBES the booking handler to the same event', () =>
+        notifyConsumerCode().includes(
+            "eventBus.subscribe('payment.failed', handler.handleBookingPaymentFailed.bind(handler))",
+        ));
+
+    /**
+     * ⚠ **Two handlers hear one event, so each must refuse the other's payload.** Without the
+     * booking filter an order failure would also be announced as an appointment; without the
+     * order filter the reverse. Either is a second, wrong message about one failed charge.
+     */
+    assert('each handler takes only its own payload — one failure, one message', () => {
+        const src = notifyHandlerCode();
+        const booking = handlerMethod(src, 'async handleBookingPaymentFailed(');
+        const order = handlerMethod(src, 'async handleOrderPaymentFailed(');
+        if (!booking || !order) return false;
+        return booking.includes("if (p.aggregateType !== 'booking' || !p.bookingId) return;")
+            && /p\.aggregateType && p\.aggregateType !== 'order'\)\) return;/.test(order);
+    });
+
+    assert('a balance and the original price are told apart — a customer can fail at both', () => {
+        const booking = handlerMethod(notifyHandlerCode(), 'async handleBookingPaymentFailed(');
+        if (!booking) return false;
+        return booking.includes("situation: 'booking.payment_failed'")
+            && booking.includes("const isBalance = p.purpose === 'booking_balance';")
+            && booking.includes("idempotencyKey: `customer.booking.payment_failed:${p.bookingId}${isBalance ? ':balance' : ''}`");
+    });
+
+    /**
+     * ⚠ **Keys compared as a SET, never by substring** — a substring check is fooled by a longer
+     * key sharing the prefix. The table must also be found non-empty first: an empty set makes
+     * "the key is absent" true of nothing.
+     */
+    assert('⛔ no preference can silence a failed booking payment', () => {
+        const src = notifyHandlerCode();
+        const at = src.indexOf('const SITUATION_PREFERENCE');
+        const table = at < 0 ? '' : src.slice(at, src.indexOf('};', at));
+        const keys = new Set([...table.matchAll(/^\s*'([^']+)'\s*:/gm)].map((m) => m[1]));
+        return keys.size > 0 && keys.has('booking.reminder') && !keys.has('booking.payment_failed');
+    });
+
+    assert('⛔ the gateway\'s own failure text never reaches a booking customer', () => {
+        const fail = orchestratorMethod(orchestratorCode(), 'private async handlePaymentFailure(');
+        const booking = handlerMethod(notifyHandlerCode(), 'async handleBookingPaymentFailed(');
+        if (!fail || !booking) return false;
+        const branch = fail.slice(fail.indexOf('if (transaction.bookingId) {'), fail.indexOf('if (orderIds.length === 0) return;'));
+        return branch.length > 0
+            && !/reason|gatewayMessage|rawGatewayPayloads|error/.test(branch)
+            && !/reason|gatewayMessage/.test(booking);
     });
 
     console.log(

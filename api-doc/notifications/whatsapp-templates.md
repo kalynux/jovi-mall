@@ -942,6 +942,37 @@ charge cancels nothing) and blames nobody.
 | es | El pago no se completó para {{3}} | No pudimos cobrar los {{1}} {{2}} de tu reserva de {{3}}. No se ha cobrado nada — abre la reserva para intentarlo otra vez. | Ver reserva |
 | ar | لم يتم الدفع لحجز {{3}} | لم نتمكن من تحصيل {{1}} {{2}} لحجز {{3}}. لم يُخصم أي مبلغ — افتح الحجز لإعادة المحاولة. | عرض الحجز |
 
+### `customer_booking_balance_received`
+
+⚠ **NEW — generated locally, NOT submitted.** Added 2026-09-20 (phase 10, stage 1). Submission is
+the owner's decision, together with the rest of the stage-2 set.
+
+⭐ **It closes the last silence in the booking payment set, and the silence was deliberate.**
+`handleBookingPaymentReceived` returned early on a balance rather than reuse
+`customer_booking_payment_received`, whose copy ends *"Nothing else to do — see you then"*. A
+balance is settled **after** the appointment, so that sentence points at a visit that already
+happened — and avoiding the false wording by saying nothing left a customer who had just paid with
+no confirmation at all. The fix is a second template, not a looser sentence.
+
+⚠ **No time, no future tense.** Every word is about money that has arrived. It states the booking
+is now **fully paid**, which is the customer's actual question and the closing half of
+`customer_booking_balance_due`.
+
+- **Situation:** `booking.balance.received`
+- **Fires:** on `payment.received` with `aggregateType: 'booking'` and `purpose: 'booking_balance'`
+  — the branch that used to `return`. The original price keeps
+  `customer_booking_payment_received`.
+- **Body params:** `{{1}}`=currency, `{{2}}`=amountFormatted, `{{3}}`=serviceName
+- **Button:** URL → `shop/account/bookings/{{bookingId}}`
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Balance paid: {{1}} {{2}} | We received your {{1}} {{2}} balance payment for {{3}}. Your booking is now fully paid — thank you. | View booking |
+| fr | Solde payé : {{1}} {{2}} | Nous avons reçu votre paiement de solde de {{1}} {{2}} pour {{3}}. Votre réservation est désormais entièrement payée — merci. | Voir la réservation |
+| pt_PT | Saldo pago: {{1}} {{2}} | Recebemos o seu pagamento de saldo de {{1}} {{2}} por {{3}}. A sua reserva está totalmente paga — obrigado. | Ver reserva |
+| es | Saldo pagado: {{1}} {{2}} | Recibimos tu pago de saldo de {{1}} {{2}} por {{3}}. Tu reserva está totalmente pagada — gracias. | Ver reserva |
+| ar | تم دفع الرصيد: {{1}} {{2}} | استلمنا دفعة الرصيد بقيمة {{1}} {{2}} مقابل {{3}}. حجزك مدفوع بالكامل الآن — شكرًا لك. | عرض الحجز |
+
 ### `customer_order_shipped`
 
 - **Situation:** `order.shipped`
@@ -1067,6 +1098,132 @@ charge cancels nothing) and blames nobody.
 | pt_PT | Resolvido: "{{1}}" | Marcámos o seu pedido sobre "{{1}}" como concluído. {{2}} | Ver pedido de apoio |
 | es | Resuelto: "{{1}}" | Hemos marcado tu solicitud sobre "{{1}}" como terminada. {{2}} | Ver solicitud |
 | ar | تم الحل: "{{1}}" | لقد وضعنا علامة على طلبك بخصوص "{{1}}" بأنه منتهٍ. {{2}} | عرض الطلب |
+
+---
+
+## 14. Phase 10 · STAGE 2 — quick-reply buttons on the approved templates
+
+⛔ **NOT BUILT AND NOT SUBMITTED. This section is the specification, written 2026-09-20 so the
+decision can be taken with the cost visible.** Stage 1 (chat quick replies on Telegram and on
+WhatsApp *inside* the 24-hour window) is built and green; it required no Meta involvement at all.
+Stage 2 is the same button vocabulary projected onto the **approved templates**, which is the only
+way a proactive button reaches a customer **outside** the window.
+
+Every claim here is marked **[src]** (verified in this repository), **[meta]** (verified in Meta's
+published documentation) or **[assumption]**.
+
+### 14.1 Two code blockers, both in `src/modules/whatsapp/**`
+
+⚠ **A template quick-reply payload cannot be sent today, and the module looks as though it can.**
+`sub_type: 'quick_reply'` is already in the type union
+([`whatsapp-message.types.ts:116`](../../src/modules/whatsapp/types/whatsapp-message.types.ts))
+— but:
+
+| # | Blocker | Where | Effect |
+|---|---|---|---|
+| 1 | `TemplateParameter.type` has no `'payload'` | `whatsapp-message.types.ts:124` **[src]** | will not compile |
+| 2 | the runtime validator carries the same list as a **hardcoded allowlist and throws** | `template-validator.ts:127` **[src]** | casting past `tsc` still fails with `WHATSAPP_INVALID_PAYLOAD`, before Meta is called |
+
+This is the effort's failure mode 1 — *registered, validated, and never reached*. The fix is two
+lines (add `'payload'` to both lists, plus `payload?: string` on `TemplateParameter`). It was
+deliberately **left unbuilt**: it is inert until a quick-reply template actually exists, so
+landing it speculatively would add an untested path to a module no stream owns.
+
+### 14.2 Meta's rules that shape the design
+
+- A template may mix quick-reply and URL buttons, but **all quick replies must be consecutive and
+  all non-quick-replies consecutive** — alternating them is rejected as an invalid combination
+  **[meta]**.
+- Caps: **10 buttons total, 2 URL, 10 quick reply** **[meta]**.
+- ⚠ **Templates with 4+ buttons, or a quick-reply/other mix, do not render on WhatsApp desktop**
+  **[meta]**. This is the binding constraint, not the caps: it holds a template to **1 URL + 2
+  quick replies**.
+- **Editing an approved template requires re-approval** **[meta]**. So stage 2 is a resubmission
+  of every template that gains a button, in every language it is approved in.
+
+### 14.3 ⛔ Always send an explicit payload
+
+Meta's webhook reference documents a template quick-reply tap as `messages[0].type === "button"`
+with `button.payload` and `button.text`, and describes `button.payload` as carrying the **button
+label text** **[meta]**. It does *not* state what arrives when no payload parameter was supplied at
+send time — **[assumption]**: the label.
+
+**So every quick-reply button must be sent with an explicit `payload` parameter, and the tap
+dispatcher must treat any payload that is not a well-formed token as the stale/unknown button.**
+That rule is correct whether the assumption holds or not, and it is the one the n8n side has
+already been given: the WhatsApp adapter forwards `button.payload` verbatim — no trim, no case
+change **[src, confirmed by the n8n spec session]** — so a visible label such as `Try again` would
+otherwise arrive where a verb is expected.
+
+### 14.4 What each template gains
+
+The vocabulary is defined once, in `actions` on the customer catalog
+([`customer-notification-catalog.ts`](../../src/modules/notifications/catalog/customer-notification-catalog.ts)),
+and stage 1 already renders it. Stage 2 adds the **same 13 situations'** buttons to the templates;
+the other 12 templates are **untouched**.
+
+| Template | Quick replies to add (after the existing URL button) |
+|---|---|
+| `customer_booking_confirmed` | Cancel booking |
+| `customer_booking_rescheduled` | That works · Ask to change |
+| `customer_booking_cancelled` | Book again |
+| `customer_booking_completed` | Leave a review |
+| `customer_booking_reminder` | Cancel booking |
+| `customer_booking_payment_failed` | Try again |
+| `customer_order_payment_failed` | Try again |
+| `customer_order_shipped` | Order details |
+| `customer_order_delivered` | Leave a review · Something's wrong |
+| `customer_order_delivery_failed` | I was not there · My address is wrong · Where is it now |
+| `customer_ticket_replied` | Reply here |
+| `customer_ticket_awaiting_customer` | Reply here |
+| `customer_ticket_resolved` | Not sorted |
+
+⚠ `customer_order_delivery_failed` is the one that would exceed the desktop-rendering limit: URL +
+**three** quick replies. Either drop the URL button for that template alone (the three buttons are
+the owner's specified set) or accept that it renders on mobile only. **Open decision.**
+
+⚠ `customer_ticket_resolved`'s button is **conditional at send time**, not in the template: it is
+suppressed for a *closed* request by omitting the id its token carries. A template cannot express
+that, so the button is present in the approved template and simply not sent for a closed request —
+which Meta permits, since button parameters are supplied per send.
+
+### 14.5 The submission set, and what gates it
+
+Three groups, and **all three are owner decisions that are still open**:
+
+1. **The 13 above** — re-approval of 13 templates × the languages they are approved in.
+2. **Three templates that do not exist at all** and must be submitted before they can *ever* be
+   delivered out of window: `customer_booking_payment_failed`, `customer_order_payment_failed`
+   **[src — absent from the payloads json and from the registry]**, and the new
+   `customer_booking_balance_received` (§ 13). Note the first two are in the list above too: they
+   would be *created* with their buttons rather than edited.
+3. ⛔ **The language gap.** The payloads json is generated for `["en","fr"]` only **[src]**, while
+   `template-registry.ts:93` registers all five and the send path uses `META_LANGUAGE_CODE[lang]`
+   with **no fallback** **[src]**. A customer whose language is `pt`, `es` or `ar` therefore
+   receives **nothing** out of window — the send is refused by Meta and recorded as a delivery
+   error on the notification row. Approving all five roughly doubles the submission count; the
+   cheaper alternative is a send-time fallback to the default language, which is a code change
+   here and no Meta work at all.
+
+### 14.6 How to verify stage 2 actually took
+
+⛔ **AN APPROVAL IS NOT EVIDENCE THE SEND WORKS.** Meta reviews the template's *content* at
+approval and validates the *component shape* at **send** time, so a template can be `APPROVED`
+while every send carrying its new button parameter is refused. **Only a live send per changed
+template proves the button parameter is accepted.** Read that before planning the rollout, because
+"all approved" is the reassuring measurement that does not answer the question — and on this
+platform it would be the second time a green reading stood in for a working path
+(see ADR-022: a *successful* n8n execution is not evidence the bot replied).
+
+Then, in order:
+
+1. `npm run whatsapp:templates:submit` (no `--submit`) — prints the difference against the live
+   WABA without sending. Templates are WABA-scoped, so this is safe to run at any time.
+2. After approval, re-measure rather than trusting the submission: a template can sit `PENDING`,
+   and [`whatsapp-templates-submitted`] records that reading a *category* off a pending row is
+   meaningless.
+3. The live send from the warning above — one per changed template, and the only step that
+   exercises the payload parameter end to end.
 
 ---
 

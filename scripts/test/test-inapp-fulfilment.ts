@@ -38,10 +38,26 @@ import {
     orderShipmentsActionId,
     parseBotActionId,
     shipmentActionId,
-    ticketActionId,
     trackActionId,
 } from '../../src/modules/bot-surface/domain/bot-action-id';
 import { actionKeyOf } from '../../src/modules/bot-surface/domain/bot-action-dispatch';
+import {
+    attachToTicketActionId,
+    longestConfirmationRefLength,
+    orderCancelConfirmActionId,
+    orderCancelDeclineActionId,
+    supportFormActionId,
+    supportFormWithFileActionId,
+    supportTopicActionId,
+    ticketCardActionId,
+    ticketCloseActionId,
+    ticketCloseConfirmActionId,
+    ticketCloseDeclineActionId,
+    ticketListActionId,
+    ticketPhotoActionId,
+    ticketReplyActionId,
+} from '../../src/modules/bot-surface/domain/bot-ticket-actions';
+import { INBOUND_FILE_HANDLE_LENGTH } from '../../src/modules/bot-surface/services/inbound-file.store';
 import { BOT_COPY_LANGUAGES } from '../../src/modules/bot-surface/domain/bot-error-copy';
 import {
     ORDER_CASH_ON_DELIVERY_COPY,
@@ -81,6 +97,21 @@ const CONTROLLER_PATH = path.join(
 
 /** CRLF folded first — the tree is edited from Windows and a `\r` breaks every multi-line match. */
 const CONTROLLER = fs.readFileSync(CONTROLLER_PATH, 'utf8').replace(/\r\n/g, '\n');
+
+/**
+ * The support half of this stream, scanned as a SECOND span.
+ *
+ * ⚠ **This exists because the `tkt` handlers MOVED**, and that is the sixth guard shape: a scan of
+ * one file goes vacuously green when the code it guards is extracted elsewhere. `ticketTap` was in
+ * the order controller until phase 8; every "no tap swallows an error" rule has to follow it, so both
+ * files are read and the section below asserts each handler is found in the file that should hold it.
+ */
+const TICKET_CONTROLLER_PATH = path.join(
+    __dirname,
+    '../../src/modules/bot-surface/controllers/bot-ticket.controller.ts',
+);
+
+const TICKET_CONTROLLER = fs.readFileSync(TICKET_CONTROLLER_PATH, 'utf8').replace(/\r\n/g, '\n');
 
 /** Block and line comments removed, so a guard cannot be satisfied by a sentence about the code. */
 function stripComments(source: string): string {
@@ -129,6 +160,21 @@ function regionOf(source: string, name: string): string | null {
 }
 
 /**
+ * The argument list of one call, from `fn(` to its closing `);` — or `''` when there is no such call.
+ *
+ * ⚠ **This exists because a guard about one CALL must not read a span containing others.** The
+ * signed-cancel guard first asserted `verifyConfirmationRef([\s\S]*split.id,` and passed happily
+ * against a copy with the scope removed, because a later line in the same handler also says
+ * `split.id,`. Naming the span is the whole lesson of this file's header.
+ */
+function callArguments(region: string, fn: string): string {
+    const at = region.indexOf(`${fn}(`);
+    if (at < 0) return '';
+    const end = region.indexOf(');', at);
+    return end < 0 ? '' : region.slice(at + fn.length + 1, end);
+}
+
+/**
  * Run a source predicate against the real file (must hold) and a broken copy (must not).
  *
  * ⚠ **A mutation that changes nothing fails the assertion.** If the text a mutation replaces has
@@ -140,7 +186,23 @@ function assertBites(
     predicate: (source: string) => boolean,
     mutate: (source: string) => string,
 ): void {
+    assertBitesIn(CONTROLLER, name, predicate, mutate);
+}
+
+/**
+ * `assertBites` against any source, because this stream now spans two controllers.
+ *
+ * ⚠ **The source is a PARAMETER rather than a second copy of this function**, so the "a mutation that
+ * no longer applies FAILS" rule holds for the support half too. That rule is the whole value here.
+ */
+function assertBitesIn(
+    source: string,
+    name: string,
+    predicate: (source: string) => boolean,
+    mutate: (source: string) => string,
+): void {
     assert(name, () => {
+        const CONTROLLER = source;
         const broken = mutate(CONTROLLER);
         if (broken === CONTROLLER) {
             console.error('     ↳ the mutation no longer applies — re-read this guard against the controller');
@@ -164,6 +226,13 @@ function registeredKeys(source: string): string[] {
 }
 
 const O = '0123456789abcdef01234567';
+
+/**
+ * A file handle and a confirmation reference at their REAL lengths, so the cap assertions below are
+ * about the tokens this service actually mints rather than about short stand-ins.
+ */
+const HANDLE = `att_${'A'.repeat(INBOUND_FILE_HANDLE_LENGTH - 'att_'.length)}`;
+const REF = 'r'.repeat(longestConfirmationRefLength());
 const S = 'fedcba9876543210fedcba98';
 
 function main(): void {
@@ -178,17 +247,28 @@ function main(): void {
         ['order row', orderActionId(O)],
         ['order card · Shipments', orderShipmentsActionId(O)],
         ['order card · Cancel', orderCancelActionId(O)],
-        ['order card · Get help', ticketActionId(`new:hp:${O}`)],
-        ['cancel · Yes', confirmActionId('cnc', O)],
-        ['cancel · No', declineActionId('cnc', O)],
+        ['order card · Get help', supportTopicActionId('hp', O)],
+        ['cancel · Yes', orderCancelConfirmActionId(O, REF)],
+        ['cancel · No', orderCancelDeclineActionId(O)],
         ['parcel row', shipmentActionId(O, S)],
         ['COD card · Get code', codCodeActionId(O, S)],
         ['COD card · Track', trackActionId(O)],
         ['confirm · Yes', confirmActionId('cd', `${O}:${S}`)],
         ['confirm · No', declineActionId('cd', `${O}:${S}`)],
-        ['failed · redeliver', ticketActionId(`new:rd:${O}`)],
-        ['failed · address', ticketActionId(`new:ad:${O}`)],
+        ['failed · redeliver', supportTopicActionId('rd', O)],
+        ['failed · address', supportTopicActionId('ad', O)],
         ['order list · Load more', openSurfaceActionId('ol')],
+        ['order list · from a menu', orderActionId('list')],
+        ['request row', ticketCardActionId(O)],
+        ['request · Reply', ticketReplyActionId(O)],
+        ['request · Attach photo', ticketPhotoActionId(O)],
+        ['request · Close', ticketCloseActionId(O)],
+        ['request list · from a menu', ticketListActionId()],
+        ['support form', supportFormActionId()],
+        ['support form · with the file just sent', supportFormWithFileActionId(HANDLE)],
+        ['which request · attach here', attachToTicketActionId(O, HANDLE)],
+        ['close request · Yes', ticketCloseConfirmActionId(O, REF)],
+        ['close request · No', ticketCloseDeclineActionId(O)],
     ];
 
     const keys = registeredKeys(CONTROLLER);
@@ -196,7 +276,8 @@ function main(): void {
     assert('the registry export exists and is not empty', () => keys.length > 0);
 
     assert('it registers EXACTLY the keys this stream owns — none missing, none extra', () => {
-        const expected = ['ord', 'shp', 'code', 'track', 'tkt', 'yes:cd', 'no:cd', 'yes:cnc', 'no:cnc', 'open:ol'];
+        const expected = ['ord', 'shp', 'code', 'track', 'tkt', 'yes:cd', 'no:cd', 'yes:cnc', 'no:cnc',
+            'yes:tcl', 'no:tcl', 'open:ol'];
         const same = expected.length === keys.length && expected.every((k) => keys.includes(k));
         if (!same) console.error(`     ↳ registered: ${keys.join(' · ')}`);
         return same;
@@ -226,9 +307,10 @@ function main(): void {
         const code = stripComments(CONTROLLER);
         const used = [...code.matchAll(/\b([a-z][A-Za-z]*ActionId)\(/g)].map((m) => m[1]);
         const covered = [
-            'orderActionId', 'orderShipmentsActionId', 'orderCancelActionId', 'ticketActionId',
+            'orderActionId', 'orderShipmentsActionId', 'orderCancelActionId', 'supportTopicActionId',
             'confirmActionId', 'declineActionId', 'shipmentActionId', 'codCodeActionId',
-            'trackActionId', 'openSurfaceActionId',
+            'trackActionId', 'openSurfaceActionId', 'supportTopicActionId', 'orderCancelConfirmActionId',
+            'orderCancelDeclineActionId',
         ];
         const missing = [...new Set(used)].filter((b) => !covered.includes(b));
         if (missing.length) console.error(`     ↳ add to EMITTED: ${missing.join(', ')}`);
@@ -238,9 +320,22 @@ function main(): void {
     // ─────────────────────────────────────────────────────────────────────────
     console.log('\n══ § 2 · Taps can never swallow an error ══');
 
+    /** Tap handlers in the ORDER controller. */
     const TAP_HANDLERS = [
-        'orderTap', 'shipmentTap', 'codCodeTap', 'trackTap', 'ticketTap', 'confirmDeliveryTap',
+        'orderTap', 'shipmentTap', 'codCodeTap', 'trackTap', 'confirmDeliveryTap',
         'declineDeliveryTap', 'confirmCancelTap', 'declineCancelTap', 'orderHistoryTap',
+    ];
+
+    /**
+     * Tap handlers in the SUPPORT controller, which the same rules bind.
+     *
+     * ⚠ **Listed separately and asserted to be in the other file**, so the day one of them moves back
+     * the suite fails instead of quietly checking nothing — the vacuous-scan shape that has already
+     * cost this effort a working guard.
+     */
+    const TICKET_TAP_HANDLERS = [
+        'ticketTap', 'askForReply', 'askForPhoto', 'askToClose', 'confirmTicketCloseTap',
+        'declineTicketCloseTap', 'openSupportForm',
     ];
 
     /**
@@ -249,11 +344,14 @@ function main(): void {
      * one resolves early and swallows every refusal: no response, the automation layer times out,
      * and Telegram reports nothing for a callback that produced no message. It happened once here.
      */
-    const noTapCallsAStatic = (source: string): boolean =>
-        TAP_HANDLERS.every((name) => {
+    const noStaticInRegions = (source: string, names: readonly string[], statics: RegExp): boolean =>
+        names.every((name) => {
             const region = regionOf(source, name);
-            return region !== null && !region.includes('BotOrderController.') && !/\bnext\b/.test(region);
+            return region !== null && !statics.test(region) && !/\bnext\b/.test(region);
         });
+
+    const noTapCallsAStatic = (source: string): boolean =>
+        noStaticInRegions(source, TAP_HANDLERS, /BotOrderController\./);
 
     assertBites(
         '⛔ no tap handler awaits a route static or touches `next`',
@@ -266,6 +364,29 @@ function main(): void {
 
     assert('every tap handler exists as a plain function', () =>
         TAP_HANDLERS.every((name) => regionOf(CONTROLLER, name) !== null));
+
+    /**
+     * ⚠ **The support handlers are asserted to be in the SUPPORT file, and absent from this one.**
+     * Both halves matter: the first proves the scan below has something to read, the second proves
+     * this file's own scans are not silently covering code that has left it.
+     */
+    assert('every support tap handler exists as a plain function, in the support controller', () => {
+        const here = TICKET_TAP_HANDLERS.filter((name) => regionOf(CONTROLLER, name) !== null);
+        if (here.length) console.error(`     ↳ still in the ORDER controller: ${here.join(', ')}`);
+        const missing = TICKET_TAP_HANDLERS.filter((name) => regionOf(TICKET_CONTROLLER, name) === null);
+        if (missing.length) console.error(`     ↳ not found in the support controller: ${missing.join(', ')}`);
+        return here.length === 0 && missing.length === 0;
+    });
+
+    assertBitesIn(
+        TICKET_CONTROLLER,
+        '⛔ no SUPPORT tap handler awaits a route static or touches `next`',
+        (source) => noStaticInRegions(source, TICKET_TAP_HANDLERS, /BotTicketController\./),
+        (src) => src.replace(
+            '            await listOwnRequests(req, res, BotTicketListSchema.parse({}));',
+            '            await BotTicketController.list(req, res, () => undefined);',
+        ),
+    );
 
     assertBites(
         'a malformed argument is refused with the dispatcher\'s ONE refusal, not a home-made one',
@@ -328,12 +449,41 @@ function main(): void {
         (source) => {
             const actions = regionOf(source, 'failedDeliveryActions') ?? '';
             const asks = [...actions.matchAll(/id:\s*([a-zA-Z]+)\(/g)].map((m) => m[1]);
-            return asks.length >= 2 && asks.every((builder) => builder === 'ticketActionId');
+            return asks.length >= 2 && asks.every((builder) => builder === 'supportTopicActionId');
         },
         (src) => src.replace(
-            "id: ticketActionId(`new:rd:${orderId}`),",
+            "id: supportTopicActionId('rd', orderId),",
             'id: trackActionId(orderId),',
         ),
+    );
+
+    assertBites(
+        '⛔ "Yes, cancel" is SIGNED for purpose `cancel` and scoped to the order it names',
+        (source) => {
+            const tap = regionOf(source, 'confirmCancelTap') ?? '';
+            const ask = regionOf(source, 'askToCancel') ?? '';
+            /**
+             * ⚠ **Read the CALL's own arguments, never a span across the whole handler.** A
+             * `[\s\S]*split\.id,` reaching past the verify call matches the `cancelOwnedOrder(req,
+             * res, split.id, undefined)` line below it, so dropping the scope from the verify call
+             * left the guard green — measured, not imagined: that is how this guard first failed its
+             * own bite-proof.
+             */
+            const verify = callArguments(tap, 'verifyConfirmationRef');
+            const mint = callArguments(ask, 'mintConfirmationRef');
+            const signedForThisOrder = verify.includes("'cancel'") && verify.includes('split.id');
+            const mintedForThisOrder = mint.includes("'cancel'") && mint.includes('orderId');
+            return signedForThisOrder
+                && mintedForThisOrder
+                && tap.includes('splitConfirmArgument(action.argument)')
+                && tap.includes("verdict !== 'valid'");
+        },
+        /**
+         * Drop the SCOPE the reference is verified against: a confirmation minted for one order would
+         * then be accepted for cancelling ANY of that customer's orders, which is the whole reason the
+         * scope exists.
+         */
+        (src) => src.replace("        'cancel',\n        { userId: caller.userId, channel: caller.channel },\n        split.id,", "        'cancel',\n        { userId: caller.userId, channel: caller.channel },\n        '',"),
     );
 
     assertBites(
@@ -341,7 +491,7 @@ function main(): void {
         (source) => {
             const tap = regionOf(source, 'confirmCancelTap') ?? '';
             const work = regionOf(source, 'cancelOwnedOrder') ?? '';
-            return /cancelOwnedOrder\(req, res, orderId, undefined\)/.test(tap)
+            return tap.includes('cancelOwnedOrder(req, res, split.id, undefined)')
                 && /reason\s*\?\s*null\s*:\s*\{ kind: 'text', text: botChrome\('cancelReasonPrompt'/.test(work);
         },
         (src) => src.replace("botChrome('cancelReasonPrompt'", "botChrome('confirmButton'"),

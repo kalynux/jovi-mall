@@ -8,6 +8,8 @@ import { PURCHASE_ACTION_HANDLERS } from './bot-purchase.controller';
 import { ORDER_ACTION_HANDLERS } from './bot-order.controller';
 import { CHECKOUT_ACTION_HANDLERS } from './bot-checkout.controller';
 import { ACCOUNT_ACTION_HANDLERS } from './bot-account.controller';
+import { DISCOVERY_ACTION_HANDLERS } from './bot-discovery.controller';
+import { BARGAIN_ACTION_HANDLERS } from './bot-negotiation.controller';
 
 /**
  * THE TAP-CODE DISPATCHER — `POST /catalog/action`, the surface's single tap handler.
@@ -50,13 +52,27 @@ const HANDLERS = mergeActionHandlers([
     /** pay (pay:st Check status · pay:rt Try again) */
     ['checkout', CHECKOUT_ACTION_HANDLERS],
     /**
-     * yes:close · no:close
+     * acct · lang · yes:close · no:close · yes:unl · no:unl
      *
      * ⚠ **Registered a round late, and the gap is the lesson.** The close preview drew both
      * buttons from 6b2a47d while this line was missing, so each tap answered the unknown-token
      * sentence. Nothing proved a DRAWN key was ROUTED — only that no key was routed twice.
+     *
+     * ⚠ `lang` is a CLAIM on a verb that already existed: `languageActionId` has shipped since
+     * milestone 1 with nothing drawing it and nothing handling it. The four keys after `acct`
+     * arrive with the handlers that draw them, in one change each, for the reason above.
      */
     ['account', ACCOUNT_ACTION_HANDLERS],
+    /**
+     * cat · sim · save · open:pd
+     *
+     * ⚠ `open:pd` is the fourth screen sub-key and the three owners are deliberately apart:
+     * purchase holds `open:co` and `open:pl`, orders holds `open:ol`. The pair guard below is
+     * what makes that separation enforced rather than agreed.
+     */
+    ['discovery', DISCOVERY_ACTION_HANDLERS],
+    /** deal — accepting a price the bargaining agent offered in one numbered round. */
+    ['bargain', BARGAIN_ACTION_HANDLERS],
 ]);
 
 export class BotActionController {

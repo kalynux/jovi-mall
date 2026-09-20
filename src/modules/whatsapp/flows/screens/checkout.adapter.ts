@@ -52,6 +52,23 @@ export function toCheckoutScreen(view: CheckoutView, copy: FlowCopy): FlowRespon
     });
 }
 
+/**
+ * The review screen again, with Meta's snackbar: a refusal the customer can correct while the
+ * handle is still live (a mistyped number, no number at all).
+ *
+ * ⚠ **The snackbar goes on `REVIEW` only.** If the view no longer draws the review — the saved
+ * address was removed while the form was open — the notice that replaces it already says why,
+ * and a correction message on a screen with nothing to correct would contradict it.
+ */
+export function reviewWithCorrection(
+    view: CheckoutView,
+    copy: FlowCopy,
+    message: string,
+): FlowResponseBody {
+    const body = toCheckoutScreen(view, copy);
+    return body.screen === CHECKOUT_SCREEN ? screenResponse(body.screen, body.data, message) : body;
+}
+
 /** Whether the form field was left empty, in the same sense `placeCheckout` folds it. */
 export function isBlankPhone(phone: unknown): boolean {
     return phone === null || phone === undefined
@@ -93,6 +110,21 @@ export type CheckoutFailurePlan =
 export const GATEWAY_NOT_CONFIGURED = 'PAYMENT_GATEWAY_NOT_CONFIGURED';
 
 /**
+ * Whether a `placeCheckout` refusal left the handle alive — i.e. provably happened BEFORE the
+ * spend, so nothing was placed and a retry is honest.
+ *
+ * ⛔ **Absent means spent.** Only an explicit `details.spent === false` says the handle survived;
+ * a missing flag, a non-boolean one, or an error that isn't an `AppError` at all all read as
+ * "an order may exist". One function, because two readers decide on it: `planCheckoutFailure`
+ * (may the customer stay on the screen?) and the endpoint's claim (replay this answer, or let a
+ * retry run?). Two copies of this test is how one of them starts reading `!spent`.
+ */
+export function handleSurvived(error: unknown): boolean {
+    const e = error as { details?: { spent?: unknown } | null } | null;
+    return e?.details?.spent === false;
+}
+
+/**
  * What a `placeCheckout` refusal should lead to. **Pure**, so the whole table is asserted.
  *
  * ── ⛔ ABSENT MEANS SPENT ────────────────────────────────────────────────────
@@ -120,14 +152,13 @@ export function planCheckoutFailure(error: unknown): CheckoutFailurePlan {
         statusCode?: unknown;
         code?: unknown;
         category?: unknown;
-        details?: { spent?: unknown } | null;
     } | null;
     const status = typeof e?.statusCode === 'number' ? e.statusCode : null;
 
     if (e?.code === GATEWAY_NOT_CONFIGURED || status === 503) return { kind: 'unavailable' };
 
-    if ((status === 400 || status === 422) && e?.details?.spent === false
-        && typeof e.code === 'string' && typeof e.category === 'string') {
+    if ((status === 400 || status === 422) && handleSurvived(error)
+        && typeof e?.code === 'string' && typeof e.category === 'string') {
         return { kind: 'stay', code: e.code, category: e.category };
     }
     if (status === 404 || status === 410) return { kind: 'restart' };
@@ -140,5 +171,11 @@ export function planCheckoutFailure(error: unknown): CheckoutFailurePlan {
  * can be acted on. None of `placed`'s figures is shown here.
  */
 export function placedResponse(_placed: CheckoutPlaced, copy: FlowCopy): FlowResponseBody {
-    return noticeResponse(copy.checkoutWatchChat, copy);
+    /**
+     * ⚠ **Stamped `placed`, and the chat deliberately says NOTHING for it.** The stamp is there so
+     * the completion tells the truth about what happened; the silence is because the payment
+     * result reaches the conversation through the payment path, and a "got that" here would talk
+     * over the message the customer is actually waiting for.
+     */
+    return noticeResponse(copy.checkoutWatchChat, copy, 'placed');
 }

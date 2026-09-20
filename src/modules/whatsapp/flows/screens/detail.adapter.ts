@@ -24,11 +24,14 @@ import { FLOW_CAPS, fitText, joinFitted, wouldCut } from './flow-text';
  * @param imageBase64 the hero image already encoded, or null. ⚠ It must have been withheld
  *   **before** encoding when its `access` isn't `public`: see `image-bytes.ts`. This function
  *   can't check, and doesn't try.
+ * @param openRef this open's reference, echoed back by the footer for the idempotency key. A
+ *   redraw after a refusal passes the SAME one: it is still the same open.
  */
 export function toDetailScreen(
     view: ProductDetailView,
     copy: FlowCopy,
     imageBase64: string | null,
+    openRef: string,
 ): FlowResponseBody {
     const variants = view.variants.slice(0, FLOW_CAPS.dropdownOptions);
 
@@ -78,6 +81,7 @@ export function toDetailScreen(
             enabled: v.affordance.enabled,
         })),
         actionLabel: fitText(labelled.affordance.label, FLOW_CAPS.footerLabel),
+        openRef,
     };
 
     if (imageBase64) {

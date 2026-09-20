@@ -5,6 +5,15 @@ import { paymentMethodService } from '../../payment-methods/services/payment-met
 import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
 import { windowForChat } from '../domain/bot-list-window';
 import { toBotPaymentMethodDto } from '../dto/bot-projections';
+import { setBotReply } from '../middlewares/bot-reply.middleware';
+import { botChrome } from '../domain/bot-chrome-copy';
+import { unknownBotAction } from '../domain/bot-action-dispatch';
+import {
+    parseSavedItemAction,
+    setSavedItemReply,
+    setSavedListReply,
+    type SavedListRow,
+} from '../domain/bot-saved-list-reply';
 import {
     BotNoArgsSchema,
     BotPaymentMethodAddSchema,
@@ -156,5 +165,91 @@ export class BotPaymentMethodController {
             remaining: remaining.length,
             hasDefault: remaining.some((m) => m.is_default),
         });
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `acct:pay:…` — the saved ways to pay
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The saved methods, default first, projected for the shared list shape. */
+async function paymentRows(customerId: string): Promise<SavedListRow[]> {
+    const methods = await paymentMethodService.list('customer', customerId);
+
+    return [...methods]
+        .sort((a, b) => Number(b.is_default) - Number(a.is_default))
+        .map((m) => toBotPaymentMethodDto(m))
+        .map((m) => ({
+            id: m.id,
+            title: m.label,
+            detail: m.expires ? `${m.expires}${m.expired ? ' ⚠' : ''}` : null,
+            isDefault: m.isDefault,
+            /**
+             * ⚠ **An expired card may be REMOVED but not made the default.** The service
+             * accepts it and checkout then declines the charge, so the button's only outcome
+             * is a customer discovering at the till that the thing they just chose cannot
+             * pay. See `SavedListRow.mayBeDefault`.
+             */
+            mayBeDefault: !m.expired,
+        }));
+}
+
+/**
+ * `acct:pay` · `acct:pay:<id>` · `acct:pay:<id>:def|rm`.
+ *
+ * The address book's twin, deliberately — same gestures, same stale-row rule, same silence on
+ * an empty list. See `addressSection` for why each of those is what it is; the two sit two rows
+ * apart in one menu and must not behave differently.
+ */
+export async function paymentSection(req: Request, res: Response, rest: string): Promise<void> {
+    const caller = botCallerOf(req);
+    const language = botResponseLanguageOf(req);
+    const rows = await paymentRows(caller.customerId);
+
+    if (rest === '') {
+        if (rows.length > 0) setSavedListReply(req, language, 'pay', 'paymentMethodsPrompt', rows);
+        sendSuccess(res, rows);
+        return;
+    }
+
+    const parsed = parseSavedItemAction(rest);
+    if (!parsed) throw unknownBotAction();
+
+    const row = rows.find((r) => r.id === parsed.id);
+    if (!row) {
+        if (rows.length > 0) setSavedListReply(req, language, 'pay', 'paymentMethodsPrompt', rows);
+        sendSuccess(res, rows);
+        return;
+    }
+
+    if (parsed.op === null) {
+        setSavedItemReply(req, language, 'pay', row);
+        sendSuccess(res, row);
+        return;
+    }
+
+    if (parsed.op === 'def') {
+        /**
+         * ⚠ **Re-checked here, not merely left off the keyboard.** `paymentRows` declines to
+         * draw the button for an expired card; this declines to ACT on the token. A tap is a
+         * string a client can send without ever having been drawn one, and the two together
+         * are what make "an expired card cannot become the default" a property rather than a
+         * rendering habit.
+         */
+        if (row.mayBeDefault === false) throw unknownBotAction();
+
+        await paymentMethodService.setDefault('customer', caller.customerId, row.id);
+        setBotReply(req, { kind: 'text', text: botChrome('defaultSet', language) });
+        sendSuccess(res, await paymentRows(caller.customerId));
+        return;
+    }
+
+    await paymentMethodService.remove('customer', caller.customerId, row.id);
+    const remaining = await paymentRows(caller.customerId);
+    setBotReply(req, { kind: 'text', text: botChrome('itemRemoved', language) });
+    sendSuccess(res, {
+        removed: true,
+        remaining: remaining.length,
+        hasDefault: remaining.some((m) => m.isDefault),
     });
 }

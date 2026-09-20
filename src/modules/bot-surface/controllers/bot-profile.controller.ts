@@ -9,9 +9,24 @@ import {
     AddCustomerAddressInput,
     UpdateCustomerAddressInput,
 } from '../../customers/validators/customer-onboarding.validator';
+import { SUPPORTED_LANGUAGES, type Language } from '../../../core/constants/languages';
 import { geoCandidateStore } from '../services/geo-candidate.store';
-import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
+import {
+    botCallerOf,
+    botResponseLanguageOf,
+    setBotResponseLanguage,
+} from '../middlewares/bot-identity.middleware';
+import { setBotReply } from '../middlewares/bot-reply.middleware';
+import { botChrome } from '../domain/bot-chrome-copy';
+import { languageActionId } from '../domain/bot-action-id';
+import { unknownBotAction, type ParsedBotAction } from '../domain/bot-action-dispatch';
 import { toBotAddressList, toBotProfileSummary } from '../dto/bot-projections';
+import {
+    parseSavedItemAction,
+    setSavedItemReply,
+    setSavedListReply,
+    type SavedListRow,
+} from '../domain/bot-saved-list-reply';
 import { windowForChat } from '../domain/bot-list-window';
 import {
     BotAddAddressSchema,
@@ -305,3 +320,150 @@ function clamp(value: string, max: number): string {
 
 /** Exported for `test:bot-surface`, which drives it against real provider candidates. */
 export { toSavedAddressInput as __toSavedAddressInput };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Language, as a tap — `acct:lang` asks, `lang:<code>` answers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Each language, written in itself.
+ *
+ * ⚠ **NOT copy, and it must never become copy.** These are endonyms: the French option says
+ * *Français* to an Arabic speaker and to an English one, because the person who needs it is
+ * precisely the person who cannot read the current language. A copy key would give five
+ * translations of five names — twenty-five strings, twenty of them wrong to show anybody — and
+ * would let a translator turn *Português* into *Portuguese*, which is the one word a Portuguese
+ * speaker scanning the list is not looking for.
+ *
+ * Derived from `SUPPORTED_LANGUAGES` by a lookup rather than by a parallel array, so a sixth
+ * language is a compile error here instead of a silently missing row.
+ */
+const LANGUAGE_ENDONYM: Readonly<Record<Language, string>> = Object.freeze({
+    en: 'English',
+    fr: 'Français',
+    pt: 'Português',
+    es: 'Español',
+    ar: 'العربية',
+});
+
+/** `acct:lang` — which language should I use? */
+export async function languageChoiceTap(req: Request, res: Response): Promise<void> {
+    botCallerOf(req);
+    const language = botResponseLanguageOf(req);
+
+    setBotReply(req, {
+        kind: 'choice',
+        text: botChrome('languagePrompt', language),
+        options: SUPPORTED_LANGUAGES.map((code) => ({
+            id: languageActionId(code),
+            label: LANGUAGE_ENDONYM[code],
+        })),
+        listButton: botChrome('chooseListButton', language),
+        sectionTitle: botChrome('chooseSectionTitle', language),
+    });
+    sendSuccess(res, { languages: SUPPORTED_LANGUAGES });
+}
+
+/**
+ * `lang:<code>` — set it.
+ *
+ * ⚠ **The confirmation is written in the language just CHOSEN, not the one in force.**
+ * `botResponseLanguageOf` returns what the identity middleware stamped when the request
+ * arrived, which is the language being left behind — answering in it would tell a customer
+ * who has just switched to Arabic, in French, that they will be written to in Arabic.
+ *
+ * `setBotResponseLanguage` moves the request's own stamp too, so an error raised after this
+ * point in the same request is also answered in the new language.
+ */
+export async function setLanguageTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    const caller = botCallerOf(req);
+
+    const language = action.argument;
+    if (!(SUPPORTED_LANGUAGES as readonly string[]).includes(language)) throw unknownBotAction();
+
+    const profile = await customerProfileService.updateProfile(caller.customerId, {
+        preferences: { language },
+    });
+
+    setBotResponseLanguage(req, language);
+    setBotReply(req, { kind: 'text', text: botChrome('languageSet', language) });
+    sendSuccess(res, { preferences: { language: profile.preferences.language } });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `acct:addr:…` — the address book
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The saved addresses, default first, projected for the shared list shape. */
+async function addressRows(customerId: string): Promise<SavedListRow[]> {
+    const profile = await customerProfileService.getProfile(customerId);
+    const rows = toBotAddressList(profile.savedAddresses).map((a) => ({
+        id: a.id,
+        title: a.label,
+        detail: a.formattedAddress,
+        isDefault: a.isDefault,
+    }));
+
+    return [...rows].sort((a, b) => Number(b.isDefault) - Number(a.isDefault));
+}
+
+/**
+ * `acct:addr` · `acct:addr:<id>` · `acct:addr:<id>:def|rm`.
+ *
+ * ⚠ **Every branch re-reads the list, and a row that is no longer there is answered with the
+ * CURRENT list rather than with an error.** A chat keeps its buttons for ever: the Remove under
+ * an address deleted from the storefront last week is still tappable, and the honest answer to
+ * it is what the customer has now. The same rule the stale Skip taught in onboarding, and the
+ * reason neither `removeAddress` nor `setDefaultAddress` is reached with an id that has gone —
+ * both would throw a 404 at somebody who pressed a button we drew.
+ */
+export async function addressSection(req: Request, res: Response, rest: string): Promise<void> {
+    const caller = botCallerOf(req);
+    const language = botResponseLanguageOf(req);
+    const rows = await addressRows(caller.customerId);
+
+    if (rest === '') {
+        /**
+         * ⚠ **An empty book gets NO reply, on purpose.** There is no control to draw — the
+         * list IS the control — and a rendered sentence here would be this surface narrating a
+         * state the model already holds as data and describes better in the customer's own
+         * words. The same rule as a contact state with nothing pending, and as the basket in
+         * § 14.3. It is also why there is no `addressBookEmpty` copy key to go stale.
+         */
+        if (rows.length > 0) setSavedListReply(req, language, 'addr', 'addressBookPrompt', rows);
+        sendSuccess(res, rows);
+        return;
+    }
+
+    const parsed = parseSavedItemAction(rest);
+    if (!parsed) throw unknownBotAction();
+
+    const row = rows.find((r) => r.id === parsed.id);
+    if (!row) {
+        // Gone since the button was drawn. Answer with what there is now, never a 404.
+        if (rows.length > 0) setSavedListReply(req, language, 'addr', 'addressBookPrompt', rows);
+        sendSuccess(res, rows);
+        return;
+    }
+
+    if (parsed.op === null) {
+        setSavedItemReply(req, language, 'addr', row);
+        sendSuccess(res, row);
+        return;
+    }
+
+    if (parsed.op === 'def') {
+        const profile = await customerProfileService.setDefaultAddress(caller.customerId, row.id);
+        setBotReply(req, { kind: 'text', text: botChrome('defaultSet', language) });
+        sendSuccess(res, toBotAddressList(profile.savedAddresses));
+        return;
+    }
+
+    const profile = await customerProfileService.removeAddress(caller.customerId, row.id);
+    setBotReply(req, { kind: 'text', text: botChrome('itemRemoved', language) });
+    sendSuccess(res, {
+        removed: true,
+        remaining: profile.savedAddresses.length,
+        hasDefault: profile.savedAddresses.some((a) => a.is_default === true),
+    });
+}

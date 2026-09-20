@@ -14,7 +14,9 @@ import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { botChrome } from '../domain/bot-chrome-copy';
 import { botStorefrontLink } from '../domain/bot-list-window';
 import { BotReplyIntent, BotReplyOption } from '../domain/channel-reply';
-import { cartViewActionId, openSurfaceActionId } from '../domain/bot-action-id';
+// ⚠ `cartViewActionId` / `openSurfaceActionId` are deliberately NOT imported here any more:
+// the three post-add buttons are built in `domain/purchase-chat-copy.ts` alone, and
+// `test:inapp-purchase` fails if this file starts building them again.
 import {
     BotActionHandlers,
     ParsedBotAction,
@@ -22,6 +24,7 @@ import {
 } from '../domain/bot-action-dispatch';
 import { inAppBaseUrl, inAppScreenUrl } from '../domain/inapp-url';
 import { PurchaseVerb, resolvePurchaseAffordance } from '../domain/purchase-affordance';
+import { addedToCartActions, purchaseInvitePrompt } from '../domain/purchase-chat-copy';
 import { inAppSurfaceStore } from '../services/inapp-surface.store';
 import { productDisplayService } from '../services/product-display.service';
 import { productDisplayStore } from '../services/product-display.store';
@@ -435,7 +438,7 @@ export async function executePurchase(ctx: PurchaseContext): Promise<PurchaseRes
             return {
                 ...base,
                 outcome: 'chat',
-                message: `${product.title}\n\n${botChrome('bargainInvitePrompt', language)}`,
+                message: purchaseInvitePrompt(product.title, 'bargain', language),
                 url: null,
             };
 
@@ -443,7 +446,7 @@ export async function executePurchase(ctx: PurchaseContext): Promise<PurchaseRes
             return {
                 ...base,
                 outcome: 'chat',
-                message: `${product.title}\n\n${botChrome('bookInvitePrompt', language)}`,
+                message: purchaseInvitePrompt(product.title, 'book', language),
                 url: null,
             };
 
@@ -570,27 +573,16 @@ function replyForPurchase(result: PurchaseResult, language: string | null): BotR
 }
 
 /**
- * View cart · Checkout · Browse more — the three things a customer wants after adding something.
+ * ⚠ **MOVED to `domain/purchase-chat-copy.ts`** (2026-09-20). Re-exported here only so that the
+ * two call sites in other streams' files keep compiling until their owners switch the import;
+ * it is a forwarding line and **not** a second definition.
  *
- * ⚠ **Exported because TWO doors produce an "added to cart" turn**, and they must offer the
- * same three controls: this file's button path, and `cart_add_item` on the cart controller when
- * the customer typed their order rather than tapping. Two copies of this list is how one door
- * quietly grows a fourth button, or loses Checkout, and nothing fails.
- *
- * All three are tokens rather than typed words, per `bot-action-id.ts`'s rule: the label is
- * translated, the id is not.
- *
- * ⚠ **The Checkout token carries NO handle.** A `co` session is ten minutes and single-use, so
- * baking one into a button would produce a control that is dead before most customers tap it.
- * The server mints on the tap instead, which is the shape `open:ol` and `open:sl` already use.
+ * It had to move because a controller cannot be imported by a suite on this surface — this file
+ * reaches `orders/` and `payments/`, which do work at import under bare `ts-node` and never
+ * return — and because the WhatsApp form completion needs the same three buttons the chat tap
+ * produces. ⛔ **Do not add a local copy back here**; import the domain module.
  */
-export function addedToCartActions(language: string | null): BotReplyOption[] {
-    return [
-        { id: cartViewActionId(), label: botChrome('viewCartButton', language) },
-        { id: openSurfaceActionId('co'), label: botChrome('checkoutButton', language) },
-        { id: openSurfaceActionId('pl'), label: botChrome('browseMoreButton', language) },
-    ];
-}
+export { addedToCartActions } from '../domain/purchase-chat-copy';
 
 /**
  * Mint the checkout screen's session and return its URL, or null when there is no screen.

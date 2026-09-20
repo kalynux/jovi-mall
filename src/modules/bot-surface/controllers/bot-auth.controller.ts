@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { sendSuccess } from '../../../core/responses';
 import { senderLoginDeliveryService } from '../../messaging-login/services/sender-login-delivery.service';
-import { botCallerOf } from '../middlewares/bot-identity.middleware';
+import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
 import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { BotNoArgsSchema } from '../validators/bot.validators';
 
@@ -67,7 +67,14 @@ export class BotAuthController {
         BotNoArgsSchema.parse(req.body ?? {});
         const caller = botCallerOf(req);
 
-        const result = await senderLoginDeliveryService.send(caller);
+        /**
+         * ⚠ **The language travels with the call.** It is the one thing this door has that the
+         * `/login` slash command does not: the identity middleware has already resolved the
+         * customer and stamped `preferences.language` on the request. Without passing it the
+         * sign-in message falls back to English — which is what every customer got until now,
+         * on the one message that decides whether they can reach their account.
+         */
+        const result = await senderLoginDeliveryService.send(caller, botResponseLanguageOf(req));
 
         /**
          * ⚠ **Explicitly NO channel reply, and this is the one route on the surface where

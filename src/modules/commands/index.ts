@@ -60,9 +60,17 @@ export function register_all_commands(bus: CommandBus): void {
    * ⚠ **`flow_complete` is a THIRD kind of command, and it is neither a slash command nor a
    * credential.** Like `login_contact` it is dispatched by the automation layer on an inbound
    * event rather than by anything a customer types — here, a WhatsApp Flow's completion
-   * message (`interactive.nfm_reply`). Unlike every other command on this bus, it mints
-   * nothing and writes nothing: the encrypted endpoint already did whatever was going to be
-   * done, while the session was live, and this only reports it back into the conversation.
+   * message (`interactive.nfm_reply`). The purchase, the payment and the order all happened
+   * already, inside the encrypted endpoint, while the session was live and the retry guard
+   * held; this only carries the outcome back into the conversation.
+   *
+   * ⚠ **It does mint ONE thing, and this comment used to deny it:** a `pd` VIEW session, so a
+   * customer who chose a product in the listing form can be handed that product's screen. Only
+   * under three conditions, all checked in the handler — the listing session is still live
+   * (read, never consumed), the sender IS the conversation that session was minted for, and
+   * every field of the new session is inherited from the old one rather than taken from the
+   * payload. A `pd` handle views a product and starts a purchase from the form; it places
+   * nothing and pays nothing.
    *
    * ⛔ **Until this registration existed, a customer could fill in a WhatsApp form, press the
    * final button, and the thread would say nothing at all** — the completion message reached

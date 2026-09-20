@@ -4,7 +4,7 @@ import { renderTemplate, RenderContext } from './message-renderer';
 import { Language, DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES } from './notification-i18n';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
-import { ChannelText, SituationMessages, ButtonDef } from './notification-catalog';
+import { ChannelText, SituationMessages, ButtonDef, QuickReplyDef } from './notification-catalog';
 import { storefrontPath } from '../../../core/utils/storefront-link.util';
 
 /**
@@ -195,6 +195,97 @@ const TRACK_BUTTON: ButtonDef = {
     label: TRACK_ORDER_LABEL,
     urlSuffix: 'shop/account/orders/detail/{{orderId}}/tracking'
 };
+
+// ─── Quick replies (phase 10, stage 1) ───────────────────────────────────────
+
+/**
+ * ⭐ **The chat quick-reply vocabulary, designed once for all 24 situations.**
+ *
+ * A tap here comes back as a TOKEN to the bot's dispatcher, unlike `button`
+ * above, which opens a page. See `QuickReplyDef` for the per-channel mechanics
+ * and for why the in-app inbox deliberately shows none of these.
+ *
+ * ── The rule that decided which situations get one ──────────────────────────
+ *
+ * Every situation already has a URL button answering *"let me look at it"*. A
+ * quick reply is added **only** where the customer plausibly wants to *do*
+ * something the bot can finish in chat without opening a screen. **11 of the 24
+ * get none, deliberately** — a button that merely repeats the link costs a Meta
+ * re-approval in stage 2 and buys the customer nothing.
+ *
+ * ── ⚠ Three constraints every entry below satisfies, all asserted at boot ───
+ *
+ *  1. **≤ 20 characters per label, in all five languages** — WhatsApp's reply
+ *     button title cap, the tightest of the channels. Over it the builder
+ *     truncates and the customer reads a clipped word.
+ *  2. **≤ 64 bytes per rendered token** — Telegram's `callback_data` cap. The
+ *     longest here is 44.
+ *  3. **≤ 3 per situation** — WhatsApp's cap on one interactive message.
+ *
+ * ── ⚠ An unresolved placeholder DROPS the button, and that is a feature ─────
+ *
+ * `pay:rt:` with no id would reach the dispatcher's unknown-action refusal,
+ * which reads to a customer as *"this button expired"* on a message that just
+ * arrived. So the renderer drops any quick reply whose token still contains an
+ * unfilled `{{…}}`. Two entries rely on this **as their conditional**, rather
+ * than growing a second mechanism — see `ticket.resolved` and
+ * `booking.cancelled` below.
+ */
+
+const CANCEL_BOOKING_LABEL: Record<Language, string> = {
+    en: 'Cancel booking', fr: 'Annuler', pt: 'Cancelar', es: 'Cancelar', ar: 'إلغاء الحجز'
+};
+
+const THAT_WORKS_LABEL: Record<Language, string> = {
+    en: 'That works', fr: 'Ça me va', pt: 'Está bem', es: 'Me va bien', ar: 'يناسبني'
+};
+
+const ASK_TO_CHANGE_LABEL: Record<Language, string> = {
+    en: 'Ask to change', fr: 'Demander un autre', pt: 'Pedir outra hora', es: 'Pedir otra hora', ar: 'طلب وقت آخر'
+};
+
+const BOOK_AGAIN_LABEL: Record<Language, string> = {
+    en: 'Book again', fr: 'Réserver à nouveau', pt: 'Reservar de novo', es: 'Reservar otra vez', ar: 'حجز مرة أخرى'
+};
+
+const LEAVE_REVIEW_LABEL: Record<Language, string> = {
+    en: 'Leave a review', fr: 'Donner un avis', pt: 'Deixar avaliação', es: 'Dejar reseña', ar: 'أضف تقييمًا'
+};
+
+const TRY_AGAIN_LABEL: Record<Language, string> = {
+    en: 'Try again', fr: 'Réessayer', pt: 'Tentar de novo', es: 'Intentar otra vez', ar: 'إعادة المحاولة'
+};
+
+const ORDER_DETAILS_LABEL: Record<Language, string> = {
+    en: 'Order details', fr: 'Détails', pt: 'Detalhes', es: 'Detalles', ar: 'تفاصيل الطلب'
+};
+
+const SOMETHING_WRONG_LABEL: Record<Language, string> = {
+    en: 'Something\'s wrong', fr: 'Un problème', pt: 'Há um problema', es: 'Hay un problema', ar: 'هناك مشكلة'
+};
+
+const REPLY_HERE_LABEL: Record<Language, string> = {
+    en: 'Reply here', fr: 'Répondre ici', pt: 'Responder aqui', es: 'Responder aquí', ar: 'الرد هنا'
+};
+
+const NOT_SORTED_LABEL: Record<Language, string> = {
+    en: 'Not sorted', fr: 'Pas résolu', pt: 'Não resolvido', es: 'Sin resolver', ar: 'لم يُحل'
+};
+
+const NOT_THERE_LABEL: Record<Language, string> = {
+    en: 'I was not there', fr: 'Je n\'étais pas là', pt: 'Não estava lá', es: 'No estaba allí', ar: 'لم أكن هناك'
+};
+
+const ADDRESS_WRONG_LABEL: Record<Language, string> = {
+    en: 'My address is wrong', fr: 'Adresse incorrecte', pt: 'Morada errada', es: 'Dirección errónea', ar: 'العنوان خاطئ'
+};
+
+const WHERE_NOW_LABEL: Record<Language, string> = {
+    en: 'Where is it now', fr: 'Où est-il ?', pt: 'Onde está?', es: '¿Dónde está?', ar: 'أين هو الآن'
+};
+
+const CANCEL_BOOKING: QuickReplyDef = { token: 'bk:cancel:{{bookingId}}', label: CANCEL_BOOKING_LABEL };
+const TRY_PAYMENT_AGAIN: QuickReplyDef = { token: 'pay:rt:{{transactionId}}', label: TRY_AGAIN_LABEL };
 
 // ─── Composed lines ──────────────────────────────────────────────────────────
 
@@ -435,7 +526,8 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
                 bodyParams: ['{{vendorName}}', '{{serviceName}}', '{{startAt}}']
             }
         },
-        button: BOOKING_BUTTON
+        button: BOOKING_BUTTON,
+        actions: [CANCEL_BOOKING]
     },
 
     // Both the old and the new time, always. A message carrying only the new one
@@ -470,7 +562,11 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
                 bodyParams: ['{{serviceName}}', '{{previousStartAt}}', '{{startAt}}']
             }
         },
-        button: BOOKING_BUTTON
+        button: BOOKING_BUTTON,
+        actions: [
+            { token: 'yes:bkmove:{{bookingId}}', label: THAT_WORKS_LABEL },
+            { token: 'tkt:new:bk:{{bookingId}}', label: ASK_TO_CHANGE_LABEL }
+        ]
     },
 
     // `{{refundLine}}` is substituted by the handler: a paid booking must say
@@ -506,7 +602,8 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
                 bodyParams: ['{{serviceName}}', '{{startAt}}', '{{cancelledBy}}']
             }
         },
-        button: BOOKING_BUTTON
+        button: BOOKING_BUTTON,
+        actions: [{ token: 'book:{{productId}}', label: BOOK_AGAIN_LABEL }]
     },
 
     'booking.completed': {
@@ -539,7 +636,8 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
                 bodyParams: ['{{serviceName}}', '{{vendorName}}', '{{currency}}', '{{finalPriceFormatted}}']
             }
         },
-        button: BOOKING_BUTTON
+        button: BOOKING_BUTTON,
+        actions: [{ token: 'rate:bk:{{bookingId}}', label: LEAVE_REVIEW_LABEL }]
     },
 
     // The message that stops a `no-show` being recorded against someone who
@@ -575,7 +673,8 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
                 bodyParams: ['{{serviceName}}', '{{vendorName}}', '{{startAt}}', '{{whenPhrase}}']
             }
         },
-        button: BOOKING_BUTTON
+        button: BOOKING_BUTTON,
+        actions: [CANCEL_BOOKING]
     },
 
     'booking.payment.received': {
@@ -606,6 +705,61 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
             template: {
                 name: 'customer_booking_payment_received',
                 bodyParams: ['{{currency}}', '{{amountFormatted}}', '{{serviceName}}', '{{startAt}}']
+            }
+        },
+        button: BOOKING_BUTTON
+    },
+
+    /**
+     * ⭐ **A BALANCE paid after the appointment — the last silence in the booking payment set.**
+     *
+     * `handleBookingPaymentReceived` returned early on `purpose === 'booking_balance'`, so a
+     * customer who had just paid the outstanding amount was told **nothing at all**. The early
+     * return was not careless: `booking.payment.received` ends *"Nothing else to do — see you
+     * then"*, and a balance is settled AFTER the service, so reusing it would have promised an
+     * appointment that already happened. The fix is a second situation, not a looser sentence.
+     *
+     * Three rules the copy obeys:
+     *   - ⚠ **No future tense and no `{{startAt}}`.** The appointment is over; every word here
+     *     is about money that has arrived.
+     *   - ⚠ **It says the account is SETTLED**, which is the customer's actual question — the
+     *     balance request (`booking.balance.due`) is the only message that ever asked them for
+     *     more, and this is its closing half.
+     *   - It names the amount, because a partial balance payment is possible and the figure is
+     *     what tells the two apart.
+     *
+     * ⚠ **Its template is NOT approved** (stage 2). Out of window this cannot be delivered on
+     * WhatsApp until `customer_booking_balance_received` is submitted — the same state
+     * `customer_booking_payment_failed` is in. In window, and on Telegram, it works today.
+     */
+    'booking.balance.received': {
+        base: {
+            en: {
+                subject: 'Balance paid: {{currency}} {{amountFormatted}}',
+                body: 'We received your {{currency}} {{amountFormatted}} balance payment for {{serviceName}}. Your booking is now fully paid — thank you.'
+            },
+            fr: {
+                subject: 'Solde payé : {{currency}} {{amountFormatted}}',
+                body: 'Nous avons reçu votre paiement de solde de {{currency}} {{amountFormatted}} pour {{serviceName}}. Votre réservation est désormais entièrement payée — merci.'
+            },
+            pt: {
+                subject: 'Saldo pago: {{currency}} {{amountFormatted}}',
+                body: 'Recebemos o seu pagamento de saldo de {{currency}} {{amountFormatted}} por {{serviceName}}. A sua reserva está totalmente paga — obrigado.'
+            },
+            es: {
+                subject: 'Saldo pagado: {{currency}} {{amountFormatted}}',
+                body: 'Recibimos tu pago de saldo de {{currency}} {{amountFormatted}} por {{serviceName}}. Tu reserva está totalmente pagada — gracias.'
+            },
+            ar: {
+                subject: 'تم دفع الرصيد: {{currency}} {{amountFormatted}}',
+                body: 'استلمنا دفعة الرصيد بقيمة {{currency}} {{amountFormatted}} مقابل {{serviceName}}. حجزك مدفوع بالكامل الآن — شكرًا لك.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_booking_balance_received',
+                bodyParams: ['{{currency}}', '{{amountFormatted}}', '{{serviceName}}']
             }
         },
         button: BOOKING_BUTTON
@@ -663,7 +817,8 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
                 bodyParams: ['{{currency}}', '{{amountFormatted}}', '{{serviceName}}']
             }
         },
-        button: BOOKING_BUTTON
+        button: BOOKING_BUTTON,
+        actions: [TRY_PAYMENT_AGAIN]
     },
 
     // The platform never charges this silently — this message IS the request, so
@@ -933,7 +1088,8 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
                 bodyParams: ['{{currency}}', '{{amountFormatted}}', '{{orderNumber}}']
             }
         },
-        button: ORDER_BUTTON
+        button: ORDER_BUTTON,
+        actions: [TRY_PAYMENT_AGAIN]
     },
 
     'order.shipped': {
@@ -966,7 +1122,8 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
                 bodyParams: ['{{orderNumber}}', '{{vendorName}}', '{{trackingNumber}}']
             }
         },
-        button: TRACK_BUTTON
+        button: TRACK_BUTTON,
+        actions: [{ token: 'ord:{{orderId}}', label: ORDER_DETAILS_LABEL }]
     },
 
     // The one message worth interrupting someone for — it is the only prompt to
@@ -1034,7 +1191,11 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
                 bodyParams: ['{{orderNumber}}']
             }
         },
-        button: ORDER_BUTTON
+        button: ORDER_BUTTON,
+        actions: [
+            { token: 'rate:{{orderId}}', label: LEAVE_REVIEW_LABEL },
+            { token: 'tkt:new:ord:{{orderId}}', label: SOMETHING_WRONG_LABEL }
+        ]
     },
 
     'order.delivery_failed': {
@@ -1067,7 +1228,12 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
                 bodyParams: ['{{orderNumber}}']
             }
         },
-        button: TRACK_BUTTON
+        button: TRACK_BUTTON,
+        actions: [
+            { token: 'tkt:new:dlv:{{orderId}}:absent', label: NOT_THERE_LABEL },
+            { token: 'tkt:new:dlv:{{orderId}}:address', label: ADDRESS_WRONG_LABEL },
+            { token: 'track:{{orderId}}', label: WHERE_NOW_LABEL }
+        ]
     },
 
     'order.cancelled': {
@@ -1178,7 +1344,8 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
                 bodyParams: ['{{subject}}']
             }
         },
-        button: TICKET_BUTTON
+        button: TICKET_BUTTON,
+        actions: [{ token: 'tkt:reply:{{ticketId}}', label: REPLY_HERE_LABEL }]
     },
 
     'ticket.awaiting_customer': {
@@ -1211,7 +1378,8 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
                 bodyParams: ['{{subject}}']
             }
         },
-        button: TICKET_BUTTON
+        button: TICKET_BUTTON,
+        actions: [{ token: 'tkt:reply:{{ticketId}}', label: REPLY_HERE_LABEL }]
     },
 
     // `{{reopenLine}}` is substituted by the handler, already localized, because
@@ -1252,7 +1420,8 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
                 bodyParams: ['{{subject}}', '{{reopenLine}}']
             }
         },
-        button: TICKET_BUTTON
+        button: TICKET_BUTTON,
+        actions: [{ token: 'tkt:reopen:{{reopenableTicketId}}', label: NOT_SORTED_LABEL }]
     }
 };
 
@@ -1272,6 +1441,86 @@ export function assertCustomerCatalogComplete(): void {
                     500,
                     `Missing '${lang}' base copy for customer notification situation '${situation}'`
                 );
+            }
+        }
+    }
+    assertCustomerQuickRepliesSendable();
+}
+
+/**
+ * The three caps a quick reply must satisfy on the tightest channel that renders
+ * it, checked at boot rather than discovered on a customer's handset.
+ *
+ * Each of these fails SILENTLY in production if it is not checked here:
+ *
+ *  - an over-long **label** is truncated by the WhatsApp builder, so the customer
+ *    reads a clipped word rather than seeing an error;
+ *  - an over-long **token** is refused by Telegram as `BUTTON_DATA_INVALID`,
+ *    which fails the whole `sendMessage` — the message does not arrive at all;
+ *  - a **fourth button** is refused by WhatsApp for the whole interactive
+ *    message, same outcome.
+ *
+ * ⚠ **The token budget is measured with every placeholder expanded to a 24-character
+ * Mongo id**, which is what all of them actually carry. Measuring the literal
+ * `{{bookingId}}` would pass a token that cannot fit its own argument — the
+ * placeholder is 13 characters and its value is 24.
+ */
+export function assertCustomerQuickRepliesSendable(): void {
+    /** Telegram `callback_data`. The binding cap: WhatsApp's reply-button id allows 256. */
+    const MAX_TOKEN_BYTES = 64;
+    /** `WA_LIMITS.BUTTON_REPLY_TITLE`. Not imported — the notifications stack does not depend on the WhatsApp module. */
+    const MAX_LABEL_CHARS = 20;
+    /** One WhatsApp interactive message. */
+    const MAX_ACTIONS = 3;
+    const SAMPLE_ID = 'a'.repeat(24);
+
+    const fail = (message: string): never => {
+        throw createAppError(ERROR_CODES.CONFIG_NOTIFICATION_CATALOG_INCOMPLETE, 500, message);
+    };
+
+    for (const situation of Object.keys(CUSTOMER_NOTIFICATION_CATALOG) as CustomerNotificationType[]) {
+        const actions = CUSTOMER_NOTIFICATION_CATALOG[situation].actions;
+        if (!actions) continue;
+
+        if (actions.length > MAX_ACTIONS) {
+            fail(`Situation '${situation}' has ${actions.length} quick replies; WhatsApp renders at most ${MAX_ACTIONS}`);
+        }
+
+        const seen = new Set<string>();
+        for (const action of actions) {
+            const placeholders = tokenPlaceholders(action.token);
+
+            // A token with no placeholder is legal (a bare verb such as `cart:view`), but a
+            // token that is ONLY a placeholder, or carries none of our verb grammar, is not.
+            if (!/^[a-z]+:/.test(action.token)) {
+                fail(`Quick-reply token '${action.token}' on '${situation}' does not start with a verb`);
+            }
+            if (/\s/.test(action.token)) {
+                fail(`Quick-reply token '${action.token}' on '${situation}' contains whitespace`);
+            }
+
+            let widest = action.token;
+            for (const key of placeholders) {
+                widest = widest.replace(new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'g'), SAMPLE_ID);
+            }
+            const bytes = Buffer.byteLength(widest, 'utf8');
+            if (bytes > MAX_TOKEN_BYTES) {
+                fail(`Quick-reply token '${action.token}' on '${situation}' is ${bytes} bytes with ids expanded; Telegram allows ${MAX_TOKEN_BYTES}`);
+            }
+
+            if (seen.has(action.token)) {
+                fail(`Situation '${situation}' repeats quick-reply token '${action.token}'`);
+            }
+            seen.add(action.token);
+
+            for (const lang of SUPPORTED_LANGUAGES) {
+                const label = action.label[lang];
+                if (!label) {
+                    fail(`Quick reply '${action.token}' on '${situation}' is missing its '${lang}' label`);
+                }
+                if ([...label].length > MAX_LABEL_CHARS) {
+                    fail(`Quick-reply label '${label}' (${lang}) on '${situation}' is ${[...label].length} characters; the cap is ${MAX_LABEL_CHARS}`);
+                }
             }
         }
     }
@@ -1388,4 +1637,95 @@ export function renderCustomerButton(
     const url = trimmedBase ? `${trimmedBase}${localizedPath}` : whatsappSuffix;
 
     return { label, url, urlSuffix, whatsappSuffix };
+}
+
+// ─── Quick replies: rendering (phase 10, stage 1) ────────────────────────────
+
+/** Placeholder names inside a quick-reply token. Mirrors `renderTemplate`'s own syntax. */
+const TOKEN_PLACEHOLDER = /\{\{\s*(\w+)\s*\}\}/g;
+
+/**
+ * Names of every placeholder in a token, in order. A fresh regex per call —
+ * `TOKEN_PLACEHOLDER` is a module-level `/g` regex and `matchAll` would otherwise
+ * inherit a `lastIndex` from a previous caller.
+ */
+export function tokenPlaceholders(token: string): string[] {
+    return [...token.matchAll(new RegExp(TOKEN_PLACEHOLDER.source, 'g'))].map(m => m[1]);
+}
+
+/**
+ * Resolve a situation's quick replies into `{ token, label }` pairs for a chat channel.
+ *
+ * ⛔ **THE DEAD-BUTTON GUARD CANNOT LOOK FOR A LEFTOVER `{{`.** `renderTemplate`
+ * fills a missing key with an **EMPTY string** — so `pay:rt:{{transactionId}}`
+ * becomes `pay:rt:`, **well formed, pointing at nothing**, with no `{{` left to
+ * notice. A customer tapping it gets the dispatcher's unknown-action refusal,
+ * which reads as *"this button expired"* on a message that arrived seconds ago.
+ *
+ * So the check is on the **CONTEXT**: a quick reply whose token has an unsupplied
+ * placeholder is DROPPED, not sent.
+ *
+ * ⭐ **Two situations use this deliberately as their CONDITION**, rather than
+ * growing a second mechanism for conditional buttons — and because
+ * `{{reopenableTicketId}}` / `{{productId}}` then drive both the button and the
+ * sentence from ONE boolean, the two cannot contradict each other:
+ *
+ *  - `ticket.resolved` — the token names `{{reopenableTicketId}}`, which the
+ *    handler sets ONLY for a *resolved* request and never for a *closed* one. So
+ *    "Not sorted" appears exactly where `reopenLine` already promises a reply
+ *    will be read, and a closed request shows no button at a door we have shut.
+ *  - `booking.cancelled` — `{{productId}}` is absent when the booking's product
+ *    no longer exists, so "Book again" cannot offer a service that is gone.
+ *
+ * An empty string counts as unsupplied, because that is what a missing id
+ * actually looks like by the time it reaches a context.
+ */
+export function renderCustomerQuickReplies(
+    situation: CustomerNotificationType,
+    lang: Language,
+    ctx: RenderContext
+): Array<{ token: string; label: string }> {
+    const actions = CUSTOMER_NOTIFICATION_CATALOG[situation].actions;
+    if (!actions || actions.length === 0) return [];
+
+    const resolved: Array<{ token: string; label: string }> = [];
+    for (const action of actions) {
+        const supplied = tokenPlaceholders(action.token).every(key => {
+            const value = ctx[key];
+            return value !== undefined && value !== null && String(value).length > 0;
+        });
+        if (!supplied) continue;
+
+        resolved.push({
+            token: renderTemplate(action.token, ctx),
+            label: action.label[lang] ?? action.label[DEFAULT_LANGUAGE]
+        });
+    }
+    return resolved;
+}
+
+/**
+ * The "and here is the link" line appended to a chat message whose URL button was
+ * displaced by quick replies.
+ *
+ * ── Why this is composed and NOT a per-language copy key ────────────────────
+ *
+ * It was specified as one shared `viewLine` key × five languages. Composing it
+ * from `renderCustomerButton`'s own output is the stronger form of that same
+ * intent: the label and the URL are **the same two values the CTA button would
+ * have carried**, read from one place, so the line and the button it replaces
+ * cannot drift — there is no second string to update when a suffix moves.
+ *
+ * **The only translated part is the label, which is already localized on the
+ * `ButtonDef`, so five keys would add a drift surface and buy no translation.**
+ *
+ * ⚠ **Only where a quick reply actually displaced the button.** WhatsApp's
+ * interactive message is either reply buttons or a CTA URL — never both — so
+ * this line exists to stop the link disappearing. A situation with no quick
+ * reply keeps its CTA button and must NOT gain this line.
+ */
+export function viewLineFor(
+    button: { label: string; url: string } | null
+): string {
+    return button ? `${button.label}: ${button.url}` : '';
 }

@@ -23,6 +23,10 @@ import { ERROR_CODES } from '../../../core/error-codes';
  * - `button`   — optional shared action: a URL button on the WhatsApp template
  *                AND an appended "label: url" link on the text channels. Label
  *                is localized; the suffix is appended to VENDOR_APP_URL.
+ * - `actions`  — optional chat quick replies (phase 10). Tap-back tokens, not
+ *                links, and rendered only on the CHAT channels. See
+ *                `QuickReplyDef` for why they are not a `button` variant and
+ *                why the in-app inbox deliberately does not show them.
  *
  * Translations are maintained for: en, fr, pt, es, ar.
  */
@@ -51,6 +55,52 @@ export interface ButtonDef {
     urlSuffix: string;
 }
 
+/**
+ * A chat QUICK REPLY: a button whose tap comes back to the platform as a token,
+ * rather than opening a page the way a `ButtonDef` does (phase 10, stage 1).
+ *
+ * ── Why this is a different type and not a `ButtonDef` variant ───────────────
+ *
+ * The two are delivered by different mechanisms on every channel that has both,
+ * and one of them does not exist on most channels at all:
+ *
+ * | channel | `ButtonDef` | `QuickReplyDef` |
+ * |---|---|---|
+ * | in-app / push | `action` deep link | **never** — see below |
+ * | email | an appended "label: url" line | **never** — email has no tap-back |
+ * | Telegram | inline button with `url` | inline button with `callback_data` |
+ * | WhatsApp in-window | `interactive/cta_url` | `interactive/button` reply buttons |
+ * | WhatsApp out-of-window | the approved template's URL button | **not yet possible** — stage 2 |
+ *
+ * ⚠ **Deliberately NOT rendered on the in-app inbox or a push** (stage-1
+ * decision, not an omission). A token is meaningless to the mobile app: it is
+ * addressed to the bot's tap dispatcher, and tapping one in the app would reach
+ * no handler at all. The inbox keeps the URL button, which is the affordance
+ * that works there.
+ *
+ * ⚠ **`token` is placeholder-bearing and must render to ≤ 64 bytes**, because
+ * Telegram's `callback_data` is capped there. Asserted at boot.
+ *
+ * ⚠ **A token whose argument renders EMPTY is a dead button** — `pay:rt:` with
+ * no id reaches the dispatcher's unknown-action refusal, which reads to the
+ * customer as "this button expired" on a message they just received. The
+ * renderer drops any quick reply with an unresolved placeholder rather than
+ * shipping one, and the completeness assertion pins that every token's
+ * placeholders are supplied by the situation that uses it.
+ */
+export interface QuickReplyDef {
+    /** Placeholder-bearing tap token, e.g. `pay:rt:{{transactionId}}`. */
+    token: string;
+    /**
+     * Localized button title.
+     *
+     * ⚠ **≤ 20 characters in every language** — WhatsApp's reply-button title cap
+     * (`WA_LIMITS.BUTTON_REPLY_TITLE`), which is the tightest of the channels.
+     * Over it, the builder truncates and the customer reads a clipped word.
+     */
+    label: Record<Language, string>;
+}
+
 export interface SituationMessages {
     base: Record<Language, ChannelText>;
     email?: Partial<Record<Language, ChannelTextOverride>>;
@@ -60,6 +110,15 @@ export interface SituationMessages {
         template: WhatsAppTemplateDef;
     };
     button?: ButtonDef;
+    /**
+     * Chat quick replies, in render order. At most three — WhatsApp's cap on an
+     * interactive reply-button message, and the tightest of the channels.
+     *
+     * Absent means "this situation's only affordance is the link", which is the
+     * case for 11 of the 24 customer situations by design: a button that merely
+     * repeats the URL costs a Meta re-approval in stage 2 and buys nothing.
+     */
+    actions?: QuickReplyDef[];
 }
 
 // ─── Shared button label sets ────────────────────────────────────────────────

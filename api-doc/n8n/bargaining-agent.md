@@ -152,9 +152,45 @@ Bargain Agent finishes → read gate echo ┘ → clear gate echo → decide sen
 |---|---|---|
 | `approved` | **the gate's `reply`, verbatim** | open, or **closed** if a lock was minted |
 | `revise` (last submission) | nothing — hand back | **stays open**: one bad draft is not the end of a haggle |
+| `revise` with `NEGOTIATION_SESSION_CLOSED` (⭐ the customer pressed **Lock it in** mid-turn) | nothing — hand back | **closed**: the deal is done at `details.agreedPrice`, and the next `negotiation_context` says so through `agreed` |
 | gate refused the *call* (session expired / unknown / no longer negotiable) | nothing — hand back | closed |
 | no gate call at all | the model's own words | open — a turn with no price in it |
 | `#HANDBACK#`, or the agent errored / no playbook | nothing — hand back | closed on `#HANDBACK#` only |
+
+### ⭐ A DEAL NOW HAS TWO CLOSERS — the model, and the customer's own button (2026-09-20)
+
+Every offer the agent makes is drawn with a **Lock it in · 18 000 XAF** button under it, and a
+press closes the deal: the backend mints the same price lock the gate mints, and the item goes
+into the basket at that price. The owner's rule changed from *"only the model closes a deal"* to
+**"the model, or an explicit priced button — never inferred from free text"**. A customer typing
+"ok" is still not acceptance; a press on a button that names the price is.
+
+Three consequences for this flow, and the first two are the ones that bite:
+
+- **`negotiation_context` now returns `agreed`** — `{ unitPrice, expiresAt, closedBy }`, non-null
+  whenever a live, unspent lock exists for that (customer, variant, quantity). ⚠ It also **resumes**
+  that agreed session instead of opening a fresh one, which is what closed the real hazard: the
+  press is not a message, so the agent has no memory of it, and it would cheerfully re-open a
+  haggle over something already bought. The playbook's step 1a and its new gate-verdict case tell
+  it what to do; ⛔ those live in **Mongo**, so `npm run seed:negotiation-playbook` must be re-run
+  at deploy or the agent never reads them.
+- **`negotiation_record` can lose a race, and it is answered rather than crashed.** Both writers
+  compare-and-set on `(status open, round)`. If the press lands while the agent is composing, the
+  agent's write is refused, re-read and judged again, and comes back `revise` with
+  `code: NEGOTIATION_SESSION_CLOSED` whose `details` now carry **`agreedPrice`** and **`closedBy`**
+  — the instruction names the price and tells the model to stop selling and move to delivery. The
+  older, useless *"this negotiation is closed"* sentence survives only for a closed session with no
+  lock. In the other order the press is the loser and answers the customer *"that offer has changed
+  — here is the latest"*, carrying the new offer's own button. Neither side is ever silently
+  overwritten and neither gets silence.
+- **The lock records `closed_by: 'model' | 'button'`**, so the ledger says which door closed a
+  deal. Absent on locks minted before the button existed, which were all the model's.
+
+⚠ **The tap answers on `/catalog/action`, NOT through this flow**, so n8n learns about it from the
+response: `data.outcome === "deal_locked"` with `data.negotiation.closed === true`. On that signal
+the bargaining flag and the held lock reference must both be cleared — the deploy-day change set
+carries it. The server no longer *depends* on that happening (a resumed `agreed` session and a
+refusing gate cover it), but a stale flag sends the next typed line to an agent with nothing to do.
 
 ⚠ **The echo key is conversation-scoped and stamped with the `messageId`**, and the flow
 deletes it after reading. That is not tidiness: **the n8n Redis node's `set` exposes no TTL**

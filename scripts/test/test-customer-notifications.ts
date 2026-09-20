@@ -28,9 +28,12 @@ import { join } from 'path';
 import {
     CUSTOMER_NOTIFICATION_CATALOG,
     assertCustomerCatalogComplete,
+    assertCustomerQuickRepliesSendable,
     renderCustomerInApp,
     renderCustomerWhatsAppTemplateParams,
     renderCustomerButton,
+    renderCustomerQuickReplies,
+    viewLineFor,
     customerWhatsAppTemplateName,
     deliveryFailureLine,
     codReadyLine,
@@ -77,6 +80,10 @@ function assert(name: string, fn: () => boolean): void {
 const UNMUTABLE: CustomerNotificationType[] = [
     'booking.cancelled',
     'booking.payment.received',
+    // Money, on the same footing as the line above: it is the RECEIPT for a balance the
+    // platform asked for in `booking.balance.due`, and a setting that silenced it would
+    // leave somebody who has just paid unsure whether it landed.
+    'booking.balance.received',
     'booking.balance.due',
     'booking.refunded',
     'booking.refund.pending',
@@ -115,6 +122,11 @@ const EXPECTED_WA_PARAMS: Record<CustomerNotificationType, number> = {
     'booking.completed': 4,
     'booking.reminder': 4,
     'booking.payment.received': 4,
+    // currency + amount + serviceName, and deliberately NO startAt — the appointment is already
+    // over by the time a balance is settled, so a time here reads as a future visit. The same
+    // reason `booking.payment_failed` omits one, arrived at from the opposite direction: that
+    // situation needs ONE sentence true of both purposes, this one is the balance's own.
+    'booking.balance.received': 3,
     // currency + amount + serviceName, and deliberately NO startAt: the same sentence must be true
     // for a balance paid after the appointment, where a time reads as a future visit.
     'booking.payment_failed': 3,
@@ -188,16 +200,19 @@ function main(): void {
 
     console.log('\n── Catalog ↔ model enum (the drift that bit the agent stack) ──');
 
-    // 24 = the 18 this stack shipped with, plus GAP-012's three `ticket.*`, the card
+    // 25 = the 18 this stack shipped with, plus GAP-012's three `ticket.*`, the card
     // payment page, `order.payment_failed` — the silence that used to follow a declined
-    // charge — and `booking.payment_failed`, the same silence for an appointment. The literal
+    // charge — `booking.payment_failed`, the same silence for an appointment, and
+    // `booking.balance.received` (phase 10), the LAST of that set: a balance paid after the
+    // appointment used to return early rather than reuse a "see you then" sentence that had
+    // become false, which told the customer nothing at all. The literal
     // is kept rather than derived: this assertion's whole job is to notice a situation appearing
     // on one side and not the other, and `catalog.length === model.length` would pass happily
     // while both drifted away from what anybody meant.
-    assert('catalog and model enum list the same 24 situations', () => {
+    assert('catalog and model enum list the same 25 situations', () => {
         const catalog = Object.keys(CUSTOMER_NOTIFICATION_CATALOG).sort();
         const model = [...CUSTOMER_NOTIFICATION_TYPES].sort();
-        return catalog.length === 24 && JSON.stringify(catalog) === JSON.stringify(model);
+        return catalog.length === 25 && JSON.stringify(catalog) === JSON.stringify(model);
     });
 
     // The aggregate enum is spread from CUSTOMER_AGGREGATE_TYPES rather than hand-kept —
@@ -684,6 +699,257 @@ function main(): void {
 
     assert('fractional cash amounts are rounded, never truncated to zero', () =>
         cashSettle(7500, 0, 0.6) === 1);
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Phase 10 · chat quick replies (stage 1)
+    //
+    //  Stage 1 renders the vocabulary on the CHAT channels only. The three pins
+    //  the design owes, plus the dead-button guard that makes conditional
+    //  buttons possible without a second mechanism.
+    // ─────────────────────────────────────────────────────────────────────────
+    console.log('\n── Quick replies: the vocabulary ──');
+
+    const ID = 'a'.repeat(24);
+    const withActions = (Object.keys(CUSTOMER_NOTIFICATION_CATALOG) as CustomerNotificationType[])
+        .filter(s => (CUSTOMER_NOTIFICATION_CATALOG[s].actions?.length ?? 0) > 0);
+
+    assert('the boot assertion accepts the catalogue as written', () => {
+        assertCustomerQuickRepliesSendable();
+        return true;
+    });
+
+    // The split is the design, not an accident: a button that merely repeats the URL
+    // costs a Meta re-approval in stage 2 and buys the customer nothing.
+    assert('exactly 13 of the 25 situations carry a quick reply', () =>
+        withActions.length === 13);
+
+    assert('⚠ every label fits WhatsApp\'s 20-character reply-button cap, in all five languages', () => {
+        for (const situation of withActions) {
+            for (const action of CUSTOMER_NOTIFICATION_CATALOG[situation].actions!) {
+                for (const lang of SUPPORTED_LANGUAGES) {
+                    const label = action.label[lang];
+                    if (!label || [...label].length > 20) return false;
+                }
+            }
+        }
+        return true;
+    });
+
+    assert('⚠ every token fits Telegram\'s 64-BYTE callback_data cap with a real id expanded', () => {
+        for (const situation of withActions) {
+            for (const action of CUSTOMER_NOTIFICATION_CATALOG[situation].actions!) {
+                const widest = action.token.replace(/\{\{\s*\w+\s*\}\}/g, ID);
+                if (Buffer.byteLength(widest, 'utf8') > 64) return false;
+            }
+        }
+        return true;
+    });
+
+    /**
+     * ⭐ **Green is not evidence: each cap is shown to BITE on a deliberately broken
+     * catalogue.** These mutate the in-memory catalogue, assert the boot check throws
+     * for the RIGHT reason, and restore it — so the proof needs no file mutation and
+     * cannot leave the tree broken.
+     *
+     * The failure this catches is the one this effort kept finding: an assertion that
+     * passes because it has stopped looking, rather than because the property holds.
+     */
+    const bites = (name: string, fault: string, breakIt: () => () => void): void => {
+        assert(name, () => {
+            const restore = breakIt();
+            try {
+                assertCustomerQuickRepliesSendable();
+                return false; // did not throw — the cap is not enforced
+            } catch (err) {
+                return (err as Error).message.includes(fault);
+            } finally {
+                restore();
+            }
+        });
+    };
+
+    const victim = 'order.delivered' as CustomerNotificationType;
+    const swapActions = (next: typeof CUSTOMER_NOTIFICATION_CATALOG[CustomerNotificationType]['actions']) => {
+        const original = CUSTOMER_NOTIFICATION_CATALOG[victim].actions;
+        CUSTOMER_NOTIFICATION_CATALOG[victim].actions = next;
+        return () => { CUSTOMER_NOTIFICATION_CATALOG[victim].actions = original; };
+    };
+    const label20 = { en: 'ok', fr: 'ok', pt: 'ok', es: 'ok', ar: 'ok' };
+
+    bites('PROOF: a 21-character label is refused', 'characters; the cap is', () =>
+        swapActions([{ token: 'ord:{{orderId}}', label: { ...label20, en: 'x'.repeat(21) } }]));
+
+    bites('PROOF: a token that cannot fit its own id is refused', 'bytes with ids expanded', () =>
+        swapActions([{ token: `ord:${'x'.repeat(50)}:{{orderId}}`, label: label20 }]));
+
+    bites('PROOF: a fourth button is refused', 'WhatsApp renders at most', () =>
+        swapActions([
+            { token: 'ord:{{orderId}}', label: label20 },
+            { token: 'rate:{{orderId}}', label: label20 },
+            { token: 'track:{{orderId}}', label: label20 },
+            { token: 'tkt:new:ord:{{orderId}}', label: label20 },
+        ]));
+
+    bites('PROOF: a missing translation is refused', 'is missing its', () =>
+        swapActions([{ token: 'ord:{{orderId}}', label: { ...label20, ar: '' } as never }]));
+
+    bites('PROOF: a token with no verb is refused', 'does not start with a verb', () =>
+        swapActions([{ token: '{{orderId}}', label: label20 }]));
+
+    bites('PROOF: two buttons sharing one token are refused', 'repeats quick-reply token', () =>
+        swapActions([
+            { token: 'ord:{{orderId}}', label: label20 },
+            { token: 'ord:{{orderId}}', label: label20 },
+        ]));
+
+    console.log('\n── Quick replies: the dead-button guard ──');
+
+    /**
+     * ⭐ The guard this whole mechanism rests on, and the reason it cannot be a
+     * check for a leftover `{{`: `renderTemplate` fills a MISSING key with an empty
+     * string, so `pay:rt:{{transactionId}}` with no id renders to `pay:rt:` — well
+     * formed, and pointing at nothing. A customer tapping it gets "this button
+     * expired" on a message that arrived seconds ago.
+     */
+    assert('⛔ a token whose id is missing is DROPPED, not sent half-built', () =>
+        renderCustomerQuickReplies('order.payment_failed', 'en', { orderId: ID }).length === 0);
+
+    assert('the same token IS sent once its id is supplied', () => {
+        const out = renderCustomerQuickReplies('order.payment_failed', 'en', { transactionId: ID });
+        return out.length === 1 && out[0].token === `pay:rt:${ID}`;
+    });
+
+    assert('an EMPTY id counts as missing — that is what a lost id looks like in a context', () =>
+        renderCustomerQuickReplies('order.payment_failed', 'en', { transactionId: '' }).length === 0);
+
+    // The conditional, expressed as a present-or-absent id rather than a second
+    // mechanism. A closed request must not offer a reply: `reopenLine` already tells
+    // the customer that door is shut, and a button beside it would contradict the
+    // sentence it sits under.
+    assert('⛔ a CLOSED request offers no "Not sorted" button', () =>
+        renderCustomerQuickReplies('ticket.resolved', 'en', { ticketId: ID }).length === 0);
+
+    assert('a RESOLVED request does offer it', () =>
+        renderCustomerQuickReplies('ticket.resolved', 'en', { reopenableTicketId: ID }).length === 1);
+
+    assert('the owner\'s three delivery-failure buttons all render, and name no action we cannot do', () => {
+        const out = renderCustomerQuickReplies('order.delivery_failed', 'en', { orderId: ID });
+        if (out.length !== 3) return false;
+        // No reschedule and no redirect — the owner's constraint. A label naming either
+        // would promise a customer something the platform deliberately does not offer.
+        return !out.some(b => /reschedul|redirect|change (the )?(date|address)/i.test(b.label));
+    });
+
+    console.log('\n── Quick replies: what must NOT change ──');
+
+    /**
+     * Scans read from here, so a mutation harness can point them at a deliberately
+     * broken copy and confirm each one reports ITS OWN fault. Same convention as
+     * `INAPP_CHECKOUT_SCAN_ROOT`. Unset in normal runs: the real tree.
+     *
+     * ⚠ CRLF is normalised on read — the committed blobs carry it, so a scan that
+     * does not normalise fails on correct code under a fresh checkout.
+     */
+    const scanRoot = process.env.CUSTOMER_NOTIFICATIONS_SCAN_ROOT || join(__dirname, '../..');
+    if (process.env.CUSTOMER_NOTIFICATIONS_SCAN_ROOT) console.log('  (SCANS REDIRECTED)');
+    const readSource = (rel: string) => readFileSync(join(scanRoot, rel), 'utf8').replace(/\r\n/g, '\n');
+
+    const handlerSource = readSource('src/modules/notifications/services/customer-notification-event-handler.service.ts');
+    const telegramSource = readSource('src/modules/telegram/services/telegram-bot.service.ts');
+
+    // A scan that stops matching returns nothing, and "nothing" satisfies most checks.
+    assert('the scanned sources were actually found', () =>
+        handlerSource.includes('private async sendWhatsApp') && telegramSource.includes('inline_keyboard'));
+
+    /**
+     * PIN 1 — the compensating link line carries the SAME label and URL the CTA button
+     * would have. Composed from one value rather than a second copy key, so the two
+     * cannot drift.
+     */
+    assert('⚠ the view line is built from the button it replaces, so the two cannot drift', () => {
+        const button = renderCustomerButton('order.delivered', 'en', { orderId: ID }, 'https://wi-mall.com');
+        if (!button) return false;
+        const line = viewLineFor({ label: button.label, url: button.url });
+        return line.includes(button.url) && line.includes(button.label);
+    });
+
+    assert('no view line exists when there is no button to replace', () =>
+        viewLineFor(null) === '');
+
+    /**
+     * PIN 2 — the line belongs to the IN-WINDOW interactive path only. The
+     * out-of-window template is untouched in stage 1: its body is the approved copy,
+     * and appending anything would make the send disagree with what Meta approved.
+     */
+    assert('⛔ the view line is applied ONLY on the in-window path, never to a template body', () => {
+        const templateBranch = handlerSource.slice(handlerSource.indexOf('const components: TemplateComponent[]'));
+        return !templateBranch.includes('viewLineFor');
+    });
+
+    /**
+     * PIN 3 — a situation with no quick reply keeps the CTA URL button it has today.
+     * The `buttons` payload is reachable only behind a non-empty quick-reply list.
+     */
+    assert('⛔ reply buttons are sent only when a quick reply exists; otherwise the CTA path is unchanged', () => {
+        const inWindow = handlerSource.slice(
+            handlerSource.indexOf('if (withinWindow) {'),
+            handlerSource.indexOf('const components: TemplateComponent[]')
+        );
+        return /if \(quickReplies\.length > 0\) \{[\s\S]*?WaServiceMessage\.buttons\(/.test(inWindow)
+            && /\} else if \(button\) \{[\s\S]*?WaServiceMessage\.ctaUrl\(/.test(inWindow);
+    });
+
+    assert('the 12 situations without a quick reply still resolve a URL button', () => {
+        const ctx = { orderId: ID, bookingId: ID, ticketId: ID, payToken: 'tok' };
+        const none = (Object.keys(CUSTOMER_NOTIFICATION_CATALOG) as CustomerNotificationType[])
+            .filter(s => !(CUSTOMER_NOTIFICATION_CATALOG[s].actions?.length));
+        return none.length === 12
+            && none.every(s => renderCustomerButton(s, 'en', ctx, 'https://wi-mall.com') !== null);
+    });
+
+    /**
+     * Telegram's pre-phase-10 callers pass `button` alone, and the row they produce must
+     * be the same bytes it always was. The new `buttons` path is additive.
+     */
+    assert('⛔ Telegram\'s single-URL-button shape is preserved for every existing caller', () =>
+        /options\.buttons\?\.length[\s\S]{0,200}options\.button/.test(telegramSource)
+        && telegramSource.includes('{ text: b.text, url: b.url }'));
+
+    assert('a Telegram callback button carries callback_data, not a url', () =>
+        telegramSource.includes('{ text: b.text, callback_data: b.callbackData }'));
+
+    /**
+     * The coordinator's pin: at most ONE secondary channel is chosen per notification
+     * (telegram > email > whatsapp), so each rendering is read ALONE. A sentence
+     * referring the customer to another channel's copy would be false for everybody
+     * who did not receive that one.
+     *
+     * ⚠ What this proves and what it does not: it catches copy that NAMES another
+     * channel, which is the reachable form of the mistake. It cannot prove a sentence
+     * is self-contained in general — no scan can.
+     */
+    const crossChannelFree = (): boolean => {
+        const crossChannel = /\b(check your (email|inbox|sms)|see the (email|sms|app)|as (we )?(emailed|texted)|in the app we sent)\b/i;
+        for (const situation of Object.keys(CUSTOMER_NOTIFICATION_CATALOG) as CustomerNotificationType[]) {
+            for (const lang of SUPPORTED_LANGUAGES) {
+                const copy = CUSTOMER_NOTIFICATION_CATALOG[situation].base[lang];
+                if (crossChannel.test(copy.subject) || crossChannel.test(copy.body)) return false;
+            }
+        }
+        return true;
+    };
+
+    assert('⛔ no situation\'s copy points the customer at another channel\'s message', crossChannelFree);
+
+    assert('PROOF: a sentence referring to another channel IS caught', () => {
+        const original = CUSTOMER_NOTIFICATION_CATALOG['order.delivered'].base.en.body;
+        CUSTOMER_NOTIFICATION_CATALOG['order.delivered'].base.en.body = `${original} Check your email for the receipt.`;
+        try {
+            return crossChannelFree() === false;
+        } finally {
+            CUSTOMER_NOTIFICATION_CATALOG['order.delivered'].base.en.body = original;
+        }
+    });
 
     console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed\n`);
     if (failed > 0) process.exit(1);

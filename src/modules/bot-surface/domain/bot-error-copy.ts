@@ -265,6 +265,39 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         es: 'Esa lista ya no está disponible. Dime qué buscas y vuelvo a buscar.',
         ar: 'لم تعد هذه القائمة متاحة. أخبرني بما تبحث عنه وسأبحث من جديد.',
     },
+    /**
+     * ⚠ **THE FIRST SENTENCE IN THIS TABLE TO NAME A NUMBER, and it is a deliberate exception
+     * with a guard attached.** "About two minutes" hardcodes
+     * `CONTACT_RESEND_COOLDOWN_SECONDS = 120`: change that constant alone and all five
+     * sentences begin lying in the direction nobody notices — the customer is told two minutes
+     * and refused at three. Stream H pins both halves together (the constant IS 120, and each
+     * translation still names two minutes), so moving one without the other goes red naming
+     * which. The alternative considered and rejected was "wait a little", which removes the
+     * coupling and is also exactly what somebody retries immediately.
+     *
+     * ⚠ It says **"that"**, not "code" and not "link", because what went out is one or the
+     * other depending on which contact change is pending. The exact remaining wait still
+     * travels mechanically in `details.retryAfterSeconds`.
+     */
+    [ERROR_CODES.BOT_CONTACT_CODE_RESEND_TOO_SOON]: {
+        en: 'I sent that a moment ago. Please wait about two minutes before asking for it again.',
+        fr: "Je viens de l'envoyer. Veuillez patienter environ deux minutes avant de le redemander.",
+        pt: 'Acabei de o enviar. Aguarde cerca de dois minutos antes de pedir de novo.',
+        es: 'Acabo de enviarlo. Espera unos dos minutos antes de volver a pedirlo.',
+        ar: 'أرسلته للتو. انتظر نحو دقيقتين قبل طلبه مرة أخرى.',
+    },
+    /**
+     * ⚠ **Deliberately says nothing about WHICH screen and offers no fresh search.** One
+     * sentence serves checkout, orders, stores and the support form, and the honest common
+     * remedy for all four is "ask for it again" — the caller's own next turn names the thing.
+     */
+    [ERROR_CODES.BOT_SCREEN_SESSION_EXPIRED]: {
+        en: 'That screen is no longer open. Ask me again and I will open a fresh one.',
+        fr: "Cet écran n'est plus ouvert. Demandez-le-moi à nouveau et j'en ouvrirai un autre.",
+        pt: 'Esse ecrã já não está aberto. Peça-me outra vez e abro um novo.',
+        es: 'Esa pantalla ya no está abierta. Pídemelo otra vez y abro una nueva.',
+        ar: 'لم تعد هذه الشاشة مفتوحة. اطلب مني ذلك مرة أخرى وسأفتح واحدة جديدة.',
+    },
     [ERROR_CODES.BOT_ACTION_TOKEN_UNKNOWN]: {
         en: 'That button is no longer active. Tell me what you would like to do and I will help.',
         fr: "Ce bouton n'est plus actif. Dites-moi ce que vous souhaitez faire et je vous aide.",
@@ -538,6 +571,34 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         pt: 'Não encontrei esse pagamento na sua conta. Pergunte-me pela sua última encomenda e eu procuro-a.',
         es: 'No encontré ese pago en tu cuenta. Pregúntame por tu último pedido y lo busco.',
         ar: 'لم أجد هذا الدفع في حسابك. اسألني عن آخر طلب لك وسأبحث عنه.',
+    },
+    /**
+     * ⚠ **The most likely reason a customer meets this is that the thing sold out between the
+     * card being drawn and the button being pressed** — a card lives in a chat history
+     * indefinitely, and `executePurchase` re-resolves the rung on every write rather than
+     * trusting the button. Without an entry here it fell back to the category sentence, *"That
+     * is not possible right now"*, which reads as the shop being broken rather than as one item
+     * being gone. It names what to do next, because the customer's question is "so now what?".
+     */
+    [ERROR_CODES.CATALOG_VARIANT_INSUFFICIENT_STOCK]: {
+        en: 'That one is sold out just now. Pick another option, or ask me for something similar.',
+        fr: "Celui-ci est épuisé pour le moment. Choisissez une autre option ou demandez-moi quelque chose de similaire.",
+        pt: 'Esse está esgotado de momento. Escolha outra opção ou peça-me algo parecido.',
+        es: 'Ese está agotado ahora mismo. Elige otra opción o pídeme algo parecido.',
+        ar: 'هذا غير متوفر حاليًا. اختر خيارًا آخر أو اطلب مني شيئًا مشابهًا.',
+    },
+    /**
+     * ⚠ **Raised on BOTH sides of the checkout spend, so the sentence must be true either way.**
+     * It says what to do and never whether anything was placed — a sentence that claimed "no
+     * order was created" would be a lie on one of the two paths, and that is the lie a customer
+     * acts on by ordering again.
+     */
+    [ERROR_CODES.PAYMENT_OPERATOR_UNDETERMINED]: {
+        en: 'I could not tell which mobile money network that number belongs to. Check it, or send me a different number.',
+        fr: "Je n'ai pas pu déterminer l'opérateur mobile money de ce numéro. Vérifiez-le ou envoyez-moi un autre numéro.",
+        pt: 'Não consegui identificar a operadora de mobile money desse número. Verifique-o ou envie-me outro número.',
+        es: 'No pude identificar el operador de mobile money de ese número. Revísalo o envíame otro número.',
+        ar: 'لم أتمكن من تحديد شبكة المحفظة المحمولة لهذا الرقم. تحقق منه أو أرسل لي رقمًا آخر.',
     },
 });
 

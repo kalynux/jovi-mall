@@ -1973,6 +1973,39 @@ the model is at the end of this section.
 the account, or orders still moving). The sentence says why, in the same words the close
 itself would refuse with.
 
+#### Your account
+
+Every row of the account list, and everything it opens. One verb, `acct:<section>`, with the
+section deciding what is read or written.
+
+| token | drawn on | what it does | reply | data |
+|---|---|---|---|---|
+| `acct:menu` | **My account**, and once the setup questions are finished | the account list — eight rows | the eight-row choice | `{ section: "menu" }` |
+| `acct:prof` | a row of that list | reads the profile | the summary, masked as `profile_get_summary` already masks it | the profile |
+| `acct:addr` | a row of that list | reads the saved addresses | the list, each row offering Make default · Remove | the addresses |
+| `acct:addr:<id>:def` · `acct:addr:<id>:rm` | an address row | makes it the default · removes it | one sentence | `{ addressId, outcome }` |
+| `acct:addr:new:<gc_…>` | a candidate picked after onboarding | saves that candidate as an address | one sentence | `{ addressId }` |
+| `acct:pay` · `acct:pay:<id>:def` · `acct:pay:<id>:rm` | the payment rows | the same three things for saved payment methods | one sentence | `{ paymentMethodId, outcome }` |
+| `acct:inbox` · `acct:inbox:read` | a row of that list | the five most recent notifications · marks them all read | the list · one sentence | `{ unread }` |
+| `acct:conn` | a row of that list | which apps can reach the account | the disconnect question, or the sentence saying this is the only one | the connections |
+| `yes:unl:<whatsapp\|telegram>:<ref>` · `no:unl:<whatsapp\|telegram>` | that question | disconnects that app · keeps it | one sentence | `{ channel, disconnected }` |
+| `acct:lang` · `lang:<code>` | a row of that list · a language option | asks which language · sets it | the five-way choice · one sentence **in the newly chosen language** | `{ language }` |
+| `acct:contact:em\|ph:resend\|cancel` | a pending contact change | sends the code again · abandons the change | one sentence | `{ field, outcome }` |
+| `acct:close` | the last row of that list | draws the closure consequences and the two buttons | the consequence sentence + **Keep my account · Close my account** | `{ closing: true }` |
+
+⚠ **The scope on an unlink is the CHANNEL NAME, not an id.** This platform has no connection
+id: the set is closed at `whatsapp` and `telegram`, and the route is
+`DELETE /connections/:channel`.
+
+⚠ **A customer has at most ONE disconnectable app**, because the app they are talking to you on
+can never be disconnected — that binding is what resolved the request, and cutting it would
+leave them unable to undo it from where they did it. So `acct:conn` asks the question directly
+rather than drawing a one-row list.
+
+⚠ **A stale `yes:unl` reference re-asks rather than refusing**, exactly as `yes:close` does, and
+`no:` carries no reference at all: declining writes nothing, so there is nothing to bind, and
+refusing a stale decline would refuse the one answer that is always safe.
+
 #### Buying and the basket
 
 | token | drawn on | what it does | reply | data |
@@ -1996,6 +2029,80 @@ not the label the customer pressed.
 ⚠ **`add:` and `buy:` never expire. `more:` and `next:` expire after thirty minutes**, with
 `404 BOT_PRODUCT_LIST_EXPIRED` and a sentence inviting a fresh search. The first two name
 products; the second two name a held list.
+
+#### Orders and delivery
+
+| token | drawn on | what it does | reply | data |
+|---|---|---|---|---|
+| `ord:<orderId>` | **an order row**, in the list of orders | the order card | the card — order number · store, then state · payment, then the total — with up to three buttons: **Shipments**, **Cancel**, **Get help** | the customer's order. ⛔ **delivery codes are stripped from it**; the only way one leaves is `code:` below |
+| `ord:<orderId>:cancel` | **Cancel**, on that card | **cancels nothing and checks nothing.** It asks the are-you-sure | the question, as a two-way choice: Yes → `yes:cnc:<orderId>`, No → `no:cnc:<orderId>` | `{ orderId, orderNumber, awaitingConfirmation: true }` |
+| `yes:cnc:<orderId>` | **Yes**, on that question | **cancels the order**, against the full eligibility rule rather than the card's own guess. A card sitting in a chat history may be stale, so an order that has moved on since is refused here, in the customer's language | the request for a **typed** reason. The tap is the decision; the words come next (owner's decision — a reason is never picked from a list) | `{ order_id, fulfillment_status }` |
+| `no:cnc:<orderId>` | **No**, beside it | changes nothing. Draws the order card again, so the customer lands where they came from | the card, as `ord:<orderId>` | the order |
+| `shp:<orderId>` | **Shipments**, on the order card | every parcel on that order | **one parcel** → that parcel's card · **several** → a choice of parcels, numbered, each row carrying its state, its carrier and its tracking code · **none** → **none**, and the model says where the order has got to | the parcels |
+| `shp:<orderId>:<shipmentId>` | **a parcel row**, in that choice | one parcel's card, with whatever that parcel can actually offer | the parcel card. Its buttons depend on where the parcel is — a cash-on-delivery parcel carries **Get code**, a failed delivery carries support buttons | that parcel |
+| `code:<orderId>:<shipmentId>` | **Get code**, on a cash-on-delivery parcel card | shows the delivery code for that parcel | the code. ⛔ **No Resend, deliberately** — a replacement is issued by the agent from their own app, so there is one issuing path; a second here would let a chat invalidate the code the agent is holding at the door. An **already-collected** parcel carries no code, and then the reply is **none** | the collection block |
+| `track:<orderId>` | **Track**, beside Get code on a cash-on-delivery parcel card — and **only there**. Every other parcel card carries the tracking LINK directly, because one WhatsApp interactive message cannot hold a reply button and a URL button at once | where the order is, plus the storefront's tracking page | the order number and its state, with a **link** button. With no storefront configured the button is not offered at all, and this token is not drawn — a Track that can only answer with a sentence looks broken | `{ orderId, orderNumber, trackingUrl }` |
+| `yes:cd:<orderId>:<shipmentId>` | **Yes**, under "did it arrive?" — offered on a parcel the agent has handed over and **never on a cash-on-delivery one**, where giving the agent the code IS the confirmation | confirms that parcel as delivered | the confirmed sentence | the confirmation |
+| `no:cd:<orderId>:<shipmentId>` | **No**, beside it | **writes nothing**, and exists so that a two-way question has two answers rather than a control that can only agree | the not-received sentence | `{ confirmed: false, orderId, shipmentId }` |
+| `tkt:new:<topic>:<orderId>` | **Get help** on an order card, and the support buttons on a failed delivery. `<topic>` is `rd`, `ad` or `hp` | **opens no ticket.** It names the topic and hands the turn to you | **none** — the model asks what happened and opens the ticket, so it is asked for what a ticket needs | `{ supportRequest: true, topic, orderId, orderNumber }`. `topic` comes back in full — `redelivery_requested`, `delivery_address_wrong`, `delivery_problem` — the abbreviation exists only to keep the token inside 64 bytes |
+| `open:ol` | the **last row of the order list** — the way out of the five-row cap. It is a row and not a link because a choice row cannot be one: both channels render an option as a token, so the escape hatch is a tap that *produces* a link | the order history as a screen | a screen button; without screens the storefront's orders page — **that second case is production today**, since `BOT_MINIAPP_BASE_URL` is unset; with neither, **none** | `{ handle, opened: "orders" }`. ⛔ `handle` is a credential — § 19.5 |
+
+⚠ **Two of those three support topics exist because the FEATURE does not.** There is no
+delivery-reschedule endpoint anywhere in this platform, and the delivery address is snapshotted
+onto the order at checkout, so neither can be changed from a chat. The customer is handed a
+person instead of a button that lies.
+
+#### Support requests
+
+The rest of the `tkt:` verb. Every row is handled by the same stream as the orders above, and
+each key is registered in the change that first draws its button.
+
+| token | drawn on | what it does | reply | data |
+|---|---|---|---|---|
+| `tkt:list` | **My requests** | the customer's support requests | a choice of requests | the requests |
+| `tkt:<ticketId>` | a request row | that request: where it stands, the latest replies, and up to three buttons | the request card — **Reply · Attach photo · Close** | the request |
+| `tkt:<ticketId>:rp` | **Reply**, on that card, and **Reply here** on a request waiting for the customer | **writes nothing.** It says the next message will be filed against this request | **none** — the model asks, then files the customer's next message with `tickets_add_note` | `{ ticketId, subject, status, awaitingReply: true }` |
+| `tkt:<ticketId>:ph` | **Attach photo** | asks for the picture | the ask | `{ ticketId, awaitingFile: true }` |
+| `tkt:<ticketId>:<att_…>` | the which-request picker, after a photo arrives with no request named | attaches the picture just sent to that request | one sentence | `{ ticketId, attached: true }` |
+| `tkt:<ticketId>:cl` | **Close** | asks the are-you-sure | the question: **Yes** → `yes:tcl:<ticketId>:<ref>`, **No** → `no:tcl:<ticketId>` | `{ ticketId, awaitingConfirmation: true }` |
+| `yes:tcl:<ticketId>:<ref>` · `no:tcl:<ticketId>` | that question | closes the request · keeps it open | one sentence | `{ ticketId, closed }` |
+| `tkt:new` | **Get help**, with no order in hand | opens the support form | a screen button, or the sentence asking what happened | `{ handle, opened: "ticket_form" }` |
+| `tkt:new:<att_…>` | a photo sent with nothing else | opens the form carrying that picture | as above | as above |
+| `tkt:new:rd\|ad\|hp:<orderId>` | the order and failed-delivery buttons | opens the form **pre-filled** with that order and topic where a screen can be served; unchanged otherwise | a screen button, or **none** | `{ supportRequest: true, topic, orderId, orderNumber }` |
+
+⚠ **The close carries a signed reference and the decline does not** — the same pair as
+`yes:close` and `yes:cnc`, ten minutes, bound to this customer, this conversation and **that one
+request**, so a Close button from another thread cannot close this one. A stale reference asks
+the question again rather than refusing.
+
+⚠ **Closing is milder than it looks and the reference is still right.** Support can reopen a
+request; the customer cannot. So the ten minutes cost a re-ask, never a conversation.
+
+⚠ **A reply is not a direct write, and this is the pattern to recognise.** The tap returns data
+and sets **no** `reply`, because a chat carries no state between turns: the customer's words are
+in their NEXT message, and the model files them. The same shape is used after `yes:cnc`, where
+the cancellation reason is typed rather than picked.
+
+⚠ **`cat:<digest>`, `rate:<orderId>:<stars>` and `lang:<code>` are in the token vocabulary and
+are NOT routed today.** They have builders and no handler, so a tap on one answers
+`BOT_ACTION_TOKEN_UNKNOWN`. Nothing draws them, and nothing should until this section gains a
+row for them.
+
+#### Payments
+
+| token | drawn on | what it does | reply | data |
+|---|---|---|---|---|
+| `pay:st:<transactionId>` | **Check status**, under a payment result. *Nothing draws it yet*: the payment-result messages being built this round will | asks the gateway where that payment is, unless it has already finished | **none** | `{ transactionId, state, amountText, orderCount }`. `state` is `settled`, `failed` or `waiting` |
+| `pay:rt:<transactionId>` | **Try again**, under a failed payment. *Nothing draws it yet*, as above | a fresh mobile-money charge **for the orders that payment covered**, to the number on the account. **It never places an order again**. If those orders have been paid meanwhile, it answers `settled` instead of charging | **none** | `{ transactionId, state, instructions }`. `instructions` is the operator's own text (the USSD code, "approve on your phone"); it is the one thing the customer must act on, so relay it |
+
+⚠ **These tokens carry the transaction id; the matching tools do not.** A button outlives the
+payment it was drawn for. A Try again tapped under last week's failure must charge for last
+week's orders, not whatever basket is newest. A tool is called by the model, which would
+invent an id, so the tools use "the latest".
+
+⚠ **`pay:rt` with no number on the account** answers `422 PAYMENT_REFERENCE_REQUIRED`. The
+model should ask which number to charge and call `checkout_retry_payment` with `phone`. A
+button cannot carry a number.
 
 ---
 

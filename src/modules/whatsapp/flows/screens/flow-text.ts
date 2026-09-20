@@ -1,16 +1,35 @@
 /**
  * Meta's character caps for the components these Flows use, and one way to fit text into them.
  *
- * Every number here is from Meta's Flow component reference, read 2026-09-16. A value over its
- * cap doesn't truncate on the handset: at best the screen fails to render, at worst the Flow
- * fails validation. So fitting happens here, once, before anything is sent.
+ * Every number here is from Meta's Flow component reference — the TEXT ones read 2026-09-16, the
+ * input ones added 2026-09-20. A value over its cap doesn't truncate on the handset: at best the
+ * screen fails to render, at worst the Flow fails validation. So fitting happens here, once,
+ * before anything is sent.
+ *
+ * ── ⛔ EACH NUMBER NAMES THE ROW IT CAME FROM, AND HERE IS WHY ───────────────
+ * Asked "what are the text limits", a documentation lookup on 2026-09-20 answered that
+ * **`TextCaption` caps at 80** — and it does not; 80 is the row ABOVE it (`TextSubheading`), and
+ * the summary had merged the two. Believed, it would have "fixed" `caption` from 409 down to 80,
+ * which is shorter than the checkout screen's phone hint — so a correct constant would have been
+ * broken, and the shipped screen with it, on the strength of a tidy-sounding answer.
+ *
+ * A narrower question — *quote the row for TextCaption* — returned "Caption | Character Limit |
+ * 409", agreeing with what was already here. **So: before changing any number below, ask for its
+ * ROW, not for the table**, and treat a summary that disagrees with a verified constant as a
+ * reason to re-ask rather than as a finding. This is the same failure mode as a guard whose
+ * comment carries a false example: the text reads more confidently than the thing it describes.
  */
 export const FLOW_CAPS = Object.freeze({
     /** `TextHeading.text`. */
     heading: 80,
     /** `TextBody.text`. */
     body: 4096,
-    /** `TextCaption.text`. */
+    /**
+     * `TextCaption.text` — row "Caption | Character Limit | 409".
+     *
+     * ⚠ **409, not 80.** 80 is `TextSubheading`, the row above it. See the header: a summary
+     * answer merged the two, and this is the number it would have broken.
+     */
     caption: 409,
     /** A `RadioButtonsGroup` / `Dropdown` option `title`. */
     optionTitle: 30,
@@ -22,6 +41,18 @@ export const FLOW_CAPS = Object.freeze({
     dropdownOptions: 200,
     /** `Footer.label`. */
     footerLabel: 35,
+    /**
+     * A `TextInput` / `TextArea` **label**.
+     *
+     * ⚠ **20, which is shorter than any other label on a screen** — a heading takes 80 and a
+     * footer 35. Read 2026-09-20 from the same limits table. "Que s'est-il passé ?" is exactly
+     * 20, so a French label here has no room at all: check a new one in every language.
+     */
+    inputLabel: 20,
+    /** A `TextInput` / `TextArea` `helper-text`. ⚠ 80 — a caption beneath it takes 409. */
+    helperText: 80,
+    /** `TextArea`'s own default `max-length` — what a customer may type, not what we send. */
+    textAreaMax: 600,
 });
 
 /**

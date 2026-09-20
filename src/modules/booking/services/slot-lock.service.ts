@@ -4,8 +4,19 @@ import { SlotLockData } from '../types/booking.types';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 
+/**
+ * How long a hold on a slot lives, in seconds.
+ *
+ * ⚠ **Exported because two callers have to AGREE with it rather than restate it.** The
+ * storefront lock route and the shop's reschedule hold both tell the caller when their hold
+ * expires, and both used to compute that from a `15 * 60 * 1000` written at the route — a
+ * second copy of this number, free to drift from it. A dashboard that believes it has longer
+ * than it does shows a picker that has already lapsed.
+ */
+export const SLOT_HOLD_TTL_SECONDS = 900; // 15 minutes
+
 export class SlotLockService {
-  private static readonly DEFAULT_TTL = 900; // 15 minutes in seconds
+  private static readonly DEFAULT_TTL = SLOT_HOLD_TTL_SECONDS;
   private static readonly CAPACITY_MUTEX_TTL = 10; // seconds — short critical section
 
   /**

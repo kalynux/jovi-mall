@@ -66,6 +66,18 @@
   .lede__price { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .desc { color: var(--muted); font-size: 14px; margin-block-start: 18px; white-space: pre-wrap; }
   .desc h2 { font-size: 13px; color: var(--fg); margin: 0 0 4px; }
+  /* Reviews and the similar-items control. Both sit under the fold, below the description. */
+  .sect { margin-block-start: 22px; }
+  .sect h2 { font-size: 13px; margin: 0 0 8px; }
+  .rev { border-top: 1px solid var(--line); padding-block: 10px; }
+  .rev__head { display: flex; gap: 8px; align-items: baseline; }
+  .rev__stars { color: var(--accent); font-size: 13px; letter-spacing: 1px; }
+  .rev__date { color: var(--muted); font-size: 12px; margin-inline-start: auto; }
+  .rev__title { font-weight: 600; font-size: 14px; }
+  .rev__body { font-size: 14px; color: var(--muted); margin-block-start: 4px; white-space: pre-wrap; }
+  .rating { display: flex; gap: 8px; align-items: baseline; font-variant-numeric: tabular-nums; }
+  .rating__avg { font-size: 18px; font-weight: 700; }
+  .rating__count { color: var(--muted); font-size: 13px; }
 </style>
 </head>
 <body>
@@ -88,6 +100,30 @@
         <h2 id="descLabel"></h2>
         <div id="desc"></div>
       </div>
+
+      <!--
+        Similar items. Drawn only when the server says there ARE some (`hasSimilar`), because a
+        button that answers "nothing similar" is a button that wasted a tap. The press mints a
+        pinned listing server-side and navigates to it.
+      -->
+      <div class="sect" id="simWrap" hidden>
+        <button class="btn btn--block" id="simBtn" type="button"></button>
+      </div>
+
+      <!--
+        Reviews. Loaded AFTER the product, and never allowed to fail the page: a product that
+        cannot be bought because its reviews would not load is the worst possible trade.
+      -->
+      <section class="sect" id="revWrap" hidden>
+        <h2 id="revLabel"></h2>
+        <div class="rating" id="rating" hidden>
+          <span class="rev__stars" id="ratingStars"></span>
+          <span class="rating__avg" id="ratingAvg"></span>
+          <span class="rating__count" id="ratingCount"></span>
+        </div>
+        <div id="revList"></div>
+        <button class="btn btn--block" id="revMore" type="button" hidden></button>
+      </section>
     </div>
   </main>
 
@@ -135,7 +171,17 @@
     desc: document.getElementById("desc"),
     foot: document.getElementById("foot"),
     act: document.getElementById("act"),
-    note: document.getElementById("note")
+    note: document.getElementById("note"),
+    simWrap: document.getElementById("simWrap"),
+    simBtn: document.getElementById("simBtn"),
+    revWrap: document.getElementById("revWrap"),
+    revLabel: document.getElementById("revLabel"),
+    rating: document.getElementById("rating"),
+    ratingStars: document.getElementById("ratingStars"),
+    ratingAvg: document.getElementById("ratingAvg"),
+    ratingCount: document.getElementById("ratingCount"),
+    revList: document.getElementById("revList"),
+    revMore: document.getElementById("revMore")
   };
 
   var copy = null;
@@ -208,6 +254,17 @@
    *   POST ./similar  →  { success: true, data: { url: string | null } }
    *     `url` is a same-origin listing of similar products, pinned at the moment of asking.
    *     null = nothing similar after all (a race: `hasSimilar` was true when the page loaded).
+   *
+   *   GET ./reviews?page=N  →  { success: true, data: {
+   *       rating:   { average: number, count: number } | null,   // null = nothing published
+   *       reviews:  [{ rating, title: string|null, body: string, publishedAt: string|null }],
+   *       page:     number,
+   *       hasMore:  boolean,
+   *       total:    number
+   *   }}
+   *     ⚠ A GET, unlike `./similar`, because it mints nothing. The page size is the server's.
+   *     ⚠ Loaded AFTER the product and allowed to fail silently — a review service having a bad
+   *     minute must never cost the customer the product page they opened.
    *
    * A product in `simple` mode has zero options and exactly one variant, so the picker draws
    * nothing and the button is live on arrival. That is the common case and it must stay the
@@ -316,6 +373,136 @@
     el.detail.hidden = false;
     el.foot.hidden = false;
     refresh();
+
+    if (data.hasSimilar) {
+      el.simBtn.textContent = copy.detailSimilar;
+      el.simWrap.hidden = false;
+    }
+
+    loadReviews(1);
+  }
+
+  /*
+   * ── Similar items ────────────────────────────────────────────────────────
+   * The press asks the SERVER for a listing, because only the server can mint a screen session.
+   * The answer is a same-origin path; navigating to an absolute URL built here could take the
+   * customer out of the WebView, which is the one thing a Mini App must not do by accident.
+   *
+   * ⚠ A `null` url means the shelf emptied between the page loading and the tap — a race, not a
+   * fault. It is said in words rather than left as a button that appears to do nothing.
+   */
+  el.simBtn.addEventListener("click", function () {
+    if (busy) return;
+    busy = true;
+    el.simBtn.disabled = true;
+
+    json(base + "/similar", { method: "POST", headers: { Accept: "application/json" } })
+      .then(function (res) {
+        busy = false;
+        if (!res.ok || !res.body || !res.body.data) {
+          el.simBtn.disabled = false;
+          say(explain(res), true);
+          return;
+        }
+        if (res.body.data.url) { window.location.assign(res.body.data.url); return; }
+        el.simBtn.disabled = true;
+        el.simBtn.textContent = copy.detailNoSimilar;
+      })
+      .catch(function () {
+        busy = false;
+        el.simBtn.disabled = false;
+        say(copy.failed, true);
+      });
+  });
+
+  /*
+   * ── Reviews ──────────────────────────────────────────────────────────────
+   * ⚠ **A failure here must never touch the product.** This runs after the page is already drawn
+   * and every branch ends by leaving the section hidden or showing "no reviews yet" — the customer
+   * came to buy something, and a review service having a bad minute is not a reason to show them a
+   * broken screen.
+   */
+  function loadReviews(page) {
+    json(base + "/reviews?page=" + encodeURIComponent(page), { headers: { Accept: "application/json" } })
+      .then(function (res) {
+        if (!res.ok || !res.body || !res.body.data) return;
+        drawReviews(res.body.data, page);
+      })
+      .catch(function () { /* the section simply stays as it is */ });
+  }
+
+  /*
+   * ⚠ **The stars and the average arrive as STRINGS and this page computes neither**, exactly as
+   * it computes no prices. Three surfaces draw the same rating — this screen, a chat message and a
+   * WhatsApp Flow later — and three roundings of 4.25 is how one product reads 4.3 in one place and
+   * 4.2 in another. `test:inapp-catalog` enforces the same rule for money, and the first version of
+   * this section tripped it with a `toFixed` on the average.
+   */
+  function drawReviews(data, page) {
+    el.revLabel.textContent = copy.detailReviews;
+    el.revWrap.hidden = false;
+
+    if (data.rating && data.rating.count > 0) {
+      el.ratingStars.textContent = data.rating.stars;
+      el.ratingAvg.textContent = data.rating.averageText;
+      el.ratingCount.textContent = "(" + data.rating.count + ")";
+      el.rating.hidden = false;
+    }
+
+    if (page === 1 && (!data.reviews || !data.reviews.length)) {
+      el.revList.textContent = copy.detailNoReviews;
+      return;
+    }
+
+    (data.reviews || []).forEach(function (review) {
+      var row = document.createElement("div");
+      row.className = "rev";
+
+      var head = document.createElement("div");
+      head.className = "rev__head";
+
+      var s = document.createElement("span");
+      s.className = "rev__stars";
+      s.textContent = review.stars;
+      head.appendChild(s);
+
+      if (review.title) {
+        var t = document.createElement("span");
+        t.className = "rev__title";
+        t.textContent = review.title;
+        head.appendChild(t);
+      }
+
+      if (review.publishedAt) {
+        var d = document.createElement("span");
+        d.className = "rev__date";
+        /* The customer's own locale formats their own date; the server sends an ISO instant. */
+        d.textContent = new Date(review.publishedAt).toLocaleDateString(document.documentElement.lang || undefined);
+        head.appendChild(d);
+      }
+
+      row.appendChild(head);
+
+      if (review.body) {
+        var b = document.createElement("div");
+        b.className = "rev__body";
+        b.textContent = review.body;
+        row.appendChild(b);
+      }
+
+      el.revList.appendChild(row);
+    });
+
+    if (data.hasMore) {
+      el.revMore.textContent = copy.detailMoreReviews;
+      el.revMore.hidden = false;
+      el.revMore.onclick = function () {
+        el.revMore.hidden = true;
+        loadReviews(page + 1);
+      };
+    } else {
+      el.revMore.hidden = true;
+    }
   }
 
   function labelFor(data, optionIndex, valueId) {
@@ -401,7 +588,12 @@
     outOfStock: "Out of stock",
     detailChoose: "Choose",
     detailDescription: "Description",
-    detailPickFirst: "Pick an option first"
+    detailPickFirst: "Pick an option first",
+    detailSimilar: "Similar items",
+    detailNoSimilar: "Nothing similar to show right now.",
+    detailReviews: "Reviews",
+    detailMoreReviews: "More reviews",
+    detailNoReviews: "No reviews yet."
   };
 
   function boot(d) {

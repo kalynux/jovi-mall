@@ -26,6 +26,8 @@ import {
     renderCustomerChannelText,
     renderCustomerWhatsAppTemplateParams,
     renderCustomerButton,
+    renderCustomerQuickReplies,
+    viewLineFor,
     customerWhatsAppTemplateName,
     deliveryFailureLine,
     codReadyLine,
@@ -308,6 +310,14 @@ export class CustomerNotificationEventHandler {
             idempotencyKey: `customer.booking.cancelled:${p.bookingId}`,
             context: {
                 bookingId: p.bookingId,
+                /**
+                 * Only for the "Book again" quick reply, and deliberately looked up rather
+                 * than taken from the event: `booking.cancelled`'s payload carries
+                 * `productTitle` but no id, and widening it would be an event-shape change
+                 * in the booking module for one button. A miss leaves the key absent, which
+                 * DROPS the button — the right outcome when the service no longer exists.
+                 */
+                productId: await this.bookingProductId(p.bookingId),
                 serviceName: p.productTitle ?? this.genericService(lang),
                 startAt: this.formatMoment(p.startAt, customer, lang),
                 cancelledBy: this.actorLabel(p.cancelledByRole, lang),
@@ -462,22 +472,39 @@ export class CustomerNotificationEventHandler {
         };
 
         if (p.aggregateType !== 'booking' || !p.bookingId) return;
-        if (p.purpose === 'booking_balance') return;
 
         const customer = await this.resolveCustomerByUserId(undefined, p.userId);
         if (!customer) return;
         const lang = resolveLanguage(customer);
         const booking = await this.bookingContext(p.bookingId, customer, lang);
 
+        /**
+         * ⭐ **A balance gets its OWN situation; it used to get silence.**
+         *
+         * This was `if (p.purpose === 'booking_balance') return;` — a deliberate early exit,
+         * because `booking.payment.received` ends "see you then" and a balance is paid after
+         * the appointment. Avoiding the false sentence by saying nothing left a customer who
+         * had just handed over money with no confirmation at all.
+         *
+         * ⚠ **The two situations are told apart by `purpose`, exactly as the FAILURE twin
+         * keys its idempotency on it** — and for the same underlying reason: a customer can
+         * pay, and fail to pay, at both the original price and the balance, so the two must
+         * never collapse onto one record.
+         */
+        const isBalance = p.purpose === 'booking_balance';
+
         await this.notify({
-            situation: 'booking.payment.received',
+            situation: isBalance ? 'booking.balance.received' : 'booking.payment.received',
             customerId: customer._id.toString(),
             aggregateType: 'booking',
             aggregateId: p.bookingId,
-            idempotencyKey: `customer.booking.payment.received:${p.bookingId}`,
+            idempotencyKey: isBalance
+                ? `customer.booking.balance.received:${p.bookingId}`
+                : `customer.booking.payment.received:${p.bookingId}`,
             context: {
                 bookingId: p.bookingId,
                 serviceName: booking?.serviceName ?? this.genericService(lang),
+                // Unused by the balance copy, which carries no time by design.
                 startAt: booking?.startAt ?? '',
                 currency: p.currency ?? booking?.currency ?? 'XAF',
                 amountFormatted: this.formatAmount(p.amount ?? booking?.price ?? 0)
@@ -509,6 +536,8 @@ export class CustomerNotificationEventHandler {
             purpose?: string;
             amount?: number;
             currency?: string;
+            /** The failed charge, for the "Try again" quick reply. Published already. */
+            paymentId?: string;
         };
 
         if (p.aggregateType !== 'booking' || !p.bookingId) return;
@@ -527,6 +556,18 @@ export class CustomerNotificationEventHandler {
             idempotencyKey: `customer.booking.payment_failed:${p.bookingId}${isBalance ? ':balance' : ''}`,
             context: {
                 bookingId: p.bookingId,
+                /**
+                 * The charge that failed, for the "Try again" quick reply. `paymentId` is
+                 * already on the event — the orchestrator publishes it on both the booking
+                 * and the order branch — so nothing new is emitted for this.
+                 *
+                 * ⚠ **The tap MUST carry this id**, for the reason `paymentTap` documents:
+                 * a button outlives the payment it was drawn for, and a "Try again" that
+                 * resolved "my latest payment" would charge a different basket than the
+                 * message beside it names. Absent, the button is dropped rather than
+                 * guessing.
+                 */
+                transactionId: p.paymentId ?? '',
                 serviceName: booking?.serviceName ?? this.genericService(lang),
                 currency: p.currency ?? booking?.currency ?? 'XAF',
                 amountFormatted: this.formatAmount(p.amount ?? 0)
@@ -541,6 +582,20 @@ export class CustomerNotificationEventHandler {
      * was since deleted or a booking id is stale; the callers fall back to the localized generic
      * wording, which is what every other booking message here already does.
      */
+    /**
+     * The product a booking was made against, for the "Book again" quick reply.
+     *
+     * ⚠ **Empty string on ANY miss, never a throw** — same rule as `bookingContext`. An
+     * absent value drops the button (`renderCustomerQuickReplies`), which is exactly what
+     * should happen when the service has since been deleted: offering to rebook something
+     * that no longer exists is worse than offering nothing.
+     */
+    private async bookingProductId(bookingId: string): Promise<string> {
+        if (!mongoose.Types.ObjectId.isValid(bookingId)) return '';
+        const booking = await Booking.findById(bookingId).select('productId').lean();
+        return booking?.productId?.toString() ?? '';
+    }
+
     private async bookingContext(
         bookingId: string,
         customer: ICustomer,
@@ -692,6 +747,8 @@ export class CustomerNotificationEventHandler {
             amount: number;
             currency: string;
             aggregateType?: string;
+            /** The failed charge, for the "Try again" quick reply. Published already. */
+            paymentId?: string;
         };
 
         // The same charge pipeline carries bookings, plan purchases and credit top-ups.
@@ -709,6 +766,8 @@ export class CustomerNotificationEventHandler {
             idempotencyKey: `customer.order.payment_failed:${p.orderId}`,
             context: {
                 orderId: p.orderId,
+                /** See the booking twin: the tap must name the charge it was drawn under. */
+                transactionId: p.paymentId ?? '',
                 orderNumber: p.orderNumber ?? orderNumber ?? p.orderId,
                 currency: p.currency,
                 amountFormatted: this.formatAmount(p.amount)
@@ -908,6 +967,20 @@ export class CustomerNotificationEventHandler {
             context: {
                 ticketId: p.ticketId,
                 subject: ticket.subject,
+                /**
+                 * ⭐ **The "Not sorted" button's condition, expressed as a present-or-absent
+                 * id rather than as a second conditional mechanism.**
+                 *
+                 * `ticket.resolved`'s quick reply names `{{reopenableTicketId}}`, and
+                 * `renderCustomerQuickReplies` drops any button whose placeholders are not
+                 * supplied. So setting this only for a RESOLVED request makes the button
+                 * appear exactly where `reopenLine` already promises a reply will be read,
+                 * and vanish on a CLOSED one — where offering it would send somebody at a
+                 * door the platform has shut, which is the fault the two sentences exist to
+                 * avoid. The button and the sentence cannot disagree, because both are
+                 * driven by `isClosed`.
+                 */
+                reopenableTicketId: isClosed ? '' : p.ticketId,
                 reopenLine: ticketReopenLine(isClosed, resolveLanguage(ticket.customer))
             }
         });
@@ -1243,10 +1316,22 @@ export class CustomerNotificationEventHandler {
     ): Promise<void> {
         const button = this.resolveButton(situation, lang, context);
 
+        /**
+         * Phase 10, stage 1: the chat channels get quick replies; email and the in-app
+         * inbox deliberately do not.
+         *
+         * ⚠ **Email is excluded structurally, not by omission.** A tap token has nowhere
+         * to go in an inbox — there is no tap-back — so email keeps the link it always
+         * had. Same reasoning excludes in-app/push: a token addressed to the bot's
+         * dispatcher is meaningless to the mobile app, and a control that reaches no
+         * handler is worse than none.
+         */
+        const quickReplies = renderCustomerQuickReplies(situation, lang, context);
+
         if (channels.includes('telegram')) {
             const content = renderCustomerChannelText(situation, 'telegram', lang, context);
             await this.attemptDelivery(notification, 'telegram', () =>
-                this.sendTelegram(customer, content, button)
+                this.sendTelegram(customer, content, button, quickReplies)
             );
         }
 
@@ -1341,16 +1426,24 @@ export class CustomerNotificationEventHandler {
     private async sendTelegram(
         customer: ICustomer,
         content: ChannelText,
-        button: { label: string; url: string } | null
+        button: { label: string; url: string } | null,
+        quickReplies: Array<{ token: string; label: string }> = []
     ): Promise<void> {
         // Escaped HTML, never the legacy Markdown this used to ride on — see
         // toTelegramNotificationBody for the failure it closes.
         const message = toTelegramNotificationBody(content.subject, content.body);
 
+        /**
+         * ⚠ **Telegram keeps BOTH** — an inline keyboard row mixes a URL button and
+         * callback buttons freely, so nothing is displaced here and the body gains no
+         * compensating link line. That is the one structural difference from WhatsApp,
+         * whose interactive message is either/or.
+         */
         const result = await this.telegramService.send({
             userId: customer.user_id.toString(),
             message,
             button: button ?? undefined,
+            quickReplies: quickReplies.length > 0 ? quickReplies : undefined,
             parseMode: 'HTML'
         });
 
@@ -1396,8 +1489,36 @@ export class CustomerNotificationEventHandler {
             const button = process.env.STOREFRONT_URL
                 ? renderCustomerButton(situation, lang, context, process.env.STOREFRONT_URL)
                 : null;
+            const quickReplies = renderCustomerQuickReplies(situation, lang, context);
 
-            if (button) {
+            /**
+             * ⭐ **Phase 10, stage 1 — the one place the two affordances COMPETE.**
+             *
+             * A WhatsApp interactive message is `cta_url` **or** `button` and never both:
+             * `InteractiveMessage.subtype` is a discriminator, which is Meta's model, not
+             * ours. So a situation with quick replies cannot also keep its URL button, and
+             * the link would simply vanish from the message.
+             *
+             * ⚠ **So the link moves into the BODY, as one appended line** — WhatsApp
+             * auto-links a bare URL in body text, and `viewLineFor` composes it from the
+             * SAME label and URL the CTA button would have carried, so the two cannot
+             * drift. The customer keeps both the action and the way to look at it.
+             *
+             * ⚠ **Only where a quick reply actually displaced the button.** A situation
+             * with no quick reply takes the `ctaUrl` branch below completely unchanged —
+             * same payload, same bytes — and must never gain this line.
+             */
+            if (quickReplies.length > 0) {
+                const viewLine = viewLineFor(button);
+                result = await getWhatsAppMessagingService().send(
+                    WaServiceMessage.buttons({
+                        to,
+                        header: content.subject,
+                        body: viewLine ? `${content.body}\n\n${viewLine}` : content.body,
+                        buttons: quickReplies.map(q => ({ id: q.token, title: q.label }))
+                    })
+                );
+            } else if (button) {
                 result = await getWhatsAppMessagingService().send(
                     WaServiceMessage.ctaUrl({
                         to,

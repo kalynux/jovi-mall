@@ -32,9 +32,20 @@ import {
     orderCancelActionId,
     orderShipmentsActionId,
     shipmentActionId,
-    ticketActionId,
     trackActionId,
 } from '../domain/bot-action-id';
+import {
+    orderCancelConfirmActionId,
+    orderCancelDeclineActionId,
+    splitConfirmArgument,
+    supportTopicActionId,
+} from '../domain/bot-ticket-actions';
+import { mintConfirmationRef, verifyConfirmationRef } from '../domain/bot-confirmation-ref';
+import {
+    confirmTicketCloseTap,
+    declineTicketCloseTap,
+    ticketTap,
+} from './bot-ticket.controller';
 import {
     botFulfillmentStateLabel,
     botOrderCopy,
@@ -115,66 +126,7 @@ export class BotOrderController {
      * every existing caller already read.
      */
     static list = asyncHandler(async (req: Request, res: Response) => {
-        const query = BotOrderListSchema.parse(req.body ?? {});
-        const caller = botCallerOf(req);
-        const language = botResponseLanguageOf(req);
-
-        const { data, meta } = await orderRepository.findGroupsByCustomer(
-            caller.customerId,
-            { page: query.page, limit: query.limit },
-            {
-                fulfillmentStatus: query.status,
-                paymentStatus: query.paymentStatus,
-                q: query.q,
-            },
-        );
-
-        const chat = windowForChat({
-            items: data.map((group) => ({
-                cartId: group.cartId,
-                createdAt: group.createdAt,
-                currency: group.currency,
-                totalAmount: group.totalAmount,
-                orderCount: group.orderCount,
-                paymentStatus: aggregatePaymentStatus(group.paymentStatuses),
-                orders: group.orders,
-            })),
-            total: meta.total,
-            offset: (query.page - 1) * query.limit,
-            surface: 'orders',
-            language,
-        });
-
-        /**
-         * Flatten the windowed groups to their orders and cap again.
-         *
-         * ⚠ **The second cap is not redundant.** `windowForChat` caps GROUPS at five, and five
-         * groups can hold more than five orders — a single basket split across three sellers is
-         * three rows on its own. Without this, a WhatsApp list could exceed the ten rows Meta
-         * accepts and the whole message would be rejected.
-         */
-        const rows = chat.items.flatMap((group) => group.orders).slice(0, ORDER_ROW_MAX);
-        const droppedInFlattening =
-            chat.items.reduce((sum, group) => sum + group.orders.length, 0) > rows.length;
-        const hasMore = chat.window.hasMore || droppedInFlattening;
-
-        setBotReply(
-            req,
-            rows.length === 0
-                ? null
-                : {
-                      kind: 'choice',
-                      text: botOrderCopy('whichOrder', language),
-                      options: [
-                          ...rows.map((order) => orderRow(order, language)),
-                          ...(hasMore ? [loadMoreRow(language)] : []),
-                      ],
-                      listButton: botChrome('chooseListButton', language),
-                      sectionTitle: botChrome('chooseSectionTitle', language),
-                  },
-        );
-
-        sendSuccess(res, chat.items, { meta: { ...meta, ...chat.window } });
+        await listOwnOrders(req, res, BotOrderListSchema.parse(req.body ?? {}));
     });
 
     /** `POST /orders/groups/:cartId` — one checkout group in detail. */
@@ -457,6 +409,79 @@ async function discloseCodCode(
     sendSuccess(res, match);
 }
 
+/**
+ * Order history as a picker — for `POST /orders/list` and for the `ord:list` tap.
+ *
+ * ⚠ **One function, because a tap and a tool must not word one list differently.** The route passes
+ * whatever filter the model chose; the tap passes the schema's own defaults, so the first five rows a
+ * customer taps their way to are the same five the model would have described.
+ */
+async function listOwnOrders(
+    req: Request,
+    res: Response,
+    query: ReturnType<typeof BotOrderListSchema.parse>,
+): Promise<void> {
+    const caller = botCallerOf(req);
+    const language = botResponseLanguageOf(req);
+
+    const { data, meta } = await orderRepository.findGroupsByCustomer(
+        caller.customerId,
+        { page: query.page, limit: query.limit },
+        {
+            fulfillmentStatus: query.status,
+            paymentStatus: query.paymentStatus,
+            q: query.q,
+        },
+    );
+
+    const chat = windowForChat({
+        items: data.map((group) => ({
+            cartId: group.cartId,
+            createdAt: group.createdAt,
+            currency: group.currency,
+            totalAmount: group.totalAmount,
+            orderCount: group.orderCount,
+            paymentStatus: aggregatePaymentStatus(group.paymentStatuses),
+            orders: group.orders,
+        })),
+        total: meta.total,
+        offset: (query.page - 1) * query.limit,
+        surface: 'orders',
+        language,
+    });
+
+    /**
+     * Flatten the windowed groups to their orders and cap again.
+     *
+     * ⚠ **The second cap is not redundant.** `windowForChat` caps GROUPS at five, and five groups can
+     * hold more than five orders — a single basket split across three sellers is three rows on its
+     * own. Without this, a WhatsApp list could exceed the ten rows Meta accepts and the whole message
+     * would be rejected.
+     */
+    const rows = chat.items.flatMap((group) => group.orders).slice(0, ORDER_ROW_MAX);
+    const droppedInFlattening =
+        chat.items.reduce((sum, group) => sum + group.orders.length, 0) > rows.length;
+    const hasMore = chat.window.hasMore || droppedInFlattening;
+
+    setBotReply(
+        req,
+        rows.length === 0
+            ? null
+            : {
+                  kind: 'choice',
+                  text: botOrderCopy('whichOrder', language),
+                  options: [
+                      ...rows.map((order) => orderRow(order, language)),
+                      ...(hasMore ? [loadMoreRow(language)] : []),
+                  ],
+                  listButton: botChrome('chooseListButton', language),
+                  sectionTitle: botChrome('chooseSectionTitle', language),
+              },
+    );
+
+    sendSuccess(res, chat.items, { meta: { ...meta, ...chat.window } });
+}
+
 /** The order card — for `POST /orders/:orderId`, `ord:<orderId>` and `no:cnc:<orderId>`. */
 async function showOrderCard(req: Request, res: Response, orderRef: string): Promise<void> {
     const caller = botCallerOf(req);
@@ -613,6 +638,18 @@ function idsOf(argument: string, count: number): string[] {
  */
 async function orderTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
     const [orderId, view, ...extra] = action.argument.split(':');
+
+    /**
+     * `ord:list` — the chat order list, for a menu that has no order to name yet.
+     *
+     * ⚠ **Told apart by SHAPE, before the id check.** `list` is not 24 hex characters, so it cannot
+     * collide with an order id — the same way `tkt:list` and `tkt:new` sit beside ticket ids.
+     */
+    if (orderId === 'list' && view === undefined && extra.length === 0) {
+        await listOwnOrders(req, res, BotOrderListSchema.parse({}));
+        return;
+    }
+
     if (!OBJECT_ID.test(orderId ?? '') || extra.length > 0) throw unknownBotAction();
 
     if (view === undefined) {
@@ -644,12 +681,25 @@ async function askToCancel(req: Request, res: Response, orderRef: string): Promi
     const order = await resolveOwnedOrder(caller.customerId, orderRef);
     const orderId = order._id.toString();
 
+    /**
+     * ⚠ **The confirm carries a SIGNED, ten-minute reference; the decline carries none.**
+     * A button lives in a chat history for as long as the conversation does, so a bare `yes:cnc` would
+     * still cancel an order when tapped three weeks later, from a message the customer scrolled past —
+     * long after the sentence above it stopped describing the order. Declining changes nothing, so
+     * refusing a stale "No, keep it" would be refusing the one answer that is always safe.
+     */
+    const ref = mintConfirmationRef(
+        'cancel',
+        { userId: caller.userId, channel: caller.channel },
+        orderId,
+    );
+
     setBotReply(req, {
         kind: 'choice',
         text: botChrome('cancelOrderPrompt', language),
         options: [
-            { id: confirmActionId('cnc', orderId), label: botChrome('confirmButton', language) },
-            { id: declineActionId('cnc', orderId), label: botChrome('declineButton', language) },
+            { id: orderCancelConfirmActionId(orderId, ref), label: botChrome('confirmButton', language) },
+            { id: orderCancelDeclineActionId(orderId), label: botChrome('declineButton', language) },
         ],
         listButton: botChrome('chooseListButton', language),
         sectionTitle: botChrome('chooseSectionTitle', language),
@@ -767,10 +817,36 @@ async function declineDeliveryTap(req: Request, res: Response, action: ParsedBot
     sendSuccess(res, { confirmed: false, orderId: order._id.toString(), shipmentId });
 }
 
-/** `yes:cnc:<orderId>` — cancel it. The reason is asked for next, as typed text. */
+/**
+ * `yes:cnc:<orderId>:<ref>` — cancel it. The reason is asked for next, as typed text.
+ *
+ * ⚠ **A stale or unverifiable reference ASKS AGAIN rather than refusing**, the shape the account
+ * stream's close established: the customer who tapped is this conversation's own account and could
+ * get a fresh confirm by asking, so re-stating what the tap would do is that, one step shorter — and
+ * it re-reads the order, which by then may no longer be cancellable at all.
+ *
+ * ⚠ **A reference is REQUIRED.** The bare `yes:cnc:<orderId>` shape predates signing and was never
+ * deployed; accepting it would re-open exactly the three-weeks-later tap the signature exists to
+ * refuse.
+ */
 async function confirmCancelTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
-    const [orderId] = idsOf(action.argument, 1);
-    await cancelOwnedOrder(req, res, orderId, undefined);
+    const split = splitConfirmArgument(action.argument);
+    if (!split) throw unknownBotAction();
+
+    const caller = botCallerOf(req);
+    const verdict = verifyConfirmationRef(
+        split.ref,
+        'cancel',
+        { userId: caller.userId, channel: caller.channel },
+        split.id,
+    );
+
+    if (verdict !== 'valid') {
+        await askToCancel(req, res, split.id);
+        return;
+    }
+
+    await cancelOwnedOrder(req, res, split.id, undefined);
 }
 
 /** `no:cnc:<orderId>` — leave it alone. Back to the card the customer came from. */
@@ -779,56 +855,6 @@ async function declineCancelTap(req: Request, res: Response, action: ParsedBotAc
     await showOrderCard(req, res, orderId);
 }
 
-/**
- * `tkt:new:<topic>:<orderId>` — a support conversation about a delivery.
- *
- * ⚠ **`tkt:<ticketId>` is refused for now.** Support is this stream's this round, so the whole verb
- * is claimed here rather than split later — but ticket detail is not built yet, and nothing emits
- * that shape, so no button reaches the refusal.
- *
- * ⚠ **It creates no ticket.** `bot-ticket.controller.ts` is the one door onto ticket creation; a
- * second here would be a second set of rules about category and importance. This answers with the
- * topic named and **no reply**, which hands the turn to the model — the documented meaning of an
- * absent `reply` — so the customer is asked for what a ticket needs before one is opened.
- *
- * ⚠ **Two of the three topics exist because the FEATURE does not.** Owner's decision, 2026-09-16:
- * no delivery-reschedule endpoint exists anywhere, and the delivery address is snapshotted onto the
- * order at checkout. The customer gets a person instead of a button that lies. If either capability
- * is ever built, this is the call site to revisit.
- */
-async function ticketTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
-    const [head, topic, orderRef, ...extra] = action.argument.split(':');
-    const supportTopic = SUPPORT_TOPICS[topic as keyof typeof SUPPORT_TOPICS];
-    if (head !== 'new' || !supportTopic || !OBJECT_ID.test(orderRef ?? '') || extra.length > 0) {
-        throw unknownBotAction();
-    }
-
-    const caller = botCallerOf(req);
-    const order = await resolveOwnedOrder(caller.customerId, orderRef);
-
-    // No reply: the turn belongs to the model, which asks what happened and opens the ticket.
-    setBotReply(req, null);
-
-    sendSuccess(res, {
-        supportRequest: true,
-        topic: supportTopic,
-        orderId: order._id.toString(),
-        orderNumber: order.order_number,
-    });
-}
-
-/**
- * The three delivery topics, as the model is told about them.
- *
- * ⚠ **Short in the token, explicit in the body.** Telegram truncates a token past 64 bytes with no
- * error, and `tkt:new:redelivery:<orderId>` would leave little room; the model never sees the
- * abbreviation.
- */
-const SUPPORT_TOPICS = Object.freeze({
-    rd: 'redelivery_requested',
-    ad: 'delivery_address_wrong',
-    hp: 'delivery_problem',
-});
 
 /**
  * `open:ol` — the whole order history, on a screen.
@@ -879,11 +905,20 @@ export const ORDER_ACTION_HANDLERS: BotActionHandlers = Object.freeze({
     shp: shipmentTap,
     code: codCodeTap,
     track: trackTap,
+    /**
+     * ⚠ **The whole `tkt` verb, handled in `bot-ticket.controller.ts`** — the request list, one
+     * request, Reply, Attach photo, Close, an attach, and the support form. It stays registered in
+     * THIS map because the dispatch contract gives each stream one map, and orders, support and
+     * digital are one stream; the handlers live with the requests they are about.
+     */
     tkt: ticketTap,
     'yes:cd': confirmDeliveryTap,
     'no:cd': declineDeliveryTap,
     'yes:cnc': confirmCancelTap,
     'no:cnc': declineCancelTap,
+    /** Closing a support request — the confirm pair, from the support half of this stream. */
+    'yes:tcl': confirmTicketCloseTap,
+    'no:tcl': declineTicketCloseTap,
     'open:ol': orderHistoryTap,
 });
 
@@ -1016,7 +1051,7 @@ function setOrderCardReply(req: Request, order: CustomerOrderDto): void {
     }
 
     actions.push({
-        id: ticketActionId(`new:hp:${order.id}`),
+        id: supportTopicActionId('hp', order.id),
         label: botChrome('getHelpButton', language),
     });
 
@@ -1281,7 +1316,7 @@ async function failedDeliveryActions(
     const refused = reason === 'customer_refused' || reason === 'payment_refused';
     if (!refused) {
         actions.push({
-            id: ticketActionId(`new:rd:${orderId}`),
+            id: supportTopicActionId('rd', orderId),
             label: botOrderCopy('askRedeliveryButton', language),
         });
     }
@@ -1290,13 +1325,13 @@ async function failedDeliveryActions(
     // simply out invites them to change a correct address.
     if (reason === 'address_not_found' || reason === 'address_inaccessible') {
         actions.push({
-            id: ticketActionId(`new:ad:${orderId}`),
+            id: supportTopicActionId('ad', orderId),
             label: botOrderCopy('askAddressFixButton', language),
         });
     }
 
     actions.push({
-        id: ticketActionId(`new:hp:${orderId}`),
+        id: supportTopicActionId('hp', orderId),
         label: botChrome('getHelpButton', language),
     });
 

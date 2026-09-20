@@ -5,7 +5,12 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 // The barrel, never a file inside it: that module's header makes `ConnectionMapper` the one
 // way `external_id` may leave, and reaching past it is how a second way appears.
-import { connectionService, ConnectionMapper } from '../../channel-connections';
+import {
+    connectionService,
+    ConnectionMapper,
+    isMessagingChannel,
+    type MessagingChannel,
+} from '../../channel-connections';
 import { AccountClosureService } from '../../users/account-closure.service';
 import { AccountClosureRepository } from '../../users/account-closure.repository';
 import { UserRepository } from '../../users/user.repository';
@@ -14,12 +19,16 @@ import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.
 import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { botChrome } from '../domain/bot-chrome-copy';
 import { customerMessageFor } from '../domain/bot-error-copy';
-import { confirmActionId, declineActionId } from '../domain/bot-action-id';
+import { accountActionId, confirmActionId, declineActionId } from '../domain/bot-action-id';
 import { unknownBotAction, type BotActionHandlers, type ParsedBotAction } from '../domain/bot-action-dispatch';
 import { mintConfirmationRef, verifyConfirmationRef } from '../domain/bot-confirmation-ref';
 import type { ResolvedBotCaller } from '../services/bot-identity.service';
-import { toBotConnectionDto } from '../dto/bot-projections';
+import { toBotConnectionDto, toBotProfileSummary } from '../dto/bot-projections';
+import { CustomerProfileService } from '../../customers/services/customer-profile.service';
 import { BotAccountCloseSchema, BotConnectionParamSchema, BotNoArgsSchema } from '../validators/bot.validators';
+import { addressSection, languageChoiceTap, setLanguageTap } from './bot-profile.controller';
+import { contactSection } from './bot-contact.controller';
+import { paymentSection } from './bot-payment-method.controller';
 import { ACCOUNT_CLOSURE_CONFIRMATION } from '../../users/user.validator';
 
 /**
@@ -45,6 +54,7 @@ import { ACCOUNT_CLOSURE_CONFIRMATION } from '../../users/user.validator';
 const accountClosureService = new AccountClosureService();
 const closureRepo = new AccountClosureRepository();
 const userRepo = new UserRepository();
+const customerProfileService = new CustomerProfileService();
 
 export class BotAccountController {
     /**
@@ -325,11 +335,281 @@ async function confirmCloseTap(req: Request, res: Response, action: ParsedBotAct
     await closeAndReply(req, res, caller);
 }
 
-/** `no:close` — Keep my account. Changes nothing, whenever it is tapped. */
+/**
+ * `no:close` — Keep my account. Changes nothing, whenever it is tapped.
+ *
+ * ⚠ **It now SAYS so.** Until this reply existed the safe answer was the silent one: the
+ * customer pressed "Keep my account" on the most frightening question the product asks and
+ * the thread said nothing back, which reads as *did that work?* — and the obvious way to find
+ * out is to press the other button.
+ */
 async function keepAccountTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
     botCallerOf(req);
     if (action.argument !== '') throw unknownBotAction();
+
+    setBotReply(req, { kind: 'text', text: botChrome('accountKept', botResponseLanguageOf(req)) });
     sendSuccess(res, { closed: false, kept: true });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Disconnecting an app — the same two-button shape as closure, one rung down
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A channel's own name. **Not copy, and deliberately not in the copy table**: "WhatsApp" is a
+ * brand, identical in all five languages, and a translator handed it as a string to localise
+ * would eventually localise it.
+ */
+const CHANNEL_LABEL: Readonly<Record<MessagingChannel, string>> = Object.freeze({
+    whatsapp: 'WhatsApp',
+    telegram: 'Telegram',
+});
+
+/**
+ * Which apps this customer could disconnect from where they are standing.
+ *
+ * ⚠ **The current channel is excluded HERE rather than refused later**, so the question is
+ * never asked about the one app the answer cannot be given from. `disconnect` still refuses it
+ * (`BOT_CONNECTION_ACTIVE_CHANNEL`) and that refusal stays the authority — this is the
+ * narrowing that keeps a customer from meeting it.
+ *
+ * ⚠ **`CONNECTION_CHANNELS` is closed at two, so this list is today always empty or exactly
+ * one** — which is why a single connected app goes straight to the question below instead of
+ * being listed first. The multi-row branch is not speculation: it is what keeps that shortcut
+ * honest the day a third channel is added, rather than silently asking about whichever came
+ * back first.
+ */
+async function removableConnections(caller: ResolvedBotCaller): Promise<MessagingChannel[]> {
+    const states = await connectionService.getStates(caller.userId);
+    return ConnectionMapper.toDtoList(states)
+        .map((c) => toBotConnectionDto(c, caller.channel))
+        .filter((c) => c.connected && !c.isCurrentChannel)
+        .map((c) => c.channel);
+}
+
+/**
+ * The question, with the app named above it.
+ *
+ * ⚠ **The app's name is a LINE, not a placeholder.** The copy table holds fixed sentences and
+ * interpolates nothing (`contactEmailChangeStarted` records why), so the value that must vary
+ * is composed around the sentence rather than dropped into it — the same shape the sign-in
+ * assembler uses.
+ *
+ * "Keep connected" comes first and carries no reference, exactly as "Keep my account" does:
+ * the answer that costs nothing sits nearest the thumb, and a stale decline must never be
+ * refused.
+ */
+function setDisconnectReply(req: Request, caller: ResolvedBotCaller, channel: MessagingChannel): void {
+    const language = botResponseLanguageOf(req);
+    const ref = mintConfirmationRef(
+        'unlink',
+        { userId: caller.userId, channel: caller.channel },
+        channel,
+    );
+
+    setBotReply(req, {
+        kind: 'text',
+        text: `${CHANNEL_LABEL[channel]}\n\n${botChrome('connectionDisconnectPrompt', language)}`,
+        actions: [
+            { id: declineActionId('unl', channel), label: botChrome('keepConnectedButton', language) },
+            { id: confirmActionId('unl', `${channel}:${ref}`), label: botChrome('disconnectButton', language) },
+        ],
+    });
+}
+
+/**
+ * `yes:unl:<channel>:<ref>` — Disconnect.
+ *
+ * ⚠ **The scope is the channel being disconnected, and that is what makes the reference worth
+ * having here.** A ref bound only to the account would let a button minted for Telegram
+ * disconnect WhatsApp — the two live in one thread and expire ten minutes apart, so the mix-up
+ * is a scroll, not an attack. `bot-confirmation-ref.ts` already anticipated this: its
+ * `subject.channel` is documented as *the conversation's, not the one being disconnected*.
+ *
+ * A stale reference re-asks rather than refusing, for the reason `confirmCloseTap` gives.
+ */
+async function confirmUnlinkTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    const caller = botCallerOf(req);
+
+    const colon = action.argument.indexOf(':');
+    const channel = colon < 0 ? action.argument : action.argument.slice(0, colon);
+    const ref = colon < 0 ? '' : action.argument.slice(colon + 1);
+    if (!isMessagingChannel(channel)) throw unknownBotAction();
+
+    /**
+     * ⚠ **Checked again here, though `removableConnections` already excluded it.** This tap
+     * carries its own channel and arrives from the open thread, so the narrowing that drew the
+     * button is not evidence about the token that came back. The refusal is the route's
+     * (`BOT_CONNECTION_ACTIVE_CHANNEL`), stated once and reached from both doors.
+     */
+    if (channel === caller.channel) {
+        throw createAppError(ERROR_CODES.BOT_CONNECTION_ACTIVE_CHANNEL, 409, undefined, { channel });
+    }
+
+    const verdict = verifyConfirmationRef(
+        ref,
+        'unlink',
+        { userId: caller.userId, channel: caller.channel },
+        channel,
+    );
+
+    if (verdict !== 'valid') {
+        setDisconnectReply(req, caller, channel);
+        sendSuccess(res, { disconnected: false, confirmation: verdict, channel });
+        return;
+    }
+
+    await connectionService.disconnect(caller.userId, channel);
+
+    setBotReply(req, {
+        kind: 'text',
+        text: botChrome('connectionDisconnected', botResponseLanguageOf(req)),
+    });
+    sendSuccess(res, { disconnected: true, channel });
+}
+
+/** `no:unl:<channel>` — Keep connected. Writes nothing, so it carries no reference. */
+async function keepConnectionTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    botCallerOf(req);
+    if (!isMessagingChannel(action.argument)) throw unknownBotAction();
+
+    setBotReply(req, {
+        kind: 'text',
+        text: botChrome('connectionKept', botResponseLanguageOf(req)),
+    });
+    sendSuccess(res, { disconnected: false, kept: true, channel: action.argument });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `acct:` — one verb, one owner, one section router
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The account surface's sections.
+ *
+ * ⚠ **The verb dispatches on the verb alone** (`acct` is not in `SUB_DISPATCHED_VERBS`), so the
+ * section is parsed HERE. It is a private namespace rather than a shared one: a section name
+ * costs nothing outside this file, which is why the account surface can grow a row without a
+ * contract request for each one.
+ *
+ * ⚠ **An unknown section throws the one unknown-token refusal**, the same sentence the
+ * dispatcher gives an unknown verb. Three ways to route nowhere, one answer — a customer
+ * cannot tell them apart and must not be shown that they differ.
+ */
+const ACCOUNT_SECTIONS: Readonly<Record<string, (req: Request, res: Response, rest: string) => Promise<void>>> =
+    Object.freeze({
+        conn: connectionsSection,
+        /**
+         * Lives in `bot-profile.controller.ts`, beside `PATCH /profile/language` — the write
+         * and the tap that triggers it are one thing, and splitting them is how a surface ends
+         * up with two opinions about what a language change does.
+         */
+        lang: async (req, res, rest) => {
+            if (rest !== '') throw unknownBotAction();
+            await languageChoiceTap(req, res);
+        },
+        /** Resend / Cancel under a pending change — `bot-contact.controller.ts`. */
+        contact: contactSection,
+        /** The address book and the saved ways to pay, each beside its own service. */
+        addr: addressSection,
+        pay: paymentSection,
+        prof: profileSection,
+        close: closeSection,
+    });
+
+/**
+ * `acct:prof` — what we hold about this customer.
+ *
+ * ⚠ **No reply, deliberately: this row answers with DATA and lets the model say it.** A
+ * summary is a set of values with a label each — name, phone, email, language — and labels are
+ * the one thing this surface cannot render cheaply: the copy table holds fixed sentences and
+ * interpolates nothing, so a rendered summary would need four more keys in five languages to
+ * say what the model already says better, in the customer's own words, in the conversation it
+ * is having. There is also no control to draw — the one writable field is the name, and
+ * changing it needs typed text rather than a button. Same rule as an empty address book.
+ *
+ * ⚠ **`toBotProfileSummary` masks**, and that is why this hands over the projection rather than
+ * the profile: a chat window is screenshotted and shoulder-surfed.
+ */
+async function profileSection(req: Request, res: Response, rest: string): Promise<void> {
+    if (rest !== '') throw unknownBotAction();
+
+    const profile = await customerProfileService.getProfile(botCallerOf(req).customerId);
+    sendSuccess(res, toBotProfileSummary(profile));
+}
+
+/**
+ * `acct:close` — the menu row that opens the closure question.
+ *
+ * The same preview `account_close_preview` serves, drawn by the same function, so the row and
+ * the tool cannot come to describe the closure differently. When closure is blocked it draws no
+ * buttons and says why, using the refusal copy the verb itself would raise.
+ */
+async function closeSection(req: Request, res: Response, rest: string): Promise<void> {
+    if (rest !== '') throw unknownBotAction();
+
+    const caller = botCallerOf(req);
+    const language = botResponseLanguageOf(req);
+
+    const preview = await readClosurePreview(caller, language);
+    setClosureReply(req, caller, preview, language);
+    sendSuccess(res, preview);
+}
+
+/**
+ * `acct:conn` — the connected apps, and `acct:conn:<channel>` — the question about one.
+ *
+ * With `CONNECTION_CHANNELS` closed at two there is at most one disconnectable app, so the
+ * list is skipped and the question asked directly. See `removableConnections`.
+ */
+async function connectionsSection(req: Request, res: Response, rest: string): Promise<void> {
+    const caller = botCallerOf(req);
+    const language = botResponseLanguageOf(req);
+
+    if (rest !== '') {
+        if (!isMessagingChannel(rest)) throw unknownBotAction();
+        setDisconnectReply(req, caller, rest);
+        sendSuccess(res, { section: 'conn', channel: rest, asking: true });
+        return;
+    }
+
+    const removable = await removableConnections(caller);
+
+    if (removable.length === 0) {
+        setBotReply(req, { kind: 'text', text: botChrome('connectionsOnlyCurrent', language) });
+        sendSuccess(res, { section: 'conn', removable: [] });
+        return;
+    }
+
+    if (removable.length === 1) {
+        setDisconnectReply(req, caller, removable[0]);
+        sendSuccess(res, { section: 'conn', channel: removable[0], asking: true });
+        return;
+    }
+
+    setBotReply(req, {
+        kind: 'choice',
+        text: botChrome('connectionsPrompt', language),
+        options: removable.map((channel) => ({
+            id: accountActionId('conn', channel),
+            label: CHANNEL_LABEL[channel],
+        })),
+        listButton: botChrome('chooseListButton', language),
+        sectionTitle: botChrome('chooseSectionTitle', language),
+    });
+    sendSuccess(res, { section: 'conn', removable });
+}
+
+/** `acct:<section>[:…]` — parsed once, routed once. */
+async function accountTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    const colon = action.argument.indexOf(':');
+    const section = colon < 0 ? action.argument : action.argument.slice(0, colon);
+    const rest = colon < 0 ? '' : action.argument.slice(colon + 1);
+
+    const handler = ACCOUNT_SECTIONS[section];
+    if (!handler) throw unknownBotAction();
+
+    await handler(req, res, rest);
 }
 
 /**
@@ -337,6 +617,16 @@ async function keepAccountTap(req: Request, res: Response, action: ParsedBotActi
  * registered from here — see `bot-action.controller.ts`.
  */
 export const ACCOUNT_ACTION_HANDLERS: BotActionHandlers = Object.freeze({
+    acct: accountTap,
+    /**
+     * ⚠ **One map for the whole stream, deliberately.** Every key below could have been a
+     * second exported map registered on its own dispatcher line, and each such line is a place
+     * the registry's owner can be asked for something and forget — the shape that left
+     * `yes:close` drawn but unrouted for a round. Stream H asks once.
+     */
+    lang: setLanguageTap,
     'yes:close': confirmCloseTap,
     'no:close': keepAccountTap,
+    'yes:unl': confirmUnlinkTap,
+    'no:unl': keepConnectionTap,
 });

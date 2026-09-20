@@ -15,6 +15,7 @@ import { BotTicketController } from './controllers/bot-ticket.controller';
 import { BotFileController } from './controllers/bot-file.controller';
 import { BotCatalogController } from './controllers/bot-catalog.controller';
 import { BotProductDisplayController } from './controllers/bot-product-display.controller';
+import { BotDiscoveryController } from './controllers/bot-discovery.controller';
 import { BotActionController } from './controllers/bot-action.controller';
 import { BotCheckoutController } from './controllers/bot-checkout.controller';
 import { BotBookingController } from './controllers/bot-booking.controller';
@@ -184,6 +185,10 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
     inapp_open_stores: BotInAppController.stores,
     inapp_open_orders: BotInAppController.orders,
     inapp_open_product: BotInAppController.product,
+
+    // ── Discovery ────────────────────────────────────────────────────────────
+    catalog_browse_categories: BotDiscoveryController.browseCategories,
+    catalog_product_reviews_summary: BotDiscoveryController.reviewsSummary,
 
     // ── Wishlist, recently viewed, digital ───────────────────────────────────
     wishlist_list: BotCatalogController.listWishlist,

@@ -239,6 +239,21 @@ function main(): void {
     const PURCHASE = codeOf(path.join(CONTROLLERS, 'bot-purchase.controller.ts'));
     const DISPATCHER = codeOf(path.join(CONTROLLERS, 'bot-action.controller.ts'));
     const CART = codeOf(path.join(CONTROLLERS, 'bot-cart.controller.ts'));
+    /**
+     * ⭐ **The subject MOVED on 2026-09-20, and that is why this constant exists.** The three
+     * post-add buttons and the bargain/book question used to be built inside
+     * `bot-purchase.controller.ts`; they now live in `domain/purchase-chat-copy.ts`, because a
+     * suite cannot import a controller on this surface and the WhatsApp form completion needs
+     * the same wording.
+     *
+     * Every guard below that used to scan the controller alone now scans **both**, and anchors
+     * on the new module first — a "must NOT build these" check over a file that no longer
+     * builds them is true of any file, which is the vacuous-green shape this suite's own header
+     * warns about.
+     */
+    const CHAT_COPY = codeOf(
+        path.join(__dirname, '../../src/modules/bot-surface/domain/purchase-chat-copy.ts'),
+    );
 
     /**
      * ⛔ **WHY THE GUARDS BELOW SCAN SEVERAL FILES TOGETHER, AND PROVE THEY BITE.**
@@ -294,6 +309,21 @@ function main(): void {
 
     assert('the cart module is found and holds the typed-path reply', () =>
         CART.includes('static addItem') && CART.includes('addedToCartActions('));
+
+    /** Non-vacuity for every guard below that spans the extracted module. */
+    assert('the purchase chat-copy module is found and is the one that DEFINES both pieces', () =>
+        CHAT_COPY.includes('export function addedToCartActions(')
+        && CHAT_COPY.includes('export function purchaseInvitePrompt('));
+
+    /**
+     * ⚠ **The extracted module must stay importable by a SUITE**, which is the whole reason it
+     * exists: a controller here reaches `orders/` and `payments/`, whose imports do work and
+     * never return under bare `ts-node`, so a suite importing one produces no output at all.
+     * A service import creeping into this module would take that property away silently.
+     */
+    assert('⛔ the chat-copy module imports no service, no controller and no model', () =>
+        !/from\s+['"][^'"]*\/(services|controllers|models)\//.test(CHAT_COPY)
+        && !/from\s+['"][^'"]*\.(controller|service|model)['"]/.test(CHAT_COPY));
 
     /**
      * ⛔ **Every scan in this suite gives the SAME verdict on a Windows clone.** Rather than
@@ -361,14 +391,14 @@ function main(): void {
      * label is translated, the id is not (`bot-action-id.ts`).
      */
     assert('"Added to cart" offers exactly three actions', () =>
-        PURCHASE.includes('cartViewActionId()')
-        && PURCHASE.includes("openSurfaceActionId('co')")
-        && PURCHASE.includes("openSurfaceActionId('pl')"));
+        CHAT_COPY.includes('cartViewActionId()')
+        && CHAT_COPY.includes("openSurfaceActionId('co')")
+        && CHAT_COPY.includes("openSurfaceActionId('pl')"));
 
     assert('each of the three has a translated label', () =>
-        PURCHASE.includes("botChrome('viewCartButton'")
-        && PURCHASE.includes("botChrome('checkoutButton'")
-        && PURCHASE.includes("botChrome('browseMoreButton'"));
+        CHAT_COPY.includes("botChrome('viewCartButton'")
+        && CHAT_COPY.includes("botChrome('checkoutButton'")
+        && CHAT_COPY.includes("botChrome('browseMoreButton'"));
 
     /**
      * ⭐ **BOTH doors offer the same three, and this is an OWNER DECISION (2026-09-16) rather
@@ -400,10 +430,13 @@ function main(): void {
      */
     guardBites('⛔ the three buttons are built in exactly ONE place — and the guard bites', {
         anchor: () =>
-            PURCHASE.includes('export function addedToCartActions(')
-            && PURCHASE.includes('cartViewActionId()')
-            && CART.includes('addedToCartActions('),
-        sources: [CART, DISPATCHER],
+            CHAT_COPY.includes('export function addedToCartActions(')
+            && CHAT_COPY.includes('cartViewActionId()')
+            && CART.includes('addedToCartActions(')
+            && PURCHASE.includes('addedToCartActions('),
+        // ⚠ The controller that used to DEFINE these is now a source that must not rebuild
+        // them. Leaving it out is what would make this guard vacuous after the extraction.
+        sources: [PURCHASE, CART, DISPATCHER],
         forbidden: (src) => src.includes('cartViewActionId(') || src.includes("openSurfaceActionId('co')"),
         mutant: "const actions = [{ id: cartViewActionId(), label: 'View cart' }];",
     });
@@ -502,15 +535,26 @@ function main(): void {
      * and it would look completely correct from this side, which is why it is pinned here.
      */
     guardBites('⛔ neither the write path nor the dispatcher reaches for the negotiation module — and the guard bites', {
-        anchor: () => PURCHASE.includes("case 'bargain':") && PURCHASE.includes('bargainInvitePrompt'),
-        sources: [PURCHASE, DISPATCHER],
+        anchor: () =>
+            PURCHASE.includes("case 'bargain':")
+            && PURCHASE.includes('purchaseInvitePrompt(')
+            && CHAT_COPY.includes('bargainInvitePrompt'),
+        sources: [PURCHASE, DISPATCHER, CHAT_COPY],
         forbidden: (src) => /from\s+['"][^'"]*\/negotiation[/'"]/.test(src),
         mutant: "import { negotiationService } from '../../negotiation/services/negotiation.service';",
     });
 
+    /**
+     * ⚠ **Two halves, in two files, and both are asserted.** The controller must ASK through
+     * the shared builder (so the chat tap and the WhatsApp form completion cannot drift), and
+     * the builder must reach the two invite sentences. Checking only one half would pass while
+     * the other quietly stopped asking anything.
+     */
     assert('bargain and book ask a question rather than announcing anything', () =>
-        PURCHASE.includes("botChrome('bargainInvitePrompt'")
-        && PURCHASE.includes("botChrome('bookInvitePrompt'"));
+        PURCHASE.includes("purchaseInvitePrompt(product.title, 'bargain'")
+        && PURCHASE.includes("purchaseInvitePrompt(product.title, 'book'")
+        && CHAT_COPY.includes("'bargainInvitePrompt'")
+        && CHAT_COPY.includes("'bookInvitePrompt'"));
 
     /**
      * ⚠ **Neither rung writes.** A haggle has no agreed price yet and a booking has no slot

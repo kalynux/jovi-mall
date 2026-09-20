@@ -70,8 +70,18 @@ router.patch('/:id/payment-status', VendorBookingController.markAsPaid);
 router.post('/:id/settle-balance', VendorBookingController.settleBalanceByCash);
 
 /**
+ * POST /api/vendor/bookings/:id/slot-hold
+ * Hold any time this shop's own rule allows — same length as the appointment, in the future,
+ * free — so it can then be rescheduled onto it. Published opening hours are NOT consulted; that
+ * is what this door is for, and it is why the storefront's lock route cannot serve it.
+ * Body: { slotId: string }
+ */
+router.post('/:id/slot-hold', VendorBookingController.holdSlot);
+
+/**
  * PATCH /api/vendor/bookings/:id/reschedule
- * Reschedule to a new slot. The vendor must have locked the slot first.
+ * Reschedule to a new slot. The vendor must have locked the slot first — inside published hours
+ * through the storefront's lock route, or anywhere the shop rule allows through /slot-hold above.
  * Body: { newSlotId: string }
  * Eligibility: pending or confirmed bookings only.
  */

@@ -2,7 +2,7 @@ import { existsSync } from 'fs';
 import path from 'path';
 import { Request, Response } from 'express';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
-import { InAppSurfaceKind } from '../services/inapp-surface.store';
+import { InAppSurfaceKind, TTL_SECONDS } from '../services/inapp-surface.store';
 import { inAppCopy } from './inapp-copy';
 import { miniAppDirection } from './miniapp-copy';
 
@@ -194,10 +194,19 @@ export class InAppPageController {
 /**
  * The closed set of screens, as a type guard.
  *
- * ⚠ **An allowlist, never a sanitiser** — see the traversal note on `page`. It also keeps the
- * URL's kind and `InAppSurfaceKind` from drifting: a sixth screen fails to compile here.
+ * ⚠ **An allowlist, never a sanitiser** — see the traversal note on `page`.
+ *
+ * ⚠ **DERIVED, because the hand-written list could not keep the promise its comment made.**
+ * This read *"a sixth screen fails to compile here"*, and that was never true: a literal array
+ * typed `readonly InAppSurfaceKind[]` is perfectly valid while missing a member, so a new
+ * screen would have compiled, routed nowhere, and answered "no such screen" — the quietest
+ * possible failure. `TTL_SECONDS` is a **total** `Record<InAppSurfaceKind, number>`, so a kind
+ * added to the union fails to compile *there* and arrives here for free. The claim is now
+ * carried by the code rather than by this paragraph.
  */
-const SCREEN_KINDS: readonly InAppSurfaceKind[] = Object.freeze(['pl', 'pd', 'ol', 'sl', 'co']);
+const SCREEN_KINDS: readonly InAppSurfaceKind[] = Object.freeze(
+    Object.keys(TTL_SECONDS) as InAppSurfaceKind[],
+);
 
 function asScreenKind(raw: unknown): InAppSurfaceKind | null {
     return typeof raw === 'string' && (SCREEN_KINDS as readonly string[]).includes(raw)

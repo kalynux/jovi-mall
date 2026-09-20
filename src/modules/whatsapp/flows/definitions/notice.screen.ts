@@ -29,9 +29,15 @@ export const NOTICE_SCREEN = 'NOTICE';
  * close button. So the SENTENCE varies, chosen by the endpoint from the five-language screen
  * copy, and the screen doesn't.
  *
- * ⚠ **The payload stamps which Flow closed and names no outcome the customer could forge into
- * an action.** `flow_complete` reports and never writes, so a stamp can do no more than route
- * a thank-you. `outcome: 'notice'` tells it this wasn't a choice.
+ * ⚠ **The payload stamps which Flow closed and WHAT HAPPENED, and neither is content.**
+ * `flow_complete` reports and never writes, so a stamp can do no more than choose which of a
+ * closed set of answers the chat gives — see `domain/flow-outcome.ts`. Every word of that answer
+ * is rebuilt from the session and the live catalogue, never echoed from here.
+ *
+ * ⚠ **`outcome` is `${data.outcome}`, not a literal**, because this one screen closes every
+ * state: an empty shelf, a lapsed handle, a basket that just gained an item, a question the
+ * customer must answer by typing. A literal `'notice'` said "nothing happened" for all of them,
+ * which left a WhatsApp customer's bargain question visible only on a screen that had closed.
  *
  * `flow_token` is not in the payload. Meta's reference says the business receives the
  * completion "together with the flow_token and all of the other parameters from the payload".
@@ -47,6 +53,8 @@ export function noticeScreen(kind: InAppSurfaceKind): FlowScreen {
                 __example__: 'This page is no longer available. Ask me again in the chat and I will open a fresh one.',
             },
             closeLabel: { type: 'string', __example__: 'Back to chat' },
+            /** One of `FLOW_OUTCOMES`. Routes the chat's answer; never rendered to anyone. */
+            outcome: { type: 'string', __example__: 'notice' },
         },
         layout: {
             type: 'SingleColumnLayout',
@@ -57,7 +65,7 @@ export function noticeScreen(kind: InAppSurfaceKind): FlowScreen {
                     label: '${data.closeLabel}',
                     'on-click-action': {
                         name: 'complete',
-                        payload: { screen: kind, outcome: 'notice' },
+                        payload: { screen: kind, outcome: '${data.outcome}' },
                     },
                 },
             ],

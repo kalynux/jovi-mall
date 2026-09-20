@@ -60,10 +60,15 @@ function privateKeyPassphrase(): string {
  * undocumented variable by construction; and a malformed map fails at parse for *every*
  * screen, where a missing single id degrades exactly one.
  *
- * ⚠ **The keys are `InAppSurfaceKind`, so a screen and its Flow name the same thing.** `ol`
- * and `sl` are declared with no variable because their screens are a later milestone — a
+ * ⚠ **The keys are `InAppSurfaceKind`, so a screen and its Flow name the same thing.** `ol`,
+ * `sl` and `tf` are declared with no variable because their forms are not built yet — a
  * Flow cannot exist before the screen it mirrors, and leaving them out of the type would
  * mean editing this map when they land.
+ *
+ * ⚠ **The map is TOTAL over the kinds on purpose, and that is what makes it useful.** When
+ * another stream adds a screen kind, this file stops compiling until somebody decides whether
+ * that screen has a WhatsApp form — which is exactly the question that would otherwise be
+ * answered by silence. `tf` (the ticket form) arrived that way.
  */
 const FLOW_ID_READERS: Readonly<Record<InAppSurfaceKind, () => string>> = Object.freeze({
     pl: () => process.env.WHATSAPP_FLOW_ID_PRODUCT_LISTING || '',
@@ -71,6 +76,7 @@ const FLOW_ID_READERS: Readonly<Record<InAppSurfaceKind, () => string>> = Object
     co: () => process.env.WHATSAPP_FLOW_ID_CHECKOUT || '',
     ol: () => '',
     sl: () => '',
+    tf: () => '',
 });
 
 let cachedKey: KeyObject | null = null;

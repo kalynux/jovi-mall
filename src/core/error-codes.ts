@@ -172,6 +172,23 @@ export const ERROR_CODES = Object.freeze({
     PAYMENT_ORDER_ALREADY_PAID: 'PAYMENT_ORDER_ALREADY_PAID',
     PAYMENT_INVALID_ORDER_STATUS: 'PAYMENT_INVALID_ORDER_STATUS',
     PAYMENT_GATEWAY_NOT_SUPPORTED: 'PAYMENT_GATEWAY_NOT_SUPPORTED',
+    /**
+     * ⚠ **"This deployment has no gateway", which is OUR configuration — never "that gateway
+     * is not on offer", which is `PAYMENT_GATEWAY_NOT_SUPPORTED` and a different fault.**
+     *
+     * They were one code, raised at 503 for an unconfigured deployment and at 400 for a
+     * client naming an unknown gateway. One code at two statuses derives two categories —
+     * `external_service` and `validation` — so the same code told an operator to go and look
+     * at a third party that was never involved, and `test:errors` § 3 reported it as a new
+     * conflict. Splitting it is what makes each half honest.
+     *
+     * ⚠ **Raise it at 500, not 503.** A 503 derives `external_service` (nobody is down: a
+     * secret is unset), which would then need an override to put it back to `internal` — and
+     * a 500 already derives `internal` by the rules, so the override would be dead and
+     * `test:errors` § 2 refuses dead overrides. `MAIL_PROVIDER_NOT_CONFIGURED` is the
+     * precedent: 500, no override.
+     */
+    PAYMENT_GATEWAY_NOT_CONFIGURED: 'PAYMENT_GATEWAY_NOT_CONFIGURED',
     PAYMENT_INITIATION_FAILED: 'PAYMENT_INITIATION_FAILED',
     PAYMENT_VERIFICATION_FAILED: 'PAYMENT_VERIFICATION_FAILED',
     PAYMENT_BOOKING_NOT_FOUND: 'PAYMENT_BOOKING_NOT_FOUND',
@@ -496,6 +513,22 @@ export const ERROR_CODES = Object.freeze({
      */
     BOT_PRODUCT_LIST_EXPIRED: 'BOT_PRODUCT_LIST_EXPIRED',
     /**
+     * A SCREEN session — checkout, orders, stores, the support form — is unknown, lapsed,
+     * spent or belongs to another conversation. Same 404 and the same single refusal bucket as
+     * the product list above, for the same reason.
+     *
+     * ⚠ **It exists because the product-list code was being raised for screens that hold no
+     * products**, and its customer sentence says *"tell me what you are looking for and I will
+     * search again"* — which, to somebody whose CHECKOUT expired, is an answer to a question
+     * they did not ask. The remedy differs by screen and none of them is a fresh search: open
+     * checkout again, ask for your orders again, tap Get help again.
+     *
+     * ⚠ **`details.spent` is how a caller tells "gone" from "already used"** on a checkout
+     * handle, which is single-use by design. The sentence stays the same either way: a customer
+     * who pressed twice and one whose ten minutes ran out both need a fresh screen.
+     */
+    BOT_SCREEN_SESSION_EXPIRED: 'BOT_SCREEN_SESSION_EXPIRED',
+    /**
      * A callback token this service did not mint, or minted under a vocabulary it
      * no longer has.
      *
@@ -612,6 +645,16 @@ export const ERROR_CODES = Object.freeze({
      * survives, so nothing the customer is currently using breaks.
      */
     BOT_CONNECTION_ACTIVE_CHANNEL: 'BOT_CONNECTION_ACTIVE_CHANNEL',
+    /**
+     * A **Send it again** on a contact change, pressed inside the two-minute cooldown. 429, so
+     * the category rules file it as `rate_limit` with no override.
+     *
+     * ⚠ **`details.retryAfterSeconds` survives the boundary** — `retryafterseconds` is on
+     * `RATE_LIMIT_DETAIL_KEYS` in `core/error-detail-policy.ts`, so the customer can be told
+     * how long to wait. That is the whole reason the wait is worth reporting rather than
+     * swallowing: "try again later" without a number is what makes somebody press repeatedly.
+     */
+    BOT_CONTACT_CODE_RESEND_TOO_SOON: 'BOT_CONTACT_CODE_RESEND_TOO_SOON',
 
     // ── GOOGLE / INTEGRATIONS ─────────────────────────────────────────────────
     GOOGLE_MISSING_CLIENT_ID: 'GOOGLE_MISSING_CLIENT_ID',
@@ -694,6 +737,24 @@ export const ERROR_CODES = Object.freeze({
     ORDER_ALREADY_CANCELLED: 'ORDER_ALREADY_CANCELLED',
     ORDER_NOT_CANCELLABLE: 'ORDER_NOT_CANCELLABLE',
     ORDER_CANCEL_REQUIRES_REFUND: 'ORDER_CANCEL_REQUIRES_REFUND',
+    /**
+     * The three refusals of "record what the customer said about why they cancelled".
+     *
+     * The words arrive one turn AFTER the cancellation — the tap is the decision, the reason is
+     * typed next — so the write has to be guarded against three ways that turn can go wrong.
+     *
+     *   - `NOT_CANCELLED` (422) — the order is not cancelled, so there is no cancellation to
+     *     explain. A model relaying an ordinary complaint about a live order must not have it
+     *     filed as a cancellation reason.
+     *   - `ALREADY_RECORDED` (409) — one note per cancellation. A replayed tool call cannot
+     *     append a second, contradictory story to the same order's history.
+     *   - `WINDOW_CLOSED` (422) — the words came more than a day later. A chat thread lives
+     *     forever, so without a bound an old conversation could attach a sentence to an order
+     *     cancelled months ago, where nobody reading the history would expect one.
+     */
+    ORDER_CANCELLATION_REASON_NOT_CANCELLED: 'ORDER_CANCELLATION_REASON_NOT_CANCELLED',
+    ORDER_CANCELLATION_REASON_ALREADY_RECORDED: 'ORDER_CANCELLATION_REASON_ALREADY_RECORDED',
+    ORDER_CANCELLATION_REASON_WINDOW_CLOSED: 'ORDER_CANCELLATION_REASON_WINDOW_CLOSED',
     // Shared by order + booking customer cancellation (vendor cancellation_policy gate).
     CANCELLATION_NOT_ALLOWED: 'CANCELLATION_NOT_ALLOWED',
 

@@ -32,6 +32,7 @@ Complete API reference for managing bookings in the multi-vendor ecommerce platf
 - [Update Booking Status](#update-booking-status)
 - [Complete Booking (settle final price)](#complete-booking-settle-final-price)
 - [Mark Cash Booking as Paid](#mark-cash-booking-as-paid)
+- [Hold Any Time (shop rule)](#hold-any-time-shop-rule) 🆕
 - [Reschedule Booking](#reschedule-booking)
 - [Cancel Booking](#cancel-booking)
 - [Booking Status State Machine](#booking-status-state-machine)
@@ -397,6 +398,123 @@ Manually mark a cash booking as paid. Updates calendar color automatically.
 
 ---
 
+## Hold Any Time (shop rule)
+
+```http
+POST /api/vendor/bookings/:id/slot-hold
+```
+
+> 🆕 **NEW, 2026-09-20. Nothing on this page changed with it.** This is an additional route; the
+> reschedule below, its request, its response and its refusals are all exactly as they were. If
+> you are syncing a copy of this file, take this section and the two 🆕 lines in **Reschedule
+> Booking** — nothing else here is a change.
+
+**What it is for, in plain words.** A shop may agree a time with a customer that is outside its
+published opening hours — a regular who can only come at 7pm, or a day the shop has rearranged —
+as long as the appointment keeps the length it was booked for. Moving an appointment needs the
+new time to be *held* first, and the ordinary hold route only offers times inside opening hours.
+So this route is the shop's own hold: it takes the time under the shop's rule instead, and the
+reschedule then accepts it.
+
+**Who may call it.** A signed-in **vendor**, for **their own** booking. Anyone else is refused:
+no token is `401 AUTH_MISSING_TOKEN`, any other role (a customer, an agent) is
+`403 AUTH_ROLE_NOT_FOUND`, and another shop's booking id is `404 BOOKING_NOT_FOUND` — the same
+answer as a booking that does not exist, so nobody can discover other shops' bookings by probing.
+
+**Eligibility:** only `pending` or `confirmed` bookings, exactly as the reschedule requires.
+
+**Path parameter**
+
+| Name | Type | Description |
+|---|---|---|
+| `id` | string (ObjectId) | The booking you are about to move. The hold is for *this* appointment — its length is the rule. |
+
+**Request Body**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `slotId` | string | yes | The time you want to hold, as `slot_{startMs}_{endMs}_{hash}` — epoch **milliseconds**. For a time inside opening hours, pass back exactly what `GET /availability` returned. For a time outside them there is nothing to pass back, so build the id from the two instants and any trailing segment (the server reads only the two numbers). |
+
+```json
+{ "slotId": "slot_1771426800000_1771430400000_shop" }
+```
+
+> ⚠ **The field is `slotId` here and `newSlotId` on the reschedule.** The hold names the time you
+> are taking; the reschedule names the time you are moving to. Sending the wrong name returns
+> `400 VALIDATION_ERROR` naming the field.
+
+**Success Response** — `200 OK`
+
+```json
+{
+  "success": true,
+  "data": {
+    "held": true,
+    "slotId": "slot_1771426800000_1771430400000_shop",
+    "startAt": "2026-02-18T18:00:00.000Z",
+    "endAt": "2026-02-18T19:00:00.000Z",
+    "expiresAt": "2026-02-18T14:15:00.000Z"
+  },
+  "message": "Slot held"
+}
+```
+
+`expiresAt` is **15 minutes** after the hold was taken. `startAt` / `endAt` are the instants the
+server read out of the slot id — render those, rather than re-parsing the id yourself.
+
+**Refusals** — each one, with the sentence to show
+
+| Status | `code` | `details.reason` | What happened | Sentence to show |
+|---|---|---|---|---|
+| 400 | `VALIDATION_ERROR` | — | `slotId` missing or empty | "Choose a time first." |
+| 400 | `BOOKING_INVALID_SLOT_ID` | — | The slot id is not `slot_{ms}_{ms}_…` | "That time could not be read. Pick it again." |
+| 400 | `BOOKING_INVALID_SLOT_ID` | `inverted` | The end is before the start | "That time ends before it starts." |
+| 400 | `BOOKING_INVALID_SLOT_ID` | `length_changed` | Not the appointment's length | "Keep the same length as the original appointment — 1 hour." |
+| 400 | `BOOKING_INVALID_SLOT_ID` | `not_future` | The time has already passed | "Choose a time in the future." |
+| 409 | `BOOKING_SLOT_UNAVAILABLE` | — | Another appointment already occupies it | "That time is no longer free. Please choose another." |
+| 409 | `BOOKING_SLOT_LOCKED` | — | Somebody else is holding it right now | "Someone is booking that time. Try again in a few minutes." |
+| 409 | `BOOKING_NOT_RESCHEDULABLE` | — | The booking is cancelled, completed or a no-show | "This appointment can no longer be moved." |
+| 404 | `BOOKING_NOT_FOUND` | — | Not your booking, or no such booking | "That appointment was not found." |
+| 403 | `AUTH_ROLE_NOT_FOUND` | — | Signed in, but not as a shop | "Sign in as your shop to change appointments." |
+| 401 | `AUTH_MISSING_TOKEN` | — | Not signed in | "Sign in to continue." |
+
+The `message` in the envelope is the server's own English; `details.reason` is what the screen
+should branch on, because it is stable and the three 400s share one code.
+
+**Three rules, and one that is deliberately absent.** The length must match the appointment being
+moved; the start must be in the future; the time must not already be sold (single-appointment
+services only). Published opening hours are **not** consulted — that is the entire point of this
+route. For a **class or group** service, seats are *not* counted here: capacity is checked when
+the move actually happens, so a hold is never a promise of a seat.
+
+**The two calls, in order**
+
+```
+1. POST /api/vendor/bookings/:id/slot-hold      { "slotId": "slot_…" }      → 200, expiresAt
+2. PATCH /api/vendor/bookings/:id/reschedule    { "newSlotId": "slot_…" }   → 200, the booking
+```
+
+Use the same slot id in both. Call the second within the 15 minutes; it re-applies the same rules,
+so a hold never lets through a move that would be refused.
+
+> [!IMPORTANT]
+> **If the hold succeeds and the move then fails**, the time is still held by you, for the rest of
+> the 15 minutes. Three ways out, and the first is usually right:
+>
+> 1. **Fix and retry the move** — the hold is still yours, so `PATCH …/reschedule` again with the
+>    same `slotId`. Nothing needs re-holding.
+> 2. **Give the time back**, if the shop changed its mind:
+>    `POST /api/products/:productId/slots/:slotId/unlock` — the same route a customer's screen
+>    uses, and it releases only a hold you took. The `productId` is the booking's product
+>    (`booking.productId`).
+> 3. **Do nothing.** The hold expires by itself 15 minutes after it was taken, and the time is
+>    free again. Nothing is booked and no customer is told anything: a hold is invisible to them.
+>
+> There is deliberately no "release" route of its own here — one way to give a time back is
+> enough, and it already exists.
+
+---
+
 ## Reschedule Booking
 
 ```http
@@ -408,10 +526,19 @@ Reschedule a booking to a new time slot. Updates the Google Calendar event.
 > [!IMPORTANT]
 > **Slot Lock Required**
 >
-> Hold the new slot first, signed in as the shop, with
-> `POST /api/products/:productId/slots/:slotId/lock` (the same route a customer uses), then call
-> this endpoint within the hold's 15 minutes. The hold belongs to whoever is signed in; nobody
-> sends an owner id, on either call.
+> Hold the new slot first, signed in as the shop, then call this endpoint within the hold's 15
+> minutes. The hold belongs to whoever is signed in; nobody sends an owner id, on either call.
+> Two routes take a hold, and which one you use depends on the time:
+>
+> - **inside** the shop's published hours — `POST /api/products/:productId/slots/:slotId/lock`,
+>   the same route a customer uses. Unchanged.
+> - **outside** them — 🆕 [`POST /api/vendor/bookings/:id/slot-hold`](#hold-any-time-shop-rule)
+>   above. Before 2026-09-20 there was no such route, so an out-of-hours move could not be held
+>   and therefore could not be made at all.
+>
+> 🆕 **One rule is new on this endpoint too: a shop can no longer move an appointment into the
+> past** (`400 BOOKING_INVALID_SLOT_ID`, `details.reason: "not_future"`). It was previously
+> accepted, which silently rewrote history for a customer who had already been.
 >
 > ⚠ **Fixed 2026-09-19. Nothing changes for the caller.** The request, the response and the
 > two-call sequence are exactly as before, so a client built from this page has nothing to
@@ -542,6 +669,11 @@ stateDiagram-v2
 | `BOOKING_TERMINAL_STATE` | 409 | Booking is `completed`/`no-show` and cannot be cancelled |
 | `BOOKING_SLOT_NOT_LOCKED` | 409 | New slot is not locked, or the lock expired (reschedule) |
 | `BOOKING_UNAUTHORIZED` | 403 | New slot is locked by a different owner (reschedule) |
+| `BOOKING_INVALID_SLOT_ID` | 400 | The slot id could not be read, or breaks the shop rule — `details.reason` is `inverted`, `length_changed` or `not_future` (hold and reschedule) |
+| `BOOKING_SLOT_UNAVAILABLE` | 409 | Another appointment already occupies that time (hold and reschedule) |
+| `BOOKING_SLOT_LOCKED` | 409 | Somebody else is holding that time right now (hold) |
+| `AUTH_ROLE_NOT_FOUND` | 403 | Signed in, but not as a shop — `details.required` lists the roles allowed |
+| `AUTH_MISSING_TOKEN` | 401 | Not signed in |
 | ~~`BOOKING_CALENDAR_SYNC_FAILED`~~ | ~~500~~ | **UNREACHABLE** — registered, given a default message, and raised by nothing. Calendar sync never fails a request |
 | `INTERNAL_SERVER_ERROR` | 500 | Unexpected server error |
 
@@ -552,14 +684,22 @@ stateDiagram-v2
   "success": false,
   "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
-    "code": "VALIDATION_ERROR",
-    "message": "Invalid input",
-    "statusCode": 500,
-    "category": "internal",
-    "details": [...]
+    "code": "BOOKING_INVALID_SLOT_ID",
+    "message": "A rescheduled appointment must keep its original length.",
+    "statusCode": 400,
+    "category": "validation",
+    "details": { "slotId": "slot_1771426800000_1771434000000_shop", "reason": "length_changed" }
   }
 }
 ```
+
+> 🔴 **Corrected 2026-09-20.** The example here showed `VALIDATION_ERROR` with
+> `"statusCode": 500` and `"category": "internal"` — three fields that cannot occur together, and
+> a misleading one to build a screen from. `category` is **derived from the status**: 400
+> `validation`, 403 `authorization`, 404 `not_found`, 409 `conflict`, 5xx `internal`. On a 5xx the
+> `message` is replaced with a generic one and `details` is dropped entirely, in every
+> environment — so never rely on either for a 500. `details` survives on the 4xx codes this page
+> lists.
 
 ---
 

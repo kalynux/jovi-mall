@@ -40,7 +40,14 @@ import { FLOW_SCREEN_TITLE, NOTICE_SCREEN, noticeScreen } from './notice.screen'
  * The Telegram page performs the purchase itself (`POST /act`), so this Flow does too: the
  * footer is a `data_exchange` and the endpoint calls the same purchase core. ⚠ **Meta retries
  * an exchange on its own schedule**, which a browser does not, so the write must be idempotent
- * per open Flow. See `screens/detail.adapter.ts`.
+ * **per open Flow** — see `openRef` below and `flow-screens.ts`.
+ *
+ * ⚠ **"Per open", not "per handle", and the difference is a customer's second kettle.** The
+ * cart ADDS rather than sets, so the guard's key decides what a repeat means. Keyed on the
+ * handle and the variant alone, a customer who reopens the form ten minutes later and adds the
+ * same variant again would be told "added" while nothing was added — the Telegram page adds
+ * twice for two presses. So every open draws a fresh `openRef` and the footer sends it back:
+ * a double submit inside ONE open is one add, the same variant in a LATER open is a new one.
  */
 
 /** The data both product screens declare. `image` is present only on `PRODUCT`. */
@@ -75,6 +82,12 @@ function productData(withImage: boolean): FlowScreen['data'] {
         },
         /** Bargain · Add to cart · Buy now · Book. Resolved server-side, capped at 20 upstream. */
         actionLabel: { type: 'string', __example__: 'Add to cart' },
+        /**
+         * A fresh random reference per open, echoed back by the footer. Carries no authority:
+         * the only thing a forged one can do is make the customer's OWN retry count as a new
+         * add to their OWN basket. It exists for the idempotency key and nothing else.
+         */
+        openRef: { type: 'string', __example__: 'k3J9xQ2mWp1aZ8rT' },
     };
 }
 
@@ -109,7 +122,11 @@ function productScreen(id: string, withImage: boolean): FlowScreen {
                      */
                     'on-click-action': {
                         name: 'data_exchange',
-                        payload: { variantId: '${form.variant}' },
+                        /**
+                         * ⚠ `openRef` is `${data.…}`, not `${form.…}`: it is the value this open
+                         * was drawn with, not something the customer chose.
+                         */
+                        payload: { variantId: '${form.variant}', openRef: '${data.openRef}' },
                     },
                 },
             ],

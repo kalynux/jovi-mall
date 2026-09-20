@@ -9,6 +9,7 @@ import { __IN_APP_SCREEN_PATH } from '../../domain/inapp-url';
 import { InAppSurfaceSession, inAppSurfaceStore } from '../../services/inapp-surface.store';
 import { browserImageUrl } from './browser-image-url';
 import { readProductDetail } from './product-detail.read';
+import { readProductRating, readProductReviewPage } from './product-reviews.read';
 import { readSimilarProductIds } from './similar-products.read';
 
 /**
@@ -174,7 +175,55 @@ export class ProductDetailController {
             url: `${__IN_APP_SCREEN_PATH}/pl/${listingHandle}?lang=${toBotCopyLanguage(session.language)}`,
         });
     });
+
+    /**
+     * `GET /api/bot/miniapp/s/pd/:handle/reviews?page=` — what customers said, paged.
+     *
+     * ⚠ **A GET, unlike `/similar` beside it, and the difference is real rather than stylistic.**
+     * That one MINTS a listing session — a write, and the reason it is a POST. This reads published
+     * rows and mints nothing, so it is safe to repeat, safe to prefetch and safe for the browser to
+     * cache. Same rule the rest of this surface follows: the verb says whether something is created.
+     *
+     * ⚠ **The handle is the only credential and it names the product**, so a caller cannot read
+     * another product's reviews by asking — there is no product id in the path at all. The reviews
+     * themselves are public (the storefront serves the same rows unauthenticated); what the handle
+     * protects is not the content but the shape of this surface, where every screen route is
+     * reached exactly one way.
+     *
+     * ⚠ **The session is NOT extended here.** `touch` belongs to the screen's own data read; a
+     * customer scrolling reviews is reading, and letting a side panel keep a session alive
+     * indefinitely would quietly undo the 30-minute life the store sets.
+     */
+    static reviews = asyncHandler(async (req: Request, res: Response) => {
+        const { handle } = HandleSchema.parse(req.params);
+        const { page } = ReviewsQuerySchema.parse(req.query);
+        const session = await readDetailSession(handle);
+
+        const [rating, list] = await Promise.all([
+            readProductRating(session.productId),
+            readProductReviewPage(session.productId, page, REVIEWS_PER_PAGE),
+        ]);
+
+        sendSuccess(res, {
+            rating,
+            reviews: list.reviews,
+            page,
+            hasMore: list.hasMore,
+            total: list.total,
+        });
+    });
 }
+
+/**
+ * ⚠ **A page number and nothing else.** The page size is the SERVER's, not the caller's: a `limit`
+ * a browser can set is a browser that can ask for every review ever written in one request.
+ */
+const ReviewsQuerySchema = z.object({
+    page: z.coerce.number().int().positive().max(200).default(1),
+});
+
+/** Enough to fill a phone screen and page again, matching the listing grid's own rhythm. */
+const REVIEWS_PER_PAGE = 10;
 
 /**
  * Resolve a detail handle, or refuse the way the chat would have.

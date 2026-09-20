@@ -1,11 +1,15 @@
 import { z } from 'zod';
 import { CommandHandler } from '../../../command-bus/command-bus';
 import type { RenderableCommandResult } from '../../../command-bus/command-reply';
+import { botChrome } from '../../../bot-surface/domain/bot-chrome-copy';
+import type { BotReplyOption } from '../../../bot-surface/domain/channel-reply';
+import { addedToCartActions } from '../../../bot-surface/controllers/bot-purchase.controller';
 import { inAppCopy } from '../../../bot-surface/miniapp/inapp-copy';
 import {
     InAppSurfaceKind,
     inAppSurfaceStore,
 } from '../../../bot-surface/services/inapp-surface.store';
+import { planCompletion } from './flow-completion-plan';
 
 export const command_name = 'flow_complete';
 
@@ -18,13 +22,28 @@ export const command_name = 'flow_complete';
  * command existed nothing in any of the three repositories read that message type.
  *
  * ── WHAT EACH COMPLETION NEEDS FROM THE CHAT ────────────────────────────────
- *   · **listing, a product chosen** → the chat opens that product's detail screen. This is the
- *     one completion that asks for something next.
- *   · **detail and checkout** → nothing. Their forms show the outcome on a closing screen
- *     before they close (added to the basket, go to the chat to bargain, approve the payment on
- *     your phone), and the payment result reaches the chat through the payment path. A second
- *     "got that" here would talk over the message the customer is actually waiting for.
+ *   · **listing, a product chosen** → the chat opens that product's detail screen.
+ *   · **the product form, having added to the basket** → the chat says so and offers the same
+ *     three controls a chat-tap "added to cart" offers. ⛔ **This used to say "nothing", and
+ *     that was the gap**: a Telegram customer keeps the screen's own controls, while a WhatsApp
+ *     customer's form CLOSES — so the basket changed and the thread said nothing at all.
+ *   · **checkout** → nothing. The payment result reaches the chat through the payment path, and
+ *     a "got that" here would talk over the message the customer is waiting for.
  *   · **any notice screen** ("nothing here", "no saved address") → nothing, for the same reason.
+ *
+ * ── ⚠ EXACTLY ONE MESSAGE PER COMPLETION, AND IT HOLDS BY CONSTRUCTION ──────
+ * There is no guard here against a duplicate, and none is needed: **Flows are WhatsApp-only, so
+ * a Telegram session produces no completion at all** — the two ways a customer can be told
+ * cannot both fire for one press. Telegram's screens push into the thread themselves; WhatsApp's
+ * forms answer here. Each plan below resolves to at most one intent.
+ *
+ * ⚠ **STILL MISSING, and it is the other half of the same gap**: the bargain and booking rungs
+ * ask a QUESTION the customer answers by typing, and on WhatsApp that question is visible only
+ * on a screen that has closed. The closing screen already stamps `asked` for it. The chat cannot
+ * answer it yet because the sentence is built inside `executePurchase` and there is no pure
+ * function to call; the extraction is requested (see `flow-outcome.ts`). Until it lands, an
+ * `asked` completion is SILENT — the customer keeps the words they read on the screen, and
+ * nothing false is said.
  *
  * ── ⚠ THE TOKEN MAY ALREADY BE SPENT, AND THAT IS SUCCESS, NOT FAILURE ──────
  * The checkout's terminal exchange spends its handle. Meta then sends the completion with the
@@ -70,57 +89,12 @@ export interface FlowCompleteReply extends RenderableCommandResult {
     completedScreen: InAppSurfaceKind | null;
     /** The completion params, minus the token. */
     params: Record<string, unknown>;
+    /** Buttons beside the message — the chat's own three, after a form added to the basket. */
+    actions?: readonly BotReplyOption[];
 }
 
 const isKind = (value: string): value is InAppSurfaceKind =>
     value === 'pl' || value === 'pd' || value === 'ol' || value === 'sl' || value === 'co';
-
-const OBJECT_ID = /^[0-9a-f]{24}$/i;
-
-/** Digits only, so `+237 6…`, `2376…` and a bare-digits `wa_phone_id` compare equal. */
-const digitsOf = (value: string | null | undefined): string =>
-    typeof value === 'string' ? value.replace(/\D/g, '') : '';
-
-export type CompletionPlan =
-    | { kind: 'open_detail'; productId: string }
-    /** The listing session has lapsed: say so, in words, and open nothing. */
-    | { kind: 'expired' }
-    /** Nothing for the chat to add. */
-    | { kind: 'silent' };
-
-/**
- * What a completion should lead to. **Pure**, so every branch is asserted without Redis.
- *
- * ⚠ **A sender mismatch is SILENT, not "expired".** Telling a stranger the listing lapsed would
- * confirm that a handle they don't own was real. Silence tells them nothing.
- */
-export function planCompletion(input: {
-    completedScreen: InAppSurfaceKind | null;
-    params: Record<string, unknown>;
-    /** `wa_phone_id` from the command CONTEXT, never from the payload. */
-    sender: string | null;
-    /** The live listing session, or null when it lapsed or there was no token. */
-    session: { channel: string; externalId: string } | null;
-}): CompletionPlan {
-    if (input.completedScreen !== 'pl') return { kind: 'silent' };
-    if (input.params.outcome === 'notice') return { kind: 'silent' };
-
-    const productId = input.params.productId;
-    if (typeof productId !== 'string' || !OBJECT_ID.test(productId)) return { kind: 'silent' };
-
-    if (!input.session) return { kind: 'expired' };
-
-    const sender = digitsOf(input.sender);
-    if (
-        input.session.channel !== 'whatsapp'
-        || sender === ''
-        || sender !== digitsOf(input.session.externalId)
-    ) {
-        return { kind: 'silent' };
-    }
-
-    return { kind: 'open_detail', productId };
-}
 
 export const handler: CommandHandler<z.infer<typeof schema>, FlowCompleteReply> = async (
     payload,
@@ -131,13 +105,17 @@ export const handler: CommandHandler<z.infer<typeof schema>, FlowCompleteReply> 
         declaredScreen && isKind(declaredScreen) ? declaredScreen : null;
 
     /**
-     * Read only for a listing completion, and with the kind named: `read('pl', …)` refuses a
-     * `pd` or `co` handle by construction. It is `read`, never `touch`, so a completion can't
-     * extend a session's life.
+     * Read with the kind NAMED, so a handle can only ever resolve as the form that stamped it:
+     * `read('pl', …)` refuses a `pd` or `co` handle by construction, and vice versa. It is
+     * `read`, never `touch`, so a completion cannot extend a session's life.
+     *
+     * ⚠ **A `co` completion resolves nothing on purpose.** Its handle was SPENT by the write
+     * that placed the order, so looking it up would find nothing and a handler that treated
+     * that as a failure would tell every customer whose order succeeded that it failed.
      */
     const session =
-        completedScreen === 'pl' && flowToken
-            ? await inAppSurfaceStore.read('pl', flowToken)
+        flowToken && (completedScreen === 'pl' || completedScreen === 'pd')
+            ? await inAppSurfaceStore.read(completedScreen, flowToken)
             : null;
 
     const plan = planCompletion({
@@ -148,6 +126,8 @@ export const handler: CommandHandler<z.infer<typeof schema>, FlowCompleteReply> 
     });
 
     const base = { completedScreen, params };
+    /** The session is where a language can honestly come from; a payload is not. */
+    const language = session?.language ?? null;
 
     if (plan.kind === 'silent') return { ...base, message: '' };
 
@@ -155,6 +135,26 @@ export const handler: CommandHandler<z.infer<typeof schema>, FlowCompleteReply> 
         // The session and its language are gone together, so this is English. See
         // `flow-screens.ts` `tokenUnusable` for the same limit on the endpoint.
         return { ...base, message: inAppCopy(null).expired };
+    }
+
+    /**
+     * ⛔ **The form added something, and on WhatsApp its screen is already gone.**
+     *
+     * A Telegram customer keeps the screen's own controls; a WhatsApp customer pressed a footer
+     * and the form closed. Without this the basket changed and the thread said nothing at all —
+     * no confirmation, and no way to reach the basket except by typing.
+     *
+     * ⚠ **The SAME three controls the chat's own "added to cart" offers**, imported rather than
+     * rebuilt: two doors offering different buttons for one outcome is how one of them quietly
+     * loses Checkout. Nothing here writes — the purchase already happened inside the exchange.
+     */
+    if (plan.kind === 'added_to_cart') {
+        return {
+            ...base,
+            message: botChrome('addedToCart', language),
+            actions: addedToCartActions(language),
+            language,
+        };
     }
 
     const listing = session!;

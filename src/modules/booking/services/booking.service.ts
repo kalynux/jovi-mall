@@ -646,7 +646,11 @@ export class BookingService {
    * hold can never be granted for a time the move would then refuse. Two copies of a rule split
    * across two endpoints is how a dashboard ends up holding a slot it cannot use.
    */
-  private assertShopRuleSlot(booking: IBooking, newSlotId: string): { start: Date; end: Date } {
+  private assertShopRuleSlot(
+    booking: IBooking,
+    newSlotId: string,
+    now: Date = new Date()
+  ): { start: Date; end: Date } {
     const { start, end } = this.slotGenerator.parseSlotId(newSlotId);
     const length = end.getTime() - start.getTime();
     const current = booking.endAt.getTime() - booking.startAt.getTime();
@@ -664,7 +668,7 @@ export class BookingService {
     if (length !== current) {
       refuse('length_changed', 'A rescheduled appointment must keep its original length.');
     }
-    if (start.getTime() <= Date.now()) {
+    if (start.getTime() <= now.getTime()) {
       refuse('not_future', 'An appointment cannot be moved to a time that has already passed.');
     }
 

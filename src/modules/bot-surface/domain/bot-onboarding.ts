@@ -205,6 +205,19 @@ export function outstandingRequired(
  * door on a field the person owns. **Skipping a REQUIRED step is refused by the caller**
  * (`BOT_ONBOARDING_STEP_NOT_SKIPPABLE`) rather than silently ignored here — a flow that
  * believes it skipped the phone number will never ask for it again.
+ *
+ * ⚠ **SKIPPING IS ONLY MEANINGFUL ON A `pending` STEP, AND THAT IS THIS FUNCTION'S JOB.**
+ * A chat keeps its history: the "Skip" button offered with the email question stays in the
+ * thread and stays tappable forever. So the sequence *ask → customer types their address →
+ * customer later taps the old Skip* is ordinary, not adversarial — and an unconditional
+ * write answers it by re-recording an ANSWERED step as declined. The damage is not the
+ * stored word: `skipped` means "do not ask again", so a provided email whose row is
+ * overwritten keeps the value while the checklist stops accounting for it, and `provided`
+ * is also the state `isOnboardingComplete` requires of every REQUIRED step — an overwrite
+ * there un-completes a finished account. The asymmetry with `provided` above is deliberate
+ * and is the whole rule: **a later answer may always replace an earlier one; a stale
+ * refusal may never replace an answer.** Stated here rather than at the call site because
+ * a pure rule cannot be forgotten by the next caller.
  */
 export function applyOnboardingStep(
     records: readonly BotOnboardingRecord[],
@@ -212,8 +225,37 @@ export function applyOnboardingStep(
     state: Exclude<BotOnboardingStepState, 'pending'>,
     now: Date,
 ): BotOnboardingRecord[] {
-    return normalizeOnboarding(records).map((row) =>
+    const current = normalizeOnboarding(records);
+
+    if (state === 'skipped' && current.find((row) => row.step === step)?.state !== 'pending') {
+        return current;
+    }
+
+    return current.map((row) =>
         row.step === step ? { step, state, at: now } : row,
+    );
+}
+
+/**
+ * Whether two checklists differ — what lets a caller answer a no-op without writing.
+ *
+ * Derived, never a second copy of the rule above: a caller asks whether the list it got
+ * back differs from the one it passed in, so a stale Skip needs no `save()` and no
+ * `updated_at` bump, and nothing at the call site has to restate WHICH applications are
+ * no-ops. Both sides are normalised first, so a legacy account whose stored array predates
+ * a step compares as equal on the steps it does hold.
+ */
+export function onboardingChanged(
+    before: readonly BotOnboardingRecord[],
+    after: readonly BotOnboardingRecord[],
+): boolean {
+    const a = normalizeOnboarding(before);
+    const b = normalizeOnboarding(after);
+
+    return a.some((row, i) =>
+        row.step !== b[i].step
+        || row.state !== b[i].state
+        || (row.at?.getTime() ?? null) !== (b[i].at?.getTime() ?? null),
     );
 }
 

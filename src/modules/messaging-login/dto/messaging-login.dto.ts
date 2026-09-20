@@ -1,16 +1,22 @@
 import { MessagingChannel } from '../../channel-connections';
+import { botChrome } from '../../bot-surface/domain/bot-chrome-copy';
+import { composeSignInMessage } from '../../bot-surface/domain/bot-signin-message';
 
 /**
  * What the bot says back, and where the magic link points.
  *
- * ── ENGLISH ONLY, and it is a constraint rather than an oversight ────────────
- * Every other piece of outbound copy in this service is localised from a catalog
- * keyed on the recipient's `preferred_language` — which lives on a role entity.
- * At `/login` time there may be no account at all (that is the whole premise),
- * and even when there is, guessing a language from a phone prefix is wrong often
- * enough to be worse than not trying. Once signed in, everything the platform
- * sends is localised. Same position `/connect`'s reply takes, for the same
- * reason.
+ * ── ⭐ NO LONGER ENGLISH ONLY — and the old argument is worth keeping ────────
+ * This header used to read *"ENGLISH ONLY, and it is a constraint rather than an
+ * oversight"*, on the grounds that at `/login` time there may be no account at
+ * all, and that guessing a language from a phone prefix is worse than not trying.
+ *
+ * **The first half is still true and the second was never the question.** Nobody
+ * has to guess: by the time a model calls `auth_send_login_link` the customer has
+ * an account and a stored `preferences.language`, and this surface has already
+ * stamped it on the request. So `buildLoginReply` takes the language its caller
+ * knows, and falls back to English for the caller that genuinely has none — the
+ * `/login` slash command, which runs on the command bus with no resolved account.
+ * The constraint was real; it just applied to one of the two doors.
  */
 
 /** The command a user sends to either bot. */
@@ -65,31 +71,52 @@ function storefrontLabel(): string {
  * Two credentials because they solve different problems. The link is for the
  * phone already in the user's hand: one tap, no typing. The code is for the
  * desktop in front of them when WhatsApp is on a phone across the room.
+ *
+ * ── ⭐ IT IS NO LONGER ENGLISH-ONLY ──────────────────────────────────────────
+ * This was the one message on the surface that ignored the customer's language, and it is
+ * the message that decides whether they can get into their account. It now assembles from
+ * five-language phrases (`composeSignInMessage`), which also fixed two things that were
+ * invisible in English: the duration prints as `15 min` rather than picking between
+ * minute/minutes — Arabic needs four forms — and every value sits alone on its line, so a
+ * right-to-left message cannot have its code or its link reordered by the bidi algorithm.
+ *
+ * ⚠ **Callers that pass no language still get English**, and one real path does:
+ * `login.command.ts` (the `/login` slash command) runs on the command bus, which resolves
+ * no account and therefore has no stored preference to read. Its surface is documented as
+ * English-only outbound (`command-reply.ts`). The bot-surface path — the one a model reaches
+ * through `auth_send_login_link` — passes the customer's own language.
  */
 export function buildLoginReply(
   code: string,
   magicLink: string | null,
-  ttlSeconds: number
+  ttlSeconds: number,
+  /**
+   * The customer's own language. **Null falls back to English**, which is what every caller
+   * that cannot resolve one gets — see the ⚠ below.
+   */
+  language: string | null = null
 ): string {
-  const minutes = Math.round(ttlSeconds / 60);
-  const site = storefrontLabel();
-  const lines: string[] = [];
-
-  if (magicLink) {
-    lines.push('Tap to sign in on this device:', magicLink, '');
-    lines.push(`Or go to ${site} and sign in with your phone number and this code:`);
-  } else {
-    lines.push(`Go to ${site} and sign in with your phone number and this code:`);
-  }
-
-  lines.push(
-    code,
-    '',
-    `${magicLink ? 'Both' : 'It'} expire${magicLink ? '' : 's'} in ${minutes} minutes and can be used once.`,
-    'If you did not ask to sign in, ignore this message.'
+  return composeSignInMessage(
+    {
+      tapToOpen: botChrome('signInTapToOpen', language),
+      codeIntro: botChrome('signInCodeIntro', language),
+      codeOnly: botChrome('signInCodeOnly', language),
+      website: botChrome('signInWebsite', language),
+      validFor: botChrome('signInValidFor', language),
+      ignore: botChrome('signInIgnore', language),
+    },
+    {
+      magicLink,
+      /**
+       * ⚠ **Null rather than the old `'the Wi-Mall website'` fallback.** That literal was an
+       * English fragment sitting inside an otherwise translated message; with no site to name,
+       * the label line now disappears entirely and the customer uses the link above it.
+       */
+      site: process.env.STOREFRONT_URL ? storefrontLabel() : null,
+      code,
+      ttlSeconds,
+    }
   );
-
-  return lines.join('\n');
 }
 
 /** The command that starts a password reset from a chat. */

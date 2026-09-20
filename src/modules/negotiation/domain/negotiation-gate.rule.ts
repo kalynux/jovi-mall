@@ -157,6 +157,19 @@ export function reviseInstruction(refusal: GateRefusal, details: Record<string, 
         case 'session_expired':
             return 'This negotiation has expired. Start a new one before quoting a price.';
         case 'session_closed':
-            return 'This negotiation is closed. Do not quote a price on it.';
+            /**
+             * ⚠ **A closed session is usually a deal the CUSTOMER just closed**, by pressing
+             * "Lock it in" on the price this agent offered — possibly while this very turn was
+             * being composed. "Do not quote a price" is true but useless there: the agent needs to
+             * know the deal is done, at what price, and that the right move is to stop selling.
+             * `NegotiationService.refusalDetails` attaches the price whenever the session holds a
+             * lock; without one this falls back to the plain sentence.
+             */
+            return typeof details.agreedPrice === 'number'
+                ? `The customer has already accepted ${details.agreedPrice} for this line`
+                  + `${details.closedBy === 'button' ? ' by pressing your offer' : ''}. The deal is`
+                  + ' closed and the item is in their basket at that price. Do not quote a price or'
+                  + ' reopen it — confirm warmly and move on to quantity, payment and delivery.'
+                : 'This negotiation is closed. Do not quote a price on it.';
     }
 }

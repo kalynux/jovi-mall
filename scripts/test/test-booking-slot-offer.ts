@@ -45,6 +45,7 @@ import * as redisFactory from '../../src/infra/redis/redis.factory';
 import { SlotLockFacade } from '../../src/modules/catalog/domain/services/booking/SlotLockFacade';
 import { productBookingService } from '../../src/modules/catalog/domain/services/booking/product-booking.instance';
 import { productBookingRouter } from '../../src/modules/catalog/routes/product-booking.routes';
+import vendorBookingRouter from '../../src/modules/booking/routes/vendor-booking.routes';
 import { VendorBookingController } from '../../src/modules/booking/controllers/vendor-booking.controller';
 import { Booking } from '../../src/modules/booking/models/booking.model';
 import { ProductModel } from '../../src/modules/catalog/models';
@@ -493,6 +494,66 @@ async function main(): Promise<void> {
             'modules/catalog/domain/services/booking/ProductBookingService.ts',
         ]));
 
+    /**
+     * ⛔ **THERE ARE NOW TWO HOLD DOORS, AND EACH HAS ITS OWN RULE.** Until 2026-09-20 this
+     * project could say "every hold reaches `lockSlot`, which validates it" — one sentence
+     * covering every door. `holdSlotForReschedule` (§ 11) is the second, and it deliberately does
+     * NOT ask `assertOfferedSlot`: it exists precisely to hold a time outside published hours.
+     *
+     * ⚠ **So the guard that used to be "one door" is now "these two, each validated".** A third
+     * caller of the lock primitive is a hold with no rule at all — the fabricated-slot hole
+     * reopened — and fails here rather than passing quietly. Both known callers are asserted to
+     * validate first, so this cannot pass by a door merely existing.
+     */
+    await assert('⛔ exactly two doors take a hold, and each validates before it takes one', () => {
+        const callers = productionCallers(/slotLockService\.lock\(|slotLockFacade\.lockSlot\(/);
+        const holdBody = methodBody(BS, /async holdSlotForReschedule\(/);
+        const lockBody2 = methodBody(
+            codeOf('modules/catalog/domain/services/booking/ProductBookingService.ts'),
+            /async lockSlot\(/,
+        );
+        return JSON.stringify(callers) === JSON.stringify([
+            // The two doors…
+            'modules/booking/services/booking.service.ts',
+            'modules/catalog/domain/services/booking/ProductBookingService.ts',
+            // …and the facade one of them goes through, which is the primitive, not a door.
+            'modules/catalog/domain/services/booking/SlotLockFacade.ts',
+        ])
+            && Boolean(holdBody && lockBody2)
+            /**
+             * Each door validates FIRST: the shop rule here, the offered rule there.
+             *
+             * ⚠ **Both positions are required to EXIST before they are compared**, and that is not
+             * belt-and-braces. A mutation that deleted the validation entirely left `indexOf`
+             * answering -1, and `-1 < 30` is true — so the ordering check passed hardest exactly
+             * when the check it describes had stopped happening. Found by running that mutant.
+             */
+            && [
+                [holdBody!, 'this.assertShopRuleSlot(', 'slotLockService.lock('],
+                [lockBody2!, 'assertOfferedSlot(', 'slotLockFacade.lockSlot('],
+            ].every(([body, validate, take]) => {
+                const validatedAt = body.indexOf(validate);
+                const takenAt = body.indexOf(take);
+                return validatedAt >= 0 && takenAt >= 0 && validatedAt < takenAt;
+            });
+    });
+
+    /**
+     * ⚠ **One shop rule, not two.** The hold and the move must never disagree about what a shop
+     * may move to, so both call `assertShopRuleSlot` and nothing else re-implements its length
+     * comparison. A second copy is how a dashboard ends up holding a time the move refuses.
+     */
+    await assert('⛔ the shop rule is defined once and called by BOTH the hold and the move', () => {
+        const definitions = (BS.match(/private assertShopRuleSlot\(/g) ?? []).length;
+        const calls = (BS.match(/this\.assertShopRuleSlot\(/g) ?? []).length;
+        const target = methodBody(BS, /private async assertRescheduleTarget\(/);
+        const holdBody = methodBody(BS, /async holdSlotForReschedule\(/);
+        return definitions === 1 && calls === 2
+            && Boolean(target && holdBody)
+            && target!.includes('this.assertShopRuleSlot(')
+            && holdBody!.includes('this.assertShopRuleSlot(');
+    });
+
     console.log('\n══ § 9 · The chat reschedule passes a product ID, not a product ══');
 
     /**
@@ -635,8 +696,12 @@ async function main(): Promise<void> {
     });
     let stored: ReturnType<typeof bookingOfShopA> | null = null;
 
-    /** The real `rescheduleBooking`, with only its database edges replaced. */
-    const rescheduler = (group: boolean) => {
+    /**
+     * The real `rescheduleBooking` — and, in § 11, the real `holdSlotForReschedule` — with only
+     * their database edges replaced. `overlaps` is what `countOverlappingBookings` answers, so a
+     * target that is already sold can be set up without a database.
+     */
+    const rescheduler = (group: boolean, overlaps = 0) => {
         const service = new BookingService();
         const state = { service, groupMoves: 0 };
         const edges = service as unknown as Record<string, unknown>;
@@ -645,7 +710,7 @@ async function main(): Promise<void> {
             moveIntoSlot: async () => { state.groupMoves++; },
             syncCalendarForMove: async () => undefined,
         };
-        edges.countOverlappingBookings = async () => 0;
+        edges.countOverlappingBookings = async () => overlaps;
         edges.emitBookingRescheduledEvent = async () => undefined;
         return state;
     };
@@ -708,6 +773,220 @@ async function main(): Promise<void> {
             const wasRefused = await refused(() => rescheduler(false).service.rescheduleBooking(
                 stored!._id.toString(), target, shopB.user.id, asShop(shopB)), 'BOOKING_NOT_FOUND', 404);
             return held && wasRefused && stored.saves === 0 && stored.startAt.getTime() === at(10).getTime();
+        });
+
+        console.log('\n══ § 11 · ⛔ The shop\'s own hold — the door that made the shop rule reachable ══');
+
+        /**
+         * ── WHY THIS DOOR EXISTS ────────────────────────────────────────────────────
+         * A move needs a hold, and the only route that took one ran `assertOfferedSlot`, which
+         * refuses anything outside published hours. So "a shop may move an appointment outside
+         * its opening hours" was a rule with no way to exercise it: every such move died at the
+         * hold, one step before the rule that allows it.
+         *
+         * ⚠ **The rule is ONE method, shared.** `holdSlotForReschedule` and the vendor branch of
+         * `assertRescheduleTarget` both call `assertShopRuleSlot`, so this door cannot grant a
+         * time the move would then refuse. The assertions below drive the REAL service, and § 8's
+         * door census (extended for this door) is what stops a second hold path appearing beside
+         * it with a rule of its own.
+         */
+        const hold = (shop: typeof shopA, slot: string, group = false, overlaps = 0) =>
+            rescheduler(group, overlaps).service.holdSlotForReschedule(
+                stored!._id.toString(), slot, shop.user.id, asShop(shop));
+
+        const outsideHours = slotId(at(19), at(20)); // 19:00, after the 09–17 published rules
+
+        await assert('a shop holds a time OUTSIDE its published hours — what the storefront lock refuses', async () => {
+            redisStore.clear();
+            stored = bookingOfShopA();
+            const held = await hold(shopA, outsideHours);
+            const refusedByCustomerDoor = await refused(
+                () => world({ realLocks: true }).service.lockSlot('p1', outsideHours, shopA.user.id),
+                'BOOKING_SLOT_UNAVAILABLE', 409, 'not_offered');
+            return held.slotId === outsideHours
+                && held.start.getTime() === at(19).getTime()
+                && held.expiresAt.getTime() - Date.now() > 14 * 60 * 1000
+                && redisStore.size === 1
+                && refusedByCustomerDoor;
+        });
+
+        await assert('⛔ the hold is written under the shop\'s USER id — (a)\'s fix, carried into the new door', async () => {
+            redisStore.clear();
+            stored = bookingOfShopA();
+            await hold(shopA, outsideHours);
+            const key = [...redisStore.keys()][0] ?? '';
+            const held = JSON.parse(redisStore.get(key) ?? '{}');
+            return held.ownerId === shopA.user.id
+                && held.ownerId !== shopA.vendorId.toString()
+                && !key.includes(shopA.vendorId.toString());
+        });
+
+        await assert('⛔ and the held time really is the one the move then accepts', async () => {
+            redisStore.clear();
+            stored = bookingOfShopA();
+            await hold(shopA, outsideHours);
+            const moved = await rescheduler(false).service.rescheduleBooking(
+                stored._id.toString(), outsideHours, shopA.user.id, asShop(shopA));
+            return moved.startAt.getTime() === at(19).getTime() && redisStore.size === 0;
+        });
+
+        await assert('⛔ a shop cannot hold a time for ANOTHER shop\'s appointment', async () => {
+            redisStore.clear();
+            stored = bookingOfShopA();
+            const wasRefused = await refused(() => hold(shopB, outsideHours), 'BOOKING_NOT_FOUND', 404);
+            return wasRefused && redisStore.size === 0;
+        });
+
+        await assert('⛔ a cancelled or finished appointment cannot be held a new time', async () => {
+            redisStore.clear();
+            stored = bookingOfShopA();
+            stored.status = BookingStatus.CANCELLED;
+            const wasRefused = await refused(() => hold(shopA, outsideHours), 'BOOKING_NOT_RESCHEDULABLE', 409);
+            return wasRefused && redisStore.size === 0;
+        });
+
+        await assert('⛔ the hold keeps the appointment\'s LENGTH, and refuses an inverted interval', async () => {
+            redisStore.clear();
+            stored = bookingOfShopA();
+            const longer = await refused(() => hold(shopA, slotId(at(19), at(21))),
+                'BOOKING_INVALID_SLOT_ID', 400, 'length_changed');
+            const inverted = await refused(() => hold(shopA, slotId(at(20), at(19))),
+                'BOOKING_INVALID_SLOT_ID', 400, 'inverted');
+            return longer && inverted && redisStore.size === 0;
+        });
+
+        /**
+         * ⚠ **`not_future` is NEW (2026-09-20) and lands on both doors in one change.** Without it
+         * a shop could move an appointment into last week — rewriting history for a customer who
+         * has already been, and putting the booking behind every sweep and reminder, which only
+         * look forward. The customer rule never had the hole: `assertOfferedSlot` refuses a past
+         * slot outright.
+         */
+        await assert('⛔ neither door accepts a time that has already passed', async () => {
+            redisStore.clear();
+            stored = bookingOfShopA();
+            const gone = slotId(new Date(Date.UTC(2020, 0, 6, 8)), new Date(Date.UTC(2020, 0, 6, 9)));
+            const heldRefused = await refused(() => hold(shopA, gone),
+                'BOOKING_INVALID_SLOT_ID', 400, 'not_future');
+            const moveRefused = await refused(() => rescheduler(false).service.rescheduleBooking(
+                stored!._id.toString(), gone, shopA.user.id, asShop(shopA)),
+                'BOOKING_INVALID_SLOT_ID', 400, 'not_future');
+            return heldRefused && moveRefused && redisStore.size === 0 && stored.saves === 0;
+        });
+
+        /**
+         * ⚠ **A hold taken at the boundary cannot be moved once that boundary has passed.** The
+         * hold lives fifteen minutes and the rule is re-applied by the move, so a shop that holds
+         * 19:00 at 18:59 and calls the move at 19:01 is refused — the hold does not grant the past.
+         */
+        await assert('⛔ a hold taken a minute before the start does not survive into the past', async () => {
+            redisStore.clear();
+            stored = bookingOfShopA();
+            const service = rescheduler(false).service as unknown as {
+                assertShopRuleSlot(b: unknown, s: string, now: Date): { start: Date };
+            };
+            const start = at(19);
+            const justBefore = service.assertShopRuleSlot(stored, outsideHours, new Date(start.getTime() - MIN));
+            let refusedAfter = false;
+            try {
+                service.assertShopRuleSlot(stored, outsideHours, new Date(start.getTime() + MIN));
+            } catch (err) {
+                refusedAfter = err instanceof AppError && err.details?.reason === 'not_future';
+            }
+            return justBefore.start.getTime() === start.getTime() && refusedAfter;
+        });
+
+        await assert('⛔ a time another appointment already occupies is refused (single occupancy)', async () => {
+            redisStore.clear();
+            stored = bookingOfShopA();
+            const wasRefused = await refused(() => hold(shopA, outsideHours, false, 1),
+                'BOOKING_SLOT_UNAVAILABLE', 409);
+            return wasRefused && redisStore.size === 0;
+        });
+
+        /**
+         * ⚠ **Seats are deliberately NOT counted here**, so a class hold passes an occupancy the
+         * single-seat rule would refuse; capacity is enforced when the move happens, under the
+         * target slot's mutex. A hold is not a seat, and a second opinion about capacity is a
+         * second thing to disagree with.
+         */
+        await assert('a CLASS hold is per-owner, and does not count seats', async () => {
+            redisStore.clear();
+            stored = bookingOfShopA();
+            const held = await hold(shopA, outsideHours, true, 3);
+            const key = [...redisStore.keys()][0] ?? '';
+            return held.slotId === outsideHours && key.includes(shopA.user.id);
+        });
+
+        await assert('⛔ the moving appointment overlapping ITSELF is allowed, as it is on the move', async () => {
+            redisStore.clear();
+            stored = bookingOfShopA(); // 10:00–11:00
+            const held = await hold(shopA, slotId(at(10, 30), at(11, 30)), false, 1);
+            return held.start.getTime() === at(10, 30).getTime();
+        });
+
+        // ── The door itself: mounted, gated, and passing both ids ────────────────────────────
+
+        const holdRoute = (vendorBookingRouter.stack as unknown as RouteLayer[])
+            .find((layer) => layer.route?.path === '/:id/slot-hold' && layer.route.methods.post)?.route;
+
+        await assert('in scope: the vendor router really registers POST /:id/slot-hold', () =>
+            Boolean(holdRoute) && typeof holdRoute!.stack[holdRoute!.stack.length - 1]?.handle === 'function');
+
+        /**
+         * ⚠ **Run, not read.** "The role middleware is present" is satisfied by a middleware that
+         * lets everyone through; what must hold is that a CUSTOMER is actually refused. The
+         * router's `use` layers are driven with a signed-in customer and one of them must answer
+         * 403 before any route handler is reached.
+         */
+        await assert('⛔ a customer is REFUSED at this router, by running its gate', async () => {
+            const gates = (vendorBookingRouter.stack as unknown as Array<{ route?: unknown; handle: Handler }>)
+                .filter((layer) => !layer.route)
+                .map((layer) => layer.handle);
+            if (gates.length === 0) return false;
+            const asRole = (role: string, auth: unknown) => ({ auth, role, headers: {}, params: {}, body: {} });
+            const customerAuth = {
+                user: new UserModel({}), role: 'customer', role_entity: { _id: new mongoose.Types.ObjectId() },
+            };
+
+            /**
+             * The gate that DECIDES by role is the one that refuses a customer and lets the shop
+             * through — found by running, so the assertion cannot be satisfied by `requireAuth`
+             * (which refuses both, for want of a token) or by a middleware that refuses nobody.
+             */
+            for (const gate of gates) {
+                const asCustomer = await run(gate, asRole('customer', customerAuth));
+                const asVendor = await run(gate, asRole('vendor', shopA.auth));
+                const refusal = asCustomer.error;
+                if (
+                    refusal instanceof AppError
+                    && refusal.statusCode === 403
+                    && refusal.code === 'AUTH_ROLE_NOT_FOUND'
+                    && asVendor.error === undefined
+                ) return true;
+            }
+            return false;
+        });
+
+        await assert('⛔ the handler holds under the USER id and scopes the booking by the VENDOR id', async () => {
+            let passed: { slotId: string; holdOwnerId: string; actor: unknown } | undefined;
+            const original = BookingService.prototype.holdSlotForReschedule;
+            try {
+                BookingService.prototype.holdSlotForReschedule = async function (
+                    _bookingId: string, slot: string, holdOwnerId: string, actor: { role: 'vendor'; id: string },
+                ) {
+                    passed = { slotId: slot, holdOwnerId, actor };
+                    return { slotId: slot, start: at(19), end: at(20), expiresAt: new Date() };
+                };
+                await run(VendorBookingController.holdSlot as unknown as Handler, {
+                    auth: shopA.auth, params: { id: 'b1' }, body: { slotId: outsideHours },
+                });
+            } finally {
+                BookingService.prototype.holdSlotForReschedule = original;
+            }
+            return passed?.slotId === outsideHours
+                && passed.holdOwnerId === shopA.user.id
+                && JSON.stringify(passed.actor) === JSON.stringify({ role: 'vendor', id: shopA.vendorId.toString() });
         });
     } finally {
         (Booking as unknown as Record<string, unknown>).findOne = originalFindOne;

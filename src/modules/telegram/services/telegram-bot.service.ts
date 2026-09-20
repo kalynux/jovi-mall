@@ -43,9 +43,46 @@ export interface InlineUrlButton {
  */
 export type TelegramParseMode = 'none' | 'HTML';
 
+/**
+ * An inline button whose tap comes BACK to us as a `callback_query`, rather than
+ * opening a page (phase 10, stage 1).
+ *
+ * ⚠ **`callbackData` is capped at 64 BYTES by Telegram** — not characters. Over
+ * it, the Bot API answers `BUTTON_DATA_INVALID` and rejects the WHOLE
+ * `sendMessage`, so the message does not arrive at all rather than arriving
+ * without its button. Callers carrying tap tokens assert this at boot; see
+ * `assertCustomerQuickRepliesSendable`.
+ */
+export interface InlineCallbackButton {
+    text: string;
+    callbackData: string;
+}
+
+export type InlineButton = InlineUrlButton | InlineCallbackButton;
+
+/** A URL button, told apart from a callback one by shape rather than a discriminator field. */
+function isUrlButton(button: InlineButton): button is InlineUrlButton {
+    return 'url' in button;
+}
+
 export interface SendMessageOptions {
-    /** Optional inline URL button rendered under the message. */
+    /**
+     * Optional inline URL button rendered under the message.
+     *
+     * ⚠ **Kept for every existing caller and unchanged in behaviour.** When
+     * `buttons` is absent this still produces exactly `inline_keyboard:
+     * [[{ text, url }]]` — the same bytes it always did.
+     */
     button?: InlineUrlButton;
+    /**
+     * Optional inline buttons, URL and/or callback, rendered as ONE row under the
+     * message.
+     *
+     * Takes precedence over `button` when both are given. Telegram allows several
+     * rows; one row is enough for every caller here and keeps the rendering
+     * identical to what `button` produced.
+     */
+    buttons?: InlineButton[];
     /**
      * Defaults to `'none'`, and that default is the point: an unformatted
      * message always arrives, while a malformed formatted one arrives not at
@@ -91,11 +128,31 @@ export class TelegramBotService {
                 // parse_mode as "render verbatim", which is not the same as
                 // passing an empty string.
                 ...(parseMode !== 'none' && { parse_mode: parseMode }),
-                ...(options.button && {
-                    reply_markup: {
-                        inline_keyboard: [[{ text: options.button.text, url: options.button.url }]],
-                    },
-                }),
+                /**
+                 * ⚠ **The single-`button` shape must stay byte-identical.** Every caller
+                 * that existed before phase 10 passes `button` alone, and the row it
+                 * produces is unchanged: `[[{ text, url }]]`, no extra keys. `buttons`
+                 * is the new path and wins when both are supplied.
+                 */
+                ...(() => {
+                    const row = options.buttons?.length
+                        ? options.buttons
+                        : options.button
+                            ? [options.button]
+                            : [];
+                    if (row.length === 0) return {};
+                    return {
+                        reply_markup: {
+                            inline_keyboard: [
+                                row.map(b =>
+                                    isUrlButton(b)
+                                        ? { text: b.text, url: b.url }
+                                        : { text: b.text, callback_data: b.callbackData }
+                                ),
+                            ],
+                        },
+                    };
+                })(),
             });
 
             if (response.data.ok) {

@@ -272,7 +272,15 @@ export type InAppScreenPayload =
     | { kind: 'pd'; productId: string }
     | { kind: 'ol' }
     | { kind: 'sl'; query: { q?: string | null; city?: string | null } }
-    | { kind: 'co'; cartId: string | null };
+    | { kind: 'co'; cartId: string | null }
+    | {
+          kind: 'tf';
+          form: {
+              orderId: string | null;
+              topic: 'rd' | 'ad' | 'hp' | null;
+              attachmentRef: string | null;
+          };
+      };
 
 /**
  * Mint a screen session for the customer this request belongs to, and set the reply that opens

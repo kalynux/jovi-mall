@@ -43,8 +43,27 @@ export type CustomerNotificationType =
      * a status the platform holds against a customer nobody reminded.
      */
     | 'booking.reminder'
-    /** Payment for the booking succeeded — the original price, or a balance paid later. */
+    /**
+     * Payment for the booking's ORIGINAL price succeeded.
+     *
+     * ⚠ **Not a balance** — see `booking.balance.received`. This copy ends "see you then",
+     * which is true of a payment made before the appointment and false of one made after it.
+     */
     | 'booking.payment.received'
+    /**
+     * ⭐ **A BALANCE was paid, after the appointment happened.**
+     *
+     * Its own situation rather than a reuse of `booking.payment.received`, because that
+     * sentence ends *"Nothing else to do — see you then"*: a balance is settled once the
+     * service is over, so "see you then" points at an appointment in the past.
+     *
+     * ⚠ **This closes a real silence, not a wording nicety.** `handleBookingPaymentReceived`
+     * returned early on `purpose === 'booking_balance'` precisely to avoid saying the false
+     * thing — which left a customer who had just paid money told NOTHING at all. The comment
+     * on `booking.payment_failed` records the same reasoning from the failure side: failure
+     * announces both purposes because its copy carries no time.
+     */
+    | 'booking.balance.received'
     /**
      * A mobile-money charge for a booking did not go through — the original price or a balance.
      *
@@ -164,6 +183,7 @@ export const CUSTOMER_NOTIFICATION_TYPES: readonly CustomerNotificationType[] = 
     'booking.completed',
     'booking.reminder',
     'booking.payment.received',
+    'booking.balance.received',
     'booking.payment_failed',
     'booking.balance.due',
     'booking.refunded',

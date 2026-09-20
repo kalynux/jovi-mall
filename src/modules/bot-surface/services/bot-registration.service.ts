@@ -22,6 +22,7 @@ import {
     isOnboardingComplete,
     isRequiredStep,
     normalizeOnboarding,
+    onboardingChanged,
     seedOnboarding,
 } from '../domain/bot-onboarding';
 import { BotIdentityEnvelope } from './bot-identity.service';
@@ -458,7 +459,19 @@ export class BotRegistrationService {
                     step,
                 });
             }
-            const records = applyOnboardingStep(currentRecords(customer), step, 'skipped', now);
+
+            /**
+             * A Skip that changes nothing writes nothing — see `applyOnboardingStep`, which
+             * owns the rule that a stale Skip cannot overwrite an answered step. The
+             * customer is returned as it stands, so the caller still answers with the
+             * CURRENT checklist (`onboarding.next` and all) rather than with a refusal: the
+             * person tapped a button that was true when it was drawn, and telling them their
+             * email was declined — or erroring at them — are both wrong answers to it.
+             */
+            const before = currentRecords(customer);
+            const records = applyOnboardingStep(before, step, 'skipped', now);
+            if (!onboardingChanged(before, records)) return customer;
+
             return this.persistOnboarding(customer, records, channel, now);
         }
 

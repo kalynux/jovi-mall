@@ -12,6 +12,19 @@ export interface SendNotificationParams {
     message: string;
     /** Optional inline URL button rendered under the message. */
     button?: { label: string; url: string };
+    /**
+     * Optional chat quick replies, rendered in the SAME row as `button`, after it
+     * (phase 10, stage 1). A tap comes back as a `callback_query` carrying `token`.
+     *
+     * ⚠ **Unlike WhatsApp, Telegram keeps the URL button AND these together** — an
+     * inline keyboard row mixes both kinds freely. So a Telegram customer loses
+     * nothing to gain a quick reply, and the WhatsApp `viewLine` compensation is
+     * deliberately NOT applied here.
+     *
+     * ⚠ Each `token` must be ≤ 64 BYTES: over it Telegram rejects the whole
+     * message, not just the button.
+     */
+    quickReplies?: Array<{ token: string; label: string }>;
     /** Defaults to `'none'` — see `TelegramParseMode`. */
     parseMode?: TelegramParseMode;
 }
@@ -68,9 +81,23 @@ export class TelegramNotificationService {
             };
         }
 
-        // Send message via bot (with optional inline URL button)
+        /**
+         * One row: the URL button first, then any quick replies.
+         *
+         * ⚠ **`buttons` is passed ONLY when there is a quick reply.** With none, the call
+         * goes through the original `button` path untouched, so every pre-phase-10 caller
+         * produces the exact keyboard it always did.
+         */
+        const quickReplies = params.quickReplies ?? [];
+        const urlButton = params.button ? { text: params.button.label, url: params.button.url } : undefined;
         const sent = await this.botService.sendMessage(chatId, params.message, {
-            button: params.button ? { text: params.button.label, url: params.button.url } : undefined,
+            button: urlButton,
+            ...(quickReplies.length > 0 && {
+                buttons: [
+                    ...(urlButton ? [urlButton] : []),
+                    ...quickReplies.map(q => ({ text: q.label, callbackData: q.token })),
+                ],
+            }),
             parseMode: params.parseMode,
         });
 

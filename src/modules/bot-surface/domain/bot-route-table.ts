@@ -260,6 +260,16 @@ export const BOT_ROUTES: readonly BotRouteSpec[] = Object.freeze([
      */
     { tool: 'catalog_display_action', method: 'POST', path: '/catalog/action', mutating: true, requiresCustomerRole: true },
 
+    // ── Discovery: browsing by category, and what other customers said ───────
+    /**
+     * ⚠ **Both are `mutating: false`, unlike `catalog_show_products` above, and the difference
+     * is the credential.** Drawing product cards mints a handle a browser can write a basket
+     * with; these two draw buttons whose tokens carry nothing but a category digest or a
+     * product id, so a retried chat message costs nothing and needs no `Idempotency-Key`.
+     */
+    { tool: 'catalog_browse_categories', method: 'POST', path: '/catalog/categories', mutating: false, requiresCustomerRole: true },
+    { tool: 'catalog_product_reviews_summary', method: 'POST', path: '/catalog/products/:productId/reviews', mutating: false, requiresCustomerRole: true },
+
     // ── The in-app screens ───────────────────────────────────────────────────
     /**
      * ⚠ **All three are `mutating`, and none of them writes a business record.** They mint a

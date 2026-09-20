@@ -224,7 +224,7 @@ export async function placeCheckout(handle: string, phone: unknown): Promise<Che
         const payerNumber = typedNumber ?? (await storedPayerNumber(customer));
         if (!payerNumber) {
             throw createAppError(
-                ERROR_CODES.PAYMENT_REFERENCE_REQUIRED,
+                ERROR_CODES.PAYMENT_PAYER_NUMBER_REQUIRED,
                 422,
                 'A mobile money number is needed to take this payment',
                 { spent: true },

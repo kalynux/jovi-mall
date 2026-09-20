@@ -543,6 +543,672 @@ const CANCEL_ORDER_PROMPT: Copy = {
  * ⚠ **The reason is TYPED, never picked from a list.** Owner's decision: a canned reason tells
  * the vendor less than a sentence does, and the list would have to guess at the cases.
  */
+// ─────────────────────────────────────────────────────────────────────────────
+//  Discovery and bargaining (Stream B)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SIMILAR_ITEMS_BUTTON: Copy = {
+    en: 'Similar items',
+    fr: 'Articles similaires',
+    pt: 'Artigos semelhantes',
+    es: 'Artículos similares',
+    ar: 'منتجات مشابهة',
+};
+
+/** ⛔ Owner's decision: this REPLACES "Notify me". Nothing here can announce a restock. */
+const SAVE_FOR_LATER_BUTTON: Copy = {
+    en: 'Save for later',
+    fr: 'Mettre de côté',
+    pt: 'Guardar para depois',
+    es: 'Guardar para luego',
+    ar: 'احفظه لوقت لاحق',
+};
+
+const READ_ALL_REVIEWS_BUTTON: Copy = {
+    en: 'Read all reviews',
+    fr: 'Lire tous les avis',
+    pt: 'Ler as opiniões',
+    es: 'Leer las opiniones',
+    ar: 'اقرأ كل التقييمات',
+};
+
+const BARGAIN_AGAIN_BUTTON: Copy = {
+    en: 'Bargain again',
+    fr: 'Renégocier',
+    pt: 'Negociar de novo',
+    es: 'Negociar de nuevo',
+    ar: 'فاوض مجددًا',
+};
+
+/**
+ * ⚠ **`cap: null`, and that is measured rather than lax.** It is never a whole control title:
+ * Telegram draws `"<label> · <price>"`, which has no 20-character limit, and WhatsApp draws the
+ * option's `shortLabel` (`"✓ <price>"`). So the price is on the button the customer presses on
+ * both channels, and capping the label would cut the label rather than the price.
+ */
+const LOCK_IT_IN_BUTTON: Copy = {
+    en: 'Lock it in',
+    fr: 'Je valide',
+    pt: 'Fechar negócio',
+    es: 'Cerrar trato',
+    ar: 'ثبّت السعر',
+};
+
+const BROWSE_CATEGORIES_PROMPT: Copy = {
+    en: 'What kind of thing are you looking for?',
+    fr: "Quel genre d'article cherchez-vous ?",
+    pt: 'Que tipo de artigo procura?',
+    es: '¿Qué tipo de artículo buscas?',
+    ar: 'ما نوع المنتج الذي تبحث عنه؟',
+};
+
+const NO_CATEGORIES_PROMPT: Copy = {
+    en: "There's nothing listed yet. Tell me what you're after and I'll look.",
+    fr: "Rien n'est encore en vente. Dites-moi ce que vous cherchez et je regarde.",
+    pt: 'Ainda não há nada à venda. Diga-me o que procura e eu procuro.',
+    es: 'Todavía no hay nada a la venta. Dime qué buscas y lo miro.',
+    ar: 'لا توجد منتجات معروضة بعد. أخبرني بما تبحث عنه وسأبحث لك.',
+};
+
+/** A tapped category that has since emptied. The grid of everything follows. */
+const CATEGORY_GONE_PROMPT: Copy = {
+    en: "That category has nothing in it any more. Here's everything instead.",
+    fr: 'Cette catégorie est désormais vide. Voici tout le reste à la place.',
+    pt: 'Essa categoria já não tem nada. Aqui está tudo o resto.',
+    es: 'Esa categoría ya no tiene nada. Aquí tienes todo lo demás.',
+    ar: 'لم يعد في هذه الفئة أي منتج. إليك كل المنتجات بدلًا من ذلك.',
+};
+
+/**
+ * ⚠ **Not `moreProductsPrompt`.** "Here are some more" is true after a See-more tap and wrong
+ * after a Similar-items tap: the customer asked for things LIKE the one they were looking at,
+ * not for more of a list they were paging.
+ */
+const SIMILAR_ITEMS_PROMPT: Copy = {
+    en: 'Here are some similar items.',
+    fr: 'Voici des articles similaires.',
+    pt: 'Aqui estão alguns artigos semelhantes.',
+    es: 'Aquí tienes algunos artículos similares.',
+    ar: 'إليك بعض المنتجات المشابهة.',
+};
+
+const NO_SIMILAR_ITEMS_PROMPT: Copy = {
+    en: "I couldn't find anything similar right now.",
+    fr: "Je n'ai rien trouvé de similaire pour le moment.",
+    pt: 'Não encontrei nada semelhante de momento.',
+    es: 'No he encontrado nada similar por ahora.',
+    ar: 'لم أجد شيئًا مشابهًا في الوقت الحالي.',
+};
+
+/** ⛔ Must not imply a restock message will ever arrive (owner's decision). */
+const SAVED_FOR_LATER_PROMPT: Copy = {
+    en: "Saved. You'll find it in your saved items.",
+    fr: "C'est noté. Vous le retrouverez dans vos articles enregistrés.",
+    pt: 'Guardado. Vai encontrá-lo nos seus artigos guardados.',
+    es: 'Guardado. Lo encontrarás en tus artículos guardados.',
+    ar: 'تم الحفظ. ستجده ضمن المنتجات المحفوظة لديك.',
+};
+
+const NO_REVIEWS_YET_PROMPT: Copy = {
+    en: 'No one has reviewed this yet.',
+    fr: "Personne n'a encore laissé d'avis sur cet article.",
+    pt: 'Ainda ninguém deixou uma opinião sobre este artigo.',
+    es: 'Nadie ha opinado todavía sobre este artículo.',
+    ar: 'لم يقيّم أحد هذا المنتج بعد.',
+};
+
+/** Followed by `addedToCartActions` — a won bargain lands exactly like an ordinary add. */
+const DEAL_LOCKED_PROMPT: Copy = {
+    en: "Deal — it's in your basket at that price.",
+    fr: 'Marché conclu — c\'est dans votre panier à ce prix.',
+    pt: 'Negócio fechado — está no seu cesto a esse preço.',
+    es: 'Trato hecho — ya está en tu cesta a ese precio.',
+    ar: 'تم الاتفاق — أُضيف إلى سلتك بهذا السعر.',
+};
+
+/** The pressed offer was replaced; the latest offer's button follows. */
+const DEAL_SUPERSEDED_PROMPT: Copy = {
+    en: "That offer has changed since. Here's the latest one.",
+    fr: 'Cette offre a changé depuis. Voici la plus récente.',
+    pt: 'Essa oferta mudou entretanto. Aqui está a mais recente.',
+    es: 'Esa oferta ha cambiado. Aquí tienes la más reciente.',
+    ar: 'تغيّر هذا العرض منذ ذلك الحين. إليك أحدث عرض.',
+};
+
+const DEAL_ALREADY_ORDERED_PROMPT: Copy = {
+    en: "You've already ordered this at the agreed price.",
+    fr: 'Vous avez déjà commandé cet article au prix convenu.',
+    pt: 'Já encomendou este artigo ao preço combinado.',
+    es: 'Ya pediste este artículo al precio acordado.',
+    ar: 'لقد طلبت هذا المنتج بالفعل بالسعر المتفق عليه.',
+};
+
+/** Bargain again follows. */
+const DEAL_UNAVAILABLE_PROMPT: Copy = {
+    en: "I can't find that offer any more. Want to talk about the price again?",
+    fr: 'Je ne retrouve plus cette offre. Voulez-vous rediscuter du prix ?',
+    pt: 'Já não encontro essa oferta. Quer voltar a falar sobre o preço?',
+    es: 'Ya no encuentro esa oferta. ¿Quieres que volvamos a hablar del precio?',
+    ar: 'لم أعد أجد هذا العرض. هل تريد أن نتحدث عن السعر مرة أخرى؟',
+};
+
+/**
+ * ⛔ **An expired deal must never read as though it never happened** (the owner's rule), which
+ * is why neither this nor the next is a fresh "would you like to haggle?" — both name what
+ * lapsed. Neither promises anything about the basket: at the moment they render, the item is
+ * not in it, and the model may be about to add it at the shelf price.
+ *
+ * ⚠ Neither names a seller. `bargaining-agent.md` § 11 records the agent inventing a human
+ * seller and the prompt being rewritten to stop it; there is no human in this loop.
+ */
+const BARGAIN_LOCK_EXPIRED_PROMPT: Copy = {
+    en: 'The price we agreed has run out. Want to talk about it again?',
+    fr: 'Le prix convenu a expiré. Voulez-vous en rediscuter ?',
+    pt: 'O preço combinado expirou. Quer voltar a falar sobre ele?',
+    es: 'El precio acordado ha caducado. ¿Quieres que lo hablemos otra vez?',
+    ar: 'انتهت صلاحية السعر الذي اتفقنا عليه. هل تريد أن نتحدث عنه مرة أخرى؟',
+};
+
+const BARGAIN_PRICE_CHANGED_PROMPT: Copy = {
+    en: 'This price has changed since we agreed it. Want to talk about it again?',
+    fr: 'Ce prix a changé depuis notre accord. Voulez-vous en rediscuter ?',
+    pt: 'Este preço mudou desde o nosso acordo. Quer voltar a falar sobre ele?',
+    es: 'Este precio ha cambiado desde nuestro acuerdo. ¿Quieres que lo hablemos otra vez?',
+    ar: 'تغيّر هذا السعر منذ اتفاقنا. هل تريد أن نتحدث عنه مرة أخرى؟',
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  The account surface (Stream H)
+//
+//  ⚠ **The menu is ONE list of eight** (the owner's decision), which forces every row title
+//  to the 24-character WhatsApp list cap rather than the 20-character button cap: eight
+//  options cannot be buttons, because a WhatsApp message carries three.
+//
+//  ⚠ **Nothing here interpolates**, the rule this whole table keeps. Where a value must
+//  appear — the name of the app being disconnected, the site and code in a sign-in message —
+//  the handler puts it on its own line ABOVE the fixed sentence. A placeholder inside a
+//  translated sentence is a word order decision made by whoever wrote the English.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ACCOUNT_MENU_PROMPT: Copy = {
+    en: 'What would you like to see?',
+    fr: 'Que voulez-vous consulter ?',
+    pt: 'O que quer ver?',
+    es: '¿Qué quieres ver?',
+    ar: 'ما الذي تريد الاطلاع عليه؟',
+};
+
+const ACCOUNT_ROW_PROFILE: Copy = {
+    en: 'My details',
+    fr: 'Mes informations',
+    pt: 'Os meus dados',
+    es: 'Mis datos',
+    ar: 'بياناتي',
+};
+
+const ACCOUNT_ROW_ADDRESSES: Copy = {
+    en: 'My addresses',
+    fr: 'Mes adresses',
+    pt: 'As minhas moradas',
+    es: 'Mis direcciones',
+    ar: 'عناويني',
+};
+
+const ACCOUNT_ROW_PAYMENTS: Copy = {
+    en: 'Payment methods',
+    fr: 'Moyens de paiement',
+    pt: 'Formas de pagamento',
+    es: 'Métodos de pago',
+    ar: 'طرق الدفع',
+};
+
+const ACCOUNT_ROW_NOTIFY_SETTINGS: Copy = {
+    en: 'Notification settings',
+    fr: 'Réglages des alertes',
+    pt: 'Definições de avisos',
+    es: 'Ajustes de avisos',
+    ar: 'إعدادات الإشعارات',
+};
+
+const ACCOUNT_ROW_INBOX: Copy = {
+    en: 'Recent notifications',
+    fr: 'Alertes récentes',
+    pt: 'Avisos recentes',
+    es: 'Avisos recientes',
+    ar: 'أحدث الإشعارات',
+};
+
+const ACCOUNT_ROW_CHANNELS: Copy = {
+    en: 'Connected apps',
+    fr: 'Applications liées',
+    pt: 'Aplicações ligadas',
+    es: 'Apps conectadas',
+    ar: 'التطبيقات المرتبطة',
+};
+
+const ACCOUNT_ROW_LANGUAGE: Copy = {
+    en: 'Language',
+    fr: 'Langue',
+    pt: 'Idioma',
+    es: 'Idioma',
+    ar: 'اللغة',
+};
+
+const ACCOUNT_ROW_CLOSE: Copy = {
+    en: 'Close my account',
+    fr: 'Fermer mon compte',
+    pt: 'Encerrar a minha conta',
+    es: 'Cerrar mi cuenta',
+    ar: 'إغلاق حسابي',
+};
+
+/** The answer to "Keep my account" — it must say that nothing happened, not merely stop. */
+const ACCOUNT_KEPT: Copy = {
+    en: 'Your account is staying open. Nothing has changed.',
+    fr: "Votre compte reste ouvert. Rien n'a changé.",
+    pt: 'A sua conta continua aberta. Nada mudou.',
+    es: 'Tu cuenta sigue abierta. No ha cambiado nada.',
+    ar: 'حسابك لا يزال مفتوحًا. لم يتغيّر شيء.',
+};
+
+const CONNECTIONS_PROMPT: Copy = {
+    en: 'These apps can reach your account. Choose one to disconnect it.',
+    fr: 'Ces applications ont accès à votre compte. Choisissez-en une pour la déconnecter.',
+    pt: 'Estas aplicações têm acesso à sua conta. Escolha uma para a desligar.',
+    es: 'Estas apps tienen acceso a tu cuenta. Elige una para desconectarla.',
+    ar: 'هذه التطبيقات يمكنها الوصول إلى حسابك. اختر واحدًا لفصله.',
+};
+
+/**
+ * ⚠ **The branch where there is nothing to offer.** The app a customer is TALKING on can
+ * never be disconnected, and the set is closed at two — so a customer connected only here
+ * has no choice to make, and must be told that rather than shown an empty list.
+ */
+const CONNECTIONS_ONLY_CURRENT: Copy = {
+    en: 'This is the only app connected to your account.',
+    fr: "C'est la seule application connectée à votre compte.",
+    pt: 'Esta é a única aplicação ligada à sua conta.',
+    es: 'Esta es la única app conectada a tu cuenta.',
+    ar: 'هذا هو التطبيق الوحيد المرتبط بحسابك.',
+};
+
+/** ⚠ Says what SURVIVES, because that is the question a customer is actually asking. */
+const CONNECTION_DISCONNECT_PROMPT: Copy = {
+    en: 'Disconnect this app? You can connect it again at any time. Your account and your orders stay exactly as they are.',
+    fr: "Déconnecter cette application ? Vous pourrez la reconnecter à tout moment. Votre compte et vos commandes restent inchangés.",
+    pt: 'Desligar esta aplicação? Pode voltar a ligá-la quando quiser. A sua conta e as suas encomendas ficam como estão.',
+    es: '¿Desconectar esta app? Puedes volver a conectarla cuando quieras. Tu cuenta y tus pedidos no cambian.',
+    ar: 'هل تريد فصل هذا التطبيق؟ يمكنك ربطه مرة أخرى في أي وقت. يبقى حسابك وطلباتك كما هي.',
+};
+
+const DISCONNECT_BUTTON: Copy = {
+    en: 'Disconnect',
+    fr: 'Déconnecter',
+    pt: 'Desligar',
+    es: 'Desconectar',
+    ar: 'فصل',
+};
+
+const KEEP_CONNECTED_BUTTON: Copy = {
+    en: 'Keep connected',
+    fr: 'Rester connecté',
+    pt: 'Manter ligada',
+    es: 'Mantener',
+    ar: 'الإبقاء عليه',
+};
+
+const CONNECTION_KEPT: Copy = {
+    en: 'Nothing has changed — that app is still connected.',
+    fr: "Rien n'a changé — cette application est toujours connectée.",
+    pt: 'Nada mudou — essa aplicação continua ligada.',
+    es: 'No ha cambiado nada: esa app sigue conectada.',
+    ar: 'لم يتغيّر شيء — لا يزال ذلك التطبيق مرتبطًا.',
+};
+
+const LANGUAGE_PROMPT: Copy = {
+    en: 'Which language should I use?',
+    fr: 'Quelle langue dois-je utiliser ?',
+    pt: 'Que idioma devo usar?',
+    es: '¿Qué idioma debo usar?',
+    ar: 'ما اللغة التي أستخدمها؟',
+};
+
+/**
+ * ⚠ **The one key rendered in the language just CHOSEN rather than the one in force**, which
+ * is why each translation names its own language rather than carrying a placeholder. The five
+ * options themselves are endonyms (English · Français · Português · Español · العربية) and are
+ * deliberately NOT copy: a language's own name is not translated.
+ */
+const LANGUAGE_SET: Copy = {
+    en: "I'll write in English from now on.",
+    fr: "Je vous écrirai en français à partir de maintenant.",
+    pt: 'A partir de agora escrevo em português.',
+    es: 'A partir de ahora te escribo en español.',
+    ar: 'سأكتب بالعربية من الآن فصاعدًا.',
+};
+
+const ADDRESS_BOOK_PROMPT: Copy = {
+    en: 'Your saved addresses. Choose one to make it your default or to remove it.',
+    fr: 'Vos adresses enregistrées. Choisissez-en une pour la définir par défaut ou la supprimer.',
+    pt: 'As suas moradas guardadas. Escolha uma para a tornar padrão ou removê-la.',
+    es: 'Tus direcciones guardadas. Elige una para hacerla predeterminada o eliminarla.',
+    ar: 'عناوينك المحفوظة. اختر واحدًا لجعله الافتراضي أو لحذفه.',
+};
+
+const PAYMENT_METHODS_PROMPT: Copy = {
+    en: 'Your saved payment methods. Choose one to make it your default or to remove it.',
+    fr: 'Vos moyens de paiement enregistrés. Choisissez-en un pour le définir par défaut ou le supprimer.',
+    pt: 'As suas formas de pagamento guardadas. Escolha uma para a tornar padrão ou removê-la.',
+    es: 'Tus métodos de pago guardados. Elige uno para hacerlo predeterminado o eliminarlo.',
+    ar: 'طرق الدفع المحفوظة لديك. اختر واحدة لجعلها الافتراضية أو لحذفها.',
+};
+
+const SET_DEFAULT_BUTTON: Copy = {
+    en: 'Make default',
+    fr: 'Par défaut',
+    pt: 'Tornar padrão',
+    es: 'Predeterminada',
+    ar: 'اجعله الافتراضي',
+};
+
+const REMOVE_BUTTON: Copy = {
+    en: 'Remove',
+    fr: 'Supprimer',
+    pt: 'Remover',
+    es: 'Eliminar',
+    ar: 'حذف',
+};
+
+/** ⚠ Shared by addresses and payment methods — one sentence, no ambiguity, two fewer keys. */
+const DEFAULT_SET: Copy = {
+    en: 'That is your default now.',
+    fr: "C'est maintenant votre choix par défaut.",
+    pt: 'Passou a ser o seu padrão.',
+    es: 'Ahora es tu opción predeterminada.',
+    ar: 'أصبح هذا خيارك الافتراضي.',
+};
+
+/** Shared, as `defaultSet` is. */
+const ITEM_REMOVED: Copy = {
+    en: 'Removed.',
+    fr: 'Supprimé.',
+    pt: 'Removido.',
+    es: 'Eliminado.',
+    ar: 'تم الحذف.',
+};
+
+const ADD_ADDRESS_BUTTON: Copy = {
+    en: 'Add an address',
+    fr: 'Ajouter une adresse',
+    pt: 'Adicionar morada',
+    es: 'Añadir dirección',
+    ar: 'إضافة عنوان',
+};
+
+const RESEND_CODE_BUTTON: Copy = {
+    en: 'Send it again',
+    fr: 'Renvoyer',
+    pt: 'Enviar de novo',
+    es: 'Enviar de nuevo',
+    ar: 'إعادة الإرسال',
+};
+
+const CANCEL_CHANGE_BUTTON: Copy = {
+    en: 'Cancel change',
+    fr: 'Annuler',
+    pt: 'Cancelar',
+    es: 'Cancelar',
+    ar: 'إلغاء التغيير',
+};
+
+const CONTACT_CODE_RESENT: Copy = {
+    en: 'I have sent it again.',
+    fr: "Je l'ai renvoyé.",
+    pt: 'Enviei de novo.',
+    es: 'Te lo he enviado de nuevo.',
+    ar: 'أعدت إرساله.',
+};
+
+/**
+ * ⚠ **Shown AFTER the setup questions, never before** (the owner's decision). A menu offered
+ * to somebody who has not finished telling us who they are interrupts the one conversation
+ * they came to have.
+ */
+const WELCOME_PROMPT: Copy = {
+    en: 'You are all set. What would you like to do?',
+    fr: 'Tout est prêt. Que souhaitez-vous faire ?',
+    pt: 'Está tudo pronto. O que quer fazer?',
+    es: 'Todo listo. ¿Qué quieres hacer?',
+    ar: 'كل شيء جاهز. ماذا تريد أن تفعل؟',
+};
+
+// ── The sign-in message ──────────────────────────────────────────────────────
+/**
+ * ⭐ **Six fixed phrases that an assembler stacks around three values** — the site, the code and
+ * the validity — with every value on its OWN LINE under its label.
+ *
+ * ⚠ **That shape is what makes it safe in Arabic.** A URL or a digit string placed inside a
+ * right-to-left sentence is reordered by the bidi algorithm, and the damage looks exactly like a
+ * corrupted code: the customer types what they see and it is refused. A value alone on its line
+ * cannot be reordered into anything.
+ *
+ * ⚠ **`signInCodeIntro` and `signInCodeOnly` are a PAIR and must stay one.** The first is used
+ * when a link was offered above it ("**Or** sign in…"), the second when the code is the only
+ * credential. Dropping either leaves a dangling "Or" in five languages.
+ */
+const SIGN_IN_TAP_TO_OPEN: Copy = {
+    en: 'Tap to sign in on this device:',
+    fr: 'Touchez pour vous connecter sur cet appareil :',
+    pt: 'Toque para entrar neste dispositivo:',
+    es: 'Toca para iniciar sesión en este dispositivo:',
+    ar: 'اضغط لتسجيل الدخول على هذا الجهاز:',
+};
+
+const SIGN_IN_CODE_INTRO: Copy = {
+    en: 'Or sign in with your phone number and this code:',
+    fr: 'Ou connectez-vous avec votre numéro de téléphone et ce code :',
+    pt: 'Ou entre com o seu número de telefone e este código:',
+    es: 'O inicia sesión con tu número de teléfono y este código:',
+    ar: 'أو سجّل الدخول برقم هاتفك وهذا الرمز:',
+};
+
+const SIGN_IN_CODE_ONLY: Copy = {
+    en: 'Sign in with your phone number and this code:',
+    fr: 'Connectez-vous avec votre numéro de téléphone et ce code :',
+    pt: 'Entre com o seu número de telefone e este código:',
+    es: 'Inicia sesión con tu número de teléfono y este código:',
+    ar: 'سجّل الدخول برقم هاتفك وهذا الرمز:',
+};
+
+const SIGN_IN_WEBSITE: Copy = {
+    en: 'Website:',
+    fr: 'Site web :',
+    pt: 'Site:',
+    es: 'Sitio web:',
+    ar: 'الموقع:',
+};
+
+/** The duration prints as `15 min`, a symbol that does not inflect — so no plural has to agree. */
+const SIGN_IN_VALID_FOR: Copy = {
+    en: 'Valid for:',
+    fr: 'Valable :',
+    pt: 'Válido:',
+    es: 'Válido:',
+    ar: 'صالح لمدة:',
+};
+
+const SIGN_IN_IGNORE: Copy = {
+    en: 'If you did not ask to sign in, ignore this message.',
+    fr: "Si vous n'avez pas demandé à vous connecter, ignorez ce message.",
+    pt: 'Se não pediu para entrar, ignore esta mensagem.',
+    es: 'Si no pediste iniciar sesión, ignora este mensaje.',
+    ar: 'إن لم تطلب تسجيل الدخول، تجاهل هذه الرسالة.',
+};
+
+// ── The notification inbox ───────────────────────────────────────────────────
+const INBOX_PROMPT: Copy = {
+    en: 'Your five most recent notifications.',
+    fr: 'Vos cinq notifications les plus récentes.',
+    pt: 'As suas cinco notificações mais recentes.',
+    es: 'Tus cinco notificaciones más recientes.',
+    ar: 'أحدث خمسة إشعارات لديك.',
+};
+
+const MARK_ALL_READ_BUTTON: Copy = {
+    en: 'Mark all read',
+    fr: 'Tout marquer lu',
+    pt: 'Marcar todas lidas',
+    es: 'Marcar todas leídas',
+    ar: 'تعليم الكل كمقروء',
+};
+
+const ALL_MARKED_READ: Copy = {
+    en: 'All marked as read.',
+    fr: 'Tout est marqué comme lu.',
+    pt: 'Tudo marcado como lido.',
+    es: 'Todo marcado como leído.',
+    ar: 'تم تعليم الكل كمقروء.',
+};
+
+// ── Notification settings, in the chat ───────────────────────────────────────
+/**
+ * The owner's shape: ONE channel choice and FOUR switches, in the conversation rather than on a
+ * screen. The four keys are the real preference names (`orderUpdates`, `bookingUpdates`,
+ * `bookingReminders`, `marketing`), not a second vocabulary.
+ *
+ * ⚠ **THE FIVE ROW LABELS ARE CAPPED AT 22, NOT 24, AND THAT IS NOT A TYPO.** Each renders with
+ * a state marker appended — "Order updates ✓" — inside WhatsApp's 24-character row title. A
+ * 24-character label would have its marker truncated away, and **every switch would read as
+ * on**. The cap is where that gets caught.
+ *
+ * ⚠ **The switches carry a TARGET STATE, never a toggle** (`acct:ntf:<key>:on|off`): a toggle
+ * flips whatever the state happens to be when an old button is finally pressed, which is the
+ * stale-button defect with a different name.
+ */
+const NOTIFY_SETTINGS_PROMPT: Copy = {
+    en: 'What I send you, and where.',
+    fr: 'Ce que je vous envoie, et où.',
+    pt: 'O que lhe envio, e para onde.',
+    es: 'Lo que te envío, y dónde.',
+    ar: 'ما أرسله إليك، وإلى أين.',
+};
+
+const NOTIFY_ROW_CHANNEL: Copy = {
+    en: 'Where to send',
+    fr: 'Où envoyer',
+    pt: 'Para onde enviar',
+    es: 'Dónde enviar',
+    ar: 'إلى أين أرسل',
+};
+
+const NOTIFY_ROW_ORDER_UPDATES: Copy = {
+    en: 'Order updates',
+    fr: 'Suivi commandes',
+    pt: 'Estado de encomendas',
+    es: 'Estado de pedidos',
+    ar: 'تحديثات الطلبات',
+};
+
+const NOTIFY_ROW_BOOKING_UPDATES: Copy = {
+    en: 'Booking updates',
+    fr: 'Suivi réservations',
+    pt: 'Estado de reservas',
+    es: 'Estado de reservas',
+    ar: 'تحديثات الحجوزات',
+};
+
+const NOTIFY_ROW_BOOKING_REMINDERS: Copy = {
+    en: 'Booking reminders',
+    fr: 'Rappels de RDV',
+    pt: 'Lembretes de reserva',
+    es: 'Recordatorios',
+    ar: 'تذكيرات الحجز',
+};
+
+const NOTIFY_ROW_MARKETING: Copy = {
+    en: 'Offers and news',
+    fr: 'Offres et actus',
+    pt: 'Ofertas e novidades',
+    es: 'Ofertas y novedades',
+    ar: 'العروض والأخبار',
+};
+
+const NOTIFY_CHANNEL_PROMPT: Copy = {
+    en: 'Where should I send them?',
+    fr: 'Où dois-je les envoyer ?',
+    pt: 'Para onde devo enviá-las?',
+    es: '¿Dónde debo enviarlas?',
+    ar: 'إلى أين أرسلها؟',
+};
+
+/** ⚠ Telegram and WhatsApp get no key — brand literals, like the language endonyms. */
+const NOTIFY_CHANNEL_EMAIL: Copy = {
+    en: 'Email',
+    fr: 'E-mail',
+    pt: 'E-mail',
+    es: 'Correo',
+    ar: 'البريد الإلكتروني',
+};
+
+const NOTIFY_CHANNEL_NONE: Copy = {
+    en: 'Do not send any',
+    fr: 'Ne rien envoyer',
+    pt: 'Não enviar nada',
+    es: 'No enviar nada',
+    ar: 'لا ترسل شيئًا',
+};
+
+const NOTIFY_UPDATED: Copy = {
+    en: 'Saved.',
+    fr: 'Enregistré.',
+    pt: 'Guardado.',
+    es: 'Guardado.',
+    ar: 'تم الحفظ.',
+};
+
+const MY_ORDERS_BUTTON: Copy = {
+    en: 'My orders',
+    fr: 'Mes commandes',
+    pt: 'Encomendas',
+    es: 'Mis pedidos',
+    ar: 'طلباتي',
+};
+
+/**
+ * The sentence over the button that opens the order-history screen.
+ *
+ * ⚠ **It exists because a ROW TITLE was doing a BODY's job.** `open:ol` was passing
+ * `loadMoreRow` ("Load more") as the message body, which is four words describing a control
+ * rather than a sentence introducing a screen — and the shared default introduces *products*,
+ * which an order list is not.
+ */
+const ORDERS_SCREEN_PROMPT: Copy = {
+    en: 'Here are your orders.',
+    fr: 'Voici vos commandes.',
+    pt: 'Aqui estão as suas encomendas.',
+    es: 'Aquí tienes tus pedidos.',
+    ar: 'إليك طلباتك.',
+};
+
+/**
+ * The sentence over the button that opens the support form.
+ *
+ * ⚠ **It promises ONE screen, and that promise is load-bearing.** A customer with a problem is
+ * already out of patience; "it takes one screen" is what makes them open a form rather than
+ * type a paragraph the assistant then has to take apart. The form must stay one screen for
+ * this sentence to stay true.
+ *
+ * The button beside it reuses `getHelpButton` — the same words the order card already offers,
+ * so the same act has one name everywhere.
+ */
+const SUPPORT_FORM_PROMPT: Copy = {
+    en: 'Tell me what happened — it takes one screen.',
+    fr: "Dites-moi ce qui s'est passé — tout tient sur un seul écran.",
+    pt: 'Diga-me o que aconteceu — cabe tudo num só ecrã.',
+    es: 'Cuéntame qué ha pasado — cabe todo en una sola pantalla.',
+    ar: 'أخبرني بما حدث — كل شيء في شاشة واحدة.',
+};
+
 const CANCEL_REASON_PROMPT: Copy = {
     en: 'What went wrong? Tell me in your own words and I will pass it on.',
     fr: "Que s'est-il passé ? Dites-le avec vos mots et je transmettrai.",
@@ -794,6 +1460,89 @@ const CHROME = Object.freeze({
     cancelOrderPrompt: { copy: CANCEL_ORDER_PROMPT, cap: null },
     cancelReasonPrompt: { copy: CANCEL_REASON_PROMPT, cap: null },
     handoverPrompt: { copy: HANDOVER_PROMPT, cap: null },
+    ordersScreenPrompt: { copy: ORDERS_SCREEN_PROMPT, cap: null },
+    supportFormPrompt: { copy: SUPPORT_FORM_PROMPT, cap: null },
+
+    // ── Discovery and bargaining (Stream B) ──────────────────────────────────
+    similarItemsButton: { copy: SIMILAR_ITEMS_BUTTON, cap: 20 },
+    saveForLaterButton: { copy: SAVE_FOR_LATER_BUTTON, cap: 20 },
+    readAllReviewsButton: { copy: READ_ALL_REVIEWS_BUTTON, cap: 20 },
+    bargainAgainButton: { copy: BARGAIN_AGAIN_BUTTON, cap: 20 },
+    // ⚠ Uncapped deliberately — see the constant: the price, not the label, is the title.
+    lockItInButton: { copy: LOCK_IT_IN_BUTTON, cap: null },
+    browseCategoriesPrompt: { copy: BROWSE_CATEGORIES_PROMPT, cap: null },
+    noCategoriesPrompt: { copy: NO_CATEGORIES_PROMPT, cap: null },
+    categoryGonePrompt: { copy: CATEGORY_GONE_PROMPT, cap: null },
+    similarItemsPrompt: { copy: SIMILAR_ITEMS_PROMPT, cap: null },
+    noSimilarItemsPrompt: { copy: NO_SIMILAR_ITEMS_PROMPT, cap: null },
+    savedForLaterPrompt: { copy: SAVED_FOR_LATER_PROMPT, cap: null },
+    noReviewsYetPrompt: { copy: NO_REVIEWS_YET_PROMPT, cap: null },
+    dealLockedPrompt: { copy: DEAL_LOCKED_PROMPT, cap: null },
+    dealSupersededPrompt: { copy: DEAL_SUPERSEDED_PROMPT, cap: null },
+    dealAlreadyOrderedPrompt: { copy: DEAL_ALREADY_ORDERED_PROMPT, cap: null },
+    dealUnavailablePrompt: { copy: DEAL_UNAVAILABLE_PROMPT, cap: null },
+    bargainLockExpiredPrompt: { copy: BARGAIN_LOCK_EXPIRED_PROMPT, cap: null },
+    bargainPriceChangedPrompt: { copy: BARGAIN_PRICE_CHANGED_PROMPT, cap: null },
+
+    // ── The account surface (Stream H) ───────────────────────────────────────
+    // ⚠ The eight menu rows are capped at 24 — a WhatsApp list ROW title, never a button.
+    // Eight options cannot be buttons at all: a WhatsApp message carries three.
+    accountMenuPrompt: { copy: ACCOUNT_MENU_PROMPT, cap: null },
+    accountRowProfile: { copy: ACCOUNT_ROW_PROFILE, cap: 24 },
+    accountRowAddresses: { copy: ACCOUNT_ROW_ADDRESSES, cap: 24 },
+    accountRowPayments: { copy: ACCOUNT_ROW_PAYMENTS, cap: 24 },
+    accountRowNotifySettings: { copy: ACCOUNT_ROW_NOTIFY_SETTINGS, cap: 24 },
+    accountRowInbox: { copy: ACCOUNT_ROW_INBOX, cap: 24 },
+    accountRowChannels: { copy: ACCOUNT_ROW_CHANNELS, cap: 24 },
+    accountRowLanguage: { copy: ACCOUNT_ROW_LANGUAGE, cap: 24 },
+    accountRowClose: { copy: ACCOUNT_ROW_CLOSE, cap: 24 },
+    accountKept: { copy: ACCOUNT_KEPT, cap: null },
+    connectionsPrompt: { copy: CONNECTIONS_PROMPT, cap: null },
+    connectionsOnlyCurrent: { copy: CONNECTIONS_ONLY_CURRENT, cap: null },
+    connectionDisconnectPrompt: { copy: CONNECTION_DISCONNECT_PROMPT, cap: null },
+    disconnectButton: { copy: DISCONNECT_BUTTON, cap: 20 },
+    keepConnectedButton: { copy: KEEP_CONNECTED_BUTTON, cap: 20 },
+    connectionKept: { copy: CONNECTION_KEPT, cap: null },
+    languagePrompt: { copy: LANGUAGE_PROMPT, cap: null },
+    languageSet: { copy: LANGUAGE_SET, cap: null },
+    addressBookPrompt: { copy: ADDRESS_BOOK_PROMPT, cap: null },
+    paymentMethodsPrompt: { copy: PAYMENT_METHODS_PROMPT, cap: null },
+    setDefaultButton: { copy: SET_DEFAULT_BUTTON, cap: 20 },
+    removeButton: { copy: REMOVE_BUTTON, cap: 20 },
+    defaultSet: { copy: DEFAULT_SET, cap: null },
+    itemRemoved: { copy: ITEM_REMOVED, cap: null },
+    addAddressButton: { copy: ADD_ADDRESS_BUTTON, cap: 20 },
+    resendCodeButton: { copy: RESEND_CODE_BUTTON, cap: 20 },
+    cancelChangeButton: { copy: CANCEL_CHANGE_BUTTON, cap: 20 },
+    contactCodeResent: { copy: CONTACT_CODE_RESENT, cap: null },
+    welcomePrompt: { copy: WELCOME_PROMPT, cap: null },
+    myOrdersButton: { copy: MY_ORDERS_BUTTON, cap: 20 },
+
+    // ── The sign-in message: fixed phrases only, values on their own lines ────
+    signInTapToOpen: { copy: SIGN_IN_TAP_TO_OPEN, cap: null },
+    signInCodeIntro: { copy: SIGN_IN_CODE_INTRO, cap: null },
+    signInCodeOnly: { copy: SIGN_IN_CODE_ONLY, cap: null },
+    signInWebsite: { copy: SIGN_IN_WEBSITE, cap: null },
+    signInValidFor: { copy: SIGN_IN_VALID_FOR, cap: null },
+    signInIgnore: { copy: SIGN_IN_IGNORE, cap: null },
+
+    // ── The notification inbox ───────────────────────────────────────────────
+    inboxPrompt: { copy: INBOX_PROMPT, cap: null },
+    markAllReadButton: { copy: MARK_ALL_READ_BUTTON, cap: 20 },
+    allMarkedRead: { copy: ALL_MARKED_READ, cap: null },
+
+    // ── Notification settings in the chat ────────────────────────────────────
+    // ⚠ 22, not 24: each row title carries a state marker inside WhatsApp's 24. See above.
+    notifySettingsPrompt: { copy: NOTIFY_SETTINGS_PROMPT, cap: null },
+    notifyRowChannel: { copy: NOTIFY_ROW_CHANNEL, cap: 22 },
+    notifyRowOrderUpdates: { copy: NOTIFY_ROW_ORDER_UPDATES, cap: 22 },
+    notifyRowBookingUpdates: { copy: NOTIFY_ROW_BOOKING_UPDATES, cap: 22 },
+    notifyRowBookingReminders: { copy: NOTIFY_ROW_BOOKING_REMINDERS, cap: 22 },
+    notifyRowMarketing: { copy: NOTIFY_ROW_MARKETING, cap: 22 },
+    notifyChannelPrompt: { copy: NOTIFY_CHANNEL_PROMPT, cap: null },
+    notifyChannelEmail: { copy: NOTIFY_CHANNEL_EMAIL, cap: 24 },
+    notifyChannelNone: { copy: NOTIFY_CHANNEL_NONE, cap: 24 },
+    notifyUpdated: { copy: NOTIFY_UPDATED, cap: null },
 } as const);
 
 export type BotChromeKey = keyof typeof CHROME;

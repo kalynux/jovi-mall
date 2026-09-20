@@ -1,0 +1,464 @@
+{
+ "_source": {
+  "workflow": "UP-wi-mall-core",
+  "id": "vvbouV2136P5weCs",
+  "versionId": "1997c757-ccd0-44d8-b5d6-c2f476a8fee3",
+  "activeVersionId": "b9c9187c-3f78-4a6a-9e7f-8b091074952f",
+  "updatedAt": "2026-09-16T18:46:01.543Z",
+  "takenOn": "2026-09-19"
+ },
+ "nodes": {
+  "route turn": {
+   "type": "n8n-nodes-base.switch",
+   "typeVersion": 3.4,
+   "onError": null,
+   "parameters": {
+    "rules": {
+     "values": [
+      {
+       "conditions": {
+        "options": {
+         "caseSensitive": true,
+         "leftValue": "",
+         "typeValidation": "strict",
+         "version": 3
+        },
+        "conditions": [
+         {
+          "leftValue": "={{ $json.success === false }}",
+          "rightValue": "",
+          "operator": {
+           "type": "boolean",
+           "operation": "true",
+           "singleValue": true
+          },
+          "id": "fd43d8d3-d28a-4dce-8899-73ab43fcdca1"
+         }
+        ],
+        "combinator": "and"
+       },
+       "renameOutput": true,
+       "outputKey": "error"
+      },
+      {
+       "conditions": {
+        "options": {
+         "caseSensitive": true,
+         "leftValue": "",
+         "typeValidation": "strict",
+         "version": 3
+        },
+        "conditions": [
+         {
+          "leftValue": "={{ $json.data?.onboarding?.next != null }}",
+          "rightValue": "",
+          "operator": {
+           "type": "boolean",
+           "operation": "true",
+           "singleValue": true
+          },
+          "id": "0e9d46fa-c3a8-4d17-a871-e1c19c0f83a2"
+         }
+        ],
+        "combinator": "and"
+       },
+       "renameOutput": true,
+       "outputKey": "onboarding"
+      },
+      {
+       "conditions": {
+        "options": {
+         "caseSensitive": true,
+         "leftValue": "",
+         "typeValidation": "strict",
+         "version": 3
+        },
+        "conditions": [
+         {
+          "leftValue": "={{ $('Inbound').item.json.kind === 'token' && ['add:', 'buy:', 'more:'].some(function (p) { return String($('Inbound').item.json.token || '').startsWith(p); }) }}",
+          "rightValue": "",
+          "operator": {
+           "type": "boolean",
+           "operation": "true",
+           "singleValue": true
+          },
+          "id": "b1d0c9a4-7e21-4c33-9f10-2a5e6c0b71aa"
+         }
+        ],
+        "combinator": "and"
+       },
+       "renameOutput": true,
+       "outputKey": "card tap"
+      }
+     ]
+    },
+    "options": {
+     "fallbackOutput": "extra",
+     "renameFallbackOutput": "agent"
+    }
+   }
+  },
+  "has reply?": {
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 2.3,
+   "onError": null,
+   "parameters": {
+    "conditions": {
+     "options": {
+      "caseSensitive": true,
+      "leftValue": "",
+      "typeValidation": "loose",
+      "version": 3
+     },
+     "conditions": [
+      {
+       "leftValue": "={{ $json.reply != null }}",
+       "rightValue": "",
+       "operator": {
+        "type": "boolean",
+        "operation": "true",
+        "singleValue": true
+       },
+       "id": "ce36bcd7-5f3b-436a-8233-c40b43c3f5e5"
+      }
+     ],
+     "combinator": "and"
+    },
+    "looseTypeValidation": true,
+    "options": {}
+   }
+  },
+  "AI Agent": {
+   "type": "@n8n/n8n-nodes-langchain.agent",
+   "typeVersion": 3.1,
+   "onError": "continueErrorOutput",
+   "parameters": {
+    "promptType": "define",
+    "text": "={{ $json.firstMessage || $json.agentInput || $('Inbound').item.json.text || '(The customer has just finished setting up their account and has not asked anything yet. Greet them briefly in their own language and ask how you can help.)' }}",
+    "needsFallback": true,
+    "options": {
+     "systemMessage": "=You are the wi-mall shopping assistant, talking to a customer in a chat window.\n\n## THE CUSTOMER\nname: {{ $('sync identity').item.json.data?.customer?.displayName }}\nlanguage: {{ $('sync identity').item.json.data?.customer?.language }}\nchannel: {{ $('Inbound').item.json.channel }}\nhas open orders: {{ $('sync identity').item.json.data?.customer?.hasOpenOrders }}\n\n## THE ACCOUNT TOOLS\nThe wi-mall tools act on this customer's own account. Every one of them takes a `botToken` argument, and this is its value:\n\nbotToken: {{ $('sync identity').item.json.data?.customer?.botToken }}\n\nCopy that string into every wi-mall tool call exactly as written. Never alter it, never invent one, never reuse one from an earlier conversation, and never show it or mention it to the customer. If a tool answers BOT_IDENTITY_TOKEN_EXPIRED or BOT_IDENTITY_TOKEN_INVALID, do not retry with a different value — ask the customer to send their message again.\n\n## FILES THE CUSTOMER SENDS\nYou cannot see images. When the customer sends a photo or a PDF you are told its file name and a reference in square brackets — nothing about what is in it. Never describe, read or guess at its contents; refer to it only as what the customer called it. If it is evidence for a support request, call `tickets_add_attachment` with that exact reference (open the ticket first if there is not one). The reference works once and expires in 30 minutes; if you were given none, the file is not available and the customer must send it again.\n\n## SHOWING PRODUCTS\n⛔ NEVER write a list of products in your own text. Not numbered, not bulleted, not \"1. Headphones – 20,000 XAF\". A list typed into a chat has no pictures, no price anybody can tap and no way to buy — it is a catalogue read aloud.\n\nWhenever you are presenting MORE THAN ONE product, call `Show-Products` with their ids, in the order you want them shown, and then write ONE short sentence introducing them. That sentence is all you write: the products themselves are drawn as real cards with pictures and buttons.\n\nGood: call Show-Products with the five ids, then say \"Here is what we have in electronics.\"\nBad: the same five products typed out as a numbered list.\n\nRead what it answers. `shown` is how many were actually drawn, and it can be lower than the number of ids you sent — a product goes off sale between your search and your answer. Say what was actually shown and never claim five when four went out. When `hasMore` is true the customer has a See more button; do not offer to list the rest yourself.\n\nDo NOT call it for a single product the customer asked a specific question about — \"how much is the fan?\" is answered in a sentence. It is for a SET they are meant to choose from.\n\nYou are not told which shape was drawn — a page, a carousel or a stack of cards depends on their app and on the shop's configuration. So never describe the interface: not \"tap the carousel below\", not \"scroll right\". Say what you found, not how it is displayed.\n\n## HAGGLING OVER PRICE\nYou do not bargain yourself. Whether a product can be negotiated, and how far, is settled elsewhere — not by you.\n\nWhen the customer pushes on the price of ONE specific product you have already identified — \"c'est trop cher\", \"last price?\", \"dernier prix\", \"can you do better\", or they simply name a lower figure — call `open_negotiation` with that product's id, the variant id if you know which one, the quantity, and the figure they named if they named one.\n\nIt does not reply to the customer. Read what it answers:\n- `handedOver: true` — say ONE short line, in the customer's language, that you are looking at what can be done on this price, and stop there. It must read as YOU looking at it right now, not as a message handed to somebody else. Good: \"Let me see what I can do on the price.\" / \"Je regarde ce que je peux faire sur le prix.\" Do not name a price, do not offer a discount, do not promise an outcome. The customer's very next message is answered on the price directly, so keep this to one sentence.\n- `negotiable: false` — this product's price is fixed. Say so plainly and warmly, once, and move on. Do not call the tool again for that product.\n- `handedOver: false` with `negotiable: null` — you could not check right now. Do not tell the customer the price is fixed; quote the listed price and offer to look again.\n\n⛔ NOBODY IS BEING ASKED AND NOBODY IS WAITING. There is no seller, vendor, shop owner, colleague, team, manager, agent or system on the other end of this, and no human is consulted at any point. Never say or imply that you are passing on, forwarding, relaying or submitting the customer's offer, that you are waiting on anyone, or that someone will get back to them. Not \"let's see what the seller says\", not \"j'ai transmis votre offre\", not \"I'll check with the vendor\". The price conversation is between you and the customer, and it continues in their very next message.\n\nNever invent a discount of your own: the listed price is the only price you may quote.\n\nIf you have already said that line for a product and the customer is still pushing on its price, do not say it again and do not call `open_negotiation` again — answer them yourself at the listed price.\n\n### A PRICE ALREADY AGREED\nagreedPrice: {{ $('read bargain flag').isExecuted ? $('read bargain flag').first().json.agreedPrice : 'none' }}\n\nThat line is one of three things, and they are not interchangeable.\n\n**`none`** — no price has been agreed with this customer. Nothing to do.\n\n**Starts with `ref`** — a price has just been agreed, for the variant and quantity it names. When they ask you to put THAT variant, at THAT quantity, in their basket, pass the `ref` value as `negotiationLockRef` to `cart_add_item`, so they are charged what they agreed instead of the shelf price. Never show it, never mention it, and never pass it for a different product or a different quantity. If `cart_add_item` is refused because of it, add the item again without it and tell the customer plainly that the price they agreed is no longer available.\n\n**Starts with `expired`** — you DID agree that price with this customer and it has run out. You have no `ref` and there is nothing to pass to `cart_add_item`. The `unitPrice` it names is no longer available: never quote it as if it still stands and never add the item at that figure.\n\nWhat that changes about how you answer:\n- If they refer back to the deal — \"we agreed 16,000\", \"you said 16k\", a screenshot of your own message — **believe them**. You did agree it. Never say you have no record of it, never say you do not confirm prices that way, and never suggest they are mistaken or that it came from somewhere else. It expired, that is all.\n- Say so in one short line and offer to look at the price again.\n- If they want you to, call `open_negotiation` for that product and quantity exactly as you would for a fresh haggle. It may land somewhere different this time — never promise the old figure.\n- If their message has nothing to do with that product, ignore this line entirely.\n\n## RULES\n- Always answer in the language named above.\n- Keep it short and natural. This is a chat message, not a web page. Under 900 characters.\n- NEVER invent product data, prices, stock or order status. Use a tool.\n- ⛔ Never list products in your own text — draw them with `Show-Products`. See SHOWING PRODUCTS above.\n- If a tool returns nothing, say so plainly and offer the nearest useful next step.\n- A tool that fails returns error.customerMessage. Say that, in the customer's language, rather than inventing an explanation.\n- Do not add to the cart, cancel anything or send anything unless the customer has just asked for that exact action.\n\nCurrent date and time: {{ $now }}"
+    }
+   }
+  },
+  "compose agent reply": {
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "onError": null,
+   "parameters": {
+    "jsCode": "// THE TURN'S OUTBOUND MESSAGES, IN ORDER — and there may be more than one now.\n//\n// This was `runOnceForEachItem` and emitted exactly one text body. A product list is\n// SEVERAL messages (a sentence, then cards, then \"See more\"), and they are composed by\n// jovi-mall rather than here: `channel-reply.ts` is the one place that knows a WhatsApp\n// reply-button title is capped at twenty characters and that a carousel is a template with\n// a fixed card count. What arrives here is a ready array of request bodies.\n//\n// ⚠ ORDER IS THE RENDERING. The sentence goes first, then the cards. `send guard`,\n// `is telegram?` and both send nodes iterate their input items in order, so emitting the\n// array is all it takes — do not sort it, do not fan it out.\n//\n// ⚠ Reads `$('AI Agent')` explicitly rather than `$input`. Its immediate predecessor is now\n// a Redis DELETE, whose output is an API result and not the model's answer.\nconst inbound = $('Inbound').first().json;\nconst sync = $('sync identity').first().json;\n\n// ── The cards the display tool drew, if it ran ──────────────────────────────\n//\n// wi-mall-product-cards writes the channel-ready bodies to Redis rather than returning\n// them, because a tool result lands in the MODEL's context where a sendPhoto body can do\n// nothing. Same gate-echo mechanism the bargaining tools use, for the same reason.\n//\n// ⚠ The value carries its own `expiresAt` AND its own `__messageId`, and both are checked.\n// The n8n Redis node's `set` exposes no TTL — measured, and the reason the product-search\n// query cache lives in Postgres — so a key can outlive its turn. Sending last turn's cards\n// under this turn's sentence is worse than sending none.\nlet cards = [];\ntry {\n  const echoRaw = $('check display').first().json.displayEcho;\n  const echo = echoRaw ? JSON.parse(String(echoRaw)) : null;\n  const fresh = !!echo && !!echo.expiresAt && new Date(echo.expiresAt).getTime() > Date.now();\n  const mine = !!echo && String(echo.__messageId || '') === String(inbound.messageId || '');\n  if (echo && fresh && mine && Array.isArray(echo.replies)) {\n    cards = echo.replies.filter(function (r) { return r && r.channel && r.method && r.body; });\n  }\n} catch (e) {\n  cards = [];\n}\n\nconst answer = String($('AI Agent').first().json.output ?? '').trim();\n\n// ⚠ The stand-in is SUPPRESSED when there are cards. An empty model turn is a failure only\n// when nothing else is going out; over a page of products it would put \"Sorry, I could not\n// answer that just now\" above five things we had just found for them.\nconst standIn = cards.length > 0\n  ? ''\n  : String(sync && sync.data && sync.data.fallback ? sync.data.fallback.assistantUnavailable : '').trim();\n\nconst chosen = answer || standIn;\nconst text = chosen.length > 4000 ? chosen.slice(0, 3997) + '…' : chosen;\n\nconst out = [];\n\nif (text) {\n  out.push({ json: { reply: inbound.channel === 'telegram'\n    ? { channel: 'telegram', method: 'sendMessage', body: { chat_id: String(inbound.externalId), text: text } }\n    : { channel: 'whatsapp', method: 'messages', body: {\n        messaging_product: 'whatsapp', recipient_type: 'individual',\n        to: String(inbound.externalId), type: 'text', text: { body: text } } } } });\n}\n\ncards.forEach(function (reply) { out.push({ json: { reply: reply } }); });\n\n// `send guard` drops a null reply. Emitting one item rather than none keeps this branch the\n// exact shape it has always been for a turn with nothing to say.\nif (out.length === 0) { out.push({ json: { reply: null } }); }\n\nreturn out;"
+   }
+  },
+  "is telegram?": {
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 2.3,
+   "onError": null,
+   "parameters": {
+    "conditions": {
+     "options": {
+      "caseSensitive": true,
+      "leftValue": "",
+      "typeValidation": "loose",
+      "version": 2
+     },
+     "combinator": "and",
+     "conditions": [
+      {
+       "leftValue": "={{ $json.reply.channel === 'telegram' }}",
+       "rightValue": "",
+       "operator": {
+        "type": "boolean",
+        "operation": "true",
+        "singleValue": true
+       }
+      }
+     ]
+    },
+    "looseTypeValidation": true,
+    "options": {}
+   }
+  },
+  "send telegram": {
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.5,
+   "onError": null,
+   "parameters": {
+    "method": "POST",
+    "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/{{ $json.reply.method }}",
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify($json.reply.body) }}",
+    "options": {
+     "timeout": 20000,
+     "batching": {
+      "batch": {
+       "batchSize": 1,
+       "batchInterval": 300
+      }
+     }
+    }
+   }
+  },
+  "send whatsapp": {
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.5,
+   "onError": null,
+   "parameters": {
+    "method": "POST",
+    "url": "={{ $env.WHATSAPP_API_URL || 'https://graph.facebook.com/v26.0' }}/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/{{ $json.reply.method }}",
+    "authentication": "genericCredentialType",
+    "genericAuthType": "httpBearerAuth",
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify($json.reply.body) }}",
+    "options": {
+     "timeout": 20000,
+     "batching": {
+      "batch": {
+       "batchSize": 1,
+       "batchInterval": 300
+      }
+     }
+    }
+   }
+  },
+  "send guard": {
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 2.3,
+   "onError": null,
+   "parameters": {
+    "conditions": {
+     "options": {
+      "caseSensitive": true,
+      "leftValue": "",
+      "typeValidation": "loose",
+      "version": 3
+     },
+     "conditions": [
+      {
+       "leftValue": "={{ $json.reply != null }}",
+       "rightValue": "",
+       "operator": {
+        "type": "boolean",
+        "operation": "true",
+        "singleValue": true
+       },
+       "id": "4c6b240e-7a57-494f-b7da-f1aefa885f24"
+      }
+     ],
+     "combinator": "and"
+    },
+    "looseTypeValidation": true,
+    "options": {}
+   }
+  },
+  "recall first message": {
+   "type": "n8n-nodes-base.redis",
+   "typeVersion": 1,
+   "onError": null,
+   "parameters": {
+    "operation": "get",
+    "propertyName": "firstMessage",
+    "key": "=wi-mall:firstmsg:{{ $('Inbound').item.json.channel }}:{{ $('Inbound').item.json.externalId }}",
+    "keyType": "string",
+    "options": {
+     "dotNotation": false
+    }
+   }
+  },
+  "upload inbound file": {
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.5,
+   "onError": null,
+   "parameters": {
+    "method": "POST",
+    "url": "={{ $env.JOVI_MALL_BASE_URL || 'http://jovi-mall:8022' }}/api/internal/bot/files/inbound",
+    "authentication": "genericCredentialType",
+    "genericAuthType": "httpBearerAuth",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "X-Webhook-Secret",
+       "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+      },
+      {
+       "name": "Idempotency-Key",
+       "value": "={{ $('Inbound').item.json.channel }}-{{ $('Inbound').item.json.externalId }}-{{ $('Inbound').item.json.messageId }}-file"
+      },
+      {
+       "name": "X-Request-Id",
+       "value": "={{ $execution.id }}"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').item.json.channel, externalId: $('Inbound').item.json.externalId, displayName: $('Inbound').item.json.displayName, handle: $('Inbound').item.json.handle, language: $('Inbound').item.json.language }, fileName: $('Inbound').item.json.media.fileName, mimeType: $('Inbound').item.json.media.mimeType, contentBase64: $('Inbound').item.json.media.contentBase64 }) }}",
+    "options": {
+     "response": {
+      "response": {
+       "neverError": true
+      }
+     },
+     "timeout": 45000
+    }
+   }
+  },
+  "compose agent input": {
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "onError": null,
+   "parameters": {
+    "mode": "runOnceForEachItem",
+    "jsCode": "// What the model is actually asked, for an ordinary agent turn.\n//\n// ⚠ THIS USED TO SAY THE MODEL COULD NOT SEE THE FILE, AND THAT IS NO LONGER TRUE.\n// wi-mall-perceive renders a picture, a voice note or a video into text before we get\n// here. Three different things come back and they are NOT interchangeable:\n//\n//   audio  -> a TRANSCRIPT. That IS the customer's message, so it becomes the turn\n//             itself rather than a note about a turn.\n//   image  -> a DESCRIPTION written by another model. The agent still cannot see, so it\n//    video    must speak only about what the description mentions and never claim to\n//             have looked at it.\n//\n// Perceiving and STORING are separate questions and separate branches. A voice note is\n// understood and never uploaded, because the backend allowlist is images and PDF only.\nconst inbound = $('Inbound').item.json;\nconst typed = String(inbound.text || '').trim();\n\nlet note = '';\nlet spoken = '';\n\n// Referencing a node that did not run in this execution THROWS, so ask first.\nif (inbound.kind === 'media' && $('call perceive').isExecuted) {\n  const p = $('call perceive').item.json || {};\n  const body = (p && p.perceived === true) ? String(p.text || '').trim() : '';\n\n  if (body && p.kind === 'audio') {\n    spoken = body;\n    note = '[The customer sent this as a VOICE NOTE. Answer it exactly as if they had typed it, in the language they spoke. Never mention transcription.]';\n  } else if (body && p.kind === 'video') {\n    note = '[The customer sent a VIDEO. You cannot watch it. A model that did describes it as: ' + body + ' Speak only about what that description mentions, and never claim to have watched it.]';\n  } else if (body) {\n    note = '[The customer sent a PICTURE. You cannot see it. A model that did describes it as: ' + body + ' Speak only about what that description mentions, and never claim to have seen it.]';\n  } else {\n    note = '[The customer sent a file and it could not be read. Say so plainly and ask them to describe it, or to send it again.]';\n  }\n}\n\n// The storage handle, when the file was one the backend accepts. Only reachable through\n// `is storable?`, so audio and video never land here.\nif (inbound.kind === 'media' && $('upload inbound file').isExecuted) {\n  const res = $('upload inbound file').item.json || {};\n  const d = res.data;\n  if (res.success && d && d.ref) {\n    note = note + ' [It is also stored as ' + d.fileName + ' (' + d.kind + '), reference ' + d.ref + '. Pass that exact string as ref to tickets_add_attachment if it belongs on a support ticket; open the ticket first if there is not one. The reference works ONCE and expires in 30 minutes.]';\n  } else {\n    // The SENTENCE is the backend's, already in the customer's language: n8n holds no\n    // copy table and no translator. See api-doc/n8n/bot-surface.md 11.4.\n    const msg = res.error ? String(res.error.customerMessage || '').trim() : '';\n    if (msg) {\n      note = note + ' [It could not be stored. If they ask to attach it to anything, tell them exactly this, in their language: ' + msg + ']';\n    }\n  }\n}\n\nconst agentInput = [note, typed || spoken].filter(Boolean).join(' ').trim();\n\nreturn { json: { agentInput: agentInput || null } };\n"
+   }
+  },
+  "drop duplicate reply": {
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "onError": null,
+   "parameters": {
+    "jsCode": "// EVERY MESSAGE THIS TURN COMPOSED GOES OUT — AND THE MAIN AGENT'S SENTENCE IS SUPPRESSED WHEN\n// THE BARGAINER HAS ALREADY SPOKEN.\n//\n// ── Why this node now returns ALL items (fixed 2026-09-16) ─────────────────────\n// `compose agent reply` emits the turn as SEVERAL items since product cards landed: the\n// agent's sentence first (when there is one), then each card body the display tool echoed.\n// This node used to read `$(nm).first()` and return ONE item, so every card after the first\n// item was silently dropped — a customer who asked for products got the sentence and no\n// products. `send guard`, `is telegram?` and both send nodes iterate their input items in\n// order, so returning the items in order is the whole fix. ⚠ Never sort them: order IS the\n// rendering (sentence, then cards, then \"See more\").\n//\n// ── The bargaining suppression (unchanged in purpose) ────────────────────────\n// `open_negotiation` chains into a full bargaining turn, so the customer is sent the gate's\n// approved sentence from INSIDE the agent's tool call. The agent still composes a final answer\n// afterwards, and without this the customer gets two messages: the negotiated price, then a\n// line saying the price is being looked at. The sentence stays the BARGAINER'S (D-4).\n//\n// ⚠ What is suppressed is the AGENT'S SENTENCE — never the cards. A turn that both bargained\n// and showed products keeps its products.\n//\n// How the sentence is recognised, without guessing and without re-reading the display echo:\n// `compose agent reply` emits a sentence exactly when (a) the model wrote something — then it\n// is ALWAYS the first item — or (b) the model wrote nothing AND there were no cards, in which\n// case it emits the backend's stand-in sentence as the ONLY item. So: drop item 0 when the\n// model spoke; otherwise drop a single item only when it IS the stand-in, word for word. A\n// card can never equal the stand-in, and the fallback nodes emit nothing but a sentence.\n//\n// The echo is written ONLY after wi-mall-bargain's send returned, is stamped with this turn's\n// messageId, carries its own expiry (the n8n Redis node's `set` exposes no TTL) and is deleted\n// on read. A stale, mismatched or malformed echo is not an answer.\n//\n// Fails toward an extra message, never toward silence: with Redis unreachable the customer\n// keeps the counter-offer and also gets the bridging line.\nconst inbound = $('Inbound').first().json;\n\nlet source = null;\nfor (const nm of ['compose agent reply', 'agent fallback', 'outage fallback']) {\n  if ($(nm).isExecuted) { source = nm; break; }\n}\nif (source == null) { return [{ json: { reply: null } }]; }\n\nconst replies = $(source).all()\n  .map(function (item) { return (item.json || {}).reply || null; })\n  .filter(function (reply) { return reply != null; });\n\nlet answered = false;\nif ($('read bargain echo').isExecuted) {\n  const raw = ($('read bargain echo').first().json || {}).bargainAnswered;\n  try {\n    const echo = raw ? JSON.parse(String(raw)) : null;\n    const live = !!echo && !!echo.expiresAt && new Date(echo.expiresAt).getTime() > Date.now();\n    if (live && String(echo.messageId) === String(inbound.messageId)) { answered = true; }\n  } catch (e) { /* a malformed echo is not an answer */ }\n}\n\nlet out = replies;\n\nif (answered) {\n  if (source !== 'compose agent reply') {\n    // The fallbacks emit a sentence and nothing else.\n    out = [];\n  } else {\n    const modelSpoke = String(($('AI Agent').first().json || {}).output ?? '').trim() !== '';\n    const sync = $('sync identity').first().json;\n    const standIn = String(sync && sync.data && sync.data.fallback ? sync.data.fallback.assistantUnavailable : '').trim();\n    const textOf = function (reply) {\n      const body = (reply && reply.body) || {};\n      if (typeof body.text === 'string') return body.text;\n      if (body.text && typeof body.text.body === 'string') return body.text.body;\n      return null;\n    };\n\n    if (modelSpoke) {\n      out = replies.slice(1);\n    } else if (replies.length === 1 && standIn !== '' && textOf(replies[0]) === standIn) {\n      out = [];\n    }\n  }\n}\n\nif (out.length === 0) { return [{ json: { reply: null } }]; }\nreturn out.map(function (reply) { return { json: { reply: reply } }; });\n"
+   }
+  },
+  "detect command": {
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "onError": null,
+   "parameters": {
+    "jsCode": "// IS THIS MESSAGE A COMMAND? — and deliberately nothing more than that.\n//\n// ⭐ THE VOCABULARY MOVED SERVER-SIDE ON 2026-09-09, and this node used to hold it: every\n// command name, every alias, and the argument grammar. It holds none of them now. The\n// reason is the one `bot-surface.md` § 14.6 already gives about parsing a typed answer:\n//\n//   \"A typed answer is language-dependent and whatever reads it is not... That table would\n//    have lived in the automation layer, which is the one layer with no copy table.\"\n//\n// The alias table IS a five-language table — /chercher /buscar /procurar, /annuler\n// /cancelar. Keeping it here meant a vocabulary nobody translates, nobody reviews and\n// nobody notices has gone stale. jovi-mall parses now, and answers with a channel-ready\n// reply like every other turn.\n//\n// ⚠ THE RAW TEXT IS WHAT TRAVELS. Never Telegram's bot_command entity: it stops at a\n// hyphen, which is why /reset-password could only ever be read as /reset plus trailing\n// text — and why the vocabulary is now one word with no separators at all.\n\nconst inbound = $('Inbound').first().json;\nconst sync = $input.first().json;\n\nlet kind = '';\nlet payload = {};\n\nconst text = typeof inbound.text === 'string' ? inbound.text.trim() : '';\nconst onboardingPending = !!(sync && sync.data && sync.data.onboarding && sync.data.onboarding.next);\n\n// A failed /identity/sync is `route turn`'s business — a 4xx body renders its own refusal.\nif (sync && sync.success !== false) {\n  if (inbound.kind === 'contact' && inbound.contact && !onboardingPending) {\n    // ⚠ A CONTACT IS A TAP, NOT TYPED TEXT, so it keeps the webhook command bus rather than\n    // going to the parser. It also runs ONLY once onboarding is finished: while the\n    // checklist still wants the phone step, `route onboarding` must have the contact — it\n    // is the same number, and binding it there is what completes registration. Afterwards a\n    // contact can only be answering the request_contact keyboard /login or /password put\n    // up, and the PLATFORM's pending intent decides which. n8n never branches on that.\n    kind = 'contact';\n    payload = {\n      contact: {\n        phone_number: String(inbound.contact.phoneNumber || ''),\n        user_id: inbound.contact.userId,\n        first_name: inbound.contact.firstName || undefined,\n        last_name: inbound.contact.lastName || undefined\n      },\n      username: inbound.handle ? String(inbound.handle).replace(/^@/, '') : undefined\n    };\n  } else if (inbound.kind === 'text' && text.charAt(0) === '/') {\n    // That is the whole test. Which command it is, whether it exists, what its arguments\n    // mean and what to say about a typo are all the backend's now.\n    kind = 'slash';\n  }\n}\n\nreturn [{ json: Object.assign({}, sync, { _kind: kind, _payload: payload }) }];"
+   }
+  },
+  "is command?": {
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 2.3,
+   "onError": null,
+   "parameters": {
+    "conditions": {
+     "options": {
+      "caseSensitive": true,
+      "leftValue": "",
+      "typeValidation": "loose",
+      "version": 3
+     },
+     "combinator": "and",
+     "conditions": [
+      {
+       "id": "b7f1c0a2-3d4e-4f5a-8b6c-1d2e3f4a5b6c",
+       "leftValue": "={{ $json._kind !== '' }}",
+       "rightValue": "",
+       "operator": {
+        "type": "boolean",
+        "operation": "true",
+        "singleValue": true
+       }
+      }
+     ]
+    },
+    "looseTypeValidation": true,
+    "options": {}
+   }
+  },
+  "run command": {
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.5,
+   "onError": null,
+   "parameters": {
+    "method": "POST",
+    "url": "={{ ($env.JOVI_MALL_BASE_URL || 'http://jovi-mall:8022') + ($json._kind === 'slash' ? '/api/internal/bot/command' : ($('Inbound').first().json.channel === 'telegram' ? '/api/webhooks/telegram/webhook' : '/api/webhooks/whatsapp')) }}",
+    "authentication": "genericCredentialType",
+    "genericAuthType": "httpBearerAuth",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "X-Webhook-Secret",
+       "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+      },
+      {
+       "name": "Idempotency-Key",
+       "value": "={{ $('Inbound').first().json.channel }}-{{ $('Inbound').first().json.externalId }}-{{ $('Inbound').first().json.messageId }}-cmd"
+      },
+      {
+       "name": "X-Request-Id",
+       "value": "={{ $execution.id }}"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify($json._kind === 'slash' ? { identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, text: $('Inbound').first().json.text } : Object.assign({ is_command: true, command: 'login_contact', payload: $json._payload }, $('Inbound').first().json.channel === 'telegram' ? { chat_id: $('Inbound').first().json.externalId, user_id: $('Inbound').first().json.externalId } : { reply_to: $('Inbound').first().json.externalId })) }}",
+    "options": {
+     "response": {
+      "response": {
+       "neverError": true
+      }
+     },
+     "timeout": 20000
+    }
+   }
+  },
+  "command reply": {
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "onError": null,
+   "parameters": {
+    "jsCode": "// The backend words every ordinary outcome AND attaches a channel-ready `reply` to it, so\n// the common paths — the credential, every refusal, the request_contact keyboard — arrive\n// here already renderable and pass straight through.\n//\n// This covers the rest: a genuine error envelope carries a sentence but no envelope.\n//\n// ⚠ It wraps the BACKEND'S sentence and never writes one. That is what keeps \"the bot relays,\n// never renders\" true here — n8n holds no copy table and no button labels, only the two wire\n// shapes, and those come from channel-reply.ts on every other path.\nconst r = $input.first().json || {};\nif (r.reply) { return [{ json: r }]; }\n\nconst inbound = $('Inbound').first().json;\nconst text = (r.error && (r.error.customerMessage || r.error.message)) || '';\n\n// No sentence at all means there is nothing honest to say; `has reply?` sends this to the\n// model rather than leaving the customer in silence. On this surface an empty 200 is still\n// a TURN — the lesson the address-picker taught on 2026-09-06.\nif (!text) { return [{ json: Object.assign({}, r, { reply: null }) }]; }\n\nconst reply = inbound.channel === 'telegram'\n  ? { channel: 'telegram', method: 'sendMessage', body: { chat_id: inbound.externalId, text: text } }\n  : { channel: 'whatsapp', method: 'messages', body: { messaging_product: 'whatsapp', recipient_type: 'individual', to: inbound.externalId, type: 'text', text: { body: text, preview_url: false } } };\n\nreturn [{ json: Object.assign({}, r, { reply: reply }) }];"
+   }
+  },
+  "check display": {
+   "type": "n8n-nodes-base.redis",
+   "typeVersion": 1,
+   "onError": "continueRegularOutput",
+   "parameters": {
+    "operation": "get",
+    "propertyName": "displayEcho",
+    "key": "=wi-mall:display:{{ $('Inbound').item.json.channel }}:{{ $('Inbound').item.json.externalId }}",
+    "keyType": "string",
+    "options": {
+     "dotNotation": false
+    }
+   }
+  },
+  "product action": {
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.5,
+   "onError": null,
+   "parameters": {
+    "method": "POST",
+    "url": "={{ $env.JOVI_MALL_BASE_URL || 'http://jovi-mall:8022' }}/api/internal/bot/catalog/action",
+    "authentication": "genericCredentialType",
+    "genericAuthType": "httpBearerAuth",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "X-Webhook-Secret",
+       "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+      },
+      {
+       "name": "Idempotency-Key",
+       "value": "={{ $('Inbound').item.json.channel }}-{{ $('Inbound').item.json.externalId }}-{{ $('Inbound').item.json.messageId }}-cardaction"
+      },
+      {
+       "name": "X-Request-Id",
+       "value": "={{ $execution.id }}"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').item.json.channel, externalId: $('Inbound').item.json.externalId, displayName: $('Inbound').item.json.displayName, handle: $('Inbound').item.json.handle, language: $('Inbound').item.json.language }, token: $('Inbound').item.json.token }) }}",
+    "options": {
+     "response": {
+      "response": {
+       "neverError": true
+      }
+     },
+     "timeout": 20000
+    }
+   }
+  }
+ }
+}

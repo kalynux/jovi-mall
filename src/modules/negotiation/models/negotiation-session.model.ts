@@ -39,9 +39,30 @@ export interface INegotiationTurn {
     reply: string;
 }
 
+/**
+ * Who closed the deal — the two doors a lock can be minted through.
+ *
+ * ⚠ **The enum below is derived from this array, never hand-written.** tsc cannot check a plain
+ * string list against a union, and a hand-written Mongoose enum that drifts from the type throws a
+ * `ValidationError` on the one write that uses the missing value — here, the customer's own press.
+ */
+export const NEGOTIATION_LOCK_CLOSERS = Object.freeze(['model', 'button'] as const);
+export type NegotiationLockCloser = (typeof NEGOTIATION_LOCK_CLOSERS)[number];
+
 export interface INegotiationLock {
     /** The opaque handle the cart presents. Never the session id — see the model header. */
     ref: string;
+    /**
+     * `model` — the bargaining agent asked the gate for a lock (`record` with `lock: true`).
+     * `button` — the customer pressed **Lock it in** under the agent's latest offer.
+     *
+     * ⚠ **The rule this records: a deal closes by the model's call, or by an explicit PRICED
+     * button — never by inferring a yes from free text.** The button carries a reference to the
+     * offer (session and round), never a price; the price is the session's own record of that
+     * round, re-judged against the live window at the press. Absent on locks minted before the
+     * button existed, which were all the model's.
+     */
+    closed_by?: NegotiationLockCloser;
     /** Per unit, agreed. */
     unit_price: number;
     /** `variant.price` at the moment of agreement — Stream C/E's uplift basis. */
@@ -101,6 +122,7 @@ const TurnSchema = new Schema<INegotiationTurn>(
 const LockSchema = new Schema<INegotiationLock>(
     {
         ref: { type: String, required: true },
+        closed_by: { type: String, enum: [...NEGOTIATION_LOCK_CLOSERS], default: 'model' },
         unit_price: { type: Number, required: true, min: 0 },
         floor_snapshot: { type: Number, required: true, min: 0 },
         issued_at: { type: Date, required: true },

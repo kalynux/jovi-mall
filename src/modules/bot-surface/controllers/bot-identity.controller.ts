@@ -20,12 +20,13 @@ import {
     BotRegistrationOutcome,
     currentRecords,
 } from '../services/bot-registration.service';
-import { BotOnboardingRecord, seedOnboarding } from '../domain/bot-onboarding';
+import { BotOnboardingRecord, isOnboardingComplete, seedOnboarding } from '../domain/bot-onboarding';
 import { sealBotIdentity } from '../domain/bot-identity-token';
 import { BotSyncDto, toBotIdentityDto, toBotSyncDto } from '../dto/bot-projections';
 import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { botChrome } from '../domain/bot-chrome-copy';
-import { skipActionId } from '../domain/bot-action-id';
+import { openSurfaceActionId, orderActionId, skipActionId } from '../domain/bot-action-id';
+import { supportFormActionId } from '../domain/bot-ticket-actions';
 import { BotIdentitySyncSchema, BotOnboardingSubmitSchema } from '../validators/bot.validators';
 import { __toSavedAddressInput as toSavedAddressInput } from './bot-profile.controller';
 
@@ -215,13 +216,29 @@ export class BotIdentityController {
                 throw createAppError(ERROR_CODES.MAGIC_CONTACT_UNVERIFIED, 400);
             }
 
+            /**
+             * ⚠ **The phone step can be the COMPLETING one too, rarely.** It is asked first, so
+             * normally it cannot be — but a backfilled account (`backfillOnboarding` marks a
+             * step satisfied from field presence) can hold a name, an email and an address with
+             * `phone` still pending, and then sharing a contact finishes the checklist. An
+             * account that does not exist yet was definitionally not complete a moment ago.
+             */
+            const before = req.bot?.caller
+                ? await customerRepository.findById(req.bot.caller.customerId)
+                : null;
+            const wasComplete = before ? isOnboardingComplete(currentRecords(before)) : false;
+
             const outcome = await botRegistrationService.registerFromContact(
                 envelope,
                 input.contact.phoneNumber,
             );
-            sendSuccess(res, await describe(req, outcome), {
-                status: outcome.createdAccount ? 201 : 200,
-            });
+
+            const dto = await describe(req, outcome);
+            if (!wasComplete && isOnboardingComplete(currentRecords(outcome.customer))) {
+                setWelcomeReply(req, outcome.customer.preferences?.language ?? null);
+            }
+
+            sendSuccess(res, dto, { status: outcome.createdAccount ? 201 : 200 });
             return;
         }
 
@@ -275,6 +292,12 @@ export class BotIdentityController {
             );
         }
 
+        /**
+         * Read BEFORE the write — the welcome fires on the transition, not on the state. See
+         * `setWelcomeReply`.
+         */
+        const wasComplete = isOnboardingComplete(currentRecords(customer));
+
         const updated = await botRegistrationService.applyStep(
             customer,
             step,
@@ -283,12 +306,25 @@ export class BotIdentityController {
             envelope.channel,
         );
 
-        sendSuccess(res, await describe(req, {
+        const dto = await describe(req, {
             account: { ...caller, customerId: caller.customerId, roles: [], },
             createdAccount: false,
             createdCustomerProfile: false,
             customer: updated,
-        }));
+        });
+
+        /**
+         * ⚠ **After `describe`, which is what makes this the last word.** `describe` calls
+         * `setOnboardingReply`, which sets the next question — and on the completing call there
+         * is no next question, so it sets nothing and leaves this standing. Setting the welcome
+         * first would work today and would silently become a lost message the day that function
+         * gains a branch for `next: null`.
+         */
+        if (!wasComplete && isOnboardingComplete(currentRecords(updated))) {
+            setWelcomeReply(req, updated.preferences?.language ?? null);
+        }
+
+        sendSuccess(res, dto);
     });
 }
 
@@ -375,6 +411,43 @@ async function describe(req: Request, outcome: BotRegistrationOutcome) {
  * drawn from a set known in advance is a button, never typed text.** See
  * `bot-action-id.ts`.
  */
+/**
+ * The welcome — the one turn the platform gets to say "you are set up, here is what I can do".
+ *
+ * ⚠ **It fires on the call that COMPLETES the checklist, and on no other**, which is the
+ * owner's decision that the welcome comes AFTER the setup questions rather than before them. A
+ * greeting sent at first contact lands on somebody who has just been asked for their phone
+ * number and has not answered yet; sent on every later sync it becomes the thing the customer
+ * scrolls past to find their answer.
+ *
+ * ⚠ **`wasComplete` is why this takes two states rather than one.** "The checklist is complete"
+ * is true for ever afterwards, so welcoming on that alone would greet the customer again every
+ * time they later offered an email or re-shared their contact. The transition is the event; the
+ * state is not.
+ *
+ * The three buttons are the owner's: Browse · My orders · Help. Exactly three, which is also
+ * WhatsApp's cap on reply buttons — a fourth would be dropped silently by the renderer.
+ * `ord:list` and `tkt:new` belong to the orders stream and are agreed with it.
+ */
+function setWelcomeReply(req: Request, language: string | null): void {
+    setBotReply(req, {
+        kind: 'text',
+        text: botChrome('welcomePrompt', language),
+        actions: [
+            { id: openSurfaceActionId('pl'), label: botChrome('browseProductsButton', language) },
+            /**
+             * ⚠ **`orderActionId('list')` rather than the literal `'ord:list'`.** `list` is the
+             * orders stream's documented sentinel — its parser checks for it BEFORE the 24-hex
+             * id test, precisely because no order id can look like it — and going through the
+             * builder keeps this token inside `token()`'s 64-byte check like every other. There
+             * is no `orderListActionId()` to import; if that stream adds one, this should use it.
+             */
+            { id: orderActionId('list'), label: botChrome('myOrdersButton', language) },
+            { id: supportFormActionId(), label: botChrome('getHelpButton', language) },
+        ],
+    });
+}
+
 function setOnboardingReply(req: Request, dto: BotSyncDto, language: string | null): void {
     const next = dto.onboarding.next;
     if (!next) return;

@@ -69,6 +69,12 @@ import { verifyFlowSignature } from '../../src/modules/whatsapp/flows/domain/flo
 import { PRODUCT_LISTING_FLOW } from '../../src/modules/whatsapp/flows/definitions/product-listing.flow';
 import { PRODUCT_DETAIL_FLOW } from '../../src/modules/whatsapp/flows/definitions/product-detail.flow';
 import { CHECKOUT_FLOW } from '../../src/modules/whatsapp/flows/definitions/checkout.flow';
+import { TICKET_FORM_FLOW } from '../../src/modules/whatsapp/flows/definitions/ticket-form.flow';
+import {
+    bookingListFlow,
+    bookingPayFlow,
+    bookingSlotFlow,
+} from '../../src/modules/whatsapp/flows/definitions/booking.flow';
 import { FLOW_SCREEN_TITLE, NOTICE_SCREEN } from '../../src/modules/whatsapp/flows/definitions/notice.screen';
 import { FLOW_LISTING_PAGE_SIZE, toListingScreen } from '../../src/modules/whatsapp/flows/screens/listing.adapter';
 import { toDetailScreen } from '../../src/modules/whatsapp/flows/screens/detail.adapter';
@@ -77,18 +83,52 @@ import { FLOW_CAPS, fitText } from '../../src/modules/whatsapp/flows/screens/flo
 import type { FlowCopy } from '../../src/modules/whatsapp/flows/screens/flow-copy';
 import type { ListingPage } from '../../src/modules/bot-surface/miniapp/surfaces/product-listing.read';
 import type { ProductDetailView } from '../../src/modules/bot-surface/miniapp/surfaces/product-detail.read';
-import {
-    handler as flowCompleteHandler,
-    planCompletion,
-} from '../../src/modules/whatsapp/flows/commands/flow-complete.command';
+/**
+ * ⚠ **The plan, never the handler.** The handler renders an "added to cart" answer with the
+ * chat's own three controls, which live in a controller that reaches `orders/` and `payments/` —
+ * importing it here would hang this suite with no output at all. The decision is therefore a
+ * pure sibling module, and the handler is scanned as text further down.
+ */
+import { planCompletion } from '../../src/modules/whatsapp/flows/commands/flow-completion-plan';
+import { asFlowOutcome, FLOW_OUTCOMES } from '../../src/modules/whatsapp/flows/domain/flow-outcome';
 import { commandReplyIntent, screenReplyIntent } from '../../src/modules/command-bus/command-reply';
 import { botChrome } from '../../src/modules/bot-surface/domain/bot-chrome-copy';
 import {
+    handleSurvived,
     needsTypedNumber,
     planCheckoutFailure,
     toCheckoutScreen,
 } from '../../src/modules/whatsapp/flows/screens/checkout.adapter';
-import type { CheckoutView } from '../../src/modules/bot-surface/miniapp/surfaces/checkout.controller';
+import type {
+    CheckoutPlaced,
+    CheckoutView,
+} from '../../src/modules/bot-surface/miniapp/surfaces/checkout.controller';
+import {
+    CHECKOUT_CLAIM_IDENTITY,
+    CLAIM_WAITS,
+    serveFlowScreen,
+    type FlowClaim,
+    type FlowScreenPorts,
+    type FlowScreenVerdict,
+} from '../../src/modules/whatsapp/flows/flow-screens';
+import type { FlowScreenRequest } from '../../src/modules/whatsapp/flows/domain/flow-protocol';
+import { createAppError } from '../../src/core/errors';
+import { ERROR_CODES } from '../../src/core/error-codes';
+import { customerMessageFor } from '../../src/modules/bot-surface/domain/bot-error-copy';
+import { inAppCopy } from '../../src/modules/bot-surface/miniapp/inapp-copy';
+import {
+    TTL_SECONDS,
+    type InAppSurfaceSession,
+} from '../../src/modules/bot-surface/services/inapp-surface.store';
+import {
+    BOT_IDEMPOTENCY_RECORD_TTL_SECONDS,
+    type BotClaimResult,
+    type BotIdempotentResponse,
+} from '../../src/modules/bot-surface/services/bot-idempotency.store';
+import type {
+    PurchaseContext,
+    PurchaseResult,
+} from '../../src/modules/bot-surface/controllers/bot-purchase.controller';
 
 let passed = 0;
 let failed = 0;
@@ -107,11 +147,16 @@ function section(title: string): void {
     console.log(`\n▶ ${title}`);
 }
 
+/**
+ * ⚠ **CRLF normalised once, here.** This repository has no `.gitattributes` and
+ * `core.autocrlf=true`, so a Windows clone reads `\r\n`; two scan guards elsewhere failed on
+ * correct code that way. Every scan below reads through this.
+ */
 const readSrc = (relative: string): string =>
     fs.readFileSync(
         path.join(__dirname, '..', '..', 'src', 'modules', 'whatsapp', 'flows', relative),
         'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
 
 /** Strip comments, so a scan cannot be satisfied by prose describing the rule. */
 const stripComments = (source: string): string =>
@@ -520,10 +565,29 @@ async function main(): Promise<void> {
     // ═════════════════════════════════════════════════════════════════════════
     section('8 · The published Flow definitions — what Meta validates at publish time');
 
+    /**
+     * ⚠ **The ticket form is a DRAFT and is held to every rule below anyway.** It is built against
+     * the read and submit core the ticket stream is extracting, and it is deliberately absent from
+     * `publish-whatsapp-flows.ts` until those land — so it cannot reach Meta early, while a
+     * mistake in its shape still fails here rather than at publish, which is the one step this
+     * platform cannot rehearse.
+     */
+    /**
+     * ⚠ **The three booking forms are built with a PLACEHOLDER kind**, because `bl`, `bk` and `bp`
+     * are not in `InAppSurfaceKind` yet — the bookings stream requests them when its core lands.
+     * The kind only stamps which form closed, so every structural rule below is exercised exactly
+     * as it will be; the day those kinds exist each builder becomes one exported constant.
+     */
+    const PLACEHOLDER_KIND = 'tf' as const;
+    /** `[label, definition, the file it lives in]` — the three booking forms share one file. */
     const ALL_FLOWS = [
-        ['product-listing', PRODUCT_LISTING_FLOW],
-        ['product-detail', PRODUCT_DETAIL_FLOW],
-        ['checkout', CHECKOUT_FLOW],
+        ['product-listing', PRODUCT_LISTING_FLOW, 'product-listing.flow.ts'],
+        ['product-detail', PRODUCT_DETAIL_FLOW, 'product-detail.flow.ts'],
+        ['checkout', CHECKOUT_FLOW, 'checkout.flow.ts'],
+        ['ticket-form', TICKET_FORM_FLOW, 'ticket-form.flow.ts'],
+        ['booking-list', bookingListFlow(PLACEHOLDER_KIND), 'booking.flow.ts'],
+        ['booking-slot', bookingSlotFlow(PLACEHOLDER_KIND), 'booking.flow.ts'],
+        ['booking-pay', bookingPayFlow(PLACEHOLDER_KIND), 'booking.flow.ts'],
     ] as const;
 
     /** Every `${data.x}` string anywhere under a node, with the component it sits on. */
@@ -541,7 +605,7 @@ async function main(): Promise<void> {
         });
     };
 
-    for (const [label, definition] of ALL_FLOWS) {
+    for (const [label, definition, sourceFile] of ALL_FLOWS) {
         assert(`${label}: declares a data_api_version — without one the Flow is static`,
             definition.data_api_version === '3.0');
 
@@ -622,7 +686,7 @@ async function main(): Promise<void> {
         assert(`${label}: ⛔ no literal customer-facing text — all of it comes from the copy table`,
             literals.length === 0, literals.join(', '));
 
-        const source = stripComments(readSrc(`definitions/${label}.flow.ts`));
+        const source = stripComments(readSrc(`definitions/${sourceFile}`));
         assert(`${label}: no money maths in a definition — prices arrive formatted`,
             !/toFixed|parseFloat|Intl\.NumberFormat/.test(source));
 
@@ -667,6 +731,35 @@ async function main(): Promise<void> {
     assert('listing rows declare `enabled` — a muted Telegram card is a disabled row here',
         JSON.stringify(listing?.data?.products).includes('"enabled"'));
 
+    // ── the closing screen stamps WHAT HAPPENED, in every Flow ───────────────
+    /**
+     * ⛔ Without this the chat cannot tell "nothing here" from "your basket just changed", and a
+     * WhatsApp customer's form closes onto an empty thread. The stamp is `${data.outcome}` rather
+     * than a literal precisely because ONE screen closes every state.
+     */
+    for (const [label, definition] of ALL_FLOWS) {
+        const notice = definition.screens.find((s) => s.id === NOTICE_SCREEN);
+        const noticeFooter = notice?.layout.children.find((c) => c.type === 'Footer') as
+            | { 'on-click-action'?: { name?: string; payload?: Record<string, unknown> } } | undefined;
+        assert(`${label}: the closing screen stamps its outcome from data, never a literal`,
+            noticeFooter?.['on-click-action']?.payload?.outcome === '${data.outcome}'
+            && notice?.data?.outcome?.type === 'string');
+        assert(`${label}: … and still stamps which form closed`,
+            typeof noticeFooter?.['on-click-action']?.payload?.screen === 'string');
+    }
+
+    for (const s of PRODUCT_DETAIL_FLOW.screens.filter((x) => x.id !== NOTICE_SCREEN)) {
+        const footer = s.layout.children.find((c) => c.type === 'Footer') as
+            | { 'on-click-action'?: { payload?: Record<string, unknown> } } | undefined;
+        /**
+         * ⚠ `${data.openRef}`, not `${form.…}`: it is the value this open was drawn with, not
+         * something the customer chose. It is what makes the write idempotent PER OPEN.
+         */
+        assert(`detail ${s.id}: the footer sends back this open's reference, from data`,
+            footer?.['on-click-action']?.payload?.openRef === '${data.openRef}'
+            && s.data?.openRef?.type === 'string');
+    }
+
     // ── the detail ───────────────────────────────────────────────────────────
     const detailScreens = PRODUCT_DETAIL_FLOW.screens.filter((s) => s.id !== NOTICE_SCREEN);
     assert('detail: two product screens, one with the image and one without',
@@ -704,6 +797,70 @@ async function main(): Promise<void> {
         assert(`detail ${s.id}: its only route is the notice screen`,
             JSON.stringify(PRODUCT_DETAIL_FLOW.routing_model[s.id]) === JSON.stringify([NOTICE_SCREEN]));
     }
+
+    // ── the ticket form: a draft, and held to the same rules ─────────────────
+    const supportScreens = TICKET_FORM_FLOW.screens.filter((s) => s.id !== NOTICE_SCREEN);
+    const withoutContext = (s: { layout: { children: Array<Record<string, unknown>> } }) =>
+        JSON.stringify(s.layout.children.filter((c) => c.type !== 'TextCaption'));
+    assert('⚠ ticket form: two screens, and apart from the context line they are identical',
+        supportScreens.length === 2
+        && withoutContext(supportScreens[0]) === withoutContext(supportScreens[1])
+        && supportScreens.filter((s) => s.layout.children.some((c) => c.type === 'TextCaption')).length === 1);
+    assert('⚠ ticket form: the subjects are a radio group — eight options, none hidden behind a tap',
+        supportScreens.every((s) => s.layout.children.some((c) => c.type === 'RadioButtonsGroup' && c.name === 'subject')));
+    assert('⛔ ticket form: it submits the subject KEY and the customer\'s words, nothing else',
+        supportScreens.every((s) => {
+            const footer = s.layout.children.find((c) => c.type === 'Footer') as
+                | { 'on-click-action'?: { name?: string; payload?: Record<string, unknown> } } | undefined;
+            return footer?.['on-click-action']?.name === 'data_exchange'
+                && JSON.stringify(Object.keys(footer['on-click-action'].payload ?? {})) === '["subject","description"]';
+        }));
+
+    /**
+     * ⛔ **A draft must not be publishable.** Its read and submit core do not exist yet, so a Flow
+     * published now would open a form that cannot be sent. The publish list is the gate, and this
+     * is what keeps the draft on the safe side of it.
+     */
+    const publishSource = stripComments(fs.readFileSync(
+        path.join(__dirname, '..', 'publish-whatsapp-flows.ts'), 'utf8',
+    ).replace(/\r\n/g, '\n'));
+    assert('⛔ the ticket form is NOT in the publish list while its seam is unbuilt',
+        /PRODUCT_LISTING_FLOW/.test(publishSource) && !/TICKET_FORM_FLOW/.test(publishSource));
+    assert('⛔ nor are the three booking forms, whose reads and screen kinds do not exist yet',
+        !/bookingListFlow|bookingSlotFlow|bookingPayFlow/.test(publishSource));
+
+    // ── the booking forms: the cap is what shaped them ───────────────────────
+    const slotFlow = bookingSlotFlow(PLACEHOLDER_KIND);
+    const dayScreen = slotFlow.screens.find((s) => s.id === 'DAY');
+    const timesScreen = slotFlow.screens.find((s) => s.id === 'TIMES');
+    /**
+     * ⛔ THE RULE THAT SHAPED THIS FORM. Twenty options is the radio cap, so a fortnight of slots
+     * cannot be one screen — hence a day, then that day's times. Collapsing it back into one list
+     * is the change this assertion exists to catch.
+     */
+    assert('⛔ booking a slot is TWO screens — a day, then that day\'s times',
+        !!dayScreen && !!timesScreen
+        && JSON.stringify(slotFlow.routing_model.DAY) === JSON.stringify(['TIMES', NOTICE_SCREEN]));
+    assert('⚠ times are a Dropdown (200), because a day can hold more than twenty slots',
+        timesScreen?.layout.children.some((c) => c.type === 'Dropdown' && c.name === 'slot') === true
+        && !timesScreen?.layout.children.some((c) => c.type === 'RadioButtonsGroup'));
+    assert('⚠ the day is confirmed with the footer, so a touch cannot move the customer on',
+        dayScreen?.layout.children.some((c) => c.type === 'RadioButtonsGroup' && c.name === 'day') === true
+        && !JSON.stringify(dayScreen).includes('on-select-action'));
+    assert('⛔ the form hands back the opaque slot handle and nothing it computed',
+        JSON.stringify((timesScreen?.layout.children.find((c) => c.type === 'Footer') as
+            { 'on-click-action'?: { payload?: Record<string, unknown> } })?.['on-click-action']?.payload)
+            === JSON.stringify({ slotId: '${form.slot}' }));
+
+    const payScreen = bookingPayFlow(PLACEHOLDER_KIND).screens.find((s) => s.id === 'PAY');
+    const payInputs = (payScreen?.layout.children ?? []).filter((c) =>
+        ['TextInput', 'TextArea', 'DatePicker', 'Dropdown', 'RadioButtonsGroup', 'CheckboxGroup', 'OptIn']
+            .includes(String(c.type)));
+    assert('⛔ the booking payment screen has EXACTLY ONE input, and it is a phone number',
+        payInputs.length === 1 && payInputs[0]['input-type'] === 'phone'
+        && payInputs[0].required === false);
+    assert('⚠ … whose helper text is the masked number, never its value',
+        payInputs[0]?.['helper-text'] === '${data.phoneMasked}' && !('value' in (payInputs[0] ?? {})));
 
     // ── checkout: the four protections, each pinned on its own ───────────────
     const review = CHECKOUT_FLOW.screens.find((s) => s.id === 'REVIEW');
@@ -751,20 +908,13 @@ async function main(): Promise<void> {
 
     /**
      * ⛔ THE LOAD-BEARING ONE. The checkout handle is SPENT by the write that places the order,
-     * so by the time Meta sends the completion it is gone, correctly. The handler must neither
-     * refuse nor even look it up: the Flow's own stamp says which form finished.
+     * so by the time Meta sends the completion it is gone, correctly. A finished checkout must
+     * therefore need no session at all — and it must not be mistaken for a failure.
      */
-    const spent = await flowCompleteHandler(
-        { flow_token: 'ia_definitely-not-in-redis', screen: 'co', orderCount: 1 } as never,
-        {},
-    );
-    assert('⛔ a SPENT checkout token is not an error — the completion is handled normally',
-        spent.completedScreen === 'co' && spent.message === '');
-    assert('the params pass through, minus the token',
-        (spent.params as { orderCount?: number }).orderCount === 1 && !('flow_token' in spent.params));
-
-    assert('an unrecognised screen stamp yields null rather than being trusted',
-        (await flowCompleteHandler({ screen: 'not-a-kind' } as never, {})).completedScreen === null);
+    assert('⛔ a SPENT checkout token is not an error — a finished checkout is simply silent',
+        planCompletion({ completedScreen: 'co', params: { outcome: 'placed' }, sender: '237652705926', session: null }).kind === 'silent');
+    assert('an unrecognised screen stamp is not trusted — it plans nothing',
+        planCompletion({ completedScreen: null, params: { productId: '66f1a2b3c4d5e6f708192a3b' }, sender: '237652705926', session: null }).kind === 'silent');
 
     const live = { channel: 'whatsapp', externalId: '237652705926' };
     const pid = '66f1a2b3c4d5e6f708192a3b';
@@ -779,15 +929,52 @@ async function main(): Promise<void> {
         plan({ sender: '+237 652 705 926' }).kind === 'open_detail');
 
     /**
-     * ⚠ Detail and checkout say their outcome on a closing screen before they close. A second
-     * message here would talk over the one the customer is actually waiting for.
+     * ⚠ A finished checkout stays quiet: the payment RESULT arrives through the payment path,
+     * and a "got that" here would talk over the message the customer is waiting for.
      */
     for (const done of ['pd', 'co'] as const) {
-        assert(`a finished ${done} form adds nothing to the chat`,
+        assert(`a ${done} form that changed nothing adds nothing to the chat`,
             plan({ completedScreen: done }).kind === 'silent');
     }
     assert('a notice screen closing adds nothing to the chat',
         plan({ params: { screen: 'pl', outcome: 'notice' } }).kind === 'silent');
+
+    // ── the product form's outcome, which the chat must finish on WhatsApp ───
+    /**
+     * ⛔ THE GAP THIS CLOSES. A Telegram customer keeps the screen's own controls; a WhatsApp
+     * customer's form CLOSES, so the basket changed and the thread said nothing at all.
+     */
+    const added = (over: Partial<Parameters<typeof planCompletion>[0]> = {}) => plan({
+        completedScreen: 'pd', params: { screen: 'pd', outcome: 'added' }, ...over,
+    });
+    assert('⛔ a product form that added to the basket → the chat says so, with the three controls',
+        added().kind === 'added_to_cart');
+    assert('⚠ … and still does when the session has since lapsed: the basket really did change',
+        added({ session: null }).kind === 'added_to_cart');
+    assert('⛔ … but NOT for a live session belonging to a different conversation',
+        added({ sender: '237600000000' }).kind === 'silent'
+        && added({ session: { channel: 'telegram', externalId: '237652705926' } }).kind === 'silent');
+    assert('⚠ `placed` is stamped but stays silent — the payment result comes through the payment path',
+        plan({ completedScreen: 'pd', params: { outcome: 'placed' } }).kind === 'silent'
+        && plan({ completedScreen: 'co', params: { outcome: 'placed' } }).kind === 'silent');
+    /**
+     * ⚠ The stamp ROUTES and never carries content, so a value from a Flow published later than
+     * this code must not be guessed at.
+     */
+    assert('⚠ an outcome outside the closed set reads as "nothing happened", never as an add',
+        asFlowOutcome('added') === 'added' && asFlowOutcome('something-new') === 'notice'
+        && asFlowOutcome(undefined) === 'notice' && asFlowOutcome(7) === 'notice'
+        && plan({ completedScreen: 'pd', params: { outcome: 'something-new' } }).kind === 'silent');
+    assert('the closed set is exactly the four the screens can stamp',
+        JSON.stringify([...FLOW_OUTCOMES].sort()) === JSON.stringify(['added', 'asked', 'notice', 'placed']));
+    /**
+     * ⚠ PENDING, and asserted so it cannot be forgotten: `asked` (bargain / booking) needs the
+     * chat to carry the question, because on WhatsApp it is visible only on a screen that has
+     * closed. It stays SILENT until `purchaseInvitePrompt` is extracted, so that the question is
+     * built in ONE place rather than copied — requested from the switchboard.
+     */
+    assert('⚠ `asked` is silent FOR NOW — pending the one-construction invite prompt (see the comment)',
+        plan({ completedScreen: 'pd', params: { outcome: 'asked' } }).kind === 'silent');
     assert('a listing completion with no valid product id opens nothing',
         plan({ params: { productId: 'not-an-id' } }).kind === 'silent');
 
@@ -815,8 +1002,39 @@ async function main(): Promise<void> {
         && !/executePurchase|placeCheckout|addToCart|createOrder|placeOrder/i.test(commandSource));
     assert('⚠ the only session it mints is a pd (view) session',
         (commandSource.match(/\.mint\(/g) ?? []).length === 1 && /kind:\s*'pd'/.test(commandSource));
-    assert('⚠ it reads the listing session by naming its kind — a pd or co handle is refused',
-        /inAppSurfaceStore\.read\('pl',/.test(commandSource));
+    /**
+     * ⚠ The read names the kind that STAMPED the completion, so a handle can only ever resolve as
+     * the form it belongs to — and only the two forms that can need a session are looked up at
+     * all. A `co` handle is spent by the write that placed the order; looking it up would find
+     * nothing, and treating that as a failure would tell every customer whose order succeeded
+     * that it failed.
+     */
+    assert('⚠ it resolves a session only for pl and pd, and always by naming the kind',
+        /inAppSurfaceStore\.read\(completedScreen, flowToken\)/.test(commandSource)
+        && /completedScreen === 'pl' \|\| completedScreen === 'pd'/.test(commandSource));
+
+    /**
+     * ⛔ The chat's three controls are IMPORTED, never rebuilt here. Two doors offering different
+     * buttons for one outcome is how one of them quietly loses Checkout — the exported list's own
+     * comment says so.
+     */
+    assert('⛔ the added-to-cart buttons come from the shared list, not a second copy',
+        /import \{ addedToCartActions \} from/.test(commandSource)
+        && /actions: addedToCartActions\(language\)/.test(commandSource)
+        && !/cartViewActionId\(|openSurfaceActionId\(/.test(commandSource));
+
+    /**
+     * ⚠ The DECISION must stay in a module this suite can import. The handler reaches a
+     * controller that touches orders and payments, which never returns under bare ts-node — so a
+     * plan that drifted back into the handler would take every assertion above with it, silently.
+     */
+    const planSource = stripComments(readSrc('commands/flow-completion-plan.ts'));
+    assert('⛔ the completion PLAN is pure — no store, no service, no controller, no copy table',
+        /export function planCompletion/.test(planSource)
+        && !/inAppSurfaceStore|botChrome|addedToCartActions|Service|controller/.test(planSource));
+    assert('⚠ the plan imports nothing but types and the outcome vocabulary',
+        [...planSource.matchAll(/^import\s+(type\s+)?[^;]*?from\s+'([^']+)';/gm)]
+            .every((m) => m[1] !== undefined || /flow-outcome$/.test(m[2])));
 
     /**
      * ⛔ The new session's identity comes from the live listing session, never the payload.
@@ -906,11 +1124,13 @@ async function main(): Promise<void> {
         ...over,
     });
 
-    const plain = toDetailScreen(detailView(), copy, null);
-    const withImage = toDetailScreen(detailView(), copy, 'aGVsbG8=');
+    const plain = toDetailScreen(detailView(), copy, null, 'openref-0001');
+    const withImage = toDetailScreen(detailView(), copy, 'aGVsbG8=', 'openref-0001');
     assert('no picture → the no-image screen; a picture → the image screen with the bytes',
         plain.screen === 'PRODUCT_NO_IMAGE' && !('image' in plain.data)
         && withImage.screen === 'PRODUCT' && withImage.data.image === 'aGVsbG8=');
+    assert('⚠ both product screens carry this open\'s reference, for the footer to send back',
+        plain.data.openRef === 'openref-0001' && withImage.data.openRef === 'openref-0001');
 
     const detailRows = plain.data.variants as Array<Record<string, unknown>>;
     assert('⛔ a sold-out variant is SHOWN disabled — matching Telegram, not omitted',
@@ -923,7 +1143,7 @@ async function main(): Promise<void> {
 
     const nothingBuyable = toDetailScreen(detailView({
         variants: detailView().variants.map((v) => ({ ...v, affordance: { ...v.affordance, enabled: false } })),
-    }), copy, null);
+    }), copy, null, 'openref-0001');
     assert('⚠ nothing buyable → the notice screen, never a required drop-down nobody can fill',
         nothingBuyable.screen === NOTICE_SCREEN && nothingBuyable.data.message === copy.outOfStock);
 
@@ -1038,6 +1258,21 @@ async function main(): Promise<void> {
             unreachable?.kind === 'text' && (unreachable as { text: string }).text === 'Hello');
         assert('the existing contract is unchanged: no message and no screen → nothing',
             commandReplyIntent({ message: '' }) === null);
+
+        /**
+         * ⛔ The buttons a finished WhatsApp form needs. They ride the `text` intent rather than a
+         * `choice`: the customer may still type instead, which on this surface they often do.
+         */
+        const withButtons = commandReplyIntent({
+            message: 'Ajouté à votre panier.',
+            actions: [{ id: 'cart:view', label: 'Voir le panier' }, { id: 'open:co', label: 'Commander' }],
+        });
+        assert('⛔ a command result\'s buttons reach the reply, beside its words',
+            withButtons?.kind === 'text'
+            && (withButtons as { actions?: readonly unknown[] }).actions?.length === 2);
+        assert('⚠ no buttons means no empty list on the intent — the shape a channel renders is unchanged',
+            !('actions' in (commandReplyIntent({ message: 'Hello' }) ?? {}))
+            && !('actions' in (commandReplyIntent({ message: 'Hello', actions: [] }) ?? {})));
     } finally {
         if (savedBase === undefined) delete process.env.BOT_MINIAPP_BASE_URL;
         else process.env.BOT_MINIAPP_BASE_URL = savedBase;
@@ -1134,6 +1369,693 @@ async function main(): Promise<void> {
         !/maskPhone|maskAddress|\.consume\(|placeCheckout\(|createOrder/.test(checkoutAdapterSource));
     assert('⚠ the stay rule is keyed on an explicit `spent === false`, never a truthiness test',
         /spent === false/.test(checkoutAdapterSource) && !/!\s*e\??\.details\??\.spent/.test(checkoutAdapterSource));
+
+    /** ⛔ ABSENT MEANS SPENT — the one reading both the plan and the endpoint's claim decide on. */
+    assert('⛔ handleSurvived is true ONLY for an explicit spent:false',
+        handleSurvived(err(400, false))
+        && !handleSurvived(err(400, true)) && !handleSurvived(err(400, undefined))
+        && !handleSurvived(err(400, 'false')) && !handleSurvived(new TypeError('x')) && !handleSurvived(null));
+
+    // ═════════════════════════════════════════════════════════════════════════
+    section('13 · The router — opening a form, every branch driven through fake ports');
+
+    /**
+     * ── HOW THIS SECTION WORKS ──────────────────────────────────────────────
+     * `flow-screens.ts` takes every dependency as a PORT, because the checkout and purchase cores
+     * cannot be imported here (they reach `orders/`/`payments/`, which hang under ts-node). So the
+     * router is driven with fakes that behave like the real things in the ways that matter:
+     *   - the session store refuses a wrong KIND, as `inAppSurfaceStore.read` does;
+     *   - the claim store is `botIdempotencyStore`'s semantics in memory — claim NX, stored answer
+     *     replayed, a different fingerprint "reused", release deletes;
+     *   - `placeCheckout` DELETES the session it spends, as the real Lua consume does, and refuses
+     *     a spent handle with 404 `spent:false`, as `handleGone(false)` does.
+     * Section 15 then pins that the production ports ARE the real exports.
+     */
+    const PID = '66f1a2b3c4d5e6f708192a3b';
+    const VID = '66f1a2b3c4d5e6f708192a40';
+    const VID2 = '66f1a2b3c4d5e6f708192a41';
+    const FORGED_PID = '66f1a2b3c4d5e6f708192aff';
+    const owned = {
+        owner: 'user-1', customerId: 'cust-1', channel: 'whatsapp' as const,
+        externalId: '237652705926', expiresAt: '2999-01-01T00:00:00.000Z',
+    };
+    const plSession = (language: string | null = 'fr'): InAppSurfaceSession =>
+        ({ ...owned, language, kind: 'pl', query: { q: 'kettle', category: null, storeSlug: null, productIds: null } });
+    const pdSession = (language: string | null = 'fr'): InAppSurfaceSession =>
+        ({ ...owned, language, kind: 'pd', productId: PID });
+    const coSession = (language: string | null = 'fr'): InAppSurfaceSession =>
+        ({ ...owned, language, kind: 'co', cartId: 'cart-1' });
+
+    const fr = inAppCopy('fr');
+    const en = inAppCopy(null);
+
+    type StoredClaim = { state: 'in_progress' | 'done'; fingerprint: string; tool: string; response?: BotIdempotentResponse };
+
+    /** `botIdempotencyStore`, in memory. */
+    const memoryClaims = () => {
+        const records = new Map<string, StoredClaim>();
+        const at = (identity: string, key: string): string => `${identity}|${key}`;
+        return {
+            records,
+            async claim(input: FlowClaim): Promise<BotClaimResult> {
+                const existing = records.get(at(input.identity, input.key));
+                if (!existing) {
+                    records.set(at(input.identity, input.key),
+                        { state: 'in_progress', fingerprint: input.fingerprint, tool: input.tool });
+                    return { status: 'claimed' };
+                }
+                if (existing.fingerprint !== input.fingerprint) return { status: 'reused', tool: existing.tool };
+                if (existing.state === 'done' && existing.response) return { status: 'replay', response: existing.response };
+                return { status: 'in_progress', tool: existing.tool };
+            },
+            async complete(input: FlowClaim & { response: BotIdempotentResponse }): Promise<void> {
+                records.set(at(input.identity, input.key),
+                    { state: 'done', fingerprint: input.fingerprint, tool: input.tool, response: input.response });
+            },
+            async release(identity: string, key: string): Promise<void> {
+                records.delete(at(identity, key));
+            },
+        };
+    };
+
+    const listingPageFixture: ListingPage = {
+        heading: 'kettle', page: 1, hasMore: false,
+        products: [{ productId: PID, variantId: VID, title: 'Kettle', priceText: '12 500 FCFA',
+            storeName: 'Chez Awa', inStock: true, imageSourceUrl: null, image: null }],
+    };
+    const checkoutFixture = (over: Partial<CheckoutView> = {}): CheckoutView => ({
+        lines: [{ title: 'Kettle', variantLabel: null, quantity: 1, lineTotalText: '12 500 FCFA', imageUrl: null }],
+        totalText: '12 500 FCFA', address: { text: 'Akwa, Douala' },
+        payment: { phoneMasked: '+2376••••4417' }, language: 'fr', ...over,
+    });
+    const gone = () => createAppError(ERROR_CODES.BOT_PRODUCT_LIST_EXPIRED, 404, 'gone', { spent: false });
+
+    /** A router run's world: sessions, fake ports, and a log of what was called. */
+    const harness = (
+        sessions: Record<string, InAppSurfaceSession>,
+        over: Partial<FlowScreenPorts> = {},
+    ) => {
+        const claims = memoryClaims();
+        const calls = {
+            listing: [] as Array<{ page?: number; pageSize?: number }>,
+            detail: [] as Array<{ productId: string; language: string | null }>,
+            purchase: [] as PurchaseContext[],
+            place: [] as Array<{ handle: string; phone: unknown }>,
+            extended: [] as string[],
+            reported: [] as string[],
+            released: [] as string[],
+            completed: [] as string[],
+            claimedWith: [] as FlowClaim[],
+            sequence: [] as string[],
+            sleeps: 0,
+        };
+        let refs = 0;
+        const ports: FlowScreenPorts = {
+            readSession: async (kind, handle) => {
+                const s = sessions[handle];
+                return (s && s.kind === kind ? s : null) as never;
+            },
+            extendSession: async (kind, handle) => { calls.extended.push(`${kind}:${handle}`); return true; },
+            readListingPage: async (_query, options) => { calls.listing.push(options); return listingPageFixture; },
+            readProductDetail: async (productId, language) => {
+                calls.detail.push({ productId, language });
+                return detailView({ productId });
+            },
+            loadImage: async () => null,
+            readCheckoutView: async (handle) => {
+                const s = sessions[handle];
+                if (!s || s.kind !== 'co') throw gone();
+                return checkoutFixture();
+            },
+            placeCheckout: async (handle, phone) => {
+                calls.sequence.push('place');
+                calls.place.push({ handle, phone });
+                const s = sessions[handle];
+                if (!s || s.kind !== 'co') throw gone();
+                delete sessions[handle]; // ⚠ the consume
+                return { orderCount: 1, transactionId: 'tx-1', status: 'pending' as CheckoutPlaced['status'] };
+            },
+            executePurchase: async (ctx): Promise<PurchaseResult> => {
+                calls.purchase.push(ctx);
+                return { verb: 'add', outcome: 'cart', message: 'Ajouté à votre panier.', url: null,
+                    productId: ctx.productId, variantId: ctx.variantId, productTitle: 'Kettle' };
+            },
+            claims: {
+                claim: async (input) => { calls.sequence.push('claim'); calls.claimedWith.push(input); return claims.claim(input); },
+                complete: async (input) => { calls.completed.push(input.key); return claims.complete(input); },
+                release: async (identity, key) => { calls.released.push(key); return claims.release(identity, key); },
+            },
+            newOpenRef: () => `openref-${String(++refs).padStart(4, '0')}`,
+            sleep: async () => { calls.sleeps += 1; },
+            reportFailure: (where) => { calls.reported.push(where); },
+            ...over,
+        };
+        return { ports, calls, claims, sessions };
+    };
+
+    const request = (
+        action: string,
+        screen: string | null,
+        data: Record<string, unknown>,
+        flowToken: string | null,
+    ): FlowScreenRequest => ({ kind: 'screen', action, screen, data, flowToken });
+    const open = (token: string | null) => request('INIT', null, {}, token);
+    const bodyOf = (v: FlowScreenVerdict) => v.body as { screen?: string; data?: Record<string, unknown>; error_msg?: string };
+
+    assert('⛔ no token at all → 427, nothing read',
+        (await serveFlowScreen(open(null), harness({}).ports)).status === 427);
+
+    {
+        const h = harness({ ia_pl: plSession() });
+        const v = await serveFlowScreen(open('ia_pl'), h.ports);
+        assert('a listing handle opens the PRODUCTS screen', v.status === 200 && bodyOf(v).screen === 'PRODUCTS');
+        const emptyShelf = await serveFlowScreen(open('ia_pl'), harness({ ia_pl: plSession() }, {
+            readListingPage: async () => ({ heading: null, page: 1, hasMore: false, products: [] }),
+        }).ports);
+        assert('⚠ a closing screen where NOTHING happened stamps `notice` — the chat adds nothing',
+            bodyOf(emptyShelf).screen === NOTICE_SCREEN && bodyOf(emptyShelf).data?.outcome === 'notice');
+        assert('⚠ it asks the shared read for page one of 20 — the radio cap is the caller\'s to pass',
+            h.calls.listing.length === 1 && h.calls.listing[0].page === 1 && h.calls.listing[0].pageSize === 20);
+        assert('⚠ the words come from the session\'s language — French here',
+            bodyOf(v).data?.openLabel === fr.flowOpenProduct);
+        assert('opening a listing keeps its session alive, as the Telegram page does',
+            JSON.stringify(h.calls.extended) === JSON.stringify(['pl:ia_pl']));
+    }
+
+    {
+        const h = harness({ ia_pd: pdSession() });
+        const v = await serveFlowScreen(open('ia_pd'), h.ports);
+        assert('a product handle opens a product screen', v.status === 200 && bodyOf(v).screen === 'PRODUCT_NO_IMAGE');
+        assert('⛔ the product read is the SESSION\'s product, in the session\'s language',
+            h.calls.detail.length === 1 && h.calls.detail[0].productId === PID && h.calls.detail[0].language === 'fr');
+        assert('⚠ each open draws a fresh reference for the footer to send back',
+            bodyOf(v).data?.openRef === 'openref-0001');
+        const again = await serveFlowScreen(open('ia_pd'), h.ports);
+        assert('⚠ … and a second open draws a DIFFERENT one',
+            bodyOf(again).data?.openRef === 'openref-0002');
+    }
+
+    {
+        const h = harness({ ia_co: coSession() });
+        const v = await serveFlowScreen(open('ia_co'), h.ports);
+        assert('a checkout handle opens the REVIEW screen', v.status === 200 && bodyOf(v).screen === 'REVIEW');
+        assert('⛔ opening a checkout NEVER extends it — a checkout credential must not slide',
+            h.calls.extended.length === 0);
+        assert('⛔ opening a checkout spends nothing', h.calls.place.length === 0);
+    }
+
+    {
+        const v = await serveFlowScreen(open('ia_unknown'), harness({}).ports);
+        assert('an unknown or lapsed handle → 427 with the "ask me again" sentence (English: no session)',
+            v.status === 427 && bodyOf(v).error_msg === en.expired);
+    }
+
+    {
+        const h = harness({ ia_pd: pdSession() }, {
+            readProductDetail: async () => { throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404, 'gone'); },
+        });
+        const v = await serveFlowScreen(open('ia_pd'), h.ports);
+        assert('⚠ a product taken off sale → 427, in the SESSION\'s language, and nothing reported',
+            v.status === 427 && bodyOf(v).error_msg === fr.expired && h.calls.reported.length === 0);
+    }
+
+    {
+        const h = harness({ ia_pl: plSession() }, {
+            readListingPage: async () => { throw new TypeError('database wobble'); },
+        });
+        const v = await serveFlowScreen(open('ia_pl'), h.ports);
+        assert('⚠ an unexpected failure → the form\'s own "something went wrong", in French …',
+            v.status === 200 && bodyOf(v).screen === NOTICE_SCREEN && bodyOf(v).data?.message === fr.failed);
+        assert('⛔ … and it is REPORTED, never swallowed — the global handler never sees it',
+            h.calls.reported.length === 1);
+    }
+
+    {
+        const h = harness({}, { readSession: async () => { throw new TypeError('redis down'); } });
+        const v = await serveFlowScreen(open('ia_x'), h.ports);
+        assert('the session store unreachable → "something went wrong" (English: no session) and reported',
+            v.status === 200 && bodyOf(v).data?.message === en.failed && h.calls.reported.length === 1);
+    }
+
+    {
+        const h = harness({ ia_pd: pdSession() }, { loadImage: async () => { throw new TypeError('sharp'); } });
+        const v = await serveFlowScreen(open('ia_pd'), h.ports);
+        assert('⚠ a picture that fails costs the picture, never the product screen',
+            v.status === 200 && bodyOf(v).screen === 'PRODUCT_NO_IMAGE');
+    }
+
+    assert('an unknown action → 427',
+        (await serveFlowScreen(request('SOMETHING', null, {}, 'ia_pl'), harness({ ia_pl: plSession() }).ports)).status === 427);
+    assert('⚠ an exchange from a screen no form sends it from (the listing CLOSES) → 427',
+        (await serveFlowScreen(request('data_exchange', 'PRODUCTS', {}, 'ia_pl'), harness({ ia_pl: plSession() }).ports)).status === 427);
+
+    // ═════════════════════════════════════════════════════════════════════════
+    section('14 · The product form\'s button — the purchase core, guarded per open');
+
+    const press = (data: Record<string, unknown>, screen = 'PRODUCT_NO_IMAGE', token = 'ia_pd') =>
+        request('data_exchange', screen, data, token);
+
+    {
+        const h = harness({ ia_pd: pdSession() });
+        const v = await serveFlowScreen(press({ variantId: VID, openRef: 'openref-0001', productId: FORGED_PID }), h.ports);
+        assert('a press runs the shared purchase core once and shows its message on the closing screen',
+            h.calls.purchase.length === 1 && bodyOf(v).screen === NOTICE_SCREEN
+            && bodyOf(v).data?.message === 'Ajouté à votre panier.');
+        /**
+         * ⛔ The stamp the CHAT reads when the form closes. Without it the basket changes and the
+         * WhatsApp thread says nothing — the customer is left with no confirmation and no door.
+         */
+        assert('⛔ an add stamps the closing screen `added`, so the chat can finish the turn',
+            bodyOf(v).data?.outcome === 'added');
+        const ctx = h.calls.purchase[0];
+        assert('⛔ the PRODUCT comes from the session — a productId in the form is ignored',
+            ctx.productId === PID);
+        assert('⛔ who is buying comes from the session, never the form',
+            ctx.userId === owned.owner && ctx.customerId === owned.customerId
+            && ctx.externalId === owned.externalId && ctx.channel === 'whatsapp' && ctx.language === 'fr');
+        assert('⚠ the claim is scoped to the session\'s owner, keyed on handle + open + variant',
+            h.calls.claimedWith[0].identity === owned.owner
+            && h.calls.claimedWith[0].key === `wa-flow:pd:ia_pd:openref-0001:${VID}`);
+    }
+
+    {
+        /** ⭐ Coordinator's pin (2): a double submit in ONE open is one add. */
+        const h = harness({ ia_pd: pdSession() });
+        const first = await serveFlowScreen(press({ variantId: VID, openRef: 'openref-0001' }), h.ports);
+        const second = await serveFlowScreen(press({ variantId: VID, openRef: 'openref-0001' }), h.ports);
+        assert('⛔ a double submit in ONE open → ONE add, the second answer replayed identically',
+            h.calls.purchase.length === 1 && JSON.stringify(first) === JSON.stringify(second));
+
+        /** ⭐ …and the same variant in a LATER open is a new add, as two Telegram presses are. */
+        await serveFlowScreen(press({ variantId: VID, openRef: 'openref-0002' }), h.ports);
+        assert('⛔ the same variant in a LATER open → a SECOND add, as on the Telegram page',
+            h.calls.purchase.length === 2);
+
+        await serveFlowScreen(press({ variantId: VID2, openRef: 'openref-0001' }), h.ports);
+        assert('a different variant in the same open is its own add', h.calls.purchase.length === 3);
+    }
+
+    {
+        const h = harness({ ia_pd: pdSession() }, {
+            executePurchase: async (ctx) => {
+                h.calls.purchase.push(ctx);
+                return { verb: 'buy', outcome: 'checkout', message: 'Ajouté. Dites « commander ».',
+                    url: 'https://screens.example.com/s/co/ia_secret', productId: ctx.productId,
+                    variantId: ctx.variantId, productTitle: 'Kettle' };
+            },
+        });
+        const v = await serveFlowScreen(press({ variantId: VID, openRef: 'openref-0001' }), h.ports);
+        assert('⚠ a checkout outcome shows its message and NEVER its url — a Telegram screen address',
+            bodyOf(v).data?.message === 'Ajouté. Dites « commander ».' && !JSON.stringify(v).includes('ia_secret'));
+        assert('⚠ … and it stamps `added` too: the basket changed, whichever rung it was',
+            bodyOf(v).data?.outcome === 'added');
+    }
+
+    {
+        /**
+         * ⛔ The two rungs that WRITE NOTHING. A bargain or a booking is a QUESTION the customer
+         * answers by typing — and the agent only wakes on their next message. On WhatsApp the
+         * question is visible solely on a screen that closes, so the chat must carry it.
+         */
+        const h = harness({ ia_pd: pdSession() }, {
+            executePurchase: async (ctx) => {
+                h.calls.purchase.push(ctx);
+                return { verb: 'bargain', outcome: 'chat', message: 'Kettle\n\nFaites-moi une offre…',
+                    url: null, productId: ctx.productId, variantId: ctx.variantId, productTitle: 'Kettle' };
+            },
+        });
+        const v = await serveFlowScreen(press({ variantId: VID, openRef: 'openref-0001' }), h.ports);
+        assert('⛔ a bargain or booking stamps `asked` — the chat has a question to carry',
+            bodyOf(v).data?.outcome === 'asked' && bodyOf(v).data?.message === 'Kettle\n\nFaites-moi une offre…');
+    }
+
+    {
+        let stock = false;
+        const refusal = () => createAppError(ERROR_CODES.CATALOG_VARIANT_INSUFFICIENT_STOCK, 422, 'cannot');
+        const h = harness({ ia_pd: pdSession() }, {
+            executePurchase: async (ctx) => {
+                h.calls.purchase.push(ctx);
+                if (!stock) throw refusal();
+                return { verb: 'add', outcome: 'cart', message: 'ok', url: null,
+                    productId: ctx.productId, variantId: ctx.variantId, productTitle: 'Kettle' };
+            },
+        });
+        const v = await serveFlowScreen(press({ variantId: VID, openRef: 'openref-0001' }), h.ports);
+        assert('⚠ a refusal the customer can act on keeps them ON THE FORM, freshly redrawn …',
+            v.status === 200 && bodyOf(v).screen === 'PRODUCT_NO_IMAGE' && h.calls.detail.length === 1);
+        assert('⚠ … with the refusal as Meta\'s snackbar, from the shared customer-copy table, in French',
+            bodyOf(v).data?.error_message === customerMessageFor(refusal().code, refusal().category, 'fr'));
+        assert('⚠ … and the SAME open reference, because it is still the same open',
+            bodyOf(v).data?.openRef === 'openref-0001');
+        stock = true;
+        await serveFlowScreen(press({ variantId: VID, openRef: 'openref-0001' }), h.ports);
+        assert('⛔ a refusal RELEASES the claim — pressing again once stock returns runs again',
+            h.calls.purchase.length === 2);
+    }
+
+    {
+        const h = harness({ ia_pd: pdSession() }, {
+            executePurchase: async () => { throw createAppError(ERROR_CODES.CATALOG_VARIANT_INSUFFICIENT_STOCK, 422, 'x'); },
+        });
+        const v = await serveFlowScreen(press({ variantId: VID, openRef: 'openref-0001' }, 'PRODUCT'), h.ports);
+        assert('⚠ a redraw that would change screen (PRODUCT → no-image is no declared route) → the notice, with the refusal',
+            bodyOf(v).screen === NOTICE_SCREEN
+            && bodyOf(v).data?.message === customerMessageFor(ERROR_CODES.CATALOG_VARIANT_INSUFFICIENT_STOCK, 'business_rule', 'fr'));
+    }
+
+    {
+        const h = harness({ ia_pd: pdSession() }, {
+            executePurchase: async () => { throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404, 'gone'); },
+        });
+        const v = await serveFlowScreen(press({ variantId: VID, openRef: 'openref-0001' }), h.ports);
+        assert('a product gone by the time of the press → 427, in French',
+            v.status === 427 && bodyOf(v).error_msg === fr.expired);
+    }
+
+    {
+        const h = harness({ ia_pd: pdSession() }, { executePurchase: async () => { throw new TypeError('boom'); } });
+        const v = await serveFlowScreen(press({ variantId: VID, openRef: 'openref-0001' }), h.ports);
+        assert('⚠ an unexpected failure → "something went wrong", reported, claim released',
+            bodyOf(v).data?.message === fr.failed && h.calls.reported.length === 1 && h.calls.released.length === 1);
+    }
+
+    {
+        const h = harness({ ia_pd: pdSession() });
+        await serveFlowScreen(press({ openRef: 'openref-0001' }), h.ports);
+        await serveFlowScreen(press({ variantId: VID }), h.ports);
+        await serveFlowScreen(press({ variantId: 'not-an-id', openRef: 'openref-0001' }), h.ports);
+        assert('⛔ no variant, no open reference or a malformed id → nothing bought, never a default variant',
+            h.calls.purchase.length === 0 && h.calls.claimedWith.length === 0);
+    }
+
+    {
+        const h = harness({ ia_co: coSession() });
+        const v = await serveFlowScreen(press({ variantId: VID, openRef: 'openref-0001' }, 'PRODUCT_NO_IMAGE', 'ia_co'), h.ports);
+        assert('⛔ a CHECKOUT handle submitted to the product form reads as absent → 427, nothing bought',
+            v.status === 427 && h.calls.purchase.length === 0);
+    }
+
+    {
+        const h = harness({ ia_pd: pdSession() });
+        const busy = await h.claims.claim({
+            identity: owned.owner, key: `wa-flow:pd:ia_pd:openref-0001:${VID}`,
+            fingerprint: `pd:${PID}:${VID}`, tool: 'x',
+        });
+        const v = await serveFlowScreen(press({ variantId: VID, openRef: 'openref-0001' }), h.ports);
+        assert('⚠ an identical press still running → wait, then "still working on it" — never a second add',
+            busy.status === 'claimed' && h.calls.purchase.length === 0 && h.calls.sleeps === CLAIM_WAITS
+            && bodyOf(v).data?.message === customerMessageFor(ERROR_CODES.BOT_IDEMPOTENCY_IN_PROGRESS, 'conflict', 'fr'));
+    }
+
+    {
+        const h = harness({ ia_pd: pdSession() });
+        const stored: FlowScreenVerdict = { status: 200, body: { screen: NOTICE_SCREEN, data: { message: 'first', closeLabel: 'x' } } };
+        const key = `wa-flow:pd:ia_pd:openref-0001:${VID}`;
+        await h.claims.claim({ identity: owned.owner, key, fingerprint: `pd:${PID}:${VID}`, tool: 'x' });
+        h.ports.sleep = async () => {
+            h.calls.sleeps += 1;
+            if (h.calls.sleeps === 2) {
+                await h.claims.complete({ identity: owned.owner, key, fingerprint: `pd:${PID}:${VID}`, tool: 'x', response: stored });
+            }
+        };
+        const v = await serveFlowScreen(press({ variantId: VID, openRef: 'openref-0001' }), h.ports);
+        assert('⚠ … and if the first press finishes during the wait, ITS answer is replayed',
+            JSON.stringify(v) === JSON.stringify(stored) && h.calls.purchase.length === 0);
+    }
+
+    {
+        const h = harness({ ia_pd: pdSession() }, {
+            claims: {
+                claim: async () => { throw new TypeError('redis down'); },
+                complete: async () => undefined,
+                release: async () => undefined,
+            },
+        });
+        const v = await serveFlowScreen(press({ variantId: VID, openRef: 'openref-0001' }), h.ports);
+        assert('⛔ the claim store unreachable FAILS CLOSED — nothing bought without the guard',
+            h.calls.purchase.length === 0
+            && bodyOf(v).data?.message === customerMessageFor(ERROR_CODES.BOT_IDEMPOTENCY_STORE_UNAVAILABLE, 'external_service', 'fr')
+            && h.calls.reported.length === 1);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    section('15 · The checkout form\'s Pay — never a second order, and a retry is told the truth');
+
+    const pay = (phone: unknown, token = 'ia_co') => request('data_exchange', 'REVIEW', { phone }, token);
+
+    {
+        const h = harness({ ia_co: coSession() });
+        const first = await serveFlowScreen(pay(''), h.ports);
+        assert('a Pay press places once and says "approve it on your phone, I will tell you in the chat"',
+            h.calls.place.length === 1 && bodyOf(first).screen === NOTICE_SCREEN
+            && bodyOf(first).data?.message === fr.checkoutWatchChat);
+        assert('⚠ it stamps `placed` — true, and the chat stays quiet on it by design',
+            bodyOf(first).data?.outcome === 'placed');
+
+        /** ⭐ Coordinator's pin (1): the claim is taken BEFORE the handle is consumed. */
+        assert('⭐ the claim is taken BEFORE the handle is consumed',
+            h.calls.sequence.indexOf('claim') > -1 && h.calls.sequence.indexOf('claim') < h.calls.sequence.indexOf('place'));
+
+        const retry = await serveFlowScreen(pay(''), h.ports);
+        assert('⛔ a retry after a Pay that went through REPLAYS "approve it on your phone" …',
+            JSON.stringify(retry) === JSON.stringify(first));
+        assert('⛔ … and never re-executes: still exactly one placement',
+            h.calls.place.length === 1);
+        assert('⛔ … and is never told "no longer available, ask me again" — the second-order trap',
+            retry.status === 200 && bodyOf(retry).error_msg === undefined);
+    }
+
+    {
+        /** ⭐ Pin (1): a failure after the spend is replayed too — never re-executed. */
+        const h = harness({ ia_co: coSession() }, {
+            placeCheckout: async (handle, phone) => {
+                h.calls.sequence.push('place');
+                h.calls.place.push({ handle, phone });
+                delete h.sessions[handle];
+                throw createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 502, 'gateway said no', { spent: true });
+            },
+        });
+        const first = await serveFlowScreen(pay(''), h.ports);
+        const retry = await serveFlowScreen(pay(''), h.ports);
+        assert('⛔ a failure AFTER the spend → "look in the chat" (never "approve on your phone") …',
+            bodyOf(first).data?.message === fr.failed && bodyOf(first).data?.message !== fr.checkoutWatchChat);
+        assert('⭐ … REPLAYED to a retry, and the core runs exactly once',
+            JSON.stringify(retry) === JSON.stringify(first) && h.calls.place.length === 1);
+        assert('… and it is reported', h.calls.reported.length === 1);
+    }
+
+    {
+        /** ⛔ Absent means spent: a failure with no flag is stored like any post-spend failure. */
+        const h = harness({ ia_co: coSession() }, {
+            placeCheckout: async (handle, phone) => {
+                h.calls.place.push({ handle, phone });
+                delete h.sessions[handle];
+                throw new TypeError('socket hang up');
+            },
+        });
+        await serveFlowScreen(pay(''), h.ports);
+        const retry = await serveFlowScreen(pay(''), h.ports);
+        assert('⛔ a failure with NO spent flag is treated as spent — replayed, never re-run',
+            h.calls.place.length === 1 && bodyOf(retry).data?.message === fr.failed);
+    }
+
+    {
+        /**
+         * The one refusal that is RELEASED: it provably happened before the spend. Storing it would
+         * replay "fix your number" at a customer who has fixed it — and releasing it cannot cost a
+         * second order, because nothing was placed and the consume still guards the handle.
+         */
+        const h = harness({ ia_co: coSession() }, {
+            placeCheckout: async (handle, phone) => {
+                h.calls.place.push({ handle, phone });
+                if (phone === '12') {
+                    throw createAppError(ERROR_CODES.VALIDATION_ERROR, 400, 'bad', { spent: false, field: 'phone' });
+                }
+                delete h.sessions[handle];
+                return { orderCount: 1, transactionId: 'tx-1', status: 'pending' as CheckoutPlaced['status'] };
+            },
+        });
+        const bad = await serveFlowScreen(pay('12'), h.ports);
+        assert('⚠ a mistyped number keeps them on REVIEW, with the phone field\'s own instruction as the snackbar',
+            bodyOf(bad).screen === 'REVIEW' && bodyOf(bad).data?.error_message === fr.flowPhoneHint);
+        assert('⚠ … and RELEASES the claim, because the handle survived', h.calls.released.length === 1 && h.calls.completed.length === 0);
+        const fixed = await serveFlowScreen(pay('+237652705926'), h.ports);
+        assert('⚠ the corrected number then goes through — the same handle, placed once',
+            bodyOf(fixed).data?.message === fr.checkoutWatchChat && h.calls.place.length === 2);
+    }
+
+    {
+        const h = harness({ ia_co: coSession() }, {
+            readCheckoutView: async () => checkoutFixture({ payment: { phoneMasked: null } }),
+        });
+        const v = await serveFlowScreen(pay('  '), h.ports);
+        assert('⛔ no number on file and the field left empty → refused BEFORE the spend: nothing placed',
+            h.calls.place.length === 0 && h.calls.released.length === 1);
+        assert('… on REVIEW, with the payer-number sentence the chat uses, in French',
+            bodyOf(v).screen === 'REVIEW'
+            && bodyOf(v).data?.error_message === customerMessageFor(ERROR_CODES.PAYMENT_PAYER_NUMBER_REQUIRED, 'business_rule', 'fr'));
+    }
+
+    {
+        const h = harness({ ia_co: coSession() }, {
+            placeCheckout: async (handle, phone) => {
+                h.calls.place.push({ handle, phone });
+                throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED, 503, 'none', { spent: false });
+            },
+        });
+        const v = await serveFlowScreen(pay(''), h.ports);
+        assert('no gateway configured → "look in the chat", reported, and released (nothing was spent)',
+            bodyOf(v).data?.message === fr.failed && h.calls.reported.length === 1 && h.calls.released.length === 1);
+    }
+
+    {
+        const h = harness({ ia_co: coSession() }, {
+            placeCheckout: async (handle, phone) => {
+                h.calls.place.push({ handle, phone });
+                delete h.sessions[handle];
+                throw createAppError(ERROR_CODES.BOT_PRODUCT_LIST_EXPIRED, 404, 'replaced', { spent: true });
+            },
+        });
+        const first = await serveFlowScreen(pay(''), h.ports);
+        const retry = await serveFlowScreen(pay(''), h.ports);
+        assert('a basket replaced under the screen → 427 in French, and the retry replays it',
+            first.status === 427 && bodyOf(first).error_msg === fr.expired
+            && JSON.stringify(retry) === JSON.stringify(first) && h.calls.place.length === 1);
+    }
+
+    {
+        const h = harness({ ia_co: coSession() });
+        const busy = await h.claims.claim({ identity: CHECKOUT_CLAIM_IDENTITY, key: 'wa-flow:co:ia_co', fingerprint: 'co:place', tool: 'x' });
+        const v = await serveFlowScreen(pay(''), h.ports);
+        assert('⛔ a Pay press arriving while the first is still running NEVER places — it waits, then says so',
+            busy.status === 'claimed' && h.calls.place.length === 0 && h.calls.sleeps === CLAIM_WAITS
+            && bodyOf(v).data?.message === customerMessageFor(ERROR_CODES.BOT_IDEMPOTENCY_IN_PROGRESS, 'conflict', 'fr'));
+    }
+
+    {
+        const h = harness({ ia_pd: pdSession() });
+        const v = await serveFlowScreen(pay('', 'ia_pd'), h.ports);
+        assert('⛔ a PRODUCT handle submitted to the checkout form → 427, nothing placed, claim released',
+            v.status === 427 && h.calls.place.length === 0 && h.calls.released.length === 1);
+    }
+
+    {
+        const h = harness({ ia_co: coSession() }, {
+            claims: {
+                claim: async () => { throw new TypeError('redis down'); },
+                complete: async () => undefined,
+                release: async () => undefined,
+            },
+        });
+        await serveFlowScreen(pay(''), h.ports);
+        assert('⛔ the claim store unreachable → nothing placed (fails closed)', h.calls.place.length === 0);
+    }
+
+    {
+        const h = harness({});
+        await h.claims.claim({ identity: CHECKOUT_CLAIM_IDENTITY, key: 'wa-flow:co:ia_gone', fingerprint: 'co:place', tool: 'x' });
+        await h.claims.complete({ identity: CHECKOUT_CLAIM_IDENTITY, key: 'wa-flow:co:ia_gone', fingerprint: 'co:place', tool: 'x',
+            response: { status: 200, body: 'not a screen' } });
+        const v = await serveFlowScreen(pay('', 'ia_gone'), h.ports);
+        assert('a stored answer we cannot read → "look in the chat", reported — never handed to the cipher as-is',
+            bodyOf(v).data?.message === en.failed && h.calls.reported.length === 1);
+    }
+
+    /**
+     * ⭐ Coordinator's pin (1), second half: the stored answer outlives the handle, so a retry
+     * inside the handle's life can never find the record gone and fall through to a fresh place.
+     * (The 60-second in-flight claim is covered by the consume: a press outliving it finds the
+     * handle spent.)
+     */
+    assert('⭐ a stored checkout answer lives at least as long as the checkout handle (24 h ≥ 10 min)',
+        BOT_IDEMPOTENCY_RECORD_TTL_SECONDS >= TTL_SECONDS.co && TTL_SECONDS.co === 600);
+
+    // ═════════════════════════════════════════════════════════════════════════
+    section('16 · The router\'s wiring — real exports, types only, no second copy of a rule');
+
+    const routerSource = stripComments(readSrc('flow-screens.ts'));
+    const portsSource = stripComments(readSrc('flow-screen-ports.ts'));
+    const controllerWiring = stripComments(readSrc('flow-data.controller.ts'));
+
+    /**
+     * ⛔ The sixth guard shape: a "must NOT" scan goes vacuously green when the code it guards
+     * moves. Both files that make up the router are asserted present before they are scanned.
+     */
+    assert('both router files are in scope for the scans below (non-empty, and the ports file exports the ports)',
+        routerSource.includes('export async function serveFlowScreen')
+        && /export const flowScreenPorts/.test(portsSource));
+
+    assert('⛔ the controller hands the router the PRODUCTION ports',
+        /serveFlowScreen\(request,\s*flowScreenPorts\)/.test(controllerWiring)
+        && /from '\.\/flow-screen-ports'/.test(controllerWiring));
+
+    /**
+     * ⛔ Each port IS the shared export, named — so a look-alike with its own rules cannot be
+     * slipped in without this going red.
+     */
+    const realPorts: Array<[string, RegExp]> = [
+        ['readSession → inAppSurfaceStore.read', /readSession:[^\n]*=>\s*inAppSurfaceStore\.read\(kind,\s*handle\)/],
+        ['extendSession → inAppSurfaceStore.touch', /extendSession:[^\n]*=>\s*inAppSurfaceStore\.touch\(kind,\s*handle\)/],
+        ['readListingPage', /^\s*readListingPage,$/m],
+        ['readProductDetail', /^\s*readProductDetail,$/m],
+        ['loadImage → loadFlowImage', /loadImage:\s*loadFlowImage,/],
+        ['readCheckoutView', /^\s*readCheckoutView,$/m],
+        ['placeCheckout', /^\s*placeCheckout,$/m],
+        ['executePurchase', /^\s*executePurchase,$/m],
+        ['claims → botIdempotencyStore', /claims:\s*botIdempotencyStore,/],
+    ];
+    const notReal = realPorts.filter(([, re]) => !re.test(portsSource)).map(([name]) => name);
+    assert('⛔ every production port is the real shared export, passed through', notReal.length === 0, notReal.join(', '));
+
+    const sourcedFrom: Array<[string, string]> = [
+        ['executePurchase', 'bot-surface/controllers/bot-purchase.controller'],
+        ['placeCheckout, readCheckoutView', 'bot-surface/miniapp/surfaces/checkout.controller'],
+        ['readProductDetail', 'bot-surface/miniapp/surfaces/product-detail.read'],
+        ['readListingPage', 'bot-surface/miniapp/surfaces/product-listing.read'],
+        ['botIdempotencyStore', 'bot-surface/services/bot-idempotency.store'],
+        ['inAppSurfaceStore', 'bot-surface/services/inapp-surface.store'],
+    ];
+    /**
+     * ⚠ A literal `includes`, deliberately, and not a built regex: this repository bans
+     * `new RegExp()` outright (regex injection + ReDoS), and the check needs no pattern —
+     * `flow-screen-ports.ts` sits two levels under `modules/`, so the path is exact.
+     */
+    const wrongSource = sourcedFrom
+        .filter(([names, from]) => !portsSource.includes(`import { ${names} } from '../../${from}';`))
+        .map(([names]) => names);
+    assert('⛔ … imported from the modules that own them, not from a copy', wrongSource.length === 0, wrongSource.join(', '));
+
+    /**
+     * ⚠ The router must stay importable by THIS suite: anything from the two controller files, or
+     * from the two Redis stores, is a TYPE import. A value import would either hang the suite or
+     * bypass the ports.
+     */
+    /**
+     * Whole import STATEMENTS, not lines: `import type {\n A,\n B,\n} from '…'` spans four lines,
+     * and a line-by-line scan cannot see which module a multi-line import names.
+     */
+    const importsOf = (source: string): Array<{ typeOnly: boolean; from: string }> =>
+        [...source.matchAll(/^import\s+(type\s+)?[^;]*?from\s+'([^']+)';/gm)]
+            .map((m) => ({ typeOnly: m[1] !== undefined, from: m[2] }));
+    const HEAVY = /bot-purchase\.controller$|checkout\.controller$|inapp-surface\.store$|bot-idempotency\.store$/;
+    const routerImports = importsOf(routerSource);
+    const heavy = routerImports.filter((i) => HEAVY.test(i.from));
+    assert('the import scan sees the router\'s imports at all (≥ 4 heavy modules named)',
+        heavy.length >= 4, `${heavy.length} found`);
+    assert('⚠ the router imports the controllers and the two stores as TYPES only',
+        heavy.every((i) => i.typeOnly), heavy.filter((i) => !i.typeOnly).map((i) => i.from).join(', '));
+    assert('⚠ the router never imports the image loader (sharp, storage) — it arrives as a port',
+        !routerImports.some((i) => /image-bytes$/.test(i.from)));
+
+    const router = routerSource + portsSource;
+    assert('⛔ neither router file re-derives a rule: no rung, no price formatting, no mask, no spend, no order',
+        !/resolvePurchaseAffordance|formatBotPrice|maskPhone|maskAddress|\.consume\(|addToCart|createOrdersFromCart|toFixed|Intl\.NumberFormat/.test(router));
+    assert('⛔ the router never reads a purchase result\'s url — a Telegram screen address',
+        !/result\.url|\.url\b/.test(routerSource));
+    assert('⛔ the product id reaches the purchase core from the SESSION, never from the form',
+        /productId:\s*session\.productId/.test(routerSource) && !/data\.productId/.test(routerSource));
+    assert('⚠ a post-spend outcome is stored and a pre-spend one released, decided by handleSurvived alone',
+        /spent\s*=\s*!handleSurvived\(error\)/.test(routerSource) && !/spent\s*===\s*false/.test(routerSource));
 
     // ═════════════════════════════════════════════════════════════════════════
     console.log('\n────────────────────────────────────────────────────────────');

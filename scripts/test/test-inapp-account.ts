@@ -27,6 +27,23 @@ import {
     verifyConfirmationRef,
     type BotConfirmationPurpose,
 } from '../../src/modules/bot-surface/domain/bot-confirmation-ref';
+import {
+    applyOnboardingStep,
+    BOT_ONBOARDING_STEP_VALUES,
+    isOnboardingComplete,
+    nextOnboardingStep,
+    onboardingChanged,
+    seedOnboarding,
+    type BotOnboardingRecord,
+} from '../../src/modules/bot-surface/domain/bot-onboarding';
+import {
+    CONTACT_RESEND_COOLDOWN_SECONDS,
+    resendWaitSeconds,
+} from '../../src/modules/bot-surface/domain/bot-resend-cooldown';
+import {
+    composeSignInMessage,
+    SignInMessageError,
+} from '../../src/modules/bot-surface/domain/bot-signin-message';
 
 let passed = 0;
 let failed = 0;
@@ -275,7 +292,99 @@ function main(): void {
         !renderer.includes('business_connection_id'));
 
     console.log('\n══ § 2 · Atlas phase 1 — first contact ══');
-    console.log('  (not built yet)\n');
+
+    console.log('\n── A Skip button stays tappable forever, and must not rewrite an answer ──');
+
+    /**
+     * ⚠ **THE SITUATION, BECAUSE IT READS LIKE AN EDGE CASE AND IS NOT ONE.** The bot asks
+     * for an email and draws [Skip]. The customer ignores the button and types their address
+     * instead; the step is recorded `provided`. The Skip is still sitting in the thread —
+     * a chat keeps its whole history, and nothing expires a button — and days later they
+     * scroll up and tap it.
+     *
+     * Before the fix the write was unconditional, so that tap re-recorded an ANSWERED step as
+     * declined. `skipped` means "never ask again", so the address stayed on the profile while
+     * the checklist stopped accounting for it — and on a REQUIRED step the same overwrite
+     * un-completes a finished account, because `isOnboardingComplete` demands `provided`
+     * there, not merely "not pending".
+     */
+    const JAN = new Date('2026-01-05T09:00:00Z');
+    const MAR = new Date('2026-03-02T14:30:00Z');
+    const LATER = new Date('2026-03-02T14:35:00Z');
+
+    /** A WhatsApp account: the sender id IS the number, so `phone` is satisfied at creation. */
+    const seeded = seedOnboarding(['phone'], JAN);
+    const stateOf = (rows: readonly BotOnboardingRecord[], step: string) =>
+        rows.find((r) => r.step === step)!;
+
+    const answeredEmail = applyOnboardingStep(seeded, 'email', 'provided', MAR);
+    const staleSkip = applyOnboardingStep(answeredEmail, 'email', 'skipped', LATER);
+
+    assert('⛔ a Skip tapped after the answer leaves the email PROVIDED, at its original time', () =>
+        stateOf(staleSkip, 'email').state === 'provided'
+        && stateOf(staleSkip, 'email').at!.getTime() === MAR.getTime());
+
+    assert('⛔ a stale Skip cannot un-complete a finished account (the REQUIRED-step case)', () => {
+        const done = ['name', 'email', 'address'].reduce(
+            (rows, step) => applyOnboardingStep(rows, step as typeof BOT_ONBOARDING_STEP_VALUES[number], 'provided', JAN),
+            seeded,
+        );
+        if (!isOnboardingComplete(done)) return false;
+        return isOnboardingComplete(applyOnboardingStep(done, 'name', 'skipped', LATER));
+    });
+
+    assert('⛔ a second Skip keeps the date of the FIRST refusal, so "when did they decline" survives', () => {
+        const declined = applyOnboardingStep(seeded, 'email', 'skipped', JAN);
+        const again = applyOnboardingStep(declined, 'email', 'skipped', LATER);
+        return stateOf(again, 'email').state === 'skipped'
+            && stateOf(again, 'email').at!.getTime() === JAN.getTime();
+    });
+
+    /** The guard must not cost the ordinary path: a genuine first Skip still records. */
+    assert('a Skip on a step that IS pending still records, and the ask moves on', () => {
+        const skipped = applyOnboardingStep(
+            applyOnboardingStep(seeded, 'name', 'provided', MAR), 'email', 'skipped', MAR,
+        );
+        return stateOf(skipped, 'email').state === 'skipped'
+            && stateOf(skipped, 'email').at!.getTime() === MAR.getTime()
+            && nextOnboardingStep(skipped)?.step === 'address';
+    });
+
+    /**
+     * The asymmetry is the rule, not an oversight: a LATER answer may always replace an
+     * earlier refusal (a person who declined an email in January owns that field in March),
+     * while a stale refusal may never replace an answer.
+     */
+    assert('providing after a skip is still allowed — only the reverse is refused', () => {
+        const declined = applyOnboardingStep(seeded, 'email', 'skipped', JAN);
+        const answered = applyOnboardingStep(declined, 'email', 'provided', MAR);
+        return stateOf(answered, 'email').state === 'provided'
+            && stateOf(answered, 'email').at!.getTime() === MAR.getTime();
+    });
+
+    assert('onboardingChanged tells a real skip from a stale one, so a no-op need not be written', () =>
+        onboardingChanged(seeded, applyOnboardingStep(seeded, 'email', 'skipped', MAR))
+        && !onboardingChanged(answeredEmail, staleSkip));
+
+    /**
+     * ⚠ **Span, stated because a scan that cannot say what it read is the recurring defect
+     * here**: the text between `async applyStep(` and this method's `switch (step) {` — i.e.
+     * the skip branch alone, never the whole file, which mentions `persistOnboarding` in four
+     * other places. Both boundary markers are asserted present first, so a rename cannot
+     * leave this vacuously green.
+     */
+    const registration = read('modules/bot-surface/services/bot-registration.service.ts');
+    const from = registration.indexOf('async applyStep(');
+    const to = registration.indexOf('switch (step) {', from);
+    const skipBranch = from >= 0 && to > from ? registration.slice(from, to) : '';
+
+    assert('the scan found applyStep\'s skip branch (markers present, region non-empty)', () =>
+        skipBranch.length > 0 && skipBranch.includes("action === 'skip'"));
+
+    assert('⛔ the service returns the customer UNWRITTEN when the skip changes nothing', () =>
+        /if\s*\(!onboardingChanged\([^)]*\)\)\s*return customer;/.test(stripComments(skipBranch))
+        && stripComments(skipBranch).indexOf('onboardingChanged')
+            < stripComments(skipBranch).indexOf('persistOnboarding'));
 
     console.log('\n══ § 3 · Atlas phase 9 — the account ══');
 
@@ -433,6 +542,254 @@ function main(): void {
             return minted.length === 29 && Buffer.byteLength(token, 'utf8') === 62;
         });
     }
+
+    console.log('\n── Disconnecting an app: the scope is the CHANNEL, and the budget is not tight ──');
+
+    /**
+     * ⚠ **The scope here is the channel being disconnected, which is not the channel in the
+     * subject.** `bot-confirmation-ref.ts` documents that distinction at `ConfirmationSubject`:
+     * the subject's channel is the conversation's. Both matter and they differ — a customer
+     * talking to us on WhatsApp gets a button that disconnects Telegram, so a reference bound
+     * only to the account would let the two swap places in a scrolled-back thread.
+     *
+     * ⚠ **`unlink` is also the purpose whose scope is NOT a 24-hex id**, which is the reason
+     * these assertions exist beside the orders stream's: the byte arithmetic that says 62 does
+     * not describe this verb at all, and a budget assertion copied from there would pin a
+     * number this token can never reach.
+     */
+    const WA = 'whatsapp';
+    const TG = 'telegram';
+    const unlinkRef = mintConfirmationRef('unlink', ME, TG, T0, SECRET);
+    const judgeUnlink = (scope: string, subject = ME, purpose: BotConfirmationPurpose = 'unlink') =>
+        verifyConfirmationRef(unlinkRef, purpose, subject, scope, T0 + 1000, SECRET);
+
+    assert('unlink: valid for the one app it was minted for', () =>
+        judgeUnlink(TG) === 'valid');
+
+    assert('⛔ unlink: the OTHER app → invalid (a scrolled-back button cannot swap which app it cuts)', () =>
+        judgeUnlink(WA) === 'invalid');
+
+    assert('⛔ unlink: an EMPTY scope → invalid', () =>
+        judgeUnlink('') === 'invalid');
+
+    assert('⛔ unlink: another customer, or the same question asked in the other app → invalid', () =>
+        judgeUnlink(TG, { ...ME, userId: '66f0a1b2c3d4e5f601234568' }) === 'invalid'
+        && judgeUnlink(TG, { ...ME, channel: 'whatsapp' }) === 'invalid');
+
+    assert('⛔ unlink: presented on any OTHER purpose, same scope → invalid', () =>
+        (['close', 'cancel', 'ticket-close'] as const)
+            .every((other) => judgeUnlink(TG, ME, other) === 'invalid'));
+
+    assert('yes:unl:<channel>:<ref> is 46 bytes, and no:unl:<channel> is 15', () =>
+        Buffer.byteLength(`yes:unl:${WA}:${unlinkRef}`, 'utf8') === 46
+        && Buffer.byteLength(`no:unl:${WA}`, 'utf8') === 15);
+
+    /**
+     * ⛔ **The measurement that changed the design.** The plan called this context `unlink`, and
+     * with the scope it was first specified with — a 24-hex id — `yes:unlink:<id>:<ref>` is 65
+     * bytes, one over Telegram's cap, which silently drops the keyboard. Both halves moved: the
+     * context to three letters, and the scope to what the platform actually identifies a
+     * connection by. This pins the arithmetic so neither can drift back.
+     */
+    assert('⛔ the rejected shapes are the ones that do NOT fit: `unlink` + a 24-hex id is 65 bytes', () =>
+        Buffer.byteLength(`yes:unlink:${ORDER_A}:${unlinkRef}`, 'utf8') === 65
+        && Buffer.byteLength(`yes:unl:${ORDER_A}:${unlinkRef}`, 'utf8') === 62);
+
+    console.log('\n── Asking for the confirmation link again: the wait, and the button that is absent ──');
+
+    const SENT = new Date('2026-09-20T10:00:00Z');
+    const after = (seconds: number) => new Date(SENT.getTime() + seconds * 1000);
+
+    assert('the moment it was sent, the whole cooldown is still to run', () =>
+        resendWaitSeconds(SENT, SENT) === CONTACT_RESEND_COOLDOWN_SECONDS);
+
+    assert('⛔ one millisecond short of the cooldown still refuses, and never says "retry in 0"', () => {
+        const wait = resendWaitSeconds(SENT, new Date(SENT.getTime() + CONTACT_RESEND_COOLDOWN_SECONDS * 1000 - 1));
+        return wait === 1;
+    });
+
+    assert('exactly on time may send — the request a well-behaved client makes after being told to wait', () =>
+        resendWaitSeconds(SENT, after(CONTACT_RESEND_COOLDOWN_SECONDS)) === 0
+        && resendWaitSeconds(SENT, after(CONTACT_RESEND_COOLDOWN_SECONDS + 1)) === 0);
+
+    assert('a wait is always a whole number of seconds, for every point inside the window', () =>
+        [0.5, 1, 17.25, 60, 119.9].every((elapsed) => {
+            const wait = resendWaitSeconds(SENT, after(elapsed));
+            return Number.isInteger(wait) && wait >= 1 && wait <= CONTACT_RESEND_COOLDOWN_SECONDS;
+        }));
+
+    assert('⛔ a requestedAt in the FUTURE waits the full cooldown, never a negative wait', () =>
+        resendWaitSeconds(SENT, after(-90)) === CONTACT_RESEND_COOLDOWN_SECONDS
+        && resendWaitSeconds(new Date(NaN), SENT) === CONTACT_RESEND_COOLDOWN_SECONDS);
+
+    /**
+     * ⚠ **Span**: the body of `pendingChangeActions` and of `contactSection` in
+     * `bot-contact.controller.ts`, sliced between named markers and asserted non-empty first.
+     * What it pins is a DELIBERATE ASYMMETRY that reads like an omission — a phone change sends
+     * nothing (it is proved by connecting the number on WhatsApp), so there is no link to send
+     * again and no `ph:resend` anywhere. The next person to "finish the pair" needs to meet
+     * this rather than a silent no-op.
+     */
+    const contactSource = read('modules/bot-surface/controllers/bot-contact.controller.ts');
+    const actionsFrom = contactSource.indexOf('function pendingChangeActions(');
+    const actionsTo = contactSource.indexOf('export class BotContactController', actionsFrom);
+    const actionsRegion = actionsFrom >= 0 && actionsTo > actionsFrom
+        ? stripComments(contactSource.slice(actionsFrom, actionsTo)) : '';
+
+    const routeFrom = contactSource.indexOf('export async function contactSection(');
+    const routeRegion = routeFrom >= 0 ? stripComments(contactSource.slice(routeFrom)) : '';
+
+    assert('the scan found both spans it reasons about', () =>
+        actionsRegion.includes('cancelChangeButton') && routeRegion.includes('switch (rest)'));
+
+    assert('⛔ a phone change offers Cancel and NOTHING to re-send (nothing was ever sent)', () =>
+        actionsRegion.includes("if (field === 'phone') return [cancel];")
+        && !actionsRegion.includes("'ph', 'resend'"));
+
+    assert('⛔ `ph:resend` routes nowhere — three cases, and the fourth is refused, not ignored', () =>
+        ["'em:resend'", "'em:cancel'", "'ph:cancel'"].every((c) => routeRegion.includes(c))
+        && !routeRegion.includes("'ph:resend'")
+        && routeRegion.includes('throw unknownBotAction()'));
+
+    console.log('\n── The sign-in message: five languages, one code, no grammar around a value ──');
+
+    /** Stand-ins for the five-language phrases, which land with backend-dc's batch 2. */
+    const PHRASES = {
+        en: { tapToOpen: 'Tap to sign in on this device:', codeIntro: 'Or sign in with your phone number and this code:', codeOnly: 'Sign in with your phone number and this code:', website: 'Website:', validFor: 'Valid for:', ignore: 'If you did not ask to sign in, ignore this message.' },
+        fr: { tapToOpen: 'Touchez pour vous connecter sur cet appareil :', codeIntro: 'Ou connectez-vous avec votre numéro de téléphone et ce code :', codeOnly: 'Connectez-vous avec votre numéro de téléphone et ce code :', website: 'Site web :', validFor: 'Valable :', ignore: "Si vous n'avez pas demandé à vous connecter, ignorez ce message." },
+        pt: { tapToOpen: 'Toque para entrar neste dispositivo:', codeIntro: 'Ou entre com o seu número de telefone e este código:', codeOnly: 'Entre com o seu número de telefone e este código:', website: 'Site:', validFor: 'Válido:', ignore: 'Se não pediu para entrar, ignore esta mensagem.' },
+        es: { tapToOpen: 'Toca para iniciar sesión en este dispositivo:', codeIntro: 'O inicia sesión con tu número de teléfono y este código:', codeOnly: 'Inicia sesión con tu número de teléfono y este código:', website: 'Sitio web:', validFor: 'Válido:', ignore: 'Si no pediste iniciar sesión, ignora este mensaje.' },
+        ar: { tapToOpen: 'اضغط لتسجيل الدخول على هذا الجهاز:', codeIntro: 'أو سجّل الدخول برقم هاتفك وهذا الرمز:', codeOnly: 'سجّل الدخول برقم هاتفك وهذا الرمز:', website: 'الموقع:', validFor: 'صالح لمدة:', ignore: 'إن لم تطلب تسجيل الدخول، تجاهل هذه الرسالة.' },
+    };
+    const VALUES = { magicLink: 'https://wi-mall.com/s/abc123', site: 'wi-mall.com', code: '482913', ttlSeconds: 900 };
+    const LANGS = ['en', 'fr', 'pt', 'es', 'ar'] as const;
+
+    assert('every language assembles, and none of them drops a phrase or a value', () =>
+        LANGS.every((lang) => {
+            const message = composeSignInMessage(PHRASES[lang], VALUES);
+            return Object.values(PHRASES[lang]).filter((p) => p !== PHRASES[lang].codeOnly).every((p) => message.includes(p))
+                && message.includes(VALUES.magicLink) && message.includes(VALUES.site);
+        }));
+
+    assert('⛔ the code appears EXACTLY once, in every language', () =>
+        LANGS.every((lang) =>
+            composeSignInMessage(PHRASES[lang], VALUES).split(VALUES.code).length - 1 === 1));
+
+    assert('⛔ the code is alone on its line — nothing to select around, nothing to reorder it', () =>
+        LANGS.every((lang) =>
+            composeSignInMessage(PHRASES[lang], VALUES).split('\n').includes(VALUES.code)));
+
+    /**
+     * ⚠ **The Arabic assertion is about the ASSEMBLED string, not the phrases** — which is
+     * the check the coordinator asked for, and the one that would have caught a concatenated
+     * sentence. Every left-to-right run (the link, the code, `15 min`, the host) must occupy
+     * a whole line, so the bidirectional algorithm has no right-to-left text on that line to
+     * reorder it against.
+     */
+    assert('⛔ Arabic: every left-to-right value stands alone on its own line', () => {
+        const lines = composeSignInMessage(PHRASES.ar, VALUES).split('\n');
+        return [VALUES.magicLink, VALUES.code, VALUES.site, '15 min'].every((ltr) => lines.includes(ltr));
+    });
+
+    assert('the duration never inflects a word: a number and the symbol "min"', () =>
+        LANGS.every((lang) => {
+            const message = composeSignInMessage(PHRASES[lang], VALUES);
+            return message.includes('15 min')
+                && !/minute|minuto|دقيقة|دقائق|دقيقتان/.test(message);
+        }));
+
+    assert('⛔ a lifetime rounds UP, and never to "0 min" or below one minute', () =>
+        [[30, '1 min'], [60, '1 min'], [61, '2 min'], [90, '2 min'], [900, '15 min']]
+            .every(([ttl, expected]) =>
+                composeSignInMessage(PHRASES.en, { ...VALUES, ttlSeconds: ttl as number })
+                    .includes(expected as string)));
+
+    assert('without a magic link the code intro stands alone — no dangling "Or"', () => {
+        const message = composeSignInMessage(PHRASES.en, { ...VALUES, magicLink: null });
+        return message.includes(PHRASES.en.codeOnly)
+            && !message.includes(PHRASES.en.codeIntro)
+            && !message.includes(PHRASES.en.tapToOpen);
+    });
+
+    assert('without a site the website label disappears with it', () => {
+        const message = composeSignInMessage(PHRASES.en, { ...VALUES, site: null });
+        return !message.includes(PHRASES.en.website);
+    });
+
+    /**
+     * ⛔ The refusals. Each of these reaches a customer as a blank line or `NaN min` on the
+     * one message they need to get into their account, where it reads as the platform having
+     * lost their code rather than as a caller that forgot an argument.
+     */
+    assert('⛔ a missing code, phrase or lifetime THROWS rather than printing a gap', () => {
+        const cases: (() => string)[] = [
+            () => composeSignInMessage(PHRASES.en, { ...VALUES, code: '   ' }),
+            () => composeSignInMessage(PHRASES.en, { ...VALUES, ttlSeconds: 0 }),
+            () => composeSignInMessage(PHRASES.en, { ...VALUES, ttlSeconds: NaN }),
+            () => composeSignInMessage({ ...PHRASES.en, validFor: '' }, VALUES),
+        ];
+        return cases.every((run) => {
+            try {
+                run();
+                return false;
+            } catch (err) {
+                return err instanceof SignInMessageError;
+            }
+        });
+    });
+
+    console.log('\n── The welcome: once, on the turn that finishes the setup ──');
+
+    /**
+     * ⚠ **Span**: `setWelcomeReply`'s own body, sliced to where the next function begins, plus
+     * the two call sites found over the whole file. Both markers asserted present first. The
+     * controller cannot be imported — it reaches `orders/`, which does work at import under
+     * bare `ts-node` and never returns — so this is a scan by necessity, and it is written to
+     * name what it read.
+     */
+    const identity = read('modules/bot-surface/controllers/bot-identity.controller.ts');
+    const welcomeFrom = identity.indexOf('function setWelcomeReply(');
+    const welcomeTo = identity.indexOf('function setOnboardingReply(', welcomeFrom);
+    const welcome = welcomeFrom >= 0 && welcomeTo > welcomeFrom
+        ? stripComments(identity.slice(welcomeFrom, welcomeTo)) : '';
+
+    /**
+     * ⚠ **Everything OUTSIDE the definition**, because `function setWelcomeReply(req…` matches
+     * a naive search for a call and would make "two call sites" read as three. Caught by this
+     * assertion failing on correct code — the span and the claim have to be the same text.
+     */
+    const callSites = identity.slice(0, welcomeFrom) + identity.slice(welcomeTo);
+
+    assert('the scan found setWelcomeReply, and the file still has both call sites', () =>
+        welcome.length > 0
+        && (callSites.match(/setWelcomeReply\(req/g) ?? []).length === 2);
+
+    assert('the welcome offers exactly THREE buttons — WhatsApp silently drops a fourth', () =>
+        (welcome.match(/\{ id: /g) ?? []).length === 3);
+
+    assert('they are Browse · My orders · Help, by the agreed tokens', () =>
+        welcome.includes("openSurfaceActionId('pl')")
+        && welcome.includes("orderActionId('list')")
+        && welcome.includes('supportFormActionId()'));
+
+    /**
+     * ⛔ The property the whole feature turns on. "The checklist is complete" stays true for
+     * ever, so a welcome sent on the STATE greets the customer again every time they later add
+     * an email or re-share their contact. Only the TRANSITION is the event — and both call
+     * sites must test it, including the rare one where sharing a contact completes a
+     * backfilled account.
+     */
+    assert('⛔ both call sites fire on the TRANSITION (!wasComplete && …), never on the state', () =>
+        (identity.match(/if\s*\(!wasComplete\s*&&\s*isOnboardingComplete\([\s\S]{0,60}?setWelcomeReply\(req/g) ?? []).length === 2);
+
+    assert('⛔ each `wasComplete` is read BEFORE its write, not after', () => {
+        const stripped = stripComments(identity);
+        return ['applyStep(', 'registerFromContact('].every((write) => {
+            const at = stripped.indexOf(write);
+            const readAt = stripped.lastIndexOf('wasComplete =', at);
+            return readAt > 0 && readAt < at;
+        });
+    });
 
     console.log('\n── Every source file stays TEXT to git ──');
 

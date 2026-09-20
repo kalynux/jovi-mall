@@ -9,6 +9,7 @@ import {
 import { flowAppSecret, verifyFlowSignature } from './domain/flow-signature';
 import { flowPrivateKey } from './flows.config';
 import { serveFlowScreen } from './flow-screens';
+import { flowScreenPorts } from './flow-screen-ports';
 
 /**
  * `POST /api/webhooks/whatsapp/flows` — the encrypted data endpoint.
@@ -181,7 +182,7 @@ export class FlowDataController {
          * through the same cipher as a 200, and the handset shows that sentence. A bare 427
          * ends the Flow with nothing for the customer to act on.
          */
-        const verdict = await serveFlowScreen(request);
+        const verdict = await serveFlowScreen(request, flowScreenPorts);
         res.status(verdict.status)
             .type('text/plain')
             .send(encryptFlowResponse(verdict.body, aesKey, initialVector));

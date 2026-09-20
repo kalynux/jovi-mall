@@ -63,6 +63,15 @@ const RescheduleBookingSchema = z.object({
     newSlotId: z.string().min(1, 'newSlotId is required'),
 });
 
+/**
+ * ⚠ **`slotId`, not `newSlotId`.** The hold names the time being taken; the reschedule names the
+ * time being moved TO. Two names for two calls is worth the asymmetry — a dashboard that sends
+ * `newSlotId` here gets a validation error naming the field, rather than a hold on `undefined`.
+ */
+const HoldSlotSchema = z.object({
+    slotId: z.string().min(1, 'slotId is required'),
+});
+
 const CancelBookingSchema = z.object({
     reason: z.string().max(500).optional(),
 });
@@ -358,6 +367,45 @@ export class VendorBookingController {
             success: true,
             data: updatedBooking,
             message: 'Booking rescheduled',
+        });
+    });
+
+    /**
+     * POST /api/vendor/bookings/:id/slot-hold
+     *
+     * Hold any time the shop rule allows, so the appointment can then be moved onto it.
+     *
+     * ⚠ **This exists because the shop rule was unreachable.** A move needs a hold, and the only
+     * route that takes one is the storefront's slot lock, which refuses anything outside the
+     * shop's published hours. So "a shop may move an appointment outside its opening hours"
+     * (owner, 2026-09-16) failed one step earlier, at the hold, for every shop.
+     *
+     * ⚠ **The same two ids as the reschedule above, for the same reason** — the hold under the
+     * signed-in USER, the booking scoped by the VENDOR entity. The service applies the identical
+     * rule the move will apply, so this door can never grant a time the next call refuses.
+     */
+    static holdSlot = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const holdOwnerId = req.auth!.user._id.toString();
+        const { slotId } = HoldSlotSchema.parse(req.body ?? {});
+
+        const hold = await bookingService.holdSlotForReschedule(
+            req.params.id,
+            slotId,
+            holdOwnerId,
+            { role: 'vendor', id: vendorId },
+        );
+
+        res.json({
+            success: true,
+            data: {
+                held: true,
+                slotId: hold.slotId,
+                startAt: hold.start,
+                endAt: hold.end,
+                expiresAt: hold.expiresAt,
+            },
+            message: 'Slot held',
         });
     });
 

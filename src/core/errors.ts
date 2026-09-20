@@ -291,6 +291,9 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.PAYMENT_ORDER_ALREADY_PAID]: 'Order is already paid',
     [ERROR_CODES.PAYMENT_INVALID_ORDER_STATUS]: 'Invalid order status for payment',
     [ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED]: 'Payment gateway not supported',
+    // The `internal` sentence a customer actually receives: the boundary replaces the thrown
+    // message with this one and drops `details`, so it must say nothing about our secrets.
+    [ERROR_CODES.PAYMENT_GATEWAY_NOT_CONFIGURED]: 'No payment gateway is configured',
     [ERROR_CODES.PAYMENT_INITIATION_FAILED]: 'Payment initiation failed',
     [ERROR_CODES.PAYMENT_VERIFICATION_FAILED]: 'Payment verification failed',
     [ERROR_CODES.PAYMENT_BOOKING_NOT_FOUND]: 'Booking not found',
@@ -431,6 +434,8 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
         'That file reference is unknown or has expired — the customer must send the file again',
     [ERROR_CODES.BOT_PRODUCT_LIST_EXPIRED]:
         'That product list is unknown or has expired — run the search again',
+    [ERROR_CODES.BOT_SCREEN_SESSION_EXPIRED]:
+        'That screen session is unknown, spent or has expired — open the screen again',
     [ERROR_CODES.BOT_ACTION_TOKEN_UNKNOWN]:
         'That button carries a token this service does not recognise',
     [ERROR_CODES.BOT_PRODUCT_NOT_IN_LIST]:
@@ -449,6 +454,8 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
         'The requested support scope has no party in this context',
     [ERROR_CODES.BOT_CONNECTION_ACTIVE_CHANNEL]:
         'A chat cannot disconnect the channel it arrived on — that is the binding this request was resolved by',
+    [ERROR_CODES.BOT_CONTACT_CODE_RESEND_TOO_SOON]:
+        'That code was sent moments ago — wait before asking for another',
 
     [ERROR_CODES.GOOGLE_MISSING_CLIENT_ID]: 'GOOGLE_CLIENT_ID is not configured',
     [ERROR_CODES.GOOGLE_MISSING_CLIENT_SECRET]: 'GOOGLE_CLIENT_SECRET is not configured',

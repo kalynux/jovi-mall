@@ -93,7 +93,7 @@ export class SenderLoginDeliveryService {
      * the gate has already run by the time this is reached, and re-running it here would
      * ask the same question twice and risk two answers.
      */
-    async send(caller: ResolvedLoginAccount): Promise<SenderLoginDeliveryResult> {
+    async send(caller: ResolvedLoginAccount, language: string | null = null): Promise<SenderLoginDeliveryResult> {
         await this.assertWithinLimit(caller);
 
         const issued = await this.logins.mint(caller);
@@ -112,6 +112,7 @@ export class SenderLoginDeliveryService {
             issued.code,
             buildMagicLinkUrl(issued.token),
             issued.ttlSeconds,
+            language,
         );
 
         await this.deliver(caller, body);

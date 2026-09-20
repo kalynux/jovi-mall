@@ -67,7 +67,9 @@ export type InAppSurfaceKind =
     /** Store listing. A later milestone; the contract is frozen here. */
     | 'sl'
     /** Checkout — cart, address, delivery, payment. The sensitive one. */
-    | 'co';
+    | 'co'
+    /** Ticket form — one screen to open a support request. */
+    | 'tf';
 
 /**
  * Per-kind lifetimes.
@@ -83,6 +85,14 @@ export const TTL_SECONDS: Readonly<Record<InAppSurfaceKind, number>> = Object.fr
     ol: 30 * 60,
     sl: 30 * 60,
     co: 10 * 60,
+    /**
+     * Thirty minutes, with the list screens rather than with checkout, because the customer is
+     * WRITING here: describing what went wrong takes longer than paying, and a form that
+     * expires mid-sentence loses what they typed. It spends its handle on submit all the same
+     * — the single use is what stops a double tap opening two tickets — but single use and a
+     * short life answer different risks, and only the first one applies to a support request.
+     */
+    tf: 30 * 60,
 });
 
 const HANDLE_PREFIX = 'ia_';
@@ -158,7 +168,24 @@ export type InAppSurfaceSession =
      * A checkout screen must quote live money — a held total is a total that can disagree
      * with the cart by the time somebody pays.
      */
-    | (InAppSessionBase & { kind: 'co'; cartId: string | null });
+    | (InAppSessionBase & { kind: 'co'; cartId: string | null })
+    /**
+     * The support form. Every member is nullable because the form is reached from three
+     * doors — a bare "I need help", a button on one order, and a photo the customer has just
+     * sent — and each knows a different amount. What it carries is what PRE-FILLS the screen;
+     * the ticket itself is written from what the customer submits.
+     *
+     * ⚠ **A `tf` handle authorises ONE submit** (`consume`, not `read`, on that route), so a
+     * double tap cannot open two tickets. Reading the form is repeatable.
+     */
+    | (InAppSessionBase & {
+          kind: 'tf';
+          form: {
+              orderId: string | null;
+              topic: 'rd' | 'ad' | 'hp' | null;
+              attachmentRef: string | null;
+          };
+      });
 
 /** What `mint` is given: everything but the expiry, which only this store may set. */
 export type InAppSessionInput =
@@ -166,7 +193,8 @@ export type InAppSessionInput =
     | Omit<Extract<InAppSurfaceSession, { kind: 'pd' }>, 'expiresAt'>
     | Omit<Extract<InAppSurfaceSession, { kind: 'ol' }>, 'expiresAt'>
     | Omit<Extract<InAppSurfaceSession, { kind: 'sl' }>, 'expiresAt'>
-    | Omit<Extract<InAppSurfaceSession, { kind: 'co' }>, 'expiresAt'>;
+    | Omit<Extract<InAppSurfaceSession, { kind: 'co' }>, 'expiresAt'>
+    | Omit<Extract<InAppSurfaceSession, { kind: 'tf' }>, 'expiresAt'>;
 
 const unexpired = (expiresAt: string): boolean => {
     const at = Date.parse(expiresAt);

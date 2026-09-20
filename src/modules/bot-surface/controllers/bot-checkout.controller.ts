@@ -292,7 +292,7 @@ async function retryCharge(
     const payerNumber = phone ?? (await storedPayerNumber(customer));
     if (!payerNumber) {
         throw createAppError(
-            ERROR_CODES.PAYMENT_REFERENCE_REQUIRED,
+            ERROR_CODES.PAYMENT_PAYER_NUMBER_REQUIRED,
             422,
             'A mobile money number is needed to take this payment',
         );

@@ -122,6 +122,47 @@ const DETAIL_CHOOSE: Copy = {
     ar: 'اختر',
 };
 
+/** Section heading over the similar-items strip on the detail screen. */
+const DETAIL_SIMILAR: Copy = {
+    en: 'Similar items',
+    fr: 'Articles similaires',
+    pt: 'Artigos semelhantes',
+    es: 'Artículos similares',
+    ar: 'منتجات مشابهة',
+};
+
+const DETAIL_NO_SIMILAR: Copy = {
+    en: 'Nothing similar to show right now.',
+    fr: 'Rien de similaire à afficher pour le moment.',
+    pt: 'Nada de semelhante para mostrar de momento.',
+    es: 'Nada similar que mostrar por ahora.',
+    ar: 'لا يوجد شيء مشابه لعرضه حاليًا.',
+};
+
+const DETAIL_REVIEWS: Copy = {
+    en: 'Reviews',
+    fr: 'Avis',
+    pt: 'Opiniões',
+    es: 'Opiniones',
+    ar: 'التقييمات',
+};
+
+const DETAIL_MORE_REVIEWS: Copy = {
+    en: 'More reviews',
+    fr: "Plus d'avis",
+    pt: 'Mais opiniões',
+    es: 'Más opiniones',
+    ar: 'المزيد من التقييمات',
+};
+
+const DETAIL_NO_REVIEWS: Copy = {
+    en: 'No reviews yet.',
+    fr: "Pas encore d'avis.",
+    pt: 'Ainda sem opiniões.',
+    es: 'Aún no hay opiniones.',
+    ar: 'لا توجد تقييمات بعد.',
+};
+
 const DETAIL_DESCRIPTION: Copy = {
     en: 'Description',
     fr: 'Description',
@@ -354,6 +395,11 @@ const PAGE = Object.freeze({
     detailChoose: DETAIL_CHOOSE,
     detailDescription: DETAIL_DESCRIPTION,
     detailPickFirst: DETAIL_PICK_FIRST,
+    detailSimilar: DETAIL_SIMILAR,
+    detailNoSimilar: DETAIL_NO_SIMILAR,
+    detailReviews: DETAIL_REVIEWS,
+    detailMoreReviews: DETAIL_MORE_REVIEWS,
+    detailNoReviews: DETAIL_NO_REVIEWS,
 
     checkoutHeading: CHECKOUT_HEADING,
     checkoutTotal: CHECKOUT_TOTAL,

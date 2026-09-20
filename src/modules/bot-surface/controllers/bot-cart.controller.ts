@@ -12,7 +12,7 @@ import { payLinkService } from '../../payments/services/pay-link.service';
 import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
 import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { botChrome } from '../domain/bot-chrome-copy';
-import { addedToCartActions } from './bot-purchase.controller';
+import { addedToCartActions } from '../domain/purchase-chat-copy';
 import {
     BotCartAddItemSchema,
     BotCartQuoteSchema,

@@ -117,6 +117,28 @@ export const BOT_ACTION_VERBS = Object.freeze([
     'tkt',
     'rate',
     'lang',
+    // ── Discovery and bargaining ─────────────────────────────────────────────
+    /** `sim:<productId>` — what else is like this one. */
+    'sim',
+    /** `save:<productId>` — keep it for later. ⚠ NOT a restock alert; nothing can send one. */
+    'save',
+    /** `deal:<sessionId>:<round>` — take the price the agent offered in that round. */
+    'deal',
+    // ── The account surface ──────────────────────────────────────────────────
+    /**
+     * `acct:<section>[:<id>[:<op>]]` — every door on the account surface, under ONE verb with
+     * one owning stream.
+     *
+     * ⚠ **A section, not a verb each.** Eight sections as eight verbs would put eight names in
+     * the shared vocabulary for one stream's internal structure — and the dispatcher routes a
+     * plain verb by the verb alone, so the argument grammar below stays inside the owning
+     * handler where the next change to it is not somebody else's edit.
+     *
+     * Worst case is `acct:addr:new:<candidate>` at 60 bytes: a geocoding candidate handle is
+     * `gc_` plus 43 characters, and `token()` throws above 64 rather than letting Telegram
+     * truncate it in silence.
+     */
+    'acct',
 ] as const);
 export type BotActionVerb = (typeof BOT_ACTION_VERBS)[number];
 
@@ -456,6 +478,56 @@ export function rateActionId(orderId: string, stars: 1 | 2 | 3 | 4 | 5): string 
 /** `lang:<code>` — one of the five languages this surface speaks. */
 export function languageActionId(language: string): string {
     return token('lang', language);
+}
+
+/**
+ * `sim:<productId>` — products similar to this one, as a listing. Drawn on an out-of-stock card,
+ * where the buy buttons are gone and "what else is like it" is the useful next step. 28 bytes.
+ *
+ * ⚠ Not `open:pl:<productId>`: `open:pl` is already Browse more, and its handler refuses any
+ * argument. Overloading it would give one key two meanings decided by whether an argument exists.
+ */
+export function similarItemsActionId(productId: string): string {
+    return token('sim', productId);
+}
+
+/**
+ * `save:<productId>` — put the product in the customer's saved items. 29 bytes.
+ *
+ * ⚠ Owner decision 2026-09-16: this REPLACES "Notify me". Nothing on the platform can tell a
+ * customer when something is back in stock, so the button promises nothing of the kind — it saves.
+ */
+export function saveForLaterActionId(productId: string): string {
+    return token('save', productId);
+}
+
+/**
+ * `deal:<sessionId>:<round>` — accept the price the bargaining agent offered in that round, and put
+ * the item in the basket at it. At most 33 bytes (a 24-hex session id, a round under 1000).
+ *
+ * ⛔ **The token carries a REFERENCE, never a price** (owner's rule). The price is read from the
+ * negotiation session's own record of that round and re-judged against the live window on the
+ * press — a price in the token would let anyone lock any figure. The ROUND is what makes "the exact
+ * price shown" true: a press on an offer the agent has since replaced is refused as superseded,
+ * never locked at a price the customer did not see.
+ */
+export function lockInOfferActionId(sessionId: string, round: number): string {
+    return token('deal', `${sessionId}:${round}`);
+}
+
+/**
+ * `acct:<section>[:<id>[:<op>]]` — the account surface.
+ *
+ * Sections: `menu` · `prof` · `addr` · `pay` · `ntf` · `inbox` · `conn` · `lang` · `close` ·
+ * `contact`. Operations ride as further parts — `acct:addr:<id>:def`, `acct:addr:<id>:rm`,
+ * `acct:inbox:read`, `acct:contact:em:resend`, `acct:addr:new:<candidateRef>`.
+ *
+ * ⚠ **Variadic rather than one `argument` string**, so no caller can hand-build a section and
+ * an id with the wrong separator; the joining happens here, once, and `token()` checks the
+ * result against the 64-byte cap for every shape.
+ */
+export function accountActionId(section: string, ...parts: string[]): string {
+    return token('acct', [section, ...parts].join(':'));
 }
 
 /**

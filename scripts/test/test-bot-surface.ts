@@ -2979,9 +2979,9 @@ async function main(): Promise<void> {
      * above is a one-way guard — they all pass on an EMPTY emission, which is exactly the
      * failure mode of a filter that has become too broad. Only a count catches that.
      */
-    assert('the generator emits 54 tools — update this when one lands', () => {
-        if (emitted.length !== 54) console.error(`     ↳ emitted ${emitted.length}`);
-        return emitted.length === 54;
+    assert('the generator emits 56 tools — update this when one lands', () => {
+        if (emitted.length !== 56) console.error(`     ↳ emitted ${emitted.length}`);
+        return emitted.length === 56;
     });
 
     /**

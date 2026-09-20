@@ -1375,7 +1375,7 @@
       "service": "jovi-mall",
       "surface": "public",
       "description": "Up to eight products related to this one, and — importantly — which kind of relation it is.",
-      "when_to_use": "After showing a product card, when the customer asks for alternatives or similar items.",
+      "when_to_use": "After showing a product card, when the customer asks for alternatives or similar items. To SHOW them, pass their ids to catalog_show_products rather than describing them.",
       "when_not_to_use": "Never describe the result as 'customers also bought' unless meta.source is co_purchase. On a young catalogue the fallback is the common case and saying otherwise is a false claim about other shoppers.",
       "operation": {
         "method": "GET",
@@ -5490,6 +5490,124 @@
       }
     },
     {
+      "name": "catalog_browse_categories",
+      "version": 1,
+      "title": "Show the categories as buttons",
+      "tier": "core",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Show the customer the shop's categories as buttons they can tap — the busiest five, plus See all. Tapping one opens that category as a scrollable product grid.",
+      "when_to_use": "When the customer wants to BROWSE by category: \"what do you sell?\", \"show me your categories\", \"what kinds of things do you have?\".",
+      "when_not_to_use": "Not to learn category NAMES in order to filter a search — use catalog_list_categories for that. Not when they already named a category — use inapp_open_listing with category.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/catalog/categories"
+      },
+      "doc": "n8n/bot-surface.md#19-the-in-app-screens",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {}
+      },
+      "request": {
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "shown",
+          "total"
+        ]
+      },
+      "errors": [],
+      "mutating": false,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "low",
+      "audit": false,
+      "requires_customer_role": true,
+      "side_effects": [],
+      "platform_notes": {
+        "telegram": "Renders as buttons under one question. This tool answers with a ready-made `reply` — send it unmodified. Write nothing of your own alongside it: the question is already in the reply.",
+        "whatsapp": "Renders as reply buttons, or as a list when a category name is too long for a button. This tool answers with a ready-made `reply` — send it unmodified. Write nothing of your own alongside it: the question is already in the reply."
+      },
+      "context_resolution": {
+        "subject": "none",
+        "policy": "not_applicable"
+      }
+    },
+    {
+      "name": "catalog_product_reviews_summary",
+      "version": 1,
+      "title": "Show what customers say about a product",
+      "tier": "extended",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Show a product's star rating, how many reviews it has, and two short quotes from the most recent written reviews, with a button to read them all inside the app.",
+      "when_to_use": "When the customer asks whether a product is any good, what people think of it, or for reviews or opinions.",
+      "when_not_to_use": "Not to read raw review rows for your own reasoning — use catalog_list_product_reviews for that. Never restate the rating in your own words: it is already in the reply.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/catalog/products/{productId}/reviews"
+      },
+      "doc": "n8n/bot-surface.md#19-the-in-app-screens",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "productId"
+        ],
+        "properties": {
+          "productId": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "The product the customer is asking about, as the catalogue returned it."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "productId"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "average",
+          "count"
+        ]
+      },
+      "errors": [
+        {
+          "code": "CATALOG_PRODUCT_NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "The product is not on sale any more.",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": false,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "low",
+      "audit": false,
+      "requires_customer_role": true,
+      "side_effects": [],
+      "platform_notes": {
+        "telegram": "Renders as one message with a Read all reviews button that opens the product inside Telegram. This tool answers with a ready-made `reply` — send it unmodified, and write nothing of your own alongside it.",
+        "whatsapp": "Renders as one message with a Read all reviews button to the product page, until a WhatsApp Flow is published. This tool answers with a ready-made `reply` — send it unmodified, and write nothing of your own alongside it."
+      },
+      "context_resolution": {
+        "subject": "product",
+        "policy": "explicit_only"
+      }
+    },
+    {
       "name": "inapp_open_listing",
       "version": 1,
       "title": "Open the product grid",
@@ -5731,7 +5849,7 @@
       "service": "jovi-mall",
       "surface": "bot_internal",
       "description": "Products the customer saved for later, newest save first.",
-      "when_to_use": "When the customer asks what they saved, or wants to buy something they saved earlier.",
+      "when_to_use": "When the customer asks what they saved, or wants to buy something they saved earlier. To SHOW the saved items, pass their ids to catalog_show_products — the customer gets cards with a button that opens all of them as a grid.",
       "when_not_to_use": "Not as a browse surface — it is their own short list, not the catalogue.",
       "operation": {
         "method": "POST",
