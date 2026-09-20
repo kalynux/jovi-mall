@@ -4,7 +4,7 @@ import { CreateBookingInput, BookingStatus, CalendarDayBooking } from '../types/
 import { BookedWindow } from '../utils/availability-windows.util';
 import { transactionManager } from '../../../core/database/transaction.manager';
 import { isCalendarNotConnected } from '../utils/calendar-error.util';
-import { SlotLockService } from './slot-lock.service';
+import { SlotLockService, SLOT_HOLD_TTL_SECONDS } from './slot-lock.service';
 import { SlotGeneratorService } from './slot-generator.service';
 import { GroupBookingService } from './group-booking.service';
 import { CalendarClientFactory } from '../../integrations/calendar/calendar-client.factory';
@@ -431,8 +431,10 @@ export class BookingService {
    *
    * @param bookingId Existing booking ID
    * @param newSlotId New slot ID
-   * @param lockOwnerId Owner of the hold on the new slot (the caller)
-   * @param actor Which side is asking, and their id
+   * @param lockOwnerId Owner of the hold on the new slot: the signed-in USER's id, because that is
+   *   the only id a hold is ever written under. ⚠ For a shop this is NOT `actor.id` — see
+   *   `VendorBookingController.rescheduleBooking`.
+   * @param actor Which side is asking, and their id (for a shop, the VENDOR id the booking holds)
    */
   async rescheduleBooking(
     bookingId: string,
@@ -604,6 +606,7 @@ export class BookingService {
    * only come at 7pm, a closure moved at short notice. What a shop may NOT do is change the
    * length: the price was fixed on the original interval, and a longer one is also how a single
    * booking blocks a whole day. Overlap is refused below by the same checks every move passes.
+   * The rule itself is `assertShopRuleSlot`, shared with the hold that precedes the move.
    *
    * ⚠ **An absent `actor` gets the CUSTOMER rule.** Every caller passes one today; a future caller
    * that forgets must not inherit the looser rule by omission.
@@ -618,26 +621,149 @@ export class BookingService {
     newSlotId: string,
     actor?: { role: 'vendor' | 'customer'; id: string }
   ): Promise<{ start: Date; end: Date }> {
-    if (actor?.role === 'vendor') {
-      const { start, end } = this.slotGenerator.parseSlotId(newSlotId);
-      const length = end.getTime() - start.getTime();
-      const current = booking.endAt.getTime() - booking.startAt.getTime();
-
-      if (length <= 0 || length !== current) {
-        throw createAppError(
-          ERROR_CODES.BOOKING_INVALID_SLOT_ID,
-          400,
-          'A rescheduled appointment must keep its original length.',
-          { slotId: newSlotId, reason: length <= 0 ? 'inverted' : 'length_changed' }
-        );
-      }
-      return { start, end };
-    }
+    if (actor?.role === 'vendor') return this.assertShopRuleSlot(booking, newSlotId);
 
     const { productBookingService } = await import(
       '../../catalog/domain/services/booking/product-booking.instance'
     );
     return productBookingService.assertOfferedSlot(booking.productId.toString(), newSlotId);
+  }
+
+  /**
+   * The SHOP's rule for a time it may move one of its own appointments to.
+   *
+   * Three things, and no availability read: the interval is real, it keeps the appointment's
+   * length, and it has not already happened. Published opening hours are deliberately not
+   * consulted — that is the whole point of the shop rule (see `assertRescheduleTarget`).
+   *
+   * ⚠ **`not_future` was missing until 2026-09-20, and it is not a tidy-up.** Without it a shop
+   * could move an appointment into last week — quietly rewriting history for a customer who has
+   * already been, and moving a booking behind the sweeps and reminders that only ever look
+   * forward. The customer rule never had this hole, because `assertOfferedSlot` refuses a past
+   * slot outright.
+   *
+   * ⚠ **Shared with the hold, on purpose.** `holdSlotForReschedule` calls this same method, so a
+   * hold can never be granted for a time the move would then refuse. Two copies of a rule split
+   * across two endpoints is how a dashboard ends up holding a slot it cannot use.
+   */
+  private assertShopRuleSlot(booking: IBooking, newSlotId: string): { start: Date; end: Date } {
+    const { start, end } = this.slotGenerator.parseSlotId(newSlotId);
+    const length = end.getTime() - start.getTime();
+    const current = booking.endAt.getTime() - booking.startAt.getTime();
+
+    const refuse = (reason: 'inverted' | 'length_changed' | 'not_future', message: string): never => {
+      throw createAppError(ERROR_CODES.BOOKING_INVALID_SLOT_ID, 400, message, {
+        slotId: newSlotId,
+        reason,
+      });
+    };
+
+    if (length <= 0) {
+      refuse('inverted', 'A rescheduled appointment must keep its original length.');
+    }
+    if (length !== current) {
+      refuse('length_changed', 'A rescheduled appointment must keep its original length.');
+    }
+    if (start.getTime() <= Date.now()) {
+      refuse('not_future', 'An appointment cannot be moved to a time that has already passed.');
+    }
+
+    return { start, end };
+  }
+
+  /**
+   * Hold a time for a shop that is about to move one of its own appointments onto it.
+   *
+   * ── WHY THIS EXISTS ─────────────────────────────────────────────────────────
+   * A move needs a hold, and the only route that takes one — the storefront's slot lock — runs
+   * `assertOfferedSlot`, which refuses anything outside the shop's published hours. So the shop
+   * rule granted a freedom the shop had no way to exercise: every out-of-hours move failed at the
+   * hold, one step before the rule that allows it. This is that door, and it enforces the SAME
+   * rule the move applies a moment later.
+   *
+   * ⚠ **Scoped by the booking, not by the product.** The rule is "the length of THIS appointment",
+   * and scoping the lookup by `actor` makes another shop's booking a 404 rather than a 403 —
+   * the same answer `rescheduleBooking` gives, for the same reason.
+   *
+   * ⚠ **The hold is written under the signed-in USER's id**, exactly as every other hold on this
+   * platform is, and owner-scoped for a group service exactly as the move will assert it. Passing
+   * the vendor entity's id here is the defect of 2026-02-23 all over again — see
+   * `VendorBookingController.rescheduleBooking`.
+   *
+   * ⚠ **Seats are NOT checked for a group service.** Capacity is enforced when the move happens,
+   * under the target slot's mutex; checking it here as well would be a second opinion that can
+   * disagree, and a hold is not a seat.
+   */
+  async holdSlotForReschedule(
+    bookingId: string,
+    newSlotId: string,
+    holdOwnerId: string,
+    actor: { role: 'vendor'; id: string }
+  ): Promise<{ slotId: string; start: Date; end: Date; expiresAt: Date }> {
+    const booking = await Booking.findOne({
+      _id: bookingId,
+      vendorId: new Types.ObjectId(actor.id),
+      deletedAt: null,
+    });
+    if (!booking) {
+      throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, 'Booking not found');
+    }
+
+    const reschedulable: BookingStatus[] = [BookingStatus.PENDING, BookingStatus.CONFIRMED];
+    if (!reschedulable.includes(booking.status)) {
+      throw createAppError(
+        ERROR_CODES.BOOKING_NOT_RESCHEDULABLE,
+        409,
+        `Cannot reschedule a booking with status '${booking.status}'. Only pending or confirmed bookings can be rescheduled.`
+      );
+    }
+
+    const { start, end } = this.assertShopRuleSlot(booking, newSlotId);
+
+    const group = await this.groupBookingService.resolveCapacity(booking.productId.toString());
+    const scopeToOwner = group !== null;
+
+    // Single occupancy only: the target must not already be sold. The booking being moved is
+    // still counted, so moving an appointment a little earlier — overlapping itself — is allowed,
+    // exactly as `rescheduleBooking` allows it.
+    if (!group) {
+      const overlapping = await this.countOverlappingBookings(
+        booking.productId.toString(),
+        start,
+        end
+      );
+      const selfOverlaps =
+        booking.startAt.getTime() < end.getTime() && booking.endAt.getTime() > start.getTime();
+      if (overlapping > (selfOverlaps ? 1 : 0)) {
+        throw createAppError(
+          ERROR_CODES.BOOKING_SLOT_UNAVAILABLE,
+          409,
+          'That time is no longer free. Please choose another slot.',
+          { slotId: newSlotId }
+        );
+      }
+    }
+
+    const held = await this.slotLockService.lock(
+      newSlotId,
+      holdOwnerId,
+      SLOT_HOLD_TTL_SECONDS,
+      scopeToOwner
+    );
+    if (!held) {
+      throw createAppError(
+        ERROR_CODES.BOOKING_SLOT_LOCKED,
+        409,
+        'This slot is already locked by another user'
+      );
+    }
+
+    return {
+      slotId: newSlotId,
+      start,
+      end,
+      expiresAt: new Date(Date.now() + SLOT_HOLD_TTL_SECONDS * 1000),
+    };
   }
 
   /**

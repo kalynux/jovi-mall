@@ -326,20 +326,31 @@ export class VendorBookingController {
      * Reschedule a booking to a new slot. Uses existing slot-lock mechanism.
      * The vendor must have locked the new slot before calling this endpoint.
      * Eligibility: booking must be pending or confirmed.
+     *
+     * ⛔ **Two different ids, and swapping either one breaks the route for every shop.**
+     * The HOLD is checked against the vendor's USER id, because that is the only id any hold is
+     * ever written under: `POST /api/products/:productId/slots/:slotId/lock` takes the owner from
+     * `req.auth.user`, whoever is signed in. The BOOKING is scoped by the VENDOR id (the role
+     * entity), because that is what `booking.vendorId` holds. From 2026-02-23 until 2026-09-19
+     * this passed the vendor id for both, so the hold the dashboard had just taken never matched:
+     * a single-seat service answered 403 "locked by another user" (the other user was the shop
+     * itself) and a group class 409 "not locked". No shop could move an appointment.
+     * `test:booking-slot-offer` § 10 runs this handler and the lock route with one signed-in
+     * vendor and pins that both name the same hold owner.
      */
     static rescheduleBooking = asyncHandler(async (req: Request, res: Response): Promise<void> => {
         const vendorId = req.auth!.role_entity._id.toString();
+        const holdOwnerId = req.auth!.user._id.toString();
         const { id } = req.params;
 
         const { newSlotId } = RescheduleBookingSchema.parse(req.body);
 
         // Ownership scoping and the pending/confirmed eligibility check both live in
         // the service now, so the vendor and customer paths cannot drift apart.
-        // The service uses vendorId as the lockOwnerId — vendors lock slots on their behalf.
         const updatedBooking = await bookingService.rescheduleBooking(
             id,
             newSlotId,
-            vendorId,
+            holdOwnerId,
             { role: 'vendor', id: vendorId },
         );
 

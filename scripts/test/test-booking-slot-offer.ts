@@ -38,9 +38,17 @@ import {
     subtractBusyWindows,
     unionWindows,
 } from '../../src/modules/booking/utils/availability-windows.util';
-import { TimeWindow } from '../../src/modules/booking/types/booking.types';
+import { TimeWindow, BookingStatus } from '../../src/modules/booking/types/booking.types';
 import { BookingService } from '../../src/modules/booking/services/booking.service';
 import { referencedIdOf } from '../../src/modules/bot-surface/controllers/bot-booking.controller';
+import * as redisFactory from '../../src/infra/redis/redis.factory';
+import { SlotLockFacade } from '../../src/modules/catalog/domain/services/booking/SlotLockFacade';
+import { productBookingService } from '../../src/modules/catalog/domain/services/booking/product-booking.instance';
+import { productBookingRouter } from '../../src/modules/catalog/routes/product-booking.routes';
+import { VendorBookingController } from '../../src/modules/booking/controllers/vendor-booking.controller';
+import { Booking } from '../../src/modules/booking/models/booking.model';
+import { ProductModel } from '../../src/modules/catalog/models';
+import { UserModel } from '../../src/modules/users/user.model';
 
 let passed = 0;
 let failed = 0;
@@ -111,7 +119,12 @@ interface World {
     bufferAfter: number;
 }
 
-function world(overrides: Partial<Pick<World, 'mode' | 'seats' | 'bufferAfter'>> = {}): World {
+/**
+ * @param overrides.realLocks Hold slots through the REAL `SlotLockFacade` → `SlotLockService`
+ *   (on § 10's in-memory Redis) instead of the recording stand-in, so the key a hold is written
+ *   under is the production key.
+ */
+function world(overrides: Partial<Pick<World, 'mode' | 'seats' | 'bufferAfter'>> & { realLocks?: boolean } = {}): World {
     const w: World = {
         service: null as unknown as ProductBookingService,
         bookings: [],
@@ -185,10 +198,12 @@ function world(overrides: Partial<Pick<World, 'mode' | 'seats' | 'bufferAfter'>>
         bookingService as never,
         priceResolver as never,
         variantRepository as never,
-        {
-            lockSlot: async (id: string) => { w.heldSlots.push(id); return true; },
-            releaseSlot: async () => true,
-        } as never,
+        overrides.realLocks
+            ? new SlotLockFacade()
+            : {
+                lockSlot: async (id: string) => { w.heldSlots.push(id); return true; },
+                releaseSlot: async () => true,
+            } as never,
         { isGroupService: async () => w.mode === 'capacity' } as never,
     );
     return w;
@@ -506,6 +521,198 @@ async function main(): Promise<void> {
         return body.includes('referencedIdOf(existing.productId)')
             && !body.includes('existing.productId.toString()');
     });
+
+    console.log('\n══ § 10 · ⛔ A shop\'s reschedule checks the hold the shop actually took ══');
+
+    /**
+     * ── ⛔ WHAT WAS WRONG, found 2026-09-19 ────────────────────────────────────────
+     * The dashboard holds the new time through the storefront lock route, which writes the hold
+     * under the signed-in USER id. The shop's reschedule route then asserted the hold under the
+     * VENDOR id: the role entity, a different document with its own id. The two never matched,
+     * so from 2026-02-23 every shop reschedule failed: 403 "locked by another user" on a
+     * single-seat service (the other user being the shop itself), 409 "not locked" on a class.
+     *
+     * ⚠ **Pinned by RUNNING both handlers, not by reading them.** Both are driven with ONE
+     * signed-in shop, and what each hands to the layer below is captured. A scan can say which
+     * expression each passes; only running them says the two expressions name the same id. The
+     * real hold store (the real `SlotLockService`, on an in-memory Redis) and the real
+     * `rescheduleBooking` then prove that the id the handlers agree on is the one that passes.
+     */
+    const redisStore = new Map<string, string>();
+    (redisFactory as Record<string, unknown>).getRedisClient = async (): Promise<unknown> => ({
+        get: async (key: string) => redisStore.get(key) ?? null,
+        set: async (key: string, value: string, opts?: { NX?: boolean }) => {
+            if (opts?.NX && redisStore.has(key)) return null;
+            redisStore.set(key, value);
+            return 'OK';
+        },
+        del: async (key: string) => (redisStore.delete(key) ? 1 : 0),
+        exists: async (key: string) => (redisStore.has(key) ? 1 : 0),
+    });
+
+    /** A real user document, so `.id` and `._id` behave exactly as `requireAuth` hands them over. */
+    const signedIn = () => {
+        const user = new UserModel({});
+        const vendorId = new mongoose.Types.ObjectId();
+        return { user, vendorId, auth: { user, role: 'vendor', role_entity: { _id: vendorId } } };
+    };
+    const shopA = signedIn();
+    const shopB = signedIn();
+
+    type Handler = (req: unknown, res: unknown, next: (err?: unknown) => void) => void;
+    /** Runs an `asyncHandler`-wrapped handler to completion: it returns void, so wait on `res`/`next`. */
+    const run = (handler: Handler, req: Record<string, unknown>): Promise<{ body?: unknown; error?: unknown }> =>
+        new Promise((resolve) => {
+            const res = {
+                status: () => res,
+                json: (body: unknown) => resolve({ body }),
+            };
+            handler(req, res, (error?: unknown) => resolve({ error }));
+        });
+
+    type RouteLayer = { route?: { path: string; methods: Record<string, boolean>; stack: Array<{ handle: Handler }> } };
+    const lockRoute = (productBookingRouter.stack as unknown as RouteLayer[])
+        .find((layer) => layer.route?.path === '/:productId/slots/:slotId/lock' && layer.route.methods.post)?.route;
+    // The route's LAST handler is the route's own; the ones before it are `requireAuth`.
+    const lockHandler = lockRoute?.stack[lockRoute.stack.length - 1]?.handle;
+
+    await assert('in scope: the lock route is found, and a shop\'s user id and vendor id really differ', () =>
+        typeof lockHandler === 'function'
+        && (lockRoute?.stack.length ?? 0) >= 2
+        && shopA.user.id !== shopA.vendorId.toString()
+        && shopA.user.id === shopA.user._id.toString());
+
+    let heldBy: string | undefined;
+    let movedWith: { lockOwnerId: string; actor: unknown } | undefined;
+    const originalLockSlot = productBookingService.lockSlot;
+    const originalReschedule = BookingService.prototype.rescheduleBooking;
+    try {
+        productBookingService.lockSlot = async (_productId: string, _slotId: string, owner: string) => {
+            heldBy = owner;
+            return true;
+        };
+        BookingService.prototype.rescheduleBooking = async function (
+            _bookingId: string, _slotId: string, lockOwnerId: string, actor?: { role: 'vendor' | 'customer'; id: string },
+        ) {
+            movedWith = { lockOwnerId, actor };
+            return {} as never;
+        };
+        /**
+         * ⚠ **Guarded, so a renamed lock route FAILS the assertions below rather than crashing
+         * the run.** Proven: mutating the route's path leaves `lockHandler` undefined, and an
+         * unguarded `run(lockHandler!, …)` threw out of `main` — which reads as a broken suite
+         * rather than as the in-scope assertion catching a moved route.
+         */
+        if (typeof lockHandler === 'function') {
+            await run(lockHandler, { auth: shopA.auth, params: { productId: 'p1', slotId: 'slot_x' } });
+        }
+        await run(VendorBookingController.rescheduleBooking as unknown as Handler, {
+            auth: shopA.auth, params: { id: 'b1' }, body: { newSlotId: 'slot_x' },
+        });
+    } finally {
+        productBookingService.lockSlot = originalLockSlot;
+        BookingService.prototype.rescheduleBooking = originalReschedule;
+    }
+
+    await assert('⛔ the lock route and the shop\'s reschedule name the SAME hold owner: the shop\'s USER id', () =>
+        heldBy === shopA.user.id && movedWith?.lockOwnerId === heldBy);
+
+    await assert('⛔ …while the booking itself is still scoped by the shop\'s VENDOR id', () =>
+        JSON.stringify(movedWith?.actor) === JSON.stringify({ role: 'vendor', id: shopA.vendorId.toString() }));
+
+    /** Shop A's booking at 10:00–11:00, as `Booking.findOne` would return it. */
+    const bookingOfShopA = () => ({
+        _id: new mongoose.Types.ObjectId(),
+        productId: new mongoose.Types.ObjectId(),
+        vendorId: shopA.vendorId,
+        userId: new mongoose.Types.ObjectId(),
+        status: BookingStatus.CONFIRMED,
+        startAt: at(10),
+        endAt: at(11),
+        deletedAt: null,
+        saves: 0,
+        async save() { this.saves++; return this; },
+    });
+    let stored: ReturnType<typeof bookingOfShopA> | null = null;
+
+    /** The real `rescheduleBooking`, with only its database edges replaced. */
+    const rescheduler = (group: boolean) => {
+        const service = new BookingService();
+        const state = { service, groupMoves: 0 };
+        const edges = service as unknown as Record<string, unknown>;
+        edges.groupBookingService = {
+            resolveCapacity: async () => (group ? { maxBookings: 3 } : null),
+            moveIntoSlot: async () => { state.groupMoves++; },
+            syncCalendarForMove: async () => undefined,
+        };
+        edges.countOverlappingBookings = async () => 0;
+        edges.emitBookingRescheduledEvent = async () => undefined;
+        return state;
+    };
+    const target = slotId(at(12), at(13));
+    const asShop = (shop: typeof shopA) => ({ role: 'vendor' as const, id: shop.vendorId.toString() });
+
+    const originalFindOne = Booking.findOne;
+    const originalFindById = ProductModel.findById;
+    try {
+        /** Honours every key of the scope, which is the thing the cross-shop case is about. */
+        (Booking as unknown as Record<string, unknown>).findOne = async (query: Record<string, unknown>) => {
+            const doc = stored as unknown as Record<string, unknown> | null;
+            const hit = doc !== null && Object.entries(query).every(([key, value]) =>
+                value === null ? doc[key] == null : String(value) === String(doc[key]));
+            return hit ? stored : null;
+        };
+        (ProductModel as unknown as Record<string, unknown>).findById = async () => ({ title: 'Yoga' });
+
+        await assert('a shop moves a single-seat appointment onto a time it holds, and the hold is spent', async () => {
+            redisStore.clear();
+            stored = bookingOfShopA();
+            const held = await world({ realLocks: true }).service.lockSlot('p1', target, shopA.user.id);
+            const moved = await rescheduler(false).service.rescheduleBooking(
+                stored._id.toString(), target, shopA.user.id, asShop(shopA));
+            return held && moved.startAt.getTime() === at(12).getTime() && stored.saves === 1 && redisStore.size === 0;
+        });
+
+        await assert('⛔ the defect, reproduced: asserted under the VENDOR id, the shop\'s own hold is "someone else\'s"', async () => {
+            redisStore.clear();
+            stored = bookingOfShopA();
+            await world({ realLocks: true }).service.lockSlot('p1', target, shopA.user.id);
+            const wasRefused = await refused(() => rescheduler(false).service.rescheduleBooking(
+                stored!._id.toString(), target, shopA.vendorId.toString(), asShop(shopA)), 'BOOKING_UNAUTHORIZED', 403);
+            return wasRefused && stored.saves === 0;
+        });
+
+        await assert('a shop moves a CLASS booking onto a class it holds (the per-owner key)', async () => {
+            redisStore.clear();
+            stored = bookingOfShopA();
+            await world({ mode: 'capacity', seats: 3, realLocks: true }).service.lockSlot('p1', target, shopA.user.id);
+            const moving = rescheduler(true);
+            await moving.service.rescheduleBooking(stored._id.toString(), target, shopA.user.id, asShop(shopA));
+            return moving.groupMoves === 1 && [...redisStore.keys()].length === 0;
+        });
+
+        await assert('⛔ …and the class defect, reproduced: under the VENDOR id the per-owner key is never found', async () => {
+            redisStore.clear();
+            stored = bookingOfShopA();
+            await world({ mode: 'capacity', seats: 3, realLocks: true }).service.lockSlot('p1', target, shopA.user.id);
+            const moving = rescheduler(true);
+            const wasRefused = await refused(() => moving.service.rescheduleBooking(
+                stored!._id.toString(), target, shopA.vendorId.toString(), asShop(shopA)), 'BOOKING_SLOT_NOT_LOCKED', 409);
+            return wasRefused && moving.groupMoves === 0;
+        });
+
+        await assert('⛔ another shop, HOLDING the very slot, cannot move this shop\'s booking', async () => {
+            redisStore.clear();
+            stored = bookingOfShopA();
+            const held = await world({ realLocks: true }).service.lockSlot('p1', target, shopB.user.id);
+            const wasRefused = await refused(() => rescheduler(false).service.rescheduleBooking(
+                stored!._id.toString(), target, shopB.user.id, asShop(shopB)), 'BOOKING_NOT_FOUND', 404);
+            return held && wasRefused && stored.saves === 0 && stored.startAt.getTime() === at(10).getTime();
+        });
+    } finally {
+        (Booking as unknown as Record<string, unknown>).findOne = originalFindOne;
+        (ProductModel as unknown as Record<string, unknown>).findById = originalFindById;
+    }
 
     console.log(
         failed === 0

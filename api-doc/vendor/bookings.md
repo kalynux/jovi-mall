@@ -408,7 +408,20 @@ Reschedule a booking to a new time slot. Updates the Google Calendar event.
 > [!IMPORTANT]
 > **Slot Lock Required**
 >
-> The vendor must lock the new slot via the slot-locking mechanism before calling this endpoint. The `vendorId` is used as the `lockOwnerId`.
+> Hold the new slot first, signed in as the shop, with
+> `POST /api/products/:productId/slots/:slotId/lock` (the same route a customer uses), then call
+> this endpoint within the hold's 15 minutes. The hold belongs to whoever is signed in; nobody
+> sends an owner id, on either call.
+>
+> ⚠ **Fixed 2026-09-19. Nothing changes for the caller.** The request, the response and the
+> two-call sequence are exactly as before, so a client built from this page has nothing to
+> update. What changed is server-side: this line used to say "the `vendorId` is used as the
+> `lockOwnerId`", and the server did exactly that, while the lock route records the hold under
+> the signed-in *user*, which is a different id. The two never matched, so **this endpoint refused
+> every call from 2026-02-23 to 2026-09-19**: `403 BOOKING_UNAUTHORIZED` on a single-seat
+> service, `409 BOOKING_SLOT_NOT_LOCKED` on a class. The hold is now checked under the signed-in
+> user, and the booking is still found by the shop's vendor id, so one shop cannot move
+> another's booking even while holding the slot (`404 BOOKING_NOT_FOUND`).
 
 **Eligibility:** Only `pending` or `confirmed` bookings can be rescheduled.
 
