@@ -21,6 +21,24 @@ connection changed. Times UTC. Each row's previous version is its rollback.
 | 07:02:09 | `abf83805` | **§ 4.6** — the awaiting carry: 4 nodes, 6 wiring changes, `compose agent input` = live + § 4.6 layer, the two filing rules in RULES. 61 → 65 nodes | `run-deployed.js` 112/0 |
 | 07:37:39 | `0ed551f3` | **§ 5.3** — the token paragraph, rewritten for the v2 token (below) | `run-deployed.js` 117/0 |
 | 07:44:06 | `1089e871` | **§ 4.8** — `compose tap input`: an `awaiting…` flag means the platform waits for the CUSTOMER (below) | `run-deployed.js` 128/0 |
+| 10:26:40 | `1050e7c3` | **§ 3, merged with the owner's reporting** — `expand replies` + `send loop`; every send path returns to the loop; `report channel down` corrected (below). 65 → 67 nodes | `run-deployed.js` 159/0 |
+
+**§ 3 · shipped MERGED, not as specified.** § 3.2 was written against `1997c757`, before the
+owner's Saturday change routed both send nodes' error output to `report channel down` (a direct
+`degraded_turn` push, run left successful — ADR-022's current design). Built as written, § 3's
+`note refused send` + `any send refused?` would have reported every refusal **twice**. Shipped
+instead: the owner's reporting kept, handing back to the loop; only `expand replies` (reads
+`replies`) and `send loop` (one message at a time) added; A3's `batching` removed. The harness
+applies the nine wiring ops to the live graph and WALKS it message by message — a path that does
+not return to the loop stalls it, and the mutants prove that is caught.
+
+Two corrections to `report channel down`, found while merging: **`$('Inbound').item` →
+`.first()`** — `.item` resolves by tracing lineage, which is what breaks inside a loop, and the
+node continues on error, so the REPORT would have been lost silently; and **the platform's
+reason** — it read `$json.error.message`, n8n's generic sentence, while Telegram's reason is in
+`description` and Meta's in a nested `error.message`; the failures board never saw
+"(#131047) …". ⏳ **Live checks owed:** the loop on a real turn (now, any message), and the
+multi-message order on a product page (when the first product is live).
 
 **§ 4.8 · the flag was read the wrong way round.** Exec 1502: the support-request Reply tap
 handed the model `awaitingReply: true` with "act on it", and it answered *"no reply has come in

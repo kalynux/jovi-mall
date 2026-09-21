@@ -69,9 +69,10 @@ function evalExpr(expr, { nodes = {}, json = {}, env = {} } = {}) {
   const m = /^=\{\{([\s\S]*)\}\}$/.exec(String(expr).trim());
   if (!m) throw new Error('not a single {{ }} expression: ' + String(expr).slice(0, 80));
   const $ = nodeAccessor(nodes);
+  // `$workflow` added 2026-09-21 for `report channel down`'s body (§ 3 as shipped).
   // eslint-disable-next-line no-new-func
-  const fn = new Function('$', '$json', '$env', '$execution', '$now', `return (${m[1]});`);
-  return fn($, json, env, { id: 'sim' }, luxonNow());
+  const fn = new Function('$', '$json', '$env', '$execution', '$now', '$workflow', `return (${m[1]});`);
+  return fn($, json, env, { id: 'sim' }, luxonNow(), { id: 'sim-workflow', name: 'UP-wi-mall-core' });
 }
 
 let passed = 0;

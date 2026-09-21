@@ -247,6 +247,154 @@ check(S8, 'the live body is otherwise untouched (one contiguous change)', CTI.en
 const mutAsk = CTI.replace("      + ask\n", '');
 check(S8, 'guard bites — without the ask, the Reply tap is reported as a status again', mutAsk !== CTI && !tapNote(mutAsk, REPLY_TAP).includes('WAITING FOR THE CUSTOMER'));
 
+// ── § 3 · A2 as shipped: the send path, merged with the owner's reporting ────
+const S9 = '§ 3 · as shipped (merged with report channel down)';
+const S10 = '§ 3 · guard bites';
+const { LIVE_SEND, REPORT_OLD_ERROR } = require('./build-live-fixes');
+const EXPAND = FIX['3 nodes'][0].parameters.jsCode;
+const REPORT_NEW = FIX['3 report body'];
+const REPORT_OLD = LIVE_SEND.nodes['report channel down'].parameters.jsonBody;
+
+/** Apply update_workflow connection ops to a copy of a connections object, exactly as n8n would. */
+function applyWiring(connections, ops) {
+  const c = JSON.parse(JSON.stringify(connections));
+  for (const op of ops) {
+    const outs = ((c[op.source] = c[op.source] || {}).main = c[op.source].main || []);
+    while (outs.length <= op.sourceIndex) outs.push([]);
+    const list = outs[op.sourceIndex] || (outs[op.sourceIndex] = []);
+    const at = list.findIndex((t) => t.node === op.target && t.index === op.targetIndex);
+    if (op.type === 'removeConnection') {
+      if (at === -1) throw new Error(`removeConnection: ${op.source}[${op.sourceIndex}] -> ${op.target} does not exist`);
+      list.splice(at, 1);
+    } else {
+      if (at !== -1) throw new Error(`addConnection: ${op.source}[${op.sourceIndex}] -> ${op.target} already exists`);
+      list.push({ node: op.target, type: 'main', index: op.targetIndex });
+    }
+  }
+  return c;
+}
+const targets = (c, src, out) => (((c[src] || {}).main || [])[out] || []).map((t) => t.node);
+const sourcesOf = (c, node) => Object.entries(c).flatMap(([src, t]) => ((t.main || []).flatMap((list, i) => (list || []).filter((x) => x.node === node).map(() => `${src}:${i}`))));
+
+/**
+ * Walk the send sub-graph of `conns` for one turn, the way n8n v1 would: `send loop` hands over
+ * one item, the item follows the wires, and the NEXT item is handed over only if the path came
+ * back to `send loop`. A path that does not return STALLS the loop — every later message is lost.
+ */
+function runSendPath(conns, entry, inputItems, platform) {
+  const inbound = { channel: inputItems[0].json.reply.channel, externalId: inputItems[0].json.reply.channel === 'telegram' ? '42' : '237600000000', messageId: 'm' };
+  const expanded = runCode(EXPAND, { nodes: { Inbound: [j(inbound)] }, input: inputItems });
+  if (!targets(conns, entry, 0).includes('expand replies')) return { sent: [], reports: [], stalled: true, reason: `${entry} does not feed expand replies` };
+  const sent = []; const reports = [];
+  for (let i = 0; i < expanded.length; i += 1) {
+    const reply = expanded[i].json.reply;
+    if (!targets(conns, 'send loop', 1).includes('is telegram?')) return { sent, reports, stalled: true, reason: 'loop does not feed is telegram?' };
+    const sender = reply.channel === 'telegram' ? targets(conns, 'is telegram?', 0)[0] : targets(conns, 'is telegram?', 1)[0];
+    const result = platform(reply, i);
+    let next;
+    if (result.ok) {
+      sent.push(reply);
+      next = targets(conns, sender, 0);
+    } else {
+      const onError = targets(conns, sender, 1);
+      if (onError.includes('report channel down')) {
+        reports.push(JSON.parse(evalExpr(REPORT_BODY_UNDER_TEST, { nodes: { Inbound: [j(inbound)] }, json: { error: result.error } })));
+        next = targets(conns, 'report channel down', 0);
+      } else next = onError;
+    }
+    if (!next.includes('send loop')) return { sent, reports, stalled: i < expanded.length - 1, reason: `${sender} path does not return to send loop` };
+  }
+  return { sent, reports, stalled: false };
+}
+let REPORT_BODY_UNDER_TEST = REPORT_NEW;
+
+const WIRED = applyWiring(LIVE_SEND.connections, FIX['3 wiring']);
+
+// — the graph after the ops —
+check(S9, 'every connection the ops remove exists live, and none they add already does', (() => { try { applyWiring(LIVE_SEND.connections, FIX['3 wiring']); return true; } catch (e) { return false; } })());
+check(S9, 'has reply? (true) and send guard (true) now feed expand replies, and nothing else',
+  JSON.stringify(targets(WIRED, 'has reply?', 0)) === '["expand replies"]' && JSON.stringify(targets(WIRED, 'send guard', 0)) === '["expand replies"]');
+check(S9, "has reply?'s false branch is untouched", JSON.stringify(targets(WIRED, 'has reply?', 1)) === JSON.stringify(targets(LIVE_SEND.connections, 'has reply?', 1)));
+check(S9, 'expand replies → send loop; the loop output → is telegram?; the done output → nothing',
+  JSON.stringify(targets(WIRED, 'expand replies', 0)) === '["send loop"]' && JSON.stringify(targets(WIRED, 'send loop', 1)) === '["is telegram?"]' && targets(WIRED, 'send loop', 0).length === 0);
+check(S9, 'is telegram? is fed by the loop alone', JSON.stringify(sourcesOf(WIRED, 'is telegram?')) === '["send loop:1"]');
+check(S9, "⭐ every path out of a send returns to the loop — success, refusal via the owner's report, both channels",
+  ['send telegram', 'send whatsapp'].every((s) => JSON.stringify(targets(WIRED, s, 0)) === '["send loop"]' && JSON.stringify(targets(WIRED, s, 1)) === '["report channel down"]')
+  && JSON.stringify(targets(WIRED, 'report channel down', 0)) === '["send loop"]');
+const edgeSet = (c) => new Set(Object.entries(c).flatMap(([s, t]) => Object.entries(t).flatMap(([ty, outs]) => (outs || []).flatMap((l, i) => (l || []).map((x) => `${s}[${ty}:${i}]->${x.node}`)))));
+const before = edgeSet(LIVE_SEND.connections); const after = edgeSet(WIRED);
+check(S9, 'nothing else in the graph moved (the diff is exactly the nine ops)',
+  [...before].filter((e) => !after.has(e)).length === 2 && [...after].filter((e) => !before.has(e)).length === 7);
+check(S9, 'the new nodes land on free canvas, clear of every live node',
+  FIX['3 nodes'].every((n) => Object.values(LIVE_SEND.positions).every((p) => Math.abs(p[0] - n.position[0]) >= 150 || Math.abs(p[1] - n.position[1]) >= 100)));
+
+// — a turn, walked through that graph —
+const tgCard = (n) => ({ channel: 'telegram', method: 'sendPhoto', body: { chat_id: '42', photo: `https://cdn/x${n}.jpg`, caption: `Card ${n}` } });
+const waText = (t) => ({ channel: 'whatsapp', method: 'messages', body: { messaging_product: 'whatsapp', to: '237600000000', type: 'text', text: { body: t } } });
+const intro = { channel: 'telegram', method: 'sendMessage', body: { chat_id: '42', text: 'Here is what we have.' } };
+const page = [intro, tgCard(1), tgCard(2), tgCard(3), tgCard(4)];
+const ok = () => ({ ok: true });
+
+const whole = runSendPath(WIRED, 'has reply?', [j({ reply: page[0], replies: page })], ok);
+check(S9, '⭐ a five-message page tapped open: all five are sent, in order, the first not repeated',
+  !whole.stalled && JSON.stringify(whole.sent) === JSON.stringify(page));
+const single = runSendPath(WIRED, 'has reply?', [j({ reply: intro })], ok);
+check(S9, 'a one-message turn (almost every turn): exactly one send, body byte-identical, no report',
+  !single.stalled && single.sent.length === 1 && JSON.stringify(single.sent[0]) === JSON.stringify(intro) && single.reports.length === 0);
+const agent = runSendPath(WIRED, 'send guard', [j({ role: 'model', reply: waText('Hi') }), j({ role: 'tool', reply: waText('Which request?') })], ok);
+check(S9, 'the agent path (several items from drop duplicate reply): each sent, in order',
+  !agent.stalled && JSON.stringify(agent.sent.map((r) => r.body.text.body)) === '["Hi","Which request?"]');
+const META_131047 = { message: 'Bad request - please check your parameters', description: '(#131047) Re-engagement message' };
+const refusedAt2 = runSendPath(WIRED, 'has reply?', [j({ reply: page[0], replies: page })], (r, i) => (i === 1 ? { ok: false, error: META_131047 } : { ok: true }));
+check(S9, "⭐ a refusal at message 2 of 5: messages 3–5 still go out, and the owner's report carries the platform's reason",
+  !refusedAt2.stalled && refusedAt2.sent.length === 4 && refusedAt2.reports.length === 1
+  && refusedAt2.reports[0].errorMessage.includes('(#131047)') && refusedAt2.reports[0].kind === 'degraded_turn');
+let threw = false;
+try { runSendPath(WIRED, 'has reply?', [j({ reply: { channel: 'telegram', method: 'sendMessage', body: { chat_id: '999', text: 'x' } } })], ok); } catch (e) { threw = /addressed to/.test(e.message); }
+check(S9, '⛔ a message addressed to another conversation fails the turn loudly', threw);
+check(S9, "expand replies is byte-identical to the spec's (test-s3's checks on it hold)", EXPAND === NEW['core:expand replies'] && EXPAND.split(BS).length - 1 === 0);
+
+// — the owner's report node —
+const reasonOf = (body, error) => JSON.parse(evalExpr(body, { nodes: { Inbound: [j({ channel: 'telegram', externalId: '42', messageId: 'm' })] }, json: { error } })).errorMessage;
+const SHAPES = [
+  ['a Telegram rejection', { ok: false, error_code: 400, description: 'Bad Request: chat not found' }, 'Bad Request: chat not found'],
+  ["n8n's generic message plus the platform's description", META_131047, 'Bad request - please check your parameters -- (#131047) Re-engagement message'],
+  ["Meta's nested error", { error: { message: '(#131047) Re-engagement message', code: 131047 } }, '(#131047) Re-engagement message'],
+  ['a request that could not be built (a string)', 'getaddrinfo ENOTFOUND api.telegram.org', 'getaddrinfo ENOTFOUND api.telegram.org'],
+  ['no error detail at all', undefined, 'the chat platform refused the message'],
+  ['the same words twice', { message: 'x', description: 'x' }, 'x'],
+];
+for (const [name, error, want] of SHAPES) check(S9, `report reason — ${name}`, reasonOf(REPORT_NEW, error) === want, `got ${JSON.stringify(reasonOf(REPORT_NEW, error))}`);
+check(S9, 'report reason — capped at 1000 characters', reasonOf(REPORT_NEW, { message: 'x'.repeat(5000) }).length === 1000);
+check(S9, "measured, the defect being fixed: the LIVE body loses Telegram's and Meta's reason",
+  reasonOf(REPORT_OLD, SHAPES[0][1]) === 'the chat platform refused the message' && reasonOf(REPORT_OLD, SHAPES[2][1]) === 'the chat platform refused the message');
+const rep = JSON.parse(evalExpr(REPORT_NEW, { nodes: { Inbound: [j({ channel: 'whatsapp', externalId: '237600000000', messageId: 'm' })] }, json: { error: 'x' } }));
+check(S9, 'every other field of the report is as before (kind, node, channel, id, a UTC time)',
+  rep.kind === 'degraded_turn' && rep.nodeName === 'send whatsapp' && rep.channel === 'whatsapp' && rep.externalId === '237600000000' && /Z$/.test(rep.occurredAt) && rep.workflowName === 'UP-wi-mall-core');
+check(S9, "no `$('Inbound').item` left in the report — lineage tracing is what breaks inside a loop", !REPORT_NEW.includes("$('Inbound').item"));
+check(S9, 'the report body changed in exactly the two intended ways',
+  REPORT_NEW.replace(REPORT_NEW.slice(REPORT_NEW.indexOf('errorMessage: ['), REPORT_NEW.indexOf('"the chat platform refused the message"') + 39), REPORT_OLD_ERROR).split("$('Inbound').first().json").join("$('Inbound').item.json") === REPORT_OLD);
+check(S9, 'the send nodes lose `batching` and keep every other option',
+  ['send telegram', 'send whatsapp'].every((s) => !('batching' in FIX['3 send options'][s]) && JSON.stringify(FIX['3 send options'][s]) === JSON.stringify({ timeout: 20000 })));
+check(S9, "the send nodes' error routing (the owner's) is already continueErrorOutput live — nothing to change there",
+  ['send telegram', 'send whatsapp'].every((s) => LIVE_SEND.nodes[s].onError === 'continueErrorOutput'));
+const allNames3 = new Set([...LIVE_SEND.nodeNames, ...FIX['3 nodes'].map((n) => n.name)]);
+const missing3 = refsIn([EXPAND, REPORT_NEW].join('\n')).filter((r) => !allNames3.has(r));
+check(S9, "⛔ every $('…') in the new bodies names a node that will exist", missing3.length === 0, missing3.join(', '));
+
+// — mutants —
+const noReturn = applyWiring(LIVE_SEND.connections, FIX['3 wiring'].filter((op) => !(op.source === 'report channel down')));
+const stalls = runSendPath(noReturn, 'has reply?', [j({ reply: page[0], replies: page })], (r, i) => (i === 1 ? { ok: false, error: META_131047 } : { ok: true }));
+check(S10, 'guard bites — if the report does not hand back to the loop, a refusal at 2 of 5 LOSES messages 3–5', stalls.stalled && stalls.sent.length === 1);
+const noLoopBack = applyWiring(LIVE_SEND.connections, FIX['3 wiring'].filter((op) => !(op.source === 'send whatsapp' && op.target === 'send loop')));
+const waPage = [waText('a'), waText('b'), waText('c')];
+check(S10, 'guard bites — a send that does not return to the loop stops the turn after one message',
+  runSendPath(noLoopBack, 'has reply?', [j({ reply: waPage[0], replies: waPage })], ok).sent.length === 1);
+REPORT_BODY_UNDER_TEST = REPORT_OLD;
+const oldReport = runSendPath(WIRED, 'has reply?', [j({ reply: page[0], replies: page })], (r, i) => (i === 1 ? { ok: false, error: { error: { message: '(#131047) Re-engagement message' } } } : { ok: true }));
+REPORT_BODY_UNDER_TEST = REPORT_NEW;
+check(S10, "guard bites — with the live report body, Meta's reason never reaches the failures board", !oldReport.reports[0].errorMessage.includes('131047'));
+
 // ── § 5.3 · the token paragraph for v2 ───────────────────────────────────────
 const S7 = '§ 5.3 · the token paragraph for v2';
 const { TOKEN_PARA_53 } = require('./build-live-fixes');

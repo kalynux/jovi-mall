@@ -1,0 +1,103 @@
+{
+ "nodes": [
+  {
+   "name": "expand replies",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    4112,
+    784
+   ],
+   "parameters": {
+    "jsCode": "// EVERY MESSAGE OF THE TURN, IN ORDER, AND ONLY TO THIS CONVERSATION.\n//\n// jovi-mall answers a turn that is more than one message with `replies` (the whole ordered\n// list) BESIDE `reply` (the first of them) -- `reply` stays a single object so nothing wired\n// to it broke (bot-surface.md 14.8). This node is where n8n finally reads `replies`: send it\n// when it is there, `reply` otherwise, never both. Before this node existed, a product page\n// tapped open with `next:` or `more:` delivered its first card and dropped the rest.\n//\n// ⚠ ORDER IS THE RENDERING (intro, cards, 'See more'). Never sort, never de-duplicate here.\n//\n// ⛔ A body addressed to any other chat is REFUSED LOUDLY, never dropped. It cannot happen by\n// design -- the backend addresses every reply from the identity on the request -- so if it\n// ever does it is a platform fault, and a quiet drop would make it a silence nobody sees\n// (ADR-022). Today every method in use carries its recipient (`sendMessage`/`sendPhoto`:\n// chat_id, WhatsApp `messages`: to); a method without one must be added here deliberately.\nconst inbound = $('Inbound').first().json;\nconst out = [];\nfor (const item of $input.all()) {\n  const j = item.json || {};\n  const list = (Array.isArray(j.replies) && j.replies.length > 0) ? j.replies : (j.reply ? [j.reply] : []);\n  for (const reply of list) {\n    const body = (reply && reply.body) || null;\n    if (!reply || !reply.channel || !reply.method || !body) {\n      throw new Error('expand replies: a reply without channel/method/body: ' + JSON.stringify(reply).slice(0, 300));\n    }\n    const to = reply.channel === 'telegram' ? body.chat_id : body.to;\n    if (reply.channel !== inbound.channel || String(to) !== String(inbound.externalId)) {\n      throw new Error('expand replies: a reply addressed to ' + reply.channel + ':' + String(to) + ' in a turn from ' + inbound.channel + ':' + String(inbound.externalId));\n    }\n    out.push({ json: { reply: reply } });\n  }\n}\nreturn out;"
+   }
+  },
+  {
+   "name": "send loop",
+   "type": "n8n-nodes-base.splitInBatches",
+   "typeVersion": 3,
+   "position": [
+    4336,
+    784
+   ],
+   "parameters": {
+    "batchSize": 1,
+    "options": {}
+   }
+  }
+ ],
+ "wiring": [
+  {
+   "type": "removeConnection",
+   "source": "has reply?",
+   "target": "is telegram?",
+   "sourceIndex": 0,
+   "targetIndex": 0
+  },
+  {
+   "type": "removeConnection",
+   "source": "send guard",
+   "target": "is telegram?",
+   "sourceIndex": 0,
+   "targetIndex": 0
+  },
+  {
+   "type": "addConnection",
+   "source": "has reply?",
+   "target": "expand replies",
+   "sourceIndex": 0,
+   "targetIndex": 0
+  },
+  {
+   "type": "addConnection",
+   "source": "send guard",
+   "target": "expand replies",
+   "sourceIndex": 0,
+   "targetIndex": 0
+  },
+  {
+   "type": "addConnection",
+   "source": "expand replies",
+   "target": "send loop",
+   "sourceIndex": 0,
+   "targetIndex": 0
+  },
+  {
+   "type": "addConnection",
+   "source": "send loop",
+   "target": "is telegram?",
+   "sourceIndex": 1,
+   "targetIndex": 0
+  },
+  {
+   "type": "addConnection",
+   "source": "send telegram",
+   "target": "send loop",
+   "sourceIndex": 0,
+   "targetIndex": 0
+  },
+  {
+   "type": "addConnection",
+   "source": "send whatsapp",
+   "target": "send loop",
+   "sourceIndex": 0,
+   "targetIndex": 0
+  },
+  {
+   "type": "addConnection",
+   "source": "report channel down",
+   "target": "send loop",
+   "sourceIndex": 0,
+   "targetIndex": 0
+  }
+ ],
+ "sendOptions": {
+  "send telegram": {
+   "timeout": 20000
+  },
+  "send whatsapp": {
+   "timeout": 20000
+  }
+ },
+ "reportBody": "={{ JSON.stringify({ workflowId: $workflow.id, workflowName: $workflow.name, executionId: String($execution.id), kind: \"degraded_turn\", occurredAt: $now.toUTC().toISO(), nodeName: $('Inbound').first().json.channel === \"telegram\" ? \"send telegram\" : \"send whatsapp\", errorMessage: [($json.error && typeof $json.error === \"object\") ? $json.error.message : $json.error, ($json.error && typeof $json.error === \"object\") ? $json.error.description : null, ($json.error && typeof $json.error === \"object\" && $json.error.error) ? (typeof $json.error.error === \"string\" ? $json.error.error : ($json.error.error.message || JSON.stringify($json.error.error))) : null].filter(function (p, i, all) { return typeof p === \"string\" && p !== \"\" && all.indexOf(p) === i; }).join(\" -- \").slice(0, 1000) || \"the chat platform refused the message\", channel: $('Inbound').first().json.channel, externalId: String($('Inbound').first().json.externalId), requestId: String($execution.id) }) }}"
+}

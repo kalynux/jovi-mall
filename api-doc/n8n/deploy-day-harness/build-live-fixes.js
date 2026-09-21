@@ -196,7 +196,69 @@ FIX['compose tap input'] = patch('compose tap input § 4.8', LIVE_NOW.nodes['com
   ],
 ]);
 
-module.exports = { FIX, live, wf, TOKEN_PARA_OLD, TOKEN_PARA_NEW, TOKEN_PARA_53, AWAIT_KEY, RULES_46, LIVE_NOW };
+// ── § 3 · A2 AS SHIPPED — several messages, one at a time, merged with the owner's reporting ──
+// The spec (§ 3.2, written 2026-09-20 against version 1997c757) routed a refused send to
+// `note refused send` and failed the run at the end in `any send refused?`. The OWNER changed the
+// send nodes on Saturday: `onError: continueErrorOutput` → `report channel down`, a direct
+// `degraded_turn` push to wi-admin with the run left successful — which is ADR-022's current design.
+// Building the spec as written would report every refusal TWICE (the push and a failed run).
+// Merged: the owner's reporting is KEPT and simply hands back to the loop; the spec's two nodes
+// are not built. What § 3 adds is only what is new — `expand replies` (read `replies`, not just
+// `reply`) and `send loop` (one message at a time, in order; a refusal at 2 of 6 costs nothing
+// after it).
+const LIVE_SEND = JSON.parse(fs.readFileSync(path.join(__dirname, 'live-core-1089e871.json'), 'utf8'));
+
+FIX['3 nodes'] = [
+  // Byte-identical to build-new.js's, so test-s3's twenty-two checks on it hold for this body.
+  { name: 'expand replies', type: 'n8n-nodes-base.code', typeVersion: 2, position: [4112, 784],
+    parameters: { jsCode: NEW['core:expand replies'] } },
+  // Loop Over Items v3: output 0 is DONE, output 1 is LOOP. Nothing is wired to done — the run
+  // ends there, and it still returns items, so the adapters' `stop typing` still runs.
+  { name: 'send loop', type: 'n8n-nodes-base.splitInBatches', typeVersion: 3, position: [4336, 784],
+    parameters: { batchSize: 1, options: {} } },
+];
+
+FIX['3 wiring'] = [
+  { type: 'removeConnection', source: 'has reply?', target: 'is telegram?', sourceIndex: 0, targetIndex: 0 },
+  { type: 'removeConnection', source: 'send guard', target: 'is telegram?', sourceIndex: 0, targetIndex: 0 },
+  { type: 'addConnection', source: 'has reply?', target: 'expand replies', sourceIndex: 0, targetIndex: 0 },
+  { type: 'addConnection', source: 'send guard', target: 'expand replies', sourceIndex: 0, targetIndex: 0 },
+  { type: 'addConnection', source: 'expand replies', target: 'send loop', sourceIndex: 0, targetIndex: 0 },
+  { type: 'addConnection', source: 'send loop', target: 'is telegram?', sourceIndex: 1, targetIndex: 0 },
+  { type: 'addConnection', source: 'send telegram', target: 'send loop', sourceIndex: 0, targetIndex: 0 },
+  { type: 'addConnection', source: 'send whatsapp', target: 'send loop', sourceIndex: 0, targetIndex: 0 },
+  { type: 'addConnection', source: 'report channel down', target: 'send loop', sourceIndex: 0, targetIndex: 0 },
+];
+
+// A3's `batching` goes: it only SPACED requests (it never awaited one before starting the next),
+// and with one item per call it is inert. Every other option is kept exactly.
+const sendOptions = (name) => {
+  const opts = JSON.parse(JSON.stringify(LIVE_SEND.nodes[name].parameters.options || {}));
+  delete opts.batching;
+  return opts;
+};
+FIX['3 send options'] = { 'send telegram': sendOptions('send telegram'), 'send whatsapp': sendOptions('send whatsapp') };
+
+// `report channel down` — two corrections to the owner's node, both found while merging:
+//   1. `$('Inbound').item` → `.first()`. `.item` resolves by tracing each item's lineage, and
+//      inside a loop that trace is what breaks; the node continues on error, so a broken trace
+//      would lose the REPORT silently. Every run has exactly one inbound message.
+//   2. The platform's actual reason. `$json.error.message` is n8n's generic sentence ("Bad
+//      request - please check your parameters"); Telegram's reason is in `description` and Meta's
+//      in a nested `error.message`. The failures board got the generic sentence or the fallback,
+//      never "(#131047) outside the 24-hour window". All three are read now, de-duplicated.
+const REPORT_OLD_ERROR = 'errorMessage: ($json.error && $json.error.message) || "the chat platform refused the message"';
+const REPORT_NEW_ERROR = 'errorMessage: [($json.error && typeof $json.error === "object") ? $json.error.message : $json.error, ($json.error && typeof $json.error === "object") ? $json.error.description : null, ($json.error && typeof $json.error === "object" && $json.error.error) ? (typeof $json.error.error === "string" ? $json.error.error : ($json.error.error.message || JSON.stringify($json.error.error))) : null].filter(function (p, i, all) { return typeof p === "string" && p !== "" && all.indexOf(p) === i; }).join(" -- ").slice(0, 1000) || "the chat platform refused the message"';
+const REPORT_LIVE = LIVE_SEND.nodes['report channel down'].parameters.jsonBody;
+const itemRefs = REPORT_LIVE.split("$('Inbound').item.json").length - 1;
+if (itemRefs !== 3) { throw new Error(`report channel down: expected 3 $('Inbound').item references, found ${itemRefs}`); }
+FIX['3 report body'] = patch('report channel down', REPORT_LIVE, [[REPORT_OLD_ERROR, REPORT_NEW_ERROR]])
+  .split("$('Inbound').item.json").join("$('Inbound').first().json");
+
+module.exports = {
+  FIX, live, wf, TOKEN_PARA_OLD, TOKEN_PARA_NEW, TOKEN_PARA_53, AWAIT_KEY, RULES_46, LIVE_NOW, LIVE_SEND,
+  REPORT_OLD_ERROR,
+};
 
 if (require.main === module) {
   fs.mkdirSync(path.join(__dirname, 'new'), { recursive: true });
@@ -206,6 +268,9 @@ if (require.main === module) {
   fs.writeFileSync(path.join(__dirname, 'new', 'fix_system_message_46.txt'), FIX['systemMessage.46']);
   fs.writeFileSync(path.join(__dirname, 'new', 'fix_system_message_53.txt'), FIX['systemMessage.53']);
   fs.writeFileSync(path.join(__dirname, 'new', 'fix_compose_tap_input_48.txt'), FIX['compose tap input']);
+  fs.writeFileSync(path.join(__dirname, 'new', 'fix_3_send_path.json'), JSON.stringify({
+    nodes: FIX['3 nodes'], wiring: FIX['3 wiring'], sendOptions: FIX['3 send options'], reportBody: FIX['3 report body'],
+  }, null, 1));
   fs.writeFileSync(path.join(__dirname, 'new', 'fix_compose_agent_input_46.txt'), FIX['compose agent input']);
   fs.writeFileSync(path.join(__dirname, 'new', 'fix_46_nodes.json'), JSON.stringify({ nodes: FIX['4.6 nodes'], wiring: FIX['4.6 wiring'] }, null, 1));
   for (const [k, v] of Object.entries(FIX)) {
