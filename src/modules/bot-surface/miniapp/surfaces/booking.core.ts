@@ -41,12 +41,22 @@ import { ProductModel } from '../../../catalog/models';
 import { VendorModel } from '../../../vendors/vendor.model';
 import { BOOKING_CONFIG } from '../../../booking/config/booking.config';
 import { inAppSurfaceStore } from '../../services/inapp-surface.store';
-import { createAppError } from '../../../../core/errors';
+import { CustomerModel, ICustomer } from '../../../customers/customer.model';
+import { PaymentOrchestratorService } from '../../../payments/services/payment-orchestrator.service';
+import {
+    assertNetworkChargeable,
+    maskedPayerNumber,
+    mobileMoneyGateway,
+    storedPayerNumber,
+    validatedPayerNumber,
+} from './checkout-payer';
+import { AppError, createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
 import type { Slot } from '../../../booking/types/booking.types';
 import {
     BOOKING_TEXT_CAPS,
     bookingScreenCopy,
+    bookingSpotsLeft,
     bookingTimesAvailable,
     fitBookingRowTitle,
 } from '../../domain/bot-booking-copy';
@@ -57,6 +67,7 @@ import {
  * holds no per-request state; there is no shared instance to import.
  */
 const bookingService = new BookingService();
+const paymentOrchestrator = new PaymentOrchestratorService();
 
 /** The five the bot speaks. Anything else falls back to English, as every other surface does. */
 type ScreenLanguage = 'en' | 'fr' | 'pt' | 'es' | 'ar';
@@ -104,6 +115,14 @@ export interface BookingSlotOption {
     label: string;
     /** Capacity services only; null on a one-person appointment — not "none left". */
     spotsRemaining: number | null;
+    /**
+     * The row's description, e.g. "2 spots left", or null when there is nothing to say.
+     *
+     * ⚠ **Worded here because a form cannot build a sentence**, and null rather than "0 spots
+     * left" on a one-person appointment: `spotsRemaining: null` means "not a class", and a
+     * transport turning that into a number would tell every haircut customer no seats remain.
+     */
+    description: string | null;
 }
 
 /** The shop's wall clock — the one availability was authored in. */
@@ -237,6 +256,9 @@ export async function readBookingSlots(input: {
             slotId: slot.id,
             label: `${timeLabel(slot.start, timezone, language)} – ${timeLabel(slot.end, timezone, language)}`,
             spotsRemaining: slot.spotsRemaining ?? null,
+            description: slot.spotsRemaining === undefined || slot.spotsRemaining === null
+                ? null
+                : bookingSpotsLeft(slot.spotsRemaining, input.language),
         })),
     };
 }
@@ -404,6 +426,177 @@ async function receiptFor(
         service: (product as { title?: string } | null)?.title ?? '',
         awaitingShop: booking.status === 'pending',
     };
+}
+
+/**
+ * What the `bp` screen shows before anybody pays.
+ *
+ * ⚠ **THE AMOUNT IS RE-RESOLVED HERE AND HELD NOWHERE.** The session carries a booking id and a
+ * purpose, never a figure: a held amount is an amount that can disagree with what is actually
+ * charged a minute later, and on a screen that takes money that disagreement is the customer's
+ * money. `bp`'s ten-minute life is checkout's, for checkout's reason — it is a credential that
+ * moves money, not a list somebody is scrolling.
+ *
+ * ⚠ **The masked number is the only form of it this side of the server.** `storedPayerNumber`
+ * returns the number in full and must never reach a page; `maskedPayerNumber` is what a customer
+ * sees, so they can recognise their own wallet without the page holding it.
+ */
+export async function readBookingPayment(handle: string): Promise<{
+    copy: ReturnType<typeof bookingScreenCopy>;
+    purpose: 'primary' | 'balance';
+    service: string;
+    when: string;
+    currency: string;
+    amount: number;
+    amountText: string;
+    maskedPayer: string | null;
+}> {
+    const session = await inAppSurfaceStore.read('bp', handle);
+    if (!session) {
+        throw createAppError(ERROR_CODES.BOT_SCREEN_SESSION_EXPIRED, 410, undefined, { kind: 'bp' });
+    }
+
+    const { booking, customer } = await payableBooking(session.bookingId, session.owner);
+    const language = languageOf(session.language);
+    const timezone = await shopTimezone(booking.vendorId);
+    const product = await ProductModel.findById(booking.productId).select('title').lean();
+    const amount = amountDueFor(booking, session.purpose);
+
+    return {
+        copy: bookingScreenCopy(session.language),
+        purpose: session.purpose,
+        service: (product as { title?: string } | null)?.title ?? '',
+        when: `${dayLabel(booking.startAt, timezone, language)} ${timeLabel(booking.startAt, timezone, language)}`,
+        currency: booking.currency,
+        amount,
+        amountText: `${booking.currency} ${new Intl.NumberFormat('en-US').format(Math.round(amount))}`,
+        maskedPayer: await maskedPayerNumber(customer),
+    };
+}
+
+/**
+ * Take the payment: the appointment's price, or the balance a longer job came to.
+ *
+ * ── ⚠ EVERY PROTECTION HERE IS THE CHECKOUT'S, COPIED RATHER THAN RE-DERIVED ─
+ * The handle is SPENT by this write, the gateway is chosen by the server and never by the page,
+ * the network is checked BEFORE the spend for a typed number and after it for the account's, and
+ * every refusal carries `details.spent` so the page knows whether its button may unlatch. That
+ * flag is read as ABSENT-MEANS-SPENT, because the error boundary strips `details` from internal
+ * and gateway failures and a lost response has no body at all — so both stay latched, which is
+ * the direction that cannot take a second payment.
+ *
+ * ⚠ **The result does NOT come back here.** A mobile-money charge is approved on a handset, and
+ * no screen can hold a session open while that happens. The customer is told in the chat by the
+ * payment path (`payment.received.*` / `payment.failed`), which is also what makes the same
+ * answer arrive whether they paid from a screen, from the chat, or from the storefront.
+ */
+export async function payBooking(
+    handle: string,
+    input: { phone?: unknown },
+): Promise<{ transactionId: string; status: string; instructions?: unknown }> {
+    const typed = validatedPayerNumber(input.phone);
+    const gateway = mobileMoneyGateway();
+    /** Before the spend: a number no network can be resolved for must not cost the handle. */
+    if (typed) assertNetworkChargeable(gateway, typed, false);
+
+    const session = await inAppSurfaceStore.consume('bp', handle);
+    if (!session) {
+        throw createAppError(ERROR_CODES.BOT_SCREEN_SESSION_EXPIRED, 410, undefined, { kind: 'bp' });
+    }
+
+    try {
+        const { booking, customer } = await payableBooking(session.bookingId, session.owner);
+        const payerNumber = typed ?? (await storedPayerNumber(customer));
+        if (!payerNumber) {
+            throw createAppError(
+                ERROR_CODES.PAYMENT_PAYER_NUMBER_REQUIRED,
+                422,
+                'A mobile money number is needed to take this payment',
+                { spent: true },
+            );
+        }
+        /** After the spend, because the account's number needs the session to find the customer. */
+        assertNetworkChargeable(gateway, payerNumber, true);
+
+        const channel = { phoneNumber: payerNumber };
+        const result = session.purpose === 'balance'
+            ? await paymentOrchestrator.initiateBookingBalancePayment(String(booking._id), gateway, channel)
+            : await paymentOrchestrator.initiateBookingPayment(String(booking._id), gateway, channel);
+
+        return {
+            transactionId: result.transactionId,
+            status: result.status,
+            instructions: result.instructions,
+        };
+    } catch (error) {
+        throw markSpent(error);
+    }
+}
+
+/**
+ * The booking this screen may charge for, scoped to the customer whose session it is.
+ *
+ * ⚠ **Scoped in the QUERY**, so another customer's booking id is a 404 rather than a 403 — a 403
+ * would confirm the booking exists, which is itself the disclosure.
+ */
+async function payableBooking(
+    bookingId: string,
+    owner: string,
+): Promise<{ booking: IBooking; customer: ICustomer }> {
+    const booking = await Booking.findOne({
+        _id: bookingId,
+        userId: new Types.ObjectId(owner),
+        deletedAt: null,
+    });
+    if (!booking) {
+        throw createAppError(ERROR_CODES.PAYMENT_BOOKING_NOT_FOUND, 404, undefined, { bookingId });
+    }
+
+    const customer = await CustomerModel.findOne({ user_id: new Types.ObjectId(owner) });
+    if (!customer) {
+        throw createAppError(ERROR_CODES.CUSTOMER_NOT_FOUND, 404);
+    }
+    return { booking, customer };
+}
+
+/**
+ * What is owed right now — the quote, or what a longer job came to above it.
+ *
+ * ⚠ **Read from the booking at the moment it is asked**, never from the session. The balance in
+ * particular moves: a vendor settles the appointment after it happens, and a screen opened before
+ * that would otherwise quote a figure that no longer exists.
+ */
+function amountDueFor(booking: IBooking, purpose: 'primary' | 'balance'): number {
+    if (purpose !== 'balance') return booking.priceSnapshot;
+
+    const settlement = booking.settlement;
+    const outstanding = (settlement?.balanceDue ?? 0) - (settlement?.balancePaid ?? 0);
+    if (outstanding <= 0) {
+        throw createAppError(ERROR_CODES.BOOKING_BALANCE_ALREADY_SETTLED, 409, undefined, {
+            bookingId: String(booking._id),
+        });
+    }
+    return outstanding;
+}
+
+/**
+ * Mark a refusal as having cost the handle.
+ *
+ * ⚠ **Everything after `consume` is spent, whatever went wrong.** A page told otherwise would
+ * offer a Pay button backed by a handle that no longer exists — and the customer would meet a
+ * dead screen at the one moment they are trying to pay. Copied from the checkout's `markedSpent`
+ * rather than re-derived, and it never overwrites a flag a refusal set for itself.
+ */
+function markSpent(error: unknown): unknown {
+    if (!(error instanceof AppError)) return error;
+    if (error.details?.spent === true) return error;
+    return new AppError(
+        error.message,
+        error.statusCode,
+        error.code,
+        error.isOperational,
+        { ...(error.details ?? {}), spent: true },
+    );
 }
 
 /**

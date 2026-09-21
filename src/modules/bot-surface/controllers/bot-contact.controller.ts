@@ -11,6 +11,7 @@ import { accountActionId } from '../domain/bot-action-id';
 import { unknownBotAction } from '../domain/bot-action-dispatch';
 import { resendWaitSeconds } from '../domain/bot-resend-cooldown';
 import { maskPhone, toBotContactState } from '../dto/bot-projections';
+import { botStorefrontLink, surfacePath } from '../domain/bot-list-window';
 import {
     BotContactEmailSchema,
     BotContactPhoneSchema,
@@ -52,6 +53,34 @@ import {
 function botActorOf(req: Request): { userId: string; role: string; roleEntityId: string } {
     const caller = botCallerOf(req);
     return { userId: caller.userId, role: 'customer', roleEntityId: caller.customerId };
+}
+
+/**
+ * Where a customer changes their email or phone — the storefront's sign-in details page.
+ *
+ * ── ⭐ THE OWNER'S RULING, AND WHY IT IS DATA RATHER THAN A BUTTON ───────────
+ * Changing either value is **not built in chat** (2026-09-20): the customer is sent to the
+ * website, knowing that pushes them out of the conversation. A rendered link button was the
+ * obvious shape and was refused, because **a reply carrying a control replaces the model's
+ * sentence rather than joining it** — so a button here would cost the customer the answer
+ * they usually came for, which is *"what email do you have for me?"* rather than *"change
+ * it"*. As data the model says both in one line, in their own language.
+ *
+ * ⚠ **It also draws no new control**, which is the second reason and the one that settles it
+ * independently: a control nothing draws is the defect family this round exists to remove. In
+ * particular there is deliberately NO bare `acct:contact` tap — it would be a token no button
+ * emits.
+ *
+ * ⚠ **The path is `surfacePath('security')`, read from the storefront's own source** rather
+ * than guessed from its neighbours: that page's header names it as the email and phone the
+ * account is resolved by. `verify:landing-routes` checks it against that repository on every
+ * run, which a typed literal here would escape.
+ *
+ * Null when `STOREFRONT_URL` is unset — no honest destination exists, so nothing is offered
+ * rather than a broken link.
+ */
+function contactChangeUrl(language: string | null): string | null {
+    return botStorefrontLink(surfacePath('security'), language);
 }
 
 /**
@@ -123,7 +152,7 @@ export class BotContactController {
             });
         }
 
-        sendSuccess(res, toBotContactState(state, proved));
+        sendSuccess(res, toBotContactState(state, proved, contactChangeUrl(language)));
     });
 
     /**
@@ -269,7 +298,7 @@ async function resendEmailTap(req: Request, res: Response): Promise<void> {
      * it was drawn is answered, not scolded.
      */
     if (!pending) {
-        sendSuccess(res, toBotContactState(state, null));
+        sendSuccess(res, toBotContactState(state, null, contactChangeUrl(botResponseLanguageOf(req))));
         return;
     }
 
@@ -299,7 +328,7 @@ async function cancelChangeTap(req: Request, res: Response, field: 'email' | 'ph
 
     // As above: a stale Cancel on a change that is already gone reports the state, not an error.
     if (!pending) {
-        sendSuccess(res, toBotContactState(state, null));
+        sendSuccess(res, toBotContactState(state, null, contactChangeUrl(botResponseLanguageOf(req))));
         return;
     }
 

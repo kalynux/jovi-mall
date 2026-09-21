@@ -490,25 +490,6 @@ const BOOK_INVITE_PROMPT: Copy = {
 
 // ── Orders and fulfilment ────────────────────────────────────────────────────
 
-/**
- * The sentence above "See all" when `open:ol` is tapped — the whole order history.
- *
- * ⚠ **Replaces `loadMoreRow` doing a body's job.** That key is a WhatsApp list ROW title capped at 24
- * characters, and it was being used as the message text for the order-history button.
- *
- * ⚠ **True on BOTH paths, deliberately.** In production there is no screen origin, so this sits
- * above a storefront link rather than a screen — "tap below to see" is honest either way, where
- * "open your order screen" would be false in production today. Same shape as
- * `BROWSE_PRODUCTS_PROMPT`.
- */
-const VIEW_ORDERS_PROMPT: Copy = {
-    en: 'Tap below to see all your orders.',
-    fr: 'Appuyez ci-dessous pour voir toutes vos commandes.',
-    pt: 'Toque abaixo para ver todas as suas encomendas.',
-    es: 'Toca abajo para ver todos tus pedidos.',
-    ar: 'اضغط أدناه لرؤية جميع طلباتك.',
-};
-
 /** The order detail's second action. Destructive, so it opens a confirm rather than acting. */
 const CANCEL_ORDER_BUTTON: Copy = {
     en: 'Cancel order',
@@ -1287,13 +1268,40 @@ const MY_ORDERS_BUTTON: Copy = {
  * `loadMoreRow` ("Load more") as the message body, which is four words describing a control
  * rather than a sentence introducing a screen — and the shared default introduces *products*,
  * which an order list is not.
+ *
+ * ⚠ **THIS WAS THE SECOND KEY WRITTEN FOR ONE JOB.** `viewOrdersPrompt` already existed for
+ * exactly this, with a docblock saying so; I added this one without finding it, the orders
+ * stream wired this name, and the duplicate is now deleted. Two keys for one sentence is how a
+ * surface ends up saying two different things in two places, and neither reads as wrong.
+ *
+ * ⚠ **The WORDING is the deleted key's, and its argument is why.** In production there is no
+ * screen origin, so this sits above a storefront LINK — *"tap below to see"* is honest on both
+ * paths, where *"here are your orders"* is a small lie next to a link, because they are not
+ * here. That reasoning was written down in the key I removed, and keeping my own sentence would
+ * have thrown away the better half of a duplicate.
  */
 const ORDERS_SCREEN_PROMPT: Copy = {
-    en: 'Here are your orders.',
-    fr: 'Voici vos commandes.',
-    pt: 'Aqui estão as suas encomendas.',
-    es: 'Aquí tienes tus pedidos.',
-    ar: 'إليك طلباتك.',
+    en: 'Tap below to see all your orders.',
+    fr: 'Appuyez ci-dessous pour voir toutes vos commandes.',
+    pt: 'Toque abaixo para ver todas as suas encomendas.',
+    es: 'Toca abajo para ver todos tus pedidos.',
+    ar: 'اضغط أدناه لرؤية جميع طلباتك.',
+};
+
+/**
+ * The sentence over the button that opens the bookings screen.
+ *
+ * ⚠ **"Appointments", not "bookings", in every language** — it is what a customer calls the
+ * thing. The screen's own heading (`inapp-copy.ts` `bookingsHeading`) says Your bookings, which
+ * is the noun the rest of the product uses; this is the sentence in a chat window, where the
+ * word that matters is the one they would have said themselves.
+ */
+const BOOKINGS_SCREEN_PROMPT: Copy = {
+    en: 'Here are your appointments.',
+    fr: 'Voici vos rendez-vous.',
+    pt: 'Aqui estão as suas marcações.',
+    es: 'Aquí tienes tus citas.',
+    ar: 'إليك مواعيدك.',
 };
 
 /**
@@ -1560,13 +1568,13 @@ const CHROME = Object.freeze({
     bargainInvitePrompt: { copy: BARGAIN_INVITE_PROMPT, cap: null },
     bookInvitePrompt: { copy: BOOK_INVITE_PROMPT, cap: null },
     // ── Orders and fulfilment ────────────────────────────────────────────────
-    viewOrdersPrompt: { copy: VIEW_ORDERS_PROMPT, cap: null },
     cancelOrderButton: { copy: CANCEL_ORDER_BUTTON, cap: 20 },
     confirmDeliveryPrompt: { copy: CONFIRM_DELIVERY_PROMPT, cap: null },
     cancelOrderPrompt: { copy: CANCEL_ORDER_PROMPT, cap: null },
     cancelReasonPrompt: { copy: CANCEL_REASON_PROMPT, cap: null },
     handoverPrompt: { copy: HANDOVER_PROMPT, cap: null },
     ordersScreenPrompt: { copy: ORDERS_SCREEN_PROMPT, cap: null },
+    bookingsScreenPrompt: { copy: BOOKINGS_SCREEN_PROMPT, cap: null },
     myBookingsButton: { copy: MY_BOOKINGS_BUTTON, cap: 20 },
 
     // ── Reviews ──────────────────────────────────────────────────────────────

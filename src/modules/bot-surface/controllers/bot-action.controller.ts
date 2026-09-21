@@ -11,6 +11,8 @@ import { ACCOUNT_ACTION_HANDLERS } from './bot-account.controller';
 import { DISCOVERY_ACTION_HANDLERS } from './bot-discovery.controller';
 import { BARGAIN_ACTION_HANDLERS } from './bot-negotiation.controller';
 import { DIGITAL_ACTION_HANDLERS } from './bot-catalog.controller';
+import { REVIEW_ACTION_HANDLERS } from './bot-review.controller';
+import { BOOKING_ACTION_HANDLERS } from './bot-booking.controller';
 
 /**
  * THE TAP-CODE DISPATCHER — `POST /catalog/action`, the surface's single tap handler.
@@ -83,6 +85,22 @@ const HANDLERS = mergeActionHandlers([
      * a customer met it rather than after.
      */
     ['digital', DIGITAL_ACTION_HANDLERS],
+    /**
+     * rate — the stars under a delivered order, and the product they belong to.
+     *
+     * ⚠ **Three arities of one verb**, told apart inside the handler rather than by a sub-key:
+     * `rate` has one owner, and sub-dispatching a verb nobody shares would put this stream's
+     * argument grammar into the shared registry.
+     */
+    ['reviews', REVIEW_ACTION_HANDLERS],
+    /**
+     * open:bl — the customer's own appointments.
+     *
+     * ⚠ **`bk` and `bp` are deliberately NOT here and never will be.** A picker handle holds a
+     * slot and a payment handle moves money; both are minted server-side on the tap that opens
+     * them, so neither may sit in a chat history waiting to be pressed.
+     */
+    ['bookings', BOOKING_ACTION_HANDLERS],
 ]);
 
 export class BotActionController {

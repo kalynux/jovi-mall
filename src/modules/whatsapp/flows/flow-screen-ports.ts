@@ -4,6 +4,16 @@ import { ERROR_CATEGORIES } from '../../../core/error-category';
 import { logger } from '../../../core/logging';
 import { recordError } from '../../system/metrics/metrics';
 import { executePurchase } from '../../bot-surface/controllers/bot-purchase.controller';
+import {
+    bookingChatReceipt,
+    bookingScreenCopy,
+} from '../../bot-surface/domain/bot-booking-copy';
+import {
+    confirmBooking,
+    readBookingPicker,
+    readCustomerBookings,
+    type BookingConfirmed,
+} from '../../bot-surface/miniapp/surfaces/booking.core';
 import { placeCheckout, readCheckoutView } from '../../bot-surface/miniapp/surfaces/checkout.controller';
 import { readProductDetail } from '../../bot-surface/miniapp/surfaces/product-detail.read';
 import { readListingPage } from '../../bot-surface/miniapp/surfaces/product-listing.read';
@@ -33,6 +43,21 @@ export const flowScreenPorts: FlowScreenPorts = Object.freeze({
     readCheckoutView,
     placeCheckout,
     executePurchase,
+    readBookingPicker,
+    confirmBooking,
+    readCustomerBookings,
+    bookingWords: bookingScreenCopy,
+    /**
+     * ⚠ **The SCREEN gets the full receipt**, because at this moment the endpoint holds the
+     * booking it has just made and the session was provably this customer's. The chat that
+     * follows gets `bookingChatAcknowledgement` instead — a different sentence, not this one with
+     * the details removed, which renders "Booked: , ." and was nearly shipped that way.
+     */
+    bookingReceipt: (confirmed: BookingConfirmed, language: string | null) => bookingChatReceipt(
+        { moved: confirmed.moved, awaitingShop: confirmed.awaitingShop },
+        { reference: confirmed.reference, when: confirmed.when, service: confirmed.service },
+        language,
+    ),
     claims: botIdempotencyStore,
     /** 12 random bytes → 16 URL-safe characters: unguessable, and inside the router's pattern. */
     newOpenRef: () => randomBytes(12).toString('base64url'),

@@ -4,6 +4,19 @@ import { categoryFor, type ErrorCategory } from '../../../core/error-category';
 import { customerMessageFor } from '../../bot-surface/domain/bot-error-copy';
 import { inAppCopy } from '../../bot-surface/miniapp/inapp-copy';
 import type { PurchaseContext, PurchaseResult } from '../../bot-surface/controllers/bot-purchase.controller';
+import type { BookingConfirmed } from '../../bot-surface/miniapp/surfaces/booking.core';
+import {
+    bookingConfirmedResponse,
+    toBookingDayScreen,
+    toBookingListScreen,
+    toBookingTimesScreen,
+    type BookingDayView,
+    type BookingTimesView,
+} from './screens/booking.adapter';
+import {
+    BOOKING_DAY_SCREEN,
+    BOOKING_TIMES_SCREEN,
+} from './definitions/booking.flow';
 import type { CheckoutPlaced, CheckoutView } from '../../bot-surface/miniapp/surfaces/checkout.controller';
 import type { ImageSource } from '../../bot-surface/miniapp/surfaces/image-source';
 import type { ProductDetailView } from '../../bot-surface/miniapp/surfaces/product-detail.read';
@@ -35,6 +48,7 @@ import {
 import { toDetailScreen } from './screens/detail.adapter';
 import type { FlowCopy } from './screens/flow-copy';
 import { FLOW_LISTING_PAGE_SIZE, noticeResponse, toListingScreen } from './screens/listing.adapter';
+import { FLOW_CAPS } from './screens/flow-text';
 
 /**
  * Serving a screen: from a decrypted request to the answer that goes back encrypted.
@@ -69,8 +83,22 @@ import { FLOW_LISTING_PAGE_SIZE, noticeResponse, toListingScreen } from './scree
  * kind — a listing handle submitted to the checkout form reads as absent.
  */
 
-/** The three session kinds a WhatsApp form can open. `ol` and `sl` have no form. */
-export type FlowSessionKind = 'pl' | 'pd' | 'co';
+/**
+ * The session kinds a WhatsApp form can open. `ol` and `sl` have no form; `bp` has a definition
+ * but no read yet, so it is deliberately absent — see `openForm`.
+ */
+export type FlowSessionKind = 'pl' | 'pd' | 'co' | 'bl' | 'bk';
+
+/** What `readBookingPicker` answers: the days, or one day's times — with the screens' words. */
+export interface BookingPickerView {
+    moving: string | null;
+    copy: BookingDayView['copy'] & BookingTimesView['copy'];
+    timezone: string;
+    days?: BookingDayView['days'];
+    date?: string;
+    label?: string;
+    slots?: BookingTimesView['slots'];
+}
 type SessionOf<K extends FlowSessionKind> = Extract<InAppSurfaceSession, { kind: K }>;
 
 /** What one idempotency claim is scoped to. See `bot-idempotency.store.ts`. */
@@ -103,6 +131,22 @@ export interface FlowScreenPorts {
     readCheckoutView(handle: string): Promise<CheckoutView>;
     placeCheckout(handle: string, phone: unknown): Promise<CheckoutPlaced>;
     executePurchase(ctx: PurchaseContext): Promise<PurchaseResult>;
+    /**
+     * `readBookingPicker` — one read for both booking screens. It resolves the `bk` session
+     * ITSELF and carries the screens' own words, so this side holds no booking strings and no
+     * second opinion about which days have times.
+     */
+    readBookingPicker(handle: string, input?: { date?: string | null }): Promise<BookingPickerView>;
+    /** `confirmBooking` — consumes the `bk` handle itself; one handle, one appointment. */
+    confirmBooking(handle: string, input: { slotId: string }): Promise<BookingConfirmed>;
+    readCustomerBookings(input: {
+        userId: string;
+        language?: string | null;
+        limit?: number;
+    }): Promise<{ bookings: Array<{ bookingId: string; title: string; description: string }> }>;
+    /** `bookingScreenCopy` / the chat acknowledgement — the one booking vocabulary. */
+    bookingWords(language: string | null): { listTitle: string; listEmpty: string };
+    bookingReceipt(confirmed: BookingConfirmed, language: string | null): string;
     /** `botIdempotencyStore` — atomic claim, stored answer replayed, released to retry. */
     claims: {
         claim(input: FlowClaim): Promise<BotClaimResult>;
@@ -169,6 +213,7 @@ export const CLAIM_WAIT_MS = 750;
 /** The idempotency `tool` names, so a stored answer says which door wrote it. */
 export const FLOW_DETAIL_TOOL = 'whatsapp_flow_product_detail';
 export const FLOW_CHECKOUT_TOOL = 'whatsapp_flow_checkout';
+export const FLOW_BOOKING_TOOL = 'whatsapp_flow_booking';
 
 /**
  * The claim scope for a checkout press.
@@ -197,6 +242,12 @@ export async function serveFlowScreen(
         }
         if (request.screen === CHECKOUT_SCREEN) {
             return submitCheckout(handle, request.data, ports);
+        }
+        if (request.screen === BOOKING_DAY_SCREEN) {
+            return chooseBookingDay(handle, request.data, ports);
+        }
+        if (request.screen === BOOKING_TIMES_SCREEN) {
+            return confirmBookingTime(handle, request.data, ports);
         }
         // No definition sends an exchange from any other screen — the listing CLOSES on a choice.
         console.warn(`[WhatsAppFlows] data_exchange from screen '${request.screen ?? '(none)'}', which no form sends`);
@@ -229,10 +280,72 @@ async function openForm(handle: string, ports: FlowScreenPorts): Promise<FlowScr
 
         const checkout = await ports.readSession('co', handle);
         if (checkout) return await drawCheckout(handle, checkout, ports);
+
+        const bookings = await ports.readSession('bl', handle);
+        if (bookings) return await drawBookingList(bookings, ports);
+
+        const picker = await ports.readSession('bk', handle);
+        if (picker) return await drawBookingDays(handle, picker, ports);
     } catch (error) {
         return readFailed('open', error, null, ports);
     }
+    /**
+     * ⚠ **A `bp` handle lands here and is refused, deliberately.** Its definition exists and its
+     * screen kind does, but nothing reads a booking's outstanding amount yet — and a payment
+     * screen that cannot re-resolve what is owed is the one screen that must not be guessed at.
+     * When that read lands this becomes a branch like the others.
+     */
     return tokenUnusable(null);
+}
+
+async function drawBookingList(
+    session: SessionOf<'bl'>,
+    ports: FlowScreenPorts,
+): Promise<FlowScreenVerdict> {
+    try {
+        const { bookings } = await ports.readCustomerBookings({
+            userId: session.owner,
+            language: session.language,
+            limit: FLOW_CAPS.radioOptions,
+        });
+        return {
+            status: 200,
+            body: toBookingListScreen(
+                bookings,
+                ports.bookingWords(session.language),
+                flowCopyFor(session.language),
+            ),
+        };
+    } catch (error) {
+        return readFailed('open bl', error, session.language, ports);
+    }
+}
+
+/**
+ * The day screen.
+ *
+ * ⚠ **`readBookingPicker` resolves the `bk` session itself**, so the handle is read twice on this
+ * path — once here to learn the kind, once inside the read. That is deliberate: the read owning
+ * its own session is what lets the Telegram page and this form be served by one function, and a
+ * second Redis read costs less than a second opinion about what the session says.
+ */
+async function drawBookingDays(
+    handle: string,
+    session: SessionOf<'bk'>,
+    ports: FlowScreenPorts,
+): Promise<FlowScreenVerdict> {
+    try {
+        const picker = await ports.readBookingPicker(handle);
+        return {
+            status: 200,
+            body: toBookingDayScreen(
+                { moving: picker.moving, copy: picker.copy, days: picker.days ?? [] },
+                flowCopyFor(session.language),
+            ),
+        };
+    } catch (error) {
+        return readFailed('open bk', error, session.language, ports);
+    }
 }
 
 async function drawListing(
@@ -639,6 +752,134 @@ function checkoutRefused(
             ports.reportFailure('submit co', error);
             return { status: 200, body: noticeResponse(copy.failed, copy) };
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  The booking form's two presses
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
+/** A slot handle is the read's own opaque string; bounded, never parsed. */
+const SLOT_ID = /^[\w:.-]{1,128}$/;
+
+/**
+ * "See times" — the day is chosen, the same read answers again with that day's times.
+ *
+ * ⚠ **A read, not a write**, so no claim: nothing is held, nothing is spent, and pressing twice
+ * costs a second look at the same availability.
+ */
+async function chooseBookingDay(
+    handle: string,
+    data: Record<string, unknown>,
+    ports: FlowScreenPorts,
+): Promise<FlowScreenVerdict> {
+    let session: SessionOf<'bk'> | null;
+    try {
+        session = await ports.readSession('bk', handle);
+    } catch (error) {
+        return readFailed('submit bk', error, null, ports);
+    }
+    if (!session) return tokenUnusable(null);
+
+    const copy = flowCopyFor(session.language);
+    const date = stringMatching(data.day, DAY_KEY);
+    if (!date) {
+        console.warn('[WhatsAppFlows] a booking day was submitted without a day');
+        return { status: 200, body: noticeResponse(copy.failed, copy) };
+    }
+
+    try {
+        const picker = await ports.readBookingPicker(handle, { date });
+        return {
+            status: 200,
+            body: toBookingTimesScreen(
+                { copy: picker.copy, label: picker.label, slots: picker.slots ?? [] },
+                copy,
+            ),
+        };
+    } catch (error) {
+        return readFailed('submit bk', error, session.language, ports);
+    }
+}
+
+/**
+ * "Confirm" — the appointment is made, or moved.
+ *
+ * ── ⛔ TWO GUARDS, THE SAME SPLIT THE CHECKOUT ARRIVED AT ───────────────────
+ *   1. **`confirmBooking` consumes the `bk` handle itself**, so a second press cannot make a
+ *      second appointment, whatever the timing.
+ *   2. **The claim, taken BEFORE that consume, decides what a second press is TOLD.** Without it
+ *      a retry of a confirm that went through — WhatsApp resends a slow exchange, a customer
+ *      presses again after a timeout — would meet a spent handle and be told to start again,
+ *      which is how somebody books twice out of politeness to a form.
+ * Every outcome after the consume is stored and replayed; a refusal BEFORE it releases, so the
+ * customer can pick another time when the one they chose was taken a moment earlier.
+ *
+ * ⚠ **The screen shows the full receipt and the chat will not.** Here the session is provably
+ * this customer's; by the time the chat speaks it is gone. See `screens/booking.adapter.ts`.
+ */
+async function confirmBookingTime(
+    handle: string,
+    data: Record<string, unknown>,
+    ports: FlowScreenPorts,
+): Promise<FlowScreenVerdict> {
+    let session: SessionOf<'bk'> | null;
+    try {
+        session = await ports.readSession('bk', handle);
+    } catch (error) {
+        return readFailed('confirm bk', error, null, ports);
+    }
+    const language = session?.language ?? null;
+    const copy = flowCopyFor(language);
+
+    const slotId = stringMatching(data.slot, SLOT_ID);
+    if (!slotId) {
+        console.warn('[WhatsAppFlows] a booking was confirmed without a slot');
+        return { status: 200, body: noticeResponse(copy.failed, copy) };
+    }
+
+    const claim: FlowClaim = {
+        identity: CHECKOUT_CLAIM_IDENTITY,
+        key: `wa-flow:bk:${handle}:${slotId}`,
+        fingerprint: `bk:${slotId}`,
+        tool: FLOW_BOOKING_TOOL,
+    };
+
+    const gate = await claimOrWait(claim, ports);
+    if (gate.status !== 'claimed') return answerFromGate(gate, language, ports);
+
+    const release = (): Promise<void> =>
+        settle(ports, () => ports.claims.release(claim.identity, claim.key));
+
+    if (!session) {
+        await release();
+        return tokenUnusable(null);
+    }
+
+    let verdict: FlowScreenVerdict;
+    let spent: boolean;
+    try {
+        const confirmed = await ports.confirmBooking(handle, { slotId });
+        verdict = {
+            status: 200,
+            body: bookingConfirmedResponse(confirmed, ports.bookingReceipt(confirmed, language), copy),
+        };
+        spent = true;
+    } catch (error) {
+        /**
+         * ⚠ **A refusal here is almost always "somebody took that time first"**, and the handle
+         * survives it — `confirmBooking` consumes before it holds the slot, so a 409 arrives with
+         * the session already gone. Treated as spent for that reason: the customer cannot press
+         * again on this form and must reopen it, which is what the notice says.
+         */
+        spent = !handleSurvived(error);
+        verdict = readFailed('confirm bk', error, language, ports);
+    }
+
+    await settle(ports, () => (spent
+        ? ports.claims.complete({ ...claim, response: verdict })
+        : ports.claims.release(claim.identity, claim.key)));
+    return verdict;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

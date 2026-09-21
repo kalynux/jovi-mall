@@ -24,7 +24,14 @@
  * ⚠ **A value outside this set means a Flow published later than this code.** It is treated as
  * `notice`: say nothing rather than guess at what happened.
  */
-export const FLOW_OUTCOMES = Object.freeze(['notice', 'added', 'asked', 'placed'] as const);
+export const FLOW_OUTCOMES = Object.freeze([
+    'notice',
+    'added',
+    'asked',
+    'placed',
+    'booked',
+    'moved',
+] as const);
 
 export type FlowOutcome = (typeof FLOW_OUTCOMES)[number];
 
@@ -39,6 +46,20 @@ export type FlowOutcome = (typeof FLOW_OUTCOMES)[number];
  *             The chat must carry that question, or it is asked into a closed screen.
  *   `placed`  the checkout was placed. The chat stays quiet on purpose: the payment RESULT
  *             arrives through the payment path, and a "got that" here would talk over it.
+ *   `booked`  an appointment was made. The chat acknowledges it — CONTENT-FREE, plus a "My
+ *             bookings" button — because the platform's own booking notification picks one
+ *             secondary channel (telegram > email > whatsapp) and is mutable by a preference, so
+ *             a WhatsApp customer with a verified email could otherwise hear nothing at all in
+ *             the conversation they just booked from.
+ *   `moved`   the same, for a RESCHEDULE. ⚠ Its own value rather than a flag on `booked`,
+ *             because telling somebody their appointment is "booked" when they moved one reads
+ *             as a second appointment.
+ *
+ * ⚠ **`booked` and `moved` carry NOTHING about the appointment**, and that is the point: the
+ * screen showed the reference and the time while the session was live and provable, and by the
+ * time the chat speaks the handle is spent and the completion is caller-supplied. The button is
+ * how the customer reaches those details again — a tap code is not content, it opens a screen
+ * that resolves the sender's own session server-side.
  */
 export const asFlowOutcome = (value: unknown): FlowOutcome => {
     const known = FLOW_OUTCOMES.find((outcome) => outcome === value);

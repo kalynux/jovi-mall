@@ -27,7 +27,9 @@
  */
 import fs from 'fs';
 import path from 'path';
+import ts from 'typescript';
 import {
+    BOT_ACTION_VERBS,
     __CALLBACK_DATA_BYTES,
     codCodeActionId,
     confirmActionId,
@@ -148,6 +150,12 @@ const FORM_READ_PATH = path.join(
 );
 
 const FORM_READ = fs.readFileSync(FORM_READ_PATH, 'utf8').replace(/\r\n/g, '\n');
+
+/** The route table, read as text so § 9's pin on the published tool name can prove it bites. */
+const ROUTE_TABLE = fs.readFileSync(
+    path.join(__dirname, '../../src/modules/bot-surface/domain/bot-route-table.ts'),
+    'utf8',
+).replace(/\r\n/g, '\n');
 
 /** Block and line comments removed, so a guard cannot be satisfied by a sentence about the code. */
 function stripComments(source: string): string {
@@ -638,6 +646,8 @@ function main(): void {
     supportSection();
     cancellationReasonSection();
     crossStreamSection();
+    automationContractSection();
+    tokenContainmentSection();
 
     // ─────────────────────────────────────────────────────────────────────────
     console.log('\n────────────────────────────────────────────────────────────────────────────');
@@ -1301,4 +1311,444 @@ function crossStreamSection(): void {
     assert('⛔ the four-segment shape that nearly shipped is still refused', () =>
         parseTicketTap(`new:dlv:${ID}:absent`) === null
             && parseTicketTap(`new:dlv:${ID}:address`) === null);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  § 9 · Three literals of mine that another repository's document quotes
+//
+//  ⭐ **THE HAZARD, AND IT RUNS THE OPPOSITE WAY TO § 8.** There, another stream drew a button my
+//  parser had to read. Here, the automation layer keys on strings THIS stream emits — two flag names
+//  in a tap's `data` and one tool name — and they are written out in
+//  `api-doc/n8n/N8N-DEPLOY-DAY-CHANGES.md`, which another stream owns and n8n is built from.
+//
+//  **There is no compiler between the halves.** A tidy-up that renames `awaitingCancellationReason`
+//  leaves this repository green, leaves that document green, and silently stops the customer's typed
+//  cancellation reason from ever being recorded — the failure nobody sees, because an empty column
+//  looks exactly like customers who chose not to answer. So the rename has to fail HERE, loudly,
+//  where the person doing it is standing.
+//
+//  ⚠ **The document is asserted as well as the code, and a MISSING document is a FAILURE.** If that
+//  file moves or is renamed, this pin has stopped protecting anything, and the only safe way to learn
+//  that is to be told rather than to keep passing.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function automationContractSection(): void {
+    console.log('\n══ § 9 · The literals the automation layer keys on ══');
+
+    /** Emitted by this stream, keyed on by n8n, quoted in a document this stream does not own. */
+    const CONTRACT = Object.freeze({
+        /** The order-cancel tap's flag: the assistant must file the customer's next message. */
+        cancellationFlag: 'awaitingCancellationReason',
+        /** The ticket-Reply tap's flag. Same rule, same shape, different situation. */
+        replyFlag: 'awaitingReply',
+        /** The tool that writes the typed reason onto the order's history. */
+        tool: 'orders_record_cancellation_reason',
+        /** Its path, which the catalogue publishes to the automation layer. */
+        path: '/orders/:orderId/cancellation-reason',
+    });
+
+    const DEPLOY_DOC_PATH = path.join(__dirname, '../../api-doc/n8n/N8N-DEPLOY-DAY-CHANGES.md');
+
+    /**
+     * ⚠ **Every one of the three is a bite-proof, not a presence check**, because a pin whose whole
+     * job is to fail on a rename is worthless if nobody has watched it fail on a rename. Each
+     * mutation below is exactly the change a tidy-up would make.
+     */
+    assertBitesIn(
+        CONTROLLER,
+        'the order-cancel flag is emitted as a LITERAL key, spelled as the automation layer reads it',
+        (source) => stripComments(source).includes(`${CONTRACT.cancellationFlag}:`),
+        // The rename that leaves both repositories green and stops the reason being recorded.
+        (src) => src.split(CONTRACT.cancellationFlag).join('awaitingReasonText'),
+    );
+
+    assertBitesIn(
+        TICKET_CONTROLLER,
+        'the ticket-Reply flag is emitted as a LITERAL key, spelled as the automation layer reads it',
+        (source) => stripComments(source).includes(`${CONTRACT.replyFlag}:`),
+        (src) => src.split(CONTRACT.replyFlag).join('awaitsCustomerReply'),
+    );
+
+    assertBitesIn(
+        ROUTE_TABLE,
+        'the tool and its path are exactly what the catalogue publishes to the automation layer',
+        (source) => source.includes(`tool: '${CONTRACT.tool}'`) && source.includes(`path: '${CONTRACT.path}'`),
+        (src) => src.split(CONTRACT.tool).join('orders_add_cancellation_note'),
+    );
+
+    /**
+     * ⚠ **The other half of the contract, and the reason a missing file FAILS.** This is the position
+     * `test:blog`'s cross-repository fixture list holds: two halves, no shared package, nothing but an
+     * assertion in the middle. If the document moves, this pin has stopped protecting anything, and
+     * the only safe way to learn that is to be told rather than to keep passing.
+     */
+    assert('the automation layer\'s own document still exists where this pin looks for it', () => {
+        if (fs.existsSync(DEPLOY_DOC_PATH)) return true;
+        console.error('     ↳ N8N-DEPLOY-DAY-CHANGES.md is gone from this path — this pin protects NOTHING');
+        console.error('     ↳ re-point it at the document that replaced it, or tell the stream that owns it');
+        return false;
+    });
+
+    assertBitesIn(
+        fs.existsSync(DEPLOY_DOC_PATH) ? fs.readFileSync(DEPLOY_DOC_PATH, 'utf8') : '',
+        'and that document still names all three, so a rename here cannot leave it stale',
+        (source) => [CONTRACT.cancellationFlag, CONTRACT.replyFlag, CONTRACT.tool]
+            .every((literal) => source.includes(literal)),
+        // A rewording that drops one of them: the two halves must be decided together.
+        (src) => src.split(CONTRACT.cancellationFlag).join('the cancellation flag'),
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  § 10 · Where a tap token may be written by hand
+//
+//  ⭐ **THE QUESTION THIS ANSWERS: has a NEW producer started hand-writing tokens somewhere nobody
+//  parse-tests them?** § 8 checks the producers we know about. Nothing checks for a producer nobody
+//  told the claiming stream about — and that is how the four-segment `tkt:new:dlv:…:absent` nearly
+//  shipped: a well-formed token, a sensible label, a green suite on the drawing side, and a parser it
+//  had never been tried against. Telegram reports nothing for an unhandled callback, so the first
+//  evidence is a customer being told "I did not understand that".
+//
+//  ── ⚠ WHY THIS IS CONTAINMENT AND NOT "ALWAYS CALL A BUILDER" ───────────────
+//  The stronger rule was measured and rejected (census session, 2026-09-20) rather than judged:
+//    · a text scan is 90% false positives — 345 hits, 311 of them PROSE, because this codebase
+//      documents token grammars thoroughly and one docstring alone holds thirteen shapes;
+//    · an AST scan sees correctly (comments are not nodes) and cuts that to 34 — but 24 of the 34 are
+//      legitimate: registry map KEYS are declarations of what is routed, so flagging them is exactly
+//      backwards, and the byte-budget samples exist to be worst cases;
+//    · ⛔ and the notification catalogue **structurally cannot comply**: its tokens carry
+//      `{{placeholders}}` resolved at render time, so there is no id to hand a builder. "Call the
+//      builder instead" asks for an API that cannot exist.
+//  A guard that starts life failing on correct code is the shape this repository's own record says
+//  teaches the next person to delete it. So: a token literal may appear only in the files below, each
+//  with its reason. A NEW file on that list is the whole signal, and the reviewer's question is the
+//  entire lesson in one prompt: **is this token parse-tested?**
+//
+//  ── ⚠ WHAT THIS GUARD CANNOT SEE, SAID PLAINLY ─────────────────────────────
+//  It walks `.ts` files under `src/` only. A token hand-written in an in-app page's inline script
+//  (`miniapp/public/*.html`) or in the generated `api-doc/n8n/tools/catalog.json` is invisible to it.
+//  Neither writes tap tokens today — measured 2026-09-20 — so this is a LIMIT rather than a defect. It
+//  is written down because "a token literal may appear only in these files" is a broader sentence than
+//  the span that enforces it, and a reader who believes the sentence is the person this guard exists to
+//  protect.
+//
+//  ── ⚠ VACUITY IS GUARDED WITH SENTINELS, NEVER WITH A COUNT ────────────────
+//  Taken verbatim from the census session's own slip twenty minutes before this was written: their
+//  key-extraction scan broke, reported three live tokens dead, and **their vacuity check did not fire,
+//  because it asserted "more than twenty keys found" and the broken regex still produced more than
+//  twenty pieces of garbage.** A count proves a scan produced output, not that it produced the right
+//  output. So this asserts that specific literals it KNOWS exist are found, and prints what it did
+//  extract when they are not.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface TokenLiteral {
+    file: string;
+    text: string;
+    /** A registry map key declares what is ROUTED; anything else is a token being composed. */
+    isRegistryKey: boolean;
+}
+
+
+function tokenContainmentSection(): void {
+    console.log('\n══ § 10 · Where a tap token may be written by hand ══');
+
+    /**
+     * Where a hand-written token is legitimate, and why. Sorted, so a diff to this list reads cleanly.
+     *
+     * ⚠ **Adding a file here is a DECISION, not a formality.** The question to answer in the same change:
+     * is every token this file writes tried against the parser that claims its verb? For the catalogue
+     * that answer is § 8; for the builders it is §§ 1 and 6.
+     */
+    const TOKEN_LITERALS_ALLOWED: Readonly<Record<string, { shape: 'keys-only' | 'composed'; reason: string }>> =
+        Object.freeze({
+            // The five stream registry maps. Their literals are KEYS — `'yes:cd': handler` — which
+            // declare what the dispatcher routes. Flagging a declaration would be backwards.
+            //
+            // ⚠ **`keys-only` is ENFORCED, not descriptive** (the discovery stream's finding 2,
+            // 2026-09-20, measured): a per-file allowlist makes an allowlisted file a blind spot, and a
+            // controller that starts COMPOSING a token by hand is a new producer hiding inside one —
+            // the likeliest hiding place there is, because nobody asks "is this token parse-tested?" of
+            // a controller a second time. The five are 100% keys and 0 composed today.
+            'modules/bot-surface/controllers/bot-account.controller.ts': { shape: 'keys-only', reason: 'registry keys' },
+            'modules/bot-surface/controllers/bot-booking.controller.ts': { shape: 'keys-only', reason: 'registry keys' },
+            'modules/bot-surface/controllers/bot-discovery.controller.ts': { shape: 'keys-only', reason: 'registry keys' },
+            'modules/bot-surface/controllers/bot-order.controller.ts': { shape: 'keys-only', reason: 'registry keys' },
+            'modules/bot-surface/controllers/bot-purchase.controller.ts': { shape: 'keys-only', reason: 'registry keys' },
+            // This stream's builders, plus the byte-budget worst-case samples that exist to be literals.
+            'modules/bot-surface/domain/bot-ticket-actions.ts': { shape: 'composed', reason: 'the tkt builders and the budget samples' },
+            // One deliberate fallback payload, explained at its call site.
+            'modules/bot-surface/domain/channel-reply.ts': { shape: 'composed', reason: 'the `more:none` fallback payload' },
+            // ⚠ Cannot comply with a builder rule: its tokens carry `{{placeholders}}` filled at render
+            // time. Every one of them is parse-tested from this side instead — see § 8.
+            'modules/notifications/catalog/customer-notification-catalog.ts': { shape: 'composed', reason: 'template tokens, parse-tested in § 8' },
+        });
+
+    /**
+     * Literals this scan must find, or it has stopped working.
+     *
+     * ⚠ **These are four PLACES, and by node kind only two SHAPES** — three `StringLiteral`s and one
+     * `TemplateExpression`. The comment here used to claim three shapes, which was the check and the
+     * claim covering different spans, in the comment rather than the code (the discovery stream's
+     * finding 1). The walker's third branch has no real literal to point a sentinel at — nothing in
+     * `src/` writes a token in plain backticks — so it is exercised by the bite-proof instead.
+     */
+    const TOKEN_SCAN_SENTINELS: ReadonlyArray<readonly [file: string, text: string]> = Object.freeze([
+        ['modules/bot-surface/controllers/bot-order.controller.ts', 'yes:cd'],
+        ['modules/bot-surface/domain/bot-ticket-actions.ts', 'tkt:${…}'],
+        ['modules/notifications/catalog/customer-notification-catalog.ts', 'tkt:new:rd:{{orderId}}'],
+        ['modules/bot-surface/domain/channel-reply.ts', 'more:none'],
+    ] as const);
+
+    const SRC_ROOT = path.join(__dirname, '../../src');
+
+    /** The verbs, IMPORTED rather than scanned: the closed set is already exported for this. */
+    const verbs = BOT_ACTION_VERBS as readonly string[];
+
+    /**
+     * What may follow the colon in a real token: ids, sub-words, `{{placeholders}}`, `<documented>`
+     * shapes, `${…}` interpolations — and **never whitespace**.
+     *
+     * ⚠ **This is the anti-false-positive rule, and without it the guard is the text version again.**
+     * Nine of the twenty-five verbs are ordinary English words (`open`, `code`, `add`, `no`, `save`,
+     * `deal`, `book`, `more`, `next`), so a bare "starts with a verb and a colon" test flags
+     * `'code: 200'`, `'open: true'` and `'Status code: 404'` — a prefix collision of exactly the shape
+     * that has already produced a guard going red on correct code twice in this effort. A token never
+     * contains a space; a sentence after a colon almost always does.
+     */
+    const TOKEN_ARGUMENT = /^[A-Za-z0-9_{}<>:.$…-]+$/;
+
+    const isTokenText = (text: string): boolean =>
+        verbs.some((verb) => {
+            if (!text.startsWith(`${verb}:`)) return false;
+            const argument = text.slice(verb.length + 1);
+            return argument.length > 0 && TOKEN_ARGUMENT.test(argument);
+        });
+
+    /**
+     * A template head is the same test with one extra case: `` `tkt:${id}` `` has the head `tkt:` and
+     * nothing after it, which is a token being composed rather than a sentence.
+     */
+    const isTokenHead = (head: string): boolean =>
+        verbs.some((verb) => head === `${verb}:`) || isTokenText(head);
+
+    /**
+     * Whether a string literal is a registry map KEY — a declaration of what is routed — rather than a
+     * token being composed.
+     *
+     * ⚠ **A COMPUTED key counts too.** `{ ['yes:cd']: handler }` puts a `ComputedPropertyName` between
+     * the literal and the property, so the plain parent check classes it as composed — which would fail
+     * the `keys-only` rule in a file that is doing nothing wrong (the discovery stream's finding 4).
+     * Nothing writes one today; handling it costs two lines and removes a trap from the guard rather
+     * than from the code.
+     */
+    const isRegistryKeyNode = (node: ts.StringLiteral): boolean => {
+        const parent = node.parent;
+        if (!parent) return false;
+        if (ts.isPropertyAssignment(parent)) return parent.name === node;
+        if (ts.isComputedPropertyName(parent)) {
+            return Boolean(parent.parent) && ts.isPropertyAssignment(parent.parent);
+        }
+        return false;
+    };
+
+    assert('⛔ the matcher reads tokens and NOT ordinary prose that happens to start with a verb', () => {
+        const tokens = ['yes:cd', 'tkt:new:rd:{{orderId}}', 'more:none', 'ord:list', 'tkt:<ticketId>:<att_>'];
+        const prose = ['code: 200', 'open: true', 'no: thanks', 'Status code: 404', 'book: the blue one', 'add: one more'];
+
+        const missed = tokens.filter((text) => !isTokenText(text));
+        const flagged = prose.filter((text) => isTokenText(text));
+        if (missed.length) console.error(`     ↳ real tokens it cannot see: ${missed.join(' · ')}`);
+        if (flagged.length) console.error(`     ↳ prose it would flag: ${flagged.join(' · ')}`);
+        return missed.length === 0 && flagged.length === 0 && isTokenHead('tkt:');
+    });
+
+    const found: TokenLiteral[] = [];
+
+    const walk = (dir: string): void => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const at = path.join(dir, entry.name);
+            if (entry.isDirectory()) walk(at);
+            else if (entry.name.endsWith('.ts')) {
+                const rel = path.relative(SRC_ROOT, at).split(path.sep).join('/');
+                found.push(...literalsIn(rel, fs.readFileSync(at, 'utf8')));
+            }
+        }
+    };
+
+    /**
+     * The walker, over a NAMED source text rather than a path.
+     *
+     * ⚠ **Text rather than a filename is what makes the bite-proof possible**: the guard can be shown
+     * a synthetic new producer without planting a token literal in another stream's file. A guard whose
+     * only proof is "it is green against the tree as it stands" is the shape this file exists to refuse.
+     */
+    const literalsIn = (rel: string, text: string): TokenLiteral[] => {
+        const collected: TokenLiteral[] = [];
+        const source = ts.createSourceFile(rel, text, ts.ScriptTarget.Latest, true);
+
+        const visit = (node: ts.Node): void => {
+            /**
+             * ⚠ **The AST is what makes this workable at all**: a comment is not a node, so the 311
+             * prose mentions that sank the text version vanish for free rather than needing an
+             * exclusion list that would itself go stale.
+             */
+            if (ts.isStringLiteral(node) && isTokenText(node.text)) {
+                collected.push({ file: rel, text: node.text, isRegistryKey: isRegistryKeyNode(node) });
+            }
+
+            /**
+             * ⚠ **A token built with `+` writes no complete literal, so nothing else here sees it.**
+             * `'tkt:' + id` and `` `tkt:${id}` `` are the same act written two ways, and only the second
+             * was caught — and a producer that used `+` exclusively would have been invisible for ever
+             * rather than merely on that line, because a bare `tkt:` fails the argument test. Accepted
+             * only under a `+`, which measured **zero** hits across `src/` (the discovery stream's
+             * finding 3), so it adds no false positives.
+             */
+            if (
+                ts.isStringLiteral(node)
+                && isTokenHead(node.text)
+                && !isTokenText(node.text)
+                && node.parent
+                && ts.isBinaryExpression(node.parent)
+                && node.parent.operatorToken.kind === ts.SyntaxKind.PlusToken
+            ) {
+                collected.push({ file: rel, text: `${node.text} + …`, isRegistryKey: false });
+            }
+            if (ts.isTemplateExpression(node) && isTokenHead(node.head.text)) {
+                collected.push({ file: rel, text: `${node.head.text}\${…}`, isRegistryKey: false });
+            }
+            if (ts.isNoSubstitutionTemplateLiteral(node) && isTokenText(node.text)) {
+                collected.push({ file: rel, text: node.text, isRegistryKey: false });
+            }
+            ts.forEachChild(node, visit);
+        };
+
+        visit(source);
+        return collected;
+    };
+
+    walk(SRC_ROOT);
+
+    assert('⛔ the scan still works — every sentinel it knows about is found', () => {
+        const missing = TOKEN_SCAN_SENTINELS.filter(
+            ([file, text]) => !found.some((hit) => hit.file === file && hit.text === text),
+        );
+        if (missing.length) {
+            console.error(`     ↳ the walker no longer sees: ${missing.map(([f, t]) => `${t} in ${f}`).join(' · ')}`);
+            console.error(`     ↳ it extracted ${found.length} literals across ${new Set(found.map((h) => h.file)).size} files:`);
+            for (const hit of found.slice(0, 12)) console.error(`        ${hit.file}  ${hit.text}`);
+            console.error('     ↳ a COUNT would have passed here — that is why this asserts named literals');
+        }
+        return missing.length === 0;
+    });
+
+    /**
+     * ⛔ **THE BITE-PROOF, and the guard is worth nothing without it.** A synthetic producer is shown to
+     * the same walker, matcher and allowlist comparison the real scan uses — so this proves the whole
+     * chain reacts, not merely that the tree happens to be clean today. It plants nothing on disk:
+     * writing a token into another stream's file to test my own guard is exactly the kind of "temporary"
+     * edit that gets committed.
+     */
+    assert('⛔ it BITES: a new file writing a token by hand is caught, and its literal is named', () => {
+        const strangerFile = 'modules/somewhere/new-producer.ts';
+        const hits = literalsIn(
+            strangerFile,
+            [
+                '// A prose mention of tkt:new:rd:<orderId> must NOT count — comments are not nodes.',
+                "const quickReply = { token: 'tkt:new:zz:640000000000000000000001', label: 'Help' };",
+                'const composed = `ord:${orderId}`;',
+                // ⚠ Plain backticks and a `+` — the two branches nothing in `src/` exercises.
+                'const backticked = `ord:640000000000000000000001`;',
+                "const glued = 'tkt:' + ticketId;",
+                "const notAToken = 'code: 200';",
+                "const alsoNot = { message: 'Status code: 404' };",
+            ].join('\n'),
+        );
+
+        const texts = hits.map((hit) => hit.text).sort();
+        const expected = [
+            'ord:640000000000000000000001',
+            'ord:${…}',
+            'tkt: + …',
+            'tkt:new:zz:640000000000000000000001',
+        ].sort();
+
+        const caught = JSON.stringify(texts) === JSON.stringify(expected)
+            && !(strangerFile in TOKEN_LITERALS_ALLOWED);
+
+        if (!caught) console.error(`     ↳ the walker saw ${hits.length}: ${texts.join(' · ')}`);
+        return caught;
+    });
+
+    /**
+     * ⛔ **An allowlisted file is otherwise a BLIND SPOT, and this closes it.** A file allowed to hold
+     * registry keys may hold ONLY keys: a controller that starts composing a token by hand is a new
+     * producer hiding where nobody will ask the question again. Measured when this landed: the five
+     * controllers are 100% keys, the other three 100% composed, so the reasons in the allowlist were
+     * exactly true — and enforced by nothing. This turns them from documentation into assertions.
+     */
+    assert('⛔ a file allowlisted for registry KEYS may not compose a token by hand', () => {
+        const offenders = found.filter((hit) => {
+            const entry = TOKEN_LITERALS_ALLOWED[hit.file];
+            return entry?.shape === 'keys-only' && !hit.isRegistryKey;
+        });
+
+        if (offenders.length) {
+            console.error('     ↳ a file allowlisted only for registry keys now COMPOSES a token:');
+            for (const hit of offenders) console.error(`        ${hit.file}  →  ${hit.text}`);
+            console.error('     ↳ either build it through a builder, or move the file to `composed` and');
+            console.error('        say in the same change where that token is parse-tested.');
+        }
+        return offenders.length === 0;
+    });
+
+    assert('⛔ it BITES: a registry-keys file that composes a token is caught', () => {
+        const keysOnlyFile = Object.keys(TOKEN_LITERALS_ALLOWED)
+            .find((file) => TOKEN_LITERALS_ALLOWED[file].shape === 'keys-only');
+        if (!keysOnlyFile) return false;
+
+        const hits = literalsIn(keysOnlyFile, "const drawn = { id: 'ord:640000000000000000000001' };");
+        return hits.length === 1
+            && hits[0].isRegistryKey === false
+            && TOKEN_LITERALS_ALLOWED[keysOnlyFile].shape === 'keys-only';
+    });
+
+    assert('⛔ no NEW file writes a tap token by hand', () => {
+        const strangers = [...new Set(found.map((hit) => hit.file))]
+            .filter((file) => !(file in TOKEN_LITERALS_ALLOWED))
+            .sort();
+
+        if (strangers.length) {
+            console.error('     ↳ a token literal appears in a file that is not on the allowlist:');
+            for (const file of strangers) {
+                const texts = found.filter((hit) => hit.file === file).map((hit) => hit.text);
+                console.error(`        ${file}  →  ${texts.join(', ')}`);
+            }
+            console.error('     ↳ ⚠ ASK, BEFORE ADDING IT: is every token this file writes tried against');
+            console.error('        the parser that claims its verb? Nothing on the drawing side can tell.');
+        }
+        return strangers.length === 0;
+    });
+
+    /**
+     * ⚠ **The allowlist must not outlive its files.** An entry for a file that no longer holds a token
+     * is dead weight that makes the list look more considered than it is — and the next reader trusts
+     * it. Reported rather than failed only where the FILE is gone, because a stream may legitimately
+     * be mid-move; a file that still exists and no longer needs its entry is a failure.
+     */
+    assert('every allowlisted file still exists and still needs to be there', () => {
+        const stale = Object.keys(TOKEN_LITERALS_ALLOWED).filter((file) => {
+            if (!fs.existsSync(path.join(SRC_ROOT, file))) {
+                console.log(`     ↳ allowlisted file is gone (a move in flight?): ${file}`);
+                return false;
+            }
+            return !found.some((hit) => hit.file === file);
+        });
+
+        if (stale.length) {
+            console.error(`     ↳ no longer writes any token, so drop the entry: ${stale.join(', ')}`);
+            for (const file of stale) console.error(`        ${file} was allowed for: ${TOKEN_LITERALS_ALLOWED[file].reason}`);
+        }
+        return stale.length === 0;
+    });
 }

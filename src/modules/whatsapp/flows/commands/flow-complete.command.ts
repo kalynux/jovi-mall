@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { CommandHandler } from '../../../command-bus/command-bus';
 import type { RenderableCommandResult } from '../../../command-bus/command-reply';
 import { botChrome } from '../../../bot-surface/domain/bot-chrome-copy';
+import { openSurfaceActionId } from '../../../bot-surface/domain/bot-action-id';
+import { bookingChatAcknowledgement } from '../../../bot-surface/domain/bot-booking-copy';
 import type { BotReplyOption } from '../../../bot-surface/domain/channel-reply';
 import {
     addedToCartActions,
@@ -177,6 +179,31 @@ export const handler: CommandHandler<z.infer<typeof schema>, FlowCompleteReply> 
      * ⚠ **A read failure says nothing rather than something wrong.** The customer has the words
      * on the screen they just closed; an invented sentence would be worse than silence.
      */
+    /**
+     * ⛔ **The appointment's only acknowledgement in this conversation.**
+     *
+     * The screen showed the reference and the time while the session was provably this
+     * customer's; this sentence names neither, because the handle is spent and the completion is
+     * a fresh caller-supplied inbound — a reference here would let a forged completion have the
+     * bot state somebody else's appointment details. The **My bookings** button is what carries
+     * the customer back to those details: a tap code is not content, and the screen it opens
+     * resolves the sender's own session server-side.
+     *
+     * ⚠ **`bookingChatAcknowledgement`, NOT the full receipt with empty fields** — that renders
+     * "Booked: , . Your reference is ." in every language, and was nearly shipped that way.
+     */
+    if (plan.kind === 'booking_ack') {
+        return {
+            ...base,
+            message: bookingChatAcknowledgement({ moved: plan.moved }, language),
+            actions: [{
+                id: openSurfaceActionId('bl'),
+                label: botChrome('myBookingsButton', language),
+            }],
+            language,
+        };
+    }
+
     if (plan.kind === 'invite_reply') {
         try {
             const product = await readProductDetail(plan.productId, language);

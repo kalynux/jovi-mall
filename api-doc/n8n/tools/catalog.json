@@ -3372,9 +3372,9 @@
       "gap_ref": "GAP-001",
       "service": "jovi-mall",
       "surface": "bot_internal",
-      "description": "Replace a lost or locked delivery code with a new one.",
-      "when_to_use": "When the customer says they lost the code, or the agent entered it wrongly too many times.",
-      "when_not_to_use": "Not as a first response to 'what is my code' — show the existing one first.",
+      "description": "⛔ NOT AVAILABLE FROM CHAT. The delivery code has ONE issuing path — the agent app — and this tool is deliberately not called from any flow.",
+      "when_to_use": "Never, from this surface. A customer who has lost their code is shown the existing one (`orders_get_cod_code`); a replacement is issued by the agent at the door, from the agent app.",
+      "when_not_to_use": "⛔ Do not wire this up. A second issuing path would let a customer invalidate the code the agent is holding in front of them.",
       "operation": {
         "method": "POST",
         "path": "/api/internal/bot/orders/{orderId}/shipments/{shipmentId}/resend-delivery-code"
@@ -6227,7 +6227,7 @@
       "service": "jovi-mall",
       "surface": "bot_internal",
       "description": "Note that the customer opened a product, so the platform's idea of what they were last looking at stays current.",
-      "when_to_use": "Automatically, by the flow step that renders a product card. It is what keeps the support routing and the website's recently-viewed list in agreement with the conversation.",
+      "when_to_use": "Automatically, by the backend, when a customer OPENS a product — the in-app product screen and the Open-product tap both record it. ⛔ Nothing in the automation layer needs to call this, and a flow that RENDERS product cards must not: one search draws five to ten cards, and recording those floods the recently-viewed list that support routing reads, which is the opposite of what this tool is for.",
       "when_not_to_use": "Never from the model, never for a product merely mentioned in a search result, and never for one the customer did not open.",
       "operation": {
         "method": "POST",

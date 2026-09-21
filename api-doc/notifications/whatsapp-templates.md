@@ -1221,21 +1221,29 @@ which Meta permits, since button parameters are supplied per send.
 
 ### 14.5 The submission set, and what gates it
 
-Three groups, and **all three are owner decisions that are still open**:
+⛔ **EVERYTHING HERE IS SUBMITTED IN ENGLISH AND FRENCH ONLY. Nothing in stage 2 assumes a
+five-language submission, and nothing in it should ever be changed to.** The owner has ruled
+that Portuguese, Spanish and Arabic are **prepared, not served** — the platform is French and
+English for now. Those three resolve to English through `templateLanguage()`, so they are
+already reachable and need **no** template of their own. Submitting five languages would roughly
+double the round for three languages nobody is served in yet.
 
-1. **The 13 above** — re-approval of 13 templates × the languages they are approved in.
+*(This section previously listed the language gap as an open owner decision and offered a
+send-time fallback as "the cheaper alternative". Both are settled: the fallback is built and
+live at all six send sites, and the owner has ruled. Left recorded rather than deleted, because
+a reader arriving on deployment day with the old text would have submitted three languages that
+nobody needs.)*
+
+Two groups remain, and **both are owner decisions that are still open**:
+
+1. **The 13 above** — re-approval of 13 templates, **× 2 languages**.
 2. **Three templates that do not exist at all** and must be submitted before they can *ever* be
    delivered out of window: `customer_booking_payment_failed`, `customer_order_payment_failed`
    **[src — absent from the payloads json and from the registry]**, and the new
-   `customer_booking_balance_received` (§ 13). Note the first two are in the list above too: they
-   would be *created* with their buttons rather than edited.
-3. ⛔ **The language gap.** The payloads json is generated for `["en","fr"]` only **[src]**, while
-   `template-registry.ts:93` registers all five and the send path uses `META_LANGUAGE_CODE[lang]`
-   with **no fallback** **[src]**. A customer whose language is `pt`, `es` or `ar` therefore
-   receives **nothing** out of window — the send is refused by Meta and recorded as a delivery
-   error on the notification row. Approving all five roughly doubles the submission count; the
-   cheaper alternative is a send-time fallback to the default language, which is a code change
-   here and no Meta work at all.
+   `customer_booking_balance_received` (§ 13). ⚠ These three are the ones with a real
+   consequence today rather than a cosmetic one: until they exist, a customer whose payment
+   fails outside the 24-hour window is told **nothing at all**. Note the first two are in the
+   list above too — they would be *created* with their buttons rather than edited.
 
 ### 14.6 How to verify stage 2 actually took
 

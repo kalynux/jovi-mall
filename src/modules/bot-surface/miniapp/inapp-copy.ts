@@ -164,21 +164,22 @@ const DETAIL_NO_REVIEWS: Copy = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Bookings — the three screens' own headings and buttons
+//  Bookings — ONLY what a FORM needs and a page does not
 //
-//  ⚠ **Chrome only.** Every row's text — day labels, times, prices — is formatted by the
-//  bookings core, so there is no second formatter here and no way for a screen to disagree
-//  with the chat about when an appointment is.
+//  ⚠ **Six keys landed here and four were deleted the same day.** `bookingsHeading`,
+//  `bookingWhen`, `bookingPickTime` and `bookingConfirm` duplicated `listTitle`, `pickDay`,
+//  `pickTime` and `confirm` in `domain/bot-booking-copy.ts`, which `bookingScreenCopy()` serves
+//  to the Telegram pages AND the WhatsApp forms. Two tables for one screen is how a form and a
+//  page start saying different things about the same appointment — so the request was withdrawn
+//  by the stream that made it, which is the right way for a duplicate to die.
+//
+//  ⚠ **The two below are NOT duplicates and must survive the next sweep.** They exist only
+//  because a FORM has a footer button and a page does not: a page's rows are tapped directly,
+//  so nothing on the Telegram side ever needs the word "Open" or "See times". Delete them only
+//  if the forms stop having footers.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const BOOKINGS_HEADING: Copy = {
-    en: 'Your bookings',
-    fr: 'Vos réservations',
-    pt: 'As suas reservas',
-    es: 'Tus reservas',
-    ar: 'حجوزاتك',
-};
-
+/** A Flow footer button. No page equivalent: a page row is tapped, not confirmed by a footer. */
 const BOOKING_OPEN: Copy = {
     en: 'Open',
     fr: 'Ouvrir',
@@ -187,37 +188,13 @@ const BOOKING_OPEN: Copy = {
     ar: 'فتح',
 };
 
-const BOOKING_WHEN: Copy = {
-    en: 'When would you like to come?',
-    fr: 'Quand souhaitez-vous venir ?',
-    pt: 'Quando gostaria de vir?',
-    es: '¿Cuándo quieres venir?',
-    ar: 'متى تود الحضور؟',
-};
-
+/** The other Flow footer button, on the day picker. Same reason. */
 const BOOKING_SEE_TIMES: Copy = {
     en: 'See times',
     fr: 'Voir les horaires',
     pt: 'Ver horários',
     es: 'Ver horarios',
     ar: 'عرض الأوقات',
-};
-
-/** ⚠ Fitted to 20 rather than the control's 30 — the forms stream's deliberate margin. */
-const BOOKING_PICK_TIME: Copy = {
-    en: 'Pick a time',
-    fr: 'Choisissez un horaire',
-    pt: 'Escolha um horário',
-    es: 'Elige un horario',
-    ar: 'اختر وقتًا',
-};
-
-const BOOKING_CONFIRM: Copy = {
-    en: 'Confirm',
-    fr: 'Confirmer',
-    pt: 'Confirmar',
-    es: 'Confirmar',
-    ar: 'تأكيد',
 };
 
 const DETAIL_DESCRIPTION: Copy = {
@@ -458,12 +435,9 @@ const PAGE = Object.freeze({
     detailMoreReviews: DETAIL_MORE_REVIEWS,
     detailNoReviews: DETAIL_NO_REVIEWS,
 
-    bookingsHeading: BOOKINGS_HEADING,
+    // Flow footers only — every other booking word comes from `bookingScreenCopy()`.
     bookingOpen: BOOKING_OPEN,
-    bookingWhen: BOOKING_WHEN,
     bookingSeeTimes: BOOKING_SEE_TIMES,
-    bookingPickTime: BOOKING_PICK_TIME,
-    bookingConfirm: BOOKING_CONFIRM,
 
     checkoutHeading: CHECKOUT_HEADING,
     checkoutTotal: CHECKOUT_TOTAL,

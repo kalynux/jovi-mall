@@ -6,9 +6,13 @@ import { createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
 import { inAppSurfaceStore } from '../../services/inapp-surface.store';
 import { bookingChatReceipt } from '../../domain/bot-booking-copy';
+import { botChrome } from '../../domain/bot-chrome-copy';
+import { openSurfaceActionId } from '../../domain/bot-action-id';
 import {
     BookingConfirmed,
     confirmBooking,
+    payBooking,
+    readBookingPayment,
     readBookingPicker,
     readCustomerBookings,
 } from './booking.core';
@@ -89,6 +93,29 @@ export class BookingScreensController {
 
         sendSuccess(res, outcome, { status: 201 });
     });
+
+    /** `GET /api/bot/miniapp/s/bp/:handle/data` — what is owed, re-resolved now. Repeatable. */
+    static payData = asyncHandler(async (req: Request, res: Response) => {
+        sendSuccess(res, await readBookingPayment(String(req.params.handle ?? '')));
+    });
+
+    /**
+     * `POST /api/bot/miniapp/s/bp/:handle/pay` — SPENDS the handle and opens the charge.
+     *
+     * ⚠ **The answer is "the request is on its way", never "paid".** A mobile-money charge is
+     * approved on a handset, minutes later, on a device this route cannot see; the outcome
+     * reaches the customer through the payment path, which speaks only where the gateway gave a
+     * verdict. Anything this route said about success or failure would be the screen reaching a
+     * verdict the platform deliberately has not.
+     *
+     * ⚠ **No chat push here, unlike the confirm above** — for the same reason. The confirm tells
+     * the customer something this service knows (an appointment now exists); this one would be
+     * guessing at an outcome that has not happened yet.
+     */
+    static pay = asyncHandler(async (req: Request, res: Response) => {
+        const body = (req.body ?? {}) as { phone?: unknown };
+        sendSuccess(res, await payBooking(String(req.params.handle ?? ''), { phone: body.phone }));
+    });
 }
 
 /** The session behind the handle, or the one refusal every screen gives for a dead one. */
@@ -117,11 +144,31 @@ async function pushReceipt(
 ): Promise<void> {
     if (channel !== 'telegram') return;
     try {
-        await telegramBotService.sendMessage(externalId, bookingChatReceipt(
-            { moved: outcome.moved, awaitingShop: outcome.awaitingShop },
-            { reference: outcome.reference, when: outcome.when, service: outcome.service },
-            language,
-        ));
+        await telegramBotService.sendMessage(
+            externalId,
+            bookingChatReceipt(
+                { moved: outcome.moved, awaitingShop: outcome.awaitingShop },
+                { reference: outcome.reference, when: outcome.when, service: outcome.service },
+                language,
+            ),
+            {
+                /**
+                 * ⚠ **The button and its handler landed together, button last.** `open:bl` is
+                 * answered by `BOOKING_ACTION_HANDLERS` in `bot-booking.controller.ts`; drawing
+                 * it before that map existed would answer every tap with the unknown-tap
+                 * sentence, which on Telegram reaches the customer as silence.
+                 *
+                 * ⚠ **A tap code, never a link.** The screen it opens resolves the tapping
+                 * customer's own session server-side, so the reference and the time are read from
+                 * a scope that belongs to them — which is also what lets the WhatsApp half say a
+                 * content-free sentence and still be useful.
+                 */
+                buttons: [{
+                    text: botChrome('myBookingsButton', language),
+                    callbackData: openSurfaceActionId('bl'),
+                }],
+            },
+        );
     } catch (error) {
         console.error('[BookingScreens] receipt push failed:', error);
     }

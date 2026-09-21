@@ -35,7 +35,16 @@ import {
 import { INegotiationLock } from '../../src/modules/negotiation/models/negotiation-session.model';
 import { toBotProductCard } from '../../src/modules/bot-surface/domain/product-card';
 import { counterOfferIntent } from '../../src/modules/negotiation/services/offer-outbound.service';
-import { downloadActionId } from '../../src/modules/bot-surface/domain/bot-action-id';
+import {
+    downloadActionId,
+    rateActionId,
+    rateInviteActionId,
+    rateProductActionId,
+} from '../../src/modules/bot-surface/domain/bot-action-id';
+import {
+    distinctProducts,
+    starOptions,
+} from '../../src/modules/bot-surface/controllers/bot-review.controller';
 import { botChrome } from '../../src/modules/bot-surface/domain/bot-chrome-copy';
 import { BotReplyOption, renderBotReply } from '../../src/modules/bot-surface/domain/channel-reply';
 import { downloadOptions } from '../../src/modules/bot-surface/controllers/bot-catalog.controller';
@@ -1025,6 +1034,236 @@ async function main(): Promise<void> {
             if (!declared) throw new Error(`${file} no longer declares the cap it disambiguates against`);
             eq(Number(declared[1]), WA_LIMITS.LIST_ROW_TITLE, `${file} cap`);
         }
+    });
+
+    originalConsole.log('\n── 10 · ⛔ Leaving a review — the invitation that led nowhere ───────────');
+
+    /**
+     * ⛔ **THE DEFECT:** a customer could not leave a review at all. `reviews_create` is `flow_only`
+     * so the model may never call it — correct — but nothing else called it either: the route had no
+     * caller of any kind, and the "Leave a review" button on two automatic messages carried a verb
+     * (`rate`) that no handler map claimed. The platform invited a review twice and had no path from
+     * the invitation to a review. Third instance of "registered, validated, reachable by nobody" in
+     * one day, after the download link and the flow completion command.
+     */
+    const reviewSrc = stripComments(read(SRC, 'modules', 'bot-surface', 'controllers', 'bot-review.controller.ts'));
+    const ORDER = '68b0000000000000000000f1';
+
+    await assert('⭐ a SINGLE-product order never reaches the "which one?" question', () => {
+        /**
+         * The branch the whole design rests on, and the path most orders take — so a refactor could
+         * break it with every other test still green. An order may hold several LINES of one product
+         * (two sizes of one shirt), which is still ONE thing to review.
+         */
+        const oneProduct = distinctProducts([
+            { product_id: '68b0000000000000000000c1', title: 'Chemise en coton' },
+            { product_id: '68b0000000000000000000c1', title: 'Chemise en coton' },
+        ]);
+        eq(oneProduct.length, 1, 'distinct products');
+
+        const two = distinctProducts([
+            { product_id: '68b0000000000000000000c1', title: 'Chemise en coton' },
+            { product_id: '68b0000000000000000000c2', title: 'Pantalon en lin' },
+        ]);
+        eq(two.length, 2, 'distinct products');
+
+        // And the handler takes the one-product path BEFORE it ever builds a picker.
+        const handler = reviewSrc.slice(reviewSrc.indexOf('async function handleRateTap'));
+        const body = handler.slice(0, handler.indexOf('async function submitStars'));
+        const single = body.indexOf('products.length === 1');
+        const picker = body.indexOf('rateProductActionId');
+        if (single < 0) throw new Error('the single-product branch is gone');
+        if (picker >= 0 && picker < single) {
+            throw new Error('the picker is built before the single-product check — one product would be asked about');
+        }
+    });
+
+    await assert('the five stars are one tap, and carry no copy in any language', () => {
+        const options = starOptions(ORDER);
+        eq(options.length, 5, 'options');
+        eq(options[0].id, `rate:${ORDER}:5`, 'best first');
+        eq(options[0].label, '★★★★★', 'label');
+        eq(options[4].label, '★☆☆☆☆', 'label');
+
+        for (const option of options) {
+            if ([...option.label].length > WA_LIMITS.LIST_ROW_TITLE) {
+                throw new Error(`"${option.label}" would be cut`);
+            }
+            if (Buffer.byteLength(option.id, 'utf8') > 64) throw new Error(`${option.id} exceeds the callback cap`);
+        }
+    });
+
+    await assert('⭐ five stars render as a LIST on WhatsApp and five buttons on Telegram', () => {
+        /**
+         * The reason this feature needs no screen and no Flow: five options exceed WhatsApp's
+         * three-button cap, so the renderer draws a list — ten rows are allowed and five pass
+         * through whole. Verified with the forms stream before the design was settled, and asserted
+         * here so nobody has to take it on trust again.
+         */
+        const rows = waRows(starOptions(ORDER));
+        eq(rows.length, 5, 'whatsapp rows');
+
+        const telegram = renderBotReply(
+            {
+                kind: 'choice',
+                text: 'x',
+                options: starOptions(ORDER),
+                listButton: 'Choose',
+                sectionTitle: 'Stars',
+            },
+            'telegram',
+            '4242',
+        ).body as Record<string, any>;
+
+        const keyboard = telegram.reply_markup?.inline_keyboard;
+        if (!Array.isArray(keyboard)) throw new Error('telegram drew no keyboard');
+        eq(keyboard.flat().length, 5, 'telegram buttons');
+    });
+
+    await assert('⛔ FRENCH — the product picker tells two products of one order apart', () => {
+        const titles = ['Chemise en coton bio pour homme', 'Chemise en coton bio pour femme'];
+        const options: BotReplyOption[] = titles.map((title, index) => ({
+            id: `rate:${ORDER}:5:68b0000000000000000000c${index + 1}`,
+            label: title,
+            shortLabel: distinguishingPart(title, titles),
+            description: title,
+        }));
+
+        const rows = waRows(options);
+        if (new Set(rows.map((row) => row.title)).size !== rows.length) {
+            throw new Error(`identical rows: ${rows.map((r) => r.title).join(' | ')}`);
+        }
+        eq(rows[0].description, titles[0], 'the full title survives in the description');
+    });
+
+    /**
+     * ⭐ **STARS ONLY, AND THIS IS THE ASSERTION THAT PROTECTS THE CUSTOMER'S RATING.** A bare star
+     * PUBLISHES IMMEDIATELY; prose is held for a moderator (`initialStatusOf`). So a title or a body
+     * invented from a tap would take the customer's rating out of the published average and leave it
+     * invisible until a human read it — the opposite of what they asked for by tapping.
+     */
+    await assert('⛔ a tapped review sends NO title and NO body', () => {
+        const submit = reviewSrc.slice(reviewSrc.indexOf('async function submitStars'));
+        const call = submit.slice(submit.indexOf('reviewService.submit('), submit.indexOf('setBotReply'));
+        if (!/title:\s*null/.test(call) || !/body:\s*null/.test(call)) {
+            throw new Error('prose is being sent with a tapped rating — it would be held for moderation');
+        }
+    });
+
+    await assert('⭐ MUTANT — the no-prose scan catches an invented body', () => {
+        bites('invented prose', reviewSrc.replace('body: null,', "body: 'Great product',"), (src) => {
+            const submit = src.slice(src.indexOf('async function submitStars'));
+            const call = submit.slice(submit.indexOf('reviewService.submit('), submit.indexOf('setBotReply'));
+            if (!/title:\s*null/.test(call) || !/body:\s*null/.test(call)) throw new Error('found');
+        });
+    });
+
+    await assert('⛔ `reviews_create` is STILL flow_only — this was built beside it, not around it', () => {
+        const catalogue = JSON.parse(read(SRC, '..', 'api-doc', 'n8n', 'tools', 'catalog.json')) as
+            | { tools?: Array<Record<string, unknown>> }
+            | Array<Record<string, unknown>>;
+        const tools = Array.isArray(catalogue) ? catalogue : catalogue.tools ?? [];
+        const create = tools.find((tool) => tool.name === 'reviews_create');
+        if (!create) throw new Error('reviews_create is gone from the catalogue');
+        eq(create.tier, 'flow_only', 'tier');
+
+        // And the handler reaches the service directly rather than through that tool.
+        if (!reviewSrc.includes('reviewService.submit(')) {
+            throw new Error('the tap no longer calls the service — it cannot be writing reviews');
+        }
+    });
+
+    await assert('the three arities are told apart by COUNT, and all fit the callback cap', () => {
+        const invite = rateInviteActionId(ORDER);
+        const stars = rateActionId(ORDER, 5);
+        const product = rateProductActionId(ORDER, 5, '68b0000000000000000000c1');
+
+        eq(invite.split(':').length, 2, 'invite parts');
+        eq(stars.split(':').length, 3, 'stars parts');
+        eq(product.split(':').length, 4, 'product parts');
+
+        for (const token of [invite, stars, product]) {
+            const bytes = Buffer.byteLength(token, 'utf8');
+            if (bytes > 64) throw new Error(`${token} is ${bytes} bytes`);
+        }
+        eq(Buffer.byteLength(product, 'utf8'), 56, 'the longest arity');
+    });
+
+    originalConsole.log('\n── 11 · ⛔ Recently viewed — recorded on OPENING, never on rendering ────');
+
+    /**
+     * ⛔ **THE DEFECT:** nothing called `recently_viewed_record` from anywhere, so the list the
+     * support ladder reads to answer *"what was this customer looking at"* was never written from
+     * the bot at all. It is `flow_only` and its own description asked the CARD-RENDERING flow to
+     * call it.
+     *
+     * ⭐ **THAT DESCRIPTION WAS REJECTED RATHER THAN FOLLOWED** (owner's ruling, 2026-09-20): a
+     * single search draws five to ten cards, so recording on render floods that list and makes it
+     * less useful the more the customer browses. Opening a product is the act that means something.
+     * These assertions pin the ruling, because the description still exists to argue the other way.
+     */
+    const discoverySrcRv = stripComments(
+        read(SRC, 'modules', 'bot-surface', 'controllers', 'bot-discovery.controller.ts'),
+    );
+    const detailSrcRv = stripComments(
+        read(SRC, 'modules', 'bot-surface', 'miniapp', 'surfaces', 'product-detail.controller.ts'),
+    );
+    const displaySrcRv = stripComments(
+        read(SRC, 'modules', 'bot-surface', 'services', 'product-display.service.ts'),
+    );
+
+    await assert('⭐ a view is recorded where a product is OPENED — both places', () => {
+        const tap = discoverySrcRv.slice(discoverySrcRv.indexOf('async function handleOpenProductTap'));
+        const tapBody = tap.slice(0, tap.indexOf('function recordProductView'));
+        if (!tapBody.includes('recordProductView(')) {
+            throw new Error('the open:pd tap no longer records the view');
+        }
+        if (!/recentlyViewedService\s*\.?\s*\n?\s*\.record\(/.test(detailSrcRv)) {
+            throw new Error('the product screen no longer records the view');
+        }
+    });
+
+    await assert('⛔ and NEVER where a list is merely drawn', () => {
+        /**
+         * The display service builds every product-card page. A `record` call here would put five
+         * to ten products into the list per search — the behaviour the tool's description asks for
+         * and the owner refused.
+         */
+        if (/recentlyViewed/i.test(displaySrcRv)) {
+            throw new Error('the card renderer records views — a search would flood the list');
+        }
+    });
+
+    await assert('⚠ recording can never fail the turn that opened the product', () => {
+        // `record` throws for a product that has gone off sale; a remembered view is a convenience
+        // and the customer came to look at something.
+        const helper = discoverySrcRv.slice(discoverySrcRv.indexOf('function recordProductView'));
+        if (!/\.catch\(/.test(helper.slice(0, 400))) {
+            throw new Error('the tap would fail when a view cannot be recorded');
+        }
+        /**
+         * ⚠ **Anchored on the CALL, not on the name.** The first occurrence of
+         * `recentlyViewedService` in that file is its IMPORT, a hundred lines above the call — so
+         * slicing from the name looked at the wrong span and reported a missing `.catch` that is
+         * plainly there. Fourth time today that a scan and its claim covered different spans; the
+         * fix is always to anchor on the thing being asserted about.
+         */
+        const call = detailSrcRv.indexOf('.record(');
+        if (call < 0) throw new Error('the screen no longer records a view at all');
+        if (!/\.catch\(/.test(detailSrcRv.slice(call, call + 200))) {
+            throw new Error('the screen read would fail when a view cannot be recorded');
+        }
+    });
+
+    await assert('⭐ MUTANT — both scans catch the behaviour the description asks for', () => {
+        bites('renderer records', `${displaySrcRv}\nrecentlyViewedService.record(a, b);`, (src) => {
+            if (/recentlyViewed/i.test(src)) throw new Error('found');
+        });
+        bites('tap stops recording', discoverySrcRv.replace('recordProductView(botCallerOf(req).customerId, productId);', ''), (src) => {
+            const tap = src.slice(src.indexOf('async function handleOpenProductTap'));
+            const tapBody = tap.slice(0, tap.indexOf('function recordProductView'));
+            if (!tapBody.includes('recordProductView(')) throw new Error('found');
+        });
     });
     originalConsole.log('\n════════════════════════════════════════════════════════════════════════════');
     originalConsole.log(`  ${passed} passed, ${failed} failed`);

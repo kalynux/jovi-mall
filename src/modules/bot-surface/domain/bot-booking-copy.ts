@@ -125,6 +125,21 @@ export interface BookingScreenCopy {
     movingNotice: string;
     changeTime: string;
     timesAvailable: (count: number) => string;
+    /** `bp`, the price of the appointment. */
+    payTitle: string;
+    /** `bp`, what a longer job came to above the quote. A different sentence, not a variant. */
+    payBalanceTitle: string;
+    /** Above the optional number field: what happens if it is left empty. */
+    payNumberHint: string;
+    payButton: string;
+    /**
+     * ⚠ **What the screen says after the charge is STARTED — and it never says "paid".**
+     * A mobile-money charge is approved on a handset, minutes later, on a device this screen
+     * cannot see. The outcome reaches the customer through the payment path, which speaks only
+     * where the gateway actually gave a verdict — so a screen claiming success or failure here
+     * would be reaching a verdict the platform deliberately has not.
+     */
+    paySent: string;
 }
 
 const SCREEN: Record<Language, BookingScreenCopy> = {
@@ -139,6 +154,11 @@ const SCREEN: Record<Language, BookingScreenCopy> = {
         movingNotice: 'Moving your appointment',
         changeTime: 'Change time',
         timesAvailable: (n) => (n === 1 ? '1 time free' : `${n} times free`),
+        payTitle: 'Pay for your appointment',
+        payBalanceTitle: 'Pay the balance',
+        payNumberHint: 'Leave empty to use the number on your account.',
+        payButton: 'Pay now',
+        paySent: 'I\'ve sent the request to your phone. Approve it there and I\'ll tell you in the chat.',
     },
     fr: {
         listTitle: 'Vos rendez-vous',
@@ -151,6 +171,11 @@ const SCREEN: Record<Language, BookingScreenCopy> = {
         movingNotice: 'Déplacement de votre rendez-vous',
         changeTime: "Changer l'horaire",
         timesAvailable: (n) => (n === 1 ? '1 horaire libre' : `${n} horaires libres`),
+        payTitle: 'Payer votre rendez-vous',
+        payBalanceTitle: 'Payer le solde',
+        payNumberHint: 'Laissez vide pour utiliser le numéro de votre compte.',
+        payButton: 'Payer maintenant',
+        paySent: 'J\'ai envoyé la demande sur votre téléphone. Validez-la et je vous préviens dans la conversation.',
     },
     pt: {
         listTitle: 'As suas marcações',
@@ -163,6 +188,11 @@ const SCREEN: Record<Language, BookingScreenCopy> = {
         movingNotice: 'A alterar a sua marcação',
         changeTime: 'Alterar horário',
         timesAvailable: (n) => (n === 1 ? '1 horário livre' : `${n} horários livres`),
+        payTitle: 'Pagar a sua marcação',
+        payBalanceTitle: 'Pagar o saldo',
+        payNumberHint: 'Deixe vazio para usar o número da sua conta.',
+        payButton: 'Pagar agora',
+        paySent: 'Enviei o pedido para o seu telemóvel. Aprove-o e aviso-o na conversa.',
     },
     es: {
         listTitle: 'Tus citas',
@@ -175,6 +205,11 @@ const SCREEN: Record<Language, BookingScreenCopy> = {
         movingNotice: 'Moviendo tu cita',
         changeTime: 'Cambiar horario',
         timesAvailable: (n) => (n === 1 ? '1 horario libre' : `${n} horarios libres`),
+        payTitle: 'Paga tu cita',
+        payBalanceTitle: 'Paga el saldo',
+        payNumberHint: 'Déjalo vacío para usar el número de tu cuenta.',
+        payButton: 'Pagar ahora',
+        paySent: 'He enviado la solicitud a tu teléfono. Apruébala y te aviso en el chat.',
     },
     ar: {
         listTitle: 'مواعيدك',
@@ -187,6 +222,11 @@ const SCREEN: Record<Language, BookingScreenCopy> = {
         movingNotice: 'جارٍ نقل موعدك',
         changeTime: 'تغيير الموعد',
         timesAvailable: (n) => (n === 1 ? 'وقت واحد متاح' : `${n} أوقات متاحة`),
+        payTitle: 'ادفع لموعدك',
+        payBalanceTitle: 'ادفع الرصيد',
+        payNumberHint: 'اتركه فارغًا لاستخدام الرقم المسجل في حسابك.',
+        payButton: 'ادفع الآن',
+        paySent: 'أرسلت الطلب إلى هاتفك. وافق عليه وسأخبرك في المحادثة.',
     },
 };
 
@@ -201,6 +241,28 @@ export function bookingScreenCopy(language: string | null | undefined): Omit<Boo
 export function bookingTimesAvailable(count: number, language: string | null | undefined): string {
     return pick(SCREEN, language).timesAvailable(count);
 }
+
+/**
+ * The description line under one TIME on a class: how many seats are left.
+ *
+ * ⚠ **Only ever called for a capacity service.** On a one-person appointment `spotsRemaining` is
+ * `null`, which means "not a class" and emphatically not "none left" — wording that as a number
+ * would tell every customer booking a haircut that no seats remain.
+ *
+ * ⚠ **A count inside the sentence, like its sibling**, because a form can place a string and
+ * cannot build one, and because "1 spot left" is not "1 spots left" in any of the five.
+ */
+export function bookingSpotsLeft(count: number, language: string | null | undefined): string {
+    return pick(SPOTS_LEFT, language)(count);
+}
+
+const SPOTS_LEFT: Record<Language, (count: number) => string> = {
+    en: (n) => (n === 1 ? '1 spot left' : `${n} spots left`),
+    fr: (n) => (n === 1 ? '1 place restante' : `${n} places restantes`),
+    pt: (n) => (n === 1 ? '1 lugar restante' : `${n} lugares restantes`),
+    es: (n) => (n === 1 ? '1 plaza libre' : `${n} plazas libres`),
+    ar: (n) => (n === 1 ? 'مكان واحد متبقٍ' : `${n} أماكن متبقية`),
+};
 
 /**
  * The CONTENT-FREE acknowledgement, for a channel that cannot prove whose booking it is.

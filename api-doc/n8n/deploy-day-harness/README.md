@@ -24,6 +24,16 @@ production.
 
 ## Three rules this harness is built on
 
+> ⭐ **"A check that finds nothing and says passed is worse than no check, because it also
+> retires the worry."**
+>
+> — `scripts/verify-landing-routes.ts`, on why it refuses instead of skipping.
+
+That sentence is the general form of most of what this round found: a placeholder assertion that
+passed on a token nobody handled, a census probe that would have printed a clean sheet twice, a
+guard that goes vacuously green the day the code it watches moves to another file. Each one
+retired a worry it had not earned. The three rules below are what this harness does about it.
+
 **1 · A patch must fail loudly when its anchor misses.** `build-new.js` throws unless each
 anchor matches *exactly once*. A patch that silently matched nothing would leave the "new" body
 equal to the live one and every proof would pass against the wrong subject — green, and

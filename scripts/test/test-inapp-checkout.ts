@@ -125,6 +125,24 @@ const NOTIFY_CONSUMER_SRC = path.join(SCAN_ROOT, 'src/modules/notifications/cust
 const MASKING_SRC = path.join(SCAN_ROOT, 'src/modules/bot-surface/miniapp/surfaces/checkout-masking.ts');
 
 /**
+ * The five payment helpers — `validatedPayerNumber`, `assertNetworkChargeable`,
+ * `maskedPayerNumber`, `storedPayerNumber`, `mobileMoneyGateway` — extracted from the
+ * controller 2026-09-20.
+ *
+ * ⚠ **The extraction was forced by a guard in ANOTHER suite, and the reason matters here.**
+ * The booking pay screen's core needs these five, and that core is imported directly by the
+ * WhatsApp form handler — so a controller anywhere in its import graph makes a bare `ts-node`
+ * run do real work at module scope and hang with no output. `test-inapp-bookings` § 2 refuses
+ * it. The helpers therefore moved to a module with no Express in it; the controller re-exports
+ * them so no existing caller changed.
+ *
+ * ⚠ **Adding this path is not bookkeeping — SIX assertions below went red the moment the code
+ * moved**, including the in-scope guard itself, which is precisely the outcome that guard
+ * exists to produce. A "must NOT" scan over a file the subject has left passes vacuously.
+ */
+const PAYER_SRC = path.join(SCAN_ROOT, 'src/modules/bot-surface/miniapp/surfaces/checkout-payer.ts');
+
+/**
  * ⚠ **The screen's scope is the controller AND every module the checkout logic was extracted
  * into, read together.** A "must NOT" scan over one file passes vacuously the day the code it
  * guards moves to another — backend-fc hit exactly that when extracting their reads: three
@@ -132,7 +150,7 @@ const MASKING_SRC = path.join(SCAN_ROOT, 'src/modules/bot-surface/miniapp/surfac
  * with every extraction, and `the checkout logic is actually in scope` (§ 5, first) fails before
  * any absence check can pass on an empty subject.
  */
-const SCREEN_SCOPE = [SCREEN_SRC, MASKING_SRC];
+const SCREEN_SCOPE = [SCREEN_SRC, MASKING_SRC, PAYER_SRC];
 const screenCode = (): string =>
     SCREEN_SCOPE.map((file) => stripTs(fs.readFileSync(file, 'utf8'))).join('\n');
 const chatCode = (): string => stripTs(fs.readFileSync(CHAT_SRC, 'utf8'));

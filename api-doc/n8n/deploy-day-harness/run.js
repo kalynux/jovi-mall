@@ -3,6 +3,7 @@
 require('./test-s1-s2');
 require('./test-s3');
 require('./test-s4');
+require('./test-s46');
 require('./test-s5');
 require('./test-s6');
 require('./test-s8');

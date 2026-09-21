@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>wi-mall</title>
+<!--
+  Pay for an appointment — its price, or the balance a longer job came to.  Screen kind `bp`.
+
+  ⚠ **THE FILENAME IS THE ROUTE** — `inapp-page.controller.ts` sends `public/<kind>.html`.
+
+  Endpoints:  `GET  /api/bot/miniapp/s/bp/:handle/data`   (repeatable; spends nothing)
+              `POST /api/bot/miniapp/s/bp/:handle/pay`    (SPENDS the handle)
+
+  ── ⚠ THE AMOUNT IS THE SERVER'S, EVERY TIME IT IS SHOWN ────────────────────
+  This page computes no money and holds none.  `amountText` arrives formatted, the session holds
+  no figure at all, and the server re-resolves what is owed again when Pay is pressed — because a
+  balance moves when a vendor settles the appointment, and a screen opened five minutes earlier
+  would otherwise quote a number that no longer exists.
+
+  ── ⚠ THE NUMBER FIELD IS OPTIONAL AND THE EMPTY CASE IS THE COMMON ONE ─────
+  Empty means "use the number on my account", which is what most customers want and what
+  discloses nothing.  The page never receives that number in full; the hint shows the masked form
+  so somebody can recognise their own wallet.
+
+  ── ⚠ THIS SCREEN NEVER SAYS "PAID", AND NEVER SAYS "FAILED" ────────────────
+  A mobile-money charge is approved on a handset, minutes later, on a device this page cannot
+  see.  The outcome reaches the customer in the chat, through the payment path, which speaks only
+  where the gateway actually gave a verdict — and it deliberately does NOT speak from the catch
+  around the charge, where a timeout cannot be told from a refusal and the money may still be
+  moving.  So the most this page may say is that the request is on its way.
+
+  ── ⚠ ONE PRESS, LATCHED ────────────────────────────────────────────────────
+  The write spends the handle, so a second press could only ever meet a dead screen.  Every
+  refusal carries `details.spent`, and the button unlatches ONLY on a 400 or 422 that says
+  explicitly `spent: false` — the typed-number refusal, which is the one case where trying again
+  is both honest and useful.  ABSENT MEANS SPENT: the error boundary strips `details` from
+  internal and gateway failures and a lost response has no body at all, so both stay latched.
+-->
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/api/bot/miniapp/shell.css">
+<style>
+  /* Screen-specific only. Anything another screen would also want belongs in shell.css. */
+  .amount { font-size: 28px; font-weight: 700; margin-block: 4px 2px; }
+  .for { color: var(--muted); font-size: 14px; }
+  .field { margin-block-start: 18px; }
+  .field__hint { font-size: 12px; color: var(--muted); margin-block-start: 6px; }
+  input[type="tel"] { width: 100%; padding: 12px; border-radius: 10px; background: var(--card);
+                      border: 0; color: inherit; font: inherit; }
+  .pay { width: 100%; margin-block-start: 18px; }
+</style>
+</head>
+<body>
+  <header class="screen__head">
+    <h1 class="screen__title" id="title"></h1>
+  </header>
+
+  <main class="screen__body">
+    <div class="state" id="state"><p class="state__text" id="stateText"></p></div>
+
+    <div id="sheet" hidden>
+      <div class="amount" id="amount"></div>
+      <div class="for" id="for"></div>
+
+      <div class="field">
+        <input type="tel" id="phone" inputmode="tel" autocomplete="tel">
+        <div class="field__hint" id="phoneHint"></div>
+      </div>
+
+      <button type="button" class="btn btn--primary pay" id="pay"></button>
+    </div>
+  </main>
+
+<script>
+(function () {
+  "use strict";
+
+  var tg = window.Telegram && window.Telegram.WebApp;
+  if (tg) { tg.ready(); tg.expand(); }
+
+  var parts = window.location.pathname.split("/").filter(Boolean);
+  var handle = parts[parts.length - 1];
+  var base = "/api/bot/miniapp/s/bp/" + encodeURIComponent(handle);
+  var lang = new URLSearchParams(window.location.search).get("lang") || "en";
+
+  var el = {
+    title: document.getElementById("title"),
+    state: document.getElementById("state"),
+    stateText: document.getElementById("stateText"),
+    sheet: document.getElementById("sheet"),
+    amount: document.getElementById("amount"),
+    for: document.getElementById("for"),
+    phone: document.getElementById("phone"),
+    phoneHint: document.getElementById("phoneHint"),
+    pay: document.getElementById("pay")
+  };
+
+  var copy = null;
+  /** ⚠ Latches on the first press. Only an explicit `spent: false` refusal clears it. */
+  var latched = false;
+
+  function json(url, options) {
+    return fetch(url, options || {}).then(function (response) {
+      return response.json().catch(function () { return null; }).then(function (body) {
+        return { ok: response.ok, status: response.status, body: body };
+      });
+    });
+  }
+
+  function state(text, isError) {
+    el.stateText.textContent = text;
+    el.state.hidden = false;
+    el.state.className = isError ? "state state--error" : "state";
+    el.sheet.hidden = true;
+  }
+
+  function explain(res) {
+    if (res.status === 410 || res.status === 404) return copy.expired;
+    var error = res.body && res.body.error;
+    /*
+     * A refusal the customer can act on carries its own sentence — a mistyped number, a network
+     * we cannot resolve. Anything else is the generic line: the boundary replaces internal and
+     * gateway messages with a registry default, so quoting them would tell a customer about
+     * NotchPay rather than about their payment.
+     */
+    if (error && error.message && (res.status === 400 || res.status === 422)) return error.message;
+    return copy.failed;
+  }
+
+  /**
+   * ⚠ **ABSENT MEANS SPENT.** The button comes back only for a 400 or 422 that says explicitly
+   * the handle was not spent. Anything else — a 500, a gateway failure, a lost response with no
+   * body at all — leaves it latched, which is the direction that cannot take a second payment.
+   */
+  function handleSurvived(res) {
+    var details = res.body && res.body.error && res.body.error.details;
+    return (res.status === 400 || res.status === 422) && details && details.spent === false;
+  }
+
+  function draw(data) {
+    el.title.textContent = data.purpose === "balance" ? copy.payBalanceTitle : copy.payTitle;
+    el.amount.textContent = data.amountText;
+    el.for.textContent = [data.service, data.when].filter(Boolean).join(" · ");
+    el.phoneHint.textContent = data.maskedPayer
+      ? data.maskedPayer + " — " + copy.payNumberHint
+      : copy.payNumberHint;
+    el.pay.textContent = copy.payButton;
+    el.pay.disabled = false;
+    el.state.hidden = true;
+    el.sheet.hidden = false;
+  }
+
+  function load() {
+    state(copy.loading, false);
+    json(base + "/data", { headers: { Accept: "application/json" } }).then(function (res) {
+      if (!res.ok || !res.body || res.body.success === false || !res.body.data) {
+        state(explain(res), true);
+        return;
+      }
+      var data = res.body.data;
+      if (data.copy) { copy = Object.assign({}, copy, data.copy); }
+      draw(data);
+    }).catch(function () {
+      state(copy.failed, true);
+    });
+  }
+
+  el.pay.addEventListener("click", function () {
+    if (latched) return;
+    latched = true;
+    el.pay.disabled = true;
+
+    json(base + "/pay", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ phone: el.phone.value })
+    }).then(function (res) {
+      if (!res.ok || !res.body || res.body.success === false) {
+        state(explain(res), true);
+        /* The one case a customer can fix and try again: a number this screen never spent on. */
+        if (handleSurvived(res)) {
+          latched = false;
+          el.pay.disabled = false;
+          el.state.hidden = false;
+          el.sheet.hidden = false;
+        }
+        return;
+      }
+      /*
+       * Not "paid" — the request is on its way. The verdict arrives in the chat, from the only
+       * place that has one.
+       */
+      state(copy.paySent, false);
+      if (tg) { setTimeout(function () { tg.close(); }, 2000); }
+    }).catch(function () {
+      /* A lost response may still have opened a charge: latched, and the chat will say. */
+      state(copy.failed, true);
+    });
+  });
+
+  var FALLBACK = {
+    loading: "Loading…",
+    failed: "Something went wrong. Close this and ask me again in the chat.",
+    expired: "This page is no longer available. Ask me again in the chat.",
+    payTitle: "Pay for your appointment",
+    payBalanceTitle: "Pay the balance",
+    payNumberHint: "Leave empty to use the number on your account.",
+    payButton: "Pay now",
+    paySent: "I've sent the request to your phone. Approve it there and I'll tell you in the chat."
+  };
+
+  json("/api/bot/miniapp/copy?lang=" + encodeURIComponent(lang), { headers: { Accept: "application/json" } })
+    .then(function (res) { copy = (res.body && res.body.data && res.body.data.copy) || FALLBACK; })
+    .catch(function () { copy = FALLBACK; })
+    .then(function () {
+      document.documentElement.lang = lang;
+      document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
+      load();
+    });
+})();
+</script>
+</body>
+</html>

@@ -45,6 +45,8 @@ export type BotListSurface =
     | 'notifications'
     | 'paymentMethods'
     | 'reviews'
+    /** Where a contact change is finished — the email and phone the account signs in with. */
+    | 'security'
     | 'products';
 
 /**
@@ -65,8 +67,54 @@ const SURFACE_PATHS: Readonly<Record<BotListSurface, string>> = Object.freeze({
     notifications: '/shop/account/notifications',
     paymentMethods: '/shop/account/payment-methods',
     reviews: '/shop/account/reviews',
+    /**
+     * Where a contact change is finished — the email and phone the account is resolved by.
+     *
+     * ⚠ The destination was READ from the storefront's own source
+     * (`frontend/landing/src/app/[locale]/shop/account/security/page.tsx`, whose header says
+     * exactly that) rather than guessed from the pattern of its neighbours. `verify:landing-routes`
+     * checks it on every run.
+     */
+    security: '/shop/account/security',
     products: '/shop',
 });
+
+/**
+ * Every surface, at runtime.
+ *
+ * ⚠ **DERIVED from the table rather than listed**, so it is total by construction: a surface
+ * added to `BotListSurface` must gain a path (the `Record` is total) and arrives here for free.
+ * A hand-written array would compile while missing a member, which is how a checker quietly
+ * stops covering the thing it was written for.
+ */
+export const BOT_LIST_SURFACES: readonly BotListSurface[] = Object.freeze(
+    Object.keys(SURFACE_PATHS) as BotListSurface[],
+);
+
+/**
+ * One surface's storefront path, WITHOUT a locale prefix — for a caller that needs the bare
+ * path rather than a link.
+ *
+ * ── WHY THIS EXISTS (the bookings stream's idea, 2026-09-20) ────────────────
+ * `openInAppScreen` takes a `fallbackPath`, not a URL: it composes the link itself when there
+ * is no screen to open. Before this accessor the table was unreachable from outside — both
+ * exported builders return a locale-prefixed link — so the two callers that needed a bare path
+ * **typed the literal**, and one of them carried a comment claiming it came "via the same
+ * table". It did not, and nothing would have noticed if one moved.
+ *
+ * ⚠ **That is why the accessor is worth three lines for two callers**: a comment claiming a
+ * mechanism should name the code that implements it, so the claim dies with the code. This one
+ * now does.
+ *
+ * It does NOT fix the deeper hole, which is stated on the table above: these are a hand-kept
+ * copy of another repository's routes. `verify:landing-routes` is the check for that — it
+ * derives **every path in the table** and refuses to run rather than passing quietly when that
+ * repository is not present. ⚠ It is derived precisely so no comment has to say how many there
+ * are; a count in prose is wrong the week after it is written.
+ */
+export function surfacePath(surface: BotListSurface): string {
+    return SURFACE_PATHS[surface];
+}
 
 /**
  * Where a list's "see the rest" link points.

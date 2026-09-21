@@ -974,8 +974,13 @@ async function main(): Promise<void> {
         asFlowOutcome('added') === 'added' && asFlowOutcome('something-new') === 'notice'
         && asFlowOutcome(undefined) === 'notice' && asFlowOutcome(7) === 'notice'
         && plan({ completedScreen: 'pd', params: { outcome: 'something-new' } }).kind === 'silent');
-    assert('the closed set is exactly the four the screens can stamp',
-        JSON.stringify([...FLOW_OUTCOMES].sort()) === JSON.stringify(['added', 'asked', 'notice', 'placed']));
+    /**
+     * ⚠ The whole vocabulary, pinned. A screen stamping a value the chat does not know reads as
+     * "nothing happened" — silently — so the set is asserted rather than left to grow by habit.
+     */
+    assert('the closed set is exactly the six the screens can stamp',
+        JSON.stringify([...FLOW_OUTCOMES].sort())
+        === JSON.stringify(['added', 'asked', 'booked', 'moved', 'notice', 'placed']));
     // ── the question a bargain or a booking asks, carried into the chat ──────
     /**
      * ⛔ THE OTHER HALF OF THE SAME GAP, now closed. These two rungs WRITE NOTHING — they start a
@@ -993,6 +998,23 @@ async function main(): Promise<void> {
         && asked({ session: live }).kind === 'expired');
     assert('⛔ … and a completion from another conversation says nothing at all',
         asked({ sender: '237600000000' }).kind === 'silent');
+
+    // ── the appointment's acknowledgement ────────────────────────────────────
+    /**
+     * ⛔ The chat MUST speak here: the platform's booking notification picks one secondary
+     * channel (telegram > email > whatsapp) and is mutable by a preference, so a WhatsApp
+     * customer with a verified email could otherwise finish the form and hear nothing at all.
+     */
+    const booked = (outcome: string, over: Partial<Parameters<typeof planCompletion>[0]> = {}) =>
+        plan({ completedScreen: 'bk', params: { screen: 'bk', outcome }, session: null, ...over });
+    assert('⛔ a confirmed appointment → the chat acknowledges it',
+        JSON.stringify(booked('booked')) === JSON.stringify({ kind: 'booking_ack', moved: false }));
+    assert('⛔ a RESCHEDULE carries `moved` — "booked" would read as a second appointment',
+        JSON.stringify(booked('moved')) === JSON.stringify({ kind: 'booking_ack', moved: true }));
+    assert('⚠ it needs no session: the handle was consumed by the write that made the booking',
+        booked('booked', { sender: null }).kind === 'booking_ack');
+    assert('a booking form that changed nothing stays silent',
+        booked('notice').kind === 'silent' && booked('added').kind === 'silent');
     assert('a listing completion with no valid product id opens nothing',
         plan({ params: { productId: 'not-an-id' } }).kind === 'silent');
 
@@ -1036,10 +1058,22 @@ async function main(): Promise<void> {
      * buttons for one outcome is how one of them quietly loses Checkout — the exported list's own
      * comment says so.
      */
+    /**
+     * ⛔ The THREE cart controls must come from the shared list — two doors offering different
+     * buttons for one outcome is how one of them quietly loses Checkout.
+     *
+     * ⚠ **The ban names the trio's own ids, not `openSurfaceActionId` wholesale.** This guard
+     * first refused that helper outright, and then went red on the My-bookings button, which is a
+     * single unrelated control and not a second copy of anything. A guard that fails on correct
+     * code teaches the next person to weaken it, so it is narrowed to the span it is actually
+     * true of: `cart:view`, `open:co` and `open:pl` are the list's, and only the list may build
+     * them.
+     */
     assert('⛔ the added-to-cart buttons come from the shared list, not a second copy',
         /addedToCartActions,/.test(commandSource)
         && /actions: addedToCartActions\(language\)/.test(commandSource)
-        && !/cartViewActionId\(|openSurfaceActionId\(/.test(commandSource));
+        && !/cartViewActionId\(/.test(commandSource)
+        && !/openSurfaceActionId\('co'\)|openSurfaceActionId\('pl'\)/.test(commandSource));
 
     /**
      * ⛔ ONE CONSTRUCTION of the invite sentence, shared with the chat tap. A second copy here is
@@ -1056,6 +1090,15 @@ async function main(): Promise<void> {
      * whole purchase surface is built on, and the reason a closed bargaining window produces no
      * invite rather than an invitation the platform would then refuse.
      */
+    /**
+     * ⛔ The acknowledgement names nothing about the appointment, and reaches the details through
+     * a BUTTON instead — a tap code is not caller-supplied content.
+     */
+    assert('⛔ the booking acknowledgement is content-free and carries a My bookings button',
+        /bookingChatAcknowledgement\(\{ moved: plan\.moved \}, language\)/.test(commandSource)
+        && /openSurfaceActionId\('bl'\)/.test(commandSource)
+        && !/bookingChatReceipt|plan\.reference|params\.reference|params\.bookingId/.test(commandSource));
+
     assert('⛔ it re-reads the product and refuses to invite on any rung but bargain or book',
         /readProductDetail\(plan\.productId, language\)/.test(commandSource)
         && /verb !== 'bargain' && verb !== 'book'/.test(commandSource)
@@ -1104,6 +1147,7 @@ async function main(): Promise<void> {
         expired: 'No longer available.', failed: 'Something went wrong.',
         flowOpenProduct: 'View product', flowBackToChat: 'Back to chat',
         flowPhoneLabel: 'Mobile money number', flowPhoneHint: 'Include the country code.',
+        bookingOpen: 'Open', bookingSeeTimes: 'See times',
     };
 
     const listingProduct = (over: Partial<ListingPage['products'][number]> = {}): ListingPage['products'][number] => ({
@@ -1487,6 +1531,11 @@ async function main(): Promise<void> {
         payment: { phoneMasked: '+2376••••4417' }, language: 'fr', ...over,
     });
     const gone = () => createAppError(ERROR_CODES.BOT_PRODUCT_LIST_EXPIRED, 404, 'gone', { spent: false });
+    /** The words `readBookingPicker` carries, so no form holds a booking string. */
+    const bookingWords = {
+        pickDay: 'Choisissez un jour', pickTime: 'Choisissez une heure',
+        confirm: 'Confirmer', listEmpty: 'Aucun créneau.', movingNotice: 'Déplacement de votre rendez-vous',
+    };
 
     /** A router run's world: sessions, fake ports, and a log of what was called. */
     const harness = (
@@ -1505,6 +1554,9 @@ async function main(): Promise<void> {
             completed: [] as string[],
             claimedWith: [] as FlowClaim[],
             sequence: [] as string[],
+            picker: [] as Array<{ handle: string; date: string | null }>,
+            confirmed: [] as Array<{ handle: string; slotId: string }>,
+            bookingList: [] as string[],
             sleeps: 0,
         };
         let refs = 0;
@@ -1533,6 +1585,43 @@ async function main(): Promise<void> {
                 delete sessions[handle]; // ⚠ the consume
                 return { orderCount: 1, transactionId: 'tx-1', status: 'pending' as CheckoutPlaced['status'] };
             },
+            /**
+             * The booking core, faked at its own boundary: `readBookingPicker` resolves the `bk`
+             * session ITSELF and carries the screens' words, and `confirmBooking` CONSUMES the
+             * handle — both reproduced here, because the router's behaviour depends on exactly
+             * those two properties.
+             */
+            readBookingPicker: async (bookingHandle, input) => {
+                calls.picker.push({ handle: bookingHandle, date: input?.date ?? null });
+                const held = sessions[bookingHandle];
+                if (!held || held.kind !== 'bk') throw gone();
+                return input?.date
+                    ? {
+                        moving: null, copy: bookingWords, timezone: 'Africa/Douala',
+                        date: input.date, label: 'Tuesday 22 September',
+                        slots: [
+                            /** A capacity service: the read words the count. */
+                            { slotId: 'slot_opaque_1', label: '14:00 – 15:00', description: '2 places restantes' },
+                            /** ⚠ A one-person appointment: null, meaning "not a class". */
+                            { slotId: 'slot_opaque_2', label: '15:00 – 16:00', description: null },
+                        ],
+                    }
+                    : { moving: (held as { bookingId?: string | null }).bookingId ?? null, copy: bookingWords, timezone: 'Africa/Douala', days: [{ date: '2026-09-22', label: 'Tue 22 Sep', description: '6 times free' }] };
+            },
+            confirmBooking: async (bookingHandle, input) => {
+                calls.sequence.push('confirm');
+                calls.confirmed.push({ handle: bookingHandle, slotId: input.slotId });
+                const held = sessions[bookingHandle];
+                if (!held || held.kind !== 'bk') throw gone();
+                delete sessions[bookingHandle]; // ⚠ the consume
+                return { bookingId: 'bkg-1', productId: PID, moved: false, reference: 'BKG-2026-000123', when: 'Tue 22 Sep 14:00', service: 'Coupe homme', awaitingShop: false };
+            },
+            readCustomerBookings: async ({ userId }) => {
+                calls.bookingList.push(userId);
+                return { bookings: [{ bookingId: 'bkg-1', title: 'BKG-2026-000123 · Tue 14:00', description: 'Coupe homme · 5 000 FCFA' }] };
+            },
+            bookingWords: () => ({ listTitle: 'Vos rendez-vous', listEmpty: 'Aucun rendez-vous.' }),
+            bookingReceipt: (confirmed) => `Réservé : ${confirmed.service}, ${confirmed.when}.`,
             executePurchase: async (ctx): Promise<PurchaseResult> => {
                 calls.purchase.push(ctx);
                 return { verb: 'add', outcome: 'cart', message: 'Ajouté à votre panier.', url: null,
@@ -2009,7 +2098,131 @@ async function main(): Promise<void> {
         BOT_IDEMPOTENCY_RECORD_TTL_SECONDS >= TTL_SECONDS.co && TTL_SECONDS.co === 600);
 
     // ═════════════════════════════════════════════════════════════════════════
-    section('16 · The router\'s wiring — real exports, types only, no second copy of a rule');
+    section('16 · The booking forms — the day, the times, and one appointment per press');
+
+    const blSession = (language: string | null = 'fr'): InAppSurfaceSession =>
+        ({ ...owned, language, kind: 'bl' } as InAppSurfaceSession);
+    const bkSession = (over: Record<string, unknown> = {}): InAppSurfaceSession =>
+        ({ ...owned, language: 'fr', kind: 'bk', productId: PID, bookingId: null, ...over } as InAppSurfaceSession);
+
+    {
+        const h = harness({ ia_bl: blSession() });
+        const v = await serveFlowScreen(open('ia_bl'), h.ports);
+        assert('a bookings handle opens the list, with rows the read already worded',
+            v.status === 200 && bodyOf(v).screen === 'BOOKINGS'
+            && (bodyOf(v).data?.bookings as Array<Record<string, string>>)[0].title === 'BKG-2026-000123 · Tue 14:00');
+        assert('⛔ the list is read for the SESSION\'s owner, never for anyone the form names',
+            JSON.stringify(h.calls.bookingList) === JSON.stringify([owned.owner]));
+        assert('⚠ its heading is the shared booking vocabulary, not a second table',
+            bodyOf(v).data?.heading === 'Vos rendez-vous');
+    }
+
+    {
+        const h = harness({ ia_bl: blSession() }, {
+            readCustomerBookings: async () => ({ bookings: [] }),
+        });
+        const v = await serveFlowScreen(open('ia_bl'), h.ports);
+        assert('no appointments → the notice screen, in the customer\'s language',
+            bodyOf(v).screen === NOTICE_SCREEN && bodyOf(v).data?.message === 'Aucun rendez-vous.');
+    }
+
+    {
+        const h = harness({ ia_bk: bkSession() });
+        const day = await serveFlowScreen(open('ia_bk'), h.ports);
+        assert('a booking handle opens the DAY screen, offering only days that have times',
+            bodyOf(day).screen === 'DAY'
+            && (bodyOf(day).data?.days as Array<Record<string, string>>)[0].id === '2026-09-22');
+        assert('⚠ its words come from the READ, so the page and the form cannot differ',
+            bodyOf(day).data?.heading === bookingWords.pickDay);
+
+        const times = await serveFlowScreen(
+            request('data_exchange', 'DAY', { day: '2026-09-22' }, 'ia_bk'), h.ports);
+        assert('choosing a day asks the SAME read for that day, and draws the times',
+            bodyOf(times).screen === 'TIMES'
+            && h.calls.picker[1].date === '2026-09-22'
+            && bodyOf(times).data?.dayLine === 'Tuesday 22 September');
+        assert('⛔ choosing a day writes nothing — no claim, no hold, no appointment',
+            h.calls.confirmed.length === 0 && h.calls.claimedWith.length === 0);
+        /**
+         * ⛔ **`null` means "not a class", never "none left".** A one-person appointment has
+         * nothing to say under its time, and a transport coalescing that to a number would tell
+         * every haircut customer no seats remain — while an empty string would draw a blank line
+         * under every row. So the property is absent entirely.
+         */
+        const rows = bodyOf(times).data?.times as Array<Record<string, unknown>>;
+        assert('⚠ a capacity service shows "2 spots left"; a one-person appointment shows NO line',
+            rows[0].description === '2 places restantes' && !('description' in rows[1]));
+        assert('⚠ a day that is not a day is refused rather than passed to the read',
+            bodyOf(await serveFlowScreen(request('data_exchange', 'DAY', { day: 'tomorrow' }, 'ia_bk'), h.ports))
+                .screen === NOTICE_SCREEN && h.calls.picker.length === 2);
+    }
+
+    {
+        /** ⛔ The press that makes the appointment. */
+        const h = harness({ ia_bk: bkSession() });
+        const first = await serveFlowScreen(
+            request('data_exchange', 'TIMES', { slot: 'slot_opaque_1' }, 'ia_bk'), h.ports);
+        assert('confirming makes ONE appointment and shows the full receipt on the closing screen',
+            h.calls.confirmed.length === 1 && bodyOf(first).screen === NOTICE_SCREEN
+            && String(bodyOf(first).data?.message).startsWith('Réservé : Coupe homme'));
+        assert('⛔ … stamped `booked`, so the chat can acknowledge it',
+            bodyOf(first).data?.outcome === 'booked');
+        /** ⭐ The same split the checkout arrived at: consume makes two impossible, the claim decides what a retry is TOLD. */
+        assert('⭐ the claim is taken BEFORE the handle is consumed',
+            h.calls.sequence.indexOf('claim') < h.calls.sequence.indexOf('confirm'));
+        const retry = await serveFlowScreen(
+            request('data_exchange', 'TIMES', { slot: 'slot_opaque_1' }, 'ia_bk'), h.ports);
+        assert('⛔ a retry REPLAYS the first answer — never a second appointment, never "start again"',
+            JSON.stringify(retry) === JSON.stringify(first) && h.calls.confirmed.length === 1);
+    }
+
+    {
+        const h = harness({ ia_bk: bkSession({ bookingId: 'bkg-existing' }) }, {
+            confirmBooking: async (bookingHandle, input) => {
+                h.calls.confirmed.push({ handle: bookingHandle, slotId: input.slotId });
+                delete h.sessions[bookingHandle];
+                return { bookingId: 'bkg-existing', productId: PID, moved: true, reference: 'BKG-2026-000123', when: 'Wed 23 Sep 10:00', service: 'Coupe homme', awaitingShop: false };
+            },
+        });
+        const moving = await serveFlowScreen(open('ia_bk'), h.ports);
+        assert('⚠ a RESCHEDULE says so in the heading — a caption that only sometimes applies cannot be hidden',
+            bodyOf(moving).data?.heading === bookingWords.movingNotice);
+        const done = await serveFlowScreen(
+            request('data_exchange', 'TIMES', { slot: 'slot_opaque_1' }, 'ia_bk'), h.ports);
+        assert('⛔ a move stamps `moved`, never `booked` — "booked" would read as a second appointment',
+            bodyOf(done).data?.outcome === 'moved');
+    }
+
+    {
+        const h = harness({ ia_bk: bkSession() }, {
+            confirmBooking: async () => {
+                throw createAppError(ERROR_CODES.BOOKING_SLOT_LOCKED, 409, 'taken', { spent: true });
+            },
+        });
+        const v = await serveFlowScreen(
+            request('data_exchange', 'TIMES', { slot: 'slot_opaque_1' }, 'ia_bk'), h.ports);
+        assert('a time taken a moment earlier → the form says so rather than claiming an appointment',
+            v.status === 200 && bodyOf(v).screen === NOTICE_SCREEN
+            && bodyOf(v).data?.outcome !== 'booked' && h.calls.reported.length === 1);
+    }
+
+    {
+        const h = harness({ ia_bk: bkSession() });
+        await serveFlowScreen(request('data_exchange', 'TIMES', { slot: '' }, 'ia_bk'), h.ports);
+        assert('⛔ no slot → nothing confirmed, and no claim taken',
+            h.calls.confirmed.length === 0 && h.calls.claimedWith.length === 0);
+    }
+
+    {
+        /** ⚠ `bp` has a definition and a kind, but nothing reads what is owed — so it is refused. */
+        const h = harness({ ia_bp: { ...owned, language: 'fr', kind: 'bp' } as InAppSurfaceSession });
+        const v = await serveFlowScreen(open('ia_bp'), h.ports);
+        assert('⚠ a booking-payment handle is refused until a read can re-resolve the amount',
+            v.status === 427);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    section('17 · The router\'s wiring — real exports, types only, no second copy of a rule');
 
     const routerSource = stripComments(readSrc('flow-screens.ts'));
     const portsSource = stripComments(readSrc('flow-screen-ports.ts'));

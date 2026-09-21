@@ -202,6 +202,24 @@ router.get('/s/bk/:handle/data', BookingScreensController.slotData);
 router.post('/s/bk/:handle/confirm', BookingScreensController.confirm);
 
 /**
+ * Paying for an appointment — the deposit, or the balance a vendor has since settled.
+ *
+ * ⚠ **`bp` waited for this read rather than being reserved with the other two**, and the wait
+ * was the point: the session holds NO amount, because a balance moves the moment a vendor
+ * settles the appointment. The figure is resolved at read and **again at pay**, so a screen
+ * drawn from a stale session cannot charge a stale number. Mounting a route before that read
+ * existed would have been a payment screen with nothing honest to show.
+ *
+ * ⚠ **`pay` SPENDS the handle**, like `/s/co/:handle/place` and `/s/bk/:handle/confirm`.
+ *
+ * ⛔ **Neither route claims an OUTCOME** — not "failed", and not "payment received" either. A
+ * screen that announces a result on its own authority is the same fault in the cheerful
+ * direction, and the easier one to add later: the verdict comes from the gateway, to the chat.
+ */
+router.get('/s/bp/:handle/data', BookingScreensController.payData);
+router.post('/s/bp/:handle/pay', BookingScreensController.pay);
+
+/**
  * The support form — one screen that opens a request.
  *
  * ⚠ **Mounted as a PAIR, and `submit` SPENDS its handle** (`consume`, not `read`) exactly as

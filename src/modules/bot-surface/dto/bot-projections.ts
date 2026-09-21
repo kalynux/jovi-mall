@@ -944,6 +944,20 @@ export interface BotContactStateDto {
      * Null when nothing is pending. See `BotContactController.getState`.
      */
     phoneChangeProved: boolean | null;
+    /**
+     * Where a customer changes either of these — the storefront's sign-in details page.
+     *
+     * ⚠ **DATA, deliberately, and not a button** (owner's ruling, 2026-09-20). Changing an
+     * email or a phone is not built in chat; the customer is sent to the website. The link
+     * travels here rather than as a rendered control because a reply carrying a control
+     * REPLACES the model's sentence instead of joining it — so a button would cost the
+     * customer the answer they usually came for, which is *"what email do you have for me?"*
+     * rather than *"change it"*. As data, one sentence answers both.
+     *
+     * Null when the deployment has no storefront URL configured, in which case there is no
+     * honest destination and nothing should be offered.
+     */
+    changeUrl: string | null;
 }
 
 /**
@@ -973,6 +987,23 @@ export function toBotContactState(
     },
     /** Whether a WhatsApp connection currently proves the pending number. */
     phoneChangeProved: boolean | null,
+    /**
+     * Where the customer changes either value, already composed.
+     *
+     * ⚠ **Passed in rather than built here**, because the link depends on the customer's
+     * language and on a deployment's `STOREFRONT_URL` — request-scoped facts a pure
+     * projection has no business reading. Same reason `toBotNotificationDto` takes a link
+     * builder instead of importing one.
+     *
+     * ⚠ **OPTIONAL, and the default is honest rather than a convenience.** It landed REQUIRED
+     * and broke three call sites in `test-bot-surface.ts` — a file the author never opened —
+     * which stopped the whole suite COMPILING and took every session's gate down with it.
+     * **A required parameter added to a shared projection breaks every existing call site in
+     * files the author never opens.** `null` is also the truthful value when no storefront is
+     * configured, which is production today, so defaulting to it states a fact rather than
+     * papering over one.
+     */
+    changeUrl: string | null = null,
 ): BotContactStateDto {
     return {
         emailMasked: state.email ? maskEmail(state.email) : null,
@@ -984,6 +1015,7 @@ export function toBotContactState(
             ? { target: state.pendingPhone.target, expiresAt: state.pendingPhone.expiresAt }
             : null,
         phoneChangeProved: state.pendingPhone ? phoneChangeProved : null,
+        changeUrl,
     };
 }
 

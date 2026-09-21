@@ -33,13 +33,14 @@ These are also the **rollback versions** (§ 12).
 | **2** | a completed WhatsApp form is answered with a **greeting**, over the form's own closing screen | the form's outcome is acted on, or the turn ends in silence — deliberately | ✅ specified · proven |
 | **3** | a turn of several messages delivers **its first message** | all of them, one at a time, in order | ✅ specified · proven |
 | **4** | a tap whose answer is data is answered with a **greeting** | the assistant acts on the data; the token never reaches the model | ✅ specified · proven |
+| **4.6** | a tap that ANSWERS and asks a question (cancel → "what went wrong?") loses the answer: the next message has nothing to attach it to | the data is carried to the next turn, once, and deleted whatever the customer says | ✅ specified · proven · ⛔ ships only with § 4.7 |
 | **5** | a message a tool prepared **never reaches the customer** | it is sent; the model's sentence is kept, or suppressed when the tool says so | ✅ specified · proven · ❓ one backend flag |
-| **6** | a file's own question ("which request is this for?") is composed and **never sent** | sent, and the model is told not to race it | ✅ specified · proven · ⏳ copy |
+| **6** | a file's own question ("which request is this for?") is composed and **never sent** | sent, and the model is told not to race it for the one-use handle | ✅ specified · proven · built |
 | **7** | — | **nothing to change**: template taps already arrive as ordinary taps | ✅ measured |
 | **8** | a deal closed by a button leaves the haggle open; **every Bargain button is a dead end** | the routing keys follow the buttons; the counter-offer can carry one | ⚠ **live gap** · specified · proven |
 | **9** | the model cannot call the two new discovery doors at all | regenerate and republish the MCP server — the delta is **2** (`catalog_browse_categories`, `catalog_product_reviews_summary`) and may grow again before deploy day | ⚠ **required now** · re-measure |
 | **10** | a refused bargaining message = the customer gets **nothing**, and the board stays clean | it fails the run and is reported; the Graph version gets one home | ⚠ found while reading |
-| **12.5** | — | ⛔ **not an n8n change**: re-seed the bargaining playbook into the production database, or the model never sees round 2's two new instructions | ✅ verified |
+| **12.5** | — | ⛔ **not n8n changes**: (a) re-seed the bargaining playbook into the production database, or the model never sees round 2s two new instructions · (b) `verify:landing-routes` before the links go out — ⚠ its exit 2 means *unverified*, never green | ✅ verified |
 | **13** | WhatsApp forms exist but no customer can open one | publish the three ready Flows — ⛔ **strictly AFTER the deploy**, because Meta health-checks the live endpoint before it will publish | ✅ runbook · owner's call |
 
 **Open, and owed by others:** the `replyStandsAlone` flag and its name (backend-dc) · `/record`'s
@@ -129,7 +130,7 @@ Worth being precise about *when* each kind of skip arrives, because the two are 
 
 ### 1.4 · Proof
 
-Harness § 11, rows `§ 1`: **35 checks, 0 failed** *(2026-09-20 — the count is derived, see
+Harness § 11, rows `§ 1`: **36 checks, 0 failed** *(2026-09-20 — the count is derived, see
 11.2)*. The condition is evaluated live-vs-new over a corpus **derived from `BOT_ACTION_VERBS` at
 run time** (never a hand-kept list), after a prior assertion that the scan found the vocabulary
 at all — an empty scan would make "every verb routes" vacuously true.
@@ -454,18 +455,107 @@ The owner's decision: after "Yes, cancel" the bot asks *"What went wrong? Tell m
 words and I will pass it on"*, and those words must reach the order — today it is cancelled with
 a fixed literal and the answer is recorded nowhere.
 
-**It needs no mechanism of its own** (design by backend-3e, 2026-09-20). The cancel tap
-`yes:cnc:<orderId>:<ref>` answers with **no reply** and
+⚠ **This section described a no-reply tap until 2026-09-20, and the built design is different
+in the one way that matters.** The cancel tap `yes:cnc:<orderId>:<ref>` cancels the order and
+**answers with a reply** — a deterministic prompt, *"What went wrong? Tell me in your own words
+and I will pass it on"* — alongside
 
 ```jsonc
 "data": { "cancelled": true, "orderId": "…", "orderNumber": "ORD-2026-000123", "awaitingCancellationReason": true }
 ```
 
-so it is an ordinary § 4 turn: the data reaches the assistant, which tells the customer the order
-is cancelled, asks what went wrong, and files their **next** message with
-`orders_record_cancellation_reason(orderId, reason)` — the same shape as a ticket Reply. The
-customer's next message is a new turn and the model's own memory carries what it just asked;
-n8n keeps no state, adds no node and needs no branch.
+**and that is the right call, not an oversight.** The orders stream deliberately did not drop the
+reply to reuse § 4's no-reply path, because on the live core a no-reply tap reaches the assistant
+with empty input and produces the *"customer finished setup, greet them"* prompt — so a customer
+who had just cancelled an order would be **greeted**. That is the wrong failure for a
+money-adjacent action, and a deterministic sentence beats a model's improvisation there even
+after § 4 lands.
+
+The consequence is a rule § 4 does not yet have: **the assistant is not involved in the turn that
+sent the reply**, so when the customer then types *"the shop never replied"*, it arrives as
+ordinary text with nothing to attach it to, and the words are never recorded. The backend half
+is built (`orders_record_cancellation_reason` writes the customer's own sentence onto the order's
+history); this is the n8n half.
+
+**The rule, keyed on the flag and never on the verb** — so `awaitingCancellationReason` (order
+cancel) and `awaitingReply` (ticket Reply) are one rule and a future one needs no n8n edit:
+
+> When a tap's response carries `data` with an `awaiting*` flag, that data reaches the assistant
+> on the **next** turn, even though a reply was sent.
+
+n8n holds no state between turns by design, so the carry needs a home. Two shapes were weighed,
+and **both are kept here on purpose** — if the chosen one ever proves awkward, the next person
+should find the other already reasoned through rather than re-derive it.
+
+| | Shape | |
+|---|---|---|
+| ✅ **A · a one-shot carry in n8n** — **CHOSEN** | write the data on the tap turn, read **and delete** it on the next, expiry inside the value | 4 nodes, no backend change. Precedent in this same workflow: the first-message carry (`remember`/`recall`/`forget first message`) |
+| **B · the backend reports it** | `/identity/sync` runs on every message and would report the outstanding question | no n8n state at all; backend work with a suite |
+
+**Why A:**
+
+1. ⭐ **Read-and-delete gives the customer exactly ONE turn to answer**, which is what "the
+   question must not trap the conversation" asks for. Any backend-side expiry can bring the
+   question back — *"so what went wrong with that cancellation?"* two messages after the customer
+   has moved on is **worse than not recording the reason at all**. That is a behaviour
+   difference, not an implementation detail.
+2. **The Redis index budget is effectively full**: DB 10 already carries five prefixes
+   (`bot:idem:`, `bot:geo:`, `bot:display:`, `bot:miniapp:`, `bot:inapp:`) against a working
+   range of 5–15 and a hard ceiling of 16. B costs either a sixth prefix on a database whose
+   flush policy is prefix-scoped for that reason, or conversational state on the customer
+   document, which is worse.
+3. **This surface is deliberately stateless between turns** — it mints no session and takes the
+   identity from the envelope on every call. An outstanding-question store would be the first
+   piece of conversational state on it, "and the first one is what makes the second look
+   reasonable".
+
+📌 **This decision was made twice, and it should show that it moved.** B was chosen first, on
+the strongest general tiebreaker this effort has: *B can be proven today, A only on deploy day*,
+and the day already carries thirteen sections. It was reversed on the two arguments above that
+are not about convenience — the one-turn behaviour and a hard resource limit — plus one
+correction to B's own case: `/identity/sync` reporting an agreed price is **not** the same shape,
+because that price is derived from a durable negotiation record rather than held as
+conversational state. The local-versus-deploy-day weighting still stands as a general tiebreaker;
+here it was outweighed.
+
+### 4.6 · The carry — and the live check it does not ship without
+
+**Four nodes, symmetric with the first-message carry already in this workflow.**
+
+```
+product action ──► has reply?                    (the turn's own path, unchanged)
+               └─► awaiting answer? ──true──► remember awaiting        (dead end, as § 8.3)
+
+bargaining? ──false──► recall awaiting ──► is media? ──► … ──► compose agent input
+                                      └──► forget awaiting            (dead end)
+```
+
+- **`awaiting answer?`** (IF) — true when the response's `data` carries any key beginning
+  `awaiting` whose value is `true`. ⛔ **Keyed on the flag, never on the verb**, so
+  `awaitingReply` (ticket Reply) and `awaitingCancellationReason` (order cancel) are one rule and
+  the next one needs no n8n edit.
+- **`remember awaiting`** (Redis set, `wi-mall:awaiting:<channel>:<externalId>`) — stores the
+  response's `data`, the `messageId` it was written for, and an `expiresAt` fifteen minutes out.
+  ⚠ The n8n Redis node's `set` exposes no TTL, so the value is the authority, exactly as the
+  bargaining keys and the display echo already work.
+- **`recall awaiting` → `forget awaiting`** — read, then delete unconditionally. **The delete is
+  what makes it one turn**, and it happens whatever the customer said.
+- **`compose agent input`** adds the data to the model's note when the carry is fresh and was
+  written for a *different* message, with one instruction: if their message answers it, file it;
+  if it does not, ignore it entirely.
+
+⛔ **IT DOES NOT SHIP WITHOUT § 4.7's LIVE CHECK, and that is a condition rather than a
+suggestion.** This failure is **silent and untestable from either repository**: if the carry is
+lost or edited away, the reason is simply never recorded, nothing goes red, and an empty column
+looks exactly like customers who chose not to answer — the same shape as a successful n8n
+execution proving nothing (ADR-022). The backend half and the n8n half are each individually
+green when the chain between them is broken.
+
+
+**Two rules go to the model with it either way**, since n8n owns the system prompt: file the
+customer's **own words**, never a summary or an invention (they go onto the order's history for
+the vendor to read), and **never retry a filing the platform refused with a 409** — it means the
+reason is already recorded, and a retry appends a second story to one cancellation.
 
 **Two rules do belong to n8n**, because they are about how the model behaves, and n8n owns the
 system prompt. Added to its `RULES` block:
@@ -476,10 +566,81 @@ system prompt. Added to its `RULES` block:
 - **Never retry a filing the platform refused with a conflict (409).** It means the reason is
   already recorded, and a retry appends a second story to one cancellation.
 
-The same two rules cover every "the next typed message belongs to the last tap" case — the
-ticket Reply note, and whatever follows them — so they are written once, as rules, rather than
-per feature. ⏳ Backend-3e confirms here when the route and tool exist; nothing in n8n changes
-before then.
+The same rules cover every "the next typed message belongs to the last tap" case — the ticket
+Reply note and whatever follows them — so they are written once, as rules, rather than per
+feature.
+
+### 4.7 · Deploy-day live check — the typed cancellation reason
+
+*Written by the orders/support stream, which built the backend half. It lives here rather than in
+the runbook because it belongs with the change it proves.*
+
+⚠ **Why this check exists, and why it is not optional.** Shape A's failure is SILENT and **no
+suite in either repository can see it.** The backend half is green on its own
+(`test:inapp-fulfilment` proves the rule, the refusals and the write), the n8n half is green on
+its own (the carry writes and reads), and **the chain between them is what breaks** — after which
+the question is still asked, no note is ever written, nothing goes red, and an empty column is
+indistinguishable from customers who chose not to answer. Two minutes on the day is the only
+thing that proves it.
+
+**Preconditions:** § 4.6's carry published · jovi-mall deployed with
+`POST /orders/:orderId/cancellation-reason` and its `catalog.json` entry (✅ both landed
+2026-09-20, verified in `bot-route-table.ts:189`, `bot.routes.ts:130` and the catalogue as a
+`core` tool) · the owner's test number connected.
+
+⛔ **Confirm § 9's MCP regeneration BEFORE running this check, not after.** Until the workflow is
+regenerated the assistant has **no way to call the tool** — and that produces *"prompt appears,
+no row"*, which is also what a broken carry looks like. Two different faults with one symptom, on
+a day with thirteen other sections, is how an afternoon disappears. The regeneration is the last
+dependency of the whole chain.
+
+**From the owner's test number:**
+
+1. Have a cancellable order — unpaid and not yet shipped. An order placed and left unpaid
+   qualifies.
+2. Ask for your orders, open that order, tap **Cancel**, then **Yes** on the are-you-sure.
+3. ✅ The bot answers with **the fixed sentence** asking what went wrong — not an improvised one,
+   and **not a greeting**. A greeting means the tap's data never reached the assistant.
+4. Type, in **French, with an accent** — e.g. `Le vendeur ne répond pas depuis trois jours`.
+   French deliberately: it is a served language, and the accent proves nothing is mangled on the
+   way in.
+5. ✅ The assistant confirms it has been passed on.
+
+**Then verify in the database, which is the only actual proof:**
+
+```js
+db.order_timelines.find({ order_id: ObjectId("<the order id>"), event_type: "note.added" })
+  .sort({ created_at: -1 }).limit(1)
+```
+
+| field | expected |
+|---|---|
+| `event_type` | `note.added` |
+| `description` | **the customer's sentence, verbatim** — compare character by character, accents included |
+| `metadata.cancellationReason` | `true` |
+| `metadata.cancelledAt` | the cancellation's own timestamp, ISO |
+| `actor_type` | `customer` |
+| `actor_id` | that customer's `users._id` |
+
+**Then one more turn, which is half the check:** type a **second** sentence about the same
+cancellation. ✅ **No second row may appear** — the route answers
+`409 ORDER_CANCELLATION_REASON_ALREADY_RECORDED` and the assistant must not retry it. One
+cancellation, one story.
+
+⭐ **That property is defended twice over, from both ends**, which is worth knowing when reading
+a failure: the catalogue marks the row `mutating`, so every call carries an `Idempotency-Key`. A
+retry with the **same** key replays the stored 2xx rather than writing a second note; a **fresh**
+key meets the 409. The model rule ("never retry a 409") and the idempotency guard would each
+have to fail before a cancellation could acquire two stories.
+
+**If it fails, what each failure means:**
+
+| symptom | cause |
+|---|---|
+| prompt appears, no row | the carry did not reach the assistant, or the tool is not in the MCP workflow — read the n8n execution: was the tool called at all? |
+| row present, words tidied or shortened | the "own words, never a summary" rule is missing from the model's instructions |
+| a second row appears | the 409 is being retried |
+| a greeting instead of the prompt | the tap's data is not being carried (§ 4.6) |
 
 ## 5 · A5 — a message prepared by the assistant's tool reaches the customer
 
@@ -931,6 +1092,12 @@ tokens or paths; that is credential fishing at a live door. Refresh both values 
 ⚠ **Nothing in §§ 1–8 requires this section.** A5 reads what the tools already return; it adds
 no tool and changes no node of the MCP server.
 
+⛔ **But § 4.7's live check does, and the dependency is invisible from the chat.** The typed
+cancellation reason cannot be checked until `orders_record_cancellation_reason` is in the
+regenerated workflow — and **a missing regeneration and a broken carry look identical**: the
+prompt appears, no row is written. So this section runs **before** that check, and a failure
+there is read as "was the tool called at all?" before anything else is suspected.
+
 ## 10 · Found while reading — not on the brief
 
 Both are in `UP-wi-mall-bargain`, both were found while mapping § 8, and the coordinator has
@@ -973,7 +1140,7 @@ expiry, never merely preserve the literal.
 
 ## 11 · Proof — the offline harness
 
-**`api-doc/n8n/deploy-day-harness/`** · `node run.js` · **179 checks, 0 failed** (2026-09-20).
+**`api-doc/n8n/deploy-day-harness/`** · `node run.js` · **201 checks, 0 failed** (2026-09-20).
 No n8n, no network, no database.
 
 ⚠ **That number is a measurement, not a property — re-run it, never quote it.** § 1's corpus is
@@ -1006,18 +1173,24 @@ live pair over A3's own sixteen scenarios.
 
 | Section | Checks | |
 |---|---|---|
-| § 1 · A1 routing | 35 | corpus derived from `BOT_ACTION_VERBS` at run time — **this row moves** |
+| § 1 · A1 routing | 36 | corpus derived from `BOT_ACTION_VERBS` at run time — **this row moves** |
 | § 2 · WhatsApp forms | 30 | 13 adapter + 17 core |
 | § 3 · A2 send path | 22 | includes a modelled five-message turn with a refusal |
 | § 4 · taps → assistant | 15 | before/after on a real tap |
+| § 4.6 · the awaiting carry | 21 | one turn and only one, proven |
 | § 5 · A5 | 31 | **16 A3-equivalence** + 15 new |
 | § 6 · file question | 8 | |
 | § 8 · bargaining keys | 17 | includes the cross-workflow pin against the **live reader** |
 | § 8.4 · the gate's body | 9 | five verdict paths byte-identical |
 | § 8.5 · the hand-back | 12 | one sender keeps the pen, proven |
-| **total** | **179** | at this measurement |
+| **total** | **201** | at this measurement |
 
 ### 11.3 · Three guards that must bite, and do
+
+> ⭐ **"A check that finds nothing and says passed is worse than no check, because it also
+> retires the worry."** — `scripts/verify-landing-routes.ts`, on why it refuses rather than
+> skips. It is the general form of what this round kept finding, and the reason for the three
+> mutants below.
 
 Every one was run against a deliberately broken copy and reports *that* fault:
 
@@ -1061,7 +1234,7 @@ writes no key (§ 8).
 | # | Workflow | Sections | Must ship together with |
 |---|---|---|---|
 | 1 | `UP-wi-mall-wa-adapter` | § 2 (adapter half) | — (either order with draft 2; see 2.5) |
-| 2 | `UP-wi-mall-core` | §§ 1, 2 (core half), 3, 4, 5, 6, 8.1–8.3, 8.5 | ⛔ **§ 1 and § 4 are one change** — routing every tap without giving the assistant the data turns a silent tap into a greeting |
+| 2 | `UP-wi-mall-core` | §§ 1, 2 (core half), 3, 4, **4.6**, 5, 6, 8.1–8.3, 8.5 | ⛔ **§ 1 and § 4 are one change** — routing every tap without giving the assistant the data turns a silent tap into a greeting |
 | 3 | `UP-wi-mall-bargain` | §§ 8.4, 10.1, 10.2 | § 8.4 needs backend-27's `/record` change deployed |
 | 4 | `UP-wi-mall-mcp` | § 9 — **required**: the delta is 2 and may grow. Re-measure first | ⛔ the two tools' backend routes **deployed** — a tool published ahead of its route is a 404 in front of a live agent (§ 9.2) |
 
@@ -1073,7 +1246,7 @@ session's draft: if `versionId !== activeVersionId` when you start, stop and ask
 | Draft | Expected |
 |---|---|
 | wa-adapter | exactly **1 node modified** (`normalize`, `jsCode` only). Nothing added, nothing removed, no connection change |
-| core | **10 nodes modified** — `route turn` (rule 3 only), `detect command`, `run command` (`jsonBody` only), `command reply`, `compose agent input`, `compose agent reply`, `drop duplicate reply`, `AI Agent` (one option), `send telegram` + `send whatsapp` (`options.batching` removed, `onError` added — nothing else) — and **12 added**: `ends silently?`, `compose tap input`, `expand replies`, `send loop`, `note refused send`, `any send refused?`, `bargain key change?`, `alternatives handed back?` and the four Redis nodes (`clear bargain flag (tap)`, `clear price lock (tap)`, `clear price lock (reopen)`, `set bargain flag (tap)`), plus the rewiring in §§ 2.2, 3.2, 4.2, 8.3. **No node removed** |
+| core | **10 nodes modified** — `route turn` (rule 3 only), `detect command`, `run command` (`jsonBody` only), `command reply`, `compose agent input`, `compose agent reply`, `drop duplicate reply`, `AI Agent` (one option), `send telegram` + `send whatsapp` (`options.batching` removed, `onError` added — nothing else) — and **16 added** — `ends silently?` (§ 2), `compose tap input` (§ 4), `expand replies` · `send loop` · `note refused send` · `any send refused?` (§ 3), `awaiting answer?` · `remember awaiting` · `recall awaiting` · `forget awaiting` (§ 4.6), `bargain key change?` and its four Redis nodes `clear bargain flag (tap)` · `clear price lock (tap)` · `clear price lock (reopen)` · `set bargain flag (tap)` (§ 8.3), `alternatives handed back?` (§ 8.5) — plus the rewiring in §§ 2.2, 3.2, 4.2, 4.6, 8.3, 8.5. **No node removed** |
 | bargain | **3 nodes modified** (`decide send`, `send telegram`, `send whatsapp`) |
 | mcp | `nodesModified: []` — see § 9.2 |
 
@@ -1096,9 +1269,9 @@ customer got nothing, so every check below is about messages.
 6. **§ 4**: press "Help with this delivery" and confirm the assistant asks about the delivery
    rather than greeting.
 
-### 12.5 · ⛔ One deploy-day action that is NOT an n8n change
+### 12.5 · ⛔ Two deploy-day actions that are NOT n8n changes
 
-**`npm run seed:negotiation-playbook`, against the PRODUCTION database.**
+#### a · `npm run seed:negotiation-playbook`, against the PRODUCTION database
 
 The bargaining model reads its playbook from **Mongo**; `src/modules/negotiation/playbook/
 negotiation.core.md` is only the authored source, and this script is the one bridge between them
@@ -1123,6 +1296,24 @@ npm run seed:negotiation-playbook
   data step, independent of the four drafts.
 - Superseded versions are kept, so this is revertible from the history rather than by re-running
   an older file.
+
+#### b · `npm run verify:landing-routes` — before the links go out
+
+Ten storefront paths this service hands customers (`SURFACE_PATHS` in `bot-list-window.ts`) are
+a **hand-kept copy** of the landing app's routes. Nothing compares them at build time, so a page
+renamed over there turns ten links into 404s **silently** — found by a customer who tapped "see
+the rest" and landed on nothing.
+
+⛔ **It has three outcomes, not two, and the third is the one to read carefully.** When the
+landing app is not checked out it **exits 2 with a stated "cannot check from here" — which is
+NOT a pass.** That was deliberate: a `test:` that skipped when the other repository is absent
+would report *passed*, having verified nothing, on every CI run for ever — the exact shape this
+round has spent its time removing. A check that finds nothing and says "passed" is worse than no
+check, because it also retires the worry.
+
+So: run it where the two repositories sit side by side (or pass `-- --landing <path>`), and
+treat **exit 2 as "unverified", never as green**. It is read-only and one-directional; it must
+not grow into a build dependency on a repository this one does not control.
 
 ### 12.6 · Rollback (n8n)
 

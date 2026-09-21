@@ -260,6 +260,17 @@ export type BotReplyIntent =
           hasMore: boolean;
           /** `more:<setId>`. Meaningless unless `hasMore`. */
           moreToken?: string | null;
+          /**
+           * `next:<setId>` — the next five cards IN THE CHAT. Meaningless unless `hasMore`.
+           *
+           * ⚠ **It is not a duplicate of `moreToken`, though today it behaves like one.**
+           * `more:` opens the in-app grid and currently FALLS BACK to the next page of cards,
+           * because no screen origin is configured. The day one is, `more:` starts opening the
+           * grid — which on WhatsApp, until the Flows are published, means a link out to a
+           * browser — and a customer loses in-chat paging entirely unless this token is already
+           * being drawn. Its absence would become permanent and silent on exactly that day.
+           */
+          nextToken?: string | null;
           /** Button labels, already in the customer's language — see `bot-chrome-copy.ts`. */
           labels: {
               browse: string;
@@ -277,6 +288,8 @@ export type BotReplyIntent =
                */
               similarItems?: string;
               saveForLater?: string;
+              /** The label on `nextToken`. Optional for the same reason as the two above. */
+              nextPage?: string;
           };
           /**
            * The approved WhatsApp carousel template, when the deployment has one.
@@ -898,11 +911,26 @@ function telegramCardKeyboard(
             { text: truncate(intent.labels.details, TG_LIMITS.BUTTON_TEXT), url: card.detailUrl },
         ]);
     }
+    /**
+     * The paging row: **See more** opens the grid, **Next page** sends five more cards here.
+     *
+     * ⚠ **Both, on one row, and Telegram is the channel where that is possible** — an inline
+     * keyboard row takes several buttons, so neither control has to give way. WhatsApp caps a
+     * message at three reply buttons and the last card already spends all three, which is why
+     * the two travel as their own message there. Same pair, two shapes.
+     *
+     * ⚠ Today the two do the same thing, because `more:` falls back to the next page while no
+     * screen origin is configured. Drawing only `more:` would therefore look correct right up
+     * to the day screens are switched on, and would then silently remove in-chat paging.
+     */
+    const paging: Record<string, unknown>[] = [];
     if (withMore && intent.moreToken) {
-        rows.push([
-            { text: truncate(intent.labels.seeMore, TG_LIMITS.BUTTON_TEXT), callback_data: intent.moreToken },
-        ]);
+        paging.push({ text: truncate(intent.labels.seeMore, TG_LIMITS.BUTTON_TEXT), callback_data: intent.moreToken });
     }
+    if (withMore && intent.nextToken && intent.labels.nextPage) {
+        paging.push({ text: truncate(intent.labels.nextPage, TG_LIMITS.BUTTON_TEXT), callback_data: intent.nextToken });
+    }
+    if (paging.length > 0) rows.push(paging);
 
     return rows.length > 0 ? { inline_keyboard: rows } : null;
 }
@@ -1032,20 +1060,44 @@ function whatsappCardBody(card: BotProductCard): string {
 function whatsappProductList(intent: ProductListIntent, to: string): BotChannelReply[] {
     const replies: BotChannelReply[] = [];
 
-    const seeMoreMessage = (): BotChannelReply =>
+    /**
+     * The paging controls as their own message — **See more** (the grid) and, when it is drawn,
+     * **Next page** (five more cards here).
+     *
+     * ⚠ **They cannot ride the last card on this channel, and that is arithmetic rather than
+     * preference.** Meta caps an interactive message at three reply buttons and drops the rest
+     * without an error: an ordinary last card already spends all three on Buy now, Add to cart
+     * and See more, and a sold-out one spends them on Similar items, Save for later and See
+     * more. A fourth button would vanish silently — so when there are two paging controls they
+     * both move here, where they fit and stay together. The carousel path has always worked
+     * this way ("See more cannot live on a card"); the card path now joins it whenever `next:`
+     * is drawn, and is otherwise untouched.
+     */
+    const pagingMessage = (): BotChannelReply =>
         waEnvelope(to, 'interactive', {
             interactive: {
                 type: 'button',
                 body: { text: truncate(intent.browsePrompt, WA_LIMITS.INTERACTIVE_BODY) as string },
                 action: {
                     buttons: [
-                        {
-                            type: 'reply',
-                            reply: {
-                                id: intent.moreToken,
-                                title: truncate(intent.labels.seeMore, WA_LIMITS.BUTTON_REPLY_TITLE),
-                            },
-                        },
+                        ...(intent.moreToken
+                            ? [{
+                                type: 'reply',
+                                reply: {
+                                    id: intent.moreToken,
+                                    title: truncate(intent.labels.seeMore, WA_LIMITS.BUTTON_REPLY_TITLE),
+                                },
+                            }]
+                            : []),
+                        ...(intent.nextToken && intent.labels.nextPage
+                            ? [{
+                                type: 'reply',
+                                reply: {
+                                    id: intent.nextToken,
+                                    title: truncate(intent.labels.nextPage, WA_LIMITS.BUTTON_REPLY_TITLE),
+                                },
+                            }]
+                            : []),
                     ],
                 },
             },
@@ -1131,7 +1183,7 @@ function whatsappProductList(intent: ProductListIntent, to: string): BotChannelR
             },
         });
 
-        if (intent.hasMore && intent.moreToken) replies.push(seeMoreMessage());
+        if (intent.hasMore && intent.moreToken) replies.push(pagingMessage());
         return replies;
     }
 
@@ -1200,7 +1252,15 @@ function whatsappProductList(intent: ProductListIntent, to: string): BotChannelR
          * what keeps it that way — but the next person to add a card button will silently cost
          * the last card its "See more" rather than get an error. Count before adding one.
          */
-        if (last && intent.hasMore && intent.moreToken && buttons.length < WA_MAX_BUTTONS) {
+        /**
+         * ⚠ **See more rides the last card ONLY when it travels alone.** With a `next:` token
+         * to draw as well the pair moves to its own message (`pagingMessage`), because three
+         * reply buttons is the whole budget and the last card has already spent it — see the
+         * arithmetic there. When `next:` is absent this is byte-for-byte today's behaviour.
+         */
+        const pagingRidesTheCard = !(intent.nextToken && intent.labels.nextPage);
+        if (last && pagingRidesTheCard && intent.hasMore && intent.moreToken
+            && buttons.length < WA_MAX_BUTTONS) {
             buttons.push({
                 type: 'reply',
                 reply: {
@@ -1274,6 +1334,15 @@ function whatsappProductList(intent: ProductListIntent, to: string): BotChannelR
             }),
         );
     });
+
+    /**
+     * The paging pair, after the cards, when there are two of them to draw. One extra message
+     * per page — the price of not dropping a control silently, and the shape the carousel path
+     * has always used.
+     */
+    if (intent.hasMore && intent.nextToken && intent.labels.nextPage) {
+        replies.push(pagingMessage());
+    }
 
     if (replies.length === 0) replies.push(whatsappText(to, intent.browsePrompt));
     return replies;

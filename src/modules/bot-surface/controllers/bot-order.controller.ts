@@ -60,7 +60,7 @@ import {
     botShipmentStateLabel,
     toBotOrderPaymentState,
 } from '../domain/bot-order-status-copy';
-import { botStorefrontLink, windowForChat } from '../domain/bot-list-window';
+import { botStorefrontLink, surfacePath, windowForChat } from '../domain/bot-list-window';
 import {
     BotCartIdParamSchema,
     BotCodCodeSchema,
@@ -989,22 +989,28 @@ async function declineCancelTap(req: Request, res: Response, action: ParsedBotAc
  * only be addressed at the chat that asked for it. That binding is the security property of the
  * whole in-app surface; it is written once.
  *
- * ⚠ **`fallbackPath` is the same `/shop/account/orders` that `windowForChat({ surface: 'orders' })`
- * builds**, via the same table, so the row's destination cannot drift from the `moreUrl` reported on
- * the turn that drew it.
+ * ⚠ **`fallbackPath` is READ FROM THE SAME TABLE `windowForChat({ surface: 'orders' })` uses**, so
+ * the row's destination cannot drift from the `moreUrl` reported on the turn that drew it.
  *
- * ⚠ **`textKey` is `loadMoreRow`, a row title doing a body's job.** The chrome table has no
- * orders-screen sentence yet and `respondWithScreen`'s default introduces products. A proper key is
- * requested of the switchboard.
+ * ⚠ **This sentence used to say that while the code typed the literal `'/shop/account/orders'`.**
+ * The path was right, so nothing was ever red — and a reader (the switchboard, 2026-09-20) believed
+ * the drift was already prevented and told another stream to copy the pattern, which turned out not
+ * to exist. `surfacePath()` was added so the claim could become true rather than be deleted.
+ *
+ * ⚠ **`textKey` is `ordersScreenPrompt`, and it used to be `loadMoreRow` — a row title doing a body's
+ * job.** `loadMoreRow` is a 24-character list-row title ("Load more"), and as the sentence ABOVE a
+ * button it said nothing about what the button opens; `respondWithScreen`'s own default is worse here,
+ * because it introduces products. The switchboard added the proper key on 2026-09-20 and this is its
+ * one caller, so `viewOrdersPrompt` — the key this was NOT allowed to borrow — can now go.
  */
 async function orderHistoryTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
     if (action.argument !== '') throw unknownBotAction();
 
     const handle = await openInAppScreen(req, {
         payload: { kind: 'ol' },
-        fallbackPath: '/shop/account/orders',
+        fallbackPath: surfacePath('orders'),
         labelKey: 'browseAllButton',
-        textKey: 'loadMoreRow',
+        textKey: 'ordersScreenPrompt',
     });
 
     sendSuccess(res, { handle, opened: 'orders' });

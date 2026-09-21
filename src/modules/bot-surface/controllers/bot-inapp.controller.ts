@@ -284,7 +284,18 @@ export type InAppScreenPayload =
               topic: 'rd' | 'ad' | 'hp' | null;
               attachmentRef: string | null;
           };
-      };
+      }
+    /**
+     * ⚠ **All THREE bookings kinds land together, though only `bl` has a caller today.** This
+     * type is the second declaration of a fact the store already holds, and the `tf` round
+     * showed what happens when only one half moves: the store gained the kind, this did not,
+     * and the stream that needed it stopped dead on a type error in a file it does not own.
+     * Adding `bk` and `bp` now costs two lines and removes this file as a place the kinds can
+     * disagree.
+     */
+    | { kind: 'bl' }
+    | { kind: 'bk'; productId: string; bookingId: string | null }
+    | { kind: 'bp'; bookingId: string; purpose: 'primary' | 'balance' };
 
 /**
  * Mint a screen session for the customer this request belongs to, and set the reply that opens

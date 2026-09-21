@@ -190,6 +190,114 @@ function main(): void {
         return title.endsWith('14:00') && title.includes('…');
     });
 
+    console.log('\n══ § 4b · ⛔ The money screen ══');
+
+    const pay = core.slice(core.indexOf('export async function payBooking('));
+    const payRead = core.slice(
+        core.indexOf('export async function readBookingPayment('),
+        core.indexOf('export async function payBooking('),
+    );
+
+    assert('in scope: both halves of the pay screen are found', () =>
+        pay.length > 0 && payRead.length > 0);
+
+    /**
+     * ⭐ **THE AMOUNT IS NEVER HELD.** The `bp` session carries a booking id and a purpose; a
+     * figure in it is a figure that can disagree with what is actually charged a minute later,
+     * and a balance in particular moves when the vendor settles the appointment. Both the read
+     * and the write resolve it from the booking, at the moment they run.
+     */
+    /**
+     * ⚠ **Line-anchored, because "contains the right call" is not "uses only the right call".**
+     * The first version asserted that the read CONTAINED `amountDueFor(...)`, and a mutant that
+     * preferred a session figure and fell back to the call — `session.amount ?? amountDueFor(…)` —
+     * satisfied it exactly. The assertion has to be about what the amount IS, not about a string
+     * appearing somewhere in the expression.
+     */
+    assert('⛔ the amount is re-resolved from the booking, never read from the session', () =>
+        /\n\s*const amount = amountDueFor\(booking, session\.purpose\);\n/.test(payRead)
+        // ⚠ Only a READ of an amount OFF the session is forbidden. An earlier version banned
+        // "amount … session." on one line and so failed on the correct line itself, which reads
+        // `const amount = amountDueFor(booking, session.purpose)`.
+        && !/session[^\n]{0,40}\.(amount|price|total|amountText)\b/.test(core)
+        && core.includes('function amountDueFor('));
+
+    assert('⛔ the write SPENDS the handle, and the read does not', () =>
+        pay.includes("inAppSurfaceStore.consume('bp'")
+        && payRead.includes("inAppSurfaceStore.read('bp'")
+        && !payRead.includes('consume('));
+
+    /**
+     * ⚠ **The gateway is the server's choice.** Every other entry point takes it from its caller
+     * because those callers are the platform's own code; this one's caller is a browser, and a
+     * gateway name from a browser is a caller choosing where a stranger's money goes.
+     */
+    assert('⛔ the page never names the gateway', () =>
+        pay.includes('mobileMoneyGateway()')
+        && !/input\.(gateway|provider)/.test(pay));
+
+    /**
+     * ⚠ **Checked before the spend for a typed number, after it for the account's.** The typed
+     * one can be judged immediately; the account's needs the session to find the customer. A
+     * number no network can be resolved for must not cost the customer their screen.
+     */
+    assert('⛔ the mobile network is checked on both numbers, in that order', () => {
+        const typedAt = pay.indexOf('assertNetworkChargeable(gateway, typed, false)');
+        const spendAt = pay.indexOf("inAppSurfaceStore.consume('bp'");
+        const accountAt = pay.indexOf('assertNetworkChargeable(gateway, payerNumber, true)');
+        return typedAt > 0 && spendAt > typedAt && accountAt > spendAt;
+    });
+
+    assert('⛔ every refusal after the spend is marked spent', () =>
+        pay.includes('throw markSpent(error);') && core.includes('function markSpent('));
+
+    /**
+     * ⭐ **THE SCREEN MAY NOT REACH A VERDICT, and this is the assertion that keeps it honest.**
+     * The orchestrator publishes a booking failure ONLY where the gateway gave one — the webhook
+     * and the verify sweep, on the transition into a dead status — and deliberately NOT from the
+     * catch around the charge, where a timeout cannot be told from a refusal and the money may
+     * still be moving. So nothing here may announce an outcome: no chat push, no situation, no
+     * event. The customer hears it from the payment path or not at all.
+     */
+    assert('⛔ the pay path announces NOTHING — no push, no event, no situation', () =>
+        !/pushReceipt|sendMessage|eventBus\.publish|notify\(/.test(pay));
+
+    /**
+     * ⚠ **Bounded at the handler's own end, because `pay` is the LAST method in the class** and a
+     * slice to end-of-file swallows `pushReceipt`'s definition — which made this fail on correct
+     * code the first time it ran. A span that runs past its subject is the defect this project
+     * keeps meeting; here it pointed the wrong way, at code that was right.
+     */
+    assert('⛔ and the transport does not announce it either', () => {
+        const screens = stripped(SCREENS);
+        const at = screens.indexOf('static pay = asyncHandler');
+        const end = screens.indexOf('\n    });', at);
+        if (at < 0 || end < 0) return false;
+        return !/pushReceipt|sendMessage/.test(screens.slice(at, end));
+    });
+
+    /**
+     * The page is the other half of the same rule: it may say "sent", never "paid".
+     *
+     * ⚠ **JS comments are stripped as well as HTML ones.** The page EXPLAINS that it must not say
+     * "paid", inside a `/* *\/` block in its script — so a scan that read only the markup failed
+     * on the file that gets it right, which is how a correct guard teaches somebody to delete the
+     * comment that makes the code legible.
+     */
+    assert('⛔ the page never claims the payment succeeded or failed', () => {
+        const page = read('src/modules/bot-surface/miniapp/public/bp.html')
+            .replace(/<!--[\s\S]*?-->/g, '')
+            .replace(/\/\*[\s\S]*?\*\//g, '');
+        /**
+         * ⚠ **The property is "no VERDICT", not "no failure message".** An earlier version banned
+         * only "paid" and "payment failed", which leaves the CHEERFUL direction open — a screen
+         * saying "payment received" on its own authority is the same fault, and the easier one to
+         * add later without anybody noticing, because it reads like good news rather than a bug.
+         */
+        return page.includes('copy.paySent')
+            && !/\bpaid\b|payment (failed|received|confirmed|complete)|\bsuccessful\b/i.test(page);
+    });
+
     console.log('\n══ § 5 · The words ══');
 
     assert('every screen word exists in all five languages', () =>

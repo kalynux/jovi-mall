@@ -28,6 +28,7 @@ import { join } from 'path';
 import { parseBotActionId } from '../../src/modules/bot-surface/domain/bot-action-id';
 import { actionKeyOf } from '../../src/modules/bot-surface/domain/bot-action-dispatch';
 import { parseTicketTap } from '../../src/modules/bot-surface/domain/bot-ticket-actions';
+import { TemplateRegistry } from '../../src/modules/whatsapp/handlers/template/template-registry';
 import {
     CUSTOMER_NOTIFICATION_CATALOG,
     assertCustomerCatalogComplete,
@@ -899,7 +900,34 @@ function main(): void {
      */
     const scanRoot = process.env.CUSTOMER_NOTIFICATIONS_SCAN_ROOT || join(__dirname, '../..');
     if (process.env.CUSTOMER_NOTIFICATIONS_SCAN_ROOT) console.log('  (SCANS REDIRECTED)');
-    const readSource = (rel: string) => readFileSync(join(scanRoot, rel), 'utf8').replace(/\r\n/g, '\n');
+
+    /**
+     * ⛔ **COMMENTS ARE STRIPPED BEFORE ANY SCAN, AND THIS IS NOT TIDINESS.**
+     *
+     * Without it, **the sentence stating a rule defeats the check of the rule.** The positive
+     * guard below looks for `templateLanguage(` — and two of the six files explain the rule in
+     * a ⛔ comment that quotes the call *with its parenthesis*. So the real call could be
+     * swapped back to `META_LANGUAGE_CODE[` and the guard would still pass, matching the
+     * comment instead of the code. Measured, not theorised: with the call reverted and the
+     * comment untouched — which is exactly how this regresses, because nobody deletes a ⛔ rule
+     * comment — `delivery-code.service.ts` and `phone-verification.service.ts` both still
+     * passed. Those are the two sites where the failure means a person can never verify a
+     * phone number, or never receives a delivery code.
+     *
+     * ⚠ **It fixes the opposite direction at the same time.** The negative guard forbids
+     * `language: META_LANGUAGE_CODE[`, and is clean today only because every comment happens
+     * to quote the old form without a `language:` prefix. One comment written the obvious way
+     * — *"the old form was `language: META_LANGUAGE_CODE[lang]`"* — would fail the guard on
+     * CORRECT code, which is how a guard teaches the next person to weaken it.
+     *
+     * Block comments and whole-line `//` comments only: a trailing `//` is left alone so a URL
+     * in a string literal cannot be mangled.
+     */
+    const stripComments = (src: string) =>
+        src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+
+    const readSource = (rel: string) =>
+        stripComments(readFileSync(join(scanRoot, rel), 'utf8').replace(/\r\n/g, '\n'));
 
     // ─────────────────────────────────────────────────────────────────────────
     //  Template languages — the silent gap between what we speak and what Meta cleared
@@ -941,6 +969,31 @@ function main(): void {
 
     // The fallback is English BY NAME, not "the platform default" and not "whichever approved
     // language sorts first" — both would drift without failing.
+    /**
+     * ⛔ **THE REGISTRY MAY NOT CLAIM A TEMPLATE THAT WAS NEVER SUBMITTED.**
+     *
+     * `template-registry.ts` gates nothing — its whole job is the "template not in registry,
+     * this may fail" warning. So the one thing it must never do is assert that a template
+     * exists when it does not, which is precisely what it did: it registered every name in
+     * all five languages while only `en` and `fr` were ever submitted. Six send sites asked
+     * Meta for the missing ones and died, and the mechanism designed to shout about that
+     * stayed silent **because it had been told the template was there.**
+     *
+     * Behavioural, not a scan: the real registry is instantiated and every pair it claims is
+     * checked against the generated submission set.
+     */
+    assert('⛔ the template registry claims no language that was never submitted', () => {
+        const submitted = new Set(payloads.payloads.map(p => p.language));
+        const claimed = new TemplateRegistry().getAll();
+        if (claimed.length === 0) return false; // an empty registry would pass vacuously
+        const overclaimed = claimed.filter(t => !submitted.has(t.language));
+        if (overclaimed.length > 0) {
+            const langs = [...new Set(overclaimed.map(t => t.language))].join(', ');
+            console.error(`     ↳ registry claims unsubmitted languages: ${langs} (${overclaimed.length} entries)`);
+        }
+        return overclaimed.length === 0;
+    });
+
     assert('⛔ an unapproved language falls back to ENGLISH specifically', () =>
         templateLanguage('ar') === 'en' && templateLanguage('es') === 'en' && templateLanguage('pt') === 'en');
 
@@ -1097,9 +1150,19 @@ function main(): void {
      * PROOF that both halves bite, using the real dead tokens this check was written after —
      * one per failure mode. If either passes, the assertion above is not doing its job.
      */
-    assert('PROOF: an unregistered verb is caught (`rate:` — declared, handled by nobody)', () => {
-        const parsed = parseBotActionId(`rate:${ID}`);
-        return parsed === null || !keys.has(actionKeyOf(parsed).key);
+    /**
+     * ⚠ **This proof used `rate:` and had to be re-pointed within the hour** — another stream
+     * registered `rate` while this was being written, so the token stopped being dead and the
+     * proof went green for the wrong reason. Instructive rather than annoying: a bite proof
+     * anchored on a CURRENT defect expires the moment somebody fixes it, exactly like a count.
+     *
+     * `skip` is the durable choice: declared in `BOT_ACTION_VERBS` and registered by nobody
+     * **on purpose**, so it parses (proving the registry half of the check bites, not the
+     * parser half) and nobody is about to claim it.
+     */
+    assert('PROOF: a declared-but-unregistered verb is caught (`skip`, parses, no handler)', () => {
+        const parsed = parseBotActionId(`skip:${ID}`);
+        return parsed !== null && !keys.has(actionKeyOf(parsed).key);
     });
 
     assert('PROOF: a claimed verb with an illegal argument is caught (`tkt:reply:<id>`)', () =>

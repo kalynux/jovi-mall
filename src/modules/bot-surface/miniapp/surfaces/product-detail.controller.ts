@@ -11,6 +11,7 @@ import { browserImageUrl } from './browser-image-url';
 import { readProductDetail } from './product-detail.read';
 import { readProductRating, readProductReviewPage } from './product-reviews.read';
 import { readSimilarProductIds } from './similar-products.read';
+import { recentlyViewedService } from '../../../customers/services/recently-viewed.service';
 
 /**
  * `inAppProductDetail` — the screen's read side.
@@ -95,6 +96,25 @@ export class ProductDetailController {
          * same read must never extend an in-app session as a side effect of fetching data.
          */
         void inAppSurfaceStore.touch('pd', handle).catch(() => undefined);
+
+        /**
+         * ⭐ **Opening the screen IS the view** — the second of the two places a product is opened,
+         * beside the `open:pd` tap. Nothing was recording views from the bot at all before these
+         * two calls, so the recently-viewed list the support ladder reads to answer *"what was
+         * this customer looking at"* was never written.
+         *
+         * ⚠ **On opening, never on rendering a list** (owner's ruling): a search draws five to ten
+         * cards, and recording those would flood that list and make it less useful the more the
+         * customer browses. The tool's own description asks for the opposite; it is being corrected
+         * rather than followed.
+         *
+         * ⚠ Best-effort and side-effect-free for the caller, exactly like the `touch` above: a
+         * customer opening a product must never be shown a failure because remembering it failed.
+         * Re-opening the same product reorders the list and inserts nothing, so a refresh is cheap.
+         */
+        void recentlyViewedService
+            .record(session.customerId, session.productId)
+            .catch(() => undefined);
 
         /**
          * ⚠ **Exactly the fields `pd.html`'s contract names, and no more.** The read also carries

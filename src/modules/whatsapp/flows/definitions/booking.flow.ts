@@ -195,12 +195,18 @@ export function bookingSlotFlow(kind: InAppSurfaceKind): FlowDefinition {
                                 /** ⛔ The opaque slot handle. Re-verified server-side at confirm. */
                                 id: { type: 'string' },
                                 title: { type: 'string' },
+                                /**
+                                 * ⚠ **Present only on a capacity service** ("2 spots left").
+                                 * A one-person appointment has nothing to say here, and the row
+                                 * carries no description at all rather than an empty line — see
+                                 * `screens/booking.adapter.ts`.
+                                 */
                                 description: { type: 'string' },
                             },
                         },
                         __example__: [
-                            { id: 'slot_opaque_1', title: '14:00 – 15:00', description: '5 000 FCFA' },
-                            { id: 'slot_opaque_2', title: '15:00 – 16:00', description: '5 000 FCFA' },
+                            { id: 'slot_opaque_1', title: '14:00 – 15:00', description: '2 spots left' },
+                            { id: 'slot_opaque_2', title: '15:00 – 16:00' },
                         ],
                     },
                     confirmLabel: { type: 'string', __example__: 'Confirm' },
@@ -318,6 +324,10 @@ export function bookingPayFlow(kind: InAppSurfaceKind): FlowDefinition {
  * kind whose session opens it cannot drift apart — and so the suite exercises exactly what a
  * handset would be sent.
  */
+export const BOOKING_LIST_SCREEN = 'BOOKINGS';
+export const BOOKING_DAY_SCREEN = 'DAY';
+export const BOOKING_TIMES_SCREEN = 'TIMES';
+
 export const BOOKING_LIST_FLOW: FlowDefinition = bookingListFlow('bl');
 export const BOOKING_SLOT_FLOW: FlowDefinition = bookingSlotFlow('bk');
 export const BOOKING_PAY_FLOW: FlowDefinition = bookingPayFlow('bp');

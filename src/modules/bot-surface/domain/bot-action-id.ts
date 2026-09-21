@@ -275,26 +275,42 @@ export function bookActionId(productId: string): string {
  *
  * ⚠ **The argument is a literal, not an id, and that is not an oversight.** A customer has
  * exactly one open basket, so naming it would be inventing a parameter that could only ever be
- * wrong — the same reasoning that leaves `open:ol` and `open:sl` without a reference.
+ * wrong — the same reasoning that leaves `open:ol` without a reference.
  * `parseBotActionId` requires a non-empty argument, so the literal is what satisfies it.
+ *
+ * ⚠ **This cited `open:sl` as the second example until 2026-09-20, and `open:sl` DOES NOT
+ * EXIST.** No handler map claims it and nothing anywhere builds it: the store screen is real
+ * and is reached by a TOOL (`inapp_open_stores`), never by a tap. The reasoning was sound and
+ * one of its two examples was imaginary — which is how a reader comes away believing there is a
+ * store tap to maintain.
  */
 export function cartViewActionId(): string {
     return token('cart', 'view');
 }
 
 /**
- * `open:<surface>:<ref>` — **one verb for all four in-app screens.**
+ * `open:<surface>:<ref>` — **one verb for every in-app screen.**
  *
- * A verb per screen would have cost four entries in the closed set and four builders for what
- * is one action: *leave the chat and draw this properly*. The surface is the first argument
- * segment instead, which also means a fifth screen is a new SURFACE rather than a new VERB —
- * and a new verb is the thing that has to be documented, mapped and taught to the automation
- * layer.
+ * A verb per screen would have cost an entry in the closed set and a builder apiece for what is
+ * one action: *leave the chat and draw this properly*. The surface is the first argument
+ * segment instead, which also means a NEW screen is a new SURFACE rather than a new VERB — and
+ * a new verb is the thing that has to be documented, mapped and taught to the automation layer.
  *
- * ⚠ **Three of the five carry no reference at all.** The order listing, the store listing and
- * checkout are scoped by the caller's own identity, so naming an id would be inventing a
- * parameter that could only ever be wrong. `parseBotActionId` requires a non-empty argument,
- * so the bare surface name IS the argument — `open:ol`, not `open:ol:`.
+ * ⚠ **This said "all four screens", then "the five", and by 2026-09-20 there were EIGHT** —
+ * `pd pl ol sl co bl bk bp`. The counts were correct when written and nothing made them wrong
+ * out loud, which is the argument against counting in prose at all: the sentence now describes
+ * the rule and the type below is the list.
+ *
+ * ⚠ **The ones that carry no reference are scoped by the caller's own identity** — the order
+ * listing and checkout — so naming an id would be inventing a parameter that could only ever be
+ * wrong. `parseBotActionId` requires a non-empty argument, so the bare surface name IS the
+ * argument: `open:ol`, not `open:ol:`.
+ *
+ * ⚠ **A surface in this type is not the same thing as a TAP that reaches it.** Today a tap can
+ * ask for `pl`, `pd`, `ol` and `co`; `sl` is reached only by a tool; `bl` arrives with the
+ * bookings button; and `bk`/`bp` are minted server-side and are deliberately unreachable from a
+ * button at all. `test-bot-surface` § 20 is what keeps that honest — it compares every token
+ * this file can BUILD against every key the dispatcher ROUTES.
  *
  * ⚠ **`co` was added late, and the reason is worth keeping.** An earlier version of this type
  * excluded checkout on the grounds that "no tap-code should be able to open a screen that can

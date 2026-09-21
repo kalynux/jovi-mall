@@ -1,6 +1,6 @@
 import { publicCatalogService } from '../../catalog/services/public-catalog.service';
 import { botChrome } from '../domain/bot-chrome-copy';
-import { showMoreActionId } from '../domain/bot-action-id';
+import { nextPageActionId, showMoreActionId } from '../domain/bot-action-id';
 import { BOT_CHAT_LIST_MAX } from '../domain/bot-list-window';
 import { BotReplyIntent, WA_CAROUSEL_CARDS } from '../domain/channel-reply';
 import { BotProductCard, toBotProductCard } from '../domain/product-card';
@@ -270,6 +270,15 @@ export class ProductDisplayService {
                 miniAppUrl,
                 hasMore,
                 moreToken: hasMore ? showMoreActionId(setId) : null,
+                /**
+                 * ⚠ **`next:` is NOT a duplicate of `more:`, although today they behave
+                 * identically.** `more:` opens the in-app grid and falls back to the next page
+                 * of cards only because no screen origin is configured. On the day one is, it
+                 * starts opening the grid — a browser trip on WhatsApp until the Flows are
+                 * published — and in-chat paging disappears unless this token is already drawn.
+                 * Correct today, wrong on deployment day, with nothing to announce the change.
+                 */
+                nextToken: hasMore ? nextPageActionId(setId) : null,
                 labels: {
                     browse: botChrome('browseProductsButton', set.language),
                     buyNow: botChrome('buyNowButton', set.language),
@@ -288,6 +297,7 @@ export class ProductDisplayService {
                      */
                     similarItems: botChrome('similarItemsButton', set.language),
                     saveForLater: botChrome('saveForLaterButton', set.language),
+                    nextPage: botChrome('nextPageButton', set.language),
                 },
                 carousel: cards.length === WA_CAROUSEL_CARDS ? carouselTemplate() : null,
                 /**

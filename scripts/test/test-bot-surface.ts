@@ -510,6 +510,23 @@ function sourcesExcept(excludeSuffix: string): string[] {
  * ── NON-VACUITY COMES FIRST ─────────────────────────────────────────────────────────────
  * Every scan throws when it finds nothing. An empty ROUTED set satisfies "every routed key is
  * documented" for free, which is the shape that passes hardest once it has stopped working.
+ *
+ * ── ⚠ WHAT "DRAWN" MEANS HERE, AND WHAT IT DOES NOT ─────────────────────────────────────
+ * DRAWN means **a builder is called**, and that is NOT the only way a token reaches a
+ * customer. `notifications/catalog/customer-notification-catalog.ts` writes tokens as
+ * LITERALS carrying placeholders — `pay:rt:{{transactionId}}` (:292), `book:{{productId}}`
+ * (:622), `ord:{{orderId}}` (:1140) — because its ids do not exist until render time, so it
+ * cannot call a builder and this scan cannot see a single token it produces.
+ *
+ * Two consequences, opposite in direction:
+ *   · a verb drawn ONLY there reads here as never drawn — `book` and `pay` both did, while
+ *     both were live on real messages;
+ *   · a token written there for a verb nobody handles is invisible to this check entirely,
+ *     which is how TEN dead tokens survived in that file until a census read it by hand.
+ *
+ * The containment guard — a token literal may appear only in an allowlisted file — is what
+ * covers the second. Nothing here does, and this note exists so the next reader does not
+ * believe otherwise.
  */
 function botActionCoverage(
     readSource: (repoRelative: string) => string,
@@ -576,19 +593,62 @@ function botActionCoverage(
     if (everythingElse.length < 200_000) {
         throw new Error('coverage scan: the call-site haystack is too small to be the whole tree');
     }
+    /**
+     * ⛔ THE UNIT COUNTED MUST BE THE UNIT CLAIMED — and this guard got it wrong once.
+     *
+     * The dispatcher routes `open`, `yes` and `no` by the **(verb, sub-key) PAIR**; every other
+     * verb has one owner and routes by verb alone. The first version of this scan recorded the
+     * VERB for every builder, so a new sub-key of an already-routed verb was invisible: drawing
+     * `open:bl` with no handler left it green, because `open:co` was routed and satisfied the
+     * verb-level question.
+     *
+     * ⚠ Which means it would NOT have caught the defect it was written for. The close-account
+     * buttons were `yes:close` / `no:close`, and `yes:cd` and `yes:cnc` were already routed — so
+     * the guard would have passed while every tap answered the unknown-token sentence. Found by
+     * the bookings stream, whose own correct change exposed it.
+     */
+    const SUB_DISPATCHED = new Set(['open', 'yes', 'no']);
     const drawn = new Map<string, string>();
     for (const [fn, verb] of builders) {
-        if (new RegExp(`\\b${fn}\\(`).test(everythingElse)) drawn.set(verb, fn);
+        const calls = [...everythingElse.matchAll(new RegExp(`\\b${fn}\\(\\s*([^,)]*)`, 'g'))];
+        if (calls.length === 0) continue;
+        if (!SUB_DISPATCHED.has(verb)) {
+            drawn.set(verb, fn);
+            continue;
+        }
+        for (const call of calls) {
+            // The sub-key is a literal at every call site today (`'bl'`, `` `close:${ref}` ``).
+            // ⚠ One that is NOT resolvable is REPORTED, never skipped — skipping would restore
+            // the coarse behaviour as a silent default, which is the defect above.
+            const literal = call[1].match(/^['"`]([a-z]+)/);
+            if (!literal) {
+                problems.push(
+                    `SUB-KEY UNRESOLVABLE: ${fn}() is called with a non-literal first argument, `
+                    + `so "${verb}:?" cannot be checked against the handler maps`,
+                );
+                continue;
+            }
+            drawn.set(`${verb}:${literal[1]}`, fn);
+        }
     }
     if (drawn.size === 0) throw new Error('coverage scan: no builder call sites found anywhere');
+    if (![...drawn.keys()].some((k) => k.includes(':'))) {
+        throw new Error('coverage scan: no sub-dispatched pair resolved — the pair scan is not running');
+    }
 
     // ── The two failures ────────────────────────────────────────────────────────────────
-    const isRouted = (verb: string): boolean =>
-        routed.has(verb) || [...routed.keys()].some((k) => k.startsWith(`${verb}:`));
+    /**
+     * A PAIR is matched exactly — that is the whole point of the pair scan above. A plain verb
+     * is satisfied by its own key or by any pair under it, because a verb with one owner may be
+     * registered either way.
+     */
+    const isRouted = (key: string): boolean => (key.includes(':')
+        ? routed.has(key)
+        : routed.has(key) || [...routed.keys()].some((k) => k.startsWith(`${key}:`)));
 
-    for (const [verb, fn] of drawn) {
-        if (!isRouted(verb) && !NOT_DISPATCHED.has(verb)) {
-            problems.push(`DRAWN BUT NOT ROUTED: ${fn}() emits "${verb}:" and no handler map claims it`);
+    for (const [key, fn] of drawn) {
+        if (!isRouted(key) && !NOT_DISPATCHED.has(key.split(':')[0])) {
+            problems.push(`DRAWN BUT NOT ROUTED: ${fn}() emits "${key}:" and no handler map claims it`);
         }
     }
     for (const [key, stream] of routed) {
@@ -3291,7 +3351,7 @@ async function main(): Promise<void> {
             phone: '+237600124417',
             pendingEmail: { target: 'nouveau@example.com', expiresAt: expires },
             pendingPhone: null,
-        }, null);
+        }, null, null);
 
         return dto.emailMasked === 'j••••t@example.com'
             && dto.phoneMasked === '+2376••••4417'
@@ -3308,13 +3368,17 @@ async function main(): Promise<void> {
         const none = toBotContactState(
             { email: null, phone: '+237600124417', pendingEmail: null, pendingPhone: null },
             true,
+            // ⚠ No change link: these three assertions are about MASKING, not about links, and
+            // a null is the honest value here — it is what the projection receives when no
+            // storefront origin is configured, which is production today.
+            null,
         );
         const pendingUnproved = toBotContactState({
             email: null,
             phone: '+237600124417',
             pendingEmail: null,
             pendingPhone: { target: '+237600999888', expiresAt: new Date() },
-        }, false);
+        }, false, null);
 
         return none.phoneChangeProved === null
             && none.pendingPhone === null

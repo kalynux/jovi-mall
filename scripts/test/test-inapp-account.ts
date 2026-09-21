@@ -22,6 +22,8 @@ import fs from 'fs';
 import path from 'path';
 import { renderBotReplies, type BotReplyIntent } from '../../src/modules/bot-surface/domain/channel-reply';
 import type { BotProductCard } from '../../src/modules/bot-surface/domain/product-card';
+import { accountActionId, parseBotActionId } from '../../src/modules/bot-surface/domain/bot-action-id';
+import { toBotContactState } from '../../src/modules/bot-surface/dto/bot-projections';
 import {
     CONFIRMATION_REF_TTL_SECONDS,
     mintConfirmationRef,
@@ -983,6 +985,197 @@ function main(): void {
         const json = JSON.stringify(tg.body);
         return !json.includes('undefined') && !json.includes('sim:p1');
     });
+
+    console.log('\n── Paging: `next:` and `more:` are two controls, and both must survive ──');
+
+    /**
+     * ⚠ **THE DEFECT THIS PREVENTS IS INVISIBLE TODAY AND ARRIVES ON DEPLOYMENT DAY.** `more:`
+     * opens the in-app grid and currently falls back to the next page of cards, because no
+     * screen origin is configured — so `next:` looks redundant and drawing only `more:` looks
+     * correct. The day a screen origin exists, `more:` starts opening the grid (on WhatsApp, a
+     * link out to a browser until the Flows are published) and in-chat paging disappears, with
+     * nothing to announce it. Third member of that family today, after the language fallback
+     * and the template registry.
+     */
+    const SET = 'more:s1';
+    const pagedIntent = (withNext: boolean): BotReplyIntent => ({
+        kind: 'product_list',
+        text: '',
+        browsePrompt: 'Here is what I found.',
+        cards: [soldOutCard, { ...soldOutCard, productId: 'p2', similarToken: null, saveToken: null, buyToken: 'buy:p2:v2', addToken: 'add:p2:v2' }],
+        miniAppUrl: null,
+        hasMore: true,
+        moreToken: SET,
+        ...(withNext ? { nextToken: 'next:s1' } : {}),
+        labels: {
+            ...LABELS,
+            similarItems: 'Similar items',
+            saveForLater: 'Save for later',
+            ...(withNext ? { nextPage: 'Next page' } : {}),
+        },
+    });
+
+    assert('Telegram: the last card carries BOTH See more and Next page, on one row', () => {
+        const replies = renderBotReplies(pagedIntent(true), 'telegram', PRIVATE);
+        const rows = (replies[replies.length - 1].body.reply_markup as Markup).inline_keyboard!;
+        const paging = rows[rows.length - 1];
+        return paging.length === 2
+            && paging[0].callback_data === SET
+            && paging[1].callback_data === 'next:s1';
+    });
+
+    /**
+     * ⛔ On WhatsApp the pair CANNOT ride the last card: three reply buttons is the whole
+     * budget and an ordinary last card already spends it on Buy now, Add to cart and See more.
+     * A fourth is dropped without an error, so the two paging controls travel as their own
+     * message — the shape the carousel path has always used.
+     */
+    assert('⛔ WhatsApp: no card exceeds three buttons, and the paging pair is its own message', () => {
+        const replies = renderBotReplies(pagedIntent(true), 'whatsapp', '237600000000');
+        const interactives = replies.map((r) => (r.body as Record<string, any>).interactive);
+        const overCap = interactives.some((i) => (i?.action?.buttons?.length ?? 0) > 3);
+
+        const paging = interactives[interactives.length - 1];
+        const ids = paging.action.buttons.map((b: any) => b.reply.id);
+        return !overCap && ids.join(',') === `${SET},next:s1`;
+    });
+
+    assert('⛔ WhatsApp: the last CARD no longer carries See more when the pair moved off it', () => {
+        const replies = renderBotReplies(pagedIntent(true), 'whatsapp', '237600000000');
+        const cardMessages = replies.slice(0, -1);
+        return cardMessages.every((r) => {
+            const buttons = (r.body as Record<string, any>).interactive?.action?.buttons ?? [];
+            return !buttons.some((b: any) => b.reply?.id === SET);
+        });
+    });
+
+    /**
+     * The other half of the same rule: with no `next:` to draw, this is byte-for-byte the
+     * behaviour that shipped — See more on the last card, and no extra message.
+     */
+    assert('without a next token nothing changes: See more rides the last card, no extra message', () => {
+        const withNext = renderBotReplies(pagedIntent(true), 'whatsapp', '237600000000');
+        const without = renderBotReplies(pagedIntent(false), 'whatsapp', '237600000000');
+        const lastCard = (without[without.length - 1].body as Record<string, any>).interactive;
+        const ids = (lastCard.action?.buttons ?? []).map((b: any) => b.reply.id);
+        return without.length === withNext.length - 1 && ids.includes(SET);
+    });
+
+    /** The producer must actually mint it, or the whole control is theatre. See the seam guard. */
+    assert('⛔ the producer mints a next token whenever there is another page', () => {
+        const display = read('modules/bot-surface/services/product-display.service.ts');
+        return /nextToken: hasMore \? nextPageActionId\(setId\) : null/.test(display);
+    });
+
+    console.log('\n── Adding an address happens on the website, and the link has to work ──');
+
+    /**
+     * The owner's ruling (2026-09-20): a customer who wants to ADD a delivery address is sent
+     * to the storefront. Saving one needs a geocoded candidate, which needs a search, a picker
+     * and several turns — so the choice was the link over the feature, knowing it pushes
+     * somebody out of the conversation.
+     *
+     * ⚠ **Span**: `addressSection`'s body in `bot-profile.controller.ts`, from its declaration
+     * to the next top-level function. The controller reaches `customers/`, which hangs bare
+     * `ts-node` at import, so this is a scan — and it says so and names what it read.
+     */
+    const profileSource = read('modules/bot-surface/controllers/bot-profile.controller.ts');
+    const addrFrom = profileSource.indexOf('export async function addressSection(');
+    const addrTo = profileSource.indexOf('\nfunction ', addrFrom);
+    const addrSection = addrFrom >= 0
+        ? stripComments(profileSource.slice(addrFrom, addrTo > addrFrom ? addrTo : undefined))
+        : '';
+
+    assert('the scan found addressSection', () =>
+        addrSection.includes("rest === 'new'") && addrSection.includes('setSavedListReply'));
+
+    assert('⛔ the Add control is a LINK that works, never a button that apologises', () =>
+        /kind: 'link'/.test(addrSection)
+        && addrSection.includes("botChrome('addAddressButton'"));
+
+    /**
+     * ⛔ The ruling's own rule: the path comes from the table `verify:landing-routes` checks
+     * against the storefront's real routes. A typed literal is invisible to that check, and
+     * the last two copies of a storefront path in this repository disagreed for months.
+     */
+    assert('⛔ the destination comes from surfacePath(), never a typed path', () =>
+        addrSection.includes("surfacePath('addresses')")
+        && !/['"`]\/shop\//.test(addrSection));
+
+    assert('an empty address book goes straight to the link — one tap, not an empty list', () =>
+        /rows\.length === 0[\s\S]{0,120}addressSection\(req, res, 'new'\)/.test(addrSection));
+
+    assert('a non-empty book keeps its addresses first and appends the Add row last', () =>
+        /\.\.\.rows,[\s\S]{0,200}id: 'new'/.test(addrSection));
+
+    /** The row's token must round-trip through the parser, or the row is decoration. */
+    assert("the Add row's token is `acct:addr:new` — 13 bytes, and it parses", () => {
+        const token = accountActionId('addr', 'new');
+        const parsed = parseBotActionId(token);
+        return token === 'acct:addr:new'
+            && Buffer.byteLength(token, 'utf8') === 13
+            && parsed?.verb === 'acct' && parsed.argument === 'addr:new';
+    });
+
+    console.log('\n── Changing an email or a phone: the website, as DATA and not a button ──');
+
+    /**
+     * The owner's ruling (2026-09-20), and the shape it takes here is the whole decision:
+     * **the link travels as data, never as a rendered control.** A reply carrying a control
+     * REPLACES the model's sentence rather than joining it, so a button would cost the
+     * customer the answer they usually came for — *"what email do you have for me?"* — in
+     * order to answer the rarer one. As data, one sentence answers both.
+     */
+    const contactState = toBotContactState(
+        { email: 'jean@example.com', phone: '+237600000000', pendingEmail: null, pendingPhone: null },
+        null,
+        'https://wi-mall.com/fr/shop/account/security',
+    );
+
+    assert('the contact state carries the change link as DATA, beside the masked values', () =>
+        contactState.changeUrl === 'https://wi-mall.com/fr/shop/account/security'
+        && contactState.emailMasked !== null
+        && contactState.phoneMasked !== null);
+
+    assert('⛔ a deployment with no storefront offers nothing rather than a broken link', () =>
+        toBotContactState(
+            { email: 'jean@example.com', phone: null, pendingEmail: null, pendingPhone: null },
+            null,
+            null,
+        ).changeUrl === null);
+
+    /**
+     * ⚠ **Span**: `bot-contact.controller.ts` whole, for two properties it must have and one
+     * it must NOT. Asserted non-empty first.
+     */
+    const contactSrc = stripComments(read('modules/bot-surface/controllers/bot-contact.controller.ts'));
+
+    assert('the scan found the contact controller', () =>
+        contactSrc.includes('toBotContactState') && contactSrc.includes('contactChangeUrl'));
+
+    assert('⛔ the destination is surfacePath(\'security\'), never a typed path', () =>
+        contactSrc.includes("surfacePath('security')") && !/['"`]\/shop\//.test(contactSrc));
+
+    assert('every answer that reports contact state carries the link — all three of them', () => {
+        const calls = contactSrc.match(/toBotContactState\(/g) ?? [];
+        const withUrl = contactSrc.match(/toBotContactState\([^;]*contactChangeUrl\(/g) ?? [];
+        return calls.length === 3 && withUrl.length === 3;
+    });
+
+    /**
+     * ⛔ **THE NEGATIVE PROPERTY, and it is the one most likely to be "fixed" later.** There
+     * is deliberately NO bare `acct:contact` tap: nothing would draw it, and a token no button
+     * emits is the defect family this round exists to remove — not a step toward the feature.
+     * The section answers `em:resend`, `em:cancel` and `ph:cancel`, and refuses everything
+     * else, INCLUDING the empty argument.
+     */
+    assert('⛔ there is no bare `acct:contact` tap — a control nothing draws is the defect', () =>
+        !/case '':/.test(contactSrc)
+        && /switch \(rest\)[\s\S]*default:\s*throw unknownBotAction\(\)/.test(contactSrc));
+
+    /** The asymmetry the ruling called out: Cancel keeps working on a pending change. */
+    assert('a pending change keeps its Cancel, so nothing reads as half-built', () =>
+        contactSrc.includes("accountActionId('contact', field === 'email' ? 'em' : 'ph', 'cancel')"));
 
     console.log('\n── The seam: every label the renderer can draw is one the producer supplies ──');
 

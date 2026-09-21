@@ -33,6 +33,18 @@ export type CompletionPlan =
      * meantime must not be invited into.
      */
     | { kind: 'invite_reply'; productId: string }
+    /**
+     * An appointment was made or moved. The chat acknowledges it — content-free, plus a **My
+     * bookings** button — because the platform's own booking notification picks ONE secondary
+     * channel (telegram > email > whatsapp) and is mutable by a preference, so a WhatsApp
+     * customer with a verified email could finish the form and hear nothing in the conversation
+     * they booked from.
+     *
+     * ⚠ **`moved` carries through**, because telling somebody their appointment is "booked" when
+     * they moved one reads as a second appointment. It comes from the SESSION's own knowledge —
+     * a `bk` handle that named a booking to move — never from anything the form sent.
+     */
+    | { kind: 'booking_ack'; moved: boolean }
     /** The session has lapsed: say so, in words, and open nothing. */
     | { kind: 'expired' }
     /** Nothing for the chat to add. */
@@ -106,6 +118,21 @@ export function planCompletion(input: {
             return { kind: 'silent' };
         }
         return { kind: 'added_to_cart' };
+    }
+
+    /**
+     * The booking form. Its receipt was shown on the closing screen while the session was live;
+     * this is the conversation's own acknowledgement, and it names nothing about the appointment.
+     */
+    if (input.completedScreen === 'bk') {
+        if (outcome !== 'booked' && outcome !== 'moved') return { kind: 'silent' };
+        /**
+         * ⚠ **No sender check is possible and none is needed.** `confirmBooking` consumed the
+         * handle, so there is no session left to compare against — and the sentence discloses
+         * nothing, while the button resolves against whoever is actually asking rather than
+         * against the completion.
+         */
+        return { kind: 'booking_ack', moved: outcome === 'moved' };
     }
 
     if (input.completedScreen !== 'pl') return { kind: 'silent' };

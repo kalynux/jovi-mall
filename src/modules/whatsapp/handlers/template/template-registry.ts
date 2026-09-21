@@ -1,11 +1,18 @@
 /**
  * Template Registry
- * 
+ *
  * NO MAGIC STRINGS!
- * 
+ *
  * All WhatsApp Business templates must be registered here.
  * Templates must be pre-approved in WhatsApp Business Manager.
+ *
+ * ⚠ **This registry is ADVISORY — it gates nothing.** A send whose template is absent from it
+ * still goes out; the only consequence is a `console.warn` from `template-validator.ts`. That
+ * makes it an early-warning system rather than a guard, and it means the ONE thing it must
+ * never do is claim a template exists when it does not. See `registerDefaultTemplates` for
+ * the incident where it did exactly that.
  */
+import { TEMPLATE_LANGUAGES, META_LANGUAGE_CODE } from '../../../notifications/catalog/notification-i18n';
 
 export interface RegisteredTemplate {
     /** Template name (as registered in WhatsApp Business Manager) */
@@ -89,8 +96,34 @@ export class TemplateRegistry {
      * exists to surface.
      */
     private registerDefaultTemplates(): void {
-        // Meta language codes the notification templates are approved in.
-        const languages = ['en', 'fr', 'pt_PT', 'es', 'ar'];
+        /**
+         * ⛔ **DERIVED, never a literal list — this line used to say
+         * `['en', 'fr', 'pt_PT', 'es', 'ar']` and it was FALSE.**
+         *
+         * The templates are approved in English and French only. Registering all five meant
+         * this registry asserted that a Portuguese, Spanish or Arabic template existed, and
+         * **that false assurance is why a real defect survived for months.**
+         *
+         * ── What this registry is for, and how the lie disabled it ──────────
+         *
+         * It gates nothing. Its entire job is the warning in `template-validator.ts`:
+         * *"Template not in registry … this may fail if template is not approved."* Six send
+         * sites named the recipient's own language, so for `pt`/`es`/`ar` they asked Meta for
+         * a template that does not exist and the send died — including the phone-verification
+         * OTP, which made it impossible for those users to verify a number at all. The one
+         * mechanism designed to shout about exactly that stayed silent, **because it had been
+         * told the template was there.** An assurance mechanism that lies is worse than none:
+         * it converts a missing check into a passed one.
+         *
+         * So the list now comes from `TEMPLATE_LANGUAGES`, the same constant the send path's
+         * `templateLanguage()` fallback reads. One record of one fact. Adding a third approved
+         * language is one edit there and this follows; `test:customer-notifications` asserts
+         * both against what the generator actually submitted.
+         *
+         * ⚠ **Registering FEWER languages is the point, not a regression.** A send in an
+         * unapproved language should warn loudly — that warning is the feature.
+         */
+        const languages = TEMPLATE_LANGUAGES.map((lang) => META_LANGUAGE_CODE[lang]);
 
         // [name, body param count, has URL button, description]
         const notificationTemplates: Array<[string, number, boolean, string]> = [

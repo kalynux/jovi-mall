@@ -27,7 +27,7 @@ import {
     setSavedListReply,
     type SavedListRow,
 } from '../domain/bot-saved-list-reply';
-import { windowForChat } from '../domain/bot-list-window';
+import { botStorefrontLink, surfacePath, windowForChat } from '../domain/bot-list-window';
 import {
     BotAddAddressSchema,
     BotAddressParamSchema,
@@ -424,14 +424,61 @@ export async function addressSection(req: Request, res: Response, rest: string):
 
     if (rest === '') {
         /**
-         * ⚠ **An empty book gets NO reply, on purpose.** There is no control to draw — the
-         * list IS the control — and a rendered sentence here would be this surface narrating a
-         * state the model already holds as data and describes better in the customer's own
-         * words. The same rule as a contact state with nothing pending, and as the basket in
-         * § 14.3. It is also why there is no `addressBookEmpty` copy key to go stale.
+         * ⚠ **An empty book goes STRAIGHT to the link**, rather than drawing an empty list or
+         * saying nothing. Until the owner's ruling there was no control to offer here, so this
+         * answered with data and let the model word it; now there is exactly one useful thing a
+         * customer with no addresses can do, and it is one tap rather than two.
          */
-        if (rows.length > 0) setSavedListReply(req, language, 'addr', 'addressBookPrompt', rows);
+        if (rows.length === 0) {
+            await addressSection(req, res, 'new');
+            return;
+        }
+
+        /**
+         * ⚠ **The Add row is LAST, after the addresses themselves.** A list is read top down and
+         * the rows the customer came for are their own; an action ahead of them would be the
+         * first thing tapped by someone scanning quickly. WhatsApp caps a list at ten rows and
+         * the chat window caps addresses below that, so the row cannot be pushed off the end.
+         */
+        setSavedListReply(req, language, 'addr', 'addressBookPrompt', [
+            ...rows,
+            {
+                id: 'new',
+                title: botChrome('addAddressButton', language),
+                isDefault: false,
+                mayBeDefault: false,
+            },
+        ]);
         sendSuccess(res, rows);
+        return;
+    }
+
+    /**
+     * `acct:addr:new` — adding an address happens on the WEBSITE (owner's ruling, 2026-09-20).
+     *
+     * ── WHY A LINK AND NOT A FLOW ───────────────────────────────────────────
+     * Saving an address needs a geocoded candidate, which needs a search, which needs typed
+     * text and a picker — a multi-turn flow this surface deliberately does not own. The owner
+     * chose the link over the feature, knowing it pushes somebody out of the conversation.
+     *
+     * ⚠ **It is a LINK THAT WORKS, never a button that apologises.** A control tapped only to
+     * be told "not available here" spends the customer's patience to deliver nothing; that is
+     * the shape this round has been removing, not adding.
+     *
+     * ⚠ The path comes from `surfacePath('addresses')`, never a literal — `verify:landing-routes`
+     * checks that table against the storefront's own routes, and a typed path is invisible to it.
+     */
+    if (rest === 'new') {
+        const url = botStorefrontLink(surfacePath('addresses'), language);
+        if (url) {
+            setBotReply(req, {
+                kind: 'link',
+                text: botChrome('addressBookPrompt', language),
+                label: botChrome('addAddressButton', language),
+                url,
+            });
+        }
+        sendSuccess(res, { section: 'addr', add: 'storefront', url });
         return;
     }
 

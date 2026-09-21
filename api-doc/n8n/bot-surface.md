@@ -2112,6 +2112,17 @@ button, and never silently locked at a price the customer never saw.
 expired, window moved, already ordered. ⛔ An expired deal must never read as though it never
 happened.
 
+#### Bookings
+
+| token | drawn on | what it does | reply | data |
+|---|---|---|---|---|
+| `open:bl` | **My bookings**, under a booking receipt | the customer's own appointments as a screen | a screen button; without screens the storefront's bookings page — **that second case is production today** | `{ handle, opened: "bookings" }`. ⛔ `handle` is a credential — § 19.5 |
+
+⚠ **`bl` is the only bookings screen a BUTTON can name**, and the other two are absent from this
+table on purpose. A picker handle (`bk`) holds a slot on a shop's calendar and a payment handle
+(`bp`) moves money, so both are minted **server-side on the tap that opens them** and never sit
+in a chat history waiting to be pressed. The same rule keeps a checkout handle out of `open:co`.
+
 #### Reviews
 
 Three arities of one verb, told apart by how many parts the argument has — the same way

@@ -30,4 +30,14 @@ export interface FlowCopy {
     flowPhoneLabel: string;
     /** Under-field hint: leave empty for the account number, or include the country code. */
     flowPhoneHint: string;
+    /**
+     * ── THE TWO BOOKING STRINGS A FORM NEEDS AND A PAGE DOES NOT ────────────
+     * Every other word on the booking screens comes from `readBookingPicker`'s own `copy`, which
+     * the Telegram pages read too — one table, so the two channels cannot word one screen
+     * differently. These two are here because **a Flow screen has a footer button and a web page
+     * has not**: a page's list rows are tapped directly, so nothing there ever says "Open" or
+     * "See times".
+     */
+    bookingOpen: string;
+    bookingSeeTimes: string;
 }

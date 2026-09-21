@@ -9,7 +9,13 @@ import { productBookingService } from '../../catalog/domain/services/booking/pro
 import { PaymentOrchestratorService } from '../../payments/services/payment-orchestrator.service';
 import { PaymentTransactionModel } from '../../payments/models/payment-transaction.model';
 import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
-import { windowForChat } from '../domain/bot-list-window';
+import { surfacePath, windowForChat } from '../domain/bot-list-window';
+import { openInAppScreen } from './bot-inapp.controller';
+import {
+    BotActionHandlers,
+    ParsedBotAction,
+    unknownBotAction,
+} from '../domain/bot-action-dispatch';
 import {
     BotBookingPaymentDto,
     toBotBookingDto,
@@ -449,6 +455,53 @@ export class BotBookingController {
         sendSuccess(res, toBotBookingDto(booking));
     });
 }
+
+/**
+ * `open:bl` — the customer's own appointments, on a screen.
+ *
+ * ── ⚠ THE DEGRADATION IS THE PATH THAT ACTUALLY RUNS ────────────────────────
+ * `BOT_MINIAPP_BASE_URL` is unset in production, so `inAppScreenUrl` answers null and this falls
+ * back to the storefront's own bookings page. With a NULL fallback it would render no control at
+ * all — a sentence with nothing to press — which is precisely the defect `inapp_open_product`
+ * shipped with. The path comes from `surfacePath('bookings')` rather than a literal, so the
+ * button's destination cannot drift from the `moreUrl` reported on the turn that drew the list.
+ *
+ * ⚠ **`openInAppScreen` rather than a hand-rolled mint.** The five fields binding a screen
+ * session to a conversation are read there from the request envelope and nowhere else, so a
+ * session can only be addressed at the chat that asked for it.
+ *
+ * ⚠ **No argument.** A customer has exactly one set of appointments and the session is scoped to
+ * them, so a reference here could only ever be somebody else's — `parseBotActionId` gives this
+ * verb an empty argument and anything else is an unknown tap.
+ */
+async function bookingsScreenTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    if (action.argument !== '') throw unknownBotAction();
+
+    const handle = await openInAppScreen(req, {
+        payload: { kind: 'bl' },
+        fallbackPath: surfacePath('bookings'),
+        labelKey: 'myBookingsButton',
+        textKey: 'bookingsScreenPrompt',
+    });
+
+    sendSuccess(res, { handle, opened: 'bookings' });
+}
+
+/**
+ * ⭐ **The keys this stream answers, for the dispatcher's registry.**
+ *
+ * One map per stream, as `bot-action-dispatch.ts` requires, exported rather than registered here
+ * so the registry stays the one place a reader can see every routed key.
+ *
+ * ⚠ **This map and the button that emits `open:bl` landed in the SAME change, button last.** A
+ * drawn token with no handler answers the unknown-tap sentence, and Telegram reports nothing for
+ * an unhandled callback — so from the customer's side it is silence. That shipped once already
+ * with the close-account buttons; `test-bot-surface` § 20 now compares every DRAWN token against
+ * every ROUTED key, and would fail `DRAWN BUT NOT ROUTED` naming the builder.
+ */
+export const BOOKING_ACTION_HANDLERS: BotActionHandlers = Object.freeze({
+    'open:bl': bookingsScreenTap,
+});
 
 /**
  * The id behind a reference, whether or not it was populated.

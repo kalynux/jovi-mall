@@ -7,6 +7,7 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { publicCatalogService } from '../../catalog/services/public-catalog.service';
 import { wishlistService } from '../../customers/services/wishlist.service';
+import { recentlyViewedService } from '../../customers/services/recently-viewed.service';
 import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
 import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { botChrome } from '../domain/bot-chrome-copy';
@@ -409,7 +410,33 @@ async function handleOpenProductTap(req: Request, res: Response, action: ParsedB
         labelKey: 'openButton',
     });
 
+    recordProductView(botCallerOf(req).customerId, productId);
+
     sendSuccess(res, { opened: 'product', productId });
+}
+
+/**
+ * Remember that this customer opened this product.
+ *
+ * ── ⚠ ON OPENING, NEVER ON RENDERING — AND THE TOOL'S OWN DESCRIPTION SAID OTHERWISE ──
+ * `recently_viewed_record` is `flow_only` and its description asks the flow that RENDERS product
+ * cards to call it. That was rejected deliberately (owner's ruling, 2026-09-20): a single search
+ * draws five to ten cards, so recording on render floods the very list the support ladder reads to
+ * answer *"what was this customer looking at"* — and makes it less useful the more the customer
+ * browses. Opening a product is the act that means something; being shown one in a grid is not.
+ *
+ * ⚠ **Nothing was calling it at all**, from any flow, so the list the ladder reads was never
+ * written from the bot. This call and the product screen's data read are the two that fix it.
+ *
+ * ⚠ **Best-effort, and it must stay that way.** A remembered view is a convenience; the tap's job
+ * is to open the product. `record` throws for a product that has gone off sale, and that must cost
+ * the customer nothing — so the failure is logged and swallowed, exactly as the screen session's
+ * `touch` is.
+ */
+function recordProductView(customerId: string, productId: string): void {
+    void recentlyViewedService.record(customerId, productId).catch((error: unknown) => {
+        console.warn('[BotSurface] could not record a product view', error);
+    });
 }
 
 /**

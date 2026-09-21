@@ -15,6 +15,23 @@
  *   § 3  every token it emits is a key the dispatcher actually routes
  *   § 4  the maintenance window: mode-aware, and `details.mode` survives the boundary
  *   § 5  labels are translated and fit the channel that caps hardest
+ *   § 6  ⛔ the maintenance gate is still mounted, once, in the right place in `app.ts`
+ *
+ * ── ⛔ TWO LESSONS THIS SUITE WAS BOUGHT WITH ───────────────────────────────
+ *
+ * **1 · A CATEGORY IS DERIVED FROM A STATUS, so reasoning about categories is reasoning
+ * about a number somebody chose at a throw site you have not read.** § 2 exists because
+ * `BOT_IDENTITY_UNRESOLVED` is raised at **404** and therefore derives `not_found` — the one
+ * category that offers Browse — on the error raised for a customer the platform could not
+ * identify. Every bot route is behind `requireBotIdentity`, so the table would have answered
+ * a dead end with the same dead end, one tap later. No amount of thinking about what
+ * `not_found` *means* would have found it; it took opening `bot-identity.service.ts:210`.
+ *
+ * **2 · A PROOF OF THE ORDER IS NOT A PROOF THE THING IS THERE.** §§ 1–5 and the mount-order
+ * harness all passed against an `app.ts` from which the maintenance gate had been deleted
+ * outright, because none of them read `app.ts`. § 6 is the cheap assertion that does.
+ * ⚠ Generalise it before writing the next guard: **a test that builds its own subject cannot
+ * see the real subject going missing.**
  *
  * § 2 and § 3 are the two that matter. Both answer the same question from opposite ends —
  * *can the customer actually use the thing we just offered them?* — and a table can be
@@ -333,6 +350,80 @@ function main(): void {
         recovery(ERROR_CODES.BOT_PRODUCT_LIST_EXPIRED, ERROR_CATEGORIES.NOT_FOUND).text === SENTENCE
         && recovery('ANY_CODE', ERROR_CATEGORIES.INTERNAL).text === SENTENCE
         && recovery(null, null).text === SENTENCE);
+
+    console.log('\n── § 6 · The gate is still mounted, once, in the right place ──');
+
+    /**
+     * ⛔ **THE ASSERTION THAT EXISTS BECAUSE THE FIX NEARLY BROKE THE THING IT FIXED.**
+     *
+     * Applying the mount-order change, the first attempt replaced the block around
+     * `app.use(maintenanceModeMiddleware)` and did not put the gate back — which would have
+     * disabled maintenance mode platform-wide. **Every proof still passed**, because the
+     * harness wires the middleware itself and never reads `app.ts`. It was caught by hand.
+     *
+     * So this reads the real file. The property is not "the order is right" — that was always
+     * provable elsewhere — it is **"the gate is still there at all"**.
+     *
+     * ⚠ **Comments are stripped first — as a BELT, and the honest measurement is this.**
+     * `app.ts` names `maintenanceModeMiddleware` four times: the import, two comments
+     * explaining what sits either side of it, and the mount. So **a guard that counted the
+     * SYMBOL would find four and fail on correct code.** The `app.use(…)` form below finds
+     * exactly one **with or without** the stripping, measured — so today the stripping changes
+     * nothing, and it is kept for the case this codebase makes likely rather than
+     * hypothetical: a comment that quotes the mount it is describing. There is no such
+     * comment in `app.ts` right now; there are several elsewhere in this repository.
+     *
+     * ⚠ That distinction is written out because the first version of this comment claimed the
+     * stripping was load-bearing and that a naive count "finds three mounts". Both were false
+     * — wrong number, wrong regex — in a guard that was itself correct. **A wrong example
+     * inside a right guard is how the guard gets weakened later**, by somebody who tests the
+     * comment, finds it does not hold, and concludes the check is junk.
+     */
+    const appSrc = fs
+        .readFileSync(path.join(__dirname, '../../src/app.ts'), 'utf8')
+        .replace(/\r\n/g, '\n');
+    const appCode = appSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+
+    assert('app.ts was read and has mounts (non-vacuity)', () =>
+        appCode.length > 500 && appCode.includes('app.use('));
+
+    /**
+     * ⚠ **Matched as a PROPERTY, not an idiom.** Whitespace, a trailing semicolon and an
+     * `app.use(x, maintenanceModeMiddleware)` form are all the same fact; pinning the exact
+     * spelling would accuse a correct rewrite of being a breach.
+     */
+    const mountsOf = (needle: string): number[] => {
+        const out: number[] = [];
+        const re = new RegExp(`app\\s*\\.\\s*use\\s*\\([^)]*\\b${needle}\\b`, 'g');
+        for (const m of appCode.matchAll(re)) out.push(m.index ?? -1);
+        return out;
+    };
+
+    const gate = mountsOf('maintenanceModeMiddleware');
+    const reply = mountsOf('attachBotReply');
+    const envelope = mountsOf('attachBotEnvelope');
+    const api = appCode.search(/app\s*\.\s*use\s*\(\s*['"]\/api['"]/);
+
+    assert('⛔ the maintenance gate is mounted EXACTLY once', () => gate.length === 1);
+
+    assert('the two bot mounts are present, once each', () =>
+        reply.length === 1 && envelope.length === 1);
+
+    /**
+     * The order the whole fix depends on: the bot surface must be able to answer a refusal the
+     * gate is about to make, and the gate must still run before any business route.
+     */
+    assert('⛔ bot mounts → maintenance gate → /api, in that order', () =>
+        reply[0] > 0
+        && reply[0] < gate[0]
+        && envelope[0] < gate[0]
+        && gate[0] < api
+        && api > 0);
+
+    /** ⚠ Bot-prefixed, never app-wide — what makes every other route byte-identical. */
+    assert('the two bot mounts are scoped to the bot prefix, not app-wide', () =>
+        [reply[0], envelope[0]].every((at) =>
+            appCode.slice(at, at + 120).includes('BOT_SURFACE_PREFIX')));
 
     console.log(
         failed === 0
