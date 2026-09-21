@@ -209,6 +209,44 @@ const mutProp = CAI.replace("$('recall awaiting').item.json || {}).awaitingCarry
 check(S6, 'guard bites — compose reading a different property loses the carry',
   mutProp !== CAI && !nextTurn(mutProp, written).includes('awaitingReply') && carried.includes('awaitingReply'));
 
+// ── § 4.8 · an `awaiting…` flag is read the right way round ──────────────────
+const S8 = '§ 4.8 · the awaiting flag means the CUSTOMER is expected';
+const CTI = FIX['compose tap input'];
+const LIVE_CTI = LIVE_NOW.nodes['compose tap input'].parameters.jsCode;
+const tapNote = (body, data, { kind = 'token', success = true } = {}) => runCode(body, {
+  nodes: {
+    Inbound: [j({ channel: 'whatsapp', externalId: '237600000000', messageId: 'tap-1', kind })],
+    'product action': [j(success ? { success: true, data } : { success: false, error: { customerMessage: 'That request is closed.' } })],
+  },
+  input: [j({ firstMessage: null })],
+})[0].json.agentInput;
+const REPLY_TAP = { ticketId: '6ab0c501865937d254d5bff5', subject: 'Something else: A general question', status: 'open', awaitingReply: true };
+
+const replyNote = tapNote(CTI, REPLY_TAP);
+check(S8, '⭐ the Reply tap (exec 1502) tells the model the platform waits for the CUSTOMER, and to ask for it',
+  replyNote.includes('WAITING FOR THE CUSTOMER') && replyNote.includes('(awaitingReply)') && replyNote.includes('do not report a status'), replyNote);
+check(S8, 'the data still reaches the model, before the ask', replyNote.indexOf('6ab0c501865937d254d5bff5') > -1 && replyNote.indexOf('6ab0c501865937d254d5bff5') < replyNote.indexOf('WAITING'));
+for (const [name, data, opts] of [
+  ['an ordinary data tap (no flag)', { cartCount: 2 }, {}],
+  ['a flag present but FALSE', { awaitingReply: false }, {}],
+  ['a key that merely mentions the word', { notAwaiting: true }, {}],
+  ['a refused tap', null, { success: false }],
+  ['a typed turn (not a tap)', { awaitingReply: true }, { kind: 'text' }],
+]) {
+  check(S8, `unchanged against the LIVE node — ${name}`, tapNote(CTI, data, opts) === tapNote(LIVE_CTI, data, opts));
+}
+// The two nodes that read the flag must agree on which taps are questions.
+const armsCarry = (data) => evalExpr(N46['awaiting answer?'].parameters.conditions.conditions[0].leftValue, { json: { success: true, data } }) === true;
+const asks = (data) => tapNote(CTI, data).includes('WAITING FOR THE CUSTOMER');
+const samples = [REPLY_TAP, { awaitingCancellationReason: true }, { awaitingSomethingNew: true }, { cartCount: 1 }, { awaitingReply: false }, { notAwaiting: true }, {}];
+check(S8, "⭐ it asks exactly when `awaiting answer?` arms the carry — the two readers of the flag never disagree",
+  samples.every((d) => asks(d) === armsCarry(d)));
+check(S8, 'no backslash in the body', CTI.split(BS).length - 1 === 0);
+let ctiAt = 0; while (CTI[ctiAt] === LIVE_CTI[ctiAt]) ctiAt += 1;
+check(S8, 'the live body is otherwise untouched (one contiguous change)', CTI.endsWith(LIVE_CTI.slice(LIVE_CTI.indexOf("  }\n}\n\nreturn [{ json:"))));
+const mutAsk = CTI.replace("      + ask\n", '');
+check(S8, 'guard bites — without the ask, the Reply tap is reported as a status again', mutAsk !== CTI && !tapNote(mutAsk, REPLY_TAP).includes('WAITING FOR THE CUSTOMER'));
+
 // ── § 5.3 · the token paragraph for v2 ───────────────────────────────────────
 const S7 = '§ 5.3 · the token paragraph for v2';
 const { TOKEN_PARA_53 } = require('./build-live-fixes');

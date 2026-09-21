@@ -20,6 +20,16 @@ connection changed. Times UTC. Each row's previous version is its rollback.
 | 06:10:39 | `c36d16e7` | **§ 5.2** — the token paragraph (below) | `run-deployed.js` 67/0 |
 | 07:02:09 | `abf83805` | **§ 4.6** — the awaiting carry: 4 nodes, 6 wiring changes, `compose agent input` = live + § 4.6 layer, the two filing rules in RULES. 61 → 65 nodes | `run-deployed.js` 112/0 |
 | 07:37:39 | `0ed551f3` | **§ 5.3** — the token paragraph, rewritten for the v2 token (below) | `run-deployed.js` 117/0 |
+| 07:44:06 | `1089e871` | **§ 4.8** — `compose tap input`: an `awaiting…` flag means the platform waits for the CUSTOMER (below) | `run-deployed.js` 128/0 |
+
+**§ 4.8 · the flag was read the wrong way round.** Exec 1502: the support-request Reply tap
+handed the model `awaitingReply: true` with "act on it", and it answered *"no reply has come in
+on it yet — support still needs to pick it up, nothing more you need to do"* — it took the
+REQUEST to be awaiting support. The name allows both readings. When any `data` key starting
+`awaiting` is `true`, the note now says the platform is **waiting for the customer** and to ask
+for it in one sentence. Same predicate as `awaiting answer?`, and the harness asserts the two
+agree on every sample — the node that asks and the node that remembers can never disagree about
+which taps are questions.
 
 **§ 5.3 · § 5.2 did not hold, and the fix moved to the backend.** On the owner's handset at
 07:10 UTC (exec 1505) the § 4.6 carry **worked** — `recall awaiting` handed over ticket
