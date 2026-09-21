@@ -1,6 +1,6 @@
 # n8n deploy-day change set — bot rich-UI, round 2
 
-**Status: ⚙ PARTLY APPLIED (2026-09-21) — see the log below.** Written 2026-09-19 by session
+**Status: ✅ APPLIED (2026-09-21) — every section except § 8.5 (declined by the owner) and § 13 (the owner's call). See the log below.** Written 2026-09-19 by session
 backend-aa for coordinator backend-ba as a specification; n8n was only read while writing it.
 Every node change below is applied after the backend it depends on is deployed, diffed by the
 coordinator before publishing — the procedure `N8N-FIX-A3-DROPPED-CARDS.md` § 4 established.
@@ -27,6 +27,7 @@ connection changed. Times UTC. Each row's previous version is its rollback.
 | 11:53:10 | `97073c59` | **§ 4.9** — a waiting tap files nothing; a file reference is not reused after its turn (below). `compose tap input` + the prompt's FILES rule | `run-deployed.js` 191/0 |
 | 12:33:37 | `926d6353` | **§ 8.1–8.3** — `bargain key change?` + four Redis nodes, a dead end off `product action` (below). 68 → 73 nodes | `run-deployed.js` 227/0 |
 | 12:35:22 | bargain `58c25a1a` | **§ 8.4 + § 10** — `UP-wi-mall-bargain` (`lJdli0uwOtWBGx5R`): `decide send` prefers `data.outbound`; both sends lose `neverError`; `send whatsapp` reads `WHATSAPP_API_URL`. Rollback `430b3eba` | `run-deployed.js` 227/0 |
+| 15:39:54 | `754ad009` | **§ 4.10** — the waiting note names WHAT it waits for, derived from the flag (below) | `run-deployed.js` 238/0 |
 
 **§ 3 · shipped MERGED, not as specified.** § 3.2 was written against `1997c757`, before the
 owner's Saturday change routed both send nodes' error output to `report channel down` (a direct
@@ -52,9 +53,31 @@ each arrived in order, so the ordering is proven on a real turn and no longer wa
 page. ⏳ **Still unexercised live:** a REFUSED send inside the loop, i.e. the report path, which
 only a real refusal can show; the harness walks it and its mutants bite.
 
+**§ 4.10 · § 4.9 held on tools, not on words.** On the owner's retest (15:33 UTC) the model called no
+tool on any of the three taps — § 4.9's half held. But on Telegram (exec 1609) it answered *"Please
+send the screenshot again and I'll attach it"*: its chat memory ended on exec 1590's broken
+screenshot exchange, and "ask them for it" let it read *it* as that screenshot. The same tap on
+WhatsApp (exec 1606, no such memory) asked for the reply correctly. The note now names what is
+awaited, **derived from the backend's own flag name** (`awaitingReply` → "reply",
+`awaitingCancellationReason` → "cancellation reason"), so there is still no verb table in n8n, and
+says nothing earlier in the chat is what is being asked for.
+
+**§ 12.5a · verified already done — nothing written (2026-09-21, ~15:45 UTC).** Production's
+`negotiation_playbooks` holds v1 `market-vendor-negotiation`, published 04:26 UTC, checksum
+`b405ccb8…` = the file at HEAD (unchanged since the deployed commit, and it carries both round-2
+instructions). Checked with `seed:negotiation-playbook --dry-run` from a workstation over the
+tailnet (`100.89.182.51:27017`, `directConnection=true`), with Mongoose `autoIndex` and
+`autoCreate` OFF so the connection itself could write nothing. ⚠ The server's own `docker compose
+pull jovi-mall-toolbox` answers **unauthorized** for the SSH user — the GHCR login belongs to
+Dokploy — so the documented toolbox route needs that login, or this workstation route.
+
+**§ 8.5 · declined by the owner (2026-09-21).** Alternatives the bargainer suggests stay in its own
+words, never drawn as product cards: *"it feels more human than AI like that."* Not owed; do not
+build it. The core half written in § 8.5 stays in the harness as a record, unapplied.
+
 **§ 8 + § 10 · applied, with three departures from the specification, and § 8.5 NOT built.**
 
-- **§ 8.5 is not built.** Nothing produces `handoff` anywhere — not the backend, not the
+- **§ 8.5 is not built** — and the owner has since declined it (below the log). Nothing produces `handoff` anywhere — not the backend, not the
   bargaining workflow's `return to core` — so its core half would be a rule that can never fire,
   which is dead code that looks alive. Owed: the bargainer must first return the alternative
   product ids it found; the core half written in § 8.5 then applies unchanged.
@@ -79,7 +102,7 @@ keys core's `check bargain` / `check price lock` read **and** the keys the barga
 itself sets — two workflows, nothing else comparing them; the branch is a dead end on the live
 graph; the WhatsApp URL resolves through `WHATSAPP_API_URL` with a v26.0 fallback. ⏳ **Live proof
 needs a negotiable product**: § 12.4 item 5, and a counter-offer showing its Lock-it-in button.
-⛔ § 12.5a (re-seed the playbook on the production database) is still owed and is not an n8n change.
+✅ § 12.5a turned out to be already done — see its note above.
 
 **§ 4.9 · a waiting tap filed a stale file — found on the handset, not in the specification.**
 Exec 1590: the owner pressed "Reply here" on a support-reply notification. The tap worked and

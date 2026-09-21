@@ -390,9 +390,22 @@ const WA_URL_OLD = "=https://graph.facebook.com/v18.0/{{ $env.WHATSAPP_PHONE_NUM
 if (LIVE_BARGAIN.nodes['send whatsapp'].parameters.url !== WA_URL_OLD) { throw new Error('§ 10.2: the bargainer WhatsApp URL is not the v18.0 literal this was written against'); }
 FIX['10 whatsapp url'] = "={{ $env.WHATSAPP_API_URL || 'https://graph.facebook.com/v26.0' }}/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/{{ $('decide send').first().json.reply.method }}";
 
+// ── § 4.10 · the waiting note names WHAT it waits for ─────────────────────────────────
+// Exec 1609 (2026-09-21 15:33 UTC): after § 4.9 the model called no tool — that half held — but
+// on Telegram it still answered "Please send the screenshot again and I'll attach it". Its chat
+// memory ended on exec 1590's broken exchange about a screenshot, and "ask them for it" let it
+// read "it" as that screenshot. The same tap on WhatsApp (no such memory) asked for the reply.
+// The note now says WHAT is awaited, derived from the backend's own flag name (awaitingReply →
+// "reply", awaitingCancellationReason → "cancellation reason") — so still no verb table here —
+// and that nothing said earlier in the chat is what is being asked for.
+const ASK49_OLD = "      ? ' The platform is now WAITING FOR THE CUSTOMER to type something (' + waitingFor.join(', ') + '). Ask them for it in one short sentence, and do not report a status instead. They have not given it yet, so call no tool that files, attaches, adds or changes anything on this turn.'\n";
+const ASK410_NEW =
+  "      ? ' The platform is now WAITING FOR THE CUSTOMER to give their ' + waitingFor.map(function (k) { return k.slice(8).replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase(); }).join(' and ') + ' (' + waitingFor.join(', ') + '). Ask them for exactly that, in one short sentence, and do not report a status instead. It is a new question: nothing said earlier in this chat (a file, a screenshot, another request) is what is being asked for now. They have not given it yet, so call no tool that files, attaches, adds or changes anything on this turn.'\n";
+FIX['compose tap input.410'] = patch('compose tap input § 4.10', FIX['compose tap input.49'], [[ASK49_OLD, ASK410_NEW]]);
+
 module.exports = {
   FIX, live, wf, TOKEN_PARA_OLD, TOKEN_PARA_NEW, TOKEN_PARA_53, AWAIT_KEY, RULES_46, LIVE_NOW, LIVE_SEND,
-  REPORT_OLD_ERROR, LIVE_FORMS, ASK_OLD, ASK_NEW, FILE_OLD, FILE_NEW, LIVE_CORE_8, LIVE_BARGAIN, FLAG_KEY, LOCK_KEY, WA_URL_OLD,
+  REPORT_OLD_ERROR, LIVE_FORMS, ASK_OLD, ASK_NEW, FILE_OLD, FILE_NEW, LIVE_CORE_8, LIVE_BARGAIN, FLAG_KEY, LOCK_KEY, WA_URL_OLD, ASK49_OLD, ASK410_NEW,
 };
 
 if (require.main === module) {
@@ -413,6 +426,7 @@ if (require.main === module) {
     coreNodes: FIX['8 nodes'], coreWiring: FIX['8 wiring'], decideSend: FIX['8 decide send'],
     sendOptions: FIX['10 send options'], whatsappUrl: FIX['10 whatsapp url'],
   }, null, 1));
+  fs.writeFileSync(path.join(__dirname, 'new', 'fix_compose_tap_input_410.txt'), FIX['compose tap input.410']);
   fs.writeFileSync(path.join(__dirname, 'new', 'fix_2_forms.json'), JSON.stringify({
     waNormalize: FIX['2 wa normalize'], detectCommand: FIX['2 detect command'], runCommandJsonBody: FIX['2 run command jsonBody'],
     commandReply: FIX['2 command reply'], node: FIX['2 node'], wiring: FIX['2 wiring'],

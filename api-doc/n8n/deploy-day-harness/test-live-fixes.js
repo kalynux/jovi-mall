@@ -581,4 +581,27 @@ const W8bad = applyWiring(LIVE_CORE_8.connections, FIX['8 wiring'].concat([{ typ
 check(S17, 'guard bites — a branch wired back into the turn is no longer a dead end', reach8(W8bad, 'bargain key change?').has('has reply?'));
 check(S17, 'guard bites — the live WhatsApp URL ignores WHATSAPP_API_URL (still v18.0)', tmpl(WA_URL_OLD, { env: { WHATSAPP_API_URL: 'https://graph.facebook.com/v23.0', WHATSAPP_PHONE_NUMBER_ID: '111' }, nodes: { 'decide send': [j({ reply: { method: 'messages' } })] } }) === 'https://graph.facebook.com/v18.0/111/messages');
 
+// ── § 4.10 · the waiting note names WHAT it waits for ───────────────────────────
+const S18 = '§ 4.10 · the waiting note names what it waits for';
+const S19 = '§ 4.10 · guard bites';
+const TAP410 = FIX['compose tap input.410'];
+const note410 = (code, data) => tapRun(code, { success: true, data });
+const n1609 = note410(TAP410, { ticketId: '6ab0d1fe865937d254d5cba7', subject: 'A question about a product', status: 'open', awaitingReply: true });
+check(S18, 'exec 1609 replayed: the note says the customer is to give their REPLY', n1609.includes('WAITING FOR THE CUSTOMER to give their reply (awaitingReply)'), n1609);
+check(S18, 'and that nothing earlier in the chat (a file, a screenshot) is what is asked for', n1609.includes('nothing said earlier in this chat (a file, a screenshot, another request) is what is being asked for now'));
+check(S18, '§ 4.9 kept: still one sentence, still no status, still no writing tool',
+  n1609.includes('in one short sentence') && n1609.includes('do not report a status') && n1609.includes('call no tool that files, attaches, adds or changes anything on this turn'));
+const nCancel = note410(TAP410, { orderId: 'o1', awaitingCancellationReason: true });
+check(S18, 'the name is derived, not listed: awaitingCancellationReason → "cancellation reason"', nCancel.includes('to give their cancellation reason (awaitingCancellationReason)'), nCancel);
+const nTwo = note410(TAP410, { awaitingPhoto: true, awaitingReply: true });
+check(S18, 'two flags are named together, in the order the data gave them', nTwo.includes('to give their photo and reply (awaitingPhoto, awaitingReply)'), nTwo);
+check(S18, 'a flag set to anything but true is not waited for', !note410(TAP410, { awaitingReply: 'yes' }).includes('WAITING'));
+check(S18, 'a tap that is NOT waiting, or is refused, gets exactly the § 4.9 note',
+  tapRun(TAP410, notWaiting) === tapRun(FIX['compose tap input.49'], notWaiting) && tapRun(TAP410, refused) === tapRun(FIX['compose tap input.49'], refused));
+const { ASK49_OLD, ASK410_NEW } = require('./build-live-fixes');
+check(S18, 'the node changed in that one line only', TAP410.replace(ASK410_NEW, ASK49_OLD) === FIX['compose tap input.49']);
+check(S18, 'no backslash anywhere in the body (the regex needs none)', !TAP410.includes(String.fromCharCode(92)));
+check(S18, "every $('…') still names a live node", refsIn(TAP410).every((r) => LIVE_CORE_8.nodeNames.includes(r)), refsIn(TAP410).join(', '));
+check(S19, 'guard bites — the live § 4.9 note, on exec 1609, never says WHAT is awaited', !note410(FIX['compose tap input.49'], { awaitingReply: true }).includes('give their reply'));
+
 module.exports = {};
