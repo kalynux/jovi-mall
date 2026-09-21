@@ -332,6 +332,74 @@ async function main(): Promise<void> {
         }
     });
 
+    /**
+     * ⛔ **CI went red on "Cannot call abortTransaction after calling commitTransaction"**
+     * (2026-09-21, the `seed:negotiation-playbook` step, intermittently on both branches). That
+     * message is not a cause: `runInTransaction` answered a failed COMMIT by aborting, which the
+     * driver forbids once a commit has been attempted — so the abort threw and REPLACED the real
+     * error. On a fresh database the real one is MongoDB's "please retry" answer to a write racing
+     * the collection's creation, which is exactly what the retrying variant exists for.
+     *
+     * A stand-in session, faithful to the driver on the one point that matters: once
+     * `commitTransaction` has been CALLED — whatever it answered — the transaction is no longer
+     * in progress, and `abortTransaction` throws that message.
+     */
+    const txnSession = (commitError: Error | null) => {
+        let state: 'none' | 'open' | 'committed' | 'aborted' = 'none';
+        const calls: string[] = [];
+        return {
+            calls,
+            session: {
+                startTransaction: () => { calls.push('start'); state = 'open'; },
+                inTransaction: () => state === 'open',
+                commitTransaction: async () => {
+                    calls.push('commit');
+                    state = 'committed';
+                    if (commitError) throw commitError;
+                },
+                abortTransaction: async () => {
+                    calls.push('abort');
+                    if (state === 'committed') throw new Error('Cannot call abortTransaction after calling commitTransaction');
+                    state = 'aborted';
+                },
+                endSession: async () => { calls.push('end'); },
+            },
+        };
+    };
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mongooseModule = require('mongoose') as { startSession: unknown };
+    const realStartSession = mongooseModule.startSession;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { transactionManager } = require('../../src/core/database/transaction.manager') as typeof import('../../src/core/database/transaction.manager');
+    const withSession = async <T>(fake: ReturnType<typeof txnSession>, run: () => Promise<T>): Promise<T> => {
+        mongooseModule.startSession = async () => fake.session;
+        try { return await run(); } finally { mongooseModule.startSession = realStartSession; }
+    };
+
+    await assert('⛔ a FAILED COMMIT surfaces its own error — never "Cannot call abortTransaction…"', async () => {
+        const fake = txnSession(new Error('WriteConflict: please retry'));
+        let seen = '';
+        await withSession(fake, () => transactionManager.runInTransaction(async () => 'written')).catch((e: Error) => { seen = e.message; });
+        if (seen !== 'WriteConflict: please retry') throw new Error(`the caller saw "${seen}" (calls: ${fake.calls.join(' → ')})`);
+        if (fake.calls.includes('abort')) throw new Error(`it tried to abort after a commit: ${fake.calls.join(' → ')}`);
+    });
+
+    await assert('a failure INSIDE the transaction is still rolled back, and its error surfaces', async () => {
+        const fake = txnSession(null);
+        let seen = '';
+        await withSession(fake, () => transactionManager.runInTransaction(async () => { throw new Error('the write failed'); })).catch((e: Error) => { seen = e.message; });
+        if (seen !== 'the write failed' || fake.calls.join(' → ') !== 'start → abort → end') {
+            throw new Error(`saw "${seen}", calls ${fake.calls.join(' → ')}`);
+        }
+    });
+
+    await assert('publish() uses the RETRYING transaction — a fresh database answers its first write with "please retry"', () => {
+        const code = repoSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+        if (!code.includes('transactionManager.runInTransactionWithRetry(')) {
+            throw new Error('publish() uses the non-retrying runInTransaction: the seed fails intermittently on a fresh database');
+        }
+    });
+
     originalConsole.log('\n════════════════════════════════════════════════════════════════════════════');
     originalConsole.log(`  ${passed} passed, ${failed} failed`);
     originalConsole.log('════════════════════════════════════════════════════════════════════════════\n');

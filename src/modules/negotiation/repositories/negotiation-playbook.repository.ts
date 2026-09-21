@@ -69,7 +69,10 @@ export class NegotiationPlaybookRepository {
 
         const nextVersion = (await this.latestVersion(key)) + 1;
 
-        return transactionManager.runInTransaction(async (session: ClientSession) => {
+        // RETRYING, because the first write to a fresh database can race the collection's own
+        // creation and MongoDB answers that with "please retry" (a TransientTransactionError).
+        // Safe to re-run: an aborted attempt leaves nothing behind, and `nextVersion` is fixed above.
+        return transactionManager.runInTransactionWithRetry(async (session: ClientSession) => {
             await NegotiationPlaybookModel.updateMany(
                 { key, status: 'active' },
                 { $set: { status: 'superseded' } },

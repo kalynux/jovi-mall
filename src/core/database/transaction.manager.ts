@@ -23,7 +23,11 @@ export class TransactionManager {
       await session.commitTransaction();
       return result;
     } catch (error) {
-      await session.abortTransaction();
+      // ⚠ Only a transaction still IN PROGRESS can be aborted. When the COMMIT is what failed,
+      // the driver has already left that state and `abortTransaction` throws "Cannot call
+      // abortTransaction after calling commitTransaction" — which then REPLACED the real error.
+      // Found 2026-09-21 as an intermittent red CI on `seed:negotiation-playbook`.
+      if (session.inTransaction()) await session.abortTransaction();
       throw error; // Re-throw to be handled by caller
     } finally {
       await session.endSession();
