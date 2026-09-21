@@ -63,6 +63,14 @@ import { AccountActivationService, accountActivationService } from './account-ac
  * builds its whole ladder around). Both are surfaced as
  * `CONTACT_CHANGE_PHONE_UNPROVEN`, whose message says what to do.
  *
+ * ⭐ **The two bullets above are no longer the whole story, and the storefront does not use
+ * this proof.** A six-digit WhatsApp code now proves a phone too (`modules/phone-verification`,
+ * finishing through `applyProvenPhone` below). It is sent as an approved AUTHENTICATION
+ * template outside the window, and it is not billed to anybody. On 2026-09-21 the owner
+ * decided that **customers changing their number on the storefront get the code**, instead of
+ * being told to message the bot from the new number. This connection proof stays for the bot
+ * surface (`contact_confirm_phone`), where the customer is already in the chat.
+ *
  * ── What this deliberately does NOT do ────────────────────────────────────────
  *
  * It does not stamp `password_changed_at`. That field is the session revocation list, and
@@ -372,6 +380,7 @@ export class ContactChangeService {
     }
 
     await this.assertPhoneFree(pending.number, actor.userId);
+    await this.moveWhatsAppLinkOffRetiredNumber(actor.userId, user.login_phone ?? null, pending.number);
 
     const updated = await this.userRepo.applyPhoneChange(actor.userId, pending.number);
     if (!updated) throw createAppError(ERROR_CODES.CONTACT_CHANGE_NOT_PENDING, 409);
@@ -380,6 +389,60 @@ export class ContactChangeService {
     await this.audit(actor.userId, actor.role, 'PHONE_CHANGED', { phone: pending.number });
 
     return { phone: pending.number, changed: true };
+  }
+
+  /**
+   * When a phone change completes by CODE, take the WhatsApp link off the number being given up.
+   *
+   * ── Why the code path needs this and the connection path does not ────────────
+   * The connection proof (`confirmPhoneChange`) only succeeds once the account's WhatsApp link
+   * already IS the new number, so there is nothing to move. The code proof leaves the link
+   * wherever it was, and when that is the OLD number, two things go wrong at once:
+   *
+   *   - **whoever holds the old number is still this customer to the bot.** A recycled or lost
+   *     SIM keeps resolving through `channel_connections` at step 1 of the identity ladder, so
+   *     the next holder can ask the bot for a sign-in link and be handed a session.
+   *   - **WhatsApp notifications keep going to the old number**, because the notification
+   *     stacks address the connection's `external_id`, not `login_phone`.
+   *
+   * ── What it does ─────────────────────────────────────────────────────────────
+   * Only a link on the OLD number is touched. A link on some third number is one the account
+   * chose deliberately (`/connect` binds any number) and is left alone. A link on the old
+   * number moves to the new one, whose control the code has just proved: the code arrived in
+   * that WhatsApp account. So notifications keep flowing and nobody has to message the bot.
+   * If the new number is already linked to a DIFFERENT account, the link is removed rather
+   * than transferred, the same never-transfer rule as `redeemCode`.
+   *
+   * ⚠ **Runs BEFORE the swap, and is not best-effort.** A failure here refuses the change
+   * with nothing committed. Run after the swap, a failure would leave the number changed and
+   * the old holder still signed in to the bot, which is the one outcome this exists to stop.
+   */
+  private async moveWhatsAppLinkOffRetiredNumber(
+    userId: string,
+    oldPhone: string | null,
+    newPhone: string,
+  ): Promise<void> {
+    if (!oldPhone) return;
+
+    const link = await this.connections.getConnection(userId, 'whatsapp');
+    if (!link) return;
+    if (messagingPhoneToE164(link.external_id) !== normalizePhoneNumber(oldPhone)) return;
+
+    // Bare digits: the form Meta addresses by, and the form every other writer stores.
+    const newIdentity = normalizePhoneNumber(newPhone).replace(/^\+/, '');
+    const holder = await this.connections.resolveIdentityOwner('whatsapp', newIdentity);
+
+    if (holder && holder.user_id.toString() !== userId) {
+      await this.connections.disconnect(userId, 'whatsapp');
+      return;
+    }
+
+    await this.connections.bindVerifiedIdentity(userId, {
+      channel: 'whatsapp',
+      externalId: newIdentity,
+      displayName: link.display_name ?? null,
+      handle: null,
+    });
   }
 
   /** The number a proof should be aimed at: the pending change if there is one, else current. */

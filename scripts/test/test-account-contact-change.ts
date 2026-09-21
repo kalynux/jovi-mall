@@ -671,6 +671,107 @@ assert('both windows are configuration, not literals in the rule', () =>
 assert('the email window is shorter than the 24h registration verification window', () =>
   CONTACT_CHANGE_CONFIG.EMAIL_TOKEN_TTL_SECONDS < 86400);
 
+section('Phone — a change completed by CODE moves the WhatsApp link (2026-09-21)');
+
+/**
+ * The storefront now confirms a phone change with a WhatsApp code (owner decision
+ * 2026-09-21). Unlike the connection proof, the code leaves the account's WhatsApp link where it
+ * was, and when that is the OLD number the next holder of that SIM is still this customer to the
+ * bot (a sign-in link away from a session), while notifications keep going there.
+ *
+ * `applyProvenPhone` is the funnel the code path finishes through, so it is driven directly.
+ */
+class LinkStore {
+  public calls: string[] = [];
+  constructor(
+    public links: Array<{ user_id: string; channel: string; external_id: string; display_name: string | null }>,
+    private readonly failOnBind = false,
+  ) {}
+  async getConnection(userId: string, channel: string) {
+    return this.links.find((l) => l.user_id === String(userId) && l.channel === channel) ?? null;
+  }
+  async resolveIdentityOwner(channel: string, externalId: string) {
+    const link = this.links.find((l) => l.channel === channel && l.external_id === externalId);
+    return link ? { ...link, user_id: { toString: () => link.user_id } } : null;
+  }
+  async bindVerifiedIdentity(userId: string, data: { channel: string; externalId: string; displayName?: string | null }) {
+    this.calls.push(`bind:${data.externalId}`);
+    if (this.failOnBind) throw new Error('bind failed');
+    const existing = await this.getConnection(userId, data.channel);
+    if (existing) existing.external_id = data.externalId;
+    else this.links.push({ user_id: String(userId), channel: data.channel, external_id: data.externalId, display_name: data.displayName ?? null });
+  }
+  async disconnect(userId: string, channel: string) {
+    this.calls.push(`disconnect:${channel}`);
+    this.links = this.links.filter((l) => !(l.user_id === String(userId) && l.channel === channel));
+  }
+}
+
+const OLD = '+237600000001';
+const NEW = '+237600000002';
+const changing = () => makeUser('u1', {
+  login_phone: OLD,
+  pending_phone: { number: NEW, requested_at: new Date(), expires_at: new Date(Date.now() + 3_600_000) },
+});
+const linkOf = (userId: string, digits: string) =>
+  ({ user_id: userId, channel: 'whatsapp', external_id: digits, display_name: 'Ada' });
+
+assert('⛔ a link on the OLD number moves to the new one when the code completes the change', async () => {
+  const links = new LinkStore([linkOf('u1', '237600000001')]);
+  const h = harness([changing()], links as never);
+  const result = await h.service.applyProvenPhone(ACTOR, NEW, { completePendingChange: true });
+  return result.changed
+    && h.users.rows[0].login_phone === NEW
+    && links.links.length === 1
+    && links.links[0].external_id === '237600000002';
+});
+
+assert('⛔ …so the old number no longer resolves to this account', async () => {
+  const links = new LinkStore([linkOf('u1', '237600000001')]);
+  const h = harness([changing()], links as never);
+  await h.service.applyProvenPhone(ACTOR, NEW, { completePendingChange: true });
+  return (await links.resolveIdentityOwner('whatsapp', '237600000001')) === null;
+});
+
+assert('a link on some THIRD number is one the account chose — left alone', async () => {
+  const links = new LinkStore([linkOf('u1', '237699999999')]);
+  const h = harness([changing()], links as never);
+  await h.service.applyProvenPhone(ACTOR, NEW, { completePendingChange: true });
+  return links.calls.length === 0 && links.links[0].external_id === '237699999999';
+});
+
+assert('⚠ the new number already linked to ANOTHER account → our link is removed, never transferred', async () => {
+  const links = new LinkStore([linkOf('u1', '237600000001'), linkOf('u2', '237600000002')]);
+  const h = harness([changing()], links as never);
+  await h.service.applyProvenPhone(ACTOR, NEW, { completePendingChange: true });
+  const other = links.links.find((l) => l.user_id === 'u2');
+  return links.calls.join(',') === 'disconnect:whatsapp'
+    && !links.links.some((l) => l.user_id === 'u1')
+    && other?.external_id === '237600000002'
+    && h.users.rows[0].login_phone === NEW;
+});
+
+assert('no link at all → nothing to move, and the change still completes', async () => {
+  const links = new LinkStore([]);
+  const h = harness([changing()], links as never);
+  await h.service.applyProvenPhone(ACTOR, NEW, { completePendingChange: true });
+  return links.calls.length === 0 && h.users.rows[0].login_phone === NEW;
+});
+
+assert('verifying the number ALREADY on file moves nothing', async () => {
+  const links = new LinkStore([linkOf('u1', '237600000001')]);
+  const h = harness([makeUser('u1', { login_phone: OLD })], links as never);
+  await h.service.applyProvenPhone(ACTOR, OLD, { completePendingChange: false });
+  return links.calls.length === 0 && links.links[0].external_id === '237600000001';
+});
+
+assert('⚠ it runs BEFORE the swap — a failed move leaves the number unchanged', async () => {
+  const links = new LinkStore([linkOf('u1', '237600000001')], true);
+  const h = harness([changing()], links as never);
+  const code = await codeOf(() => h.service.applyProvenPhone(ACTOR, NEW, { completePendingChange: true }));
+  return code !== null && h.users.rows[0].login_phone === OLD && h.users.rows[0].pending_phone !== null;
+});
+
 // ═════════════════════════════════════════════════════════════════════════════
 
 void (async () => {

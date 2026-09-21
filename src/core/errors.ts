@@ -687,7 +687,7 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.CONTACT_CHANGE_EXPIRED]: 'That change request has expired — start again',
     [ERROR_CODES.CONTACT_CHANGE_TOKEN_INVALID]: 'That confirmation link is not valid',
     [ERROR_CODES.CONTACT_CHANGE_PHONE_UNPROVEN]:
-        'Connect that number on WhatsApp first, so we know you can receive on it',
+        'That number has not been confirmed yet. Confirm it with the code we send to it on WhatsApp',
     [ERROR_CODES.STORE_NOT_FOUND]: 'store not found',
     [ERROR_CODES.STORE_SLUG_TAKEN]: 'store slug taken',
     [ERROR_CODES.VENDOR_NOTIFICATION_NOT_FOUND]: 'vendor notification not found',

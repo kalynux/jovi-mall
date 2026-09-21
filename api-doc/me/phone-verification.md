@@ -11,12 +11,17 @@ each serves accounts the other cannot reach.
 |---|---|---|
 | Proof | an existing WhatsApp **connection** on that number | a **six-digit code** sent to it |
 | Strength | stronger — a message actually *arrived* from the number | weaker — we sent the code ourselves |
-| Serves | customers (they reach the platform through the bot) | **vendor · agency · agent · admin** |
+| Serves | the bot surface (`contact_confirm_phone`) | **every dashboard and the storefront** — customer · vendor · agency · agent · admin |
 | Body | `{}` | `{ "code": "123456" }` |
 
 Dashboard roles never register through the bot, so they hold no connection and
-`phone_verified` could never become true for them. That is what this flow is for. **The
-customer path is unchanged** — do not route customers here when they have a connection.
+`phone_verified` could never become true for them. That is what this flow was built for.
+
+⭐ **Customers use it too** (owner decision, 2026-09-21). A customer changing their number on the
+storefront gets the code, instead of being told to message the bot from the new number. The
+connection proof stays for the bot surface only. When the code completes a change, the account's
+WhatsApp link moves off the number being given up. See
+[contact-change.md](contact-change.md#the-phone-proof-is-a-whatsapp-code).
 
 ## Endpoints
 

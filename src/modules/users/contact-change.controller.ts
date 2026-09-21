@@ -73,7 +73,9 @@ export class ContactChangeController {
     const input = RequestPhoneChangeSchema.parse(req.body);
     const pending = await contactChangeService.requestPhoneChange(actorFrom(req), input.phone);
 
-    sendSuccess(res, { pendingPhone: pending }, { message: 'Connect that number on WhatsApp, then confirm the change. Until you do, you still sign in with your current number.' });
+    // The storefront confirms with a WhatsApp CODE (`/phone/verify/*`), not by messaging the bot
+    // from the new number — owner decision 2026-09-21. The copy points at the code.
+    sendSuccess(res, { pendingPhone: pending }, { message: 'Confirm the change with the code we send to that number on WhatsApp. Until you do, you still sign in with your current number.' });
   });
 
   /**

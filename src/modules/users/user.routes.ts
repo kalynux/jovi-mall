@@ -57,6 +57,10 @@ router.delete('/phone/pending', ContactChangeController.cancelPhone);
  * and may never message the platform, so there is no connection to check and `phone_verified`
  * could never become true for them. These three routes are that path.
  *
+ * ⭐ **Customers use them too, on the storefront** (owner decision, 2026-09-21): a customer
+ * changing their number gets the code rather than being told to message the bot from it.
+ * `/phone/confirm` above stays for the bot surface. None of these routes is role-gated.
+ *
  * ⚠ Every segment here is a LITERAL and no `:param` is declared under `/phone`, so nothing
  * shadows anything. Check that again before adding `/phone/:id`.
  */

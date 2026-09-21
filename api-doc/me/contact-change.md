@@ -74,33 +74,38 @@ envelope throughout; see [errors/README.md](../errors/README.md).
 | | Email | Phone |
 |---|---|---|
 | Request | `PATCH /api/me/email` | `PATCH /api/me/phone` |
-| Proof of control | a token emailed to the **new address** | a **WhatsApp connection** on the new number |
-| Confirm | `POST /api/auth/email-change/confirm` (**public**) | `POST /api/me/phone/confirm` (**authenticated**) |
+| Proof of control | a token emailed to the **new address** | a **six-digit WhatsApp code** sent to the new number |
+| Confirm | `POST /api/auth/email-change/confirm` (**public**) | `POST /api/me/phone/verify/request`, then `POST /api/me/phone/verify/confirm` (**authenticated**) — [phone-verification.md](phone-verification.md) |
 | Cancel | `DELETE /api/me/email/pending` | `DELETE /api/me/phone/pending` |
 | Window | 1 hour (`CONTACT_CHANGE_EMAIL_TTL_SECONDS`) | 24 hours (`CONTACT_CHANGE_PHONE_TTL_SECONDS`) |
 
-### Why the phone flow has no OTP
+### The phone proof is a WhatsApp code
 
-There is deliberately **no SMS code and no WhatsApp code** on this platform, and this is the
-answer a client should build against rather than wait for:
+**Every client, the storefront included, confirms a phone change with a six-digit code sent to
+the new number on WhatsApp** (owner decision, 2026-09-21):
 
-- This service integrates **no SMS provider**.
-- A WhatsApp message to a number that has not messaged the bot is outside Meta's 24-hour service
-  window, so it must be an approved **paid template** billed to a credit wallet — and a customer
-  has no wallet.
+```
+PATCH /api/me/phone               { "phone": "+237600000002" }   → pending, nothing moves yet
+POST  /api/me/phone/verify/request                               → code sent to the NEW number
+POST  /api/me/phone/verify/confirm  { "code": "123456" }         → login_phone swaps
+```
 
-What the platform already has is the *inbound* direction. A messaging connection
-([connections/README.md](../connections/README.md)) exists only because a message arrived **from
-that number** and the account holder redeemed the resulting code while signed in. That is a
-stronger proof of control than an OTP, and it is already built — so the phone confirm requires it.
+The code goes out as free text inside Meta's 24-hour window and as the approved AUTHENTICATION
+template outside it, so the user never has to message the bot first. It is not billed to anyone.
+Refusals, limits and the "what to show on failure" contract are in
+[phone-verification.md](phone-verification.md).
 
-**Consequences a client must handle:**
+⚠ **The account's WhatsApp link moves with the number.** If the account was linked to the bot
+from the number being given up, confirming the code moves that link to the new number. Otherwise
+whoever holds the old number, a lost or recycled SIM, would still be this customer to the bot,
+and notifications would keep going there. If the new number is already linked to a different
+account, the link is removed instead of transferred.
 
-- An account with **no WhatsApp connection** cannot change its phone. Send the user to the
-  connections screen first.
-- A **Telegram** connection does not count. A Telegram `chat_id` bears no relation to any phone
-  number.
-- The connected number must be **the number being claimed**, not merely any connected number.
+⛔ **This section used to say the platform had "deliberately no WhatsApp code"**, and that the
+only proof was a messaging connection: send `/connect` to the bot **from the new number**, redeem
+the code, then call `POST /api/me/phone/confirm`. That flow still works and the bot surface uses
+it (`contact_confirm_phone`), but **the storefront must not send customers through it**. Remove
+any "message the bot from your new number" copy that was built from the old text.
 
 ---
 
@@ -289,22 +294,30 @@ platform uses: a leading `+`, country code, no spaces or punctuation. `.strict()
       "expiresAt": "2026-08-22T09:00:00.000Z"
     }
   },
-  "message": "Connect that number on WhatsApp, then confirm the change. Until you do, you still sign in with your current number."
+  "message": "Confirm the change with the code we send to that number on WhatsApp. Until you do, you still sign in with your current number."
 }
 ```
 
 **Errors** — the same three as `PATCH /api/me/email`.
 
-**What the client should do next**: if the account has no WhatsApp connection on that number,
-route the user through `POST /api/me/connections`
-([connections/README.md](../connections/README.md)) — send `/connect` to the bot **from the new
-number**, then redeem the 6-character code it replies with. Then call the confirm below.
+**What the client should do next**: call `POST /api/me/phone/verify/request` (no body). The
+server sends the code to the **pending** number, not the current one, and
+`POST /api/me/phone/verify/confirm` with that code completes the change
+(`data.changed: true`). See [phone-verification.md](phone-verification.md).
+
+⚠ This call does **not** send the code by itself. Request it explicitly: sending it here would
+start the 60-second resend cooldown, and the explicit request that every client already makes
+next would then be refused with `429`.
 
 ---
 
 ## POST /api/me/phone/confirm
 
-Complete a phone change, once the number is proved.
+Complete a phone change, once the number is proved **by a WhatsApp connection**.
+
+⚠ **The storefront does not use this route.** It confirms with the code (above). This one stays
+for the bot surface (`contact_confirm_phone`), where the customer is already chatting from a
+WhatsApp number, and for an account whose link already is the new number.
 
 **Authenticated, and takes no body.** There is no token to present: the proof is a property of the
 account, so the session is what makes it lookupable at all.
