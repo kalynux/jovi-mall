@@ -76,6 +76,9 @@ import {
     BOOKING_SLOT_FLOW,
 } from '../../src/modules/whatsapp/flows/definitions/booking.flow';
 import { FLOW_SCREEN_TITLE, NOTICE_SCREEN } from '../../src/modules/whatsapp/flows/definitions/notice.screen';
+import type { FlowDefinition } from '../../src/modules/whatsapp/flows/definitions/flow-definition.types';
+// ⚠ Safe to import: the publisher runs only under `require.main === module`.
+import { FLOW_REQUIRED_PROPERTIES, missingRequiredProperties } from '../publish-whatsapp-flows';
 import { FLOW_LISTING_PAGE_SIZE, toListingScreen } from '../../src/modules/whatsapp/flows/screens/listing.adapter';
 import { toDetailScreen } from '../../src/modules/whatsapp/flows/screens/detail.adapter';
 import { mayShowImageToCustomer, FLOW_IMAGE_MAX_SOURCE_BYTES } from '../../src/modules/whatsapp/flows/screens/image-policy';
@@ -650,6 +653,15 @@ async function main(): Promise<void> {
             missingExample.length === 0, missingExample.join(', '));
 
         /**
+         * ⛔ Meta's required properties, per component. The listing's radio group had no `label`
+         * (required since Flow JSON 4.0) and Meta was the first to notice, on deploy day — the
+         * publish stopped at a draft. The two booking forms had the same gap.
+         */
+        const missingRequired = missingRequiredProperties(definition);
+        assert(`${label}: ⛔ every component carries Meta's required properties`,
+            missingRequired.length === 0, missingRequired.join(' | '));
+
+        /**
          * ⛔ THE CHECK THAT WOULD HAVE CAUGHT THE ARRAY BOUND TO A TEXT BOX. Every `${data.x}`
          * must name a field that screen declares, and text on a Text* component must bind to a
          * STRING field. The first checkout definition bound `TextBody.text` to an array, and no
@@ -702,6 +714,39 @@ async function main(): Promise<void> {
         assert(`${label}: every screen that ends the Flow can reach the conversation (a NOTICE)`,
             definition.screens.some((s) => s.id === NOTICE_SCREEN && s.terminal));
     }
+
+    /**
+     * ⛔ **The table is Meta's, so its entries are pinned as LITERALS here** — a guard that took
+     * its standard from the table it checks would pass on whatever the table says. These are the
+     * components the forms actually use (Flow JSON components reference, 6.x).
+     */
+    const requires = (type: string, props: string[]): boolean =>
+        props.every((p) => (FLOW_REQUIRED_PROPERTIES[type] ?? []).includes(p));
+    assert('⛔ the required-properties table holds Meta\'s rules for every component the forms use',
+        requires('RadioButtonsGroup', ['label', 'data-source', 'name'])
+        && requires('Dropdown', ['label', 'data-source', 'name'])
+        && requires('TextInput', ['label', 'name'])
+        && requires('TextArea', ['label', 'name'])
+        && requires('Footer', ['label', 'on-click-action'])
+        && requires('Image', ['src'])
+        && requires('TextHeading', ['text']) && requires('TextBody', ['text'])
+        && requires('TextCaption', ['text']));
+
+    /** A deep copy of the listing, with its radio group handed to `edit`. */
+    const listingWith = (edit: (radio: Record<string, unknown>, children: unknown[]) => void): FlowDefinition => {
+        const copy = JSON.parse(JSON.stringify(PRODUCT_LISTING_FLOW)) as FlowDefinition;
+        const children = copy.screens[0].layout.children as unknown as Array<Record<string, unknown>>;
+        const radio = children.find((c) => c.type === 'RadioButtonsGroup');
+        if (radio) edit(radio, children);
+        return copy;
+    };
+    assert('⛔ guard bites — the listing as first sent to Meta (no radio label) is refused here',
+        missingRequiredProperties(listingWith((radio) => { delete radio.label; }))
+            .some((f) => f.includes("RadioButtonsGroup: missing 'label'")));
+    assert('⚠ guard bites — a component type nobody has looked up is a fault, not a pass',
+        missingRequiredProperties(listingWith((_radio, children) => {
+            children.push({ type: 'PhotoPicker', name: 'photo' });
+        })).some((f) => f.includes('PhotoPicker: not in the required-properties table')));
 
     /**
      * ⛔ Images are BASE64, never URLs. Meta: `src` is "Base64 of an image", "up to 300kb", and

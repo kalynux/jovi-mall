@@ -70,6 +70,7 @@ export function bookingListFlow(kind: InAppSurfaceKind): FlowDefinition {
                             },
                         ],
                     },
+                    chooseLabel: { type: 'string', __example__: 'Choose' },
                     openLabel: { type: 'string', __example__: 'Open' },
                 },
                 layout: {
@@ -79,6 +80,8 @@ export function bookingListFlow(kind: InAppSurfaceKind): FlowDefinition {
                         {
                             type: 'RadioButtonsGroup',
                             name: 'booking',
+                            /** ⛔ Required by Meta since Flow JSON 4.0 — see `product-listing.flow.ts`. */
+                            label: '${data.chooseLabel}',
                             required: true,
                             'data-source': '${data.bookings}',
                         },
@@ -156,6 +159,7 @@ export function bookingSlotFlow(kind: InAppSurfaceKind): FlowDefinition {
                             { id: '2026-09-23', title: 'Wed 23 Sep', description: '2 times' },
                         ],
                     },
+                    chooseLabel: { type: 'string', __example__: 'Choose' },
                     continueLabel: { type: 'string', __example__: 'See times' },
                 },
                 layout: {
@@ -165,6 +169,8 @@ export function bookingSlotFlow(kind: InAppSurfaceKind): FlowDefinition {
                         {
                             type: 'RadioButtonsGroup',
                             name: 'day',
+                            /** ⛔ Required by Meta since Flow JSON 4.0 — see `product-listing.flow.ts`. */
+                            label: '${data.chooseLabel}',
                             required: true,
                             'data-source': '${data.days}',
                         },

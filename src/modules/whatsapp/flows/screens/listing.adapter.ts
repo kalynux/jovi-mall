@@ -76,6 +76,7 @@ export function toListingScreen(page: ListingPage, copy: FlowCopy): FlowResponse
     return screenResponse(PRODUCT_LISTING_SCREEN, {
         heading: fitText(page.heading ?? copy.listingHeading, FLOW_CAPS.heading),
         products,
+        chooseLabel: fitText(copy.detailChoose, FLOW_CAPS.inputLabel),
         openLabel: fitText(copy.flowOpenProduct, FLOW_CAPS.footerLabel),
     });
 }

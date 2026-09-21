@@ -1590,6 +1590,18 @@ Fixed in `scripts/publish-whatsapp-flows.ts`: `endpoint_uri` is sent on create, 
 
 ⏸ **Publishing is held for the owner's explicit permission.** The first outward call (`--upload-key`) was refused by the session's permission gate as a production deploy — correctly: it is an outward act on the live Business Account. Nothing was sent to Meta beyond the read-only checks above.
 
+**First run — by the owner, from their own terminal (the session's gate refused it even after their "yes, publish"), ~16:55 UTC:**
+
+- ✅ **Key uploaded.** The number now holds our public key, signature status `VALID`, fingerprint `46c7ab05ccbd` = the one the live endpoint decrypts with.
+- ✅ **`endpoint_uri` took.** Draft `2416208812534765` ("wi-mall product listing") points at `https://api.wi-mall.com/api/webhooks/whatsapp/flows` — the first fix above, proven on Meta's side.
+- ❌ **Asset refused, nothing published:** `MISSING_REQUIRED_PROPERTY` — "Required property 'label' is missing" at `screens[0].layout.children[1]`, the listing's `RadioButtonsGroup`. Meta's components reference: `label` is required on it **since Flow JSON 4.0**; these forms are 6.0. The draft's `health_status` said the same (`valid_json`, error 131000), plus an advisory that the Business Account is not subscribed to the Flows webhooks (status/health notifications — not a publishing requirement).
+
+⛔ **The second defect of the day, and the same shape as the first: nothing offline knew Meta's rule.** The rehearsal checked routing, terminal screens and `__example__`s — every rule somebody had written down — and none of Meta's required properties. An offline scan of all seven forms found **three** missing labels: the listing, and the booking list and booking day screens (not in the publish list yet, so they would have failed later, one refusal at a time).
+
+Fixed: each of the three radio groups gains `label: '${data.chooseLabel}'`, filled by its adapter from `detailChoose` ("Choose" in five languages — the product-detail form's own pattern), so no literal reaches a customer. The publisher gained `FLOW_REQUIRED_PROPERTIES` (Meta's table, transcribed) and refuses a definition missing any of them — and treats a component type **absent from the table** as a fault, so a new component cannot pass by being unknown. `test:whatsapp-flows` **378/0**: the check over all seven forms, the table's entries pinned as literals, and two self-checks (the listing as first sent is refused; an unlooked-up component is refused).
+
+⚠ **A re-run no longer creates a second form.** The publisher used to create a new Flow every time, so the owner's next run would have left a second "wi-mall product listing" beside the refused draft. It now reuses a DRAFT of the same name (re-stating its `endpoint_uri`) and refuses outright when a form of that name is already live — replacing a live form is a separate decision.
+
 ### 13.1 · Preconditions
 
 | | Proved by |

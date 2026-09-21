@@ -98,6 +98,8 @@ export const PRODUCT_LISTING_FLOW: FlowDefinition = {
                         },
                     ],
                 },
+                /** The choice group's label — required by Meta, see the component below. */
+                chooseLabel: { type: 'string', __example__: 'Choose' },
                 openLabel: { type: 'string', __example__: 'View product' },
             },
 
@@ -113,6 +115,14 @@ export const PRODUCT_LISTING_FLOW: FlowDefinition = {
                          */
                         type: 'RadioButtonsGroup',
                         name: 'product',
+                        /**
+                         * ⛔ **Required by Meta since Flow JSON 4.0, and this form is 6.0.** It was
+                         * absent, and Meta refused the first publish on deploy day (2026-09-21):
+                         * "Required property 'label' is missing" at `children[1]`. Nothing offline
+                         * knew the rule until then; `test:whatsapp-flows` now checks every
+                         * component against Meta's required properties.
+                         */
+                        label: '${data.chooseLabel}',
                         required: true,
                         'data-source': '${data.products}',
                     },

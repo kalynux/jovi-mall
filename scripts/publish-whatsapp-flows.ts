@@ -86,6 +86,70 @@ const FLOW_ENDPOINT_PATH = '/api/webhooks/whatsapp/flows';
 const API_PUBLIC_URL = (process.env.API_PUBLIC_URL || '').replace(/\/+$/, '');
 const ENDPOINT_URI = API_PUBLIC_URL ? `${API_PUBLIC_URL}${FLOW_ENDPOINT_PATH}` : '';
 
+/**
+ * Meta's REQUIRED properties per component — the Flow JSON components reference, 6.x.
+ *
+ * ⛔ **Found the hard way on deploy day (2026-09-21).** The listing's `RadioButtonsGroup` had no
+ * `label` — required since Flow JSON 4.0 — and nothing here knew the rule, so Meta was the first
+ * to check it: the Flow was created, its asset refused, and the publish stopped at a draft. The
+ * table is Meta's, transcribed; `test:whatsapp-flows` pins the entries it relies on as literals so
+ * this table cannot quietly become its own standard.
+ *
+ * ⚠ **A component missing from the table is itself a fault** — a new component type must be looked
+ * up before it ships, or this check would pass it by knowing nothing about it.
+ */
+export const FLOW_REQUIRED_PROPERTIES: Readonly<Record<string, readonly string[]>> = Object.freeze({
+    TextHeading: ['text'],
+    TextSubheading: ['text'],
+    TextBody: ['text'],
+    TextCaption: ['text'],
+    RichText: ['text'],
+    Image: ['src'],
+    Footer: ['label', 'on-click-action'],
+    EmbeddedLink: ['text', 'on-click-action'],
+    If: ['condition', 'then'],
+    Switch: ['value', 'cases'],
+    TextInput: ['label', 'name'],
+    TextArea: ['label', 'name'],
+    DatePicker: ['label', 'name'],
+    CalendarPicker: ['label', 'name'],
+    Dropdown: ['label', 'data-source', 'name'],
+    RadioButtonsGroup: ['label', 'data-source', 'name'],
+    CheckboxGroup: ['label', 'data-source', 'name'],
+    ChipsSelector: ['label', 'data-source', 'name'],
+    OptIn: ['label', 'name'],
+});
+
+/** Every missing required property in a definition, as `SCREEN.path Type: 'prop'`. */
+export function missingRequiredProperties(definition: FlowDefinition): string[] {
+    const faults: string[] = [];
+    const visit = (node: unknown, where: string): void => {
+        if (Array.isArray(node)) {
+            node.forEach((n, i) => visit(n, `${where}[${i}]`));
+            return;
+        }
+        if (node === null || typeof node !== 'object') return;
+        const rec = node as Record<string, unknown>;
+        if (typeof rec.type === 'string') {
+            const required = FLOW_REQUIRED_PROPERTIES[rec.type];
+            if (!required) faults.push(`${where} ${rec.type}: not in the required-properties table`);
+            for (const prop of required ?? []) {
+                if (!(prop in rec)) faults.push(`${where} ${rec.type}: missing '${prop}'`);
+            }
+        }
+        for (const key of ['children', 'then', 'else']) {
+            if (key in rec) visit(rec[key], `${where}.${key}`);
+        }
+        if (rec.cases && typeof rec.cases === 'object') {
+            for (const [name, value] of Object.entries(rec.cases as Record<string, unknown>)) {
+                visit(value, `${where}.cases.${name}`);
+            }
+        }
+    };
+    for (const screen of definition.screens) visit(screen.layout.children, `${screen.id}.children`);
+    return faults;
+}
+
 function line(label: string, value: string): void {
     console.log(`  ${label.padEnd(28)} ${value}`);
 }
@@ -181,6 +245,7 @@ function validate(): boolean {
             ...badRoutes.map((r) => `route ${r} targets a missing screen or itself`),
             ...(terminals >= 1 ? [] : ['no terminal screen: at least one is required']),
             ...missingExample.map((f) => `${f} has no __example__`),
+            ...missingRequiredProperties(definition),
         ];
 
         const published = flowIdFor(kind);
@@ -288,18 +353,8 @@ async function main(): Promise<void> {
     for (const [kind, name, definition] of selected) {
         console.log(`\n▶ Publishing ${kind} · ${name}`);
 
-        const created = (await graph(`${WABA_ID}/flows`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, categories: ['OTHER'], endpoint_uri: ENDPOINT_URI }),
-        })) as { id?: string };
-
-        const flowId = created.id;
-        if (!flowId) {
-            console.error('  ❌ Meta returned no Flow id');
-            continue;
-        }
-        console.log(`  created ${flowId}`);
+        const flowId = await draftOrNewFlow(name);
+        if (!flowId) continue;
 
         /**
          * ⚠ **The definition is uploaded as a FILE, not as a JSON body**, and the field name
@@ -345,6 +400,55 @@ async function main(): Promise<void> {
     }
 
     console.log('');
+}
+
+/**
+ * The Flow to upload into: a DRAFT of the same name if one exists, otherwise a new one.
+ *
+ * ⚠ **A refused publish leaves a draft behind, and re-running used to create a second one beside
+ * it** — which is how a Business Account fills with half-finished forms sharing one name. Found on
+ * deploy day (2026-09-21), when Meta refused the first listing asset. A draft is reused, and its
+ * `endpoint_uri` re-stated in case it was created before that field was sent.
+ *
+ * ⛔ **A form of that name that is already live is REFUSED, not superseded.** Replacing a form
+ * customers can open is a separate decision from re-running a publish, so this answers with the
+ * id and status and sends nothing.
+ */
+async function draftOrNewFlow(name: string): Promise<string | null> {
+    const listed = (await graph(`${WABA_ID}/flows?fields=id,name,status&limit=100`, {
+        method: 'GET',
+    })) as { data?: Array<{ id: string; name: string; status: string }> };
+    const sameName = (listed.data ?? []).filter((f) => f.name === name);
+
+    const live = sameName.find((f) => f.status !== 'DRAFT' && f.status !== 'DEPRECATED');
+    if (live) {
+        console.error(`  ❌ '${name}' already exists as ${live.status} (${live.id}).`);
+        console.error('  Replacing a live form is a separate decision. Nothing was sent.');
+        return null;
+    }
+
+    const draft = sameName.find((f) => f.status === 'DRAFT');
+    if (draft) {
+        await graph(draft.id, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ endpoint_uri: ENDPOINT_URI }),
+        });
+        console.log(`  reusing draft ${draft.id}`);
+        return draft.id;
+    }
+
+    const created = (await graph(`${WABA_ID}/flows`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, categories: ['OTHER'], endpoint_uri: ENDPOINT_URI }),
+    })) as { id?: string };
+    if (!created.id) {
+        console.error('  ❌ Meta returned no Flow id');
+        return null;
+    }
+    console.log(`  created ${created.id}`);
+    return created.id;
 }
 
 function envNameFor(kind: InAppSurfaceKind): string {

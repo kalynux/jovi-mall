@@ -59,6 +59,7 @@ export function toBookingListScreen(
             title: fitText(row.title, FLOW_CAPS.optionTitle),
             description: fitText(row.description, FLOW_CAPS.optionDescription),
         })),
+        chooseLabel: fitText(copy.detailChoose, FLOW_CAPS.inputLabel),
         openLabel: fitText(copy.bookingOpen, FLOW_CAPS.footerLabel),
     });
 }
@@ -87,6 +88,7 @@ export function toBookingDayScreen(view: BookingDayView, copy: FlowCopy): FlowRe
             title: fitText(day.label, FLOW_CAPS.optionTitle),
             description: fitText(day.description, FLOW_CAPS.optionDescription),
         })),
+        chooseLabel: fitText(copy.detailChoose, FLOW_CAPS.inputLabel),
         continueLabel: fitText(copy.bookingSeeTimes, FLOW_CAPS.footerLabel),
     });
 }
