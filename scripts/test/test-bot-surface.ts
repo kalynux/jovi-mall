@@ -228,10 +228,13 @@ import { BOT_INBOUND_FILE_MAX_BYTES } from '../../src/modules/bot-surface/contro
 import { TICKET_ATTACHMENT_LIMIT } from '../../src/modules/tickets/services/ticket-attachment.service';
 import { ACCOUNT_CLOSURE_CONFIRMATION } from '../../src/modules/users/user.validator';
 import {
+    BOT_IDENTITY_TOKEN_BUCKET_SECONDS,
     BOT_IDENTITY_TOKEN_TTL_SECONDS,
     sealBotIdentity,
     unsealBotIdentity,
 } from '../../src/modules/bot-surface/domain/bot-identity-token';
+import { createHmac as createHmacForLegacyToken } from 'crypto';
+import { getBotIdentityTokenSecret } from '../../src/config/secrets.config';
 import {
     BOT_CHAT_LIST_MAX,
     BotListSurface,
@@ -3059,89 +3062,153 @@ async function main(): Promise<void> {
     }
 
     const sealed = sealBotIdentity({ channel: 'whatsapp', externalId: '237600123456', language: 'fr' });
+    const HOUR = BOT_IDENTITY_TOKEN_BUCKET_SECONDS;
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const hourStart = Math.floor(nowSeconds / HOUR) * HOUR;
+
+    /** The refusal code, or null when the token verified. A throw without a code is itself a finding. */
+    const tokenRefusal = (token: string, now?: number): string | null => {
+        try {
+            unsealBotIdentity(token, now);
+            return null;
+        } catch (error) {
+            return (error as { code?: string }).code ?? 'THREW_WITHOUT_A_CODE';
+        }
+    };
+
+    /** A v1 token, built the way v1 was minted — only to prove the legacy branch still reads one. */
+    const mintLegacyV1 = (payload: Record<string, unknown>): string => {
+        const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
+        const signature = createHmacForLegacyToken('sha256', getBotIdentityTokenSecret()).update(encoded).digest('base64url');
+        return `v1.${encoded}.${signature}`;
+    };
 
     assert('a sealed token round-trips to the identity it sealed', () => {
         const out = unsealBotIdentity(sealed);
         return out.channel === 'whatsapp' && out.externalId === '237600123456' && out.language === 'fr';
     });
 
+    assert('a token sealed without a language unseals to language null', () =>
+        unsealBotIdentity(sealBotIdentity({ channel: 'telegram', externalId: '99' })).language === null);
+
+    assert('nothing mints v1 any more', () => sealed.startsWith('v2.') && sealed.split('.').length === 2);
+
     /**
      * ⚠ **THE assertion this whole mechanism exists for.**
      *
      * A model holding a valid token must not be able to turn it into a token for somebody
-     * else. Re-signing is out of reach (it has no secret), so the attack it CAN reach is
-     * editing the payload and keeping the signature — which is what this does, byte for
-     * byte, with a second real customer's `externalId`.
+     * else — or into anything at all. With v2 there is no payload to edit, so the reachable
+     * attack is changing bytes. Every single byte is flipped here, one at a time, and every
+     * result must be refused as INVALID: not accepted, not expired, not a crash.
      */
-    assert('⚠ a payload edited to name another customer does not verify', () => {
-        const parts = sealed.split('.');
-        const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
-        payload.e = '237699999999';
-        const forged = `${parts[0]}.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.${parts[2]}`;
-        try {
-            unsealBotIdentity(forged);
-            return false;
-        } catch (error) {
-            return (error as { code?: string }).code === 'BOT_IDENTITY_TOKEN_INVALID';
+    assert('⚠ changing ANY byte of the token makes it invalid — there is nothing to edit', () => {
+        const bytes = Buffer.from(sealed.split('.')[1], 'base64url');
+        const survivors: number[] = [];
+        for (let i = 0; i < bytes.length; i += 1) {
+            const copy = Buffer.from(bytes);
+            copy[i] ^= 0x01;
+            if (tokenRefusal(`v2.${copy.toString('base64url')}`) !== 'BOT_IDENTITY_TOKEN_INVALID') survivors.push(i);
         }
-    });
-
-    assert('an edited signature does not verify', () => {
-        const parts = sealed.split('.');
-        const flipped = parts[2].startsWith('A') ? `B${parts[2].slice(1)}` : `A${parts[2].slice(1)}`;
-        try {
-            unsealBotIdentity(`${parts[0]}.${parts[1]}.${flipped}`);
-            return false;
-        } catch (error) {
-            return (error as { code?: string }).code === 'BOT_IDENTITY_TOKEN_INVALID';
-        }
+        if (survivors.length) console.error('     ↳ bytes whose change was NOT refused:', survivors.join(', '));
+        return bytes.length > 24 && survivors.length === 0;
     });
 
     /**
-     * ⚠ **A short signature must be a 401, not a 500.** `timingSafeEqual` THROWS on buffers
-     * of unequal length, so without the length guard in `unsealBotIdentity` anyone could
-     * raise an unhandled fault on the refusal path just by truncating a token. This is the
-     * regression test for that guard, not a shape check.
+     * ⚠ **A short token must be a 401, not a 500.** The decipher and `setAuthTag` both throw on
+     * malformed input, so without the length check in `unsealBotIdentity` anyone could raise an
+     * unhandled fault on the refusal path just by truncating a token.
      */
-    assert('⚠ a truncated signature is refused rather than crashing', () => {
-        const parts = sealed.split('.');
-        try {
-            unsealBotIdentity(`${parts[0]}.${parts[1]}.AAAA`);
-            return false;
-        } catch (error) {
-            return (error as { code?: string }).code === 'BOT_IDENTITY_TOKEN_INVALID';
-        }
-    });
+    assert('⚠ a truncated token is refused rather than crashing', () =>
+        ['v2.', 'v2.AAAA', sealed.slice(0, -4), sealed.slice(0, 20), `v2.${'A'.repeat(33)}`]
+            .every((t) => tokenRefusal(t) === 'BOT_IDENTITY_TOKEN_INVALID'));
+
+    assert('an unknown version, or the right version in the wrong shape, is refused', () =>
+        [`v9.${sealed.split('.')[1]}`, `${sealed}.extra`, `v1.${sealed.split('.')[1]}`, '', 'garbage']
+            .every((t) => tokenRefusal(t) === 'BOT_IDENTITY_TOKEN_INVALID'));
 
     assert('an expired token is EXPIRED, not INVALID', () => {
-        const past = Math.floor(Date.now() / 1000) - BOT_IDENTITY_TOKEN_TTL_SECONDS - 60;
-        const stale = sealBotIdentity({ channel: 'telegram', externalId: '99', now: past });
-        try {
-            unsealBotIdentity(stale);
-            return false;
-        } catch (error) {
-            return (error as { code?: string }).code === 'BOT_IDENTITY_TOKEN_EXPIRED';
-        }
-    });
-
-    assert('a token from another version is refused', () => {
-        const parts = sealed.split('.');
-        try {
-            unsealBotIdentity(`v2.${parts[1]}.${parts[2]}`);
-            return false;
-        } catch (error) {
-            return (error as { code?: string }).code === 'BOT_IDENTITY_TOKEN_INVALID';
-        }
+        const stale = sealBotIdentity({ channel: 'telegram', externalId: '99', now: hourStart - HOUR - BOT_IDENTITY_TOKEN_TTL_SECONDS });
+        return tokenRefusal(stale) === 'BOT_IDENTITY_TOKEN_EXPIRED';
     });
 
     /**
-     * ⚠ **Opacity is a property the token must HAVE, not one it happens to have.** It is
-     * repeated into a model's context window, chat memory and n8n execution logs on every
-     * tool call, and a base64 payload is not encryption — but it is enough that a raw
-     * messaging identifier is never sitting in any of those in a form a reader recognises.
+     * ⭐ **THE assertion v2 exists for** (2026-09-21). The model rebuilt v1 tokens instead of
+     * copying them, and the chat memory held several DIFFERENT old ones beside the fresh one.
+     * One customer's token is now the same string all hour, so a copy from memory IS the fresh
+     * value — and a change of the hour is the only thing that changes it.
      */
-    assert('⚠ the token never carries the identifier in clear text', () =>
-        !sealed.includes('237600123456'));
+    assert('⭐ every token for one customer in one clock hour is the SAME string', () => {
+        const first = sealBotIdentity({ channel: 'whatsapp', externalId: '237600123456', language: 'fr', now: hourStart });
+        const last = sealBotIdentity({ channel: 'whatsapp', externalId: '237600123456', language: 'fr', now: hourStart + HOUR - 1 });
+        const next = sealBotIdentity({ channel: 'whatsapp', externalId: '237600123456', language: 'fr', now: hourStart + HOUR });
+        return first === last && first !== next;
+    });
+
+    assert('it lives at least the TTL wherever in the hour it was minted, and at most one hour more', () => {
+        const early = sealBotIdentity({ channel: 'telegram', externalId: '99', now: hourStart });
+        const late = sealBotIdentity({ channel: 'telegram', externalId: '99', now: hourStart + HOUR - 1 });
+        const endOfLife = hourStart + HOUR + BOT_IDENTITY_TOKEN_TTL_SECONDS;
+        return tokenRefusal(early, hourStart + BOT_IDENTITY_TOKEN_TTL_SECONDS) === null
+            && tokenRefusal(late, hourStart + HOUR - 1 + BOT_IDENTITY_TOKEN_TTL_SECONDS - 1) === null
+            && tokenRefusal(early, endOfLife - 1) === null
+            && tokenRefusal(early, endOfLife) === 'BOT_IDENTITY_TOKEN_EXPIRED';
+    });
+
+    assert('a copy from the PREVIOUS hour still verifies — the hand-over between two stable tokens', () => {
+        const previous = sealBotIdentity({ channel: 'telegram', externalId: '99', now: hourStart - 1 });
+        return tokenRefusal(previous, hourStart + 1) === null;
+    });
+
+    assert('different customers, channels and languages never share a token', () => {
+        const at = hourStart + 5;
+        const tokens = [
+            sealBotIdentity({ channel: 'whatsapp', externalId: '237600123456', language: 'fr', now: at }),
+            sealBotIdentity({ channel: 'whatsapp', externalId: '237600123457', language: 'fr', now: at }),
+            sealBotIdentity({ channel: 'telegram', externalId: '237600123456', language: 'fr', now: at }),
+            sealBotIdentity({ channel: 'whatsapp', externalId: '237600123456', language: 'en', now: at }),
+        ];
+        return new Set(tokens).size === tokens.length;
+    });
+
+    /**
+     * ⚠ **Opacity, measured AFTER decoding.** This assertion used to read
+     * `!sealed.includes('237600123456')` — which a base64 payload passes by construction, since
+     * base64 never contains the digits it encodes. It stayed green for the whole life of v1
+     * while the number sat one decode away, readable by the model that rebuilt tokens from it.
+     * The check now decodes first, and is proved to bite on a v1 token.
+     */
+    const recoverable = (token: string, needle: string): boolean =>
+        token.includes(needle)
+        || token.split('.').some((segment) => Buffer.from(segment, 'base64url').toString('latin1').includes(needle));
+
+    assert('⚠ the token carries the identifier in no recoverable form — not even after decoding', () =>
+        !recoverable(sealed, '237600123456') && !recoverable(sealed, 'whatsapp'));
+
+    assert('guard bites — the same check DOES find the identifier in a v1 token', () =>
+        recoverable(mintLegacyV1({ c: 'whatsapp', e: '237600123456', x: nowSeconds + 600 }), '237600123456'));
+
+    assert('the token is at most 100 characters (v1 was about 150)', () => sealed.length <= 100);
+
+    // ── v1: accepted, never minted ───────────────────────────────────────────
+    assert('v1 is still ACCEPTED — a token already in chat memory at the deploy keeps working until it expires', () => {
+        const out = unsealBotIdentity(mintLegacyV1({ c: 'telegram', e: '99', x: nowSeconds + 600, l: 'en' }));
+        return out.channel === 'telegram' && out.externalId === '99' && out.language === 'en';
+    });
+
+    assert('⚠ a v1 payload edited to name another customer still does not verify', () => {
+        const legacy = mintLegacyV1({ c: 'whatsapp', e: '237600123456', x: nowSeconds + 600 });
+        const parts = legacy.split('.');
+        const forged = `v1.${Buffer.from(JSON.stringify({ c: 'whatsapp', e: '237699999999', x: nowSeconds + 600 })).toString('base64url')}.${parts[2]}`;
+        return tokenRefusal(forged) === 'BOT_IDENTITY_TOKEN_INVALID';
+    });
+
+    assert('⚠ a truncated v1 signature is refused rather than crashing', () => {
+        const parts = mintLegacyV1({ c: 'telegram', e: '99', x: nowSeconds + 600 }).split('.');
+        return tokenRefusal(`v1.${parts[1]}.AAAA`) === 'BOT_IDENTITY_TOKEN_INVALID';
+    });
+
+    assert('an expired v1 is EXPIRED', () =>
+        tokenRefusal(mintLegacyV1({ c: 'telegram', e: '99', x: nowSeconds - 1 })) === 'BOT_IDENTITY_TOKEN_EXPIRED');
 
     // ═════════════════════════════════════════════════════════════════════════
     section('15 · The MCP generator — what it emits, and what it must never emit');

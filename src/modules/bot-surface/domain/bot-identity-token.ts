@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'crypto';
+import { createCipheriv, createDecipheriv, createHmac, timingSafeEqual } from 'crypto';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { getBotIdentityTokenSecret } from '../../../config/secrets.config';
@@ -31,15 +31,44 @@ import { CONNECTION_CHANNELS, MessagingChannel } from '../../channel-connections
  *
  * ── THE THREE PROPERTIES THAT MAKE IT SAFE ───────────────────────────────────
  *
- *   1. **Unforgeable.** HMAC-SHA256 over the payload. A model that invents a token, or
- *      alters the `externalId` inside one it was given, produces a signature that does not
- *      verify — so it cannot name a customer it was not handed.
+ *   1. **Unforgeable.** Authenticated encryption (AES-256-GCM). A model that invents a
+ *      token, or alters one it was given, produces bytes that do not authenticate — so it
+ *      cannot name a customer it was not handed.
  *   2. **Expiring.** A leaked token is a bounded liability rather than a permanent one.
  *      `/identity/sync` runs on EVERY message, so a fresh token reaches the conversation
  *      each turn and the TTL never has to be generous to be usable.
- *   3. **Opaque.** It is not a phone number. It goes into a model's context window, chat
- *      memory and n8n execution logs, and none of those becomes a place where a real
- *      person's messaging identifier sits in the clear.
+ *   3. **Opaque.** It goes into a model's context window, chat memory and n8n execution
+ *      logs, and none of those becomes a place where a real person's messaging identifier
+ *      sits in a form a reader — or a model — can recover.
+ *   4. **Stable within the hour.** See v2 below; it is what makes a copy from chat memory
+ *      the SAME string as the fresh one.
+ *
+ * ── v2, AND THE MEASURED REASON v1 WAS REPLACED (2026-09-21) ─────────────────
+ * v1 was `v1.<base64url JSON>.<HMAC>`. Property 3 above was claimed for it and was FALSE:
+ * base64 is an encoding, not a seal, and the middle segment decoded to
+ * `{"c":"whatsapp","e":"2376…","x":<expiry>}` — readable by anyone, and readable by the model.
+ * The model acted on that. Across the owner's handset tests (n8n executions 1398, 1415, 1426,
+ * 1439, 1443, 1505) it repeatedly did not COPY the token from its prompt: it REBUILT one —
+ * channel and number intact, the expiry moved a day or more ahead, the signature invented —
+ * and every such call was refused. The chat memory made it worse: it replays every earlier
+ * tool call WITH its token, so the model saw five or six different ~150-character lookalikes
+ * beside the one fresh value. A prompt rule ("copy it exactly, retry once") did not hold.
+ *
+ * v2 removes what the model was acting on, rather than asking it to behave:
+ *   - **Encrypted**, so there is no expiry to "update" and no structure to rebuild.
+ *   - **Deterministic within a clock hour** — the nonce is derived from the plaintext, and
+ *     the plaintext carries the hour, not the second — so every token minted for one customer
+ *     in one hour is BYTE-IDENTICAL. The copies in chat memory are the fresh value.
+ *   - **About half as long** (~90 characters, not ~150), and fewer characters to copy is
+ *     fewer to get wrong.
+ * Deterministic encryption reveals only that two tokens are equal, and equal tokens mean the
+ * same customer in the same hour — which is exactly what the logs already say.
+ *
+ * ⚠ **v1 is still ACCEPTED, never minted.** Tokens minted before the deploy sit in chat
+ * memory and in in-flight turns; refusing them outright would turn the deploy itself into a
+ * wave of refusals. A v1 token lives at most two hours, so the `v1` branch of
+ * `unsealBotIdentity` is dead weight from two hours after the deploy and can be deleted in
+ * any later change — it can only ever refuse by then.
  *
  * ⚠ **This is NOT a session, and it must never grow into one.** It authenticates nothing
  * on its own: it is a sealed restatement of the envelope the automation layer could
@@ -58,23 +87,41 @@ import { CONNECTION_CHANNELS, MessagingChannel } from '../../channel-connections
  */
 
 /**
- * How long a minted token stays valid.
+ * The SHORTEST time a minted token stays valid.
  *
- * Two hours: comfortably longer than the n8n chat memory's own hour, so a conversation
- * cannot outlive its token mid-turn, and short enough that a token scraped from a log is
- * worthless by the time anybody reads it. It does not need to cover a whole conversation —
- * every inbound message re-mints one.
+ * Two hours, and short enough that a token scraped from a log is worthless by the time anybody
+ * reads it. It does not need to cover a whole conversation — every inbound message re-mints
+ * one. ⚠ Since v2 it is a floor, not an exact lifetime: a token expires two hours after the
+ * END of the clock hour it was minted in, so it lives between two and three hours. That is the
+ * price of being identical all hour, and it is why a copy from the previous hour still verifies.
  */
 export const BOT_IDENTITY_TOKEN_TTL_SECONDS = 7200;
 
-/** The only version this build mints or accepts. A future shape gets `v2`, never a flag. */
-const VERSION = 'v1';
+/** The window within which every token for one customer is the same string. */
+export const BOT_IDENTITY_TOKEN_BUCKET_SECONDS = 3600;
+
+/** The version this build mints. A future shape gets `v3`, never a flag. */
+const VERSION = 'v2';
+
+/** Accepted, never minted — see "v1 is still ACCEPTED" above. */
+const LEGACY_VERSION = 'v1';
+
+const NONCE_BYTES = 12;
+const TAG_BYTES = 12;
 
 /**
- * The sealed payload.
- *
- * Single-letter keys, because this string is repeated into a model's context window on
- * every tool call and the field names carry no meaning to any reader but this file.
+ * Two keys derived from the one secret, so v2 needs no new environment variable and rotates
+ * with `BOT_IDENTITY_TOKEN_SECRET` exactly as v1 did. Separate keys for the cipher and for
+ * the nonce: the nonce is a MAC of the plaintext, and a key must never serve two purposes.
+ */
+function subkey(purpose: 'encryption' | 'nonce'): Buffer {
+    return createHmac('sha256', getBotIdentityTokenSecret())
+        .update(`wi-mall bot identity token ${VERSION} ${purpose}`)
+        .digest();
+}
+
+/**
+ * The v1 payload — kept only so `unsealBotIdentity` can still read a v1 token.
  */
 interface SealedPayload {
     /** channel */
@@ -94,11 +141,17 @@ export interface UnsealedBotIdentity {
     language: string | null;
 }
 
-function encode(input: string): string {
-    return Buffer.from(input).toString('base64url');
-}
+/**
+ * The v2 plaintext: `[channel, externalId, expiryHour, language]`, as JSON.
+ *
+ * `expiryHour` is hours since the epoch, never seconds — the whole point is that two mints in
+ * the same hour produce the same bytes. `language` is `''` when absent so the array always has
+ * four entries.
+ */
+type SealedTuple = [string, string, number, string];
 
-function sign(payload: string): string {
+/** v1's signature — used only to VERIFY a legacy token. */
+function signLegacy(payload: string): string {
     return createHmac('sha256', getBotIdentityTokenSecret()).update(payload).digest('base64url');
 }
 
@@ -117,15 +170,24 @@ export function sealBotIdentity(input: {
     now?: number;
 }): string {
     const now = input.now ?? Math.floor(Date.now() / 1000);
-    const payload: SealedPayload = {
-        c: input.channel,
-        e: input.externalId,
-        x: now + BOT_IDENTITY_TOKEN_TTL_SECONDS,
-    };
-    if (input.language) payload.l = input.language;
+    const hour = Math.floor(now / BOT_IDENTITY_TOKEN_BUCKET_SECONDS);
+    const expiryHour = hour + 1 + BOT_IDENTITY_TOKEN_TTL_SECONDS / BOT_IDENTITY_TOKEN_BUCKET_SECONDS;
 
-    const encoded = encode(JSON.stringify(payload));
-    return `${VERSION}.${encoded}.${sign(encoded)}`;
+    const tuple: SealedTuple = [input.channel, input.externalId, expiryHour, input.language ?? ''];
+    const plaintext = Buffer.from(JSON.stringify(tuple), 'utf8');
+
+    /**
+     * ⚠ **The nonce is derived from the plaintext, and that is deliberate** — it is what makes
+     * the token identical all hour (the "synthetic IV" construction). GCM's one catastrophic
+     * misuse is the same nonce with DIFFERENT plaintexts; here a nonce can only repeat when the
+     * plaintext does, which yields the same ciphertext and reveals nothing new.
+     */
+    const nonce = createHmac('sha256', subkey('nonce')).update(plaintext).digest().subarray(0, NONCE_BYTES);
+    const cipher = createCipheriv('aes-256-gcm', subkey('encryption'), nonce, { authTagLength: TAG_BYTES });
+    cipher.setAAD(Buffer.from(VERSION));
+    const sealed = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+
+    return `${VERSION}.${Buffer.concat([nonce, sealed, cipher.getAuthTag()]).toString('base64url')}`;
 }
 
 /**
@@ -139,11 +201,73 @@ export function sealBotIdentity(input: {
  */
 export function unsealBotIdentity(token: string, now?: number): UnsealedBotIdentity {
     const parts = token.split('.');
-    if (parts.length !== 3 || parts[0] !== VERSION) throw invalidToken();
+    const at = now ?? Math.floor(Date.now() / 1000);
 
-    const encoded = parts[1];
-    const provided = Buffer.from(parts[2], 'base64url');
-    const expected = Buffer.from(sign(encoded), 'base64url');
+    if (parts.length === 2 && parts[0] === VERSION) return unsealV2(parts[1], at);
+    if (parts.length === 3 && parts[0] === LEGACY_VERSION) return unsealLegacyV1(parts[1], parts[2], at);
+    throw invalidToken();
+}
+
+function unsealV2(body: string, at: number): UnsealedBotIdentity {
+    const bytes = Buffer.from(body, 'base64url');
+
+    /**
+     * ⚠ **Checked before any slicing**, for the reason v1 guarded `timingSafeEqual`: a token cut
+     * short must be a 401, never a fault on the refusal path. `setAuthTag` and the decipher both
+     * throw on malformed input, and a throw here would be a 500 anyone could provoke.
+     */
+    if (bytes.length < NONCE_BYTES + TAG_BYTES + 1) throw invalidToken();
+
+    let plaintext: string;
+    try {
+        const nonce = bytes.subarray(0, NONCE_BYTES);
+        const tag = bytes.subarray(bytes.length - TAG_BYTES);
+        const sealed = bytes.subarray(NONCE_BYTES, bytes.length - TAG_BYTES);
+        const decipher = createDecipheriv('aes-256-gcm', subkey('encryption'), nonce, { authTagLength: TAG_BYTES });
+        decipher.setAAD(Buffer.from(VERSION));
+        decipher.setAuthTag(tag);
+        plaintext = Buffer.concat([decipher.update(sealed), decipher.final()]).toString('utf8');
+    } catch {
+        // Did not authenticate: invented, edited, truncated, or sealed under another secret.
+        throw invalidToken();
+    }
+
+    let tuple: unknown;
+    try {
+        tuple = JSON.parse(plaintext);
+    } catch {
+        // Authenticated, so this is our own malformed mint rather than an attack — still a 401.
+        throw invalidToken();
+    }
+
+    if (
+        !Array.isArray(tuple)
+        || tuple.length !== 4
+        || typeof tuple[0] !== 'string'
+        || typeof tuple[1] !== 'string'
+        || !Number.isInteger(tuple[2])
+        || typeof tuple[3] !== 'string'
+        || !(CONNECTION_CHANNELS as readonly string[]).includes(tuple[0])
+        || tuple[1].length === 0
+        || tuple[1].length > 128
+    ) {
+        throw invalidToken();
+    }
+
+    const [channel, externalId, expiryHour, language] = tuple as SealedTuple;
+    if (expiryHour * BOT_IDENTITY_TOKEN_BUCKET_SECONDS <= at) throw expiredToken();
+
+    return {
+        channel: channel as MessagingChannel,
+        externalId,
+        language: language === '' ? null : language,
+    };
+}
+
+/** v1, read-only. Delete with `LEGACY_VERSION` once no v1 token can still be alive. */
+function unsealLegacyV1(encoded: string, signature: string, at: number): UnsealedBotIdentity {
+    const provided = Buffer.from(signature, 'base64url');
+    const expected = Buffer.from(signLegacy(encoded), 'base64url');
 
     /**
      * ⚠ **The length check is not redundant; it is what makes the comparison legal.**
@@ -175,20 +299,21 @@ export function unsealBotIdentity(token: string, now?: number): UnsealedBotIdent
         throw invalidToken();
     }
 
-    const at = now ?? Math.floor(Date.now() / 1000);
-    if (payload.x <= at) {
-        throw createAppError(
-            ERROR_CODES.BOT_IDENTITY_TOKEN_EXPIRED,
-            401,
-            'The sealed identity token has expired',
-        );
-    }
+    if (payload.x <= at) throw expiredToken();
 
     return {
         channel: payload.c as MessagingChannel,
         externalId: payload.e,
         language: typeof payload.l === 'string' ? payload.l : null,
     };
+}
+
+function expiredToken() {
+    return createAppError(
+        ERROR_CODES.BOT_IDENTITY_TOKEN_EXPIRED,
+        401,
+        'The sealed identity token has expired',
+    );
 }
 
 function invalidToken() {
