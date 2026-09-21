@@ -6,7 +6,7 @@ const MSG_85 = 'wamid.ALT';
 const S8 = '§ 8 · bargaining keys and the gate\'s body';
 const PRODUCT = '68b0aa0000000000000000aa';
 const VARIANT = '68c0bb0000000000000000bb';
-const INB = { channel: 'whatsapp', externalId: '237672745831', messageId: 'wamid.B', kind: 'token', token: 'x', text: '' };
+const INB = { channel: 'whatsapp', externalId: '237600000001', messageId: 'wamid.B', kind: 'token', token: 'x', text: '' };
 
 const switchOn = (expr, data) => evalExpr(expr, { json: { success: true, data } });
 const CLOSED = NEW['core:bargain key change?.closed'];

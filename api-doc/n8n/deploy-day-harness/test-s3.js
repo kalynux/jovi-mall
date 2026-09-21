@@ -3,7 +3,7 @@ const { runCode, evalExpr, check, j } = require('./n8n-sim');
 const { NEW, live } = require('./build-new');
 
 const S3 = '§ 3 · A2 expand replies / send loop / refusals';
-const INB = { channel: 'whatsapp', externalId: '237672745831', messageId: 'wamid.A', kind: 'text', text: 'shoes' };
+const INB = { channel: 'whatsapp', externalId: '237600000001', messageId: 'wamid.A', kind: 'text', text: 'shoes' };
 const TG = { channel: 'telegram', externalId: '900000881', messageId: '55', kind: 'text', text: 'shoes' };
 
 const waText = (body, to = INB.externalId) => ({ channel: 'whatsapp', method: 'messages', body: { messaging_product: 'whatsapp', to, type: 'text', text: { body } } });

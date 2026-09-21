@@ -60,7 +60,7 @@ check(S1, `guard bites — the live rule drops ${liveMisses.length} of ${verbs.l
 // ════════════════════════════════════════════════════════════════════════════
 const S2a = '§ 2 · wa-adapter normalize (live vs new)';
 
-const meta = (message) => ({ 'WhatsApp Trigger': [j({ messages: [Object.assign({ from: '237672745831', id: 'wamid.X' }, message)], contacts: [{ wa_id: '237672745831', profile: { name: 'Ulrich' } }] })] });
+const meta = (message) => ({ 'WhatsApp Trigger': [j({ messages: [Object.assign({ from: '237600000001', id: 'wamid.X' }, message)], contacts: [{ wa_id: '237600000001', profile: { name: 'Ulrich' } }] })] });
 const runNormalize = (code, message) => runCode(code, { nodes: meta(message), input: [j({})], mode: 'each' })[0].json;
 
 const PRODUCT = '68b0aa0000000000000000aa';
@@ -93,13 +93,13 @@ for (const [name, rj, expected] of formCases) {
   const b = runNormalize(NEW['wa:normalize'], nfm(rj));
   check(S2a, `nfm_reply — ${name}: live kind=${a.kind} text=${JSON.stringify(a.text)} → new kind=${b.kind}`, a.kind === 'unsupported' && a.text === '' && b.kind === 'form' && JSON.stringify(b.form) === JSON.stringify(expected), JSON.stringify(b));
 }
-check(S2a, 'a form keeps the sender as externalId (bare digits) — the backend authorises on it', runNormalize(NEW['wa:normalize'], nfm('{}')).externalId === '237672745831');
+check(S2a, 'a form keeps the sender as externalId (bare digits) — the backend authorises on it', runNormalize(NEW['wa:normalize'], nfm('{}')).externalId === '237600000001');
 
 // ── core: detect command ─────────────────────────────────────────────────────
 const S2b = '§ 2 · core detect command / run command / command reply';
 const syncOk = { success: true, data: { onboarding: { next: null } } };
 const form = { flow_token: 'ia_abc', screen: 'pl', productId: PRODUCT };
-const inForm = { channel: 'whatsapp', externalId: '237672745831', messageId: 'wamid.F', kind: 'form', text: '', token: '', form };
+const inForm = { channel: 'whatsapp', externalId: '237600000001', messageId: 'wamid.F', kind: 'form', text: '', token: '', form };
 const detect = (code, inbound, sync) => runCode(code, { nodes: { Inbound: [j(inbound)] }, input: [j(sync)] })[0].json;
 
 const dLive = detect(live['detect command'].parameters.jsCode, inForm, syncOk);
@@ -122,7 +122,7 @@ const url = evalExpr(live['run command'].parameters.url, { nodes: runNodes(inFor
 check(S2b, `form posts to ${url.replace('http://jovi-mall:8022', '')}`, url === 'http://jovi-mall:8022/api/webhooks/whatsapp');
 const body = JSON.parse(evalExpr(NEW['core:run command.jsonBody'], { nodes: runNodes(inForm), json: dNew }));
 check(S2b, 'form body = { is_command, command: flow_complete, payload: <form untouched>, reply_to: <sender> }',
-  body.is_command === true && body.command === 'flow_complete' && JSON.stringify(body.payload) === JSON.stringify(form) && body.reply_to === '237672745831' && Object.keys(body).length === 4, JSON.stringify(body));
+  body.is_command === true && body.command === 'flow_complete' && JSON.stringify(body.payload) === JSON.stringify(form) && body.reply_to === '237600000001' && Object.keys(body).length === 4, JSON.stringify(body));
 const contactIn = { channel: 'whatsapp', externalId: '237600', kind: 'contact', contact: { phoneNumber: '+237600', userId: 1 } };
 const dContact = detect(live['detect command'].parameters.jsCode, contactIn, syncOk);
 check(S2b, 'unchanged — the contact command body', evalExpr(live['run command'].parameters.jsonBody, { nodes: runNodes(contactIn), json: dContact }) === evalExpr(NEW['core:run command.jsonBody'], { nodes: runNodes(contactIn), json: dContact }));
@@ -134,7 +134,7 @@ check(S2b, 'unchanged — the slash command body', evalExpr(live['run command'].
 const cmdReply = (code, inbound, response) => runCode(code, { nodes: { Inbound: [j(inbound)] }, input: [j(response)] });
 const ENDS = '={{ $json.endTurn === true }}';
 const endsSilently = (item) => evalExpr(ENDS, { json: item.json });
-const aReply = { channel: 'whatsapp', method: 'messages', body: { to: '237672745831', type: 'interactive' } };
+const aReply = { channel: 'whatsapp', method: 'messages', body: { to: '237600000001', type: 'interactive' } };
 
 let out = cmdReply(NEW['core:command reply'], inForm, { message: 'Inbound recorded', reply: aReply });
 check(S2b, 'form + reply (listing chose a product) → the reply is sent', out.length === 1 && out[0].json.reply === aReply && !endsSilently(out[0]));
