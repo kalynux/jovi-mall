@@ -169,6 +169,26 @@ let base = '';
 const RUN = randomBytes(4).toString('hex');
 const idem = (name: string): string => `verify-${RUN}-${name}`;
 
+/**
+ * A slot id in the FUTURE, on the shape this surface's validator accepts
+ * (`^slot_\d{1,15}_\d{1,15}$`, `bot.validators.ts`).
+ *
+ * ⚠ **Computed, never a literal, and that is the whole point.** Since `83ab777` every door
+ * that holds or books a slot runs `assertOfferedSlot` first, and it refuses a start at or
+ * before `now` with `409 BOOKING_SLOT_UNAVAILABLE` / `reason: 'not_future'` — BEFORE the
+ * product is looked up at all. The three hardcoded timestamps that used to be here were
+ * September 2025, so from 2026-09-16 they stopped probing the thing they were written to
+ * probe and began failing on a refusal about themselves.
+ *
+ * ⭐ The general shape, worth more than this fix: **a test fixture carrying an absolute date
+ * has an expiry date.** It passes until the day it does not, and it fails describing
+ * something other than the property it pins.
+ */
+const futureSlot = (daysAhead: number): string => {
+    const start = Date.now() + daysAhead * 86_400_000;
+    return `slot_${start}_${start + 3_600_000}`;
+};
+
 type Json = Record<string, unknown>;
 
 interface BotResponse {
@@ -540,25 +560,31 @@ async function main(): Promise<void> {
             const res = await call(
                 'POST',
                 '/api/internal/bot/bookings',
-                { productId: '68f0000000000000000000aa', slotId: 'slot_1757494800000_1757498400000' },
+                { productId: '68f0000000000000000000aa', slotId: futureSlot(7) },
                 { idempotencyKey: idem('booking-create-404') },
             );
-            // The list would answer 200 with an array. Create takes the slot hold, fails to
-            // find the product, and releases it.
+            // The list would answer 200 with an array. Create validates the slot, fails to
+            // find the product INSIDE that validation, and so never reaches the hold.
             return res.status === 404 && errorCode(res) === 'CATALOG_BOOKING_PRODUCT_NOT_FOUND';
         });
 
         /**
-         * ⚠ **The hold must not survive a failed create.** The customer API releases only on
-         * its success path, so a failure there leaves a dead hold on the slot for the rest of
-         * its fifteen minutes. This surface releases in a `finally` — and the proof is that
-         * the SAME slot can be attempted again immediately: a surviving hold would answer
-         * `409 BOOKING_SLOT_LOCKED` on the second call instead of the same 404.
+         * ⚠ **A failed create must not leave the slot locked out**, or one bad attempt costs
+         * every other customer that appointment for fifteen minutes. The customer API releases
+         * only on its success path; this surface releases in a `catch` for every failure.
+         *
+         * ⚠ **TWO mechanisms guarantee it now, and this pins the OUTCOME rather than either
+         * one.** Since `83ab777`, `lockSlot` validates the slot BEFORE it takes the hold, so an
+         * unknown product never reaches the hold at all; the controller's release still covers
+         * a failure that happens after a hold was genuinely taken. Asserting the `finally` by
+         * name would now pass for the wrong reason — nothing was held — so the assertion is
+         * that the SAME slot answers the same 404 on a second attempt, where a surviving hold
+         * would answer `409 BOOKING_SLOT_LOCKED`.
          */
         await assert('⚠ a failed create RELEASES the slot hold — the next attempt is not 409', async () => {
             const body = {
                 productId: '68f0000000000000000000aa',
-                slotId: 'slot_1757581200000_1757584800000',
+                slotId: futureSlot(8),
             };
             const first = await call('POST', '/api/internal/bot/bookings', body, {
                 idempotencyKey: idem('booking-release-1'),
@@ -619,7 +645,7 @@ async function main(): Promise<void> {
             const res = await call(
                 'PATCH',
                 '/api/internal/bot/bookings/68f0000000000000000000aa/reschedule',
-                { slotId: 'slot_1757667600000_1757671200000' },
+                { slotId: futureSlot(9) },
                 { idempotencyKey: idem('booking-reschedule-404') },
             );
             return res.status === 404 && errorCode(res) === 'BOOKING_NOT_FOUND';
@@ -1652,6 +1678,24 @@ async function main(): Promise<void> {
         // ═════════════════════════════════════════════════════════════════════
 
         await assert('a WhatsApp sender with no inbound traffic reports the window CLOSED', async () => {
+            /**
+             * ⚠ **The premise is re-established HERE, and not only in `cleanup()`.** This
+             * section runs eight sections and a hundred-odd calls after the sweep, and § 3's
+             * "every route in the table is MOUNTED" check loops `BOT_ROUTES` and POSTs every
+             * row — `identity_sync_sender` among them. Since `3831694` that call records
+             * inbound activity as its first statement, which is what stamps
+             * `open_chat_window:<phone>` for 23 hours. So this suite opens the window on
+             * itself, long before asserting it is shut.
+             *
+             * ⛔ **Do not "fix" that by not calling the route.** Recording the window on every
+             * inbound message IS the fix for every WhatsApp phone OTP silently failing for
+             * months, and the mount loop must keep covering every row. The suite models a
+             * sender the platform has never seen, so it has to say so where it says it.
+             */
+            await getRedisClient(WA_WINDOW_DB)
+                .then((redis) => redis.del(`open_chat_window:${WA_PHONE_ID}`))
+                .catch(() => undefined);
+
             const res = await call('POST', '/api/internal/bot/messaging/window');
             const data = res.body.data as Json | undefined;
             return res.status === 200

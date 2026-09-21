@@ -106,8 +106,28 @@ const TG_PHONE_E164 = '+237600000394';
 const SUSPENDED_USER_ID = new mongoose.Types.ObjectId('60700000000000000000d392');
 const VENDOR_USER_ID = new mongoose.Types.ObjectId('60700000000000000000d393');
 
-const ALL_PHONES = [NEW_PHONE_E164, SUSPENDED_PHONE, VENDOR_PHONE, TG_PHONE_E164];
-const ALL_EXTERNAL_IDS = [NEW_WA_PHONE_ID, SUSPENDED_WA_PHONE_ID, VENDOR_WA_PHONE_ID, TG_CHAT_ID];
+/**
+ * A sender that arrives late and answers nothing — § 9 needs a step that is still PENDING.
+ * See the note at the Skip check for why it cannot reuse `NEW_WA_PHONE_ID`.
+ */
+const SKIP_WA_PHONE_ID = '237600000397';
+const SKIP_PHONE_E164 = '+237600000397';
+
+/**
+ * ⚠ **Telegram chat ids here are NUMERIC, and that is load-bearing rather than cosmetic.**
+ * `telegramIsPrivateChat` in `channel-reply.ts` reads Telegram's own dialog-id scheme — a
+ * private chat's id is a positive integer — and outside one it drops every reply-keyboard
+ * control, because a contact button cannot be offered in a group. A made-up string id is
+ * therefore rendered as a shape no real Telegram chat ever has, and a check that reads a
+ * button off it is reading an absence.
+ */
+const TG_REPLY_CHAT_ID = '99000391';
+const TG_REPLY_FR_CHAT_ID = '99000392';
+
+const ALL_PHONES = [NEW_PHONE_E164, SUSPENDED_PHONE, VENDOR_PHONE, TG_PHONE_E164, SKIP_PHONE_E164];
+const ALL_EXTERNAL_IDS = [
+    NEW_WA_PHONE_ID, SUSPENDED_WA_PHONE_ID, VENDOR_WA_PHONE_ID, TG_CHAT_ID, SKIP_WA_PHONE_ID,
+];
 
 let server: http.Server | null = null;
 let base = '';
@@ -651,7 +671,7 @@ async function main(): Promise<void> {
     const replyOf = (res: BotResponse): Json => (res.body.reply ?? {}) as Json;
     const replyBody = (res: BotResponse): Json => (replyOf(res).body ?? {}) as Json;
 
-    const tgReply = await sync({ channel: 'telegram', externalId: 'verify-botreg-tg-reply-1' });
+    const tgReply = await sync({ channel: 'telegram', externalId: TG_REPLY_CHAT_ID });
 
     await check('⚠ the Telegram first turn carries a COMPLETE sendMessage body', () => {
         const body = replyBody(tgReply);
@@ -659,7 +679,7 @@ async function main(): Promise<void> {
         const keyboard = (markup.keyboard ?? []) as Array<Array<Json>>;
         return replyOf(tgReply).channel === 'telegram'
             && replyOf(tgReply).method === 'sendMessage'
-            && body.chat_id === 'verify-botreg-tg-reply-1'
+            && body.chat_id === TG_REPLY_CHAT_ID
             && body.text === next(tgReply).prompt
             && keyboard[0]?.[0]?.request_contact === true
             && typeof keyboard[0]?.[0]?.text === 'string'
@@ -674,7 +694,7 @@ async function main(): Promise<void> {
         typeof next(tgReply).prompt === 'string');
 
     await check('the reply is written in the language the envelope asked for', async () => {
-        const fr = await sync({ channel: 'telegram', externalId: 'verify-botreg-tg-reply-fr', language: 'fr' });
+        const fr = await sync({ channel: 'telegram', externalId: TG_REPLY_FR_CHAT_ID, language: 'fr' });
         const text = String(replyBody(fr).text ?? '');
         const label = String(
             ((((replyBody(fr).reply_markup as Json)?.keyboard as Array<Array<Json>>)?.[0]?.[0]) ?? {}).text ?? '',
@@ -750,20 +770,41 @@ async function main(): Promise<void> {
     });
 
     await check('⚠ …and pressing it really skips the step, with no word parsed anywhere', async () => {
-        // The token maps to the body that already existed. What changed is how the customer
-        // reaches it: `callback_query.data` → `{ step, action }`, no language involved.
+        /**
+         * The token maps to the body that already existed. What changed is how the customer
+         * reaches it: `callback_query.data` → `{ step, action }`, no language involved.
+         *
+         * ⚠ **A FRESH sender, and that is not tidiness.** `NEW_WA_PHONE_ID` ANSWERED its email
+         * back in § 4, and `applyOnboardingStep` now refuses to let a stale Skip overwrite an
+         * answered step — a chat keeps its history, so an old Skip button stays tappable for
+         * ever. Tapping it there is correctly a 200 that changes nothing, which is the exact
+         * OPPOSITE of the property this check exists to prove. It needs a step still pending.
+         */
         const [verb, step] = 'skip:email'.split(':');
-        const res = await onboard(wa(NEW_WA_PHONE_ID), { step, action: verb });
+        await sync(wa(SKIP_WA_PHONE_ID));
+        const res = await onboard(wa(SKIP_WA_PHONE_ID), { step, action: verb });
         return res.status === 200
             && ((onboarding(res).steps ?? []) as Array<Json>)
                 .find((s) => s.step === 'email')?.state === 'skipped';
     });
 
-    await check('a finished checklist sets NO reply — that turn belongs to the model', () => {
-        // `named`/`skippedEmail` walked the checklist in § 4; the last response there has
-        // nothing left to ask, and a cheerful "all done!" would talk over the answer to
-        // whatever the customer actually came to ask.
-        return done.body.reply === undefined && onboarding(done).next === null;
+    await check('⚠ the call that FINISHES the checklist carries the welcome, and ONLY that one', async () => {
+        /**
+         * ⚠ **INVERTED on 2026-09-21.** This asserted that a finished checklist sets NO reply,
+         * on the grounds that the turn belongs to the model. The owner's decision reversed it:
+         * the welcome is the one turn the platform gets to say "you are set up, here is what I
+         * can do", and it is drawn with Browse · My orders · Help in the customer's language.
+         *
+         * ⭐ **The second half is the half with teeth.** "The checklist is complete" stays true
+         * for ever, so a welcome keyed on that STATE would greet the customer again on every
+         * later message. It fires on the TRANSITION instead — which is what `wasComplete` in
+         * `bot-identity.controller.ts` is for — and this proves it by taking one more turn and
+         * asserting the welcome does NOT come back.
+         */
+        const later = await sync(wa(NEW_WA_PHONE_ID));
+        return onboarding(done).next === null
+            && done.body.reply !== undefined
+            && later.body.reply === undefined;
     });
 
     // ═════════════════════════════════════════════════════════════════════════
