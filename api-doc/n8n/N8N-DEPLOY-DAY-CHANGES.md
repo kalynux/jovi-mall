@@ -66,6 +66,15 @@ live. It is split, and **neither half may be skipped:**
    written below, database row included. This is the only half that exercises a tap WITH a reply
    (the assistant absent from the tap turn), which is the case § 4.6 exists for.
 
+✅ **Half 1 PASSED on the owner's handset, 2026-09-21 ~10:12 UTC, after the v2 token deploy
+(jovi-mall `3053894`, CI green incl. live suites).** Exec 1531: the owner tapped *Attach photo*
+on ticket `…d5bff5` and sent a picture. `recall awaiting` returned the carry with
+**`awaitingPhoto`** — a flag this change was never tested with, carried because the rule keys on
+the flag family and not the verb — and the model called `tickets_add_attachment` for that ticket
+with the minted v2 token **byte-for-byte** (87 chars), → `success`, `attachmentCount 1/5`. The
+typed Reply was confirmed working by the owner in the same session. ⏳ **Half 2 (cancellation
+reason + database row) remains owed** until a cancellable order can exist.
+
 ⛔ **`compose agent input` is NOT the full build.** `build-new.js` layers § 6, **§ 4.6** and
 **§ 8.5** into that one node; the § 4.6 layer reads `$('recall awaiting')`, a node the server does
 not have, and n8n throws on a reference to a missing node — so deploying the full build would
