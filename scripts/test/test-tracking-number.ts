@@ -93,7 +93,28 @@ function main(): void {
 
   const numbers = new Set<string>();
   for (let i = 0; i < 2000; i++) numbers.add(formatTrackingNumber('FDO', at));
-  assert('2000 draws in the same second collide at most once', () => numbers.size >= 1999);
+
+  /**
+   * ⚠ **This said `>= 1999` and it reddened CI at random — MEASURED, not guessed.**
+   * The suffix is 5 characters of a 32-symbol alphabet, so 32^5 = 33,554,432 draws are
+   * possible and 2000 of them collide with expectation C(2000,2)/32^5 ≈ 0.0596. Two or more
+   * collisions in one run is therefore uncommon but perfectly ordinary: over 20,000 simulated
+   * runs, 18,830 produced 2000 distinct, 1,132 produced 1999 and **38 produced 1998** — so the
+   * old bound failed 0.19% of runs, about one CI run in 526, on completely correct code. It
+   * did exactly that on 2026-09-21.
+   *
+   * ⛔ **A test that fails 1 run in 526 is worse than no test**, because the next person meets
+   * a red pipeline while believing something is broken, and the cost is an investigation every
+   * time. 1990 is unreachable by chance — it needs eleven collisions, probability on the order
+   * of 1e-13 — while still collapsing instantly for a degenerate RNG, which is the only thing
+   * this assertion can actually detect.
+   *
+   * ⭐ **Nothing is lost by loosening it**, and that is the part worth knowing: the suffix's
+   * LENGTH and ALPHABET are pinned deterministically by the assertion immediately below, which
+   * matches every draw against `TRACKING_NUMBER_PATTERN` — `[0-9A-HJKMNP-TV-Z]{5}`. A shortened
+   * suffix or a widened alphabet fails there, on every run, rather than on a coin flip here.
+   */
+  assert('2000 draws in the same second are essentially all distinct', () => numbers.size >= 1990);
   assert('every draw is well-formed', () =>
     [...numbers].every((n) => TRACKING_NUMBER_PATTERN.test(n)));
   // I/L/O/U are excluded so nobody has to guess whether a label says 1 or I.

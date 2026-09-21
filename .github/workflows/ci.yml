@@ -285,8 +285,22 @@ jobs:
       #
       # It runs BEFORE the server starts so a suite can never observe a half-seeded
       # database, and it is idempotent — safe to re-run against a warm database too.
-      - name: Seed reference data (pricing plans)
-        run: npm run seed:plans
+      - name: Seed reference data (pricing plans, negotiation playbook)
+        run: |
+          set -euo pipefail
+          npm run seed:plans
+          # ⚠ `verify:negotiation-playbook` REFUSES OUTRIGHT without this, and that refusal is
+          #   correct: the bargaining model reads its playbook from Mongo, not from the file in
+          #   the repository, so an unseeded database means bargaining is off and the suite says
+          #   so rather than passing on an inert feature.
+          #
+          #   Idempotent by checksum (LF-normalised) and it keeps superseded versions, so
+          #   re-running it against a warm database is free — the same property that lets the
+          #   line above sit here.
+          #
+          #   The suite landed on 2026-09-20 and had never run in CI before 2026-09-21: this
+          #   job is gated on `check`, and `check` was red for five days.
+          npm run seed:negotiation-playbook
 
       - name: Start jovi-mall
         run: |
@@ -298,6 +312,28 @@ jobs:
             sleep 2
           done
           echo "::error::jovi-mall did not become healthy"; tail -100 /tmp/jovi-dev.log; exit 1
+
+      # ── The landing app, for verify:landing-routes ────────────────────────────
+      #
+      # `SURFACE_PATHS` in `domain/bot-list-window.ts` is a HAND-KEPT COPY of the landing
+      # app's URL structure, and the bot puts those paths in front of real customers. When a
+      # page is renamed over there, nothing in THIS repository changes and nothing fails —
+      # the bot simply starts sending people to a 404. This check is the only thing that
+      # catches it, and it can only do so with the other repository present.
+      #
+      # ⚠ It ran for the first time on 2026-09-21. It was added on 2026-09-21 and had never
+      #   executed: this job declares `needs: check`, `check` had been red since 2026-09-16
+      #   for an unrelated reason, and a skipped job is indistinguishable from a passing one.
+      #
+      # `main`, not a pinned ref, and deliberately: a dead link is dead as soon as the landing
+      # app ships the rename, so pinning would hide exactly the drift this exists to find.
+      - name: Check out the landing app
+        uses: actions/checkout@v4
+        with:
+          repository: kalynux/jovi-mall-landing
+          ref: main
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          path: landing-app
 
       - name: Live suites
         run: |
@@ -320,7 +356,11 @@ jobs:
           #   do. Until then the price-lock resolver is proven only against a developer
           #   database, by hand. Excluded on 2026-09-13, the first run of this job that
           #   ever reached it.
-          EXCLUDED="verify:gateways verify:negotiation-lock"
+          # ⚠ verify:landing-routes is out of THIS LOOP but it is NOT skipped — it runs in its
+          #   own step below, because it is the one suite here that takes an ARGUMENT and this
+          #   loop passes none. It needs a second repository (the landing app), which the step
+          #   below checks out. See the long note there.
+          EXCLUDED="verify:gateways verify:negotiation-lock verify:landing-routes"
           # EMPTY — see the note above the job. Kept so the next deliberate
           # exclusion has somewhere to go.
           BASELINED=""
@@ -336,6 +376,19 @@ jobs:
             echo "::error::failing live suites:$failed"
             exit 1
           fi
+
+      # Its own step, because it is the one suite here that takes an argument. `always()` so a
+      # failure in the loop above does not hide a dead customer-facing link underneath it —
+      # these two answer different questions and neither should mask the other.
+      - name: verify:landing-routes (against the real landing app)
+        if: always()
+        run: |
+          set -euo pipefail
+          # The suite REFUSES rather than passing when the app is absent, so a missing or
+          # unreadable checkout reads as a failure here rather than as a silent green. If this
+          # step fails on the checkout above with a 403 or 404, CROSS_REPO_TOKEN cannot read
+          # kalynux/jovi-mall-landing and needs that repository added to its scope.
+          npm run --silent verify:landing-routes -- --landing "${GITHUB_WORKSPACE}/landing-app"
 
       # The "Baselined live suite (exact counts)" step that stood here asserted
       # verify:messaging-login at 36/1 and was DELETED on 2026-08-23, because the suite

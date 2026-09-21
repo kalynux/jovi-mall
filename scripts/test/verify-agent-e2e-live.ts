@@ -259,6 +259,26 @@ async function buildWorld(): Promise<{ variantId: Types.ObjectId; productId: Typ
     email: `${TAG}agency@jovitest.cm`,
     phone: '+237699000912',
     status: 'active',
+    /**
+     * ⚠ **An administrator has VETTED this business, and `status: 'active'` stopped saying so.**
+     * Since 2026-09-15 an agency self-activates on a proved phone
+     * (`core/accounts/activation.ts`), so "active" now means the account holder finished
+     * signing up — not that anyone reviewed the company. `CodEligibilityService` therefore
+     * tests the KYC verdict on its own, and without these two fields step 2 below never
+     * reaches an assertion: it throws `COD_AGENCY_NOT_SUPPORTED` at checkout.
+     *
+     * ⛔ **Fix the fixture, never the rule.** Without that clause an agency nobody reviewed
+     * could switch its own COD on and start collecting cash from customers, and the platform
+     * would find out when the remittance failed to arrive. `test:agency-kyc` scans for the
+     * exact expression and goes red if it is softened.
+     *
+     * Written the way `DeliveryAgencyRepository.markVerifiedIfNotVerified` writes it on a real
+     * approval — the top-level flag AND the nested verdict — rather than the one field that
+     * happens to clear the gate, so this stays a genuinely approved agency if the gate ever
+     * reads another of them.
+     */
+    legit_verified: true,
+    kyc_details: { legit_verified: true, status: 'verified', verified_at: new Date() },
     policies: {
       pricing: {
         storage_based: {
