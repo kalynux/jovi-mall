@@ -132,8 +132,10 @@ const N46 = Object.fromEntries(FIX['4.6 nodes'].map((n) => [n.name, n]));
 // — what it is built on is what is live —
 check(S5, 'built on what is LIVE: the § 5.2 prompt is the live prompt, byte for byte',
   FIX['systemMessage.52'] === LIVE_NOW.nodes['AI Agent'].parameters.options.systemMessage);
+// ⚠ CRLF-normalised: `core.autocrlf=true` turns this committed LF file into CRLF on a Windows
+// checkout, and n8n's body is LF — an un-normalised compare fails on correct code.
 check(S5, 'built on what is LIVE: the live compose agent input is the § 6-only body that was shipped',
-  LIVE_CAI === fs.readFileSync(path.join(__dirname, 'new', 's6only_compose_agent_input.txt'), 'utf8'));
+  LIVE_CAI === fs.readFileSync(path.join(__dirname, 'new', 's6only_compose_agent_input.txt'), 'utf8').replace(/\r\n/g, '\n'));
 
 // — the node body —
 check(S5, 'compose agent input carries no backslash (the one escape became its literal character)', CAI.split(BS).length - 1 === 0);
