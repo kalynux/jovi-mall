@@ -318,9 +318,81 @@ const FILE_OLD = 'The reference works once and expires in 30 minutes; if you wer
 const FILE_NEW = "The reference works once and expires in 30 minutes. Use one only from the customer's latest message, or from the message just before it when they are now telling you which request it belongs to. Never use an older one: a button may already have attached it without you seeing, and it will be refused. If you were given none, the file is not available and the customer must send it again.";
 FIX['systemMessage.49'] = patch('systemMessage § 4.9', FIX['systemMessage.53'], [[FILE_OLD, FILE_NEW]]);
 
+// ── § 8.1–8.4 + § 10, AS SHIPPED on core 97073c59 and bargain 430b3eba ────────────────
+// § 8.5 (alternatives handed back) is NOT built: nothing produces `handoff` anywhere — not the
+// backend, not the bargaining workflow's `return to core` — so the core half would be a rule
+// that can never fire. Owed, and said so in the record.
+//
+// The bargain workflow is no longer on e2c94ead (pruned from history). 430b3eba is the owner's
+// 2026-09-20 23:29 autosave, whose only change in the retained history is a cachedResultUrl on
+// `check_promotion`. The six nodes this section reads or edits are asserted byte-identical to
+// the e2c94ead copy build-new patched, so its § 8.4 body and test-s8's proofs hold.
+const LIVE_CORE_8 = JSON.parse(fs.readFileSync(path.join(__dirname, 'live-core-97073c59.json'), 'utf8'));
+const LIVE_BARGAIN = JSON.parse(fs.readFileSync(path.join(__dirname, 'live-bargain-430b3eba.json'), 'utf8'));
+const { liveBargain: SPEC_BARGAIN } = require('./build-new');
+for (const n of Object.keys(SPEC_BARGAIN)) {
+  if (JSON.stringify(LIVE_BARGAIN.nodes[n].parameters) !== JSON.stringify(SPEC_BARGAIN[n].parameters)) {
+    throw new Error(`§ 8: live bargain '${n}' has drifted from the copy build-new patched`);
+  }
+}
+const REDIS_CRED_8 = LIVE_CORE_8.nodes['check bargain'].credentials;
+const FLAG_KEY = "=wi-mall:bargain:{{ $('Inbound').first().json.channel }}:{{ $('Inbound').first().json.externalId }}";
+const LOCK_KEY = "=wi-mall:bargain:lock:{{ $('Inbound').first().json.channel }}:{{ $('Inbound').first().json.externalId }}";
+const switchRule = (id, key, expr) => ({
+  conditions: {
+    options: { caseSensitive: true, leftValue: '', typeValidation: 'strict', version: 3 },
+    conditions: [{ leftValue: expr, rightValue: '', operator: { type: 'boolean', operation: 'true', singleValue: true }, id }],
+    combinator: 'and',
+  },
+  renameOutput: true,
+  outputKey: key,
+});
+const redis = (name, position, operation, extra) => ({
+  name, type: 'n8n-nodes-base.redis', typeVersion: 1, position, onError: 'continueRegularOutput', credentials: REDIS_CRED_8,
+  parameters: Object.assign({ operation }, extra),
+});
+// ⚠ A DEAD END, placed ABOVE `awaiting answer?` and `has reply?` on the canvas so that, under
+// execution order v1, the routing keys are written BEFORE the reply goes out: a customer who
+// answers the Bargain question at once must find the flag already set.
+FIX['8 nodes'] = [
+  // onError continueErrorOutput: this runs on EVERY tap and BEFORE the reply, so a throw here
+  // would cost the customer their answer. An error leaves by output 2, which is unconnected.
+  { name: 'bargain key change?', type: 'n8n-nodes-base.switch', typeVersion: 3.4, position: [0, 208], onError: 'continueErrorOutput',
+    parameters: { rules: { values: [
+      switchRule('8c1d0e2f-3a4b-4c5d-9e6f-7a8b9c0d1e21', 'closed', NEW['core:bargain key change?.closed']),
+      switchRule('8c1d0e2f-3a4b-4c5d-9e6f-7a8b9c0d1e22', 'reopen', NEW['core:bargain key change?.reopen']),
+    ] }, options: {} } },
+  redis('clear bargain flag (tap)', [224, 112], 'delete', { key: FLAG_KEY }),
+  redis('clear price lock (tap)', [448, 112], 'delete', { key: LOCK_KEY }),
+  redis('clear price lock (reopen)', [224, 304], 'delete', { key: LOCK_KEY }),
+  redis('set bargain flag (tap)', [448, 304], 'set', { key: FLAG_KEY, value: NEW['core:set bargain flag (tap).value'] }),
+];
+FIX['8 wiring'] = [
+  { type: 'addConnection', source: 'product action', target: 'bargain key change?', sourceIndex: 0, targetIndex: 0 },
+  { type: 'addConnection', source: 'bargain key change?', target: 'clear bargain flag (tap)', sourceIndex: 0, targetIndex: 0 },
+  { type: 'addConnection', source: 'clear bargain flag (tap)', target: 'clear price lock (tap)', sourceIndex: 0, targetIndex: 0 },
+  { type: 'addConnection', source: 'bargain key change?', target: 'clear price lock (reopen)', sourceIndex: 1, targetIndex: 0 },
+  { type: 'addConnection', source: 'clear price lock (reopen)', target: 'set bargain flag (tap)', sourceIndex: 0, targetIndex: 0 },
+];
+// § 8.4 — decide send prefers the gate's channel-ready body (jovi-mall negotiation.service
+// `outbound`, deployed). Byte-identical to build-new's, so test-s8's § 8.4 checks hold.
+FIX['8 decide send'] = NEW['bargain:decide send'];
+// § 10.1 — neverError goes from both bargainer sends (ADR-022): a refusal fails the run, the
+// error workflow reports it, and core's `hand to bargainer` error output takes the turn to the
+// main agent and `report bargain down`. § 10.2 — the Graph version gets core's one home.
+const bargainOpts = (name) => {
+  const o = JSON.parse(JSON.stringify(LIVE_BARGAIN.nodes[name].parameters.options || {}));
+  delete o.response;
+  return o;
+};
+FIX['10 send options'] = { 'send telegram': bargainOpts('send telegram'), 'send whatsapp': bargainOpts('send whatsapp') };
+const WA_URL_OLD = "=https://graph.facebook.com/v18.0/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/{{ $('decide send').first().json.reply.method }}";
+if (LIVE_BARGAIN.nodes['send whatsapp'].parameters.url !== WA_URL_OLD) { throw new Error('§ 10.2: the bargainer WhatsApp URL is not the v18.0 literal this was written against'); }
+FIX['10 whatsapp url'] = "={{ $env.WHATSAPP_API_URL || 'https://graph.facebook.com/v26.0' }}/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/{{ $('decide send').first().json.reply.method }}";
+
 module.exports = {
   FIX, live, wf, TOKEN_PARA_OLD, TOKEN_PARA_NEW, TOKEN_PARA_53, AWAIT_KEY, RULES_46, LIVE_NOW, LIVE_SEND,
-  REPORT_OLD_ERROR, LIVE_FORMS, ASK_OLD, ASK_NEW, FILE_OLD, FILE_NEW,
+  REPORT_OLD_ERROR, LIVE_FORMS, ASK_OLD, ASK_NEW, FILE_OLD, FILE_NEW, LIVE_CORE_8, LIVE_BARGAIN, FLAG_KEY, LOCK_KEY, WA_URL_OLD,
 };
 
 if (require.main === module) {
@@ -337,6 +409,10 @@ if (require.main === module) {
   fs.writeFileSync(path.join(__dirname, 'new', 'fix_compose_agent_input_46.txt'), FIX['compose agent input']);
   fs.writeFileSync(path.join(__dirname, 'new', 'fix_compose_tap_input_49.txt'), FIX['compose tap input.49']);
   fs.writeFileSync(path.join(__dirname, 'new', 'fix_system_message_49.txt'), FIX['systemMessage.49']);
+  fs.writeFileSync(path.join(__dirname, 'new', 'fix_8_10.json'), JSON.stringify({
+    coreNodes: FIX['8 nodes'], coreWiring: FIX['8 wiring'], decideSend: FIX['8 decide send'],
+    sendOptions: FIX['10 send options'], whatsappUrl: FIX['10 whatsapp url'],
+  }, null, 1));
   fs.writeFileSync(path.join(__dirname, 'new', 'fix_2_forms.json'), JSON.stringify({
     waNormalize: FIX['2 wa normalize'], detectCommand: FIX['2 detect command'], runCommandJsonBody: FIX['2 run command jsonBody'],
     commandReply: FIX['2 command reply'], node: FIX['2 node'], wiring: FIX['2 wiring'],

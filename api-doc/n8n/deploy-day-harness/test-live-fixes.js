@@ -497,4 +497,88 @@ check(S13, "every $('…') in the tap node names a live node", refsIn(TAP49).eve
 // — mutant: the live body, replayed on exec 1590, does NOT forbid the write —
 check(S14, 'guard bites — the live tap node, on exec 1590, says nothing against filing', !tapRun(FIX['compose tap input'], waiting).includes('call no tool'));
 
+// ── § 8.1–8.4 + § 10, as shipped (core 97073c59, bargain 430b3eba) ──────────────
+const S15 = '§ 8 · as shipped (routing keys follow the buttons)';
+const S16 = '§ 10 · the bargainer reports a refusal; one Graph home';
+const S17 = '§ 8/§ 10 · guard bites';
+const { LIVE_CORE_8, LIVE_BARGAIN, FLAG_KEY, LOCK_KEY, WA_URL_OLD } = require('./build-live-fixes');
+const N8 = Object.fromEntries(FIX['8 nodes'].map((n) => [n.name, n]));
+const SW = N8['bargain key change?'];
+const inb8 = { channel: 'whatsapp', externalId: '237600000000', messageId: 'wamid.K', kind: 'token', token: 'x', text: '' };
+// A parameter such as a Redis key is a TEMPLATE: literal text around several {{ }} parts, which
+// n8n-sim's evalExpr (one expression only) refuses. Each part is evaluated by evalExpr itself.
+const tmpl = (s, ctx) => String(s).replace(/^=/, '').replace(/[{][{]([^}]*)[}][}]/g, (m, e) => String(evalExpr('={{' + e + '}}', ctx)));
+const keyOf = (expr) => tmpl(expr, { nodes: { Inbound: [j(inb8)] } });
+const REDIS8 = ['clear bargain flag (tap)', 'clear price lock (tap)', 'clear price lock (reopen)', 'set bargain flag (tap)'];
+
+// the switch — its two rules ARE the expressions test-s8 classified against real responses
+const rules = SW.parameters.rules.values;
+check(S15, 'the switch has exactly two rules, closed then reopen, with the proven expressions',
+  rules.length === 2 && rules[0].outputKey === 'closed' && rules[1].outputKey === 'reopen'
+  && rules[0].conditions.conditions[0].leftValue === NEW['core:bargain key change?.closed']
+  && rules[1].conditions.conditions[0].leftValue === NEW['core:bargain key change?.reopen']);
+check(S15, '⛔ a throw in the switch cannot cost the reply: continueErrorOutput, and its error output (2) goes nowhere', SW.onError === 'continueErrorOutput' && targets(applyWiring(LIVE_CORE_8.connections, FIX['8 wiring']), 'bargain key change?', 2).length === 0);
+check(S15, 'no fallback output — an ordinary tap writes nothing', !SW.parameters.options.fallbackOutput || SW.parameters.options.fallbackOutput === 'none');
+check(S15, "same Switch type and version as the live 'route turn'", SW.type === 'n8n-nodes-base.switch' && SW.typeVersion === 3.4);
+for (const [label, data] of [['closed', { outcome: 'deal_locked', negotiation: { closed: true, closedBy: 'button' } }], ['reopen', { outcome: 'chat', verb: 'bargain', productId: 'p', variantId: 'v' }], ['plain add', { outcome: 'cart', verb: 'add' }]]) {
+  const hits = rules.map((r) => evalExpr(r.conditions.conditions[0].leftValue, { json: { success: true, data } }));
+  check(S15, `strict typing holds — both rules return a real boolean for a ${label} response`, hits.every((h) => typeof h === 'boolean'), JSON.stringify(hits));
+}
+
+// ⭐ the cross-node pins: what these nodes WRITE is exactly what the live readers READ
+const liveFlagRead = keyOf(LIVE_CORE_8.nodes['check bargain'].parameters.key);
+const liveLockRead = keyOf(LIVE_CORE_8.nodes['check price lock'].parameters.key);
+check(S15, "⭐ the flag key written = the key core's check bargain reads", keyOf(FLAG_KEY) === liveFlagRead && liveFlagRead === 'wi-mall:bargain:whatsapp:237600000000', liveFlagRead);
+check(S15, "⭐ the lock key deleted = the key core's check price lock reads", keyOf(LOCK_KEY) === liveLockRead && liveLockRead === 'wi-mall:bargain:lock:whatsapp:237600000000', liveLockRead);
+check(S15, '⭐ and = the keys the BARGAIN workflow itself sets (another workflow, nothing compares them)',
+  keyOf(FLAG_KEY) === keyOf(LIVE_BARGAIN.nodes['set bargain flag'].parameters.key) && keyOf(LOCK_KEY) === keyOf(LIVE_BARGAIN.nodes['store price lock'].parameters.key));
+check(S15, 'the close deletes the flag, then the lock; the re-open deletes the lock, then sets the flag',
+  N8['clear bargain flag (tap)'].parameters.operation === 'delete' && N8['clear bargain flag (tap)'].parameters.key === FLAG_KEY
+  && N8['clear price lock (tap)'].parameters.operation === 'delete' && N8['clear price lock (tap)'].parameters.key === LOCK_KEY
+  && N8['clear price lock (reopen)'].parameters.operation === 'delete' && N8['clear price lock (reopen)'].parameters.key === LOCK_KEY
+  && N8['set bargain flag (tap)'].parameters.operation === 'set' && N8['set bargain flag (tap)'].parameters.key === FLAG_KEY);
+check(S15, 'the flag value is the one test-s8 fed to the LIVE reader', N8['set bargain flag (tap)'].parameters.value === NEW['core:set bargain flag (tap).value']);
+check(S15, 'every Redis node continues on error — a Redis wobble costs routing, never the answer', REDIS8.every((n) => N8[n].onError === 'continueRegularOutput'));
+check(S15, "every Redis node uses core's own Redis credential", REDIS8.every((n) => JSON.stringify(N8[n].credentials) === JSON.stringify(LIVE_CORE_8.nodes['check bargain'].credentials)));
+
+// wiring on the live graph
+const W8 = applyWiring(LIVE_CORE_8.connections, FIX['8 wiring']);
+check(S15, 'product action still feeds has reply? and awaiting answer?, and now the switch', JSON.stringify(targets(W8, 'product action', 0).sort()) === JSON.stringify(['awaiting answer?', 'bargain key change?', 'has reply?']));
+check(S15, 'closed → clear flag → clear lock → end', JSON.stringify(targets(W8, 'bargain key change?', 0)) === '["clear bargain flag (tap)"]' && JSON.stringify(targets(W8, 'clear bargain flag (tap)', 0)) === '["clear price lock (tap)"]' && targets(W8, 'clear price lock (tap)', 0).length === 0);
+check(S15, 'reopen → clear lock → set flag → end', JSON.stringify(targets(W8, 'bargain key change?', 1)) === '["clear price lock (reopen)"]' && JSON.stringify(targets(W8, 'clear price lock (reopen)', 0)) === '["set bargain flag (tap)"]' && targets(W8, 'set bargain flag (tap)', 0).length === 0);
+const reach8 = (conns, from) => { const seen = new Set(); const q = [from]; while (q.length) { const n = q.shift(); if (seen.has(n)) continue; seen.add(n); for (const l of ((conns[n] || {}).main || [])) for (const x of (l || [])) q.push(x.node); } return seen; };
+const fromSwitch = reach8(W8, 'bargain key change?');
+check(S15, '⛔ a DEAD END — nothing it reaches can send, reply or reach the model', fromSwitch.size === 5 && !['has reply?', 'send telegram', 'send whatsapp', 'AI Agent', 'expand replies'].some((n) => fromSwitch.has(n)), [...fromSwitch].join(', '));
+const eb8 = edgeSet(LIVE_CORE_8.connections); const ea8 = edgeSet(W8);
+check(S15, 'the edge-set diff is exactly the five added edges, none removed', [...ea8].filter((e) => !eb8.has(e)).length === 5 && [...eb8].filter((e) => !ea8.has(e)).length === 0);
+check(S15, 'execution order v1: the switch sits ABOVE awaiting answer? and has reply?, so the keys are written before the reply goes out',
+  SW.position[1] < LIVE_CORE_8.positions['awaiting answer?'][1] && SW.position[1] < LIVE_CORE_8.positions['has reply?'][1] && LIVE_CORE_8.settings.executionOrder === 'v1');
+check(S15, 'all five positions are free on the live canvas, and the names are new',
+  FIX['8 nodes'].every((n) => !Object.values(LIVE_CORE_8.positions).some((p) => p[0] === n.position[0] && p[1] === n.position[1]) && !LIVE_CORE_8.nodeNames.includes(n.name)));
+const refs8 = refsIn(JSON.stringify(FIX['8 nodes'].map((n) => n.parameters)));
+check(S15, "⛔ every $('…') in the five nodes names a live core node", refs8.length > 0 && refs8.every((r) => LIVE_CORE_8.nodeNames.includes(r)), refs8.join(', '));
+
+// § 8.4 + § 10 on the bargain workflow
+const LB = LIVE_BARGAIN.nodes;
+check(S16, 'decide send is the body test-s8 proved (outbound preferred, D-4 untouched)', FIX['8 decide send'] === NEW['bargain:decide send']);
+const refsDS = refsIn(FIX['8 decide send']);
+check(S16, "⛔ every $('…') in decide send names a live bargain node", refsDS.length > 0 && refsDS.every((r) => LIVE_BARGAIN.nodeNames.includes(r)), refsDS.join(', '));
+check(S16, 'the send guard only asks for a reply, so an outbound body passes it', LB['send guard'].parameters.conditions.conditions[0].leftValue === "={{ $('decide send').first().json.reply != null }}");
+for (const n of ['send telegram', 'send whatsapp']) {
+  const o = FIX['10 send options'][n];
+  check(S16, `${n}: neverError is gone and the timeout is kept`, !JSON.stringify(o).includes('neverError') && o.timeout === LB[n].parameters.options.timeout && Object.keys(o).join() === 'timeout', JSON.stringify(o));
+  check(S16, `${n}: its onError is the default (stop), so a refusal FAILS the bargainer's run`, LB[n].onError === undefined);
+}
+const waUrl = (env) => tmpl(FIX['10 whatsapp url'], { env, nodes: { 'decide send': [j({ reply: { method: 'messages' } })] } });
+check(S16, 'the WhatsApp URL now reads WHATSAPP_API_URL, like core', waUrl({ WHATSAPP_API_URL: 'https://graph.facebook.com/v23.0', WHATSAPP_PHONE_NUMBER_ID: '111' }) === 'https://graph.facebook.com/v23.0/111/messages');
+check(S16, 'and falls back to v26.0, never v18.0', waUrl({ WHATSAPP_PHONE_NUMBER_ID: '111' }) === 'https://graph.facebook.com/v26.0/111/messages');
+check(S16, "its prefix is core's send whatsapp prefix, character for character", FIX['10 whatsapp url'].startsWith("={{ $env.WHATSAPP_API_URL || 'https://graph.facebook.com/v26.0' }}/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/"));
+check(S16, 'core already routes a failed bargainer to the main agent AND reports it', JSON.stringify(targets(LIVE_CORE_8.connections, 'hand to bargainer', 1).sort()) === '["is media?","report bargain down"]');
+
+// — mutants —
+check(S17, 'guard bites — a lock key one character off no longer matches the live reader', keyOf(LOCK_KEY.replace('bargain:lock:', 'bargain-lock:')) !== liveLockRead);
+const W8bad = applyWiring(LIVE_CORE_8.connections, FIX['8 wiring'].concat([{ type: 'addConnection', source: 'set bargain flag (tap)', target: 'has reply?', sourceIndex: 0, targetIndex: 0 }]));
+check(S17, 'guard bites — a branch wired back into the turn is no longer a dead end', reach8(W8bad, 'bargain key change?').has('has reply?'));
+check(S17, 'guard bites — the live WhatsApp URL ignores WHATSAPP_API_URL (still v18.0)', tmpl(WA_URL_OLD, { env: { WHATSAPP_API_URL: 'https://graph.facebook.com/v23.0', WHATSAPP_PHONE_NUMBER_ID: '111' }, nodes: { 'decide send': [j({ reply: { method: 'messages' } })] } }) === 'https://graph.facebook.com/v18.0/111/messages');
+
 module.exports = {};

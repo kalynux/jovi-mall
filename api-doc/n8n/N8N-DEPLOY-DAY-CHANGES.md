@@ -24,7 +24,9 @@ connection changed. Times UTC. Each row's previous version is its rollback.
 | 10:26:40 | `1050e7c3` | **§ 3, merged with the owner's reporting** — `expand replies` + `send loop`; every send path returns to the loop; `report channel down` corrected (below). 65 → 67 nodes | `run-deployed.js` 159/0 |
 | 11:33:44 | `73402e02` | **§ 2, core half** — `detect command` / `run command` / `command reply` as specified; new IF `ends silently?` between `command reply` and `has reply?`. 67 → 68 nodes | `run-deployed.js` 180/0 |
 | 11:35:43 | wa-adapter `9046b09b` | **§ 2, adapter half** — `UP-wi-mall-wa-adapter` (`01h0wDrawM1rWtxm`) `normalize` only; rollback `218fc514` | `test-s1-s2` (in `run.js` 201/0) |
-| 11:53:17 | `97073c59` | **§ 4.9** — a waiting tap files nothing; a file reference is not reused after its turn (below). `compose tap input` + the prompt's FILES rule | `run-deployed.js` 191/0 |
+| 11:53:10 | `97073c59` | **§ 4.9** — a waiting tap files nothing; a file reference is not reused after its turn (below). `compose tap input` + the prompt's FILES rule | `run-deployed.js` 191/0 |
+| 12:33:37 | `926d6353` | **§ 8.1–8.3** — `bargain key change?` + four Redis nodes, a dead end off `product action` (below). 68 → 73 nodes | `run-deployed.js` 227/0 |
+| 12:35:22 | bargain `58c25a1a` | **§ 8.4 + § 10** — `UP-wi-mall-bargain` (`lJdli0uwOtWBGx5R`): `decide send` prefers `data.outbound`; both sends lose `neverError`; `send whatsapp` reads `WHATSAPP_API_URL`. Rollback `430b3eba` | `run-deployed.js` 227/0 |
 
 **§ 3 · shipped MERGED, not as specified.** § 3.2 was written against `1997c757`, before the
 owner's Saturday change routed both send nodes' error output to `report channel down` (a direct
@@ -49,6 +51,35 @@ reason** — it read `$json.error.message`, n8n's generic sentence, while Telegr
 each arrived in order, so the ordering is proven on a real turn and no longer waits for a product
 page. ⏳ **Still unexercised live:** a REFUSED send inside the loop, i.e. the report path, which
 only a real refusal can show; the harness walks it and its mutants bite.
+
+**§ 8 + § 10 · applied, with three departures from the specification, and § 8.5 NOT built.**
+
+- **§ 8.5 is not built.** Nothing produces `handoff` anywhere — not the backend, not the
+  bargaining workflow's `return to core` — so its core half would be a rule that can never fire,
+  which is dead code that looks alive. Owed: the bargainer must first return the alternative
+  product ids it found; the core half written in § 8.5 then applies unchanged.
+- **The bargaining workflow was not on `e2c94ead`.** Live was `430b3eba`, the owner's autosave of
+  2026-09-20 23:29 UTC; `e2c94ead` has been pruned from n8n's history, so it can no longer be the
+  rollback (§ 12.6 updated). The retained history shows one change, a `cachedResultUrl` on
+  `check_promotion` from opening the editor, and the six nodes this section reads or edits are
+  byte-identical to the copy the specification patched — `build-live-fixes.js` throws otherwise.
+- **The switch sits ABOVE `awaiting answer?` and `has reply?`.** Under execution order v1 that
+  writes the routing keys before the reply goes out, so a customer who answers the Bargain
+  question at once finds the flag already set. Because it therefore runs on every tap and before
+  the reply, it carries `onError: continueErrorOutput` with its error output unconnected: a throw
+  there cannot cost a customer their answer. The Redis nodes continue on error as specified.
+- **A refused bargaining message now produces TWO failure rows** — the bargaining run fails
+  (`execution_failed`, carrying Telegram's or Meta's reason) and core's existing
+  `report bargain down` records the fallback (`degraded_turn`). Two views of one incident, the
+  same shape § 2.3 accepts for a refused form; before this change there were none and the
+  customer got nothing.
+
+Proved in `run-deployed.js` (§ 8 as shipped): the keys written and deleted evaluate to exactly the
+keys core's `check bargain` / `check price lock` read **and** the keys the bargaining workflow
+itself sets — two workflows, nothing else comparing them; the branch is a dead end on the live
+graph; the WhatsApp URL resolves through `WHATSAPP_API_URL` with a v26.0 fallback. ⏳ **Live proof
+needs a negotiable product**: § 12.4 item 5, and a counter-offer showing its Lock-it-in button.
+⛔ § 12.5a (re-seed the playbook on the production database) is still owed and is not an n8n change.
 
 **§ 4.9 · a waiting tap filed a stale file — found on the handset, not in the specification.**
 Exec 1590: the owner pressed "Reply here" on a support-reply notification. The tap worked and
@@ -1483,10 +1514,10 @@ Each workflow independently, by `restore_workflow_version` then publish, then co
 
 | Workflow | Roll back to |
 |---|---|
-| `UP-wi-mall-core` | `1997c757-ccd0-44d8-b5d6-c2f476a8fee3` |
+| `UP-wi-mall-core` | the previous row of the log at the top (`97073c59` before `926d6353`, and so on); `1997c757-ccd0-44d8-b5d6-c2f476a8fee3` is the pre-change baseline |
 | `UP-wi-mall-wa-adapter` | `218fc514-a72e-4b11-8784-8f1a8fcf7b2c` |
 | `UP-wi-mall-tg-adapter` | `55690aaa-f169-40fd-9b33-7fd0050ec165` (untouched by this set) |
-| `UP-wi-mall-bargain` | `e2c94ead-740b-4f52-baba-066faa7e440f` |
+| `UP-wi-mall-bargain` | `430b3eba-ce79-4e46-bab9-61744346dc98` (`e2c94ead` was pruned from n8n's history; see the § 8 note in the log) |
 
 Nothing here writes to a database, and the only Redis keys touched are the two bargaining ones
 (§ 8), whose worst case after a rollback is one stale routing flag that expires in 30 minutes.
