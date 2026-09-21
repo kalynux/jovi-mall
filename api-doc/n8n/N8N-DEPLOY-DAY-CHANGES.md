@@ -14,6 +14,7 @@ connection changed. Times UTC. Each row's previous version is its rollback.
 
 | Draft saved (published within ~1 min) | Version | Carried | Proof |
 |---|---|---|---|
+| 04:53:01 | mcp `fb56fc33` | **§ 9** — `UP-wi-mall-mcp` (`3X8oYCQZkCi7Wg4r`): the four tools added this round (`catalog_browse_categories`, `catalog_product_reviews_summary`, `inapp_open_orders`, `orders_record_cancellation_reason`), 56 → 60 nodes, rendered with `--existing` against `669bceb9`. Recorded in commit `306478a`; this row added 2026-09-21 ~16:30 UTC, when a re-render against the live server emitted **no tool operation** (58 = 58) | `test:bot-surface` § 15 |
 | 05:06:59 | `b494da91` | **§ 1 + § 4** — every tap reaches the backend; a data-only tap reaches the model via the new `compose tap input` node | `run.js` |
 | 05:32:53 | `32cb4534` | **§ 5 + § 6** — `returnIntermediateSteps` on; `compose agent reply` / `drop duplicate reply` rewritten; `compose agent input` = live **+ § 6 only** | `run-deployed.js` 39/0 |
 | 06:07:21 | `3d4e2d87` | **§ 5.1** — two defects § 5 itself surfaced (below) | `run-deployed.js` 59/0 |
@@ -1566,6 +1567,29 @@ first and deploying after is not a slower order — it is a refusal.
 ⛔ **And it is the one step this platform cannot rehearse.** A published Flow is visible to
 customers and is superseded, never deleted.
 
+### 13.0 · Deploy day (2026-09-21) — pre-flight PASSED; the endpoint defect found and fixed; publishing held for the owner
+
+Everything below was checked **without publishing anything**, before the first outward call:
+
+| Check | Result |
+|---|---|
+| Meta's health ping, encrypted with the public half derived from the production env file's key and signed with its app secret, sent to `https://api.wi-mall.com/api/webhooks/whatsapp/flows` | **200**, body decrypts to exactly `{"data":{"status":"active"}}` — the deployed key IS the one the publisher derives from |
+| The same ping with a deliberately wrong signature | **432** — the live server verifies signatures (a 200 here would mean the secret is unset in Dokploy) |
+| The ping's AES key wrapped for a stranger RSA key | **421** — a key is loaded and it is not the stranger |
+| `GET /{phone_number_id}` with an `appsecret_proof` | **200**; the same with a wrong proof **400** "Invalid appsecret_proof" — so `WHATSAPP_APP_SECRET` belongs to the app that issued the access token, which is the app Meta signs a Flow's requests with when the Flow is created through the API |
+| The number | `Wi-Mall`, `APPROVED`, `CONNECTED`, `VERIFIED`, quality `GREEN` |
+| Flows on the Business Account | **none** (`data: []`) |
+| Public key registered on the number | a **1-character placeholder**, signature status `MISMATCH` — so § 13.3's upload is genuinely needed, not a formality |
+| `npm run flows:publish` (rehearsal) against the production env file | readiness clean on every line, all three definitions `ok · not yet published` |
+
+The probes are `flow-preflight.js` and `meta-readonly.js` in the coordinator's scratchpad: each prints status codes, lengths and a 12-hex fingerprint of the PUBLIC key (`46c7ab05ccbd`), never a secret.
+
+⛔ **The defect: the publisher never told Meta where the endpoint is.** Meta's Flows API reference: from Flow JSON 3.0 the endpoint "should be specified only via API", as `endpoint_uri` on the Flow — and every definition here declares `data_api_version: '3.0'`. The create call sent `{ name, categories }` and nothing else, so each Flow would have been created, given its asset, and then refused at `/publish`, leaving one draft per attempt. Nothing offline could see it: the rehearsal validates the definitions, and the definitions were right. **Found by reading Meta's reference instead of the script**, which is the § 13.1 lesson again one level down — the script was checked against itself.
+
+Fixed in `scripts/publish-whatsapp-flows.ts`: `endpoint_uri` is sent on create, **derived** from `API_PUBLIC_URL` plus the path `app.ts` mounts (no second setting to drift), shown as a `Flow endpoint` line in the readiness block, and `--publish` is refused unless it is https. `test:whatsapp-flows` gained four assertions (368/0), one of them a vacuity guard on the create call itself; six mutants, all caught, including the original defect and a route moved in `app.ts`.
+
+⏸ **Publishing is held for the owner's explicit permission.** The first outward call (`--upload-key`) was refused by the session's permission gate as a production deploy — correctly: it is an outward act on the live Business Account. Nothing was sent to Meta beyond the read-only checks above.
+
 ### 13.1 · Preconditions
 
 | | Proved by |
@@ -1573,7 +1597,7 @@ customers and is superseded, never deleted.
 | The **owner's go-ahead** | — it is their call, not a technical gate |
 | `WHATSAPP_FLOW_PRIVATE_KEY` **and** `WHATSAPP_APP_SECRET`, set **together** | the rehearsal's readiness block, which **refuses `--publish` without either** — see the ⛔ below |
 | `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_BUSINESS_ACCOUNT_ID` | same block — ⚠ each missing one produces a Graph error that sounds like a *different* problem: a missing WABA id reads as "Flow not found", a missing token as a permissions failure on an object that is fine |
-| `POST /api/webhooks/whatsapp/flows` reachable from the internet | Meta's health check, at the moment of publishing — there is no earlier proof |
+| `POST /api/webhooks/whatsapp/flows` reachable from the internet | Meta's health check at the moment of publishing — ⚠ this said "there is no earlier proof", and there is: § 13.0's encrypted ping is the same request, sent by us first |
 | n8n routing `interactive.nfm_reply` (**§ 2 of this document**) | otherwise a customer fills in a form, presses the final button, and the thread says nothing |
 
 ⛔ **The app secret is what authenticates a request as Meta's, and without it nothing is
@@ -1660,7 +1684,10 @@ on checkout is a worse day.
 
 Each publish is three Graph calls, and the middle one has a trap:
 
-1. `POST /{waba_id}/flows` → `{ name, categories: ['OTHER'] }`, which returns the id.
+1. `POST /{waba_id}/flows` → `{ name, categories: ['OTHER'], endpoint_uri }`, which returns the id.
+   ⛔ **This line read `{ name, categories }` until deploy day, and that was the defect** (§ 13.0):
+   without `endpoint_uri` a Flow that declares `data_api_version` has nowhere to send a screen
+   request, and `/publish` refuses it.
 2. `POST /{flow_id}/assets` — ⚠ **the definition goes as a FILE** (`asset_type: FLOW_JSON`,
    field `file`), not as a JSON body. Posting it as the body is the obvious wrong version and
    Meta rejects it with a message about assets. Validation errors here stop that screen and

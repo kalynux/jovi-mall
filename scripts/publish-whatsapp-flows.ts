@@ -15,7 +15,8 @@
  *   2. **`WHATSAPP_FLOW_PRIVATE_KEY` and `WHATSAPP_APP_SECRET`**, set together (see
  *      `.env.example`: the key without the secret leaves an unrate-limited CPU cost open).
  *   3. **The endpoint reachable from the internet**, because publishing runs Meta's health
- *      check against it.
+ *      check against it — **and Meta told where it is**, which this script derives from
+ *      `API_PUBLIC_URL` (see `ENDPOINT_URI` below; it used to tell Meta nothing).
  *   4. **The automation layer routing `interactive.nfm_reply`**, or a finished form reports
  *      into silence.
  *
@@ -70,6 +71,21 @@ const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
 const ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN || '';
 const WABA_ID = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || '';
 
+/**
+ * ⛔ **Where Meta sends every screen request — and this script used to never say.** Meta's Flows
+ * API reference: from Flow JSON 3.0 the endpoint "should be specified only via API", as
+ * `endpoint_uri`, and every definition here declares a `data_api_version`. The create call sent a
+ * name and a category and nothing else, so each Flow would have been created, given its asset,
+ * and refused at the publish step — leaving a draft behind for every attempt. Found on deploy day
+ * (2026-09-21), before the first run, by reading Meta's reference rather than this file.
+ *
+ * Derived from `API_PUBLIC_URL` plus the path `app.ts` mounts, so there is no second setting to
+ * drift; `test:whatsapp-flows` pins this path against the mount.
+ */
+const FLOW_ENDPOINT_PATH = '/api/webhooks/whatsapp/flows';
+const API_PUBLIC_URL = (process.env.API_PUBLIC_URL || '').replace(/\/+$/, '');
+const ENDPOINT_URI = API_PUBLIC_URL ? `${API_PUBLIC_URL}${FLOW_ENDPOINT_PATH}` : '';
+
 function line(label: string, value: string): void {
     console.log(`  ${label.padEnd(28)} ${value}`);
 }
@@ -90,6 +106,7 @@ function reportReadiness(): boolean {
     line('Access token', ACCESS_TOKEN ? `set, ${ACCESS_TOKEN.length} chars` : '(unset)');
     line('Flow private key', flowsConfigured() ? 'set and parseable' : '(unset or unparseable)');
     line('App secret', flowAppSecret() ? `set, ${flowAppSecret().length} chars` : '(unset)');
+    line('Flow endpoint', ENDPOINT_URI || '(unset — from API_PUBLIC_URL)');
 
     if (!flowsConfigured()) problems.push('WHATSAPP_FLOW_PRIVATE_KEY is unset or will not parse');
 
@@ -119,6 +136,12 @@ function reportReadiness(): boolean {
     if (!ACCESS_TOKEN) problems.push('WHATSAPP_ACCESS_TOKEN is unset');
     if (!PHONE_NUMBER_ID) problems.push('WHATSAPP_PHONE_NUMBER_ID is unset — needed for the key upload');
     if (!WABA_ID) problems.push('WHATSAPP_BUSINESS_ACCOUNT_ID is unset — needed to create a Flow');
+    if (!ENDPOINT_URI.startsWith('https://')) {
+        problems.push(
+            'API_PUBLIC_URL is unset or not https — it is how Meta is told where the endpoint is, '
+            + 'and Meta calls only an https address',
+        );
+    }
 
     for (const p of problems) console.log(`  ⚠ ${p}`);
     return problems.length === 0;
@@ -268,7 +291,7 @@ async function main(): Promise<void> {
         const created = (await graph(`${WABA_ID}/flows`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, categories: ['OTHER'] }),
+            body: JSON.stringify({ name, categories: ['OTHER'], endpoint_uri: ENDPOINT_URI }),
         })) as { id?: string };
 
         const flowId = created.id;

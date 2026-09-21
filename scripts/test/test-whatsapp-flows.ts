@@ -838,6 +838,27 @@ async function main(): Promise<void> {
     assert('⛔ nor are the three booking forms, whose reads and screen kinds do not exist yet',
         !/BOOKING_LIST_FLOW|BOOKING_SLOT_FLOW|BOOKING_PAY_FLOW/.test(publishSource));
 
+    /**
+     * ⛔ **Meta must be TOLD where the endpoint is**, as `endpoint_uri` on the Flow — from Flow JSON
+     * 3.0 there is no other way. The create call once sent a name and a category only, so every
+     * Flow would have been refused at publish (deploy day, 2026-09-21). The path is pinned against
+     * the mount in `app.ts`: a route that moves must break this suite, not a published form.
+     */
+    const createCall = publishSource.match(/graph\(`\$\{WABA_ID\}\/flows`[\s\S]*?\}\)\)/)?.[0] ?? '';
+    const endpointPath = publishSource.match(/FLOW_ENDPOINT_PATH = '([^']+)'/)?.[1] ?? '';
+    const appSource = stripComments(fs.readFileSync(
+        path.join(__dirname, '..', '..', 'src', 'app.ts'), 'utf8',
+    ).replace(/\r\n/g, '\n'));
+    assert('⛔ the create call is found at all (so the next two cannot pass on nothing)',
+        createCall.length > 0 && endpointPath.length > 0);
+    assert('⛔ the publisher sends endpoint_uri when it creates a Flow',
+        /endpoint_uri:\s*ENDPOINT_URI/.test(createCall));
+    assert('⛔ … built from the path app.ts actually mounts the Flow endpoint on',
+        endpointPath === '/api/webhooks/whatsapp/flows' && appSource.includes(`'${endpointPath}'`)
+        && /ENDPOINT_URI = API_PUBLIC_URL \? `\$\{API_PUBLIC_URL\}\$\{FLOW_ENDPOINT_PATH\}`/.test(publishSource));
+    assert('⚠ … and --publish is refused unless that address is https',
+        /if \(!ENDPOINT_URI\.startsWith\('https:\/\/'\)\)/.test(publishSource));
+
     // ── the booking forms: the cap is what shaped them ───────────────────────
     const slotFlow = BOOKING_SLOT_FLOW;
     const dayScreen = slotFlow.screens.find((s) => s.id === 'DAY');
