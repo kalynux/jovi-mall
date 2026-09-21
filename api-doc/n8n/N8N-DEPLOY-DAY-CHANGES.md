@@ -19,6 +19,21 @@ connection changed. Times UTC. Each row's previous version is its rollback.
 | 06:07:21 | `3d4e2d87` | **§ 5.1** — two defects § 5 itself surfaced (below) | `run-deployed.js` 59/0 |
 | 06:10:39 | `c36d16e7` | **§ 5.2** — the token paragraph (below) | `run-deployed.js` 67/0 |
 | 07:02:09 | `abf83805` | **§ 4.6** — the awaiting carry: 4 nodes, 6 wiring changes, `compose agent input` = live + § 4.6 layer, the two filing rules in RULES. 61 → 65 nodes | `run-deployed.js` 112/0 |
+| 07:37:39 | `0ed551f3` | **§ 5.3** — the token paragraph, rewritten for the v2 token (below) | `run-deployed.js` 117/0 |
+
+**§ 5.3 · § 5.2 did not hold, and the fix moved to the backend.** On the owner's handset at
+07:10 UTC (exec 1505) the § 4.6 carry **worked** — `recall awaiting` handed over ticket
+`…d5bff5` with `awaitingReply`, and the model called `tickets_add_note` with the customer's
+French sentence verbatim, accents intact — and the call was still refused: the model had
+**rebuilt** its token again (expiry ~26 h out, invented signature), used the forged one on a
+second tool, and never retried. v1's middle segment was base64 JSON — channel, phone number,
+expiry — so the model could read it and "renew" it; § 5.2's own words ("earlier tokens are old
+and no longer work") plausibly invited exactly that. **jovi-mall `4e8e6a7` replaces the token**
+with v2: encrypted (nothing to rebuild), the SAME string for one customer all clock-hour (a copy
+from chat memory IS the fresh value), under 100 characters; v1 still accepted, never minted.
+§ 5.3 is the prompt half: copy it exactly from the line above, never rebuild one, retry once —
+true under v1 and v2 alike, so it went out before the backend deploy. ⏳ **The backend half
+reaches customers only when jovi-mall is redeployed.**
 
 **§ 4.6 · shipped ahead of § 8, and its live check is split in two.** `compose agent input` is
 the live § 6 body plus the § 4.6 layer only — `build-new.js` now keeps that intermediate as

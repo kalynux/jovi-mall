@@ -209,4 +209,16 @@ const mutProp = CAI.replace("$('recall awaiting').item.json || {}).awaitingCarry
 check(S6, 'guard bites — compose reading a different property loses the carry',
   mutProp !== CAI && !nextTurn(mutProp, written).includes('awaitingReply') && carried.includes('awaitingReply'));
 
+// ── § 5.3 · the token paragraph for v2 ───────────────────────────────────────
+const S7 = '§ 5.3 · the token paragraph for v2';
+const { TOKEN_PARA_53 } = require('./build-live-fixes');
+const P53 = FIX['systemMessage.53'];
+check(S7, 'the § 5.2 paragraph is replaced, once', !P53.includes(TOKEN_PARA_NEW) && P53.split(TOKEN_PARA_53).length - 1 === 1);
+check(S7, 'putting it back gives the § 4.6 prompt byte for byte', P53.replace(TOKEN_PARA_53, TOKEN_PARA_NEW) === P46);
+check(S7, '⛔ it no longer calls earlier tokens "old" — under v2 they are the same string, and "old" invites renewing one',
+  !P53.includes('no longer work') && !P53.includes('new on every message'));
+check(S7, 'it forbids rebuilding one, and keeps retry-once-then-ask',
+  TOKEN_PARA_53.includes('rebuild') && TOKEN_PARA_53.includes('make that same call once more') && TOKEN_PARA_53.includes('Only if that is refused too'));
+check(S7, 'no expression added or lost', exprCount(P53) === exprCount(P46));
+
 module.exports = {};

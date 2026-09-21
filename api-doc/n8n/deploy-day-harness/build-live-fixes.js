@@ -159,7 +159,17 @@ const RULES_46 =
   '- If a filing is refused because it is already recorded (a conflict, 409), never file it again — tell the customer it is already on record.\n';
 FIX['systemMessage.46'] = patch('systemMessage § 4.6', FIX['systemMessage.52'], [[RULES_ANCHOR, RULES_ANCHOR + RULES_46]]);
 
-module.exports = { FIX, live, wf, TOKEN_PARA_OLD, TOKEN_PARA_NEW, AWAIT_KEY, RULES_46, LIVE_NOW };
+// ── § 5.3 · the token paragraph, rewritten for the v2 token (jovi-mall 4e8e6a7) ──
+// § 5.2 told the model the value is "new on every message" and that earlier tool calls' tokens
+// "are old and no longer work". Under v2 both are false — one customer's token is the SAME string
+// all hour — and exec 1505 suggests the second did harm: told its copies were "old", the model
+// RENEWED one (moved the expiry, invented the signature) rather than copying the line it was
+// given. The paragraph now says only what holds under v1 and v2 alike: copy it exactly from the
+// line above, never rebuild one, retry once, then ask.
+const TOKEN_PARA_53 = 'Copy it character for character from the line above into every wi-mall tool call. Never edit, shorten, rebuild or guess one, and never take one from anywhere else in this chat. Never show it or mention it to the customer. If a tool answers BOT_IDENTITY_TOKEN_EXPIRED or BOT_IDENTITY_TOKEN_INVALID, make that same call once more with the botToken copied again from the line above. Only if that is refused too, ask the customer to send their message again.';
+FIX['systemMessage.53'] = patch('systemMessage § 5.3', FIX['systemMessage.46'], [[TOKEN_PARA_NEW, TOKEN_PARA_53]]);
+
+module.exports = { FIX, live, wf, TOKEN_PARA_OLD, TOKEN_PARA_NEW, TOKEN_PARA_53, AWAIT_KEY, RULES_46, LIVE_NOW };
 
 if (require.main === module) {
   fs.mkdirSync(path.join(__dirname, 'new'), { recursive: true });
@@ -167,6 +177,7 @@ if (require.main === module) {
   fs.writeFileSync(path.join(__dirname, 'new', 'fix_compose_agent_reply.txt'), FIX['compose agent reply']);
   fs.writeFileSync(path.join(__dirname, 'new', 'fix_system_message_52.txt'), FIX['systemMessage.52']);
   fs.writeFileSync(path.join(__dirname, 'new', 'fix_system_message_46.txt'), FIX['systemMessage.46']);
+  fs.writeFileSync(path.join(__dirname, 'new', 'fix_system_message_53.txt'), FIX['systemMessage.53']);
   fs.writeFileSync(path.join(__dirname, 'new', 'fix_compose_agent_input_46.txt'), FIX['compose agent input']);
   fs.writeFileSync(path.join(__dirname, 'new', 'fix_46_nodes.json'), JSON.stringify({ nodes: FIX['4.6 nodes'], wiring: FIX['4.6 wiring'] }, null, 1));
   for (const [k, v] of Object.entries(FIX)) {
