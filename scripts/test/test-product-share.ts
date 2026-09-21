@@ -118,7 +118,7 @@ function main(): void {
   // vendors owning `blue-shirt`. The canonical URL resolves the store first.
   assert('the link is store-scoped, not a bare product slug', () =>
     withStorefront(() =>
-      service.render(product(), 'whatsapp', 'my-store').body.includes(`${STOREFRONT}/stores/my-store/products/blue-shirt`)));
+      service.render(product(), 'whatsapp', 'my-store').body.includes(`${STOREFRONT}/shop/stores/my-store/products/blue-shirt`)));
 
   assert('a vendor with no store still gets a shareable message', () => {
     const body = withStorefront(() => service.render(product(), 'whatsapp', null).body);

@@ -14,7 +14,7 @@ connection changed. Times UTC. Each row's previous version is its rollback.
 
 | Draft saved (published within ~1 min) | Version | Carried | Proof |
 |---|---|---|---|
-| 04:53:01 | mcp `fb56fc33` | **§ 9** — `UP-wi-mall-mcp` (`3X8oYCQZkCi7Wg4r`): the four tools added this round (`catalog_browse_categories`, `catalog_product_reviews_summary`, `inapp_open_orders`, `orders_record_cancellation_reason`), 56 → 60 nodes, rendered with `--existing` against `669bceb9`. Recorded in commit `306478a`; this row added 2026-09-21 ~16:30 UTC, when a re-render against the live server emitted **no tool operation** (58 = 58) | `test:bot-surface` § 15 |
+| 04:53:01 | mcp `fb56fc33` | **§ 9** — `UP-wi-mall-mcp` (`3X8oYCQZkCi7Wg4r`): the four tools added this round (`catalog_browse_categories`, `catalog_product_reviews_summary`, `inapp_open_orders`, `orders_record_cancellation_reason`), 56 → 60 nodes, rendered with `--existing` against `669bceb9`. Recorded in commit `306478a`; this row added in `098ec79` (committed 20:25 UTC — ⚠ it first said "~16:30", a typed time, wrong by four hours), when a re-render against the live server emitted **no tool operation** (58 = 58) | `test:bot-surface` § 15 |
 | 05:06:59 | `b494da91` | **§ 1 + § 4** — every tap reaches the backend; a data-only tap reaches the model via the new `compose tap input` node | `run.js` |
 | 05:32:53 | `32cb4534` | **§ 5 + § 6** — `returnIntermediateSteps` on; `compose agent reply` / `drop duplicate reply` rewritten; `compose agent input` = live **+ § 6 only** | `run-deployed.js` 39/0 |
 | 06:07:21 | `3d4e2d87` | **§ 5.1** — two defects § 5 itself surfaced (below) | `run-deployed.js` 59/0 |
@@ -1515,9 +1515,9 @@ npm run seed:negotiation-playbook
 
 #### b · `npm run verify:landing-routes` — before the links go out
 
-Ten storefront paths this service hands customers (`SURFACE_PATHS` in `bot-list-window.ts`) are
+The storefront paths this service hands customers (`SURFACE_PATHS` in `bot-list-window.ts`) are
 a **hand-kept copy** of the landing app's routes. Nothing compares them at build time, so a page
-renamed over there turns ten links into 404s **silently** — found by a customer who tapped "see
+renamed over there turns those links into 404s **silently** — found by a customer who tapped "see
 the rest" and landed on nothing.
 
 ⛔ **It has three outcomes, not two, and the third is the one to read carefully.** When the
@@ -1530,6 +1530,18 @@ check, because it also retires the worry.
 So: run it where the two repositories sit side by side (or pass `-- --landing <path>`), and
 treat **exit 2 as "unverified", never as green**. It is read-only and one-directional; it must
 not grow into a build dependency on a repository this one does not control.
+
+**Run on deploy day (2026-09-21) — exit 0, all 11 paths resolve** (the prose here said "ten"; `security` was added since — which is why the count is gone from it). The landing app's route list is identical in the working tree and in `origin/production` `a756cb9`, the commit the live site runs, so the result holds for what is deployed.
+
+⛔ **And it could not see the two links that were actually broken.** It checks `SURFACE_PATHS`; the bot builds other storefront links, and a live probe of every one found:
+
+| Link | Built in | Live | Fixed to |
+|---|---|---|---|
+| `/cart` — the Checkout fallback when no screen can open | `bot-checkout.controller.ts` ×2, `bot-purchase.controller.ts` | **404**, every language | `/shop/cart` (200) |
+| `/shop/stores` — the "View stores" fallback | `bot-inapp.controller.ts` | **404** — the site has NO all-shops page, only `/shop/stores/<slug>` | `null`: no button, the assistant answers in words (the helper's documented "no honest page" case) |
+| `/stores/<s>/products/<p>` — a seller's "share this product" | `ProductShareService.ts` | **404** | `/shop/stores/<s>/products/<p>` (200), the path `product-card.ts` already used |
+
+Everything else the bot links to answered correctly: `/shop` (200 — the morning's 500 is gone), product and shop pages, `/pay/<token>`, `/login/magic`, password reset, email confirmation, all five languages; account pages redirect a signed-out visitor to sign-in, which proves the route is served but not what is behind it. ⚠ **Follow-up owed:** a check for the fallback paths too — today nothing compares them with the site.
 
 ### 12.6 · Rollback (n8n)
 
@@ -1590,7 +1602,7 @@ Fixed in `scripts/publish-whatsapp-flows.ts`: `endpoint_uri` is sent on create, 
 
 ⏸ **Publishing is held for the owner's explicit permission.** The first outward call (`--upload-key`) was refused by the session's permission gate as a production deploy — correctly: it is an outward act on the live Business Account. Nothing was sent to Meta beyond the read-only checks above.
 
-**First run — by the owner, from their own terminal (the session's gate refused it even after their "yes, publish"), ~16:55 UTC:**
+**First run — by the owner, from their own terminal (the session's gate refused it even after their "yes, publish"), between `098ec79` (20:25 UTC) and `45b4e72` (21:06 UTC):** ⚠ this said "~16:55 UTC", a typed time, and was wrong.
 
 - ✅ **Key uploaded.** The number now holds our public key, signature status `VALID`, fingerprint `46c7ab05ccbd` = the one the live endpoint decrypts with.
 - ✅ **`endpoint_uri` took.** Draft `2416208812534765` ("wi-mall product listing") points at `https://api.wi-mall.com/api/webhooks/whatsapp/flows` — the first fix above, proven on Meta's side.
@@ -1601,6 +1613,16 @@ Fixed in `scripts/publish-whatsapp-flows.ts`: `endpoint_uri` is sent on create, 
 Fixed: each of the three radio groups gains `label: '${data.chooseLabel}'`, filled by its adapter from `detailChoose` ("Choose" in five languages — the product-detail form's own pattern), so no literal reaches a customer. The publisher gained `FLOW_REQUIRED_PROPERTIES` (Meta's table, transcribed) and refuses a definition missing any of them — and treats a component type **absent from the table** as a fault, so a new component cannot pass by being unknown. `test:whatsapp-flows` **378/0**: the check over all seven forms, the table's entries pinned as literals, and two self-checks (the listing as first sent is refused; an unlooked-up component is refused).
 
 ⚠ **A re-run no longer creates a second form.** The publisher used to create a new Flow every time, so the owner's next run would have left a second "wi-mall product listing" beside the refused draft. It now reuses a DRAFT of the same name (re-stating its `endpoint_uri`) and refuses outright when a form of that name is already live — replacing a live form is a separate decision.
+
+**Second run (after `45b4e72`)** reused the draft, and Meta refused the asset again: `INVALID_ROUTING_MODEL` — "Following screens are not connected with the rest of the screens: [NOTICE]". The listing's model was `{ PRODUCTS: [], NOTICE: [] }`: two islands, because the notice is reached only from the endpoint's INIT answer, never from a tap. The owner opened the draft in the Flow Builder and saw the same message at `screens[1].id` — and the JSON there already carried the label fix, so the first fix had reached Meta.
+
+⛔ **Third defect, same shape again: a Meta rule nothing here checked.** An offline scan of all seven forms against Meta's six routing rules (Flow JSON reference, "Routing model") found **two** with it — the listing and the booking list, both a terminal list screen whose footer `complete`s, beside a notice. Fixed with the edge the other forms already use (`PRODUCTS → NOTICE`, `BOOKINGS → NOTICE`). The publisher gained `routingModelFaults` — one connected graph, an entry screen, forward routes only, ≤ 10 branches, every dead end terminal, a Footer on every terminal screen, no `SUCCESS` id — and `test:whatsapp-flows` **388/0** runs it over all seven, with three self-checks (the listing as second sent; a backward route; a non-terminal dead end).
+
+✅ **Third run: PUBLISHED.** "reusing draft 2416208812534765 · asset uploaded, no validation errors · ✅ published". Confirmed read-only against Graph: status `PUBLISHED`, 0 validation errors, `endpoint_uri` = ours, `health_status.can_send_message` **`AVAILABLE`** for the FLOW, the WABA, the BUSINESS and the APP; the number's key `VALID`, fingerprint `46c7ab05ccbd` = the endpoint's. One advisory remains on the Flow entity: the Business Account is not subscribed to the **Flows webhooks** (status and health notifications — monitoring, not a publishing requirement; worth doing so a Flow Meta throttles or blocks is heard about).
+
+⏸ **Not yet reachable by a customer**: `WHATSAPP_FLOW_ID_PRODUCT_LISTING=2416208812534765` goes into Dokploy and the service is redeployed — ⛔ **with a build that contains `45b4e72`**, because the published listing binds `${data.chooseLabel}` and only that commit's adapter sends it. Then the owner's handset test, then `pd`, then `co`.
+
+⚠ **Unverified, and only a real run can show it:** INIT answering the NOTICE screen (a lapsed handle, an empty shelf). NOTICE is not an entry screen in any of the seven models, and Meta documents no rule either way for what INIT may return; every form here relies on it.
 
 ### 13.1 · Preconditions
 

@@ -123,7 +123,10 @@ export class BotCheckoutController {
          * two minting paths, which is what keeps the two doors agreeing.
          */
         if (!inAppBaseUrl()) {
-            const fallback = botStorefrontLink('/cart', language);
+            // ⚠ `/shop/cart`, not `/cart`: the website has no `/cart` page (404 in every language),
+            // found by the deploy-day link check (2026-09-21). `verify:landing-routes` checks
+            // `SURFACE_PATHS` only, so a fallback path is checked by nothing — keep it a real route.
+            const fallback = botStorefrontLink('/shop/cart', language);
             /**
              * ⚠ **Never a dead button.** With no storefront either, the reply is cleared and
              * the model answers in its own words — the rule `/payments/:id/pay-link` already
@@ -158,7 +161,7 @@ export class BotCheckoutController {
          */
         const screenUrl = inAppScreenUrl('co', handle, language);
         if (!screenUrl) {
-            const fallback = botStorefrontLink('/cart', language);
+            const fallback = botStorefrontLink('/shop/cart', language);
             setBotReply(req, fallback ? { kind: 'link', text, label, url: fallback } : null);
             sendSuccess(res, { handle: null, opened: 'storefront', itemCount: cart.totalItems });
             return;

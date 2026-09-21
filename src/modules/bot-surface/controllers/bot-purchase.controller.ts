@@ -674,7 +674,8 @@ async function openCheckout(
      * intent with an empty target is worse than no control, and this is the one message where a
      * dead button costs an order — the same rule `createPayLink` follows.
      */
-    const fallback = botStorefrontLink('/cart', language);
+    // ⚠ `/shop/cart` — the website has no `/cart` page (deploy-day link check, 2026-09-21).
+    const fallback = botStorefrontLink('/shop/cart', language);
     setBotReply(req, fallback ? { kind: 'link', text, label, url: fallback } : null);
 }
 

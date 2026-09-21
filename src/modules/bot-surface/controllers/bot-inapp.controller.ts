@@ -180,7 +180,14 @@ export class BotInAppController {
             kind: 'sl',
             handle,
             language,
-            fallbackPath: '/shop/stores',
+            /**
+             * ⚠ **null: the website has NO all-shops page.** This was `/shop/stores`, which answers
+             * 404 in every language — only `/shop/stores/<slug>` exists (deploy-day link check,
+             * 2026-09-21). With no honest page to send them to, the customer gets no button and
+             * the assistant answers in words, rather than a "View stores" button that dead-ends.
+             * If the website gains a shops directory, point this at it.
+             */
+            fallbackPath: null,
             labelKey: 'viewStoresButton',
         });
 

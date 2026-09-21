@@ -106,7 +106,9 @@ function buildHeader(product: Product, storeSlug: string | null): string[] {
   if (base && storeSlug) {
     // The canonical product URL is store-scoped, because `Product.slug` is unique
     // per VENDOR — `/products/:slug` cannot resolve two vendors owning `blue-shirt`.
-    lines.push(`${base.replace(/\/+$/, '')}/stores/${storeSlug}/products/${product.slug}`);
+    // ⚠ Under `/shop` — `/stores/…` alone is a 404 on the website (deploy-day link check,
+    // 2026-09-21); `product-card.ts` and `store.config.ts` already used the real path.
+    lines.push(`${base.replace(/\/+$/, '')}/shop/stores/${storeSlug}/products/${product.slug}`);
   }
 
   return lines;

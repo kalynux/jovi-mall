@@ -748,7 +748,8 @@ function main(): void {
      */
     assert('⛔ the screen door degrades to the storefront, then to no button at all', () => {
         const src = chatCode();
-        return src.includes("botStorefrontLink('/cart'")
+        return src.includes("botStorefrontLink('/shop/cart'")
+            && !src.includes("botStorefrontLink('/cart'")
             && /setBotReply\(req,\s*fallback\s*\?/.test(src);
     });
 
