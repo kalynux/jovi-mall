@@ -42,7 +42,8 @@ export function bookingListFlow(kind: InAppSurfaceKind): FlowDefinition {
     return {
         version: '6.0',
         data_api_version: '3.0',
-        routing_model: { BOOKINGS: [], [NOTICE_SCREEN]: [] },
+        /** ⛔ One connected graph — see `product-listing.flow.ts`, which Meta refused for this. */
+        routing_model: { BOOKINGS: [NOTICE_SCREEN], [NOTICE_SCREEN]: [] },
         screens: [
             {
                 id: 'BOOKINGS',

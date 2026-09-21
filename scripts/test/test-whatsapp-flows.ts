@@ -78,7 +78,11 @@ import {
 import { FLOW_SCREEN_TITLE, NOTICE_SCREEN } from '../../src/modules/whatsapp/flows/definitions/notice.screen';
 import type { FlowDefinition } from '../../src/modules/whatsapp/flows/definitions/flow-definition.types';
 // ⚠ Safe to import: the publisher runs only under `require.main === module`.
-import { FLOW_REQUIRED_PROPERTIES, missingRequiredProperties } from '../publish-whatsapp-flows';
+import {
+    FLOW_REQUIRED_PROPERTIES,
+    missingRequiredProperties,
+    routingModelFaults,
+} from '../publish-whatsapp-flows';
 import { FLOW_LISTING_PAGE_SIZE, toListingScreen } from '../../src/modules/whatsapp/flows/screens/listing.adapter';
 import { toDetailScreen } from '../../src/modules/whatsapp/flows/screens/detail.adapter';
 import { mayShowImageToCustomer, FLOW_IMAGE_MAX_SOURCE_BYTES } from '../../src/modules/whatsapp/flows/screens/image-policy';
@@ -662,6 +666,16 @@ async function main(): Promise<void> {
             missingRequired.length === 0, missingRequired.join(' | '));
 
         /**
+         * ⛔ Meta's routing rules — one connected graph, an entry screen, forward routes only,
+         * ≤ 10 branches, every route ending at a terminal screen. The listing's model was two
+         * islands and Meta refused the second publish for it (deploy day); the booking list had
+         * the same shape.
+         */
+        const routingFaults = routingModelFaults(definition);
+        assert(`${label}: ⛔ the routing model obeys Meta's rules (connected, an entry, forward only)`,
+            routingFaults.length === 0, routingFaults.join(' | '));
+
+        /**
          * ⛔ THE CHECK THAT WOULD HAVE CAUGHT THE ARRAY BOUND TO A TEXT BOX. Every `${data.x}`
          * must name a field that screen declares, and text on a Text* component must bind to a
          * STRING field. The first checkout definition bound `TextBody.text` to an array, and no
@@ -743,6 +757,21 @@ async function main(): Promise<void> {
     assert('⛔ guard bites — the listing as first sent to Meta (no radio label) is refused here',
         missingRequiredProperties(listingWith((radio) => { delete radio.label; }))
             .some((f) => f.includes("RadioButtonsGroup: missing 'label'")));
+    /** The listing with its routing model replaced — the shape of each routing guard's bite. */
+    const listingRouted = (model: Record<string, string[]>): FlowDefinition =>
+        ({ ...PRODUCT_LISTING_FLOW, routing_model: model });
+    assert('⛔ guard bites — the listing as SECOND sent to Meta (two islands) is refused here',
+        routingModelFaults(listingRouted({ PRODUCTS: [], [NOTICE_SCREEN]: [] }))
+            .some((f) => f.includes('not connected') && f.includes(NOTICE_SCREEN)));
+    assert('⛔ guard bites — a backward route beside a forward one is refused',
+        routingModelFaults(listingRouted({ PRODUCTS: [NOTICE_SCREEN], [NOTICE_SCREEN]: ['PRODUCTS'] }))
+            .some((f) => f.includes('backward route')));
+    assert('⚠ guard bites — a dead end that is not terminal is refused',
+        routingModelFaults({
+            ...CHECKOUT_FLOW,
+            routing_model: { REVIEW: [], [NOTICE_SCREEN]: ['REVIEW'] },
+        }).some((f) => f.includes('REVIEW has no onward route and is not terminal')));
+
     assert('⚠ guard bites — a component type nobody has looked up is a fault, not a pass',
         missingRequiredProperties(listingWith((_radio, children) => {
             children.push({ type: 'PhotoPicker', name: 'photo' });

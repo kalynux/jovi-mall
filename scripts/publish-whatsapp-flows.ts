@@ -150,6 +150,69 @@ export function missingRequiredProperties(definition: FlowDefinition): string[] 
     return faults;
 }
 
+/**
+ * Meta's routing-model rules (Flow JSON reference, "Routing model"), beyond the two `validate()`
+ * already had — every screen declared, every route to a real, different screen.
+ *
+ * ⛔ **The second refusal on deploy day (2026-09-21).** The listing's model was
+ * `{ PRODUCTS: [], NOTICE: [] }` — two islands, because the notice is reached only from the
+ * endpoint's INIT answer, never from a tap — and Meta answered `INVALID_ROUTING_MODEL`:
+ * "Following screens are not connected with the rest of the screens: [NOTICE]". Checked here now,
+ * with the rest of that section, so Meta is not the first to read it again:
+ *
+ *   - one CONNECTED graph (edges taken both ways — "All screens should be connected")
+ *   - an ENTRY screen: at least one with no inbound edge
+ *   - forward routes only: an edge A→B means no edge B→A ("Only forward routes should be specified")
+ *   - at most 10 branches
+ *   - every route ends at a terminal screen: a screen with no onward route must be terminal
+ *   - a terminal screen carries a Footer; no screen is called SUCCESS (reserved)
+ */
+export function routingModelFaults(definition: FlowDefinition): string[] {
+    const faults: string[] = [];
+    const ids = definition.screens.map((s) => s.id);
+    const model = definition.routing_model;
+    const edges = Object.entries(model).flatMap(([from, tos]) => tos.map((to) => [from, to] as const));
+
+    const neighbours = new Map(ids.map((id) => [id, new Set<string>()]));
+    for (const [from, to] of edges) {
+        neighbours.get(from)?.add(to);
+        neighbours.get(to)?.add(from);
+    }
+    const reached = new Set<string>(ids.slice(0, 1));
+    const stack = ids.slice(0, 1);
+    while (stack.length > 0) {
+        for (const next of neighbours.get(stack.pop() as string) ?? []) {
+            if (!reached.has(next)) {
+                reached.add(next);
+                stack.push(next);
+            }
+        }
+    }
+    const islands = ids.filter((id) => !reached.has(id));
+    if (islands.length > 0) faults.push(`routing model: not connected to the rest — ${islands.join(', ')}`);
+
+    const inbound = new Set(edges.map(([, to]) => to));
+    if (!ids.some((id) => !inbound.has(id))) faults.push('routing model: no entry screen (every screen has an inbound edge)');
+
+    for (const [from, to] of edges) {
+        if (from < to && edges.some(([a, b]) => a === to && b === from)) {
+            faults.push(`routing model: backward route ${to}→${from} beside ${from}→${to}`);
+        }
+    }
+    if (edges.length > 10) faults.push(`routing model: ${edges.length} branches, Meta allows 10`);
+
+    for (const screen of definition.screens) {
+        if ((model[screen.id] ?? []).length === 0 && !screen.terminal) {
+            faults.push(`routing model: ${screen.id} has no onward route and is not terminal`);
+        }
+        if (screen.terminal && !screen.layout.children.some((c) => c.type === 'Footer')) {
+            faults.push(`${screen.id}: a terminal screen must carry a Footer`);
+        }
+        if (screen.id === 'SUCCESS') faults.push('SUCCESS is a reserved screen id');
+    }
+    return faults;
+}
+
 function line(label: string, value: string): void {
     console.log(`  ${label.padEnd(28)} ${value}`);
 }
@@ -246,6 +309,7 @@ function validate(): boolean {
             ...(terminals >= 1 ? [] : ['no terminal screen: at least one is required']),
             ...missingExample.map((f) => `${f} has no __example__`),
             ...missingRequiredProperties(definition),
+            ...routingModelFaults(definition),
         ];
 
         const published = flowIdFor(kind);

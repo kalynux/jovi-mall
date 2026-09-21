@@ -49,7 +49,15 @@ export const PRODUCT_LISTING_FLOW: FlowDefinition = {
     version: '6.0',
     data_api_version: '3.0',
 
-    routing_model: { PRODUCTS: [], [NOTICE_SCREEN]: [] },
+    /**
+     * ⛔ **`PRODUCTS → NOTICE`, although no button here navigates it.** Meta validates the model
+     * as ONE connected graph — "All screens should be connected" — and `{ PRODUCTS: [], NOTICE:
+     * [] }` was two islands: the notice is only ever reached from the endpoint's INIT answer (an
+     * empty shelf, a lapsed handle), never from a tap. Meta refused the second publish on deploy
+     * day (2026-09-21) with `INVALID_ROUTING_MODEL`. The edge declares the one transition that
+     * exists, in the direction the other forms already use.
+     */
+    routing_model: { PRODUCTS: [NOTICE_SCREEN], [NOTICE_SCREEN]: [] },
 
     screens: [
         {
