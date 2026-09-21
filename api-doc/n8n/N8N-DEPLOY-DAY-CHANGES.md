@@ -37,8 +37,15 @@ Two corrections to `report channel down`, found while merging: **`$('Inbound').i
 node continues on error, so the REPORT would have been lost silently; and **the platform's
 reason** — it read `$json.error.message`, n8n's generic sentence, while Telegram's reason is in
 `description` and Meta's in a nested `error.message`; the failures board never saw
-"(#131047) …". ⏳ **Live checks owed:** the loop on a real turn (now, any message), and the
-multi-message order on a product page (when the first product is live).
+"(#131047) …".
+
+✅ **PASSED live, 2026-09-21 11:00–11:10 UTC, execs 1542–1587.** All 14 turns, both channels, went
+`expand replies` → `send loop` → send → back to the loop, every loop ending `done`, no refusal,
+`report channel down` never ran. **Three were multi-message** — 1545 (WhatsApp) and 1559
+(Telegram), the model's sentence then the tool's request list, and 1580, the photo turn — and
+each arrived in order, so the ordering is proven on a real turn and no longer waits for a product
+page. ⏳ **Still unexercised live:** a REFUSED send inside the loop, i.e. the report path, which
+only a real refusal can show; the harness walks it and its mutants bite.
 
 **§ 4.8 · the flag was read the wrong way round.** Exec 1502: the support-request Reply tap
 handed the model `awaitingReply: true` with "act on it", and it answered *"no reply has come in
