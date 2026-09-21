@@ -26,19 +26,307 @@
     "description": "GENERATED from api-doc/n8n/tools/catalog.json by jovi-mall/scripts/gen-mcp-workflow.ts — edit the catalogue, not the nodes. Identity is a sealed botToken tool argument, never a URL. flow_only rows (money, destructive) are never emitted."
   },
   {
+    "type": "setNodePosition",
+    "nodeName": "auth_send_login_link",
+    "position": [
+      40,
+      328
+    ]
+  },
+  {
+    "type": "updateNodeParameters",
+    "nodeName": "catalog_search_products",
+    "parameters": {
+      "toolDescription": "Find products on sale, by words, category, price range, type or store. Returns a page of product cards with price, stock, rating and the store that sells them. USE IT WHEN: Any time the customer describes something they want to buy, asks what is available, or narrows a previous search. NOT THIS TOOL: Not to look up a product code printed on a package — `q` is a whole-word text search over title, tags and description and does not match SKUs. Use catalog_resolve_sku. Not to fetch one known product: catalog_get_product returns far more. ⚠ Render at most 10 rows as an interactive list; row title is capped at 24 characters and the description at 72, so the title must be truncated rather than the price dropped.",
+      "method": "GET",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/products",
+      "sendQuery": true,
+      "specifyQuery": "json",
+      "jsonQuery": "={{ JSON.stringify({ q: $fromAI(\"q\", \"Whole-word text search. Searching 'dres' will NOT find 'dress' — pass the customer's words, not a prefix. At most 200 characters.\", \"string\") || undefined, category: $fromAI(\"category\", \"Exact match. Get valid values from catalog_list_categories; do not invent one.\", \"string\") || undefined, type: $fromAI(\"type\", \"One of: physical, digital, service.\", \"string\") || undefined, storeSlug: $fromAI(\"storeSlug\", \"Narrow to one seller, by the slug from a product card's store.slug. Leave empty unless the customer named a shop.\", \"string\") || undefined, minPrice: $fromAI(\"minPrice\", \"Whole units of currency.\", \"number\") || undefined, maxPrice: $fromAI(\"maxPrice\", \"Whole units of currency.\", \"number\") || undefined, inStock: $fromAI(\"inStock\", \"Only 'true' narrows. There is no way to ask for out-of-stock items. One of: true.\", \"string\") || undefined, sort: $fromAI(\"sort\", \"There is no popularity sort and asking for one is a 400, not a silent fallback. One of: newest, price_asc, price_desc, relevance.\", \"string\") || undefined }) }}",
+      "options": {
+        "response": {
+          "response": {
+            "neverError": true
+          }
+        },
+        "timeout": 20000
+      }
+    },
+    "replace": true
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "catalog_search_products",
+    "position": [
+      240,
+      328
+    ]
+  },
+  {
+    "type": "updateNodeParameters",
+    "nodeName": "catalog_get_product",
+    "parameters": {
+      "toolDescription": "Everything about one product: description, images, options, every variant with its own price and stock, the store, and the store's return and cancellation policies. USE IT WHEN: Before answering any question about a specific product, and always before adding one to a cart — the variant id you need comes from here. NOT THIS TOOL: Not for browsing; the list rows from catalog_search_products are enough to choose from. ⚠ A service variant's price is a UNIT RATE per durationMinutes, not the price — quote priceFrom with priceUnit or the customer is misquoted.",
+      "method": "GET",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/products/{{ $fromAI(\"productId\", \"The 24-character product id. Never a SKU and never a slug.\", \"string\") }}",
+      "options": {
+        "response": {
+          "response": {
+            "neverError": true
+          }
+        },
+        "timeout": 20000
+      }
+    },
+    "replace": true
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "catalog_get_product",
+    "position": [
+      440,
+      328
+    ]
+  },
+  {
+    "type": "updateNodeParameters",
+    "nodeName": "catalog_get_product_by_slug",
+    "parameters": {
+      "toolDescription": "The same product detail, addressed the way a shared storefront link addresses it. USE IT WHEN: When the customer pastes a storefront product URL. Product slugs are unique per vendor, not globally, so both halves are required. NOT THIS TOOL: When you hold a product id — catalog_get_product returns an identical body with one parameter.",
+      "method": "GET",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/stores/{{ $fromAI(\"storeSlug\", \"The seller's slug — the first slug in a storefront product URL, or a product card's store.slug.\", \"string\") }}/products/{{ $fromAI(\"productSlug\", \"The product's slug — the second slug in a storefront product URL, or a product card's slug. Never the 24-character id.\", \"string\") }}",
+      "options": {
+        "response": {
+          "response": {
+            "neverError": true
+          }
+        },
+        "timeout": 20000
+      }
+    },
+    "replace": true
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "catalog_get_product_by_slug",
+    "position": [
+      640,
+      328
+    ]
+  },
+  {
+    "type": "updateNodeParameters",
+    "nodeName": "catalog_resolve_sku",
+    "parameters": {
+      "toolDescription": "Turn a product code printed on a package, a label or an advertisement into the product and variant it identifies. USE IT WHEN: When the customer types something that looks like a product code rather than words. NOT THIS TOOL: Not for a search phrase — catalog_search_products handles words.",
+      "method": "GET",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/variants/by-sku/{{ $fromAI(\"sku\", \"The code as the customer typed it. Case is forgiven both ways (as-typed, upper and lower are all tried, and the as-typed spelling wins), EXCEPT for a SKU stored in mixed case, which resolves only when typed exactly. Send it unchanged — do not upper-case it first, or the as-typed rule works against you. At most 64 characters.\", \"string\") }}",
+      "options": {
+        "response": {
+          "response": {
+            "neverError": true
+          }
+        },
+        "timeout": 20000
+      }
+    },
+    "replace": true
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "catalog_resolve_sku",
+    "position": [
+      840,
+      328
+    ]
+  },
+  {
+    "type": "updateNodeParameters",
+    "nodeName": "catalog_list_categories",
+    "parameters": {
+      "toolDescription": "The categories that currently have something for sale in them, with a count each. USE IT WHEN: When the customer asks what is sold here, or before filtering a search by category — the values are free text and must come from this list. NOT THIS TOOL: Not as a substitute for search when the customer already described what they want. ⚠ A complete small set, not a page — but still cap the rendered list at 10 rows and offer the rest as a second page.",
+      "method": "GET",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/categories",
+      "options": {
+        "response": {
+          "response": {
+            "neverError": true
+          }
+        },
+        "timeout": 20000
+      }
+    },
+    "replace": true
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "catalog_list_categories",
+    "position": [
+      1040,
+      328
+    ]
+  },
+  {
+    "type": "updateNodeParameters",
+    "nodeName": "catalog_list_related_products",
+    "parameters": {
+      "toolDescription": "Up to eight products related to this one, and — importantly — which kind of relation it is. USE IT WHEN: After showing a product card, when the customer asks for alternatives or similar items. To SHOW them, pass their ids to catalog_show_products rather than describing them. NOT THIS TOOL: Never describe the result as 'customers also bought' unless meta.source is co_purchase. On a young catalogue the fallback is the common case and saying otherwise is a false claim about other shoppers. ⚠ meta.source is part of the contract. co_purchase -> 'Frequently bought together'; same_category -> 'More in this category'. `orders` is always null on the fallback. An empty list is a successful answer.",
+      "method": "GET",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/products/{{ $fromAI(\"productId\", \"The 24-character id of the product to find alternatives for.\", \"string\") }}/related",
+      "options": {
+        "response": {
+          "response": {
+            "neverError": true
+          }
+        },
+        "timeout": 20000
+      }
+    },
+    "replace": true
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "catalog_list_related_products",
+    "position": [
+      1240,
+      328
+    ]
+  },
+  {
+    "type": "updateNodeParameters",
+    "nodeName": "catalog_get_store",
+    "parameters": {
+      "toolDescription": "A seller's public page: name, description, city, whether they are verified, whether they are currently open, and the support contacts they chose to publish. USE IT WHEN: When the customer asks who is selling something, or asks how to contact a seller — this is the source for the vendor branch of the support flow. NOT THIS TOOL: Not for the delivery company's contacts; those come from orders_list_shipments, because an agency is attached to a shipment rather than to a product. ⚠ Any support field may be null. A closed store (isOpen:false) still sells — say 'the seller is on holiday', never 'unavailable'.",
+      "method": "GET",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/stores/{{ $fromAI(\"slug\", \"The seller's slug, from a product card's store.slug.\", \"string\") }}",
+      "options": {
+        "response": {
+          "response": {
+            "neverError": true
+          }
+        },
+        "timeout": 20000
+      }
+    },
+    "replace": true
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "catalog_get_store",
+    "position": [
+      1440,
+      328
+    ]
+  },
+  {
+    "type": "updateNodeParameters",
+    "nodeName": "catalog_list_store_products",
+    "parameters": {
+      "toolDescription": "What a particular seller currently has for sale. USE IT WHEN: When the customer wants to see more from a seller they have already seen. NOT THIS TOOL: Use catalog_search_products with storeSlug when you also need to filter or sort within that store — the contract is identical and one call does both.",
+      "method": "GET",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/stores/{{ $fromAI(\"slug\", \"The seller's slug, from a product card's store.slug.\", \"string\") }}/products",
+      "sendQuery": true,
+      "specifyQuery": "json",
+      "jsonQuery": "={{ JSON.stringify({ q: $fromAI(\"q\", \"Whole-word text search inside this seller's products. Searching 'dres' will NOT find 'dress' — pass the customer's words, not a prefix. At most 200 characters.\", \"string\") || undefined, sort: $fromAI(\"sort\", \"One of: newest, price_asc, price_desc, relevance.\", \"string\") || undefined }) }}",
+      "options": {
+        "response": {
+          "response": {
+            "neverError": true
+          }
+        },
+        "timeout": 20000
+      }
+    },
+    "replace": true
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "catalog_list_store_products",
+    "position": [
+      40,
+      528
+    ]
+  },
+  {
+    "type": "updateNodeParameters",
+    "nodeName": "catalog_list_product_reviews",
+    "parameters": {
+      "toolDescription": "What buyers said about a product, and the star breakdown. USE IT WHEN: When the customer asks whether a product is any good, or asks for opinions. NOT THIS TOOL: Not for delivery reviews — those are internal, feed an agent's trust score and have no public endpoint. ⚠ A product nobody has reviewed carries rating: null on the product card — never report that as zero stars.",
+      "method": "GET",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/products/{{ $fromAI(\"productId\", \"The 24-character id of the product whose reviews to read.\", \"string\") }}/reviews",
+      "options": {
+        "response": {
+          "response": {
+            "neverError": true
+          }
+        },
+        "timeout": 20000
+      }
+    },
+    "replace": true
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "cart_get",
+    "position": [
+      440,
+      528
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "cart_set_item_quantity",
+    "position": [
+      840,
+      528
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "payment_get_transaction",
+    "position": [
+      1240,
+      528
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "orders_get_group",
+    "position": [
+      40,
+      728
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "orders_get_order",
+    "position": [
+      240,
+      728
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "orders_list_shipments",
+    "position": [
+      440,
+      728
+    ]
+  },
+  {
     "type": "addNode",
     "node": {
-      "name": "inapp_open_listing",
+      "name": "orders_record_cancellation_reason",
       "type": "n8n-nodes-base.httpRequestTool",
       "typeVersion": 4.5,
       "position": [
-        840,
-        928
+        640,
+        728
       ],
       "parameters": {
-        "toolDescription": "Open a scrollable product grid the customer can browse properly, with a picture, a price and a buy button on every card. Use it for a whole shelf; use catalog_show_products for a short, specific answer of five or fewer. USE IT WHEN: When the customer wants to BROWSE rather than be answered: a category, a whole store, their saved items, or \"what else do you have\". Also after a page of cards, when they ask to see everything. NOT THIS TOOL: Not for a specific question with a short answer (\"do you have red shoes in 42?\") — five cards answer that better than a grid. Not for one product: use inapp_open_product. ⚠ Renders as a cta_url button to the storefront until a WhatsApp Flow is published for this screen. This tool answers with a ready-made `reply` — send it unmodified. Do not also describe the button in your own words; the customer would get the sentence twice.",
+        "toolDescription": "Attach the customer's own words about why they cancelled an order to that order's history, where the shop and support can read them. USE IT WHEN: Immediately after a cancellation, when the customer tells you what went wrong. The cancel tap answers with no reply and you ask for the reason; this is where their answer goes. Send their words, not a summary. NOT THIS TOOL: Never to cancel anything — use orders_cancel for that. Not for a complaint about an order that is still live: that is a support request. Not twice for one order; a second call is refused. ⚠ Answers as data with no `reply`. Acknowledge it in your own words — briefly; the customer has just told you something they are unhappy about.",
         "method": "POST",
-        "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/inapp/listing",
+        "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/orders/{{ $fromAI(\"orderId\", \"The order they cancelled, as the catalogue returned it. At most 64 characters.\", \"string\") }}/cancellation-reason",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpBearerAuth",
         "sendHeaders": true,
@@ -50,13 +338,13 @@
             },
             {
               "name": "Idempotency-Key",
-              "value": "={{ $execution.id }}-{{ $now.toMillis() }}-inapp_open_listing"
+              "value": "={{ $execution.id }}-{{ $now.toMillis() }}-orders_record_cancellation_reason"
             }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, q: $fromAI(\"q\", \"Free-text search. Omit to show everything. At most 120 characters.\", \"string\") || undefined, category: $fromAI(\"category\", \"Category slug or name, as the catalogue publishes it. At most 120 characters.\", \"string\") || undefined, storeSlug: $fromAI(\"storeSlug\", \"Narrow to one store. At most 160 characters.\", \"string\") || undefined, productIds: $fromAI(\"productIds\", \"Pin an exact set instead of filtering — for saved items, or a selection you chose yourself. Up to 50, far more than a chat can show.\", \"string\") || undefined }) }}",
+        "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, reason: $fromAI(\"reason\", \"The customer's own words, relayed rather than summarised. At most 500 characters.\", \"string\") }) }}",
         "options": {
           "response": {
             "response": {
@@ -76,14 +364,86 @@
   },
   {
     "type": "addConnection",
-    "source": "inapp_open_listing",
+    "source": "orders_record_cancellation_reason",
     "target": "MCP Server Trigger",
     "connectionType": "ai_tool"
   },
   {
+    "type": "setNodePosition",
+    "nodeName": "profile_get_summary",
+    "position": [
+      840,
+      728
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "profile_update",
+    "position": [
+      1040,
+      728
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "profile_set_language",
+    "position": [
+      1240,
+      728
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "addresses_list",
+    "position": [
+      1440,
+      728
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "support_resolve_contacts",
+    "position": [
+      40,
+      928
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "tickets_list",
+    "position": [
+      240,
+      928
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "tickets_get",
+    "position": [
+      440,
+      928
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "tickets_add_note",
+    "position": [
+      640,
+      928
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "tickets_add_attachment",
+    "position": [
+      840,
+      928
+    ]
+  },
+  {
     "type": "addNode",
     "node": {
-      "name": "inapp_open_stores",
+      "name": "catalog_browse_categories",
       "type": "n8n-nodes-base.httpRequestTool",
       "typeVersion": 4.5,
       "position": [
@@ -91,9 +451,9 @@
         928
       ],
       "parameters": {
-        "toolDescription": "Open a browsable directory of the shops on the platform, each with its logo, name, description and city. USE IT WHEN: When the customer asks which shops exist, or wants to find a shop rather than a product. There are far more stores than a chat list can hold, which is why this is a screen and not a list of choices. NOT THIS TOOL: Not when they have already named a shop and want its products — use inapp_open_listing with storeSlug. ⚠ A cta_url button to the storefront directory until a WhatsApp Flow is published. This tool answers with a ready-made `reply` — send it unmodified. Do not also describe the button in your own words; the customer would get the sentence twice.",
+        "toolDescription": "Show the customer the shop's categories as buttons they can tap — the busiest five, plus See all. Tapping one opens that category as a scrollable product grid. USE IT WHEN: When the customer wants to BROWSE by category: \"what do you sell?\", \"show me your categories\", \"what kinds of things do you have?\". NOT THIS TOOL: Not to learn category NAMES in order to filter a search — use catalog_list_categories for that. Not when they already named a category — use inapp_open_listing with category. ⚠ Renders as reply buttons, or as a list when a category name is too long for a button. This tool answers with a ready-made `reply` — send it unmodified. Write nothing of your own alongside it: the question is already in the reply.",
         "method": "POST",
-        "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/inapp/stores",
+        "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/catalog/categories",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpBearerAuth",
         "sendHeaders": true,
@@ -102,65 +462,6 @@
             {
               "name": "X-Webhook-Secret",
               "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
-            },
-            {
-              "name": "Idempotency-Key",
-              "value": "={{ $execution.id }}-{{ $now.toMillis() }}-inapp_open_stores"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, q: $fromAI(\"q\", \"Search shop names. At most 120 characters.\", \"string\") || undefined, city: $fromAI(\"city\", \"Narrow to one city. City is the only location a shop publishes. At most 120 characters.\", \"string\") || undefined }) }}",
-        "options": {
-          "response": {
-            "response": {
-              "neverError": true
-            }
-          },
-          "timeout": 20000
-        }
-      },
-      "credentials": {
-        "httpBearerAuth": {
-          "id": "lz5ivIop9DF8mPHa",
-          "name": "jovi-mall-Bearer Auth account"
-        }
-      }
-    }
-  },
-  {
-    "type": "addConnection",
-    "source": "inapp_open_stores",
-    "target": "MCP Server Trigger",
-    "connectionType": "ai_tool"
-  },
-  {
-    "type": "addNode",
-    "node": {
-      "name": "inapp_open_product",
-      "type": "n8n-nodes-base.httpRequestTool",
-      "typeVersion": 4.5,
-      "position": [
-        1240,
-        928
-      ],
-      "parameters": {
-        "toolDescription": "Open one product on its own screen, where the customer can pick a size, a colour or any other option, read the full description, and buy the exact variant they chose. USE IT WHEN: Whenever the customer needs to CHOOSE something about a product before buying — a size, a colour, a variant. A chat card can only ever offer the default variant, so a product with options is unbuyable from chat alone. NOT THIS TOOL: Not for answering a passing question about a product — say the answer. Not for several products: use inapp_open_listing. ⚠ A cta_url button to the product page until a WhatsApp Flow is published. This tool answers with a ready-made `reply` — send it unmodified. Do not also describe the button in your own words; the customer would get the sentence twice.",
-        "method": "POST",
-        "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/inapp/products/{{ $fromAI(\"productId\", \"The product id, as the catalogue returned it. At most 64 characters.\", \"string\") }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpBearerAuth",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "X-Webhook-Secret",
-              "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
-            },
-            {
-              "name": "Idempotency-Key",
-              "value": "={{ $execution.id }}-{{ $now.toMillis() }}-inapp_open_product"
             }
           ]
         },
@@ -186,13 +487,64 @@
   },
   {
     "type": "addConnection",
-    "source": "inapp_open_product",
+    "source": "catalog_browse_categories",
+    "target": "MCP Server Trigger",
+    "connectionType": "ai_tool"
+  },
+  {
+    "type": "addNode",
+    "node": {
+      "name": "catalog_product_reviews_summary",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.5,
+      "position": [
+        1240,
+        928
+      ],
+      "parameters": {
+        "toolDescription": "Show a product's star rating, how many reviews it has, and two short quotes from the most recent written reviews, with a button to read them all inside the app. USE IT WHEN: When the customer asks whether a product is any good, what people think of it, or for reviews or opinions. NOT THIS TOOL: Not to read raw review rows for your own reasoning — use catalog_list_product_reviews for that. Never restate the rating in your own words: it is already in the reply. ⚠ Renders as one message with a Read all reviews button to the product page, until a WhatsApp Flow is published. This tool answers with a ready-made `reply` — send it unmodified, and write nothing of your own alongside it.",
+        "method": "POST",
+        "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/catalog/products/{{ $fromAI(\"productId\", \"The product the customer is asking about, as the catalogue returned it. At most 64 characters.\", \"string\") }}/reviews",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Webhook-Secret",
+              "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") } }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "lz5ivIop9DF8mPHa",
+          "name": "jovi-mall-Bearer Auth account"
+        }
+      }
+    }
+  },
+  {
+    "type": "addConnection",
+    "source": "catalog_product_reviews_summary",
     "target": "MCP Server Trigger",
     "connectionType": "ai_tool"
   },
   {
     "type": "setNodePosition",
-    "nodeName": "wishlist_list",
+    "nodeName": "inapp_open_listing",
     "position": [
       1440,
       928
@@ -200,9 +552,120 @@
   },
   {
     "type": "setNodePosition",
-    "nodeName": "wishlist_add",
+    "nodeName": "inapp_open_stores",
     "position": [
       40,
+      1128
+    ]
+  },
+  {
+    "type": "addNode",
+    "node": {
+      "name": "inapp_open_orders",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.5,
+      "position": [
+        240,
+        1128
+      ],
+      "parameters": {
+        "toolDescription": "Open the customer's own order history as a scrollable screen, newest first, each order showing its number, its state and what it cost. USE IT WHEN: When the customer wants to look THROUGH their orders — \"show me my orders\", \"what have I bought\", \"my past orders\" — rather than asking about one of them. NOT THIS TOOL: Not when they asked about ONE order: use orders_get_order, or orders_list_groups for the five most recent as a chat list they can tap. Not for a delivery question about a specific parcel — use orders_list_shipments. ⚠ A cta_url button to the storefront orders page until a WhatsApp Flow is published. This tool answers with a ready-made `reply` — send it unmodified. Do not also describe the button in your own words; the customer would get the sentence twice.",
+        "method": "POST",
+        "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/inapp/orders",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Webhook-Secret",
+              "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $execution.id }}-{{ $now.toMillis() }}-inapp_open_orders"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") } }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "lz5ivIop9DF8mPHa",
+          "name": "jovi-mall-Bearer Auth account"
+        }
+      }
+    }
+  },
+  {
+    "type": "addConnection",
+    "source": "inapp_open_orders",
+    "target": "MCP Server Trigger",
+    "connectionType": "ai_tool"
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "inapp_open_product",
+    "position": [
+      440,
+      1128
+    ]
+  },
+  {
+    "type": "updateNodeParameters",
+    "nodeName": "wishlist_list",
+    "parameters": {
+      "toolDescription": "Products the customer saved for later, newest save first. USE IT WHEN: When the customer asks what they saved, or wants to buy something they saved earlier. To SHOW the saved items, pass their ids to catalog_show_products — the customer gets cards with a button that opens all of them as a grid. NOT THIS TOOL: Not as a browse surface — it is their own short list, not the catalogue. ⚠ An entry's `product` can be null when the product went off sale. Say 'no longer available' and offer to remove it — never drop the row silently, and never say why it went, which would leak a seller's catalogue state.",
+      "method": "POST",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/wishlist/list",
+      "authentication": "genericCredentialType",
+      "genericAuthType": "httpBearerAuth",
+      "sendHeaders": true,
+      "headerParameters": {
+        "parameters": [
+          {
+            "name": "X-Webhook-Secret",
+            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+          }
+        ]
+      },
+      "sendBody": true,
+      "specifyBody": "json",
+      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") } }) }}",
+      "options": {
+        "response": {
+          "response": {
+            "neverError": true
+          }
+        },
+        "timeout": 20000
+      }
+    },
+    "replace": true
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "wishlist_list",
+    "position": [
+      640,
+      1128
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "wishlist_add",
+    "position": [
+      840,
       1128
     ]
   },
@@ -210,7 +673,7 @@
     "type": "setNodePosition",
     "nodeName": "wishlist_remove",
     "position": [
-      240,
+      1040,
       1128
     ]
   },
@@ -218,15 +681,47 @@
     "type": "setNodePosition",
     "nodeName": "recently_viewed_list",
     "position": [
-      440,
+      1240,
       1128
     ]
+  },
+  {
+    "type": "updateNodeParameters",
+    "nodeName": "digital_list_entitlements",
+    "parameters": {
+      "toolDescription": "Everything the customer bought as a download, and whether each one can still be downloaded. USE IT WHEN: When the customer asks about a file they bought. This tool answers with a ready-made `reply` listing the downloadable items as buttons — send it unmodified and write nothing of your own alongside it. Never offer a download link yourself: you cannot mint one, and a link in message text is consumed by the chat app's link preview before the customer taps it. NOT THIS TOOL: Not for physical orders. ⚠ maxDownloads null means unlimited and expiresAt null means never expires — say so in words rather than printing null. canDownload is the single flag that decides whether to offer the download.",
+      "method": "POST",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/digital/my-products",
+      "authentication": "genericCredentialType",
+      "genericAuthType": "httpBearerAuth",
+      "sendHeaders": true,
+      "headerParameters": {
+        "parameters": [
+          {
+            "name": "X-Webhook-Secret",
+            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+          }
+        ]
+      },
+      "sendBody": true,
+      "specifyBody": "json",
+      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") } }) }}",
+      "options": {
+        "response": {
+          "response": {
+            "neverError": true
+          }
+        },
+        "timeout": 20000
+      }
+    },
+    "replace": true
   },
   {
     "type": "setNodePosition",
     "nodeName": "digital_list_entitlements",
     "position": [
-      640,
+      1440,
       1128
     ]
   },
@@ -234,39 +729,39 @@
     "type": "setNodePosition",
     "nodeName": "bookings_get_availability",
     "position": [
-      840,
-      1128
+      40,
+      1328
     ]
   },
   {
     "type": "setNodePosition",
     "nodeName": "bookings_list",
     "position": [
-      1040,
-      1128
+      240,
+      1328
     ]
   },
   {
     "type": "setNodePosition",
     "nodeName": "bookings_get",
     "position": [
-      1240,
-      1128
+      440,
+      1328
     ]
   },
   {
     "type": "setNodePosition",
     "nodeName": "bookings_get_balance",
     "position": [
-      1440,
-      1128
+      640,
+      1328
     ]
   },
   {
     "type": "setNodePosition",
     "nodeName": "bookings_payment_status",
     "position": [
-      40,
+      840,
       1328
     ]
   },
@@ -274,7 +769,7 @@
     "type": "setNodePosition",
     "nodeName": "payment_methods_list",
     "position": [
-      240,
+      1040,
       1328
     ]
   },
@@ -282,7 +777,7 @@
     "type": "setNodePosition",
     "nodeName": "contact_get_state",
     "position": [
-      440,
+      1240,
       1328
     ]
   },
@@ -290,7 +785,7 @@
     "type": "setNodePosition",
     "nodeName": "connections_list",
     "position": [
-      640,
+      1440,
       1328
     ]
   },
@@ -298,45 +793,13 @@
     "type": "setNodePosition",
     "nodeName": "account_close_preview",
     "position": [
-      840,
-      1328
-    ]
-  },
-  {
-    "type": "setNodePosition",
-    "nodeName": "reviews_check_eligibility",
-    "position": [
-      1040,
-      1328
-    ]
-  },
-  {
-    "type": "setNodePosition",
-    "nodeName": "reviews_list_mine",
-    "position": [
-      1240,
-      1328
-    ]
-  },
-  {
-    "type": "setNodePosition",
-    "nodeName": "notifications_get_preferences",
-    "position": [
-      1440,
-      1328
-    ]
-  },
-  {
-    "type": "setNodePosition",
-    "nodeName": "notifications_list",
-    "position": [
       40,
       1528
     ]
   },
   {
     "type": "setNodePosition",
-    "nodeName": "notifications_unread_count",
+    "nodeName": "reviews_check_eligibility",
     "position": [
       240,
       1528
@@ -344,7 +807,7 @@
   },
   {
     "type": "setNodePosition",
-    "nodeName": "notifications_mark_read",
+    "nodeName": "reviews_list_mine",
     "position": [
       440,
       1528
@@ -352,7 +815,7 @@
   },
   {
     "type": "setNodePosition",
-    "nodeName": "payment_create_pay_link",
+    "nodeName": "notifications_get_preferences",
     "position": [
       640,
       1528
@@ -360,7 +823,7 @@
   },
   {
     "type": "setNodePosition",
-    "nodeName": "messaging_get_window",
+    "nodeName": "notifications_list",
     "position": [
       840,
       1528
@@ -368,10 +831,42 @@
   },
   {
     "type": "setNodePosition",
-    "nodeName": "messaging_notify_customer",
+    "nodeName": "notifications_unread_count",
     "position": [
       1040,
       1528
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "notifications_mark_read",
+    "position": [
+      1240,
+      1528
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "payment_create_pay_link",
+    "position": [
+      1440,
+      1528
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "messaging_get_window",
+    "position": [
+      40,
+      1728
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "messaging_notify_customer",
+    "position": [
+      240,
+      1728
     ]
   },
   {
