@@ -297,9 +297,30 @@ FIX['2 wiring'] = [
   { type: 'addConnection', source: 'ends silently?', target: 'has reply?', sourceIndex: 1, targetIndex: 0 },
 ];
 
+// ── § 4.9 · a waiting tap files nothing; a file reference is spent after one turn ─────
+// Exec 1590 (2026-09-21 11:32 UTC): the owner pressed "Reply here" on a support notification.
+// `compose tap input` said, correctly, that the platform was WAITING FOR THE CUSTOMER and to ask
+// for it in one sentence. The model instead called `tickets_add_attachment` with an `att_`
+// reference out of CHAT MEMORY — a photo from 23 minutes earlier that a button had already
+// attached (exec 1584). Tap turns that answer with a reply never reach the model, so memory
+// held the reference and nothing saying it was spent. The backend refused it
+// (BOT_INBOUND_FILE_EXPIRED) and the customer was told their screenshot "didn't come through".
+// Same class as § 5.2/5.3: the model reuses a value it saw earlier in the chat.
+//   1. The waiting note now says nothing has been given yet, so call no tool that writes.
+//   2. The file rule bounds a reference to the latest message, or the one before it when the
+//      customer is now saying where it goes — the one legitimate cross-turn use, since the
+//      photo's "which request?" question is NOT carried like a tap's (only `product action`
+//      feeds `awaiting answer?`).
+const ASK_OLD = "Ask them for it in one short sentence, and do not report a status instead.'";
+const ASK_NEW = "Ask them for it in one short sentence, and do not report a status instead. They have not given it yet, so call no tool that files, attaches, adds or changes anything on this turn.'";
+FIX['compose tap input.49'] = patch('compose tap input § 4.9', FIX['compose tap input'], [[ASK_OLD, ASK_NEW]]);
+const FILE_OLD = 'The reference works once and expires in 30 minutes; if you were given none, the file is not available and the customer must send it again.';
+const FILE_NEW = "The reference works once and expires in 30 minutes. Use one only from the customer's latest message, or from the message just before it when they are now telling you which request it belongs to. Never use an older one: a button may already have attached it without you seeing, and it will be refused. If you were given none, the file is not available and the customer must send it again.";
+FIX['systemMessage.49'] = patch('systemMessage § 4.9', FIX['systemMessage.53'], [[FILE_OLD, FILE_NEW]]);
+
 module.exports = {
   FIX, live, wf, TOKEN_PARA_OLD, TOKEN_PARA_NEW, TOKEN_PARA_53, AWAIT_KEY, RULES_46, LIVE_NOW, LIVE_SEND,
-  REPORT_OLD_ERROR, LIVE_FORMS,
+  REPORT_OLD_ERROR, LIVE_FORMS, ASK_OLD, ASK_NEW, FILE_OLD, FILE_NEW,
 };
 
 if (require.main === module) {
@@ -314,6 +335,8 @@ if (require.main === module) {
     nodes: FIX['3 nodes'], wiring: FIX['3 wiring'], sendOptions: FIX['3 send options'], reportBody: FIX['3 report body'],
   }, null, 1));
   fs.writeFileSync(path.join(__dirname, 'new', 'fix_compose_agent_input_46.txt'), FIX['compose agent input']);
+  fs.writeFileSync(path.join(__dirname, 'new', 'fix_compose_tap_input_49.txt'), FIX['compose tap input.49']);
+  fs.writeFileSync(path.join(__dirname, 'new', 'fix_system_message_49.txt'), FIX['systemMessage.49']);
   fs.writeFileSync(path.join(__dirname, 'new', 'fix_2_forms.json'), JSON.stringify({
     waNormalize: FIX['2 wa normalize'], detectCommand: FIX['2 detect command'], runCommandJsonBody: FIX['2 run command jsonBody'],
     commandReply: FIX['2 command reply'], node: FIX['2 node'], wiring: FIX['2 wiring'],

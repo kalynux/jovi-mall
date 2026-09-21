@@ -468,4 +468,33 @@ const oldReplyBody = LIVE_FORMS.nodes['command reply'].parameters.jsCode;
 const outOld = runCode(oldReplyBody, { nodes: { Inbound: [j(inForm2)] }, input: [j({ message: '', completedScreen: 'co' })] })[0].json;
 check(S12, "guard bites — the live command reply body never sets endTurn, so the gate alone would change nothing", !endsTrue(outOld));
 
+// ── § 4.9 · a waiting tap files nothing; a file reference is spent after one turn ──
+const S13 = '§ 4.9 · a waiting tap files nothing; old file references are not reused';
+const S14 = '§ 4.9 · guard bites';
+const { ASK_NEW, FILE_OLD, FILE_NEW } = require('./build-live-fixes');
+const TAP49 = FIX['compose tap input.49'];
+const P49 = FIX['systemMessage.49'];
+const tapRun = (code, res) => runCode(code, {
+  nodes: { Inbound: [j({ channel: 'telegram', externalId: '42', kind: 'token', token: 'tkt:6ab0d1fe865937d254d5cba7:rp', text: '' })], 'product action': [j(res)] },
+  input: [j({ firstMessage: null, agentInput: null })],
+  executed: ['product action'],
+})[0].json.agentInput;
+const waiting = { success: true, data: { ticketId: '6ab0d1fe865937d254d5cba7', subject: 'A question', status: 'open', awaitingReply: true } };
+const notWaiting = { success: true, data: { ticketId: '6ab0d1fe865937d254d5cba7', status: 'open', supportRequest: true } };
+const refused = { success: false, error: { customerMessage: 'That request is closed.' } };
+const n1590 = tapRun(TAP49, waiting);
+check(S13, 'exec 1590 replayed: the note still asks for the reply in one sentence', typeof n1590 === 'string' && n1590.includes('WAITING FOR THE CUSTOMER') && n1590.includes('Ask them for it in one short sentence'), String(n1590).slice(0, 160));
+check(S13, 'exec 1590 replayed: the note now forbids filing or attaching on this turn', n1590.includes('call no tool that files, attaches, adds or changes anything on this turn'));
+check(S13, 'a tap that is NOT waiting gets exactly the note it got before', tapRun(TAP49, notWaiting) === tapRun(FIX['compose tap input'], notWaiting));
+check(S13, 'a refused tap gets exactly the note it got before', tapRun(TAP49, refused) === tapRun(FIX['compose tap input'], refused));
+check(S13, 'the tap node changed in that one sentence only', TAP49.replace(ASK_NEW, ASK_OLD_49()) === FIX['compose tap input']);
+function ASK_OLD_49() { return require('./build-live-fixes').ASK_OLD; }
+check(S13, 'the file rule is replaced once, and putting it back gives the § 5.3 prompt byte for byte', P49.split(FILE_NEW).length - 1 === 1 && !P49.includes(FILE_OLD) && P49.replace(FILE_NEW, FILE_OLD) === FIX['systemMessage.53']);
+check(S13, 'it keeps the one legitimate cross-turn use (a typed answer to "which request?")', FILE_NEW.includes('the message just before it when they are now telling you which request it belongs to'));
+check(S13, 'it says why an older one fails — a button may have spent it unseen', FILE_NEW.includes('a button may already have attached it without you seeing'));
+check(S13, 'no expression added or lost, no backslash, no escaped quote', exprCount(P49) === exprCount(FIX['systemMessage.53']) && !P49.includes(String.fromCharCode(92)) && !TAP49.slice(TAP49.indexOf(ASK_NEW) - 5, TAP49.indexOf(ASK_NEW) + ASK_NEW.length).includes(String.fromCharCode(92)));
+check(S13, "every $('…') in the tap node names a live node", refsIn(TAP49).every((r) => LIVE_FORMS.nodeNames.includes(r)), refsIn(TAP49).join(', '));
+// — mutant: the live body, replayed on exec 1590, does NOT forbid the write —
+check(S14, 'guard bites — the live tap node, on exec 1590, says nothing against filing', !tapRun(FIX['compose tap input'], waiting).includes('call no tool'));
+
 module.exports = {};

@@ -24,6 +24,7 @@ connection changed. Times UTC. Each row's previous version is its rollback.
 | 10:26:40 | `1050e7c3` | **§ 3, merged with the owner's reporting** — `expand replies` + `send loop`; every send path returns to the loop; `report channel down` corrected (below). 65 → 67 nodes | `run-deployed.js` 159/0 |
 | 11:33:44 | `73402e02` | **§ 2, core half** — `detect command` / `run command` / `command reply` as specified; new IF `ends silently?` between `command reply` and `has reply?`. 67 → 68 nodes | `run-deployed.js` 180/0 |
 | 11:35:43 | wa-adapter `9046b09b` | **§ 2, adapter half** — `UP-wi-mall-wa-adapter` (`01h0wDrawM1rWtxm`) `normalize` only; rollback `218fc514` | `test-s1-s2` (in `run.js` 201/0) |
+| 11:53:17 | `97073c59` | **§ 4.9** — a waiting tap files nothing; a file reference is not reused after its turn (below). `compose tap input` + the prompt's FILES rule | `run-deployed.js` 191/0 |
 
 **§ 3 · shipped MERGED, not as specified.** § 3.2 was written against `1997c757`, before the
 owner's Saturday change routed both send nodes' error output to `report channel down` (a direct
@@ -48,6 +49,21 @@ reason** — it read `$json.error.message`, n8n's generic sentence, while Telegr
 each arrived in order, so the ordering is proven on a real turn and no longer waits for a product
 page. ⏳ **Still unexercised live:** a REFUSED send inside the loop, i.e. the report path, which
 only a real refusal can show; the harness walks it and its mutants bite.
+
+**§ 4.9 · a waiting tap filed a stale file — found on the handset, not in the specification.**
+Exec 1590: the owner pressed "Reply here" on a support-reply notification. The tap worked and
+`compose tap input` said, correctly, that the platform was waiting for the customer and to ask
+for it in one sentence. The model instead called `tickets_add_attachment` with an `att_`
+reference from **chat memory** — a photo sent 23 minutes earlier that a button had already
+attached (exec 1584). A tap answered with a reply never reaches the model, so memory held the
+reference and nothing saying it was spent; the backend refused it (`BOT_INBOUND_FILE_EXPIRED`)
+and the customer was told their screenshot "didn't come through". The same class as § 5.2/5.3 —
+the model reusing a value seen earlier in the chat. Two changes: the waiting note now says
+nothing has been given yet, so call no tool that writes; and the FILES rule bounds a reference to
+the latest message, or the one before it when the customer is saying where it goes. That second
+clause is the one legitimate cross-turn use and is kept on purpose: a photo's "which request?"
+question is **not** carried the way a tap's is (only `product action` feeds `awaiting answer?`),
+so a customer who types the answer instead of tapping still needs last turn's reference.
 
 **§ 2 · applied as specified, on the § 3 graph; the live proof waits for § 13.** The three core
 bodies were byte-identical in `1050e7c3` to the ones the specification patched, and the adapter
