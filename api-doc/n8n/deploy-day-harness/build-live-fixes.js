@@ -255,9 +255,51 @@ if (itemRefs !== 3) { throw new Error(`report channel down: expected 3 $('Inboun
 FIX['3 report body'] = patch('report channel down', REPORT_LIVE, [[REPORT_OLD_ERROR, REPORT_NEW_ERROR]])
   .split("$('Inbound').item.json").join("$('Inbound').first().json");
 
+// ── § 2 · completed WhatsApp forms, AS SHIPPED on top of 1050e7c3 (§ 3 live) ──────────
+// The three core bodies § 2 edits are BYTE-IDENTICAL in 1050e7c3 to build-new.js's source, and
+// the wa-adapter is still on 218fc514, the version live-wa-normalize.json was taken from. So
+// build-new's patched copies — and test-s1-s2's checks on them — hold as written. Asserted
+// below rather than assumed: a drift throws here, before anything is built.
+// What is new is the wiring, against the graph § 3 changed.
+const { live: LIVE_SPEC } = require('./build-new');
+const LIVE_FORMS = JSON.parse(fs.readFileSync(path.join(__dirname, 'live-core-1050e7c3.json'), 'utf8'));
+for (const [name, get] of [
+  ['detect command', (n) => n.parameters.jsCode],
+  ['run command', (n) => n.parameters.jsonBody],
+  ['command reply', (n) => n.parameters.jsCode],
+]) {
+  if (get(LIVE_FORMS.nodes[name]) !== get(LIVE_SPEC[name])) { throw new Error(`§ 2: live '${name}' has drifted from the body build-new patched`); }
+}
+FIX['2 wa normalize'] = NEW['wa:normalize'];
+FIX['2 detect command'] = NEW['core:detect command'];
+FIX['2 run command jsonBody'] = NEW['core:run command.jsonBody'];
+FIX['2 command reply'] = NEW['core:command reply'];
+
+// `ends silently?` — its TRUE output is deliberately unconnected: the turn ends WITH an item,
+// so the adapter's Execute Workflow node still returns and its `stop typing` still runs.
+// Same shape as `is command?` (IF 2.3, loose), the pattern `send guard` already uses.
+FIX['2 node'] = {
+  name: 'ends silently?', type: 'n8n-nodes-base.if', typeVersion: 2.3, position: [-224, 1712],
+  parameters: {
+    conditions: {
+      options: { caseSensitive: true, leftValue: '', typeValidation: 'loose', version: 3 },
+      combinator: 'and',
+      conditions: [{ id: '5e2a7c1d-9b3f-4d6e-8a1c-2f7b9e0d4c35', leftValue: '={{ $json.endTurn === true }}', rightValue: '',
+        operator: { type: 'boolean', operation: 'true', singleValue: true } }],
+    },
+    looseTypeValidation: true,
+    options: {},
+  },
+};
+FIX['2 wiring'] = [
+  { type: 'removeConnection', source: 'command reply', target: 'has reply?', sourceIndex: 0, targetIndex: 0 },
+  { type: 'addConnection', source: 'command reply', target: 'ends silently?', sourceIndex: 0, targetIndex: 0 },
+  { type: 'addConnection', source: 'ends silently?', target: 'has reply?', sourceIndex: 1, targetIndex: 0 },
+];
+
 module.exports = {
   FIX, live, wf, TOKEN_PARA_OLD, TOKEN_PARA_NEW, TOKEN_PARA_53, AWAIT_KEY, RULES_46, LIVE_NOW, LIVE_SEND,
-  REPORT_OLD_ERROR,
+  REPORT_OLD_ERROR, LIVE_FORMS,
 };
 
 if (require.main === module) {
@@ -272,6 +314,10 @@ if (require.main === module) {
     nodes: FIX['3 nodes'], wiring: FIX['3 wiring'], sendOptions: FIX['3 send options'], reportBody: FIX['3 report body'],
   }, null, 1));
   fs.writeFileSync(path.join(__dirname, 'new', 'fix_compose_agent_input_46.txt'), FIX['compose agent input']);
+  fs.writeFileSync(path.join(__dirname, 'new', 'fix_2_forms.json'), JSON.stringify({
+    waNormalize: FIX['2 wa normalize'], detectCommand: FIX['2 detect command'], runCommandJsonBody: FIX['2 run command jsonBody'],
+    commandReply: FIX['2 command reply'], node: FIX['2 node'], wiring: FIX['2 wiring'],
+  }, null, 1));
   fs.writeFileSync(path.join(__dirname, 'new', 'fix_46_nodes.json'), JSON.stringify({ nodes: FIX['4.6 nodes'], wiring: FIX['4.6 wiring'] }, null, 1));
   for (const [k, v] of Object.entries(FIX)) {
     const s = typeof v === 'string' ? v : JSON.stringify(v);

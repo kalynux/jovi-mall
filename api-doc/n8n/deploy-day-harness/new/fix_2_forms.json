@@ -1,0 +1,63 @@
+{
+ "waNormalize": "const v = $('WhatsApp Trigger').item.json;\nconst m = (v.messages || [])[0] || {};\nconst c = (v.contacts || [])[0] || {};\n\n// The bytes, when the media branch ran. `mediaBase64` is written by `to base64` and by\n// NOTHING else, so its presence IS the branch marker -- no isExecuted needed, and no\n// second source of truth about which path this item came down.\n//\n// It is also the DEGRADATION marker. Both Graph calls and the base64 step continue on\n// error, so a refused or oversized download arrives here with no bytes and falls through\n// to the description below, exactly as an unsupported type does.\nconst b64 = $input.item.json.mediaBase64 || '';\n\nlet kind = 'unsupported';\nlet text = '';\nlet token = '';\nlet location = null;\nlet media = null;\nlet form = null;\n\nif (m.type === 'text' && m.text && String(m.text.body || '').trim()) {\n  kind = 'text';\n  text = String(m.text.body).trim();\n} else if (m.type === 'location' && m.location && m.location.latitude != null && m.location.longitude != null) {\n  // The location_request_message button, or a pin sent from the attachment menu. Both arrive\n  // as the same message type, so the control is a convenience and never a precondition.\n  kind = 'location';\n  location = { lat: Number(m.location.latitude), lng: Number(m.location.longitude) };\n} else if (m.type === 'interactive' && m.interactive && m.interactive.type === 'nfm_reply' && m.interactive.nfm_reply) {\n  // A COMPLETED WHATSAPP FORM (a Flow). Not a tap: there is no id to forward. The answer is in\n  // `response_json`, which Meta delivers as a STRING CONTAINING JSON -- reading its fields\n  // without parsing yields undefined for every one of them, silently.\n  //\n  // The object goes to jovi-mall's `flow_complete` command UNTOUCHED: its schema is passthrough\n  // on purpose, and picking fields here would drop the params of the next form somebody builds.\n  // Unparseable travels as null, which the backend refuses and wi-mall-core then REPORTS --\n  // never an empty object, which the backend would answer with a silence nobody could see.\n  kind = 'form';\n  let parsed = null;\n  try { parsed = JSON.parse(String(m.interactive.nfm_reply.response_json || '')); } catch (e) { parsed = null; }\n  form = (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : null;\n} else if (m.type === 'interactive' && m.interactive) {\n  const r = m.interactive.button_reply || m.interactive.list_reply || null;\n  if (r && r.id) { kind = 'token'; token = String(r.id); }\n} else if (m.type === 'button' && m.button && m.button.payload) {\n  kind = 'token';\n  token = String(m.button.payload);\n} else if (b64 && (m.image || m.audio || m.video || m.document)) {\n  // Anything wi-mall-perceive can read, already fetched from Meta.\n  const a = m.image || m.audio || m.video || m.document;\n  // Meta may append parameters (`audio/ogg; codecs=opus`). Perception matches the type\n  // exactly, so the parameters have to come off here rather than being refused there.\n  // This is what makes a WhatsApp VOICE NOTE land as a clean `audio/ogg`.\n  const mime = String(a.mime_type || '').split(';')[0].trim();\n  let fname = 'file';\n  if (m.image) { fname = 'photo.jpg'; }\n  else if (m.audio) { fname = 'voice.ogg'; }\n  else if (m.video) { fname = 'video.mp4'; }\n  else { fname = String(a.filename || 'file'); }\n  kind = 'media';\n  media = { fileName: fname, mimeType: mime, contentBase64: b64 };\n  // The CAPTION is the customer's own words about the file and travels as ordinary text.\n  // A voice note never has one, and that is correct: its transcript becomes the turn.\n  text = typeof a.caption === 'string' ? a.caption.trim() : '';\n} else {\n  // A sticker, or a file Meta would not hand over. Described, never invented as speech.\n  text = '[the customer sent something I could not open -- a sticker, or a file too large]';\n}\n\nreturn { json: {\n  channel: 'whatsapp',\n  // BARE DIGITS, exactly as Meta delivered them. The platform stores E.164 and bridges it\n  // server-side; adding a '+' here is the one thing the contract says not to do.\n  externalId: String(m.from || c.wa_id || ''),\n  messageId: String(m.id || ''),\n  kind: kind,\n  text: text,\n  token: token,\n  location: location,\n  media: media,\n  form: form,\n  // WhatsApp satisfies the phone step from the sender id itself, so there is never a\n  // contact card to forward on this channel.\n  contact: null,\n  displayName: (c.profile && c.profile.name) ? String(c.profile.name) : undefined,\n  handle: undefined,\n  language: undefined,\n} };\n",
+ "detectCommand": "// IS THIS MESSAGE A COMMAND? — and deliberately nothing more than that.\n//\n// ⭐ THE VOCABULARY MOVED SERVER-SIDE ON 2026-09-09, and this node used to hold it: every\n// command name, every alias, and the argument grammar. It holds none of them now. The\n// reason is the one `bot-surface.md` § 14.6 already gives about parsing a typed answer:\n//\n//   \"A typed answer is language-dependent and whatever reads it is not... That table would\n//    have lived in the automation layer, which is the one layer with no copy table.\"\n//\n// The alias table IS a five-language table — /chercher /buscar /procurar, /annuler\n// /cancelar. Keeping it here meant a vocabulary nobody translates, nobody reviews and\n// nobody notices has gone stale. jovi-mall parses now, and answers with a channel-ready\n// reply like every other turn.\n//\n// ⚠ THE RAW TEXT IS WHAT TRAVELS. Never Telegram's bot_command entity: it stops at a\n// hyphen, which is why /reset-password could only ever be read as /reset plus trailing\n// text — and why the vocabulary is now one word with no separators at all.\n\nconst inbound = $('Inbound').first().json;\nconst sync = $input.first().json;\n\nlet kind = '';\nlet payload = {};\n\nconst text = typeof inbound.text === 'string' ? inbound.text.trim() : '';\nconst onboardingPending = !!(sync && sync.data && sync.data.onboarding && sync.data.onboarding.next);\n\n// A failed /identity/sync is `route turn`'s business — a 4xx body renders its own refusal.\nif (sync && sync.success !== false) {\n  if (inbound.kind === 'contact' && inbound.contact && !onboardingPending) {\n    // ⚠ A CONTACT IS A TAP, NOT TYPED TEXT, so it keeps the webhook command bus rather than\n    // going to the parser. It also runs ONLY once onboarding is finished: while the\n    // checklist still wants the phone step, `route onboarding` must have the contact — it\n    // is the same number, and binding it there is what completes registration. Afterwards a\n    // contact can only be answering the request_contact keyboard /login or /password put\n    // up, and the PLATFORM's pending intent decides which. n8n never branches on that.\n    kind = 'contact';\n    payload = {\n      contact: {\n        phone_number: String(inbound.contact.phoneNumber || ''),\n        user_id: inbound.contact.userId,\n        first_name: inbound.contact.firstName || undefined,\n        last_name: inbound.contact.lastName || undefined\n      },\n      username: inbound.handle ? String(inbound.handle).replace(/^@/, '') : undefined\n    };\n  } else if (inbound.kind === 'form') {\n    // A COMPLETED WHATSAPP FORM. Like a contact it is not typed text, so it takes the webhook\n    // command bus rather than the parser. Unlike a contact it means the same thing at every\n    // stage, so it is not gated on onboarding. `flow_complete` reports and never writes, and it\n    // decides everything -- including whether there is anything to say. Forwarded untouched.\n    kind = 'form';\n    payload = inbound.form;\n  } else if (inbound.kind === 'text' && text.charAt(0) === '/') {\n    // That is the whole test. Which command it is, whether it exists, what its arguments\n    // mean and what to say about a typo are all the backend's now.\n    kind = 'slash';\n  }\n}\n\nreturn [{ json: Object.assign({}, sync, { _kind: kind, _payload: payload }) }];",
+ "runCommandJsonBody": "={{ JSON.stringify($json._kind === 'slash' ? { identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, text: $('Inbound').first().json.text } : Object.assign({ is_command: true, command: ($json._kind === 'form' ? 'flow_complete' : 'login_contact'), payload: $json._payload }, $('Inbound').first().json.channel === 'telegram' ? { chat_id: $('Inbound').first().json.externalId, user_id: $('Inbound').first().json.externalId } : { reply_to: $('Inbound').first().json.externalId })) }}",
+ "commandReply": "// The backend words every ordinary outcome AND attaches a channel-ready `reply` to it, so\n// the common paths — the credential, every refusal, the request_contact keyboard — arrive\n// here already renderable and pass straight through.\n//\n// This covers the rest: a genuine error envelope carries a sentence but no envelope.\n//\n// ⚠ It wraps the BACKEND'S sentence and never writes one. That is what keeps \"the bot relays,\n// never renders\" true here — n8n holds no copy table and no button labels, only the two wire\n// shapes, and those come from channel-reply.ts on every other path.\nconst r = $input.first().json || {};\nconst inbound = $('Inbound').first().json;\n\n// A COMPLETED WHATSAPP FORM IS THE ONE COMMAND WHOSE SILENCE IS AN ANSWER. `flow_complete`\n// answers with a reply only when the chat has something to add (a listing form that chose a\n// product opens its detail screen). Every other completion is silent on purpose: the form's own\n// closing screen already said what happened, and a second message would talk over it. So no\n// reply ENDS THE TURN -- never handed to the model, which would greet a customer mid-purchase.\n//\n// ⚠ Never branch on WHICH form finished. The backend may answer more completions later, and\n// that must need no change here.\n//\n// A refused completion is a platform fault the customer cannot act on -- they have already read\n// the closing screen. It FAILS the run so the error workflow reports it (ADR-022); it is never\n// swallowed and never worded here.\nif (inbound.kind === 'form') {\n  if (r.reply) { return [{ json: r }]; }\n  if (r.success === false) {\n    const e = r.error || {};\n    throw new Error('flow_complete refused a WhatsApp form completion: ' + String(e.code || e.message || 'no error body'));\n  }\n  return [{ json: Object.assign({}, r, { reply: null, endTurn: true }) }];\n}\n\nif (r.reply) { return [{ json: r }]; }\nconst text = (r.error && (r.error.customerMessage || r.error.message)) || '';\n\n// No sentence at all means there is nothing honest to say; `has reply?` sends this to the\n// model rather than leaving the customer in silence. On this surface an empty 200 is still\n// a TURN — the lesson the address-picker taught on 2026-09-06.\nif (!text) { return [{ json: Object.assign({}, r, { reply: null }) }]; }\n\nconst reply = inbound.channel === 'telegram'\n  ? { channel: 'telegram', method: 'sendMessage', body: { chat_id: inbound.externalId, text: text } }\n  : { channel: 'whatsapp', method: 'messages', body: { messaging_product: 'whatsapp', recipient_type: 'individual', to: inbound.externalId, type: 'text', text: { body: text, preview_url: false } } };\n\nreturn [{ json: Object.assign({}, r, { reply: reply }) }];",
+ "node": {
+  "name": "ends silently?",
+  "type": "n8n-nodes-base.if",
+  "typeVersion": 2.3,
+  "position": [
+   -224,
+   1712
+  ],
+  "parameters": {
+   "conditions": {
+    "options": {
+     "caseSensitive": true,
+     "leftValue": "",
+     "typeValidation": "loose",
+     "version": 3
+    },
+    "combinator": "and",
+    "conditions": [
+     {
+      "id": "5e2a7c1d-9b3f-4d6e-8a1c-2f7b9e0d4c35",
+      "leftValue": "={{ $json.endTurn === true }}",
+      "rightValue": "",
+      "operator": {
+       "type": "boolean",
+       "operation": "true",
+       "singleValue": true
+      }
+     }
+    ]
+   },
+   "looseTypeValidation": true,
+   "options": {}
+  }
+ },
+ "wiring": [
+  {
+   "type": "removeConnection",
+   "source": "command reply",
+   "target": "has reply?",
+   "sourceIndex": 0,
+   "targetIndex": 0
+  },
+  {
+   "type": "addConnection",
+   "source": "command reply",
+   "target": "ends silently?",
+   "sourceIndex": 0,
+   "targetIndex": 0
+  },
+  {
+   "type": "addConnection",
+   "source": "ends silently?",
+   "target": "has reply?",
+   "sourceIndex": 1,
+   "targetIndex": 0
+  }
+ ]
+}

@@ -1,0 +1,1284 @@
+{
+ "versionId": "1050e7c3-feaa-480a-80b4-edbef5946f62",
+ "capturedFrom": "get_workflow_details, UP-wi-mall-core (vvbouV2136P5weCs), 2026-09-21 after § 3 published",
+ "settings": {
+  "executionOrder": "v1"
+ },
+ "nodeNames": [
+  "Inbound",
+  "sync identity",
+  "route turn",
+  "has reply?",
+  "route onboarding",
+  "submit skip",
+  "submit address",
+  "submit contact",
+  "search address",
+  "submit answer",
+  "AI Agent",
+  "Chat Memory",
+  "compose agent reply",
+  "is telegram?",
+  "send telegram",
+  "send whatsapp",
+  "Sticky Note c3b43800",
+  "Sticky Note 57e8b019",
+  "Sticky Note 3cdb80c5",
+  "agent fallback",
+  "outage fallback",
+  "send guard",
+  "submit skip label",
+  "reverse location",
+  "remember first message",
+  "recall first message",
+  "forget first message",
+  "Search-Products",
+  "wi-mall MCP",
+  "is media?",
+  "upload inbound file",
+  "compose agent input",
+  "check bargain",
+  "read bargain flag",
+  "bargaining?",
+  "hand to bargainer",
+  "bargain handled?",
+  "open_negotiation",
+  "Sticky Note bargaining",
+  "check price lock",
+  "report outage",
+  "report agent down",
+  "report bargain down",
+  "read bargain echo",
+  "clear bargain echo",
+  "drop duplicate reply",
+  "detect command",
+  "is command?",
+  "run command",
+  "command reply",
+  "Sticky Note commands",
+  "Show-Products",
+  "check display",
+  "forget display",
+  "product action",
+  "OpenRouter Main",
+  "OpenRouter Fallback",
+  "call perceive",
+  "is storable?",
+  "report channel down",
+  "compose tap input",
+  "awaiting answer?",
+  "remember awaiting",
+  "recall awaiting",
+  "forget awaiting",
+  "expand replies",
+  "send loop"
+ ],
+ "positions": {
+  "Inbound": [
+   -1568,
+   2048
+  ],
+  "sync identity": [
+   -1344,
+   2048
+  ],
+  "route turn": [
+   -672,
+   1008
+  ],
+  "has reply?": [
+   0,
+   624
+  ],
+  "route onboarding": [
+   -448,
+   48
+  ],
+  "submit skip": [
+   -224,
+   -96
+  ],
+  "submit address": [
+   -224,
+   96
+  ],
+  "submit contact": [
+   -224,
+   288
+  ],
+  "search address": [
+   -224,
+   480
+  ],
+  "submit answer": [
+   -224,
+   768
+  ],
+  "AI Agent": [
+   2336,
+   1184
+  ],
+  "Chat Memory": [
+   2280,
+   1416
+  ],
+  "compose agent reply": [
+   3440,
+   1088
+  ],
+  "is telegram?": [
+   4560,
+   784
+  ],
+  "send telegram": [
+   4944,
+   688
+  ],
+  "send whatsapp": [
+   4944,
+   880
+  ],
+  "Sticky Note c3b43800": [
+   5776,
+   160
+  ],
+  "Sticky Note 57e8b019": [
+   5776,
+   480
+  ],
+  "Sticky Note 3cdb80c5": [
+   5776,
+   816
+  ],
+  "agent fallback": [
+   3440,
+   1456
+  ],
+  "outage fallback": [
+   3440,
+   2048
+  ],
+  "send guard": [
+   4336,
+   1408
+  ],
+  "submit skip label": [
+   -224,
+   -288
+  ],
+  "reverse location": [
+   -224,
+   960
+  ],
+  "remember first message": [
+   -224,
+   -480
+  ],
+  "recall first message": [
+   224,
+   1184
+  ],
+  "forget first message": [
+   448,
+   1328
+  ],
+  "Search-Products": [
+   2408,
+   1416
+  ],
+  "wi-mall MCP": [
+   2536,
+   1416
+  ],
+  "is media?": [
+   896,
+   1552
+  ],
+  "upload inbound file": [
+   1568,
+   1408
+  ],
+  "compose agent input": [
+   1792,
+   1600
+  ],
+  "check bargain": [
+   -448,
+   1472
+  ],
+  "read bargain flag": [
+   0,
+   1504
+  ],
+  "bargaining?": [
+   224,
+   1504
+  ],
+  "hand to bargainer": [
+   448,
+   1664
+  ],
+  "bargain handled?": [
+   672,
+   1712
+  ],
+  "open_negotiation": [
+   2664,
+   1416
+  ],
+  "Sticky Note bargaining": [
+   5776,
+   1040
+  ],
+  "check price lock": [
+   -224,
+   1472
+  ],
+  "report outage": [
+   -448,
+   1904
+  ],
+  "report agent down": [
+   2992,
+   1888
+  ],
+  "report bargain down": [
+   672,
+   1904
+  ],
+  "read bargain echo": [
+   3664,
+   1408
+  ],
+  "clear bargain echo": [
+   3888,
+   1408
+  ],
+  "drop duplicate reply": [
+   4112,
+   1408
+  ],
+  "detect command": [
+   -1120,
+   1328
+  ],
+  "is command?": [
+   -896,
+   1328
+  ],
+  "run command": [
+   -672,
+   1744
+  ],
+  "command reply": [
+   -448,
+   1712
+  ],
+  "Sticky Note commands": [
+   5792,
+   1648
+  ],
+  "Show-Products": [
+   2792,
+   1416
+  ],
+  "check display": [
+   2992,
+   1088
+  ],
+  "forget display": [
+   3216,
+   1088
+  ],
+  "product action": [
+   -224,
+   1280
+  ],
+  "OpenRouter Main": [
+   2024,
+   1416
+  ],
+  "OpenRouter Fallback": [
+   2152,
+   1416
+  ],
+  "call perceive": [
+   1120,
+   1472
+  ],
+  "is storable?": [
+   1344,
+   1472
+  ],
+  "report channel down": [
+   5168,
+   784
+  ],
+  "compose tap input": [
+   800,
+   1184
+  ],
+  "awaiting answer?": [
+   0,
+   416
+  ],
+  "remember awaiting": [
+   224,
+   416
+  ],
+  "recall awaiting": [
+   448,
+   1504
+  ],
+  "forget awaiting": [
+   672,
+   1408
+  ],
+  "expand replies": [
+   4112,
+   784
+  ],
+  "send loop": [
+   4336,
+   784
+  ]
+ },
+ "connections": {
+  "Inbound": {
+   "main": [
+    [
+     {
+      "node": "sync identity",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "sync identity": {
+   "main": [
+    [
+     {
+      "node": "detect command",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "outage fallback",
+      "type": "main",
+      "index": 0
+     },
+     {
+      "node": "report outage",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "route turn": {
+   "main": [
+    [
+     {
+      "node": "has reply?",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "route onboarding",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "product action",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "check bargain",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "has reply?": {
+   "main": [
+    [
+     {
+      "node": "expand replies",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "recall first message",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "route onboarding": {
+   "main": [
+    [
+     {
+      "node": "has reply?",
+      "type": "main",
+      "index": 0
+     },
+     {
+      "node": "remember first message",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "submit skip",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "submit address",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "submit contact",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "search address",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "submit answer",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "submit skip label",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "reverse location",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "has reply?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "submit skip": {
+   "main": [
+    [
+     {
+      "node": "has reply?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "submit address": {
+   "main": [
+    [
+     {
+      "node": "has reply?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "submit contact": {
+   "main": [
+    [
+     {
+      "node": "has reply?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "search address": {
+   "main": [
+    [
+     {
+      "node": "has reply?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "submit answer": {
+   "main": [
+    [
+     {
+      "node": "has reply?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "AI Agent": {
+   "main": [
+    [
+     {
+      "node": "check display",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "agent fallback",
+      "type": "main",
+      "index": 0
+     },
+     {
+      "node": "report agent down",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Chat Memory": {
+   "ai_memory": [
+    [
+     {
+      "node": "AI Agent",
+      "type": "ai_memory",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "is telegram?": {
+   "main": [
+    [
+     {
+      "node": "send telegram",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "send whatsapp",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "submit skip label": {
+   "main": [
+    [
+     {
+      "node": "has reply?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "reverse location": {
+   "main": [
+    [
+     {
+      "node": "has reply?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "recall first message": {
+   "main": [
+    [
+     {
+      "node": "forget first message",
+      "type": "main",
+      "index": 0
+     },
+     {
+      "node": "compose tap input",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Search-Products": {
+   "ai_tool": [
+    [
+     {
+      "node": "AI Agent",
+      "type": "ai_tool",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "wi-mall MCP": {
+   "ai_tool": [
+    [
+     {
+      "node": "AI Agent",
+      "type": "ai_tool",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "is media?": {
+   "main": [
+    [
+     {
+      "node": "call perceive",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "compose agent input",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "upload inbound file": {
+   "main": [
+    [
+     {
+      "node": "compose agent input",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "compose agent input": {
+   "main": [
+    [
+     {
+      "node": "AI Agent",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "read bargain flag": {
+   "main": [
+    [
+     {
+      "node": "bargaining?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "bargaining?": {
+   "main": [
+    [
+     {
+      "node": "hand to bargainer",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "recall awaiting",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "hand to bargainer": {
+   "main": [
+    [
+     {
+      "node": "bargain handled?",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "is media?",
+      "type": "main",
+      "index": 0
+     },
+     {
+      "node": "report bargain down",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "bargain handled?": {
+   "main": [
+    null,
+    [
+     {
+      "node": "is media?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "open_negotiation": {
+   "ai_tool": [
+    [
+     {
+      "node": "AI Agent",
+      "type": "ai_tool",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "check bargain": {
+   "main": [
+    [
+     {
+      "node": "check price lock",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "check price lock": {
+   "main": [
+    [
+     {
+      "node": "read bargain flag",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "compose agent reply": {
+   "main": [
+    [
+     {
+      "node": "read bargain echo",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "agent fallback": {
+   "main": [
+    [
+     {
+      "node": "read bargain echo",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "outage fallback": {
+   "main": [
+    [
+     {
+      "node": "read bargain echo",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "read bargain echo": {
+   "main": [
+    [
+     {
+      "node": "clear bargain echo",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "clear bargain echo": {
+   "main": [
+    [
+     {
+      "node": "drop duplicate reply",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "drop duplicate reply": {
+   "main": [
+    [
+     {
+      "node": "send guard",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "detect command": {
+   "main": [
+    [
+     {
+      "node": "is command?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "is command?": {
+   "main": [
+    [
+     {
+      "node": "run command",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "route turn",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "run command": {
+   "main": [
+    [
+     {
+      "node": "command reply",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "report outage",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "command reply": {
+   "main": [
+    [
+     {
+      "node": "has reply?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Show-Products": {
+   "ai_tool": [
+    [
+     {
+      "node": "AI Agent",
+      "type": "ai_tool",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "check display": {
+   "main": [
+    [
+     {
+      "node": "forget display",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "forget display": {
+   "main": [
+    [
+     {
+      "node": "compose agent reply",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "product action": {
+   "main": [
+    [
+     {
+      "node": "has reply?",
+      "type": "main",
+      "index": 0
+     },
+     {
+      "node": "awaiting answer?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "OpenRouter Main": {
+   "ai_languageModel": [
+    [
+     {
+      "node": "AI Agent",
+      "type": "ai_languageModel",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "OpenRouter Fallback": {
+   "ai_languageModel": [
+    [
+     {
+      "node": "AI Agent",
+      "type": "ai_languageModel",
+      "index": 1
+     }
+    ]
+   ]
+  },
+  "call perceive": {
+   "main": [
+    [
+     {
+      "node": "is storable?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "is storable?": {
+   "main": [
+    [
+     {
+      "node": "upload inbound file",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "compose agent input",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "send whatsapp": {
+   "main": [
+    [
+     {
+      "node": "send loop",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "report channel down",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "send telegram": {
+   "main": [
+    [
+     {
+      "node": "send loop",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "report channel down",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "compose tap input": {
+   "main": [
+    [
+     {
+      "node": "AI Agent",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "awaiting answer?": {
+   "main": [
+    [
+     {
+      "node": "remember awaiting",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "recall awaiting": {
+   "main": [
+    [
+     {
+      "node": "is media?",
+      "type": "main",
+      "index": 0
+     },
+     {
+      "node": "forget awaiting",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "send guard": {
+   "main": [
+    [
+     {
+      "node": "expand replies",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "expand replies": {
+   "main": [
+    [
+     {
+      "node": "send loop",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "send loop": {
+   "main": [
+    null,
+    [
+     {
+      "node": "is telegram?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "report channel down": {
+   "main": [
+    [
+     {
+      "node": "send loop",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "nodes": {
+  "detect command": {
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    -1120,
+    1328
+   ],
+   "parameters": {
+    "jsCode": "// IS THIS MESSAGE A COMMAND? — and deliberately nothing more than that.\n//\n// ⭐ THE VOCABULARY MOVED SERVER-SIDE ON 2026-09-09, and this node used to hold it: every\n// command name, every alias, and the argument grammar. It holds none of them now. The\n// reason is the one `bot-surface.md` § 14.6 already gives about parsing a typed answer:\n//\n//   \"A typed answer is language-dependent and whatever reads it is not... That table would\n//    have lived in the automation layer, which is the one layer with no copy table.\"\n//\n// The alias table IS a five-language table — /chercher /buscar /procurar, /annuler\n// /cancelar. Keeping it here meant a vocabulary nobody translates, nobody reviews and\n// nobody notices has gone stale. jovi-mall parses now, and answers with a channel-ready\n// reply like every other turn.\n//\n// ⚠ THE RAW TEXT IS WHAT TRAVELS. Never Telegram's bot_command entity: it stops at a\n// hyphen, which is why /reset-password could only ever be read as /reset plus trailing\n// text — and why the vocabulary is now one word with no separators at all.\n\nconst inbound = $('Inbound').first().json;\nconst sync = $input.first().json;\n\nlet kind = '';\nlet payload = {};\n\nconst text = typeof inbound.text === 'string' ? inbound.text.trim() : '';\nconst onboardingPending = !!(sync && sync.data && sync.data.onboarding && sync.data.onboarding.next);\n\n// A failed /identity/sync is `route turn`'s business — a 4xx body renders its own refusal.\nif (sync && sync.success !== false) {\n  if (inbound.kind === 'contact' && inbound.contact && !onboardingPending) {\n    // ⚠ A CONTACT IS A TAP, NOT TYPED TEXT, so it keeps the webhook command bus rather than\n    // going to the parser. It also runs ONLY once onboarding is finished: while the\n    // checklist still wants the phone step, `route onboarding` must have the contact — it\n    // is the same number, and binding it there is what completes registration. Afterwards a\n    // contact can only be answering the request_contact keyboard /login or /password put\n    // up, and the PLATFORM's pending intent decides which. n8n never branches on that.\n    kind = 'contact';\n    payload = {\n      contact: {\n        phone_number: String(inbound.contact.phoneNumber || ''),\n        user_id: inbound.contact.userId,\n        first_name: inbound.contact.firstName || undefined,\n        last_name: inbound.contact.lastName || undefined\n      },\n      username: inbound.handle ? String(inbound.handle).replace(/^@/, '') : undefined\n    };\n  } else if (inbound.kind === 'text' && text.charAt(0) === '/') {\n    // That is the whole test. Which command it is, whether it exists, what its arguments\n    // mean and what to say about a typo are all the backend's now.\n    kind = 'slash';\n  }\n}\n\nreturn [{ json: Object.assign({}, sync, { _kind: kind, _payload: payload }) }];"
+   }
+  },
+  "is command?": {
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 2.3,
+   "position": [
+    -896,
+    1328
+   ],
+   "parameters": {
+    "conditions": {
+     "options": {
+      "caseSensitive": true,
+      "leftValue": "",
+      "typeValidation": "loose",
+      "version": 3
+     },
+     "combinator": "and",
+     "conditions": [
+      {
+       "id": "b7f1c0a2-3d4e-4f5a-8b6c-1d2e3f4a5b6c",
+       "leftValue": "={{ $json._kind !== '' }}",
+       "rightValue": "",
+       "operator": {
+        "type": "boolean",
+        "operation": "true",
+        "singleValue": true
+       }
+      }
+     ]
+    },
+    "looseTypeValidation": true,
+    "options": {}
+   }
+  },
+  "run command": {
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.5,
+   "position": [
+    -672,
+    1744
+   ],
+   "parameters": {
+    "method": "POST",
+    "url": "={{ ($env.JOVI_MALL_BASE_URL || 'http://jovi-mall:8022') + ($json._kind === 'slash' ? '/api/internal/bot/command' : ($('Inbound').first().json.channel === 'telegram' ? '/api/webhooks/telegram/webhook' : '/api/webhooks/whatsapp')) }}",
+    "authentication": "genericCredentialType",
+    "genericAuthType": "httpBearerAuth",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "X-Webhook-Secret",
+       "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+      },
+      {
+       "name": "Idempotency-Key",
+       "value": "={{ $('Inbound').first().json.channel }}-{{ $('Inbound').first().json.externalId }}-{{ $('Inbound').first().json.messageId }}-cmd"
+      },
+      {
+       "name": "X-Request-Id",
+       "value": "={{ $execution.id }}"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify($json._kind === 'slash' ? { identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, text: $('Inbound').first().json.text } : Object.assign({ is_command: true, command: 'login_contact', payload: $json._payload }, $('Inbound').first().json.channel === 'telegram' ? { chat_id: $('Inbound').first().json.externalId, user_id: $('Inbound').first().json.externalId } : { reply_to: $('Inbound').first().json.externalId })) }}",
+    "options": {
+     "response": {
+      "response": {
+       "neverError": true
+      }
+     },
+     "timeout": 20000
+    }
+   },
+   "onError": "continueErrorOutput"
+  },
+  "command reply": {
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    -448,
+    1712
+   ],
+   "parameters": {
+    "jsCode": "// The backend words every ordinary outcome AND attaches a channel-ready `reply` to it, so\n// the common paths — the credential, every refusal, the request_contact keyboard — arrive\n// here already renderable and pass straight through.\n//\n// This covers the rest: a genuine error envelope carries a sentence but no envelope.\n//\n// ⚠ It wraps the BACKEND'S sentence and never writes one. That is what keeps \"the bot relays,\n// never renders\" true here — n8n holds no copy table and no button labels, only the two wire\n// shapes, and those come from channel-reply.ts on every other path.\nconst r = $input.first().json || {};\nif (r.reply) { return [{ json: r }]; }\n\nconst inbound = $('Inbound').first().json;\nconst text = (r.error && (r.error.customerMessage || r.error.message)) || '';\n\n// No sentence at all means there is nothing honest to say; `has reply?` sends this to the\n// model rather than leaving the customer in silence. On this surface an empty 200 is still\n// a TURN — the lesson the address-picker taught on 2026-09-06.\nif (!text) { return [{ json: Object.assign({}, r, { reply: null }) }]; }\n\nconst reply = inbound.channel === 'telegram'\n  ? { channel: 'telegram', method: 'sendMessage', body: { chat_id: inbound.externalId, text: text } }\n  : { channel: 'whatsapp', method: 'messages', body: { messaging_product: 'whatsapp', recipient_type: 'individual', to: inbound.externalId, type: 'text', text: { body: text, preview_url: false } } };\n\nreturn [{ json: Object.assign({}, r, { reply: reply }) }];"
+   }
+  },
+  "has reply?": {
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 2.3,
+   "position": [
+    0,
+    624
+   ],
+   "parameters": {
+    "conditions": {
+     "options": {
+      "caseSensitive": true,
+      "leftValue": "",
+      "typeValidation": "loose",
+      "version": 3
+     },
+     "conditions": [
+      {
+       "leftValue": "={{ $json.reply != null }}",
+       "rightValue": "",
+       "operator": {
+        "type": "boolean",
+        "operation": "true",
+        "singleValue": true
+       },
+       "id": "ce36bcd7-5f3b-436a-8233-c40b43c3f5e5"
+      }
+     ],
+     "combinator": "and"
+    },
+    "looseTypeValidation": true,
+    "options": {}
+   }
+  }
+ }
+}

@@ -407,4 +407,65 @@ check(S7, 'it forbids rebuilding one, and keeps retry-once-then-ask',
   TOKEN_PARA_53.includes('rebuild') && TOKEN_PARA_53.includes('make that same call once more') && TOKEN_PARA_53.includes('Only if that is refused too'));
 check(S7, 'no expression added or lost', exprCount(P53) === exprCount(P46));
 
+// ── § 2 · completed WhatsApp forms, as shipped on top of 1050e7c3 ─────────────
+const S11 = '§ 2 · as shipped (on the § 3 graph)';
+const S12 = '§ 2 · guard bites';
+const { LIVE_FORMS } = require('./build-live-fixes');
+const ENDS = FIX['2 node'].parameters.conditions.conditions[0].leftValue;
+const endsTrue = (json) => evalExpr(ENDS, { json }) === true;
+
+check(S11, 'the shipped bodies are the ones test-s1-s2 proved (byte for byte)',
+  FIX['2 wa normalize'] === NEW['wa:normalize'] && FIX['2 detect command'] === NEW['core:detect command']
+  && FIX['2 run command jsonBody'] === NEW['core:run command.jsonBody'] && FIX['2 command reply'] === NEW['core:command reply']);
+check(S11, "the gate's condition is the one test-s1-s2 evaluated", ENDS === '={{ $json.endTurn === true }}');
+check(S11, 'the gate is true ONLY for endTurn === true',
+  endsTrue({ endTurn: true }) && !endsTrue({ reply: { body: {} } }) && !endsTrue({}) && !endsTrue({ endTurn: 'true' }) && !endsTrue({ endTurn: 1 }));
+
+const W2 = applyWiring(LIVE_FORMS.connections, FIX['2 wiring']);
+check(S11, "live today: command reply feeds has reply? directly (the anchor the wiring removes)", JSON.stringify(targets(LIVE_FORMS.connections, 'command reply', 0)) === '["has reply?"]');
+check(S11, 'command reply now feeds ONLY the gate', JSON.stringify(targets(W2, 'command reply', 0)) === '["ends silently?"]');
+check(S11, "the gate's TRUE output is unconnected — the turn ends there, with an item", targets(W2, 'ends silently?', 0).length === 0);
+check(S11, "the gate's FALSE output feeds has reply?", JSON.stringify(targets(W2, 'ends silently?', 1)) === '["has reply?"]');
+const hrBefore = sourcesOf(LIVE_FORMS.connections, 'has reply?').sort();
+const hrAfter = sourcesOf(W2, 'has reply?').sort();
+check(S11, "has reply? keeps every other feed (11), loses command reply's, gains the gate's",
+  JSON.stringify(hrAfter) === JSON.stringify(hrBefore.filter((x) => x !== 'command reply:0').concat('ends silently?:1').sort()) && hrAfter.length === 12, hrAfter.join(', '));
+const eb2 = edgeSet(LIVE_FORMS.connections); const ea2 = edgeSet(W2);
+check(S11, 'the edge-set diff is exactly the three wiring ops', [...ea2].filter((e) => !eb2.has(e)).length === 2 && [...eb2].filter((e) => !ea2.has(e)).length === 1);
+check(S11, "the gate's position is free on the live canvas",
+  !Object.values(LIVE_FORMS.positions).some((p) => p[0] === FIX['2 node'].position[0] && p[1] === FIX['2 node'].position[1]));
+check(S11, "the name 'ends silently?' is not already taken", !LIVE_FORMS.nodeNames.includes('ends silently?'));
+
+// Walk: command reply's real output, through the gate, on the wired graph.
+const inForm2 = { channel: 'whatsapp', externalId: '237600000000', messageId: 'wamid.F', kind: 'form', text: '', token: '', form: { screen: 'co' } };
+const inContact2 = { channel: 'whatsapp', externalId: '237600000000', kind: 'contact', contact: { phoneNumber: '+237600000000', userId: 1 } };
+const reach = (conns, inbound, response) => {
+  const out = runCode(FIX['2 command reply'], { nodes: { Inbound: [j(inbound)] }, input: [j(response)] })[0].json;
+  const next = targets(conns, 'command reply', 0);
+  if (next.includes('has reply?')) return 'has reply?';
+  if (!next.includes('ends silently?')) return 'nowhere';
+  const branch = endsTrue(out) ? 0 : 1;
+  const t = targets(conns, 'ends silently?', branch);
+  return t.length ? t.join('+') : 'END';
+};
+const aReply2 = { channel: 'whatsapp', method: 'messages', body: { to: '237600000000', type: 'interactive' } };
+check(S11, 'a silent completion (checkout closed) ENDS the turn — no assistant greeting', reach(W2, inForm2, { message: '', completedScreen: 'co' }) === 'END');
+check(S11, 'a completion WITH a reply (listing chose a product) reaches has reply? and is sent', reach(W2, inForm2, { reply: aReply2 }) === 'has reply?');
+check(S11, 'unchanged — a contact command with its reply still reaches has reply?', reach(W2, inContact2, { reply: aReply2 }) === 'has reply?');
+check(S11, 'unchanged — a refused contact command still reaches has reply? (its sentence renders itself)', reach(W2, inContact2, { success: false, error: { customerMessage: 'x' } }) === 'has reply?');
+check(S11, 'live today: the same silent completion reaches has reply? → the assistant greets over the closing screen', reach(LIVE_FORMS.connections, inForm2, { message: '', completedScreen: 'co' }) === 'has reply?');
+
+const missing2 = refsIn([FIX['2 detect command'], FIX['2 run command jsonBody'], FIX['2 command reply']].join(' ')).filter((r) => !LIVE_FORMS.nodeNames.includes(r));
+check(S11, "⛔ every $('…') in the three core bodies names a live node", missing2.length === 0, missing2.join(', '));
+check(S11, "the adapter body references no other node but the trigger", refsIn(FIX['2 wa normalize']).every((r) => r === 'WhatsApp Trigger'), refsIn(FIX['2 wa normalize']).join(', '));
+
+// — mutants: each APPLIES, and flips a check that was passing —
+const trueWired = applyWiring(LIVE_FORMS.connections, [FIX['2 wiring'][0], FIX['2 wiring'][1], { ...FIX['2 wiring'][2], sourceIndex: 0 }]);
+check(S12, "guard bites — the gate wired on its TRUE output sends a silent completion on to the assistant", reach(trueWired, inForm2, { message: '', completedScreen: 'co' }) !== 'END');
+const keptOld = applyWiring(LIVE_FORMS.connections, FIX['2 wiring'].slice(1));
+check(S12, "guard bites — leaving the old command reply → has reply? edge in place bypasses the gate", reach(keptOld, inForm2, { message: '', completedScreen: 'co' }) === 'has reply?');
+const oldReplyBody = LIVE_FORMS.nodes['command reply'].parameters.jsCode;
+const outOld = runCode(oldReplyBody, { nodes: { Inbound: [j(inForm2)] }, input: [j({ message: '', completedScreen: 'co' })] })[0].json;
+check(S12, "guard bites — the live command reply body never sets endTurn, so the gate alone would change nothing", !endsTrue(outOld));
+
 module.exports = {};

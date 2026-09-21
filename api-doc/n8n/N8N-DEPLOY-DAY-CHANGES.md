@@ -22,6 +22,8 @@ connection changed. Times UTC. Each row's previous version is its rollback.
 | 07:37:39 | `0ed551f3` | **§ 5.3** — the token paragraph, rewritten for the v2 token (below) | `run-deployed.js` 117/0 |
 | 07:44:06 | `1089e871` | **§ 4.8** — `compose tap input`: an `awaiting…` flag means the platform waits for the CUSTOMER (below) | `run-deployed.js` 128/0 |
 | 10:26:40 | `1050e7c3` | **§ 3, merged with the owner's reporting** — `expand replies` + `send loop`; every send path returns to the loop; `report channel down` corrected (below). 65 → 67 nodes | `run-deployed.js` 159/0 |
+| 11:33:44 | `73402e02` | **§ 2, core half** — `detect command` / `run command` / `command reply` as specified; new IF `ends silently?` between `command reply` and `has reply?`. 67 → 68 nodes | `run-deployed.js` 180/0 |
+| 11:35:43 | wa-adapter `9046b09b` | **§ 2, adapter half** — `UP-wi-mall-wa-adapter` (`01h0wDrawM1rWtxm`) `normalize` only; rollback `218fc514` | `test-s1-s2` (in `run.js` 201/0) |
 
 **§ 3 · shipped MERGED, not as specified.** § 3.2 was written against `1997c757`, before the
 owner's Saturday change routed both send nodes' error output to `report channel down` (a direct
@@ -46,6 +48,18 @@ reason** — it read `$json.error.message`, n8n's generic sentence, while Telegr
 each arrived in order, so the ordering is proven on a real turn and no longer waits for a product
 page. ⏳ **Still unexercised live:** a REFUSED send inside the loop, i.e. the report path, which
 only a real refusal can show; the harness walks it and its mutants bite.
+
+**§ 2 · applied as specified, on the § 3 graph; the live proof waits for § 13.** The three core
+bodies were byte-identical in `1050e7c3` to the ones the specification patched, and the adapter
+was still on the version it read — both asserted by `build-live-fixes.js`, which throws on drift
+rather than building on a moved base. Two things checked that the specification did not state:
+`sync identity` sends only who the customer is, never the message kind, so a form cannot be
+refused before `detect command` sees it; and core's `Inbound` is `passthrough`, so the new `form`
+key is not dropped at the workflow boundary. One slip, caught by the byte-compare before publish:
+the first draft carried a trailing newline on two bodies — harmless, and corrected anyway so what
+runs is what was tested. ⏳ **No customer can finish a WhatsApp form until § 13 publishes one**, so
+nothing reaches the new branch yet. The unchanged paths were re-checked live instead: a typed
+`/help` on WhatsApp crosses both changed nodes.
 
 **§ 4.8 · the flag was read the wrong way round.** Exec 1502: the support-request Reply tap
 handed the model `awaitingReply: true` with "act on it", and it answered *"no reply has come in
