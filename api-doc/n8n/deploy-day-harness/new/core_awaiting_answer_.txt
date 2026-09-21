@@ -1,0 +1,1 @@
+={{ !!$json.data && Object.keys($json.data).some(function (k) { return k.indexOf('awaiting') === 0 && $json.data[k] === true; }) }}

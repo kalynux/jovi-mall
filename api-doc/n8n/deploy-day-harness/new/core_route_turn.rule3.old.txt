@@ -1,0 +1,1 @@
+={{ $('Inbound').item.json.kind === 'token' && ['add:', 'buy:', 'more:'].some(function (p) { return String($('Inbound').item.json.token || '').startsWith(p); }) }}

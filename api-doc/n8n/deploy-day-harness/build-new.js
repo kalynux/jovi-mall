@@ -516,6 +516,11 @@ NEW['core:alternatives handed back?'] =
 // ⚠ Patched INTO the § 6 result, not beside it: `compose agent input` is ONE node and the
 // deployed body carries both changes. There is deliberately no "§ 6 only" variant to test
 // against — a harness that proved a body nobody deploys would be proving the wrong subject.
+// The body after § 6 + § 4.6 and BEFORE § 8.5 — what shipped when § 4.6 went live ahead of § 8
+// (2026-09-21). Kept as its own key so the live body is built, not reverse-engineered by cutting
+// § 8.5 back out. See build-live-fixes.js § 4.6.
+NEW['core:compose agent input@4.6'] = NEW['core:compose agent input'];
+
 NEW['core:compose agent input'] = patch('core:compose agent input (handoff)', NEW['core:compose agent input'], [
   [
     "const agentInput = [note, typed || spoken].filter(Boolean).join(' ').trim();",

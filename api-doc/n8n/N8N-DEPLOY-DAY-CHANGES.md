@@ -1,10 +1,82 @@
 # n8n deploy-day change set — bot rich-UI, round 2
 
-**Status: 📝 SPECIFICATION — nothing here is applied.** Written 2026-09-19 by session backend-aa
-for coordinator backend-ba. n8n was only read while writing this document; nothing was written
-to it. Every node change below is to be applied on deploy day, after the backend it depends on is
-deployed, as ONE draft per workflow, diffed by the coordinator before publishing — the procedure
-`N8N-FIX-A3-DROPPED-CARDS.md` § 4 established.
+**Status: ⚙ PARTLY APPLIED (2026-09-21) — see the log below.** Written 2026-09-19 by session
+backend-aa for coordinator backend-ba as a specification; n8n was only read while writing it.
+Every node change below is applied after the backend it depends on is deployed, diffed by the
+coordinator before publishing — the procedure `N8N-FIX-A3-DROPPED-CARDS.md` § 4 established.
+
+## Applied to production — the log
+
+Owner's go-ahead 2026-09-21 ("you have the go to work on step 4 and Step 5 completely").
+`UP-wi-mall-core` (`vvbouV2136P5weCs`), each publish verified the same way: every changed body
+**byte-identical** to the harness file it was tested as, only the intended nodes changed, no
+connection changed. Times UTC. Each row's previous version is its rollback.
+
+| Draft saved (published within ~1 min) | Version | Carried | Proof |
+|---|---|---|---|
+| 05:06:59 | `b494da91` | **§ 1 + § 4** — every tap reaches the backend; a data-only tap reaches the model via the new `compose tap input` node | `run.js` |
+| 05:32:53 | `32cb4534` | **§ 5 + § 6** — `returnIntermediateSteps` on; `compose agent reply` / `drop duplicate reply` rewritten; `compose agent input` = live **+ § 6 only** | `run-deployed.js` 39/0 |
+| 06:07:21 | `3d4e2d87` | **§ 5.1** — two defects § 5 itself surfaced (below) | `run-deployed.js` 59/0 |
+| 06:10:39 | `c36d16e7` | **§ 5.2** — the token paragraph (below) | `run-deployed.js` 67/0 |
+| 07:02:09 | `abf83805` | **§ 4.6** — the awaiting carry: 4 nodes, 6 wiring changes, `compose agent input` = live + § 4.6 layer, the two filing rules in RULES. 61 → 65 nodes | `run-deployed.js` 112/0 |
+
+**§ 4.6 · shipped ahead of § 8, and its live check is split in two.** `compose agent input` is
+the live § 6 body plus the § 4.6 layer only — `build-new.js` now keeps that intermediate as
+`core:compose agent input@4.6` rather than it being cut back out of the full build. The two
+filing rules § 4.5 assigns to n8n ("the customer's own words", "never re-file a 409") had been
+specified and never built; they are in RULES now. `awaiting answer?` sits **above** `has reply?`
+on the canvas on purpose: the workflow runs execution order v1, which takes sibling branches top
+to bottom, so the carry is written before a no-reply tap's assistant turn rather than 30 s after.
+
+⚠ **§ 4.7's check cannot run yet as written** — it needs a cancellable order, and no product is
+live. It is split, and **neither half may be skipped:**
+
+1. **The carry's mechanics — now, via a support-request Reply** (`awaitingReply`). ⚠ That path
+   is a *no-reply* tap, so the assistant is ALSO in the tap turn (§ 4) and its own "type your
+   reply" sits in chat memory — **the outcome alone can pass without the carry working.** The
+   proof is therefore the execution, not the ticket: on the next typed turn, `recall awaiting`
+   must return a value and `compose agent input`'s `agentInput` must contain the ticket id and
+   `awaitingReply`.
+2. **The cancellation reason — when the first cancellable order exists.** § 4.7 exactly as
+   written below, database row included. This is the only half that exercises a tap WITH a reply
+   (the assistant absent from the tap turn), which is the case § 4.6 exists for.
+
+⛔ **`compose agent input` is NOT the full build.** `build-new.js` layers § 6, **§ 4.6** and
+**§ 8.5** into that one node; the § 4.6 layer reads `$('recall awaiting')`, a node the server does
+not have, and n8n throws on a reference to a missing node — so deploying the full build would
+have failed **every typed turn**. Caught by a reference scan before the write (the simulator
+cannot see it). Only the § 6 layer went out: `deploy-day-harness/new/s6only_compose_agent_input.txt`.
+§ 4.6 ships with its four nodes (and § 4.7), § 8.5 with § 8. `run-deployed.js` runs the proofs
+against what is actually on the server; `run.js` still proves the full deploy-day build.
+
+✅ **§ 5 confirmed against a real execution, not only the fixture** (exec 1439): the MCP
+observation is `"[{\"response\":[{\"type\":\"text\",\"text\":\"[<body>]\"}]}]"` — exactly the
+shape `mcpStep` in `test-s5.js` builds. And on the owner's handset: the ticket list's buttons
+arrived on Telegram (inline) and WhatsApp (the Choose list), and the support form opened from
+WhatsApp and filed a ticket.
+
+**§ 5.1 · what § 5 surfaced, because it works.** (1) The model had always *described* the
+buttons its tools prepared — harmless while they were dropped, a **duplicate message** once they
+arrived (on WhatsApp it re-typed the whole list and the word "Choose"). Prompt section
+`MESSAGES YOUR TOOLS SEND`: a tool's reply is sent for it; never re-type it; a *failed* tool sends
+nothing. (2) `**Closed**` reached both channels as literal stars — the send nodes set no
+`parse_mode`, deliberately (Telegram refuses an unbalanced message outright). `compose agent
+reply` now rewrites the **model's sentence only**: `**x**` → `x` on Telegram, `*x*` on WhatsApp,
+`#` headings stripped; tool messages and cards are never touched. Plus a prompt line.
+
+**§ 5.2 · the botToken paragraph — a live defect that predates this change set.** Chat memory
+replays every earlier tool call **with its botToken**, so the model has several ~150-char
+lookalikes beside the one fresh value in its prompt, and on some turns copies a stale one
+(fine under 2 h, `EXPIRED` after) or **invents** one (exec 1439: expiry ~32 h out, fabricated
+signature → `INVALID` 401). Seen before § 5 existed (exec 1398 on `b494da91`, exec 1334 on
+2026-09-17). ⭐ The old rule *"do not retry — ask the customer to send again"* is what made it
+visible: every time the model ignored it and retried with the prompt's value it recovered
+(1398, 1415, 1426); every time it obeyed, the customer was told the connection had dropped
+(1439, 1443) — and a resend cannot help, because the next turn has the same memory in view. New
+paragraph: the value is new every message, earlier tool calls' tokens are stale, retry **once**
+with the fresh value, only then ask the customer. **Structural options, owner's call, not
+taken:** mint a token that is stable within an hour (every copy in view identical), or scrub
+tokens out of the Redis memory before each run.
 
 **Why this exists:** almost everything the backend built in round 2 is invisible to a customer
 until `UP-wi-mall-core` changes. The backend already composes the buttons, the multi-message

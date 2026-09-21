@@ -1,0 +1,1 @@
+={{ Array.isArray($json.handoff?.productIds) && $json.handoff.productIds.length > 0 }}

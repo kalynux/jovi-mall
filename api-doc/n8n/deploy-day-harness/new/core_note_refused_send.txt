@@ -1,0 +1,20 @@
+// A MESSAGE THE PLATFORM REFUSED -- remembered, so the rest of the turn is still sent.
+//
+// Both send nodes route their ERROR output here (`onError: continueErrorOutput`) instead of
+// failing the run on the spot, because a run that dies at message 2 of 6 never sends 3 to 6.
+// The run STILL FAILS, once, at the end: `any send refused?` throws when the loop is done, so
+// the error workflow reports it exactly as ADR-022 requires. Nothing is swallowed.
+//
+// ⚠ The error item REPLACES the message that was refused -- HttpRequest v4.5 emits
+// `{ error: <the platform's rejection>, details }` for a refused response and
+// `{ error: '<message>' }` (a STRING) for a request it could not even build. Both are read.
+const j = $input.item.json || {};
+const e = j.error;
+const isObj = !!e && typeof e === 'object';
+const platformBody = isObj ? (e.error != null ? e.error : e.description) : null;
+return { json: { _refused: {
+  channel: String($('Inbound').first().json.channel || ''),
+  message: isObj ? String(e.message || 'refused') : String(e || 'refused'),
+  httpCode: isObj && (e.statusCode != null || e.httpCode != null) ? String(e.statusCode != null ? e.statusCode : e.httpCode) : null,
+  description: platformBody == null ? '' : (typeof platformBody === 'string' ? platformBody : JSON.stringify(platformBody)).slice(0, 500),
+} } };

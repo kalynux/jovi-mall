@@ -1,0 +1,145 @@
+{
+ "nodes": [
+  {
+   "name": "awaiting answer?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 2.3,
+   "position": [
+    0,
+    416
+   ],
+   "parameters": {
+    "conditions": {
+     "options": {
+      "caseSensitive": true,
+      "leftValue": "",
+      "typeValidation": "loose",
+      "version": 3
+     },
+     "conditions": [
+      {
+       "id": "awaiting-flag",
+       "leftValue": "={{ !!$json.data && Object.keys($json.data).some(function (k) { return k.indexOf('awaiting') === 0 && $json.data[k] === true; }) }}",
+       "rightValue": "",
+       "operator": {
+        "type": "boolean",
+        "operation": "true",
+        "singleValue": true
+       }
+      }
+     ],
+     "combinator": "and"
+    },
+    "looseTypeValidation": true,
+    "options": {}
+   }
+  },
+  {
+   "name": "remember awaiting",
+   "type": "n8n-nodes-base.redis",
+   "typeVersion": 1,
+   "position": [
+    224,
+    416
+   ],
+   "credentials": {
+    "redis": {
+     "id": "2ozA4xfzywBEfZH8",
+     "name": "n8n_redis"
+    }
+   },
+   "parameters": {
+    "operation": "set",
+    "key": "=wi-mall:awaiting:{{ $('Inbound').item.json.channel }}:{{ $('Inbound').item.json.externalId }}",
+    "value": "={{ JSON.stringify({ data: $json.data, messageId: String($('Inbound').first().json.messageId), expiresAt: $now.plus({ minutes: 15 }).toISO() }) }}"
+   }
+  },
+  {
+   "name": "recall awaiting",
+   "type": "n8n-nodes-base.redis",
+   "typeVersion": 1,
+   "position": [
+    448,
+    1504
+   ],
+   "credentials": {
+    "redis": {
+     "id": "2ozA4xfzywBEfZH8",
+     "name": "n8n_redis"
+    }
+   },
+   "parameters": {
+    "operation": "get",
+    "propertyName": "awaitingCarry",
+    "key": "=wi-mall:awaiting:{{ $('Inbound').item.json.channel }}:{{ $('Inbound').item.json.externalId }}",
+    "keyType": "string",
+    "options": {
+     "dotNotation": false
+    }
+   }
+  },
+  {
+   "name": "forget awaiting",
+   "type": "n8n-nodes-base.redis",
+   "typeVersion": 1,
+   "position": [
+    672,
+    1408
+   ],
+   "credentials": {
+    "redis": {
+     "id": "2ozA4xfzywBEfZH8",
+     "name": "n8n_redis"
+    }
+   },
+   "parameters": {
+    "operation": "delete",
+    "key": "=wi-mall:awaiting:{{ $('Inbound').item.json.channel }}:{{ $('Inbound').item.json.externalId }}"
+   }
+  }
+ ],
+ "wiring": [
+  {
+   "type": "addConnection",
+   "source": "product action",
+   "target": "awaiting answer?",
+   "sourceIndex": 0,
+   "targetIndex": 0
+  },
+  {
+   "type": "addConnection",
+   "source": "awaiting answer?",
+   "target": "remember awaiting",
+   "sourceIndex": 0,
+   "targetIndex": 0
+  },
+  {
+   "type": "removeConnection",
+   "source": "bargaining?",
+   "target": "is media?",
+   "sourceIndex": 1,
+   "targetIndex": 0
+  },
+  {
+   "type": "addConnection",
+   "source": "bargaining?",
+   "target": "recall awaiting",
+   "sourceIndex": 1,
+   "targetIndex": 0
+  },
+  {
+   "type": "addConnection",
+   "source": "recall awaiting",
+   "target": "is media?",
+   "sourceIndex": 0,
+   "targetIndex": 0
+  },
+  {
+   "type": "addConnection",
+   "source": "recall awaiting",
+   "target": "forget awaiting",
+   "sourceIndex": 0,
+   "targetIndex": 0
+  }
+ ]
+}

@@ -1,0 +1,1 @@
+={{ $('Inbound').item.json.kind === 'token' && String($('Inbound').item.json.token || '') !== '' && !String($('Inbound').item.json.token || '').startsWith('gc_') && !String($('Inbound').item.json.token || '').startsWith('skip:') }}

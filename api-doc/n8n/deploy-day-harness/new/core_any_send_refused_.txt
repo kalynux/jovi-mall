@@ -1,0 +1,13 @@
+// THE TURN'S VERDICT -- one failure for the whole turn, raised only after every message was tried.
+//
+// `send loop` hands back, on its done output, every item that returned to it: a platform
+// response for each message sent, a `_refused` marker for each one refused. ADR-022: a
+// Telegram/Meta 4xx must fail the run so the error workflow reports it -- that decision is
+// kept, only moved to after the last message instead of at the first refused one.
+const all = $input.all();
+const refused = all.filter(function (i) { return i.json && i.json._refused; });
+if (refused.length > 0) {
+  const r = refused[0].json._refused;
+  throw new Error(refused.length + ' of ' + all.length + ' outbound message(s) refused. First: ' + r.message + (r.httpCode ? ' (HTTP ' + r.httpCode + ')' : '') + (r.description ? ' -- ' + r.description : ''));
+}
+return all;

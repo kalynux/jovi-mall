@@ -1,0 +1,160 @@
+// THE TURN'S OUTBOUND MESSAGES, IN ORDER — and there may be more than one now.
+//
+// This was `runOnceForEachItem` and emitted exactly one text body. A product list is
+// SEVERAL messages (a sentence, then cards, then "See more"), and they are composed by
+// jovi-mall rather than here: `channel-reply.ts` is the one place that knows a WhatsApp
+// reply-button title is capped at twenty characters and that a carousel is a template with
+// a fixed card count. What arrives here is a ready array of request bodies.
+//
+// ⚠ ORDER IS THE RENDERING. The sentence goes first, then the cards. `send guard`,
+// `is telegram?` and both send nodes iterate their input items in order, so emitting the
+// array is all it takes — do not sort it, do not fan it out.
+//
+// ⚠ Reads `$('AI Agent')` explicitly rather than `$input`. Its immediate predecessor is now
+// a Redis DELETE, whose output is an API result and not the model's answer.
+const inbound = $('Inbound').first().json;
+const sync = $('sync identity').first().json;
+
+// ── The cards the display tool drew, if it ran ──────────────────────────────
+//
+// wi-mall-product-cards writes the channel-ready bodies to Redis rather than returning
+// them, because a tool result lands in the MODEL's context where a sendPhoto body can do
+// nothing. Same gate-echo mechanism the bargaining tools use, for the same reason.
+//
+// ⚠ The value carries its own `expiresAt` AND its own `__messageId`, and both are checked.
+// The n8n Redis node's `set` exposes no TTL — measured, and the reason the product-search
+// query cache lives in Postgres — so a key can outlive its turn. Sending last turn's cards
+// under this turn's sentence is worse than sending none.
+let cards = [];
+try {
+  const echoRaw = $('check display').first().json.displayEcho;
+  const echo = echoRaw ? JSON.parse(String(echoRaw)) : null;
+  const fresh = !!echo && !!echo.expiresAt && new Date(echo.expiresAt).getTime() > Date.now();
+  const mine = !!echo && String(echo.__messageId || '') === String(inbound.messageId || '');
+  if (echo && fresh && mine && Array.isArray(echo.replies)) {
+    cards = echo.replies.filter(function (r) { return r && r.channel && r.method && r.body; });
+  }
+} catch (e) {
+  cards = [];
+}
+
+const answer = String($('AI Agent').first().json.output ?? '').trim();
+
+// ── The messages the assistant's TOOLS prepared, if any ─────────────────────
+//
+// A tool can answer with a ready channel-ready body of its own: the account-closure
+// consequence with its Keep/Confirm buttons, an in-app door, a picker. Until now the customer
+// never saw one. A tool's result lands in the MODEL's context, where a Telegram request body
+// can do nothing at all, and this node sent only the model's sentence.
+//
+// They are read from the agent's OWN intermediate steps, which is what binds them to THIS
+// turn: `returnIntermediateSteps` puts one entry per tool call in the agent's output, each
+// carrying its `observation` -- the tool node's output items, JSON-encoded. For the MCP client
+// that is [{ response: [{ type: 'text', text: '<the backend body, JSON>' }] }], so it is JSON
+// inside JSON. Both layers are walked DEFENSIVELY: anything unrecognised yields no message
+// rather than an exception, which degrades to exactly the behaviour before this existed.
+//
+// ⚠ ONLY A SUCCESSFUL call's reply is sent. A refused tool also carries a `reply` (built from
+// error.customerMessage) and the model RETRIES -- relaying those would send the customer a
+// refusal the model has already recovered from. A failure stays the model's to word.
+//
+// ⚠ Order is the rendering here too: tool messages go out in the order the model called them,
+// and the product cards take the place of the display tool's own call.
+const toolMessages = [];
+let standsAlone = false;
+const seenReply = {};
+const collectReplies = function (value, depth) {
+  // ⚠ The real nesting is SEVEN levels (observation string → items → response → text block →
+  // string → bodies array → body), so a tighter bound silently finds nothing — and 'nothing'
+  // looks exactly like 'this tool prepared no message'. Proven by the harness, which caught a
+  // limit of 5 doing precisely that.
+  if (value == null || depth > 12) { return; }
+  if (typeof value === 'string') {
+    let parsed = null;
+    try { parsed = JSON.parse(value); } catch (e) { parsed = null; }
+    if (parsed != null && typeof parsed === 'object') { collectReplies(parsed, depth + 1); }
+    return;
+  }
+  if (Array.isArray(value)) { value.forEach(function (v) { collectReplies(v, depth + 1); }); return; }
+  if (typeof value !== 'object') { return; }
+  if (Array.isArray(value.response)) { collectReplies(value.response, depth + 1); return; }
+  if (value.type === 'text' && typeof value.text === 'string') { collectReplies(value.text, depth + 1); return; }
+  if (value.success !== true) { return; }
+  const list = (Array.isArray(value.replies) && value.replies.length > 0) ? value.replies : (value.reply ? [value.reply] : []);
+  list.forEach(function (reply) {
+    if (!reply || !reply.channel || !reply.method || !reply.body) { return; }
+    const key = JSON.stringify(reply);
+    if (seenReply[key]) { return; }
+    seenReply[key] = true;
+    if (value.replyStandsAlone === true) { standsAlone = true; }
+    toolMessages.push({ reply: reply, isDisplay: false });
+  });
+};
+
+const steps = $('AI Agent').first().json.intermediateSteps;
+if (Array.isArray(steps)) {
+  steps.forEach(function (step) {
+    const tool = String((step && step.action && step.action.tool) || '');
+    // The display tool echoes its cards through Redis rather than returning them, so its
+    // place in the order is all that is read from its step.
+    if (/show.?products/i.test(tool)) { toolMessages.push({ reply: null, isDisplay: true }); return; }
+    collectReplies(step && step.observation, 0);
+  });
+}
+
+// § 6 · The file the customer sent can itself carry a question ('which request is this for?').
+// It is the BACKEND's question and not a tool's: `upload inbound file` is called by this
+// workflow, not by the model, so it has no step of its own to be found in. Same rules —
+// successful answers only, same de-duplication, and it lands after the agent's sentence.
+if ($('upload inbound file').isExecuted) {
+  collectReplies($('upload inbound file').first().json, 0);
+}
+const toolReplyCount = toolMessages.filter(function (m) { return !m.isDisplay; }).length;
+
+// ⚠ The stand-in is SUPPRESSED when there are cards. An empty model turn is a failure only
+// when nothing else is going out; over a page of products it would put "Sorry, I could not
+// answer that just now" above five things we had just found for them.
+// ⚠ A TOOL MESSAGE SUPPRESSES THE STAND-IN for the same reason a card does: 'Sorry, I could
+// not answer that just now' above an answer the platform did produce is worse than silence.
+const standIn = (cards.length > 0 || toolReplyCount > 0)
+  ? ''
+  : String(sync && sync.data && sync.data.fallback ? sync.data.fallback.assistantUnavailable : '').trim();
+
+const chosen = answer || standIn;
+const text = chosen.length > 4000 ? chosen.slice(0, 3997) + '…' : chosen;
+
+// ⚠ EVERY ITEM CARRIES ITS ROLE from here on. `drop duplicate reply` suppresses the AGENT'S
+// SENTENCE on a bargained turn, and it used to find it by POSITION (item 0) -- true while the
+// only other items were cards. A tool message can now precede or follow it, so position is no
+// longer the sentence's identity and the role says which item is which.
+//
+// `standsAlone` is the backend's own flag on a tool answer whose message must be the whole
+// turn (the account-closure consequence: a paraphrase of it is the failure). n8n holds no
+// list of tool names -- the flag travels with the answer.
+const out = [];
+
+if (text && !standsAlone) {
+  out.push({ json: { role: answer ? 'model' : 'standIn', reply: inbound.channel === 'telegram'
+    ? { channel: 'telegram', method: 'sendMessage', body: { chat_id: String(inbound.externalId), text: text } }
+    : { channel: 'whatsapp', method: 'messages', body: {
+        messaging_product: 'whatsapp', recipient_type: 'individual',
+        to: String(inbound.externalId), type: 'text', text: { body: text } } } } });
+}
+
+let cardsEmitted = false;
+const emitCards = function () {
+  if (cardsEmitted) { return; }
+  cardsEmitted = true;
+  cards.forEach(function (reply) { out.push({ json: { role: 'card', reply: reply } }); });
+};
+toolMessages.forEach(function (m) {
+  if (m.isDisplay) { emitCards(); return; }
+  out.push({ json: { role: 'tool', reply: m.reply } });
+});
+emitCards();
+
+// `send guard` drops a null reply. Emitting one item rather than none keeps this branch the
+// exact shape it has always been for a turn with nothing to say.
+if (out.length === 0) { out.push({ json: { reply: null } }); }
+
+return out;

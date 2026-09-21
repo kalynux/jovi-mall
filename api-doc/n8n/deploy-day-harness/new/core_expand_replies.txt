@@ -1,0 +1,33 @@
+// EVERY MESSAGE OF THE TURN, IN ORDER, AND ONLY TO THIS CONVERSATION.
+//
+// jovi-mall answers a turn that is more than one message with `replies` (the whole ordered
+// list) BESIDE `reply` (the first of them) -- `reply` stays a single object so nothing wired
+// to it broke (bot-surface.md 14.8). This node is where n8n finally reads `replies`: send it
+// when it is there, `reply` otherwise, never both. Before this node existed, a product page
+// tapped open with `next:` or `more:` delivered its first card and dropped the rest.
+//
+// ⚠ ORDER IS THE RENDERING (intro, cards, 'See more'). Never sort, never de-duplicate here.
+//
+// ⛔ A body addressed to any other chat is REFUSED LOUDLY, never dropped. It cannot happen by
+// design -- the backend addresses every reply from the identity on the request -- so if it
+// ever does it is a platform fault, and a quiet drop would make it a silence nobody sees
+// (ADR-022). Today every method in use carries its recipient (`sendMessage`/`sendPhoto`:
+// chat_id, WhatsApp `messages`: to); a method without one must be added here deliberately.
+const inbound = $('Inbound').first().json;
+const out = [];
+for (const item of $input.all()) {
+  const j = item.json || {};
+  const list = (Array.isArray(j.replies) && j.replies.length > 0) ? j.replies : (j.reply ? [j.reply] : []);
+  for (const reply of list) {
+    const body = (reply && reply.body) || null;
+    if (!reply || !reply.channel || !reply.method || !body) {
+      throw new Error('expand replies: a reply without channel/method/body: ' + JSON.stringify(reply).slice(0, 300));
+    }
+    const to = reply.channel === 'telegram' ? body.chat_id : body.to;
+    if (reply.channel !== inbound.channel || String(to) !== String(inbound.externalId)) {
+      throw new Error('expand replies: a reply addressed to ' + reply.channel + ':' + String(to) + ' in a turn from ' + inbound.channel + ':' + String(inbound.externalId));
+    }
+    out.push({ json: { reply: reply } });
+  }
+}
+return out;

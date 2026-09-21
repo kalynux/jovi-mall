@@ -1,0 +1,46 @@
+// The backend words every ordinary outcome AND attaches a channel-ready `reply` to it, so
+// the common paths — the credential, every refusal, the request_contact keyboard — arrive
+// here already renderable and pass straight through.
+//
+// This covers the rest: a genuine error envelope carries a sentence but no envelope.
+//
+// ⚠ It wraps the BACKEND'S sentence and never writes one. That is what keeps "the bot relays,
+// never renders" true here — n8n holds no copy table and no button labels, only the two wire
+// shapes, and those come from channel-reply.ts on every other path.
+const r = $input.first().json || {};
+const inbound = $('Inbound').first().json;
+
+// A COMPLETED WHATSAPP FORM IS THE ONE COMMAND WHOSE SILENCE IS AN ANSWER. `flow_complete`
+// answers with a reply only when the chat has something to add (a listing form that chose a
+// product opens its detail screen). Every other completion is silent on purpose: the form's own
+// closing screen already said what happened, and a second message would talk over it. So no
+// reply ENDS THE TURN -- never handed to the model, which would greet a customer mid-purchase.
+//
+// ⚠ Never branch on WHICH form finished. The backend may answer more completions later, and
+// that must need no change here.
+//
+// A refused completion is a platform fault the customer cannot act on -- they have already read
+// the closing screen. It FAILS the run so the error workflow reports it (ADR-022); it is never
+// swallowed and never worded here.
+if (inbound.kind === 'form') {
+  if (r.reply) { return [{ json: r }]; }
+  if (r.success === false) {
+    const e = r.error || {};
+    throw new Error('flow_complete refused a WhatsApp form completion: ' + String(e.code || e.message || 'no error body'));
+  }
+  return [{ json: Object.assign({}, r, { reply: null, endTurn: true }) }];
+}
+
+if (r.reply) { return [{ json: r }]; }
+const text = (r.error && (r.error.customerMessage || r.error.message)) || '';
+
+// No sentence at all means there is nothing honest to say; `has reply?` sends this to the
+// model rather than leaving the customer in silence. On this surface an empty 200 is still
+// a TURN — the lesson the address-picker taught on 2026-09-06.
+if (!text) { return [{ json: Object.assign({}, r, { reply: null }) }]; }
+
+const reply = inbound.channel === 'telegram'
+  ? { channel: 'telegram', method: 'sendMessage', body: { chat_id: inbound.externalId, text: text } }
+  : { channel: 'whatsapp', method: 'messages', body: { messaging_product: 'whatsapp', recipient_type: 'individual', to: inbound.externalId, type: 'text', text: { body: text, preview_url: false } } };
+
+return [{ json: Object.assign({}, r, { reply: reply }) }];

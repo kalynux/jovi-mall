@@ -1,0 +1,61 @@
+// IS THIS MESSAGE A COMMAND? — and deliberately nothing more than that.
+//
+// ⭐ THE VOCABULARY MOVED SERVER-SIDE ON 2026-09-09, and this node used to hold it: every
+// command name, every alias, and the argument grammar. It holds none of them now. The
+// reason is the one `bot-surface.md` § 14.6 already gives about parsing a typed answer:
+//
+//   "A typed answer is language-dependent and whatever reads it is not... That table would
+//    have lived in the automation layer, which is the one layer with no copy table."
+//
+// The alias table IS a five-language table — /chercher /buscar /procurar, /annuler
+// /cancelar. Keeping it here meant a vocabulary nobody translates, nobody reviews and
+// nobody notices has gone stale. jovi-mall parses now, and answers with a channel-ready
+// reply like every other turn.
+//
+// ⚠ THE RAW TEXT IS WHAT TRAVELS. Never Telegram's bot_command entity: it stops at a
+// hyphen, which is why /reset-password could only ever be read as /reset plus trailing
+// text — and why the vocabulary is now one word with no separators at all.
+
+const inbound = $('Inbound').first().json;
+const sync = $input.first().json;
+
+let kind = '';
+let payload = {};
+
+const text = typeof inbound.text === 'string' ? inbound.text.trim() : '';
+const onboardingPending = !!(sync && sync.data && sync.data.onboarding && sync.data.onboarding.next);
+
+// A failed /identity/sync is `route turn`'s business — a 4xx body renders its own refusal.
+if (sync && sync.success !== false) {
+  if (inbound.kind === 'contact' && inbound.contact && !onboardingPending) {
+    // ⚠ A CONTACT IS A TAP, NOT TYPED TEXT, so it keeps the webhook command bus rather than
+    // going to the parser. It also runs ONLY once onboarding is finished: while the
+    // checklist still wants the phone step, `route onboarding` must have the contact — it
+    // is the same number, and binding it there is what completes registration. Afterwards a
+    // contact can only be answering the request_contact keyboard /login or /password put
+    // up, and the PLATFORM's pending intent decides which. n8n never branches on that.
+    kind = 'contact';
+    payload = {
+      contact: {
+        phone_number: String(inbound.contact.phoneNumber || ''),
+        user_id: inbound.contact.userId,
+        first_name: inbound.contact.firstName || undefined,
+        last_name: inbound.contact.lastName || undefined
+      },
+      username: inbound.handle ? String(inbound.handle).replace(/^@/, '') : undefined
+    };
+  } else if (inbound.kind === 'form') {
+    // A COMPLETED WHATSAPP FORM. Like a contact it is not typed text, so it takes the webhook
+    // command bus rather than the parser. Unlike a contact it means the same thing at every
+    // stage, so it is not gated on onboarding. `flow_complete` reports and never writes, and it
+    // decides everything -- including whether there is anything to say. Forwarded untouched.
+    kind = 'form';
+    payload = inbound.form;
+  } else if (inbound.kind === 'text' && text.charAt(0) === '/') {
+    // That is the whole test. Which command it is, whether it exists, what its arguments
+    // mean and what to say about a typo are all the backend's now.
+    kind = 'slash';
+  }
+}
+
+return [{ json: Object.assign({}, sync, { _kind: kind, _payload: payload }) }];

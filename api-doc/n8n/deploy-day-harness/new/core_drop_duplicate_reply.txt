@@ -1,0 +1,61 @@
+// EVERY MESSAGE THIS TURN COMPOSED GOES OUT — AND THE MAIN AGENT'S SENTENCE IS SUPPRESSED WHEN
+// THE BARGAINER HAS ALREADY SPOKEN.
+//
+// ── What this node is for (unchanged since the A3 fix) ───────────────────────
+// `compose agent reply` emits the turn as SEVERAL items: the agent's sentence (when there is
+// one), the messages its tools prepared, and each card the display tool echoed. This node
+// relays them ALL, in order — it used to read `.first()` and return ONE, so every card after
+// the first was silently dropped. ⚠ Never sort them: order IS the rendering.
+//
+// ── The bargaining suppression (unchanged in purpose) ────────────────────────
+// `open_negotiation` chains into a full bargaining turn, so the customer is sent the gate's
+// approved sentence from INSIDE the agent's tool call. The agent still composes a final answer
+// afterwards, and without this the customer gets two messages: the negotiated price, then a
+// line saying the price is being looked at. The sentence stays the BARGAINER'S (D-4).
+//
+// ── ⭐ WHAT CHANGED: the sentence is identified by ROLE, not by POSITION ──────
+// The A3 fix found the agent's sentence at item 0 when the model had spoken, and otherwise
+// compared a single item against the backend's stand-in word for word. Both were true only
+// while the sentence and the cards were the only things in the list. A tool's own message can
+// now sit in that list, so `compose agent reply` labels every item it emits — `model`,
+// `standIn`, `card`, `tool` — and this node suppresses exactly the first two. The two fallback
+// nodes emit a sentence and nothing else, and carry no label, so an unlabelled item is
+// treated as the sentence it is.
+//
+// ⚠ What is suppressed is the AGENT'S SENTENCE — never a card, never a tool's message. A turn
+// that both bargained and showed products keeps its products.
+//
+// The echo is written ONLY after wi-mall-bargain's send returned, is stamped with this turn's
+// messageId, carries its own expiry (the n8n Redis node's `set` exposes no TTL) and is deleted
+// on read. A stale, mismatched or malformed echo is not an answer.
+//
+// Fails toward an extra message, never toward silence: with Redis unreachable the customer
+// keeps the counter-offer and also gets the bridging line.
+const inbound = $('Inbound').first().json;
+
+let source = null;
+for (const nm of ['compose agent reply', 'agent fallback', 'outage fallback']) {
+  if ($(nm).isExecuted) { source = nm; break; }
+}
+if (source == null) { return [{ json: { reply: null } }]; }
+
+const items = $(source).all()
+  .map(function (item) { return item.json || {}; })
+  .filter(function (j) { return j.reply != null; });
+
+let answered = false;
+if ($('read bargain echo').isExecuted) {
+  const raw = ($('read bargain echo').first().json || {}).bargainAnswered;
+  try {
+    const echo = raw ? JSON.parse(String(raw)) : null;
+    const live = !!echo && !!echo.expiresAt && new Date(echo.expiresAt).getTime() > Date.now();
+    if (live && String(echo.messageId) === String(inbound.messageId)) { answered = true; }
+  } catch (e) { /* a malformed echo is not an answer */ }
+}
+
+const out = answered
+  ? items.filter(function (j) { return j.role === 'card' || j.role === 'tool'; })
+  : items;
+
+if (out.length === 0) { return [{ json: { reply: null } }]; }
+return out.map(function (j) { return { json: { role: j.role || 'model', reply: j.reply } }; });

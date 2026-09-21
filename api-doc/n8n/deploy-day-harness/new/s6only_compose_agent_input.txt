@@ -1,0 +1,64 @@
+// What the model is actually asked, for an ordinary agent turn.
+//
+// ⚠ THIS USED TO SAY THE MODEL COULD NOT SEE THE FILE, AND THAT IS NO LONGER TRUE.
+// wi-mall-perceive renders a picture, a voice note or a video into text before we get
+// here. Three different things come back and they are NOT interchangeable:
+//
+//   audio  -> a TRANSCRIPT. That IS the customer's message, so it becomes the turn
+//             itself rather than a note about a turn.
+//   image  -> a DESCRIPTION written by another model. The agent still cannot see, so it
+//    video    must speak only about what the description mentions and never claim to
+//             have looked at it.
+//
+// Perceiving and STORING are separate questions and separate branches. A voice note is
+// understood and never uploaded, because the backend allowlist is images and PDF only.
+const inbound = $('Inbound').item.json;
+const typed = String(inbound.text || '').trim();
+
+let note = '';
+let spoken = '';
+
+// Referencing a node that did not run in this execution THROWS, so ask first.
+if (inbound.kind === 'media' && $('call perceive').isExecuted) {
+  const p = $('call perceive').item.json || {};
+  const body = (p && p.perceived === true) ? String(p.text || '').trim() : '';
+
+  if (body && p.kind === 'audio') {
+    spoken = body;
+    note = '[The customer sent this as a VOICE NOTE. Answer it exactly as if they had typed it, in the language they spoke. Never mention transcription.]';
+  } else if (body && p.kind === 'video') {
+    note = '[The customer sent a VIDEO. You cannot watch it. A model that did describes it as: ' + body + ' Speak only about what that description mentions, and never claim to have watched it.]';
+  } else if (body) {
+    note = '[The customer sent a PICTURE. You cannot see it. A model that did describes it as: ' + body + ' Speak only about what that description mentions, and never claim to have seen it.]';
+  } else {
+    note = '[The customer sent a file and it could not be read. Say so plainly and ask them to describe it, or to send it again.]';
+  }
+}
+
+// The storage handle, when the file was one the backend accepts. Only reachable through
+// `is storable?`, so audio and video never land here.
+if (inbound.kind === 'media' && $('upload inbound file').isExecuted) {
+  const res = $('upload inbound file').item.json || {};
+  const d = res.data;
+  // ⚠ THE PLATFORM MAY HAVE ALREADY ASKED THE CUSTOMER WHICH REQUEST THIS FILE IS FOR, with
+  // buttons (a picker it renders when they have open requests). That question is SENT this
+  // turn, so the model must not spend the one-use reference racing it: whoever loses gets
+  // 'send the file again'. ⏳ The exact wording is the orders stream's to confirm.
+  if (res.reply) {
+    note = note + ' [The customer has already been asked, with buttons, which request this file belongs to. Do not attach it yourself unless they name one in words.]';
+  }
+  if (res.success && d && d.ref) {
+    note = note + ' [It is also stored as ' + d.fileName + ' (' + d.kind + '), reference ' + d.ref + '. Pass that exact string as ref to tickets_add_attachment if it belongs on a support ticket; open the ticket first if there is not one. The reference works ONCE and expires in 30 minutes.]';
+  } else {
+    // The SENTENCE is the backend's, already in the customer's language: n8n holds no
+    // copy table and no translator. See api-doc/n8n/bot-surface.md 11.4.
+    const msg = res.error ? String(res.error.customerMessage || '').trim() : '';
+    if (msg) {
+      note = note + ' [It could not be stored. If they ask to attach it to anything, tell them exactly this, in their language: ' + msg + ']';
+    }
+  }
+}
+
+const agentInput = [note, typed || spoken].filter(Boolean).join(' ').trim();
+
+return { json: { agentInput: agentInput || null } };

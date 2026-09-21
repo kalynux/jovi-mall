@@ -1,0 +1,88 @@
+const v = $('WhatsApp Trigger').item.json;
+const m = (v.messages || [])[0] || {};
+const c = (v.contacts || [])[0] || {};
+
+// The bytes, when the media branch ran. `mediaBase64` is written by `to base64` and by
+// NOTHING else, so its presence IS the branch marker -- no isExecuted needed, and no
+// second source of truth about which path this item came down.
+//
+// It is also the DEGRADATION marker. Both Graph calls and the base64 step continue on
+// error, so a refused or oversized download arrives here with no bytes and falls through
+// to the description below, exactly as an unsupported type does.
+const b64 = $input.item.json.mediaBase64 || '';
+
+let kind = 'unsupported';
+let text = '';
+let token = '';
+let location = null;
+let media = null;
+let form = null;
+
+if (m.type === 'text' && m.text && String(m.text.body || '').trim()) {
+  kind = 'text';
+  text = String(m.text.body).trim();
+} else if (m.type === 'location' && m.location && m.location.latitude != null && m.location.longitude != null) {
+  // The location_request_message button, or a pin sent from the attachment menu. Both arrive
+  // as the same message type, so the control is a convenience and never a precondition.
+  kind = 'location';
+  location = { lat: Number(m.location.latitude), lng: Number(m.location.longitude) };
+} else if (m.type === 'interactive' && m.interactive && m.interactive.type === 'nfm_reply' && m.interactive.nfm_reply) {
+  // A COMPLETED WHATSAPP FORM (a Flow). Not a tap: there is no id to forward. The answer is in
+  // `response_json`, which Meta delivers as a STRING CONTAINING JSON -- reading its fields
+  // without parsing yields undefined for every one of them, silently.
+  //
+  // The object goes to jovi-mall's `flow_complete` command UNTOUCHED: its schema is passthrough
+  // on purpose, and picking fields here would drop the params of the next form somebody builds.
+  // Unparseable travels as null, which the backend refuses and wi-mall-core then REPORTS --
+  // never an empty object, which the backend would answer with a silence nobody could see.
+  kind = 'form';
+  let parsed = null;
+  try { parsed = JSON.parse(String(m.interactive.nfm_reply.response_json || '')); } catch (e) { parsed = null; }
+  form = (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : null;
+} else if (m.type === 'interactive' && m.interactive) {
+  const r = m.interactive.button_reply || m.interactive.list_reply || null;
+  if (r && r.id) { kind = 'token'; token = String(r.id); }
+} else if (m.type === 'button' && m.button && m.button.payload) {
+  kind = 'token';
+  token = String(m.button.payload);
+} else if (b64 && (m.image || m.audio || m.video || m.document)) {
+  // Anything wi-mall-perceive can read, already fetched from Meta.
+  const a = m.image || m.audio || m.video || m.document;
+  // Meta may append parameters (`audio/ogg; codecs=opus`). Perception matches the type
+  // exactly, so the parameters have to come off here rather than being refused there.
+  // This is what makes a WhatsApp VOICE NOTE land as a clean `audio/ogg`.
+  const mime = String(a.mime_type || '').split(';')[0].trim();
+  let fname = 'file';
+  if (m.image) { fname = 'photo.jpg'; }
+  else if (m.audio) { fname = 'voice.ogg'; }
+  else if (m.video) { fname = 'video.mp4'; }
+  else { fname = String(a.filename || 'file'); }
+  kind = 'media';
+  media = { fileName: fname, mimeType: mime, contentBase64: b64 };
+  // The CAPTION is the customer's own words about the file and travels as ordinary text.
+  // A voice note never has one, and that is correct: its transcript becomes the turn.
+  text = typeof a.caption === 'string' ? a.caption.trim() : '';
+} else {
+  // A sticker, or a file Meta would not hand over. Described, never invented as speech.
+  text = '[the customer sent something I could not open -- a sticker, or a file too large]';
+}
+
+return { json: {
+  channel: 'whatsapp',
+  // BARE DIGITS, exactly as Meta delivered them. The platform stores E.164 and bridges it
+  // server-side; adding a '+' here is the one thing the contract says not to do.
+  externalId: String(m.from || c.wa_id || ''),
+  messageId: String(m.id || ''),
+  kind: kind,
+  text: text,
+  token: token,
+  location: location,
+  media: media,
+  form: form,
+  // WhatsApp satisfies the phone step from the sender id itself, so there is never a
+  // contact card to forward on this channel.
+  contact: null,
+  displayName: (c.profile && c.profile.name) ? String(c.profile.name) : undefined,
+  handle: undefined,
+  language: undefined,
+} };

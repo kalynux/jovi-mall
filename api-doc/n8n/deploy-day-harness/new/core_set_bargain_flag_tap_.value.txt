@@ -1,0 +1,1 @@
+={{ JSON.stringify({ variantId: $('product action').first().json.data.variantId, productId: $('product action').first().json.data.productId, quantity: 1, expiresAt: $now.plus({ minutes: 30 }).toISO() }) }}

@@ -1,0 +1,1 @@
+={{ $json.data?.outcome === 'chat' && $json.data?.verb === 'bargain' && !!$json.data?.variantId }}
