@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHmac, timingSafeEqual } from 'crypto';
+import { createCipheriv, createDecipheriv, createHmac } from 'crypto';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { getBotIdentityTokenSecret } from '../../../config/secrets.config';
@@ -64,11 +64,11 @@ import { CONNECTION_CHANNELS, MessagingChannel } from '../../channel-connections
  * Deterministic encryption reveals only that two tokens are equal, and equal tokens mean the
  * same customer in the same hour — which is exactly what the logs already say.
  *
- * ⚠ **v1 is still ACCEPTED, never minted.** Tokens minted before the deploy sit in chat
- * memory and in in-flight turns; refusing them outright would turn the deploy itself into a
- * wave of refusals. A v1 token lives at most two hours, so the `v1` branch of
- * `unsealBotIdentity` is dead weight from two hours after the deploy and can be deleted in
- * any later change — it can only ever refuse by then.
+ * ⚠ **v1 is no longer accepted** (removed 2026-09-21). It was read for a while after v2 went
+ * live, so the tokens already sitting in chat memory at the deploy kept working; every v1
+ * token lived at most two hours, and the branch was deleted six hours after the deploy, when
+ * it could only ever refuse. A v1 token now answers INVALID, which the prompt's retry-once
+ * rule handles exactly as it handles EXPIRED.
  *
  * ⚠ **This is NOT a session, and it must never grow into one.** It authenticates nothing
  * on its own: it is a sealed restatement of the envelope the automation layer could
@@ -100,11 +100,8 @@ export const BOT_IDENTITY_TOKEN_TTL_SECONDS = 7200;
 /** The window within which every token for one customer is the same string. */
 export const BOT_IDENTITY_TOKEN_BUCKET_SECONDS = 3600;
 
-/** The version this build mints. A future shape gets `v3`, never a flag. */
+/** The version this build mints and reads. A future shape gets `v3`, never a flag. */
 const VERSION = 'v2';
-
-/** Accepted, never minted — see "v1 is still ACCEPTED" above. */
-const LEGACY_VERSION = 'v1';
 
 const NONCE_BYTES = 12;
 const TAG_BYTES = 12;
@@ -118,20 +115,6 @@ function subkey(purpose: 'encryption' | 'nonce'): Buffer {
     return createHmac('sha256', getBotIdentityTokenSecret())
         .update(`wi-mall bot identity token ${VERSION} ${purpose}`)
         .digest();
-}
-
-/**
- * The v1 payload — kept only so `unsealBotIdentity` can still read a v1 token.
- */
-interface SealedPayload {
-    /** channel */
-    c: string;
-    /** externalId */
-    e: string;
-    /** expires at, seconds since the epoch */
-    x: number;
-    /** language hint, carried so a refusal before resolution is still worded in it */
-    l?: string;
 }
 
 /** What a verified token unseals to — exactly the envelope fields it sealed. */
@@ -149,11 +132,6 @@ export interface UnsealedBotIdentity {
  * four entries.
  */
 type SealedTuple = [string, string, number, string];
-
-/** v1's signature — used only to VERIFY a legacy token. */
-function signLegacy(payload: string): string {
-    return createHmac('sha256', getBotIdentityTokenSecret()).update(payload).digest('base64url');
-}
 
 /**
  * Seal a messaging identity into a token.
@@ -204,7 +182,6 @@ export function unsealBotIdentity(token: string, now?: number): UnsealedBotIdent
     const at = now ?? Math.floor(Date.now() / 1000);
 
     if (parts.length === 2 && parts[0] === VERSION) return unsealV2(parts[1], at);
-    if (parts.length === 3 && parts[0] === LEGACY_VERSION) return unsealLegacyV1(parts[1], parts[2], at);
     throw invalidToken();
 }
 
@@ -212,8 +189,8 @@ function unsealV2(body: string, at: number): UnsealedBotIdentity {
     const bytes = Buffer.from(body, 'base64url');
 
     /**
-     * ⚠ **Checked before any slicing**, for the reason v1 guarded `timingSafeEqual`: a token cut
-     * short must be a 401, never a fault on the refusal path. `setAuthTag` and the decipher both
+     * ⚠ **Checked before any slicing**: a token cut short must be a 401, never a fault on the
+     * refusal path. `setAuthTag` and the decipher both
      * throw on malformed input, and a throw here would be a 500 anyone could provoke.
      */
     if (bytes.length < NONCE_BYTES + TAG_BYTES + 1) throw invalidToken();
@@ -261,50 +238,6 @@ function unsealV2(body: string, at: number): UnsealedBotIdentity {
         channel: channel as MessagingChannel,
         externalId,
         language: language === '' ? null : language,
-    };
-}
-
-/** v1, read-only. Delete with `LEGACY_VERSION` once no v1 token can still be alive. */
-function unsealLegacyV1(encoded: string, signature: string, at: number): UnsealedBotIdentity {
-    const provided = Buffer.from(signature, 'base64url');
-    const expected = Buffer.from(signLegacy(encoded), 'base64url');
-
-    /**
-     * ⚠ **The length check is not redundant; it is what makes the comparison legal.**
-     * `timingSafeEqual` THROWS on buffers of different lengths, so a caller sending a
-     * short signature would get a 500 rather than a 401 — a fault on the refusal path,
-     * available to anyone who wants one.
-     */
-    if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
-        throw invalidToken();
-    }
-
-    let payload: SealedPayload;
-    try {
-        payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as SealedPayload;
-    } catch {
-        // The signature verified, so this is our own malformed mint rather than an attack.
-        // It is still a token this request cannot use, and still a 401 to the caller.
-        throw invalidToken();
-    }
-
-    if (
-        typeof payload?.c !== 'string'
-        || typeof payload?.e !== 'string'
-        || typeof payload?.x !== 'number'
-        || !(CONNECTION_CHANNELS as readonly string[]).includes(payload.c)
-        || payload.e.length === 0
-        || payload.e.length > 128
-    ) {
-        throw invalidToken();
-    }
-
-    if (payload.x <= at) throw expiredToken();
-
-    return {
-        channel: payload.c as MessagingChannel,
-        externalId: payload.e,
-        language: typeof payload.l === 'string' ? payload.l : null,
     };
 }
 

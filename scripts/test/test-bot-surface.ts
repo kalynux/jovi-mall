@@ -3076,7 +3076,7 @@ async function main(): Promise<void> {
         }
     };
 
-    /** A v1 token, built the way v1 was minted — only to prove the legacy branch still reads one. */
+    /** A v1 token, built the way v1 was minted — to prove v1 is refused, and that the opacity check bites. */
     const mintLegacyV1 = (payload: Record<string, unknown>): string => {
         const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
         const signature = createHmacForLegacyToken('sha256', getBotIdentityTokenSecret()).update(encoded).digest('base64url');
@@ -3189,26 +3189,15 @@ async function main(): Promise<void> {
 
     assert('the token is at most 100 characters (v1 was about 150)', () => sealed.length <= 100);
 
-    // ── v1: accepted, never minted ───────────────────────────────────────────
-    assert('v1 is still ACCEPTED — a token already in chat memory at the deploy keeps working until it expires', () => {
-        const out = unsealBotIdentity(mintLegacyV1({ c: 'telegram', e: '99', x: nowSeconds + 600, l: 'en' }));
-        return out.channel === 'telegram' && out.externalId === '99' && out.language === 'en';
-    });
-
-    assert('⚠ a v1 payload edited to name another customer still does not verify', () => {
-        const legacy = mintLegacyV1({ c: 'whatsapp', e: '237600123456', x: nowSeconds + 600 });
-        const parts = legacy.split('.');
-        const forged = `v1.${Buffer.from(JSON.stringify({ c: 'whatsapp', e: '237699999999', x: nowSeconds + 600 })).toString('base64url')}.${parts[2]}`;
-        return tokenRefusal(forged) === 'BOT_IDENTITY_TOKEN_INVALID';
-    });
-
-    assert('⚠ a truncated v1 signature is refused rather than crashing', () => {
-        const parts = mintLegacyV1({ c: 'telegram', e: '99', x: nowSeconds + 600 }).split('.');
-        return tokenRefusal(`v1.${parts[1]}.AAAA`) === 'BOT_IDENTITY_TOKEN_INVALID';
-    });
-
-    assert('an expired v1 is EXPIRED', () =>
-        tokenRefusal(mintLegacyV1({ c: 'telegram', e: '99', x: nowSeconds - 1 })) === 'BOT_IDENTITY_TOKEN_EXPIRED');
+    // ── v1: no longer accepted (removed 2026-09-21, six hours after v2 went live) ──
+    /**
+     * ⚠ **A GENUINE, unexpired v1 token is refused.** It is built with the real secret exactly as
+     * v1 was minted, so this proves the legacy branch is gone — not merely that a forgery fails,
+     * which it always did. INVALID rather than EXPIRED, and that costs nothing: the prompt's
+     * retry-once rule treats the two alike, and the next `/identity/sync` hands the model a v2.
+     */
+    assert('⚠ a genuine, unexpired v1 token is REFUSED — the legacy branch is gone', () =>
+        tokenRefusal(mintLegacyV1({ c: 'telegram', e: '99', x: nowSeconds + 600, l: 'en' })) === 'BOT_IDENTITY_TOKEN_INVALID');
 
     // ═════════════════════════════════════════════════════════════════════════
     section('15 · The MCP generator — what it emits, and what it must never emit');

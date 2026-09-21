@@ -118,8 +118,9 @@ decoded to the channel, the phone number and the expiry. The customer bot's mode
 tokens from that instead of copying them (expiry moved a day ahead, signature invented), and
 its chat memory replayed several different old tokens beside the fresh one. v2 is encrypted
 (nothing to rebuild), **identical for one customer all clock-hour** (a copy from memory IS the
-fresh value), and under 100 characters. v1 is still **accepted, never minted**, so tokens alive
-at the deploy expire naturally within two hours.
+fresh value), and under 100 characters. v1 was read for six hours after the deploy, so tokens
+alive at that moment expired naturally, and was then **removed**: a v1 token now answers
+`BOT_IDENTITY_TOKEN_INVALID`, which the prompt's retry-once rule treats exactly like EXPIRED.
 
 | | |
 |---|---|
