@@ -57,6 +57,12 @@ export interface SignInPhrases {
     website: string;
     /** Above the duration. */
     validFor: string;
+    /**
+     * That spending the credential ends it. A REQUIRED phrase, not an optional one: it was
+     * lost once in a rewrite that kept the lifetime, and a required field makes the omission
+     * a compile error instead of a quiet subtraction from a security-relevant message.
+     */
+    singleUse: string;
     /** The closing warning. */
     ignore: string;
 }
@@ -111,7 +117,13 @@ export function composeSignInMessage(phrases: SignInPhrases, values: SignInValue
     groups.push([values.magicLink ? phrases.codeIntro : phrases.codeOnly, code]);
     if (values.site) groups.push([phrases.website, values.site]);
     groups.push([phrases.validFor, `${minutes} min`]);
-    groups.push([phrases.ignore]);
+    /**
+     * The two closing facts share one paragraph, as they did in the English-only message this
+     * replaced ("…and can be used once." / "If you did not ask…"). `singleUse` carries no
+     * value, so it is a sentence line rather than a label line — the label/value pairing above
+     * exists to keep a value out of a sentence, and there is no value here to keep out.
+     */
+    groups.push([phrases.singleUse, phrases.ignore]);
 
     return groups.map((lines) => lines.join('\n')).join('\n\n');
 }

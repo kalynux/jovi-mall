@@ -687,8 +687,16 @@ export class PayoutRequestService {
       });
     }
 
+    /**
+     * ⚠ **A DIFFERENT code from the destination check above, and at 500 rather than 503.**
+     * Nobody is down — `PAYOUT_GATEWAY` names a gateway that cannot send payouts, which is
+     * this deployment's configuration. At 503 it derived `external_service` and sent whoever
+     * is on call to look at a third party that was never involved; at 500 it derives
+     * `internal`, which is whose fault it actually is. Sharing one code with the destination
+     * rule also gave that code two categories, which is the conflict `test:errors` § 3 refuses.
+     */
     if (!gatewaySupportsPayout(PAYOUT_GATEWAY)) {
-      throw createAppError(ERROR_CODES.EARNINGS_PAYOUT_GATEWAY_UNSUPPORTED, 503, undefined, {
+      throw createAppError(ERROR_CODES.EARNINGS_PAYOUT_GATEWAY_NOT_CONFIGURED, 500, undefined, {
         gateway: PAYOUT_GATEWAY,
         hint: 'Automatic payouts are not enabled on this deployment. Settle this one manually.',
       });

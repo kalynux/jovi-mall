@@ -103,6 +103,7 @@ export function buildLoginReply(
       codeOnly: botChrome('signInCodeOnly', language),
       website: botChrome('signInWebsite', language),
       validFor: botChrome('signInValidFor', language),
+      singleUse: botChrome('signInSingleUse', language),
       ignore: botChrome('signInIgnore', language),
     },
     {

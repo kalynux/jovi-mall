@@ -1570,6 +1570,12 @@ export function assertCustomerQuickRepliesSendable(): void {
 
             let widest = action.token;
             for (const key of placeholders) {
+                // `key` came from `tokenPlaceholders`, whose pattern captures `(\w+)` — so it
+                // is word characters BY CONSTRUCTION and cannot carry regex syntax. This runs
+                // at boot over the catalogue's own literals; no request value reaches it.
+                // Line-wise with the reason, as the ban's comment prescribes for a static
+                // pattern — never file-wide, which would drop the other two bans here.
+                // eslint-disable-next-line no-restricted-syntax
                 widest = widest.replace(new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'g'), SAMPLE_ID);
             }
             const bytes = Buffer.byteLength(widest, 'utf8');
@@ -1719,6 +1725,10 @@ const TOKEN_PLACEHOLDER = /\{\{\s*(\w+)\s*\}\}/g;
  * inherit a `lastIndex` from a previous caller.
  */
 export function tokenPlaceholders(token: string): string[] {
+    // Re-flagging a MODULE CONSTANT's own source, which is the exception the ban's comment
+    // names explicitly (alongside core/logging/scrub.ts). The argument is `TOKEN_PLACEHOLDER`
+    // three lines above, never the token being searched.
+    // eslint-disable-next-line no-restricted-syntax
     return [...token.matchAll(new RegExp(TOKEN_PLACEHOLDER.source, 'g'))].map(m => m[1]);
 }
 

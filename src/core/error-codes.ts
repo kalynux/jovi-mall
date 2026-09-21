@@ -1732,7 +1732,30 @@ export const ERROR_CODES = Object.freeze({
     EARNINGS_PAYOUT_NOT_SENDABLE: 'EARNINGS_PAYOUT_NOT_SENDABLE',
     EARNINGS_PAYOUT_TRANSFER_IN_FLIGHT: 'EARNINGS_PAYOUT_TRANSFER_IN_FLIGHT',
     EARNINGS_PAYOUT_ALREADY_TRIAGED: 'EARNINGS_PAYOUT_ALREADY_TRIAGED',
+    /**
+     * ⚠ **"This payout's DESTINATION cannot be sent to automatically" — a bank or card row
+     * that predates `ENABLED_PAYOUT_METHODS`. Raised at 422, `business_rule`, and settled by
+     * hand through `markPaid`.** Never "this deployment has no payout gateway", which is
+     * `EARNINGS_PAYOUT_GATEWAY_NOT_CONFIGURED` below.
+     */
     EARNINGS_PAYOUT_GATEWAY_UNSUPPORTED: 'EARNINGS_PAYOUT_GATEWAY_UNSUPPORTED',
+    /**
+     * ⚠ **"This deployment has no payout gateway", which is OUR configuration.** The exact
+     * shape of `PAYMENT_GATEWAY_NOT_CONFIGURED`, one module along — and the third instance of
+     * this split on the platform, after that pair and `MAIL_PROVIDER_NOT_CONFIGURED`.
+     *
+     * They were one code, raised at 422 for an unsendable destination and at 503 for an
+     * unconfigured deployment. One code at two statuses derives two categories —
+     * `business_rule` and `external_service` — so the same code sent an operator to look at a
+     * third party that was never involved, and `test:errors` § 3 reported it as a new conflict
+     * on 2026-09-16, where it then failed CI for five days.
+     *
+     * ⚠ **Raise it at 500, not 503.** A 503 derives `external_service` (nobody is down: a
+     * setting is unset), which would need an override to put it back to `internal` — and a
+     * 500 derives `internal` by the rules already, so the override would be dead and
+     * `test:errors` § 2 refuses dead overrides.
+     */
+    EARNINGS_PAYOUT_GATEWAY_NOT_CONFIGURED: 'EARNINGS_PAYOUT_GATEWAY_NOT_CONFIGURED',
     EARNINGS_PAYOUT_TRANSFER_FAILED: 'EARNINGS_PAYOUT_TRANSFER_FAILED',
 
     // ── COD (cash on delivery: collection, cash liabilities, reconciliation) ──

@@ -394,6 +394,10 @@ function main(): void {
      */
     const mountsOf = (needle: string): number[] => {
         const out: number[] = [];
+        // `needle` is a middleware IDENTIFIER this suite names itself, matched against
+        // `app.ts` as text — never a user value, and `\b` on both sides keeps it a whole
+        // word. Line-wise with the reason, as the ban's comment prescribes.
+        // eslint-disable-next-line no-restricted-syntax
         const re = new RegExp(`app\\s*\\.\\s*use\\s*\\([^)]*\\b${needle}\\b`, 'g');
         for (const m of appCode.matchAll(re)) out.push(m.index ?? -1);
         return out;

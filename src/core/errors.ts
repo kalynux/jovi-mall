@@ -125,6 +125,9 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.EARNINGS_PAYOUT_ALREADY_TRIAGED]: 'This payout request has already been reviewed',
     [ERROR_CODES.EARNINGS_PAYOUT_GATEWAY_UNSUPPORTED]:
         'No configured payment gateway can send to this payout destination',
+    // The `internal` sentence the caller actually receives: the boundary replaces the thrown
+    // message with this one and drops `details`, so it must name no setting and no provider.
+    [ERROR_CODES.EARNINGS_PAYOUT_GATEWAY_NOT_CONFIGURED]: 'No payout gateway is configured',
     [ERROR_CODES.EARNINGS_PAYOUT_TRANSFER_FAILED]: 'The payment gateway refused the transfer',
 
     /**

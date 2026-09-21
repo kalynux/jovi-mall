@@ -46,7 +46,9 @@ let passed = 0;
 let failed = 0;
 
 function assert(label: string, condition: () => boolean): void {
-    let ok = false;
+    // Declared without an initial value: every path below assigns it, and a `= false` here
+    // is dead — the linter is right that it hides which branch decided the verdict.
+    let ok: boolean;
     try {
         ok = condition();
     } catch (error: any) {

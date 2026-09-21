@@ -555,6 +555,11 @@ function botActionCoverage(
     const routed = new Map<string, string>();
     for (const [stream, mapName] of wired) {
         const imported = dispatcher.match(
+            // `mapName` was parsed out of the dispatcher's own merge call two lines above
+            // and matches `[A-Z_]+` by construction — a source identifier, never a value
+            // from outside this repository. Line-wise with the reason, as the ban's own
+            // comment prescribes for a static pattern.
+            // eslint-disable-next-line no-restricted-syntax
             new RegExp(`import\\s*\\{[^}]*\\b${mapName}\\b[^}]*\\}\\s*from\\s*'\\./([^']+)'`),
         );
         if (!imported) throw new Error(`coverage scan: ${mapName} is merged but not imported`);
@@ -610,6 +615,10 @@ function botActionCoverage(
     const SUB_DISPATCHED = new Set(['open', 'yes', 'no']);
     const drawn = new Map<string, string>();
     for (const [fn, verb] of builders) {
+        // `fn` is a builder name parsed out of `bot-action-id.ts` (`export function (\w+)`),
+        // so it is a source identifier by construction. Same exemption as the import scan
+        // above, and for the same reason.
+        // eslint-disable-next-line no-restricted-syntax
         const calls = [...everythingElse.matchAll(new RegExp(`\\b${fn}\\(\\s*([^,)]*)`, 'g'))];
         if (calls.length === 0) continue;
         if (!SUB_DISPATCHED.has(verb)) {

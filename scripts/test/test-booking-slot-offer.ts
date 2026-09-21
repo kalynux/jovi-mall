@@ -521,6 +521,10 @@ async function main(): Promise<void> {
             (fs.readFileSync(path.join(__dirname, '../../src', file), 'utf8')
                 .replace(/\/\*[\s\S]*?\*\//g, '')
                 .replace(/^\s*\/\/[^\n]*$/gm, '')
+                // Re-flagging a module constant's own source with `g` to COUNT its matches —
+                // the pattern is `takesAHold`, defined in this file, and no value from
+                // outside it reaches the constructor. The ban's documented exception.
+                // eslint-disable-next-line no-restricted-syntax
                 .match(new RegExp(takesAHold.source, 'g')) ?? []).length
         ));
         if (sites.some((n) => n !== 1)) return false;

@@ -1124,6 +1124,24 @@ const SIGN_IN_VALID_FOR: Copy = {
     ar: 'صالح لمدة:',
 };
 
+/**
+ * ⚠ **A credential's SINGLE USE, and it went missing once already.** The English-only message
+ * this table replaced said "…expire in 10 minutes and can be used once"; the rewrite carried
+ * the lifetime across and dropped the single use, so for one round the customer was told when
+ * the code died but not that spending it killed it. `test:messaging-login` caught it.
+ *
+ * ⚠ **Number-neutral in all five, deliberately.** The message carries a link AND a code, or a
+ * code alone, so anything that agrees with a count ("both", "each of the two" — Arabic has a
+ * dual) is wrong in one of the two cases. These five agree with nothing.
+ */
+const SIGN_IN_SINGLE_USE: Copy = {
+    en: 'Single use only.',
+    fr: 'Utilisable une seule fois.',
+    pt: 'Utilizável apenas uma vez.',
+    es: 'Se puede usar una sola vez.',
+    ar: 'للاستخدام مرة واحدة فقط.',
+};
+
 const SIGN_IN_IGNORE: Copy = {
     en: 'If you did not ask to sign in, ignore this message.',
     fr: "Si vous n'avez pas demandé à vous connecter, ignorez ce message.",
@@ -1651,6 +1669,7 @@ const CHROME = Object.freeze({
     signInCodeOnly: { copy: SIGN_IN_CODE_ONLY, cap: null },
     signInWebsite: { copy: SIGN_IN_WEBSITE, cap: null },
     signInValidFor: { copy: SIGN_IN_VALID_FOR, cap: null },
+    signInSingleUse: { copy: SIGN_IN_SINGLE_USE, cap: null },
     signInIgnore: { copy: SIGN_IN_IGNORE, cap: null },
 
     // ── The notification inbox ───────────────────────────────────────────────

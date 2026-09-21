@@ -242,6 +242,11 @@ function readSigning(apkPath: string): Signing | null {
     if (!sha) return null;
 
     const schemes = ['v1', 'v2', 'v3', 'v3.1', 'v4']
+        // The five scheme names are a literal on the line above — nothing here comes from a
+        // user or from the APK. Line-wise, with the reason at the site, as the ban's own
+        // comment prescribes for a static pattern; never file-wide, which would take the
+        // `res.json({ error })` ban down with it.
+        // eslint-disable-next-line no-restricted-syntax
         .filter((v) => new RegExp('Verified using ' + v.replace('.', '\\.') + ' scheme[^:]*: true').test(out))
         .join(', ');
 

@@ -812,8 +812,23 @@ async function main(): Promise<void> {
   assert('the mint DOES log the identity, so the event is still traceable', () =>
     logLines.some((line) => line.includes(WA_PHONE_ID)));
 
+  /**
+   * ⚠ **The WORDING changed on 2026-09-20; the GUARANTEE did not.** The message became
+   * five-language, and the lifetime now prints as `10 min` — a symbol that does not inflect,
+   * so Arabic never has to pick between four plural forms (`bot-signin-message.ts` carries
+   * the reasoning). `10 minutes` is therefore gone on purpose, and this asserts the new
+   * format AND the absence of the old one, so a silent revert fails here too.
+   *
+   * ⛔ **The single use, though, was genuinely LOST in that rewrite, and this line is what
+   * caught it** — for one round the customer was told when the code dies and not that
+   * spending it kills it. The English sentence is spelled out HERE, a second time, on
+   * purpose: a guard that read the phrase out of the copy table it is checking would have
+   * passed on a table with the sentence deleted, which is precisely the edit that happened.
+   */
   assert('the reply states the expiry and the single use', () =>
-    /10 minutes/.test(replyRecord.message) && /once/.test(replyRecord.message)
+    replyRecord.message.includes('10 min')
+    && !replyRecord.message.includes('10 minutes')
+    && replyRecord.message.includes('Single use only.')
     && replyRecord.expiresInSeconds === 600);
 
   assert('the reply tells an unintended recipient to ignore it', () =>
