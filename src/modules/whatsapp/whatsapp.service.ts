@@ -5,6 +5,23 @@ import { getRedisClient, WA_WINDOW_DB } from '../../infra/redis/redis.factory';
 // back to a template) instead of risking a rejected out-of-window text send.
 const WINDOW_TTL = 82800; // 23 hours
 
+/**
+ * One key per person, whichever spelling of the number the caller holds.
+ *
+ * ⛔ **Two spellings reach this file, and until 2026-09-21 they were two different keys.** The
+ * inbound stamp writes the bare digits Meta delivers (`237600123456`). `WhatsAppMessagingService`
+ * normalises every recipient to E.164 (`+237600123456`) before its policy check asks. So the
+ * window the bot had just opened was read under a key nothing wrote, every free-form send was
+ * refused as "outside the 24-hour window", and texting the bot first made a phone code FAIL
+ * rather than helping. In-window notifications have no template fallback, so they were dropped.
+ *
+ * Stripping one leading `+` is the whole normalisation, deliberately. It cannot invent a
+ * country code, and every writer already stores bare digits, so no stored key moves.
+ */
+function windowKey(waPhoneId: string): string {
+  return `open_chat_window:${waPhoneId.trim().replace(/^\+/, '')}`;
+}
+
 export class WhatsappService {
   /**
    * Record inbound traffic and open/refresh the 24h chat window.
@@ -13,7 +30,7 @@ export class WhatsappService {
    */
   async recordInbound(waPhoneId: string, userId?: string): Promise<void> {
     const redis = await getRedisClient(WA_WINDOW_DB);
-    const key = `open_chat_window:${waPhoneId}`;
+    const key = windowKey(waPhoneId);
     const value = userId || waPhoneId; // Fallback to storing phone ID if user unknown
     
     await redis.set(key, value, { EX: WINDOW_TTL });
@@ -25,7 +42,7 @@ export class WhatsappService {
    */
   async canSendFreeMessage(waPhoneId: string): Promise<boolean> {
     const redis = await getRedisClient(WA_WINDOW_DB);
-    const key = `open_chat_window:${waPhoneId}`;
+    const key = windowKey(waPhoneId);
     const exists = await redis.exists(key);
     return exists === 1;
   }
@@ -48,7 +65,7 @@ export class WhatsappService {
    */
   async windowStatus(waPhoneId: string): Promise<{ open: boolean; expiresAt: Date | null }> {
     const redis = await getRedisClient(WA_WINDOW_DB);
-    const key = `open_chat_window:${waPhoneId}`;
+    const key = windowKey(waPhoneId);
     const ttl = await redis.ttl(key);
     if (ttl < 0) return { open: false, expiresAt: null };
     return { open: true, expiresAt: new Date(Date.now() + ttl * 1000) };

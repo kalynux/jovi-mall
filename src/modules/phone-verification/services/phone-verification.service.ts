@@ -2,7 +2,7 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { Language } from '../../../core/constants/languages';
 import { normalizePhoneNumber } from '../../../core/validation/phone';
-import { getWhatsAppMessagingService } from '../../whatsapp/services/whatsapp-messaging.service';
+import { getWhatsAppMessagingService, WhatsAppMessagingService } from '../../whatsapp/services/whatsapp-messaging.service';
 import { WaServiceMessage } from '../../whatsapp/builders/service-message.builder';
 import { WhatsappService } from '../../whatsapp/whatsapp.service';
 import { templateLanguage } from '../../notifications/catalog/notification-i18n';
@@ -76,6 +76,13 @@ export interface SendResult {
  *
  * ⚠ **In-window delivery is unaffected and works**, because free-form text needs no template.
  *
+ * ⭐ **The person is never asked to message the bot first.** The template is the fallback for
+ * EVERY case where free text cannot go: outside the window, and inside it when the free-form
+ * send is refused anyway (a window record the platform believes open and Meta does not). Until
+ * 2026-09-21 an in-window refusal was a 502 with no second attempt, and the published client
+ * advice for that 502 was "send the bot a message, then resend". That advice asked the user to
+ * repair something they cannot see.
+ *
  * ⚠ **The swap is invisible to callers by design.** `SendResult.delivery` stays `'template'`
  * for either template, so no client can come to depend on which one went out, and resolving
  * the verification later does not alter a single response body. The distinction lives in the
@@ -84,7 +91,14 @@ export interface SendResult {
  * See `scripts/generate-whatsapp-templates.ts` and `api-doc/notifications/whatsapp-templates.md`.
  */
 export class PhoneVerificationService {
-    constructor(private readonly window: WhatsappService = new WhatsappService()) {}
+    constructor(
+        private readonly window: WhatsappService = new WhatsappService(),
+        /**
+         * A getter rather than an instance: the shared messaging service is built on first
+         * use, because its provider throws at construction when WhatsApp is unconfigured.
+         */
+        private readonly messaging: () => Pick<WhatsAppMessagingService, 'send'> = getWhatsAppMessagingService,
+    ) {}
 
     /**
      * Mint and send a code.
@@ -202,17 +216,23 @@ export class PhoneVerificationService {
         const withinWindow = await this.window.canSendFreeMessage(waPhoneId);
 
         if (withinWindow) {
-            const result = await getWhatsAppMessagingService().send(
+            const result = await this.messaging().send(
                 WaServiceMessage.text({ to: phone, body: otpMessage(code, lang, OTP_LIMITS.ttlSeconds) }),
             );
-            if (!result?.success) {
-                throw createAppError(
-                    ERROR_CODES.PHONE_VERIFICATION_DELIVERY_FAILED,
-                    502,
-                    'The verification code could not be delivered over WhatsApp',
-                );
-            }
-            return 'text';
+            if (result?.success) return 'text';
+
+            /**
+             * ⚠ **A refused in-window send FALLS THROUGH to the template; it does not fail.**
+             * The window is our own Redis record of the last inbound message, and Meta keeps its
+             * own; when they disagree, only a template can still reach the person. Failing here
+             * was what made "message the bot, then resend" the published remedy. The same code
+             * goes out, so a text that was delivered after all costs a duplicate, never a dead
+             * code.
+             */
+            console.warn(
+                `[PhoneVerification] in-window text was refused (${result?.error?.code ?? 'unknown'}); `
+                + 'trying the template',
+            );
         }
 
         /**
@@ -279,9 +299,9 @@ export class PhoneVerificationService {
         throw createAppError(
             ERROR_CODES.PHONE_VERIFICATION_DELIVERY_FAILED,
             502,
-            `The verification code could not be delivered: neither '${primary}' nor the fallback `
-            + `'${fallback || '(none configured)'}' could be sent, and a free-form message is `
-            + 'refused outside the 24-hour window',
+            `The verification code could not be delivered: ${withinWindow ? 'the free-form text, ' : ''}`
+            + `the template '${primary}' and the fallback '${fallback || '(none configured)'}' `
+            + 'were all refused',
         );
     }
 
@@ -327,7 +347,7 @@ export class PhoneVerificationService {
          */
         const language = templateLanguage(lang);
         try {
-            const result = await getWhatsAppMessagingService().send({
+            const result = await this.messaging().send({
                 to: phone,
                 type: 'template',
                 message: { type: 'template', name, language, components },

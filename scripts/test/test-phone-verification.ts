@@ -43,6 +43,11 @@ import {
     otpExpiryMinutes,
 } from '../../src/modules/phone-verification/domain/otp-copy';
 import { OTP_LIMITS } from '../../src/modules/phone-verification/config/phone-verification.config';
+import { PhoneVerificationService } from '../../src/modules/phone-verification/services/phone-verification.service';
+import { WhatsappService } from '../../src/modules/whatsapp/whatsapp.service';
+import { WhatsAppPolicyValidator } from '../../src/modules/whatsapp/validation/policy-validator';
+import * as redisFactory from '../../src/infra/redis/redis.factory';
+import { WhatsAppSendPayload } from '../../src/modules/whatsapp/types/whatsapp-message.types';
 import { SUPPORTED_LANGUAGES } from '../../src/core/constants/languages';
 
 const originalConsole = { log: console.log.bind(console), error: console.error.bind(console) };
@@ -391,7 +396,133 @@ section('7. Source scans — what no behavioural test can see');
         routes.includes("'/phone/confirm'"));
 }
 
-originalConsole.log(`\n${'═'.repeat(72)}`);
-originalConsole.log(`  ${passed} passed, ${failed} failed`);
-originalConsole.log('═'.repeat(72));
-if (failed > 0) process.exit(1);
+/**
+ * ⭐ The person is never sent to the bot to repair a delivery. Driven through the real
+ * `deliver()` with a fake window and a fake sender, because the rule is a DECISION about which
+ * send to try next, and a source scan cannot tell a fall-through from a throw.
+ *
+ * Until 2026-09-21 a refused in-window text was a 502 with no second attempt, and the published
+ * client advice for that 502 was "message the bot, then resend".
+ */
+async function deliverySection(): Promise<void> {
+    section('8. Delivery — the template covers every case free text cannot');
+
+    const PHONE = '+237600001234';
+
+    function harness(opts: { withinWindow: boolean; accept: Array<'text' | 'template'> }) {
+        const sent: Array<{ type: string; name?: string }> = [];
+        const window = { canSendFreeMessage: async () => opts.withinWindow } as unknown as WhatsappService;
+        const messaging = () => ({
+            send: async (payload: WhatsAppSendPayload) => {
+                const type = payload.type;
+                const name = type === 'template' ? (payload.message as { name: string }).name : undefined;
+                sent.push({ type, name });
+                const ok = (opts.accept as string[]).includes(type);
+                return ok
+                    ? { success: true, messageId: 'wamid.test' }
+                    : { success: false, error: { code: 'WHATSAPP_PROVIDER_REJECTED', message: 'refused' } };
+            },
+        });
+        const service = new PhoneVerificationService(window, messaging);
+        return { sent, deliver: () => service['deliver'](PHONE, '123456', 'en') };
+    }
+
+    const outcomeOf = async (run: () => Promise<string>): Promise<string> => {
+        try { return await run(); } catch (err) { return (err as { code?: string }).code ?? 'NO_CODE'; }
+    };
+
+    {
+        const h = harness({ withinWindow: true, accept: ['text', 'template'] });
+        const outcome = await outcomeOf(h.deliver);
+        assert('inside the window, an accepted text is the whole delivery',
+            outcome === 'text' && h.sent.length === 1 && h.sent[0].type === 'text');
+    }
+
+    {
+        const h = harness({ withinWindow: true, accept: ['template'] });
+        const outcome = await outcomeOf(h.deliver);
+        assert('⭐ inside the window, a REFUSED text falls through to the template',
+            outcome === 'template'
+            && h.sent.map(s => s.type).join(',') === 'text,template'
+            && h.sent[1].name === 'wi_mall_phone_verification',
+            `outcome=${outcome} sent=${JSON.stringify(h.sent)}`);
+    }
+
+    {
+        const h = harness({ withinWindow: false, accept: ['text', 'template'] });
+        const outcome = await outcomeOf(h.deliver);
+        assert('outside the window, the template goes and free text is never attempted',
+            outcome === 'template' && h.sent.every(s => s.type === 'template'));
+    }
+
+    {
+        const h = harness({ withinWindow: true, accept: [] });
+        const outcome = await outcomeOf(h.deliver);
+        assert('only when every send is refused does it answer PHONE_VERIFICATION_DELIVERY_FAILED',
+            outcome === 'PHONE_VERIFICATION_DELIVERY_FAILED' && h.sent[0].type === 'text'
+            // At least one template was actually TRIED after the text — an empty tail would
+            // pass `every` and hide the old fail-on-first-refusal shape.
+            && h.sent.length >= 2
+            && h.sent.slice(1).every(s => s.type === 'template'),
+            `outcome=${outcome} sent=${JSON.stringify(h.sent)}`);
+    }
+}
+
+/**
+ * ⛔ The defect that made "text the bot first" fail rather than help. The bot stamps the window
+ * under the bare digits Meta delivers; `WhatsAppMessagingService` normalises the recipient to
+ * E.164 and its policy check asks under `+237…`. Two keys, so a window the customer had just
+ * opened read as closed, and every free-form send was refused as "outside the 24-hour window".
+ *
+ * Driven through the REAL policy validator against a fake Redis, because the bug lives in the
+ * hand-off between two files that were each correct on their own.
+ */
+async function windowKeySection(): Promise<void> {
+    section('9. The 24-hour window is ONE key, whichever spelling asks');
+
+    const store = new Map<string, string>();
+    const fakeRedis = {
+        set: async (key: string, value: string) => { store.set(key, value); return 'OK'; },
+        exists: async (key: string) => (store.has(key) ? 1 : 0),
+        ttl: async (key: string) => (store.has(key) ? 82800 : -2),
+    };
+    const factory = redisFactory as unknown as { getRedisClient: unknown };
+    const original = factory.getRedisClient;
+    factory.getRedisClient = async () => fakeRedis;
+
+    try {
+        // Stamped exactly as `BotRegistrationService.recordInboundActivity` does: bare digits.
+        await new WhatsappService().recordInbound('237600001234');
+
+        const policy = new WhatsAppPolicyValidator();
+        const context = await policy.computeSendContext('+237600001234', 'text');
+        assert('⛔ a window stamped in bare digits is OPEN to the send path, which asks in E.164',
+            context.isWithin24hWindow === true);
+
+        let textAllowed = true;
+        try { policy.validatePolicy('text', context); } catch { textAllowed = false; }
+        assert('⛔ …so a free-form text passes the policy check instead of being refused',
+            textAllowed);
+
+        assert('the bare-digits spelling still reads it',
+            await new WhatsappService().canSendFreeMessage('237600001234'));
+        assert('a number that never wrote to us stays closed',
+            !(await new WhatsappService().canSendFreeMessage('+237699999999')));
+        assert('exactly one key was written, under the bare digits — no stored key moves',
+            [...store.keys()].join(',') === 'open_chat_window:237600001234');
+    } finally {
+        factory.getRedisClient = original;
+    }
+}
+
+function summary(): void {
+    originalConsole.log(`\n${'═'.repeat(72)}`);
+    originalConsole.log(`  ${passed} passed, ${failed} failed`);
+    originalConsole.log('═'.repeat(72));
+    if (failed > 0) process.exit(1);
+}
+
+deliverySection().then(windowKeySection).then(summary).catch((err) => {
+    originalConsole.error('test:phone-verification crashed:', err);
+    process.exit(1);
+});

@@ -56,8 +56,10 @@ otherwise the current one.
 }
 ```
 
-`delivery` is `"text"` inside Meta's 24-hour service window and `"template"` outside it. It is
-reported because it is the first thing to ask in support when a code did not arrive.
+`delivery` is `"text"` when the code went as a free-form message inside Meta's 24-hour service
+window, and `"template"` otherwise: outside the window, **or inside it when the free-form send was
+refused** and the backend fell back to the template. It is reported because it is the first thing
+to ask in support when a code did not arrive.
 
 ⚠ **`"template"` does not tell you WHICH template.** Two are tried in order outside the window
 (see below) and both report `"template"` — deliberately, so a client cannot come to depend on a
@@ -208,47 +210,39 @@ not a field.
 
 ## What a client must DO on `PHONE_VERIFICATION_DELIVERY_FAILED`
 
-⚠ **This is the one error on this endpoint the user can actually clear themselves, and they
-will never guess how.** Treat it as an instruction, not as a failure.
+**Never ask the user to message the WhatsApp bot first.** The backend already falls back to the
+approved AUTHENTICATION template wherever free-form text cannot go: outside the 24-hour window,
+and inside it when the free-form send is refused anyway. So by the time this 502 comes back,
+**every route was tried and WhatsApp refused them all**. Nothing the user can do in the bot
+changes that.
 
-**Tell the user to send any message to the WhatsApp bot, then press resend.** One message —
-"hi" is enough — opens Meta's service window for the next 23 hours, and inside it the code goes
-as free-form text, which needs no template and is unaffected by the blocker above.
+⛔ **Until 2026-09-21 this section said the opposite**: it told clients to have the user send the
+bot any message and then press Resend, so the code could go as free text. **Remove that copy and
+the `wa.me` link from every frontend that built it.** It sent people to repair something they
+cannot see, and it made things worse. The bot recorded the window under the bare number
+(`237…`), while the send path checked it under `+237…`, a key nothing wrote. So texting the bot
+steered the code onto the free-text path, the policy check refused it as "outside the window",
+and the request failed with no template attempt. A user who had *not* texted the bot got the
+template and could verify. Both halves are fixed: one window key whichever spelling asks
+(`whatsapp.service.ts`), and a refused free-form send falls back to the template.
 
 Required of the client:
 
-- **Do not render this as a retry-the-same-thing error.** Retrying without messaging the bot
-  reproduces it exactly, because nothing about the account changed. A bare "try again" button
-  here is a loop.
-- **Give the bot's number, or a `wa.me` deep link.** The user cannot act on this advice without
-  knowing where to send the message. `WA_BOT_NUMBER` is the configured number.
-- **Respect the 60-second resend cooldown** (`PHONE_VERIFICATION_RESEND_TOO_SOON`, 429). A user
-  who messages the bot and immediately taps resend can land on it; say "wait a moment", not
-  "failed".
+- **Show it as a temporary failure with a Resend button**, and respect the 60-second cooldown
+  (`PHONE_VERIFICATION_RESEND_TOO_SOON`, 429, `details.retryAfterSeconds`).
+- **Offer a way to contact support** if it happens again. A refusal on every route is a platform
+  or Meta-side fault, and support can read the reason in the server log.
 - **Do not tell the user the platform is down.** ⛔ The agent app currently maps *every* 502 to
-  "We can't reach our systems right now" before it reads `error.code`, which turns this
-  actionable refusal into an outage report and sends the user away. Branch on the code first.
+  "We can't reach our systems right now" before it reads `error.code`. Branch on the code first.
 
 ```
 POST /api/me/phone/verify/request
 → 502  PHONE_VERIFICATION_DELIVERY_FAILED
-   ├─ show: "We couldn't send your code on WhatsApp. Send any message to
-   │         +237 XXX XXX XXX, then tap Resend."
-   ├─ primary action: open wa.me link
-   └─ secondary action: Resend (respects the 60s cooldown)
+   ├─ show: "We couldn't send your code on WhatsApp right now. Please try again
+   │         in a minute."
+   ├─ primary action: Resend (respects the 60s cooldown)
+   └─ secondary action: Contact support
 ```
-
-**Why not just check the window first and warn ahead of time?** There is no client-facing
-window read on `/api/me/*` — `GET /api/me/phone/verify` reports whether a *code* is in flight,
-not whether the WhatsApp window is open. The bot surface has one (`messaging_get_window`), but
-it authenticates a messaging identity rather than a dashboard session, so a dashboard cannot
-call it. Recovery is therefore reactive by design: attempt, and act on this code if it comes
-back.
-
-⚠ **This advice is only true on a deployment carrying the 2026-09-15 window fix.** Before it,
-messaging the bot did nothing at all — see the ⛔ above. If a deployment predates it, the
-advice is worse than useless: it sends the user to do something that cannot help and makes the
-platform look broken twice.
 
 ## Administrators — a different door, same mechanism
 
