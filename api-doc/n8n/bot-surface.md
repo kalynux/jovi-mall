@@ -2598,6 +2598,20 @@ There is no `token`, no `code`, no `link` and no `reply`. That is not an omissio
 around — it is the contract, and `test:bot-surface` § 19 fails if a credential field ever
 appears here.
 
+### When the send fails
+
+`502 MESSAGING_DELIVERY_FAILED`, category `external_service`, with the usual
+`error.customerMessage`. **`sent: true` is only ever returned for a message the channel
+accepted.** The model must tell the customer it did not go through. It must not say it was
+sent.
+
+⚠ **Until 2026-09-21 that sentence was false on WhatsApp**, in both directions at once. The
+recipient was the bare-digits `wa_phone_id`, which the messaging service refuses as
+not-E.164, so **every** WhatsApp send failed before Meta was called. The refusal comes back
+as `success: false` rather than a throw, and the WhatsApp branch never read it. So the route
+answered `sent: true`, and the bot told customers a link was on its way that never existed.
+`test:messaging-login` now drives both halves.
+
 ### Why it sends instead of returning
 
 Every other credential entrance hands its `message` back and lets the automation layer relay

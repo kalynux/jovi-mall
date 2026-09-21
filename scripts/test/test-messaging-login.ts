@@ -161,6 +161,11 @@ import {
   LOGIN_SESSION_GRACE_SECONDS,
 } from '../../src/modules/messaging-login/services/login-session.store';
 import { MessagingLoginService } from '../../src/modules/messaging-login/services/messaging-login.service';
+import {
+  SenderLoginDeliveryService,
+  WhatsAppTextSender,
+} from '../../src/modules/messaging-login/services/sender-login-delivery.service';
+import { TelegramNotificationService } from '../../src/modules/telegram/services/telegram-notification.service';
 import { buildLoginCommandReply } from '../../src/modules/messaging-login/commands/login.command';
 import { buildResetCommandReply } from '../../src/modules/messaging-login/commands/reset-password.command';
 import { handler as loginContactHandler, schema as loginContactSchema }
@@ -1518,6 +1523,106 @@ async function main(): Promise<void> {
 
   assert('the command name is reset_password', () =>
     resetCmd.includes("export const command_name = 'reset_password'"));
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  console.log('\n▶ auth_send_login_link — a refused send is a FAILURE, never "sent"');
+
+  /**
+   * Found live 2026-09-21: a customer asked the bot for a sign-in link on WhatsApp, the bot
+   * said it had sent one, and nothing arrived. Two defects stacked, and each alone produces
+   * that transcript:
+   *
+   *   1. the recipient was the `wa_phone_id` in BARE DIGITS, which the messaging service
+   *      refuses as not-E.164 — so every WhatsApp send failed before Meta was called;
+   *   2. that refusal comes back as `success: false`, never as a throw, and the WhatsApp
+   *      branch never read it — so the route answered `sent: true` regardless.
+   *
+   * Driven through the real service with a fake sender, because the defect is an UNREAD
+   * return value and a source scan cannot tell a result that is read from one that is not.
+   */
+  const deliveryCaller = {
+    userId: USER_ID,
+    customerId: CUSTOMER_ID,
+    channel: 'whatsapp' as const,
+    externalIdentity: WA_PHONE_ID,
+    identityHint: null,
+  };
+  const fakeLogins = {
+    mint: async () => ({
+      sessionId: generateLoginSessionId(),
+      token: generateLoginToken(),
+      code: generateLoginCode(),
+      expiresAt: new Date(Date.now() + LOGIN_SESSION_TTL_SECONDS * 1000),
+      ttlSeconds: LOGIN_SESSION_TTL_SECONDS,
+    }),
+  } as unknown as MessagingLoginService;
+  const unusedTelegram = {
+    send: async () => { throw new Error('the WhatsApp path must not reach Telegram'); },
+  } as unknown as TelegramNotificationService;
+
+  /** A WhatsApp sender that records what it was asked and answers as scripted. */
+  function scriptedWhatsApp(answer: { success: boolean; error?: { code: string; message: string } }) {
+    const calls: Array<{ to: string; body: string }> = [];
+    const sender: WhatsAppTextSender = {
+      sendText: async (options) => {
+        calls.push({ to: options.to, body: options.body });
+        return { ...answer, meta: { timestamp: new Date() } };
+      },
+    };
+    return { calls, load: async () => sender };
+  }
+
+  const delivered = scriptedWhatsApp({ success: true });
+  const deliveredResult = await new SenderLoginDeliveryService(
+    fakeLogins, unusedTelegram, delivered.load,
+  ).send(deliveryCaller);
+
+  assert('⛔ the bare-digits wa_phone_id reaches the sender as E.164 (+ prepended)', () =>
+    delivered.calls.length === 1 && delivered.calls[0].to === STORED_PHONE);
+
+  assert('a send the channel accepted answers sent: true', () =>
+    deliveredResult.sent === true);
+
+  // What the messaging service actually returned for the bare-digits recipient.
+  const refused = scriptedWhatsApp({
+    success: false,
+    error: {
+      code: 'WHATSAPP_VALIDATION_ERROR',
+      message: "Validation failed for field 'to': Phone number must be in international E.164 format",
+    },
+  });
+
+  await assertAsync('⛔ a WhatsApp send returning success:false RAISES MESSAGING_DELIVERY_FAILED', async () =>
+    (await codeFrom(() => new SenderLoginDeliveryService(
+      fakeLogins, unusedTelegram, refused.load,
+    ).send(deliveryCaller))) === 'MESSAGING_DELIVERY_FAILED'
+    && refused.calls.length === 1);
+
+  const refusingTelegram = {
+    send: async () => ({ success: false, error: 'Bad Request: chat not found' }),
+  } as unknown as TelegramNotificationService;
+
+  await assertAsync('the Telegram branch still raises on success:false (the half that always read it)', async () =>
+    (await codeFrom(() => new SenderLoginDeliveryService(
+      fakeLogins, refusingTelegram, refused.load,
+    ).send({ ...deliveryCaller, channel: 'telegram', externalIdentity: TG_CHAT_ID })))
+      === 'MESSAGING_DELIVERY_FAILED');
+
+  /**
+   * The administrator path carried the identical unread result. It is not driven here —
+   * its constructor wires eight collaborators for a rule that lives in eight lines — so
+   * this scan is narrowed to the WhatsApp branch of `deliver`, from its `sendText(` to the
+   * Telegram send that follows it. A `result.success` read anywhere else in the file does
+   * not count.
+   */
+  assert("⛔ the admin credential path's WhatsApp branch reads the send result", () => {
+    const source = stripComments(
+      read('modules/messaging-login/services/admin-credential-delivery.service.ts'));
+    const start = source.indexOf('new WhatsAppServiceMessenger().sendText(');
+    const end = source.indexOf('this.telegram.send(', start);
+    const branch = start > 0 && end > start ? source.slice(start, end) : '';
+    return /!result\.success/.test(branch) && branch.includes('MESSAGING_DELIVERY_FAILED');
+  });
 
   // ═══════════════════════════════════════════════════════════════════════════
   console.log('\n▶ Redis catalogue registration');

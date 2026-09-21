@@ -343,7 +343,7 @@ export class AdminCredentialDeliveryService {
                 const { WhatsAppServiceMessenger } = await import(
                     '../../whatsapp/services/whatsapp-service-messenger'
                 );
-                await new WhatsAppServiceMessenger().sendText({
+                const result = await new WhatsAppServiceMessenger().sendText({
                     to: destination.address,
                     body,
                     // Off for a sign-in link: WhatsApp FETCHES urls to build a preview
@@ -351,6 +351,18 @@ export class AdminCredentialDeliveryService {
                     // fetched by anything but a human. Off for the reset too, for tidiness.
                     previewUrl: false,
                 });
+                // ⛔ The messaging service reports a refusal by RETURNING, never by throwing,
+                // so an unread result is an administrator told "sent" for a message that
+                // never left — the exact failure this method's header forbids. Read it,
+                // as the Telegram branch below always has.
+                if (!result.success) {
+                    throw createAppError(
+                        ERROR_CODES.MESSAGING_DELIVERY_FAILED,
+                        502,
+                        result.error?.message ?? 'WhatsApp delivery failed',
+                        { channel, providerCode: result.error?.code ?? null },
+                    );
+                }
                 return;
             }
 

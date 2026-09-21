@@ -3,9 +3,10 @@ import { ERROR_CODES } from '../../../core/error-codes';
 import { logger } from '../../../core/logging';
 import { getRedisClient, LOGIN_CODE_DB } from '../../../infra/redis/redis.factory';
 import { TelegramNotificationService } from '../../telegram/services/telegram-notification.service';
+import type { WhatsAppServiceMessenger } from '../../whatsapp/services/whatsapp-service-messenger';
 import { digestForKey } from '../domain/login-token';
 import { buildLoginReply, buildMagicLinkUrl } from '../dto/messaging-login.dto';
-import { ResolvedLoginAccount } from './identity-resolver.service';
+import { messagingPhoneToE164, ResolvedLoginAccount } from './identity-resolver.service';
 import { MessagingLoginService, messagingLoginService } from './messaging-login.service';
 
 /**
@@ -79,10 +80,27 @@ export interface SenderLoginDeliveryResult {
     expiresAt: string;
 }
 
+/** The one method this service needs from the WhatsApp stack. */
+export type WhatsAppTextSender = Pick<WhatsAppServiceMessenger, 'sendText'>;
+
+/**
+ * Lazily imported for the reason `PasswordResetService` and the administrator path both
+ * state: the WhatsApp module drags in the messaging stack and its configuration, and this
+ * module must stay loadable without it. A loader rather than an instance so a test can
+ * hand in a fake without constructing the real provider, which throws when unconfigured.
+ */
+async function loadWhatsAppSender(): Promise<WhatsAppTextSender> {
+    const { WhatsAppServiceMessenger } = await import(
+        '../../whatsapp/services/whatsapp-service-messenger'
+    );
+    return new WhatsAppServiceMessenger();
+}
+
 export class SenderLoginDeliveryService {
     constructor(
         private readonly logins: MessagingLoginService = messagingLoginService,
         private readonly telegram: TelegramNotificationService = new TelegramNotificationService(),
+        private readonly whatsapp: () => Promise<WhatsAppTextSender> = loadWhatsAppSender,
     ) { }
 
     /**
@@ -161,25 +179,30 @@ export class SenderLoginDeliveryService {
      * a silent failure produces a customer waiting for a message that does not exist, and
      * a chat transcript that says it was sent. The refusal reaches the model as tool
      * content it can act on.
+     *
+     * ⛔ **Both channels report failure by RETURNING `success: false`, never by throwing**, so
+     * each branch must read the result. The WhatsApp branch did not, until 2026-09-21: every
+     * send was refused and this route answered `sent: true` anyway, and the bot told the
+     * customer a link was on its way that never existed.
      */
     private async deliver(caller: ResolvedLoginAccount, body: string): Promise<void> {
         try {
             if (caller.channel === 'whatsapp') {
                 /**
-                 * Lazily imported for the reason `PasswordResetService` and the
-                 * administrator path both state: the WhatsApp module drags in the
-                 * messaging stack and its configuration, and this module must stay
-                 * loadable without it.
-                 *
                  * ⚠ The 24-hour service window is open by construction here — the customer
                  * messaged the bot in this very turn, which is what opened it — so this
                  * never needs the template branch `bot-messaging.controller.ts` documents.
                  */
-                const { WhatsAppServiceMessenger } = await import(
-                    '../../whatsapp/services/whatsapp-service-messenger'
-                );
-                await new WhatsAppServiceMessenger().sendText({
-                    to: caller.externalIdentity,
+                const sender = await this.whatsapp();
+                const result = await sender.sendText({
+                    /**
+                     * ⛔ The identity is Meta's `wa_phone_id`, BARE DIGITS, and the messaging
+                     * service accepts strict E.164 only — so the raw value is refused before
+                     * Meta is ever called, on every send. Same repair, same function, as the
+                     * identity ladder uses for the lookup; the value comes from Meta, so the
+                     * prepended `+` cannot invent a country code.
+                     */
+                    to: messagingPhoneToE164(caller.externalIdentity) ?? caller.externalIdentity,
                     body,
                     /**
                      * Off, and not for tidiness: WhatsApp FETCHES a URL to build its
@@ -188,6 +211,14 @@ export class SenderLoginDeliveryService {
                      */
                     previewUrl: false,
                 });
+                if (!result.success) {
+                    throw createAppError(
+                        ERROR_CODES.MESSAGING_DELIVERY_FAILED,
+                        502,
+                        result.error?.message ?? 'WhatsApp delivery failed',
+                        { channel: caller.channel, providerCode: result.error?.code ?? null },
+                    );
+                }
                 return;
             }
 
