@@ -19,6 +19,7 @@ import { Booking as BookingModel } from '../../booking/models/booking.model';
 import { StoreModel } from '../../store/models/store.model';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
+import { assertGatewayOffered } from '../gateways/registry';
 
 /**
  * GAP-008's backend half: mint a hosted-card-page link, and resolve one.
@@ -171,6 +172,17 @@ export class PayLinkService {
                 `${transaction.gateway} payments complete on the customer's handset and need no payment page`,
             );
         }
+
+        /**
+         * ⛔ **A page for a gateway this deployment does not offer is a page that cannot take the
+         * money**, so it is refused before a link exists — the same `assertGatewayOffered` the
+         * orchestrator opens every charge with. With cards off (no `STRIPE_SECRET_KEY`), no new
+         * card transaction can be opened any more, so what reaches here is an OLD one; minting a
+         * live link for it would put a card form in front of a customer that no server can
+         * confirm. After `PAYMENT_LINK_NOT_APPLICABLE` on purpose: "mobile money needs no page"
+         * is the truer answer for a mobile-money transaction whatever cards are doing.
+         */
+        assertGatewayOffered(transaction.gateway);
 
         const state = payLinkState({
             status: transaction.status,

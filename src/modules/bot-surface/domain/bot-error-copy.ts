@@ -673,6 +673,18 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
      * ⚠ Names the field the way the checkout SCREEN does (`inapp-copy.ts` `checkoutPhone`), in all
      * five languages, so a customer told about it in the chat and on the screen hears one word.
      */
+    /**
+     * A gateway this deployment does not offer — today, cards: no Stripe keys in production, and
+     * the owner's rule of 2026-09-22 is mobile money only. The installed app still showed a
+     * "Card" option; the answer names what DOES work rather than only refusing.
+     */
+    [ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED]: {
+        en: 'Card payments are not available right now. You can pay with mobile money (MTN or Orange) instead.',
+        fr: "Le paiement par carte n'est pas disponible pour le moment. Vous pouvez payer par mobile money (MTN ou Orange).",
+        pt: 'Os pagamentos com cartão não estão disponíveis de momento. Pode pagar com mobile money (MTN ou Orange).',
+        es: 'Los pagos con tarjeta no están disponibles por ahora. Puedes pagar con mobile money (MTN u Orange).',
+        ar: 'الدفع بالبطاقة غير متاح حاليًا. يمكنك الدفع عبر المحفظة المحمولة (MTN أو Orange).',
+    },
     [ERROR_CODES.PAYMENT_PAYER_NUMBER_REQUIRED]: {
         en: 'I need a mobile money number to take this payment. Send me the number you want to pay with.',
         fr: "J'ai besoin d'un numéro mobile money pour ce paiement. Envoyez-moi le numéro avec lequel vous souhaitez payer.",

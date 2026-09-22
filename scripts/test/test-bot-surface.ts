@@ -846,6 +846,28 @@ async function main(): Promise<void> {
     const mountedTools = new Set(BOT_ROUTES.map((r) => r.tool));
     const catalogued = catalog.tools.filter((t) => mountedTools.has(t.name));
 
+    /**
+     * ⛔ **A mounted route that is not catalogued is a tool the model can never call** — the
+     * generator builds the MCP server from the catalogue, so the route answers and nothing asks
+     * it. `checkout_payment_status` and `checkout_retry_payment` sat exactly there until
+     * 2026-09-22: the assistant could not check or retry a payment when the customer typed, and
+     * every assertion here passed, because they compare only rows present in BOTH places.
+     *
+     * Exemptions are named, each with its reason. Add one only with a reason.
+     */
+    const UNCATALOGUED_BY_DESIGN: Readonly<Record<string, string>> = {
+        checkout_open_screen: 'the tap `open:co` mints the checkout screen; the model checks out '
+            + 'in the chat with checkout_review / checkout_place instead (2026-09-22)',
+    };
+    assert('⛔ every mounted route is catalogued, or exempt by name with a reason', () => {
+        const catalogNames = new Set(catalog.tools.map((t) => t.name));
+        const silent = [...mountedTools].filter((n) => !catalogNames.has(n) && !(n in UNCATALOGUED_BY_DESIGN));
+        const staleExempt = Object.keys(UNCATALOGUED_BY_DESIGN).filter((n) => !mountedTools.has(n) || catalogNames.has(n));
+        if (silent.length) console.error('     ↳ mounted, not catalogued:', silent.join(', '));
+        if (staleExempt.length) console.error('     ↳ exemption no longer needed:', staleExempt.join(', '));
+        return mountedTools.size > 50 && silent.length === 0 && staleExempt.length === 0;
+    });
+
     assert('a MOUNTED route is never still marked `status: "gap"` in the catalogue', () => {
         // The catalogue's own notes promise that a `gap` tool "does NOT exist". A row that
         // is mounted and still says so tells the automation layer not to call something it
@@ -3254,10 +3276,14 @@ async function main(): Promise<void> {
      * ⚠ A count, deliberately, and it is meant to be edited when a tool lands. Every assertion
      * above is a one-way guard — they all pass on an EMPTY emission, which is exactly the
      * failure mode of a filter that has become too broad. Only a count catches that.
+     *
+     * 58 → 61 on 2026-09-22: + checkout_review, checkout_place, checkout_payment_status,
+     * checkout_retry_payment (the last two were mounted and never catalogued, so the model could
+     * not check or retry a payment), − payment_create_pay_link (card-only, off while cards are).
      */
-    assert('the generator emits 58 tools — update this when one lands', () => {
-        if (emitted.length !== 58) console.error(`     ↳ emitted ${emitted.length}`);
-        return emitted.length === 58;
+    assert('the generator emits 61 tools — update this when one lands', () => {
+        if (emitted.length !== 61) console.error(`     ↳ emitted ${emitted.length}`);
+        return emitted.length === 61;
     });
 
     /**

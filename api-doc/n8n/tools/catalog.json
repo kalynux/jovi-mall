@@ -2478,6 +2478,415 @@
       ]
     },
     {
+      "name": "checkout_review",
+      "version": 1,
+      "title": "Review a checkout in the chat",
+      "tier": "core",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "What the customer is about to agree to, read live: the basket lines, the total (already formatted), where it will be delivered (one of their SAVED addresses — the default unless they chose another), and the masked mobile-money number the payment prompt will go to. When it can go ahead it returns a single-use checkoutRef (10 minutes) for checkout_place.",
+      "when_to_use": "When the customer wants to buy / check out / pay for their basket in the chat. Call it, tell them the total, the address and the masked number, and ask them to confirm. Call it again with deliveryAddressId when they want a different saved address.",
+      "when_not_to_use": "It places nothing. Never ask for an address or a phone number the review already shows. If blocker is no_saved_address or address_not_deliverable, offer a deliverable address from `addresses`, or send addAddressUrl (the website) — never collect an address in the chat. address_not_found: call addresses_list and ask again.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/checkout/chat/review"
+      },
+      "doc": "customer/orders.md#post-apicustomerorderscheckout",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "deliveryAddressId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "Optional. The id of one of the customer's saved addresses (from `addresses` or addresses_list). Omit for their default."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "deliveryAddressId"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "ready",
+          "blocker",
+          "checkoutRef",
+          "lines[].title",
+          "lines[].variantLabel",
+          "lines[].quantity",
+          "lines[].lineTotalText",
+          "totalText",
+          "delivery.kind",
+          "delivery.address.id",
+          "delivery.address.label",
+          "delivery.address.formattedAddress",
+          "delivery.to",
+          "addresses[].id",
+          "addresses[].label",
+          "addresses[].formattedAddress",
+          "addresses[].isDefault",
+          "addresses[].deliverable",
+          "payment.phoneMasked",
+          "addAddressUrl"
+        ],
+        "result_kind": "cart_summary",
+        "never_relay": [
+          "checkoutRef"
+        ]
+      },
+      "errors": [
+        {
+          "code": "CART_EMPTY_CHECKOUT",
+          "status": 400,
+          "category": "business_rule",
+          "when": "The basket is empty",
+          "customer_action": "explain"
+        },
+        {
+          "code": "PAYMENT_GATEWAY_NOT_CONFIGURED",
+          "status": 500,
+          "category": "internal",
+          "when": "This deployment has no mobile-money gateway",
+          "customer_action": "escalate_to_support"
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "idempotency": "Each call mints a fresh single-use checkoutRef; an unused one lapses after ten minutes. Idempotency-Key collapses a retried request onto one ref.",
+      "requires_confirmation": false,
+      "risk": "medium",
+      "context_resolution": {
+        "subject": "customer",
+        "policy": "not_applicable"
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "payment.phoneMasked null means the account has no number: ask for one, then pass it as `phone` to checkout_place."
+      },
+      "commands": [
+        "checkout",
+        "buy"
+      ]
+    },
+    {
+      "name": "checkout_place",
+      "version": 1,
+      "title": "Place the order and send the mobile-money prompt",
+      "tier": "core",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Spends the checkoutRef from checkout_review: creates the customer's orders from their basket (prices re-resolved, bargained price locks honoured) and pushes a mobile-money payment prompt to the account's own wallet. The customer approves it on their phone; the result arrives in the chat.",
+      "when_to_use": "Only right after checkout_review returned ready: true AND the customer explicitly confirmed the total, the address and the masked number it showed.",
+      "when_not_to_use": "Never without that confirmation, never twice, never with an invented checkoutRef. Pass deliveryAddressId = the delivery.address.id the review showed (required for physical goods). Pass phone ONLY if the customer typed a different number themselves. On an error whose details.spent is not false, do NOT place again — use checkout_payment_status.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/checkout/chat/place"
+      },
+      "doc": "customer/orders.md#post-apicustomerorderscheckout",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "checkoutRef"
+        ],
+        "properties": {
+          "checkoutRef": {
+            "type": "string",
+            "description": "Exactly as checkout_review returned it. Single use, ten minutes."
+          },
+          "deliveryAddressId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "The delivery.address.id from the review. Required for physical goods; omit for downloads."
+          },
+          "phone": {
+            "type": "string",
+            "description": "Only a mobile-money number the customer typed, with country code. Omit to use the account's."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "checkoutRef",
+          "deliveryAddressId",
+          "phone"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "transactionId",
+          "state",
+          "orderCount",
+          "orderNumbers",
+          "amountText",
+          "payerMasked",
+          "instructions"
+        ],
+        "result_kind": "payment_instruction",
+        "never_relay": [
+          "transactionId"
+        ]
+      },
+      "errors": [
+        {
+          "code": "BOT_PRODUCT_LIST_EXPIRED",
+          "status": 404,
+          "category": "not_found",
+          "when": "checkoutRef unknown/expired/used, or the basket changed",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "ORDER_DELIVERY_ADDRESS_REQUIRED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "No/unnamed/unmapped address (details.reason)",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "reason",
+            "spent"
+          ]
+        },
+        {
+          "code": "CUSTOMER_ADDRESS_NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "deliveryAddressId is not the customer's",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "PAYMENT_PAYER_NUMBER_REQUIRED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "No number on the account and none typed",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "PAYMENT_OPERATOR_UNDETERMINED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The number's network (MTN/Orange) cannot be identified",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "CATALOG_INSUFFICIENT_STOCK",
+          "status": 422,
+          "category": "business_rule",
+          "when": "A line sold out",
+          "customer_action": "explain",
+          "details_fields": [
+            "variantId",
+            "sku",
+            "requested",
+            "available"
+          ]
+        },
+        {
+          "code": "PAYMENT_INITIATION_FAILED",
+          "status": 502,
+          "category": "external_service",
+          "when": "The gateway could not be reached; orders may exist",
+          "customer_action": "retry_with_backoff"
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "idempotency": "The checkoutRef is spent atomically on the first call; any second call is refused.",
+      "requires_confirmation": true,
+      "risk": "critical",
+      "side_effects": [
+        "Creates one order per seller",
+        "Holds stock 30 minutes",
+        "Clears the basket",
+        "Pushes a mobile-money prompt to the customer's phone"
+      ],
+      "context_resolution": {
+        "subject": "customer",
+        "policy": "not_applicable"
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "state 'failed' = the gateway refused the charge as it opened: the orders exist, NO prompt is coming — say so and offer checkout_retry_payment. state 'waiting' = tell them to approve on their phone; the result arrives as a message."
+      },
+      "commands": [
+        "checkout",
+        "buy"
+      ]
+    },
+    {
+      "name": "checkout_payment_status",
+      "version": 1,
+      "title": "Check where the last checkout payment got to",
+      "tier": "core",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Asks the payment gateway (not just our record) where the customer's most recent checkout payment is: settled, failed, or still waiting.",
+      "when_to_use": "When the customer asks whether their payment went through, or after checkout_place/checkout_retry_payment when they say they approved it.",
+      "when_not_to_use": "Takes no transaction id — never invent one.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/checkout/payment-status"
+      },
+      "doc": "payments/README.md#post-paymentsverify",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "request": {
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "state",
+          "amountText",
+          "orderCount"
+        ],
+        "result_kind": "status",
+        "never_relay": [
+          "transactionId"
+        ]
+      },
+      "errors": [
+        {
+          "code": "PAYMENT_TRANSACTION_NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "No checkout payment on this account",
+          "customer_action": "explain"
+        },
+        {
+          "code": "PAYMENT_VERIFICATION_FAILED",
+          "status": 502,
+          "category": "external_service",
+          "when": "The gateway could not be asked",
+          "customer_action": "retry_with_backoff"
+        }
+      ],
+      "mutating": false,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "none",
+      "context_resolution": {
+        "subject": "transaction",
+        "policy": "not_applicable"
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "platform_notes": {},
+      "commands": [
+        "pay"
+      ]
+    },
+    {
+      "name": "checkout_retry_payment",
+      "version": 1,
+      "title": "Send the mobile-money prompt again",
+      "tier": "core",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Opens a fresh mobile-money charge for the orders of the customer's most recent checkout that are still unpaid, to the account's wallet (or a number the customer typed). Creates no new order.",
+      "when_to_use": "When a checkout payment failed or was not approved and the customer wants to try again (after they confirm).",
+      "when_not_to_use": "Never to start a new purchase (that is checkout_review). Never ask for a number the account has; pass phone only if the customer typed one.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/checkout/retry-payment"
+      },
+      "doc": "payments/README.md#post-paymentsinitiate",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "phone": {
+            "type": "string",
+            "description": "Only a number the customer typed, with country code."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "phone"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "state",
+          "instructions",
+          "amountText"
+        ],
+        "result_kind": "payment_instruction",
+        "never_relay": [
+          "transactionId"
+        ]
+      },
+      "errors": [
+        {
+          "code": "PAYMENT_TRANSACTION_NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "No checkout payment on this account",
+          "customer_action": "explain"
+        },
+        {
+          "code": "PAYMENT_PAYER_NUMBER_REQUIRED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "No number on the account",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "PAYMENT_OPERATOR_UNDETERMINED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "Network cannot be identified",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "PAYMENT_CART_NO_PAYABLE_ORDERS",
+          "status": 409,
+          "category": "conflict",
+          "when": "Nothing left to pay (e.g. cancelled)",
+          "customer_action": "explain"
+        },
+        {
+          "code": "PAYMENT_INITIATION_FAILED",
+          "status": 502,
+          "category": "external_service",
+          "when": "Gateway unreachable",
+          "customer_action": "retry_with_backoff"
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "requires_confirmation": true,
+      "risk": "high",
+      "context_resolution": {
+        "subject": "transaction",
+        "policy": "not_applicable"
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {},
+      "commands": [
+        "pay"
+      ]
+    },
+    {
       "name": "payment_initiate",
       "version": 1,
       "title": "Start a mobile-money or card payment",
@@ -2874,9 +3283,9 @@
       "gap_ref": "GAP-001",
       "service": "jovi-mall",
       "surface": "bot_internal",
-      "description": "The customer's order history, newest first, grouped the way they placed them — one group per checkout, however many sellers were in it.",
-      "when_to_use": "When the customer asks about their orders in general, and as the first step of anything that needs an order the customer has not named.",
-      "when_not_to_use": "Not to answer 'where is my parcel' — that needs orders_list_shipments, which carries the delivery status.",
+      "description": "The customer's order history, newest first, grouped the way they placed them — one group per checkout, however many sellers were in it. The result is drawn IN THE CHAT as a list they can pick from: up to five orders, and a Load more row that opens the rest; it is sent automatically.",
+      "when_to_use": "Whenever the customer asks to see, show or check their orders — \"show my orders\", \"my orders\", \"what have I bought\", \"did my order go through\" — and as the first step of anything that needs an order the customer has not named.",
+      "when_not_to_use": "Not to answer 'where is my parcel' — that needs orders_list_shipments, which carries the delivery status. Never type the orders out yourself: the list is already in the chat.",
       "operation": {
         "method": "POST",
         "path": "/api/internal/bot/orders/list"
@@ -2929,7 +3338,7 @@
           "limit": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 100,
+            "maximum": 5,
             "default": 5
           }
         }
@@ -5868,8 +6277,8 @@
       "service": "jovi-mall",
       "surface": "bot_internal",
       "description": "Open the customer's own order history as a scrollable screen, newest first, each order showing its number, its state and what it cost.",
-      "when_to_use": "When the customer wants to look THROUGH their orders — \"show me my orders\", \"what have I bought\", \"my past orders\" — rather than asking about one of them.",
-      "when_not_to_use": "Not when they asked about ONE order: use orders_get_order, or orders_list_groups for the five most recent as a chat list they can tap. Not for a delivery question about a specific parcel — use orders_list_shipments.",
+      "when_to_use": "Only when the customer asks for ALL their orders, for OLDER ones, or for more than the five the chat list showed.",
+      "when_not_to_use": "NEVER the first answer to \"show my orders\" — that is orders_list_groups, which lists the five most recent in the chat. Not when they asked about ONE order: use orders_get_order. Not for a delivery question about a specific parcel — use orders_list_shipments.",
       "operation": {
         "method": "POST",
         "path": "/api/internal/bot/inapp/orders"
@@ -9619,14 +10028,14 @@
       "name": "payment_create_pay_link",
       "version": 1,
       "title": "Get a page the customer can pay by card on",
-      "tier": "extended",
+      "tier": "flow_only",
       "status": "available",
       "gap_ref": "GAP-008",
       "service": "jovi-mall",
       "surface": "bot_internal",
       "description": "A short-lived link to a page where the customer completes a CARD payment. Mobile money never needs this — it finishes on the customer's handset.",
       "when_to_use": "After payment_initiate with gateway STRIPE, when the customer chose to pay by card. Send them the url.",
-      "when_not_to_use": "Never for mobile money — that completes in the chat and this refuses it. Never for a payment that is already done. If url comes back null the deployment has no payment page: offer mobile money instead.",
+      "when_not_to_use": "⚠ Off the model's list while card payments are disabled (owner, 2026-09-22 — no Stripe keys in production): this link only completes a CARD payment, so it can only fail. Mobile money never needs it. Never for mobile money — that completes in the chat and this refuses it. Never for a payment that is already done. If url comes back null the deployment has no payment page: offer mobile money instead.",
       "operation": {
         "method": "POST",
         "path": "/api/internal/bot/payments/{transactionId}/pay-link"

@@ -127,3 +127,34 @@ export function notchPayEnabled(): boolean {
 export function myCoolPayEnabled(): boolean {
   return MYCOOLPAY_CONFIG.PUBLIC_KEY !== '' && MYCOOLPAY_CONFIG.PRIVATE_KEY !== '';
 }
+
+/**
+ * True when Stripe (cards) has the credential to call with and the secret to verify with — the
+ * same two-part rule as `notchPayEnabled`.
+ *
+ * ── ⚠ THIS IS THE CARD OFF-SWITCH, AND UNTIL 2026-09-22 NOTHING READ IT ─────
+ * The production environment file says, in as many words, that leaving `STRIPE_SECRET_KEY` out
+ * "is the off switch … and the gateway simply is not offered". The first half was true and the
+ * second was not: the gateway was registered unconditionally, `POST /payments/initiate` accepted
+ * `gateway: 'STRIPE'` from any caller, opened a transaction row, and only THEN reached
+ * `getStripeClient()` — which is where a customer met "Stripe is not configured" (ORD-2026-000002,
+ * 2026-09-22, from the storefront app's "send a payment link" button). The row it left behind
+ * was FAILED, so the pay-link mint that followed answered `PAYMENT_LINK_NOT_PAYABLE`.
+ *
+ * `gatewayAcceptsNewPayments` (`gateways/registry.ts`) reads this, and the orchestrator refuses
+ * a gateway it does not accept BEFORE any row exists. So the sentence in the environment file is
+ * now true: no secret key, no card payments — on every door, with nothing else to remember.
+ *
+ * ⚠ **Read live from `process.env`, never frozen into a config object at import.**
+ * `getStripeClient()` reads the variable at call time, and the switch and the client must never
+ * hold two opinions about whether Stripe exists.
+ *
+ * ⚠ **Both halves, not just the key.** `config/env.ts` already refuses to boot with the key and
+ * no webhook secret, so in a booted process the second test never decides anything — it is here
+ * so a test or a script that sets only the key cannot switch on a gateway whose callbacks would
+ * all be refused.
+ */
+export function stripeEnabled(): boolean {
+  return (process.env.STRIPE_SECRET_KEY ?? '').trim() !== ''
+    && (process.env.STRIPE_WEBHOOK_SECRET ?? '').trim() !== '';
+}

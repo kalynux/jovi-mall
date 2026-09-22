@@ -7,7 +7,7 @@ import {
   PaymentGatewayType
 } from '../models/payment-transaction.model';
 import { PaymentChannelInfo } from '../gateways/gateway.interface';
-import { getPaymentGateway } from '../gateways/registry';
+import { assertGatewayOffered, getPaymentGateway } from '../gateways/registry';
 import { mintMerchantRef } from '../domain/merchant-reference';
 import { NormalizedWebhookEvent } from '../domain/webhook-verification';
 import { WebhookOutcome } from '../domain/webhook-response';
@@ -130,6 +130,12 @@ export class PaymentOrchestratorService {
     instructions?: any;
     message: string;
   }> {
+    // ⛔ FIRST, before any read or write. A gateway this deployment does not offer is refused
+    // here rather than discovered inside the adapter after a transaction row exists — which is
+    // how a customer met "Stripe is not configured" with a FAILED row left behind them. The
+    // same line opens all four charge-starting methods; see `assertGatewayOffered`.
+    assertGatewayOffered(gateway);
+
     // 1. LOAD AND VALIDATE ORDER
     const order = await this.orderRepo.findById(orderId);
 
@@ -325,6 +331,9 @@ export class PaymentOrchestratorService {
     instructions?: any;
     message: string;
   }> {
+    // ⛔ FIRST — see the same line in `initiatePayment`.
+    assertGatewayOffered(gateway);
+
     // 1. LOAD THE GROUP'S ORDERS
     const orders = await OrderModel.find({ cart_id: cartId });
     if (orders.length === 0) {
@@ -802,6 +811,9 @@ export class PaymentOrchestratorService {
     instructions?: any;
     message: string;
   }> {
+    // ⛔ FIRST — see the same line in `initiatePayment`.
+    assertGatewayOffered(gateway);
+
     // 1. LOAD AND VALIDATE BOOKING
     const booking = await Booking.findById(bookingId);
 
@@ -1000,6 +1012,9 @@ export class PaymentOrchestratorService {
     instructions?: any;
     message: string;
   }> {
+    // ⛔ FIRST — see the same line in `initiatePayment`.
+    assertGatewayOffered(gateway);
+
     const booking = await Booking.findById(bookingId);
     if (!booking) {
       throw createAppError(ERROR_CODES.PAYMENT_BOOKING_NOT_FOUND, 404);

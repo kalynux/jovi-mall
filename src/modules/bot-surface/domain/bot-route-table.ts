@@ -159,6 +159,15 @@ export const BOT_ROUTES: readonly BotRouteSpec[] = Object.freeze([
      * handset, and a second unasked-for prompt is a second interruption of somebody's day.
      */
     { tool: 'checkout_retry_payment', method: 'POST', path: '/checkout/retry-payment', mutating: true, requiresCustomerRole: true },
+    /**
+     * Checkout IN the chat (owner, 2026-09-22: "it could just use the tools … and place the order
+     * without asking the client for what the account already has"). Review mints the checkout
+     * screen's single-use `co` credential — hence `mutating` — and place spends it: the orders are
+     * created and the mobile-money prompt goes to the account's own wallet. Both are thin doors
+     * onto the screen's own core; see `BotCheckoutController.reviewInChat`.
+     */
+    { tool: 'checkout_review', method: 'POST', path: '/checkout/chat/review', mutating: true, requiresCustomerRole: true },
+    { tool: 'checkout_place', method: 'POST', path: '/checkout/chat/place', mutating: true, requiresCustomerRole: true },
     { tool: 'checkout_create_orders', method: 'POST', path: '/checkout', mutating: true, requiresCustomerRole: true },
     { tool: 'payment_get_transaction', method: 'POST', path: '/payments/:transactionId', mutating: false, requiresCustomerRole: true },
     // GAP-008. `mutating`, and the classification is the interesting half: it changes

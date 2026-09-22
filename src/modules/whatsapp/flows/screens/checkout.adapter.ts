@@ -170,12 +170,17 @@ export function planCheckoutFailure(error: unknown): CheckoutFailurePlan {
  * close. The receipt, the Check-status and Try-again buttons all arrive in the chat, where they
  * can be acted on. None of `placed`'s figures is shown here.
  */
-export function placedResponse(_placed: CheckoutPlaced, copy: FlowCopy): FlowResponseBody {
+export function placedResponse(placed: CheckoutPlaced, copy: FlowCopy): FlowResponseBody {
     /**
      * ⚠ **Stamped `placed`, and the chat deliberately says NOTHING for it.** The stamp is there so
      * the completion tells the truth about what happened; the silence is because the payment
      * result reaches the conversation through the payment path, and a "got that" here would talk
      * over the message the customer is actually waiting for.
+     *
+     * ⛔ **A charge refused AT OPEN is still `placed` — the orders exist — but it gets `failed`,
+     * never "approve it on your phone"**: no prompt is coming, and the payment path announces
+     * nothing for a refusal the customer was present for. Same rule as the Telegram page.
      */
-    return noticeResponse(copy.checkoutWatchChat, copy, 'placed');
+    const refused = placed.status === 'FAILED' || placed.status === 'CANCELLED';
+    return noticeResponse(refused ? copy.failed : copy.checkoutWatchChat, copy, 'placed');
 }

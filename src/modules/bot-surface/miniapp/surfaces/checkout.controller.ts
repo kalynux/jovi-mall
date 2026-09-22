@@ -12,8 +12,11 @@ import { PaymentOrchestratorService } from '../../../payments';
 import { PaymentGatewayType, PaymentStatus } from '../../../payments/models/payment-transaction.model';
 import { publicCatalogService } from '../../../catalog/services/public-catalog.service';
 import { formatBotPrice, toPublicMediaUrl } from '../../domain/product-card';
+import { botStorefrontLink, surfacePath } from '../../domain/bot-list-window';
+import { maskPhone } from '../../dto/bot-projections';
 import { InAppSurfaceSession, inAppSurfaceStore } from '../../services/inapp-surface.store';
 import { accountIdentifier, maskAddress } from './checkout-masking';
+import { ChatDestination, resolveChatDestination } from './checkout-destination';
 import {
     assertNetworkChargeable,
     maskedPayerNumber,
@@ -131,6 +134,20 @@ export interface CheckoutView {
     /** ⚠ Never the full number — a placeholder, and empty means "use this one". */
     payment: { phoneMasked: string | null };
     language: string | null;
+    /**
+     * The website's address page, in the customer's language — **only in the no-address state**,
+     * null otherwise and null when `STOREFRONT_URL` is unset (the page then shows the sentence
+     * and no link, never a dead one).
+     *
+     * ⚠ **Built HERE and never by the page**, through `botStorefrontLink(surfacePath('addresses'))`
+     * — the one reader of the storefront origin and the locale rule, and the path table
+     * `verify:landing-routes` checks. Owner's ruling 2026-09-20: an address is added on the
+     * website; this screen captures none.
+     *
+     * Optional in the TYPE only because the WhatsApp form (on hold) does not draw it and its
+     * fixtures predate it; `readCheckoutView` always sets it.
+     */
+    addAddressUrl?: string | null;
 }
 
 /**
@@ -144,7 +161,50 @@ export interface CheckoutView {
 export interface CheckoutPlaced {
     orderCount: number;
     transactionId: string;
+    /**
+     * ⚠ **`FAILED` or `CANCELLED` here means the charge was refused AT OPEN — no prompt is coming
+     * to the handset.** The orchestrator answers a gateway's refusal as a result rather than an
+     * error (it throws only when the call itself failed), so a caller that reads only "did it
+     * throw" tells the customer to approve a payment that does not exist. Every renderer must
+     * read this field, and all three do: `co.html` and the WhatsApp form's `placedResponse` say
+     * `failed` instead of "approve it on your phone", and the chat door reports `state: 'failed'`
+     * (`stateOf`). Found 2026-09-22: the page said "approve it" for every 200.
+     */
     status: PaymentStatus;
+}
+
+/**
+ * What `placeCheckout` knows after placing — a superset of `CheckoutPlaced`, for the CHAT door.
+ *
+ * ⚠ **The screen is sent `CheckoutPlaced` only, by explicit projection in
+ * `CheckoutController.place`.** The extra fields are for a conversation the customer owns, which
+ * can word them in their language beside Check-status and Try-again; a screen that is about to
+ * close has no use for them, and a `co` URL is forwardable.
+ */
+export interface CheckoutPlacement extends CheckoutPlaced {
+    orderNumbers: string[];
+    /** The wallet the prompt went to, MASKED — the same mask the screen's placeholder uses. */
+    payerMasked: string;
+    /** The gateway's own instruction (a USSD code, "confirm on your phone"), relayed verbatim. */
+    instructions: unknown;
+}
+
+/**
+ * What only the CHAT door passes to `placeCheckout`.
+ *
+ * The screen has none of these: it has no identity but the handle, and no address picker by
+ * design. The chat has both — the bot resolved the customer before the handler ran, and the
+ * customer chose an address in words.
+ */
+export interface PlaceCheckoutOptions {
+    /**
+     * The customer the bot resolved. The handle must be theirs; and knowing them BEFORE the
+     * spend is what lets the address and the wallet be checked while a refusal still costs the
+     * customer nothing (`details.spent: false`).
+     */
+    callerCustomerId?: string;
+    /** One of the customer's own saved addresses. Null → their default, exactly as the screen. */
+    addressId?: string | null;
 }
 
 /**
@@ -183,13 +243,15 @@ export async function readCheckoutView(handle: string): Promise<CheckoutView> {
      * separately and reported as data.
      */
     const quote = await cartQuoteService.quoteForCustomer(session.customerId);
+    const address = await resolveDestination(cart, customer);
 
     return {
         lines: await toCheckoutLines(cart),
         totalText: formatBotPrice(quote.total, quote.currency),
-        address: await resolveDestination(cart, customer),
+        address,
         payment: { phoneMasked: await maskedPayerNumber(customer) },
         language: session.language,
+        addAddressUrl: address ? null : botStorefrontLink(surfacePath('addresses'), session.language),
     };
 }
 
@@ -215,20 +277,47 @@ export async function readCheckoutView(handle: string): Promise<CheckoutView> {
  *      guard there is.
  *   3. **Everything else**, with every refusal marked spent.
  *
- * ⚠ **The ADDRESS is never an argument.** `createOrdersFromCart` resolves it from the customer's
- * own saved addresses, so neither transport can send a delivery somewhere other than the address
- * the screen showed.
+ * ⚠ **The ADDRESS is never free text and never a coordinate.** On the screen it is not an
+ * argument at all — `createOrdersFromCart` resolves the customer's default. The chat door may name
+ * ONE OF THE CUSTOMER'S OWN saved addresses by id (`options.addressId`), checked before the spend
+ * by `resolveChatDestination` and then passed to `createOrdersFromCart` explicitly, so neither
+ * door can send a delivery anywhere the customer has not saved and been shown.
  *
  * @param phone Whatever the screen submitted. `null`, `undefined`, `''` and whitespace all mean
  *   "use the number on my account"; anything else must be a valid phone number.
+ * @param options The chat door's extras — see `PlaceCheckoutOptions`. The screen passes none.
  */
-export async function placeCheckout(handle: string, phone: unknown): Promise<CheckoutPlaced> {
+export async function placeCheckout(
+    handle: string,
+    phone: unknown,
+    options: PlaceCheckoutOptions = {},
+): Promise<CheckoutPlacement> {
     const typedNumber = validatedPayerNumber(phone);
     const gateway = mobileMoneyGateway();
     if (typedNumber) assertNetworkChargeable(gateway, typedNumber, false);
 
+    /**
+     * ⚠ **The chat door is checked BEFORE the spend, because it can be.** The screen learns its
+     * customer only from the session, so everything about them is necessarily after `consume`;
+     * the chat knows the caller up front. A wrong address id or an account with no wallet is
+     * then refused with the handle still alive, and the model can put it right in the same turn
+     * instead of re-opening the checkout.
+     */
+    const addressId = options.callerCustomerId
+        ? await precheckChatDoor(options.callerCustomerId, options.addressId ?? null, typedNumber, gateway)
+        : null;
+
     const session = await inAppSurfaceStore.consume('co', plausibleHandle(handle));
     if (!session) throw handleGone(false);
+    /**
+     * ⚠ **A handle belongs to one customer, and the chat door proves it.** A `co` URL is
+     * forwardable, so a handle a customer pasted into their own chat could otherwise place an
+     * order for whoever it was minted for. Refused exactly like an unknown handle — anything
+     * else would confirm the handle was real — and marked spent, because it now is.
+     */
+    if (options.callerCustomerId && session.customerId !== options.callerCustomerId) {
+        throw handleGone(true);
+    }
 
     try {
         const cart = await cartService.getCart(session.customerId);
@@ -263,7 +352,7 @@ export async function placeCheckout(handle: string, phone: unknown): Promise<Che
         const { cartId, orders } = await orderService.createOrdersFromCart(
             session.customerId,
             'online',
-            { addressId: null, address: null },
+            { addressId, address: null },
         );
 
         /**
@@ -281,29 +370,104 @@ export async function placeCheckout(handle: string, phone: unknown): Promise<Che
             orderCount: orders.length,
             transactionId: payment.transactionId,
             status: payment.status,
+            orderNumbers: orders.map((order) => order.order_number),
+            payerMasked: maskPhone(payerNumber),
+            instructions: payment.instructions ?? null,
         };
     } catch (error) {
         throw markedSpent(error);
     }
 }
 
+/**
+ * The checkout a CHAT would review — the screen's read, for a customer with no screen.
+ *
+ * ── ⭐ THE SAME PROJECTION AS `readCheckoutView`, NOT A SECOND ONE ───────────
+ * Lines through `toCheckoutLines`, the total through `cartQuoteService`, the wallet through
+ * `maskedPayerNumber`, the gateway through `mobileMoneyGateway` — every figure a customer is told
+ * in the chat is the figure the screen would have shown them. What differs is only what a chat
+ * can do and a screen deliberately cannot: choose among the saved addresses.
+ *
+ * ⚠ **Read live and holds nothing** — the handle the chat door mints beside it carries a cart id
+ * and no money, exactly as the screen's does.
+ *
+ * ⚠ **The gateway is asked for here, before anything is minted**, so a deployment with no mobile
+ * money refuses in the review rather than after the customer has said yes.
+ *
+ * Refuses an empty basket with `CART_EMPTY_CHECKOUT` (400), the chat's own sentence for it — the
+ * screen door (`POST /checkout/screen`) refuses it the same way.
+ */
+export async function readChatCheckout(
+    customerId: string,
+    requestedAddressId: string | null,
+): Promise<ChatCheckoutView> {
+    mobileMoneyGateway();
+
+    const cart = await cartService.getCart(customerId);
+    if (cart.items.length === 0 || !cart.cartId) {
+        throw createAppError(ERROR_CODES.CART_EMPTY_CHECKOUT, 400, 'There is nothing in the basket to check out');
+    }
+
+    const customer = await loadCustomer(customerId);
+    const quote = await cartQuoteService.quoteForCustomer(customerId);
+    const addresses = customer.saved_addresses ?? [];
+
+    return {
+        cartId: cart.cartId,
+        productType: cart.productType ?? null,
+        lines: await toCheckoutLines(cart),
+        totalText: formatBotPrice(quote.total, quote.currency),
+        destination: resolveChatDestination(cart.productType, addresses, requestedAddressId),
+        addresses,
+        accountIdentifier: accountIdentifier(customer),
+        phoneMasked: await maskedPayerNumber(customer),
+    };
+}
+
+/** What `readChatCheckout` answers. The chat controller shapes it for the model. */
+export interface ChatCheckoutView {
+    cartId: string;
+    productType: string | null;
+    lines: CheckoutLine[];
+    totalText: string;
+    destination: ChatDestination;
+    /** In stored order. The chat controller projects them through `toBotAddressDto`. */
+    addresses: ICustomerSavedAddress[];
+    /** Where a DOWNLOAD lands — the screen's own wording for a digital basket. */
+    accountIdentifier: string;
+    phoneMasked: string | null;
+}
+
 export class CheckoutController {
     /** `GET /api/bot/miniapp/s/co/:handle/data` — the page's read. A thin wrapper; see `readCheckoutView`. */
     static data = asyncHandler(async (req: Request, res: Response) => {
         const view = await readCheckoutView(String(req.params.handle ?? ''));
-        /** The page's contract is the four fields; `language` came in through the copy call. */
+        /** The page's contract is these five fields; `language` came in through the copy call. */
         sendSuccess(res, {
             lines: view.lines,
             totalText: view.totalText,
             address: view.address,
             payment: view.payment,
+            addAddressUrl: view.addAddressUrl ?? null,
         });
     });
 
-    /** `POST /api/bot/miniapp/s/co/:handle/place` — the page's write. A thin wrapper; see `placeCheckout`. */
+    /**
+     * `POST /api/bot/miniapp/s/co/:handle/place` — the page's write. A thin wrapper; see `placeCheckout`.
+     *
+     * ⚠ **Projected to `CheckoutPlaced` field by field**, never the placement itself: order
+     * numbers and the masked wallet are for the chat, and a spread would hand this forwardable
+     * page whatever the placement gains next.
+     */
     static place = asyncHandler(async (req: Request, res: Response) => {
         const { phone } = PlaceBodySchema.parse(req.body ?? {});
-        sendSuccess(res, await placeCheckout(String(req.params.handle ?? ''), phone));
+        const placed = await placeCheckout(String(req.params.handle ?? ''), phone);
+        const answer: CheckoutPlaced = {
+            orderCount: placed.orderCount,
+            transactionId: placed.transactionId,
+            status: placed.status,
+        };
+        sendSuccess(res, answer);
     });
 }
 
@@ -324,6 +488,89 @@ function plausibleHandle(handle: string): string {
 }
 
 
+
+/**
+ * The chat door's refusals that can be made while the handle is still alive.
+ *
+ * Every one carries `spent: false`, and every one is something the model can put right in the
+ * same turn — pick a deliverable address, list the addresses again, ask for a number — which is
+ * exactly why it must not cost the customer their checkout.
+ *
+ * ⚠ **The same codes `createOrdersFromCart` raises for the same conditions**
+ * (`ORDER_DELIVERY_ADDRESS_REQUIRED` 422 with the same `details.reason` values,
+ * `CUSTOMER_ADDRESS_NOT_FOUND` 404), so a client handles one vocabulary whichever side of the
+ * spend a refusal lands on.
+ *
+ * ⚠ **The account's number is network-checked here too**, with `spent: false`, for the reason
+ * `assertNetworkChargeable` gives: a number no network can be worked out for would otherwise be
+ * found only inside the gateway, after the orders and their stock hold exist.
+ *
+ * @returns The address id to place the orders against — null for a digital basket.
+ */
+async function precheckChatDoor(
+    customerId: string,
+    requestedAddressId: string | null,
+    typedNumber: string | null,
+    gateway: PaymentGatewayType,
+): Promise<string | null> {
+    const cart = await cartService.getCart(customerId);
+    if (cart.items.length === 0 || !cart.cartId) {
+        throw createAppError(ERROR_CODES.BOT_PRODUCT_LIST_EXPIRED, 404, 'That basket is no longer there', { spent: false });
+    }
+
+    /**
+     * ⚠ **A physical basket must NAME its address on the chat door — the default is never
+     * assumed at this step.** The review proposed one and the customer agreed to THAT one; had
+     * the model chosen another address in the review and then omitted the id here, falling back
+     * to the default would ship the parcel somewhere the customer was never shown. The same
+     * reasoning that makes `deliveryAddressId` required on `checkout_create_orders`.
+     */
+    if (cart.productType !== 'digital' && !requestedAddressId) {
+        throw createAppError(
+            ERROR_CODES.ORDER_DELIVERY_ADDRESS_REQUIRED,
+            422,
+            'Name the delivery address: pass the address id the checkout review proposed.',
+            { reason: 'address_not_named', spent: false },
+        );
+    }
+
+    const customer = await loadCustomer(customerId);
+    const destination = resolveChatDestination(cart.productType, customer.saved_addresses ?? [], requestedAddressId);
+
+    if (destination.kind === 'blocked') {
+        if (destination.blocker === 'address_not_found') {
+            throw createAppError(ERROR_CODES.CUSTOMER_ADDRESS_NOT_FOUND, 404, 'That address is not one of yours', {
+                spent: false,
+            });
+        }
+        throw createAppError(
+            ERROR_CODES.ORDER_DELIVERY_ADDRESS_REQUIRED,
+            422,
+            destination.blocker === 'no_saved_address'
+                ? 'A delivery address is required. Add one on the website, then check out again.'
+                : 'That address has no mapped location, so a delivery cannot be routed to it. Choose another.',
+            {
+                reason: destination.blocker === 'no_saved_address' ? 'no_delivery_address' : 'selected_address_not_geocoded',
+                spent: false,
+            },
+        );
+    }
+
+    if (!typedNumber) {
+        const stored = await storedPayerNumber(customer);
+        if (!stored) {
+            throw createAppError(
+                ERROR_CODES.PAYMENT_PAYER_NUMBER_REQUIRED,
+                422,
+                'A mobile money number is needed to take this payment',
+                { spent: false },
+            );
+        }
+        assertNetworkChargeable(gateway, stored, false);
+    }
+
+    return destination.kind === 'address' ? String(destination.address._id) : null;
+}
 
 /** The handle-gone refusal, one wording for the read and the write. */
 function handleGone(spent: boolean): AppError {

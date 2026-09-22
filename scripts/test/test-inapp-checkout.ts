@@ -34,6 +34,9 @@ import { BOT_COPY_LANGUAGES } from '../../src/modules/bot-surface/domain/bot-err
  * under that symptom is deleting the assertions rather than moving the functions.
  */
 import { maskAddress, accountIdentifier } from '../../src/modules/bot-surface/miniapp/surfaces/checkout-masking';
+// ── § 12's imports (the chat door, 2026-09-22) — both pure, both safe under bare ts-node ──
+import { resolveChatDestination } from '../../src/modules/bot-surface/miniapp/surfaces/checkout-destination';
+import { placedResponse } from '../../src/modules/whatsapp/flows/screens/checkout.adapter';
 import {
     customerWhatsAppTemplateName,
     renderCustomerInApp,
@@ -150,7 +153,10 @@ const PAYER_SRC = path.join(SCAN_ROOT, 'src/modules/bot-surface/miniapp/surfaces
  * with every extraction, and `the checkout logic is actually in scope` (§ 5, first) fails before
  * any absence check can pass on an empty subject.
  */
-const SCREEN_SCOPE = [SCREEN_SRC, MASKING_SRC, PAYER_SRC];
+/** The chat door's address rule (2026-09-22). Pure — § 12 drives it as well as scanning it. */
+const DESTINATION_SRC = path.join(SCAN_ROOT, 'src/modules/bot-surface/miniapp/surfaces/checkout-destination.ts');
+
+const SCREEN_SCOPE = [SCREEN_SRC, MASKING_SRC, PAYER_SRC, DESTINATION_SRC];
 const screenCode = (): string =>
     SCREEN_SCOPE.map((file) => stripTs(fs.readFileSync(file, 'utf8'))).join('\n');
 const chatCode = (): string => stripTs(fs.readFileSync(CHAT_SRC, 'utf8'));
@@ -352,6 +358,10 @@ function main(): void {
             'export function accountIdentifier(',
             'export async function storedPayerNumber(',
             'function mobileMoneyGateway(',
+            // The chat door (2026-09-22): § 12's absence checks are about these three.
+            'export async function readChatCheckout(',
+            'async function precheckChatDoor(',
+            'export function resolveChatDestination(',
         ];
         const missing = required.filter((needle) => !src.includes(needle));
         if (missing.length > 0) console.error(`      out of scope: ${missing.join(', ')}`);
@@ -1259,12 +1269,336 @@ function main(): void {
             && !/reason|gatewayMessage/.test(booking);
     });
 
+    chatDoorAssertions();
+
     console.log(
         failed === 0
             ? `\n✅ ${passed} passed, 0 failed`
             : `\n❌ ${passed} passed, ${failed} failed`,
     );
     process.exit(failed === 0 ? 0 : 1);
+}
+
+/**
+ * § 12 — checkout IN the conversation, and a charge refused at open (2026-09-22).
+ *
+ * The owner's decision: the assistant completes a purchase with tools, choosing the delivery
+ * address from the account's saved ones and paying from the account's own wallet. The chat door
+ * (`reviewInChat` → `placeInChat`) is a thin wrapper over the screen's own core, so what is
+ * pinned here is (a) the one rule it adds — which address — driven directly, and (b) that it
+ * adds no OTHER rule and keeps every protection the screen has.
+ *
+ * And the defect found on the way: a charge the gateway REFUSED as it was opened comes back as
+ * a successful placement with `status: FAILED`, and every renderer said "approve the payment on
+ * your phone" for it.
+ */
+function chatDoorAssertions(): void {
+    console.log('\n══ § 12 · Checkout in the chat — review, then place ══');
+
+    const saved = (id: string, opts: { isDefault?: boolean; geo?: unknown } = {}): ICustomerSavedAddress =>
+        ({
+            _id: id,
+            label: `A-${id.slice(-2)}`,
+            address_line1: '12 Rue Joss',
+            city: 'Douala',
+            country: 'CM',
+            is_default: opts.isDefault ?? false,
+            geo: 'geo' in opts ? opts.geo : { coordinates: [9.7, 4.05], formatted_address: 'Akwa, Douala' },
+        }) as unknown as ICustomerSavedAddress;
+    const ID = (n: number): string => `64b000000000000000000${String(n).padStart(3, '0')}`;
+    const kindOf = (d: ReturnType<typeof resolveChatDestination>): string =>
+        d.kind === 'blocked' ? `blocked:${d.blocker}` : d.kind === 'address' ? `address:${String(d.address._id)}` : d.kind;
+
+    console.log('\n── 12a · Which address — the one rule the chat door adds ──');
+
+    assert('a digital basket needs no address, whatever id the model sends', () =>
+        kindOf(resolveChatDestination('digital', [], ID(1))) === 'digital'
+        && kindOf(resolveChatDestination('digital', [saved(ID(2), { geo: null })], null)) === 'digital');
+
+    assert('an id that is not one of the customer\'s addresses is refused, never guessed', () =>
+        kindOf(resolveChatDestination('physical', [saved(ID(1), { isDefault: true })], ID(9))) === 'blocked:address_not_found');
+
+    assert('a chosen address with no mapped location is refused', () =>
+        kindOf(resolveChatDestination('physical', [saved(ID(1), { geo: null })], ID(1))) === 'blocked:address_not_deliverable');
+
+    // `toBotAddressDto` says `deliverable: Boolean(geo?.coordinates)` — the chat must not confirm
+    // an address the address book called undeliverable a turn earlier.
+    assert('"deliverable" means coordinates, not merely a geo object', () =>
+        kindOf(resolveChatDestination('physical', [saved(ID(1), { geo: {} })], ID(1))) === 'blocked:address_not_deliverable');
+
+    assert('a chosen deliverable address wins over the default', () =>
+        kindOf(resolveChatDestination('physical', [saved(ID(1), { isDefault: true }), saved(ID(2))], ID(2))) === `address:${ID(2)}`);
+
+    assert('with no choice: the default, even when it is not first', () =>
+        kindOf(resolveChatDestination('physical', [saved(ID(1)), saved(ID(2), { isDefault: true })], null)) === `address:${ID(2)}`);
+
+    assert('with no choice and no default: the first — the screen\'s rule exactly', () =>
+        kindOf(resolveChatDestination('physical', [saved(ID(1)), saved(ID(2))], null)) === `address:${ID(1)}`);
+
+    /**
+     * ⛔ **The default is a statement of where the customer wants things.** Skipping it for "some
+     * other geocoded address" would ship a parcel to their office because their home was typed by
+     * hand — a decision for them, handed back with the list, never taken by a fallback.
+     */
+    assert('⛔ an undeliverable default is REFUSED, never silently skipped for another address', () =>
+        kindOf(resolveChatDestination('physical', [saved(ID(1), { isDefault: true, geo: null }), saved(ID(2))], null))
+            === 'blocked:address_not_deliverable');
+
+    assert('no saved address at all is its own blocker — the website remedy', () =>
+        kindOf(resolveChatDestination('physical', [], null)) === 'blocked:no_saved_address');
+
+    console.log('\n── 12b · The chat door keeps every protection the screen has ──');
+
+    const fn = (src: string, sig: string): string => {
+        const start = src.indexOf(sig);
+        return start < 0 ? '' : src.slice(start, src.indexOf('\n}\n', start));
+    };
+
+    /**
+     * ⛔ **Before the spend, because it can be.** The screen learns its customer only from the
+     * session; the chat knows the caller up front, so a wrong address id or a missing wallet is
+     * refused with the handle still alive and fixed in the same turn.
+     */
+    assert('⛔ the chat door is checked BEFORE the spend, and its chosen id reaches the orders', () => {
+        const place = fn(screenCode(), 'export async function placeCheckout(');
+        const precheck = place.indexOf('precheckChatDoor(');
+        const spend = place.indexOf("inAppSurfaceStore.consume('co'");
+        return precheck > 0 && spend > precheck
+            && /createOrdersFromCart\([\s\S]{0,160}\{ addressId, address: null \}/.test(place)
+            && !/createOrdersFromCart\([\s\S]{0,160}addressId:\s*null/.test(place);
+    });
+
+    /**
+     * ⛔ **A handle belongs to one customer.** A `co` URL is forwardable; pasted into somebody's
+     * own chat it must not place an order for whoever it was minted for. Refused like an unknown
+     * handle (anything else confirms it is real) and marked spent (because it now is).
+     */
+    assert('⛔ on the chat door the handle must be the CALLER\'s, checked straight after the spend', () => {
+        const place = fn(screenCode(), 'export async function placeCheckout(');
+        const spend = place.indexOf("inAppSurfaceStore.consume('co'");
+        const owner = place.indexOf('session.customerId !== options.callerCustomerId');
+        const tryAt = place.indexOf('try {', spend);
+        return spend > 0 && owner > spend && owner < tryAt
+            && place.slice(owner, tryAt).includes('throw handleGone(true)');
+    });
+
+    assert('⛔ every chat-door precheck refusal leaves the handle alive (`spent: false`)', () => {
+        const src = screenCode();
+        const pre = fn(src, 'async function precheckChatDoor(');
+        const refusals = [...pre.matchAll(/createAppError\(/g)].length;
+        const alive = [...pre.matchAll(/spent: false/g)].length;
+        return pre.length > 0 && refusals >= 4 && alive === refusals
+            && !pre.includes('inAppSurfaceStore.')
+            && !pre.includes('createOrdersFromCart(')
+            && !pre.includes('initiatePaymentForCart(');
+    });
+
+    /**
+     * ⛔ **The review named an address; the place must name the same one.** Falling back to the
+     * default at place time would ship the parcel elsewhere whenever the review had named a
+     * different address — the reason `checkout_create_orders` requires the id too.
+     */
+    assert('⛔ a physical placement on the chat door must NAME its address', () => {
+        const pre = fn(screenCode(), 'async function precheckChatDoor(');
+        // The STATEMENT, not the phrase: `if (false && …)` keeps the phrase and removes the rule.
+        const guard = pre.indexOf("if (cart.productType !== 'digital' && !requestedAddressId) {");
+        const block = guard < 0 ? '' : pre.slice(guard, pre.indexOf('\n    }\n', guard));
+        return block.includes('throw createAppError(')
+            && block.includes("reason: 'address_not_named'")
+            && guard < pre.indexOf('resolveChatDestination(');
+    });
+
+    assert('the wallet on the chat door is the ACCOUNT\'s, network-checked before the spend', () => {
+        const pre = fn(screenCode(), 'async function precheckChatDoor(');
+        return pre.includes('storedPayerNumber(customer)')
+            && pre.includes('assertNetworkChargeable(gateway, stored, false)')
+            && pre.includes('ERROR_CODES.PAYMENT_PAYER_NUMBER_REQUIRED');
+    });
+
+    /**
+     * ⚠ **The screen is sent `CheckoutPlaced` field by field.** Order numbers and the masked
+     * wallet are for the chat; a `co` URL is forwardable, and a spread would publish whatever the
+     * placement gains next.
+     */
+    assert('⛔ the screen\'s write projects the placement explicitly — no order numbers, no wallet', () => {
+        const src = screenCode();
+        const start = src.indexOf('export class CheckoutController {');
+        const cls = src.slice(start, src.indexOf('\n}\n', start));
+        return start > 0
+            && cls.includes('orderCount: placed.orderCount')
+            && cls.includes('status: placed.status')
+            && !cls.includes('orderNumbers')
+            && !cls.includes('payerMasked')
+            && !/sendSuccess\(res,\s*placed\)/.test(cls)
+            && !/sendSuccess\(res,\s*await placeCheckout\(/.test(cls);
+    });
+
+    const chat = chatCode();
+    const between = (from: string, to: string): string => {
+        const start = chat.indexOf(from);
+        const end = to ? chat.indexOf(to, start + from.length) : -1;
+        return start < 0 ? '' : chat.slice(start, end < 0 ? chat.length : end);
+    };
+    const review = between('static reviewInChat', 'static placeInChat');
+    const placeInChat = between('static placeInChat', '\n}\n');
+
+    /**
+     * ⚠ **Every `co` mint in the chat controller holds a cart id and no money** — the rule § 6
+     * pins for the screen door, which reads only the FIRST mint in the file. The review is a
+     * second one.
+     */
+    assert('⛔ EVERY checkout handle the chat controller mints holds a cart id and no money', () => {
+        const mints = [...chat.matchAll(/inAppSurfaceStore\.mint\(\{([\s\S]*?)\}\)/g)].map((m) => m[1]);
+        return mints.length === 2
+            && mints.every((body) => body.includes("kind: 'co'") && /cartId: (cart|view)\.cartId/.test(body)
+                && !/\b(total|price|amount|subtotal)\s*:/i.test(body));
+    });
+
+    assert('the review mints the credential only when the checkout can go ahead', () =>
+        /const checkoutRef = blocked\s*\?\s*null\s*:\s*await inAppSurfaceStore\.mint\(/.test(review));
+
+    assert('⛔ the review is the screen\'s read — no rule of its own', () =>
+        review.includes('readChatCheckout(caller.customerId')
+        && !review.includes('cartService.')
+        && !review.includes('quoteForCustomer')
+        && !review.includes('storedPayerNumber')
+        && !review.includes('.reduce('));
+
+    assert('⛔ the chat place IS `placeCheckout`, with the caller — it creates nothing itself', () =>
+        /placeCheckout\(checkoutRef, phone, \{\s*callerCustomerId: caller\.customerId,/.test(placeInChat)
+        && !placeInChat.includes('createOrdersFromCart(')
+        && !placeInChat.includes('initiatePaymentForCart(')
+        && !placeInChat.includes('inAppSurfaceStore.')
+        && !placeInChat.includes('mobileMoneyGateway('));
+
+    assert('the chat place reports a refused-at-open charge as `failed`, through the one mapping', () =>
+        placeInChat.includes('state: stateOf(placed.status)'));
+
+    assert('its amount is the transaction\'s snapshot, formatted — never a sum', () =>
+        placeInChat.includes('formatBotPrice(transaction.amountSnapshot, transaction.currencySnapshot)')
+        && !placeInChat.includes('.reduce('));
+
+    /**
+     * ⛔ **No gateway, no address text, no coordinate, no customer id from the body.** The key
+     * sets are pinned EXACTLY: a model-facing schema that grew `gateway` would let a caller choose
+     * where a stranger's money goes, and one that grew an address string would capture an address
+     * the owner ruled must be added on the website.
+     */
+    assert('⛔ the chat door\'s two bodies accept exactly the keys they need, strictly', () => {
+        const schemaKeys = (name: string): string[] | null => {
+            const at = chat.indexOf(`const ${name} = z`);
+            if (at < 0) return null;
+            const body = chat.slice(at, chat.indexOf('.strict();', at));
+            // A key opens a line or follows the object's `{` — the review's one key sits inline.
+            return [...body.matchAll(/(?:^|\{)\s*([a-zA-Z]+):/gm)].map((m) => m[1]).sort();
+        };
+        const reviewKeys = schemaKeys('ChatReviewSchema');
+        const placeKeys = schemaKeys('ChatPlaceSchema');
+        return reviewKeys?.join(',') === 'deliveryAddressId'
+            && placeKeys?.join(',') === 'checkoutRef,deliveryAddressId,phone'
+            && chat.slice(chat.indexOf('const ChatPlaceSchema')).includes('OptionalPhoneNumberSchema');
+    });
+
+    console.log('\n── 12c · A charge refused AT OPEN is never "approve it on your phone" ──');
+
+    /**
+     * ⛔ The orchestrator answers a gateway's refusal as a RESULT (`status: FAILED`, 200), not an
+     * error — the orders exist. The page used to say "approve the payment on your phone" for every
+     * 200, sending the customer to wait for a prompt that was never coming.
+     */
+    assert('⛔ the page reads the charge status and says `failed` BEFORE any "approve it" line', () => {
+        const c = pageCode();
+        const errorBranch = c.indexOf('if (!res.ok || !res.body || res.body.success === false)');
+        const read = c.indexOf('var charge = res.body.data && res.body.data.status;');
+        const refused = c.indexOf('if (charge === "FAILED" || charge === "CANCELLED")');
+        const watch = c.indexOf('say(copy.checkoutWatchChat, false);');
+        const branch = refused < 0 ? '' : c.slice(refused, c.indexOf('}', refused));
+        return errorBranch > 0 && read > errorBranch && refused > read && watch > refused
+            && branch.includes('say(copy.failed, true);')
+            && branch.includes('return;');
+    });
+
+    const copy = inAppCopy('en');
+    const notice = (status: string): unknown =>
+        (placedResponse({ orderCount: 1, transactionId: 't', status: status as never }, copy).data as { message?: unknown })
+            .message;
+
+    assert('⛔ the WhatsApp form says `failed` for a charge refused at open — FAILED and CANCELLED', () =>
+        notice('FAILED') === copy.failed && notice('CANCELLED') === copy.failed);
+
+    assert('…and still "approve it on your phone" for a charge that opened', () =>
+        notice('PENDING') === copy.checkoutWatchChat && notice('INITIATED') === copy.checkoutWatchChat);
+
+    assert('a refused charge is still stamped `placed` — the orders DO exist', () => {
+        const data = placedResponse({ orderCount: 1, transactionId: 't', status: 'FAILED' }, copy).data as { outcome?: unknown };
+        return data.outcome === 'placed';
+    });
+
+    console.log('\n── 12d · No saved address: ONE link, to the website, built by the server ──');
+
+    /**
+     * ⚠ **The URL is built in the core, through the storefront's one reader and the path table
+     * `verify:landing-routes` checks** — never a literal, never by the page. And only for the
+     * no-address state: a link on a screen that can already take the payment would lead the
+     * customer away from the Pay button for nothing.
+     */
+    assert('⛔ the add-address URL is the server\'s, and exists only in the no-address state', () => {
+        const read = fn(screenCode(), 'export async function readCheckoutView(');
+        return /addAddressUrl: address \? null : botStorefrontLink\(surfacePath\('addresses'\), session\.language\)/.test(read)
+            && !/addAddressUrl:\s*['"`]/.test(screenCode());
+    });
+
+    assert('the page\'s read hands it through — the /data contract is five fields', () => {
+        const src = screenCode();
+        const start = src.indexOf('export class CheckoutController {');
+        const cls = src.slice(start, src.indexOf('\n}\n', start));
+        return cls.includes('addAddressUrl: view.addAddressUrl ?? null');
+    });
+
+    const pageSrc = pageCode();
+    const noAddressBranch = (() => {
+        const at = pageSrc.indexOf('if (!data.address) {');
+        return at < 0 ? '' : pageSrc.slice(at, pageSrc.indexOf('}', at));
+    })();
+
+    assert('⛔ the link is drawn in the no-address state and in NO other', () => {
+        const calls = [...pageSrc.matchAll(/addressLink\(/g)].length;
+        return noAddressBranch.includes('state(copy.checkoutNoAddress, false);')
+            && noAddressBranch.includes('addressLink(data.addAddressUrl);')
+            && noAddressBranch.indexOf('addressLink(') < noAddressBranch.indexOf('return;')
+            // the definition + the one call site
+            && calls === 2;
+    });
+
+    /**
+     * ⛔ **A server value is still checked before it becomes a link** — only http(s), set through
+     * `href` and `textContent`, never concatenated into markup. Defence in depth: the day
+     * `STOREFRONT_URL` is mistyped as something else, the page draws nothing rather than a
+     * `javascript:` target.
+     */
+    assert('⛔ the link accepts only an http(s) URL and never composes markup from it', () => {
+        const at = pageSrc.indexOf('function addressLink(url) {');
+        const body = at < 0 ? '' : pageSrc.slice(at, pageSrc.indexOf('\n  }\n', at));
+        return body.includes('if (typeof url !== "string" || !/^https?:\\/\\//i.test(url)) return;')
+            && body.includes('a.href = url;')
+            && body.includes('a.textContent = copy.checkoutAddAddress;')
+            && !body.includes('innerHTML')
+            && body.includes('rel = "noopener noreferrer"');
+    });
+
+    assert('a re-render removes the link, so a retried read can never show two', () => {
+        const at = pageSrc.indexOf('function state(text, retry) {');
+        const body = at < 0 ? '' : pageSrc.slice(at, pageSrc.indexOf('\n  }\n', at));
+        return body.includes('document.getElementById("addAddress")') && body.includes('oldLink.remove()');
+    });
+
+    assert('the link\'s words resolve in all five languages, and say what the owner ruled', () =>
+        BOT_COPY_LANGUAGES.every((lang) => {
+            const c = inAppCopy(lang) as Record<string, string>;
+            return typeof c.checkoutAddAddress === 'string' && c.checkoutAddAddress.trim().length > 0;
+        })
+        && /website/i.test(inAppCopy('en').checkoutNoAddress)
+        && !/send me your address/i.test(inAppCopy('en').checkoutNoAddress));
 }
 
 main();

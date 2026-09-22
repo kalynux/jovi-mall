@@ -13,9 +13,10 @@ payment, a whole multi-vendor cart in one charge, or a service booking.
 
 - **Base URL**: `http://localhost:8022/api`
 - **Response envelope**: standard `{ success, ... }` — see [../README.md](../README.md#the-response-envelope-read-this-first).
-- **Gateways**: `NOTCHPAY` and `MYCOOLPAY` (mobile money), `STRIPE` (cards).
+- **Gateways**: `NOTCHPAY` and `MYCOOLPAY` (mobile money), `STRIPE` (cards) — but **only the ones
+  this deployment OFFERS may start a payment** — see [Which gateways are offered](#which-gateways-are-offered--cards-are-off-today-2026-09-22).
 
-> ### All three gateways are live
+> ### All three gateways are implemented
 >
 > NotchPay and My-CoolPay were placeholders until Phase 1 — they made no HTTP call at all, and
 > unkeyed they fabricated a `PENDING` response with a hard-coded USSD code so a checkout *looked*
@@ -37,6 +38,44 @@ payment, a whole multi-vendor cart in one charge, or a service booking.
 > credentials at all, so any transaction was readable by id. A client polling it must now send the
 > session cookie or a Bearer token. See [Reading a transaction](#get-paymentstransactionid).
 
+## Which gateways are offered — cards are OFF today (2026-09-22)
+
+**Verified against source on 2026-09-22** (`gateways/registry.ts` `assertGatewayOffered`,
+`config/payments.config.ts`, `services/payment-orchestrator.service.ts`, `services/pay-link.service.ts`).
+
+A gateway may open a **new** charge only when it is configured:
+
+| Gateway | Offered when | Production today |
+|---|---|---|
+| `NOTCHPAY` | `NOTCHPAY_PUBLIC_KEY` **and** `NOTCHPAY_WEBHOOK_SECRET` are set | ✅ offered |
+| `MYCOOLPAY` | `MYCOOLPAY_PUBLIC_KEY` **and** `MYCOOLPAY_PRIVATE_KEY` are set | ✅ offered |
+| `STRIPE` | `STRIPE_SECRET_KEY` **and** `STRIPE_WEBHOOK_SECRET` are set | ⛔ **not offered** — the owner's rule: mobile money only |
+
+Naming a gateway that is not offered — on `POST /payments/initiate`, on the booking pay routes,
+or when minting a pay link — answers **`400 PAYMENT_GATEWAY_NOT_SUPPORTED`** *before anything is
+written*:
+
+```jsonc
+{ "success": false, "requestId": "req_…", "error": { "code": "PAYMENT_GATEWAY_NOT_SUPPORTED", "statusCode": 400,
+  "category": "validation",
+  "message": "Card payments are not available right now. Please pay with mobile money.",
+  "details": { "gateway": "STRIPE", "offered": ["NOTCHPAY", "MYCOOLPAY"] } } }
+```
+
+Pick from `details.offered`; do not retry the same gateway.
+
+⚠ **What this replaced.** Until 2026-09-22 Stripe was accepted whatever the configuration: the
+request opened a transaction row, only then discovered "Stripe is not configured", and saved the
+row `FAILED` — so the pay-link mint a client made next answered `PAYMENT_LINK_NOT_PAYABLE` for a
+payment nobody had been able to make. That is how a customer met a Stripe error on ORD-2026-000002.
+
+⚠ **Switching cards back on is configuration, not code**: set both Stripe secrets and every door
+offers cards again at once. A client should not hard-code a card option — a storefront build that
+shows "Card" while the server refuses it offers the customer a button that can only fail.
+
+Payments **already taken** through a gateway that is later switched off still verify, settle by
+webhook, reconcile and refund; only a *new* charge is refused.
+
 ## Endpoints
 
 | Method | Path | Auth | Purpose |
@@ -56,6 +95,7 @@ Related surfaces that do **not** live here:
 | Gateway webhooks (server-to-server) | `POST /api/webhooks/*` — not client-callable |
 | **Plan purchases & credit top-ups** | `/{vendor,agency,agent}/plans/...`, `.../credits/topups` — a **separate** path that creates **no** `PaymentTransaction`. See [../billing-plans-across-roles.md](../billing-plans-across-roles.md) |
 | Saved cards / mobile-money instruments | `/api/me/payment-methods` — [../customer/payment-methods.md](../customer/payment-methods.md) |
+| **Checkout in the chat** (the assistant places the order and sends the prompt) | `POST /api/internal/bot/checkout/chat/{review,place}` — see [Checkout in the chat](#checkout-in-the-chat-bot-surface-2026-09-22) below |
 
 ## Who can read a payment
 
@@ -82,7 +122,7 @@ transaction rather than charging twice.
 |---|---|---|---|
 | `cartId` | string | one of | Preferred for cart checkout: one payment settles every order in the group |
 | `orderId` | string | one of | Single-order payment (legacy path) |
-| `gateway` | string | ✅ | `NOTCHPAY` \| `MYCOOLPAY` \| `STRIPE` |
+| `gateway` | string | ✅ | `NOTCHPAY` \| `MYCOOLPAY` \| `STRIPE` — and it must be **offered** on this deployment, or `400 PAYMENT_GATEWAY_NOT_SUPPORTED` (see [Which gateways are offered](#which-gateways-are-offered--cards-are-off-today-2026-09-22)). `STRIPE` is not offered today |
 | `channel` | object | ✅ | `{ phoneNumber?, phoneOperator?, cardToken?, customerEmail?, customerName? }` |
 
 `channel.phoneNumber` is **required** unless `gateway` is `STRIPE`.
@@ -367,7 +407,12 @@ live payment page and must be attributable. The bot surface reaches the same ope
 |---|---|---|
 | `PAYMENT_TRANSACTION_NOT_FOUND` | 404 | Unknown, malformed, or not the caller's — indistinguishable on purpose |
 | `PAYMENT_LINK_NOT_APPLICABLE` | 422 | A mobile-money transaction. It completes on the handset and needs no page |
+| `PAYMENT_GATEWAY_NOT_SUPPORTED` | 400 | The transaction's gateway is not offered on this deployment — today, any card (`STRIPE`) transaction. Checked after `PAYMENT_LINK_NOT_APPLICABLE`, before any token is minted |
 | `PAYMENT_LINK_NOT_PAYABLE` | 422 | Already settled, failed or cancelled |
+
+⚠ **While cards are off, a pay link cannot be minted at all** — every pay link is a card page, and
+`initiate` refuses to open a new card transaction. The bot tool `payment_create_pay_link` is
+`flow_only` for the same reason (2026-09-22).
 
 ⚠ **A second mint REVOKES the first**, and that is the only revocation there is. At most one link
 per transaction is live, which is what makes "the customer lost the message, send it again" safe —
@@ -458,6 +503,47 @@ and logged**, never published — cards then report as unconfigured until it is 
 `PAYMENT_LINK_TTL_MINUTES` (default 30) sets the window, matched to the checkout stock hold.
 
 ---
+
+## Checkout in the chat (bot surface, 2026-09-22)
+
+**Verified against source on 2026-09-22** (`bot-surface/controllers/bot-checkout.controller.ts`
+`reviewInChat` / `placeInChat`, `bot-surface/miniapp/surfaces/checkout.controller.ts`
+`readChatCheckout` / `placeCheckout`, `…/checkout-destination.ts`). Caller: the automation layer
+only — service token + messaging identity, `Idempotency-Key` required. Catalogue rows
+`checkout_review` and `checkout_place` ([../n8n/tools/catalog.json](../n8n/tools/catalog.json)).
+
+The owner's rule: the assistant can complete a purchase **with tools**, without asking the customer
+for anything the account already has. The address is **chosen** from the customer's saved
+addresses; the mobile-money number is the **account's** (saved mobile-money method first, then the
+profile phone). Both routes are thin wrappers over the checkout screen's own core, so every rule the
+screen has holds here too: the gateway is chosen server-side (mobile money only — no request can
+name one), prices are re-resolved and a bargained price lock is redeemed inside order creation, and
+the order-placing credential is **single-use**.
+
+| Step | Route | Body | Answers (`data`) |
+|---|---|---|---|
+| 1 · review | `POST /checkout/chat/review` | `{ deliveryAddressId? }` — omit for the default | `ready`, `blocker`, `checkoutRef` (only when ready; 10 minutes, single use), `lines[]`, `totalText`, `delivery` (`{kind:'address', address}` \| `{kind:'digital', to}` \| null), `addresses[]` (default first, each with `deliverable`), `payment.phoneMasked`, `addAddressUrl` |
+| 2 · place | `POST /checkout/chat/place` | `{ checkoutRef, deliveryAddressId, phone? }` — the address id the review named (**required** for physical goods); `phone` only if the customer typed another number | `transactionId`, `state` (`waiting` \| `failed` \| `settled`), `orderCount`, `orderNumbers[]`, `amountText`, `payerMasked`, `instructions` |
+
+`blocker` is one of `no_saved_address`, `address_not_deliverable` (no mapped location — an
+unmapped default is **refused**, never swapped for another address), `address_not_found`. With the
+first two, `addAddressUrl` is the website's address page (addresses are added on the website, never
+captured in the chat).
+
+⚠ **`details.spent` is on every place refusal, and absent means spent.** `false` — the address, the
+wallet or the number was refused before the credential was used: correct it and call `place` again
+with the same `checkoutRef`. Anything else: orders may exist — ask `checkout_payment_status`, never
+place again.
+
+⚠ **`state: "failed"` is an outcome, not an error.** The gateway refused the charge as it was
+opened: the orders exist and await payment, and **no prompt is coming** to the handset. The
+notification catalogue announces nothing for a refusal the customer was present for, so say it and
+offer `checkout_retry_payment`. The same rule on the checkout **screen**: its `place` answers `200`
+with `status: "FAILED"` in that case, and the page now shows its "go back to the chat" message
+instead of "approve the payment on your phone".
+
+The result of an approved or declined prompt still arrives in the chat as today —
+`order.payment.received` / `order.payment_failed`, with **Check status** and **Try again**.
 
 ## Refunds differ by gateway
 

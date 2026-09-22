@@ -4,6 +4,7 @@ import { MyCoolPayGateway } from './mycoolpay.gateway';
 import { StripeGateway } from './stripe.gateway';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
+import { myCoolPayEnabled, notchPayEnabled, stripeEnabled } from '../config/payments.config';
 
 /**
  * The one gateway registry.
@@ -64,6 +65,69 @@ export function getPaymentGateway(name: string): PaymentGateway {
     );
   }
   return gateway;
+}
+
+/**
+ * Which gateways may OPEN a new charge on this deployment — a question about configuration, and
+ * a different one from "does the platform know this gateway".
+ *
+ * ── WHY IT IS NOT `getPaymentGateway` ────────────────────────────────────────
+ * That lookup serves verify, webhooks, refunds and the reconciliation sweep too, and every one of
+ * those must keep working for a gateway that has since been switched off: a payment already
+ * taken still settles, still reconciles and can still be refunded. Only a NEW charge is refused.
+ *
+ * ── WHY A TABLE KEYED BY NAME ────────────────────────────────────────────────
+ * `Record<PaymentGatewayName, …>` makes a fourth gateway without an answer a compile error, the
+ * same property `PAYMENT_GATEWAYS` gives the webhook verifiers. The predicates are the ones the
+ * rest of the service already trusts — `notchPayEnabled` and `myCoolPayEnabled` choose the
+ * checkout screen's gateway (`checkout-payer.ts`) — so "offered here" and "chosen there" cannot
+ * disagree.
+ *
+ * ⚠ **The owner's rule on 2026-09-22 is "mobile money only, Stripe off", and it is enforced by
+ * CONFIGURATION: `STRIPE_SECRET_KEY` is absent from production.** Nothing here names Stripe as
+ * special. Setting both Stripe secrets turns cards back on across every door at once; that is a
+ * decision for the owner, not a code change.
+ */
+const ACCEPTS_NEW_PAYMENTS: Readonly<Record<PaymentGatewayName, () => boolean>> = Object.freeze({
+  NOTCHPAY: notchPayEnabled,
+  MYCOOLPAY: myCoolPayEnabled,
+  STRIPE: stripeEnabled,
+});
+
+/** Whether a new charge may be opened on this gateway right now. False for an unknown name. */
+export function gatewayAcceptsNewPayments(name: string): boolean {
+  if (!gateways.has(name as PaymentGatewayName)) return false;
+  return ACCEPTS_NEW_PAYMENTS[name as PaymentGatewayName]();
+}
+
+/** The gateways a new charge may be opened on, in registration order. */
+export function offeredPaymentGateways(): PaymentGatewayName[] {
+  return PAYMENT_GATEWAY_NAMES.filter((name) => ACCEPTS_NEW_PAYMENTS[name]());
+}
+
+/**
+ * Refuse a new charge on a gateway this deployment does not offer — BEFORE anything is written.
+ *
+ * ⚠ **`PAYMENT_GATEWAY_NOT_SUPPORTED` at 400, the code and status `getPaymentGateway` already
+ * raises for a name it does not know.** To the caller the two are one situation — "you named a
+ * gateway that is not on offer here; name another" — and `test:errors` allows one status per
+ * code. It is NOT `PAYMENT_GATEWAY_NOT_CONFIGURED` (500), which means the deployment has no
+ * gateway at all and is our fault; nor `PAYMENT_GATEWAY_NOT_IMPLEMENTED` (503), which the
+ * adapters raise from INSIDE a call that has already opened a row.
+ *
+ * `details.offered` names what the caller may use instead, so a client can recover without a
+ * second request. It is configuration, not a secret.
+ */
+export function assertGatewayOffered(name: string): void {
+  if (gatewayAcceptsNewPayments(name)) return;
+  throw createAppError(
+    ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED,
+    400,
+    name === 'STRIPE'
+      ? 'Card payments are not available right now. Please pay with mobile money.'
+      : `Payments through ${name} are not available right now.`,
+    { gateway: name, offered: offeredPaymentGateways() }
+  );
 }
 
 /** Non-throwing lookup, for the webhook router and the reconciliation sweep. */

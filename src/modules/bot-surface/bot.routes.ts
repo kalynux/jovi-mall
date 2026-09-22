@@ -116,6 +116,8 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
     checkout_open_screen: BotCheckoutController.screen,
     checkout_payment_status: BotCheckoutController.paymentStatus,
     checkout_retry_payment: BotCheckoutController.retryPayment,
+    checkout_review: BotCheckoutController.reviewInChat,
+    checkout_place: BotCheckoutController.placeInChat,
     checkout_create_orders: BotCartController.checkout,
     payment_get_transaction: BotCartController.getTransaction,
     payment_create_pay_link: BotCartController.createPayLink,

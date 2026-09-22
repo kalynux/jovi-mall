@@ -244,16 +244,28 @@ const CHECKOUT_ADDRESS: Copy = {
 
 /**
  * ⚠ **The screen requires an EXISTING address and says so rather than collecting one.**
- * Capturing an address here would drag the whole geocoding candidate flow into a WebView; the
- * chat already does it well, with a map pin and a candidate picker. So this is a real state
- * with a real instruction, not an error.
+ * Capturing an address here would drag the whole geocoding candidate flow into a WebView. So
+ * this is a real state with a real instruction, not an error.
+ *
+ * ⚠ **The instruction is the WEBSITE, not the chat** — the owner's rule of 2026-09-22: a new
+ * delivery address is added on the website, and the chat CHOOSES among saved ones. This used to
+ * say "send me your address in the chat", which contradicted that rule.
  */
 const CHECKOUT_NO_ADDRESS: Copy = {
-    en: 'You have no saved delivery address yet. Close this and send me your address in the chat — then I will reopen checkout.',
-    fr: "Vous n'avez pas encore d'adresse de livraison enregistrée. Fermez cette page et envoyez-moi votre adresse dans la discussion — je rouvrirai ensuite la commande.",
-    pt: 'Ainda não tem uma morada de entrega guardada. Feche esta página e envie-me a sua morada na conversa — depois reabro a finalização.',
-    es: 'Todavía no tienes una dirección de entrega guardada. Cierra esta página y envíame tu dirección en el chat — después reabriré el pago.',
-    ar: 'لا يوجد لديك عنوان توصيل محفوظ بعد. أغلق هذه الصفحة وأرسل لي عنوانك في المحادثة — ثم سأعيد فتح إتمام الطلب.',
+    en: 'You have no saved delivery address yet. Add one on our website, then come back to the chat and I will reopen checkout.',
+    fr: "Vous n'avez pas encore d'adresse de livraison enregistrée. Ajoutez-en une sur notre site, puis revenez dans la discussion et je rouvrirai la commande.",
+    pt: 'Ainda não tem uma morada de entrega guardada. Adicione uma no nosso site e volte à conversa — depois reabro a finalização.',
+    es: 'Todavía no tienes una dirección de entrega guardada. Añade una en nuestra web y vuelve al chat; después reabriré el pago.',
+    ar: 'لا يوجد لديك عنوان توصيل محفوظ بعد. أضف عنوانًا على موقعنا، ثم عُد إلى المحادثة وسأعيد فتح إتمام الطلب.',
+};
+
+/** The link under that message, to the website's address book. Kept short: it is a button. */
+const CHECKOUT_ADD_ADDRESS: Copy = {
+    en: 'Add an address',
+    fr: 'Ajouter une adresse',
+    pt: 'Adicionar morada',
+    es: 'Añadir dirección',
+    ar: 'إضافة عنوان',
 };
 
 /** Mobile money is the only live method, so the one field is a phone number. */
@@ -444,6 +456,7 @@ const PAGE = Object.freeze({
     checkoutAddress: CHECKOUT_ADDRESS,
     checkoutDigitalDelivery: CHECKOUT_DIGITAL_DELIVERY,
     checkoutNoAddress: CHECKOUT_NO_ADDRESS,
+    checkoutAddAddress: CHECKOUT_ADD_ADDRESS,
     checkoutPhone: CHECKOUT_PHONE,
     checkoutPay: CHECKOUT_PAY,
     checkoutWatchChat: CHECKOUT_WATCH_CHAT,

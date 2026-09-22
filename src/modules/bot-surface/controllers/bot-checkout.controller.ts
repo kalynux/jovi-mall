@@ -13,11 +13,17 @@ import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.
 import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { botChrome } from '../domain/bot-chrome-copy';
 import { BotActionHandlers, ParsedBotAction, unknownBotAction } from '../domain/bot-action-dispatch';
-import { botStorefrontLink } from '../domain/bot-list-window';
+import { botStorefrontLink, surfacePath } from '../domain/bot-list-window';
 import { formatBotPrice } from '../domain/product-card';
 import { inAppBaseUrl, inAppScreenUrl } from '../domain/inapp-url';
+import { toBotAddressDto } from '../dto/bot-projections';
 import { inAppSurfaceStore } from '../services/inapp-surface.store';
-import { mobileMoneyGateway, storedPayerNumber } from '../miniapp/surfaces/checkout.controller';
+import {
+    mobileMoneyGateway,
+    placeCheckout,
+    readChatCheckout,
+    storedPayerNumber,
+} from '../miniapp/surfaces/checkout.controller';
 
 /**
  * The chat half of checkout — the door onto the screen, and the payment's answer afterwards.
@@ -30,6 +36,14 @@ import { mobileMoneyGateway, storedPayerNumber } from '../miniapp/surfaces/check
  *   `POST /checkout/screen`          mint the `co` session and hand back the button that opens it
  *   `POST /checkout/payment-status`  ask the gateway where the charge actually got to
  *   `POST /checkout/retry-payment`   open a fresh charge for the same orders
+ *
+ * ── AND TWO MORE, FOR A CHECKOUT WITH NO SCREEN AT ALL (2026-09-22) ─────────
+ *   `POST /checkout/chat/review`     what would be ordered, for how much, delivered where, paid
+ *                                    from which wallet — and a single-use `checkoutRef`
+ *   `POST /checkout/chat/place`      spend that ref: create the orders, push the prompt
+ *
+ * See `BotCheckoutController.reviewInChat` for why they exist. They add NO rule: both are thin
+ * wrappers over the screen's own core (`readChatCheckout`, `placeCheckout`).
  *
  * ── ⚠ THE PAYMENT'S RESULT ARRIVES IN THE CHAT, AND NOT THROUGH THIS FILE ───
  * Neither a Mini App nor a WhatsApp Flow can hold a session open while somebody approves a
@@ -222,7 +236,171 @@ export class BotCheckoutController {
         const { phone } = RetrySchema.parse(req.body ?? {});
         await retryCharge(req, res, null, phone);
     });
+
+    /**
+     * `POST /checkout/chat/review` — checkout IN the conversation, step one: what the customer is
+     * about to agree to.
+     *
+     * ── WHY THIS DOOR EXISTS (owner's decision, 2026-09-22) ─────────────────
+     * "The assistant must be able to complete a purchase using tools, without asking the customer
+     * for anything the account already has." Until now the only road from a basket to a charge
+     * was a SCREEN, and the model could reach neither `checkout_create_orders` nor
+     * `payment_initiate` (both `flow_only`). A customer who said "yes, buy it" was handed a
+     * button, and a customer the button failed was stuck.
+     *
+     * ── ⭐ NO RULE LIVES HERE ──────────────────────────────────────────────────
+     * The read is `readChatCheckout` — the screen's projection (`toCheckoutLines`, the quote
+     * service's total, the masked wallet, `mobileMoneyGateway`) plus the one thing a chat can do
+     * that a screen deliberately cannot: choose among the saved addresses
+     * (`resolveChatDestination`). The address is CHOSEN, never captured — a customer with none
+     * gets `blocker: 'no_saved_address'` and `addAddressUrl`, the website's address page (the
+     * owner's 2026-09-20 ruling).
+     *
+     * ⚠ **The `checkoutRef` IS a `co` handle — the screen's own single-use credential, holding a
+     * cart id and no money — minted only when the checkout can go ahead.** `mutating` in the route
+     * table for `checkout_open_screen`'s reason. Single use is what makes the place safe from a
+     * model calling it twice: the MCP server's idempotency key is unique per CALL, so it cannot
+     * collapse two calls; the spent handle refuses the second.
+     *
+     * ⚠ **Sets no reply.** A review is a record for the model to narrate in the customer's words —
+     * the rule the money reads above follow.
+     */
+    static reviewInChat = asyncHandler(async (req: Request, res: Response) => {
+        const { deliveryAddressId } = ChatReviewSchema.parse(req.body ?? {});
+        const caller = botCallerOf(req);
+        const language = botResponseLanguageOf(req);
+
+        const view = await readChatCheckout(caller.customerId, deliveryAddressId ?? null);
+        const blocked = view.destination.kind === 'blocked' ? view.destination.blocker : null;
+
+        const checkoutRef = blocked
+            ? null
+            : await inAppSurfaceStore.mint({
+                kind: 'co',
+                owner: caller.userId,
+                customerId: caller.customerId,
+                channel: req.bot!.envelope.channel,
+                externalId: req.bot!.envelope.externalId,
+                language,
+                cartId: view.cartId,
+            });
+
+        /** Default first — the address a chat answer is most likely to be about. */
+        const addresses = view.destination.kind === 'digital'
+            ? []
+            : view.addresses
+                .map(toBotAddressDto)
+                .sort((a, b) => Number(b.isDefault) - Number(a.isDefault))
+                .slice(0, CHAT_REVIEW_ADDRESS_MAX);
+
+        sendSuccess(res, {
+            ready: blocked === null,
+            blocker: blocked,
+            checkoutRef,
+            lines: view.lines.map((line) => ({
+                title: line.title,
+                variantLabel: line.variantLabel,
+                quantity: line.quantity,
+                lineTotalText: line.lineTotalText,
+            })),
+            totalText: view.totalText,
+            delivery: view.destination.kind === 'digital'
+                ? { kind: 'digital', to: view.accountIdentifier }
+                : view.destination.kind === 'address'
+                    ? { kind: 'address', address: toBotAddressDto(view.destination.address) }
+                    : null,
+            addresses,
+            payment: {
+                method: 'mobile_money',
+                /** ⚠ Masked. Null means the account has no number: ask for one, then pass `phone`. */
+                phoneMasked: view.phoneMasked,
+            },
+            /**
+             * The website's address page, only when an address is what would unblock this. Null
+             * too when the storefront URL is unset — the model then says it in words rather than
+             * sending a dead link.
+             */
+            addAddressUrl: blocked === 'no_saved_address' || blocked === 'address_not_deliverable'
+                ? botStorefrontLink(surfacePath('addresses'), language)
+                : null,
+        });
+    });
+
+    /**
+     * `POST /checkout/chat/place` — step two: spend the ref, create the orders, open the charge.
+     *
+     * ⚠ **`placeCheckout` is the whole implementation** — the function the screen and the
+     * WhatsApp form call. This handler adds only the caller, so the handle must be theirs and the
+     * address and wallet are checked BEFORE the spend. `details.spent` is on every refusal, as on
+     * the screen: `false` means the ref is still good and may be corrected and retried; anything
+     * else means orders may exist — ask `checkout_payment_status`, never place again.
+     *
+     * ⚠ **`state: 'failed'` is an outcome, not an error.** The gateway refused the charge as it
+     * was opened: the orders exist and await payment, and no prompt is coming to the handset. The
+     * notification catalogue deliberately announces nothing for a refusal the customer was present
+     * for, so the model must say it — and offer `checkout_retry_payment`.
+     */
+    static placeInChat = asyncHandler(async (req: Request, res: Response) => {
+        const { checkoutRef, deliveryAddressId, phone } = ChatPlaceSchema.parse(req.body ?? {});
+        const caller = botCallerOf(req);
+
+        const placed = await placeCheckout(checkoutRef, phone, {
+            callerCustomerId: caller.customerId,
+            addressId: deliveryAddressId ?? null,
+        });
+
+        /**
+         * ⚠ **The amount is the TRANSACTION's snapshot** — what the gateway was asked for —
+         * formatted through `formatBotPrice` like every price on this surface. Never a sum.
+         */
+        const transaction = await PaymentTransactionModel.findById(placed.transactionId)
+            .select('amountSnapshot currencySnapshot')
+            .lean();
+
+        sendSuccess(res, {
+            transactionId: placed.transactionId,
+            state: stateOf(placed.status),
+            orderCount: placed.orderCount,
+            orderNumbers: placed.orderNumbers,
+            amountText: transaction
+                ? formatBotPrice(transaction.amountSnapshot, transaction.currencySnapshot)
+                : null,
+            payerMasked: placed.payerMasked,
+            /** The operator's own instruction, relayed verbatim — as the retry does. */
+            instructions: placed.instructions ?? null,
+        });
+    });
 }
+
+/** A saved address id, checked the way every other id on this surface is. */
+const savedAddressId = z.string().trim().regex(/^[a-fA-F0-9]{24}$/, 'Must be a saved address id');
+
+/** `POST /checkout/chat/review`. Omitting the address means "my default", which the review names. */
+const ChatReviewSchema = z
+    .object({ deliveryAddressId: savedAddressId.nullable().optional() })
+    .strict();
+
+/**
+ * `POST /checkout/chat/place`.
+ *
+ * ⚠ **`deliveryAddressId` is REQUIRED for a physical basket, and the core enforces it** (422
+ * `ORDER_DELIVERY_ADDRESS_REQUIRED`, `details.reason: 'address_not_named'`). The customer agreed
+ * to the address the review named; falling back to "the default" here would ship the parcel
+ * somewhere else whenever the review had named a different one.
+ *
+ * ⚠ **`phone` only when the customer TYPED a number** — absent means the account's own wallet.
+ * The platform's E.164 schema, the one `RetrySchema` and the screen use.
+ */
+const ChatPlaceSchema = z
+    .object({
+        checkoutRef: z.string().trim().min(1).max(128),
+        deliveryAddressId: savedAddressId.nullable().optional(),
+        phone: OptionalPhoneNumberSchema.nullable().default(null),
+    })
+    .strict();
+
+/** A chat can offer only so many addresses to choose from. */
+const CHAT_REVIEW_ADDRESS_MAX = 10;
 
 /**
  * A retry may name the wallet to charge. Absent means "the one on my account".

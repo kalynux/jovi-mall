@@ -25,6 +25,7 @@
  *  11. The initiate row               — it is written before it has a gateway reference
  *  12. The retry                      — a dead attempt hands its idempotency key back
  *  13. Paying twice                   — the four ways, and what bounds each
+ *  14. Cards off                      — an un-offered gateway opens no charge and no pay link
  *
  * DB-free. Run: npm run test:payments
  */
@@ -50,9 +51,14 @@ import { originalConsole } from '../../src/core/logging/sink-guard';
 import {
   PAYMENT_GATEWAYS,
   PAYMENT_GATEWAY_NAMES,
+  assertGatewayOffered,
+  gatewayAcceptsNewPayments,
   gatewaySupportsRefund,
   gatewayImplementsRefund,
+  offeredPaymentGateways,
 } from '../../src/modules/payments/gateways/registry';
+import { AppError } from '../../src/core/errors';
+import { ERROR_CODES } from '../../src/core/error-codes';
 import {
   notchPaySignature,
   myCoolPaySignature,
@@ -1308,6 +1314,145 @@ assert('a failed charge keeps the reference the gateway had already issued', () 
   const carried = notchpay.includes('...(error.details ?? {}),') && notchpay.includes('gatewayRef,');
   const landed = ORCHESTRATOR.split('private async recordFailedAttempt')[1]?.slice(0, 600) ?? '';
   return carried && landed.includes('error.details?.gatewayRef');
+});
+
+section('14. Cards off — a gateway this deployment does not offer opens NO charge');
+
+// ORD-2026-000002, 2026-09-22. The storefront app's "send a payment link" called
+// `POST /payments/initiate` with `gateway: 'STRIPE'` on a deployment with no STRIPE_SECRET_KEY.
+// The orchestrator opened a transaction row, the adapter then failed inside `getStripeClient()`
+// ("Stripe is not configured"), the row was saved FAILED, and the pay-link mint that followed
+// answered PAYMENT_LINK_NOT_PAYABLE for the row it had just created. The environment file's
+// promise — "the gateway simply is not offered" — was read by nothing.
+
+/**
+ * Run `fn` with the two Stripe secrets set exactly as given, and put the environment back.
+ *
+ * ⚠ The developer `.env` may carry real test-mode Stripe keys, so the absent case is created
+ * here rather than assumed; an assertion that passed only because this machine happened to have
+ * no key would be a fact about the machine.
+ */
+function withStripe<T>(secret: string | undefined, webhook: string | undefined, fn: () => T): T {
+  const saved = [process.env.STRIPE_SECRET_KEY, process.env.STRIPE_WEBHOOK_SECRET];
+  const put = (name: string, value: string | undefined) => {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  };
+  put('STRIPE_SECRET_KEY', secret);
+  put('STRIPE_WEBHOOK_SECRET', webhook);
+  try {
+    return fn();
+  } finally {
+    put('STRIPE_SECRET_KEY', saved[0]);
+    put('STRIPE_WEBHOOK_SECRET', saved[1]);
+  }
+}
+
+assert('with no Stripe secret key, cards are not offered — and mobile money still is', () =>
+  withStripe(undefined, undefined, () =>
+    !gatewayAcceptsNewPayments('STRIPE')
+    && gatewayAcceptsNewPayments('NOTCHPAY')
+    && gatewayAcceptsNewPayments('MYCOOLPAY')
+    && offeredPaymentGateways().join(',') === 'NOTCHPAY,MYCOOLPAY'));
+
+// A whitespace value is what a hand-edited .env line with nothing after `=` often leaves.
+assert('a blank or whitespace key is OFF, not on', () =>
+  withStripe('   ', 'whsec_fixture', () => !gatewayAcceptsNewPayments('STRIPE')));
+
+// The key alone would switch on a gateway whose every callback is refused (no secret to verify
+// with) — charged customers, unpaid orders. env.ts refuses that boot; this refuses it anywhere.
+assert('the key without its webhook secret is still OFF', () =>
+  withStripe('sk_test_fixture', undefined, () => !gatewayAcceptsNewPayments('STRIPE')));
+
+assert('both Stripe secrets turn cards back on — configuration, not a code change', () =>
+  withStripe('sk_test_fixture', 'whsec_fixture', () =>
+    gatewayAcceptsNewPayments('STRIPE') && offeredPaymentGateways().includes('STRIPE')));
+
+assert('an unknown gateway name is never "offered"', () =>
+  !gatewayAcceptsNewPayments('PAYPAL') && !gatewayAcceptsNewPayments(''));
+
+assert('the refusal is PAYMENT_GATEWAY_NOT_SUPPORTED at 400, naming what IS on offer', () =>
+  withStripe(undefined, undefined, () => {
+    try {
+      assertGatewayOffered('STRIPE');
+      return false;
+    } catch (error) {
+      const e = error as AppError;
+      const offered = (e.details as { offered?: unknown } | undefined)?.offered;
+      return e instanceof AppError
+        && e.code === ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED
+        && e.statusCode === 400
+        && Array.isArray(offered)
+        && !offered.includes('STRIPE')
+        && offered.includes('NOTCHPAY');
+    }
+  }));
+
+assert('an offered gateway passes the gate without throwing', () => {
+  assertGatewayOffered('NOTCHPAY');
+  return true;
+});
+
+/**
+ * ⚠ **Bounded to each method, first statement, both ends named.** "Somewhere in the method" is
+ * not the property: a gate after `openAttempt` still leaves a FAILED row behind it, which is the
+ * exact state that made the pay-link mint answer NOT_PAYABLE.
+ */
+/** ⚠ LF first: the sources carry CRLF on this machine, and a `\n  }\n` bound would never match. */
+const lf = (source: string): string => source.replace(/\r\n/g, '\n');
+const ORCHESTRATOR_LF = lf(ORCHESTRATOR);
+
+const orchestratorMethodBody = (sig: string): string | null => {
+  const start = ORCHESTRATOR_LF.indexOf(sig);
+  if (start < 0) return null;
+  const open = ORCHESTRATOR_LF.indexOf('}> {', start);
+  const end = ORCHESTRATOR_LF.indexOf('\n  }\n', open);
+  return open < 0 || end < 0 ? null : ORCHESTRATOR_LF.slice(open + '}> {'.length, end);
+};
+
+assert('⛔ all four charge-starting methods refuse an un-offered gateway BEFORE any read or write', () => {
+  const methods = [
+    'async initiatePayment(',
+    'async initiatePaymentForCart(',
+    'async initiateBookingPayment(',
+    'async initiateBookingBalancePayment(',
+  ].map(orchestratorMethodBody);
+  if (methods.some((m) => m === null)) {
+    originalConsole.error('     ↳ a charge-starting method was not found — the ordering check would be vacuous');
+    return false;
+  }
+  return methods.every((body) => {
+    const first = body!.trim().split('\n')[0].trim();
+    return first === 'assertGatewayOffered(gateway);'
+      && body!.indexOf('assertGatewayOffered(gateway);') < body!.indexOf('await ')
+      && body!.indexOf('assertGatewayOffered(gateway);') < body!.indexOf('this.openAttempt(');
+  });
+});
+
+// Exactly four: a fifth charge-starting method must add its own gate, and a gate moved into a
+// helper would stop being pinned to the top of each method.
+assert('the gate appears once per charge-starting method, and nowhere else in the orchestrator', () =>
+  countOf('assertGatewayOffered(gateway);') === 4 && countOf('assertGatewayOffered(') === 4);
+
+// verify, webhooks, refunds and the reconciliation sweep must keep working for a gateway that
+// was switched off after it took money: only a NEW charge is refused.
+assert('the lookup the settle paths use is NOT the gate', () => {
+  const registry = lf(PAYMENT_SOURCES.find(({ file }) => file.endsWith('registry.ts'))!.code);
+  const lookup = registry.slice(
+    registry.indexOf('export function getPaymentGateway('),
+    registry.indexOf('\n}\n', registry.indexOf('export function getPaymentGateway(')),
+  );
+  return lookup.length > 0 && !lookup.includes('gatewayAcceptsNewPayments') && !lookup.includes('assertGatewayOffered');
+});
+
+assert('⛔ the pay-link mint refuses an un-offered gateway before a token exists', () => {
+  const service = lf(PAYMENT_SOURCES.find(({ file }) => file.endsWith('pay-link.service.ts'))!.code);
+  const start = service.indexOf('async mint(');
+  const mint = start < 0 ? '' : service.slice(start, service.indexOf('\n    }\n', start));
+  const gate = mint.indexOf('assertGatewayOffered(transaction.gateway)');
+  return gate > 0
+    && gate > mint.indexOf('PAYMENT_LINK_NOT_APPLICABLE')
+    && gate < mint.indexOf('mintPayLinkToken(');
 });
 
 originalConsole.log(`\n${'═'.repeat(76)}`);
