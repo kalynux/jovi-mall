@@ -305,6 +305,10 @@ export class SubscriberPlanService {
         planCode: plan.code,
         planId: plan._id.toString(),
         maxUnterminatedShipments: plan.max_unterminated_shipments,
+        // Carried for completeness; the COD-pool consumer re-resolves through
+        // `EntitlementService.resolveAgentCodPool` anyway, because the pool also
+        // depends on the agent's KYC verdict, which this event knows nothing about.
+        maxCodPool: plan.max_cod_pool ?? null,
         liveTrackingEnabled: plan.live_tracking_enabled,
       },
     });

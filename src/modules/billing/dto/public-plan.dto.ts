@@ -31,6 +31,11 @@ export interface PublicPlanDto {
   max_storage_bytes: number | null;
   commission_percent: number | null;
   max_unterminated_shipments: number | null;
+  /**
+   * Agent plans only: the COD cash a KYC-verified agent on this tier may carry, in
+   * XAF. ⚠ `null` means **no COD**, not unlimited — unlike the other limits here.
+   */
+  max_cod_pool: number | null;
   live_tracking_enabled: boolean;
 
   /**
@@ -57,6 +62,7 @@ export function toPublicPlanDto(plan: IPricingPlan): PublicPlanDto {
     max_storage_bytes: plan.max_storage_bytes ?? null,
     commission_percent: plan.commission_percent ?? null,
     max_unterminated_shipments: plan.max_unterminated_shipments ?? null,
+    max_cod_pool: plan.max_cod_pool ?? null,
     live_tracking_enabled: plan.live_tracking_enabled,
     is_active: plan.is_active,
     sort_order: plan.sort_order,

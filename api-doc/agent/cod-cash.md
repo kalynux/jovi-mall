@@ -189,7 +189,7 @@ attempts). Resets the attempt counter. Rate-limited (min 60s between sends).
 > **⚠ This limit is not the one that gates a dispatch.** `effectiveExposureLimit` here is scaled from
 > **your whole COD pool** (`cod.max_threshold`), because a self-view has one honest limit and it is
 > yours. Each agency's dispatch is checked against **that contract's slice** of the pool, scaled by
-> the same trust tier — which is smaller, often much smaller. So it is entirely normal to see plenty
+> the same trust tier (and, since 2026-09-21, never more than your pool) — which is smaller, often much smaller. So it is entirely normal to see plenty
 > of headroom on this screen and still have one agency's assignment refused with
 > `COD_AGENT_EXPOSURE_EXCEEDED`. `GET /api/agent/cod/allocation` shows the per-agency slices, and is
 > the screen that explains it.
@@ -214,6 +214,15 @@ while another's still goes through.
     "maxThreshold": 500000,
     "allocated": 350000,
     "headroom": 150000,
+    "overAllocatedBy": 0,
+    "pool": {
+      "maxThreshold": 500000,
+      "ceiling": 500000,
+      "source": "plan",
+      "planCode": "agent_free",
+      "selfLimited": false,
+      "syncedAt": "2026-09-21T09:30:00.000Z"
+    },
     "contracts": [
       {
         "contractId": "665f1f77bcf86cd799439300",
@@ -236,17 +245,72 @@ while another's still goes through.
 
 | Field | Type | Description |
 |---|---|---|
-| `maxThreshold` | `number` | Your whole pool — the most COD cash the platform will let you carry, across every agency. Admin-set. |
-| `allocated` | `number` | Sum of the slices your live contracts hold. Can never exceed `maxThreshold`. |
-| `headroom` | `number` | `maxThreshold - allocated`. What is left for a new agency to be granted. |
+| `maxThreshold` | `number` | Your whole pool — the most COD cash (XAF) the platform will let you carry, across every agency. **Set automatically** from your plan once your identity is verified. You may lower it (`PUT /cod/pool`, below) but never raise it past `pool.ceiling`. |
+| `allocated` | `number` | Sum of the slices your live contracts hold. No agency can raise its slice past `maxThreshold`. |
+| `headroom` | `number` | `maxThreshold - allocated`, never below 0. What is left for a new agency to be granted. |
+| `overAllocatedBy` | `number` | `allocated - maxThreshold` when your contracts hold **more** than your pool, else `0`. This only happens after your pool went **down** by itself: a plan downgrade, or your identity verification being withdrawn. While it is above 0, no agency can raise your slice, and every dispatch is capped at your pool rather than at the larger slice. |
+| `pool.maxThreshold` | `number` | Same number as the top-level `maxThreshold`. |
+| `pool.ceiling` | `number` | The most `maxThreshold` can be: your plan's value, a value an administrator set for you, or `0` while your identity is not verified. |
+| `pool.source` | `string` | Where the ceiling comes from: `"plan"` · `"override"` (an administrator set it for you) · `"not_verified"` (identity not verified yet, so the ceiling is 0). Display only; see the table below. |
+| `pool.planCode` | `string \| null` | The plan the ceiling came from (`"agent_free"`, `"agent_plus"`, `"agent_pro"`). `null` unless `source` is `"plan"`. |
+| `pool.selfLimited` | `boolean` | `true` when you chose to carry less than `ceiling`. |
+| `pool.syncedAt` | `string \| null` | When the platform last recomputed your pool. `null` = not yet: an account created before 2026-09-21 that is waiting for the nightly sync. |
 | `contracts[].threshold` | `number` | That agency's slice. It binds *that agency's* dispatches only. |
 | `contracts[].outstandingBalance` | `number` | Cash you hold attributable to that agency. Must reach 0 before you can leave it. |
 
 > **Why a pool and not a cap per agency.** Three agencies each granting you 1M independently would
 > put 3M of real cash on one person while every agency believed the exposure was 1M. A pool cannot
 > be over-committed: a raise at one agency is refused when another's slice already spends the
-> headroom. Your `maxThreshold` defaults to `0` — an admin sets it before you can carry any COD at
-> all.
+> headroom.
+
+#### Where your pool comes from (since 2026-09-21)
+
+Nobody has to set your pool any more. It follows your **identity verification** and your **plan**:
+
+| Your situation | `pool.source` | `pool.ceiling` |
+|---|---|---|
+| Identity not verified (never submitted, under review, or refused) | `not_verified` | **0**: no COD at all |
+| Verified, on **Agent Free** | `plan` | **500 000** |
+| Verified, on **Agent Plus** | `plan` | **1 000 000** |
+| Verified, on **Agent Pro** | `plan` | **2 000 000** |
+| An administrator set a value for you | `override` | whatever they set, higher *or* lower than your plan |
+
+- The moment your identity is **verified**, your pool opens at your plan's value. You do nothing.
+- **Changing plan** resets your pool to the new plan's value. A **renewal of the same plan** leaves it alone.
+- If verification is **withdrawn**, your pool drops to 0. A value an administrator set for you is kept, and it comes back if you are verified again.
+- The platform can change a plan's value; your pool follows automatically. To show what each plan gives, read `max_cod_pool` from `GET /api/agent/plans` (see [billing.md](./billing.md)).
+
+⚠ Treat `pool.source` as a label to display, never as something to branch business logic on. The rule lives on the server.
+
+---
+
+### PUT /api/agent/cod/pool
+
+**Description**: Carry **less** COD cash than your ceiling allows, or go back to the full ceiling. This is the only change you can make to your COD pool yourself, and it only goes **down**. To carry more, you need a higher plan.
+
+**Request Body**:
+```json
+{ "maxThreshold": 300000 }
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `maxThreshold` | `integer \| null` | ✅ (the key must be present) | XAF, from `0` up to your `pool.ceiling`. **`null` restores your full ceiling.** |
+
+**Success Response** (`200 OK`): the same body as `GET /api/agent/cod/allocation`, with `message` `"COD pool updated."` or `"COD pool restored to your full limit."`.
+
+Your choice stays until your ceiling changes: a new plan, a new verification decision, or a change by an administrator. Then your pool resets to the new ceiling, and `pool.selfLimited` reads `false` again.
+
+**Errors**:
+
+| Status | `error.code` | When | `error.details` |
+|---|---|---|---|
+| `400` | validation error | `maxThreshold` missing, not an integer, or negative | field errors |
+| `422` | `AGENT_COD_POOL_ABOVE_CEILING` | You asked for more than your ceiling. An unverified agent's ceiling is 0, so any positive number lands here | `requested`, `ceiling`, `source`, `planCode`, `hint` |
+| `422` | `AGENT_COD_THRESHOLD_BELOW_ALLOCATED` | Your agencies already hold more than the number you asked for | `requested`, `currentlyAllocated`, `shortfall`, `contracts[]` (`contractId`, `agencyId`, `threshold`) |
+| `409` | `AGENT_COD_POOL_CONFLICT` | Your pool changed while the request was in flight, for example because your plan changed at that moment | none |
+
+> On `AGENT_COD_POOL_ABOVE_CEILING`, show `details.hint`: it tells the agent whether the fix is to get verified or to upgrade their plan. On `AGENT_COD_POOL_CONFLICT`, re-read `GET /api/agent/cod/allocation` and let the agent try again.
 
 ---
 

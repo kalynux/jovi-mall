@@ -33,7 +33,7 @@ import {
   resolveEffectiveTrustScore,
 } from '../../src/modules/agents/domain/services/agent-trust-override';
 import { AGENT_CONFIG } from '../../src/modules/agents/config/agent.config';
-import { IAgentTrustSignals } from '../../src/modules/agents/models/agent.model';
+import { DeliveryAgentModel, IAgentTrustSignals } from '../../src/modules/agents/models/agent.model';
 
 let passed = 0;
 let failed = 0;
@@ -373,6 +373,25 @@ function main(): void {
     const repo = stripComments(read('modules/agents/repositories/agent.repository.ts'));
     const setScore = repo.slice(repo.indexOf('async setTrustScore'), repo.indexOf('async setTrustSignalsShadow'));
     return !setScore.includes('trust_override');
+  });
+
+  // Behavioural, on a real (unsaved) document, because the defect was invisible to every scan:
+  // `setOverride` WROTE `set_by_user_id`, and strict mode stripped it because the schema never
+  // declared it — so every pin recorded a name and no id. Fixed 2026-09-22.
+  assert('a pinned override KEEPS who set it — set_by_user_id survives the schema', () => {
+    const doc = new DeliveryAgentModel({
+      user_id: '64b000000000000000000001',
+      name: 'test:agent-trust',
+      cod: {
+        trust_score: 100,
+        max_threshold: 0,
+        trust_override: {
+          score: 35, reason: 'why', set_at: new Date(),
+          set_by_user_id: 'admin-1', set_by_source: 'admin', set_by_name: 'An Administrator',
+        },
+      },
+    });
+    return doc.cod.trust_override?.set_by_user_id === 'admin-1';
   });
 
   assert('setTrustOverride is the ONLY writer of the field', () => {

@@ -50,9 +50,12 @@ status and touches no contract.
 (nearest first):
 1. **Eligibility** — `agentEligibilityService.listEligibleAgentIds(agencyId)` (active · active
    contract · online · tracking-allowed · device-location · under-capacity).
-2. **Location gate** — an agent with no resolvable position is dropped (can't be ranked by proximity).
-   Live/last-known position or home base counts; `REQUIRE_LIVE_POSITION` (default off) tightens this to
-   a fresh pushed fix within `POSITION_FRESHNESS_SECONDS`.
+2. **Location** — drops nobody by default. Live/last-known position or home base ranks an agent by
+   distance; an agent with **neither** is kept and ranked after every located one. That is the normal
+   state of a new agent — nothing writes `home_base`, and geo-tracker pushes a position only during a
+   tracked shipment — so dropping them (the behaviour until 2026-09-22) made a first shipment
+   impossible. `REQUIRE_LIVE_POSITION` (default off) instead drops everyone without a fresh pushed fix
+   within `POSITION_FRESHNESS_SECONDS`.
 3. **Trust floor** — below `MIN_TRUST_SCORE` (default 0) an agent receives no auto offer.
 4. **COD gate** — for COD orders, drop agents over their COD headroom (`assertCanTakeCodShipment`, run
    in parallel). Non-COD keeps every survivor ("assign to any").
@@ -222,7 +225,7 @@ order already settled — that money question is closed and must not re-open.
 | `SHIPMENT_ASSIGNMENT_MAX_CANDIDATES` | 20 | Auto pool size cap — the ceiling of agents one broadcast tries. |
 | `SHIPMENT_ASSIGNMENT_MAX_ROUNDS` | 2 | Broadcast passes before giving up (round 2 re-nudges ignored offers). |
 | `SHIPMENT_ASSIGNMENT_MIN_TRUST_SCORE` | 0 | Trust floor to receive any auto offer. |
-| `SHIPMENT_ASSIGNMENT_REQUIRE_LIVE_POSITION` | false | If on, only a fresh pushed position counts as "located". |
+| `SHIPMENT_ASSIGNMENT_REQUIRE_LIVE_POSITION` | false | If on, only a fresh pushed position counts, and agents without one are dropped — including every agent never tracked. Off, an agent with no position is ranked last. |
 | `SHIPMENT_ASSIGNMENT_POSITION_FRESHNESS_SECONDS` | 300 | How recent a live fix must be to count as fresh. |
 | `SHIPMENT_ASSIGNMENT_WEIGHT_{DISTANCE,CAPACITY,TRUST}` | 50 / 20 / 30 | Scoring weights (preview/tie-break; live sort is proximity). |
 | `SHIPMENT_ASSIGNMENT_DISTANCE_{FULL,ZERO}_KM` | 1 / 25 | Distance normalisation. |

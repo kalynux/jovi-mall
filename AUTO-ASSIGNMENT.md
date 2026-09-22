@@ -39,9 +39,12 @@ An agent is a candidate only if **all** hold (`assignment-candidate.service.ts`)
 
 - **Tracking permission** enabled, **online**, **active + approved contract**, **device-location** not
   disabled, **under capacity** — the existing `AgentEligibilityService` gate.
-- **Current location available** — a resolvable position. With `REQUIRE_LIVE_POSITION=true` only a
-  live position pushed within `POSITION_FRESHNESS_SECONDS` counts; otherwise a stale mirror or the
-  declared home base is accepted (so a deployment without geo-tracker still works).
+- **Current location** — a requirement **only** with `REQUIRE_LIVE_POSITION=true`, where a live
+  position pushed within `POSITION_FRESHNESS_SECONDS` is needed. Otherwise (the default) a stale mirror
+  or the declared home base ranks the agent, and an agent with **no position at all** is kept and
+  ranked after every located one. Since 2026-09-22 — they used to be dropped, and a new agent has no
+  position by construction (nothing writes `home_base`; geo-tracker pushes one only during a tracked
+  shipment), so a new agent could never receive a first shipment.
 - **Trust threshold** — `trust_score ≥ MIN_TRUST_SCORE` (applies to every order; default `0` = inert).
 - **COD threshold** — *only for COD orders* (`order.payment_method === 'cash_on_delivery'`): the agent
   must be under their COD headroom. Prepaid orders skip this gate entirely. Checked in **parallel**
@@ -155,7 +158,7 @@ guarded transition, so several instances sweeping at once cannot double-offer or
 | `SHIPMENT_ASSIGNMENT_MAX_CANDIDATES` | `20` | Ranking cap (STEP 1). |
 | `SHIPMENT_ASSIGNMENT_MAX_ROUNDS` | `2` | Broadcast rounds before giving up (STEP 6). |
 | `SHIPMENT_ASSIGNMENT_MIN_TRUST_SCORE` | `0` | Trust floor to receive any order (STEP 1). |
-| `SHIPMENT_ASSIGNMENT_REQUIRE_LIVE_POSITION` | `false` | Require a fresh live position to be eligible. |
+| `SHIPMENT_ASSIGNMENT_REQUIRE_LIVE_POSITION` | `false` | Require a fresh live position to be a candidate — which excludes every never-tracked agent. Off, a positionless agent is ranked last. |
 | `SHIPMENT_ASSIGNMENT_POSITION_FRESHNESS_SECONDS` | `300` | How recent a live position must be. |
 | `SHIPMENT_ASSIGNMENT_GEO_MATRIX_PATH` | `/routing/matrix` | geo-tracker matrix endpoint. |
 | `SHIPMENT_ASSIGNMENT_GEO_TIMEOUT_MS` | `3000` | Matrix call timeout (falls back fast). |

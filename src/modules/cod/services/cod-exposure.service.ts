@@ -52,7 +52,18 @@ export interface CodLimitBreakdown {
    * caller passed none and the platform default applied.
    */
   contractThreshold: number | null;
-  /** What the multiplier was applied to. */
+  /**
+   * The agent's own COD pool (`cod.max_threshold`) — a second cap on `base`, since
+   * 2026-09-21. `null` only for a partial in-memory fixture; every stored agent has one.
+   */
+  agentPool: number | null;
+  /**
+   * `true` when the POOL, not the contract's slice, set `base`. Normally false: the
+   * slices sum to at most the pool. It turns true after a plan downgrade or a revoked
+   * KYC verdict left contracts holding more than the pool — see `limitBreakdown`.
+   */
+  poolBinds: boolean;
+  /** What the multiplier was applied to — `min(contractThreshold, agentPool)`. */
   base: number;
   /** The score the tier was chosen by — the OVERRIDE when one is pinned. */
   trustScore: number;
@@ -98,7 +109,8 @@ export interface CodCapacityVerdict {
  *          + expected cash of their still-pending collections (packages out
  *            for delivery that WILL become cash on handoff).
  *
- * Effective limit = (agency override ?? platform default) × trust multiplier:
+ * Effective limit = min(agency override ?? platform default, the agent's own pool)
+ *                   × trust multiplier:
  *  - trust ≥ TRUST_FULL_THRESHOLD     → ×1
  *  - trust ≥ TRUST_REDUCED_THRESHOLD  → ×TRUST_REDUCED_MULTIPLIER
  *  - below                            → COD blocked entirely
@@ -241,6 +253,9 @@ export class CodExposureService {
       currentExposure: verdict.exposure!.total,
       additionalAmount,
       effectiveLimit: verdict.limit.effectiveLimit,
+      // Additive (2026-09-21): true when the agent's own pool — not this agency's
+      // slice — is what capped the limit, so a dashboard can say which to change.
+      poolBinds: verdict.limit.poolBinds,
     });
   }
 
@@ -262,7 +277,16 @@ export class CodExposureService {
    * here and neither implies the other.
    */
   limitBreakdown(agent: IDeliveryAgent, maxExposureOverride: number | null): CodLimitBreakdown {
-    const base = maxExposureOverride ?? COD_CONFIG.AGENT_MAX_EXPOSURE_DEFAULT;
+    const slice = maxExposureOverride ?? COD_CONFIG.AGENT_MAX_EXPOSURE_DEFAULT;
+    // ⚠ The agent's POOL caps the slice (2026-09-21). While the pool invariant holds —
+    // slices sum to at most the pool — this changes nothing, because every slice is
+    // already ≤ the pool. It exists for the state an automatic sync can leave behind: a
+    // plan downgrade or a revoked KYC verdict shrinks the pool but cannot rewrite the
+    // slices agencies agreed, and without this cap the agent would go on carrying the
+    // old, larger slice — the plan would say 500 000 and the gate would allow 1 000 000.
+    const rawPool = agent.cod?.max_threshold;
+    const agentPool = typeof rawPool === 'number' && Number.isFinite(rawPool) ? rawPool : null;
+    const base = agentPool === null ? slice : Math.min(slice, agentPool);
     // ⚠ `resolveEffectiveTrustScore`, NEVER `agent.cod.trust_score`. An
     // administrator's persistent override outranks the computed score — see that
     // function's header for why (O-7). This is one of the two decision points
@@ -280,6 +304,8 @@ export class CodExposureService {
 
     return {
       contractThreshold: maxExposureOverride,
+      agentPool,
+      poolBinds: agentPool !== null && agentPool < slice,
       base,
       trustScore: trust.score,
       trustSource: trust.source,

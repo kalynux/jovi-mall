@@ -74,13 +74,14 @@ export const ASSIGNMENT_CONFIG = Object.freeze({
   MIN_TRUST_SCORE: numEnv('SHIPMENT_ASSIGNMENT_MIN_TRUST_SCORE', 0),
 
   /**
-   * "Current location is available" — the requirement makes a resolvable
-   * position a hard eligibility cut BEFORE the geo provider is called (an agent
-   * with no coordinates cannot be ranked by proximity). When false (the default)
-   * a stale live position or the declared home base still counts as "available",
-   * so a deployment without geo-tracker pushing positions keeps working. When
-   * true, ONLY a live position reported within POSITION_FRESHNESS_SECONDS counts,
-   * and agents without one are dropped from the pool.
+   * "Current location is available" as a hard cut. When true, ONLY a live
+   * position reported within POSITION_FRESHNESS_SECONDS counts, and agents
+   * without one are dropped from the pool. When false (the default) nobody is
+   * dropped for location: a stale live position or the declared home base is
+   * used to rank, and an agent with NO position on file is ranked after every
+   * located one — the normal state of an agent before their first delivery (see
+   * `AssignmentCandidateService.resolvePosition`). Turning this on therefore
+   * shuts out every agent who has never been tracked.
    */
   REQUIRE_LIVE_POSITION: boolEnv('SHIPMENT_ASSIGNMENT_REQUIRE_LIVE_POSITION', false),
 

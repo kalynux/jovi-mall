@@ -1436,7 +1436,20 @@ section('Worker inventory — the thirteenth worker was invisible to every surfa
 // 18 -> 19: PlanQuotaReconcileWorker, the drift sweep that repairs plan-quota enforcement
 // when the `plan.activated` event that should have done it was lost — and that releases an
 // owner's held-back products once they free room, which no plan change announces.
-assert('the inventory now holds 19 workers', () => WORKER_INVENTORY.length === 19);
+// 19 -> 20 (2026-09-21): AgentCodPoolReconcileWorker, the durability half of the agent COD
+// pool rule (plan × KYC verdict × admin pin) — a lost `plan.activated` would otherwise leave a
+// downgraded agent on the larger pool, and it is what converges agents written before the rule.
+assert('the inventory now holds 20 workers', () => WORKER_INVENTORY.length === 20);
+
+assert('agent-cod-pool-reconcile is registered AND triggerable', () =>
+    WORKER_KEYS.includes('agent-cod-pool-reconcile' as never)
+    && WORKER_INVENTORY.some((e) => e.key === 'agent-cod-pool-reconcile' && e.triggerable));
+
+assert('its schedule is derived from AGENT_COD_POOL_RECONCILE_CRON, not a literal', () => {
+    const entry = WORKER_INVENTORY.find((e) => e.key === 'agent-cod-pool-reconcile');
+    const schedule = entry?.worker.schedules[0];
+    return schedule?.kind === 'cron' && schedule.source === 'AGENT_COD_POOL_RECONCILE_CRON';
+});
 
 /**
  * The new one, asserted by name and by the two properties that make it a backstop rather
@@ -1492,8 +1505,8 @@ const WORKER_SOURCES = [
         readFileSync(join(SRC, 'core', 'jobs', 'aggregation-scheduler.ts'), 'utf8')) },
 ];
 
-assert('the scan sees every worker file — 18 module workers plus the scheduler', () =>
-    WORKER_SOURCES.length === 19);
+assert('the scan sees every worker file — 19 module workers plus the scheduler', () =>
+    WORKER_SOURCES.length === 20);
 
 assert('EVERY worker routes its pass through withWorkerLock', () => {
     const missing = WORKER_SOURCES.filter(({ code }) => !code.includes('withWorkerLock('));

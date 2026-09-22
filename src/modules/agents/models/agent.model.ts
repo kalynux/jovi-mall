@@ -252,16 +252,57 @@ export interface IAgentCodProfile {
    */
   trust_score: number;
   /**
-   * The agent's GLOBAL COD threshold: the maximum cash-in-hand they may hold
-   * across every agency combined. Set by the agent, bounded by
-   * AGENT_CONFIG.COD_THRESHOLD_{MIN,MAX}.
+   * The agent's GLOBAL COD pool: the maximum cash-in-hand they may hold across
+   * every agency combined. **This is the number every reader uses** — headroom,
+   * allocation, the self-view, wi-admin, and (since 2026-09-21) a hard cap inside
+   * the COD exposure gate itself.
+   *
+   * It is DERIVED, not free-standing (owner decision 2026-09-21). It equals
+   * `pool_ceiling` unless the agent has chosen to carry less, and it is written
+   * only by `AgentCodPoolService`:
+   *
+   *   pool_ceiling = 0                        when kyc.status !== 'verified'
+   *                = pool_override.amount     when an administrator pinned one
+   *                = plan.max_cod_pool ?? 0   otherwise (the agent's active plan,
+   *                                           or the free tier when they hold none)
+   *   max_threshold ∈ [0, pool_ceiling]       the agent may lower it; a CHANGE of
+   *                                           ceiling resets it to the new ceiling
    *
    * Every contract's `cod.threshold` is a sub-allocation of this pool, and the
-   * sum across allocating contracts may never exceed it. See
-   * AgentCodThresholdService — the constraint is enforced from both directions
-   * (agent lowering, agency raising).
+   * sum across allocating contracts may never be RAISED past it. See
+   * AgentCodThresholdService. An automatic sync (plan downgrade, KYC revoked) can
+   * leave the pool below what contracts already hold — it is a consequence and
+   * cannot be refused — and then headroom reads 0 and the exposure gate binds at
+   * the pool, not at the larger slice.
    */
   max_threshold: number;
+
+  /**
+   * The most `max_threshold` may be right now, as of the last sync — see the
+   * rule on `max_threshold`. Stored rather than recomputed on read because
+   * wi-admin reads this collection directly and must not re-derive plan policy.
+   */
+  pool_ceiling: number;
+  /** Which rule produced `pool_ceiling`. */
+  pool_source: AgentCodPoolSource;
+  /**
+   * The plan whose `max_cod_pool` was read, when `pool_source === 'plan'`.
+   * `null` for the other two sources. Display only — never a branch.
+   */
+  pool_plan_code: string | null;
+  /** When `AgentCodPoolService` last wrote the four pool fields. */
+  pool_synced_at: Date | null;
+  /**
+   * An administrator's PERSISTENT pool, which replaces the plan's value as the
+   * ceiling until an administrator clears it (owner decision 2026-09-21).
+   *
+   * Same shape and same reasoning as `trust_override`: a separate field that no
+   * sync writes, so a plan renewal or a KYC verdict cannot erase a judgement.
+   * It does NOT outrank KYC — an unverified agent's pool is 0 with or without
+   * one — but it survives the unverified spell and applies again on
+   * re-verification.
+   */
+  pool_override: IAgentCodPoolOverride | null;
 
   /**
    * An administrator's PERSISTENT trust override — the answer to **O-7**.
@@ -312,6 +353,28 @@ export interface IAgentTrustOverride {
   /** 0–100, on the same scale as `trust_score`. */
   score: number;
   /** Why it was pinned. Required — an unexplained override is unreviewable. */
+  reason: string;
+  set_at: Date;
+  set_by_user_id: string | null;
+  set_by_source: string;
+  set_by_name: string | null;
+}
+
+/**
+ * Where an agent's COD pool ceiling comes from — see `IAgentCodProfile.max_threshold`.
+ * Checked in this order; the first that applies wins.
+ */
+export const AGENT_COD_POOL_SOURCES = ['not_verified', 'override', 'plan'] as const;
+export type AgentCodPoolSource = (typeof AGENT_COD_POOL_SOURCES)[number];
+
+/**
+ * An administrator's pinned COD pool. The actor stamp is the three-field
+ * `actorStampFields()` convention, exactly as on `IAgentTrustOverride`.
+ */
+export interface IAgentCodPoolOverride {
+  /** XAF, within AGENT_CONFIG.COD_THRESHOLD_{MIN,MAX}. May be above OR below the plan. */
+  amount: number;
+  /** Required — an unexplained override on a cash limit is unreviewable. */
   reason: string;
   set_at: Date;
   set_by_user_id: string | null;
@@ -644,6 +707,35 @@ const TrustOverrideSchema = new Schema(
     // the next administrator, and this field outranks the whole scoring system.
     reason: { type: String, required: true, trim: true },
     set_at: { type: Date, required: true, default: Date.now },
+    // ⚠ Declared explicitly, and it was MISSING until 2026-09-22. `actorStampFields` supplies
+    // only `_source` and `_name`; `CodTrustService.setOverride` writes `set_by_user_id` too
+    // (via `actorStamp`), and strict mode silently STRIPPED it on every pin — so no override
+    // ever recorded WHO pinned it, only a name snapshot. A String, because an administrator's
+    // id resolves in wi-admin, not here. `test:agent-trust` pins the declaration.
+    set_by_user_id: { type: String, default: null },
+    ...actorStampFields('set_by'),
+  },
+  { _id: false }
+);
+
+/**
+ * The administrator's pinned COD pool. See `IAgentCodPoolOverride` — `_id: false`
+ * for the reason `TrustOverrideSchema` gives.
+ */
+const CodPoolOverrideSchema = new Schema(
+  {
+    amount: {
+      type: Number,
+      required: true,
+      min: AGENT_CONFIG.COD_THRESHOLD_MIN,
+      max: AGENT_CONFIG.COD_THRESHOLD_MAX,
+    },
+    reason: { type: String, required: true, trim: true },
+    set_at: { type: Date, required: true, default: Date.now },
+    // Declared explicitly: `actorStampFields` supplies only `_source` and `_name`, and
+    // an undeclared id is stripped by strict mode on write, leaving a pin nobody can
+    // attribute. A String, because an administrator's id resolves in wi-admin, not here.
+    set_by_user_id: { type: String, default: null },
     ...actorStampFields('set_by'),
   },
   { _id: false }
@@ -822,12 +914,19 @@ export const agentDefaults = {
   }),
   /**
    * A new agent starts trusted (matching the previous delta model, which seeded
-   * everyone at 100 and subtracted) and with zero COD threshold — they must
-   * opt in to holding cash before any agency can allocate against them.
+   * everyone at 100 and subtracted) and with a ZERO COD pool, sourced
+   * `not_verified` — which is exactly what `AgentCodPoolService` would
+   * compute for them, so a brand-new document is already in sync. The pool
+   * opens automatically at the KYC verdict, from their plan.
    */
   cod: (): IAgentCodProfile => ({
     trust_score: AGENT_CONFIG.TRUST_SCORE_SEED,
     max_threshold: AGENT_CONFIG.COD_THRESHOLD_MIN,
+    pool_ceiling: AGENT_CONFIG.COD_THRESHOLD_MIN,
+    pool_source: 'not_verified',
+    pool_plan_code: null,
+    pool_synced_at: null,
+    pool_override: null,
     // No override is the normal state. `null` is the whole vocabulary — there is
     // deliberately no "override disabled but remembered" state, because an
     // override an operator can see and cannot rely on is worse than none.
@@ -873,6 +972,19 @@ const DeliveryAgentSchema = new Schema<IDeliveryAgent>(
           // O-7's answer. Nullable, and NOT written by any recompute — see
           // IAgentCodProfile.trust_override for why that is the whole design.
           trust_override: { type: TrustOverrideSchema, default: null },
+          // The pool's provenance — written only by AgentCodPoolService. See
+          // IAgentCodProfile.max_threshold for the rule these four record.
+          pool_ceiling: {
+            type: Number,
+            default: AGENT_CONFIG.COD_THRESHOLD_MIN,
+            min: AGENT_CONFIG.COD_THRESHOLD_MIN,
+            max: AGENT_CONFIG.COD_THRESHOLD_MAX,
+          },
+          pool_source: { type: String, enum: AGENT_COD_POOL_SOURCES, default: 'not_verified' },
+          pool_plan_code: { type: String, default: null },
+          pool_synced_at: { type: Date, default: null },
+          // The administrator's pinned pool. Like trust_override, no sync writes it.
+          pool_override: { type: CodPoolOverrideSchema, default: null },
         },
         { _id: false }
       ),

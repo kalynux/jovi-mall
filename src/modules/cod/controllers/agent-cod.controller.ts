@@ -14,6 +14,8 @@ import {
 } from '../validators/cod.validators';
 import { IDeliveryAgent, agentCodThresholdService } from '../../agents';
 import { resolveEffectiveTrustScore } from '../../agents/domain/services/agent-trust-override';
+import { agentCodPoolService } from '../../agents/domain/services/agent-cod-pool.service';
+import { SetOwnCodPoolSchema } from '../../agents/validators/agent.validator';
 import {
   agentActionAuditService,
   outcomeFromError,
@@ -104,7 +106,8 @@ export class AgentCodController {
     // `cod.max_threshold` is the pool that bounds it — so a self-view has a
     // single honest limit, and it is the agent's own. Each contract's threshold
     // is a slice of this and binds only that agency's dispatches; none of them
-    // is "my limit".
+    // is "my limit". (Since 2026-09-21 the exposure gate also caps every dispatch
+    // at this pool, so the self-view and the gate now agree on the ceiling.)
     const [{ balance, currency }, exposure] = await Promise.all([
       codCashAccountService.getBalance('agent', agentId),
       codExposureService.currentExposure(agentId),
@@ -145,6 +148,29 @@ export class AgentCodController {
     const agentId = req.auth!.role_entity._id.toString();
     const allocation = await agentCodThresholdService.getAllocation(agentId);
     res.json({ success: true, data: allocation });
+  });
+
+  /**
+   * PUT /api/agent/cod/pool — body `{ maxThreshold: number | null }`.
+   *
+   * The one COD-pool write an agent has, and it only goes DOWN: carry less than the
+   * ceiling their plan (or an administrator's pin) allows, never more — `null` puts
+   * them back on the whole ceiling. Unverified agents have a ceiling of 0, so for them
+   * this can only confirm 0. Refused below what their contracts already hold, naming
+   * the contracts in the way. Answers the same body as `GET /cod/allocation`.
+   */
+  static setPool = asyncHandler(async (req: Request, res: Response) => {
+    const agentId = req.auth!.role_entity._id.toString();
+    const { maxThreshold } = SetOwnCodPoolSchema.parse(req.body);
+
+    await agentCodPoolService.setAgentLimit(agentId, maxThreshold);
+    const allocation = await agentCodThresholdService.getAllocation(agentId);
+
+    res.json({
+      success: true,
+      data: allocation,
+      message: maxThreshold === null ? 'COD pool restored to your full limit.' : 'COD pool updated.',
+    });
   });
 
   /** GET /api/agent/cod/ledger — append-only history of this agent's cash movements. */

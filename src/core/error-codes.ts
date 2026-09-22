@@ -1185,6 +1185,12 @@ export const ERROR_CODES = Object.freeze({
     // COD threshold allocation (agent global pool ← contract sub-allocations)
     AGENT_COD_THRESHOLD_OUT_OF_BOUNDS: 'AGENT_COD_THRESHOLD_OUT_OF_BOUNDS',
     AGENT_COD_THRESHOLD_BELOW_ALLOCATED: 'AGENT_COD_THRESHOLD_BELOW_ALLOCATED',
+    // The agent asked to carry MORE than their ceiling (plan value, an admin's pinned
+    // pool, or 0 while KYC is unverified). They may only ever lower it themselves.
+    AGENT_COD_POOL_ABOVE_CEILING: 'AGENT_COD_POOL_ABOVE_CEILING',
+    // The pool moved underneath a write (a plan/KYC sync or an admin override landed
+    // between the read and the compare-and-set). Re-read and retry.
+    AGENT_COD_POOL_CONFLICT: 'AGENT_COD_POOL_CONFLICT',
     // An administrator's pinned trust score (O-7) outside 0–100. Same scale as
     // the computed score, because the whole point is that it substitutes for it.
     AGENT_TRUST_OVERRIDE_OUT_OF_BOUNDS: 'AGENT_TRUST_OVERRIDE_OUT_OF_BOUNDS',

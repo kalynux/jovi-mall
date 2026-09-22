@@ -27,6 +27,12 @@ the agent's only once they accept. See [agent offers](../agent/offers.md) for th
 > [`GET /api/agency/agents/:agentId/eligibility`](./agent-roster.md) for the agents you expected:
 > it reports **every** failing rule at once (`agency-roster.controller.ts:670-677`), and it is the
 > diagnostic this screen should link to rather than leaving an operator to guess.
+>
+> ⚠ **But "every rule" means every ELIGIBILITY rule** (corrected 2026-09-22). That endpoint is
+> `AgentEligibilityService.evaluate` alone — platform ban · KYC · active · contract · online ·
+> tracking · device location · capacity. It does **not** run the COD, value-ceiling or coverage
+> gates, so an agent refused by one of those reads **all green** there. For them, `assign-agent` on
+> that agent either places the offer or returns the `422` that names the blocker.
 
 ## Base Path
 
@@ -102,16 +108,21 @@ qualifies.
 **How the ranking is built** (nearest-first):
 - **Eligible agents** — active · active contract with this agency · online · tracking allowed · device
   location on · under capacity.
-- **Location gate** — an agent with no resolvable position is dropped (they can't be ranked by
-  proximity). A live/last-known position, or the agent's declared home base, counts; a deployment can
-  require a *fresh* live fix (`REQUIRE_LIVE_POSITION`).
+- **Location** — removes nobody by default. A live/last-known position, or the agent's declared home
+  base, places an agent by distance. An agent with **no position on file** — the normal state before
+  their first delivery — is **kept and ranked after every located agent**, with `distance_km: null`.
+  *(Changed 2026-09-22: they used to be dropped, so a new agent could never be offered a first
+  shipment while `/eligibility` showed them all green.)* A deployment can require a *fresh* live fix
+  instead (`REQUIRE_LIVE_POSITION`), which drops everyone without one — every never-tracked agent
+  included.
 - **Trust floor** — below `MIN_TRUST_SCORE` (platform default `0`, so inert until raised) an agent
   gets no auto offer.
 - **COD gate** (COD orders only) — agents over their COD headroom on this agency's contract are removed
   entirely.
 - **Order** — survivors are capped to the nearest `MAX_AUTO_CANDIDATES` (default **20**) and ordered
   nearest-first via the road-network distance matrix (haversine fallback when the geo provider is
-  unavailable). The weighted `score`/`breakdown` on the [candidate preview](#candidates) is for
+  unavailable), then the agents with no position — who are therefore the first cut when more than 20
+  qualify. The weighted `score`/`breakdown` on the [candidate preview](#candidates) is for
   explainability and tie-breaking, **not** the primary sort — proximity is.
 
 **The broadcast — the key behaviour for the UI.** The full ranking is snapshotted onto a temporary
@@ -134,7 +145,9 @@ shipment as **searching** until an agent binds or you are told it is unfilled.
 Preview the ranked pool without offering — the same nearest-first order auto-assignment would use.
 Returns each candidate with `rank` (0 = nearest) and a score breakdown (`distance_km`,
 `distance_score`, `free_capacity`, `capacity_score`, `trust_score`, `weighted`). The `weighted` score
-is explanatory/tie-break context; the list order is proximity.
+is explanatory/tie-break context; the list order is proximity. `distance_km` is `null` for an agent
+with no position on file (listed after the located ones) and for everyone when the pickup point has
+no coordinates.
 
 ```json
 {

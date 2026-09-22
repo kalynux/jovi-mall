@@ -10,7 +10,8 @@ const PlanRoleSchema = z.enum([...BILLING_OWNER_TYPES]);
 /**
  * Admin: create a pricing plan. Limit fields are role-specific and nullable —
  * vendor plans carry products/storage/commission; agency/agent plans carry
- * `max_unterminated_shipments`. `live_tracking_enabled` defaults true everywhere.
+ * `max_unterminated_shipments`; agent plans carry `max_cod_pool` (⚠ `null` = no COD
+ * at all, not unlimited — see the model). `live_tracking_enabled` defaults true everywhere.
  */
 export const CreatePlanSchema = z.object({
   role: PlanRoleSchema.default('vendor'),
@@ -24,6 +25,7 @@ export const CreatePlanSchema = z.object({
   max_storage_bytes: z.number().int().min(0).nullable().optional(),
   commission_percent: z.number().min(0).max(100).nullable().optional(),
   max_unterminated_shipments: z.number().int().min(0).nullable().optional(),
+  max_cod_pool: z.number().int().min(0).nullable().optional(),
   live_tracking_enabled: z.boolean().optional(),
   is_active: z.boolean().optional(),
   sort_order: z.number().int().optional(),

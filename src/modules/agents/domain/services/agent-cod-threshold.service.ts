@@ -7,9 +7,8 @@ import {
   AgentContractRepository,
   agentContractRepository,
 } from '../../repositories/agent-contract.repository';
-import { IDeliveryAgent } from '../../models/agent.model';
 import { AGENT_CONFIG } from '../../config/agent.config';
-import { eventBus } from '../../../../core/events/event-bus';
+import { CodPoolView, describeCodPool } from './agent-cod-pool';
 
 export interface ThresholdAllocation {
   agentId: string;
@@ -19,6 +18,15 @@ export interface ThresholdAllocation {
   allocated: number;
   /** maxThreshold - allocated. Never negative. */
   headroom: number;
+  /**
+   * `allocated - maxThreshold` when contracts hold MORE than the pool, else 0. Only
+   * an automatic sync can produce this (a plan downgrade, a revoked KYC verdict) —
+   * the human writers refuse to. While it is above 0 no slice can be raised, and
+   * the exposure gate binds at the pool rather than at any larger slice.
+   */
+  overAllocatedBy: number;
+  /** Where the pool comes from — the plan, a pinned value, or 0 while unverified. */
+  pool: CodPoolView;
   /** Per-contract breakdown — what the agency review screen needs. */
   contracts: Array<{
     contractId: string;
@@ -57,13 +65,22 @@ export interface ThresholdAllocation {
  * ── Where the constraint is enforced ────────────────────────────────────────
  *
  * From both directions, because either side can breach it:
- *   - agent lowering `max_threshold` below what is already allocated → reject
+ *   - the agent or an administrator lowering the pool below what is already
+ *     allocated → reject (`AgentCodPoolService`, which owns every pool write)
  *   - agency raising `contract.threshold` beyond remaining headroom → reject
  *   - approving a pending contract whose threshold exceeds headroom → reject
  *
  * Every check runs INSIDE the caller's transaction against a session-scoped
  * read. A check outside the transaction is decoration: two agencies approving
  * simultaneously would both read the same headroom and both commit.
+ *
+ * ── The pool itself is not written here any more (2026-09-21) ──────────────
+ *
+ * `setAgentThreshold` lived here and wrote `cod.max_threshold` directly. The pool
+ * is now derived from the agent's plan and KYC verdict (see `agent-cod-pool.ts`),
+ * and a direct write would be silently undone by the next sync — so every write
+ * moved to `AgentCodPoolService`, and this service only reads the pool it
+ * sub-allocates.
  */
 export class AgentCodThresholdService {
   constructor(
@@ -87,6 +104,8 @@ export class AgentCodThresholdService {
       maxThreshold,
       allocated,
       headroom: Math.max(0, maxThreshold - allocated),
+      overAllocatedBy: Math.max(0, allocated - maxThreshold),
+      pool: describeCodPool(agent),
       contracts: allocating.map((c) => ({
         contractId: c._id.toString(),
         agencyId: c.agency_id.toString(),
@@ -113,79 +132,6 @@ export class AgentCodThresholdService {
       .reduce((sum, c) => sum + (c.cod?.threshold ?? 0), 0);
 
     return Math.max(0, (agent.cod?.max_threshold ?? 0) - allocated);
-  }
-
-  // ─── Agent side: the global pool ──────────────────────────────────────────
-
-  /**
-   * The agent sets their own global threshold.
-   *
-   * Lowering below what is already allocated is a HARD rejection — not a
-   * partial write, not a queued intent, no side effects. There is deliberately
-   * no remediation workflow: freeing the headroom means getting agencies to
-   * lower their contract thresholds or end a contract, which is an off-platform
-   * negotiation. The system's job here is to refuse and say exactly how much is
-   * in the way.
-   */
-  async setAgentThreshold(agentId: string, maxThreshold: number): Promise<IDeliveryAgent> {
-    if (
-      !Number.isInteger(maxThreshold) ||
-      maxThreshold < AGENT_CONFIG.COD_THRESHOLD_MIN ||
-      maxThreshold > AGENT_CONFIG.COD_THRESHOLD_MAX
-    ) {
-      throw createAppError(ERROR_CODES.AGENT_COD_THRESHOLD_OUT_OF_BOUNDS, 422, undefined, {
-        requested: maxThreshold,
-        min: AGENT_CONFIG.COD_THRESHOLD_MIN,
-        max: AGENT_CONFIG.COD_THRESHOLD_MAX,
-      });
-    }
-
-    return await transactionManager.runInTransaction(async (session) => {
-      const agent = await this.agents.findById(agentId, session);
-      if (!agent) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
-
-      const allocating = await this.contracts.listAllocating(agentId, session);
-      const allocated = allocating.reduce((sum, c) => sum + (c.cod?.threshold ?? 0), 0);
-
-      if (maxThreshold < allocated) {
-        throw createAppError(ERROR_CODES.AGENT_COD_THRESHOLD_BELOW_ALLOCATED, 422, undefined, {
-          requested: maxThreshold,
-          currentlyAllocated: allocated,
-          shortfall: allocated - maxThreshold,
-          contracts: allocating.map((c) => ({
-            contractId: c._id.toString(),
-            agencyId: c.agency_id.toString(),
-            threshold: c.cod?.threshold ?? 0,
-          })),
-        });
-      }
-
-      const previous = agent.cod?.max_threshold ?? 0;
-      const updated = await this.agents.setCodMaxThreshold(agentId, maxThreshold, session);
-      if (!updated) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
-
-      // Raising the pool can unblock contracts sitting pending for want of
-      // headroom — emit so an agency's review queue can refresh rather than
-      // poll. Nothing subscribes yet; the event is the seam.
-      if (previous !== maxThreshold) {
-        void eventBus
-          .publish('agent.cod_threshold_changed', {
-            eventType: 'agent.cod_threshold_changed',
-            aggregateId: agentId,
-            occurredAt: new Date(),
-            payload: {
-              agentId,
-              from: previous,
-              to: maxThreshold,
-              allocated,
-              headroom: maxThreshold - allocated,
-            },
-          })
-          .catch((err) => console.error('[AgentCodThresholdService] threshold emit failed:', err));
-      }
-
-      return updated;
-    });
   }
 
   // ─── Contract side: the sub-allocation ────────────────────────────────────
@@ -222,7 +168,9 @@ export class AgentCodThresholdService {
         requested: threshold,
         headroom,
         shortfall: threshold - headroom,
-        hint: 'The agent must raise their global COD threshold, or another contract must free capacity.',
+        hint:
+          'The agent\'s COD pool has no room for this. Their pool comes from their plan once their identity '
+          + 'is verified (they may also have chosen to carry less); otherwise another contract must free capacity.',
       });
     }
   }

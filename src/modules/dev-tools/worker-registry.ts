@@ -12,6 +12,7 @@ import { paymentReconciliationWorker } from '../payments/workers/payment-reconci
 import { codDepositDeadlineWorker } from '../cod/workers/cod-deposit-deadline.worker';
 import { trackingDispatchWorker } from '../tracking-integration/workers/tracking-dispatch.worker';
 import { agentCapacityReconcileWorker } from '../agents/workers/agent-capacity-reconcile.worker';
+import { agentCodPoolReconcileWorker } from '../agents/workers/agent-cod-pool-reconcile.worker';
 import { agentTrustRecomputeWorker } from '../agents/workers/agent-trust-recompute.worker';
 import { agencyInventoryReconcileWorker } from '../inventory/workers/agency-inventory-reconcile.worker';
 import { agencyStorageInvoiceWorker } from '../inventory/workers/agency-storage-invoice.worker';
@@ -218,6 +219,21 @@ export const WORKER_REGISTRY = Object.freeze({
         runOnce: () => runVoidSweep(
             () => agentCapacityReconcileWorker.runSweep(),
             'Active-shipment counters reconciled against reality',
+        ),
+    },
+    /**
+     * Triggerable because the first run after the deploy that introduced it is the one that
+     * matters: agents written before the plan × KYC rule carry no provenance, and their pool
+     * reads 0 (or an old administrator-set number) until this converges them. Waiting for
+     * 04:30 is correct and slow; pressing it is correct and immediate. Every write is a
+     * compare-and-set and an in-step agent is not written, so a second press is a no-op.
+     */
+    'agent-cod-pool-reconcile': {
+        label: 'Agent COD pool reconciliation',
+        worker: agentCodPoolReconcileWorker,
+        runOnce: () => runVoidSweep(
+            () => agentCodPoolReconcileWorker.runSweep(),
+            'COD pools re-derived from plan, KYC verdict and administrator pins',
         ),
     },
     /**

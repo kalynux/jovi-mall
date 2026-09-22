@@ -96,6 +96,7 @@ pre-split.
       "max_storage_bytes": 1073741824,
       "commission_percent": 7,
       "max_unterminated_shipments": null,
+      "max_cod_pool": null,
       "live_tracking_enabled": true,
       "is_active": true,
       "sort_order": 1
@@ -120,6 +121,7 @@ pre-split.
 | `max_storage_bytes` | number \| null | Media cap, all roles. Bytes. |
 | `commission_percent` | number \| null | Vendor only. % of order gross taken at payment. |
 | `max_unterminated_shipments` | number \| null | Agency (**soft** cap) and agent (**hard** cap). `null` = unlimited. |
+| `max_cod_pool` | number \| null | **Agent plans only** (since 2026-09-21): the cash-on-delivery money (XAF) an agent on this tier may carry once their identity is verified. Free 500 000 · Plus 1 000 000 · Pro 2 000 000. ⚠ `null` means **no COD**, never "unlimited". `null` on every vendor and agency plan. |
 | `live_tracking_enabled` | boolean | `true` on every tier today. Read it, don't build copy on it. |
 | `is_active` | boolean | Whether the tier is buyable today — see below. |
 | `sort_order` | number | Display order within the role. |

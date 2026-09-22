@@ -138,16 +138,18 @@ export function rankScored(
  * Pipeline (matches the requirement):
  *   1. eligibility — active · approved · online · tracking-allowed · device-loc
  *      · under-capacity (AgentEligibilityService).
- *   2. current-location gate — an agent with no resolvable position is dropped
- *      (they cannot be ranked by proximity). With REQUIRE_LIVE_POSITION on, only
- *      a FRESH pushed position counts.
+ *   2. current-location gate — only with REQUIRE_LIVE_POSITION on, where an
+ *      agent without a FRESH pushed position is dropped. Off (the default), an
+ *      agent with no position on file at all is KEPT and ranked after every
+ *      located agent — see `resolvePosition` for why dropping them was wrong.
  *   3. trust floor — MIN_TRUST_SCORE gates receiving ANY order.
  *   4. COD gate — for a COD order, drop agents over their COD headroom (checked
  *      in parallel, not a sequential N+1). Prepaid orders skip it entirely.
  *   5. cap to MAX_AUTO_CANDIDATES nearest (local haversine pre-cut).
- *   6. proximity ranking — send the capped set + pickup to the Geo Provider
- *      (geo-tracker's road-network matrix); fall back to local haversine order
- *      if it is unavailable. Order is nearest → farthest.
+ *   6. proximity ranking — send the capped set's LOCATED agents + pickup to the
+ *      Geo Provider (geo-tracker's road-network matrix); fall back to local
+ *      haversine order if it is unavailable. Order is nearest → farthest, then
+ *      the unlocated agents.
  */
 export class AssignmentCandidateService {
   constructor(
@@ -166,7 +168,7 @@ export class AssignmentCandidateService {
   /**
    * Ranked candidates for a shipment, nearest first, capped at
    * MAX_AUTO_CANDIDATES. Empty when no eligible (and, for COD, COD-clearable)
-   * agent with a usable location exists.
+   * agent exists — or, with REQUIRE_LIVE_POSITION on, none with a fresh fix.
    */
   async buildRanking(shipment: IShipment, order: IOrder): Promise<RankingResult> {
     const agencyId = shipment.agency_id.toString();
@@ -194,11 +196,12 @@ export class AssignmentCandidateService {
     const countryCode = order.delivery_address?.components?.country_code ?? null;
 
     // Steps 2–4 — every pure gate in one pass, no I/O.
-    const located = agents
+    const pool = agents
       .map((agent) => ({ agent, position: this.resolvePosition(agent) }))
-      .filter((c): c is { agent: IDeliveryAgent; position: ResolvedPosition } => {
-        if (!c.position) return false; // no current location → cannot rank by proximity
-        if (ASSIGNMENT_CONFIG.REQUIRE_LIVE_POSITION && !c.position.fresh) return false;
+      .filter((c) => {
+        // A missing position fails only the fresh-fix requirement. Without it,
+        // the agent stays in and sorts after everyone located (see resolvePosition).
+        if (ASSIGNMENT_CONFIG.REQUIRE_LIVE_POSITION && !c.position?.fresh) return false;
         if ((c.agent.cod?.trust_score ?? 0) < ASSIGNMENT_CONFIG.MIN_TRUST_SCORE) return false;
 
         // Contract-term gates. A missing contract cannot happen for an eligible
@@ -217,10 +220,10 @@ export class AssignmentCandidateService {
 
     // Step 5 — COD headroom gate. Still last: it is the only one that reads the
     // agent's live exposure, so it is the most expensive to be wrong about.
-    let survivors = located;
+    let survivors = pool;
     if (isCod) {
       const codOk = await Promise.all(
-        located.map((c) =>
+        pool.map((c) =>
           this.canTakeCod(
             c.agent,
             contractByAgent.get(c.agent._id.toString())?.cod?.threshold ?? 0,
@@ -228,16 +231,18 @@ export class AssignmentCandidateService {
           )
         )
       );
-      survivors = located.filter((_, i) => codOk[i]);
+      survivors = pool.filter((_, i) => codOk[i]);
     }
     if (survivors.length === 0) return { candidates: [], source: 'haversine' };
 
     // Step 5 — pre-cut to the nearest MAX_AUTO_CANDIDATES by local haversine, so
     // the Geo Provider is only ever asked about the plausible set (the
-    // requirement's "up to 20 to the provider").
+    // requirement's "up to 20 to the provider"). An unlocated agent's distance is
+    // null, which `byNearest` sorts last — so they are the first cut when the
+    // pool overflows: an agent known to be close beats one nothing is known about.
     const withDistance = survivors.map((c) => ({
       ...c,
-      haversineKm: pickup ? haversineKm(pickup, c.position.point) : null,
+      haversineKm: pickup && c.position ? haversineKm(pickup, c.position.point) : null,
     }));
     withDistance.sort((a, b) => this.byNearest(a.haversineKm, b.haversineKm, a.agent, b.agent));
     const capped = withDistance.slice(0, ASSIGNMENT_CONFIG.MAX_AUTO_CANDIDATES);
@@ -246,28 +251,38 @@ export class AssignmentCandidateService {
     return await this.rankByProximity(capped, pickup);
   }
 
-  /** Order the capped set nearest-first via the Geo Provider, else haversine. */
+  /**
+   * Order the capped set nearest-first via the Geo Provider, else haversine.
+   * Only LOCATED agents can go to the provider; the unlocated ones follow them.
+   */
   private async rankByProximity(
-    capped: Array<{ agent: IDeliveryAgent; position: ResolvedPosition; haversineKm: number | null }>,
+    capped: Array<{ agent: IDeliveryAgent; position: ResolvedPosition | null; haversineKm: number | null }>,
     pickup: IGeoPoint | null
   ): Promise<RankingResult> {
+    const located = capped.filter(
+      (c): c is typeof c & { position: ResolvedPosition } => c.position !== null
+    );
     const geo = pickup
       ? await this.geoRouting.rankByProximity(
           pickup,
-          capped.map((c) => ({ agentId: c.agent._id.toString(), position: c.position.point }))
+          located.map((c) => ({ agentId: c.agent._id.toString(), position: c.position.point }))
         )
       : null;
 
     if (geo) {
       // Provider order wins. Build candidates in the returned nearest→farthest order.
-      const byId = new Map(capped.map((c) => [c.agent._id.toString(), c]));
+      const byId = new Map(located.map((c) => [c.agent._id.toString(), c]));
       const candidates: RankedCandidate[] = [];
-      geo.forEach((r, rank) => {
+      geo.forEach((r) => {
         const c = byId.get(r.agentId);
         if (!c) return;
         const distanceKm = Number.isFinite(r.distanceMeters) ? r.distanceMeters / 1000 : c.haversineKm;
-        candidates.push(this.toRanked(c.agent, rank, r.distanceMeters, r.durationSeconds, distanceKm));
+        candidates.push(this.toRanked(c.agent, candidates.length, r.distanceMeters, r.durationSeconds, distanceKm));
       });
+      // Then everyone with no position, in the order the pre-cut left them.
+      for (const c of capped) {
+        if (c.position === null) candidates.push(this.toRanked(c.agent, candidates.length, null, null, null));
+      }
       return { candidates, source: 'geo_matrix' };
     }
 
@@ -355,8 +370,15 @@ export class AssignmentCandidateService {
   /**
    * Agent position + whether it counts as CURRENT. A live pushed position within
    * POSITION_FRESHNESS_SECONDS is fresh; an older mirror or the declared home
-   * base is a usable fallback but not "fresh". Null when nothing is on file — an
-   * agent with no coordinates at all cannot be ranked by proximity.
+   * base is a usable fallback but not "fresh". Null when nothing is on file.
+   *
+   * ⚠ Null is the NORMAL state of a new agent, which is why it no longer drops
+   * them. Neither source can be filled before a first delivery: nothing writes
+   * `home_base` (`agentRepository.setHomeBase` has no caller), and geo-tracker
+   * pushes a position only on a tracking-SESSION transition, which exists only
+   * for an active shipment — an idle agent's live fix stays in geo-tracker. So
+   * a dropped agent could never be offered the shipment that would give them a
+   * position, while every eligibility screen showed them all green.
    */
   private resolvePosition(agent: IDeliveryAgent): ResolvedPosition | null {
     const lk = agent.last_known_tracking_state;

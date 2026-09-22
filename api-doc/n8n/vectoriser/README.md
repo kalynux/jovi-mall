@@ -17,6 +17,7 @@ stock have to come from the service that owns them.
 | The table + the search function | [`product_vectors.sql`](product_vectors.sql) — **all applied** to `vector_db` |
 | The search tool | n8n workflow **`wi-mall-product-search`** (`GUrwafUbWGNv4XW7`) — published |
 | The schema applier | n8n workflow **`wi-mall-vectoriser-schema`** (`i4Zo7LPGZx9Rh7mE`) |
+| Product photos (image arm) | [`image-vectoriser/`](image-vectoriser/) + n8n **`UP-wi-mall-image-vectoriser`** (`SiWU1FWg3sFoilQE`) — ✅ live (§ 15) |
 | The caller | [`VectorisationService.ts`](../../../src/modules/catalog/domain/services/VectorisationService.ts) |
 | Its config | [`vectoriser.config.ts`](../../../src/config/vectoriser.config.ts) |
 | The internal door | [`internal-vectoriser.routes.ts`](../../../src/modules/catalog/routes/internal-vectoriser.routes.ts) |
@@ -225,7 +226,7 @@ the same reason and one more: the volume is one callback per job.
 
 ## 5. What is in the embedded text, and what is not
 
-The text is built by code, not a model, in the `build product text` node. Same
+The text is built by code, not a model, in the `build all texts` node (it was `build product text` before § 11 batched it). Same
 product in, same vector out — otherwise an unrelated price edit reshuffles every
 customer's search results, and a model will happily invent attributes ("breathable
 mesh") that no vendor typed and that the agent then quotes as fact.
@@ -852,3 +853,361 @@ That gap *is* the fusion working, and it is why the per-arm ranks are returned.
   three in the bot workflows.
 - **`wi-mall-core` is still inactive**, as it was before this change. Activating it
   is the owner's call.
+
+---
+
+## 15. Product photos — the image arm  ✅ LIVE (2026-09-22)
+
+**What it adds.** A fourth retrieval arm over what the product *photos* look like. A
+text query can then reach a product whose text never mentions it (*"voiture de sport
+noire"* finds the Porsche photo), and a customer's **photo** can reach the product it
+shows. Only pictures are embedded: PNG/JPEG/WEBP/GIF from the gallery and from each
+variant. **No video, no digital asset.** Both are excluded by how the list is built,
+not by a filter someone has to remember (§ 15.3).
+
+**Where it stands.** Applied and published on the production n8n and `vector_db`, and
+proven end to end there with a test product (§ 15.9). ⚠ **It has no real photos to work
+on yet**: on 2026-09-22 production had one public product, and it had no photo; the
+production index held only stale dev products (§ 15.10). Photos start flowing as soon
+as real products with photos are vectorised through jovi-mall's normal opt-in.
+
+| Piece | Where | State |
+|---|---|---|
+| Table, trigger, claim/settle, cache, 4th arm | [`product_vectors.sql`](product_vectors.sql) → `wi-mall-vectoriser-schema` | ✅ applied; `7. Fingerprint` = the proven container, 10/10 hashes |
+| SQL proofs | [`image_arm.test.sql`](image_arm.test.sql) | ✅ 47/47, 4 guards proven to bite, old-schema upgrade path proven |
+| The drainer | **`UP-wi-mall-image-vectoriser`** (`SiWU1FWg3sFoilQE`), built from `image-vectoriser/nodes/*.js` | ✅ published, every minute |
+| The one change to the text flow | `UP-wi-mall-vectoriser` → `build all texts` → **`metadata.image_files`** | ✅ published; draft proven byte-identical to the patched file |
+| n8n-side proofs | [`image-vectoriser/test.js`](image-vectoriser/test.js) · [`search/test.js`](image-vectoriser/search/test.js) | ✅ 51/51 · 42/42 |
+| The search side | `UP-wi-mall-product-search` (`GUrwafUbWGNv4XW7`), `UP-wi-mall-core` → `Search-Products` | ✅ published (§ 15.7) |
+| Floor calibration | [`image-vectoriser/calibrate-floors.js`](image-vectoriser/calibrate-floors.js) + `calibration-2026-09-21.json` | ✅ real voyage-multimodal-3.5 vectors |
+| Live smoke test | **`wi-mall-image-arm-smoke`** (`c6jCwddhot1pa5qN`) — seed / check / photo / clean | ✅ keep INACTIVE; run by hand |
+
+### 15.1 · Why a separate arm, not a new model for the whole index
+
+The image model is **`voyage-multimodal-3.5`**, and it is **not in the voyage-4
+vector space**. Voyage's shared space covers only the four voyage-4 text models. That
+left two options:
+
+- Move the whole index to the multimodal model. That means a full re-index,
+  re-measuring the § 14 floor, emptying the query cache, and leaving pure-text
+  matching to a model that isn't voyage-4.
+- Keep the text index **exactly as it is** and add photos as a ranking of their own.
+
+The owner chose the second. It is additive: the live text search can't regress, and
+RRF never compares distances across the two spaces, only positions.
+
+**Each photo is embedded alone, with no caption.** Adding the title would make this
+arm re-find what the three text arms already find, and RRF would count the same
+evidence twice. The arm exists to add what the text doesn't say.
+
+### 15.2 · Designed for the free tier, on the owner's instruction
+
+The owner asked for the flow to be designed **as if no Voyage payment method
+existed**, which means **3 requests and 10K tokens per minute**. Voyage charges
+**1 token per 560 pixels**, capped at about 2M pixels, so a full-size product photo
+costs **up to ~3,572 tokens**. One 32-product text chunk carrying six photos each
+would be ~100× the per-minute budget.
+
+So images are **not** embedded inside the text job. The text flow gains exactly one
+metadata key, and a separate **scheduled drainer** embeds the photos at a pace the
+free tier can carry:
+
+```
+wi-mall-vectoriser  (same shape as before)
+  build all texts    ── metadata.image_files = embeddableImages(p)   ← the ONLY edit
+  store chunk        ── INSERT … ON CONFLICT (product_id) DO UPDATE
+                           └─ trigger → product_image_vectors rows ('pending'),
+                              same transaction, only when the image list changed
+
+wi-mall-image-vectoriser  (new, every minute)
+  mint claim id → claim images → build embed request → embed images
+               → assemble results → settle images → verify settled
+```
+
+**The two settings** are `EVERY_MINUTES = 1` and `BATCH = 2` in `build-workflow.js`.
+Two full-size photos are ~7.1K tokens in one request per minute. That leaves two
+requests and ~2.9K tokens of each minute for the live search's own multimodal calls,
+and it works out to **120 photos an hour**. On a paid tier you change those two
+numbers; the workflow's shape stays the same.
+
+⚠ **Voyage's free-tier limiter refuses requests by IMAGE COUNT, not by pixels.**
+Measured 2026-09-21 with the key in `jovi-mall/.env`:
+
+| request | billed tokens | answer |
+|---|---|---|
+| 1 image, 512 px | 334 | 200 |
+| 3 × 512 px | 1,003 | 200 |
+| 4 × 512 px | 1,338 | 200 |
+| 6 × 512 px | 2,007 | 200 |
+| **11 × 256 px** | ~1,000 | **429** |
+| 11 × 512 px | ~3,700 | **429** |
+| 3 × 1024 px · 2 × 1440 px | 4,015 · 5,292 | 200 · 200 |
+
+Eleven images are refused at any size, even though they'd bill a tenth of the
+budget. The per-request ceiling is somewhere between 7 and 10 images regardless of
+size, and the **billed** tokens are what use up the minute. `BATCH = 2` stays under
+both limits.
+
+⚠ **The key in `jovi-mall/.env` (`VOYAGE_EMBEDDINGS_API_KEY`) belongs to a Voyage
+organisation with NO payment method.** Every probe above came back with the
+reduced-limits message. If a payment method was added, it went on a different
+organisation, or n8n's `Voyage Bearer` credential holds a different key. Check which
+organisation the production key belongs to before relying on paid limits anywhere.
+
+### 15.3 · Which photos (`embeddableImages`)
+
+This function lives in `build all texts` (inside `buildProductText`), and its result becomes
+`metadata.image_files` beside the older `metadata.images`. It never enters the embedded
+**text**, so § 5's rule still holds.
+
+- **PNG / JPEG / WEBP / GIF only**, the four formats Voyage accepts. A video in the
+  gallery (`video/mp4`) is skipped. A digital asset lives under
+  `variants[].digitalConfig.asset` and is never read.
+- **https only.** Voyage fetches each URL itself. An `http://` URL points at a dev
+  laptop's storage, which Voyage can never reach, so queuing it would only burn five
+  attempts. In production the URLs are on the R2 CDN (`cdn.fante.cloud`).
+- **Gallery first, then each variant's own photos**, deduplicated by file id. A
+  gallery photo reused on a variant counts once, as a gallery photo.
+- **At most 6 per product.** At 2 photos a minute that is three minutes of drainer
+  time per product, and it limits the queue one vendor with 40 photos could build.
+- **`url: null`** means the file is quota-blocked and the platform withheld its
+  address. It is skipped, never guessed.
+
+### 15.4 · The queue, and the rules that make it safe to run every minute
+
+`product_image_vectors` is both the queue **and** the index: one row per (product,
+file), moving `pending → claimed → embedded | failed`. The trigger keeps it in step
+with `product_vectors.metadata.image_files`. The foreign key **cascades from
+`product_vectors`**, so `/delete` needed no change. `/status` needed none either,
+because the arm joins `product_vectors` and inherits its status filter.
+
+- **Re-indexing with the same photos touches no row.** This is the common case, e.g.
+  a price edit. The trigger fires only when the image list changed, and the upsert
+  rewrites only rows whose URL, variant or position moved. Proven by `xmin` (test 1e).
+- **An embedded photo keeps its vector when only its URL moves**, e.g. after a
+  storage migration: same file id, same bytes. A *failed* photo whose URL moved gets a
+  fresh start.
+- **Primary photos go first, across all products.** The claim orders by position, so
+  every product's photo 0 is embedded before any product's photo 1.
+- **Settling a claim is idempotent**, the same way jovi-mall's
+  `vectorisationJob.jobId` works. Settle writes only rows that still carry *its*
+  `claim_id`. A duplicate, late or foreign settle writes nothing, and `verify settled`
+  catches that in the returned rows.
+- ⚠ **One bad URL fails the whole Voyage request.** So new work is claimed in
+  batches, but **a retry is always claimed alone**. The bad photo fails its
+  batch-mate once; after that each is retried by itself, and only the bad one keeps
+  failing.
+- ⚠ **Only a failure caused by the photo itself uses up an attempt.** `failed`
+  (attempts + 1, backoff 1-2-4-8 min, 5 attempts) is reserved for a 400/413/415/422.
+  A 429, a 5xx, a refused credential or no answer at all is `deferred`: the photo goes
+  back to pending in a minute and **no attempt is spent**. Otherwise one afternoon of
+  Voyage outage would exhaust the whole queue. 401/403/5xx/no-answer also **throw** in
+  `verify settled`, so the run reaches the automation board through `errorWorkflow`. A
+  429 doesn't throw: on the free tier it's expected, not an incident.
+- **An abandoned claim** (the run died between claim and settle) is recovered after
+  10 minutes and **counts as an attempt**, so a photo that crashes its run every time
+  eventually stops being retried.
+- Successful executions are **not saved** (`saveDataSuccessExecution: none`). The
+  drainer runs 1,440 times a day and nearly every run is "nothing to claim". Failures
+  are saved.
+
+When photo search seems thin, run this first to see where the photos stand:
+
+```sql
+SELECT status, count(*) AS images,
+       count(*) FILTER (WHERE attempts >= 5) AS gave_up,
+       min(next_attempt_at) FILTER (WHERE status <> 'embedded') AS next_due
+FROM product_image_vectors GROUP BY status;
+```
+
+### 15.5 · The fourth arm in `product_search()`
+
+Three new parameters, **appended last** so every existing call with named arguments
+is untouched, and **off by default**:
+
+| | |
+|---|---|
+| `p_image_embedding` | the query as a `voyage-multimodal-3.5` vector, `input_type=query`: a customer's photo, or their words |
+| `p_image_weight` | 1.0 (§ 13's lesson: a weight below 1.0 can disable an arm) |
+| `p_max_image_distance` | the floor. ⚠ **never omit it when the embedding is set** |
+
+A product counts as close as its **closest** photo, since one good angle is a match.
+The arm is an **exact** scan over the photos of products that pass the filters.
+Filtering first means the pgvector filter hazard in § 13 can't starve it, and it takes
+milliseconds at a few thousand photos. There is deliberately no HNSW index: the
+planner couldn't use one from inside this query, and an unused index still slows
+every write. `image_rank` is returned beside the other three ranks.
+
+`p_query_embedding` may now be **NULL**. A photo with no words skips the text semantic
+arm (`One-Time Filter: false` in the plan) and ranks on the image arm alone.
+
+⚠ **A finding about the EXISTING function, recorded here, not fixed.** § 13's table
+says the HNSW index is used. **It isn't, from inside `product_search()`.** The
+`filtered` CTE is referenced by every arm, PostgreSQL materialises any CTE referenced
+more than once, and so the semantic arm runs as a sequential scan plus sort over it.
+Measured with `EXPLAIN` on PG 17.11 + pgvector 0.8.6, 2026-09-21. At today's
+catalogue size that is *exact* search costing milliseconds, and it's more accurate
+than HNSW. It stops being cheap somewhere in the tens of thousands of products. The
+fix then is `AS NOT MATERIALIZED` on the semantic arm's own scan, or a direct HNSW
+scan joined back to `filtered`, with `hnsw.iterative_scan`.
+
+### 15.6 · The floors, MEASURED
+
+Measured with real `voyage-multimodal-3.5` vectors: 11 catalogue photos from dev
+storage, 9 photo queries, 22 text queries (`calibration-2026-09-21.json`).
+
+| search | true matches | nothing matches (nearest) | floor |
+|---|---|---|---|
+| **photo → photo** | 0.146 – 0.379 | 0.641 – 0.738 | **0.50**: clean gap |
+| **text → photo** | 0.498 – 0.827 | 0.773 – 0.925 | **0.72**: the ranges overlap |
+
+- **The realistic photo case is the book.** A *different page* of the same workbook
+  still found it, at 0.373. The crops (0.15–0.21) flatter the numbers.
+- ⚠ **Photo search finds THE SAME PRODUCT, not look-alikes.** A different car scored
+  0.712 against the Porsche crop, further away than an empty road (0.641). Don't
+  promise "similar items" from a photo; promise "this item, if we sell it".
+- **Text → photo is the weaker direction**, so 0.72 is deliberately conservative. It
+  keeps 9 of 12 matches and admits **no** non-match (the nearest was 0.7725). It drops
+  *sac à dos* (0.815), *chat roux* (0.827) and *livre pour apprendre le chinois*
+  (0.751). The three text arms still cover those words, and showing a wrong product is
+  worse than missing a weak one.
+- ⚠ **Re-measure on the live index once the backlog is embedded.** The same photo at
+  1440 px and at 512 px drifted **0.084 – 0.162**, and these vectors were made at
+  512 px while production embeds the originals. Also re-measure after any model
+  change, the same rule as § 14.
+
+### 15.7 · The search side, as built
+
+Owner decisions, 2026-09-22: **customer photos may be sent to Voyage** for the search,
+and a photo is **searchable only in the message it arrived with**. It is used for that
+one search and dropped: never cached, never stored.
+
+**`wi-mall-core` → `Search-Products`** gained three inputs:
+
+| input | value | why this shape |
+|---|---|---|
+| `usePhoto` | a standalone from-AI boolean | the model decides whether this search is about the picture. Same shape as `inStockOnly`, the one pattern already proven in that node |
+| `photoBase64` | `$('Inbound').first().json.media.contentBase64`, **image messages only** | a voice note or PDF never travels; `$('Inbound').first()` is how the node's other tools read the message |
+| `photoMimeType` | the message's mime | |
+
+⚠ **Why not one expression gating the bytes on the model's answer.** It would put a
+from-AI call inside a larger expression, which no tool in this bot does. If n8n parsed
+it wrongly, every product search would break for every customer. The two-input shape
+costs one thing: on a turn that carried a picture *and* ran a search, the picture also
+lands in product-search's execution log, as it already does in core's.
+
+**`wi-mall-product-search`**, in order:
+
+```
+Search Request  (+ photoBase64, photoMimeType, usePhoto)
+  → Normalise Query       zero = not given (§ 15.10); has_text / has_photo / image_arm
+  → Cache Lookup → Cached?
+       hit ───────────────────────────────┐
+       miss → Has Text?                   │
+                yes → Embed Query → Shape Vector ─┤ (+ Cache Embedding)
+                no  ──────────────────────────────┤
+  → Text Vector Ready  (NoOp — the text vector's single meeting point)
+  → Image Arm?
+       no  → Run Hybrid Search
+       yes → Image Cache Lookup → Image Cached?
+                hit → Run Hybrid Search
+                miss → Embed Image Query → Shape Image Vector → Run Hybrid Search
+                                                             └→ Cache Image Embedding
+  → Found Anything? → Collect Ids → Hydrate Live Prices → Shape Result → Any Live?
+                                                                          yes → Return Hybrid Result
+                                                                          no  → Keyword Fallback
+```
+
+- **The image arm is best-effort.** `Embed Image Query` has a real retry (no
+  `neverError`, § 11's rule for a call a customer waits on) and `continueRegularOutput`.
+  `Shape Image Vector` never throws. When the multimodal call fails, the search runs
+  on its three text arms exactly as before.
+- **Free-tier budgets are per MODEL**, measured: a fourth `voyage-4` call in a minute
+  got 429, and a `voyage-multimodal-3.5` call in the same minute got 200. The image
+  arm cannot starve the text search. Its own 3 RPM is shared between the drainer (1)
+  and search-time image embeds (2).
+- **Typed words are cached** (`product_image_query_cache`, key `text:<normalised
+  query>`). **A photo never is**: its key is `null`, the lookup matches nothing and
+  the insert's `WHERE` refuses it. Proven live (§ 15.9).
+- **A photo with no words never reaches the keyword search.** jovi-mall answers an
+  empty `q` with `400 VALIDATION_ERROR`, and a listing would have been worse.
+  `Shape Fallback Result` answers `source: "photo"`, `count: 0`, with an honest note.
+- The answer carries **`searchedPhoto`**. After a photo match, the note tells the
+  agent to confirm with the customer: a photo finds the same item, not look-alikes.
+
+Source of every node body and expression: [`image-vectoriser/search/`](image-vectoriser/search/)
+(`normalise-query.js`, `shape-image-vector.js`, `shape-result.js`,
+`shape-fallback-result.js`, `expressions.js`), proven by `search/test.js` (42/42, 3
+guards bite). [`image-vectoriser/check-core-tool.js`](image-vectoriser/check-core-tool.js)
+checks core's stored tool node and that nothing else in core changed.
+
+### 15.8 · How it was applied, and how to re-apply it
+
+Every edit was checked by **fetching the saved draft back and comparing it
+byte-for-byte with the tested file** before publishing. An API edit writes the
+draft (§ 12), and a transcription slip would otherwise ship unseen. That check caught
+nothing in the workflows. It **did** catch a corrupted test photo I had pasted by
+hand (§ 15.9), which is why nothing long is pasted by hand any more.
+
+1. **Schema.** `wi-mall-vectoriser-schema` gained nodes `2a`–`2j` (cut verbatim from
+   `product_vectors.sql` by `image-vectoriser/applier-statements.js`). They run
+   **before** step 3/4, because `product_search()` now reads `product_image_vectors`.
+   A new node **`7. Fingerprint`** hashes what is *installed*: functions, triggers,
+   columns, constraints, indexes. Run the same query on a throwaway container with
+   the file applied; equal hashes mean `vector_db` holds exactly the proven schema.
+   On 2026-09-22: **10/10 equal**.
+2. **Text flow.** `image-vectoriser/patch-build-all-texts.js` builds the new `build all
+   texts` from the LIVE one by anchored insertion. It proves every output field
+   except `image_files` is byte-identical. ⚠ The key is **`image_files`, not
+   `images`**: the live node already wrote `metadata.images` as five bare URL strings,
+   and reading objects out of it would have produced zero rows, silently.
+3. **Drainer.** Created from SDK source generated by `image-vectoriser/sdk-source.js`
+   (the same definition `build-workflow.js` writes to JSON). Settings: failure
+   reporter `d2JZ7jA2jJCg0O9S`, successful runs not saved, 300 s timeout.
+4. **Search side**: § 15.7.
+5. **Backfill.** Nothing indexed before 2026-09-22 has `image_files`. Products get
+   them the next time jovi-mall vectorises them (vendor opt-in, or the admin bulk
+   vectorise). ⚠ Do **not** push products into the index some other way: the
+   vendor's opt-in is a billing gate.
+
+### 15.9 · Proven live, 2026-09-22
+
+With `wi-mall-image-arm-smoke`: a test product `imgsmoke-1`, two real photos on
+`cdn.fante.cloud`. It is not a jovi-mall product, so customer searches drop it at
+hydration.
+
+| step | result |
+|---|---|
+| seed | the trigger queued **2 `pending` rows** in production |
+| drainer, one manual run | claimed 2; Voyage fetched both from the CDN by URL (**200**, 5,656 tokens, 3.17 M px); settled **2 embedded**; `verify settled` clean |
+| photo search through the real `Search Request`, core's argument shape | photo embedded as `image_base64`; `Run Hybrid Search` → **`imgsmoke-1`, `image_rank: 1`**, image arm only; `Cache Image Embedding` wrote **nothing** |
+| clean | product deleted; **0 image rows left** (the FK cascade, in production) |
+| core's OLD 7-input call against the new search | still answers (keyword: *Nike Air Max 90*, `searchedPhoto: false`) |
+
+⚠ **Voyage's answer carried `x-api-warning: You have not yet added your payment
+method`**. n8n's production key (`Voyage Bearer`) is on the free tier too, as the
+owner said, so the free-tier shape is the right one.
+
+### 15.10 · Found on the way, and fixed
+
+**1 · Every bot search had been falling to the keyword fallback.** Core's
+`Search-Products` sends `maxDistance: 0`, and a missing budget arrives as
+`maxPrice: 0`; typed numeric inputs can't be blank (see the typed-input trap).
+`Normalise Query` read both literally: a 0.00 relevance floor and a 0 XAF price
+ceiling. `product_search()` returned nothing for **every** bot search, and every turn
+fell to the weaker keyword search (execution 1335, 2026-09-17). **Fixed**: zero means
+"not given" for both. Proven live: *ventilateur sur pied* with core's zeros now gets
+the hybrid ranks.
+
+**2 · The production index holds dev products.** The 29 rows in production
+`vector_db` are dev seeds ("COD shipment seed", "agent-app seed") that production
+jovi-mall does not know, so hydration drops them all. With fix 1 in place, the tool
+would have answered "No products matched." where the bug used to fall through to a
+keyword search that *does* find real products. **Guarded**: `Any Live?`. When every
+hybrid match turns out withdrawn, the keyword search answers instead. ⏳ **Still owed
+by the owner**: re-index the real catalogue through jovi-mall. The dev rows can
+then be removed (`DELETE FROM product_vectors WHERE product_id = ANY(…)`); they are
+harmless meanwhile, since hydration drops them.
+
+**3 · `product_search()` never used its HNSW index** (§ 15.5), recorded rather than
+fixed: at today's size, exact search is cheaper and more accurate.

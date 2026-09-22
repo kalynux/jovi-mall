@@ -73,6 +73,7 @@ import { CodCashAccountModel } from '../../src/modules/cod/models/cod-cash-accou
 import { CodCashLedgerModel } from '../../src/modules/cod/models/cod-cash-ledger.model';
 import { agentCapacityService } from '../../src/modules/agents/domain/services/agent-capacity.service';
 import { agentCodThresholdService } from '../../src/modules/agents/domain/services/agent-cod-threshold.service';
+import { agentCodPoolService } from '../../src/modules/agents/domain/services/agent-cod-pool.service';
 import { agentContractService } from '../../src/modules/agents/domain/services/agent-contract.service';
 import { agentGateService } from '../../src/modules/agents/domain/services/agent-gate.service';
 import { agentContractRepository } from '../../src/modules/agents/repositories/agent-contract.repository';
@@ -262,7 +263,11 @@ async function scenario2Pool(): Promise<void> {
 
   // The other direction — the agent lowering their own pool beneath what is
   // already allocated. Same invariant, opposite actor.
-  const codeLower = await codeOf(() => agentCodThresholdService.setAgentThreshold(AGENT.toString(), POOL - 1));
+  // Since 2026-09-21 the pool is plan × KYC and a human reaches it only through the
+  // administrator's PIN (or the agent's own lower-only write) — both keep this refusal.
+  const codeLower = await codeOf(() => agentCodPoolService.setOverride({
+    agentId: AGENT.toString(), amount: POOL - 1, reason: 'verify:agent-contract — pin below allocated', actor: ADMIN_ACTOR,
+  }));
   assert(
     'the AGENT lowering the pool below what is allocated is refused too',
     codeLower === ERROR_CODES.AGENT_COD_THRESHOLD_BELOW_ALLOCATED,
@@ -287,7 +292,9 @@ async function scenario2Pool(): Promise<void> {
   );
 
   // Raising the pool is what unblocks the other agencies.
-  await agentCodThresholdService.setAgentThreshold(AGENT.toString(), 1_200_000);
+  await agentCodPoolService.setOverride({
+    agentId: AGENT.toString(), amount: 1_200_000, reason: 'verify:agent-contract — raise the pool', actor: ADMIN_ACTOR,
+  });
   await agentCodThresholdService.setContractThreshold(AGENT.toString(), contractA, 600_000);
   await agentCodThresholdService.setContractThreshold(AGENT.toString(), contractB, 200_000);
   const shared = await agentCodThresholdService.getAllocation(AGENT.toString());

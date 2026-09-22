@@ -6,6 +6,8 @@ import { agentContractService } from '../domain/services/agent-contract.service'
 import { agentEligibilityService } from '../domain/services/agent-eligibility.service';
 import { agentGateService } from '../domain/services/agent-gate.service';
 import { agentCodThresholdService } from '../domain/services/agent-cod-threshold.service';
+import { agentCodPoolService } from '../domain/services/agent-cod-pool.service';
+import { describeCodPool } from '../domain/services/agent-cod-pool';
 import { agentRepository } from '../repositories/agent.repository';
 import { agentMembershipEventRepository } from '../repositories/agent-membership-event.repository';
 import { AgentMembershipMapper } from '../dto/agent-membership.dto';
@@ -42,6 +44,20 @@ async function agentAvatar(agent: IDeliveryAgent) {
 /** Same, for the vehicle photo — the full profile DTO carries both. */
 async function agentVehiclePhoto(agent: IDeliveryAgent) {
   return resolveFileDetail(agent.vehicle_info?.photo_file_id?.toString(), fileRepository, storageProvider);
+}
+
+/** An administrator's COD-pool pin, camelCased, or null. Admin reads only. */
+function overrideDto(agent: IDeliveryAgent) {
+  const pin = agent.cod?.pool_override ?? null;
+  if (!pin) return null;
+  return {
+    amount: pin.amount,
+    reason: pin.reason,
+    setAt: pin.set_at,
+    setByUserId: pin.set_by_user_id ?? null,
+    setBySource: pin.set_by_source,
+    setByName: pin.set_by_name ?? null,
+  };
 }
 
 /**
@@ -249,7 +265,10 @@ export class AdminAgentController {
 
     res.json({
       success: true,
-      data: { agentId, kyc: agent.kyc },
+      // `codPool` because the verdict moves it: `verified` opens the pool from the plan,
+      // anything else closes it to 0. Showing the result beside the verdict is what lets
+      // a reviewer see the consequence of what they just decided.
+      data: { agentId, kyc: agent.kyc, codPool: describeCodPool(agent) },
       message: `KYC set to ${status}.`,
     });
   });
@@ -275,20 +294,35 @@ export class AdminAgentController {
   });
 
   /**
-   * PUT /api/admin/agents/:agentId/cod-threshold
-   * Body: { maxThreshold }
+   * PUT /api/internal/admin/agents/:agentId/cod-threshold
+   * Body: { maxThreshold: number | null, reason }
    *
-   * The agent's whole COD pool. Lowering below what contracts already
-   * sub-allocate is rejected with the shortfall and the offending contracts.
+   * PINS the agent's COD pool, replacing their plan's value as the ceiling until
+   * released with `maxThreshold: null` (owner decision 2026-09-21). The pin does
+   * not outrank KYC: an unverified agent's pool stays 0 and the pin waits for the
+   * verdict. Leaving the pool below what contracts already sub-allocate is
+   * rejected with the shortfall and the offending contracts — on release too.
+   *
+   * ⚠ The body gained a required `reason` and a nullable `maxThreshold` in the
+   * same change; wi-admin's gateway sends both.
    */
   static setCodThreshold = asyncHandler(async (req: Request, res: Response) => {
     const { agentId } = AgentIdParamSchema.parse(req.params);
-    const { maxThreshold } = SetAgentThresholdSchema.parse(req.body);
+    const { maxThreshold, reason } = SetAgentThresholdSchema.parse(req.body);
 
-    await agentCodThresholdService.setAgentThreshold(agentId, maxThreshold);
+    const agent = await agentCodPoolService.setOverride({
+      agentId,
+      amount: maxThreshold,
+      reason,
+      actor: actorOf(req),
+    });
     const allocation = await agentCodThresholdService.getAllocation(agentId);
 
-    res.json({ success: true, data: allocation, message: 'COD pool updated.' });
+    res.json({
+      success: true,
+      data: { ...allocation, override: overrideDto(agent) },
+      message: maxThreshold === null ? 'COD pool pin released.' : 'COD pool pinned.',
+    });
   });
 
   /**
@@ -299,7 +333,10 @@ export class AdminAgentController {
   static getCodAllocation = asyncHandler(async (req: Request, res: Response) => {
     const { agentId } = AgentIdParamSchema.parse(req.params);
     const allocation = await agentCodThresholdService.getAllocation(agentId);
-    res.json({ success: true, data: allocation });
+    const agent = await agentRepository.findById(agentId);
+    // The pin's reason and author ride on the ADMIN read only — the agent's own
+    // `/agent/cod/allocation` carries `pool.source: 'override'` and nothing more.
+    res.json({ success: true, data: { ...allocation, override: agent ? overrideDto(agent) : null } });
   });
 
   /** GET /api/admin/agents/:agentId/history — the full membership trail. */

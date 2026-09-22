@@ -710,7 +710,7 @@ request.
 |--------|------|-------------|
 | `404` | `CONTRACT_NOT_FOUND` | No such contract on your roster |
 | `422` | `CONTRACT_COD_THRESHOLD_OUT_OF_BOUNDS` | Outside the absolute per-contract bounds. `details: { requested, min, max }` |
-| `422` | `CONTRACT_COD_THRESHOLD_EXCEEDS_HEADROOM` | The agent's pool has no room. `details: { requested, headroom, shortfall, hint }` |
+| `422` | `CONTRACT_COD_THRESHOLD_EXCEEDS_HEADROOM` | The agent's pool has no room. `details: { requested, headroom, shortfall, hint }`. Since 2026-09-21 the pool is automatic (0 until the agent is verified, then their plan's value) and the agent may lower it themselves, so the fix is on the agent's side or another agency's slice. `hint` is prose: display it, never parse it |
 | `422` | `CONTRACT_COD_THRESHOLD_BELOW_OUTSTANDING` | You cannot set a threshold beneath cash the agent already holds under this contract. `details: { requested, outstandingBalance, hint }` |
 
 ---

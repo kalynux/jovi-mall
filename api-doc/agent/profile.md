@@ -361,7 +361,7 @@ state, not as controls:
 | `tracking.allowed` | admin | `PUT /api/internal/admin/agents/:agentId/tracking-allow` — see [../tracking/agent-tracking-policy.md](../tracking/agent-tracking-policy.md) |
 | `status` / `statusReason` | admin | `PATCH /api/internal/admin/agents/:agentId/status` |
 | `kyc` | admin | `PUT /api/internal/admin/agents/:agentId/kyc`. Not returned on this endpoint, but note that dispatch requires `verified` — an agent whose offers all fail eligibility is usually waiting on this |
-| `cod.max_threshold` | admin | `PUT /api/internal/admin/agents/:agentId/cod-threshold`; the agent's read is `GET /agent/cod/allocation` — see [cod-cash.md](./cod-cash.md) |
+| `cod.max_threshold` (the COD pool) | the platform: your plan, once your identity is verified; `0` before that; an administrator may pin a value | Automatic since 2026-09-21. The agent's read is `GET /agent/cod/allocation`, and the agent's **one** write is `PUT /agent/cod/pool`, which can only **lower** it. See [cod-cash.md](./cod-cash.md#where-your-pool-comes-from-since-2026-09-21) |
 | `workingState` | the system | derived from shipment counts |
 | `lastKnownTrackingState` | geo-tracker | pushed over the internal API |
 

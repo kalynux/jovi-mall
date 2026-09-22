@@ -63,6 +63,7 @@
         "test:profile-mappers": "ts-node scripts/test/test-profile-mappers.ts",
         "test:contact-validation": "ts-node scripts/test/test-contact-validation.ts",
         "test:agent-domain": "ts-node scripts/test/test-agent-domain.ts",
+        "test:agent-cod-pool": "ts-node scripts/test/test-agent-cod-pool.ts",
         "test:agent-trust": "ts-node scripts/test/test-agent-trust.ts",
         "test:agent-shipment-discovery": "ts-node scripts/test/test-agent-shipment-discovery.ts",
         "test:agent-action-audit": "ts-node scripts/test/test-agent-action-audit.ts",

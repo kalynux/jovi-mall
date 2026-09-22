@@ -35,6 +35,7 @@ type SeedPlan = {
   max_storage_bytes?: number | null;
   commission_percent?: number | null;
   max_unterminated_shipments?: number | null;
+  max_cod_pool?: number | null;
   live_tracking_enabled?: boolean;
   is_active: boolean;
   sort_order: number;
@@ -67,13 +68,17 @@ const AGENCY_PLANS: SeedPlan[] = [
 // Agent tiers. Free = 20 unterminated deliveries (drives capacity.max_active_shipments).
 // `max_storage_bytes` caps the agent's OWN media (an agent's delivery proofs count
 // against the agency, not here).
+// `max_cod_pool` is the COD cash a KYC-VERIFIED agent on the tier may carry across every
+// agency (owner decision 2026-09-21: Free 500 000 · Plus 1 000 000 · Pro 2 000 000). An
+// unverified agent's pool is 0 whatever the tier — `AgentCodPoolService` applies that rule,
+// not the plan. ⚠ `null` here would mean NO COD, not unlimited.
 const AGENT_PLANS: SeedPlan[] = [
   { role: 'agent', code: freePlanCode('agent'), name: 'Agent Free', price: 0, currency: 'XAF', term_days: null,
-    credit_allowance: 20, max_unterminated_shipments: 20, max_storage_bytes: 1 * GB, live_tracking_enabled: true, is_active: true, sort_order: 1 },
+    credit_allowance: 20, max_unterminated_shipments: 20, max_storage_bytes: 1 * GB, max_cod_pool: 500_000, live_tracking_enabled: true, is_active: true, sort_order: 1 },
   { role: 'agent', code: 'agent_plus', name: 'Agent Plus', price: 2_000, currency: 'XAF', term_days: 30,
-    credit_allowance: 150, max_unterminated_shipments: 50, max_storage_bytes: 3 * GB, live_tracking_enabled: true, is_active: false, sort_order: 2 },
+    credit_allowance: 150, max_unterminated_shipments: 50, max_storage_bytes: 3 * GB, max_cod_pool: 1_000_000, live_tracking_enabled: true, is_active: false, sort_order: 2 },
   { role: 'agent', code: 'agent_pro', name: 'Agent Pro', price: 5_000, currency: 'XAF', term_days: 30,
-    credit_allowance: 400, max_unterminated_shipments: 100, max_storage_bytes: 10 * GB, live_tracking_enabled: true, is_active: false, sort_order: 3 },
+    credit_allowance: 400, max_unterminated_shipments: 100, max_storage_bytes: 10 * GB, max_cod_pool: 2_000_000, live_tracking_enabled: true, is_active: false, sort_order: 3 },
 ];
 
 const ALL_PLANS: SeedPlan[] = [...VENDOR_PLANS, ...AGENCY_PLANS, ...AGENT_PLANS];

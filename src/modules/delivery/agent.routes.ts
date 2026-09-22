@@ -179,6 +179,15 @@ router.get('/cod/balance', AgentCodController.getBalance);
  */
 router.get('/cod/allocation', AgentCodController.getAllocation);
 
+/**
+ * PUT /api/agent/cod/pool
+ * Body: { maxThreshold: number | null } — carry LESS than the ceiling (`null` = the
+ * whole ceiling again). The ceiling is the agent's plan once their KYC is verified,
+ * an administrator's pin, or 0 while unverified; the agent can never raise past it.
+ * Answers the same body as GET /cod/allocation.
+ */
+router.put('/cod/pool', AgentCodController.setPool);
+
 /** GET /api/agent/cod/ledger — append-only history of this agent's cash movements. */
 router.get('/cod/ledger', AgentCodController.getLedger);
 

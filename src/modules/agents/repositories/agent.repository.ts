@@ -8,6 +8,8 @@ import {
   AgentStatus,
   AgentAvailabilityState,
   AgentWorkingState,
+  AgentCodPoolSource,
+  IAgentCodPoolOverride,
 } from '../models/agent.model';
 import { IGeoPoint } from '../../../core/types/geo.types';
 import { RoleActorRef, actorStamp } from '../../../core/types/actor-source.types';
@@ -246,17 +248,49 @@ export class AgentRepository {
     );
   }
 
-  // ─── COD threshold (the agent's global pool) ──────────────────────────────
+  // ─── COD pool (the agent's global threshold) ──────────────────────────────
 
-  async setCodMaxThreshold(
+  /**
+   * Write the pool and its provenance as ONE compare-and-set. The only writer of
+   * `cod.max_threshold`, `cod.pool_*` — `AgentCodPoolService` is its only caller.
+   *
+   * `expectedSyncedAt` is the version token: every write stamps `pool_synced_at`,
+   * so a writer that read the pool and then lost a race to another writer (a KYC
+   * verdict landing during a plan sync, an agent lowering their pool during an
+   * admin override) matches nothing and gets `null` back, rather than
+   * overwriting a newer answer with one computed from stale inputs. `null` as the
+   * expected value also matches a document that has never been synced, where the
+   * field is absent.
+   *
+   * `override` is written only when present in `next`: `undefined` leaves the
+   * administrator's pin untouched (a sync never writes it), `null` clears it.
+   */
+  async writeCodPool(
     agentId: string,
-    maxThreshold: number,
+    expectedSyncedAt: Date | null,
+    next: {
+      maxThreshold: number;
+      ceiling: number;
+      source: AgentCodPoolSource;
+      planCode: string | null;
+      syncedAt: Date;
+      override?: IAgentCodPoolOverride | null;
+    },
     session?: ClientSession
   ): Promise<IDeliveryAgent | null> {
-    return await DeliveryAgentModel.findByIdAndUpdate(
-      agentId,
-      { $set: { 'cod.max_threshold': maxThreshold } },
-      { new: true, session }
+    const set: Record<string, unknown> = {
+      'cod.max_threshold': next.maxThreshold,
+      'cod.pool_ceiling': next.ceiling,
+      'cod.pool_source': next.source,
+      'cod.pool_plan_code': next.planCode,
+      'cod.pool_synced_at': next.syncedAt,
+    };
+    if (next.override !== undefined) set['cod.pool_override'] = next.override;
+
+    return await DeliveryAgentModel.findOneAndUpdate(
+      { _id: agentId, 'cod.pool_synced_at': expectedSyncedAt },
+      { $set: set },
+      { new: true, session, runValidators: true }
     );
   }
 

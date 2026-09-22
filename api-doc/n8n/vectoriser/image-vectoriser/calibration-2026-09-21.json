@@ -1,0 +1,330 @@
+{
+  "photo": [
+    {
+      "label": "clock-crop",
+      "expect": "clock",
+      "nearest": "clock",
+      "nearestD": 0.3789,
+      "targetRank": 1,
+      "targetD": 0.3789,
+      "secondD": 0.8437,
+      "top3": "clock:0.379 porsche:0.844 dress:0.856"
+    },
+    {
+      "label": "porsche-crop",
+      "expect": "porsche",
+      "nearest": "porsche",
+      "nearestD": 0.1986,
+      "targetRank": 1,
+      "targetD": 0.1986,
+      "secondD": 0.7116,
+      "top3": "porsche:0.199 vintagecars:0.712 leaf:0.860"
+    },
+    {
+      "label": "cat-crop",
+      "expect": "cat",
+      "nearest": "cat",
+      "nearestD": 0.1459,
+      "targetRank": 1,
+      "targetD": 0.1459,
+      "secondD": 0.7313,
+      "top3": "cat:0.146 bench:0.731 sunset:0.760"
+    },
+    {
+      "label": "dress-crop",
+      "expect": "dress",
+      "nearest": "dress",
+      "nearestD": 0.2088,
+      "targetRank": 1,
+      "targetD": 0.2088,
+      "secondD": 0.847,
+      "top3": "dress:0.209 clock:0.847 silhouette:0.868"
+    },
+    {
+      "label": "hsk-other-page",
+      "expect": "hskbook",
+      "nearest": "hskbook",
+      "nearestD": 0.3727,
+      "targetRank": 1,
+      "targetD": 0.3727,
+      "secondD": 0.8262,
+      "top3": "hskbook:0.373 leaf:0.826 clock:0.836"
+    },
+    {
+      "label": "microscope",
+      "expect": null,
+      "nearest": "leaf",
+      "nearestD": 0.7142,
+      "targetRank": null,
+      "targetD": null,
+      "secondD": 0.7348,
+      "top3": "leaf:0.714 bulbnote:0.735 vintagecars:0.815"
+    },
+    {
+      "label": "robot",
+      "expect": null,
+      "nearest": "cat",
+      "nearestD": 0.738,
+      "targetRank": null,
+      "targetD": null,
+      "secondD": 0.7502,
+      "top3": "cat:0.738 bulbnote:0.750 vintagecars:0.810"
+    },
+    {
+      "label": "empty-road",
+      "expect": null,
+      "nearest": "porsche",
+      "nearestD": 0.641,
+      "targetRank": null,
+      "targetD": null,
+      "secondD": 0.6865,
+      "top3": "porsche:0.641 sunset:0.687 silhouette:0.722"
+    },
+    {
+      "label": "umbrella-wall",
+      "expect": null,
+      "nearest": "bulbnote",
+      "nearestD": 0.6958,
+      "targetRank": null,
+      "targetD": null,
+      "secondD": 0.7511,
+      "top3": "bulbnote:0.696 silhouette:0.751 leaf:0.751"
+    }
+  ],
+  "text": [
+    {
+      "label": "horloge murale",
+      "expect": "clock",
+      "nearest": "clock",
+      "nearestD": 0.6273,
+      "targetRank": 1,
+      "targetD": 0.6273,
+      "secondD": 0.8327,
+      "top3": "clock:0.627 bulbnote:0.833 hskbook:0.856"
+    },
+    {
+      "label": "wall clock with roman numerals",
+      "expect": "clock",
+      "nearest": "clock",
+      "nearestD": 0.5201,
+      "targetRank": 1,
+      "targetD": 0.5201,
+      "secondD": 0.8824,
+      "top3": "clock:0.520 bulbnote:0.882 cat:0.896"
+    },
+    {
+      "label": "banc de jardin en bois",
+      "expect": "bench",
+      "nearest": "bench",
+      "nearestD": 0.7155,
+      "targetRank": 1,
+      "targetD": 0.7155,
+      "secondD": 0.9422,
+      "top3": "bench:0.715 cat:0.942 hskbook:0.950"
+    },
+    {
+      "label": "robe en jean bleu",
+      "expect": "dress",
+      "nearest": "dress",
+      "nearestD": 0.7188,
+      "targetRank": 1,
+      "targetD": 0.7188,
+      "secondD": 0.9211,
+      "top3": "dress:0.719 bench:0.921 silhouette:0.956"
+    },
+    {
+      "label": "sac à dos en toile",
+      "expect": "dress",
+      "nearest": "dress",
+      "nearestD": 0.8148,
+      "targetRank": 1,
+      "targetD": 0.8148,
+      "secondD": 0.9265,
+      "top3": "dress:0.815 bulbnote:0.927 hskbook:0.938"
+    },
+    {
+      "label": "voiture de sport noire",
+      "expect": "porsche",
+      "nearest": "porsche",
+      "nearestD": 0.5013,
+      "targetRank": 1,
+      "targetD": 0.5013,
+      "secondD": 0.7265,
+      "top3": "porsche:0.501 vintagecars:0.727 silhouette:0.928"
+    },
+    {
+      "label": "black luxury car",
+      "expect": "porsche",
+      "nearest": "porsche",
+      "nearestD": 0.4975,
+      "targetRank": 1,
+      "targetD": 0.4975,
+      "secondD": 0.7042,
+      "top3": "porsche:0.497 vintagecars:0.704 leaf:0.885"
+    },
+    {
+      "label": "voitures anciennes de collection",
+      "expect": "vintagecars",
+      "nearest": "vintagecars",
+      "nearestD": 0.6003,
+      "targetRank": 1,
+      "targetD": 0.6003,
+      "secondD": 0.7665,
+      "top3": "vintagecars:0.600 porsche:0.767 clock:0.931"
+    },
+    {
+      "label": "chat roux",
+      "expect": "cat",
+      "nearest": "cat",
+      "nearestD": 0.827,
+      "targetRank": 1,
+      "targetD": 0.827,
+      "secondD": 0.8383,
+      "top3": "cat:0.827 hskbook:0.838 clock:0.867"
+    },
+    {
+      "label": "livre pour apprendre le chinois",
+      "expect": "hskbook",
+      "nearest": "hskbook",
+      "nearestD": 0.751,
+      "targetRank": 1,
+      "targetD": 0.751,
+      "secondD": 0.9787,
+      "top3": "hskbook:0.751 sunset:0.979 porsche:0.987"
+    },
+    {
+      "label": "ampoule",
+      "expect": "bulbnote",
+      "nearest": "bulbnote",
+      "nearestD": 0.6819,
+      "targetRank": 1,
+      "targetD": 0.6819,
+      "secondD": 0.797,
+      "top3": "bulbnote:0.682 clock:0.797 leaf:0.800"
+    },
+    {
+      "label": "post-it jaune",
+      "expect": "bulbnote",
+      "nearest": "bulbnote",
+      "nearestD": 0.5251,
+      "targetRank": 1,
+      "targetD": 0.5251,
+      "secondD": 0.7991,
+      "top3": "bulbnote:0.525 leaf:0.799 cat:0.843"
+    },
+    {
+      "label": "chaussures de sport",
+      "expect": null,
+      "nearest": "hskbook",
+      "nearestD": 0.8904,
+      "targetRank": null,
+      "targetD": null,
+      "secondD": 0.8974,
+      "top3": "hskbook:0.890 porsche:0.897 vintagecars:0.913"
+    },
+    {
+      "label": "réfrigérateur",
+      "expect": null,
+      "nearest": "clock",
+      "nearestD": 0.8824,
+      "targetRank": null,
+      "targetD": null,
+      "secondD": 0.8945,
+      "top3": "clock:0.882 bulbnote:0.894 vintagecars:0.925"
+    },
+    {
+      "label": "téléphone samsung",
+      "expect": null,
+      "nearest": "silhouette",
+      "nearestD": 0.8471,
+      "targetRank": null,
+      "targetD": null,
+      "secondD": 0.853,
+      "top3": "silhouette:0.847 hskbook:0.853 sunset:0.905"
+    },
+    {
+      "label": "casserole en inox",
+      "expect": null,
+      "nearest": "dress",
+      "nearestD": 0.9248,
+      "targetRank": null,
+      "targetD": null,
+      "secondD": 0.9292,
+      "top3": "dress:0.925 clock:0.929 vintagecars:0.930"
+    },
+    {
+      "label": "parfum pour femme",
+      "expect": null,
+      "nearest": "dress",
+      "nearestD": 0.8127,
+      "targetRank": null,
+      "targetD": null,
+      "secondD": 0.9039,
+      "top3": "dress:0.813 clock:0.904 bench:0.905"
+    },
+    {
+      "label": "matelas deux places",
+      "expect": null,
+      "nearest": "cat",
+      "nearestD": 0.8992,
+      "targetRank": null,
+      "targetD": null,
+      "secondD": 0.9215,
+      "top3": "cat:0.899 porsche:0.921 hskbook:0.930"
+    },
+    {
+      "label": "lunettes de soleil",
+      "expect": null,
+      "nearest": "leaf",
+      "nearestD": 0.7725,
+      "targetRank": null,
+      "targetD": null,
+      "secondD": 0.821,
+      "top3": "leaf:0.772 clock:0.821 hskbook:0.856"
+    },
+    {
+      "label": "ordinateur portable",
+      "expect": null,
+      "nearest": "porsche",
+      "nearestD": 0.8236,
+      "targetRank": null,
+      "targetD": null,
+      "secondD": 0.8723,
+      "top3": "porsche:0.824 bulbnote:0.872 clock:0.877"
+    },
+    {
+      "label": "sac de riz 50kg",
+      "expect": null,
+      "nearest": "hskbook",
+      "nearestD": 0.9244,
+      "targetRank": null,
+      "targetD": null,
+      "secondD": 0.9311,
+      "top3": "hskbook:0.924 clock:0.931 bulbnote:0.938"
+    },
+    {
+      "label": "ventilateur sur pied",
+      "expect": null,
+      "nearest": "cat",
+      "nearestD": 0.8544,
+      "targetRank": null,
+      "targetD": null,
+      "secondD": 0.8785,
+      "top3": "cat:0.854 bulbnote:0.878 clock:0.892"
+    }
+  ],
+  "usage": {
+    "docs": {
+      "image_pixels": 2152960,
+      "total_tokens": 3843
+    },
+    "photos": {
+      "image_pixels": 1661440,
+      "total_tokens": 2966
+    },
+    "texts": {
+      "image_pixels": 0,
+      "total_tokens": 86
+    }
+  }
+}

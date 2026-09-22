@@ -32,6 +32,8 @@ export type {
   IAgentPreferences,
   IAgentSettings,
   IAgentCodProfile,
+  IAgentCodPoolOverride,
+  AgentCodPoolSource,
   AgentStatus,
   AgentAvailabilityState,
   AgentWorkingState,

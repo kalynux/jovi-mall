@@ -382,6 +382,17 @@ resolves the flag.
   `0` grants no COD headroom at all. A raise can be refused if the agent's pool is already fully
   allocated across their contracts.
 
+  **Since 2026-09-21 the agent's pool is automatic, and it is also a cap.** An agent's pool is 0
+  until their identity is verified, then their plan's value (Free **500 000**, Plus 1 000 000,
+  Pro 2 000 000), unless the agent chose to carry less or an administrator set a value. Before this,
+  it stayed 0 until an administrator typed a number, which refused every slice you tried to give a
+  new agent. The effective limit is now `min(your slice, the agent's pool)` × trust. The two are
+  equal whenever your slice fits in the pool, which is the normal state. They differ only when the
+  agent's pool went **down** after you set your slice (plan downgrade, verification withdrawn), and
+  then `COD_AGENT_EXPOSURE_EXCEEDED` carries **`details.poolBinds: true`**: the agent's own pool,
+  not your slice, is what refused, so raising your slice will not help. See
+  [FRONTEND-CHANGELOG-cod-pool.md](./FRONTEND-CHANGELOG-cod-pool.md).
+
   > ### ⚠ `threshold: 0` is the DEFAULT, and on two of the three paths it fails silently
   >
   > The sentence above is true and badly understated. Three facts compose into the most likely

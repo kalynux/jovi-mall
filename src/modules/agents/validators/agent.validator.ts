@@ -592,22 +592,45 @@ export type SetPlatformBanInput = z.infer<typeof SetPlatformBanSchema>;
 // ─── Agent COD threshold (admin) ──────────────────────────────────────────────
 
 /**
- * The agent's own COD pool — NOT a contract's slice of it.
+ * An ADMINISTRATOR's pin on the agent's COD pool — NOT a contract's slice of it.
+ *
+ * Since 2026-09-21 the pool is derived from the agent's plan and KYC verdict, so
+ * an administrator no longer SETS it: they PIN a value that replaces the plan's
+ * as the ceiling until they release it (`maxThreshold: null`). Same shape as the
+ * trust override (`{ score | null, reason }`), and the reason is required in both
+ * directions — releasing a pin is as much a judgement as setting one.
  *
  * Bounded by AGENT_CONFIG.COD_THRESHOLD_{MIN,MAX}, deliberately different
  * constants from SetCodLimitSchema's CONTRACT_COD_THRESHOLD_{MIN,MAX}: the pool
  * is the sum every contract sub-allocates from, so its ceiling is higher.
- * Lowering below what contracts already hold is rejected in the service, where
- * the allocation can be read transactionally.
+ * Leaving the pool below what contracts already hold is rejected in the service,
+ * where the allocation can be read transactionally.
  */
 export const SetAgentThresholdSchema = z.object({
     maxThreshold: z
         .number()
         .int()
         .min(AGENT_CONFIG.COD_THRESHOLD_MIN)
-        .max(AGENT_CONFIG.COD_THRESHOLD_MAX),
+        .max(AGENT_CONFIG.COD_THRESHOLD_MAX)
+        .nullable(),
+    reason: z.string().trim().min(3).max(500),
 });
 export type SetAgentThresholdInput = z.infer<typeof SetAgentThresholdSchema>;
+
+/**
+ * The AGENT choosing to carry less than their ceiling. `null` restores the whole
+ * ceiling. The upper bound is the agent's own ceiling, checked in the service —
+ * the platform maximum here is only a sanity bound.
+ */
+export const SetOwnCodPoolSchema = z.object({
+    maxThreshold: z
+        .number()
+        .int()
+        .min(AGENT_CONFIG.COD_THRESHOLD_MIN)
+        .max(AGENT_CONFIG.COD_THRESHOLD_MAX)
+        .nullable(),
+});
+export type SetOwnCodPoolInput = z.infer<typeof SetOwnCodPoolSchema>;
 
 // ─── Internal API (geo-tracker → jovi-mall) ───────────────────────────────────
 

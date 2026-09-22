@@ -71,6 +71,12 @@ Every endpoint is automatically scoped to the authenticated agent (`role_entity.
 > against. Read it back as `capacity` on [profile.md](./profile.md#capacity-is-read-only) or
 > `GET /api/agent/dispatch-settings` — it is not settable anywhere else.
 
+> **Your plan also sets your COD pool (since 2026-09-21).** `max_cod_pool` on the active plan is
+> the most cash-on-delivery money you may carry across every agency, **once your identity is
+> verified**. Before verification your pool is 0 whatever the plan says. The pool follows the plan
+> automatically (a new plan resets it to the new value), and you can choose to carry less. See
+> [cod-cash.md](./cod-cash.md#where-your-pool-comes-from-since-2026-09-21).
+
 ---
 
 ### GET /api/agent/plans
@@ -92,6 +98,7 @@ List the **active** agent pricing plans, sorted by `sort_order` then `price`.
       "term_days": null,
       "credit_allowance": 20,
       "max_unterminated_shipments": 20,
+      "max_cod_pool": 500000,
       "live_tracking_enabled": true,
       "max_active_products": null,
       "max_storage_bytes": 1073741824,
@@ -105,6 +112,7 @@ List the **active** agent pricing plans, sorted by `sort_order` then `price`.
 
 Field notes (agent plans):
 - `max_unterminated_shipments` (number | `null`) — the agent's **concurrent-delivery cap**. This value becomes the agent's `capacity.max_active_shipments` when the plan activates, and is enforced **hard** at offer-accept time (see below). Free = `20`.
+- `max_cod_pool` (number | `null`) — the **COD pool** this plan gives a **verified** agent, in XAF: the most cash-on-delivery money they may carry across every agency. Seeded Free `500000` · Plus `1000000` · Pro `2000000`. ⚠ **`null` means no COD at all, not unlimited**, the opposite of `max_unterminated_shipments`. An unverified agent's pool is 0 whatever this says. See [cod-cash.md](./cod-cash.md#where-your-pool-comes-from-since-2026-09-21).
 - `live_tracking_enabled` — always `true` today; reserved for a future free-tier restriction.
 - `max_storage_bytes` (number | `null`) — the cap on the agent's **own** media library. It is **not**
   a vendor-only field and it is **not** null: the seeded tiers are **1 GB** (free), 3 GB (Plus) and
@@ -129,7 +137,7 @@ The agent's current plan + resolved entitlements. Lazily creates `agent_free` on
       "plan": {
         "_id": "665f2001", "code": "agent_free", "name": "Agent Free", "price": 0,
         "currency": "XAF", "term_days": null, "credit_allowance": 20,
-        "max_unterminated_shipments": 20, "live_tracking_enabled": true
+        "max_unterminated_shipments": 20, "max_cod_pool": 500000, "live_tracking_enabled": true
       },
       "subscriberPlan": {
         "_id": "667c0001", "owner_type": "agent", "owner_id": "6603", "plan_id": "665f2001",

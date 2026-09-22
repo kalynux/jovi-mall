@@ -192,6 +192,377 @@ CREATE INDEX IF NOT EXISTS product_search_query_cache_last_used_idx
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
+-- product_image_vectors — what the product PHOTOS look like, one row per image.
+--
+-- The fourth retrieval arm (README § 15). A text query ("robe rouge à fleurs")
+-- reaches a dress whose text never says "floral", and a customer's photo reaches
+-- the products that look like it.
+--
+-- ── A DIFFERENT MODEL, SO A DIFFERENT TABLE ────────────────────────────────
+-- These vectors are voyage-multimodal-3.5. product_vectors.embedding is voyage-4.
+-- The two are NOT one vector space -- Voyage's shared space covers the four
+-- voyage-4 text models only -- so a distance between a row here and a row there
+-- means nothing. They never meet in SQL: each arm ranks against its own query
+-- vector, and RRF compares positions, never distances.
+--
+-- ── IMAGE ONLY, NO CAPTION ─────────────────────────────────────────────────
+-- Each row embeds the picture alone. Interleaving the title would make this arm
+-- re-find what the three text arms already find, and RRF would count the same
+-- evidence twice. The arm exists to add what the text does not say.
+--
+-- ── WHO WRITES IT ──────────────────────────────────────────────────────────
+-- Nothing in the wi-mall-vectoriser flow has to know this table exists -- the
+-- same stance as the generated columns above. The flow writes
+-- product_vectors.metadata.image_files; the trigger below turns that list into rows
+-- here, in the same transaction as the text upsert, so the set of images a
+-- product SHOULD have can never disagree with the text row it belongs to.
+--
+--   metadata.image_files = [ { "file_id": "...", "url": "https://...",
+--                         "variant_id": null | "...", "mime_type": "image/jpeg" }, ... ]
+--
+-- ⚠ NOT metadata.images. That key already exists and means something else: up
+-- to five bare URL strings, written by the same node since before this table,
+-- and possibly read by consumers of product_search() results. Reading objects
+-- out of it would have matched no entry and created no row -- silently -- so the
+-- image arm has a key of its own.
+--
+-- Keys must match the "build all texts" node, exactly as for the generated
+-- columns. That node decides WHICH images (PNG/JPEG/WEBP/GIF only -- no video,
+-- no digital asset -- gallery first, then variants, deduplicated, at most 6).
+-- This table decides nothing about that; it embeds what it is given.
+--
+-- ── WHO EMBEDS IT ──────────────────────────────────────────────────────────
+-- A separate scheduled workflow, wi-mall-image-vectoriser, one Voyage request
+-- per minute, through product_image_claim() and product_image_settle() below.
+-- Deliberately NOT the text flow: sized for Voyage's no-payment-method limits
+-- (3 RPM, 10K TPM) an image costs up to ~3,572 tokens (2M pixels / 560), so one
+-- 32-product text chunk carrying its photos would be ~100x over the minute's
+-- budget. A queue drained at a fixed pace fits any catalogue into those limits;
+-- a faster tier is a change of two numbers, not of shape.
+--
+-- ⚠ Rows are deleted with their product: the FOREIGN KEY cascades from
+-- product_vectors, so /delete needs no change. /status needs none either -- the
+-- image arm joins product_vectors and inherits its status filter.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS product_image_vectors (
+    product_id      text         NOT NULL
+                    REFERENCES product_vectors (product_id) ON DELETE CASCADE,
+    file_id         text         NOT NULL,
+    image_url       text         NOT NULL,
+    variant_id      text,                          -- NULL = the product gallery
+    position        int          NOT NULL,         -- 0 = the product's primary image
+    status          text         NOT NULL DEFAULT 'pending',
+    embedding       vector(1024),                  -- voyage-multimodal-3.5, input_type=document
+    attempts        int          NOT NULL DEFAULT 0,
+    last_error      text,
+    next_attempt_at timestamptz  NOT NULL DEFAULT now(),
+    claim_id        text,
+    claimed_at      timestamptz,
+    image_pixels    bigint,                        -- as Voyage billed it; exact for a 1-image request
+    embedded_at     timestamptz,
+    created_at      timestamptz  NOT NULL DEFAULT now(),
+    PRIMARY KEY (product_id, file_id),
+    CONSTRAINT product_image_vectors_status_chk
+        CHECK (status IN ('pending', 'claimed', 'embedded', 'failed')),
+    -- "embedded" is a claim about a vector, so it must come with one.
+    CONSTRAINT product_image_vectors_embedded_chk
+        CHECK ((status = 'embedded') = (embedding IS NOT NULL))
+);
+
+-- The drainer's queue scan. Partial: embedded rows, the vast majority, are not work.
+CREATE INDEX IF NOT EXISTS product_image_vectors_work_idx
+    ON product_image_vectors (position, created_at)
+    WHERE status IN ('pending', 'failed', 'claimed');
+
+-- No HNSW index, on purpose. The image arm is an EXACT scan over the images of
+-- the products that pass the filters (see product_search): the filters apply
+-- first, so a narrow country or price band cannot starve it the way it starves an
+-- HNSW scan, and at a few thousand images an exact scan is milliseconds. When it
+-- stops being milliseconds, the lever is an HNSW index here plus
+-- hnsw.iterative_scan (pgvector >= 0.8) -- not before, because an index the
+-- planner cannot use still costs every write.
+
+
+-- ── metadata.image_files → rows, in the text upsert's own transaction ──────
+-- Fires on INSERT, and on an UPDATE only when the image list actually changed,
+-- so a re-index with the same photos (the common case: a price edit) touches no
+-- row here and re-embeds nothing. An embedded image keeps its vector when only
+-- its URL moves (a storage migration): same file id, same bytes. A FAILED image
+-- whose URL moved gets a fresh start, since a new address is the likeliest fix.
+CREATE OR REPLACE FUNCTION product_image_vectors_sync()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.product_id IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    WITH desired AS (
+        -- DISTINCT ON is a guard, not the rule: the build node already dedupes.
+        SELECT DISTINCT ON (e.img->>'file_id')
+               e.img->>'file_id'                 AS file_id,
+               e.img->>'url'                     AS image_url,
+               NULLIF(e.img->>'variant_id', '')  AS variant_id,
+               (e.ord - 1)::int                  AS position
+        FROM jsonb_array_elements(
+                 CASE WHEN jsonb_typeof(NEW.metadata->'image_files') = 'array'
+                      THEN NEW.metadata->'image_files' ELSE '[]'::jsonb END
+             ) WITH ORDINALITY AS e(img, ord)
+        WHERE jsonb_typeof(e.img) = 'object'
+          AND coalesce(e.img->>'file_id', '') <> ''
+          AND coalesce(e.img->>'url', '') ~* '^https?://'
+        ORDER BY e.img->>'file_id', e.ord
+    ),
+    gone AS (
+        DELETE FROM product_image_vectors piv
+        WHERE piv.product_id = NEW.product_id
+          AND NOT EXISTS (SELECT 1 FROM desired d WHERE d.file_id = piv.file_id)
+    )
+    INSERT INTO product_image_vectors AS piv (product_id, file_id, image_url, variant_id, position)
+    SELECT NEW.product_id, d.file_id, d.image_url, d.variant_id, d.position
+    FROM desired d
+    ON CONFLICT (product_id, file_id) DO UPDATE
+       SET image_url       = EXCLUDED.image_url,
+           variant_id      = EXCLUDED.variant_id,
+           position        = EXCLUDED.position,
+           status          = CASE WHEN piv.status = 'failed' AND piv.image_url <> EXCLUDED.image_url
+                                  THEN 'pending' ELSE piv.status END,
+           attempts        = CASE WHEN piv.status = 'failed' AND piv.image_url <> EXCLUDED.image_url
+                                  THEN 0 ELSE piv.attempts END,
+           last_error      = CASE WHEN piv.status = 'failed' AND piv.image_url <> EXCLUDED.image_url
+                                  THEN NULL ELSE piv.last_error END,
+           next_attempt_at = CASE WHEN piv.status = 'failed' AND piv.image_url <> EXCLUDED.image_url
+                                  THEN now() ELSE piv.next_attempt_at END
+     -- Without this every sync would rewrite every row: dead tuples for nothing.
+     WHERE (piv.image_url, piv.variant_id, piv.position)
+           IS DISTINCT FROM (EXCLUDED.image_url, EXCLUDED.variant_id, EXCLUDED.position);
+
+    RETURN NULL;
+END
+$$;
+
+-- CREATE OR REPLACE TRIGGER needs PostgreSQL 14+ (vector_db is 17.11). One
+-- statement each, so the schema applier can give each its own node.
+CREATE OR REPLACE TRIGGER product_vectors_images_insert
+    AFTER INSERT ON product_vectors
+    FOR EACH ROW EXECUTE FUNCTION product_image_vectors_sync();
+
+-- INSERT ... ON CONFLICT DO UPDATE fires the UPDATE trigger for a re-index.
+CREATE OR REPLACE TRIGGER product_vectors_images_update
+    AFTER UPDATE OF metadata ON product_vectors
+    FOR EACH ROW
+    WHEN (OLD.metadata->'image_files' IS DISTINCT FROM NEW.metadata->'image_files')
+    EXECUTE FUNCTION product_image_vectors_sync();
+
+
+-- ── the drainer's two calls: claim, then settle ────────────────────────────
+-- Same idempotency idea as jovi-mall's vectorisationJob.jobId: a claim stamps
+-- claim_id, and settle only writes rows still carrying THAT claim_id. A late
+-- settle -- after the claim went stale and another run re-took the row, or after
+-- a re-index removed the image -- matches nothing, and the returned rows say so.
+--
+-- ⚠ ONE VOYAGE FAILURE FAILS THE WHOLE REQUEST. If one URL in a batch cannot be
+-- fetched, every image in the batch comes back failed. So fresh work is claimed
+-- in batches, but a RETRY is always claimed ALONE: a bad image fails its
+-- batch-mates once, then each is retried by itself, the good ones succeed and the
+-- bad one exhausts its attempts without taking anybody else down with it.
+--
+-- ⚠ Ordered by position first: every product's primary image is embedded before
+-- any product's second one. At one request a minute that is the difference
+-- between a catalogue that is visually searchable in an hour and one that is
+-- fully embedded for a few products and absent for the rest.
+
+-- Drop-then-create for the same reason as product_search below: a signature
+-- change must not leave an overload behind.
+DO $drop_image_fns$
+DECLARE r record;
+BEGIN
+    FOR r IN
+        SELECT oid::regprocedure AS sig
+        FROM pg_proc
+        WHERE proname IN ('product_image_claim', 'product_image_settle')
+          AND pronamespace = 'public'::regnamespace
+    LOOP
+        EXECUTE 'DROP FUNCTION ' || r.sig;
+    END LOOP;
+END
+$drop_image_fns$;
+
+CREATE FUNCTION product_image_claim(
+    p_claim_id     text,
+    p_max_images   int      DEFAULT 2,
+    p_max_attempts int      DEFAULT 5,
+    p_stale_after  interval DEFAULT interval '10 minutes'
+)
+RETURNS TABLE (product_id text, file_id text, image_url text, attempts int)
+LANGUAGE plpgsql
+AS $$
+#variable_conflict use_column
+BEGIN
+    IF coalesce(p_claim_id, '') = '' THEN
+        RAISE EXCEPTION 'product_image_claim: p_claim_id is required';
+    END IF;
+
+    -- An execution that died between claim and settle leaves rows 'claimed'
+    -- forever. Recovering them COUNTS as an attempt: an image that kills its run
+    -- every time must still stop being retried.
+    UPDATE product_image_vectors piv
+       SET status          = 'failed',
+           attempts        = piv.attempts + 1,
+           last_error      = 'claim abandoned: nothing settled it within ' || p_stale_after::text,
+           next_attempt_at = now(),
+           claim_id        = NULL,
+           claimed_at      = NULL
+     WHERE piv.status = 'claimed'
+       AND piv.claimed_at < now() - p_stale_after;
+
+    -- Fresh work, as many as the batch allows. Only products currently active:
+    -- an archived product's photos wait rather than spend the budget.
+    RETURN QUERY
+    WITH picked AS (
+        SELECT piv.product_id, piv.file_id
+        FROM product_image_vectors piv
+        JOIN product_vectors pv ON pv.product_id = piv.product_id
+        WHERE piv.status = 'pending'
+          AND piv.attempts = 0
+          AND piv.next_attempt_at <= now()
+          AND pv.status = 'active'
+        ORDER BY piv.position, piv.created_at, piv.product_id, piv.file_id
+        LIMIT greatest(p_max_images, 1)
+        FOR UPDATE OF piv SKIP LOCKED
+    )
+    UPDATE product_image_vectors t
+       SET status = 'claimed', claim_id = p_claim_id, claimed_at = now()
+      FROM picked
+     WHERE t.product_id = picked.product_id AND t.file_id = picked.file_id
+    RETURNING t.product_id, t.file_id, t.image_url, t.attempts;
+
+    IF FOUND THEN
+        RETURN;
+    END IF;
+
+    -- Nothing fresh: exactly ONE retry, alone. See the header.
+    RETURN QUERY
+    WITH picked AS (
+        SELECT piv.product_id, piv.file_id
+        FROM product_image_vectors piv
+        JOIN product_vectors pv ON pv.product_id = piv.product_id
+        WHERE piv.status IN ('pending', 'failed')
+          AND piv.attempts > 0
+          AND piv.attempts < p_max_attempts
+          AND piv.next_attempt_at <= now()
+          AND pv.status = 'active'
+        ORDER BY piv.next_attempt_at, piv.position
+        LIMIT 1
+        FOR UPDATE OF piv SKIP LOCKED
+    )
+    UPDATE product_image_vectors t
+       SET status = 'claimed', claim_id = p_claim_id, claimed_at = now()
+      FROM picked
+     WHERE t.product_id = picked.product_id AND t.file_id = picked.file_id
+    RETURNING t.product_id, t.file_id, t.image_url, t.attempts;
+END
+$$;
+
+-- p_results: [{ product_id, file_id, outcome, embedding?, error?, image_pixels? }]
+--   outcome 'embedded'  → the vector is stored; it must be 1024 numbers or the
+--                         whole call fails, which is correct -- the assembling
+--                         node checks the count and the dimension before this
+--   outcome 'deferred'  → NOT the image's fault: a 429, a Voyage 5xx, a refused
+--                         credential, a timeout. Back to pending in a minute and
+--                         NOT counted as an attempt -- otherwise one afternoon of
+--                         Voyage outage would exhaust every image in the queue
+--   anything else       → failed, attempts + 1, retried after 2^attempts minutes
+--                         (1, 2, 4, 8 ...) up to p_max_attempts in the claim.
+--                         Reserved for what the IMAGE caused: Voyage could not
+--                         fetch it, or refused it as an image
+-- 'embedded' with no embedding is treated as a failure rather than trusted.
+-- Returns the rows actually written -- verify the ROW, never the node.
+CREATE FUNCTION product_image_settle(p_claim_id text, p_results jsonb)
+RETURNS TABLE (product_id text, file_id text, status text, attempts int)
+LANGUAGE sql
+AS $$
+WITH r AS (
+    SELECT x.product_id AS r_product_id,
+           x.file_id    AS r_file_id,
+           CASE WHEN x.outcome = 'embedded' AND x.embedding IS NOT NULL THEN 'embedded'
+                WHEN x.outcome = 'deferred'  THEN 'deferred'
+                ELSE 'failed' END AS r_outcome,
+           x.embedding  AS r_embedding,
+           CASE WHEN x.outcome = 'embedded' AND x.embedding IS NULL
+                THEN 'reported embedded without an embedding'
+                ELSE left(x.error, 2000) END AS r_error,
+           x.image_pixels AS r_image_pixels
+    FROM jsonb_to_recordset(coalesce(p_results, '[]'::jsonb))
+         AS x(product_id text, file_id text, outcome text,
+              embedding vector(1024), error text, image_pixels bigint)
+)
+UPDATE product_image_vectors piv
+   SET status          = CASE r.r_outcome WHEN 'embedded'  THEN 'embedded'
+                                          WHEN 'deferred'  THEN 'pending'
+                                          ELSE 'failed' END,
+       embedding       = CASE WHEN r.r_outcome = 'embedded' THEN r.r_embedding END,
+       embedded_at     = CASE WHEN r.r_outcome = 'embedded' THEN now() ELSE piv.embedded_at END,
+       image_pixels    = CASE WHEN r.r_outcome = 'embedded' THEN r.r_image_pixels ELSE piv.image_pixels END,
+       attempts        = CASE WHEN r.r_outcome = 'failed' THEN piv.attempts + 1 ELSE piv.attempts END,
+       last_error      = CASE WHEN r.r_outcome = 'embedded' THEN NULL ELSE r.r_error END,
+       next_attempt_at = CASE r.r_outcome
+                             WHEN 'embedded'  THEN piv.next_attempt_at
+                             WHEN 'deferred'  THEN now() + interval '1 minute'
+                             ELSE now() + least(interval '1 minute' * power(2, piv.attempts),
+                                                interval '1 day')
+                         END,
+       claim_id        = NULL,
+       claimed_at      = NULL
+  FROM r
+ WHERE piv.product_id = r.r_product_id
+   AND piv.file_id    = r.r_file_id
+   AND piv.claim_id   = p_claim_id
+   AND piv.status     = 'claimed'
+RETURNING piv.product_id, piv.file_id, piv.status, piv.attempts;
+$$;
+
+-- Where the images stand -- the first thing to run when photo search seems thin:
+--
+--   SELECT status, count(*) AS images,
+--          count(*) FILTER (WHERE attempts >= 5) AS gave_up,
+--          min(next_attempt_at) FILTER (WHERE status <> 'embedded') AS next_due
+--   FROM product_image_vectors GROUP BY status;
+
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- product_image_query_cache — query vectors for the IMAGE arm.
+--
+-- Same shape and same UPDATE ... RETURNING lookup as product_search_query_cache,
+-- and a separate table for the reason the image vectors are: this is
+-- voyage-multimodal-3.5, that is voyage-4, and a row from one answering a lookup
+-- for the other returns confident nonsense rather than failing.
+--
+--   query_key = 'text:'  || <the same normalised key the text cache uses>
+--             | 'photo:' || <sha256 of the photo bytes, hex>
+--
+-- A photo key is a hash, never the bytes: a customer forwarding the same promo
+-- picture twice costs one Voyage call, and no photo is stored here.
+--
+-- ⚠ TRUNCATE this table in the same change as any change of multimodal model or
+-- dimension -- the rule stated above for the text cache, for the same reason.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS product_image_query_cache (
+    query_key    text PRIMARY KEY,
+    embedding    vector(1024) NOT NULL,
+    hits         bigint      NOT NULL DEFAULT 1,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    last_used_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS product_image_query_cache_last_used_idx
+    ON product_image_query_cache (last_used_at);
+
+
+-- ═══════════════════════════════════════════════════════════════════════════
 -- product_search — the hybrid search this schema exists to serve.
 --
 -- Kept beside the DDL because a schema whose query lives in another repository
@@ -275,8 +646,8 @@ CREATE INDEX IF NOT EXISTS product_search_query_cache_last_used_idx
 -- table has enough rows to measure.
 --
 -- ── ⚠ CALL IT WITH NAMED ARGUMENTS ────────────────────────────────────────
--- Thirteen parameters, eleven of them optional and eight of them defaulting to
--- NULL/1.0, is a positional call waiting to break. It already did: inserting
+-- Seventeen parameters (fourteen until the image arm, § 15), fifteen of them
+-- optional, is a positional call waiting to break. It already did: inserting
 -- p_max_distance after p_rrf_k shifted every filter one place right, and the
 -- first positional caller got
 --   invalid input syntax for type double precision: "CM"
@@ -292,8 +663,14 @@ CREATE INDEX IF NOT EXISTS product_search_query_cache_last_used_idx
 --     p_country       => 'CM',
 --     p_category      => NULL,
 --     p_price_max     => NULL,
---     p_in_stock_only => false
+--     p_in_stock_only => false,
+--     -- the image arm, optional -- omit all three and it sits out:
+--     p_image_embedding    => $3::vector(1024),  -- voyage-multimodal-3.5, input_type=query
+--     p_max_image_distance => <MEASURED floor>   -- never omit when p_image_embedding is set
 --   );
+--
+-- A photo with no words: pass NULL for $1 and '' for $2. The three text arms
+-- then find nothing and the image arm alone ranks.
 -- ═══════════════════════════════════════════════════════════════════════════
 
 -- ⚠ DROP FIRST, AND DROP EVERY OVERLOAD -- "CREATE OR REPLACE" IS NOT ENOUGH.
@@ -333,7 +710,12 @@ CREATE OR REPLACE FUNCTION product_search(
     p_product_type     text    DEFAULT NULL,
     p_category         text    DEFAULT NULL,
     p_price_max        numeric DEFAULT NULL,
-    p_in_stock_only    boolean DEFAULT false
+    p_in_stock_only    boolean DEFAULT false,
+    -- The image arm (README § 15). Appended LAST so every existing named-argument
+    -- call is untouched. NULL embedding = the arm is off, which is the default.
+    p_image_embedding    vector(1024) DEFAULT NULL,   -- voyage-multimodal-3.5, input_type=query
+    p_image_weight       float        DEFAULT 1.0,
+    p_max_image_distance float        DEFAULT NULL
 )
 RETURNS TABLE (
     product_id    text,
@@ -343,13 +725,22 @@ RETURNS TABLE (
     score         float,
     semantic_rank int,
     keyword_rank  int,
-    fuzzy_rank    int
+    fuzzy_rank    int,
+    image_rank    int
 )
 LANGUAGE sql
 STABLE
 AS $$
 WITH filtered AS (
-    SELECT pv.id, pv.embedding, pv.tsv, pv.title
+    -- ⚠ Referenced by every arm, so PostgreSQL MATERIALISES it (a CTE used more
+    -- than once is not inlined). The consequence, measured 2026-09-21 with
+    -- EXPLAIN on PG 17.11 + pgvector 0.8.6: the semantic arm below is a
+    -- sequential scan plus sort over this CTE, NOT an HNSW index scan -- the
+    -- index on product_vectors.embedding is never reached from here. At today's
+    -- catalogue size that is exact search at millisecond cost, and exact is more
+    -- accurate than HNSW. It stops being free somewhere in the tens of thousands
+    -- of products; README § 15 records it.
+    SELECT pv.id, pv.product_id, pv.embedding, pv.tsv, pv.title
     FROM product_vectors pv
     WHERE pv.status = 'active'
       AND (p_country      IS NULL   OR pv.country      = p_country)
@@ -366,10 +757,14 @@ semantic AS (
     -- default on purpose -- a threshold picked without measuring real voyage-4
     -- distances would silently drop good results, which is worse than ranking
     -- some weak ones. Calibrate it against the live index, then set it.
+    --
+    -- p_query_embedding may be NULL: a photo with no words is a search with no
+    -- text vector, and this arm simply sits out.
     SELECT f.id,
            ROW_NUMBER() OVER (ORDER BY f.embedding <=> p_query_embedding)::int AS rank
     FROM filtered f
-    WHERE f.embedding IS NOT NULL
+    WHERE p_query_embedding IS NOT NULL
+      AND f.embedding IS NOT NULL
       AND (p_max_distance IS NULL OR (f.embedding <=> p_query_embedding) <= p_max_distance)
     ORDER BY f.embedding <=> p_query_embedding
     LIMIT p_candidate_pool
@@ -400,12 +795,44 @@ fuzzy AS (
     ORDER BY word_similarity(p_query_text, z.title) DESC
     LIMIT p_candidate_pool
 ),
+image AS (
+    -- What the product LOOKS like. The query vector is either a customer's photo
+    -- or their words embedded by the same multimodal model -- both land in the
+    -- space the product photos were embedded in. A product is as close as its
+    -- CLOSEST photo: one good angle is a match, and averaging would let five
+    -- unrelated shots bury it.
+    --
+    -- An exact scan over the images of FILTERED products, not an HNSW scan: the
+    -- filters apply first, so the pgvector filter hazard described in the header
+    -- cannot starve this arm. See the product_image_vectors note on when that
+    -- stops being cheap.
+    --
+    -- ⚠ Like the semantic arm, it has no natural floor, and it is worse here: for
+    -- a TEXT query a cross-modal nearest neighbour always exists. Without
+    -- p_max_image_distance, "chaussures de sport" against a catalogue with no
+    -- shoes gets five confident pictures of something else -- the § 14 failure,
+    -- back through a new door. Callers must pass a MEASURED floor, and the
+    -- text-query floor and the photo-query floor are different numbers.
+    SELECT f.id,
+           ROW_NUMBER() OVER (ORDER BY min(piv.embedding <=> p_image_embedding))::int AS rank
+    FROM filtered f
+    JOIN product_image_vectors piv ON piv.product_id = f.product_id
+    WHERE p_image_embedding IS NOT NULL
+      AND piv.embedding IS NOT NULL
+    GROUP BY f.id
+    HAVING p_max_image_distance IS NULL
+        OR min(piv.embedding <=> p_image_embedding) <= p_max_image_distance
+    ORDER BY min(piv.embedding <=> p_image_embedding)
+    LIMIT p_candidate_pool
+),
 candidates AS (
     SELECT id FROM semantic
     UNION
     SELECT id FROM keyword
     UNION
     SELECT id FROM fuzzy
+    UNION
+    SELECT id FROM image
 ),
 -- Fused in its own CTE so every reference below is qualified. The RETURNS
 -- TABLE columns are OUT parameters and therefore visible inside the body, so a
@@ -419,15 +846,18 @@ fused AS (
            pv.indexed_at  AS f_indexed_at,
            (COALESCE(1.0 / (p_rrf_k + s.rank), 0.0) * p_semantic_weight
           + COALESCE(1.0 / (p_rrf_k + k.rank), 0.0) * p_keyword_weight
-          + COALESCE(1.0 / (p_rrf_k + z.rank), 0.0) * p_fuzzy_weight)::float AS f_score,
+          + COALESCE(1.0 / (p_rrf_k + z.rank), 0.0) * p_fuzzy_weight
+          + COALESCE(1.0 / (p_rrf_k + i.rank), 0.0) * p_image_weight)::float AS f_score,
            s.rank AS f_semantic_rank,
            k.rank AS f_keyword_rank,
-           z.rank AS f_fuzzy_rank
+           z.rank AS f_fuzzy_rank,
+           i.rank AS f_image_rank
     FROM candidates c
     JOIN product_vectors pv ON pv.id = c.id
     LEFT JOIN semantic s ON s.id = c.id
     LEFT JOIN keyword  k ON k.id = c.id
     LEFT JOIN fuzzy    z ON z.id = c.id
+    LEFT JOIN image    i ON i.id = c.id
 )
 SELECT fused.f_product_id,
        fused.f_title,
@@ -436,7 +866,8 @@ SELECT fused.f_product_id,
        fused.f_score,
        fused.f_semantic_rank,
        fused.f_keyword_rank,
-       fused.f_fuzzy_rank
+       fused.f_fuzzy_rank,
+       fused.f_image_rank
 FROM fused
 ORDER BY fused.f_score DESC, fused.f_indexed_at DESC
 LIMIT p_match_count;

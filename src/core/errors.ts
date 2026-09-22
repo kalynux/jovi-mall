@@ -245,6 +245,10 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.AGENT_COD_THRESHOLD_OUT_OF_BOUNDS]: 'That COD threshold is outside the allowed range',
     [ERROR_CODES.AGENT_COD_THRESHOLD_BELOW_ALLOCATED]:
         'That COD pool is smaller than what this agent has already allocated to their agencies',
+    [ERROR_CODES.AGENT_COD_POOL_ABOVE_CEILING]:
+        'That COD pool is more than your plan allows — you can only lower it',
+    [ERROR_CODES.AGENT_COD_POOL_CONFLICT]:
+        'Your COD pool changed while this request was in flight — reload it and try again',
     [ERROR_CODES.AGENT_TRUST_OVERRIDE_OUT_OF_BOUNDS]: 'A pinned trust score must be between 0 and 100',
     [ERROR_CODES.AGENT_MEMBERSHIP_ALREADY_EXISTS]: 'This agent already has a contract with this agency',
     [ERROR_CODES.AGENT_MEMBERSHIP_LIMIT_REACHED]:

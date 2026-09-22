@@ -5,6 +5,8 @@ import { AgentRepository, agentRepository } from '../../repositories/agent.repos
 import { IDeliveryAgent } from '../../models/agent.model';
 import { eventBus } from '../../../../core/events/event-bus';
 import { RoleActorRef, actorStampOrCleared } from '../../../../core/types/actor-source.types';
+import { logger } from '../../../../core/logging';
+import { agentCodPoolService } from './agent-cod-pool.service';
 
 export type GateFailure = 'agent_not_found' | 'kyc_not_verified' | 'platform_banned';
 
@@ -102,6 +104,21 @@ export class AgentGateService {
     });
     if (!updated) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
 
+    // The COD pool opens (from the plan) at `verified` and closes to 0 at anything
+    // else — owner decision 2026-09-21. Called directly rather than over the lossy
+    // bus, because this is the same module and the verdict is the moment an agent
+    // asks "can I carry cash yet?". A failure is logged, not thrown: the verdict has
+    // already landed and reporting it as failed would be the lie, and the pool cannot
+    // leak meanwhile — every COD gate refuses an unverified agent on KYC first, and
+    // the nightly reconcile converges it.
+    let synced = updated;
+    try {
+      await agentCodPoolService.sync(agentId, 'kyc_verdict');
+      synced = (await this.agents.findById(agentId)) ?? updated;
+    } catch (err) {
+      logger().error({ err, agentId, status }, 'agent COD pool: sync after KYC verdict failed; reconcile will retry');
+    }
+
     void eventBus
       .publish('agent.kyc_status_changed', {
         eventType: 'agent.kyc_status_changed',
@@ -111,7 +128,7 @@ export class AgentGateService {
       })
       .catch((err) => console.error('[AgentGateService] kyc emit failed:', err));
 
-    return updated;
+    return synced;
   }
 
   // ─── Platform ban (admin) ─────────────────────────────────────────────────

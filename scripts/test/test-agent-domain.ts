@@ -1628,13 +1628,24 @@ async function run(): Promise<void> {
         parses(SetPlatformBanSchema, { banned: false })
     );
 
-    // The pool ceiling, not a contract's slice of it — different constants.
-    await assert('an agent COD pool above the platform ceiling is refused', () =>
-        !parses(SetAgentThresholdSchema, { maxThreshold: AGENT_CONFIG.COD_THRESHOLD_MAX + 1 })
+    // The pool ceiling, not a contract's slice of it — different constants. Since
+    // 2026-09-21 this is an administrator's PIN on the pool (the pool itself is plan × KYC),
+    // so it carries a reason, and `null` releases the pin.
+    await assert('an agent COD pool pin above the platform ceiling is refused', () =>
+        !parses(SetAgentThresholdSchema, { maxThreshold: AGENT_CONFIG.COD_THRESHOLD_MAX + 1, reason: 'too much' })
     );
 
-    await assert('an agent COD pool of zero is accepted', () =>
-        parses(SetAgentThresholdSchema, { maxThreshold: 0 })
+    await assert('an agent COD pool pin of zero is accepted', () =>
+        parses(SetAgentThresholdSchema, { maxThreshold: 0, reason: 'cash shortfall under review' })
+    );
+
+    await assert('a COD pool pin WITHOUT a reason is refused — in either direction', () =>
+        !parses(SetAgentThresholdSchema, { maxThreshold: 0 })
+        && !parses(SetAgentThresholdSchema, { maxThreshold: null })
+    );
+
+    await assert('releasing the pin is `maxThreshold: null` with a reason', () =>
+        parses(SetAgentThresholdSchema, { maxThreshold: null, reason: 'back to the plan' })
     );
 
     // ─── Terms negotiation: who holds the offer ───────────────────────────────

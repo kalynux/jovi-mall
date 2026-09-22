@@ -55,7 +55,7 @@ control the tracking-allow flag, transfer an agent between agencies, and inspect
 | `GET` | `/internal/admin/agents/:agentId/tracking-policy` | The tracking policy geo-tracker would see |
 | `PUT` | `/internal/admin/agents/:agentId/kyc` | Set the KYC verdict — **required before the agent can be dispatched** |
 | `PUT` | `/internal/admin/agents/:agentId/ban` | Ban or unban platform-wide |
-| `PUT` | `/internal/admin/agents/:agentId/cod-threshold` | Set the agent's whole COD pool |
+| `PUT` | `/internal/admin/agents/:agentId/cod-threshold` | **Pin** (or release, with `null`) the agent's whole COD pool — overrides their plan (2026-09-21) |
 | `GET` | `/internal/admin/agents/:agentId/cod-allocation` | The pool, every contract's slice, and the headroom |
 | `GET` | `/internal/admin/agents/:agentId/history` | Membership/lifecycle history |
 | `GET` | `/internal/admin/agents/:agentId/eligibility?agencyId=` | Assignment-eligibility check for an agency — the **platform** rules only |
@@ -342,11 +342,25 @@ Side effects: `verified_at` and `verified_by_user_id` are stamped only on `verif
       "verified_by_user_id": "664usr...",
       "rejection_reason": null,
       "reference": "SUMSUB-8891"
+    },
+    "codPool": {
+      "maxThreshold": 500000,
+      "ceiling": 500000,
+      "source": "plan",
+      "planCode": "agent_free",
+      "selfLimited": false,
+      "syncedAt": "2026-09-21T09:30:00.000Z"
     }
   },
   "message": "KYC set to verified."
 }
 ```
+
+> **`codPool` (since 2026-09-21).** The verdict moves the agent's COD pool: `verified` opens it at
+> their plan's `max_cod_pool` (Free 500 000), anything else closes it to 0. `codPool` is the result,
+> read back after the verdict, so a reviewer sees the consequence of what they just decided. The
+> sync is in-line but best-effort: if it fails, the verdict still stands (logged) and the nightly
+> `agent-cod-pool-reconcile` converges the pool, so `codPool` can briefly show the old value.
 
 ---
 
@@ -383,7 +397,15 @@ Side effects: `verified_at` and `verified_by_user_id` are stamped only on `verif
 
 ## PUT `/internal/admin/agents/:agentId/cod-threshold`
 
-**Purpose**: Set the agent's **whole COD pool** — the most cash they may carry across every agency.
+**Purpose**: **Pin** the agent's **whole COD pool** (the most cash they may carry across every agency) to a value that replaces their plan's, or **release** the pin.
+
+> ⚠ **Changed 2026-09-21: this no longer SETS the pool.** The pool is derived: `0` while the
+> agent's KYC is not `verified`, otherwise their plan's `max_cod_pool` (Free 500 000 · Plus
+> 1 000 000 · Pro 2 000 000), and the agent may choose to carry less (`PUT /api/agent/cod/pool`).
+> This endpoint writes an administrator's **pin**, stored in `cod.pool_override`, which replaces
+> the plan's value, above or below it, until released. No plan change or sync erases a pin. It
+> does **not** outrank KYC: on an unverified agent the pin is stored and the pool stays 0 until
+> the verdict. Setting or releasing a pin resets the agent's own lower choice.
 
 **Auth**: `requireAdminCaller` · **Permissions**: `admin` (service caller) · **Path param**: `agentId` (ObjectId)
 
@@ -391,24 +413,31 @@ Side effects: `verified_at` and `verified_by_user_id` are stamped only on `verif
 
 | Field | Type | Required | Validation |
 |---|---|---|---|
-| `maxThreshold` | integer | ✅ | 0 – 5,000,000 (minor units) |
+| `maxThreshold` | integer \| `null` | ✅ (key required) | 0 – 5,000,000 XAF to pin; **`null` releases the pin** |
+| `reason` | string | ✅ | 3 – 500 chars. Required in **both** directions |
 
 > Bounded differently from a **contract's** threshold (`PATCH /agency/agents/:membershipId/cod-limit`,
-> 0 – 1,000,000). This is the pool; that is a slice of it. Lowering below what contracts already
-> hold is refused rather than silently over-committing them.
+> 0 – 1,000,000). This is the pool; that is a slice of it. Leaving the pool below what contracts
+> already hold is refused, **on release as well** (when the plan's value is lower than the pin
+> was). The check is skipped while the agent is unverified, because their pool is 0 either way
+> and the pin is only being stored.
 >
-> The pool defaults to `0`, so a new agent can carry no COD at all until this is set.
+> ~~The pool defaults to `0`, so a new agent can carry no COD at all until this is set.~~ No longer
+> true: a verified agent's pool opens at their plan's value without anybody calling this.
 
 ### Example success `200`
 
-Returns the same shape as `GET /internal/admin/agents/:agentId/cod-allocation`.
+Returns the same shape as `GET /internal/admin/agents/:agentId/cod-allocation` (including
+`override`), with `message` `"COD pool pinned."` or `"COD pool pin released."`.
 
 ### Errors specific to this endpoint
 
 | `error.code` | Status | When |
 |---|---|---|
-| `AGENT_COD_THRESHOLD_OUT_OF_BOUNDS` | 422 | Outside 0–5,000,000. `details: { requested, min, max }` |
-| `AGENT_COD_THRESHOLD_BELOW_ALLOCATED` | 422 | Below the sum of the contracts' slices. `details: { requested, currentlyAllocated, shortfall, contracts[] }` — lower those first |
+| validation error | 400 | `reason` missing or shorter than 3, or `maxThreshold` not an integer / out of 0–5,000,000 |
+| `AGENT_COD_THRESHOLD_OUT_OF_BOUNDS` | 422 | Outside the configured `AGENT_COD_THRESHOLD_{MIN,MAX}`. `details: { requested, min, max }` |
+| `AGENT_COD_THRESHOLD_BELOW_ALLOCATED` | 422 | The resulting pool would be below the sum of the contracts' slices. `details: { requested, currentlyAllocated, shortfall, contracts[] }` — lower those first |
+| `AGENT_COD_POOL_CONFLICT` | 409 | The pool changed between the read and the write (a sync or another write landed first). Retry |
 
 ---
 
@@ -429,6 +458,16 @@ to consult before changing either level.
     "maxThreshold": 500000,
     "allocated": 350000,
     "headroom": 150000,
+    "overAllocatedBy": 0,
+    "pool": {
+      "maxThreshold": 500000,
+      "ceiling": 500000,
+      "source": "plan",
+      "planCode": "agent_free",
+      "selfLimited": false,
+      "syncedAt": "2026-09-21T09:30:00.000Z"
+    },
+    "override": null,
     "contracts": [
       {
         "contractId": "664ctr...",
@@ -441,6 +480,12 @@ to consult before changing either level.
   }
 }
 ```
+
+| Field | Meaning |
+|---|---|
+| `overAllocatedBy` | `allocated - maxThreshold` when contracts hold MORE than the pool, else 0. Only an automatic change produces it (plan downgrade, KYC withdrawn). While above 0 no slice can be raised, and the exposure gate caps every dispatch at the pool (`limit.poolBinds: true` in the assignability diagnostic) |
+| `pool` | The pool's provenance: `ceiling`, `source` (`not_verified` · `override` · `plan`), `planCode`, `selfLimited` (the agent chose to carry less), `syncedAt` (`null` = never synced: an agent from before 2026-09-21 awaiting the reconcile) |
+| `override` | **Admin read only.** The pin — `amount`, `reason`, `setAt`, `setByUserId`, `setBySource`, `setByName` — or `null`. The agent's own `GET /api/agent/cod/allocation` carries `pool.source: "override"` and never the reason or author |
 
 ---
 
