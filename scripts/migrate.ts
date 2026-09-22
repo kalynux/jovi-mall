@@ -21,10 +21,11 @@
  * ── ORDER IS DECLARED, not discovered ─────────────────────────────────────────
  * `MIGRATIONS` below is the order. One rule produces it:
  *
- *   Index builds run LAST. SEVEN of them claim UNIQUENESS — `migrate:payment-indexes` (5
+ *   Index builds run LAST. EIGHT of them claim UNIQUENESS — `migrate:payment-indexes` (5
  *   unique indexes), `migrate:customer-catalog-indexes` (2), `migrate:review-indexes` (2),
  *   `migrate:inventory-indexes` (2), `migrate:payout-lifecycle-index` (2),
- *   `migrate:booking-number-index` (1) and `migrate:plan-quota-indexes` (1) — and a unique
+ *   `migrate:booking-number-index` (1), `migrate:plan-quota-indexes` (1) and
+ *   `migrate:vendor-email-index` (1) — and a unique
  *   build fails outright against data that still holds duplicates. Letting the data
  *   migrations reach their final shape first turns "E11000, go and investigate" into a build
  *   that simply succeeds.
@@ -257,6 +258,14 @@ export const MIGRATIONS: Migration[] = [
         file: 'scripts/migrate-payout-lifecycle-index.ts',
         dryRun: true,
         note: 'AN OWNER CAN OPEN A SECOND PAYOUT WHILE THE FIRST STILL HOLDS THEIR MONEY — the legacy index constrains \'pending\' alone, so a payout left \'processing\' or \'failed\' (a transfer in flight, or one the gateway refused) frees them to request the same balance again and the platform owes it twice; and with no unique transfer reference, two payouts can claim one gateway transfer',
+    },
+    // Before the catch-all, and that is the point: `migrate:declared-indexes` would build the
+    // partial index and never drop `email_1`, which is the half that actually fixes it.
+    {
+        name: 'migrate:vendor-email-index',
+        file: 'scripts/migrate-vendor-email-index.ts',
+        dryRun: true,
+        note: 'ONLY ONE EMAIL-LESS ACCOUNT CAN EVER BECOME A VENDOR — the legacy unique email_1 counts a missing email as null, so the second agent, agency or customer without an email to add the vendor role (or register as one) is refused with 409 DATABASE_UNIQUE_CONSTRAINT_VIOLATION',
     },
     // ── The catch-all, and it must stay LAST of all ──────────────────────────
     // Every row above builds a named handful somebody reasoned about. This one builds

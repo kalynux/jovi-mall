@@ -1882,8 +1882,13 @@ assert('MIGRATIONS covers every migrate:*/backfill:* binding, and every row has 
 // one-payout-per-owner constraint from `pending` alone to every status that still holds the
 // owner's money, and drops the legacy index it replaces. It is a named index build, so it sits
 // with the others above the catch-all.
-assert('all twenty-four are registered — the count is the count on disk', () =>
-    MIGRATIONS.length === 24);
+// ⚠ 24 -> 25 with `migrate:vendor-email-index` (2026-09-21): vendor email uniqueness made
+// PARTIAL, so it binds only vendors that have an email. It replaces a legacy index like the row
+// above (though it builds before it drops, so the constraint never lapses), and it sits above the
+// catch-all for a sharper reason than ordering — the catch-all would build the partial index and
+// never drop `email_1`, the half that actually fixes it.
+assert('all twenty-five are registered — the count is the count on disk', () =>
+    MIGRATIONS.length === 25);
 
 // The catch-all is LAST, and unlike the general index-after-data rule below this is a
 // dependency on the OTHER INDEX MIGRATIONS: it builds only what the declared-vs-live diff

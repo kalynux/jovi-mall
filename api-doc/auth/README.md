@@ -875,6 +875,15 @@ Adds a second role to an **already authenticated** user. Sets cookies scoped to 
 > the caller presented a token rather than a credential; `auth_time` is copied from the token
 > they came in with. Same for `auth-me`. See [The 90-day absolute cap](#the-90-day-absolute-cap).
 
+> **An account with no email can add any role, `vendor` included.** The new role profile copies
+> the account's email and phone as they are, and no role profile requires an email — so an
+> agent, agency or customer who signed up by phone gets a profile with no email. **Until
+> 2026-09-21 `vendor` was the exception**: its profile alone required one, and the request
+> failed with an undocumented `500`. To add an email afterwards, use
+> [`PATCH /api/me/email`](../me/contact-change.md); once confirmed it is written onto every
+> role profile, the vendor's included. Until then `POST /auth/send-email-verification` answers
+> `422 AUTH_EMAIL_MISSING` for that role.
+
 ### Response `201`
 
 Sets fresh cookies scoped to the **newly added role**.

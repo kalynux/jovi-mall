@@ -416,11 +416,19 @@ const VendorSchema = new Schema<IVendor>(
     user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, required: true, unique: true },
     display_name: { type: String },
     country: { type: String, default: null, trim: true, uppercase: true },
-    // `unique: true` on a raw-cased email is a trap: `A@x.com` and `a@x.com`
+    // A unique index on a raw-cased email is a trap: `A@x.com` and `a@x.com`
     // would be two vendors. Normalised here as well as in the Zod schema, to
     // match every other role's model (customer/agency/agent/admin) and to hold
     // for the paths that write outside a validated request (scripts, seeds).
-    email: { type: String, required: true, unique: true, trim: true, lowercase: true },
+    //
+    // ⚠ OPTIONAL, like every other role's, and it used to be `required: true`. Both
+    // `register` and `addRole` copy it from the account (`input.email` /
+    // `user.login_email`), and the account's email is optional — so an email-less
+    // agent, agency or customer adding the vendor role hit a Mongoose ValidationError,
+    // which the error handler can only report as a 500. Uniqueness moved to the
+    // PARTIAL index below: a field-level `unique` also indexes a missing email as
+    // null, so the SECOND email-less vendor would have failed on E11000 instead.
+    email: { type: String, trim: true, lowercase: true },
     phone: { type: String, required: true, trim: true },
     email_verified: { type: Boolean, default: false },
     phone_verified: { type: Boolean, default: false },
@@ -494,5 +502,30 @@ VendorSchema.index({ status: 1, created_at: -1 });
 
 /** The KYC review queue: "every vendor still pending, oldest first". */
 VendorSchema.index({ 'kyc_details.status': 1, created_at: -1 });
+
+/**
+ * One vendor per email address — among vendors that HAVE one.
+ *
+ * PARTIAL on `$type: 'string'` rather than `sparse`, the same form as
+ * `shipments.tracking_number` and `bookings.bookingNumber`: sparse skips a missing field
+ * but still indexes an explicit `null`, and this excludes both.
+ *
+ * ⚠ Named, and it REPLACES the auto-named `email_1` a field-level `unique: true` used to
+ * build. `autoIndex` is off in production, so the swap is a ledgered migration —
+ * `npm run migrate:vendor-email-index`, which builds this and then drops `email_1`. Until it
+ * has run, the old index still counts every email-less vendor as `null`, so the first one
+ * succeeds and the second answers `409 DATABASE_UNIQUE_CONSTRAINT_VIOLATION` — and in
+ * development `autoIndex` builds this one BESIDE `email_1` (Mongo 7 allows it), which
+ * changes nothing until the drop.
+ * `test:role-provisioning` asserts the migration's literals against this declaration.
+ */
+VendorSchema.index(
+  { email: 1 },
+  {
+    name: 'vendor_email_unique_when_set',
+    unique: true,
+    partialFilterExpression: { email: { $type: 'string' } },
+  }
+);
 
 export const VendorModel = mongoose.model<IVendor>(MODELS.VENDOR, VendorSchema, COLLECTIONS.VENDOR);

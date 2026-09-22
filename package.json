@@ -38,6 +38,7 @@
         "migrate:booking-number-index": "ts-node scripts/migrate-booking-number-index.ts",
         "migrate:inventory-indexes": "ts-node scripts/migrate-inventory-indexes.ts",
         "migrate:plan-quota-indexes": "ts-node scripts/migrate-plan-quota-indexes.ts",
+        "migrate:vendor-email-index": "ts-node scripts/migrate-vendor-email-index.ts",
         "migrate:declared-indexes": "ts-node scripts/migrate-declared-indexes.ts",
         "audit:infinite-agency-stock": "ts-node scripts/audit-infinite-agency-stock.ts",
         "audit:stuck-payments": "ts-node scripts/audit-stuck-payments.ts",
@@ -187,6 +188,7 @@
         "telegram:commands": "ts-node scripts/register-telegram-commands.ts",
         "verify:bot-commands": "node --max-old-space-size=4096 -r ts-node/register scripts/verify-bot-commands-live.ts",
         "test:account-activation": "ts-node scripts/test/test-account-activation.ts",
+        "test:role-provisioning": "ts-node scripts/test/test-role-provisioning.ts",
         "test:payout-verification": "ts-node scripts/test/test-payout-verification.ts"
     },
     "keywords": [],
