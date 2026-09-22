@@ -25,7 +25,9 @@ import {
 import { inAppBaseUrl, inAppScreenUrl } from '../domain/inapp-url';
 import { PurchaseVerb, resolvePurchaseAffordance } from '../domain/purchase-affordance';
 import { addedToCartActions, purchaseInvitePrompt } from '../domain/purchase-chat-copy';
+import { conversationUrl } from '../domain/conversation-url';
 import { inAppSurfaceStore } from '../services/inapp-surface.store';
+import { pendingBargainStore } from '../services/pending-bargain.store';
 import { productDisplayService } from '../services/product-display.service';
 import { productDisplayStore } from '../services/product-display.store';
 
@@ -128,10 +130,23 @@ export class BotPurchaseController {
          * ⚠ **Two of the four rungs cannot finish inside a screen, and the way out is a push.**
          * A Mini App cannot write to the chat — `Telegram.WebApp.sendData()` works only for an
          * app launched from a REPLY keyboard and this one is launched from an inline `web_app`
-         * button — so `bargain` and `book` are posted into the conversation by this service,
-         * which holds the bot token, and the page closes onto the message.
+         * button — and a WhatsApp screen is a page in WhatsApp's browser, which cannot either.
+         * So `bargain` and `book` are posted into the conversation by this service, which holds
+         * both channels' credentials, and the page goes back to the chat onto the message.
          */
         if (result.outcome === 'chat') {
+            /**
+             * ⚠ **Recorded BEFORE the push**, so a customer quick enough to answer the pushed
+             * question cannot reach `/identity/sync` ahead of the record. The question is what
+             * they answer; the record is what routes that answer to the bargainer rather than
+             * to an assistant with no product in view. See `pending-bargain.store.ts`.
+             */
+            if (result.verb === 'bargain' && result.variantId) {
+                await pendingBargainStore.record(
+                    { owner: session.owner, channel: session.channel, externalId: session.externalId },
+                    { productId: result.productId, variantId: result.variantId },
+                );
+            }
             await pushIntoConversation(session.channel, session.externalId, result.message);
         }
 
@@ -139,6 +154,11 @@ export class BotPurchaseController {
             outcome: result.outcome,
             message: result.message,
             ...(result.outcome === 'checkout' ? { url: result.url } : {}),
+            /**
+             * Where "Back to chat" goes, for a screen that cannot close itself (WhatsApp). A
+             * Telegram page closes instead and ignores it; null draws no button.
+             */
+            chatUrl: conversationUrl(session.channel),
         });
     });
 }
@@ -351,8 +371,8 @@ export interface PurchaseResult {
  *   - **Refusals are THROWN, not returned** — an `AppError` for out of stock, the cart's own
  *     rules, a product taken off sale. A caller off the bot surface renders the customer sentence
  *     itself, from `bot-error-copy.ts` by code, so a refusal reads the same in every door.
- *   - **This function NEVER pushes a message.** The Telegram push for `bargain` / `book` belongs to
- *     the Telegram screen door, because only a Mini App cannot write to the chat.
+ *   - **This function NEVER pushes a message.** The push for `bargain` / `book` belongs to the
+ *     screen door (`screenAct`), because only a screen cannot write to the chat itself.
  *   - ⚠ **Idempotency is the CALLER's, and deliberately not a parameter here.** The three doors
  *     retry differently: the chat route already demands an `Idempotency-Key`; the Telegram screen
  *     repeats only on a human double tap; the WhatsApp form's platform retries on its own
@@ -778,21 +798,44 @@ async function respondWithNextCards(
 /**
  * Post a message straight into the conversation a screen was opened from.
  *
- * ⚠ **Telegram only, and the WhatsApp gap is stated rather than hidden.** A Mini App is a
- * Telegram control; the WhatsApp half of these two rungs arrives with Flows, and until then a
- * WhatsApp customer reaches Bargain and Book from the chat card, where the reply goes back
- * through the ordinary renderer and needs no push at all.
+ * ⛔ **This used to return early for WhatsApp, on the premise that a WhatsApp customer never
+ * reaches this screen.** The premise was false: the listing screen is sent to WhatsApp as a URL
+ * button, and its rows open this detail screen in WhatsApp's in-app browser. So Bargain there
+ * pushed nothing, the page could not close, and the button "did nothing" — found on a handset,
+ * 2026-09-22.
  *
- * ⚠ **Best-effort, and a failure never fails the request.** `sendMessage` answers false rather
- * than throwing, and the page has already been told what happened — turning a send failure into
- * a 500 would tell a customer their haggle failed when the only thing that failed was the
- * notification about it.
+ * ⚠ **A plain text, inside the customer-service window.** The customer reached this screen from
+ * a message they sent moments ago, so the window is open and free text is allowed. The
+ * messaging service still applies the window check; outside it the send is refused and logged,
+ * and there is no template fallback — the page has already shown the customer the same question.
+ *
+ * ⚠ **Best-effort, and a failure never fails the request.** Both senders answer rather than
+ * throw on a refused send, and the page has already been told what happened — turning a send
+ * failure into a 500 would tell a customer their haggle failed when the only thing that failed
+ * was the notification about it.
  */
 async function pushIntoConversation(
     channel: MessagingChannel,
     externalId: string,
     message: string,
 ): Promise<void> {
-    if (channel !== 'telegram') return;
-    await telegramBotService.sendMessage(externalId, message);
+    if (channel === 'telegram') {
+        await telegramBotService.sendMessage(externalId, message);
+        return;
+    }
+
+    try {
+        /**
+         * Lazily imported, as `PasswordResetService` and `SenderLoginDeliveryService` do: the
+         * WhatsApp stack constructs its provider on load and throws when it is unconfigured,
+         * which must not take the purchase path down with it.
+         */
+        const { WhatsAppServiceMessenger } = await import('../../whatsapp/services/whatsapp-service-messenger');
+        const sent = await new WhatsAppServiceMessenger().sendText({ to: externalId, body: message });
+        if (!sent.success) {
+            console.warn(`[BotSurface] screen push to WhatsApp was refused: ${sent.error?.code ?? 'unknown'}`);
+        }
+    } catch (err) {
+        console.warn(`[BotSurface] screen push to WhatsApp failed: ${(err as Error).message}`);
+    }
 }

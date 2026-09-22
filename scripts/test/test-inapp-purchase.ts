@@ -590,7 +590,9 @@ function main(): void {
     /**
      * ⚠ **Best-effort, and it must stay that way.** Turning a failed send into a 500 would
      * tell a customer their haggle failed when the only thing that failed was the
-     * notification about it — and WhatsApp cannot be sent to from a Mini App path at all.
+     * notification about it. (This used to add that WhatsApp could not be sent to from this
+     * path at all. It can, and must: the screen opens in WhatsApp's browser too — see
+     * `test:screen-bargain`.)
      */
     assert('the push is addressed to the conversation and to no parameter', () =>
         PURCHASE.includes('session.externalId') && !/externalId:\s*(req|input)\.body/.test(PURCHASE));

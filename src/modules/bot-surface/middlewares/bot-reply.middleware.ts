@@ -3,6 +3,7 @@ import { ERROR_CODES } from '../../../core/error-codes';
 import { botChrome } from '../domain/bot-chrome-copy';
 import { recoveryFor } from '../domain/bot-recovery-actions';
 import { botPendingQuestionStore } from '../services/bot-pending-question.store';
+import { botRecentlySentStore } from '../services/bot-recently-sent.store';
 import {
     BotChannelReply,
     BotReplyIntent,
@@ -78,6 +79,28 @@ const CONTACT_KEYBOARD_CODES: readonly string[] = Object.freeze([
  */
 export function setBotReply(req: Request, intent: BotReplyIntent | null): void {
     if (req.bot) req.bot.replyIntent = intent;
+}
+
+/**
+ * ⛔ **This turn's reply carries a CREDENTIAL — send it, but never record it.**
+ *
+ * The reply is composed, rendered and delivered exactly as any other; the single effect is that
+ * its words stay out of `customer.recentlySent` (`domain/bot-recently-sent.ts`), which is handed
+ * to a model on every message and journaled by the automation layer's execution log.
+ *
+ * ⚠ **One caller today and it is the reason the marker exists**: `discloseCodCode` in
+ * `bot-order.controller.ts` draws *"Get code: 4821"*, which is the secret the customer hands the
+ * agent to prove they paid. Everything else a secret-shaped is a URL, and those are stripped
+ * generically — see `stripUrls`.
+ *
+ * ⚠ **Call it BESIDE `setBotReply`, at the site that knows what it is disclosing.** A pattern in
+ * the recorder cannot make this call: the code is digits, and a digit rule broad enough to catch
+ * it would eat every price on the surface. `test:recently-sent` § 5 scans the disclosure site for
+ * this call for exactly that reason — the guard is the only thing standing between a future
+ * second discloser and a credential in a prompt.
+ */
+export function withholdFromRecentlySent(req: Request): void {
+    if (req.bot) req.bot.replyCarriesSecret = true;
 }
 
 /**
@@ -173,6 +196,37 @@ function notePendingQuestion(req: Request): void {
     });
 }
 
+/**
+ * ⭐ **Remember that the platform SENT this** — so the model, which never saw it, can answer the
+ * message the customer sends back (`domain/bot-recently-sent.ts`).
+ *
+ * ── WHY HERE, AND NOWHERE ELSE ──────────────────────────────────────────────
+ * Two of the three reasons the model is blind to its own conversation are closed by this one
+ * mount, because both pass through here: a message a TOOL drew (`checkout_review`, an order card,
+ * "added to your basket") and a message a TAP drew (`/catalog/action` never reaches the model at
+ * all). Recording in each controller would be a rule one new turn away from being false — the
+ * argument this file already makes for `reply` itself and for the pending question. The third
+ * reason, a notification sent outside the conversation entirely, is closed on the notification
+ * handler's own side.
+ *
+ * ⚠ **Fire-and-forget, self-catching, and AFTER the response's real work.** A Redis blip must
+ * cost the model some context on the next turn, never the turn itself.
+ *
+ * ⚠ **Not reached by an idempotency REPLAY** — that body already carries `reply`, and `withReply`
+ * returns before this line. The first answer recorded the message; a replay is the same turn.
+ *
+ * ⛔ **Skipped when the turn disclosed a credential** — see `withholdFromRecentlySent`.
+ */
+function noteRecentlySent(req: Request): void {
+    const caller = req.bot?.caller;
+    const intent = req.bot?.replyIntent;
+    if (!caller || !intent || req.bot?.replyCarriesSecret) return;
+
+    botRecentlySentStore.noteDraw(caller, intent).catch((error: unknown) => {
+        console.warn('[BotSurface] could not record what was sent to this conversation', error);
+    });
+}
+
 /** The body to send, with `reply` merged in — or the body unchanged when there is none. */
 function withReply(req: Request, body: unknown): unknown {
     if (body === null || typeof body !== 'object' || Array.isArray(body)) return body;
@@ -217,9 +271,13 @@ function withReply(req: Request, body: unknown): unknown {
     // "nothing to say" indistinguishable from "something went wrong composing it".
     if (rendered.length === 0) return envelope;
 
-    // A question is remembered only once it is actually being SENT — a success whose intent
-    // rendered to at least one message. See `notePendingQuestion`.
-    if (envelope.success !== false) notePendingQuestion(req);
+    // A question — and the message carrying it — is remembered only once it is actually being
+    // SENT: a success whose intent rendered to at least one message. See `notePendingQuestion`
+    // and `noteRecentlySent`.
+    if (envelope.success !== false) {
+        notePendingQuestion(req);
+        noteRecentlySent(req);
+    }
 
     /**
      * ⚠ **`reply` stays a single object, ALWAYS, and `replies` is a sibling that appears

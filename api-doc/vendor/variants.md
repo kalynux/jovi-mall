@@ -851,6 +851,38 @@ When an order is placed for a physical variant, the fulfillment agency is resolv
 
 Frontend should warn the vendor if no agency is configured for a variant and the vendor has no default set.
 
+### Variant photos and AI search
+
+The AI search embeds a product's photos, **variant photos included**, so a customer can find
+the product by sending the bot a picture ([products.md § What gets indexed](./products.md#what-gets-indexed)).
+Since 2026-09-22 a variant write that changes **which photos** a variant shows re-sends the
+product to the index. Before that, a photo added to a variant stayed unsearchable, and a
+removed one kept matching, until the vendor next edited the product itself.
+
+| Write | Re-sends the product? |
+|---|---|
+| `POST /:id/variants` with a non-empty `fileIds` | yes |
+| `PATCH /:productId/variants/:variantId` whose `fileIds` adds or removes a photo | yes |
+| the same `PATCH` with only a **reorder** of `fileIds` | no |
+| price, stock, options, name, bargain, status, archive | no |
+
+It only happens when the parent product has `vectorisationEnabled: true` and the variant is
+`active`. A digital variant starts `archived`, so it re-sends nothing until it is activated.
+It also does not happen when the same `PATCH` **demoted** the product to `draft`: re-sending
+an ineligible product would switch its `vectorisationEnabled` off.
+
+What the vendor should know, and what a UI should handle:
+
+- **It is billed like any re-vectorisation**: `CREDIT_COST_VECTORISATION` credits (5 by
+  default). With too few credits the product lands on `skipped_no_credits` and the edit
+  itself still succeeds.
+- **The product is `pending` for a few seconds afterwards**, so the next write on it gets
+  `409 CATALOG_PRODUCT_VECTORISATION_PENDING`. A UI saving photos on several variants in a
+  row must wait for the status to leave `pending` between saves, or retry on the 409.
+- **At most 6 photos per product are embedded, gallery first.** A product whose gallery
+  already holds 6 photos has no room for variant photos in the image search. The edit is
+  still re-sent and billed, because the text index is refreshed too.
+
 ### Bargainable pricing
 
 A variant may carry a **bargain window** — the price range a buyer is allowed to haggle

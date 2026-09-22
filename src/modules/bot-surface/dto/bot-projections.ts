@@ -21,6 +21,7 @@ import {
     BotPendingQuestionView,
     pendingQuestionView,
 } from '../domain/bot-pending-question';
+import { BotRecentlySentEntry, recentlySentView } from '../domain/bot-recently-sent';
 
 /**
  * The places the bot surface's output DIFFERS from the customer API's.
@@ -96,6 +97,21 @@ export interface BotIdentityDto {
      * ⛔ **Never an account closure** — that question is button-only and is never recorded.
      */
     pendingQuestion: BotPendingQuestionView | null;
+    /**
+     * ⭐ **What the PLATFORM has recently sent this customer** — newest last, at most five, each
+     * `{ at, text }`. Empty when there is nothing (and on a Redis fault, which never fails a turn).
+     *
+     * These are messages the customer has ALREADY RECEIVED and the model has never seen: a reply a
+     * tool drew, a message a button TAP produced without passing through the model at all, and a
+     * notification sent outside the conversation entirely. Without them the bot answers "ok
+     * thanks" as though nothing had been sent.
+     *
+     * ⛔ **They are not things the model said**, and a prompt must label them that way — see
+     * `bot-surface.md` § 11.4.
+     * ⛔ **Never a credential**: every URL is stripped to `[link]` and the COD delivery code is
+     * withheld at its disclosure site. See `domain/bot-recently-sent.ts`.
+     */
+    recentlySent: BotRecentlySentEntry[];
 }
 
 /**
@@ -118,6 +134,13 @@ export function toBotIdentityDto(input: {
     memoryEpoch: number;
     /** The waiting question as the store holds it; projected here, never passed through. */
     pendingQuestion: BotPendingQuestion | null;
+    /**
+     * What the platform has recently sent, as the store holds it.
+     *
+     * ⚠ **Required, like `memoryEpoch`**, so no caller can forget it and hand a model a
+     * conversation it cannot see half of. A Redis fault passes `[]` explicitly.
+     */
+    recentlySent: readonly BotRecentlySentEntry[];
 }): BotIdentityDto {
     return {
         // Reachable only on a resolved caller — every other state is a refusal carrying its
@@ -134,6 +157,9 @@ export function toBotIdentityDto(input: {
         memoryEpoch: Number.isInteger(input.memoryEpoch) && input.memoryEpoch > 0 ? input.memoryEpoch : 0,
         // ⛔ The view drops both button tokens — see `pendingQuestionView`.
         pendingQuestion: pendingQuestionView(input.pendingQuestion),
+        // The cap is re-applied at the boundary — a record written by an older build, or edited
+        // in the cache, cannot put a sixth line in a prompt. See `recentlySentView`.
+        recentlySent: recentlySentView(input.recentlySent),
     };
 }
 
@@ -214,6 +240,19 @@ export interface BotSyncDto {
     fallback: {
         assistantUnavailable: string;
     };
+    /**
+     * A Bargain the customer pressed on an in-app SCREEN since their last message — handed
+     * over ONCE, on the sync that reports it, then gone. Null on every other sync.
+     *
+     * ⚠ **For the automation layer to write its bargaining flag from**, in exactly the shape it
+     * writes from a Bargain TAP's response (`api-doc/n8n/N8N-DEPLOY-DAY-CHANGES.md` § 8.2): a
+     * tap travels through n8n and a screen press does not, so without this the customer's offer
+     * reaches the main assistant with no product in view. See `pending-bargain.store.ts`.
+     *
+     * ⚠ **Withheld while onboarding has a question outstanding**, so it is not spent on a turn
+     * that never reaches the bargaining route; it waits for the next sync instead.
+     */
+    pendingBargain: { productId: string; variantId: string; quantity: number } | null;
 }
 
 /**
@@ -272,6 +311,8 @@ export function toBotSyncDto(input: {
         fallback: {
             assistantUnavailable: botChrome('assistantUnavailable', input.language),
         },
+        // Only `/identity/sync` ever sets it, and only after reading the checklist above.
+        pendingBargain: null,
     };
 }
 

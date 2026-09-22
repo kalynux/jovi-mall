@@ -15,10 +15,10 @@ import type { BotReplyOption } from './channel-reply';
  *     completion command, which reached `bot-purchase.controller.ts`, which reaches `orders/`
  *     and `payments/` — and those do work at import under bare `ts-node` and never return, so
  *     the run produces NO OUTPUT and reads as a broken test rather than a hung one.
- *   - **A WhatsApp customer was left in an empty thread.** There is no WhatsApp push
- *     (`pushIntoConversation` is Telegram-only), so when a customer taps Bargain or Book inside
- *     a form, the CHAT has to answer the form's completion — with the same question the chat
- *     tap produces. The alternative was a second copy of that sentence, which is the drift
+ *   - **A WhatsApp customer was left in an empty thread.** A form's completion pushes nothing
+ *     (`pushIntoConversation` belongs to the web screen's door, not the form's), so when a
+ *     customer taps Bargain or Book inside a form, the CHAT has to answer the form's completion
+ *     — with the same question the chat tap produces. The alternative was a second copy of that sentence, which is the drift
  *     `addedToCartActions`'s own comment warns about.
  *
  * ⚠ **This module imports NO service and no controller**, and must not start: that property is

@@ -1172,6 +1172,14 @@ So a service variant is indexed with its full booking config, a digital variant 
 
 Only **active** variants are indexed, so an archived variant's bargain window never reaches the negotiator.
 
+**Photos are indexed too, for search by picture** (since 2026-09-22). The AI search embeds
+the product's photos: the gallery first, then each active variant's own photos, at most
+**6 per product**, deduplicated. Only pictures are embedded (JPEG, PNG, WEBP, GIF, which is
+everything the product upload accepts); videos and digital assets never are. A customer
+who sends the bot a photo can then find the product by what it looks like. The photos are
+embedded a minute or two **after** `vectorisationStatus` reaches `completed`, by a separate
+background job; that status covers the text index only.
+
 ### Enabling / Disabling Vectorisation
 
 Vectorisation is **opt-in** — it defaults to `false` on all new and duplicated products. There are two ways to toggle it:
@@ -1278,6 +1286,9 @@ async function waitForVectorisation(productId) {
 The backend automatically re-vectorises on:
 - Product `PATCH` (data update) without `vectorisationEnabled` in the body — re-vectorises if product is currently active and `vectorisationEnabled` is `true`
 - `vectorisationEnabled` flipped from `false` to `true` (via either `PATCH /:id` or `PATCH /:id/vectorisation`) — runs the enable flow immediately
+- **A variant's photos changing** (since 2026-09-22) — `POST /:id/variants` with `fileIds`, or `PATCH /:productId/variants/:variantId` whose `fileIds` adds or removes a photo. Only when the product is opted in and the variant is `active`. A reorder alone does not re-send, and neither do price or stock edits. See [variants.md](./variants.md#variant-photos-and-ai-search)
+
+Every re-send is billed like the first (`CREDIT_COST_VECTORISATION`, 5 credits by default), and the product is `pending` (locked, below) until the vectoriser reports back, typically a few seconds.
 
 It does **not** automatically retry a `failed` product. Vendors can manually trigger a retry via the dedicated retry endpoint (`POST /:id/vectorisation/retry`), or admins can use the bulk-vectorise endpoint.
 

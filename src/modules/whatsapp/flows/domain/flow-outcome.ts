@@ -3,10 +3,10 @@
  *
  * ── ⛔ THE GAP THIS EXISTS TO CLOSE ─────────────────────────────────────────
  * A WhatsApp customer who presses "Add to cart" or "Bargain" in the product form sees the
- * outcome on the closing screen — and then the form closes and the thread is EMPTY. There is no
- * WhatsApp push (`pushIntoConversation` is Telegram-only, by construction: a Mini App cannot
- * write to a chat, a Flow completion can), and `flow_complete` was silent for every finished
- * product form. So on Telegram the customer is left holding three buttons and a question in the
+ * outcome on the closing screen — and then the form closes and the thread is EMPTY. A form's
+ * press pushes nothing (`pushIntoConversation` serves the web screen's door: a page cannot write
+ * to a chat, a Flow completion can), and `flow_complete` was silent for every finished product
+ * form. So on Telegram the customer is left holding three buttons and a question in the
  * conversation, and on WhatsApp they are left holding nothing.
  *
  * That matters most for the two rungs that WRITE NOTHING: a bargain or a booking is a

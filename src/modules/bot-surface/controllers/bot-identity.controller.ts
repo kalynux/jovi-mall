@@ -10,8 +10,11 @@ import { ICustomer } from '../../customers/customer.model';
 import { OrderModel } from '../../orders/order.model';
 import { FulfillmentStatus } from '../../orders/order.model';
 import { geoCandidateStore } from '../services/geo-candidate.store';
+import { pendingBargainStore } from '../services/pending-bargain.store';
 import { botPendingQuestionStore } from '../services/bot-pending-question.store';
+import { botRecentlySentStore } from '../services/bot-recently-sent.store';
 import { BotPendingQuestion, PendingQuestionOwner } from '../domain/bot-pending-question';
+import { BotRecentlySentEntry } from '../domain/bot-recently-sent';
 import {
     botCallerOf,
     botEnvelopeOf,
@@ -69,7 +72,7 @@ export class BotIdentityController {
         // Read the Customer directly rather than through `CustomerProfileService.getProfile`,
         // which additionally resolves an avatar file and the unified payment-method store —
         // three extra reads for two fields, on the call every conversation makes first.
-        const [customer, states, openOrder, pendingQuestion] = await Promise.all([
+        const [customer, states, openOrder, pendingQuestion, recentlySent] = await Promise.all([
             customerRepository.findById(caller.customerId),
             connectionService.getStates(caller.userId),
             OrderModel.exists({
@@ -77,6 +80,7 @@ export class BotIdentityController {
                 fulfillment_status: { $nin: SETTLED_FULFILMENT },
             }),
             waitingQuestionOf(caller),
+            recentlySentTo(caller),
         ]);
 
         const envelope = botEnvelopeOf(req);
@@ -90,6 +94,13 @@ export class BotIdentityController {
             // ⚠ The maintenance fallback must key memory exactly as `/identity/sync` does.
             memoryEpoch: customer?.bot_memory_epoch ?? 0,
             pendingQuestion,
+            /**
+             * ⚠ **On the maintenance fallback too, for the same reason the epoch is.** A
+             * `readonly` window refuses `/identity/sync`, and a turn answered without this list
+             * is a turn where the model has no idea what the platform just told the customer —
+             * which is exactly the state this record exists to end.
+             */
+            recentlySent,
             /**
              * Sealed from the ENVELOPE this request carried, not from `caller`.
              *
@@ -157,9 +168,20 @@ export class BotIdentityController {
             return;
         }
 
+        const dto = await describe(req, outcome);
+
+        /**
+         * ⚠ **Only here, never in `describe`** — the onboarding route shares that and must not
+         * spend a hand-off. And only once the checklist has nothing to ask: a turn that goes to
+         * onboarding never reaches the bargaining route, so the press waits for the next sync.
+         */
+        const pendingBargain = dto.onboarding.next
+            ? null
+            : await pendingBargainStore.consume(envelope.channel, envelope.externalId, outcome.account.userId);
+
         sendSuccess(
             res,
-            await describe(req, outcome),
+            { ...dto, pendingBargain },
             // 201 on the call that created the account, 200 otherwise. `isNew` in the body
             // is the field a caller should branch on — the status is for the HTTP log.
             { status: outcome.createdAccount ? 201 : 200 },
@@ -351,13 +373,15 @@ async function describe(req: Request, outcome: BotRegistrationOutcome) {
     setBotResponseLanguage(req, language);
     const envelope = botEnvelopeOf(req);
 
-    const [states, openOrder, pendingQuestion] = await Promise.all([
+    const conversation = { userId: outcome.account.userId, channel: outcome.account.channel };
+    const [states, openOrder, pendingQuestion, recentlySent] = await Promise.all([
         connectionService.getStates(outcome.account.userId),
         OrderModel.exists({
             customer_id: customer._id,
             fulfillment_status: { $nin: SETTLED_FULFILMENT },
         }),
-        waitingQuestionOf({ userId: outcome.account.userId, channel: outcome.account.channel }),
+        waitingQuestionOf(conversation),
+        recentlySentTo(conversation),
     ]);
 
     const dto = toBotSyncDto({
@@ -376,6 +400,12 @@ async function describe(req: Request, outcome: BotRegistrationOutcome) {
              */
             memoryEpoch: customer.bot_memory_epoch ?? 0,
             pendingQuestion,
+            /**
+             * ⭐ **What the platform has already sent this conversation** — the tool-drawn and
+             * tap-drawn replies the model never saw, and the notifications sent outside the
+             * conversation entirely. See `domain/bot-recently-sent.ts`.
+             */
+            recentlySent,
             // Sealed from the envelope, for the reason given in `resolve` above. This is
             // the mint that matters in practice: `/identity/sync` runs on EVERY inbound
             // message, so a conversation is handed a fresh token each turn and the TTL
@@ -410,6 +440,23 @@ async function waitingQuestionOf(owner: PendingQuestionOwner): Promise<BotPendin
     } catch (error) {
         console.warn('[BotSurface] could not read the question waiting for an answer', error);
         return null;
+    }
+}
+
+/**
+ * What the platform has recently sent this conversation, for the model to see.
+ *
+ * ⚠ **Fail-open to an EMPTY LIST, never a null and never a throw.** Every inbound message makes
+ * this call; a Redis blip must not fail the turn. The cost of an empty list is that the model
+ * answers the next message without knowing what was sent before it — which is the behaviour this
+ * record improves on, so degrading to it is safe by construction.
+ */
+async function recentlySentTo(owner: PendingQuestionOwner): Promise<BotRecentlySentEntry[]> {
+    try {
+        return await botRecentlySentStore.peek(owner);
+    } catch (error) {
+        console.warn('[BotSurface] could not read what was recently sent to this conversation', error);
+        return [];
     }
 }
 

@@ -109,6 +109,23 @@ declare global {
                  * knows a controller has no business naming a platform stays the one place.
                  */
                 replyIntent?: BotReplyIntent | null;
+                /**
+                 * ⛔ **This reply carries a CREDENTIAL — keep it out of the recently-sent
+                 * record.**
+                 *
+                 * Set through `withholdFromRecentlySent` (`bot-reply.middleware.ts`), never
+                 * assigned directly. The reply is still composed, rendered and SENT exactly as
+                 * any other; the one thing that changes is that its words are not written into
+                 * `customer.recentlySent`, which is read by a model and then journaled by the
+                 * automation layer's execution log.
+                 *
+                 * ⚠ **A marker rather than a pattern, and that is the whole reason it exists.**
+                 * The only secret this surface renders into a sentence today is the COD delivery
+                 * code, and it is digits — a redaction rule broad enough to catch it would eat
+                 * every price, every quantity and every order number on the surface. The site
+                 * that knows it is disclosing a secret is the site that says so.
+                 */
+                replyCarriesSecret?: boolean;
             };
         }
     }

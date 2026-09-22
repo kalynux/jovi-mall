@@ -36,10 +36,16 @@
   launched from a REPLY keyboard, and this one is launched from an inline `web_app` button
   (`channel-reply.ts`), so it is unavailable here.
 
-  The way out is that **jovi-mall holds `TELEGRAM_BOT_TOKEN` itself** and
-  `TelegramBotService.sendMessage` can push straight into the thread; the session carries the
-  `externalId` to address it.  So those two rungs are: POST → the server posts a message into
-  the chat → this page closes.  `outcome: "chat"` below is that case.
+  The way out is that **jovi-mall holds both channels' credentials itself** and can push
+  straight into the thread; the session carries the `externalId` to address it.  So those two
+  rungs are: POST → the server posts a message into the chat → this page goes back to the chat.
+  `outcome: "chat"` below is that case.
+
+  ⚠ **"Goes back" is two different things.**  Inside Telegram the page closes.  On WhatsApp
+  this is an ordinary page in WhatsApp's in-app browser — reached from the listing screen's
+  URL button — and nothing can close it, so the purchase button turns into "Back to chat",
+  pointed at the `chatUrl` the server returns.  Until 2026-09-22 the server pushed to Telegram
+  only and this page had no way back, so on WhatsApp Bargain greyed out and did nothing else.
 
   ⚠ **AND THE PUSHED MESSAGE MUST INVITE A REPLY — it cannot BE the haggle.**  An earlier
   draft of this comment called it "the bargaining agent's opening message", which rests on a
@@ -78,6 +84,8 @@
   .rating { display: flex; gap: 8px; align-items: baseline; font-variant-numeric: tabular-nums; }
   .rating__avg { font-size: 18px; font-weight: 700; }
   .rating__count { color: var(--muted); font-size: 13px; }
+  /* The bargain/book question is "<title>\n\n<question>"; without this the title runs into it. */
+  #note { white-space: pre-line; }
 </style>
 </head>
 <body>
@@ -188,6 +196,7 @@
   var product = null;
   var chosen = Object.create(null);   /* option name → value id */
   var busy = false;
+  var backTo = null;                  /* set once the press is done: the button now goes to the chat */
 
   function esc(s) {
     return String(s == null ? "" : s)
@@ -520,8 +529,12 @@
    *   { outcome: "chat",     message?: string }          → the server has posted into the
    *                                                        thread; close so the customer
    *                                                        lands on it (Bargain / Book)
+   *   …and every answer carries `chatUrl: string | null` — where "Back to chat" goes when
+   *   there is no Telegram runtime to close the page. See SEAM 2.
    */
   el.act.addEventListener("click", function () {
+    if (backTo) { window.location.assign(backTo); return; }
+
     var v = currentVariant();
     if (!v || busy) return;
 
@@ -553,7 +566,21 @@
        * the next step already is — the basket for `cart`, and for `chat` the message the
        * server has just posted, waiting on a reply. See SEAM 2 on why it waits on one.
        */
-      window.setTimeout(function () { if (tg && tg.close) { try { tg.close(); } catch (e) {} } }, 900);
+      if (tg && tg.close) {
+        window.setTimeout(function () { try { tg.close(); } catch (e) {} }, 900);
+        return;
+      }
+
+      /*
+       * ⚠ No Telegram runtime — a WhatsApp screen. Nothing can close this page, so the button
+       * becomes the way back. Left greyed out, it is a button that "does nothing" while the
+       * question waits unseen in the chat. With no `chatUrl` the message above is all there is.
+       */
+      if (out.chatUrl) {
+        backTo = out.chatUrl;
+        el.act.textContent = copy.flowBackToChat;
+        el.act.disabled = false;
+      }
     }).catch(function () {
       busy = false;
       say(copy.failed, true);
@@ -593,7 +620,8 @@
     detailNoSimilar: "Nothing similar to show right now.",
     detailReviews: "Reviews",
     detailMoreReviews: "More reviews",
-    detailNoReviews: "No reviews yet."
+    detailNoReviews: "No reviews yet.",
+    flowBackToChat: "Back to chat"
   };
 
   function boot(d) {

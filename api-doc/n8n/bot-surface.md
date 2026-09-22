@@ -965,7 +965,8 @@ Takes **no arguments** — the identity envelope is the whole input.
     },
     "fallback": {
       "assistantUnavailable": "Désolé, je n'ai pas pu répondre à l'instant. Veuillez réessayer dans un moment."
-    }
+    },
+    "pendingBargain": null        // or { productId, variantId, quantity: 1 } — see below
   }
 }
 ```
@@ -981,6 +982,21 @@ you in advance, on the call you already make on every message, in the customer's
 carries no `reply` on purpose (§14.2): the platform has no question left and the turn belongs to
 your model. Hand that turn to the model; use this string only when the model itself could not
 produce one.
+
+⭐ **`data.pendingBargain` — a Bargain pressed on the in-app detail SCREEN** (added 2026-09-22).
+`null` on almost every sync. When set it is `{ productId, variantId, quantity: 1 }`: the customer
+pressed Bargain on the detail screen since their last message, the platform has posted "make me
+an offer" into the chat, and **this message is probably their offer**. It is exactly the three
+fields a Bargain **tap's** response carries, so **write your bargaining flag from it in the same
+shape as for a tap** (`N8N-DEPLOY-DAY-CHANGES.md` § 8.2a), before the flag is read.
+
+- ⚠ **Handed over ONCE.** The sync that returns it deletes it; the next sync answers `null`.
+  After that your flag is the authority, as it is after a tap.
+- ⚠ **Withheld while `onboarding.next` is set** — a turn that goes to onboarding never reaches
+  the bargaining route, so the press waits for the next sync.
+- **Why it exists:** a tap travels through you, so you see `outcome: "chat"` and set the flag. A
+  screen press goes page → backend and never through you, so without this field the offer reaches
+  the main assistant with no product in view.
 
 ⭐ **`data.customer.memoryEpoch` — which generation of chat memory to read** (added 2026-09-22).
 A number, `0` until an administrator resets this customer's bot memory

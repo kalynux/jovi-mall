@@ -18,7 +18,7 @@ import { ShipmentService } from '../../shipments/shipment.service';
 import { cashCollectionService } from '../../cod/services/cash-collection.service';
 import { VendorRepository } from '../../vendors/vendor.repository';
 import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
-import { setBotReply } from '../middlewares/bot-reply.middleware';
+import { setBotReply, withholdFromRecentlySent } from '../middlewares/bot-reply.middleware';
 import { ORDERS_SCREEN_DOOR, openInAppScreen } from './bot-inapp.controller';
 import { BotActionHandlers, ParsedBotAction, unknownBotAction } from '../domain/bot-action-dispatch';
 import { stripDeliveryCodes } from '../dto/bot-projections';
@@ -509,6 +509,17 @@ async function discloseCodCode(
             ? { kind: 'text', text: `${botChrome('getCodeButton', botResponseLanguageOf(req))}: ${code}` }
             : null,
     );
+
+    /**
+     * ⛔ **The one message on this surface whose WORDS are a credential** — keep it out of
+     * `customer.recentlySent`, which is handed to a model on every inbound message and journaled
+     * by the automation layer's execution log. The customer still receives it; nothing else
+     * changes. See `withholdFromRecentlySent`.
+     *
+     * Unconditional rather than `if (code)`: this function's job is disclosure, and a marker that
+     * is only sometimes set is one refactor away from being sometimes forgotten.
+     */
+    withholdFromRecentlySent(req);
 
     sendSuccess(res, match);
 }

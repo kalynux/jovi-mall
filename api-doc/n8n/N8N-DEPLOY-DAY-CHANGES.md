@@ -1144,6 +1144,41 @@ knowing.** The failure is asymmetric: a flag outliving the session only means th
 opens a fresh session on the next line (a new haggle, which is correct), while a flag expiring
 early sends a mid-haggle reply to the main agent. **If you must pick, err long.**
 
+### 8.2a · ⛔ The same gap on the detail SCREEN — the flag arrives on `/identity/sync`
+
+> **Found on a handset 2026-09-22.** On WhatsApp the listing screen's rows open the detail
+> screen in WhatsApp's browser. Bargain there did nothing: the backend pushed to Telegram only
+> and the page had no way back to the chat. **The backend half is fixed** (the question now
+> reaches WhatsApp and the page's button becomes "Back to chat"). **This n8n half is not built
+> yet.**
+
+A screen press goes page → jovi-mall and **never passes through n8n**, so § 8.2's
+`bargain key change?` never sees it, the flag is never set, and the customer's offer reaches the
+main agent with no product in view. This is § 8.2's live defect again, through a second door, and
+it has been there on Telegram since the detail screen shipped.
+
+The backend now records the press and hands it over **once**, on the next `/identity/sync`, as
+`data.pendingBargain = { productId, variantId, quantity: 1 }` (`bot-surface.md` § 11.4). n8n
+writes its flag from it, **in the same shape § 8.2 writes from a tap**, before `check bargain`
+reads it:
+
+```
+sync identity ──► [pendingBargain?] ──true──► clear price lock (screen) ──► set bargain flag (screen) ──► detect command
+                                   └─false────────────────────────────────────────────────────────────► detect command
+```
+
+- `pendingBargain?` — IF `{{ !!$('sync identity').item.json.data?.pendingBargain?.variantId }}`.
+- `set bargain flag (screen)` — `set bargain flag (tap)`'s key and value, taking `productId` /
+  `variantId` / `quantity` from `data.pendingBargain` instead of from `product action`.
+- ⚠ **Inline, not a side branch.** A parallel branch can run after the main one under n8n's
+  execution order, which sets the flag one message too late. It has to be written before
+  `check bargain` runs on this same turn.
+- ⚠ **On every turn kind**, not only text, because the hand-off is spent on the sync that
+  returns it. If the next message is a tap or a photo, the flag is still set, and
+  `read bargain flag` keeps it for the next typed message, as it already does.
+- **Until this is built the field is harmless:** each sync spends the hand-off and nothing reads
+  it, which is exactly the behaviour before 2026-09-22.
+
 ### 8.3 · Where these five nodes go — a dead-end branch
 
 ```

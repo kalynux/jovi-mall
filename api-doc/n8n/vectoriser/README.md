@@ -880,7 +880,9 @@ as real products with photos are vectorised through jovi-mall's normal opt-in.
 | n8n-side proofs | [`image-vectoriser/test.js`](image-vectoriser/test.js) · [`search/test.js`](image-vectoriser/search/test.js) | ✅ 51/51 · 42/42 |
 | The search side | `UP-wi-mall-product-search` (`GUrwafUbWGNv4XW7`), `UP-wi-mall-core` → `Search-Products` | ✅ published (§ 15.7) |
 | Floor calibration | [`image-vectoriser/calibrate-floors.js`](image-vectoriser/calibrate-floors.js) + `calibration-2026-09-21.json` | ✅ real voyage-multimodal-3.5 vectors |
-| Live smoke test | **`wi-mall-image-arm-smoke`** (`c6jCwddhot1pa5qN`) — seed / check / photo / clean | ✅ keep INACTIVE; run by hand |
+| Live smoke test | **`wi-mall-image-arm-smoke`** (`c6jCwddhot1pa5qN`) — seed / check (`body.product_id`) / photo (`body.photo_url`) / clean | ✅ keep INACTIVE; run by hand |
+| Real text flow → index, end to end | a `buildPayload`-shaped payload through the live vectoriser, drainer, photo search, `/delete` | ✅ proven 2026-09-22 (§ 15.12) |
+| jovi-mall: variant photo edits re-send | `vendor-variant.controller` + `photoSetChanged`, `npm run test:variant-photo-resend` | ✅ 27/27, 9 mutants caught (§ 15.11). ⏳ reaches production at the next jovi-mall deploy |
 
 ### 15.1 · Why a separate arm, not a new model for the whole index
 
@@ -1211,3 +1213,76 @@ harmless meanwhile, since hydration drops them.
 
 **3 · `product_search()` never used its HNSW index** (§ 15.5), recorded rather than
 fixed: at today's size, exact search is cheaper and more accurate.
+
+### 15.11 · When a vendor's photos reach the index (jovi-mall's side)
+
+Nothing here pushes photos on its own. A product's photos travel **inside its text
+payload** (`images[]` and `variants[].files[]`, built by `VectorisationService.buildPayload`
+and read by `embeddableImages`). So a photo is indexed exactly when its product is
+(re-)vectorised:
+
+| Vendor action | Sent to the vectoriser? |
+|---|---|
+| creates a product (`draft`, `vectorisationEnabled: false` by default) | no. Opt-in is the billing gate, and it is refused until the product is `active` |
+| turns AI search on (`PATCH /:id/vectorisation`, or `vectorisationEnabled` in `PATCH /:id`) on an `active` product | yes: gallery + active variants' photos |
+| edits the product (`PATCH /:id`, `PATCH /:id/simple`), gallery photos included | yes, when opted in |
+| **adds or removes a variant's photos** (`POST /:id/variants`, `PATCH …/variants/:variantId`) | **yes, since 2026-09-22**, when opted in and the variant is `active` (below) |
+| price / stock / option / status edits on a variant | no. Prices are hydrated live from jovi-mall at answer time anyway |
+| activates the product (`draft → active`) | no, only `/status` metadata. The vendor enables AI search after activating |
+
+Every vendor-side re-send is billed (`CREDIT_COST_VECTORISATION`, 5 by default) and holds
+the product `pending` until the callback (≈3 s on the live run below). Formats are not a
+gap: product uploads accept only JPEG, PNG (stored as WEBP), WEBP and GIF, at most
+2048 px, which are exactly the four types `embeddableImages` keeps.
+
+**The variant rule** (owner decision, 2026-09-22, "re-send on photo change"). Until then
+the variant routes never re-sent, so a photo added to a variant of an indexed product
+stayed unsearchable, and a removed one kept matching, until the vendor's next product
+edit. `vendor-variant.controller` now re-sends after the response when:
+
+- the product is opted in, and the variant is `active`. A digital variant starts
+  `archived`, and `buildPayload` sends active variants only;
+- and the photo **set** changed (`photoSetChanged`). A reorder costs nothing, since the
+  search embeds a set;
+- and, on update, the same write did **not** demote the product. Re-sending an
+  ineligible product makes `prepareForVectorisation` switch the opt-in off, which a photo
+  edit must not do as a side effect.
+
+Pinned by `npm run test:variant-photo-resend` (27 checks; the controller is scanned as
+text, and 9 mutants of it are each proven to be caught). ⚠ Two things it deliberately
+does **not** do: archiving a variant does not re-send, so its photos stay matchable (for a
+product still on sale) until the next re-send; and with 6+ gallery photos the cap leaves
+no room for variant photos, while the re-send is still billed because the text index is
+refreshed too.
+
+### 15.12 · Proven through the REAL text flow, 2026-09-22
+
+§ 15.9's seed wrote `product_vectors` directly, so the link *jovi-mall payload →
+`build all texts` → `store chunk` → trigger* had never run in production. It has now,
+with a throwaway id (`0e2e00000000000000000a01`) and a payload in `buildPayload`'s exact
+shape: one gallery photo, one gallery **video**, and a variant carrying its own photo
+plus the gallery photo again.
+
+| step | result |
+|---|---|
+| `UP-wi-mall-vectoriser`, the real `vectorise` trigger (execution 2388) | accepted; one `voyage-4` call (157 tokens); `store chunk` returned the row; `metadata.image_files` = **2**: the gallery photo (`variant_id: null`) and the variant's own photo. The **video was skipped** and the reused photo **deduplicated** |
+| jovi-mall callback | `ignored: [the id]`, as designed for an id it does not know |
+| queue → drainer | 2 rows queued by the trigger; the **published** drainer embedded both on its next scheduled run (≈20 s later), 1024 dims |
+| search with the **variant's** photo (execution 2392) | `Run Hybrid Search` → the product at **`image_rank: 1`**, image arm only, nothing else within 0.50; hydration then dropped it (unknown to jovi-mall), as designed |
+| clean-up through the real **`/delete`** path (execution 2394) | `rows_deleted: 1`; the check then read **0** product rows and **0** photo rows (FK cascade) |
+
+A real customer photo was also checked for shape: Telegram message 79 (2026-09-21) reached
+`wi-mall-perceive` as `media.mimeType: image/jpeg` + `media.contentBase64` (107 KB), the
+exact fields `Search-Products` reads. **No real customer has searched by photo yet**: the
+last photo any customer sent predates core's `usePhoto` publish.
+
+⚠ **What this does NOT prove, and it is the open question.** Every photo match so far is
+the same image, a crop of it, or (once) another photo of the same book, at 0.373 (§ 15.6).
+A customer's own phone photo of an item against the vendor's studio shot (different unit,
+light, angle, background) has never been measured. It may land above the 0.50 floor and
+be missed. Measure it with real catalogue photos once vendors have indexed some; the smoke
+harness's `check` step now takes `body.product_id` and its `photo` step `body.photo_url`
+for exactly this.
+
+One trace remains from the run: a row for the test id in the `vectoriser_debug` data
+table, which logs every embedding job.

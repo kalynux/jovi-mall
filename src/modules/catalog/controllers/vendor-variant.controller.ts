@@ -12,6 +12,8 @@ import { resolveBargainWrite } from '../domain/services/bargain-price.rule';
 import { ProductStatusValidationService } from '../domain/services/ProductStatusValidationService';
 import { FileReferenceService } from '../domain/services/media/FileReferenceService';
 import { assertVariantImageLimit } from '../domain/services/media/image-limits';
+import { photoSetChanged } from '../domain/services/media/photo-set';
+import { vectorisationService } from '../domain/services/VectorisationService';
 import { assertNotSimpleMode } from '../domain/services/simple/mode-guard';
 import { DEFAULT_VARIANT_SIGNATURE } from '../domain/services/variants/constants';
 import { Variant } from '../repositories/mappers/variant.mapper';
@@ -254,6 +256,16 @@ export class VendorVariantController {
 
         const detail = await enrichVariant(variant, fileRepository, storageProvider, product);
         res.status(201).json({ success: true, data: detail, message: 'Variant created successfully' });
+
+        // ⚠ VARIANT PHOTOS ARE PRODUCT PHOTOS TO THE IMAGE SEARCH, which embeds them
+        // (api-doc/n8n/vectoriser/README.md § 15). Nothing reaches the index except by
+        // re-sending the product, so a photo that arrives on a variant stays unsearchable
+        // until someone does. Re-sent only when it can matter: the vendor opted in, and the
+        // variant is live (a digital variant starts archived, and buildPayload sends active
+        // variants only). Billed like a product edit (owner decision, 2026-09-22).
+        if (product.vectorisationEnabled && variant.status === 'active' && variant.fileIds.length > 0) {
+            void vectorisationService.vectoriseSingle(productId);
+        }
     });
 
     /**
@@ -439,7 +451,7 @@ export class VendorVariantController {
         // Variant fields like price feed into the product's active-state gate
         // (e.g. ProductStatusValidationService rejects active variants with
         // price <= 0). Re-check and demote the product to draft if it slipped.
-        await productStatusValidationService.revalidateActiveStatus(productId, vendorId);
+        const demoted = await productStatusValidationService.revalidateActiveStatus(productId, vendorId);
 
         const detail = await enrichVariant(updatedVariant, fileRepository, storageProvider, product);
         // One status code — 200 — whether or not the stock change was queued. A 202
@@ -456,6 +468,24 @@ export class VendorVariantController {
                 ? 'Variant updated. The stock change is awaiting the storage agency’s approval.'
                 : 'Variant updated successfully',
         });
+
+        // Re-send the product when this edit changed WHICH photos the variant shows: an
+        // added photo must become searchable and a removed one must stop matching. See the
+        // note in createVariant. Price and stock edits do not re-send (owner decision,
+        // 2026-09-22): the search fetches live prices from jovi-mall at answer time.
+        //
+        // ⚠ Skipped when this edit demoted the product. Re-sending an ineligible product
+        // makes prepareForVectorisation switch the vendor's opt-in OFF, and a photo edit
+        // must not do that as a side effect; the variant path never did before.
+        if (
+            product.vectorisationEnabled
+            && !demoted
+            && updatedVariant.status === 'active'
+            && input.fileIds !== undefined
+            && photoSetChanged(existingVariant.fileIds ?? [], input.fileIds)
+        ) {
+            void vectorisationService.vectoriseSingle(productId);
+        }
     });
 
     /**
