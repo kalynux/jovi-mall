@@ -1552,6 +1552,43 @@ async function main(): Promise<void> {
             },
         ]);
 
+        /**
+         * ⛔ **Cards are OFF in production (owner, 2026-09-22): no Stripe keys, so no card gateway
+         * is offered, and a card pay link is refused before any token exists.** Proved first,
+         * through the real mount, with the environment as this suite received it — CI composes
+         * it without Stripe keys, exactly like production. (A machine that does hold both keys
+         * has cards on, and says so rather than asserting the refusal.)
+         */
+        const stripeSecretBefore = process.env.STRIPE_SECRET_KEY;
+        const stripeWebhookBefore = process.env.STRIPE_WEBHOOK_SECRET;
+        const cardsOnArrival = (stripeSecretBefore ?? '').trim() !== '' && (stripeWebhookBefore ?? '').trim() !== '';
+        if (!cardsOnArrival) {
+            await assert('⛔ with cards OFF, the card pay link is refused: 400 PAYMENT_GATEWAY_NOT_SUPPORTED', async () => {
+                const res = await call(
+                    'POST',
+                    `/api/internal/bot/payments/${CARD_TX_ID.toString()}/pay-link`,
+                    {},
+                    { idempotencyKey: idem('pay-link-cards-off') },
+                );
+                const details = (res.body.error as Json | undefined)?.details as Json | undefined;
+                return res.status === 400
+                    && errorCode(res) === 'PAYMENT_GATEWAY_NOT_SUPPORTED'
+                    && Array.isArray(details?.offered)
+                    && !(details?.offered as unknown[]).includes('STRIPE');
+            });
+        } else {
+            console.log('  ℹ cards are ON in this environment (both Stripe keys set) — the refusal is not asserted');
+        }
+
+        /**
+         * The rest of this section, and § 11's hand-off, exercise the card page itself — dormant
+         * in production, not deleted. So cards are switched ON here for them, with test values
+         * that reach no network: nothing below calls Stripe (it passed with no key at all before
+         * the gate existed). Restored with the publishable key at the end of the suite.
+         */
+        process.env.STRIPE_SECRET_KEY = 'sk_test_verify_bot_287';
+        process.env.STRIPE_WEBHOOK_SECRET = 'whsec_verify_bot_287';
+
         let firstToken = '';
 
         await assert('the bot mints a card page link, and it points at the storefront', async () => {
@@ -2000,6 +2037,10 @@ async function main(): Promise<void> {
 
         if (stripePublishableBefore === undefined) delete process.env.STRIPE_PUBLISHABLE_KEY;
         else process.env.STRIPE_PUBLISHABLE_KEY = stripePublishableBefore;
+        if (stripeSecretBefore === undefined) delete process.env.STRIPE_SECRET_KEY;
+        else process.env.STRIPE_SECRET_KEY = stripeSecretBefore;
+        if (stripeWebhookBefore === undefined) delete process.env.STRIPE_WEBHOOK_SECRET;
+        else process.env.STRIPE_WEBHOOK_SECRET = stripeWebhookBefore;
     } finally {
         console.log(`\n${'─'.repeat(76)}`);
         console.log(`  ${passed} passed, ${failed} failed`);
