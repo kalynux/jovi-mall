@@ -2085,6 +2085,20 @@ function drawnConfirmationAssertions(): void {
     assert('⛔ the operator\'s instruction is an allowlist of two fields — a card secret never reaches a chat', () =>
         !(textOf(checkoutPlacedReply(placement(), 'en'))?.text ?? 'pi_secret').includes('pi_secret'));
 
+    // Owner's handset 2026-09-22 (ORD-2026-000004): a NotchPay push prompt read "Approve it on your
+    // phone with your PIN." and then the adapter's English "Approve the payment request on your phone
+    // to complete this payment." — the instruction twice, and in a French chat in two languages.
+    const push = { message: 'Approve the payment request on your phone to complete this payment.' };
+    assert('⭐ a push prompt (no code, no SMS step) relays no second, English-only instruction — in any language', () =>
+        BOT_COPY_LANGUAGES.every((lang) => {
+            const text = textOf(checkoutPlacedReply(placement({ instructions: push }), lang))?.text ?? '';
+            return text.includes(botChromeFill('checkoutPaymentRequestSent', lang, { amount: '21 500 XAF', phone: PHONE }))
+                && !text.includes(push.message);
+        }));
+    assert('an SMS-code step still relays the operator\'s words — the customer must do something different', () =>
+        (textOf(checkoutPlacedReply(placement({ instructions: { message: 'Enter the confirmation code sent to your phone by SMS.', requiresOtp: true } }), 'en'))?.text ?? '')
+            .includes('\nEnter the confirmation code sent to your phone by SMS.\n'));
+
     assert('⛔ failed: no money was taken — and Try again for THIS transaction, never Check status', () => {
         const failedReply = textOf(checkoutPlacedReply(placement({ state: 'failed' }), 'en'));
         return failedReply !== null

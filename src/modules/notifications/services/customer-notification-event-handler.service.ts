@@ -5,6 +5,7 @@ import { CustomerNotificationPreferenceRepository } from '../repositories/custom
 import { CustomerModel, ICustomer } from '../../customers/customer.model';
 import { Booking } from '../../booking/models/booking.model';
 import { ProductModel } from '../../catalog/models/product.model';
+import { StoreRepository } from '../../store/repositories/store.repository';
 import { connectionService } from '../../channel-connections';
 import { MailService } from '../../mail/mail.service';
 import { TelegramNotificationService } from '../../telegram/services/telegram-notification.service';
@@ -152,6 +153,7 @@ export class CustomerNotificationEventHandler {
     private telegramService: TelegramNotificationService;
     private whatsappWindow: WhatsappService;
     private fcmPushService: FcmPushService;
+    private storeRepo: StoreRepository;
 
     constructor() {
         this.notificationRepo = new CustomerNotificationRepository();
@@ -160,6 +162,7 @@ export class CustomerNotificationEventHandler {
         this.telegramService = new TelegramNotificationService();
         this.whatsappWindow = new WhatsappService();
         this.fcmPushService = new FcmPushService();
+        this.storeRepo = new StoreRepository();
     }
 
     private isWhatsAppProviderConfigured(): boolean {
@@ -638,6 +641,7 @@ export class CustomerNotificationEventHandler {
     async handleOrderCreated(event: DomainEvent): Promise<void> {
         const p = event.payload as {
             orderId: string;
+            vendorId?: string;
             customerId: string;
             orderNumber: string;
             vendorName?: string;
@@ -650,6 +654,7 @@ export class CustomerNotificationEventHandler {
         const customer = await this.loadCustomer(p.customerId);
         if (!customer) return;
         const lang = resolveLanguage(customer);
+        const vendorName = p.vendorName ?? (await this.shopNameOf(p.vendorId));
 
         await this.notify({
             situation: 'order.created',
@@ -660,7 +665,7 @@ export class CustomerNotificationEventHandler {
             context: {
                 orderId: p.orderId,
                 orderNumber: p.orderNumber,
-                vendorName: p.vendorName ?? this.genericVendor(lang),
+                vendorName: vendorName ?? this.genericVendor(lang),
                 itemCount: String(p.itemCount ?? 1),
                 currency: p.currency,
                 amountFormatted: this.formatAmount(p.totalAmount),
@@ -701,7 +706,7 @@ export class CustomerNotificationEventHandler {
         // not customer orders. No orderId → not ours.
         if (!p.orderId || (p.aggregateType && p.aggregateType !== 'order')) return;
 
-        const { customer, orderNumber } = await this.customerFromOrder(p.orderId, p.customerId);
+        const { customer, orderNumber, vendorName } = await this.customerFromOrder(p.orderId, p.customerId);
         if (!customer) return;
         const lang = resolveLanguage(customer);
 
@@ -715,7 +720,7 @@ export class CustomerNotificationEventHandler {
             context: {
                 orderId: p.orderId,
                 orderNumber: p.orderNumber ?? orderNumber ?? p.orderId,
-                vendorName: p.vendorName ?? this.genericVendor(lang),
+                vendorName: p.vendorName ?? vendorName ?? this.genericVendor(lang),
                 currency: p.currency,
                 amountFormatted: this.formatAmount(p.amount)
             }
@@ -1063,6 +1068,8 @@ export class CustomerNotificationEventHandler {
         isCod?: boolean;
         amountDue?: number;
         currency?: string;
+        /** The SHOP's name (the Store's, never the vendor's personal display name), or null. */
+        vendorName?: string | null;
     }> {
         if (!orderId || !mongoose.Types.ObjectId.isValid(orderId)) {
             // No order to read — fall back to whatever the event named.
@@ -1073,7 +1080,7 @@ export class CustomerNotificationEventHandler {
         // a top-level import here closes a require cycle at boot.
         const { OrderModel } = await import('../../orders/order.model');
         const order = await OrderModel.findById(orderId)
-            .select('customer_id order_number payment_method payment_status total_amount currency')
+            .select('customer_id vendor_id order_number payment_method payment_status total_amount currency')
             .lean();
 
         if (!order) return { customer: await this.loadCustomer(customerId) };
@@ -1091,8 +1098,28 @@ export class CustomerNotificationEventHandler {
             // the full total to someone who has already paid part of it invites an
             // argument with the agent on the doorstep.
             amountDue: isCod && order.payment_status !== 'paid' ? order.total_amount : 0,
-            currency: order.currency
+            currency: order.currency,
+            vendorName: await this.shopNameOf(order.vendor_id?.toString())
         };
+    }
+
+    /**
+     * The shop's name, as the customer knows it — the STORE's name, never the vendor's personal
+     * display name (business identity lives on the Store).
+     *
+     * ⚠ Why this exists: neither `order.created` nor `payment.received.full` carries a vendor
+     * name, so both messages fell back to "the provider" on every order — measured on the
+     * owner's handset 2026-09-22, "…ORD-2026-000004. the provider is preparing it now." Null
+     * (never a throw) when there is no store, so the caller keeps its generic wording.
+     */
+    private async shopNameOf(vendorId?: string | null): Promise<string | null> {
+        if (!vendorId || !mongoose.Types.ObjectId.isValid(vendorId)) return null;
+        try {
+            const name = (await this.storeRepo.findNameByVendorId(vendorId))?.trim();
+            return name ? name : null;
+        } catch {
+            return null;
+        }
     }
 
     /**

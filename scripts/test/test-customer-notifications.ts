@@ -1307,6 +1307,42 @@ function main(): void {
     assert('the stored value is one of the two chats, and absent (never null) elsewhere', () =>
         /originChat: \{\s*type: \{\s*channel: \{ type: String, enum: \['whatsapp', 'telegram'\], required: true \}\s*\},\s*default: undefined/.test(modelSource));
 
+    console.log('\n── The shop is named by its STORE name, never "the provider" ──');
+    // Owner's handset 2026-09-22: "…ORD-2026-000004. the provider is preparing it now." and "Your
+    // order … with the provider is placed" — neither event carries a vendor name, so both fell
+    // back to the generic word on every order. Booking messages named the vendor's PERSONAL name.
+    assert('shopNameOf returns the store\'s name, trimmed', () => SHOP_NAME.found === 'Ulrich Shop');
+    assert('no store row, a failing lookup or a malformed id → null (the generic wording), never a throw', () =>
+        SHOP_NAME.missing === null && SHOP_NAME.throws === null && SHOP_NAME.badId === null && SHOP_NAME.badIdLookups === 0);
+    const orderCreatedSpan = originHandlerSource.slice(
+        originHandlerSource.indexOf('async handleOrderCreated('),
+        originHandlerSource.indexOf('async handleOrderPaymentReceived('));
+    const paymentReceivedSpan = originHandlerSource.slice(
+        originHandlerSource.indexOf('async handleOrderPaymentReceived('),
+        originHandlerSource.indexOf('async handleOrderPaymentFailed('));
+    const namesTheShop = (created: string, received: string): boolean =>
+        created.length > 0 && received.length > 0
+        && created.includes('const vendorName = p.vendorName ?? (await this.shopNameOf(p.vendorId));')
+        && created.includes('vendorName: vendorName ?? this.genericVendor(lang),')
+        && received.includes('const { customer, orderNumber, vendorName } = await this.customerFromOrder(')
+        && received.includes('vendorName: p.vendorName ?? vendorName ?? this.genericVendor(lang),');
+    assert('order placed AND payment received look the shop up; "the provider" is only the fallback', () =>
+        namesTheShop(orderCreatedSpan, paymentReceivedSpan)
+        && /\.select\('customer_id vendor_id order_number/.test(originHandlerSource)
+        && originHandlerSource.includes('vendorName: await this.shopNameOf(order.vendor_id?.toString())'));
+    assert('PROOF: the scan bites on the handler as it was (straight to the generic word)', () =>
+        !namesTheShop(orderCreatedSpan.replace('(await this.shopNameOf(p.vendorId))', 'undefined'), paymentReceivedSpan));
+    const bookingSource = readFileSync(
+        join(__dirname, '../../src/modules/booking/services/booking.service.ts'), 'utf8'
+    ).replace(/\r\n/g, '\n');
+    const bookingNameSpan = bookingSource.slice(
+        bookingSource.indexOf('private async resolveVendorName('),
+        bookingSource.indexOf('private async resolveVendorIdentity('));
+    assert('booking messages name the store first, the vendor\'s personal name only without one', () =>
+        bookingNameSpan.indexOf('this.storeRepo.findNameByVendorId(vendorId)') > 0
+        && bookingNameSpan.indexOf('this.storeRepo.findNameByVendorId(vendorId)') < bookingNameSpan.indexOf('this.vendorRepo.findById(vendorId)')
+        && bookingSource.includes('vendorName: shop || (vendor?.display_name ?? null),'));
+
     assert('⛔ no situation\'s copy points the customer at another channel\'s message', crossChannelFree);
 
     assert('PROOF: a sentence referring to another channel IS caught', () => {
@@ -1361,7 +1397,35 @@ async function measureOriginChat(): Promise<void> {
     ORIGIN_CHAT.mutedChannel = await run(bothLinked, { ...prefs, whatsappEnabled: false }, 'whatsapp');
 }
 
-measureOriginChat().then(main, (error: unknown) => {
-    console.error('measureOriginChat failed:', error);
+/**
+ * `shopNameOf`, measured on the REAL method with only the store lookup stubbed — same
+ * constructor-free handler as above, for the same reason.
+ */
+const SHOP_NAME: { found: string | null; missing: string | null; throws: string | null; badId: string | null; badIdLookups: number } = {
+    found: null, missing: 'unmeasured', throws: 'unmeasured', badId: 'unmeasured', badIdLookups: -1,
+};
+
+async function measureShopName(): Promise<void> {
+    type ShopNamer = {
+        shopNameOf(vendorId?: string | null): Promise<string | null>;
+        storeRepo: { findNameByVendorId(vendorId: string): Promise<string | null> };
+    };
+    const handler = Object.create(CustomerNotificationEventHandler.prototype) as unknown as ShopNamer;
+    const VENDOR = '6aad69bac51c555c27cc10d6';
+    let lookups = 0;
+
+    handler.storeRepo = { findNameByVendorId: async () => '  Ulrich Shop ' };
+    SHOP_NAME.found = await handler.shopNameOf(VENDOR);
+    handler.storeRepo = { findNameByVendorId: async () => null };
+    SHOP_NAME.missing = await handler.shopNameOf(VENDOR);
+    handler.storeRepo = { findNameByVendorId: () => Promise.reject(new Error('store lookup down')) };
+    SHOP_NAME.throws = await handler.shopNameOf(VENDOR);
+    handler.storeRepo = { findNameByVendorId: async () => { lookups += 1; return 'Never asked'; } };
+    SHOP_NAME.badId = await handler.shopNameOf('not-an-object-id');
+    SHOP_NAME.badIdLookups = lookups;
+}
+
+measureOriginChat().then(measureShopName).then(main, (error: unknown) => {
+    console.error('measurement failed:', error);
     process.exit(1);
 });

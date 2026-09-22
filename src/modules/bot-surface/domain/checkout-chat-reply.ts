@@ -273,7 +273,18 @@ function instructionLines(instructions: unknown): string[] {
         return instructions.trim() ? [clip(instructions, INSTRUCTION_CLIP)] : [];
     }
     if (!instructions || typeof instructions !== 'object') return [];
-    const { message, ussdCode } = instructions as { message?: unknown; ussdCode?: unknown };
+    const { message, ussdCode, requiresOtp } = instructions as { message?: unknown; ussdCode?: unknown; requiresOtp?: unknown };
+    /**
+     * ⚠ A PUSH PROMPT SAYS NOTHING THE SENTENCE ABOVE HAS NOT ALREADY SAID. With no code to dial and
+     * no SMS code to enter, the operator has pushed the prompt to the handset, and
+     * `checkoutPaymentRequestSent` already says "approve it on your phone with your PIN" — in the
+     * customer's language. The adapter's `message` is the same sentence in ENGLISH ONLY (NotchPay's
+     * `confirm` action), so relaying it read as the instruction twice, and in a French chat as the
+     * instruction twice in two languages (owner's handset, 2026-09-22). A USSD code or an OTP step
+     * is something the customer must DO differently, and still goes through.
+     */
+    const hasCode = typeof ussdCode === 'string' && ussdCode.trim().length > 0;
+    if (!hasCode && requiresOtp !== true) return [];
     return [message, ussdCode]
         .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
         .map((value) => clip(value, INSTRUCTION_CLIP));

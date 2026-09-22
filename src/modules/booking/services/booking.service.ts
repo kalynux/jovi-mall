@@ -20,6 +20,7 @@ import { earningsCompletionService } from '../../earnings/services/earnings-comp
 import { earningsSplitService } from '../../earnings/services/earnings-split.service';
 import { bookingRefundService } from './booking-refund.service';
 import { VendorRepository } from '../../vendors/vendor.repository';
+import { StoreRepository } from '../../store/repositories/store.repository';
 import { assertCancellationAllowed } from '../../vendors/utils/cancellation-policy.util';
 import { BookingNumberGenerator } from '../utils/booking-number.generator';
 import { CustomerModel } from '../../customers/customer.model';
@@ -39,12 +40,14 @@ export class BookingService {
   private groupBookingService: GroupBookingService;
 
   private vendorRepo: VendorRepository;
+  private storeRepo: StoreRepository;
 
   constructor() {
     this.slotLockService = new SlotLockService();
     this.slotGenerator = new SlotGeneratorService();
     this.groupBookingService = new GroupBookingService();
     this.vendorRepo = new VendorRepository();
+    this.storeRepo = new StoreRepository();
   }
 
   /**
@@ -1485,9 +1488,17 @@ export class BookingService {
     }
   }
 
-  /** The vendor's display name, or null. Same never-throws rule as above. */
+  /**
+   * The SHOP's name, or null. Same never-throws rule as above.
+   *
+   * ⚠ The Store's name first: business identity lives on the Store, and `display_name` is the
+   * vendor's PERSONAL name — which is what every booking message named until 2026-09-22. The
+   * personal name stays only as the fallback for a vendor with no store row.
+   */
   private async resolveVendorName(vendorId: string): Promise<string | null> {
     try {
+      const shop = (await this.storeRepo.findNameByVendorId(vendorId))?.trim();
+      if (shop) return shop;
       const vendor = await this.vendorRepo.findById(vendorId);
       return vendor?.display_name ?? null;
     } catch {
@@ -1516,8 +1527,10 @@ export class BookingService {
   ): Promise<{ vendorName: string | null; vendorTimezone: string | null }> {
     try {
       const vendor = await this.vendorRepo.findById(vendorId);
+      // The shop's name, not the person's — see resolveVendorName.
+      const shop = (await this.storeRepo.findNameByVendorId(vendorId))?.trim();
       return {
-        vendorName: vendor?.display_name ?? null,
+        vendorName: shop || (vendor?.display_name ?? null),
         vendorTimezone: vendor?.timezone ?? null,
       };
     } catch {
