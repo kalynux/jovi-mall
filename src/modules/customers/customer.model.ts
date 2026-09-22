@@ -165,6 +165,20 @@ export interface ICustomer extends Document {
    * for the rest of the account's life. See `bot-surface/domain/bot-onboarding.ts`.
    */
   bot_onboarding: ICustomerBotOnboarding | null;
+  /**
+   * The bot conversation memory's EPOCH — which generation of chat memory the automation layer
+   * should read for this customer. 0 until an administrator first resets it.
+   *
+   * ⚠ **The memory itself is NOT here, and this service never touches it.** It lives in the
+   * automation layer's own Redis; n8n folds this number into its memory key (epoch 0 keeps the
+   * original key, epoch N appends `:e<N>`), so bumping it makes the old memory unreachable at once
+   * and the old keys lapse on their own TTL. Written ONLY by `BotMemoryService.reset`, with `$inc`
+   * so two concurrent resets cannot land on one number. Read on every inbound message by
+   * `/identity/sync`, from the document that route already loads — no extra query.
+   */
+  bot_memory_epoch: number;
+  /** When an administrator last reset the bot's memory for this customer. Null: never. */
+  bot_memory_reset_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -259,6 +273,13 @@ const CustomerSchema = new Schema<ICustomer>(
      * like an abandoned chat onboarding to the surface that reads this.
      */
     bot_onboarding: { type: BotOnboardingSchema, default: null },
+    /**
+     * Defaults, so no data migration: a document written before these fields existed reads as
+     * epoch 0 / never reset (a hydrated read applies the default, and `$inc` on an absent field
+     * starts from 0). No index — nothing queries by either.
+     */
+    bot_memory_epoch: { type: Number, default: 0, min: 0 },
+    bot_memory_reset_at: { type: Date, default: null },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );

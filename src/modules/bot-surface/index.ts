@@ -136,3 +136,15 @@ export type {
  * the only path, and it runs in this module's own middleware.
  */
 export type { BotSenderReason, BotSenderState, ResolvedBotCaller } from './services/bot-identity.service';
+
+/**
+ * An administrator's reset of one customer's bot conversation memory
+ * (`POST /api/internal/admin/users/:userId/bot-memory/reset`).
+ *
+ * ⚠ **Exported because the door is the users admin router, and the thing reset is this module's.**
+ * The memory epoch is read by `/identity/sync` and the waiting-question store is this module's own,
+ * so the write belongs here; `users/admin-user.controller.ts` only checks the user exists and calls
+ * it. The store itself stays unexported — see the header.
+ */
+export { botMemoryService } from './services/bot-memory.service';
+export type { BotMemoryResetResult } from './services/bot-memory.service';

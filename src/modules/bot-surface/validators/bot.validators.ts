@@ -620,6 +620,18 @@ export const BotDisplayActionSchema = z
     .object({ token: z.string().trim().min(1).max(128) })
     .strict();
 
+/**
+ * `POST /chat/answer` — `chat_answer_question`: the customer's typed answer, reduced to one word.
+ *
+ * ⚠ **`yes` or `no` and nothing else — never a token, never a context.** The model decides only
+ * WHETHER the message answers the waiting question and which way; WHAT it answers is read from the
+ * question this service recorded when it drew the buttons (`domain/bot-pending-question.ts`). A
+ * token argument would let a model name any button — including one it was never shown.
+ */
+export const BotChatAnswerSchema = z
+    .object({ answer: z.enum(['yes', 'no']) })
+    .strict();
+
 // ─────────────────────────────────────────────────────────────────────────────
 // The in-app screens
 //

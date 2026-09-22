@@ -54,6 +54,15 @@ function attachRoutes(router: Router): Router {
     router.post('/:userId/password-reset-link', AdminUserController.sendPasswordResetLink);
     router.post('/:userId/login-link', AdminUserController.sendLoginLink);
 
+    /**
+     * POST /:userId/bot-memory/reset
+     * Body: `{}` (anything else is ignored). Bumps the customer's bot-memory EPOCH so the
+     * automation layer's conversation memory for them is unreachable from the next message, and
+     * clears any Yes/No question still waiting for a typed answer. Writes nothing else.
+     * 200 `{ success, data: { userId, memoryEpoch, resetAt } }`.
+     */
+    router.post('/:userId/bot-memory/reset', AdminUserController.resetBotMemory);
+
     return router;
 }
 

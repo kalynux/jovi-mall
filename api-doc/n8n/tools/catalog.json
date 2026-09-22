@@ -2584,7 +2584,7 @@
       "surface": "bot_internal",
       "description": "Spends the checkoutRef from checkout_review: creates the customer's orders from their basket (prices re-resolved, bargained price locks honoured) and pushes a mobile-money payment prompt to the account's own wallet. The customer approves it on their phone; the result arrives in the chat. ⚠ On success THIS TOOL ITSELF SENDS THE CUSTOMER the order numbers and the payment instructions (where the prompt went, for how much, the operator's own instruction) with a Check status button — or, when the charge was refused as it was opened (state failed), that no money was taken, with a Try again button. Do NOT repeat any of it. Call this when the customer confirms the review in WORDS; a customer who tapped the Place order button has already placed the order — never call it again after that tap.",
       "when_to_use": "Only right after checkout_review returned ready: true AND the customer explicitly confirmed the total, the address and the masked number it showed.",
-      "when_not_to_use": "Never without that confirmation, never twice, never with an invented checkoutRef. Pass deliveryAddressId = the delivery.address.id the review showed (required for physical goods). Pass phone ONLY if the customer typed a different number themselves. On an error whose details.spent is not false, do NOT place again — use checkout_payment_status.",
+      "when_not_to_use": "Never without that confirmation, never twice, never with an invented checkoutRef. Pass deliveryAddressId = the delivery.address.id the review showed (required for physical goods). Pass phone ONLY if the customer typed a different number themselves. On an error whose details.spent is not false, do NOT place again — use checkout_payment_status. When customer.pendingQuestion.context is 'co', the customer's 'yes' answers the drawn Place order question — use chat_answer_question instead, which places to the address that question named.",
       "operation": {
         "method": "POST",
         "path": "/api/internal/bot/checkout/chat/place"
@@ -5991,6 +5991,98 @@
         "policy": "explicit_only",
         "must_echo": false,
         "notes": "Genuinely flow_only: the model never sees this tool. 'Buy now' adds to the basket and names checkout in its reply — it does NOT place an order, because checkout needs a delivery address and a payment method a bot-registered customer routinely lacks."
+      }
+    },
+    {
+      "name": "chat_answer_question",
+      "version": 1,
+      "title": "Answer the waiting Yes/No question in words",
+      "tier": "core",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Answers the Yes/No question the platform drew on its buttons and is still waiting on — shown to you as customer.pendingQuestion on identity sync — exactly as if the customer had tapped that question's Yes or No button. Whatever the button does happens: place the order (context co), confirm the parcel arrived (cd), cancel the order (cnc), close the support request (tcl), disconnect the other messaging app (unl). ⚠ THIS TOOL ITSELF SENDS THE CUSTOMER the result, word for word what the tap sends. Do NOT repeat or re-word it; add nothing unless the customer asked something else too.",
+      "when_to_use": "When customer.pendingQuestion is not null and the customer's message ANSWERS that question in words, in any language: 'yes', 'yes please', 'go ahead', 'ok', 'place it', 'oui', 'sim', 'sí', 'نعم' → answer 'yes'; 'no', 'not now', 'leave it', 'non', 'não', 'لا' → answer 'no'. Read pendingQuestion.text to be sure the message is about THAT question.",
+      "when_not_to_use": "Never when pendingQuestion is null — there is nothing to answer. Never for closing the account: that question is button-only and never appears as pendingQuestion; ask the customer to tap the button. A question is not an answer: 'how much is delivery?' or 'which address?' does not answer it — answer the question instead. Never guess: if the message could mean either, ask. Never call it twice for one message, and never after the customer tapped the button. For a waiting Place order question (context co) use THIS, not checkout_place: it places to the address the question named.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/chat/answer"
+      },
+      "doc": "n8n/bot-surface.md#1410-a-typed-yes-or-no-to-a-drawn-question",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "answer"
+        ],
+        "properties": {
+          "answer": {
+            "type": "string",
+            "enum": [
+              "yes",
+              "no"
+            ],
+            "description": "'yes' when the customer's message agrees to the waiting question, 'no' when it declines it."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "answer"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "state",
+          "orderNumbers",
+          "amountText",
+          "placed",
+          "confirmed",
+          "fulfillment_status",
+          "closed",
+          "disconnected"
+        ],
+        "result_kind": "status",
+        "never_relay": [
+          "transactionId"
+        ]
+      },
+      "errors": [
+        {
+          "code": "BOT_NO_PENDING_QUESTION",
+          "status": 409,
+          "category": "conflict",
+          "when": "No Yes/No question is waiting: none drawn, 15 minutes passed, a tap already answered it, or the one showing is button-only",
+          "customer_action": "explain"
+        },
+        {
+          "code": "BOT_ACTION_TOKEN_UNKNOWN",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The question's button can no longer be acted on",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "idempotency": "The waiting question is taken atomically before its button's handler runs, so a second call answers BOT_NO_PENDING_QUESTION; a retried call with the same Idempotency-Key replays the first answer.",
+      "requires_confirmation": false,
+      "risk": "high",
+      "side_effects": [
+        "Whatever the question's button does: places the order and pushes a mobile-money prompt (co), confirms a delivery (cd), cancels an order (cnc), closes a support request (tcl), disconnects a messaging app (unl)",
+        "Clears the waiting question"
+      ],
+      "context_resolution": {
+        "subject": "pending_question",
+        "policy": "not_applicable",
+        "notes": "The subject is not an argument: it is the one question this conversation's buttons are waiting on, recorded server-side when it was drawn. The model supplies only yes or no."
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "The customer's own words ARE the confirmation — the question they answer already named the total, the address, the order or the app. Account closure is never answerable here."
       }
     },
     {

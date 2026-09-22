@@ -182,6 +182,12 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
      * otherwise be met with silence.
      */
     catalog_display_action: BotActionController.dispatch,
+    /**
+     * ⭐ **The typed twin of the tap door** — same controller, same registry, same router
+     * (`routeTap`). It runs the token the waiting question's own Yes or No button
+     * carries, so "yes please" and a tap on Yes are one code path.
+     */
+    chat_answer_question: BotActionController.answer,
 
     // ── The in-app screens ───────────────────────────────────────────────────
     inapp_open_listing: BotInAppController.listing,

@@ -284,6 +284,7 @@ twice, each time because a step added one and nobody re-counted.
 | `connections_disconnect` | DELETE | `/connections/:channel` | ✔ |
 | `account_close_preview` | POST | `/account/close/preview` | |
 | `account_close` | POST | `/account/close` | ✔ |
+| `chat_answer_question` | POST | `/chat/answer` | ✔ |
 
 Argument shapes are in [`tools/catalog.json`](./tools/catalog.json), which is the contract
 the automation layer is generated from. The route table asserts itself against it.
@@ -942,7 +943,9 @@ Takes **no arguments** — the identity envelope is the whole input.
       "displayName": "Ada Nkeng", "language": "fr",
       "connectedChannels": ["whatsapp"],
       "hasOpenOrders": false,
-      "identityHint": "••••3456"
+      "identityHint": "••••3456",
+      "memoryEpoch": 0,           // ⭐ fold into your chat-memory key — see below
+      "pendingQuestion": null     // or { context, text, askedAt } — see below
     },
     "onboarding": {
       "complete": false,
@@ -978,6 +981,30 @@ you in advance, on the call you already make on every message, in the customer's
 carries no `reply` on purpose (§14.2): the platform has no question left and the turn belongs to
 your model. Hand that turn to the model; use this string only when the model itself could not
 produce one.
+
+⭐ **`data.customer.memoryEpoch` — which generation of chat memory to read** (added 2026-09-22).
+A number, `0` until an administrator resets this customer's bot memory
+(`POST /api/internal/admin/users/:userId/bot-memory/reset`); each reset adds one. **Fold it into
+your conversation-memory key: at `0` keep today's key unchanged, at `N > 0` append `:e<N>`.** A
+reset therefore makes the old memory unreachable on the very next message, and the old keys lapse
+on their own TTL. This service never reads or writes your memory store — the epoch is the whole
+interface. It is on `identity/resolve` too, so a `readonly` maintenance turn keys memory the same
+way.
+
+⭐ **`data.customer.pendingQuestion` — the Yes/No question the platform drew and is still
+waiting on** (added 2026-09-22). `null`, or:
+
+```jsonc
+{ "context": "co", "text": "…Total: 12 000 XAF\nDeliver to: Home, Akwa\nMobile money: ••••0001\n\nPlace this order?", "askedAt": "2026-09-22T10:00:00.000Z" }
+```
+
+`context` is `co` (place the order) · `cd` (did the parcel arrive) · `cnc` (cancel the order) ·
+`tcl` (close the support request) · `unl` (disconnect the other app). `text` is the question's own
+words, at most 300 characters — a long one loses its **beginning**, because every question ends
+with the question. **Hand both to your model**: when the customer's message answers that question
+in words, the model calls `chat_answer_question` (§ 14.10) and the outcome is exactly what tapping
+the button would have done. ⛔ It never carries the button tokens, and **account closure never
+appears here** — that question is button-only.
 
 ⭐ **`onboarding.next.prompt` is the sentence to send.** It is localised, written for a chat
 window, and always present when `next` is non-null. The other fields on `next` tell your
@@ -2217,6 +2244,60 @@ invent an id, so the tools use "the latest".
 was `PAYMENT_REFERENCE_REQUIRED` until 2026-09-19; `retryCharge` raises the new code). The
 model should ask which number to charge and call `checkout_retry_payment` with `phone`. A
 button cannot carry a number.
+
+### 14.10 · ⭐ A typed yes or no to a drawn question — `chat_answer_question`
+
+**The owner's rule (2026-09-22): a typed "yes"/"no" acts EXACTLY like tapping the Yes/No button.**
+Customers type "yes please" under Place order · Not now, and the model answering that message
+usually does not know what the question was: a tap never goes through the model, and a turn whose
+message a tool drew is not in its memory. So the platform remembers the question itself.
+
+**How it works.**
+
+1. Whenever this service draws a reply carrying exactly one `yes:<ctx>` and one `no:<ctx>` button
+   for an answerable context, it records the question for this conversation (account + channel),
+   **for fifteen minutes**: the context, the two button tokens, and the question's words. Tool-drawn
+   and tap-drawn replies alike — it happens in the one place every reply is rendered.
+2. `/identity/sync` (every inbound message) shows the model `customer.pendingQuestion`:
+   `{ context, text, askedAt }` — never the tokens (§ 11.4).
+3. The model decides the message answers it and calls **`chat_answer_question`**
+   (`POST /chat/answer`, body `{ identity, answer: "yes" | "no" }`, **mutating — send an
+   `Idempotency-Key`**, § 4). The question is taken, and the token its Yes or No button carries is
+   run through **the same router and handler table as `/catalog/action`**. The outcome, the
+   `reply` and `data` are exactly the tap's — relay the `reply` and add nothing (§ 14.2).
+
+| Answerable question | context | typed **yes** runs | typed **no** runs |
+|---|---|---|---|
+| Place order · Not now (`checkout_review`) | `co` | the Place order tap | the Not now tap |
+| Did your parcel arrive? | `cd` | confirm delivered | not received |
+| Cancel this order? | `cnc` | cancel (then asks for the typed reason) | back to the order card |
+| Close this support request? | `tcl` | close it | keep it open |
+| Disconnect the other app? | `unl` | disconnect | keep it |
+
+⛔ **Account closure is BUTTON-ONLY.** `yes:close` is never recorded, and a stored question is
+re-checked on the way out, so no typed word can close an account. A closure question drawn after
+another question **withdraws** the older one — "yes" to *"close my account?"* must never place the
+order still waiting underneath.
+
+⚠ **Not every drawn confirmation is answerable in words.** A checkout offering several deliverable
+addresses draws one Place order row per address: "yes" does not say which, so nothing is recorded
+and the older question is withdrawn — the customer taps the address. A confirm context not on the
+table above is treated the same way.
+
+**What clears the question:** any tap in the conversation (it is forgotten before the tap's
+handler runs), the answer itself (taken atomically, so a second "yes" cannot run it twice), a
+newer question, fifteen minutes, and an administrator's memory reset.
+
+**Refusal:** no question waiting — none drawn, expired, already answered by a tap, or button-only
+— answers **`409 BOT_NO_PENDING_QUESTION`** (category `conflict`, no recovery button) with a
+`customerMessage` in all five languages pointing the customer at the buttons. A stale button
+reference behaves as it does on a tap: Place order draws a fresh confirmation, a cancel or close
+asks again.
+
+⚠ **`checkout_place` stays for the case this cannot serve** — a confirmation that recorded
+nothing (several addresses). When `pendingQuestion.context` is `co`, `chat_answer_question` is the
+right tool: it places to the address the question named, with no `checkoutRef` for the model to
+remember.
 
 ---
 

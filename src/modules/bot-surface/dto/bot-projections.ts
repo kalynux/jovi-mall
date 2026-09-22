@@ -16,6 +16,11 @@ import {
 } from '../domain/bot-onboarding';
 import { BotOnboardingPrompt, onboardingPromptFor } from '../domain/bot-onboarding-copy';
 import { botChrome } from '../domain/bot-chrome-copy';
+import {
+    BotPendingQuestion,
+    BotPendingQuestionView,
+    pendingQuestionView,
+} from '../domain/bot-pending-question';
 
 /**
  * The places the bot surface's output DIFFERS from the customer API's.
@@ -68,6 +73,29 @@ export interface BotIdentityDto {
      * Callers that do not host an MCP server should ignore it. Never show it to a customer.
      */
     botToken: string;
+    /**
+     * ⭐ **The chat-memory EPOCH — fold it into your conversation-memory key.** 0 until an
+     * administrator resets this customer's bot memory; each reset adds one. The automation layer
+     * keeps the ORIGINAL key at 0 and appends `:e<N>` at N, so a reset makes the old memory
+     * unreachable on the very next message. This service never reads or writes that memory.
+     *
+     * ⚠ **On `identity/resolve` too, deliberately.** That is the fallback during a `readonly`
+     * maintenance window, and a turn keyed without the epoch would read the memory an
+     * administrator had just wiped.
+     */
+    memoryEpoch: number;
+    /**
+     * ⭐ **The Yes/No question this surface drew and is still waiting on**, or null — so the model
+     * can tell that "yes please" answers it and call `chat_answer_question`, which acts exactly as
+     * the tap would. `context` is `co` (place the order), `cd` (did the parcel arrive), `cnc`
+     * (cancel the order), `tcl` (close the support request) or `unl` (disconnect an app); `text` is
+     * the question's own words — a long one loses its BEGINNING, so the question itself, which
+     * always comes last, survives.
+     *
+     * ⛔ **Never the button tokens** — they carry confirm refs and checkout credentials.
+     * ⛔ **Never an account closure** — that question is button-only and is never recorded.
+     */
+    pendingQuestion: BotPendingQuestionView | null;
 }
 
 /**
@@ -86,6 +114,10 @@ export function toBotIdentityDto(input: {
     hasOpenOrders: boolean;
     identityHint: string | null;
     botToken: string;
+    /** `Customer.bot_memory_epoch`. Required, so no caller can forget it and read wiped memory. */
+    memoryEpoch: number;
+    /** The waiting question as the store holds it; projected here, never passed through. */
+    pendingQuestion: BotPendingQuestion | null;
 }): BotIdentityDto {
     return {
         // Reachable only on a resolved caller — every other state is a refusal carrying its
@@ -98,6 +130,10 @@ export function toBotIdentityDto(input: {
         hasOpenOrders: input.hasOpenOrders,
         identityHint: input.identityHint,
         botToken: input.botToken,
+        // A document written before the field existed has none; the epoch is then 0 by definition.
+        memoryEpoch: Number.isInteger(input.memoryEpoch) && input.memoryEpoch > 0 ? input.memoryEpoch : 0,
+        // ⛔ The view drops both button tokens — see `pendingQuestionView`.
+        pendingQuestion: pendingQuestionView(input.pendingQuestion),
     };
 }
 

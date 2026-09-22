@@ -426,6 +426,18 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         es: 'Ese botón ya no está activo. Dime qué quieres hacer y te ayudo.',
         ar: 'لم يعد هذا الزر فعّالًا. أخبرني بما تريد فعله وسأساعدك.',
     },
+    /**
+     * `chat_answer_question` with nothing to answer. ⚠ **It points at the buttons**, because the
+     * commonest real case is a question that IS on the screen and cannot be answered in words — an
+     * account closure, or a checkout offering several addresses — where a tap is the only answer.
+     */
+    [ERROR_CODES.BOT_NO_PENDING_QUESTION]: {
+        en: 'There is no question waiting for your answer right now. If a message above has buttons, tap the one you want, or tell me what you would like to do.',
+        fr: "Aucune question n'attend votre réponse pour le moment. Si un message ci-dessus comporte des boutons, appuyez sur celui que vous voulez, ou dites-moi ce que vous souhaitez faire.",
+        pt: 'Não há nenhuma pergunta à espera da sua resposta neste momento. Se uma mensagem acima tiver botões, toque no que pretende, ou diga-me o que quer fazer.',
+        es: 'Ahora mismo no hay ninguna pregunta esperando tu respuesta. Si un mensaje de arriba tiene botones, toca el que quieras, o dime qué quieres hacer.',
+        ar: 'لا يوجد سؤال بانتظار إجابتك الآن. إذا كانت في رسالة أعلاه أزرار، فاضغط على الزر الذي تريده، أو أخبرني بما تريد فعله.',
+    },
 
     // ── Inbound files and ticket attachments (Step 7b) ───────────────────────
     // Both earn an entry, and both for the reason stated above: the remedy is an ACTION

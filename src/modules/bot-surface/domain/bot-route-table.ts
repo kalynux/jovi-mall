@@ -279,6 +279,16 @@ export const BOT_ROUTES: readonly BotRouteSpec[] = Object.freeze([
      * classified this way, arriving through a different door.
      */
     { tool: 'catalog_display_action', method: 'POST', path: '/catalog/action', mutating: true, requiresCustomerRole: true },
+    /**
+     * ⭐ **A typed yes/no to the Yes/No question this surface drew** — it runs the waiting
+     * question's own button token through the tap dispatcher's registry, so it is a tap in every
+     * respect but the thumb (`domain/bot-pending-question.ts`).
+     *
+     * `mutating: true` for the tap's own reason and more: the token it runs can place an order,
+     * cancel one, confirm a delivery or disconnect an app. A retried chat message must replay the
+     * first answer, never run the handler twice.
+     */
+    { tool: 'chat_answer_question', method: 'POST', path: '/chat/answer', mutating: true, requiresCustomerRole: true },
 
     // ── Discovery: browsing by category, and what other customers said ───────
     /**

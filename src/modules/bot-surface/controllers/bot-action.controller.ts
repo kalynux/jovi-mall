@@ -3,7 +3,9 @@ import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { botCallerOf } from '../middlewares/bot-identity.middleware';
 import { parseBotActionId } from '../domain/bot-action-id';
 import { actionKeyOf, mergeActionHandlers, unknownBotAction } from '../domain/bot-action-dispatch';
-import { BotDisplayActionSchema } from '../validators/bot.validators';
+import { answerTokenFor } from '../domain/bot-pending-question';
+import { botPendingQuestionStore } from '../services/bot-pending-question.store';
+import { BotChatAnswerSchema, BotDisplayActionSchema } from '../validators/bot.validators';
 import { PURCHASE_ACTION_HANDLERS } from './bot-purchase.controller';
 import { ORDER_ACTION_HANDLERS } from './bot-order.controller';
 import { CHECKOUT_ACTION_HANDLERS } from './bot-checkout.controller';
@@ -127,25 +129,82 @@ export class BotActionController {
          * `requireBotIdentity`, the wiring fault surfaces once, here, before a token is even
          * parsed, instead of halfway through whichever stream's handler happened to be tapped.
          *
-         * The value is discarded on purpose: the call IS the check, and it throws.
+         * The call IS the check, and it throws. The caller is also whose waiting question a tap
+         * clears, below.
          */
-        botCallerOf(req);
+        const caller = botCallerOf(req);
 
         const { token } = BotDisplayActionSchema.parse(req.body ?? {});
 
-        const parsed = parseBotActionId(token);
-        if (!parsed) throw unknownBotAction();
-
-        const { key, action } = actionKeyOf(parsed);
-        const handler = HANDLERS[key];
-
         /**
-         * ⚠ **One refusal for every way a tap can route nowhere** — an unknown verb (caught
-         * above), an unknown sub-key, and a key declared in the vocabulary whose handler has not
-         * landed yet. From where the customer sits all three are the same event.
+         * ⭐ **A tap answers — or moves past — the question waiting for a typed answer**
+         * (`domain/bot-pending-question.ts`), so it is forgotten BEFORE the handler runs. Awaited,
+         * so a question the handler draws next (a stale checkout's fresh confirmation) is recorded
+         * after this clear and never erased by it.
+         *
+         * ⚠ **Best-effort.** A Redis blip must not fail a tap that has real work to do; the cost of
+         * a missed clear is a question that lapses on its own within fifteen minutes.
          */
-        if (!handler) throw unknownBotAction();
+        try {
+            await botPendingQuestionStore.clear(caller);
+        } catch (error) {
+            console.warn('[BotSurface] could not clear the pending question on a tap', error);
+        }
 
-        await handler(req, res, action);
+        await routeTap(req, res, token);
     });
+
+    /**
+     * `POST /chat/answer` — `chat_answer_question`: the customer TYPED the answer to the Yes/No
+     * question this surface drew.
+     *
+     * ⭐ **The owner's rule: a typed yes/no acts EXACTLY like tapping the Yes/No button.** So this
+     * takes the waiting question (atomically — see `answerTokenFor`), picks the token its Yes or No
+     * button carries, and hands it to `routeTap` — the SAME router, over the SAME registry, that a
+     * tap reaches. The outcome, the `reply` and every side effect are the tap's own; nothing about
+     * placing, cancelling, confirming, closing or disconnecting is implemented a second time.
+     *
+     * ⛔ **Account closure is never reachable from here** — `yes:close` is never recorded and is
+     * refused again on the way out. A typed word must not close an account.
+     *
+     * No question waiting (none drawn, the fifteen minutes passed, a tap already answered it) →
+     * `409 BOT_NO_PENDING_QUESTION`, with its sentence.
+     */
+    static answer = asyncHandler(async (req: Request, res: Response) => {
+        const caller = botCallerOf(req);
+        const { answer } = BotChatAnswerSchema.parse(req.body ?? {});
+
+        const token = await answerTokenFor(botPendingQuestionStore, caller, answer);
+        await routeTap(req, res, token);
+    });
+}
+
+/**
+ * ⭐ **THE router — parse once, resolve the key, run the one handler, or refuse in one place.**
+ *
+ * Both doors above end here: a tap with the token the platform sent back, and a typed answer with
+ * the token the waiting question's own button carries. One function over one registry is what
+ * makes "a typed yes is a tap" true of the code rather than of two call sites agreeing today — a
+ * second router for typed answers would be a second place a token is parsed, and the first place
+ * the two could disagree about what was pressed.
+ *
+ * ⚠ **Declared below the class on purpose** (hoisted, and first called long after load):
+ * `test:inapp-purchase` pins that the door resolves the caller before anything parses a token, by
+ * position in this file.
+ */
+async function routeTap(req: Request, res: Response, token: string): Promise<void> {
+    const parsed = parseBotActionId(token);
+    if (!parsed) throw unknownBotAction();
+
+    const { key, action } = actionKeyOf(parsed);
+    const handler = HANDLERS[key];
+
+    /**
+     * ⚠ **One refusal for every way a tap can route nowhere** — an unknown verb (caught above), an
+     * unknown sub-key, and a key declared in the vocabulary whose handler has not landed yet. From
+     * where the customer sits all three are the same event.
+     */
+    if (!handler) throw unknownBotAction();
+
+    await handler(req, res, action);
 }

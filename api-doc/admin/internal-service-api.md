@@ -117,7 +117,7 @@ grep -cE '^(GET|POST|PUT|PATCH|DELETE) /api/internal/admin/' DOC-PROGRAM/evidenc
 | `/reviews/*` | 4 | **never** — moderation was always service-token only | [reviews.md](./reviews.md) |
 | `/tickets/*` | 19 | ~~`/api/admin/tickets/*`~~ — deleted earlier, at **Phase 17**. 18 rows moved; `POST /:ticketId/claim` is net-new | [tickets.md](./tickets.md) |
 | `/vendors/*` | 8 | **never** | — see below |
-| `/users/*` | 5 | **never** | — see below |
+| `/users/*` | 6 | **never** | — see below. ⚠ 5 when the total above was measured; `POST /:userId/bot-memory/reset` landed 2026-09-22 |
 | `/shipments/*` | 2 | **never** | — see below |
 | `/system/*` | 12 | **never, deliberately** | [system.md](./system.md) |
 | `/dev-tools/*` | 7 | **never, deliberately** | [dev-tools.md](./dev-tools.md) |
@@ -148,10 +148,56 @@ republishing it. A second writer would reproduce the status change and miss all 
 POST   /users/:userId/suspend
 POST   /users/:userId/restore
 PATCH  /users/:userId
+POST   /users/:userId/password-reset-link      ← below
+POST   /users/:userId/login-link               ← below
+POST   /users/:userId/bot-memory/reset         ← below
 ```
 
 A suspension is only real by virtue of the checks in `requireAuth`, `login` and the refresh
 rotation — all of which live here.
+
+#### `POST /users/:userId/bot-memory/reset` — wipe the bot's conversation memory for one customer
+
+For the customer who complains the WhatsApp/Telegram bot is confused. Added 2026-09-22.
+
+```jsonc
+// → request — body {} (any other field is ignored; there is nothing to choose)
+POST /api/internal/admin/users/68d000000000000000000a01/bot-memory/reset
+{}
+
+// ← 200
+{
+  "success": true,
+  "data": {
+    "userId": "68d000000000000000000a01",
+    "memoryEpoch": 3,                          // the NEW epoch — 1 after the first reset
+    "resetAt": "2026-09-22T10:00:00.000Z"      // ISO
+  }
+}
+```
+
+**What it does.** The memory itself lives in the automation layer's Redis, which this service
+never touches. What jovi-mall owns is a **memory epoch** on the customer profile
+(`customers.bot_memory_epoch`, default `0`; `customers.bot_memory_reset_at`, default `null`).
+`/api/internal/bot/identity/sync` hands it to n8n on every inbound message as
+`customer.memoryEpoch`, and n8n folds it into its memory key (`0` = the original key, `N` = `:e<N>`
+appended). A reset:
+
+- **`$inc`s the epoch by one** — atomic, so two administrators pressing at once get two different
+  numbers, never one lost write — and sets `bot_memory_reset_at` to now;
+- clears the Yes/No question still waiting for a typed answer in every chat of that account
+  (`api-doc/n8n/bot-surface.md` § 14.10), best-effort;
+- **writes nothing else** — `updated_at` does not move.
+
+The old memory is unreachable from the customer's next message; its keys lapse on n8n's own TTL.
+
+| Status | Code | When |
+|---|---|---|
+| 404 | `USER_NOT_FOUND` | no such user — and a malformed id, which answers the same (the check every `/users` route makes) |
+| 404 | `AUTH_PROFILE_NOT_FOUND` (`details.role: "customer"`) | the account exists but has no customer profile — it has never talked to the bot as a customer, so there is no memory to forget |
+
+Not idempotent by design: each call is one more reset. wi-admin writes the audit row; this service
+records nothing beyond the two fields.
 
 **`/shipments/*`**
 

@@ -540,6 +540,13 @@ export const ERROR_CODES = Object.freeze({
      */
     BOT_ACTION_TOKEN_UNKNOWN: 'BOT_ACTION_TOKEN_UNKNOWN',
     /**
+     * `chat_answer_question` was called and no Yes/No question is waiting in this
+     * conversation — none was drawn, its fifteen minutes passed, a tap already
+     * answered it, or the one showing is a question a word may not answer (account
+     * closure; a checkout with several addresses to choose from). 409 → `conflict`.
+     */
+    BOT_NO_PENDING_QUESTION: 'BOT_NO_PENDING_QUESTION',
+    /**
      * The Mini App asked to add something the list it was opened for never
      * offered.
      *

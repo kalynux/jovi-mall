@@ -10,6 +10,8 @@ import { ICustomer } from '../../customers/customer.model';
 import { OrderModel } from '../../orders/order.model';
 import { FulfillmentStatus } from '../../orders/order.model';
 import { geoCandidateStore } from '../services/geo-candidate.store';
+import { botPendingQuestionStore } from '../services/bot-pending-question.store';
+import { BotPendingQuestion, PendingQuestionOwner } from '../domain/bot-pending-question';
 import {
     botCallerOf,
     botEnvelopeOf,
@@ -67,13 +69,14 @@ export class BotIdentityController {
         // Read the Customer directly rather than through `CustomerProfileService.getProfile`,
         // which additionally resolves an avatar file and the unified payment-method store —
         // three extra reads for two fields, on the call every conversation makes first.
-        const [customer, states, openOrder] = await Promise.all([
+        const [customer, states, openOrder, pendingQuestion] = await Promise.all([
             customerRepository.findById(caller.customerId),
             connectionService.getStates(caller.userId),
             OrderModel.exists({
                 customer_id: caller.customerId,
                 fulfillment_status: { $nin: SETTLED_FULFILMENT },
             }),
+            waitingQuestionOf(caller),
         ]);
 
         const envelope = botEnvelopeOf(req);
@@ -84,6 +87,9 @@ export class BotIdentityController {
             connectedChannels: states.filter((s) => s.connection !== null).map((s) => s.channel),
             hasOpenOrders: openOrder !== null,
             identityHint: caller.identityHint,
+            // ⚠ The maintenance fallback must key memory exactly as `/identity/sync` does.
+            memoryEpoch: customer?.bot_memory_epoch ?? 0,
+            pendingQuestion,
             /**
              * Sealed from the ENVELOPE this request carried, not from `caller`.
              *
@@ -345,12 +351,13 @@ async function describe(req: Request, outcome: BotRegistrationOutcome) {
     setBotResponseLanguage(req, language);
     const envelope = botEnvelopeOf(req);
 
-    const [states, openOrder] = await Promise.all([
+    const [states, openOrder, pendingQuestion] = await Promise.all([
         connectionService.getStates(outcome.account.userId),
         OrderModel.exists({
             customer_id: customer._id,
             fulfillment_status: { $nin: SETTLED_FULFILMENT },
         }),
+        waitingQuestionOf({ userId: outcome.account.userId, channel: outcome.account.channel }),
     ]);
 
     const dto = toBotSyncDto({
@@ -363,6 +370,12 @@ async function describe(req: Request, outcome: BotRegistrationOutcome) {
             connectedChannels: states.filter((s) => s.connection !== null).map((s) => s.channel),
             hasOpenOrders: openOrder !== null,
             identityHint: outcome.account.identityHint,
+            /**
+             * ⭐ Read off the document this route ALREADY loaded — the memory epoch costs no query
+             * on the one call every inbound message makes.
+             */
+            memoryEpoch: customer.bot_memory_epoch ?? 0,
+            pendingQuestion,
             // Sealed from the envelope, for the reason given in `resolve` above. This is
             // the mint that matters in practice: `/identity/sync` runs on EVERY inbound
             // message, so a conversation is handed a fresh token each turn and the TTL
@@ -382,6 +395,22 @@ async function describe(req: Request, outcome: BotRegistrationOutcome) {
 
     setOnboardingReply(req, dto, language);
     return dto;
+}
+
+/**
+ * The Yes/No question waiting for a typed answer in this conversation, for the model to see.
+ *
+ * ⚠ **Fail-open to null.** Every inbound message makes this call; a Redis blip must not fail the
+ * turn. The cost of a null is that the model does not know about the question, and the customer
+ * taps the button instead — nothing runs on its own.
+ */
+async function waitingQuestionOf(owner: PendingQuestionOwner): Promise<BotPendingQuestion | null> {
+    try {
+        return await botPendingQuestionStore.peek(owner);
+    } catch (error) {
+        console.warn('[BotSurface] could not read the question waiting for an answer', error);
+        return null;
+    }
 }
 
 /**

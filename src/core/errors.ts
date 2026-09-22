@@ -445,6 +445,8 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
         'That screen session is unknown, spent or has expired — open the screen again',
     [ERROR_CODES.BOT_ACTION_TOKEN_UNKNOWN]:
         'That button carries a token this service does not recognise',
+    [ERROR_CODES.BOT_NO_PENDING_QUESTION]:
+        'There is no yes/no question waiting for an answer in this conversation',
     [ERROR_CODES.BOT_PRODUCT_NOT_IN_LIST]:
         'Those products are not part of the list this page was opened for',
     [ERROR_CODES.BOT_REGISTRATION_IDENTITY_TAKEN]:

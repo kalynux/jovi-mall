@@ -2,6 +2,7 @@ import { NextFunction, Request, Response } from 'express';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { botChrome } from '../domain/bot-chrome-copy';
 import { recoveryFor } from '../domain/bot-recovery-actions';
+import { botPendingQuestionStore } from '../services/bot-pending-question.store';
 import {
     BotChannelReply,
     BotReplyIntent,
@@ -141,6 +142,37 @@ function errorReply(req: Request, error: Record<string, unknown>): BotChannelRep
     );
 }
 
+/**
+ * ⭐ **Remember the Yes/No question this reply draws** — so a customer who TYPES "yes" instead of
+ * tapping gets exactly what the tap would have done (`domain/bot-pending-question.ts`,
+ * `chat_answer_question`).
+ *
+ * ── WHY HERE, AND NOWHERE ELSE ──────────────────────────────────────────────
+ * This interceptor is the one place EVERY drawn reply passes through — a tool the model called
+ * (`checkout_review`, `account_close_preview`) and a tap's handler (`ord:…:cancel`, `tkt:…:cl`,
+ * `acct:conn`) alike. Recording in each controller that draws a confirm pair would be a rule that
+ * is one new question away from being false, which is the argument this file already makes for
+ * `reply` itself.
+ *
+ * ⚠ **Fire-and-forget, and self-catching.** The response's real work is done; a Redis blip must
+ * cost at most a question nobody can answer in words (the customer taps instead), never the
+ * response. The write starts as the response is sent, so it lands ahead of the customer's next
+ * message by the whole round trip of a chat turn — and a tap's clear, which runs on a LATER
+ * request, is ordered after it on the same client.
+ *
+ * ⚠ **Not reached by an idempotency REPLAY** — that body already carries `reply`, and `withReply`
+ * returns before this line. The first answer recorded the question; a replay is the same turn.
+ */
+function notePendingQuestion(req: Request): void {
+    const caller = req.bot?.caller;
+    const intent = req.bot?.replyIntent;
+    if (!caller || !intent) return;
+
+    botPendingQuestionStore.noteDraw(caller, intent).catch((error: unknown) => {
+        console.warn('[BotSurface] could not record the question waiting for an answer', error);
+    });
+}
+
 /** The body to send, with `reply` merged in — or the body unchanged when there is none. */
 function withReply(req: Request, body: unknown): unknown {
     if (body === null || typeof body !== 'object' || Array.isArray(body)) return body;
@@ -184,6 +216,10 @@ function withReply(req: Request, body: unknown): unknown {
     // `requestContact` already established on this surface — and a null would make
     // "nothing to say" indistinguishable from "something went wrong composing it".
     if (rendered.length === 0) return envelope;
+
+    // A question is remembered only once it is actually being SENT — a success whose intent
+    // rendered to at least one message. See `notePendingQuestion`.
+    if (envelope.success !== false) notePendingQuestion(req);
 
     /**
      * ⚠ **`reply` stays a single object, ALWAYS, and `replies` is a sibling that appears

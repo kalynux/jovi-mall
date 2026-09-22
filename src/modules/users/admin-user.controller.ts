@@ -4,6 +4,7 @@ import { sendSuccess } from '../../core/responses';
 import { actorFromRequest } from '../../core/types/actor-source.types';
 import { adminCallerActor } from '../../api/middlewares/admin-caller.middleware';
 import { adminCredentialDeliveryService } from '../messaging-login/services/admin-credential-delivery.service';
+import { botMemoryService } from '../bot-surface';
 import { AdminUserService, toAdminUserDto } from './admin-user.service';
 import {
   AdminSendCredentialSchema,
@@ -102,5 +103,29 @@ export class AdminUserController {
     );
 
     sendSuccess(res, result, { message: `Sign-in link sent by ${channel}` });
+  });
+
+  /**
+   * POST /users/:userId/bot-memory/reset — wipe the bot's conversation memory for one customer.
+   *
+   * For the customer who says "the bot is confused". jovi-mall does not hold the memory — the
+   * automation layer does — so this bumps the customer's memory EPOCH, which `/identity/sync`
+   * hands n8n on every message and n8n folds into its memory key. The old memory is unreachable
+   * from the next message on. See `bot-surface/services/bot-memory.service.ts`.
+   *
+   * ⚠ **The body is ignored, not validated** — the contract is `{}` with extras tolerated, and
+   * there is nothing for a caller to say: no choice of what to forget, no destination.
+   *
+   * ⚠ **The answer is `{ success, data }` and nothing else — no `message`.** That is the exact
+   * shape wi-admin is built against.
+   *
+   * Refusals: `404 USER_NOT_FOUND` for an unknown or malformed id (the same check every route in
+   * this file makes), `404 AUTH_PROFILE_NOT_FOUND` for an account with no customer profile.
+   */
+  static resetBotMemory = asyncHandler(async (req: Request, res: Response) => {
+    await adminUserService.getById(req.params.userId);
+    const result = await botMemoryService.reset(req.params.userId);
+
+    sendSuccess(res, result);
   });
 }

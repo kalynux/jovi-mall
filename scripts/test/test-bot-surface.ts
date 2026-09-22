@@ -1335,6 +1335,8 @@ async function main(): Promise<void> {
             hasOpenOrders: true,
             identityHint: '••••3456',
             botToken: sealBotIdentity({ channel: 'whatsapp', externalId: '237600123456' }),
+            memoryEpoch: 0,
+            pendingQuestion: null,
         });
         const json = JSON.stringify(dto);
         return !json.includes('externalId') && !json.includes('237600123456') && dto.identityHint === '••••3456';
@@ -3280,10 +3282,12 @@ async function main(): Promise<void> {
      * 58 → 61 on 2026-09-22: + checkout_review, checkout_place, checkout_payment_status,
      * checkout_retry_payment (the last two were mounted and never catalogued, so the model could
      * not check or retry a payment), − payment_create_pay_link (card-only, off while cards are).
+     * 61 → 62 on 2026-09-22: + chat_answer_question (a typed yes/no runs the waiting question's
+     * own button token — `test:chat-answer`).
      */
-    assert('the generator emits 61 tools — update this when one lands', () => {
-        if (emitted.length !== 61) console.error(`     ↳ emitted ${emitted.length}`);
-        return emitted.length === 61;
+    assert('the generator emits 62 tools — update this when one lands', () => {
+        if (emitted.length !== 62) console.error(`     ↳ emitted ${emitted.length}`);
+        return emitted.length === 62;
     });
 
     /**
