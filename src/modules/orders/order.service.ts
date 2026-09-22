@@ -1315,7 +1315,11 @@ export class OrderService {
           orderType: order.order_type,
           totalAmount: order.total_amount,
           currency: order.currency,
-          itemCount: order.items.length
+          itemCount: order.items.length,
+          // Units, not lines: two packs of one product are ONE line and TWO units. The customer's
+          // "order placed" said "1 item(s)" for two packs (owner's handset, 2026-09-22). Additive —
+          // `itemCount` keeps its meaning for every existing consumer.
+          unitCount: order.items.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0)
         }
       });
 

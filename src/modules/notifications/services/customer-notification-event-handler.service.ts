@@ -648,6 +648,8 @@ export class CustomerNotificationEventHandler {
             totalAmount: number;
             currency: string;
             itemCount: number;
+            /** Units (sum of quantities). `itemCount` is LINES — two packs of one product are 1. */
+            unitCount?: number;
             paymentStatus?: string;
         };
 
@@ -666,7 +668,8 @@ export class CustomerNotificationEventHandler {
                 orderId: p.orderId,
                 orderNumber: p.orderNumber,
                 vendorName: vendorName ?? this.genericVendor(lang),
-                itemCount: String(p.itemCount ?? 1),
+                // What the customer counts is packs, not lines: "2 item(s)" for two of one product.
+                itemCount: String(p.unitCount && p.unitCount > 0 ? p.unitCount : (p.itemCount ?? 1)),
                 currency: p.currency,
                 amountFormatted: this.formatAmount(p.totalAmount),
                 paymentLine:

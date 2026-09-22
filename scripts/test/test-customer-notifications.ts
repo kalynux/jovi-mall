@@ -1338,6 +1338,13 @@ function main(): void {
     const bookingNameSpan = bookingSource.slice(
         bookingSource.indexOf('private async resolveVendorName('),
         bookingSource.indexOf('private async resolveVendorIdentity('));
+    const orderServiceSource = readFileSync(
+        join(__dirname, '../../src/modules/orders/order.service.ts'), 'utf8'
+    ).replace(/\r\n/g, '\n');
+    assert('"order placed" counts PACKS: the event carries units and the customer copy prefers them to lines', () =>
+        orderServiceSource.includes('unitCount: order.items.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0)')
+        && orderServiceSource.includes('itemCount: order.items.length,')
+        && orderCreatedSpan.includes('itemCount: String(p.unitCount && p.unitCount > 0 ? p.unitCount : (p.itemCount ?? 1)),'));
     assert('booking messages name the store first, the vendor\'s personal name only without one', () =>
         bookingNameSpan.indexOf('this.storeRepo.findNameByVendorId(vendorId)') > 0
         && bookingNameSpan.indexOf('this.storeRepo.findNameByVendorId(vendorId)') < bookingNameSpan.indexOf('this.vendorRepo.findById(vendorId)')
