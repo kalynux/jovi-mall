@@ -7,7 +7,7 @@ import { ERROR_CODES } from '../../../core/error-codes';
 import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
 import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { botChrome, BotChromeKey } from '../domain/bot-chrome-copy';
-import { botStorefrontLink } from '../domain/bot-list-window';
+import { botStorefrontLink, surfacePath } from '../domain/bot-list-window';
 import { inAppScreenUrl } from '../domain/inapp-url';
 import {
     InAppListingQuery,
@@ -34,17 +34,80 @@ import {
  * phone, which can hold neither. So a handle is the only thing that can cross between them,
  * and minting it is all this file does.
  *
- * ── ⚠ EVERY ROUTE HERE DEGRADES, AND THE DEGRADATION IS THE COMMON CASE ─────
- * `inAppScreenUrl` answers null whenever this deployment has no HTTPS in-app origin — which
- * is **true in production today**, because `BOT_MINIAPP_BASE_URL` is unset. So the "no screen
- * available" path is not a rare fallback to be sketched in; it is the path that runs, and it
- * must leave the customer somewhere real. That somewhere is the storefront, via
- * `botStorefrontLink`, which already gets the customer's language prefix right.
+ * ── ⚠ EVERY ROUTE HERE DEGRADES, AND BOTH HALVES OF THE LADDER RUN ───────────
+ * `inAppScreenUrl` answers null whenever this deployment has no HTTPS in-app origin. This
+ * header used to say that was "true in production today"; ⚠ **it stopped being true** — the
+ * owner's WhatsApp turn of 2026-09-22 (core exec 1942) came back with a `/api/bot/miniapp/s/ol/…`
+ * screen URL, so `BOT_MINIAPP_BASE_URL` is set there now. Whether a screen exists is
+ * configuration, and neither branch is a sketch: without an origin this must still leave the
+ * customer somewhere real, which is the storefront, via `botStorefrontLink`, which already gets
+ * the customer's language prefix right.
+ *
+ * ── ⚠ THE SENTENCE ABOVE THE BUTTON IS PER SCREEN, NEVER A PRODUCT DEFAULT ────
+ * The door's `text` is what the customer reads, and on WhatsApp it is the whole `cta_url` body.
+ * Two doors were shipped reading a sentence that belonged to another screen: the order history
+ * said *"Here are a few more."* (the product "See more" page's line) and one product said *"Tap
+ * below to see THEM"*. The first reached the owner's handset twice in one turn, because the model
+ * copied it as its own answer. `SCREEN_PROMPT` is the per-kind table that replaced the single
+ * product-shaped default; see it before adding a door.
  *
  * ⚠ **Never a dead button.** A `link` intent with no URL is worse than no button at all, so
  * when neither a screen nor a storefront link can be built, the reply is cleared and the model
  * answers in its own words. That is the same rule `createPayLink` already follows.
  */
+
+/**
+ * The sentence over each screen's button, by kind — used when a door names no `textKey`.
+ *
+ * ⚠ **Every entry is a sentence that is RIGHT for that screen.** The old single default
+ * (`browseProductsPrompt`, *"Tap below to see them with pictures and prices."*) is right for a
+ * grid of products and for nothing else — it put "them" over ONE product (exec 1892, the owner's
+ * handset, 2026-09-22). It survives below only as the last resort for a kind added later without
+ * an entry here; add the entry with the kind.
+ *
+ *   - `pd` — ONE product: `productScreenPrompt`. One line here fixes BOTH doors onto the product
+ *     screen — `inapp_open_product` and the discovery stream's `open:pd` tap, which names no
+ *     `textKey` either.
+ *   - `sl` — the shop directory, whose "them" is shops and whose shops have no prices:
+ *     `storesScreenPrompt`.
+ *
+ * `co`, `bk` and `bp` have no entry because no door reaches them through this helper: each is
+ * minted by its own stream on the tap that opens it, with that stream's own sentence.
+ */
+const SCREEN_PROMPT: Readonly<Partial<Record<InAppSurfaceKind, BotChromeKey>>> = Object.freeze({
+    pl: 'browseProductsPrompt',
+    pd: 'productScreenPrompt',
+    sl: 'storesScreenPrompt',
+    ol: 'ordersScreenPrompt',
+    tf: 'supportFormPrompt',
+    bl: 'bookingsScreenPrompt',
+});
+
+/** This kind's sentence, or the product-grid line where no correct one exists yet (see above). */
+export function screenPromptOf(kind: InAppSurfaceKind): BotChromeKey {
+    return SCREEN_PROMPT[kind] ?? 'browseProductsPrompt';
+}
+
+/**
+ * ⭐ **The order-history screen, as every door onto it opens it** — the `inapp_open_orders` tool
+ * and the `open:ol` tap (the Load more row under the chat order list).
+ *
+ * One descriptor rather than two call sites agreeing, because they did NOT agree: the tap said
+ * *"Tap below to see all your orders."* over **See all**, while the tool said *"Here are a few
+ * more."* over **Load more**, and it was the tool's version the owner met (core exec 1942).
+ * `fallbackPath` is read from the same table `windowForChat({ surface: 'orders' })` reports as
+ * `moreUrl`, so the storefront page cannot drift from the one the list advertises.
+ */
+export const ORDERS_SCREEN_DOOR: Readonly<{
+    fallbackPath: string;
+    labelKey: BotChromeKey;
+    textKey: BotChromeKey;
+}> = Object.freeze({
+    fallbackPath: surfacePath('orders'),
+    labelKey: 'browseAllButton',
+    textKey: 'ordersScreenPrompt',
+});
+
 export class BotInAppController {
     /**
      * `POST /inapp/listing` — open the product grid.
@@ -209,21 +272,25 @@ export class BotInAppController {
      * door and the chat order list both need to open a screen too, and three hand-written
      * copies of the owner binding is three chances to get the owner binding wrong.
      *
-     * ⚠ **`loadMoreRow` is the label, not a button key**, because in chat this arrives as the
-     * sixth row of a list rather than as a button — five orders plus a way out. Six rows is a
-     * WhatsApp *list*; buttons cap at three.
+     * ── ⛔ WHAT THIS DOOR SAID ON THE OWNER'S HANDSET (core exec 1942, 2026-09-22) ──
+     * *"Here are a few more."* over a **Load more** button, as the answer to "Sho my orders" —
+     * and the model, reading that sentence in the tool result, typed it again as its own answer,
+     * so the customer got it twice. Both keys were borrowed from other turns: `moreProductsPrompt`
+     * is the product "See more" page's line (a SECOND page, wrong for a first look) and
+     * `loadMoreRow` is the sixth ROW of the chat order list, which is the tap that reaches
+     * `open:ol` — not what a door opened from a typed request should be labelled.
+     *
+     * ⚠ **Now `ORDERS_SCREEN_DOOR`, the one descriptor the `open:ol` tap uses too**, so the two
+     * ways into this screen say the same sentence over the same label and cannot drift apart again.
+     *
+     * ⚠ **This door is the SECOND answer to "show my orders", not the first.** The first is
+     * `orders_list_groups`, which draws the five most recent orders in the chat as a list the
+     * customer can tap, with the Load more row leading here. The model reached for this door
+     * instead because the catalogue's `when_to_use` quoted "show me my orders" verbatim — see the
+     * chat-surfaces report for the catalogue request.
      */
     static orders = asyncHandler(async (req: Request, res: Response) => {
-        const handle = await openInAppScreen(req, {
-            payload: { kind: 'ol' },
-            /**
-             * The storefront's own order list, which is where this degrades today — production
-             * has no in-app origin configured, so this is the path that actually runs.
-             */
-            fallbackPath: '/shop/account/orders',
-            labelKey: 'loadMoreRow',
-            textKey: 'moreProductsPrompt',
-        });
+        const handle = await openInAppScreen(req, { payload: { kind: 'ol' }, ...ORDERS_SCREEN_DOOR });
 
         sendSuccess(res, { handle, opened: 'orders' });
     });
@@ -248,15 +315,15 @@ export function respondWithScreen(
         fallbackPath: string | null;
         labelKey: BotChromeKey;
         /**
-         * The sentence above the button. Defaults to the browse prompt, which is right for the
-         * three product doors and wrong for everything else — an order screen introduced with
-         * "here are some products" is worse than no sentence at all.
+         * The sentence above the button. Defaults to this KIND's line in `SCREEN_PROMPT` — it
+         * used to default to the product-grid prompt for every kind, which is how a single
+         * product came to be introduced as "them".
          */
         textKey?: BotChromeKey;
     },
 ): void {
     const label = botChrome(input.labelKey, input.language);
-    const text = botChrome(input.textKey ?? 'browseProductsPrompt', input.language);
+    const text = botChrome(input.textKey ?? screenPromptOf(input.kind), input.language);
 
     const screenUrl = inAppScreenUrl(input.kind, input.handle, input.language);
     if (screenUrl) {

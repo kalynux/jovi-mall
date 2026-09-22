@@ -1314,6 +1314,30 @@ const ORDERS_SCREEN_PROMPT: Copy = {
  * is the noun the rest of the product uses; this is the sentence in a chat window, where the
  * word that matters is the one they would have said themselves.
  */
+/**
+ * The sentence over the button that opens ONE product's screen.
+ *
+ * ⚠ **Singular, and that is the reason it exists.** This door used to borrow the product-grid
+ * line, *"Tap below to see them with pictures and prices."* — "them" over a single product. The
+ * owner saw it on the handset on 2026-09-22 (exec 1892).
+ */
+const PRODUCT_SCREEN_PROMPT: Copy = {
+    en: 'Tap below to see this product in full.',
+    fr: 'Appuyez ci-dessous pour voir ce produit en détail.',
+    pt: 'Toque abaixo para ver este produto em detalhe.',
+    es: 'Toca abajo para ver este producto en detalle.',
+    ar: 'اضغط أدناه لرؤية هذا المنتج بالتفصيل.',
+};
+
+/** The sentence over the button that opens the shops screen — shops, not products. */
+const STORES_SCREEN_PROMPT: Copy = {
+    en: 'Tap below to see the shops.',
+    fr: 'Appuyez ci-dessous pour voir les boutiques.',
+    pt: 'Toque abaixo para ver as lojas.',
+    es: 'Toca abajo para ver las tiendas.',
+    ar: 'اضغط أدناه لرؤية المتاجر.',
+};
+
 const BOOKINGS_SCREEN_PROMPT: Copy = {
     en: 'Here are your appointments.',
     fr: 'Voici vos rendez-vous.',
@@ -1592,6 +1616,8 @@ const CHROME = Object.freeze({
     cancelReasonPrompt: { copy: CANCEL_REASON_PROMPT, cap: null },
     handoverPrompt: { copy: HANDOVER_PROMPT, cap: null },
     ordersScreenPrompt: { copy: ORDERS_SCREEN_PROMPT, cap: null },
+    productScreenPrompt: { copy: PRODUCT_SCREEN_PROMPT, cap: null },
+    storesScreenPrompt: { copy: STORES_SCREEN_PROMPT, cap: null },
     bookingsScreenPrompt: { copy: BOOKINGS_SCREEN_PROMPT, cap: null },
     myBookingsButton: { copy: MY_BOOKINGS_BUTTON, cap: 20 },
 

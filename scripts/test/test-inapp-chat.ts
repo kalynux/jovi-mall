@@ -18,7 +18,8 @@
  * § 1 was written by Stream 0 and pins the contract Stream A inherits: three routes, three
  * tools, one URL shape and one degradation ladder. **It is not Stream A's to edit** — if an
  * assertion here fails, the contract moved, and the other four streams need telling.
- * § 2 is empty and is where Stream A's own assertions go.
+ * § 2 is Stream A's own, and now holds the chat-surfaces stream's door assertions (2026-09-22):
+ * the order-history door as the owner met it, and the per-kind sentence over a screen button.
  *
  * Run: npm run test:inapp-chat
  */
@@ -34,9 +35,19 @@ import { BOT_ROUTES, assertNoShadowedRoutes, assertToolNamesUnique } from '../..
  * makes it meaningful.
  */
 import botSurfaceRouter, { assertHandlersCoverRoutes } from '../../src/modules/bot-surface/bot.routes';
-import { renderBotReplies } from '../../src/modules/bot-surface/domain/channel-reply';
+import { BotReplyIntent, renderBotReplies } from '../../src/modules/bot-surface/domain/channel-reply';
 import { inAppScreenUrl, inAppBaseUrl, __IN_APP_SCREEN_PATH } from '../../src/modules/bot-surface/domain/inapp-url';
 import { BOT_COPY_LANGUAGES } from '../../src/modules/bot-surface/domain/bot-error-copy';
+import { botChrome } from '../../src/modules/bot-surface/domain/bot-chrome-copy';
+import { botStorefrontLink, surfacePath } from '../../src/modules/bot-surface/domain/bot-list-window';
+import { inAppSurfaceStore } from '../../src/modules/bot-surface/services/inapp-surface.store';
+import {
+    BotInAppController,
+    ORDERS_SCREEN_DOOR,
+    screenPromptOf,
+} from '../../src/modules/bot-surface/controllers/bot-inapp.controller';
+import { ORDER_ACTION_HANDLERS } from '../../src/modules/bot-surface/controllers/bot-order.controller';
+import type { Request, Response } from 'express';
 
 let passed = 0;
 let failed = 0;
@@ -74,7 +85,143 @@ function withBase<T>(value: string | undefined, fn: () => T): T {
 
 const TOOLS = ['inapp_open_listing', 'inapp_open_product', 'inapp_open_stores'];
 
-function main(): void {
+/**
+ * The three rungs of the degradation ladder, as configuration: an in-app origin, only a
+ * storefront, or neither. Both variables are read at CALL time, so a door that awaits needs them
+ * set for the whole call — the synchronous `withBase` above would have restored them already.
+ */
+const RUNGS = {
+    screen: { BOT_MINIAPP_BASE_URL: 'https://api.test', STOREFRONT_URL: 'https://shop.test' },
+    link: { BOT_MINIAPP_BASE_URL: undefined, STOREFRONT_URL: 'https://shop.test' },
+    none: { BOT_MINIAPP_BASE_URL: undefined, STOREFRONT_URL: undefined },
+} as const;
+type Rung = keyof typeof RUNGS;
+
+const RUNG_VARIABLES = ['BOT_MINIAPP_BASE_URL', 'STOREFRONT_URL'] as const;
+
+/** Apply one rung to the environment, and hand back the function that puts it back. */
+function applyRung(rung: Rung): () => void {
+    const before = RUNG_VARIABLES.map((name) => process.env[name]);
+    RUNG_VARIABLES.forEach((name) => {
+        const value = RUNGS[rung][name];
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+    });
+    return () => RUNG_VARIABLES.forEach((name, i) => {
+        if (before[i] === undefined) delete process.env[name];
+        else process.env[name] = before[i];
+    });
+}
+
+async function withRung<T>(rung: Rung, fn: () => Promise<T>): Promise<T> {
+    const restore = applyRung(rung);
+    try {
+        return await fn();
+    } finally {
+        restore();
+    }
+}
+
+function inRung<T>(rung: Rung, fn: () => T): T {
+    const restore = applyRung(rung);
+    try {
+        return fn();
+    } finally {
+        restore();
+    }
+}
+
+/** What one door call produced: the reply it set, the body it sent, the sessions it minted. */
+interface DoorRun {
+    intent: BotReplyIntent | null | undefined;
+    body: Record<string, unknown> | null;
+    minted: Record<string, unknown>[];
+    error: unknown;
+}
+
+/**
+ * Drive a REAL door handler with a fake request, exactly as the router would after the identity
+ * guard ran — and with the session store's `mint` replaced, so no Redis is needed.
+ *
+ * ⚠ The caller is a made-up customer on a made-up WhatsApp number; nothing here is anybody's.
+ */
+async function runDoor(
+    call: (req: Request, res: Response, next: (error?: unknown) => void) => unknown,
+    language: string,
+): Promise<DoorRun> {
+    const minted: Record<string, unknown>[] = [];
+    const realMint = inAppSurfaceStore.mint;
+    inAppSurfaceStore.mint = async (input) => {
+        minted.push(input as unknown as Record<string, unknown>);
+        return 'ia_test_handle';
+    };
+    const req = {
+        body: {},
+        params: {},
+        bot: {
+            caller: { userId: 'u-test', customerId: 'c-test', channel: 'whatsapp', externalIdentity: '237600000001' },
+            envelope: { channel: 'whatsapp', externalId: '237600000001' },
+            tool: 'test',
+            anonymous: false,
+            language,
+        },
+    } as unknown as Request;
+    try {
+        return await new Promise<DoorRun>((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error('the door neither answered nor failed')), 5000);
+            const res = {
+                status: () => res,
+                json: (body: Record<string, unknown>) => {
+                    clearTimeout(timer);
+                    resolve({ intent: req.bot?.replyIntent, body, minted, error: null });
+                    return res;
+                },
+            } as unknown as Response;
+            const next = (error?: unknown): void => {
+                clearTimeout(timer);
+                resolve({ intent: req.bot?.replyIntent, body: null, minted, error: error ?? null });
+            };
+            Promise.resolve(call(req, res, next)).catch(next);
+        });
+    } finally {
+        inAppSurfaceStore.mint = realMint;
+    }
+}
+
+/** The WhatsApp body a door's reply renders to — what the owner's handset actually received. */
+function whatsappBodyOf(intent: BotReplyIntent | null | undefined): { text: string; button: string } | null {
+    if (!intent) return null;
+    const [reply] = renderBotReplies(intent, 'whatsapp', '237600000001');
+    const interactive = (reply?.body as { interactive?: Record<string, unknown> }).interactive as
+        | { body?: { text?: string }; action?: { parameters?: { display_text?: string } } }
+        | undefined;
+    if (!interactive) return null;
+    return { text: interactive.body?.text ?? '', button: interactive.action?.parameters?.display_text ?? '' };
+}
+
+const toolOrdersDoor = (req: Request, res: Response, next: (error?: unknown) => void): unknown =>
+    BotInAppController.orders(req, res, next);
+const tapOrdersDoor = (req: Request, res: Response): unknown =>
+    ORDER_ACTION_HANDLERS['open:ol']!(req, res, { verb: 'open', subKey: 'ol', argument: '' });
+
+/**
+ * § 2 is asynchronous (the doors mint before they answer), so it runs first and the assertions
+ * read its results.
+ */
+async function runDoors(): Promise<Record<string, DoorRun>> {
+    const runs: Record<string, DoorRun> = {};
+    for (const lang of BOT_COPY_LANGUAGES) {
+        for (const rung of Object.keys(RUNGS) as Rung[]) {
+            runs[`tool:${rung}:${lang}`] = await withRung(rung, () => runDoor(toolOrdersDoor, lang));
+            runs[`tap:${rung}:${lang}`] = await withRung(rung, () => runDoor(tapOrdersDoor, lang));
+        }
+    }
+    return runs;
+}
+
+async function main(): Promise<void> {
+    const doors = await runDoors();
+
     console.log('\n══ § 1 · The contract Stream 0 froze (do not edit) ══');
 
     console.log('\n── The three routes ──');
@@ -203,19 +350,107 @@ function main(): void {
     });
 
     console.log('\n══ § 2 · Stream A\'s own assertions ══');
-    console.log('  (none yet — append below this line, and nowhere else)\n');
 
     // ─────────────────────────────────────────────────────────────────────────
-    //  ▼ STREAM A: your assertions go here.
-    //
-    //  Worth covering, in rough order of what would hurt most if it broke:
+    //  Still worth covering, and NOT covered here yet:
     //    · store browse with no screen configured falls back to the STOREFRONT LINK,
     //      never to a dead button — `inAppStoreListing` is a later milestone;
-    //    · a listing door with neither a screen nor a storefront sets NO reply at all,
-    //      so the model speaks rather than a control rendering with an empty target;
-    //    · the three doors mint a session of the matching kind and no other;
     //    · a product door refuses a product the customer could not have been shown.
     // ─────────────────────────────────────────────────────────────────────────
+
+    console.log('\n── The order-history door, as the owner met it (core exec 1942) ──');
+
+    /**
+     * ⛔ **The regression, stated in the customer's terms.** "Sho my orders" was answered with a
+     * WhatsApp `cta_url` reading *"Here are a few more."* over **Load more** — a second-page line
+     * and a list-row label, borrowed from two other turns — and the model typed the same
+     * sentence again as its own answer. This drives the REAL `inapp_open_orders` handler and
+     * renders what it set through the REAL WhatsApp renderer, in all five languages.
+     */
+    assert('⛔ inapp_open_orders reads "see all your orders" over "See all" on WhatsApp — never "Here are a few more."', () =>
+        BOT_COPY_LANGUAGES.every((lang) => {
+            const wa = whatsappBodyOf(doors[`tool:screen:${lang}`].intent);
+            return wa !== null
+                && wa.text === botChrome('ordersScreenPrompt', lang)
+                && wa.button === botChrome('browseAllButton', lang)
+                && wa.text !== botChrome('moreProductsPrompt', lang)
+                && wa.button !== botChrome('loadMoreRow', lang);
+        }));
+
+    assert('with a screen, the door is an in-app button onto an `ol` session, and it mints exactly one', () =>
+        BOT_COPY_LANGUAGES.every((lang) => {
+            const run = doors[`tool:screen:${lang}`];
+            return run.error === null
+                && run.intent?.kind === 'inapp'
+                && run.intent.url === inRung('screen', () => inAppScreenUrl('ol', 'ia_test_handle', lang))
+                && run.minted.length === 1
+                && run.minted[0].kind === 'ol'
+                && (run.body?.data as { opened?: string } | undefined)?.opened === 'orders';
+        }));
+
+    /**
+     * Without an in-app origin the same sentence and label land on the storefront's own orders
+     * page, in the customer's language.
+     */
+    assert('without a screen, the door is the storefront orders page, same sentence, same label', () =>
+        BOT_COPY_LANGUAGES.every((lang) => {
+            const run = doors[`tool:link:${lang}`];
+            const link = inRung('link', () => botStorefrontLink(surfacePath('orders'), lang));
+            return link !== null
+                && link.startsWith('https://shop.test')
+                && run.error === null
+                && run.intent?.kind === 'link'
+                && run.intent.url === link
+                && run.intent.text === botChrome('ordersScreenPrompt', lang)
+                && run.intent.label === botChrome('browseAllButton', lang);
+        }));
+
+    /** ⛔ The third rung: a control with an empty target is worse than none, so there is none. */
+    assert('⛔ with neither a screen nor a storefront, the door sets NO reply and the model speaks', () =>
+        BOT_COPY_LANGUAGES.every((lang) => {
+            const run = doors[`tool:none:${lang}`];
+            return run.error === null && run.intent === null
+                && (run.body?.data as { opened?: string } | undefined)?.opened === 'orders';
+        }));
+
+    /**
+     * ⭐ **The tool and the Load more row open the SAME door**, proven by behaviour rather than
+     * by reading the source: they used to say different things over different labels, and a
+     * scan for a shared constant would pass the day somebody spread it and then overrode a key.
+     */
+    assert('⭐ the tool door and the `open:ol` tap set byte-identical replies on every rung of the ladder', () =>
+        BOT_COPY_LANGUAGES.every((lang) =>
+            (Object.keys(RUNGS) as Rung[]).every((rung) => {
+                const tool = doors[`tool:${rung}:${lang}`];
+                const tap = doors[`tap:${rung}:${lang}`];
+                return tool.error === null && tap.error === null
+                    && JSON.stringify(tool.intent) === JSON.stringify(tap.intent);
+            })));
+
+    assert('the shared descriptor reads its fallback from the list window\'s own table', () =>
+        ORDERS_SCREEN_DOOR.fallbackPath === surfacePath('orders'));
+
+    console.log('\n── The sentence over a screen is per KIND, not a product default ──');
+
+    /**
+     * ⚠ The single default used to be the product-grid line for every kind, which is how one
+     * product came to be introduced as "them" (exec 1892, the owner's handset, 2026-09-22).
+     */
+    assert('each kind that has its own sentence gets it by default', () =>
+        screenPromptOf('ol') === 'ordersScreenPrompt'
+        && screenPromptOf('pl') === 'browseProductsPrompt'
+        && screenPromptOf('pd') === 'productScreenPrompt'
+        && screenPromptOf('sl') === 'storesScreenPrompt'
+        && screenPromptOf('tf') === 'supportFormPrompt'
+        && screenPromptOf('bl') === 'bookingsScreenPrompt');
+
+    /**
+     * ⛔ The exact defect, pinned in words: the sentence over ONE product must not be the plural
+     * grid line, in any language. Read through the real copy table, not the key name.
+     */
+    assert('⛔ one product is never introduced as "them" — in all five languages', () =>
+        (['en', 'fr', 'pt', 'es', 'ar'] as const).every((lang) =>
+            botChrome(screenPromptOf('pd'), lang) !== botChrome('browseProductsPrompt', lang)));
 
     console.log(
         failed === 0
@@ -225,4 +460,7 @@ function main(): void {
     process.exit(failed === 0 ? 0 : 1);
 }
 
-main();
+main().catch((error: unknown) => {
+    console.error(`  ❌ THROW: the suite itself — ${(error as Error).message}`);
+    process.exit(1);
+});

@@ -20,6 +20,10 @@
  * exist yet.** § 1 pins the degradation that keeps that honest. The screens must never be dead
  * buttons in the meantime.
  *
+ * § 3 (chat-surfaces, 2026-09-22) drives the REAL `orders_list_groups` handler with the repository
+ * replaced: "show my orders" is answered IN THE CHAT as five rows plus Load more, which is the shape
+ * the assistant must reach for before it ever opens the order screen.
+ *
  * Run: npm run test:inapp-orders
  */
 import fs from 'fs';
@@ -32,7 +36,10 @@ import { botChrome } from '../../src/modules/bot-surface/domain/bot-chrome-copy'
 import { BOT_COPY_LANGUAGES } from '../../src/modules/bot-surface/domain/bot-error-copy';
 import { __ORDER_LISTING } from '../../src/modules/bot-surface/miniapp/surfaces/order-listing.controller';
 import { __STORE_LISTING } from '../../src/modules/bot-surface/miniapp/surfaces/store-listing.controller';
-import { CustomerOrderGroup } from '../../src/modules/orders/order.repository';
+import { CustomerOrderGroup, OrderRepository } from '../../src/modules/orders/order.repository';
+import { BotOrderController } from '../../src/modules/bot-surface/controllers/bot-order.controller';
+import { BotReplyIntent, renderBotReplies } from '../../src/modules/bot-surface/domain/channel-reply';
+import type { Request, Response } from 'express';
 import {
     ORDER_CASH_ON_DELIVERY_COPY,
     ORDER_PAYMENT_COPY,
@@ -40,6 +47,7 @@ import {
     ORDER_PROGRESS_OF,
     ORDER_STATUS_UNAVAILABLE_COPY,
     botFulfillmentStateLabel,
+    botOrderCopy,
     botPaymentStateLabel,
 } from '../../src/modules/bot-surface/domain/bot-order-status-copy';
 
@@ -95,7 +103,9 @@ const SRC = (function readBotSurface(): string {
  */
 const MINE = ['ol', 'sl'] as const;
 
-function main(): void {
+async function main(): Promise<void> {
+    await runOrderLists();
+
     console.log('\n══ § 1 · The contract Stream 0 froze (do not edit) ══');
 
     console.log('\n── The kinds exist, so nothing has to be added later ──');
@@ -750,12 +760,165 @@ function main(): void {
                 === JSON.stringify(['orderNumber', 'statusText', 'storeName']);
     });
 
+    console.log('\n══ § 3 · "Show my orders", answered in the chat (chat-surfaces, 2026-09-22) ══');
+
+    /**
+     * ⭐ **The owner's rule: the assistant must survive without buttons, and "show my orders" is
+     * answered IN THE CHAT** — up to five orders as a list the customer can pick from, plus a Load
+     * more row that opens the rest on the order screen. It is not answered by jumping straight to
+     * the screen, which is what the model did on 2026-09-22 (core exec 1942).
+     *
+     * These drive the REAL `orders_list_groups` handler with the repository replaced, and render
+     * what it set through the REAL WhatsApp renderer — the shape the customer reads.
+     */
+    console.log('\n── The designed shape ──');
+
+    const seven = lists.seven;
+    assert('seven orders → five order rows plus the Load more row, as ONE WhatsApp list', () => {
+        const wa = whatsappListOf(seven.intent);
+        return seven.error === null
+            && seven.intent?.kind === 'choice'
+            && wa !== null
+            && wa.rows.length === 6
+            && wa.rows.slice(0, 5).every((row) => row.id.startsWith('ord:'))
+            && wa.rows[5].id === openSurfaceActionId('ol')
+            && wa.rows[5].title === botChrome('loadMoreRow', 'en');
+    });
+
+    assert('the list asks which order, in the customer\'s language', () =>
+        lists.sevenFr.intent?.kind === 'choice'
+        && lists.sevenFr.intent.text === botOrderCopy('whichOrder', 'fr')
+        && whatsappListOf(lists.sevenFr.intent)?.rows[5].title === botChrome('loadMoreRow', 'fr'));
+
+    assert('three orders → three rows and NO Load more row', () => {
+        const wa = whatsappListOf(lists.three.intent);
+        return wa !== null && wa.rows.length === 3 && wa.rows.every((row) => row.id.startsWith('ord:'));
+    });
+
+    /**
+     * ⚠ A basket split across sellers is SEVERAL orders in one group. Three groups of two is six
+     * orders on the first page of groups; the list shows five and must still offer the rest, even
+     * though the GROUP window says nothing is left.
+     */
+    assert('three baskets of two sellers each → five rows and the Load more row, though no group is left', () => {
+        const wa = whatsappListOf(lists.split.intent);
+        return wa !== null && wa.rows.length === 6 && wa.rows[5].id === openSurfaceActionId('ol');
+    });
+
+    assert('no orders → no list at all, and the turn is the model\'s to word', () =>
+        lists.none.error === null && lists.none.intent === null);
+
+    assert('the data keeps its group shape, so the model can still answer about one order', () =>
+        Array.isArray(seven.body?.data) && (seven.body?.data as unknown[]).length === 5);
+
     console.log(
         failed === 0
             ? `\n✅ ${passed} passed, 0 failed`
             : `\n❌ ${passed} passed, ${failed} failed`,
     );
     process.exit(failed === 0 ? 0 : 1);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  § 3's harness — the real order-list handler, with the repository replaced
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface ListRun {
+    intent: BotReplyIntent | null | undefined;
+    body: Record<string, unknown> | null;
+    error: unknown;
+}
+
+/** `n` one-seller checkouts, newest first, or `groups` baskets of `perGroup` sellers each. */
+function groupsOf(groups: number, perGroup: number): CustomerOrderGroup[] {
+    return Array.from({ length: groups }, (_, g) => ({
+        cartId: `cart-${g}`,
+        createdAt: new Date(Date.UTC(2026, 8, 20 - g)),
+        currency: 'XAF',
+        totalAmount: 5000 * perGroup,
+        orderCount: perGroup,
+        paymentStatuses: Array.from({ length: perGroup }, () => 'paid'),
+        orders: Array.from({ length: perGroup }, (_, o) => ({
+            id: `${String(g).padStart(12, '0')}${String(o).padStart(12, '0')}`,
+            orderNumber: `ORD-2026-${String(g * 10 + o).padStart(6, '0')}`,
+            vendorId: `v${o}`,
+            orderType: 'physical',
+            total: 5000,
+            currency: 'XAF',
+            paymentMethod: 'online',
+            paymentStatus: 'paid',
+            fulfillmentStatus: 'processing',
+            itemCount: 1,
+            createdAt: new Date(Date.UTC(2026, 8, 20 - g)),
+        })),
+    }));
+}
+
+/**
+ * Call `POST /orders/list` as the router would, with `findGroupsByCustomer` answering from
+ * `all` — windowed exactly as Mongo would window it (page, limit, total).
+ */
+async function runOrderList(all: CustomerOrderGroup[], language: string): Promise<ListRun> {
+    const proto = OrderRepository.prototype as unknown as {
+        findGroupsByCustomer: (customerId: string, pagination: { page?: number; limit?: number }) => Promise<unknown>;
+    };
+    const real = proto.findGroupsByCustomer;
+    proto.findGroupsByCustomer = async (_customerId, { page = 1, limit = 20 }) => ({
+        data: all.slice((page - 1) * limit, page * limit),
+        meta: { total: all.length, page, limit, pages: Math.max(1, Math.ceil(all.length / limit)) },
+    });
+    const req = {
+        body: {},
+        params: {},
+        bot: {
+            caller: { userId: 'u-test', customerId: 'c-test', channel: 'whatsapp', externalIdentity: '237600000001' },
+            envelope: { channel: 'whatsapp', externalId: '237600000001' },
+            tool: 'orders_list_groups',
+            anonymous: false,
+            language,
+        },
+    } as unknown as Request;
+    try {
+        return await new Promise<ListRun>((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error('the order list neither answered nor failed')), 5000);
+            const res = {
+                status: () => res,
+                json: (body: Record<string, unknown>) => {
+                    clearTimeout(timer);
+                    resolve({ intent: req.bot?.replyIntent, body, error: null });
+                    return res;
+                },
+            } as unknown as Response;
+            BotOrderController.list(req, res, (error?: unknown) => {
+                clearTimeout(timer);
+                resolve({ intent: req.bot?.replyIntent, body: null, error: error ?? null });
+            });
+        });
+    } finally {
+        proto.findGroupsByCustomer = real;
+    }
+}
+
+/** The rows of the WhatsApp list a reply renders to, or null when it is not a list. */
+function whatsappListOf(intent: BotReplyIntent | null | undefined): { rows: { id: string; title: string }[] } | null {
+    if (!intent) return null;
+    const [reply] = renderBotReplies(intent, 'whatsapp', '237600000001');
+    const interactive = (reply?.body as { interactive?: { type?: string; action?: { sections?: { rows?: { id: string; title: string }[] }[] } } })
+        .interactive;
+    if (interactive?.type !== 'list') return null;
+    return { rows: (interactive.action?.sections ?? []).flatMap((section) => section.rows ?? []) };
+}
+
+let lists: Record<'seven' | 'sevenFr' | 'three' | 'split' | 'none', ListRun>;
+
+async function runOrderLists(): Promise<void> {
+    lists = {
+        seven: await runOrderList(groupsOf(7, 1), 'en'),
+        sevenFr: await runOrderList(groupsOf(7, 1), 'fr'),
+        three: await runOrderList(groupsOf(3, 1), 'en'),
+        split: await runOrderList(groupsOf(3, 2), 'en'),
+        none: await runOrderList([], 'en'),
+    };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -828,4 +991,7 @@ function noisyStore(): Record<string, unknown> {
     };
 }
 
-main();
+main().catch((error: unknown) => {
+    console.error(`  ❌ THROW: the suite itself — ${(error as Error).message}`);
+    process.exit(1);
+});

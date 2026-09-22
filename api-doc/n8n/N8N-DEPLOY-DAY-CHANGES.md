@@ -29,6 +29,7 @@ connection changed. Times UTC. Each row's previous version is its rollback.
 | 12:33:37 | `926d6353` | **§ 8.1–8.3** — `bargain key change?` + four Redis nodes, a dead end off `product action` (below). 68 → 73 nodes | `run-deployed.js` 227/0 |
 | 12:35:22 | bargain `58c25a1a` | **§ 8.4 + § 10** — `UP-wi-mall-bargain` (`lJdli0uwOtWBGx5R`): `decide send` prefers `data.outbound`; both sends lose `neverError`; `send whatsapp` reads `WHATSAPP_API_URL`. Rollback `430b3eba` | `run-deployed.js` 227/0 |
 | 15:39:54 | `754ad009` | **§ 4.10** — the waiting note names WHAT it waits for, derived from the flag (below) | `run-deployed.js` 238/0 |
+| 2026-09-22 02:36:05 | bargain `331e790e` | **the handset test of 2026-09-22** — `negotiation_record`: `traits` declared `string`, not `json` (exec 1914: the first close failed the tool schema because the model sent a JSON string). Only that parameter; rollback `58c25a1a`. ⚠ Core had moved to `63c59a2f` at 2026-09-21 23:23 UTC by another session (Search-Products `usePhoto` only) — build any core patch from a fresh snapshot | `test-bargain-spoken-deal.js` 33/0 |
 
 **§ 3 · shipped MERGED, not as specified.** § 3.2 was written against `1997c757`, before the
 owner's Saturday change routed both send nodes' error output to `report channel down` (a direct

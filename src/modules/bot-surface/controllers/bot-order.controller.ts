@@ -19,7 +19,7 @@ import { cashCollectionService } from '../../cod/services/cash-collection.servic
 import { VendorRepository } from '../../vendors/vendor.repository';
 import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
 import { setBotReply } from '../middlewares/bot-reply.middleware';
-import { openInAppScreen } from './bot-inapp.controller';
+import { ORDERS_SCREEN_DOOR, openInAppScreen } from './bot-inapp.controller';
 import { BotActionHandlers, ParsedBotAction, unknownBotAction } from '../domain/bot-action-dispatch';
 import { stripDeliveryCodes } from '../dto/bot-projections';
 import { botChrome } from '../domain/bot-chrome-copy';
@@ -60,7 +60,7 @@ import {
     botShipmentStateLabel,
     toBotOrderPaymentState,
 } from '../domain/bot-order-status-copy';
-import { botStorefrontLink, surfacePath, windowForChat } from '../domain/bot-list-window';
+import { botStorefrontLink, windowForChat } from '../domain/bot-list-window';
 import {
     BotCartIdParamSchema,
     BotCodCodeSchema,
@@ -979,39 +979,41 @@ async function declineCancelTap(req: Request, res: Response, action: ParsedBotAc
 /**
  * `open:ol` — the whole order history, on a screen.
  *
- * ── ⚠ THE DEGRADATION IS THE PATH THAT ACTUALLY RUNS ────────────────────────
- * `BOT_MINIAPP_BASE_URL` is unset in production, so `inAppScreenUrl` answers null and this returns
- * the storefront's own orders page. That is what every customer gets today, and it is why the row
- * is safe to render at all.
+ * ── ⚠ BOTH RUNGS OF THE LADDER ARE REAL ─────────────────────────────────────
+ * With no in-app origin `inAppScreenUrl` answers null and this returns the storefront's own orders
+ * page, which is why the row is safe to render at all. This comment used to say that was
+ * production's state; the owner's turn of 2026-09-22 (core exec 1942) came back with an in-app
+ * screen URL, so production has an origin now. Configuration decides, and neither rung is a sketch.
+ *
+ * ⭐ **`ORDERS_SCREEN_DOOR` is the one descriptor for this screen**, shared with the
+ * `inapp_open_orders` tool. The tool used to open it with other turns' copy — *"Here are a few
+ * more."* over **Load more** — while this tap said the right thing; one descriptor is what makes
+ * "they say the same thing" a fact rather than two call sites agreeing today.
  *
  * ⚠ **`openInAppScreen` rather than a hand-rolled mint.** The five fields binding a screen session
  * to a conversation are read there from the request envelope and nowhere else, so a session can
  * only be addressed at the chat that asked for it. That binding is the security property of the
  * whole in-app surface; it is written once.
  *
- * ⚠ **`fallbackPath` is READ FROM THE SAME TABLE `windowForChat({ surface: 'orders' })` uses**, so
- * the row's destination cannot drift from the `moreUrl` reported on the turn that drew it.
+ * ⚠ **`fallbackPath` is READ FROM THE SAME TABLE `windowForChat({ surface: 'orders' })` uses** —
+ * `ORDERS_SCREEN_DOOR` reads it with `surfacePath('orders')` — so the row's destination cannot drift
+ * from the `moreUrl` reported on the turn that drew it.
  *
  * ⚠ **This sentence used to say that while the code typed the literal `'/shop/account/orders'`.**
  * The path was right, so nothing was ever red — and a reader (the switchboard, 2026-09-20) believed
  * the drift was already prevented and told another stream to copy the pattern, which turned out not
  * to exist. `surfacePath()` was added so the claim could become true rather than be deleted.
  *
- * ⚠ **`textKey` is `ordersScreenPrompt`, and it used to be `loadMoreRow` — a row title doing a body's
- * job.** `loadMoreRow` is a 24-character list-row title ("Load more"), and as the sentence ABOVE a
- * button it said nothing about what the button opens; `respondWithScreen`'s own default is worse here,
- * because it introduces products. The switchboard added the proper key on 2026-09-20 and this is its
- * one caller, so `viewOrdersPrompt` — the key this was NOT allowed to borrow — can now go.
+ * ⚠ **The sentence is `ordersScreenPrompt`, and it used to be `loadMoreRow` — a row title doing a
+ * body's job.** `loadMoreRow` is a 24-character list-row title ("Load more"), and as the sentence
+ * ABOVE a button it said nothing about what the button opens. It stays the ROW's label, which is
+ * where it belongs; the tool door borrowed it as a button label and that is what the shared
+ * descriptor ended.
  */
 async function orderHistoryTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
     if (action.argument !== '') throw unknownBotAction();
 
-    const handle = await openInAppScreen(req, {
-        payload: { kind: 'ol' },
-        fallbackPath: surfacePath('orders'),
-        labelKey: 'browseAllButton',
-        textKey: 'ordersScreenPrompt',
-    });
+    const handle = await openInAppScreen(req, { payload: { kind: 'ol' }, ...ORDERS_SCREEN_DOOR });
 
     sendSuccess(res, { handle, opened: 'orders' });
 }
