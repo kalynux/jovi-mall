@@ -360,11 +360,18 @@ export async function placeCheckout(
          * approved on a handset minutes later, on a device that is not this screen. A failure of
          * THIS call is a failure to open the charge, not a failed payment: the orders exist and
          * await payment either way, and the chat can take the payment again.
+         *
+         * ⭐ **`originChat` is the conversation this session belongs to**, so the payment's
+         * result is told THERE (`IPaymentTransaction.originChat`). Every road into this function
+         * — the chat's own place, its Yes tap, the screen and the WhatsApp form — holds a `co`
+         * handle minted in one chat, so every one of them has a conversation to answer in.
+         * Measured 2026-09-22: without it, a WhatsApp order's "payment received" went to
+         * Telegram, the account's first-priority channel.
          */
         const payment = await paymentOrchestrator.initiatePaymentForCart(cartId, gateway, {
             phoneNumber: payerNumber,
             customerName: customer.name,
-        });
+        }, { originChat: session.channel });
 
         return {
             orderCount: orders.length,

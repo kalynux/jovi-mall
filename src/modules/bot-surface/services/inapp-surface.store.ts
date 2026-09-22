@@ -113,6 +113,20 @@ export const TTL_SECONDS: Readonly<Record<InAppSurfaceKind, number>> = Object.fr
 const HANDLE_PREFIX = 'ia_';
 const HANDLE_BYTES = 16;
 
+/**
+ * A fresh handle — exactly what `mint` hands out, and the ONLY place one is built.
+ *
+ * ⚠ **Exported so a byte budget can measure the REAL thing rather than restate it.** A checkout
+ * handle now rides inside a chat button (`yes:co:<handle>:<addressId>`, `bot-checkout-actions.ts`),
+ * and Telegram truncates a `callback_data` over 64 bytes in silence — the button then does
+ * nothing. That budget is asserted at import against a handle generated HERE, so a change to
+ * `HANDLE_BYTES` or the prefix is measured the moment it is made instead of being discovered by a
+ * customer whose Place order button stopped working.
+ */
+export function newInAppHandle(): string {
+    return `${HANDLE_PREFIX}${randomBytes(HANDLE_BYTES).toString('base64url')}`;
+}
+
 const handleKey = (handle: string): string => `bot:inapp:${digestForKey(handle)}`;
 
 /**
@@ -241,7 +255,7 @@ export class InAppSurfaceStore {
     async mint(input: InAppSessionInput): Promise<string> {
         const redis = await getRedisClient(BOT_SURFACE_DB);
         const ttl = TTL_SECONDS[input.kind];
-        const handle = `${HANDLE_PREFIX}${randomBytes(HANDLE_BYTES).toString('base64url')}`;
+        const handle = newInAppHandle();
         const record = {
             ...input,
             expiresAt: new Date(Date.now() + ttl * 1000).toISOString(),

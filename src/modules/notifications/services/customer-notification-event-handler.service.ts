@@ -115,6 +115,20 @@ interface DispatchParams {
     aggregateId: string;
     idempotencyKey: string;
     context: RenderContext;
+    /**
+     * The chat this notification ANSWERS, when it answers one — today only a checkout's payment
+     * result, carried from `IPaymentTransaction.originChat`. It takes the one secondary slot
+     * ahead of the preference order; see `determineDeliveryChannels`.
+     */
+    originChat?: OriginChatChannel;
+}
+
+/** A chat a notification can answer in — the two the bot runs on. */
+type OriginChatChannel = 'whatsapp' | 'telegram';
+
+/** An event payload's `originChannel`, accepted only as one of the two — anything else is none. */
+function originChatOf(value: unknown): OriginChatChannel | undefined {
+    return value === 'whatsapp' || value === 'telegram' ? value : undefined;
 }
 
 /**
@@ -679,6 +693,8 @@ export class CustomerNotificationEventHandler {
             amount: number;
             currency: string;
             aggregateType?: string;
+            /** The chat the checkout came from, if it came from one (`IPaymentTransaction.originChat`). */
+            originChannel?: string;
         };
 
         // The event also fires for plan purchases and credit top-ups, which are
@@ -695,6 +711,7 @@ export class CustomerNotificationEventHandler {
             aggregateType: 'order',
             aggregateId: p.orderId,
             idempotencyKey: `customer.order.payment.received:${p.orderId}`,
+            originChat: originChatOf(p.originChannel),
             context: {
                 orderId: p.orderId,
                 orderNumber: p.orderNumber ?? orderNumber ?? p.orderId,
@@ -749,6 +766,8 @@ export class CustomerNotificationEventHandler {
             aggregateType?: string;
             /** The failed charge, for the "Try again" quick reply. Published already. */
             paymentId?: string;
+            /** The chat the checkout came from, if it came from one (`IPaymentTransaction.originChat`). */
+            originChannel?: string;
         };
 
         // The same charge pipeline carries bookings, plan purchases and credit top-ups.
@@ -764,6 +783,7 @@ export class CustomerNotificationEventHandler {
             aggregateType: 'order',
             aggregateId: p.orderId,
             idempotencyKey: `customer.order.payment_failed:${p.orderId}`,
+            originChat: originChatOf(p.originChannel),
             context: {
                 orderId: p.orderId,
                 /** See the booking twin: the tap must name the charge it was drawn under. */
@@ -1203,7 +1223,7 @@ export class CustomerNotificationEventHandler {
         const prefKey = SITUATION_PREFERENCE[params.situation];
         if (prefKey && prefs.preferences[prefKey] === false) return;
 
-        const deliveredVia = await this.determineDeliveryChannels(customer, prefs);
+        const deliveredVia = await this.determineDeliveryChannels(customer, prefs, params.originChat);
         const inApp = renderCustomerInApp(params.situation, lang, params.context);
         const action = this.resolveAction(params.situation, lang, params.context);
 
@@ -1275,10 +1295,24 @@ export class CustomerNotificationEventHandler {
     /**
      * At most ONE secondary channel, and only if it is verified.
      * Priority order: telegram > email > whatsapp — same as the sibling stacks.
+     *
+     * ⭐ **Except for the answer to something done in a chat.** When `originChat` names the chat a
+     * checkout was placed from and the account is still connected there, THAT chat is the
+     * secondary channel, whatever the order above would pick. Measured 2026-09-22: an order
+     * placed and approved on WhatsApp had its "payment received" sent to Telegram, minutes after
+     * the WhatsApp chat promised "the result arrives in this chat".
+     *
+     * ⚠ **It REPLACES the preference choice, it is not added to it** — one result, told once, in
+     * the conversation that asked. And it is not gated on that channel's own `…Enabled` flag:
+     * those flags choose where UNPROMPTED news goes, and this is the reply to the customer's own
+     * action, the same standing as the bot answering them there. A muted situation group still
+     * silences everything (`dispatch` returns before this), and money carries no group.
+     * With no connection left for that chat (unlinked since), the preference order applies.
      */
     private async determineDeliveryChannels(
         customer: ICustomer,
-        prefs: ICustomerNotificationPreference
+        prefs: ICustomerNotificationPreference,
+        originChat?: OriginChatChannel
     ): Promise<CustomerDeliveryChannel[]> {
         const channels: CustomerDeliveryChannel[] = ['in-app'];
 
@@ -1287,6 +1321,11 @@ export class CustomerNotificationEventHandler {
         // muting is `telegramEnabled` alone, exactly as WhatsApp already
         // worked. See connections/services/connection.service.ts.
         const connections = await connectionService.getConnectionMap(customer.user_id);
+
+        if (originChat && connections[originChat]) {
+            channels.push(originChat);
+            return channels;
+        }
 
         if (prefs.telegramEnabled && connections.telegram) {
             channels.push('telegram');

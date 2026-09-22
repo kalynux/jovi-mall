@@ -1550,6 +1550,15 @@ is a new value in this field rather than a new branch in your workflow.
 | `/account/close` | text — the anonymise-and-retain promise, in the past tense. The last thing the platform says to that customer as themselves |
 | ⭐ `/catalog/display` | **product cards** — a Mini App button, a carousel, or one image message per product. The one turn that renders to SEVERAL messages: see § 14.8 |
 | ⭐ `/catalog/action` — **every tap** | whatever that button calls for: product cards for `next:` / `more:`, an order card, a parcel card, a yes/no question, a screen button, or **nothing** where the model should speak. One row per token in § 14.9 |
+| ⭐ `/checkout/chat/review` (`checkout_review`) | **the order confirmation** — the basket lines, the total, where it goes, the masked mobile-money number and the question, over **Place order · Not now** (two buttons, `yes:co:` / `no:co:`). A customer with **several** deliverable addresses who named none gets one row per address instead (a list) — the row IS the answer and places the order there. No address to deliver to: a **link** to the website's address page. No number on the account, or anything else it cannot sound: **none**, and the model asks |
+| ⭐ `/checkout/chat/place` (`checkout_place`) | **the placement message** — the order numbers, where the payment prompt went and for how much, the operator's own instruction, and **Check status** (`pay:st:`). A charge refused as it was opened says no money was taken, with **Try again** (`pay:rt:`) |
+
+⛔ **The two checkout rows are drawn by the server, and your model must not write its own
+confirmation.** On 2026-09-22 (core exec 2294) the model's confirmation came back truncated to
+*"Your order is 200 XAF,"*: the customer never saw the question, and the order was placed
+without one. A money confirmation is a fixed-wording turn with controls; it is no longer left to
+a model's wording. A customer who answers in WORDS ("yes, place it") still reaches
+`checkout_place` through the model, with the review's `checkoutRef` — the data is unchanged.
 
 Everything else — a cart, an order list, **one** product, a support context — is **data for
 your model to narrate**, and deliberately carries no `reply`. This service words the turns
@@ -2171,19 +2180,41 @@ lives fifteen minutes, so a URL baked into a button would be dead for almost eve
 pressed it. The server mints on the press — the rule `open:co` follows for checkout and `deal:`
 for a price.
 
+#### Checkout in the chat
+
+The two buttons under the confirmation `checkout_review` draws (§ 14.3). The context `co` is the
+chat checkout's; `<ref>` is the review's `checkoutRef` — a single-use checkout credential that
+lives ten minutes — and `<addressId>` one of the customer's own saved addresses. Worst case 57
+bytes.
+
+| token | drawn on | what it does | reply | data |
+|---|---|---|---|---|
+| `yes:co:<ref>:<addressId>` · `yes:co:<ref>` | **Place order**, under the confirmation — and **each address row** when the customer has several deliverable addresses. The short form is a download, which goes nowhere | **places the order**, exactly as `checkout_place` does: to THAT address, charging the number on the account. A stale or unknown `<ref>` places **nothing** — it draws a **fresh confirmation** for the same address, because the basket may have changed since | the placement message (§ 14.3): **Check status**, or **Try again** for a charge refused at open. On a stale ref: the confirmation again | as `checkout_place`: `{ transactionId, state, orderCount, orderNumbers, amountText, payerMasked, instructions }`. On a stale ref: the review's data |
+| `no:co:<ref>` | **Not now**, beside it, and the last row of the address list | **writes nothing**, however old the button | one sentence: nothing was ordered, and the basket is kept | `{ placed: false }` |
+
+⚠ **The button carries a checkout credential, and that is safe for two reasons.** The place is
+handed the caller, so a ref minted for somebody else is refused (and spent); and the ref is
+single use, so a second tap cannot place twice. A Place order tapped **after** the order was placed
+finds the basket empty and answers `CART_EMPTY_CHECKOUT` with its sentence; if a NEW basket has been
+started since, it draws a fresh confirmation for that one. Neither places anything.
+
+⚠ **The customer can still answer in words.** "Yes, place it" reaches `checkout_place` through
+the model with the same `checkoutRef`; the two paths run the same placement.
+
 #### Payments
 
 | token | drawn on | what it does | reply | data |
 |---|---|---|---|---|
-| `pay:st:<transactionId>` | **Check status**, under a payment result. *Nothing draws it yet*: the payment-result messages being built this round will | asks the gateway where that payment is, unless it has already finished | **none** | `{ transactionId, state, amountText, orderCount }`. `state` is `settled`, `failed` or `waiting` |
-| `pay:rt:<transactionId>` | **Try again**, under a failed payment. *Nothing draws it yet*, as above | a fresh mobile-money charge **for the orders that payment covered**, to the number on the account. **It never places an order again**. If those orders have been paid meanwhile, it answers `settled` instead of charging | **none** | `{ transactionId, state, instructions }`. `instructions` is the operator's own text (the USSD code, "approve on your phone"); it is the one thing the customer must act on, so relay it |
+| `pay:st:<transactionId>` | **Check status**, under the placement message while the prompt is waiting (`checkout_place` and the Place order tap) | asks the gateway where that payment is, unless it has already finished | **none** | `{ transactionId, state, amountText, orderCount }`. `state` is `settled`, `failed` or `waiting` |
+| `pay:rt:<transactionId>` | **Try again**, under a failed payment — the `order.payment_failed` notification, and a placement whose charge was refused as it was opened | a fresh mobile-money charge **for the orders that payment covered**, to the number on the account. **It never places an order again**. If those orders have been paid meanwhile, it answers `settled` instead of charging | **none** | `{ transactionId, state, instructions }`. `instructions` is the operator's own text (the USSD code, "approve on your phone"); it is the one thing the customer must act on, so relay it |
 
 ⚠ **These tokens carry the transaction id; the matching tools do not.** A button outlives the
 payment it was drawn for. A Try again tapped under last week's failure must charge for last
 week's orders, not whatever basket is newest. A tool is called by the model, which would
 invent an id, so the tools use "the latest".
 
-⚠ **`pay:rt` with no number on the account** answers `422 PAYMENT_REFERENCE_REQUIRED`. The
+⚠ **`pay:rt` with no number on the account** answers `422 PAYMENT_PAYER_NUMBER_REQUIRED` (it
+was `PAYMENT_REFERENCE_REQUIRED` until 2026-09-19; `retryCharge` raises the new code). The
 model should ask which number to charge and call `checkout_retry_payment` with `phone`. A
 button cannot carry a number.
 

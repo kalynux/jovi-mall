@@ -2485,8 +2485,8 @@
       "status": "available",
       "service": "jovi-mall",
       "surface": "bot_internal",
-      "description": "What the customer is about to agree to, read live: the basket lines, the total (already formatted), where it will be delivered (one of their SAVED addresses — the default unless they chose another), and the masked mobile-money number the payment prompt will go to. When it can go ahead it returns a single-use checkoutRef (10 minutes) for checkout_place.",
-      "when_to_use": "When the customer wants to buy / check out / pay for their basket in the chat. Call it, tell them the total, the address and the masked number, and ask them to confirm. Call it again with deliveryAddressId when they want a different saved address.",
+      "description": "What the customer is about to agree to, read live: the basket lines, the total (already formatted), where it will be delivered (one of their SAVED addresses — the default unless they chose another), and the masked mobile-money number the payment prompt will go to. When it can go ahead it returns a single-use checkoutRef (10 minutes) for checkout_place. ⚠ When ready is true and payment.phoneMasked is set, THIS TOOL ITSELF SENDS THE CUSTOMER the order summary and the question, with Place order / Not now buttons (or one button per address when they have several deliverable addresses and named none) — do NOT repeat the summary and do NOT ask for confirmation again yourself. If the customer then confirms in words (\"yes\", \"place it\"), call checkout_place with the checkoutRef; a tap on Place order places the order without you. With no saved address it also sends the website link itself. When phoneMasked is null nothing is sent: ask for a number.",
+      "when_to_use": "When the customer wants to buy / check out / pay for their basket in the chat. The summary and the question reach the customer from the tool itself (see description) — write nothing of your own over it; only when phoneMasked is null, ask for a number. Call it again with deliveryAddressId when they want a different saved address.",
       "when_not_to_use": "It places nothing. Never ask for an address or a phone number the review already shows. If blocker is no_saved_address or address_not_deliverable, offer a deliverable address from `addresses`, or send addAddressUrl (the website) — never collect an address in the chat. address_not_found: call addresses_list and ask again.",
       "operation": {
         "method": "POST",
@@ -2582,7 +2582,7 @@
       "status": "available",
       "service": "jovi-mall",
       "surface": "bot_internal",
-      "description": "Spends the checkoutRef from checkout_review: creates the customer's orders from their basket (prices re-resolved, bargained price locks honoured) and pushes a mobile-money payment prompt to the account's own wallet. The customer approves it on their phone; the result arrives in the chat.",
+      "description": "Spends the checkoutRef from checkout_review: creates the customer's orders from their basket (prices re-resolved, bargained price locks honoured) and pushes a mobile-money payment prompt to the account's own wallet. The customer approves it on their phone; the result arrives in the chat. ⚠ On success THIS TOOL ITSELF SENDS THE CUSTOMER the order numbers and the payment instructions (where the prompt went, for how much, the operator's own instruction) with a Check status button — or, when the charge was refused as it was opened (state failed), that no money was taken, with a Try again button. Do NOT repeat any of it. Call this when the customer confirms the review in WORDS; a customer who tapped the Place order button has already placed the order — never call it again after that tap.",
       "when_to_use": "Only right after checkout_review returned ready: true AND the customer explicitly confirmed the total, the address and the masked number it showed.",
       "when_not_to_use": "Never without that confirmation, never twice, never with an invented checkoutRef. Pass deliveryAddressId = the delivery.address.id the review showed (required for physical goods). Pass phone ONLY if the customer typed a different number themselves. On an error whose details.spent is not false, do NOT place again — use checkout_payment_status.",
       "operation": {
@@ -2732,7 +2732,7 @@
       "surface": "bot_internal",
       "description": "Asks the payment gateway (not just our record) where the customer's most recent checkout payment is: settled, failed, or still waiting.",
       "when_to_use": "When the customer asks whether their payment went through, or after checkout_place/checkout_retry_payment when they say they approved it.",
-      "when_not_to_use": "Takes no transaction id — never invent one.",
+      "when_not_to_use": "Takes no transaction id — never invent one. A waiting payment has not failed: kindly ask the customer to be patient (mobile money can take a few minutes after it is approved, and a message arrives in the chat when it lands), and never offer or send a new request while it waits.",
       "operation": {
         "method": "POST",
         "path": "/api/internal/bot/checkout/payment-status"
@@ -2800,7 +2800,7 @@
       "surface": "bot_internal",
       "description": "Opens a fresh mobile-money charge for the orders of the customer's most recent checkout that are still unpaid, to the account's wallet (or a number the customer typed). Creates no new order.",
       "when_to_use": "When a checkout payment failed or was not approved and the customer wants to try again (after they confirm).",
-      "when_not_to_use": "Never to start a new purchase (that is checkout_review). Never ask for a number the account has; pass phone only if the customer typed one.",
+      "when_not_to_use": "Never to start a new purchase (that is checkout_review), and never while the last payment is still waiting — check checkout_payment_status first. Never ask for a number the account has; pass phone only if the customer typed one.",
       "operation": {
         "method": "POST",
         "path": "/api/internal/bot/checkout/retry-payment"

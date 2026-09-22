@@ -1540,6 +1540,178 @@ const TRY_AGAIN_BUTTON: Copy = {
     ar: 'حاول مجددًا',
 };
 
+// ── Checkout in the chat: the confirmation and the placement (2026-09-22) ────
+/**
+ * ⭐ **The server draws the money confirmation, and these are its words.** On 2026-09-22 (core
+ * exec 2294) the model's own confirmation came back truncated to "Your order is 200 XAF," — the
+ * customer never saw the question, and the order was placed without one. A confirmation whose
+ * wording is fixed and whose answer is a button is exactly what this table is for.
+ *
+ * ⚠ **Fixed phrases stacked around values, the sign-in message's shape.** A label ends in its own
+ * colon (French puts a space before it, so the colon is part of the translation, not the
+ * assembler's), and the value follows it on the same line. Only the two TEMPLATE keys below put a
+ * value INSIDE a sentence, and each declares its placeholders in `CHROME_TEMPLATES`, where the
+ * boot assert checks that every language carries every one of them exactly once.
+ */
+const PLACE_ORDER_BUTTON: Copy = {
+    en: 'Place order',
+    fr: 'Passer la commande',
+    pt: 'Fazer encomenda',
+    es: 'Hacer pedido',
+    ar: 'تأكيد الطلب',
+};
+
+const NOT_NOW_BUTTON: Copy = {
+    en: 'Not now',
+    fr: 'Pas maintenant',
+    pt: 'Agora não',
+    es: 'Ahora no',
+    ar: 'ليس الآن',
+};
+
+const CHECKOUT_REVIEW_INTRO: Copy = {
+    en: 'Please check your order:',
+    fr: 'Vérifiez votre commande :',
+    pt: 'Verifique a sua encomenda:',
+    es: 'Revisa tu pedido:',
+    ar: 'يُرجى مراجعة طلبك:',
+};
+
+/**
+ * The line that stands in for basket lines past the fifth. A TEMPLATE — `{count}` is filled by
+ * `botChromeFill`. Written without a noun, so no plural has to agree with the number.
+ */
+const CHECKOUT_MORE_LINES: Copy = {
+    en: '+ {count} more',
+    fr: '+ {count} de plus',
+    pt: '+ {count} mais',
+    es: '+ {count} más',
+    ar: '+ {count} أخرى',
+};
+
+const CHECKOUT_TOTAL_LABEL: Copy = {
+    en: 'Total:',
+    fr: 'Total :',
+    pt: 'Total:',
+    es: 'Total:',
+    ar: 'المجموع:',
+};
+
+const CHECKOUT_DELIVER_TO_LABEL: Copy = {
+    en: 'Deliver to:',
+    fr: 'Livraison à :',
+    pt: 'Entregar em:',
+    es: 'Entregar en:',
+    ar: 'التوصيل إلى:',
+};
+
+/**
+ * A download is never carried anywhere, so it is not "delivered to" — the same distinction the
+ * screen draws with `checkoutDigitalDelivery`. The value is the masked account identifier.
+ */
+const CHECKOUT_SENT_TO_LABEL: Copy = {
+    en: 'Sent to:',
+    fr: 'Envoyé à :',
+    pt: 'Enviado para:',
+    es: 'Enviado a:',
+    ar: 'يُرسَل إلى:',
+};
+
+const CHECKOUT_MOBILE_MONEY_LABEL: Copy = {
+    en: 'Mobile money:',
+    fr: 'Mobile money :',
+    pt: 'Mobile money:',
+    es: 'Mobile money:',
+    ar: 'المحفظة المحمولة:',
+};
+
+const CHECKOUT_PLACE_QUESTION: Copy = {
+    en: 'Shall I place the order?',
+    fr: 'Je passe la commande ?',
+    pt: 'Posso fazer a encomenda?',
+    es: '¿Hago el pedido?',
+    ar: 'هل أؤكد الطلب؟',
+};
+
+/** The question when the customer has several deliverable addresses: each option IS the answer. */
+const CHECKOUT_CHOOSE_ADDRESS_QUESTION: Copy = {
+    en: 'Where should it be delivered? Tap an address to place the order.',
+    fr: 'Où faut-il livrer ? Touchez une adresse pour passer la commande.',
+    pt: 'Onde devemos entregar? Toque numa morada para fazer a encomenda.',
+    es: '¿Dónde lo entregamos? Toca una dirección para hacer el pedido.',
+    ar: 'إلى أين نوصل الطلب؟ اضغط على عنوان لتأكيد الطلب.',
+};
+
+/** Not now. ⚠ It must say NOTHING was ordered — the one fact a customer who hesitated needs. */
+const CHECKOUT_DECLINED: Copy = {
+    en: "No problem — nothing was ordered. Your basket is kept for whenever you're ready.",
+    fr: "Pas de souci — rien n'a été commandé. Votre panier est conservé pour quand vous serez prêt.",
+    pt: 'Sem problema — nada foi encomendado. O seu carrinho fica guardado para quando estiver pronto.',
+    es: 'Sin problema — no se ha pedido nada. Tu cesta se guarda para cuando estés listo.',
+    ar: 'لا مشكلة — لم يُطلب شيء. سلتك محفوظة متى كنت مستعدًا.',
+};
+
+/** Owner's ruling 2026-09-20: an address is added on the website, never captured in the chat. */
+const CHECKOUT_ADD_ADDRESS_PROMPT: Copy = {
+    en: "To place this order, add a delivery address on the website — then tell me and I'll carry on.",
+    fr: 'Pour passer cette commande, ajoutez une adresse de livraison sur le site — puis dites-le-moi et je continue.',
+    pt: 'Para fazer esta encomenda, adicione uma morada de entrega no site — depois diga-me e eu continuo.',
+    es: 'Para hacer este pedido, añade una dirección de entrega en la web — luego dímelo y continúo.',
+    ar: 'لإتمام هذا الطلب، أضف عنوان توصيل على الموقع — ثم أخبرني وسأكمل.',
+};
+
+const CHECKOUT_ORDER_PLACED_LABEL: Copy = {
+    en: 'Order placed:',
+    fr: 'Commande passée :',
+    pt: 'Encomenda feita:',
+    es: 'Pedido realizado:',
+    ar: 'تم تقديم الطلب:',
+};
+
+/**
+ * A TEMPLATE — `{amount}` and `{phone}` are filled by `botChromeFill`. The amount is the
+ * transaction's own snapshot, formatted; the phone is MASKED.
+ *
+ * ⚠ **The PIN is named on purpose.** A push prompt that arrives with no warning reads as a scam,
+ * and a customer who does not know it needs their PIN leaves it to time out — which is the most
+ * common way a mobile-money payment fails.
+ */
+const CHECKOUT_PAYMENT_REQUEST_SENT: Copy = {
+    en: 'A payment request for {amount} was sent to {phone}. Approve it on your phone with your PIN.',
+    fr: 'Une demande de paiement de {amount} a été envoyée au {phone}. Validez-la sur votre téléphone avec votre code PIN.',
+    pt: 'Foi enviado um pedido de pagamento de {amount} para {phone}. Aprove-o no seu telemóvel com o seu PIN.',
+    es: 'Se ha enviado una solicitud de pago de {amount} al {phone}. Apruébala en tu teléfono con tu PIN.',
+    ar: 'أُرسل طلب دفع بقيمة {amount} إلى {phone}. وافق عليه على هاتفك باستخدام رمز PIN.',
+};
+
+const CHECKOUT_PAYMENT_WAIT: Copy = {
+    en: "Mobile money can take a few minutes. You'll get a message here as soon as it's through.",
+    fr: "Le mobile money peut prendre quelques minutes. Vous recevrez un message ici dès que c'est passé.",
+    pt: 'O mobile money pode demorar alguns minutos. Receberá uma mensagem aqui assim que estiver concluído.',
+    es: 'El mobile money puede tardar unos minutos. Recibirás un mensaje aquí en cuanto se complete.',
+    ar: 'قد يستغرق الدفع عبر المحفظة المحمولة بضع دقائق. ستصلك رسالة هنا فور إتمامه.',
+};
+
+/**
+ * A charge refused AS IT WAS OPENED. The orders exist and await payment — which is why it says
+ * nothing was TAKEN and never that anything was cancelled.
+ */
+const CHECKOUT_PAYMENT_NOT_SENT: Copy = {
+    en: 'The payment request could not be sent, so no money was taken.',
+    fr: "La demande de paiement n'a pas pu être envoyée, donc aucun argent n'a été prélevé.",
+    pt: 'Não foi possível enviar o pedido de pagamento, por isso não foi cobrado nenhum dinheiro.',
+    es: 'No se pudo enviar la solicitud de pago, así que no se ha cobrado nada.',
+    ar: 'تعذّر إرسال طلب الدفع، لذلك لم يُخصم أي مبلغ.',
+};
+
+const CHECKOUT_PAYMENT_RECEIVED: Copy = {
+    en: 'Payment received — thank you!',
+    fr: 'Paiement reçu — merci !',
+    pt: 'Pagamento recebido — obrigado!',
+    es: 'Pago recibido — ¡gracias!',
+    ar: 'تم استلام الدفع — شكرًا لك!',
+};
+
 /**
  * Every chrome string, and the cap each one has to satisfy.
  *
@@ -1715,9 +1887,73 @@ const CHROME = Object.freeze({
     notifyChannelEmail: { copy: NOTIFY_CHANNEL_EMAIL, cap: 24 },
     notifyChannelNone: { copy: NOTIFY_CHANNEL_NONE, cap: 24 },
     notifyUpdated: { copy: NOTIFY_UPDATED, cap: null },
+
+    // ── Checkout in the chat: the confirmation and the placement ─────────────
+    // Two reply buttons, capped at 20; everything else is a body. `checkoutMoreLines` and
+    // `checkoutPaymentRequestSent` are TEMPLATES — see `CHROME_TEMPLATES` below.
+    placeOrderButton: { copy: PLACE_ORDER_BUTTON, cap: 20 },
+    notNowButton: { copy: NOT_NOW_BUTTON, cap: 20 },
+    checkoutReviewIntro: { copy: CHECKOUT_REVIEW_INTRO, cap: null },
+    checkoutMoreLines: { copy: CHECKOUT_MORE_LINES, cap: null },
+    checkoutTotalLabel: { copy: CHECKOUT_TOTAL_LABEL, cap: null },
+    checkoutDeliverToLabel: { copy: CHECKOUT_DELIVER_TO_LABEL, cap: null },
+    checkoutSentToLabel: { copy: CHECKOUT_SENT_TO_LABEL, cap: null },
+    checkoutMobileMoneyLabel: { copy: CHECKOUT_MOBILE_MONEY_LABEL, cap: null },
+    checkoutPlaceQuestion: { copy: CHECKOUT_PLACE_QUESTION, cap: null },
+    checkoutChooseAddressQuestion: { copy: CHECKOUT_CHOOSE_ADDRESS_QUESTION, cap: null },
+    checkoutDeclined: { copy: CHECKOUT_DECLINED, cap: null },
+    checkoutAddAddressPrompt: { copy: CHECKOUT_ADD_ADDRESS_PROMPT, cap: null },
+    checkoutOrderPlacedLabel: { copy: CHECKOUT_ORDER_PLACED_LABEL, cap: null },
+    checkoutPaymentRequestSent: { copy: CHECKOUT_PAYMENT_REQUEST_SENT, cap: null },
+    checkoutPaymentWait: { copy: CHECKOUT_PAYMENT_WAIT, cap: null },
+    checkoutPaymentNotSent: { copy: CHECKOUT_PAYMENT_NOT_SENT, cap: null },
+    checkoutPaymentReceived: { copy: CHECKOUT_PAYMENT_RECEIVED, cap: null },
 } as const);
 
 export type BotChromeKey = keyof typeof CHROME;
+
+/**
+ * The chrome keys that are TEMPLATES, and the placeholders each must carry.
+ *
+ * ── WHY THIS TABLE HAS ANY TEMPLATES AT ALL ─────────────────────────────────
+ * The rest of this file deliberately interpolates nothing (`contactEmailChangeStarted` says why: a
+ * placeholder is one more thing to get wrong in five languages, and a half-filled one reaches the
+ * customer as `{email}`). Two sentences on the chat checkout cannot be written without a value
+ * inside them — "a payment request for 20 000 XAF was sent to +2376••••0001" is ONE fact, and
+ * splitting it into labelled lines turns an instruction into a form.
+ *
+ * ⚠ **So the danger is made checkable instead of avoided.** Each template names its placeholders
+ * here; `assertBotChromeCopyFits` refuses the boot when any language drops one, repeats one, or
+ * carries one that nothing fills — the three ways a translation reaches a customer as a brace.
+ * A key NOT listed here may carry no placeholder at all, which is what stops a template being
+ * added without being declared.
+ */
+const CHROME_TEMPLATES: Readonly<Partial<Record<BotChromeKey, readonly string[]>>> = Object.freeze({
+    checkoutMoreLines: Object.freeze(['count']),
+    checkoutPaymentRequestSent: Object.freeze(['amount', 'phone']),
+});
+
+/** `{name}` — the one placeholder syntax. Static, never built from input. */
+const PLACEHOLDER = /\{([a-zA-Z]+)\}/g;
+
+const placeholdersIn = (value: string): string[] => [...value.matchAll(PLACEHOLDER)].map((m) => m[1]);
+
+/**
+ * A TEMPLATE chrome string, in the customer's language, with its placeholders filled.
+ *
+ * ⚠ **It never throws, and an unfilled placeholder is left as it is.** This runs on the placement
+ * path AFTER the orders exist, where a throw would turn a placed order into a reported failure —
+ * and a model told "that failed" tries again. The boot assert is what guarantees every language
+ * carries exactly the declared placeholders; the caller's argument is what fills them.
+ */
+export function botChromeFill(
+    key: BotChromeKey,
+    language: string | null | undefined,
+    values: Readonly<Record<string, string>>,
+): string {
+    return botChrome(key, language).replace(PLACEHOLDER, (whole: string, name: string) =>
+        (Object.prototype.hasOwnProperty.call(values, name) ? values[name] : whole));
+}
 
 /**
  * One chrome string, in the customer's language.
@@ -1742,10 +1978,31 @@ export function botChrome(key: BotChromeKey, language: string | null | undefined
  * A bare `Error` — this runs before any request exists, beside the other boot assertions.
  */
 export function assertBotChromeCopyFits(): void {
+    const gaps = botChromeCopyGaps(CHROME, CHROME_TEMPLATES);
+
+    if (gaps.length > 0) {
+        // eslint-disable-next-line no-restricted-syntax -- boot assertion, no request in flight
+        throw new Error(`[BotSurface] chrome copy is unusable: ${gaps.join('; ')}`);
+    }
+}
+
+/**
+ * Every way a chrome table fails, one line each — the whole of what `assertBotChromeCopyFits`
+ * decides, over a table it is HANDED.
+ *
+ * ⚠ **Parameterised so a suite can prove it bites.** Handed a copy of the real table with one
+ * translation two characters too long or one placeholder dropped, it must name that key and that
+ * language; `test:inapp-checkout` § 13 does exactly that. A guard only ever observed passing
+ * against the tree as it stands is not yet a guard.
+ */
+export function botChromeCopyGaps(
+    table: Readonly<Record<string, { copy: Readonly<Record<BotCopyLanguage, string>>; cap: number | null }>>,
+    templates: Readonly<Partial<Record<string, readonly string[]>>>,
+): string[] {
     const gaps: string[] = [];
 
-    for (const key of Object.keys(CHROME) as BotChromeKey[]) {
-        const { copy, cap } = CHROME[key];
+    for (const key of Object.keys(table)) {
+        const { copy, cap } = table[key];
         for (const lang of BOT_COPY_LANGUAGES) {
             const value = copy[lang];
             if (typeof value !== 'string' || value.trim().length === 0) {
@@ -1755,14 +2012,29 @@ export function assertBotChromeCopyFits(): void {
             if (cap !== null && value.length > cap) {
                 gaps.push(`${key}:${lang} is ${value.length} chars, cap is ${cap}`);
             }
+
+            /**
+             * ⚠ **Placeholders are checked in every language, both directions.** A dropped one
+             * silently loses the value (the amount vanishes from a payment sentence); a stray one
+             * reaches the customer as a brace. See `CHROME_TEMPLATES`.
+             */
+            const declared = templates[key] ?? [];
+            const carried = placeholdersIn(value);
+            for (const name of declared) {
+                const count = carried.filter((found) => found === name).length;
+                if (count !== 1) gaps.push(`${key}:${lang} carries {${name}} ${count} times, expected once`);
+            }
+            for (const name of carried) {
+                if (!declared.includes(name)) gaps.push(`${key}:${lang} carries {${name}}, which nothing fills`);
+            }
         }
     }
 
-    if (gaps.length > 0) {
-        // eslint-disable-next-line no-restricted-syntax -- boot assertion, no request in flight
-        throw new Error(`[BotSurface] chrome copy is unusable: ${gaps.join('; ')}`);
-    }
+    return gaps;
 }
 
 /** ⚠ Exported for `test:bot-surface`, which re-checks the caps the assert above enforces. */
 export const __CHROME_TABLE = CHROME;
+
+/** ⚠ Exported for `test:inapp-checkout`, which re-checks the placeholders the assert enforces. */
+export const __CHROME_TEMPLATES = CHROME_TEMPLATES;

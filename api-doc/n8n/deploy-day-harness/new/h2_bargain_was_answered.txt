@@ -1,0 +1,21 @@
+// HAS THE BARGAINER ALREADY ANSWERED THIS VERY MESSAGE?
+//
+// `open_negotiation` is a TOOL, and a model may call a tool twice in one turn. Measured
+// 2026-09-22 (core exec 2258): one customer message opened TWO haggles -- the first for a product
+// from four hours earlier in the chat -- and because this workflow SENDS, the customer got two
+// bargaining answers, the first about the wrong product. `echo answered` records the message
+// every send answered; a second open for the SAME message is answered from here, sending nothing.
+// One customer message, at most one bargaining answer.
+const inbound = $('Inbound').first().json || {};
+const item = $input.first().json || {};
+let already = false;
+try {
+  const echo = item.answeredEcho ? JSON.parse(String(item.answeredEcho)) : null;
+  already = !!echo
+    && String(echo.messageId || '') !== ''
+    && String(echo.messageId) === String(inbound.messageId || '')
+    && !!echo.expiresAt && new Date(echo.expiresAt).getTime() > Date.now();
+} catch (e) {
+  already = false;
+}
+return [{ json: Object.assign({}, item, { alreadyAnswered: already }) }];

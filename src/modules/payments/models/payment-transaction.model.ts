@@ -131,6 +131,24 @@ export interface IPaymentTransaction extends Document {
   } | null;
 
   /**
+   * The chat a checkout was placed from, when it was placed from one — and so the chat its
+   * RESULT is told in.
+   *
+   * ⚠ **Measured on the owner's handset, 2026-09-22.** An order placed and approved on WhatsApp
+   * had its "payment received" message sent to TELEGRAM: the account is linked to both, and a
+   * customer notification picks its ONE secondary channel telegram > email > whatsapp. The chat
+   * had just promised "the result arrives in this chat". A payment result is the answer to
+   * something the customer did in one conversation, so it goes back to that conversation, ahead
+   * of the preference order (`CustomerNotificationEventHandler.determineDeliveryChannels`).
+   *
+   * Only the channel is kept. The conversation's address is the account's own connection for that
+   * channel, resolved when the result is sent, so nothing about the handset is stored twice.
+   * Absent on every row not opened from a chat — the storefront and the apps have no chat to
+   * answer in, and keep the preference order.
+   */
+  originChat?: { channel: 'whatsapp' | 'telegram' } | null;
+
+  /**
    * Wrong OTP submissions on this transaction.
    *
    * My-CoolPay's Orange Money flow answers `REQUIRE_OTP`, and the endpoint
@@ -277,6 +295,17 @@ const PaymentTransactionSchema = new Schema<IPaymentTransaction>({
       token: { type: String, required: true },
       issuedAt: { type: Date, required: true },
       expiresAt: { type: Date, required: true }
+    },
+    default: undefined,
+    _id: false
+  },
+
+  // The chat a checkout was placed from — see the interface. No index: it is read off a row
+  // already in hand when the result is announced, never queried by. `default: undefined` so a
+  // row opened anywhere else carries no key at all rather than a stored null.
+  originChat: {
+    type: {
+      channel: { type: String, enum: ['whatsapp', 'telegram'], required: true }
     },
     default: undefined,
     _id: false

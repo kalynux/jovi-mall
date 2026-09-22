@@ -52,7 +52,13 @@ const HANDLERS = mergeActionHandlers([
     ['purchase', PURCHASE_ACTION_HANDLERS],
     /** ord · shp · code · track · tkt · yes:cd · no:cd · yes:cnc · no:cnc · open:ol */
     ['orders', ORDER_ACTION_HANDLERS],
-    /** pay (pay:st Check status · pay:rt Try again) */
+    /**
+     * pay (pay:st Check status · pay:rt Try again) · yes:co Place order · no:co Not now
+     *
+     * ⚠ `yes:co` / `no:co` are drawn under the chat checkout's server-drawn confirmation
+     * (2026-09-22) and registered in the same change that draws them — the lesson of the
+     * close-account buttons below.
+     */
     ['checkout', CHECKOUT_ACTION_HANDLERS],
     /**
      * acct · lang · yes:close · no:close · yes:unl · no:unl

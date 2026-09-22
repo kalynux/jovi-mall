@@ -43,7 +43,11 @@ import {
     codReadyLine,
     ticketReopenLine
 } from '../../src/modules/notifications/catalog/customer-notification-catalog';
-import { customerTicketSituationFor } from '../../src/modules/notifications/services/customer-notification-event-handler.service';
+import {
+    customerTicketSituationFor,
+    CustomerNotificationEventHandler
+} from '../../src/modules/notifications/services/customer-notification-event-handler.service';
+import { connectionService } from '../../src/modules/channel-connections';
 import { SHIPMENT_FAILURE_REASONS } from '../../src/modules/shipments/shipment.model';
 import {
     CUSTOMER_AGGREGATE_TYPES,
@@ -1258,6 +1262,51 @@ function main(): void {
         return true;
     };
 
+    // ── A payment result goes back to the chat the checkout came from (2026-09-22) ──────────
+    //
+    // The owner's handset: an order placed and approved on WhatsApp had its "payment received"
+    // sent to TELEGRAM, because the account is linked to both and the one secondary channel is
+    // chosen telegram > email > whatsapp — minutes after the chat said "the result arrives in
+    // this chat". The results below were measured by `measureOriginChat` before `main` ran.
+    assert('the defect, reproduced: with no origin, the owner\'s account gets Telegram', () =>
+        JSON.stringify(ORIGIN_CHAT.ownerNoOrigin) === JSON.stringify(['in-app', 'telegram']));
+    assert('⭐ a checkout placed on WhatsApp is answered on WhatsApp, not Telegram', () =>
+        JSON.stringify(ORIGIN_CHAT.ownerWhatsApp) === JSON.stringify(['in-app', 'whatsapp']));
+    assert('⭐ the origin REPLACES the preference choice — one result, told once', () =>
+        ORIGIN_CHAT.ownerWhatsApp.length === 2 && !ORIGIN_CHAT.ownerWhatsApp.includes('telegram'));
+    assert('a checkout placed on Telegram is answered on Telegram', () =>
+        JSON.stringify(ORIGIN_CHAT.telegramOrigin) === JSON.stringify(['in-app', 'telegram']));
+    assert('an origin chat the account is no longer linked to falls back to the preference order', () =>
+        JSON.stringify(ORIGIN_CHAT.unlinked) === JSON.stringify(['in-app', 'telegram']));
+    assert('the origin is not gated on that channel\'s own switch (it answers the customer\'s own action)', () =>
+        JSON.stringify(ORIGIN_CHAT.mutedChannel) === JSON.stringify(['in-app', 'whatsapp']));
+
+    const orchestratorSource = readFileSync(
+        join(__dirname, '../../src/modules/payments/services/payment-orchestrator.service.ts'), 'utf8'
+    ).replace(/\r\n/g, '\n');
+    const originHandlerSource = readFileSync(
+        join(__dirname, '../../src/modules/notifications/services/customer-notification-event-handler.service.ts'), 'utf8'
+    ).replace(/\r\n/g, '\n');
+    const modelSource = readFileSync(
+        join(__dirname, '../../src/modules/payments/models/payment-transaction.model.ts'), 'utf8'
+    ).replace(/\r\n/g, '\n');
+    const cartInitiate = orchestratorSource.slice(
+        orchestratorSource.indexOf('async initiatePaymentForCart('),
+        orchestratorSource.indexOf('private async', orchestratorSource.indexOf('async initiatePaymentForCart('))
+    );
+
+    assert('the chat is stamped WITH the new row, before the gateway is called (a charge can settle in seconds)', () =>
+        cartInitiate.length > 0
+        && cartInitiate.indexOf('originChat: { channel: options.originChat }') > 0
+        && cartInitiate.indexOf('originChat: { channel: options.originChat }') < cartInitiate.indexOf('gatewayInstance.initiatePayment('));
+    assert('both cart result events carry the chat (payment received AND payment failed)', () =>
+        orchestratorSource.split('originChannel: transaction.originChat?.channel ?? undefined').length - 1 === 2);
+    assert('both customer handlers pass it on, filtered to the two chat channels', () =>
+        originHandlerSource.split('originChat: originChatOf(p.originChannel)').length - 1 === 2
+        && /value === 'whatsapp' \|\| value === 'telegram' \? value : undefined/.test(originHandlerSource));
+    assert('the stored value is one of the two chats, and absent (never null) elsewhere', () =>
+        /originChat: \{\s*type: \{\s*channel: \{ type: String, enum: \['whatsapp', 'telegram'\], required: true \}\s*\},\s*default: undefined/.test(modelSource));
+
     assert('⛔ no situation\'s copy points the customer at another channel\'s message', crossChannelFree);
 
     assert('PROOF: a sentence referring to another channel IS caught', () => {
@@ -1274,4 +1323,45 @@ function main(): void {
     if (failed > 0) process.exit(1);
 }
 
-main();
+/**
+ * The channel choice, measured on the REAL method with only the connection lookup stubbed.
+ *
+ * `main` and `assert` are synchronous, so this runs first and `main` asserts on what it found.
+ * The handler is created WITHOUT its constructor (`Object.create`): the constructor builds the
+ * mail, Telegram, WhatsApp and push services, and the method under test touches none of them.
+ */
+const ORIGIN_CHAT: Record<'ownerNoOrigin' | 'ownerWhatsApp' | 'telegramOrigin' | 'unlinked' | 'mutedChannel', string[]> = {
+    ownerNoOrigin: [], ownerWhatsApp: [], telegramOrigin: [], unlinked: [], mutedChannel: [],
+};
+async function measureOriginChat(): Promise<void> {
+    type ChannelChooser = {
+        determineDeliveryChannels(customer: unknown, prefs: unknown, originChat?: 'whatsapp' | 'telegram'): Promise<string[]>;
+    };
+    const handler = Object.create(CustomerNotificationEventHandler.prototype) as ChannelChooser;
+    const lookup = connectionService as unknown as { getConnectionMap: (userId: unknown) => Promise<unknown> };
+    const customer = { user_id: 'user-1', email: null, email_verified: false };
+    const prefs = { telegramEnabled: true, emailEnabled: false, whatsappEnabled: true };
+    const bothLinked = { telegram: { channel: 'telegram' }, whatsapp: { channel: 'whatsapp' } };
+    const telegramOnly = { telegram: { channel: 'telegram' } };
+
+    const run = async (map: unknown, p: unknown, origin?: 'whatsapp' | 'telegram'): Promise<string[]> => {
+        lookup.getConnectionMap = async () => map;
+        try {
+            return await handler.determineDeliveryChannels(customer, p, origin);
+        } finally {
+            // An own property shadows the prototype's method; deleting it restores the real one.
+            delete (lookup as { getConnectionMap?: unknown }).getConnectionMap;
+        }
+    };
+
+    ORIGIN_CHAT.ownerNoOrigin = await run(bothLinked, prefs);
+    ORIGIN_CHAT.ownerWhatsApp = await run(bothLinked, prefs, 'whatsapp');
+    ORIGIN_CHAT.telegramOrigin = await run(bothLinked, { ...prefs, telegramEnabled: false }, 'telegram');
+    ORIGIN_CHAT.unlinked = await run(telegramOnly, prefs, 'whatsapp');
+    ORIGIN_CHAT.mutedChannel = await run(bothLinked, { ...prefs, whatsappEnabled: false }, 'whatsapp');
+}
+
+measureOriginChat().then(main, (error: unknown) => {
+    console.error('measureOriginChat failed:', error);
+    process.exit(1);
+});

@@ -13,6 +13,14 @@ import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.
 import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { botChrome } from '../domain/bot-chrome-copy';
 import { BotActionHandlers, ParsedBotAction, unknownBotAction } from '../domain/bot-action-dispatch';
+import { parseCheckoutConfirm, parseCheckoutDecline } from '../domain/bot-checkout-actions';
+import {
+    ChatReviewForReply,
+    checkoutDeclinedReply,
+    checkoutPlacedReply,
+    checkoutReviewReply,
+} from '../domain/checkout-chat-reply';
+import { BotReplyIntent } from '../domain/channel-reply';
 import { botStorefrontLink, surfacePath } from '../domain/bot-list-window';
 import { formatBotPrice } from '../domain/product-card';
 import { inAppBaseUrl, inAppScreenUrl } from '../domain/inapp-url';
@@ -45,6 +53,14 @@ import {
  * See `BotCheckoutController.reviewInChat` for why they exist. They add NO rule: both are thin
  * wrappers over the screen's own core (`readChatCheckout`, `placeCheckout`).
  *
+ * ── AND THE TWO TAPS UNDER THE REVIEW'S CONFIRMATION (2026-09-22) ────────────
+ *   `yes:co:<ref>[:<addressId>]`     Place order — the SAME placement `/checkout/chat/place` runs
+ *   `no:co:<ref>`                    Not now — writes nothing
+ *
+ * One implementation each, reached by a ROUTE and by a TAP (`reviewChatCheckout`,
+ * `placeChatCheckout`), so a customer who answers in words and one who presses the button cannot
+ * be treated differently.
+ *
  * ── ⚠ THE PAYMENT'S RESULT ARRIVES IN THE CHAT, AND NOT THROUGH THIS FILE ───
  * Neither a Mini App nor a WhatsApp Flow can hold a session open while somebody approves a
  * mobile-money push on their handset — the approval happens minutes later, on a device that is
@@ -56,14 +72,26 @@ import {
  * ask again. Both exist because a push tells somebody something and gives them nothing to act
  * on — which is the shape of every other dead end this surface has been closing.
  *
- * ── ⚠ NONE OF THE THREE MONEY READS SETS A SENTENCE, AND THAT IS THE RULE ───
- * `channel-reply.ts` states it: a turn whose wording is fixed — a prompt, a picker, a payment
- * button — carries a `reply`; a record is DATA for the model to narrate. A payment status is a
- * record. Writing "your payment went through" here would put a second, untranslatable opinion
- * beside the notification catalogue's own copy for the same event, in a different table, and
- * the customer would eventually be told both.
+ * ── ⚠ WHICH TURNS SET A SENTENCE — AND THE RULE WAS REDRAWN ON 2026-09-22 ──
+ * `channel-reply.ts` states the rule: a turn whose wording is fixed — a prompt, a picker, a payment
+ * button — carries a `reply`; a record is DATA for the model to narrate. This header used to say
+ * that no money turn here ever set a sentence, and that the review was "a record for the model to
+ * narrate". **That was wrong about the confirmation and the placement, and a customer paid for it.**
  *
- * The one exception is the screen door, which IS a fixed-wording turn: it renders a control.
+ * On 2026-09-22 (core exec 2294) a customer typed "Place order", `checkout_review` returned the
+ * total, the address, the masked wallet and a `checkoutRef` — and the model's confirmation came back
+ * TRUNCATED to "Your order is 200 XAF,". The question never reached the customer, and the order was
+ * later placed without a proper one. **A money confirmation must not depend on a model's wording.**
+ *
+ * So the rule, applied honestly:
+ *   - ⭐ **The confirmation and the placement ARE fixed-wording turns with controls** — Place order ·
+ *     Not now (or one row per address), and Check status or Try again. The server draws both
+ *     (`domain/checkout-chat-reply.ts`), from the same data the model receives, and the model is
+ *     told not to repeat them. So does the screen door, which renders a control.
+ *   - ⚠ **The payment STATUS read and the retry still set no sentence.** A status is a record, and
+ *     its result copy belongs to the notification catalogue: writing "your payment went through"
+ *     here would put a second, untranslatable opinion beside `order.payment.received`'s own copy
+ *     for the same event, and the customer would eventually be told both.
  */
 
 /** No arguments — every one of these is scoped to the caller's own basket and payments. */
@@ -262,68 +290,26 @@ export class BotCheckoutController {
      * model calling it twice: the MCP server's idempotency key is unique per CALL, so it cannot
      * collapse two calls; the spent handle refuses the second.
      *
-     * ⚠ **Sets no reply.** A review is a record for the model to narrate in the customer's words —
-     * the rule the money reads above follow.
+     * ── ⭐ IT DRAWS THE CONFIRMATION ITSELF (2026-09-22) ─────────────────────
+     * This used to set no reply, on the grounds that a review is a record for the model to narrate.
+     * The model's narration of one came back truncated to "Your order is 200 XAF," (core exec 2294):
+     * the customer never saw the question, and the order was placed without a proper one. So the
+     * server now draws it — the lines, the total, where it goes, the masked wallet, and the question
+     * over **Place order · Not now** (`yes:co:` / `no:co:`), or one row per deliverable address when
+     * the customer has several and named none. A confirmation is a fixed-wording turn with controls,
+     * which is exactly what the renderer's own rule says carries a `reply`.
+     *
+     * ⚠ **The JSON data is unchanged**, and the model still needs it: a customer who answers in
+     * WORDS ("yes, go ahead") reaches `checkout_place` with this `checkoutRef`. Where nothing sound
+     * can be drawn — no wallet on the account, an unknown address — the reply is absent and the
+     * model speaks, as before. See `checkoutReviewReply` for every shape.
+     *
+     * ⚠ **The body lives in `reviewChatCheckout`**, because a stale Place order tap re-runs it to
+     * draw a fresh confirmation. A tap may never await this `asyncHandler`-wrapped static.
      */
     static reviewInChat = asyncHandler(async (req: Request, res: Response) => {
         const { deliveryAddressId } = ChatReviewSchema.parse(req.body ?? {});
-        const caller = botCallerOf(req);
-        const language = botResponseLanguageOf(req);
-
-        const view = await readChatCheckout(caller.customerId, deliveryAddressId ?? null);
-        const blocked = view.destination.kind === 'blocked' ? view.destination.blocker : null;
-
-        const checkoutRef = blocked
-            ? null
-            : await inAppSurfaceStore.mint({
-                kind: 'co',
-                owner: caller.userId,
-                customerId: caller.customerId,
-                channel: req.bot!.envelope.channel,
-                externalId: req.bot!.envelope.externalId,
-                language,
-                cartId: view.cartId,
-            });
-
-        /** Default first — the address a chat answer is most likely to be about. */
-        const addresses = view.destination.kind === 'digital'
-            ? []
-            : view.addresses
-                .map(toBotAddressDto)
-                .sort((a, b) => Number(b.isDefault) - Number(a.isDefault))
-                .slice(0, CHAT_REVIEW_ADDRESS_MAX);
-
-        sendSuccess(res, {
-            ready: blocked === null,
-            blocker: blocked,
-            checkoutRef,
-            lines: view.lines.map((line) => ({
-                title: line.title,
-                variantLabel: line.variantLabel,
-                quantity: line.quantity,
-                lineTotalText: line.lineTotalText,
-            })),
-            totalText: view.totalText,
-            delivery: view.destination.kind === 'digital'
-                ? { kind: 'digital', to: view.accountIdentifier }
-                : view.destination.kind === 'address'
-                    ? { kind: 'address', address: toBotAddressDto(view.destination.address) }
-                    : null,
-            addresses,
-            payment: {
-                method: 'mobile_money',
-                /** ⚠ Masked. Null means the account has no number: ask for one, then pass `phone`. */
-                phoneMasked: view.phoneMasked,
-            },
-            /**
-             * The website's address page, only when an address is what would unblock this. Null
-             * too when the storefront URL is unset — the model then says it in words rather than
-             * sending a dead link.
-             */
-            addAddressUrl: blocked === 'no_saved_address' || blocked === 'address_not_deliverable'
-                ? botStorefrontLink(surfacePath('addresses'), language)
-                : null,
-        });
+        await reviewChatCheckout(req, res, deliveryAddressId ?? null);
     });
 
     /**
@@ -338,37 +324,18 @@ export class BotCheckoutController {
      * ⚠ **`state: 'failed'` is an outcome, not an error.** The gateway refused the charge as it
      * was opened: the orders exist and await payment, and no prompt is coming to the handset. The
      * notification catalogue deliberately announces nothing for a refusal the customer was present
-     * for, so the model must say it — and offer `checkout_retry_payment`.
+     * for, so the placement message says it — with **Try again** (`pay:rt:<transactionId>`).
+     *
+     * ⭐ **It draws the placement message itself (2026-09-22)** — the order numbers, where the
+     * prompt went and for how much, the operator's own instruction, and **Check status** — for the
+     * reason `reviewInChat` gives: what a customer must do with their phone in the next minute is
+     * not left to a model's wording. The JSON data is unchanged.
+     *
+     * ⚠ **The body lives in `placeChatCheckout`**, the one placement the Place order tap runs too.
      */
     static placeInChat = asyncHandler(async (req: Request, res: Response) => {
         const { checkoutRef, deliveryAddressId, phone } = ChatPlaceSchema.parse(req.body ?? {});
-        const caller = botCallerOf(req);
-
-        const placed = await placeCheckout(checkoutRef, phone, {
-            callerCustomerId: caller.customerId,
-            addressId: deliveryAddressId ?? null,
-        });
-
-        /**
-         * ⚠ **The amount is the TRANSACTION's snapshot** — what the gateway was asked for —
-         * formatted through `formatBotPrice` like every price on this surface. Never a sum.
-         */
-        const transaction = await PaymentTransactionModel.findById(placed.transactionId)
-            .select('amountSnapshot currencySnapshot')
-            .lean();
-
-        sendSuccess(res, {
-            transactionId: placed.transactionId,
-            state: stateOf(placed.status),
-            orderCount: placed.orderCount,
-            orderNumbers: placed.orderNumbers,
-            amountText: transaction
-                ? formatBotPrice(transaction.amountSnapshot, transaction.currencySnapshot)
-                : null,
-            payerMasked: placed.payerMasked,
-            /** The operator's own instruction, relayed verbatim — as the retry does. */
-            instructions: placed.instructions ?? null,
-        });
+        await placeChatCheckout(req, res, checkoutRef, deliveryAddressId ?? null, phone);
     });
 }
 
@@ -414,6 +381,157 @@ const CHAT_REVIEW_ADDRESS_MAX = 10;
 const RetrySchema = z
     .object({ phone: OptionalPhoneNumberSchema.nullable().default(null) })
     .strict();
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  The chat checkout — one review and one placement, reached by a ROUTE and by a TAP
+//
+//  ⚠ Module functions rather than the statics' bodies, for the dispatcher's contract: a tap must
+//  never await another route's `asyncHandler`-wrapped static (it resolves before the work finishes,
+//  and that wrapper's `.catch(next)` swallows the error). The statics above parse a model's body
+//  and call these; the taps below parse a token and call the same ones.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Read the checkout, mint the ref when it can go ahead, and draw the confirmation.
+ *
+ * ⚠ **`review` is built ONCE and is both the JSON data and the drawn reply's input**, so the
+ * buttons can never name an address or a total the model was not also given.
+ *
+ * @param deliveryAddressId The address the customer named, or null for "my default". A named one
+ *   is confirmed on its own rather than offered again among the others.
+ */
+async function reviewChatCheckout(
+    req: Request,
+    res: Response,
+    deliveryAddressId: string | null,
+): Promise<void> {
+    const caller = botCallerOf(req);
+    const language = botResponseLanguageOf(req);
+
+    const view = await readChatCheckout(caller.customerId, deliveryAddressId);
+    const blocked = view.destination.kind === 'blocked' ? view.destination.blocker : null;
+
+    const checkoutRef = blocked
+        ? null
+        : await inAppSurfaceStore.mint({
+            kind: 'co',
+            owner: caller.userId,
+            customerId: caller.customerId,
+            channel: req.bot!.envelope.channel,
+            externalId: req.bot!.envelope.externalId,
+            language,
+            cartId: view.cartId,
+        });
+
+    /** Default first — the address a chat answer is most likely to be about. */
+    const addresses = view.destination.kind === 'digital'
+        ? []
+        : view.addresses
+            .map(toBotAddressDto)
+            .sort((a, b) => Number(b.isDefault) - Number(a.isDefault))
+            .slice(0, CHAT_REVIEW_ADDRESS_MAX);
+
+    const review = {
+        ready: blocked === null,
+        blocker: blocked,
+        checkoutRef,
+        lines: view.lines.map((line) => ({
+            title: line.title,
+            variantLabel: line.variantLabel,
+            quantity: line.quantity,
+            lineTotalText: line.lineTotalText,
+        })),
+        totalText: view.totalText,
+        delivery: view.destination.kind === 'digital'
+            ? { kind: 'digital' as const, to: view.accountIdentifier }
+            : view.destination.kind === 'address'
+                ? { kind: 'address' as const, address: toBotAddressDto(view.destination.address) }
+                : null,
+        addresses,
+        payment: {
+            method: 'mobile_money' as const,
+            /** ⚠ Masked. Null means the account has no number: ask for one, then pass `phone`. */
+            phoneMasked: view.phoneMasked,
+        },
+        /**
+         * The website's address page, only when an address is what would unblock this. Null
+         * too when the storefront URL is unset — the model then says it in words rather than
+         * sending a dead link.
+         */
+        addAddressUrl: blocked === 'no_saved_address' || blocked === 'address_not_deliverable'
+            ? botStorefrontLink(surfacePath('addresses'), language)
+            : null,
+    } satisfies ChatReviewForReply;
+
+    setBotReply(req, checkoutReviewReply(review, { addressChosen: deliveryAddressId !== null }, language));
+    sendSuccess(res, review);
+}
+
+/**
+ * Spend the ref, create the orders, open the charge — and draw what the customer must do next.
+ *
+ * ⚠ **`placeCheckout` is the whole implementation** — the function the screen and the WhatsApp
+ * form call. This adds only the caller, so the handle must be theirs and the address and wallet
+ * are checked BEFORE the spend (`details.spent: false` on every refusal there).
+ *
+ * @param phone Only a number the customer TYPED; null charges the account's own wallet. A tap
+ *   always passes null — a button cannot carry what somebody would have typed.
+ */
+async function placeChatCheckout(
+    req: Request,
+    res: Response,
+    checkoutRef: string,
+    deliveryAddressId: string | null,
+    phone: string | null,
+): Promise<void> {
+    const caller = botCallerOf(req);
+
+    const placed = await placeCheckout(checkoutRef, phone, {
+        callerCustomerId: caller.customerId,
+        addressId: deliveryAddressId,
+    });
+
+    /**
+     * ⚠ **The amount is the TRANSACTION's snapshot** — what the gateway was asked for —
+     * formatted through `formatBotPrice` like every price on this surface. Never a sum.
+     */
+    const transaction = await PaymentTransactionModel.findById(placed.transactionId)
+        .select('amountSnapshot currencySnapshot')
+        .lean();
+
+    const placement = {
+        transactionId: placed.transactionId,
+        state: stateOf(placed.status),
+        orderCount: placed.orderCount,
+        orderNumbers: placed.orderNumbers,
+        amountText: transaction
+            ? formatBotPrice(transaction.amountSnapshot, transaction.currencySnapshot)
+            : null,
+        payerMasked: placed.payerMasked,
+        /** The operator's own instruction, relayed verbatim — as the retry does. */
+        instructions: placed.instructions ?? null,
+    };
+
+    setBotReply(req, drawnAfterTheWrite(() => checkoutPlacedReply(placement, botResponseLanguageOf(req))));
+    sendSuccess(res, placement);
+}
+
+/**
+ * Build a reply for a response whose WRITE has already happened — or none, never a throw.
+ *
+ * ⚠ **The orders exist by the time this runs.** A fault in composing the message must not turn a
+ * placed order into a reported failure: a model told "that failed" tries again, and a customer told
+ * it sees an error over an order that is real. Degrading to no reply hands the turn to the model,
+ * which has the data — the same posture `attachBotReply` takes for rendering.
+ */
+function drawnAfterTheWrite(build: () => BotReplyIntent | null): BotReplyIntent | null {
+    try {
+        return build();
+    } catch (error) {
+        console.error('[BotSurface] could not compose the checkout placement message', error);
+        return null;
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  The money turns — one implementation, reached by a ROUTE and by a TAP
@@ -485,6 +603,8 @@ async function retryCharge(
             cartId,
             mobileMoneyGateway(),
             { phoneNumber: payerNumber, customerName: customer.name },
+            // The retry is asked for in THIS chat, so its result is told here — see `placeCheckout`.
+            { originChat: req.bot!.envelope.channel },
         );
     } catch (error) {
         /**
@@ -518,13 +638,14 @@ async function retryCharge(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  The tap — Check status · Try again
+//  The taps — Check status · Try again · Place order · Not now
 //
 //  Reached through `/catalog/action`. The dispatcher belongs to the switchboard (backend-89): it
 //  parses the token ONCE, refuses what nobody handles in ONE place, and calls the handler a
 //  stream registers for the key. This stream owns the plain verb `pay` outright, so the key is the
 //  verb alone and the handler tells `st` from `rt` itself (`bot-action-dispatch.ts`: a verb one
-//  stream owns is never sub-dispatched in the shared registry).
+//  stream owns is never sub-dispatched in the shared registry). Place order and Not now ride the
+//  SHARED confirm pair, so they are registered as the pairs `yes:co` / `no:co`.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -579,14 +700,87 @@ export async function paymentTap(
 }
 
 /**
+ * `yes:co:<checkoutRef>:<addressId>` (or `yes:co:<checkoutRef>` for a download) — Place order.
+ *
+ * ⚠ **It places exactly as `checkout_place` does**, through `placeChatCheckout`, with the address
+ * the button named and the account's own wallet (`phone` null — a button cannot carry a typed
+ * number). Owner-safe without a check of its own: `placeCheckout` is handed the caller, refuses a
+ * handle minted for anybody else, and spends it first, so a replayed or forwarded token cannot try
+ * twice.
+ *
+ * ── ⚠ A STALE BUTTON ASKS AGAIN; IT NEVER FAILS AND NEVER PLACES ────────────
+ * The ref lives ten minutes and the button lives as long as the chat, so a Place order tapped late
+ * is ordinary. `placeCheckout` answers an unknown or lapsed handle with `BOT_PRODUCT_LIST_EXPIRED`
+ * and `details.spent: false` — nothing was spent, nothing was created — and that one refusal is
+ * turned into a FRESH confirmation for the same address, the "asks again" shape `confirmCancelTap`
+ * gives a stale reference. The basket may have changed since, which is exactly why the customer
+ * must read it again rather than be charged for it.
+ *
+ * Two things are NOT caught, deliberately:
+ *   - **An empty basket.** The pre-spend check refuses it with the same code, and the fresh review
+ *     then refuses it as `CART_EMPTY_CHECKOUT` — the review's own refusal, with its own sentence.
+ *     Most often this is the SECOND tap on a button whose first tap placed the order and emptied the
+ *     basket; drawing a confirmation there is impossible and would be wrong.
+ *   - **Anything marked spent, or carrying no flag.** Orders may exist (`placeCheckout`: "treat a
+ *     missing flag as `true`"), so the refusal goes through with its own customer copy and nothing
+ *     is re-asked or re-placed.
+ *
+ * ⚠ **The catch only re-dispatches, and only BEFORE a response exists.** It rethrows everything
+ * else untouched — the dispatcher's contract is THROW, never `next` — and checks `headersSent` so a
+ * fault after the placement answered can never produce a second answer.
+ */
+async function confirmCheckoutTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    const tap = parseCheckoutConfirm(action.argument);
+    if (!tap) throw unknownBotAction();
+
+    try {
+        await placeChatCheckout(req, res, tap.checkoutRef, tap.addressId, null);
+    } catch (error) {
+        if (res.headersSent || !isUnspentLapsedCheckout(error)) throw error;
+        await reviewChatCheckout(req, res, tap.addressId);
+    }
+}
+
+/**
+ * `no:co:<checkoutRef>` — Not now. **Writes nothing**, reads nothing, and says so.
+ *
+ * ⚠ **The ref is not checked against the store**, and a stale one declines as well as a fresh one:
+ * declining changes nothing, so refusing it would refuse the one answer that is always safe — the
+ * reasoning `no:close` and `no:cnc` follow. The basket is untouched, which is what the sentence
+ * promises.
+ */
+async function declineCheckoutTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    if (!parseCheckoutDecline(action.argument)) throw unknownBotAction();
+
+    setBotReply(req, checkoutDeclinedReply(botResponseLanguageOf(req)));
+    sendSuccess(res, { placed: false });
+}
+
+/**
+ * The one refusal a Place order tap turns into a fresh confirmation: the handle was unknown or had
+ * lapsed, and NOTHING was spent. See `confirmCheckoutTap` for what is deliberately not caught.
+ */
+function isUnspentLapsedCheckout(error: unknown): boolean {
+    return error instanceof AppError
+        && error.code === ERROR_CODES.BOT_PRODUCT_LIST_EXPIRED
+        && error.details?.spent === false;
+}
+
+/**
  * This stream's entry in the tap-code registry. ONE map per stream (`bot-action-dispatch.ts`).
  *
  * ⚠ **Keyed by the plain verb `pay`, never `pay:st` / `pay:rt`.** One stream owns `pay`
  * outright, so its argument grammar stays in `paymentTap` — sub-keying it in the shared registry
  * would make the next change to that grammar somebody else's edit.
+ *
+ * ⚠ **`yes:co` / `no:co` ARE pairs**, because `yes` and `no` are shared verbs routed by context;
+ * `co` is this stream's context, drawn by `checkoutConfirmActionId` / `checkoutDeclineActionId`
+ * (`domain/bot-checkout-actions.ts`), whose grammar and byte budget live beside those builders.
  */
 export const CHECKOUT_ACTION_HANDLERS: BotActionHandlers = Object.freeze({
     pay: paymentTap,
+    'yes:co': confirmCheckoutTap,
+    'no:co': declineCheckoutTap,
 });
 
 /**

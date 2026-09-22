@@ -48,6 +48,8 @@ type NewPaymentAttempt = {
   merchantRef: string;
   rawGatewayPayloads: unknown[];
   purpose?: 'primary' | 'booking_balance';
+  /** The chat the checkout came from, if any — see `IPaymentTransaction.originChat`. */
+  originChat?: { channel: 'whatsapp' | 'telegram' };
 } & (
   | { orderId: Types.ObjectId }
   | { cartId: Types.ObjectId; orderIds: Types.ObjectId[] }
@@ -320,11 +322,15 @@ export class PaymentOrchestratorService {
    * @param cartId - Checkout group id (cart_id shared by the split orders)
    * @param gateway - Which gateway to use
    * @param channel - Payment channel info (phone, card, etc.)
+   * @param options.originChat - The chat the checkout was placed from, so its result is told
+   *   there (`IPaymentTransaction.originChat`). Recorded on a NEW attempt only: an existing live
+   *   attempt is answered as it stands.
    */
   async initiatePaymentForCart(
     cartId: string,
     gateway: PaymentGatewayType,
-    channel: PaymentChannelInfo
+    channel: PaymentChannelInfo,
+    options: { originChat?: 'whatsapp' | 'telegram' | null } = {}
   ): Promise<{
     transactionId: string;
     status: PaymentStatus;
@@ -439,7 +445,11 @@ export class PaymentOrchestratorService {
       currencySnapshot: currency,
       idempotencyKey,
       merchantRef: mintMerchantRef('pt'),
-      rawGatewayPayloads: []
+      rawGatewayPayloads: [],
+      // ⚠ Written WITH the row, before the gateway is called: a charge can settle within
+      // seconds, and a result announced before the origin was stamped would go to the
+      // preference channel — the very defect this field exists to close.
+      ...(options.originChat ? { originChat: { channel: options.originChat } } : {})
     }, idempotencyKey);
     if ('raced' in attempt) return respondWithExisting(attempt.raced);
     const transaction = attempt.opened;
@@ -1653,7 +1663,9 @@ export class PaymentOrchestratorService {
             amount: order.total_amount,
             currency: transaction.currencySnapshot,
             status: transaction.status,
-            aggregateType: 'order'
+            aggregateType: 'order',
+            /** The chat to tell — see `IPaymentTransaction.originChat`. Absent = preference order. */
+            originChannel: transaction.originChat?.channel ?? undefined
           }
         });
       }
@@ -2160,7 +2172,9 @@ export class PaymentOrchestratorService {
             amount: order.total_amount,
             currency: transaction.currencySnapshot,
             totalAmount: order.total_amount,
-            aggregateType: 'order'
+            aggregateType: 'order',
+            /** The chat to tell — see `IPaymentTransaction.originChat`. Absent = preference order. */
+            originChannel: transaction.originChat?.channel ?? undefined
           }
         });
       }

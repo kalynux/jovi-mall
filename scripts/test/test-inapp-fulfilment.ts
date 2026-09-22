@@ -1461,16 +1461,20 @@ function tokenContainmentSection(): void {
      */
     const TOKEN_LITERALS_ALLOWED: Readonly<Record<string, { shape: 'keys-only' | 'composed'; reason: string }>> =
         Object.freeze({
-            // The five stream registry maps. Their literals are KEYS — `'yes:cd': handler` — which
+            // The stream registry maps that hold a PAIR key (six since 2026-09-22, when checkout's
+            // `yes:co` / `no:co` landed). Their literals are KEYS — `'yes:cd': handler` — which
             // declare what the dispatcher routes. Flagging a declaration would be backwards.
             //
             // ⚠ **`keys-only` is ENFORCED, not descriptive** (the discovery stream's finding 2,
             // 2026-09-20, measured): a per-file allowlist makes an allowlisted file a blind spot, and a
             // controller that starts COMPOSING a token by hand is a new producer hiding inside one —
             // the likeliest hiding place there is, because nobody asks "is this token parse-tested?" of
-            // a controller a second time. The five are 100% keys and 0 composed today.
+            // a controller a second time. Every one is 100% keys and 0 composed.
             'modules/bot-surface/controllers/bot-account.controller.ts': { shape: 'keys-only', reason: 'registry keys' },
             'modules/bot-surface/controllers/bot-booking.controller.ts': { shape: 'keys-only', reason: 'registry keys' },
+            // `'yes:co'` / `'no:co'` (2026-09-22). The tokens themselves are composed in
+            // `domain/bot-checkout-actions.ts` by builders, and parse-tested in test:inapp-checkout § 13.
+            'modules/bot-surface/controllers/bot-checkout.controller.ts': { shape: 'keys-only', reason: 'registry keys' },
             'modules/bot-surface/controllers/bot-discovery.controller.ts': { shape: 'keys-only', reason: 'registry keys' },
             'modules/bot-surface/controllers/bot-order.controller.ts': { shape: 'keys-only', reason: 'registry keys' },
             'modules/bot-surface/controllers/bot-purchase.controller.ts': { shape: 'keys-only', reason: 'registry keys' },

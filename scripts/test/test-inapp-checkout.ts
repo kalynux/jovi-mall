@@ -20,7 +20,7 @@
  */
 import fs from 'fs';
 import path from 'path';
-import { TTL_SECONDS, InAppSurfaceStore } from '../../src/modules/bot-surface/services/inapp-surface.store';
+import { TTL_SECONDS, InAppSurfaceStore, newInAppHandle } from '../../src/modules/bot-surface/services/inapp-surface.store';
 import { __IN_APP_COPY, inAppCopy } from '../../src/modules/bot-surface/miniapp/inapp-copy';
 import { __SCREEN_KINDS } from '../../src/modules/bot-surface/miniapp/inapp-page.controller';
 import { BOT_COPY_LANGUAGES } from '../../src/modules/bot-surface/domain/bot-error-copy';
@@ -43,6 +43,40 @@ import {
 } from '../../src/modules/notifications/catalog/customer-notification-catalog';
 import { SUPPORTED_LANGUAGES } from '../../src/core/constants/languages';
 import type { ICustomer, ICustomerSavedAddress } from '../../src/modules/customers/customer.model';
+// ── § 13's imports (the server-drawn confirmation, 2026-09-22) — all pure, all safe under bare ts-node ──
+import {
+    ChatPlacementForReply,
+    ChatReviewForReply,
+    __CHECKOUT_REPLY_LIMITS,
+    checkoutDeclinedReply,
+    checkoutPlacedReply,
+    checkoutReviewReply,
+} from '../../src/modules/bot-surface/domain/checkout-chat-reply';
+import {
+    checkoutConfirmActionId,
+    checkoutDeclineActionId,
+    checkoutTokenBudgetProblems,
+    isCheckoutRef,
+    parseCheckoutConfirm,
+    parseCheckoutDecline,
+} from '../../src/modules/bot-surface/domain/bot-checkout-actions';
+import {
+    BotChromeKey,
+    __CHROME_TABLE,
+    __CHROME_TEMPLATES,
+    botChrome,
+    botChromeCopyGaps,
+    botChromeFill,
+} from '../../src/modules/bot-surface/domain/bot-chrome-copy';
+import {
+    __CALLBACK_DATA_BYTES,
+    parseBotActionId,
+    paymentRetryActionId,
+    paymentStatusActionId,
+} from '../../src/modules/bot-surface/domain/bot-action-id';
+import { actionKeyOf } from '../../src/modules/bot-surface/domain/bot-action-dispatch';
+import { BotReplyIntent, renderBotReply } from '../../src/modules/bot-surface/domain/channel-reply';
+import type { BotAddressDto } from '../../src/modules/bot-surface/dto/bot-projections';
 
 let passed = 0;
 let failed = 0;
@@ -738,16 +772,36 @@ function main(): void {
      * ⚠ **A record is DATA for the model to narrate; only a fixed-wording turn carries a
      * sentence.** Writing "your payment went through" in the chat controller would put a second
      * opinion beside the notification catalogue's own copy for the same event, in a different
-     * table — and the customer would eventually be told both. The screen door is the one
-     * exception, because it renders a control.
+     * table — and the customer would eventually be told both.
+     *
+     * ⚠ **REDRAWN 2026-09-22, and the old form is kept here as the lesson.** This asserted that
+     * every reply in the chat controller was inside the screen door — i.e. that the chat
+     * CONFIRMATION was a record for the model to narrate. The model's narration of one came back
+     * truncated to "Your order is 200 XAF," (core exec 2294) and the customer never saw the
+     * question. A confirmation and a placement are fixed-wording turns with controls, so they are
+     * drawn now; the payment STATUS read and the retry are records and still draw nothing. So the
+     * rule is pinned per function, both directions, and the file-wide count must be exactly the
+     * drawn turns' — a reply added anywhere else fails here.
      */
-    assert('⛔ the money reads set no reply; only the screen door does', () => {
+    assert('⛔ the money READS set no reply; only the door, the confirmation, the placement and Not now do', () => {
         const src = chatCode();
+        const span = (sig: string): string => {
+            const start = src.indexOf(sig);
+            return start < 0 ? '' : src.slice(start, src.indexOf('\n}\n', start));
+        };
+        const replies = (text: string): number => (text.match(/setBotReply\(/g) ?? []).length;
+
+        const reads = ['async function reportPayment(', 'async function retryCharge(', 'export async function paymentTap(']
+            .map(span);
+        const drawn = ['async function reviewChatCheckout(', 'async function placeChatCheckout(', 'async function declineCheckoutTap(']
+            .map(span);
         const door = src.slice(src.indexOf('static screen'), src.indexOf('static paymentStatus'));
-        const all = (src.match(/setBotReply\(/g) ?? []).length;
-        const inDoor = (door.match(/setBotReply\(/g) ?? []).length;
-        // Every reply in the file is inside the door, and the door sets at least one.
-        return inDoor > 0 && all === inDoor;
+
+        const readsSilent = reads.every((body) => body.length > 0 && replies(body) === 0);
+        const drawnOnce = drawn.every((body) => body.length > 0 && replies(body) === 1);
+        const accounted = replies(door) + drawn.reduce((sum, body) => sum + replies(body), 0);
+        if (!readsSilent || !drawnOnce) console.error('      a money read draws a reply, or a drawn turn does not');
+        return readsSilent && drawnOnce && replies(door) > 0 && replies(src) === accounted;
     });
 
     /**
@@ -1270,6 +1324,7 @@ function main(): void {
     });
 
     chatDoorAssertions();
+    drawnConfirmationAssertions();
 
     console.log(
         failed === 0
@@ -1439,8 +1494,26 @@ function chatDoorAssertions(): void {
         const end = to ? chat.indexOf(to, start + from.length) : -1;
         return start < 0 ? '' : chat.slice(start, end < 0 ? chat.length : end);
     };
-    const review = between('static reviewInChat', 'static placeInChat');
-    const placeInChat = between('static placeInChat', '\n}\n');
+    /**
+     * ⚠ **The review and the placement moved OUT of the statics on 2026-09-22**, into
+     * `reviewChatCheckout` / `placeChatCheckout`, because a Place order TAP runs them too and a tap
+     * may never await an `asyncHandler`-wrapped static. The scans below follow the bodies — a scan
+     * left on the statics would read a two-line wrapper and pass every "must NOT" for free — and
+     * the first assertion after these pins the statics as the wrappers they now are.
+     */
+    const review = fn(chat, 'async function reviewChatCheckout(');
+    const placeInChat = fn(chat, 'async function placeChatCheckout(');
+    const reviewRoute = between('static reviewInChat', 'static placeInChat');
+    const placeRoute = between('static placeInChat', '\n}\n');
+
+    assert('⛔ the two routes are thin wrappers over the ONE review and the ONE placement', () =>
+        review.length > 0 && placeInChat.length > 0
+        && reviewRoute.includes('await reviewChatCheckout(req, res, deliveryAddressId ?? null)')
+        && !reviewRoute.includes('inAppSurfaceStore.') && !reviewRoute.includes('readChatCheckout(')
+        && placeRoute.includes('await placeChatCheckout(req, res, checkoutRef, deliveryAddressId ?? null, phone)')
+        && !placeRoute.includes('placeCheckout(')
+        // One placement in the whole chat controller — the route and the tap cannot drift.
+        && (chat.match(/\bplaceCheckout\(/g) ?? []).length === 1);
 
     /**
      * ⚠ **Every `co` mint in the chat controller holds a cart id and no money** — the rule § 6
@@ -1599,6 +1672,503 @@ function chatDoorAssertions(): void {
         })
         && /website/i.test(inAppCopy('en').checkoutNoAddress)
         && !/send me your address/i.test(inAppCopy('en').checkoutNoAddress));
+}
+
+/**
+ * § 13 — the server draws the money confirmation, and the placement (2026-09-22).
+ *
+ * ⛔ **Why this section exists.** A customer typed "Place order"; `checkout_review` returned the
+ * total, the address, the masked wallet and a `checkoutRef`; and the model's own confirmation came
+ * back TRUNCATED to "Your order is 200 XAF," (core exec 2294). The customer never saw the question,
+ * and the order was later placed without a proper one. So the review now draws the confirmation —
+ * Place order · Not now, or one row per address — and the placement draws what to do with the phone.
+ *
+ * ⚠ **The controller cannot be imported here** (it reaches `orders/` and `payments/`, which hang a
+ * bare `ts-node` run), so the reply builders were written PURE in `domain/checkout-chat-reply.ts`
+ * and are driven directly; the controller's wiring is pinned by scan, span by span.
+ */
+function drawnConfirmationAssertions(): void {
+    console.log('\n══ § 13 · The server draws the money confirmation — review, tap, placement ══');
+
+    const ID = (n: number): string => `64b000000000000000000${String(n).padStart(3, '0')}`;
+    /** A real handle, generated by the store's own generator — never a restated shape. */
+    const REF = newInAppHandle();
+    /** The masked form of the suite's fixture number, 237600000001 (`maskPhone`'s shape). */
+    const PHONE = '+2376••••0001';
+    const WA_TO = '237600000001';
+    const TG_TO = '600000001';
+    const chosen = { addressChosen: false };
+
+    const address = (n: number, over: Partial<BotAddressDto> = {}): BotAddressDto => ({
+        id: ID(n),
+        label: `Place ${n}`,
+        formattedAddress: `${n} Rue Joss, Akwa, Douala`,
+        addressLine2: null,
+        city: 'Douala',
+        state: null,
+        country: 'CM',
+        isDefault: false,
+        deliverable: true,
+        ...over,
+    });
+    const HOME = address(1, { label: 'Home', isDefault: true });
+    const OFFICE = address(2, { label: 'Office' });
+    const SHOP = address(3, { label: 'Shop' });
+    const SHED = address(4, { label: 'Shed', deliverable: false });
+
+    const review = (over: Partial<ChatReviewForReply> = {}): ChatReviewForReply => ({
+        ready: true,
+        blocker: null,
+        checkoutRef: REF,
+        lines: [{ title: 'Red shoes', variantLabel: '42', quantity: 2, lineTotalText: '20 000 XAF' }],
+        totalText: '21 500 XAF',
+        delivery: { kind: 'address', address: HOME },
+        addresses: [HOME],
+        payment: { method: 'mobile_money', phoneMasked: PHONE },
+        addAddressUrl: null,
+        ...over,
+    });
+
+    type Choice = Extract<BotReplyIntent, { kind: 'choice' }>;
+    type Text = Extract<BotReplyIntent, { kind: 'text' }>;
+    const choice = (intent: BotReplyIntent | null): Choice | null => (intent?.kind === 'choice' ? intent : null);
+    const textOf = (intent: BotReplyIntent | null): Text | null => (intent?.kind === 'text' ? intent : null);
+
+    interface WaInteractive {
+        type?: string;
+        body?: { text?: string };
+        action?: {
+            buttons?: Array<{ reply: { id: string; title: string } }>;
+            sections?: Array<{ rows: Array<{ id: string; title: string; description?: string }> }>;
+        };
+    }
+    const waOf = (intent: BotReplyIntent): WaInteractive =>
+        (renderBotReply(intent, 'whatsapp', WA_TO).body as { interactive?: WaInteractive }).interactive ?? {};
+    const tgRowsOf = (intent: BotReplyIntent): Array<Array<{ callback_data?: string }>> =>
+        (renderBotReply(intent, 'telegram', TG_TO).body as {
+            reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string }>> };
+        }).reply_markup?.inline_keyboard ?? [];
+
+    console.log('\n── 13a · The confirmation checkout_review draws ──');
+
+    const single = choice(checkoutReviewReply(review(), chosen, 'en'));
+
+    assert('⛔ one deliverable address: Place order (to THAT address) · Not now', () =>
+        single !== null
+        && single.options.length === 2
+        && single.options[0].id === checkoutConfirmActionId(REF, HOME.id)
+        && single.options[0].label === botChrome('placeOrderButton', 'en')
+        && single.options[1].id === checkoutDeclineActionId(REF)
+        && single.options[1].label === botChrome('notNowButton', 'en'));
+
+    assert('…its text is the review line for line, and ENDS in the question', () => {
+        const text = single?.text ?? '';
+        return text.startsWith(botChrome('checkoutReviewIntro', 'en'))
+            && text.includes('2 × Red shoes (42) — 20 000 XAF')
+            && text.includes(`${botChrome('checkoutTotalLabel', 'en')} 21 500 XAF`)
+            && text.includes(`${botChrome('checkoutDeliverToLabel', 'en')} Home — 1 Rue Joss, Akwa, Douala`)
+            && text.includes(`${botChrome('checkoutMobileMoneyLabel', 'en')} ${PHONE}`)
+            && text.endsWith(botChrome('checkoutPlaceQuestion', 'en'));
+    });
+
+    /**
+     * ⛔ **The channel is where a truncation happens, so the channel is what is checked.** The body
+     * must reach WhatsApp whole — the question is its last line — and the two controls must be reply
+     * BUTTONS carrying the tokens, not a list hiding them behind a "Choose" tap.
+     */
+    assert('⛔ on WhatsApp: two reply buttons and the body UNCUT; on Telegram: two inline rows', () => {
+        if (!single) return false;
+        const wa = waOf(single);
+        const rows = tgRowsOf(single);
+        return wa.type === 'button'
+            && wa.body?.text === single.text
+            && wa.action?.buttons?.length === 2
+            && wa.action.buttons[0].reply.id === single.options[0].id
+            && rows.length === 2
+            && rows[0][0].callback_data === single.options[0].id
+            && rows[1][0].callback_data === single.options[1].id;
+    });
+
+    const several = choice(checkoutReviewReply(review({ addresses: [HOME, OFFICE, SHED, SHOP] }), chosen, 'en'));
+
+    assert('⛔ several deliverable addresses: one row per address that PLACES there, default first, then Not now', () => {
+        const ids = several?.options.map((option) => option.id) ?? [];
+        return ids.length === 4
+            && ids[0] === checkoutConfirmActionId(REF, HOME.id)
+            && ids[1] === checkoutConfirmActionId(REF, OFFICE.id)
+            && ids[2] === checkoutConfirmActionId(REF, SHOP.id)
+            && ids[3] === checkoutDeclineActionId(REF)
+            && !ids.some((id) => id.includes(SHED.id));
+    });
+
+    assert('…the text names no destination and asks WHERE; each row carries its own address', () =>
+        several !== null
+        && !several.text.includes(botChrome('checkoutDeliverToLabel', 'en'))
+        && several.text.endsWith(botChrome('checkoutChooseAddressQuestion', 'en'))
+        && several.options[1].shortLabel === 'Office'
+        && several.options[1].description === OFFICE.formattedAddress
+        && several.options[1].label.includes(OFFICE.formattedAddress));
+
+    assert('⛔ on WhatsApp that is a LIST — a row has room for the address and a button does not', () => {
+        if (!several) return false;
+        const wa = waOf(several);
+        const rows = wa.action?.sections?.[0]?.rows ?? [];
+        return wa.type === 'list'
+            && rows.length === 4
+            && rows[0].id === several.options[0].id
+            && rows.every((row) => row.title.length <= 24 && (row.description ?? '').length <= 72);
+    });
+
+    assert('a list never passes WhatsApp\'s ten rows: nine addresses, then Not now', () => {
+        const many = Array.from({ length: 12 }, (_, i) => address(10 + i));
+        const list = choice(checkoutReviewReply(review({ addresses: [HOME, ...many] }), chosen, 'en'));
+        return list !== null
+            && list.options.length === __CHECKOUT_REPLY_LIMITS.MAX_ADDRESS_OPTIONS + 1
+            && list.options[list.options.length - 1].id === checkoutDeclineActionId(REF)
+            && (waOf(list).action?.sections?.[0]?.rows.length ?? 0) === 10;
+    });
+
+    assert('⛔ an address the customer NAMED is confirmed on its own, never offered again among the rest', () => {
+        const named = choice(checkoutReviewReply(
+            review({ delivery: { kind: 'address', address: OFFICE }, addresses: [HOME, OFFICE, SHOP] }),
+            { addressChosen: true },
+            'en',
+        ));
+        return named !== null
+            && named.options.length === 2
+            && named.options[0].id === checkoutConfirmActionId(REF, OFFICE.id)
+            && named.text.includes(`Office — ${OFFICE.formattedAddress}`);
+    });
+
+    assert('a download names the account it is SENT to, and its Place order carries no address', () => {
+        const digital = choice(checkoutReviewReply(
+            review({ delivery: { kind: 'digital', to: 'j•••@example.com' }, addresses: [] }),
+            chosen,
+            'en',
+        ));
+        return digital !== null
+            && digital.options[0].id === checkoutConfirmActionId(REF, null)
+            && digital.text.includes(`${botChrome('checkoutSentToLabel', 'en')} j•••@example.com`)
+            && !digital.text.includes(botChrome('checkoutDeliverToLabel', 'en'));
+    });
+
+    const WEBSITE = 'https://shop.example/en/shop/account/addresses';
+    const blocked = (blocker: ChatReviewForReply['blocker'], over: Partial<ChatReviewForReply> = {}): ChatReviewForReply =>
+        review({ ready: false, blocker, checkoutRef: null, delivery: null, addAddressUrl: WEBSITE, ...over });
+
+    assert('⛔ no saved address: ONE link, to the website\'s address page (owner\'s ruling 2026-09-20)', () => {
+        const link = checkoutReviewReply(blocked('no_saved_address', { addresses: [] }), chosen, 'en');
+        return link?.kind === 'link'
+            && link.url === WEBSITE
+            && link.label === botChrome('addAddressButton', 'en')
+            && link.text === botChrome('checkoutAddAddressPrompt', 'en');
+    });
+
+    assert('…and the same when NO address can be delivered to — but not when another one can', () =>
+        checkoutReviewReply(blocked('address_not_deliverable', { addresses: [SHED] }), chosen, 'en')?.kind === 'link'
+        && checkoutReviewReply(blocked('address_not_deliverable', { addresses: [SHED, OFFICE] }), chosen, 'en') === null);
+
+    assert('never a dead button: with no storefront URL there is no link at all', () =>
+        checkoutReviewReply(blocked('no_saved_address', { addresses: [], addAddressUrl: null }), chosen, 'en') === null);
+
+    /**
+     * ⛔ **No wallet, no buttons.** A Place order over an account with no number could only fail
+     * after the customer pressed it; the model asks for a number instead, as it always has.
+     */
+    assert('⛔ no number on the account: NO reply — the model asks; an unknown address and an empty review neither', () =>
+        checkoutReviewReply(review({ payment: { method: 'mobile_money', phoneMasked: null } }), chosen, 'en') === null
+        && checkoutReviewReply(blocked('address_not_found'), chosen, 'en') === null
+        && checkoutReviewReply(review({ lines: [] }), chosen, 'en') === null
+        && checkoutReviewReply(review({ checkoutRef: null }), chosen, 'en') === null);
+
+    assert('five basket lines at most, then "+ N more" — filled, never a brace', () => {
+        const lines = Array.from({ length: 7 }, (_, i) => ({
+            title: `Item ${i + 1}`, variantLabel: null, quantity: 1, lineTotalText: '1 000 XAF',
+        }));
+        const text = choice(checkoutReviewReply(review({ lines }), chosen, 'en'))?.text ?? '';
+        return text.includes('1 × Item 5 — 1 000 XAF')
+            && !text.includes('Item 6')
+            && text.includes(botChromeFill('checkoutMoreLines', 'en', { count: '2' }))
+            && !/[{}]/.test(text);
+    });
+
+    /**
+     * ⛔ **The defect this section exists for, at the one place it can come back.** WhatsApp cuts an
+     * interactive body at 1024 characters, from the END — and the end is the question. Long product
+     * names must fold into "+ N more"; the summary and the question never give way.
+     */
+    assert('⛔ the question is never what gets cut: long lines fold, in every language, and the body fits', () => {
+        const lines = Array.from({ length: 9 }, (_, i) => ({
+            title: `${'Ensemble de cuisine en acier inoxydable, poignées ergonomiques et couvercles '.repeat(3)}${i}`,
+            variantLabel: 'Grand modèle, finition brossée, garantie de deux ans pièces et main-d’œuvre',
+            quantity: 3,
+            lineTotalText: '12 500 000 XAF',
+        }));
+        const far = address(5, { label: 'Maison de ma grand-mère à Bonapriso, près du marché', formattedAddress: 'Rue '.repeat(100) });
+        const long = review({ lines, delivery: { kind: 'address', address: far }, addresses: [far] });
+
+        let folded = false;
+        const fits = BOT_COPY_LANGUAGES.every((lang) => {
+            const intent = choice(checkoutReviewReply(long, chosen, lang));
+            if (!intent) return false;
+            const shown = intent.text.split('\n').filter((line) => line.includes(' × ')).length;
+            if (shown < __CHECKOUT_REPLY_LIMITS.MAX_BASKET_LINES) folded = true;
+            return intent.text.length <= __CHECKOUT_REPLY_LIMITS.BODY_LIMIT
+                && intent.text.endsWith(botChrome('checkoutPlaceQuestion', lang))
+                && waOf(intent).body?.text === intent.text;
+        });
+        // Non-vacuity: the fixture must actually push past the cap, or this proves nothing.
+        if (!folded) console.error('      the fixture never forced a fold — lengthen it');
+        return fits && folded;
+    });
+
+    console.log('\n── 13b · The tokens: a real handle, 64 bytes, and one grammar ──');
+
+    assert('⛔ a handle the STORE generates is a checkout ref, and the longest button fits 64 bytes', () => {
+        const handle = newInAppHandle();
+        const worst = checkoutConfirmActionId(handle, 'f'.repeat(24));
+        return isCheckoutRef(handle)
+            && __CALLBACK_DATA_BYTES === 64
+            && Buffer.byteLength(worst, 'utf8') <= __CALLBACK_DATA_BYTES
+            && checkoutTokenBudgetProblems({ handleLength: handle.length }).length === 0;
+    });
+
+    assert('⛔ it BITES: a handle 15 characters longer is named as too long for the address button', () => {
+        const problems = checkoutTokenBudgetProblems({ handleLength: newInAppHandle().length + 15 });
+        const named = problems.some((line) => line.includes('with an address'));
+        const declineStillFits = !problems.some((line) => line.includes('Not now'));
+        if (!named) console.error(`      reported instead: ${problems.join('; ') || '(nothing)'}`);
+        return named && declineStillFits;
+    });
+
+    const route = (token: string): ReturnType<typeof actionKeyOf> | null => {
+        const parsed = parseBotActionId(token);
+        return parsed ? actionKeyOf(parsed) : null;
+    };
+
+    assert('⛔ what is drawn routes to `yes:co` / `no:co` and parses back to the same ref and address', () => {
+        const confirm = route(checkoutConfirmActionId(REF, HOME.id));
+        const download = route(checkoutConfirmActionId(REF, null));
+        const decline = route(checkoutDeclineActionId(REF));
+        const c = confirm ? parseCheckoutConfirm(confirm.action.argument) : null;
+        const d = download ? parseCheckoutConfirm(download.action.argument) : null;
+        return confirm?.key === 'yes:co' && c?.checkoutRef === REF && c?.addressId === HOME.id
+            && download?.key === 'yes:co' && d?.checkoutRef === REF && d?.addressId === null
+            && decline?.key === 'no:co' && parseCheckoutDecline(decline.action.argument) === REF;
+    });
+
+    assert('⛔ the parser is strict — anything this service did not build is refused', () => {
+        const refused = [
+            '', 'ia_', 'xx_abcdefghijklmnopqrstuv', `${REF}:not-an-id`, `${REF}:${HOME.id}:extra`,
+            `${REF}:${HOME.id}:`, `${REF} `, `${REF}:${HOME.id.slice(1)}`, `${HOME.id}:${REF}`,
+        ];
+        const accepted = refused.filter((argument) => parseCheckoutConfirm(argument) !== null);
+        if (accepted.length) console.error(`      accepted: ${accepted.join(' · ')}`);
+        return accepted.length === 0
+            && parseCheckoutDecline(`${REF}:${HOME.id}`) === null
+            && parseCheckoutDecline('') === null;
+    });
+
+    assert('a builder refuses to draw a button from something that is not a checkout handle', () => {
+        const throws = (build: () => string): boolean => {
+            try {
+                build();
+                return false;
+            } catch {
+                return true;
+            }
+        };
+        return throws(() => checkoutConfirmActionId('not-a-handle', HOME.id))
+            && throws(() => checkoutConfirmActionId(REF, 'nope'))
+            && throws(() => checkoutDeclineActionId(`${REF}:x`));
+    });
+
+    console.log('\n── 13c · The taps: registered once, placing once, asking again when stale ──');
+
+    const CONTROLLERS = path.join(SCAN_ROOT, 'src/modules/bot-surface/controllers');
+    const chat = chatCode();
+    const span = (sig: string): string => {
+        const start = chat.indexOf(sig);
+        return start < 0 ? '' : chat.slice(start, chat.indexOf('\n}\n', start));
+    };
+    const checkoutMap = (() => {
+        const at = chat.indexOf('export const CHECKOUT_ACTION_HANDLERS');
+        return at < 0 ? '' : chat.slice(at, chat.indexOf('});', at));
+    })();
+
+    assert('⛔ `yes:co` → Place order and `no:co` → Not now are registered, merged, and claimed by nobody else', () => {
+        const dispatcher = stripTs(fs.readFileSync(path.join(CONTROLLERS, 'bot-action.controller.ts'), 'utf8'));
+        const claims = fs.readdirSync(CONTROLLERS)
+            .filter((file) => file.endsWith('.ts'))
+            .map((file) => stripTs(fs.readFileSync(path.join(CONTROLLERS, file), 'utf8')))
+            .reduce((sum, src) => sum + (src.match(/'(?:yes|no):co'\s*:/g) ?? []).length, 0);
+        return /'yes:co':\s*confirmCheckoutTap,/.test(checkoutMap)
+            && /'no:co':\s*declineCheckoutTap,/.test(checkoutMap)
+            && /\[\s*'checkout',\s*CHECKOUT_ACTION_HANDLERS\s*\]/.test(dispatcher)
+            && claims === 2;
+    });
+
+    const confirmTap = span('async function confirmCheckoutTap(');
+    const declineTap = span('async function declineCheckoutTap(');
+    const lapsed = span('function isUnspentLapsedCheckout(');
+
+    assert('⛔ Place order runs THE placement, with the button\'s address and the account\'s own wallet', () =>
+        confirmTap.includes('parseCheckoutConfirm(action.argument)')
+        && /if \(!tap\) throw unknownBotAction\(\);/.test(confirmTap)
+        && confirmTap.includes('await placeChatCheckout(req, res, tap.checkoutRef, tap.addressId, null);')
+        && !confirmTap.includes('placeCheckout(')
+        && !/\bnext\b/.test(confirmTap));
+
+    /**
+     * ⛔ **Only an UNSPENT lapse is asked again.** `placeCheckout`'s rule is that a MISSING flag means
+     * orders may exist — so `spent !== true` would re-ask over an order that is real, and a catch-all
+     * would turn every refusal into a confirmation. `=== false` and nothing else.
+     */
+    assert('⛔ a stale ref ASKS AGAIN for the same address — and only an unspent lapse, before any answer', () =>
+        /if \(res\.headersSent \|\| !isUnspentLapsedCheckout\(error\)\) throw error;/.test(confirmTap)
+        && confirmTap.includes('await reviewChatCheckout(req, res, tap.addressId);')
+        && lapsed.includes('error instanceof AppError')
+        && lapsed.includes('error.code === ERROR_CODES.BOT_PRODUCT_LIST_EXPIRED')
+        && lapsed.includes('error.details?.spent === false')
+        && !/spent\s*!==\s*true/.test(lapsed));
+
+    assert('⛔ Not now writes nothing — no store, no placement, no basket — and says so', () =>
+        declineTap.includes('parseCheckoutDecline(action.argument)')
+        && declineTap.includes('checkoutDeclinedReply(')
+        && declineTap.includes('sendSuccess(res, { placed: false })')
+        && !/inAppSurfaceStore\.|placeCheckout\(|placeChatCheckout\(|cartService\.|Model\./.test(declineTap));
+
+    assert('the placement message is drawn AFTER the write, and a fault in it can never fail the placement', () => {
+        const place = span('async function placeChatCheckout(');
+        const guard = span('function drawnAfterTheWrite(');
+        const wrote = place.indexOf('placeCheckout(');
+        return wrote > 0
+            && place.indexOf('setBotReply(req, drawnAfterTheWrite(') > wrote
+            && place.includes('checkoutPlacedReply(placement,')
+            && place.includes('sendSuccess(res, placement);')
+            && guard.includes('catch (error)')
+            && guard.includes('return null;');
+    });
+
+    assert('the confirmation is drawn from the SAME object the model is sent', () => {
+        const rev = span('async function reviewChatCheckout(');
+        return /setBotReply\(req, checkoutReviewReply\(review, \{ addressChosen: deliveryAddressId !== null \}, language\)\);/.test(rev)
+            && rev.includes('sendSuccess(res, review);')
+            && rev.includes('satisfies ChatReviewForReply');
+    });
+
+    console.log('\n── 13d · The placement message ──');
+
+    const placement = (over: Partial<ChatPlacementForReply> = {}): ChatPlacementForReply => ({
+        transactionId: ID(900),
+        state: 'waiting',
+        orderNumbers: ['ORD-2026-000101', 'ORD-2026-000102'],
+        amountText: '21 500 XAF',
+        payerMasked: PHONE,
+        instructions: { message: 'Confirm the payment on your phone', ussdCode: '*126#', clientSecret: 'pi_secret_never_shown' },
+        ...over,
+    });
+
+    assert('⛔ waiting: the orders, the prompt\'s amount and number, the operator\'s words — and Check status', () => {
+        const waiting = textOf(checkoutPlacedReply(placement(), 'en'));
+        return waiting !== null
+            && waiting.text.startsWith(`${botChrome('checkoutOrderPlacedLabel', 'en')} ORD-2026-000101, ORD-2026-000102`)
+            && waiting.text.includes(botChromeFill('checkoutPaymentRequestSent', 'en', { amount: '21 500 XAF', phone: PHONE }))
+            && waiting.text.includes('\nConfirm the payment on your phone\n')
+            && waiting.text.includes('\n*126#\n')
+            && waiting.text.endsWith(botChrome('checkoutPaymentWait', 'en'))
+            && waiting.actions?.length === 1
+            && waiting.actions[0].id === paymentStatusActionId(ID(900))
+            && waiting.actions[0].label === botChrome('checkStatusButton', 'en');
+    });
+
+    assert('⛔ the operator\'s instruction is an allowlist of two fields — a card secret never reaches a chat', () =>
+        !(textOf(checkoutPlacedReply(placement(), 'en'))?.text ?? 'pi_secret').includes('pi_secret'));
+
+    assert('⛔ failed: no money was taken — and Try again for THIS transaction, never Check status', () => {
+        const failedReply = textOf(checkoutPlacedReply(placement({ state: 'failed' }), 'en'));
+        return failedReply !== null
+            && failedReply.text.includes(botChrome('checkoutPaymentNotSent', 'en'))
+            && !failedReply.text.includes(botChrome('checkoutPaymentWait', 'en'))
+            && failedReply.actions?.length === 1
+            && failedReply.actions[0].id === paymentRetryActionId(ID(900))
+            && failedReply.actions[0].label === botChrome('tryAgainButton', 'en');
+    });
+
+    assert('settled: the orders and a thank-you, and no button', () => {
+        const settled = textOf(checkoutPlacedReply(placement({ state: 'settled' }), 'en'));
+        return settled !== null
+            && !settled.actions
+            && settled.text.endsWith(botChrome('checkoutPaymentReceived', 'en'));
+    });
+
+    assert('an unknown amount draws nothing rather than a sentence with a hole in it', () =>
+        checkoutPlacedReply(placement({ amountText: null }), 'en') === null);
+
+    assert('⛔ in all five languages: no brace left behind, and Check status is a WhatsApp reply button', () =>
+        BOT_COPY_LANGUAGES.every((lang) => {
+            const waiting = checkoutPlacedReply(placement(), lang);
+            if (!waiting || waiting.kind !== 'text') return false;
+            const wa = waOf(waiting);
+            return !/[{}]/.test(waiting.text)
+                && wa.type === 'button'
+                && wa.action?.buttons?.[0]?.reply.id === paymentStatusActionId(ID(900));
+        }));
+
+    assert('Not now is one plain sentence saying nothing was ordered', () => {
+        const declined = checkoutDeclinedReply('en');
+        return declined.kind === 'text'
+            && declined.text === botChrome('checkoutDeclined', 'en')
+            && !declined.actions;
+    });
+
+    console.log('\n── 13e · The words: five languages, the button cap, and the placeholders ──');
+
+    const NEW_KEYS: BotChromeKey[] = [
+        'placeOrderButton', 'notNowButton', 'checkoutReviewIntro', 'checkoutMoreLines', 'checkoutTotalLabel',
+        'checkoutDeliverToLabel', 'checkoutSentToLabel', 'checkoutMobileMoneyLabel', 'checkoutPlaceQuestion',
+        'checkoutChooseAddressQuestion', 'checkoutDeclined', 'checkoutAddAddressPrompt', 'checkoutOrderPlacedLabel',
+        'checkoutPaymentRequestSent', 'checkoutPaymentWait', 'checkoutPaymentNotSent', 'checkoutPaymentReceived',
+    ];
+
+    assert('⛔ every new copy key exists in all five languages', () =>
+        NEW_KEYS.every((key) => BOT_COPY_LANGUAGES.every((lang) => (__CHROME_TABLE[key].copy[lang] ?? '').trim().length > 0)));
+
+    assert('⛔ both buttons fit WhatsApp\'s 20-character reply-button title in every language, and are capped at 20', () =>
+        (['placeOrderButton', 'notNowButton'] as const).every((key) =>
+            __CHROME_TABLE[key].cap === 20
+            && BOT_COPY_LANGUAGES.every((lang) => __CHROME_TABLE[key].copy[lang].length <= 20)));
+
+    assert('⛔ each template declares its placeholders, and the whole table passes the boot guard', () =>
+        __CHROME_TEMPLATES.checkoutMoreLines?.join(',') === 'count'
+        && __CHROME_TEMPLATES.checkoutPaymentRequestSent?.join(',') === 'amount,phone'
+        && botChromeCopyGaps(__CHROME_TABLE, __CHROME_TEMPLATES).length === 0);
+
+    /**
+     * ⛔ **THE BITE-PROOFS.** The boot guard is handed a copy of the real table with ONE value
+     * broken and must name that key and that language. Built from the real table, so the proof
+     * exercises the real rule — a hand-made fixture table could pass while the real one is wrong.
+     */
+    const withValue = (key: BotChromeKey, lang: 'fr' | 'pt' | 'es', value: string) => ({
+        ...__CHROME_TABLE,
+        [key]: { ...__CHROME_TABLE[key], copy: { ...__CHROME_TABLE[key].copy, [lang]: value } },
+    });
+
+    assert('⛔ it BITES: a French Place order two characters over the cap is named', () => {
+        const gaps = botChromeCopyGaps(withValue('placeOrderButton', 'fr', 'Passer la commande !!!'), __CHROME_TEMPLATES);
+        if (!gaps.length) console.error('      the guard named nothing');
+        return gaps.some((gap) => gap === 'placeOrderButton:fr is 22 chars, cap is 20');
+    });
+
+    assert('⛔ it BITES: a Portuguese payment sentence that DROPS {amount} is named — and so is a stray brace', () => {
+        const dropped = botChromeCopyGaps(
+            withValue('checkoutPaymentRequestSent', 'pt', 'Foi enviado um pedido de pagamento para {phone}.'),
+            __CHROME_TEMPLATES,
+        );
+        const stray = botChromeCopyGaps(withValue('checkoutDeclined', 'es', 'Sin problema, {name}.'), __CHROME_TEMPLATES);
+        return dropped.includes('checkoutPaymentRequestSent:pt carries {amount} 0 times, expected once')
+            && stray.includes('checkoutDeclined:es carries {name}, which nothing fills');
+    });
 }
 
 main();

@@ -21,6 +21,8 @@ Every notification produces an **in-app record** — that is the durable one, an
 
 Enabling one secondary channel automatically disables the other two. Priority when resolving: telegram → email → whatsapp.
 
+**One exception: a checkout placed from a chat is answered in that chat.** `order.payment.received` and `order.payment_failed` for a basket checked out on WhatsApp or Telegram (the chat checkout, its screen or its form) go to **that** chat, in place of the channel chosen above — while the account is still linked there. The payment's result is the answer to something the customer did in that conversation, and the chat has just told them it will arrive there. The channel's own on/off switch does not apply to it; muting a notification group still does (and money situations have none). In-app and push are unchanged. *(2026-09-22: a WhatsApp order's "payment received" had gone to the customer's Telegram.)*
+
 Copy is rendered in the customer's language (`customer.preferences.language`), in **en · fr · pt · es · ar**. Times are formatted in the customer's own `timezone`.
 
 ---

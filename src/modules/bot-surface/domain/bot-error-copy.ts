@@ -685,6 +685,20 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         es: 'Los pagos con tarjeta no están disponibles por ahora. Puedes pagar con mobile money (MTN u Orange).',
         ar: 'الدفع بالبطاقة غير متاح حاليًا. يمكنك الدفع عبر المحفظة المحمولة (MTN أو Orange).',
     },
+    /**
+     * ⚠ **Most often a SECOND tap on Place order**, after the first one placed the order and the
+     * basket emptied with it (`confirmCheckoutTap`). Without a sentence of its own it answered
+     * "That does not look right. Could you send it again?" — inviting a customer who had just
+     * ordered to try again. It does not claim the order went through: the basket can be empty for
+     * other reasons, so it points at where the answer is.
+     */
+    [ERROR_CODES.CART_EMPTY_CHECKOUT]: {
+        en: 'Your basket is empty now. If you have just placed an order, ask me for your orders to see it.',
+        fr: 'Votre panier est vide maintenant. Si vous venez de passer une commande, demandez-moi vos commandes pour la voir.',
+        pt: 'O seu cesto está vazio agora. Se acabou de fazer uma encomenda, peça-me as suas encomendas para a ver.',
+        es: 'Tu carrito está vacío ahora. Si acabas de hacer un pedido, pídeme tus pedidos para verlo.',
+        ar: 'سلتك فارغة الآن. إذا كنت قد قدمت طلبًا للتو، اطلب مني عرض طلباتك لرؤيته.',
+    },
     [ERROR_CODES.PAYMENT_PAYER_NUMBER_REQUIRED]: {
         en: 'I need a mobile money number to take this payment. Send me the number you want to pay with.',
         fr: "J'ai besoin d'un numéro mobile money pour ce paiement. Envoyez-moi le numéro avec lequel vous souhaitez payer.",
