@@ -16,9 +16,15 @@ import {
     NegotiationLockCloser,
     NegotiationSessionModel,
 } from '../models/negotiation-session.model';
+import { isRecordReplay, ReplaySessionView } from '../domain/record-replay.rule';
 import { negotiationProfileRepository } from '../repositories/negotiation-profile.repository';
 import { negotiationSessionStore } from '../repositories/negotiation-session.store';
-import { NegotiationContextInput, NegotiationRecordInput } from '../validators/negotiation.validator';
+import {
+    NegotiationContextInput,
+    NegotiationIdentity,
+    NegotiationRecordInput,
+} from '../validators/negotiation.validator';
+import { CART_DEAL_BASKET, placeDealInBasket } from './deal-basket.service';
 /** The live window, read fresh on every turn. Never a snapshot — see invariant 3. */
 import { LiveWindow, liveWindowReader } from './live-window.reader';
 import {
@@ -27,7 +33,7 @@ import {
     AcceptOfferOutcome,
     MONGO_OFFER_ACCEPTANCE,
 } from './offer-acceptance.service';
-import { buildCounterOfferOutbound } from './offer-outbound.service';
+import { buildClosedDealOutbound, buildCounterOfferOutbound } from './offer-outbound.service';
 import type { BotChannelReply } from '../../bot-surface/domain/channel-reply';
 
 /**
@@ -38,6 +44,12 @@ import type { BotChannelReply } from '../../bot-surface/domain/channel-reply';
  * against a pathological interleaving, never a retry budget anybody should reach.
  */
 const MAX_RECORD_ATTEMPTS = 3;
+
+/** A closed deal once it has been taken to the basket: what the customer is sent, and what happened. */
+interface SettledDeal {
+    outbound: BotChannelReply | null;
+    basket: { placed: true } | { placed: false; code: string };
+}
 
 export interface NegotiationContextResult {
     sessionId: string;
@@ -93,18 +105,37 @@ export type NegotiationRecordResult =
         agreedPrice: number;
         lock: { ref: string; unitPrice: number; expiresAt: Date } | null;
         /**
-         * ⭐ **The same turn as a channel-ready body, carrying a "Lock it in · 18 000 XAF" button.**
+         * ⭐ **The same turn as a channel-ready body — the message the customer is actually sent.**
          *
-         * Present only on an approved turn that did NOT lock — a standing offer is the only thing a
-         * customer can accept. Null when the deal just closed, and null when the body could not be
-         * built at all, in which case the caller sends `reply` exactly as it always has.
+         * Two shapes, by whether the turn closed the deal:
+         *   - **a standing offer** (`lock: false`) — the approved sentence with a
+         *     *Lock it in · 18 000 XAF* button, so the customer can accept by pressing;
+         *   - **a close** (`lock: true`, since 2026-09-22) — the approved sentence, then the press's
+         *     own *"Deal — it's in your basket at that price."* and View basket · Checkout · Keep
+         *     shopping. The item is already in the basket by then (see `basket`); when the basket
+         *     refused it, the cart's own explanation takes that line's place instead.
+         *
+         * Null only when the body could not be built at all, in which case the caller sends `reply`
+         * exactly as it always has.
          *
          * ⚠ **A sibling of `reply`, never a replacement.** The live bargaining flow sends
          * `data.reply` (a string) and must keep working; a flow that knows about this field prefers
          * it. Widening `reply` itself would have broken the automation layer for every existing
          * turn, which is the same reasoning that gave the bot surface `replies` beside `reply`.
+         *
+         * ⚠ The live `decide send` already prefers this on EVERY approved turn, lock or not
+         * (`UP-wi-mall-bargain` 58c25a1a) — which is why a close needed no workflow change to reach
+         * the customer with its buttons.
          */
         outbound: BotChannelReply | null;
+        /**
+         * What the close did to the basket. Null on a turn that did not close.
+         *
+         * `placed: false` means the deal STANDS — the lock is live — but the cart refused the line
+         * (`code` is the cart's own, e.g. `CART_MIXED_PRODUCT_TYPES`). The lock can still be spent
+         * by `cart_add_item` once the basket can take it, which is why `lock.ref` still travels.
+         */
+        basket: { placed: true } | { placed: false; code: string } | null;
       }
     | {
         verdict: 'revise';
@@ -123,7 +154,9 @@ export type NegotiationRecordResult =
  *   `context` — open or resume this line's session and hand over everything the
  *               model needs to take a turn, including the real window.
  *   `record`  — judge the price the model wants to quote, persist the turn, and
- *               mint the lock when the model asks for one.
+ *               mint the lock when the model asks for one — then, on that close,
+ *               put the item in the basket at the locked price, exactly as the
+ *               Lock it in press does (`deal-basket.service.ts`).
  *
  * ── `record` is a GATE, and it runs BEFORE the customer sees anything ────────
  *
@@ -234,12 +267,26 @@ export class NegotiationService {
             // exists but is somebody else's is itself a disclosure.
             if (!session) throw createAppError(ERROR_CODES.NEGOTIATION_SESSION_NOT_FOUND, 404);
 
+            const now = new Date();
+
+            /**
+             * ⭐ **A retry of the closing turn is answered as the closing turn**, not judged as a new
+             * price on a closed deal. The gate carries no idempotency key, and the flow echoes only
+             * the LAST verdict — so a retried close used to overwrite its own `approved` with a
+             * `revise` and the customer who had just agreed heard nothing. The rule is narrow on
+             * purpose (same price, same sentence, this model's lock, live and unspent); see
+             * `domain/record-replay.rule.ts`. Checked before the window read: the lock is already
+             * minted, and whether it still holds is the cart's peek to decide, not this door's.
+             */
+            if (isRecordReplay(this.replayViewOf(session), input, now)) {
+                return this.replayClosingTurn(session, caller.customerId, input);
+            }
+
             // Re-read the window EVERY turn (invariant 3). The snapshots on the session
             // are audit only; judging against them would let a vendor's price edit be
             // exploited for the life of the session.
             const window = await this.readLiveWindow(session.variant_id.toString());
 
-            const now = new Date();
             const readAtRound = session.round;
             const verdict = judgeProposedPrice({
                 floor: window.floor,
@@ -328,23 +375,52 @@ export class NegotiationService {
              */
             if (!written) continue;
 
+            /**
+             * ⭐ **A deal agreed in words does exactly what the Lock it in press does** (owner,
+             * 2026-09-22): the item goes into the basket at the locked price, through the SAME
+             * core the press uses, and the customer is sent the press's line and its three buttons
+             * under the agent's sentence. Before this the spoken close minted the lock and stopped
+             * — the customer was asked for an address, nothing was in the basket, and no button
+             * was drawn (executions 1914 → 1934).
+             *
+             * ⚠ **The basket write runs after the commit and can never fail this call.** The deal
+             * is agreed once the lock is written; a refused basket is reported in `basket` and in
+             * the message, never as a gate error that would make the flow hand back in silence.
+             */
+            let closed: SettledDeal | null = null;
             if (input.lock) {
                 lock = { ref, unitPrice: input.agentProposedPrice, expiresAt };
-                await negotiationProfileRepository.recordAgreement(caller.customerId);
+                closed = await this.settleClosedDeal({
+                    identity: input.identity,
+                    customerId: caller.customerId,
+                    session,
+                    lockRef: ref,
+                    reply: input.reply,
+                });
+
+                /**
+                 * ⚠ **A failed statistic never costs the customer their deal** — the press's rule
+                 * (`offer-acceptance.service.ts`). `sessions_agreed` is colour for the agent; throwing
+                 * here, after the lock and the basket, would report a failed gate call for a deal that
+                 * exists and is in the basket.
+                 */
+                await negotiationProfileRepository.recordAgreement(caller.customerId).catch((error: unknown) => {
+                    console.warn('[Negotiation] agreement statistic not recorded', error);
+                });
             }
 
             /**
              * ⭐ **A standing offer is sent with the price ON a button.** Only a turn that did NOT
              * close the deal gets one: a lock means the haggle is over, and a "Lock it in" button
              * under a message confirming an agreement would invite a customer to accept something
-             * they have already accepted.
+             * they have already accepted. A close is sent with the basket's three buttons instead.
              *
              * ⚠ **`reply` is untouched and remains the contract.** `outbound` is a sibling the
              * bargaining flow prefers when present and falls back from when absent, so an
              * automation layer that knows nothing about it keeps working exactly as it does today.
              */
-            const outbound = input.lock
-                ? null
+            const outbound = closed
+                ? closed.outbound
                 : await buildCounterOfferOutbound({
                       identity: input.identity,
                       customerId: caller.customerId,
@@ -363,6 +439,7 @@ export class NegotiationService {
                 agreedPrice: input.agentProposedPrice,
                 lock,
                 outbound,
+                basket: closed ? closed.basket : null,
             };
         }
 
@@ -383,14 +460,118 @@ export class NegotiationService {
      *
      * The decision and its compare-and-set live in `services/offer-acceptance.service.ts`; this is
      * the module's door onto them, so a caller outside `negotiation` never reaches past the
-     * service layer. The basket write belongs to the caller: this mints the lock, exactly as the
-     * gate does when the model closes a deal, and nothing here touches a cart.
+     * service layer. This mints the lock, exactly as the gate does when the model closes a deal;
+     * the caller then puts the line in the basket through `placeDealInBasket` — the same core the
+     * gate's own close uses (`deal-basket.service.ts`), so the two closers end in one state.
      */
     async acceptOffer(input: AcceptOfferInput): Promise<AcceptOfferOutcome> {
         return acceptOffer(MONGO_OFFER_ACCEPTANCE, input);
     }
 
     // ── internals ────────────────────────────────────────────────────────────
+
+    /**
+     * Put the closed deal in the basket and render what the customer reads. Never throws.
+     *
+     * Every field of the basket write comes from the NEGOTIATION RECORD — the product, the variant,
+     * the quantity the lock is bound to, the currency — and none from the caller: the gate's input
+     * names a session and a price, and a price is the one thing a basket write must never be told.
+     */
+    private async settleClosedDeal(args: {
+        identity: NegotiationIdentity;
+        customerId: string;
+        session: INegotiationSession;
+        lockRef: string;
+        reply: string;
+    }): Promise<SettledDeal> {
+        const placed = await placeDealInBasket(CART_DEAL_BASKET, {
+            customerId: args.customerId,
+            productId: args.session.product_id.toString(),
+            variantId: args.session.variant_id.toString(),
+            quantity: args.session.quantity,
+            currency: args.session.currency,
+            lockRef: args.lockRef,
+        });
+
+        if (!placed.placed) {
+            console.warn('[Negotiation] an agreed deal could not be put in the basket', {
+                sessionId: args.session._id.toString(),
+                code: placed.refusal.code,
+            });
+        }
+
+        const outbound = await buildClosedDealOutbound({
+            identity: args.identity,
+            customerId: args.customerId,
+            reply: args.reply,
+            refusal: placed.placed ? null : placed.refusal,
+        });
+
+        return {
+            outbound,
+            basket: placed.placed ? { placed: true } : { placed: false, code: placed.refusal.code },
+        };
+    }
+
+    /**
+     * The closing turn, answered again — same lock, same round, the basket write repeated.
+     *
+     * Nothing is written to the ledger: the turn is already there, verbatim, and the replay IS that
+     * turn. The basket write is repeated because it is idempotent (a locked add SETS the line) and
+     * because it repairs the one case a retry exists for — a first call whose basket write never
+     * happened. Traits and the agreement statistic are not re-recorded; they were, by the original.
+     */
+    private async replayClosingTurn(
+        session: INegotiationSession,
+        customerId: string,
+        input: NegotiationRecordInput,
+    ): Promise<NegotiationRecordResult> {
+        // `isRecordReplay` answers true only for a session holding a lock; the guard keeps the type honest.
+        const lock = session.lock;
+        if (!lock) throw createAppError(ERROR_CODES.NEGOTIATION_SESSION_CLOSED, 409);
+
+        const closed = await this.settleClosedDeal({
+            identity: input.identity,
+            customerId,
+            session,
+            lockRef: lock.ref,
+            reply: input.reply,
+        });
+
+        return {
+            verdict: 'approved',
+            sessionId: session._id.toString(),
+            round: session.round,
+            reply: input.reply,
+            agreedPrice: lock.unit_price,
+            lock: { ref: lock.ref, unitPrice: lock.unit_price, expiresAt: lock.expires_at },
+            outbound: closed.outbound,
+            basket: closed.basket,
+        };
+    }
+
+    /** The session as the replay rule reads it — its status, its lock, its latest turn. */
+    private replayViewOf(session: INegotiationSession): ReplaySessionView {
+        const last = session.turns.length > 0 ? session.turns[session.turns.length - 1] : null;
+        return {
+            status: session.status,
+            lock: session.lock
+                ? {
+                      closedBy: session.lock.closed_by ?? 'model',
+                      unitPrice: session.lock.unit_price,
+                      expiresAt: session.lock.expires_at,
+                      consumedAt: session.lock.consumed_at ?? null,
+                  }
+                : null,
+            lastTurn: last
+                ? {
+                      agentProposedPrice: last.agent_proposed_price,
+                      lockRequested: last.lock_requested,
+                      reply: last.reply,
+                  }
+                : null,
+        };
+    }
 
     private revise(
         session: INegotiationSession,

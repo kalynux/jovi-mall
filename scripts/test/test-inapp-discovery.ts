@@ -732,25 +732,33 @@ async function main(): Promise<void> {
         }
     });
 
-    await assert('⛔ a turn that CLOSED the deal carries no button — nothing is left to accept', () => {
-        const record = serviceSrc.slice(serviceSrc.indexOf('async record('));
+    /**
+     * ⚠ **Rewritten 2026-09-22, when a close stopped being sent as plain text.** A turn that closes
+     * the deal now carries the BASKET's three buttons (the spoken close does what the press does),
+     * so "a closing turn has no outbound" is no longer the claim. The claim that survives — and the
+     * one this pins — is narrower and the one that matters: **a closing turn never carries a Lock it
+     * in button**, because the counter-offer builder is reachable only on a turn that did not lock.
+     * Structure below, behaviour in `test:negotiation` § 8 (no `deal:` token in a closed deal's body).
+     */
+    const closedDealScan = (src: string): void => {
+        const record = src.slice(src.indexOf('async record('));
         const body = record.slice(0, record.indexOf('async acceptOffer('));
-        if (!/const outbound = input\.lock/.test(body)) {
+        if (!/let closed: SettledDeal \| null = null;\s*if \(input\.lock\) \{\s*lock = \{[^}]*\};\s*closed = await this\.settleClosedDeal\(/.test(body)) {
+            throw new Error('the closed-deal body is not built ONLY on a locking turn');
+        }
+        if (!/const outbound = closed\s*\?\s*closed\.outbound\s*:\s*await buildCounterOfferOutbound\(/.test(body)) {
             throw new Error('a locking turn would be sent with a Lock it in button under it');
         }
         if (!body.includes('outbound,')) throw new Error('the body is built and never returned');
+    };
+
+    await assert('⛔ a turn that CLOSED the deal carries no Lock it in button — nothing is left to accept', () => {
+        closedDealScan(serviceSrc);
     });
 
     await assert('⭐ MUTANT — the no-button-on-a-closed-deal scan catches the inversion', () => {
-        bites(
-            'button on a closed deal',
-            serviceSrc.replace('const outbound = input.lock', 'const outbound = false'),
-            (src) => {
-                const record = src.slice(src.indexOf('async record('));
-                const body = record.slice(0, record.indexOf('async acceptOffer('));
-                if (!/const outbound = input\.lock/.test(body)) throw new Error('found');
-            },
-        );
+        bites('lock-in button on a closed deal', serviceSrc.replace('const outbound = closed', 'const outbound = !closed'), closedDealScan);
+        bites('a closed body on an open turn', serviceSrc.replace('if (input.lock) {\n                lock = {', 'if (true) {\n                lock = {'), closedDealScan);
     });
 
 

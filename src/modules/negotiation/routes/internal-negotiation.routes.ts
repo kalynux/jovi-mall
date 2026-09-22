@@ -88,6 +88,18 @@ router.get('/playbook', async (req: Request, res: Response, next: NextFunction) 
  * is, through the SAME `botIdentityService` the bot surface uses — one resolver, two
  * doors (R-8 is about two implementations, not two mounts). Both schemas are
  * `.strict()`, so an id sent anyway is a 400 rather than a silently ignored field.
+ *
+ * ⚠ **Since 2026-09-22 `/record` WRITES TO A BASKET, which the header above says nothing
+ * here does.** A close (`lock: true`) now puts the line in the customer's basket, exactly
+ * as the Lock it in press does (`services/deal-basket.service.ts`) — the owner's rule that
+ * a deal agreed in words ends where a press ends. That is a basket write behind ONE
+ * credential, where the bot surface demands two. It is bounded, and the bound is the
+ * argument for leaving the credential as it is for now: only a variant with a live
+ * bargaining window, only at a price inside the vendor's window, only for a session this
+ * same door opened, one line, set rather than added, readable by nothing here, and no
+ * money moves until the customer checks out. The stricter option — `requireBotWebhookSecret`
+ * on this route too, with `UP-wi-mall-bargain-tools` sending `X-Webhook-Secret` — is a
+ * two-sided change (n8n first, or every gate call is refused) and is the owner's call.
  */
 router.post('/context', negotiationGateController.context);
 router.post('/record', negotiationGateController.record);

@@ -3,6 +3,7 @@ import { lockInOfferActionId } from '../../bot-surface/domain/bot-action-id';
 import { botChrome } from '../../bot-surface/domain/bot-chrome-copy';
 import { BotChannelReply, BotReplyIntent, renderBotReply } from '../../bot-surface/domain/channel-reply';
 import { formatBotPrice } from '../../bot-surface/domain/product-card';
+import { BasketRefusal, dealInBasketIntent, dealRefusedIntent } from '../domain/deal-in-basket';
 import { NegotiationIdentity } from '../validators/negotiation.validator';
 
 /**
@@ -102,6 +103,45 @@ export async function buildCounterOfferOutbound(
          * is exactly what it did before this existed. Silence would be the one unacceptable outcome.
          */
         console.warn('[Negotiation] could not build the lock-it-in reply', error);
+        return null;
+    }
+}
+
+export interface ClosedDealOutboundInput {
+    identity: NegotiationIdentity;
+    customerId: string;
+    /** The closing sentence the gate has just approved. It leads the message, verbatim. */
+    reply: string;
+    /** Null when the line is in the basket; the cart's refusal when it is not. */
+    refusal: BasketRefusal | null;
+}
+
+/**
+ * The spoken close, as the message the **Lock it in** press sends — with the agent's sentence first.
+ *
+ * ⭐ **What makes a deal agreed in words end where a press ends.** The item is already in the
+ * basket by the time this runs (`deal-basket.service.ts`); this renders what the customer reads:
+ * the approved sentence, then *"Deal — it's in your basket at that price."* and View basket ·
+ * Checkout · Keep shopping — or, when the basket refused the line, the cart's own explanation in
+ * that slot instead. `domain/deal-in-basket.ts` holds both wordings and says why the basket claim
+ * is never the model's to make.
+ *
+ * Same language rule and same self-catching as `buildCounterOfferOutbound`: a lookup or render
+ * failure answers null, and the flow falls back to sending `reply` alone — the approved sentence,
+ * without the buttons — which is strictly better than silence.
+ */
+export async function buildClosedDealOutbound(
+    input: ClosedDealOutboundInput,
+): Promise<BotChannelReply | null> {
+    try {
+        const language = await readStoredLanguage(input.customerId);
+        const intent = input.refusal
+            ? dealRefusedIntent(input.refusal, language, input.reply)
+            : dealInBasketIntent(language, input.reply);
+
+        return renderBotReply(intent, input.identity.channel, input.identity.externalId);
+    } catch (error) {
+        console.warn('[Negotiation] could not build the closed-deal reply', error);
         return null;
     }
 }

@@ -190,6 +190,8 @@ export class CartService {
     // 4. Load existing cart
     let cart = await CartModel.findOne({ userId });
 
+    const negotiated = resolvedPrice.negotiated ?? null;
+
     // 5. If cart exists, validate type consistency
     if (cart && cart.items.length > 0) {
       const existingType = cart.productType;
@@ -198,8 +200,23 @@ export class CartService {
         throw createAppError(ERROR_CODES.CART_MIXED_PRODUCT_TYPES, 409, `Your cart contains ${existingType} products. Cannot add ${product.type} products. Please checkout or clear your cart first.`);
       }
 
-      // Digital: V1 scope - only allow ONE digital product in cart
-      if (product.type === 'digital') {
+      /**
+       * Digital: V1 scope - only allow ONE digital product in cart.
+       *
+       * ⚠ **One exception: the SAME digital line, re-presented with a price lock.** A customer
+       * who put a digital item in the basket at the shelf price and then haggled it down used to
+       * be told "only one digital product at a time" about the very item the deal was on — both
+       * when they pressed Lock it in and when the agent agreed it in words — and the line stayed
+       * at the shelf price, so checkout charged the price they had talked their way out of. The
+       * guard exists to keep a SECOND digital product out; re-pricing the one already there is
+       * not that, and the existing-line branch below applies the lock to it. Without a lock the
+       * re-add is still refused exactly as before.
+       */
+      const relockingTheSameLine = negotiated !== null
+        && cart.items.length === 1
+        && cart.items[0].variantId.toString() === variantId;
+
+      if (product.type === 'digital' && !relockingTheSameLine) {
         throw createAppError(ERROR_CODES.CART_DIGITAL_LIMIT_REACHED, 409, 'Only one digital product can be added to cart at a time. Please checkout or clear your cart first.');
       }
     }
@@ -221,11 +238,9 @@ export class CartService {
       (item) => item.variantId.toString() === variantId
     );
 
-    const negotiated = resolvedPrice.negotiated ?? null;
-
     if (existingItemIndex !== -1) {
       // Variant already in cart
-      if (product.type === 'digital') {
+      if (product.type === 'digital' && !negotiated) {
         // Digital: quantity remains 1, no change
         // Just return current cart
         return this.formatCartResponse(cart);
@@ -242,6 +257,12 @@ export class CartService {
          * The discarded quantity is a real cost and it is the lesser one: the
          * alternative leaves a basket whose stated price is not the price
          * anything will honour.
+         *
+         * ⚠ **Digital lines take this branch too** (2026-09-22). `quantity` is
+         * already proven to be 1 for a digital product (the fail-fast above), so
+         * the line stays at 1 and gains the agreed price. Before this the branch was
+         * unreachable for a digital line: the one-digital guard above refused the
+         * re-add first, so a won bargain on it stayed at the shelf price.
          */
         cart.items[existingItemIndex].quantity = quantity;
         cart.items[existingItemIndex].price = resolvedPrice.unitPrice;

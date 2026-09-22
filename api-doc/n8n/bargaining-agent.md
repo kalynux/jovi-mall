@@ -40,13 +40,18 @@ customer: "40000 et je prends"
    └─ wi-mall-core · check bargain → flag is live → hand to bargainer
          └─ wi-mall-bargain [turn]  → the same loop, and this time it owns the send
    │
-   … they agree. The gate mints a lock; `store price lock` leaves the ref in Redis,
-   the flag is cleared, and the conversation goes back to wi-mall-core.
+   … they agree. negotiation_record(lock: true) → the gate mints a lock AND puts the
+   item in the basket at that price — the SAME core the Lock it in press uses — and
+   returns `outbound`: the approved sentence, then "Deal — it's in your basket at that
+   price." and View basket · Checkout · Keep shopping, plus `basket: { placed }`.
+   decide send sends that body; the flag is cleared; `store price lock` still leaves
+   the ref in Redis; the conversation goes back to wi-mall-core.   (2026-09-22, § 4)
    │
-customer: "ok, mets-le dans mon panier"
+customer: taps Checkout — or types "ok, je commande"
    │
-   └─ wi-mall-core · check price lock → the ref is in the system prompt
-        main agent · cart_add_item(… , negotiationLockRef) → charged what they agreed
+   └─ wi-mall-core · the item is already in the basket at the agreed price
+        main agent · checkout tools. The ref in the system prompt is needed only if the
+        basket REFUSED the line (`basket.placed: false`) — cart_add_item(…, negotiationLockRef)
 ```
 
 ⚠ **This used to read "a hand-off costs one conversational turn, deliberately", and that beat
@@ -150,7 +155,7 @@ Bargain Agent finishes → read gate echo ┘ → clear gate echo → decide sen
 
 | Verdict | Sent | Session |
 |---|---|---|
-| `approved` | **the gate's `reply`, verbatim** | open, or **closed** if a lock was minted |
+| `approved` | **the gate's `outbound` when present, else its `reply` verbatim** — an offer carries a **Lock it in** button; a close (`lock: true`) carries the press's basket line and View basket · Checkout · Keep shopping, and the item is already in the basket (`basket.placed`) | open, or **closed** if a lock was minted |
 | `revise` (last submission) | nothing — hand back | **stays open**: one bad draft is not the end of a haggle |
 | `revise` with `NEGOTIATION_SESSION_CLOSED` (⭐ the customer pressed **Lock it in** mid-turn) | nothing — hand back | **closed**: the deal is done at `details.agreedPrice`, and the next `negotiation_context` says so through `agreed` |
 | gate refused the *call* (session expired / unknown / no longer negotiable) | nothing — hand back | closed |
@@ -178,7 +183,8 @@ Three consequences for this flow, and the first two are the ones that bite:
   compare-and-set on `(status open, round)`. If the press lands while the agent is composing, the
   agent's write is refused, re-read and judged again, and comes back `revise` with
   `code: NEGOTIATION_SESSION_CLOSED` whose `details` now carry **`agreedPrice`** and **`closedBy`**
-  — the instruction names the price and tells the model to stop selling and move to delivery. The
+  — the instruction names the price and tells the model to stop selling and offer checkout (it used
+  to say "move to delivery", and the agent read that as "ask for the address" — § 4, 2026-09-22). The
   older, useless *"this negotiation is closed"* sentence survives only for a closed session with no
   lock. In the other order the press is the loser and answers the customer *"that offer has changed
   — here is the latest"*, carrying the new offer's own button. Neither side is ever silently
@@ -191,6 +197,59 @@ response: `data.outcome === "deal_locked"` with `data.negotiation.closed === tru
 the bargaining flag and the held lock reference must both be cleared — the deploy-day change set
 carries it. The server no longer *depends* on that happening (a resumed `agreed` session and a
 refusing gate cover it), but a stale flag sends the next typed line to an agent with nothing to do.
+
+### ⭐ A DEAL AGREED IN WORDS NOW DOES WHAT THE PRESS DOES (2026-09-22)
+
+⛔ **Until this date the spoken close stopped halfway.** Executions 1914 → 1934 (WhatsApp, owner
+testing): the agent agreed 6 000 XAF in words, the gate approved `lock: true` and minted the lock
+— and `outbound` was deliberately null on a close, so `decide send` sent the plain sentence
+*"…6,000 XAF, it's packaged for you today. What's your delivery address and number?"*. Nothing
+went into the basket, no button was drawn, and the purchase depended on a later turn remembering
+the ref. The customer reached the basket only by tapping an OLD offer button two turns later.
+
+The owner's rule: **a deal agreed in words must do exactly what the Lock it in button does.** So
+`/negotiation/record`, on a close:
+
+- **puts the item in the basket at the locked price** through `placeDealInBasket`
+  (`modules/negotiation/services/deal-basket.service.ts`) — the ONE core the press calls too, so
+  the two closers cannot drift. It runs after the lock is committed and **never fails the call**:
+  the deal is agreed whatever the basket says;
+- **returns `outbound`** — the approved sentence first (D-4 unchanged: the customer reads what the
+  gate approved), then the press's own line *"Deal — it's in your basket at that price."* and
+  View basket · Checkout · Keep shopping (`domain/deal-in-basket.ts`);
+- **returns `basket`** — `{ placed: true }`, or `{ placed: false, code }` when the cart refused the
+  line (a physical-or-digital mix, say). Then the basket line is replaced by the cart's own
+  explanation — the sentence a press gets for the same refusal — and never claims the item is in
+  the basket. The lock still stands and `lock.ref` still travels, which is what `store price lock`
+  is now for.
+
+⚠ **The flow needed no change for any of that**: the live `decide send` (58c25a1a) already prefers
+`data.outbound` on every approved turn, lock or not. Proven offline by feeding the backend's real
+body to the live node code — `deploy-day-harness/test-bargain-spoken-deal.js`.
+
+⭐ **The replay rule** (`domain/record-replay.rule.ts`). The gate carries no idempotency key — the
+call sends `X-Request-Id` and nothing else — and the echo keeps only the LAST verdict. So a
+retried close used to come back `revise` / `NEGOTIATION_SESSION_CLOSED`, overwrite its own
+`approved`, and leave the customer who had just agreed with nothing. An EXACT retry of the closing
+turn — same price, same sentence, `lock: true`, on a deal this model closed whose lock is live and
+unspent — is now answered `approved` again with the same lock, and the basket write is repeated.
+That is safe because a locked add SETS the line rather than adding to it: a retry can never put the
+item in twice. Anything else on a closed deal is still `revise`, and a deal the customer PRESSED is
+never the model's to replay.
+
+Three things shipped with it:
+
+- **The playbook never asks for an address or a phone number** — the Close row asked "Where am I
+  delivering?" in five languages and the worked turn ended «Ton adresse et ton numéro». The account
+  has both and checkout picks the address from the saved ones. ⛔ The playbook is served from
+  **Mongo**: `npm run seed:negotiation-playbook` (checksum `5088eed6…`) or the agent keeps asking.
+- **`negotiation_record`'s `traits` is declared `'string'`**, not `'json'`. n8n builds `'json'` as
+  "a non-empty object or a non-empty array", the model sent the object as a JSON STRING, and exec
+  1914's first call failed the tool schema before reaching the gate. `wi-mall-bargain-tools` →
+  `build request` already parses a string (`obj()`), so the backend still receives an object.
+- **A digital item already in the basket can be re-priced by its deal.** The one-digital-product
+  guard in `CartService.addToCart` refused the same line re-presented with its lock, so a won
+  bargain on a course already in the basket stayed at the shelf price.
 
 ⚠ **The echo key is conversation-scoped and stamped with the `messageId`**, and the flow
 deletes it after reading. That is not tidiness: **the n8n Redis node's `set` exposes no TTL**
@@ -262,6 +321,11 @@ Stream C+E — `cart.validator.ts`, `cart.service.ts`, `cart.model.ts` and `bot.
 all accept it — but `tools/catalog.json`'s `cart_add_item` did not carry it, so the MCP tool the
 main agent fills the basket with had no way to spend a lock and every lock this feature minted
 expired unspent. Closed 2026-09-07 on the owner's instruction.
+
+⭐ **Since 2026-09-22 a close fills the basket itself** (§ 4, "A deal agreed in words now does what
+the press does"), so the path below is no longer how an agreed price normally reaches the basket.
+It remains the recovery path: a close whose basket write was refused (`basket.placed: false`), or a
+customer who removed the line and asks for it again inside the lock's life.
 
 Three pieces, and the middle one is the interesting part:
 

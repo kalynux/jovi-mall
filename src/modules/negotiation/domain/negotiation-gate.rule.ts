@@ -164,12 +164,19 @@ export function reviseInstruction(refusal: GateRefusal, details: Record<string, 
              * know the deal is done, at what price, and that the right move is to stop selling.
              * `NegotiationService.refusalDetails` attaches the price whenever the session holds a
              * lock; without one this falls back to the plain sentence.
+             *
+             * ⛔ **It must never send the agent after an address or a phone number** (owner,
+             * 2026-09-22). It used to end "move on to quantity, payment and delivery", and the agent
+             * read that as "ask where to deliver": the customer's account already holds both, and
+             * checkout picks the address from the saved ones. Both closers now put the item in the
+             * basket, so the one next step to offer is checking out.
              */
             return typeof details.agreedPrice === 'number'
                 ? `The customer has already accepted ${details.agreedPrice} for this line`
                   + `${details.closedBy === 'button' ? ' by pressing your offer' : ''}. The deal is`
                   + ' closed and the item is in their basket at that price. Do not quote a price or'
-                  + ' reopen it — confirm warmly and move on to quantity, payment and delivery.'
+                  + ' reopen it — confirm warmly in one line and offer to check out. Never ask for'
+                  + ' a delivery address or a phone number: their account has them.'
                 : 'This negotiation is closed. Do not quote a price on it.';
     }
 }

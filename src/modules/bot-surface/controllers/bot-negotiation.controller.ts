@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
-import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { sendSuccess } from '../../../core/responses';
-import { CartService } from '../../cart/services/cart.service';
+import { dealInBasketIntent } from '../../negotiation/domain/deal-in-basket';
+import { CART_DEAL_BASKET, placeDealInBasket } from '../../negotiation/services/deal-basket.service';
 import { negotiationService } from '../../negotiation/services/negotiation.service';
 import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
 import { setBotReply } from '../middlewares/bot-reply.middleware';
@@ -10,9 +10,6 @@ import { BotReplyOption } from '../domain/channel-reply';
 import { bargainActionId, lockInOfferActionId } from '../domain/bot-action-id';
 import { BotActionHandlers, ParsedBotAction, unknownBotAction } from '../domain/bot-action-dispatch';
 import { formatBotPrice } from '../domain/product-card';
-import { addedToCartActions } from './bot-purchase.controller';
-
-const cartService = new CartService();
 
 /**
  * **Lock it in** — the customer closing a haggle by pressing the price they were offered.
@@ -72,31 +69,37 @@ async function handleLockInTap(req: Request, res: Response, action: ParsedBotAct
     switch (outcome.kind) {
         case 'locked': {
             /**
-             * ⚠ **The SAME `addToCart` every other door calls**, with the lock presented. Every
-             * stock, digital and mixed-cart rule stays where the storefront already exercises it,
-             * and the cart re-validates the lock itself (a `peek`) — so a lock that lapsed between
-             * the press and this line is refused by the one rule that also governs checkout, not by
-             * a second opinion here.
+             * ⭐ **The ONE core both closers use** (`negotiation/services/deal-basket.service.ts`):
+             * a deal the agent agreed in words goes through exactly this call from the gate, so the
+             * press and the spoken close end in the same basket state (owner, 2026-09-22).
+             *
+             * It is the SAME `CartService.addToCart` every other door calls, with the lock
+             * presented. Every stock, digital and mixed-cart rule stays where the storefront already
+             * exercises it, and the cart re-validates the lock itself (a `peek`) — so a lock that
+             * lapsed between the press and this line is refused by the one rule that also governs
+             * checkout, not by a second opinion here.
+             *
+             * ⚠ **A refusal is RETHROWN unchanged**, so the customer still reads the bot surface's
+             * own error reply for it, exactly as before the core was shared. The gate cannot do
+             * that (its deal is already agreed and it must answer `approved`), which is why the
+             * core returns the error rather than throwing it.
              */
-            await cartService.addToCart(
-                caller.customerId,
-                outcome.productId,
-                outcome.variantId,
-                outcome.quantity,
-                outcome.currency,
-                outcome.lockRef,
-            );
-
-            setBotReply(req, {
-                kind: 'text',
-                text: botChrome('dealLockedPrompt', language),
-                /**
-                 * The same three controls as any other add — View cart · Checkout · Browse more —
-                 * reused rather than re-listed, so a bargained add and a typed one offer the
-                 * identical next steps.
-                 */
-                actions: addedToCartActions(language),
+            const basket = await placeDealInBasket(CART_DEAL_BASKET, {
+                customerId: caller.customerId,
+                productId: outcome.productId,
+                variantId: outcome.variantId,
+                quantity: outcome.quantity,
+                currency: outcome.currency,
+                lockRef: outcome.lockRef,
             });
+            if (!basket.placed) throw basket.error;
+
+            /**
+             * The press's message and the same three controls as any other add — View cart ·
+             * Checkout · Browse more. Built by the domain module the spoken close renders too; with
+             * no lead it is the press's reply exactly.
+             */
+            setBotReply(req, dealInBasketIntent(language));
 
             sendSuccess(res, {
                 outcome: 'deal_locked',

@@ -223,6 +223,71 @@ async function main(): Promise<void> {
         }
     });
 
+    /**
+     * ⛔ **THE SELLER NEVER ASKS FOR THE ADDRESS OR THE NUMBER** (owner, 2026-09-22).
+     *
+     * Execution 1914: the agent closed a deal with *"What's your delivery address and number?"* — and
+     * it had been taught to. The register table's Close row asked "Where am I delivering?" in five
+     * languages and the worked turn ended «Ton adresse et ton numéro, et c'est parti.» The customer's
+     * account already holds both, checkout picks the address from the saved ones, and a close now
+     * puts the item in the basket. The model imitates its examples more faithfully than its rules,
+     * so the scan reads the EXAMPLES: every line the playbook puts in the seller's mouth.
+     */
+    const ASKS_FOR_DETAILS = /adress|address|endereço|endereco|dirección|direccion|عنوان|numéro|number|número|telefone|teléfono|phone|رقم|هاتف|livraison où|entrego onde|dónde te lo entrego|where am i delivering|أين أوصل/i;
+
+    /** Every utterance the playbook scripts for the seller: «…» quotes, and the quoted cells and "You:" lines. */
+    function sellerLines(text: string): string[] {
+        const lines: string[] = [];
+        for (const m of text.matchAll(/«([^»\n]+)»/g)) lines.push(m[1]!);
+        for (const row of text.split('\n')) {
+            if (!row.startsWith('|') && !row.startsWith('> **You:**')) continue;
+            for (const m of row.matchAll(/"([^"\n]{3,240})"/g)) lines.push(m[1]!);
+        }
+        return lines;
+    }
+
+    const noAddressHunt = (text: string): void => {
+        const lines = sellerLines(text);
+        if (lines.length < 20) throw new Error(`only ${lines.length} scripted lines found — the extractor has stopped seeing them`);
+        const asking = lines.filter((line) => ASKS_FOR_DETAILS.test(line));
+        if (asking.length > 0) throw new Error(`the seller is scripted to ask for delivery details: ${asking.join(' | ')}`);
+    };
+
+    await assert('⛔ no line the playbook scripts for the seller asks for an address or a phone number', () => {
+        noAddressHunt(authored);
+    });
+
+    await assert('⭐ it states the rule, and says a close puts the item in the basket', () => {
+        for (const phrase of [
+            'the platform puts the item in their basket at the agreed price',
+            'never ask where to deliver, for their address, or for their phone number',
+            'ask for a delivery address or a phone number',
+            'View basket · Checkout · Keep shopping',
+        ]) {
+            if (!authored.includes(phrase)) throw new Error(`the playbook no longer says: "${phrase}"`);
+        }
+    });
+
+    await assert('⭐ MUTANT — the two lines that taught the incident are caught if they come back', () => {
+        const oldClose = '| Close | «Bon, on fait affaire. Livraison où?» | "Deal. Where am I delivering?" | «Fechado. Entrego onde?» | «Hecho. ¿Dónde te lo entrego?» | «اتفقنا. أين أوصلها لك؟» |';
+        const oldWorked = '> **You:** «On fait affaire 🤝 Yopougon c\'est bon. Ton adresse et ton numéro, et c\'est parti.»';
+        const closeRow = authored.split('\n').find((row) => row.startsWith('| Close |'));
+        if (!closeRow) throw new Error('the Close row is gone — the mutant has no anchor');
+        for (const [label, mutated] of [
+            ['old Close row', authored.replace(closeRow, oldClose)],
+            ['old worked-turn close', `${authored}\n${oldWorked}\n`],
+        ] as const) {
+            if (mutated === authored) throw new Error(`${label}: the mutant did not apply`);
+            let threw = false;
+            try {
+                noAddressHunt(mutated);
+            } catch {
+                threw = true;
+            }
+            if (!threw) throw new Error(`${label}: the scan passed a mutant it exists to catch`);
+        }
+    });
+
     originalConsole.log('\n── 4 · The service, against a fake repository ───────────────────────────');
 
     function fakeRepo(record: PlaybookRecord | null): { repo: NegotiationPlaybookRepository; calls: () => number } {
