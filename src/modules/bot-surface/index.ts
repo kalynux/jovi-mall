@@ -23,6 +23,18 @@
  * candidate handle are meaningful only inside one request on this surface; a caller
  * outside it holding either would be a caller acting on a chat's behalf without going
  * through the door that resolves who the chat is.
+ *
+ * ⚠ **ONE store is now written from outside this module, by direct path and not through this
+ * barrel** — `services/bot-recently-sent.store.ts`, by
+ * `notifications/services/customer-notification-event-handler.service.ts`. It does not breach
+ * the rule above, and the distinction is worth stating because the next person will read it as
+ * one: that rule is about ACTING on a chat's behalf, and this caller acts on nobody's behalf —
+ * it reports, after the fact, that it delivered a message to a chat it had already resolved a
+ * connection for. It is also the only way that half of the record can exist at all: a
+ * notification is dispatched by a background consumer that never touches this surface, so
+ * nothing inside this module can see it happen. The import is by path because the barrel would
+ * put forty controllers in a consumer's import graph; the store's own graph is Redis plus a
+ * pure rules file.
  */
 
 export {

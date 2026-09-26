@@ -2,6 +2,7 @@ import { CustomerModel } from '../../customers/customer.model';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { botPendingQuestionStore } from './bot-pending-question.store';
+import { botRecentlySentStore } from './bot-recently-sent.store';
 
 /**
  * ⭐ **An administrator wipes the bot's conversation memory for one customer** — the jovi-mall half.
@@ -21,14 +22,24 @@ import { botPendingQuestionStore } from './bot-pending-question.store';
  *   - the question waiting for a typed answer (`bot:pq:`), in every chat of the account — a
  *     conversation that has just been forgotten must not still act on "yes" to a question the model
  *     no longer remembers asking.
+ *   - what the platform has recently sent (`bot:sent:`), in every chat of the account — see below.
  *
  * `timestamps: false` on the update, so `updated_at` does not move: forgetting a conversation is not
  * a change to the customer's profile, and a profile screen sorted by "recently edited" must not say
  * it was.
  *
- * ⚠ **The pending-question clear is best-effort, on purpose.** The epoch is already bumped by then;
- * failing the request would invite a retry that bumps it AGAIN. The question lapses within fifteen
- * minutes on its own.
+ * ── ⭐ WHY THE RECENTLY-SENT RECORD GOES TOO (owner's call, 2026-09-22) ──────
+ * The button is described to administrators as *"make the bot forget this customer's chat"*, and it
+ * is pressed because the bot is confused by something it remembers. Bumping the epoch and clearing
+ * the waiting question while STILL handing the model the last five platform messages for up to two
+ * hours does not match that promise — and those messages are exactly the material a confused turn
+ * would latch back onto. The epoch already puts the automation layer's own memory out of reach;
+ * `bot:sent:` is the one piece of remembered conversation left on this side, so it is the one thing
+ * a reset would otherwise leave behind.
+ *
+ * ⚠ **Both clears are best-effort, on purpose.** The epoch is already bumped by then; failing the
+ * request would invite a retry that bumps it AGAIN. The question lapses within fifteen minutes on
+ * its own and the record within two hours.
  */
 
 export interface BotMemoryResetResult {
@@ -43,6 +54,16 @@ export interface BotMemoryResetPorts {
     /** `$inc` the epoch and stamp the time on the customer profile of this user; the new epoch, or null. */
     bumpEpoch(userId: string, at: Date): Promise<number | null>;
     clearPendingQuestions(userId: string): Promise<void>;
+    /**
+     * Forget what the platform recently sent this account, in every chat (`bot:sent:`).
+     *
+     * ⚠ **OPTIONAL, and that is a compatibility decision rather than a design one** — the same
+     * reasoning `BotProductCard.similarToken` carries. A required member would break every
+     * hand-built `BotMemoryResetPorts` literal the moment it landed, in a suite another stream
+     * owns, for a port whose real implementation is one line. `MONGO_PORTS` always supplies it, so
+     * an absence only ever means "a fake, injected by a test that is about something else".
+     */
+    clearRecentlySent?(userId: string): Promise<void>;
 }
 
 const MONGO_PORTS: BotMemoryResetPorts = {
@@ -55,6 +76,7 @@ const MONGO_PORTS: BotMemoryResetPorts = {
         return updated ? updated.bot_memory_epoch ?? 0 : null;
     },
     clearPendingQuestions: (userId) => botPendingQuestionStore.clearForUser(userId),
+    clearRecentlySent: (userId) => botRecentlySentStore.clearForUser(userId),
 };
 
 export class BotMemoryService {
@@ -80,6 +102,18 @@ export class BotMemoryService {
             await this.ports.clearPendingQuestions(userId);
         } catch (error) {
             console.warn('[BotSurface] memory reset: could not clear the pending question', error);
+        }
+
+        /**
+         * ⚠ **A SEPARATE try, not a second statement inside the one above.** The two clears are
+         * independent forgettings of independent records; sharing a block would make a Redis error
+         * on the first silently skip the second, which is the failure mode this reset exists to
+         * prevent — a conversation that is half forgotten is the one that confuses the bot.
+         */
+        try {
+            await this.ports.clearRecentlySent?.(userId);
+        } catch (error) {
+            console.warn('[BotSurface] memory reset: could not clear what was recently sent', error);
         }
 
         return { userId, memoryEpoch, resetAt: now.toISOString() };

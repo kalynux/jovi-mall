@@ -434,7 +434,14 @@ async function main(): Promise<void> {
     await assert('⛔ the interceptor never records the closure question', async () => {
         fakeRedis.store.clear();
         await drawThroughInterceptor(CLOSE_INTENT, { success: true, data: {} });
-        return fakeRedis.store.size === 0;
+        /**
+         * ⚠ **`bot:pq:` keys only, not an empty database.** The same interceptor also writes
+         * `bot:sent:` — "what the platform has recently sent this customer"
+         * (`domain/bot-recently-sent.ts`, `test:recently-sent`) — and the closure preview IS a
+         * message the customer was shown, so that record correctly holds its words. What must
+         * never exist is a waiting QUESTION a typed "yes" could spend.
+         */
+        return [...fakeRedis.store.keys()].every((key) => !key.startsWith('bot:pq:'));
     });
 
     await assert('a FAILED response records nothing — the question was never shown', async () => {
@@ -712,6 +719,10 @@ async function main(): Promise<void> {
         identityHint: '••••0001',
         // Opaque to the projection; a real seal needs a secret this DB-free suite does not hold.
         botToken: 'sealed-identity-token-placeholder',
+        // The sibling record. Its own suite is `test:recently-sent`; here it only has to be
+        // supplied, because `toBotIdentityDto` requires it for the reason `memoryEpoch` is
+        // required — a caller that could forget it would hand a model half a conversation.
+        recentlySent: [],
     };
 
     await assert('pendingQuestion is { context, text, askedAt } and carries neither button token', () => {

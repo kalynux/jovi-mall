@@ -1337,6 +1337,7 @@ async function main(): Promise<void> {
             botToken: sealBotIdentity({ channel: 'whatsapp', externalId: '237600123456' }),
             memoryEpoch: 0,
             pendingQuestion: null,
+            recentlySent: [],
         });
         const json = JSON.stringify(dto);
         return !json.includes('externalId') && !json.includes('237600123456') && dto.identityHint === '••••3456';

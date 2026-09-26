@@ -945,7 +945,11 @@ Takes **no arguments** — the identity envelope is the whole input.
       "hasOpenOrders": false,
       "identityHint": "••••3456",
       "memoryEpoch": 0,           // ⭐ fold into your chat-memory key — see below
-      "pendingQuestion": null     // or { context, text, askedAt } — see below
+      "pendingQuestion": null,    // or { context, text, askedAt } — see below
+      "recentlySent": [           // ⭐ what the PLATFORM has sent this chat — see below
+        { "at": "2026-09-22T09:58:11.000Z", "text": "Paiement reçu : commande JM-2026-000123 (Voir la commande)" },
+        { "at": "2026-09-22T10:00:04.000Z", "text": "Votre commande est en route. (Suivre)" }
+      ]
     },
     "onboarding": {
       "complete": false,
@@ -1021,6 +1025,56 @@ with the question. **Hand both to your model**: when the customer's message answ
 in words, the model calls `chat_answer_question` (§ 14.10) and the outcome is exactly what tapping
 the button would have done. ⛔ It never carries the button tokens, and **account closure never
 appears here** — that question is button-only.
+
+⭐ **`data.customer.recentlySent` — what the PLATFORM has recently sent this chat** (added
+2026-09-22). An array, **newest last, at most five entries, each two hours old at most**; `[]`
+when there is nothing. Each entry is `{ at, text }`, where `text` is a one-line rendering of the
+message — the body clipped to about 160 characters, then the button or row labels in parentheses.
+
+```jsonc
+[
+  { "at": "2026-09-22T09:58:11.000Z", "text": "Paiement reçu : commande JM-2026-000123 (Voir la commande)" },
+  { "at": "2026-09-22T10:00:04.000Z", "text": "Votre commande est en route. (Suivre)" }
+]
+```
+
+⛔ **These are messages the PLATFORM sent. They are NOT things your model said, and your prompt
+must label them that way** — for example *"Messages the platform has already sent this customer
+(the assistant did not write these)"*. Presented as assistant turns, the model will treat them as
+its own words and contradict itself about what it has and has not told the customer.
+
+**Why you are given them at all:** your model cannot see most of what this platform says to this
+customer, for three reasons it cannot work around.
+
+1. **A button TAP never passes your model.** It goes straight to `catalog_display_action`, the
+   backend draws the reply, and the turn is simply not in the conversation your model remembers.
+2. **A message a TOOL drew is the tool's.** The order summary, "Added to your basket", an order
+   card, the chat-checkout confirmation — all composed by the backend and relayed by you verbatim.
+   Your memory records the tool CALL, never the sentence the customer read.
+3. **A NOTIFICATION is sent outside the conversation entirely** — "payment received", "your order
+   is on its way" — by a background worker that has never heard of a chat turn.
+
+So "ok thanks" or "how long will that take?" frequently answers something your model has no record
+of. Hand this list to it on every turn and it can.
+
+⛔ **No credential ever appears here.** Every URL is replaced by the literal `[link]` — magic
+sign-in links, reset links, download links, payment links and in-app handles alike — and the COD
+delivery code is withheld at source. Do not try to reconstruct a link from an entry; the customer
+already has the message.
+
+⚠ **It is on `identity/resolve` too**, for the same reason `memoryEpoch` is: that is the fallback
+during a `readonly` maintenance window, and a turn answered without this list is a turn where your
+model does not know what the platform just told the customer.
+
+⚠ **An administrator's bot-memory reset clears it**, in every chat of that account, in the same
+call that bumps `memoryEpoch` — a conversation the platform has just been told to forget must not
+still hand your model the last five things it sent. So a reset empties this list as well as making
+the old memory key unreachable; you need do nothing beyond keying on the epoch as you already do.
+
+⚠ **`recentlySent` and `pendingQuestion` are different things and both are worth having.** This
+one is CONTEXT — several messages, no tokens, nothing to act on. That one is a CAPABILITY — one
+specific Yes/No question a typed word may actually run, through `chat_answer_question`. The chat
+checkout appears in both: its opening lines here, its closing question there.
 
 ⭐ **`onboarding.next.prompt` is the sentence to send.** It is localised, written for a chat
 window, and always present when `next` is non-null. The other fields on `next` tell your

@@ -180,6 +180,7 @@
         "test:dead-ends": "ts-node scripts/test/test-bot-dead-ends.ts",
         "test:inapp-bookings": "ts-node scripts/test/test-inapp-bookings.ts",
         "test:chat-answer": "ts-node scripts/test/test-chat-answer.ts",
+        "test:recently-sent": "ts-node scripts/test/test-recently-sent.ts",
         "verify:negotiation-playbook": "ts-node scripts/seed/seed-negotiation-playbook.ts --check",
         "verify:landing-routes": "ts-node scripts/verify-landing-routes.ts",
         "verify:messaging-login": "node --max-old-space-size=4096 -r ts-node/register scripts/verify-messaging-login-live.ts",

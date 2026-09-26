@@ -373,15 +373,16 @@ async function describe(req: Request, outcome: BotRegistrationOutcome) {
     setBotResponseLanguage(req, language);
     const envelope = botEnvelopeOf(req);
 
-    const conversation = { userId: outcome.account.userId, channel: outcome.account.channel };
     const [states, openOrder, pendingQuestion, recentlySent] = await Promise.all([
         connectionService.getStates(outcome.account.userId),
         OrderModel.exists({
             customer_id: customer._id,
             fulfillment_status: { $nin: SETTLED_FULFILMENT },
         }),
-        waitingQuestionOf(conversation),
-        recentlySentTo(conversation),
+        // ⚠ The owner literal is repeated rather than hoisted: `test:chat-answer` pins this exact
+        // spelling as its proof that both identity routes read the same conversation.
+        waitingQuestionOf({ userId: outcome.account.userId, channel: outcome.account.channel }),
+        recentlySentTo({ userId: outcome.account.userId, channel: outcome.account.channel }),
     ]);
 
     const dto = toBotSyncDto({

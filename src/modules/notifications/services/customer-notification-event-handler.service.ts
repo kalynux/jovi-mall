@@ -7,6 +7,13 @@ import { Booking } from '../../booking/models/booking.model';
 import { ProductModel } from '../../catalog/models/product.model';
 import { StoreRepository } from '../../store/repositories/store.repository';
 import { connectionService } from '../../channel-connections';
+/**
+ * ⚠ **The one reach from a notification stack into the bot surface, and it is one-way.** A chat
+ * notification is a message the conversational model never sees; this is how it learns. Nothing
+ * here reads anything back, and the import graph of that store is Redis plus a pure rules file,
+ * so it closes no cycle. See `noteSentToChat`.
+ */
+import { botRecentlySentStore } from '../../bot-surface/services/bot-recently-sent.store';
 import { MailService } from '../../mail/mail.service';
 import { TelegramNotificationService } from '../../telegram/services/telegram-notification.service';
 import { getWhatsAppMessagingService } from '../../whatsapp/services/whatsapp-messaging.service';
@@ -1399,9 +1406,10 @@ export class CustomerNotificationEventHandler {
 
         if (channels.includes('telegram')) {
             const content = renderCustomerChannelText(situation, 'telegram', lang, context);
-            await this.attemptDelivery(notification, 'telegram', () =>
+            const delivered = await this.attemptDelivery(notification, 'telegram', () =>
                 this.sendTelegram(customer, content, button, quickReplies)
             );
+            if (delivered) this.noteSentToChat(customer, 'telegram', content, button, quickReplies);
         }
 
         if (channels.includes('email')) {
@@ -1412,10 +1420,71 @@ export class CustomerNotificationEventHandler {
         }
 
         if (channels.includes('whatsapp')) {
-            await this.attemptDelivery(notification, 'whatsapp', () =>
+            const delivered = await this.attemptDelivery(notification, 'whatsapp', () =>
                 this.sendWhatsApp(customer, situation, lang, context, notification.idempotencyKey)
             );
+            if (delivered) {
+                /**
+                 * ⚠ **The IN-WINDOW wording, even when a template was what actually went out.**
+                 * Outside Meta's 24-hour window `sendWhatsApp` sends an approved template, whose
+                 * body this service holds only as an ordered list of parameters — there is no
+                 * renderable sentence on this side to record. The two say the same thing about
+                 * the same situation in the customer's language, and the record's job is to let
+                 * a model recognise WHICH message the customer is replying to, not to be a
+                 * byte-exact transcript of it.
+                 */
+                const content = renderCustomerChannelText(situation, 'whatsapp', lang, context);
+                this.noteSentToChat(customer, 'whatsapp', content, button, quickReplies);
+            }
         }
+    }
+
+    /**
+     * ⭐ **Tell the bot surface that the PLATFORM just messaged this chat.**
+     *
+     * ── WHY A NOTIFICATION HANDLER KNOWS ABOUT THE BOT SURFACE AT ALL ───────
+     * This is the third of the three reasons the conversational model is blind to its own
+     * conversation, and the only one that cannot be closed from inside `bot-surface`: a
+     * notification is dispatched from a background consumer that has never heard of a chat turn,
+     * so "payment received" or "your order is on its way" reaches the customer and the model has
+     * no idea it happened. The customer's next message is frequently a reply to it.
+     * `domain/bot-recently-sent.ts` carries the other two and the reasoning.
+     *
+     * ⚠ **Only what was ACTUALLY delivered, and only to a chat.** Email and the in-app inbox are
+     * excluded structurally: the record answers "what has this customer been shown in THIS
+     * conversation", and an email is a different place. A send that failed, was skipped for an
+     * unconfigured provider, or found no connection records nothing — see `attemptDelivery`'s
+     * boolean and `sendWhatsApp`'s early returns.
+     *
+     * ⚠ **Fire-and-forget and self-catching.** The notification is already delivered by the time
+     * this runs; a Redis blip must cost the model some context, never a customer their message.
+     */
+    private noteSentToChat(
+        customer: ICustomer,
+        channel: 'whatsapp' | 'telegram',
+        content: ChannelText,
+        button: { label: string; url: string } | null,
+        quickReplies: Array<{ token: string; label: string }>
+    ): void {
+        const labels = [
+            ...(button ? [button.label] : []),
+            ...quickReplies.map(reply => reply.label)
+        ];
+
+        botRecentlySentStore
+            .noteSent(
+                { userId: customer.user_id.toString(), channel },
+                // Subject and body, exactly as both channels compose them — the record is one
+                // line, so the two are joined rather than kept apart.
+                `${content.subject}: ${content.body}`,
+                labels
+            )
+            .catch((error: unknown) => {
+                console.warn(
+                    '[CustomerNotificationHandler] could not record what was sent to this conversation',
+                    error
+                );
+            });
     }
 
     private resolveButton(
@@ -1446,13 +1515,24 @@ export class CustomerNotificationEventHandler {
         };
     }
 
+    /**
+     * ⚠ **It returns whether the message actually went out**, which it did not used to.
+     *
+     * Two things can mean "not sent" and only one of them throws: a delivery that failed (caught
+     * here, written to the row as a delivery error) and a sender that declined to send at all —
+     * an unconfigured WhatsApp provider, a customer with no connection left on that channel.
+     * `send` therefore returns `false` for the second case, and a `void` return keeps meaning
+     * "sent" so the telegram and email senders need no change. The caller uses this to decide
+     * whether to record the message in `customer.recentlySent`; nothing else reads it, and a
+     * false negative there costs a line of prompt context rather than a delivery.
+     */
     private async attemptDelivery(
         notification: ICustomerNotification,
         channel: CustomerDeliveryChannel,
-        send: () => Promise<void>
-    ): Promise<void> {
+        send: () => Promise<boolean | void>
+    ): Promise<boolean> {
         try {
-            await send();
+            return (await send()) !== false;
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
             console.error(`[CustomerNotificationHandler] ${channel} delivery failed:`, message);
@@ -1465,6 +1545,7 @@ export class CustomerNotificationEventHandler {
             } catch (recordErr) {
                 console.error('[CustomerNotificationHandler] Failed to record delivery error:', recordErr);
             }
+            return false;
         }
     }
 
@@ -1528,6 +1609,11 @@ export class CustomerNotificationEventHandler {
     /**
      * WhatsApp, respecting the 24-hour service window: free-form text inside it,
      * an approved template outside. Same logic as the sibling handlers.
+     *
+     * ⚠ **`false` means "nothing was sent", and is NOT a failure** — an unconfigured provider or
+     * an account with no WhatsApp connection left. It was a bare `return` before, indistinguishable
+     * from success to a caller; it has to be distinguishable now that `attemptDelivery`'s verdict
+     * decides whether the message is recorded as having reached the customer.
      */
     private async sendWhatsApp(
         customer: ICustomer,
@@ -1535,17 +1621,17 @@ export class CustomerNotificationEventHandler {
         lang: Language,
         context: RenderContext,
         idempotencyKey: string
-    ): Promise<void> {
+    ): Promise<boolean> {
         if (!this.isWhatsAppProviderConfigured()) {
             console.log('[CustomerNotificationHandler] WhatsApp not configured; skipping delivery');
-            return;
+            return false;
         }
 
         // The address comes from the connections store now, not from a `wa`
         // sub-document on the role entity. One person, one WhatsApp number,
         // whichever role this notification is for.
         const connection = await connectionService.getConnection(customer.user_id, 'whatsapp');
-        if (!connection) return;
+        if (!connection) return false;
 
         const waPhoneId = connection.external_id;
         const to = waPhoneId.startsWith('+') ? waPhoneId : `+${waPhoneId}`;
@@ -1663,5 +1749,7 @@ export class CustomerNotificationEventHandler {
                 result?.error?.message || 'WhatsApp delivery failed'
             );
         }
+
+        return true;
     }
 }

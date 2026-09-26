@@ -124,7 +124,7 @@ function bodyOf(src: string, opener: RegExp): string {
     const at = src.search(opener);
     if (at === -1) return '';
     const rest = src.slice(at);
-    const next = rest.slice(1).search(/\n(?:async function|function|export|const|\/\*\*|    static)\b/);
+    const next = rest.slice(1).search(/\n(?:async function|function|export|const|\/\*\*| {4}static)\b/);
     return next === -1 ? rest : rest.slice(0, next + 1);
 }
 
