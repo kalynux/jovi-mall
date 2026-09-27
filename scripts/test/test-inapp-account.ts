@@ -797,9 +797,22 @@ function main(): void {
      */
     const callSites = identity.slice(0, welcomeFrom) + identity.slice(welcomeTo);
 
+    /**
+     * The two completing call sites now go through `setCompletionReply`, which spends a held
+     * website Bargain link if there is one and otherwise falls back to the welcome. So: two
+     * `setCompletionReply(req` calls outside its definition, and exactly one `setWelcomeReply(req`
+     * — the fallback inside it.
+     */
+    const completionFrom = identity.indexOf('async function setCompletionReply(');
+    const completion = completionFrom >= 0 ? stripComments(identity.slice(completionFrom)) : '';
+    const completionCallSites = completionFrom >= 0 ? identity.slice(0, completionFrom) : '';
+
     assert('the scan found setWelcomeReply, and the file still has both call sites', () =>
         welcome.length > 0
-        && (callSites.match(/setWelcomeReply\(req/g) ?? []).length === 2);
+        && completion.length > 0
+        && (completionCallSites.match(/setCompletionReply\(\s*req/g) ?? []).length === 2
+        && (callSites.match(/setWelcomeReply\(req/g) ?? []).length === 1
+        && /return;\s*\}\s*setWelcomeReply\(req/.test(completion));
 
     assert('the welcome offers exactly THREE buttons — WhatsApp silently drops a fourth', () =>
         (welcome.match(/\{ id: /g) ?? []).length === 3);
@@ -817,7 +830,7 @@ function main(): void {
      * backfilled account.
      */
     assert('⛔ both call sites fire on the TRANSITION (!wasComplete && …), never on the state', () =>
-        (identity.match(/if\s*\(!wasComplete\s*&&\s*isOnboardingComplete\([\s\S]{0,60}?setWelcomeReply\(req/g) ?? []).length === 2);
+        (identity.match(/if\s*\(!wasComplete\s*&&\s*isOnboardingComplete\([\s\S]{0,80}?setCompletionReply\(\s*req/g) ?? []).length === 2);
 
     assert('⛔ each `wasComplete` is read BEFORE its write, not after', () => {
         const stripped = stripComments(identity);

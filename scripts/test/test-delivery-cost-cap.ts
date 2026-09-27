@@ -319,8 +319,12 @@ async function main(): Promise<void> {
 
   const chatSrc = stripComments(read('modules/bot-surface/miniapp/surfaces/checkout.controller.ts'));
   const precheck = spanOf(chatSrc, 'async function precheckChatDoor(', 'function handleGone(');
-  assert('chat door: precheckChatDoor checks the minimum with spent: false', () =>
-    /cartQuoteService\.assertDeliveryMinimum\(cart,\s*'online',\s*\{\s*spent:\s*false\s*\}\)/.test(precheck));
+  // The chat door serves pay-on-delivery too, so it checks the minimum for the method being
+  // PLACED (per order online, per shipment on delivery) — never a hard-coded 'online'.
+  assert('chat door: precheckChatDoor checks the minimum for the PLACED method, with spent: false', () =>
+    /cartQuoteService\.assertDeliveryMinimum\(cart,\s*method,\s*\{\s*spent:\s*false\s*\}\)/.test(precheck));
+  assert('… and that method defaults to online', () =>
+    /method:\s*'online'\s*\|\s*'cash_on_delivery'\s*=\s*'online'/.test(precheck));
 
   const quoteSrc = stripComments(read('modules/orders/services/cart-quote.service.ts'));
   assert('the quote uses the same service checkout does', () => quoteSrc.includes('this.deliveryCap.assessVendor('));
