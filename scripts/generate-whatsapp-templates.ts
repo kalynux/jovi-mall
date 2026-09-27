@@ -292,6 +292,34 @@ const BODY_TAIL_WITH_BUTTON: Record<string, string> = {
     fr: 'Appuyez sur Ouvrir ci-dessous pour tous les détails.',
 };
 
+/**
+ * The URL button's words, per template, where the generic "Open" is not good enough.
+ *
+ * ── Why this is a per-template map and not a change to the default ────────────
+ * ⚠ **Editing an APPROVED template's button costs one of the WABA's few monthly changes;
+ * CREATING one costs nothing.** So a better label is free on a template that has never been
+ * submitted and expensive on the 190-odd that have. Changing the default here would rewrite
+ * every approved payload in the generated file, leaving this repository describing buttons
+ * Meta does not hold — the drift `whatsapp-templates.md` already warns about, introduced by
+ * the very file that is supposed to be the record.
+ *
+ * So: the templates listed here are the ones being submitted for the FIRST time, and only
+ * those. Owner's decision, 2026-09-27, when the three payment-silence templates were
+ * generated: give them real words now rather than pay to fix them later.
+ *
+ * ⚠ **A label here must not contradict the body.** `BODY_TAIL_WITH_BUTTON` names the button
+ * in the sentence ("Tap Open below…"); a template carrying that tail must keep "Open", or the
+ * message tells the customer to tap something that is not there. None of the three below
+ * carries it — each ends in its own catalogue sentence.
+ *
+ * Meta caps URL button text at 25 characters; the longest here is 19.
+ */
+const BUTTON_LABEL: Record<string, Record<string, string>> = {
+    customer_order_payment_failed: { en: 'View order', fr: 'Voir la commande' },
+    customer_booking_payment_failed: { en: 'View booking', fr: 'Voir la réservation' },
+    customer_booking_balance_received: { en: 'View booking', fr: 'Voir la réservation' },
+};
+
 const BODY_TAIL_NO_BUTTON: Record<string, string> = {
     en: 'You can see the details in the Wi-Mall app.',
     fr: 'Vous pouvez voir les détails dans l\'application Wi-Mall.',
@@ -418,7 +446,7 @@ function payloadFor(row: Row, lang: Lang) {
             type: 'BUTTONS',
             buttons: [{
                 type: 'URL',
-                text: lang === 'fr' ? 'Ouvrir' : 'Open',
+                text: BUTTON_LABEL[row.name]?.[lang] ?? (lang === 'fr' ? 'Ouvrir' : 'Open'),
                 // The approved URL is host + ONE placeholder; the service sends the whole path
                 // after the host, locale prefix included (`whatsappSuffix`, not `urlSuffix`).
                 url: `${base}/{{1}}`,

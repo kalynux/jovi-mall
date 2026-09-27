@@ -1,12 +1,12 @@
 {
-  "generatedAt": "2026-09-15T17:03:02.810Z",
+  "generatedAt": "2026-09-27T03:55:35.975Z",
   "note": "GENERATED from the notification catalogs by scripts/generate-whatsapp-templates.ts. Do not hand-edit: names, placeholder counts and placeholder ORDER are derived from the same functions the send path uses, and editing them here makes the approved template disagree with what is sent.",
   "languages": [
     "en",
     "fr"
   ],
-  "templateCount": 95,
-  "submissionCount": 192,
+  "templateCount": 104,
+  "submissionCount": 210,
   "needsCopyReview": [
     {
       "name": "customer_booking_created",
@@ -1095,6 +1095,70 @@
       ]
     },
     {
+      "name": "vendor_payout_transfer_failed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Problem paying out {{1}} {{2}}*\n\nWe hit a problem sending your *{{1}}* *{{2}}*. The money is safe and still reserved for this payout — our team is on it and will retry. Nothing is needed from you; see Tickets for progress.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_payout_transfer_failed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Problème de versement de {{1}} {{2}}*\n\nNous avons rencontré un problème en envoyant vos *{{1}}* *{{2}}*. L'argent est en sécurité et toujours réservé pour ce paiement — notre équipe s'en occupe et fera une nouvelle tentative. Rien n'est requis de votre part; suivez l'avancement dans Tickets.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "vendor_shipment_rejected",
       "language": "en",
       "category": "UTILITY",
@@ -2029,6 +2093,138 @@
       ]
     },
     {
+      "name": "customer_booking_balance_received",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Balance paid: {{1}} {{2}}*\n\nWe received your *{{1}}* *{{2}}* balance payment for *{{3}}*. Your booking is now fully paid — thank you.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "View booking",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_balance_received",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Solde payé: {{1}} {{2}}*\n\nNous avons reçu votre paiement de solde de *{{1}}* *{{2}}* pour *{{3}}*. Votre réservation est désormais entièrement payée — merci.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Voir la réservation",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_payment_failed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Payment did not go through for {{3}}*\n\nWe could not take the *{{1}}* *{{2}}* for your *{{3}}* booking. Nothing has been charged — open the booking to try again.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "View booking",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_payment_failed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Paiement non abouti pour {{3}}*\n\nNous n'avons pas pu encaisser les *{{1}}* *{{2}}* pour votre réservation *{{3}}*. Rien n'a été débité — ouvrez la réservation pour réessayer.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Voir la réservation",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "customer_booking_balance_due",
       "language": "en",
       "category": "UTILITY",
@@ -2427,6 +2623,72 @@
             {
               "type": "URL",
               "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_payment_failed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Payment did not go through for {{3}}*\n\nWe could not take the *{{1}}* *{{2}}* for *{{3}}*. Nothing has been charged and your items are still waiting — open the order to try again.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "View order",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_payment_failed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Paiement non abouti pour {{3}}*\n\nNous n'avons pas pu encaisser les *{{1}}* *{{2}}* pour *{{3}}*. Rien n'a été débité et vos articles vous attendent toujours — ouvrez la commande pour réessayer.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Voir la commande",
               "url": "https://wi-mall.com/{{1}}",
               "example": [
                 "https://wi-mall.com/fr/orders/WM-2026-000123"
@@ -4395,6 +4657,70 @@
       ]
     },
     {
+      "name": "agency_payout_transfer_failed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Problem paying out {{1}} {{2}}*\n\nWe hit a problem sending your *{{1}}* *{{2}}*. The money is safe and still reserved for this payout — our team is on it and will retry. Nothing is needed from you; see Tickets for progress.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_payout_transfer_failed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Problème de versement de {{1}} {{2}}*\n\nNous avons rencontré un problème en envoyant vos *{{1}}* *{{2}}*. L'argent est en sécurité et toujours réservé pour ce paiement — notre équipe s'en occupe et fera une nouvelle tentative. Rien n'est requis de votre part; suivez l'avancement dans Tickets.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "agency_cod_deposit_declared",
       "language": "en",
       "category": "UTILITY",
@@ -6107,6 +6433,262 @@
                 "example 1",
                 "example 2",
                 "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_payout_requested",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Payout request created*\n\nYour request to withdraw *{{1}}* *{{2}}* was created. You will hear from us when it is paid.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_payout_requested",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Demande de paiement créée*\n\nVotre demande de retrait de *{{1}}* *{{2}}* a été créée. Nous vous préviendrons dès qu'elle est payée.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_payout_paid",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Payout paid*\n\nYour payout of *{{1}}* *{{2}}* has been paid.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_payout_paid",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Paiement effectué*\n\nVotre paiement de *{{1}}* *{{2}}* a été effectué.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_payout_rejected",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Payout request rejected*\n\nYour request to withdraw *{{1}}* *{{2}}* was rejected. The money is back in your available balance — open your earnings to see why, and you can request again.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_payout_rejected",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Demande de paiement refusée*\n\nVotre demande de retrait de *{{1}}* *{{2}}* a été refusée. L'argent est de retour dans votre solde disponible — ouvrez vos revenus pour voir le motif, vous pouvez refaire une demande.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_payout_transfer_failed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Problem paying out {{1}} {{2}}*\n\nWe hit a problem sending your *{{1}}* *{{2}}*. Your money is safe and still reserved for this payout — our team is on it and will retry. There is nothing you need to do.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_payout_transfer_failed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Problème de versement de {{1}} {{2}}*\n\nNous avons rencontré un problème en envoyant vos *{{1}}* *{{2}}*. Votre argent est en sécurité et toujours réservé pour ce paiement — notre équipe s'en occupe et fera une nouvelle tentative. Vous n'avez rien à faire.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
               ]
             ]
           }
