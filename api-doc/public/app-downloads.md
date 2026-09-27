@@ -28,6 +28,13 @@ verifies at install time rather than from the secrecy of a URL — which is why
 | Key | What |
 |---|---|
 | `agent-android` | Wi-Agent for Android (`com.wi_mall.wiagent`) |
+| `vendor-android` | Wi-Vendor, the vendor dashboard app (`com.wi_mall.vendor`) — added 2026-09-28 |
+| `agency-android` | Wi-Agency, the delivery-agency dashboard app (`com.wi_mall.agency`) — added 2026-09-28 |
+| `shop-android` | Wi-Mall, the customer shop app (`com.wimall.shop`) — added 2026-09-28 |
+
+Each key accepts only its own package: `npm run app:publish` refuses an APK whose manifest names
+a different one, because all four builds are called `app-release.apk` and a wrong `--app` would
+otherwise put one app behind another app's link. Pass `--app <key>` for anything but the agent app.
 
 Anything else is `404 APP_UNKNOWN`, on **both** endpoints. The key names the app **and** the
 platform: when an iOS build exists it will be `agent-ios`, a separate key with its own version and
@@ -58,7 +65,7 @@ GET /api/public/app/agent-android/latest
     "versionCode": 1,
     "packageId": "com.wi_mall.wiagent",
     "minSdk": 24,
-    "fileName": "wi-agent-0.1.0.apk",
+    "fileName": "wi-mall-agent.apk",
     "sizeBytes": 82885308,
     "sha256": "…64 lowercase hex chars…",
     "signingCertSha256": "754b669109fd578938afd18eb8bd9931d8129559cfd31725c82c5bf9cf3fd389",
@@ -119,12 +126,17 @@ The artefact is ~79 MB and the API runs on a host sized for the whole platform. 
 served by the CDN, which is closer to the user, free to egress, and — unlike a Node stream —
 supports the range requests that resuming a 79 MB download over a mobile connection depends on.
 
-### The saved filename carries a uuid prefix
+### The saved filename is clean: `wi-mall-<app>.apk`
 
-The redirect target is the storage key, so a browser saves
-`<uuid>_wi-agent-0.1.0.apk` rather than `wi-agent-0.1.0.apk`. Cosmetic, and the trade for
-everything in the paragraph above. Use `fileName` from `/latest` when the page needs to *name* the
-file in its own copy.
+Since 2026-09-28 a browser saves `wi-mall-agent.apk`, `wi-mall-vendor.apk`, `wi-mall-agency.apk`
+or `wi-mall-shop.apk` — no uuid and no version. The redirect target is still the storage key
+(`<uuid>_wi-mall-agent-0.1.1.apk`, so every build stays its own immutable object), but the
+publish script stores `Content-Disposition: attachment; filename="wi-mall-<app>.apk"` on the object,
+and a browser saves under that name. `fileName` on `/latest` is that same saved name. The version
+is `versionName` on `/latest`, and inside the app.
+
+⚠ Only builds published on or after 2026-09-28 carry the header. The agent build published
+2026-09-16 still saves as `<uuid>_wi-agent-0.1.0.apk` until a newer build supersedes it.
 
 ---
 

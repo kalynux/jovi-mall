@@ -32,8 +32,26 @@
  * artefacts with two versions and two checksums, never one row with two files. When the iOS
  * build exists it is `agent-ios` and it is a second key, not a second column.
  */
-export const APP_KEYS = ['agent-android'] as const;
+export const APP_KEYS = ['agent-android', 'vendor-android', 'agency-android', 'shop-android'] as const;
 export type AppKey = (typeof APP_KEYS)[number];
+
+/**
+ * The Android package each key must carry — the publish script refuses an APK whose manifest
+ * names a different one.
+ *
+ * ⚠ **Four keys, four near-identical `app-release.apk` files**, and every one of them passes
+ * the signing and versionCode gates when published under the wrong key. Published under the
+ * wrong key it is worse than not published: the vendor download link hands out the agency
+ * app, and nothing downstream can see it. The package id is the one thing inside the artefact
+ * that says which app it is, so it is checked. Changing an app's `applicationId` is a new app
+ * to Android anyway (no update path from the old one), so a mismatch here is always a mistake.
+ */
+export const APP_PACKAGE_IDS: Readonly<Record<AppKey, string>> = {
+    'agent-android': 'com.wi_mall.wiagent',
+    'vendor-android': 'com.wi_mall.vendor',
+    'agency-android': 'com.wi_mall.agency',
+    'shop-android': 'com.wimall.shop',
+};
 
 export function isAppKey(value: unknown): value is AppKey {
     return typeof value === 'string' && (APP_KEYS as readonly string[]).includes(value);

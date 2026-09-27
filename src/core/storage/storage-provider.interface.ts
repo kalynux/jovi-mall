@@ -15,6 +15,14 @@ export interface StoragePutOptions {
   mimeType: string;      // MIME type of the file
   folder: string;        // logical folder/prefix (e.g., 'products', 'variants', 'digital')
   filename?: string;     // optional custom filename (will generate if not provided)
+  /**
+   * The name a browser should SAVE the object as (`Content-Disposition: attachment`), stored
+   * on the object itself. For bytes a CDN serves directly — no handler here sees the request,
+   * so a response header cannot be added later. The key still carries its uuid; this only
+   * changes what lands in the visitor's Downloads folder. ASCII only.
+   * Honoured by `r2`; ignored by `local` (`express.static`) and the other providers.
+   */
+  downloadFilename?: string;
 }
 
 /**

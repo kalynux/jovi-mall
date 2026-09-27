@@ -20,7 +20,8 @@
  *   npm run app:publish -- --promote <versionCode>      # roll back to an earlier build
  *   npm run app:publish -- --list
  *
- *   --app <key>          default `agent-android`; must be one of APP_KEYS
+ *   --app <key>          default `agent-android`; must be one of APP_KEYS, and the APK must
+ *                        carry that key's package id (APP_PACKAGE_IDS)
  *   --dry-run            read, verify and print. Uploads nothing, writes nothing.
  *
  * `--dry-run` runs every check including the signing-key refusal, so it is the rehearsal that
@@ -41,6 +42,7 @@ import { AppReleaseModel } from '../src/modules/app-distribution/models/app-rele
 import {
     APK_MIME_TYPE,
     APP_KEYS,
+    APP_PACKAGE_IDS,
     APP_RELEASE_STORAGE_FOLDER,
     AppKey,
     isAppKey,
@@ -362,6 +364,18 @@ async function publish(args: Args): Promise<void> {
     console.log('    version   ' + badging.versionName + ' (versionCode ' + badging.versionCode + ')');
     console.log('    minSdk    ' + (badging.minSdk ?? '(unknown)'));
 
+    // ── The right APK for the key ───────────────────────────────────────────
+    // Four apps build four files all named `app-release.apk`; this is what stops the vendor
+    // link from serving the agency app. See APP_PACKAGE_IDS.
+    const expectedPackage = APP_PACKAGE_IDS[args.app];
+    if (badging.packageId !== expectedPackage) {
+        fail(
+            'This APK is ' + badging.packageId + ', but ' + args.app + ' must be ' + expectedPackage + '.\n'
+            + '      Wrong file, or wrong --app. The keys are:\n'
+            + APP_KEYS.map((key) => '        ' + key.padEnd(16) + APP_PACKAGE_IDS[key]).join('\n'),
+        );
+    }
+
     // ── Signing ─────────────────────────────────────────────────────────────
     const signing = readSigning(apkPath);
     if (!signing) {
@@ -408,16 +422,28 @@ async function publish(args: Args): Promise<void> {
             'The published build is ' + current.versionName + '+' + current.versionCode + ', which\n'
             + '      is not LOWER than this one (' + badging.versionName + '+' + badging.versionCode
             + '). Android refuses to install a build whose\n'
-            + '      versionCode does not increase, so every agent who already has the app would be\n'
+            + '      versionCode does not increase, so everyone who already has the app would be\n'
             + '      unable to take this update.',
         );
     }
 
-    const fileName = 'wi-' + args.app.replace(/-android$/, '') + '-' + badging.versionName + '.apk';
+    /**
+     * Two names. The STORAGE key keeps the version (plus the provider's uuid), so every build is
+     * its own immutable object. The SAVED name is clean and unversioned — `wi-mall-agent.apk` —
+     * because that is what lands in a visitor's Downloads folder (owner's request, 2026-09-28);
+     * the version is on `/latest` and inside the app. `fileName` on the row is the saved name.
+     */
+    const appSlug = args.app.replace(/-android$/, '');
+    const storageName = 'wi-mall-' + appSlug + '-' + badging.versionName + '.apk';
+    const fileName = 'wi-mall-' + appSlug + '.apk';
 
     console.log('\n  Storage provider: ' + getStorageProviderType());
     console.log('    folder    ' + APP_RELEASE_STORAGE_FOLDER + '/  (public tree)');
-    console.log('    filename  ' + fileName);
+    console.log('    saved as  ' + fileName + '   (stored as <uuid>_' + storageName + ')');
+    if (getStorageProviderType() !== 'r2') {
+        console.log('    ! only the r2 provider stores the saved-as name; with ' + getStorageProviderType()
+            + ' a browser saves the storage key instead. Production is r2.');
+    }
 
     if (args.dryRun) {
         console.log('\n  DRY RUN - every check above ran. Nothing uploaded, nothing written.\n');
@@ -429,7 +455,8 @@ async function publish(args: Args): Promise<void> {
     const stored = await getStorageProvider().put(buffer, {
         mimeType: APK_MIME_TYPE,
         folder: APP_RELEASE_STORAGE_FOLDER,
-        filename: fileName,
+        filename: storageName,
+        downloadFilename: fileName,
     });
     console.log('    OK - ' + stored.key);
 

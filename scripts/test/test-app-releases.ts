@@ -34,6 +34,7 @@ import {
 import {
     APK_MIME_TYPE,
     APP_KEYS,
+    APP_PACKAGE_IDS,
     APP_RELEASE_STATUSES,
     APP_RELEASE_STORAGE_FOLDER,
     isAppKey,
@@ -122,6 +123,38 @@ function run(): void {
     section('2. The app key is a CLOSED set');
 
     assert('`agent-android` is a key', () => isAppKey('agent-android'));
+    assert('…and so are the vendor, agency and shop apps', () =>
+        isAppKey('vendor-android') && isAppKey('agency-android') && isAppKey('shop-android'));
+
+    /**
+     * Four apps build four files all named `app-release.apk`, and each passes the signing and
+     * versionCode gates under any key. The package id is the only thing inside the artefact
+     * that says which app it is — so every key has one, no two share one, and the script
+     * refuses a mismatch before it uploads anything.
+     */
+    assert('every app key has exactly one package id, and no two keys share one', () =>
+        Object.keys(APP_PACKAGE_IDS).sort().join() === [...APP_KEYS].sort().join()
+        && new Set(Object.values(APP_PACKAGE_IDS)).size === APP_KEYS.length);
+    /**
+     * The download is saved as `wi-mall-<app>.apk` (owner's request, 2026-09-28). The bytes are
+     * served by the CDN, so the name has to be stored ON the object at upload — the script must
+     * pass it and the r2 provider must write it as Content-Disposition.
+     */
+    assert('the saved-as name is the clean wi-mall-<app>.apk, passed to the upload', () =>
+        SCRIPT_CODE.includes("const fileName = 'wi-mall-' + appSlug + '.apk'")
+        && /downloadFilename:\s*fileName/.test(SCRIPT_CODE));
+    assert('…and the r2 provider stores it as Content-Disposition: attachment', () => {
+        const r2 = fs.readFileSync(
+            path.join(__dirname, '..', '..', 'src', 'core', 'storage', 'providers', 'r2-storage.provider.ts'),
+            'utf8',
+        );
+        return /ContentDisposition:\s*`attachment; filename=/.test(r2) && r2.includes('options.downloadFilename');
+    });
+    assert('the publish script refuses an APK whose package is not the key\'s', () => {
+        const check = SCRIPT_CODE.indexOf('badging.packageId !== expectedPackage');
+        const upload = SCRIPT_CODE.indexOf('.put(');
+        return SCRIPT_CODE.includes('APP_PACKAGE_IDS[args.app]') && check > 0 && (upload < 0 || check < upload);
+    });
     assert('an unlisted app is refused', () => !isAppKey('agent-ios'));
     assert('a path-traversal probe is refused', () => !isAppKey('../../digital'));
     assert('a non-string is refused', () => !isAppKey(undefined) && !isAppKey(42));

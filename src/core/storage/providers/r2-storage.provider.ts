@@ -164,6 +164,11 @@ export class R2StorageProvider implements IStorageProvider {
        * control and be none. The bucket split above IS the control.
        */
       CacheControl: isPrivate ? 'private, no-store' : 'public, max-age=31536000, immutable',
+      // The saved-as name, e.g. `wi-mall-agent.apk` instead of `<uuid>_wi-mall-agent-0.1.1.apk`.
+      // Reduced to a safe ASCII set so a header value can never be malformed or injected.
+      ...(options.downloadFilename
+        ? { ContentDisposition: `attachment; filename="${options.downloadFilename.replace(/[^A-Za-z0-9._-]/g, '_')}"` }
+        : {}),
       // Deliberately no `Metadata: { originalName }`: S3 user metadata must be US-ASCII, and
       // originalName is uploader-supplied UTF-8 — a French or Arabic filename would throw
       // inside the SDK before the request left the process.
