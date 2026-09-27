@@ -86,8 +86,28 @@ async function existingKeys(): Promise<Set<string>> {
         if (!ok) throw new Error(`could not list existing templates: ${JSON.stringify(body?.error ?? body)}`);
         for (const template of body?.data ?? []) keys.add(`${template.name}|${template.language}`);
 
+        /**
+         * ⚠ **`API` ALREADY CARRIES THE VERSION, and Meta's `paging.next` carries it again.**
+         * This line used to cut the cursor URL at the first `/` after `https://`, which keeps
+         * `/v26.0/…`; `graph()` then prepends `https://graph.facebook.com/v26.0` and asks for
+         * `/v26.0/v26.0/{waba}/message_templates`. Graph answers `OAuthException` code 2500,
+         * *"Unknown path components: /{waba}/message_templates"* — a message that reads like a
+         * permission or WABA problem and is neither.
+         *
+         * ⛔ It could not fire until the WABA held more than one page. Measured 2026-09-27: the
+         * account crossed 200 templates mid-batch (196 → 202 while submitting the payout six),
+         * the second page appeared, and every subsequent run aborted before submitting anything.
+         * The first page had always been enough before, so this line shipped unexercised.
+         *
+         * Strip the version explicitly rather than guessing at slashes, and keep the query.
+         */
         const next: string | undefined = body?.paging?.next;
-        path = next ? next.slice(next.indexOf('/', 'https://'.length)) : null;
+        if (!next) {
+            path = null;
+        } else {
+            const cursor = new URL(next);
+            path = `${cursor.pathname.replace(/^\/v\d+(\.\d+)?/, '')}${cursor.search}`;
+        }
     }
     return keys;
 }

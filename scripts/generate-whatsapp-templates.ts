@@ -318,6 +318,16 @@ const BUTTON_LABEL: Record<string, Record<string, string>> = {
     customer_order_payment_failed: { en: 'View order', fr: 'Voir la commande' },
     customer_booking_payment_failed: { en: 'View booking', fr: 'Voir la réservation' },
     customer_booking_balance_received: { en: 'View booking', fr: 'Voir la réservation' },
+    // The payout six, submitted 2026-09-27 for the same reason: the send path names them and the
+    // WABA did not hold them, so a vendor, agency or agent outside the window was told nothing —
+    // including when a transfer FAILED and their money sat reserved. Each opens its own app's
+    // earnings or payout screen, and the French follows the body's own noun (`versement`).
+    vendor_payout_transfer_failed: { en: 'View payout', fr: 'Voir le versement' },
+    agency_payout_transfer_failed: { en: 'View payout', fr: 'Voir le versement' },
+    agent_payout_requested: { en: 'View earnings', fr: 'Voir mes gains' },
+    agent_payout_paid: { en: 'View earnings', fr: 'Voir mes gains' },
+    agent_payout_rejected: { en: 'View earnings', fr: 'Voir mes gains' },
+    agent_payout_transfer_failed: { en: 'View earnings', fr: 'Voir mes gains' },
 };
 
 const BODY_TAIL_NO_BUTTON: Record<string, string> = {
