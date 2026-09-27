@@ -45,11 +45,11 @@ type SeedPlan = {
 // then tunable per-plan via the admin API.
 const VENDOR_PLANS: SeedPlan[] = [
   { role: 'vendor', code: freePlanCode('vendor'), name: 'Starter', price: 0, currency: 'XAF', term_days: null,
-    credit_allowance: 50, max_active_products: 15, max_storage_bytes: 1 * GB, commission_percent: 7, is_active: true, sort_order: 1 },
-  { role: 'vendor', code: 'growth', name: 'Growth', price: 5_000, currency: 'XAF', term_days: 30,
-    credit_allowance: 850, max_active_products: 150, max_storage_bytes: 10 * GB, commission_percent: 5, is_active: true, sort_order: 2 },
-  { role: 'vendor', code: 'business', name: 'Business', price: 25_000, currency: 'XAF', term_days: 30,
-    credit_allowance: 4_500, max_active_products: null, max_storage_bytes: 100 * GB, commission_percent: 3, is_active: true, sort_order: 3 },
+    credit_allowance: 400, max_active_products: 80, max_storage_bytes: 5 * GB, commission_percent: 7, is_active: true, sort_order: 1 },
+  { role: 'vendor', code: 'growth', name: 'Growth', price: 7_500, currency: 'XAF', term_days: 30,
+    credit_allowance: 900, max_active_products: 180, max_storage_bytes: 12 * GB, commission_percent: 6, is_active: true, sort_order: 2 },
+  { role: 'vendor', code: 'business', name: 'Business', price: 45_000, currency: 'XAF', term_days: 30,
+    credit_allowance: 3_000, max_active_products: 600, max_storage_bytes: 40 * GB, commission_percent: 4, is_active: true, sort_order: 3 },
 ];
 
 // Agency tiers. Free = 1000 unterminated shipments (soft cap). Paid tiers are
