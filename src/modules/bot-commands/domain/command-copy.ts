@@ -127,6 +127,28 @@ const WELCOME: Copy = {
     ar: 'مرحبًا بك في wi-mall. أخبرني بما تبحث عنه، أو أرسل /help لمعرفة ما يمكنني فعله.',
 };
 
+/** `/bookings` — the customer's appointments, on a screen. */
+const BOOKINGS: Copy = {
+    en: 'See your appointments',
+    fr: 'Voir vos rendez-vous',
+    pt: 'Ver as suas marcações',
+    es: 'Ver tus citas',
+    ar: 'عرض مواعيدك',
+};
+
+/**
+ * ⚠ **Written, and never shown in a menu** — `/bargain` is `advertised: false`, so neither
+ * `/help` nor `setMyCommands` lists it. It exists because the completeness assert below demands
+ * a description of every command with a handler, and that rule is worth more than an exemption.
+ */
+const BARGAIN: Copy = {
+    en: 'Haggle on a product opened from the website',
+    fr: 'Négocier un article ouvert depuis le site',
+    pt: 'Negociar um artigo aberto a partir do site',
+    es: 'Negociar un artículo abierto desde la web',
+    ar: 'التفاوض على منتج فُتح من الموقع',
+};
+
 /** Command name → its menu description. Only live commands appear. */
 const DESCRIPTIONS: Readonly<Record<string, Copy>> = Object.freeze({
     start: START,
@@ -134,6 +156,8 @@ const DESCRIPTIONS: Readonly<Record<string, Copy>> = Object.freeze({
     login: LOGIN,
     password: PASSWORD,
     connect: CONNECT,
+    bookings: BOOKINGS,
+    bargain: BARGAIN,
 });
 
 const SENTENCES = Object.freeze({

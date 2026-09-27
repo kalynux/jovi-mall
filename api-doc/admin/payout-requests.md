@@ -39,51 +39,21 @@ process them identically. The auto sweep silently retries daily (logging, not fa
 account that's over threshold but has no payout method configured yet — nothing for admins to do
 there beyond following up with the vendor/agency if it persists.
 
-**A payout takes the owner's WHOLE available balance** — the requester names no amount. There is
-one exception, added 2026-09-15: an owner whose KYC is not verified draws on an **allowance**,
-`EARNINGS_CONFIG.UNVERIFIED_PAYOUT_CAP` per rolling
-`EARNINGS_CONFIG.UNVERIFIED_PAYOUT_WINDOW_DAYS` (default 30). The request takes
-`min(available, remaining allowance)` and the excess stays in `available_balance`.
+**A payout takes the owner's WHOLE available balance** — the requester names no amount, and
+**verification does not change that.** An owner whose KYC is not verified withdraws exactly like a
+verified one.
 
-⚠ **It is an allowance per window, NOT a per-request ceiling — the first version was the latter
-and it bounded nothing.** Only one payout may be *pending* per owner, but the moment you mark one
-paid the owner may open another. At a 20,000 cap an unverified owner holding 200,000 simply
-requested ten times. The allowance sums what has actually been **paid** inside the window.
+⚠ **There is no payout cap for unverified owners since 2026-09-27 (owner decision: "we should not
+block someone's money just because he is not verified").** From 2026-09-15 an optional allowance
+(`EARNINGS_UNVERIFIED_PAYOUT_CAP` per rolling `EARNINGS_UNVERIFIED_PAYOUT_WINDOW_DAYS`) could limit
+what an unverified owner withdrew, with partial moves and `409 EARNINGS_PAYOUT_UNVERIFIED_CAP_REACHED`.
+It was inert by default and is now **deleted** — config, env variables, error code, the partial
+move — so it cannot be switched back on by setting a number. The owner-facing `payoutAllowance`
+field survives on `GET /api/{vendor,agency,agent}/earnings` and is **always `null`**.
 
-⚠ **Rolling, not calendar.** A calendar reset would let the 31st plus the 1st move twice the cap
-in 48 hours.
-
-⚠ **Only `paid` requests count, windowed on `resolved_at`.** A request **you reject** returns the
-money to `available_balance` and is **not** charged against the owner's allowance — rejecting is
-never a penalty, and an owner is never billed for your decision. A request opened 31 days ago but
-paid yesterday *does* count, which is why the window is on `resolved_at` and not `created_at`.
-
-⚠ **`UNVERIFIED_PAYOUT_CAP` defaults to `0`, which means NO CAP — the feature is inert until a
-deployment sets a number.** That is deliberate on a money path: a live default would have begun
-capping part of every unverified owner's payout on the deploy that shipped it, with nobody having
-chosen the figure. So on a default deployment nothing here changes, and the KYC verdict on each
-row is information rather than enforcement.
-
-⚠ **It caps; it does not refuse.** The owner is still paid up to the remaining allowance.
-Refusing the whole request instead would mean an unverified owner who earns *more* than the cap
-can withdraw *nothing* — the more they sell, the less of their own money they can reach. The only
-outright refusal is when the allowance is **spent**, or when what is left of it falls under
-`MIN_PAYOUT_AMOUNT`; both answer `409 EARNINGS_PAYOUT_UNVERIFIED_CAP_REACHED` with a
-`details.reason` of `allowance_spent` or `remainder_below_minimum`.
-
-⚠ **`auto_threshold` requests are EXEMPT from the cap**, and that exemption is load-bearing. The
-sweep exists so the platform never owes an unbounded amount; capping it would leave the platform
-owing *more* to precisely the least-vetted accounts, and the nightly run would fail against them
-for ever with nothing opened to track the exposure. Those requests still reach this queue, and
-their ticket states the verdict.
-
-⚠ **Setting the cap below `MIN_PAYOUT_AMOUNT` blocks unverified payouts entirely** — the capped
-amount then fails the floor. The refusal names the cap as the cause (`details.capReason:
-"unverified"`, `details.cappedAt`) rather than reporting a bare "below minimum" the owner cannot
-act on, but the configuration is still wrong. Keep the cap comfortably above the floor.
-
-The `PAYOUT_REQUEST` ticket body states the verdict too — `KYC: verified.` or `⚠ KYC: NOT
-verified (<verdict>)` — and says so explicitly when a payout was capped.
+The `PAYOUT_REQUEST` ticket body and this API's `verification` field still state the owner's
+verdict — `KYC: verified.` or `⚠ KYC: NOT verified (<verdict>)` — so the reviewing administrator
+can weigh it. **It is information, not enforcement: it limits nothing.**
 
 ## Base Path
 ```
@@ -233,7 +203,8 @@ request was opened shows immediately. Freezing it would display a stale "unverif
 business already on file and send the reviewer chasing documents that have been submitted.
 
 ⚠ **It is shown, not enforced.** Whether to pay an unverified owner is the reviewer's judgement —
-the platform does not refuse the payout. What it may do is cap it; see below.
+the platform does not refuse the payout, and since 2026-09-27 it does not cap it either (the
+unverified-owner allowance was deleted; see the top of this page).
 
 `payout_method_snapshot.method` is `mobile_money`, `bank` or **`card`**, and exactly one of the
 three sub-objects is non-null. **Owners can only configure `mobile_money` right now** — `bank` and

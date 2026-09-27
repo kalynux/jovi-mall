@@ -701,7 +701,9 @@ function catalogueTokenProblems(
     routed: ReadonlyMap<string, string>,
 ): { problems: string[]; tokens: string[] } {
     const code = stripComments(catalogueSource.replace(/\r\n/g, '\n'));
-    const tokens = [...new Set([...code.matchAll(/\btoken:\s*'([^']+)'/g)].map((m) => m[1]))];
+    // `templateFallback` too: it is what a TEMPLATE button carries when its token cannot be
+    // filled, so it reaches the dispatcher exactly like a token does.
+    const tokens = [...new Set([...code.matchAll(/\b(?:token|templateFallback):\s*'([^']+)'/g)].map((m) => m[1]))];
     const problems: string[] = [];
     const ID = 'a'.repeat(24);
     for (const token of tokens) {
@@ -714,6 +716,60 @@ function catalogueTokenProblems(
         if (!routed.has(key)) problems.push(`WRITTEN BUT NOT ROUTED: "${token}" resolves to "${key}", which no handler map claims`);
     }
     return { problems, tokens };
+}
+
+/**
+ * ⭐ EVERY SCREEN THIS SERVICE SERVES HAS AT LEAST ONE DOOR.
+ *
+ * ── WHY IT EXISTS ───────────────────────────────────────────────────────────────────────
+ * The booking picker (`bk`) and the booking payment screen (`bp`) were finished, translated,
+ * mounted and documented — and nothing anywhere minted a session of either kind, so no customer
+ * could ever open them. Every suite was green: § 20 checks that a DRAWN button reaches a handler,
+ * and a screen nobody draws a button for is invisible to it. "Served, routed, documented" was
+ * true of both; "reachable" was not, and nothing asked.
+ *
+ * ── WHAT COUNTS AS A DOOR ───────────────────────────────────────────────────────────────
+ * A `kind: '<k>'` literal inside the argument list of an `openInAppScreen(` or an
+ * `inAppSurfaceStore.mint(` CALL — anywhere under `src/`, so a TOOL's door (`sl` is reached only
+ * by `inapp_open_stores`) counts exactly as a tap's does. ⚠ The span scanned is the call's own
+ * balanced parentheses, not "nearby": a kind named in a comment, a type or a neighbouring call
+ * must not satisfy it, and comments are already stripped by the caller.
+ *
+ * ── THE KINDS ARE THE STORE'S ───────────────────────────────────────────────────────────
+ * Read from `TTL_SECONDS`, the total record over `InAppSurfaceKind` that the page controller's
+ * allowlist is itself derived from — so "served" here is the served set, never a list kept here.
+ * `openInAppScreen`'s own definition, whose generic `mint({ ...input.payload })` names no kind,
+ * contributes nothing and is not a door.
+ */
+function screenDoorProblems(
+    storeSource: string,
+    sources: ReadonlyArray<string>,
+): { problems: string[]; kinds: string[]; doors: Map<string, number> } {
+    const store = stripComments(storeSource.replace(/\r\n/g, '\n'));
+    const at = store.indexOf('export const TTL_SECONDS');
+    const block = at < 0 ? '' : store.slice(at, store.indexOf('});', at));
+    const kinds = [...block.matchAll(/^\s*([a-z]{2}):/gm)].map((m) => m[1]);
+    if (kinds.length === 0) throw new Error('screen-door scan: no kinds parsed out of TTL_SECONDS');
+
+    const doors = new Map<string, number>(kinds.map((k) => [k, 0]));
+    for (const source of sources) {
+        for (const call of source.matchAll(/(?<!function )\b(?:openInAppScreen|inAppSurfaceStore\.mint)\(/g)) {
+            let i = call.index! + call[0].length;
+            const start = i;
+            for (let depth = 1; i < source.length && depth > 0; i++) {
+                if (source[i] === '(') depth++;
+                else if (source[i] === ')') depth--;
+            }
+            for (const named of source.slice(start, i - 1).matchAll(/\bkind:\s*'([a-z]{2})'/g)) {
+                if (doors.has(named[1])) doors.set(named[1], doors.get(named[1])! + 1);
+            }
+        }
+    }
+
+    const problems = kinds
+        .filter((k) => doors.get(k) === 0)
+        .map((k) => `KIND WITH NO DOOR: '${k}' is served, routed and documented, and nothing mints it`);
+    return { problems, kinds, doors };
 }
 
 async function main(): Promise<void> {
@@ -4659,6 +4715,45 @@ async function main(): Promise<void> {
         const baseline = catalogueTokenProblems(catalogueSource, routedKeys).problems;
         const mutant = catalogueTokenProblems(commented, routedKeys).problems;
         return mutant.length === baseline.length && !mutant.some((p) => p.includes('bogus'));
+    });
+
+    // ═════════════════════════════════════════════════════════════════════════
+    section('21 · Every screen this service serves has a door');
+    // ═════════════════════════════════════════════════════════════════════════
+
+    const STORE_FILE = 'src/modules/bot-surface/services/inapp-surface.store.ts';
+    const storeSource = readRepo(STORE_FILE);
+    const everySource = sourcesExcept('\u0000none');
+
+    /** Non-vacuity first: an empty kind list or an empty haystack makes the next one true for free. */
+    assert('the screen-door scan read the served kinds and found doors in the tree', () => {
+        const { kinds, doors } = screenDoorProblems(storeSource, everySource);
+        return kinds.length >= 9
+            && ['pl', 'pd', 'co', 'bl', 'bk', 'bp'].every((k) => kinds.includes(k))
+            && [...doors.values()].reduce((a, b) => a + b, 0) >= kinds.length;
+    });
+
+    assert('⛔ KIND WITH NO DOOR: every served screen kind is minted somewhere', () => {
+        const { problems } = screenDoorProblems(storeSource, everySource);
+        problems.forEach((p) => console.error(`      ${p}`));
+        return problems.length === 0;
+    });
+
+    /**
+     * ⭐ Shown to BITE on in-memory copies. Removing every `bk` door must name `bk` and nothing
+     * else; a `bk` named only in a COMMENT or outside a mint call must not count as a door.
+     */
+    assert('BITE: with its doors removed, `bk` is reported by name — and only `bk`', () => {
+        const without = everySource.map((s) => s.replace(/kind: 'bk'/g, "kind: 'zz'"));
+        const { problems } = screenDoorProblems(storeSource, without);
+        return problems.length === 1 && problems[0].startsWith("KIND WITH NO DOOR: 'bk'");
+    });
+
+    assert('BITE: a kind named OUTSIDE a mint call is not a door', () => {
+        const without = everySource.map((s) => s.replace(/kind: 'bp'/g, "kind: 'zz'"));
+        const decoy = [...without, "const payload = { kind: 'bp' }; openInAppScreen(req, other);"];
+        const { problems } = screenDoorProblems(storeSource, decoy);
+        return problems.some((p) => p.startsWith("KIND WITH NO DOOR: 'bp'"));
     });
 
     // ═════════════════════════════════════════════════════════════════════════

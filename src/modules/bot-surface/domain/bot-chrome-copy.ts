@@ -479,6 +479,45 @@ const BARGAIN_INVITE_PROMPT: Copy = {
     ar: 'اعرض عليّ سعرًا — كم تودّ أن تدفع مقابل هذا؟',
 };
 
+/**
+ * ⭐ **A Bargain pressed on the WEBSITE, by somebody the bot has not finished setting up.** The
+ * price question cannot be asked yet — the next few messages belong to the setup checklist, and
+ * an offer typed now would be read as a name. So this leads the setup question and says the
+ * haggle is kept; the price question follows on the turn that completes the checklist
+ * (`bargain-entry.service.ts`). Same no-placeholder rule: the title is composed above it.
+ */
+const BARGAIN_AFTER_SETUP_PROMPT: Copy = {
+    en: "Happy to talk price on this. First, a quick question so I can set you up — then we'll haggle.",
+    fr: "Avec plaisir, parlons du prix. D'abord une petite question pour vous inscrire — ensuite on négocie.",
+    pt: 'Com todo o gosto falamos do preço. Primeiro, uma pergunta rápida para o registar — depois negociamos.',
+    es: 'Encantado de hablar del precio. Primero, una pregunta rápida para registrarte — luego negociamos.',
+    ar: 'يسعدني أن نتفاوض على السعر. أولًا سؤال سريع لإعداد حسابك — ثم نتفاوض.',
+};
+
+/**
+ * ⭐ **The Bargain link named a product whose price is no longer negotiable** — the vendor closed
+ * the window after the page was drawn, or the page was stale. Owner decision (2026-09-27): say
+ * so and OFFER the basket, never add to it. A chat `bargain:` tap re-resolves to `add` and writes
+ * the cart; a link opened from a website is a different promise, and a basket line the customer
+ * never asked for is the one outcome they would read as the shop acting behind their back.
+ */
+const BARGAIN_FIXED_PRICE_PROMPT: Copy = {
+    en: 'This one has a fixed price now, so there is nothing to haggle. Would you like it anyway?',
+    fr: "Cet article a désormais un prix fixe, il n'y a donc rien à négocier. Le voulez-vous quand même ?",
+    pt: 'Este artigo tem agora um preço fixo, por isso não há nada a negociar. Quer ficar com ele na mesma?',
+    es: 'Este artículo ahora tiene un precio fijo, así que no hay nada que negociar. ¿Lo quieres de todos modos?',
+    ar: 'أصبح لهذا المنتج سعر ثابت، فلا مجال للتفاوض. هل تريده على أي حال؟',
+};
+
+/** Same case for a SERVICE: nothing to haggle, and it is booked rather than bought. */
+const BARGAIN_BOOK_INSTEAD_PROMPT: Copy = {
+    en: 'This is a service with a set price, so there is nothing to haggle. Would you like to book it?',
+    fr: "C'est un service à prix fixe, il n'y a donc rien à négocier. Voulez-vous le réserver ?",
+    pt: 'Este é um serviço com preço fixo, por isso não há nada a negociar. Quer reservá-lo?',
+    es: 'Es un servicio con precio fijo, así que no hay nada que negociar. ¿Quieres reservarlo?',
+    ar: 'هذه خدمة بسعر ثابت، فلا مجال للتفاوض. هل تريد حجزها؟',
+};
+
 /** What the customer is asked after tapping **Book**. Same no-placeholder rule. */
 const BOOK_INVITE_PROMPT: Copy = {
     en: 'When would you like this? Tell me a day and a time.',
@@ -978,6 +1017,45 @@ const MY_BOOKINGS_BUTTON: Copy = {
     ar: 'حجوزاتي',
 };
 
+/** Under the Book invitation, and over the picker screen's button. Emits `open:bk:<productId>`. */
+const BOOK_CHOOSE_TIME_BUTTON: Copy = {
+    en: 'Choose a time',
+    fr: 'Choisir un horaire',
+    pt: 'Escolher hora',
+    es: 'Elegir hora',
+    ar: 'اختر موعدًا',
+};
+
+/** The sentence over the picker screen's button — a day first, then that day's times. */
+const BOOKING_PICK_SCREEN_PROMPT: Copy = {
+    en: 'Choose a day, then a time.',
+    fr: 'Choisissez un jour, puis un horaire.',
+    pt: 'Escolha um dia e depois uma hora.',
+    es: 'Elige un día y luego una hora.',
+    ar: 'اختر يومًا ثم موعدًا.',
+};
+
+/** The button that opens the booking payment screen. Reached from `bpay:<bookingId>[:b]`. */
+const PAY_APPOINTMENT_BUTTON: Copy = {
+    en: 'Pay now',
+    fr: 'Payer maintenant',
+    pt: 'Pagar agora',
+    es: 'Pagar ahora',
+    ar: 'ادفع الآن',
+};
+
+/**
+ * The sentence over that button. ⚠ It names no amount: the figure is the screen's to resolve at
+ * the moment it opens, because a balance moves when the shop settles the appointment.
+ */
+const BOOKING_PAY_SCREEN_PROMPT: Copy = {
+    en: 'Tap below to pay for your appointment.',
+    fr: 'Appuyez ci-dessous pour payer votre rendez-vous.',
+    pt: 'Toque abaixo para pagar a sua marcação.',
+    es: 'Toca abajo para pagar tu cita.',
+    ar: 'اضغط أدناه لدفع قيمة موعدك.',
+};
+
 // ── Reviews ──────────────────────────────────────────────────────────────────
 /**
  * ⚠ **The star options themselves need NO copy**, and that is the point of asking with stars:
@@ -1228,6 +1306,15 @@ const NOTIFY_ROW_BOOKING_REMINDERS: Copy = {
     pt: 'Lembretes de reserva',
     es: 'Recordatorios',
     ar: 'تذكيرات الحجز',
+};
+
+/** The abandoned-basket reminder's off switch — the one proactive message nobody's action caused. */
+const NOTIFY_ROW_CART_REMINDERS: Copy = {
+    en: 'Basket reminders',
+    fr: 'Rappels de panier',
+    pt: 'Lembretes do cesto',
+    es: 'Aviso de carrito',
+    ar: 'تذكيرات السلة',
 };
 
 const NOTIFY_ROW_MARKETING: Copy = {
@@ -1625,6 +1712,49 @@ const CHECKOUT_MOBILE_MONEY_LABEL: Copy = {
     ar: 'المحفظة المحمولة:',
 };
 
+/**
+ * Pay on delivery in the chat checkout (owner decision, 2026-09-27). When the basket qualifies, the
+ * confirmation asks HOW to pay over **Pay now · Pay on delivery · Not now** — Pay now first.
+ */
+const CHECKOUT_PAY_NOW_BUTTON: Copy = {
+    en: 'Pay now',
+    fr: 'Payer maintenant',
+    pt: 'Pagar agora',
+    es: 'Pagar ahora',
+    ar: 'ادفع الآن',
+};
+
+const CHECKOUT_PAY_ON_DELIVERY_BUTTON: Copy = {
+    en: 'Pay on delivery',
+    fr: 'Payer à la livraison',
+    pt: 'Pagar na entrega',
+    es: 'Pagar al recibir',
+    ar: 'الدفع عند الاستلام',
+};
+
+const CHECKOUT_HOW_TO_PAY_QUESTION: Copy = {
+    en: 'How would you like to pay?',
+    fr: 'Comment souhaitez-vous payer ?',
+    pt: 'Como quer pagar?',
+    es: '¿Cómo quieres pagar?',
+    ar: 'كيف تريد أن تدفع؟',
+};
+
+/**
+ * Under the order numbers of a pay-on-delivery order. No amount is charged, and none is named.
+ *
+ * ⚠ **"You will receive", never "I will send you"** — the delivery code goes out on the customer's
+ * NOTIFICATION channel (`DeliveryCodeService.sendToCustomer` → `notificationChannelFor`: Telegram,
+ * then email, then WhatsApp), which is not always this chat. It is also in their order details.
+ */
+const CHECKOUT_CASH_ON_DELIVERY_PLACED: Copy = {
+    en: 'Pay the delivery agent in cash when it arrives. You will receive a delivery code for each parcel — give it to the agent at the door.',
+    fr: "Payez le livreur en espèces à la réception. Vous recevrez un code de livraison pour chaque colis — donnez-le au livreur à la porte.",
+    pt: 'Pague ao estafeta em dinheiro quando chegar. Vai receber um código de entrega para cada encomenda — entregue-o ao estafeta à porta.',
+    es: 'Paga al repartidor en efectivo cuando llegue. Recibirás un código de entrega por cada paquete — dáselo al repartidor en la puerta.',
+    ar: 'ادفع لمندوب التوصيل نقدًا عند الاستلام. ستتلقى رمز توصيل لكل طرد — أعطه للمندوب عند الباب.',
+};
+
 const CHECKOUT_PLACE_QUESTION: Copy = {
     en: 'Shall I place the order?',
     fr: 'Je passe la commande ?',
@@ -1828,6 +1958,10 @@ const CHROME = Object.freeze({
     tryAgainButton: { copy: TRY_AGAIN_BUTTON, cap: 20 },
     // ── The two rungs that finish as a conversation, not as a write ──────────
     bargainInvitePrompt: { copy: BARGAIN_INVITE_PROMPT, cap: null },
+    // ── The website's Bargain link (`bargain-entry.service.ts`) ──────────────
+    bargainAfterSetupPrompt: { copy: BARGAIN_AFTER_SETUP_PROMPT, cap: null },
+    bargainFixedPricePrompt: { copy: BARGAIN_FIXED_PRICE_PROMPT, cap: null },
+    bargainBookInsteadPrompt: { copy: BARGAIN_BOOK_INSTEAD_PROMPT, cap: null },
     bookInvitePrompt: { copy: BOOK_INVITE_PROMPT, cap: null },
     // ── Orders and fulfilment ────────────────────────────────────────────────
     cancelOrderButton: { copy: CANCEL_ORDER_BUTTON, cap: 20 },
@@ -1840,6 +1974,10 @@ const CHROME = Object.freeze({
     storesScreenPrompt: { copy: STORES_SCREEN_PROMPT, cap: null },
     bookingsScreenPrompt: { copy: BOOKINGS_SCREEN_PROMPT, cap: null },
     myBookingsButton: { copy: MY_BOOKINGS_BUTTON, cap: 20 },
+    bookChooseTimeButton: { copy: BOOK_CHOOSE_TIME_BUTTON, cap: 20 },
+    bookingPickScreenPrompt: { copy: BOOKING_PICK_SCREEN_PROMPT, cap: null },
+    payAppointmentButton: { copy: PAY_APPOINTMENT_BUTTON, cap: 20 },
+    bookingPayScreenPrompt: { copy: BOOKING_PAY_SCREEN_PROMPT, cap: null },
 
     // ── Reviews ──────────────────────────────────────────────────────────────
     ratePrompt: { copy: RATE_PROMPT, cap: null },
@@ -1930,6 +2068,7 @@ const CHROME = Object.freeze({
     notifyRowOrderUpdates: { copy: NOTIFY_ROW_ORDER_UPDATES, cap: 22 },
     notifyRowBookingUpdates: { copy: NOTIFY_ROW_BOOKING_UPDATES, cap: 22 },
     notifyRowBookingReminders: { copy: NOTIFY_ROW_BOOKING_REMINDERS, cap: 22 },
+    notifyRowCartReminders: { copy: NOTIFY_ROW_CART_REMINDERS, cap: 22 },
     notifyRowMarketing: { copy: NOTIFY_ROW_MARKETING, cap: 22 },
     notifyChannelPrompt: { copy: NOTIFY_CHANNEL_PROMPT, cap: null },
     notifyChannelEmail: { copy: NOTIFY_CHANNEL_EMAIL, cap: 24 },
@@ -1948,6 +2087,10 @@ const CHROME = Object.freeze({
     checkoutSentToLabel: { copy: CHECKOUT_SENT_TO_LABEL, cap: null },
     checkoutMobileMoneyLabel: { copy: CHECKOUT_MOBILE_MONEY_LABEL, cap: null },
     checkoutPlaceQuestion: { copy: CHECKOUT_PLACE_QUESTION, cap: null },
+    checkoutPayNowButton: { copy: CHECKOUT_PAY_NOW_BUTTON, cap: 20 },
+    checkoutPayOnDeliveryButton: { copy: CHECKOUT_PAY_ON_DELIVERY_BUTTON, cap: 20 },
+    checkoutHowToPayQuestion: { copy: CHECKOUT_HOW_TO_PAY_QUESTION, cap: null },
+    checkoutCashOnDeliveryPlaced: { copy: CHECKOUT_CASH_ON_DELIVERY_PLACED, cap: null },
     checkoutChooseAddressQuestion: { copy: CHECKOUT_CHOOSE_ADDRESS_QUESTION, cap: null },
     checkoutDeclined: { copy: CHECKOUT_DECLINED, cap: null },
     checkoutAddAddressPrompt: { copy: CHECKOUT_ADD_ADDRESS_PROMPT, cap: null },

@@ -108,7 +108,7 @@ counts a projected amount; it is a planning figure, not a liability.
 | Field | Description |
 |---|---|
 | `liability.balance` | What your agency still owes the platform (falls on confirmed remittances). |
-| `agents[].verified` | The platform's KYC verdict for this agent (`kyc.status === "verified"`) — render a verified badge beside the name. |
+| `agents[].verified` | The platform's KYC verdict for this agent (`kyc.status === "verified"`) — render a verified badge beside the name. Since 2026-09-27 it is also the COD switch: an unverified agent cannot be given COD shipments. |
 | `agents[].cashHeld` | Cash this agent holds **for you** and hasn't deposited yet — their contract's outstanding balance. |
 | `unsettledCollections` | Collected cash not yet covered by a confirmed remittance (what's blocking your COD earnings from releasing). |
 
@@ -198,7 +198,20 @@ releases.
 | `recipient` | `agency` (yours to answer) or `platform` (the agent paid the platform directly — the admin answers those). |
 | `status` | `declared` = awaiting your answer; `confirmed` = money moved; `rejected` = you said it didn't happen. |
 | `declaredAt` | When the agent declared it. `null` when you recorded it yourself at the desk. |
-| `reference` | The agent's transfer reference, for direct platform payments. |
+| `reference` | The agent's transfer/receipt reference, if they gave one. Optional. |
+| `proof` | The proof image the agent attached to the declaration, as a `FileDetail` (`url` is always `null` — private file). **Look at it before you confirm.** Bytes: [`GET /api/agency/cod/deposits/:id/proof/file`](#deposit-proof-file). `null` on deposits you recorded yourself, and on declarations made before proofs were required. |
+
+---
+
+<a name="deposit-proof-file"></a>
+### GET /api/agency/cod/deposits/:id/proof/file
+
+**The proof image bytes** an agent attached to a deposit made under one of your contracts
+(`Content-Type` is the image type, `Cache-Control: private, no-store`). Load it with your normal
+auth — it is not a public URL.
+
+- `404` – `COD_DEPOSIT_NOT_FOUND` – Not a deposit made to your agency.
+- `404` – `COD_PROOF_NOT_FOUND` – The deposit has no proof.
 
 ---
 
@@ -248,17 +261,22 @@ flagged is silence, not disagreement.
 <a name="declare-remittance"></a>
 ### POST /api/agency/cod/remittances
 
-**Description**: Declare a cash transfer to the platform (bank transfer, mobile money, cash desk —
-identified by `reference`). An admin confirms receipt; only then does your liability fall and your
+**Description**: Declare a cash transfer to the platform (bank transfer, mobile money, cash desk).
+**A proof image is required; the reference is optional.** An admin confirms receipt; only then does your liability fall and your
 collections settle (oldest first).
 
 You cannot declare more than you currently owe (open declarations count against the same
 liability).
 
-**Request Body**:
-```json
-{ "amount": 300000, "reference": "BANKTX-88231", "note": "Weekly settlement" }
-```
+**Request** — `multipart/form-data` (**not JSON**, since 2026-09-27): the proof image in field
+`file`, the other values as text fields beside it.
+
+| Field | Type | |
+|---|---|---|
+| `file` | image | **Required.** The transfer receipt / screenshot. JPEG, PNG or WebP, ≤ 10 MB. Private: only your agency and platform administrators can see it. |
+| `amount` | text (integer) | Required, minor units — e.g. `300000`. |
+| `reference` | text | Optional, ≤200 chars — the bank/mobile-money id, if you have one. `""` = none. |
+| `note` | text | Optional, ≤500 chars. |
 
 **Success Response** (`201 Created`):
 ```json
@@ -269,6 +287,15 @@ liability).
     "amount": 300000,
     "currency": "XAF",
     "reference": "BANKTX-88231",
+    "proof": {
+      "id": "665f1f77bcf86cd799439501",
+      "key": "cod-proofs/2026/07/…webp",
+      "url": null,
+      "access": "authorized",
+      "mimeType": "image/webp",
+      "size": 201344,
+      "originalName": "transfer.png"
+    },
     "status": "declared",
     "declaredAt": "2026-07-11T19:00:00.000Z"
   },
@@ -277,6 +304,9 @@ liability).
 ```
 
 **Error Responses**:
+- `400` – `COD_PROOF_FILE_REQUIRED` – No image in field `file`. Also what a client still sending
+  the old JSON body gets.
+- `400` – `UPLOAD_POLICY_VIOLATION` – The file is not a JPEG/PNG/WebP image, or is over 10 MB.
 - `422` – `COD_REMITTANCE_INVALID_AMOUNT` – Not a positive integer.
 - `422` – `COD_REMITTANCE_EXCEEDS_LIABILITY` – Amount (plus open declarations,
   `details.pendingDeclared`) exceeds what you owe (`details.outstanding`).
@@ -300,6 +330,8 @@ liability).
       "amount": 300000,
       "currency": "XAF",
       "reference": "BANKTX-88231",
+      "proof": { "id": "665f1f77bcf86cd799439501", "key": "cod-proofs/2026/07/…webp", "url": null,
+                 "access": "authorized", "mimeType": "image/webp", "size": 201344 },
       "note": "Weekly settlement",
       "status": "confirmed",
       "declaredAt": "2026-07-11T19:00:00.000Z",
@@ -310,6 +342,16 @@ liability).
   "meta": { "total": 3, "page": 1, "limit": 20, "pages": 1 }
 }
 ```
+
+`proof` is `null` only on remittances declared before proofs were required.
+
+<a name="remittance-proof-file"></a>
+### GET /api/agency/cod/remittances/:id/proof/file
+
+**The proof image bytes** of one of your own remittances (`Cache-Control: private, no-store`).
+
+- `404` – `COD_REMITTANCE_NOT_FOUND` – Not one of your remittances.
+- `404` – `COD_PROOF_NOT_FOUND` – The remittance has no proof.
 
 ---
 
@@ -383,6 +425,12 @@ resolves the flag.
   `0` grants no COD headroom at all. A raise can be refused if the agent's pool is already fully
   allocated across their contracts.
 
+  ⚠ **Since 2026-09-27 an unverified agent can be on your roster, but carries no COD.** You may
+  set a slice on their contract (the pool-headroom check is skipped for them); it stays
+  **dormant** and every COD shipment to them is refused `422 AGENT_KYC_NOT_VERIFIED` until an
+  administrator verifies them. Prepaid shipments are unaffected. COD therefore needs **both** your
+  agency verified (checkout) and the agent verified (dispatch).
+
   **Since 2026-09-21 the agent's pool is automatic, and it is also a cap.** An agent's pool is 0
   until their identity is verified, then their plan's value (Free **500 000**, Plus 1 000 000,
   Pro 2 000 000), unless the agent chose to carry less or an administrator set a value. Before this,
@@ -432,7 +480,9 @@ resolves the flag.
 
 - **Trust tiers** — the base threshold is then scaled by the agent's trust score
   (≥80 → full, 50–79 → halved, <50 → blocked: `COD_AGENT_TRUST_TOO_LOW`). An open `cash_shortfall`
-  discrepancy also blocks new COD assignments outright until an admin resolves it.
+  discrepancy also blocks new COD assignments outright until an admin resolves it. Ahead of both
+  (since 2026-09-27), an agent whose KYC is not verified is refused every COD assignment with
+  `AGENT_KYC_NOT_VERIFIED`.
 - **Rolling reserve** — a percentage (default 10%) of your released COD earnings parks in a
   `reserve` balance for 30 days and only releases while you have **no open discrepancies**
   (see [earnings.md](./earnings.md)).

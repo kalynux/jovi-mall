@@ -716,8 +716,9 @@ export class AgentContractService {
         // business reaching a KYC check. Failing here names the actual problem.
         this.assertTermsApprovable(contract);
 
-        // Platform gates next: KYC and bans outrank everything else. An
-        // unverified agent must not be approvable regardless of headroom.
+        // The platform gate next: a ban outranks everything else. KYC is NOT
+        // checked — an unverified agent is approvable, and a COD threshold on
+        // their contract stays dormant until verified (see the threshold service).
         await this.gates.assertCanHoldContract(agentId, session);
         await this.assertRelationshipCapacity(agentId, session);
 

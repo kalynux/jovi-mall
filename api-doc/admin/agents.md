@@ -53,7 +53,7 @@ control the tracking-allow flag, transfer an agent between agencies, and inspect
 | `PATCH` | `/internal/admin/agents/:agentId/status` | Set account status (activate/suspend/…) |
 | `PUT` | `/internal/admin/agents/:agentId/tracking-allow` | Enable/disable tracking-allow |
 | `GET` | `/internal/admin/agents/:agentId/tracking-policy` | The tracking policy geo-tracker would see |
-| `PUT` | `/internal/admin/agents/:agentId/kyc` | Set the KYC verdict — **required before the agent can be dispatched** |
+| `PUT` | `/internal/admin/agents/:agentId/kyc` | Set the KYC verdict — **required before the agent may carry cash on delivery** (since 2026-09-27 it no longer gates contracts or prepaid dispatch) |
 | `PUT` | `/internal/admin/agents/:agentId/ban` | Ban or unban platform-wide |
 | `PUT` | `/internal/admin/agents/:agentId/cod-threshold` | **Pin** (or release, with `null`) the agent's whole COD pool — overrides their plan (2026-09-21) |
 | `GET` | `/internal/admin/agents/:agentId/cod-allocation` | The pool, every contract's slice, and the headroom |
@@ -308,9 +308,16 @@ service sees). Read-only.
 
 **Auth**: `requireAdminCaller` · **Permissions**: `admin` (service caller) · **Path param**: `agentId` (ObjectId)
 
-> **This is what lets an agent work.** `kyc.status` starts at `unverified` and assignment
-> eligibility passes only on `verified` — so until an admin calls this, every offer the agent tries
-> to accept fails with `kyc_not_verified`, regardless of availability, capacity or tracking.
+> **This is what lets an agent carry cash — and only that (changed 2026-09-27, owner decision).**
+> `kyc.status` starts at `unverified`. An unverified agent may hold contracts, appears in the
+> agency directory, and is dispatchable for **prepaid** shipments exactly like a verified one.
+> What verification unlocks is COD: until an admin calls this with `verified`, the agent's COD pool
+> is `0` and the `cod_exposure` contract gate refuses every COD shipment to them on offer, accept,
+> reassign and auto-assign ranking (`422 AGENT_KYC_NOT_VERIFIED`, `details: { kycStatus, hint }`).
+> A COD slice set on their contracts meanwhile is **dormant** and starts counting on verification.
+>
+> ~~Assignment eligibility passes only on `verified` — every offer fails with `kyc_not_verified`.~~
+> True until 2026-09-27; that eligibility reason no longer exists.
 
 ### Request body
 
@@ -406,6 +413,11 @@ Side effects: `verified_at` and `verified_by_user_id` are stamped only on `verif
 > the plan's value, above or below it, until released. No plan change or sync erases a pin. It
 > does **not** outrank KYC: on an unverified agent the pin is stored and the pool stays 0 until
 > the verdict. Setting or releasing a pin resets the agent's own lower choice.
+>
+> Since 2026-09-27 an unverified agent can hold contracts, and those contracts may carry a COD
+> slice that stays **dormant** (the pool-headroom check is skipped for them; the per-contract
+> min/max still apply). On verification the pool opens; if the dormant slices sum to more than it,
+> `/cod-allocation` shows `overAllocatedBy > 0` and the exposure gate binds at the pool.
 
 **Auth**: `requireAdminCaller` · **Permissions**: `admin` (service caller) · **Path param**: `agentId` (ObjectId)
 
@@ -483,7 +495,7 @@ to consult before changing either level.
 
 | Field | Meaning |
 |---|---|
-| `overAllocatedBy` | `allocated - maxThreshold` when contracts hold MORE than the pool, else 0. Only an automatic change produces it (plan downgrade, KYC withdrawn). While above 0 no slice can be raised, and the exposure gate caps every dispatch at the pool (`limit.poolBinds: true` in the assignability diagnostic) |
+| `overAllocatedBy` | `allocated - maxThreshold` when contracts hold MORE than the pool, else 0. Only an automatic change produces it (plan downgrade, KYC withdrawn, or — since 2026-09-27 — verification opening a pool smaller than the dormant slices an unverified agent's contracts already carried). While above 0 no slice can be raised, and the exposure gate caps every dispatch at the pool (`limit.poolBinds: true` in the assignability diagnostic) |
 | `pool` | The pool's provenance: `ceiling`, `source` (`not_verified` · `override` · `plan`), `planCode`, `selfLimited` (the agent chose to carry less), `syncedAt` (`null` = never synced: an agent from before 2026-09-21 awaiting the reconcile) |
 | `override` | **Admin read only.** The pin — `amount`, `reason`, `setAt`, `setByUserId`, `setBySource`, `setByName` — or `null`. The agent's own `GET /api/agent/cod/allocation` carries `pool.source: "override"` and never the reason or author |
 
@@ -500,9 +512,13 @@ to consult before changing either level.
 ## GET `/internal/admin/agents/:agentId/eligibility`
 
 **Purpose**: Evaluate whether the agent is eligible for assignment **for a given agency**, reporting
-**every** failed rule at once (not banned · KYC verified · account active · holds an **active
+**every** failed rule at once (not banned · account active · holds an **active
 contract** with the dispatching agency · online · tracking allowed · device location not disabled ·
 under capacity).
+
+> ⚠ **KYC is not an eligibility rule since 2026-09-27** — the `kyc` rule and the
+> `kyc_not_verified` reason are gone. KYC refuses COD shipments only, and that shows up in
+> [`/assignability`](#get-internaladminagentsagentidassignability) as the `cod_exposure` gate.
 
 > The rule is named `approved` and its failure reason `membership_not_approved`, but it passes only
 > on an `active` contract — `observed.contractStatus` reports what was actually seen. Both names
@@ -556,8 +572,10 @@ would fix it.
 >
 > | Family | Gates | Diagnosable before this endpoint |
 > |---|---|---|
-> | **platform** | banned · KYC · active · available · tracking allowed · device location · capacity | ✅ `/eligibility` |
-> | **contract** | active contract · coverage region · per-shipment value ceiling · **COD exposure** | ❌ nowhere |
+> | **platform** | banned · active · available · tracking allowed · device location · capacity | ✅ `/eligibility` |
+> | **contract** | active contract · coverage region · per-shipment value ceiling · **COD exposure** (incl. KYC, since 2026-09-27) | ❌ nowhere |
+>
+> ⚠ Before 2026-09-27 KYC was a **platform** gate here; it no longer appears among them.
 >
 > The gap was not academic. An agency refused with `COD_AGENT_EXPOSURE_EXCEEDED` could read its own
 > COD threshold off three screens and could see **neither** the agent's actual exposure (which counts
@@ -669,6 +687,21 @@ it usually arrives holding an agency and an agent and no shipment id at all.
 3. **`trustScore` is the EFFECTIVE score** — an administrator's pinned override when one exists
    (`trustSource: "override"`), the computed score otherwise. `computedTrustScore` rides along so a
    screen can show both.
+4. **An unverified agent fails `cod_exposure` on KYC, before any cash arithmetic** (since
+   2026-09-27). The gate reads `status: "failed"`, `reason: "AGENT_KYC_NOT_VERIFIED"`,
+   `observed.blocker: "kyc_not_verified"` (it outranks `trust_too_low`, `open_cash_shortfall` and
+   `exposure_exceeded`), the raw verdict (`contractPolicy.codVerdict`) carries a new `kycStatus`
+   field — `observed` does not; read it from the remedy's `params` — and the only remedy is
+   `verify_agent_kyc`. Prepaid shipments report the gate `not_applicable` as usual — an unverified
+   agent is assignable for them.
+
+   ```json
+   { "family": "contract", "gate": "cod_exposure", "status": "failed",
+     "reason": "AGENT_KYC_NOT_VERIFIED",
+     "observed": { "blocker": "kyc_not_verified", "…": "exposure / limit fields as above" },
+     "summary": "Refused on KYC: the agent's identity is pending, and only a verified agent may carry cash on delivery. Prepaid shipments are unaffected.",
+     "remedies": [ { "action": "verify_agent_kyc", "params": { "kycStatus": "pending" } } ] }
+   ```
 
 ### Remedy actions
 
@@ -678,6 +711,7 @@ it usually arrives holding an agency and an agent and no shipment id at all.
 | `raise_trust_score` | `to`, `from`, `wouldRaiseLimitTo`, `sufficientOnItsOwn` — offered only when the tier is not already `full` |
 | `raise_contract_threshold` | `current`, `requiredForCurrentExposure`. ⚠ Bounded by the agent's COD pool — check `/cod-allocation` for headroom first |
 | `resolve_cash_shortfall` | — |
+| `verify_agent_kyc` | `kycStatus` — the agent's current verdict. **Since 2026-09-27**; the sole remedy when `cod_exposure` refuses on `kyc_not_verified` (nothing an agency can deposit or raise changes it). Points at `PUT /internal/admin/agents/:agentId/kyc` |
 | `add_coverage_region` | `region` |
 | `raise_shipment_value_ceiling` | `required` |
 | `activate_contract` | `contracts` — the non-active contracts that exist with this agency |
@@ -729,7 +763,7 @@ levers it legitimately owns:
 
 | To affect… | Admin uses | Not |
 |---|---|---|
-| whether the agent can work at all | `PATCH /status`, `PUT /ban`, `PUT /kyc` | editing contracts |
+| whether the agent can work at all | `PATCH /status`, `PUT /ban` (and `PUT /kyc` for whether they may carry **COD** — since 2026-09-27 it gates nothing else) | editing contracts |
 | the agent's total cash risk | `PUT /cod-threshold` (the **pool**) | a contract's slice |
 | which agency an agent belongs to | `POST /internal/admin/agents/transfer` | approving contracts for them |
 

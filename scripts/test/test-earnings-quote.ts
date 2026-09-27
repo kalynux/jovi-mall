@@ -17,6 +17,10 @@ import {
   applyFeeSplit,
   computeAgencyCut,
   computeCodHandlingFee,
+  earnedFeeFor,
+  isReturnedCod,
+  overlayAgencyActual,
+  overlayAgentActual,
   resolveEarnedFee,
 } from '../../src/modules/earnings/services/earnings-quote.service';
 import { IAgencyPolicies, ICodHandlingFee } from '../../src/modules/delivery/delivery-agency.model';
@@ -183,6 +187,49 @@ function main(): void {
   assert('the agency quote reports exactly what the agent is quoted', () => {
     const earnedFee = resolveEarnedFee('delivered', 1500, policiesWithRto(400));
     return applyFeeSplit(percentageSplit(30), earnedFee) === applyFeeSplit(percentageSplit(30), 1500);
+  });
+
+  // ── 2026-09-27: quotes agree with what the split actually does ──────────────
+  const cod = { payment_method: 'cash_on_delivery' as const };
+  const prepaid = { payment_method: 'online' as const };
+  assert('a returned COD shipment earns NOTHING (no split runs; the collection is cancelled)', () =>
+    isReturnedCod(cod, { status: 'returned' }) &&
+    earnedFeeFor(cod, { status: 'returned' }, 1500, policiesWithRto(400)) === 0);
+  assert('a returned PREPAID shipment earns the RTO rate', () =>
+    earnedFeeFor(prepaid, { status: 'returned' }, 1500, policiesWithRto(400)) === 400);
+  assert('the agent is quoted a cut of the EARNED fee, so a return agrees with the agency view', () =>
+    applyFeeSplit(percentageSplit(30), earnedFeeFor(prepaid, { status: 'returned' }, 1500, policiesWithRto(400))) === 120);
+
+  const estimate = {
+    earning: { amount: 450, currency: 'XAF', estimated: true, deliveryFee: 1500, basis: 'contract_percentage' as const },
+    earningUnavailable: null,
+  };
+  const actual = { agencyAmount: 1250, agencyStatus: 'held' as const, agentId: 'A1', agentAmount: 300, agentStatus: 'released' as const, cod: true };
+  assert('once split, the agent sees the ALLOCATION, not the estimate', () => {
+    const r = overlayAgentActual(estimate, actual, 'A1');
+    return r.earning?.amount === 300 && r.earning.estimated === false && r.earning.allocationStatus === 'released';
+  });
+  assert('a split carried by someone else is 0 for this agent, not an estimate', () => {
+    const r = overlayAgentActual(estimate, actual, 'B2');
+    return r.earning?.amount === 0 && r.earning.estimated === false;
+  });
+  assert('no split yet → the estimate stands', () => overlayAgentActual(estimate, undefined, 'A1') === estimate);
+
+  const agencyEstimate = {
+    agencyEarning: {
+      amount: 999, currency: 'XAF', estimated: true, deliveryFee: 1500, earnedFee: 1500,
+      agentCut: 1, codHandlingFee: 1, basis: 'contract_percentage' as const,
+    },
+    agencyEarningUnavailable: null,
+  };
+  assert('agency COD actual: handling fee = agency + agent − delivery_fee_snapshot', () => {
+    const r = overlayAgencyActual(agencyEstimate, actual, 1500);
+    return r.agencyEarning?.amount === 1250 && r.agencyEarning.agentCut === 300 &&
+      r.agencyEarning.codHandlingFee === 50 && r.agencyEarning.earnedFee === 1500 && r.agencyEarning.estimated === false;
+  });
+  assert('agency prepaid actual: no handling fee, earned = agency + agent', () => {
+    const r = overlayAgencyActual(agencyEstimate, { ...actual, cod: false, agencyAmount: 280, agentAmount: 120 }, 1500);
+    return r.agencyEarning?.codHandlingFee === 0 && r.agencyEarning.earnedFee === 400;
   });
 
   console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed\n`);

@@ -198,6 +198,12 @@ router.post('/s/pd/:handle/act', BotPurchaseController.screenAct);
  * pointing at a handler that does not exist stops the server for every session at boot.
  */
 router.get('/s/bl/:handle/data', BookingScreensController.listData);
+/**
+ * **Pay** on an unpaid row of the appointments list (owner decision, 2026-09-27). Mints a `bp`
+ * session for that booking and answers its same-origin URL — the `pl → pd` shape. It charges
+ * nothing; the payment screen it opens does that, with all of its own rules.
+ */
+router.post('/s/bl/:handle/pay', BookingScreensController.openPay);
 router.get('/s/bk/:handle/data', BookingScreensController.slotData);
 router.post('/s/bk/:handle/confirm', BookingScreensController.confirm);
 
@@ -242,6 +248,11 @@ router.post('/s/tf/:handle/submit', TicketFormController.submit);
  */
 router.get('/s/co/:handle/data', CheckoutController.data);
 router.post('/s/co/:handle/place', CheckoutController.place);
+/**
+ * Pay on delivery from the checkout screen (owner decision, 2026-09-27). SPENDS the handle like
+ * `place`; creates the orders as pay on delivery and opens no charge.
+ */
+router.post('/s/co/:handle/place-cod', CheckoutController.placeCashOnDelivery);
 
 /** Order history — the full list, beyond the five the chat shows. */
 router.get('/s/ol/:handle/data', OrderListingController.data);

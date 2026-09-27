@@ -99,6 +99,20 @@ export interface QuickReplyDef {
      * Over it, the builder truncates and the customer reads a clipped word.
      */
     label: Record<Language, string>;
+    /**
+     * The token a WhatsApp TEMPLATE sends for this button when `token`'s placeholders cannot
+     * be filled. Placeholder-free, and routed like any other token.
+     *
+     * ⛔ **Out of window a button cannot be dropped.** In a chat message an unfillable quick
+     * reply is simply not drawn. A template's buttons are fixed at approval — a send only
+     * supplies their payloads — so the button is shown regardless, and a tap on one sent
+     * with no payload comes back as its LABEL, which the dispatcher refuses as an unknown
+     * button. This is what that tap does instead.
+     *
+     * Required whenever `token` carries a placeholder (asserted at boot); the send path
+     * never guesses one.
+     */
+    templateFallback?: string;
 }
 
 export interface SituationMessages {

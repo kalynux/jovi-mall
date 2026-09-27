@@ -194,6 +194,7 @@ on the website and silently fails in the phone app:
 | | web | app (static export) |
 |---|---|---|
 | order group | `/shop/account/orders/[cartId]` | `/shop/account/order?id=` |
+| basket (`cart.abandoned`, 2026-09-27) | `/shop/cart` | `/shop/cart` — the same path: a static route with no id, so the export needs no twin |
 | **one order** | `/shop/account/orders/detail/[orderId]` | `/shop/account/order/detail?id=` |
 | **tracking** | `/shop/account/orders/detail/[orderId]/tracking` | `/shop/account/order/tracking?id=` |
 | booking | `/shop/account/bookings/[bookingId]` | `/shop/account/booking?id=` |

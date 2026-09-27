@@ -906,9 +906,9 @@ function main(): void {
         /on \? 'off' : 'on'/.test(switches)
         && !/toggle/i.test(switches));
 
-    assert('the four switches are the real preference keys, not invented ones', () => {
+    assert('the switches are the real preference keys, not invented ones', () => {
         const keys = [...notify.matchAll(/\{ key: '(\w+)', copy: '\w+' \}/g)].map((m) => m[1]);
-        return keys.join(',') === 'orderUpdates,bookingUpdates,bookingReminders,marketing';
+        return keys.join(',') === 'orderUpdates,bookingUpdates,bookingReminders,cartReminders,marketing';
     });
 
     console.log('\n── A sold-out card: two rescue buttons, and the service card left alone ──');

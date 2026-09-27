@@ -29,7 +29,22 @@
  *   WHATSAPP_WABA_ID=… WHATSAPP_ACCESS_TOKEN=… npx ts-node scripts/submit-whatsapp-templates.ts
  *   …                                                                              --submit
  *
- * Flags: --submit · --only=<name> · --limit=<n> · --delay=<ms> · --in=<path> · --report=<path>
+ * Flags: --submit · --edit · --only=<name> · --limit=<n> · --delay=<ms> · --in=<path> · --report=<path>
+ *
+ * ── EDITS: opt-in with `--edit`, because they spend a finite allowance ─────────
+ *
+ * A template already on the WABA whose buttons or body differ from the payload here is an
+ * EDIT, not a creation — `POST /{template_id}` with the full component list. Until
+ * 2026-09-27 this script only created, so a changed template was reported "already present"
+ * and silently skipped: stage 2's buttons could never have been sent with it.
+ *
+ * ⚠ Meta allows an APPROVED template roughly one edit a day and ten a month, and every edit
+ * goes back to review. So edits are listed in the dry run, and sent only with BOTH `--submit`
+ * and `--edit`. A PENDING template cannot be edited at all; it is listed, never sent.
+ *
+ * Compared on what a person sees — body text and the buttons' type, text and URL — never on
+ * the `example` blocks, which Meta stores in its own shape and would read as a change on
+ * every run.
  */
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { dirname, join } from 'path';
@@ -58,7 +73,8 @@ const LIMIT = Number(argOf('limit') ?? '0');
 const DELAY_MS = Number(argOf('delay') ?? '1200');
 
 interface Payload { name: string; language: string; category: string; components: unknown[] }
-interface Result { name: string; language: string; status: 'created' | 'exists' | 'failed'; id?: string; error?: string }
+interface Result { name: string; language: string; status: 'created' | 'edited' | 'exists' | 'failed'; id?: string; error?: string }
+interface LiveTemplate { id: string; status: string; components: any[] }
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -77,14 +93,18 @@ async function graph(path: string, init?: RequestInit): Promise<{ ok: boolean; s
 }
 
 /** Everything the WABA already holds, as `name|language`, following Meta's cursor pagination. */
-async function existingKeys(): Promise<Set<string>> {
-    const keys = new Set<string>();
-    let path: string | null = `/${WABA_ID}/message_templates?limit=200&fields=name,language,status`;
+async function existingTemplates(): Promise<Map<string, LiveTemplate>> {
+    const keys = new Map<string, LiveTemplate>();
+    let path: string | null = `/${WABA_ID}/message_templates?limit=200&fields=name,language,status,id,components`;
 
     while (path) {
         const { ok, body } = await graph(path);
         if (!ok) throw new Error(`could not list existing templates: ${JSON.stringify(body?.error ?? body)}`);
-        for (const template of body?.data ?? []) keys.add(`${template.name}|${template.language}`);
+        for (const template of body?.data ?? []) {
+            keys.set(`${template.name}|${template.language}`, {
+                id: String(template.id), status: String(template.status), components: template.components ?? [],
+            });
+        }
 
         /**
          * ⚠ **`API` ALREADY CARRIES THE VERSION, and Meta's `paging.next` carries it again.**
@@ -112,16 +132,31 @@ async function existingKeys(): Promise<Set<string>> {
     return keys;
 }
 
-async function createTemplate(payload: Payload): Promise<Result> {
+/** What a person sees: body text, and each button's type · text · URL. */
+function visibleShape(components: any[]): string {
+    const body = components.find(c => String(c.type).toUpperCase() === 'BODY')?.text ?? '';
+    const buttons = (components.find(c => String(c.type).toUpperCase() === 'BUTTONS')?.buttons ?? [])
+        .map((b: any) => [String(b.type).toUpperCase(), b.text ?? '', b.url ?? ''].join('·'));
+    return JSON.stringify({ body, buttons });
+}
+
+function buttonSummary(components: any[]): string {
+    const buttons = components.find(c => String(c.type).toUpperCase() === 'BUTTONS')?.buttons ?? [];
+    return buttons.map((b: any) => `${String(b.type).toUpperCase()}:${b.text}`).join(' | ') || '(none)';
+}
+
+/** Create (`templateId` absent) or edit (present). Same retry and fatal rules for both. */
+async function createTemplate(payload: Payload, templateId?: string): Promise<Result> {
     const base: Omit<Result, 'status'> = { name: payload.name, language: payload.language };
 
     for (let attempt = 0; attempt < 5; attempt++) {
-        const { ok, body } = await graph(`/${WABA_ID}/message_templates`, {
-            method: 'POST',
-            body: JSON.stringify(payload),
-        });
+        const { ok, body } = templateId
+            // An edit carries the components only: name, language and category are fixed.
+            ? await graph(`/${templateId}`, { method: 'POST', body: JSON.stringify({ components: payload.components }) })
+            : await graph(`/${WABA_ID}/message_templates`, { method: 'POST', body: JSON.stringify(payload) });
 
-        if (ok && body?.id) return { ...base, status: 'created', id: body.id };
+        if (ok && templateId && body?.success) return { ...base, status: 'edited', id: templateId };
+        if (ok && !templateId && body?.id) return { ...base, status: 'created', id: body.id };
 
         const error = body?.error ?? {};
         const code = Number(error.code);
@@ -156,7 +191,12 @@ async function main(): Promise<void> {
 
     const file = JSON.parse(readFileSync(IN, 'utf8'));
     let payloads: Payload[] = file.payloads ?? [];
-    if (ONLY) payloads = payloads.filter(p => p.name === ONLY);
+    // A comma list scopes a run to exactly the names meant — e.g. the stage-2 edits without the
+    // UTILITY OTP fallback, which Meta rejected on content and must not be re-sent by habit.
+    if (ONLY) {
+        const names = new Set(ONLY.split(',').map(n => n.trim()).filter(Boolean));
+        payloads = payloads.filter(p => names.has(p.name));
+    }
     if (!payloads.length) {
         console.error(`\n❌ no payloads to submit${ONLY ? ` matching --only=${ONLY}` : ''} in ${IN}\n`);
         process.exit(1);
@@ -165,10 +205,35 @@ async function main(): Promise<void> {
     console.log(`\nWABA ${WABA_ID} · ${API}`);
     console.log(`Source: ${IN}  (generated ${file.generatedAt})`);
 
-    const already = await existingKeys();
+    const live = await existingTemplates();
+    const already = new Set(live.keys());
     console.log(`Already on the WABA: ${already.size} template(s)`);
 
     const pending = payloads.filter(p => !already.has(`${p.name}|${p.language}`));
+
+    const differing = payloads
+        .map(p => ({ payload: p, current: live.get(`${p.name}|${p.language}`) }))
+        .filter((x): x is { payload: Payload; current: LiveTemplate } =>
+            x.current !== undefined && visibleShape(x.current.components) !== visibleShape(x.payload.components));
+    /**
+     * ⛔ **An AUTHENTICATION template is NEVER edited.** Meta compiles it: the body becomes its
+     * fixed OTP sentence and the OTP button becomes a URL button (see the generator's OTP
+     * note). So the live copy ALWAYS differs from our payload, and "fixing" that difference
+     * would re-submit the phone-verification template on every run and could break the one
+     * path that lets a person verify a number.
+     */
+    const editable = differing.filter(x => x.current.status !== 'PENDING' && x.current.status !== 'IN_APPEAL'
+        && x.payload.category !== 'AUTHENTICATION');
+    const locked = differing.filter(x => !editable.includes(x));
+
+    if (differing.length > 0) {
+        console.log(`\nDiffer from the WABA: ${differing.length}  (${editable.length} editable, ${locked.length} still in review)`);
+        for (const { payload, current } of differing) {
+            const bodyChanged = JSON.parse(visibleShape(current.components)).body !== JSON.parse(visibleShape(payload.components)).body;
+            console.log(`   ${editable.some(e => e.payload === payload) ? 'EDIT ' : 'LOCK '}${`${payload.name} [${payload.language}]`.padEnd(48)} ${current.status.padEnd(9)} `
+                + `${buttonSummary(current.components)}  →  ${buttonSummary(payload.components)}${bodyChanged ? '  ⚠ BODY CHANGES' : ''}`);
+        }
+    }
     const skipped = payloads.length - pending.length;
     const todo = LIMIT > 0 ? pending.slice(0, LIMIT) : pending;
 
@@ -183,7 +248,7 @@ async function main(): Promise<void> {
         }
         console.log('\nButton hosts these would bake in PERMANENTLY:');
         for (const [url, count] of byBase) console.log(`   ${String(count).padStart(4)}  ${url}`);
-        console.log('\nNOTHING WAS SUBMITTED. Re-run with --submit to send them to Meta for review.\n');
+        console.log('\nNOTHING WAS SUBMITTED. Re-run with --submit to create, and --submit --edit to also send the edits.\n');
         return;
     }
 
@@ -205,12 +270,33 @@ async function main(): Promise<void> {
         if (index < todo.length - 1) await sleep(DELAY_MS);
     }
 
+    if (flag('edit')) {
+        const edits = LIMIT > 0 ? editable.slice(0, LIMIT) : editable;
+        console.log(`\nEditing ${edits.length}…\n`);
+        for (const [index, { payload, current }] of edits.entries()) {
+            await sleep(DELAY_MS);
+            const result = await createTemplate(payload, current.id);
+            // An edited template was recorded as "exists" above; replace that row.
+            const at = results.findIndex(r => r.name === payload.name && r.language === payload.language);
+            if (at >= 0) results.splice(at, 1);
+            results.push(result);
+            const label = `${payload.name} [${payload.language}]`.padEnd(52);
+            const position = `${String(index + 1).padStart(3)}/${edits.length}`;
+            if (result.status === 'edited') console.log(`${position} ✏️  ${label} ${result.id}`);
+            else console.log(`${position} ❌ ${label} ${result.error}`);
+        }
+    } else if (editable.length > 0) {
+        console.log(`\n${editable.length} edit(s) NOT sent — add --edit to send them.`);
+    }
+
     const created = results.filter(r => r.status === 'created');
+    const edited = results.filter(r => r.status === 'edited');
     const failed = results.filter(r => r.status === 'failed');
 
     console.log(`\n── Summary ───────────────────────────────────────────────`);
     console.log(`   created  ${created.length}`);
-    console.log(`   existed  ${results.length - created.length - failed.length}`);
+    console.log(`   edited   ${edited.length}`);
+    console.log(`   existed  ${results.length - created.length - edited.length - failed.length}`);
     console.log(`   failed   ${failed.length}`);
 
     if (failed.length) {

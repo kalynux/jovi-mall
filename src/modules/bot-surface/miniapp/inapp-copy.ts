@@ -340,6 +340,27 @@ const CHECKOUT_WATCH_CHAT: Copy = {
     ar: 'وافق على الدفع من هاتفك. سأخبرك في المحادثة بمجرد وصوله.',
 };
 
+/** The checkout screen's second button, beside Pay now (owner decision, 2026-09-27). */
+const CHECKOUT_PAY_ON_DELIVERY: Copy = {
+    en: 'Pay on delivery',
+    fr: 'Payer à la livraison',
+    pt: 'Pagar na entrega',
+    es: 'Pagar al recibir',
+    ar: 'الدفع عند الاستلام',
+};
+
+/**
+ * After a pay-on-delivery order is placed from the screen. ⚠ "You will receive", not "I will
+ * send": the delivery code goes to the customer's notification channel, not always this chat.
+ */
+const CHECKOUT_COD_PLACED: Copy = {
+    en: 'Order placed. Pay the delivery agent in cash when it arrives — you will receive a delivery code for each parcel.',
+    fr: 'Commande passée. Payez le livreur en espèces à la réception — vous recevrez un code de livraison pour chaque colis.',
+    pt: 'Encomenda feita. Pague ao estafeta em dinheiro quando chegar — vai receber um código de entrega para cada encomenda.',
+    es: 'Pedido hecho. Paga al repartidor en efectivo cuando llegue — recibirás un código de entrega por cada paquete.',
+    ar: 'تم الطلب. ادفع لمندوب التوصيل نقدًا عند الاستلام — ستتلقى رمز توصيل لكل طرد.',
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Orders and stores — screens are a later milestone, contract frozen here
 // ─────────────────────────────────────────────────────────────────────────────
@@ -460,6 +481,8 @@ const PAGE = Object.freeze({
     checkoutPhone: CHECKOUT_PHONE,
     checkoutPay: CHECKOUT_PAY,
     checkoutWatchChat: CHECKOUT_WATCH_CHAT,
+    checkoutPayOnDelivery: CHECKOUT_PAY_ON_DELIVERY,
+    checkoutCodPlaced: CHECKOUT_COD_PLACED,
 
     ordersHeading: ORDERS_HEADING,
     storesHeading: STORES_HEADING,

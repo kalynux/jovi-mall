@@ -184,8 +184,9 @@ export class TemplateRegistry {
 
             // Customer-facing COD delivery code — fallback for when the customer is
             // outside Meta's 24h free-form window (see DeliveryCodeService).
-            // Body params: order number, delivery code, amount, currency.
-            ['cod_delivery_code', 4, false, 'Customer: cash-on-delivery delivery code'],
+            // AUTHENTICATION (Meta rejected it twice as UTILITY, 2026-09-27): Meta's fixed
+            // body with ONE param, the code, plus the copy button carrying it again.
+            ['wi_mall_delivery_code', 1, true, 'Customer: cash-on-delivery delivery code (AUTHENTICATION)'],
 
             // ── Customer (button base: STOREFRONT_URL) ───────────────────────
             // The fourth notification stack. Param counts MUST match the

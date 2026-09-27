@@ -50,6 +50,8 @@ type NewPaymentAttempt = {
   purpose?: 'primary' | 'booking_balance';
   /** The chat the checkout came from, if any — see `IPaymentTransaction.originChat`. */
   originChat?: { channel: 'whatsapp' | 'telegram' };
+  /** Who is paying, as entered at initiate — see `payerOf` and `IPaymentTransaction.payer`. */
+  payer: { name: string | null; phone: string | null; email: string | null } | null;
 } & (
   | { orderId: Types.ObjectId }
   | { cartId: Types.ObjectId; orderIds: Types.ObjectId[] }
@@ -66,6 +68,21 @@ import { eventBus } from '../../../core/events/event-bus';
 import { transactionManager } from '../../../core/database/transaction.manager';
 import { earningsSplitService } from '../../earnings/services/earnings-split.service';
 import { earningsRefundService } from '../../earnings/services/earnings-refund.service';
+
+/**
+ * The payer as they identified themselves at initiate (2026-09-27). A payment link can be paid
+ * by someone other than the customer, and until now this reached the gateway and was dropped —
+ * so no statement could say who paid. `null` when nothing identifying was given (a card payment
+ * with no name or email).
+ */
+export function payerOf(
+  channel: Pick<PaymentChannelInfo, 'customerName' | 'phoneNumber' | 'customerEmail'> | undefined
+): { name: string | null; phone: string | null; email: string | null } | null {
+  const name = channel?.customerName?.trim() || null;
+  const phone = channel?.phoneNumber?.trim() || null;
+  const email = channel?.customerEmail?.trim() || null;
+  return name || phone || email ? { name, phone, email } : null;
+}
 
 /**
  * PaymentOrchestratorService - Gateway-agnostic payment orchestration
@@ -238,6 +255,7 @@ export class PaymentOrchestratorService {
       currencySnapshot: order.currency,
       idempotencyKey,
       merchantRef: mintMerchantRef('pt'),
+      payer: payerOf(channel),
       rawGatewayPayloads: []
     }, idempotencyKey);
     if ('raced' in attempt) return respondWithExisting(attempt.raced);
@@ -445,6 +463,7 @@ export class PaymentOrchestratorService {
       currencySnapshot: currency,
       idempotencyKey,
       merchantRef: mintMerchantRef('pt'),
+      payer: payerOf(channel),
       rawGatewayPayloads: [],
       // ⚠ Written WITH the row, before the gateway is called: a charge can settle within
       // seconds, and a result announced before the origin was stamped would go to the
@@ -809,12 +828,17 @@ export class PaymentOrchestratorService {
    * @param bookingId - Booking to pay for
    * @param gateway - Which gateway to use
    * @param channel - Payment channel info (phone, card, etc.)
+   * @param options.originChat - The chat the payment was asked for from, so its result is told
+   *   there (`IPaymentTransaction.originChat`). Recorded on a NEW attempt only, exactly as
+   *   `initiatePaymentForCart` does: an existing live attempt is answered as it stands. The
+   *   storefront route passes none, which is the honest state — it has no chat.
    * @returns Payment instructions or existing transaction
    */
   async initiateBookingPayment(
     bookingId: string,
     gateway: PaymentGatewayType,
-    channel: PaymentChannelInfo
+    channel: PaymentChannelInfo,
+    options: { originChat?: 'whatsapp' | 'telegram' | null } = {}
   ): Promise<{
     transactionId: string;
     status: PaymentStatus;
@@ -931,7 +955,12 @@ export class PaymentOrchestratorService {
       currencySnapshot: booking.currency,
       idempotencyKey,
       merchantRef: mintMerchantRef('pt'),
-      rawGatewayPayloads: []
+      payer: payerOf(channel),
+      rawGatewayPayloads: [],
+      // ⚠ Written WITH the row, before the gateway is called — see the same line in
+      // `initiatePaymentForCart`: a result announced before the origin is stamped goes to the
+      // preference channel, the defect this field exists to close.
+      ...(options.originChat ? { originChat: { channel: options.originChat } } : {})
     }, idempotencyKey);
     if ('raced' in attempt) return respondWithExisting(attempt.raced);
     const transaction = attempt.opened;
@@ -1009,11 +1038,14 @@ export class PaymentOrchestratorService {
    * The resulting transaction carries `purpose: 'booking_balance'`, which is what
    * lets the webhook credit the balance instead of no-oping on an already-paid
    * booking.
+   *
+   * `options.originChat` — as `initiateBookingPayment`.
    */
   async initiateBookingBalancePayment(
     bookingId: string,
     gateway: PaymentGatewayType,
-    channel: PaymentChannelInfo
+    channel: PaymentChannelInfo,
+    options: { originChat?: 'whatsapp' | 'telegram' | null } = {}
   ): Promise<{
     transactionId: string;
     status: PaymentStatus;
@@ -1120,7 +1152,10 @@ export class PaymentOrchestratorService {
       currencySnapshot: booking.currency,
       idempotencyKey,
       merchantRef: mintMerchantRef('pt'),
-      rawGatewayPayloads: []
+      payer: payerOf(channel),
+      rawGatewayPayloads: [],
+      // ⚠ Before the gateway call — as in `initiateBookingPayment`.
+      ...(options.originChat ? { originChat: { channel: options.originChat } } : {})
     }, idempotencyKey);
     if ('raced' in attempt) return respondWithExisting(attempt.raced);
     const transaction = attempt.opened;
@@ -1625,7 +1660,9 @@ export class PaymentOrchestratorService {
             purpose: transaction.purpose ?? 'primary',
             amount: transaction.amountSnapshot,
             currency: transaction.currencySnapshot,
-            status: transaction.status
+            status: transaction.status,
+            /** The chat to tell — see `IPaymentTransaction.originChat`. Absent = preference order. */
+            originChannel: transaction.originChat?.channel ?? undefined
           }
         });
         console.log(
@@ -2137,7 +2174,9 @@ export class PaymentOrchestratorService {
           ...(type === 'booking'
             ? {
                 userId: transaction.userId?.toString(),
-                purpose: transaction.purpose ?? 'primary'
+                purpose: transaction.purpose ?? 'primary',
+                /** The chat to tell — see `IPaymentTransaction.originChat`. Absent = preference order. */
+                originChannel: transaction.originChat?.channel ?? undefined
               }
             : {})
         }

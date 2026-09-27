@@ -101,13 +101,16 @@ shown to the vendor it is about.
 
 > ⚠ **"Verification gates nothing today" was true until 2026-09-15 and is now FALSE.** This
 > paragraph used to end there, on the grounds that `requireLegitBusiness` had zero call sites
-> and was deleted on 2026-08-19. Two things read the verdict now, and both are about money:
+> and was deleted on 2026-08-19. What reads the verdict now is about money, and it is
+> **information only**:
 >
-> - **the payout allowance** — an unverified owner's withdrawals can be capped within a
->   rolling window (`EARNINGS_PAYOUT_UNVERIFIED_CAP_REACHED`), inert until a deployment sets
->   a number, but no longer nothing;
+> - ~~**the payout allowance** — an unverified owner's withdrawals can be capped within a
+>   rolling window (`EARNINGS_PAYOUT_UNVERIFIED_CAP_REACHED`).~~ **DELETED 2026-09-27** (owner
+>   decision) — an unverified vendor withdraws their whole available balance like a verified one;
+>   `payoutAllowance` is always `null` and the error code no longer exists;
 > - **the admin payout queue** — every row carries `verification: { verified, verdict }`, read
 >   fresh, because `status: "active"` stopped being evidence that anybody vetted the business.
+>   Shown to the reviewer; it limits nothing.
 >
 > It is still surfaced to agencies as `kycVerified` through `agency-vendor-browse.dto.ts`, and
 > it still refuses nothing on the request path: an unverified vendor trades normally. Working

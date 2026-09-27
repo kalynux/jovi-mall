@@ -134,9 +134,14 @@ is the emitter, geo-tracker's `/webhooks/agent-actions` the sink.
 #### Assignment eligibility
 
 An agent may receive a shipment only when **all** hold: `active` account · an **`active` contract**
-with the *dispatching* agency · `verified` KYC · no platform ban · `online` · tracking allowed ·
+with the *dispatching* agency · no platform ban · `online` · tracking allowed ·
 device location not disabled · under their concurrency ceiling. The contract rule is still keyed
 `approved` on the wire (`membership_not_approved`) — the old vocabulary, kept for clients.
+
+⚠ **`verified` KYC was on this list until 2026-09-27** (owner decision: verification is a trust
+badge, not a licence to work). It now gates **COD shipments only**, inside the `cod_exposure`
+contract gate (`CodExposureService`, `422 AGENT_KYC_NOT_VERIFIED`); an unverified agent is eligible
+for prepaid work.
 
 An agent may hold **several active shipments at once** — capacity bounds this, it does not forbid it,
 and the count spans all agencies (capacity is a property of the person, not of one agency's view).

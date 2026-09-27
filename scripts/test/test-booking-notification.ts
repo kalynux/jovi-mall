@@ -550,6 +550,116 @@ assert('both creation paths stamp a number', () => {
     return draws === 2 && group.includes('bookingNumber,');
 });
 
+// ─── A booking payment's outcome is told in the chat it was paid in ──────────
+//
+// ⭐ M-12 of `api-doc/n8n/BOOKINGS-PHASE-6-PLAN.md`. Four links, and the plan named only the
+// first: the transaction must RECORD the chat, both booking publishers must CARRY it, and both
+// customer handlers must HAND it to `notify`. Any one missing and the receipt takes the
+// preference order (Telegram → email → WhatsApp) — the order defect of 2026-09-22, one product
+// type over. Source scans, for the reason at the top of this file: the payload is untyped.
+
+console.log('\n── Booking payment outcome → the origin chat ──');
+
+// ⚠ CRLF-normalised: the spans below are bounded by `\n`, and a CRLF blob runs them to EOF.
+const ORCHESTRATOR = stripComments(read('modules/payments/services/payment-orchestrator.service.ts').replace(/\r\n/g, '\n'));
+const CUSTOMER_HANDLER_CODE = stripComments(CUSTOMER_HANDLER.replace(/\r\n/g, '\n'));
+
+/**
+ * A method's text, from its declaration to the next method at the SAME indent. Empty if not
+ * found. The indent is read off the declaration's own line, because the orchestrator indents by
+ * two and the handler class by four.
+ */
+function methodSpan(src: string, declaration: string): string {
+    const at = src.indexOf(declaration);
+    if (at < 0) return '';
+    const lineStart = src.lastIndexOf('\n', at) + 1;
+    const pad = `\n${' '.repeat(src.slice(lineStart, at).match(/^ */)![0].length)}`;
+    const from = at + declaration.length;
+    // Plain string search — the codebase bans `new RegExp`, and a fixed prefix needs none.
+    const next = [`${pad}async `, `${pad}private async `, `${pad}public async `]
+        .map((prefix) => src.indexOf(prefix, from))
+        .filter((i) => i >= 0);
+    return next.length === 0 ? '' : src.slice(at, Math.min(...next));
+}
+
+for (const method of ['initiateBookingPayment', 'initiateBookingBalancePayment']) {
+    assert(`⛔ ${method} records the origin chat on a NEW attempt only, before the gateway call`, () => {
+        const body = methodSpan(ORCHESTRATOR, `async ${method}(`);
+        const stamp = body.indexOf('...(options.originChat ? { originChat: { channel: options.originChat } } : {})');
+        const opened = body.indexOf('this.openAttempt(');
+        const gateway = body.indexOf('gatewayInstance.initiatePayment(');
+        return /options: \{ originChat\?: 'whatsapp' \| 'telegram' \| null \} = \{\}/.test(body)
+            // Inside the new row, so an existing live attempt is answered as it stands…
+            && opened > 0 && stamp > opened
+            // …and written before the gateway can settle the charge.
+            && gateway > stamp
+            // Conditional: absent when not given — the storefront has no chat to name.
+            && !/originChat: \{ channel: options\.originChat \}(?! \} : \{\}\))/.test(body);
+    });
+}
+
+assert('⛔ both booking publishers carry originChannel — success and failure', () => {
+    const success = methodSpan(ORCHESTRATOR, 'private async emitPaymentEvent(');
+    const bookingExtras = success.slice(success.indexOf("...(type === 'booking'"));
+    const failureAt = ORCHESTRATOR.indexOf('if (transaction.bookingId) {\n        const booking = await Booking.findById(transaction.bookingId).select(');
+    const failure = balancedBody(ORCHESTRATOR, failureAt);
+    const carried = 'originChannel: transaction.originChat?.channel ?? undefined';
+    return bookingExtras.includes(carried)
+        && failureAt > 0
+        && failure.includes("aggregateType: 'booking'")
+        && failure.includes(carried);
+});
+
+for (const handler of ['handleBookingPaymentReceived', 'handleBookingPaymentFailed']) {
+    assert(`⛔ ${handler} hands the origin chat to notify`, () => {
+        const body = methodSpan(CUSTOMER_HANDLER_CODE, `async ${handler}(`);
+        const notifyCall = balancedBody(body, body.indexOf('await this.notify('), '(');
+        return notifyCall.includes('originChat: originChatOf(p.originChannel)');
+    });
+}
+
+/**
+ * ⚠ **The storefront route passes nothing, and that is the honest state** — it has no chat. A
+ * default of "whatsapp" there would be a guess presented as a fact.
+ */
+assert('the storefront booking payment names no chat', () => {
+    const route = stripComments(read('modules/booking/routes/booking-payment.routes.ts'));
+    return route.includes('initiateBookingPayment(bookingId, gateway, channel)')
+        && !route.includes('originChat');
+});
+
+// ─── One message for a booking made in a chat (owner decision, 2026-09-27) ───
+//
+// The chat that took the booking confirms it itself (the picker's receipt, or the assistant's
+// answer); the platform's own `booking.created` is then kept in the inbox and sent nowhere else.
+// Three links: the event CARRIES the mark, the handler PASSES it, the dispatcher HONOURS it only
+// while that chat is still connected.
+
+console.log('\n── A booking made in a chat is confirmed once, there ──');
+
+assert('⛔ booking.created carries bookedInChat, read off the booking', () =>
+    stripComments(BOOKING_SERVICE.replace(/\r\n/g, '\n'))
+        .includes('bookedInChat: (booking.metadata as { bookedInChat?: string } | undefined)?.bookedInChat'));
+
+assert('⛔ handleBookingCreated hands it to notify as alreadyToldInChat, filtered to the two chats', () => {
+    const body = methodSpan(CUSTOMER_HANDLER_CODE, 'async handleBookingCreated(');
+    const notifyCall = balancedBody(body, body.indexOf('await this.notify('), '(');
+    return notifyCall.includes('alreadyToldInChat: originChatOf(p.bookedInChat),');
+});
+
+/**
+ * ⚠ Ordered: the "already told" exit must come BEFORE every channel is chosen, and only when that
+ * chat is still connected — unlinked since, the customer is told the usual way. The in-app row is
+ * untouched (`channels` starts as `['in-app']`).
+ */
+assert('⛔ the dispatcher sends a chat-made booking to the inbox only, while that chat is connected', () => {
+    const fn = methodSpan(CUSTOMER_HANDLER_CODE, 'private async determineDeliveryChannels(');
+    const exit = fn.indexOf('if (alreadyToldInChat && connections[alreadyToldInChat]) {\n            return channels;');
+    const origin = fn.indexOf('if (originChat && connections[originChat]) {');
+    return fn.includes("const channels: CustomerDeliveryChannel[] = ['in-app'];")
+        && exit > 0 && origin > exit;
+});
+
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${passed} passed, ${failed} failed`);

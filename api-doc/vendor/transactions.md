@@ -37,12 +37,10 @@ entry is filtered out.
 - `category` (string, optional) — filter to one of `plan`, `credit`, `earning`, `payout`.
   Omit for everything.
 
-> 🔴 **`category=payout` always returns an empty feed, and not because cash-out is unbuilt.**
-> Payout requests exist and are live at `GET`/`POST /api/vendor/earnings/payout`. The filter is
-> simply never wired to a source: `wantPlan`/`wantCredit`/`wantEarning` are all `false` under
-> `payout`, so every branch resolves to `[]`
-> (`vendor-transaction.service.ts:48-51`). Do not offer a "Payouts" tab driven by this — read
-> [earnings.md](./earnings.md) instead.
+> ✅ **`category=payout` returns payout requests (fixed 2026-09-27).** It used to always return
+> an empty feed. Each payout request is one row: `type: "payout"`, `status` is
+> `pending`/`processing`/`paid`/`rejected`/`failed`, and the method kind appears in the
+> description. The account number never appears.
 
 > ⚠ **`meta.total` and the page can disagree at depth.** The four sources are queried
 > independently, merged in memory and sliced, while `total` is the sum of four separate counts —
@@ -123,7 +121,7 @@ entry is filtered out.
 | `type` | `plan_purchase`, `credit_topup`, `credit_allowance`, `credit_usage`, `credit_adjustment`, **`credit_movement`**, `earning_hold`, `earning_release`, `earning_reversal`, **`earning_reserve_hold`**, **`earning_reserve_release`**. `credit_movement` is the fallback for any `reason_code` outside the four mapped ones (`vendor-transaction.service.ts:17-22,140`); the two `reserve_*` types come straight from `earning_${entry_type}` and the ledger's enum has five members (`earnings-ledger.model.ts:22-27`). Treat the list as open and default unknown types to a generic row |
 | `status` | Source status — money txns: `pending`/`paid`/`failed`/`reversed`; earnings: **the `entry_type` itself**, so `hold`/`release`/`reversal`/`reserve_hold`/`reserve_release` — it duplicates `type` rather than describing success, so do **not** render it as a state badge; credit moves: always `completed` |
 | `unit` | `money` (has `currency`) or `credit` (credit units) |
-| `direction` | `in` (value into the vendor) or `out` (value leaving) |
+| `direction` | Seen from the owner. `in` means money arriving: `earning_hold`, or credits granted. `out` means money leaving: `earning_reversal`, a **paid** payout, or a purchase. `internal` means money moving between the owner's own balances: `earning_release` (escrow → available), `earning_reserve_hold`/`_release`, and a payout that is pending, rejected or failed. ⚠ **`internal` is new (2026-09-27).** Before, a release was `in`, so **every earning was counted twice** in any sum. **Σ in − Σ out over `earning` and `payout` rows now equals the change in the earnings balance.** |
 | `amount` | Positive magnitude in `unit` — use `direction` for sign |
 | `currency` | Present when `unit === "money"` |
 | `credits` | Credits granted (top-up) or the magnitude of a credit move |
@@ -132,11 +130,9 @@ entry is filtered out.
 | `source` | `{ type, id }` of the originating entity (plan code, pack code, order/booking id, `cod_collection` id, etc.) |
 | `createdAt` | ISO timestamp (feed is sorted by this, desc) |
 
-> ⚠ **The `description` on a reserve row is wrong.** The builder is a three-way ternary over
-> `hold`/`release`/*everything else* (`vendor-transaction.service.ts:153-158`), so
-> `reserve_hold` and `reserve_release` both come out as *"Earning reversed (refund)"*. **Derive
-> the label from `type`, never from `description`.** Reserve rows are agency-only in practice, so
-> a vendor should not meet one — but the feed is the same code for all three owner types.
+> ✅ **Reserve rows are labelled correctly (fixed 2026-09-27).** They used to read *"Earning
+> reversed (refund)"*. The descriptions also name the owner properly now: *Sale credited* for a
+> vendor, *Delivery earning credited* for an agency or agent.
 
 > **Cash-on-delivery earnings** appear as ordinary `earning_hold`/`earning_release` rows, but with
 > `source.type: "cod_collection"` — one per COD **shipment** (the cash handoff), rather than one
@@ -145,7 +141,8 @@ entry is filtered out.
 > [orders.md — Cash-on-delivery orders](./orders.md)).
 
 **How to render a "Transactions" tab:**
-- Group/colour by `category`; show a sign from `direction` (`out` = debit, `in` = credit).
+- Group/colour by `category`; show a sign from `direction` (`out` = debit, `in` = credit,
+  `internal` = no sign — render it muted, it moved money between your own balances).
 - For `unit: "money"` rows show `amount` + `currency`; for `unit: "credit"` rows show
   `±amount` credits.
 - Top-up rows (`type: credit_topup`) carry both the money `amount` and the `credits` granted.

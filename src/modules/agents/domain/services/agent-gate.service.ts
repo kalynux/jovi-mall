@@ -8,32 +8,40 @@ import { RoleActorRef, actorStampOrCleared } from '../../../../core/types/actor-
 import { logger } from '../../../../core/logging';
 import { agentCodPoolService } from './agent-cod-pool.service';
 
-export type GateFailure = 'agent_not_found' | 'kyc_not_verified' | 'platform_banned';
+export type GateFailure = 'agent_not_found' | 'platform_banned';
 
 export interface GateResult {
   passed: boolean;
   failures: GateFailure[];
+  /** Reported for the caller's information — no gate here judges it. */
   kycStatus: string | null;
   banned: boolean;
 }
 
 /**
- * AgentGateService — the platform-wide gates that outrank everything else.
+ * AgentGateService — the platform-wide gate that outranks everything else.
  *
- * §6b is explicit that these run BEFORE the COD and capacity checks, not
- * alongside them, and the ordering carries meaning: an unverified or banned
- * agent must be refused for being unverified or banned, not for happening to be
- * offline. Reporting "not available" to an agency whose agent is actually
- * banned sends them to fix the wrong thing.
+ * §6b is explicit that it runs BEFORE the COD and capacity checks, not
+ * alongside them, and the ordering carries meaning: a banned agent must be
+ * refused for being banned, not for happening to be offline. Reporting "not
+ * available" to an agency whose agent is actually banned sends them to fix the
+ * wrong thing. No agency can override it.
  *
- * These are also the gates that no agency can override. An agency may set its
- * own contract terms, but it cannot contract with someone the platform has not
- * verified or has thrown off.
+ * ⚠ **KYC is NOT a gate here any more (owner decision, 2026-09-27).**
+ * Verification tells counterparties the platform has vetted someone; it is not
+ * a licence to work. An agent who finished onboarding may be contracted,
+ * dispatched and paid while unverified — or after being refused. The ONE thing
+ * a missing verdict withholds is CASH: `CodExposureService.evaluate` refuses
+ * every COD shipment to an agent whose `kyc.status` is not `verified`, and an
+ * unverified agent's contract may carry a COD slice that stays DORMANT until
+ * the verdict lands (`AgentCodThresholdService.assertContractThresholdAllowed`).
+ * Re-adding KYC here would silently take all prepaid work away from every
+ * unverified agent again.
  */
 export class AgentGateService {
   constructor(private readonly agents: AgentRepository = agentRepository) {}
 
-  /** Evaluate without throwing. Both gates reported, not just the first. */
+  /** Evaluate without throwing. */
   async evaluate(agentId: string, session?: ClientSession): Promise<GateResult> {
     const agent = await this.agents.findById(agentId, session);
     if (!agent) {
@@ -49,17 +57,15 @@ export class AgentGateService {
     const kycStatus = agent.kyc?.status ?? 'unverified';
 
     if (banned) failures.push('platform_banned');
-    if (kycStatus !== 'verified') failures.push('kyc_not_verified');
 
     return { passed: failures.length === 0, failures, kycStatus, banned };
   }
 
   /**
-   * Gate for holding a contract or COD cash. Throws with the specific cause.
+   * Gate for holding a contract. Throws with the specific cause.
    *
-   * The ban is reported before KYC: a banned agent's verification status is
-   * irrelevant, and telling an operator "complete KYC" for someone who has been
-   * thrown off the platform is actively misleading.
+   * Refuses a missing or platform-banned agent only — an unverified agent
+   * passes. See the class header for where verification bites instead.
    */
   async assertCanHoldContract(agentId: string, session?: ClientSession): Promise<void> {
     const result = await this.evaluate(agentId, session);
@@ -68,14 +74,8 @@ export class AgentGateService {
     if (result.failures.includes('agent_not_found')) {
       throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
     }
-    if (result.failures.includes('platform_banned')) {
-      throw createAppError(ERROR_CODES.AGENT_PLATFORM_BANNED, 403, undefined, {
-        hint: 'A platform-wide ban overrides every contract; lift the ban before contracting.',
-      });
-    }
-    throw createAppError(ERROR_CODES.AGENT_KYC_NOT_VERIFIED, 422, undefined, {
-      kycStatus: result.kycStatus,
-      hint: 'An unverified agent cannot be approved into a contract or hold COD cash.',
+    throw createAppError(ERROR_CODES.AGENT_PLATFORM_BANNED, 403, undefined, {
+      hint: 'A platform-wide ban overrides every contract; lift the ban before contracting.',
     });
   }
 
@@ -109,8 +109,8 @@ export class AgentGateService {
     // bus, because this is the same module and the verdict is the moment an agent
     // asks "can I carry cash yet?". A failure is logged, not thrown: the verdict has
     // already landed and reporting it as failed would be the lie, and the pool cannot
-    // leak meanwhile — every COD gate refuses an unverified agent on KYC first, and
-    // the nightly reconcile converges it.
+    // leak meanwhile — the COD exposure gate refuses an unverified agent on KYC
+    // first, and the nightly reconcile converges it.
     let synced = updated;
     try {
       await agentCodPoolService.sync(agentId, 'kyc_verdict');

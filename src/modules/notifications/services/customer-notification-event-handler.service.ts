@@ -35,6 +35,8 @@ import {
     renderCustomerWhatsAppTemplateParams,
     renderCustomerButton,
     renderCustomerQuickReplies,
+    renderCustomerTemplateQuickReplies,
+    CUSTOMER_NOTIFICATION_CATALOG,
     viewLineFor,
     customerWhatsAppTemplateName,
     deliveryFailureLine,
@@ -70,7 +72,9 @@ const SITUATION_PREFERENCE: Partial<
     'order.shipped': 'orderUpdates',
     'order.out_for_delivery': 'orderUpdates',
     'order.delivered': 'orderUpdates',
-    'order.delivery_failed': 'orderUpdates'
+    'order.delivery_failed': 'orderUpdates',
+    // The one situation nobody's action caused — so the one that most needs an off switch.
+    'cart.abandoned': 'cartReminders'
     // Deliberately absent (always sent):
     //   booking.cancelled, booking.payment.received, booking.balance.due,
     //   booking.refunded, booking.refund.pending,
@@ -129,6 +133,13 @@ interface DispatchParams {
      * ahead of the preference order; see `determineDeliveryChannels`.
      */
     originChat?: OriginChatChannel;
+    /**
+     * The chat that has ALREADY told the customer this, in its own words — today only a booking
+     * made in a chat, whose confirmation that conversation sent itself. When the account is still
+     * connected there, the notification is kept in the inbox and sent NOWHERE else: one message,
+     * in the chat they booked from (owner decision, 2026-09-27). Unlinked since → preference order.
+     */
+    alreadyToldInChat?: OriginChatChannel;
 }
 
 /** A chat a notification can answer in — the two the bot runs on. */
@@ -211,6 +222,8 @@ export class CustomerNotificationEventHandler {
             startAt: string | Date;
             status?: string;
             requiresPayment?: boolean;
+            /** The chat the booking was made in, if any (`booking.metadata.bookedInChat`). */
+            bookedInChat?: string;
         };
 
         const customer = await this.resolveCustomerByUserId(p.customerId, p.userId);
@@ -225,6 +238,13 @@ export class CustomerNotificationEventHandler {
             aggregateType: 'booking',
             aggregateId: p.bookingId,
             idempotencyKey: `customer.booking.created:${p.bookingId}`,
+            /**
+             * ⭐ **One message, in the chat they booked from** (owner, 2026-09-27). A booking made
+             * in a chat is confirmed THERE by that conversation — the screen's receipt, or the
+             * assistant's answer — so this one is kept in the inbox and not sent a second time,
+             * by email or on the other app. A storefront booking carries no mark and is unchanged.
+             */
+            alreadyToldInChat: originChatOf(p.bookedInChat),
             context: {
                 bookingId: p.bookingId,
                 serviceName: p.productTitle ?? this.genericService(lang),
@@ -493,6 +513,8 @@ export class CustomerNotificationEventHandler {
             purpose?: string;
             amount?: number;
             currency?: string;
+            /** The chat the payment was asked for from, if any (`IPaymentTransaction.originChat`). */
+            originChannel?: string;
         };
 
         if (p.aggregateType !== 'booking' || !p.bookingId) return;
@@ -525,6 +547,12 @@ export class CustomerNotificationEventHandler {
             idempotencyKey: isBalance
                 ? `customer.booking.balance.received:${p.bookingId}`
                 : `customer.booking.payment.received:${p.bookingId}`,
+            /**
+             * ⭐ **In the chat the customer paid in** — the booking twin of the order fix of
+             * 2026-09-22. The pay screen promised "I'll tell you in the chat"; without this the
+             * preference order sent the receipt to Telegram, or by email, for a WhatsApp payer.
+             */
+            originChat: originChatOf(p.originChannel),
             context: {
                 bookingId: p.bookingId,
                 serviceName: booking?.serviceName ?? this.genericService(lang),
@@ -562,6 +590,8 @@ export class CustomerNotificationEventHandler {
             currency?: string;
             /** The failed charge, for the "Try again" quick reply. Published already. */
             paymentId?: string;
+            /** The chat the payment was asked for from, if any (`IPaymentTransaction.originChat`). */
+            originChannel?: string;
         };
 
         if (p.aggregateType !== 'booking' || !p.bookingId) return;
@@ -578,20 +608,22 @@ export class CustomerNotificationEventHandler {
             aggregateType: 'booking',
             aggregateId: p.bookingId,
             idempotencyKey: `customer.booking.payment_failed:${p.bookingId}${isBalance ? ':balance' : ''}`,
+            /** In the chat the customer paid in — as `handleBookingPaymentReceived`. */
+            originChat: originChatOf(p.originChannel),
             context: {
                 bookingId: p.bookingId,
                 /**
-                 * The charge that failed, for the "Try again" quick reply. `paymentId` is
-                 * already on the event — the orchestrator publishes it on both the booking
-                 * and the order branch — so nothing new is emitted for this.
-                 *
-                 * ⚠ **The tap MUST carry this id**, for the reason `paymentTap` documents:
-                 * a button outlives the payment it was drawn for, and a "Try again" that
-                 * resolved "my latest payment" would charge a different basket than the
-                 * message beside it names. Absent, the button is dropped rather than
-                 * guessing.
+                 * ⭐ **Try again re-opens the BOOKING's payment screen (`bpay:`)** — it drew
+                 * `pay:rt:<transactionId>` until bookings phase 6, whose handler serves orders
+                 * only and answered the customer about their orders; the transaction id it
+                 * carried went with it. Exactly ONE of these two is filled: an empty
+                 * placeholder drops its button (`renderCustomerQuickReplies`), which is how one
+                 * message offers the price's screen or the balance's and never both. A button
+                 * that outlives its failure is safe: the tap re-checks what is owed NOW
+                 * (`assertSomethingDue`) and the screen re-resolves the amount.
                  */
-                transactionId: p.paymentId ?? '',
+                payPriceBookingId: isBalance ? '' : p.bookingId,
+                payBalanceBookingId: isBalance ? p.bookingId : '',
                 serviceName: booking?.serviceName ?? this.genericService(lang),
                 currency: p.currency ?? booking?.currency ?? 'XAF',
                 amountFormatted: this.formatAmount(p.amount ?? 0)
@@ -832,6 +864,58 @@ export class CustomerNotificationEventHandler {
                 orderId: p.orderId,
                 orderNumber: p.orderNumber ?? orderNumber ?? p.orderId,
                 refundLine: this.refundLine(lang, p.paymentStatus)
+            }
+        });
+    }
+
+    /**
+     * ⭐ The money went back, and until this existed nobody said so.
+     *
+     * `order.refunded` was fully built — copy in five languages, an approved template, a URL
+     * button, and a written decision to send it ungated — and NOTHING raised it. Meanwhile the
+     * orchestrator has published `payment.refunded` after every completed refund, carrying
+     * `orderId` for an order, and nothing subscribed to that either. This joins the two; the
+     * money path is untouched.
+     *
+     * ⚠ **Keyed per REFUND, not per order.** A refund can be partial and an order can take
+     * several (`totalRefunded` accumulates), and the copy names the amount of THIS refund. A key
+     * per order would deliver the first partial refund and silently swallow every later one —
+     * the customer would be told about 2,000 of a 5,000 return and never about the rest.
+     *
+     * ⚠ **Bookings are dropped here on purpose.** The same event fires for a booking refund,
+     * and that customer is already told through `booking.payment.updated`
+     * (`handleBookingPaymentUpdated`). Taking it here too would send the refund twice.
+     *
+     * Ungated by preference, as money is everywhere on this table (`SITUATION_PREFERENCE`).
+     */
+    async handleOrderRefunded(event: DomainEvent): Promise<void> {
+        const p = event.payload as {
+            orderId?: string;
+            bookingId?: string;
+            sourceKind?: string;
+            refundId?: string;
+            amount: number;
+            currency: string;
+        };
+
+        if (!p.orderId || p.bookingId || (p.sourceKind && p.sourceKind !== 'order')) return;
+
+        const { customer, orderNumber, currency } = await this.customerFromOrder(p.orderId);
+        if (!customer) return;
+
+        await this.notify({
+            situation: 'order.refunded',
+            customerId: customer._id.toString(),
+            aggregateType: 'order',
+            aggregateId: p.orderId,
+            // No refundId would mean an event published by something other than the
+            // orchestrator; fall back to the stamp so it still cannot collide with a real one.
+            idempotencyKey: `customer.order.refunded:${p.orderId}:${p.refundId ?? event.occurredAt?.valueOf?.() ?? Date.now()}`,
+            context: {
+                orderId: p.orderId,
+                orderNumber: orderNumber ?? p.orderId,
+                currency: p.currency ?? currency,
+                amountFormatted: this.formatAmount(p.amount)
             }
         });
     }
@@ -1260,7 +1344,12 @@ export class CustomerNotificationEventHandler {
         const prefKey = SITUATION_PREFERENCE[params.situation];
         if (prefKey && prefs.preferences[prefKey] === false) return;
 
-        const deliveredVia = await this.determineDeliveryChannels(customer, prefs, params.originChat);
+        const deliveredVia = await this.determineDeliveryChannels(
+            customer,
+            prefs,
+            params.originChat,
+            params.alreadyToldInChat,
+        );
         const inApp = renderCustomerInApp(params.situation, lang, params.context);
         const action = this.resolveAction(params.situation, lang, params.context);
 
@@ -1346,10 +1435,25 @@ export class CustomerNotificationEventHandler {
      * silences everything (`dispatch` returns before this), and money carries no group.
      * With no connection left for that chat (unlinked since), the preference order applies.
      */
+    /**
+     * The ONE secondary channel this customer's notifications go to — for a message that is
+     * not a notification but must follow the same rule (the COD delivery code). Same
+     * preferences, same priority, same connection checks, read through the same function, so
+     * "the channel set up for notifications" cannot mean two things. No `originChat`: nothing
+     * here answers a chat. `null` when there is none (the code stays in the app).
+     */
+    async notificationChannelFor(customer: ICustomer): Promise<Exclude<CustomerDeliveryChannel, 'in-app'> | null> {
+        const prefs = await this.preferenceRepo.getByCustomer(customer._id.toString());
+        const channels = await this.determineDeliveryChannels(customer, prefs);
+        const secondary = channels.find(channel => channel !== 'in-app');
+        return (secondary as Exclude<CustomerDeliveryChannel, 'in-app'> | undefined) ?? null;
+    }
+
     private async determineDeliveryChannels(
         customer: ICustomer,
         prefs: ICustomerNotificationPreference,
-        originChat?: OriginChatChannel
+        originChat?: OriginChatChannel,
+        alreadyToldInChat?: OriginChatChannel
     ): Promise<CustomerDeliveryChannel[]> {
         const channels: CustomerDeliveryChannel[] = ['in-app'];
 
@@ -1358,6 +1462,11 @@ export class CustomerNotificationEventHandler {
         // muting is `telegramEnabled` alone, exactly as WhatsApp already
         // worked. See connections/services/connection.service.ts.
         const connections = await connectionService.getConnectionMap(customer.user_id);
+
+        // The conversation already said it — see `DispatchParams.alreadyToldInChat`. Inbox only.
+        if (alreadyToldInChat && connections[alreadyToldInChat]) {
+            return channels;
+        }
 
         if (originChat && connections[originChat]) {
             channels.push(originChat);
@@ -1689,6 +1798,15 @@ export class CustomerNotificationEventHandler {
                 );
             }
         } else {
+            /**
+             * ⛔ **An in-window-only situation sends NOTHING here** (`IN_WINDOW_ONLY_SITUATIONS`;
+             * the basket reminder). It has no template by decision, and a free message outside
+             * the window is refused by Meta. Not a delivery error: the in-app row and any other
+             * channel still carried it.
+             */
+            const templateName = customerWhatsAppTemplateName(situation);
+            if (!templateName) return false;
+
             const components: TemplateComponent[] = [
                 {
                     type: 'body',
@@ -1716,12 +1834,32 @@ export class CustomerNotificationEventHandler {
                 });
             }
 
+            /**
+             * Stage 2: the template's quick replies, each with an EXPLICIT payload. Indices
+             * follow the URL button, because the generator submits them after it
+             * (`customerTemplateQuickReplyLabels` — the same groups this reads).
+             *
+             * ⛔ **One payload per template button, never fewer.** A template button cannot be
+             * hidden at send time; one sent without a payload is still shown, and its tap
+             * arrives as the label text. So an unresolvable button carries its
+             * `templateFallback` instead of being left out — `renderCustomerTemplateQuickReplies`.
+             */
+            const quickReplyOffset = CUSTOMER_NOTIFICATION_CATALOG[situation].button ? 1 : 0;
+            renderCustomerTemplateQuickReplies(situation, context).forEach((payload, i) => {
+                components.push({
+                    type: 'button',
+                    sub_type: 'quick_reply',
+                    index: quickReplyOffset + i,
+                    parameters: [{ type: 'payload', payload }]
+                });
+            });
+
             result = await getWhatsAppMessagingService().send({
                 to,
                 type: 'template',
                 message: {
                     type: 'template',
-                    name: customerWhatsAppTemplateName(situation),
+                    name: templateName,
                     /**
                      * ⛔ **`templateLanguage`, never `META_LANGUAGE_CODE[lang]`.** Our templates
                      * are approved in English and French only, so naming the customer's own

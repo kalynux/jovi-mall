@@ -88,13 +88,12 @@ export function resolveEffectiveTrustScore(agent: IDeliveryAgent): EffectiveTrus
 /**
  * Shorthand for a caller that wants only the number.
  *
- * ⚠ **No call site in `src/` uses it today**, and that is a property of the one place
- * that did rather than a sign it is unwanted: `CodExposureService` used to resolve twice
- * — this shorthand for the tier, the full resolver for the trust floor — and now resolves
- * once and reads both off the result, which is what stops the two decision points being
- * handed different arguments. Kept because the next caller wanting just the number should
- * reach for this and not for `agent.cod.trust_score`, which is the regression O-7 exists
- * to prevent.
+ * Used by the agency roster and the agent directory DTOs (2026-09-27) — both showed the raw
+ * `agent.cod.trust_score`, so an agency saw a different number for an agent than the agent's
+ * own `/cod/balance` and every admin view did. `CodExposureService` resolves once with the
+ * full resolver instead, because it needs the tier and the floor off one result. The next
+ * caller wanting just the number should reach for this and not for `agent.cod.trust_score`,
+ * which is the regression O-7 exists to prevent.
  */
 export function effectiveTrustScore(agent: IDeliveryAgent): number {
     return resolveEffectiveTrustScore(agent).score;

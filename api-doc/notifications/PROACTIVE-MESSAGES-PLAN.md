@@ -1,5 +1,25 @@
 # Proactive messages — every message the platform sends FIRST ends in the obvious next action
 
+> **EXECUTED 2026-09-27 — steps 0–8 built; nothing yet proven on a handset.** Owner rulings that
+> day: Q-4 yes · Q-5 the notification channel only · Q-6 yes (template optional) · Q-7 ship off ·
+> **Q-8 12 hours, not 6.** Submitted to Meta the same day and **APPROVED**:
+> eleven customer templates edited to add their quick replies (22), and the COD code as
+> **`wi_mall_delivery_code`, AUTHENTICATION** — Meta rejected `cod_delivery_code` twice as UTILITY
+> (`INCORRECT_CATEGORY`), so the owner ruled for an authentication template, sent only when the
+> free message is refused. Four things this plan got wrong,
+> found while executing it:
+> 1. **`cod_delivery_code` had never been submitted** — § 1.4 and Step 8 call it "already approved".
+>    The 3a guard found it.
+> 2. **A template button cannot be omitted at send time** (§ 3.4, Step 6). It is shown regardless,
+>    and a tap on one sent with no payload returns its label. Every placeholder token now declares a
+>    `templateFallback`.
+> 3. **The submitter could only CREATE** — Step 4's edits would have been silently skipped. It gained
+>    `--edit`.
+> 4. **`order.refunded` needed no new event** (Step 2): `payment.refunded` was already published and
+>    subscribed by nothing.
+>
+> What follows is the plan as written.
+
 **Status: PLAN. Nothing in it is built.** Measured against source on **2026-09-27**; every claim
 carries a `file:line`. Read § 1 before § 4 — the single most expensive mistake available here is
 building stage 1 again, because **stage 1 is already done and green**, and the two documents a

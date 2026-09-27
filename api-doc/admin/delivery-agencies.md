@@ -148,8 +148,9 @@ which runs the whole product-suspension cascade a verdict has nothing for.
 >
 > **What a refusal still costs is cash.** `CodEligibilityService` tests
 > `kyc_details.legit_verified` explicitly — it was changed in the same release, precisely
-> because it had been using `active` as a stand-in for "an administrator approved this" — and
-> an unverified owner's payouts can be capped. Anything else that ought to turn on a refusal
+> because it had been using `active` as a stand-in for "an administrator approved this". (An
+> unverified owner's payouts could also be capped from 2026-09-15; that allowance was **deleted
+> 2026-09-27** — payouts are no longer limited by verification.) Anything else that ought to turn on a refusal
 > has to say so itself; `status` will not say it for you.
 
 **There is still no un-reject, and now for the right reason.** The approval compare-and-set

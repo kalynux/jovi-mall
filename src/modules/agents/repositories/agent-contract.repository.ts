@@ -106,6 +106,21 @@ export class AgentContractRepository {
     }).session(session ?? null);
   }
 
+  /**
+   * The live contract if there is one, else the most recent contract of ANY status.
+   *
+   * For EARNINGS QUOTES on history only (2026-09-27). `findLive` alone made every past shipment
+   * of a terminated contract read `earningUnavailable: 'no_contract'` for the agent — and quote
+   * the agency the whole fee — while real allocations existed. Never use this to decide whether
+   * an agent may take new work; that is `findLive`'s question.
+   */
+  async findLiveOrLatest(agentId: string, agencyId: string): Promise<IAgentAgencyContract | null> {
+    return (
+      (await this.findLive(agentId, agencyId)) ??
+      (await AgentAgencyContractModel.findOne({ agent_id: agentId, agency_id: agencyId }).sort({ updated_at: -1, _id: -1 }))
+    );
+  }
+
   async findActive(
     agentId: string,
     agencyId: string,

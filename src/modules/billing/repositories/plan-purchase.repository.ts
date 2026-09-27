@@ -40,7 +40,11 @@ export class PlanPurchaseRepository {
     status: PlanPurchaseStatus,
     updates: Partial<IPlanPurchase> = {}
   ): Promise<IPlanPurchase | null> {
-    return PlanPurchaseModel.findByIdAndUpdate(id, { $set: { status, ...updates } }, { new: true });
+    return PlanPurchaseModel.findByIdAndUpdate(
+      id,
+      { $set: { status, ...updates, ...(status === 'paid' ? { paid_at: new Date() } : {}) } },
+      { new: true }
+    );
   }
 
   /**
@@ -52,7 +56,7 @@ export class PlanPurchaseRepository {
   async claimIfPending(id: Types.ObjectId, toStatus: PlanPurchaseStatus): Promise<IPlanPurchase | null> {
     return PlanPurchaseModel.findOneAndUpdate(
       { _id: id, status: 'pending' },
-      { $set: { status: toStatus } },
+      { $set: { status: toStatus, ...(toStatus === 'paid' ? { paid_at: new Date() } : {}) } },
       { new: true }
     );
   }

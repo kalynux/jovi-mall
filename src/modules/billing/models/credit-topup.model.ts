@@ -52,6 +52,11 @@ export interface ICreditTopup extends Document {
    */
   otp_attempts: number;
   payment_transaction_id: mongoose.Types.ObjectId | null;
+  /**
+   * When this purchase was PAID (2026-09-27) — stamped by the repository on the transition to
+   * `paid`, for account statements. `null` until then and on rows written before the field.
+   */
+  paid_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -72,6 +77,7 @@ const CreditTopupSchema = new Schema<ICreditTopup>(
     merchant_ref: { type: String, default: null, unique: true, sparse: true, index: true },
     otp_attempts: { type: Number, default: 0, min: 0 },
     payment_transaction_id: { type: Schema.Types.ObjectId, ref: MODELS.PAYMENT_TRANSACTION, default: null },
+    paid_at: { type: Date, default: null },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );

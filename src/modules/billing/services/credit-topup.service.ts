@@ -162,6 +162,7 @@ export class CreditTopupService {
       if (topup.status === 'paid') return topup; // already completed
 
       topup.status = 'paid';
+      topup.paid_at = new Date(); // statement fact (2026-09-27) — see ICreditTopup.paid_at
       await topup.save({ session });
       await this.wallet.creditInSession(
         topup.owner_type,

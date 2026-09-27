@@ -175,8 +175,10 @@ export const MODELS = Object.freeze({
   // Vendor analytics & settings
   VENDOR_SETTINGS: 'VendorSettings',
   VENDOR_CUSTOMER: 'VendorCustomer',
-  VENDOR_DAILY_METRICS: 'VendorDailyMetrics',
-  VENDOR_VARIANT_DAILY_METRICS: 'VendorVariantDailyMetrics',
+  // 2026-09-27: replaces VendorDailyMetrics / VendorVariantDailyMetrics, whose models were
+  // deleted (their collections are kept in COLLECTIONS below — wi-admin copies that map and the
+  // old rows are not dropped). Finished days of vendor MONEY, read from the earnings allocations.
+  VENDOR_MONEY_DAILY: 'VendorMoneyDaily',
 
   // Notifications
   VENDOR_NOTIFICATION: 'VendorNotification',
@@ -374,6 +376,7 @@ export const COLLECTIONS = Object.freeze({
   VENDOR_CUSTOMER: 'vendor_customers',
   VENDOR_DAILY_METRICS: 'vendor_daily_metrics',
   VENDOR_VARIANT_DAILY_METRICS: 'vendor_variant_daily_metrics',
+  VENDOR_MONEY_DAILY: 'vendor_money_daily',
 
   // Notifications
   VENDOR_NOTIFICATION: 'vendor_notifications',

@@ -1,7 +1,11 @@
 import cron, { ScheduledTask } from 'node-cron';
-import { subDays } from 'date-fns';
+import { Types } from 'mongoose';
 import { VendorModel } from '../../modules/vendors/vendor.model';
-import { VendorAnalyticsAggregationService } from '../../modules/vendors/services/vendor-analytics-aggregation.service';
+import { VendorAnalyticsService, isEmptyDay } from '../../modules/vendors/services/vendor-analytics.service';
+import { VendorMoneyDailyModel } from '../../modules/vendors/models/vendor-money-daily.model';
+import { EarningsAllocationModel } from '../../modules/earnings/models/earnings-allocation.model';
+import { RefundTransactionModel } from '../../modules/payments/models/refund-transaction.model';
+import { addDays, daysOf, localDay, toAnalyticsPeriod } from '../../modules/vendors/analytics/net-revenue';
 import { maintenanceBlocksWorkers } from '../../modules/system/services/maintenance.service';
 import { recordWorkerRun } from '../../modules/system/metrics/metrics';
 import { ObservableWorker, WorkerSchedule } from './worker-schedule';
@@ -23,6 +27,14 @@ import { withWorkerLock, SWEEP_SKIPPED } from './worker-lock';
  *    active vendor ran happily in the middle of a `down` window, which is precisely what
  *    `pauseWorkers` exists to prevent.
  *
+ * ── 2026-09-27: what it computes was replaced; the worker, its key and its schedule were not ─
+ * It used to write `vendor_daily_metrics` from ORDERS (placement date, "paid at 02:00"), which
+ * could never match the wallet. It now writes `vendor_money_daily` from the EARNINGS ALLOCATIONS
+ * — the finished days the vendor dashboard reads so it computes only today live (owner decision:
+ * keep the heavy work at night). Same worker key (`analytics-aggregation`), same
+ * `ANALYTICS_AGGREGATION_CRON`, same maintenance guard and trigger. See
+ * `modules/vendors/models/vendor-money-daily.model.ts` for why a finished day is safe to store.
+ *
  * It is now an `ObservableWorker` like the rest: schedule derived from the value it schedules
  * with, three honest booleans, a real `stop()`, the maintenance guard at the tick site, and an
  * entry in the triggerable registry — `runOnce()` is one idempotent pass, so "run it once" has
@@ -30,11 +42,16 @@ import { withWorkerLock, SWEEP_SKIPPED } from './worker-lock';
  */
 
 const DEFAULT_CRON = '0 2 * * *';
+const DEFAULT_TIMEZONE = 'Africa/Douala';
+/** How far back the job fills days nobody has covered yet — the analytics range cap. */
+const COVERAGE_DAYS = 366;
+/** Days recomputed every night regardless, as margin for writes that committed across midnight. */
+const RECOMPUTE_DAYS = 2;
 
 class AnalyticsAggregationWorker implements ObservableWorker {
     private task: ScheduledTask | null = null;
     private inFlight = false;
-    private readonly aggregationService = new VendorAnalyticsAggregationService();
+    private readonly analytics = new VendorAnalyticsService();
 
     /** Derived from the value handed to `cron.schedule`, never retyped. ADR-014 D-8. */
     get schedules(): WorkerSchedule[] {
@@ -83,7 +100,8 @@ class AnalyticsAggregationWorker implements ObservableWorker {
     }
 
     /**
-     * One idempotent pass over every active vendor, for yesterday.
+     * One idempotent pass: every finished day not yet covered (up to a year back), plus the last
+     * two days again, for every vendor with money activity in them.
      *
      * ── F-19 note: this worker was NOT in the finding, and should have been ─────
      * The audit named "seven cron workers" from the `CLAUDE.md` line, which was written before
@@ -107,24 +125,14 @@ class AnalyticsAggregationWorker implements ObservableWorker {
         let failures = 0;
 
         try {
-            const active = await VendorModel.find({ status: 'active' });
-            vendors = active.length;
+            const zones = new Set<string>([DEFAULT_TIMEZONE]);
+            const vendorZones = await VendorModel.distinct('timezone');
+            for (const z of vendorZones) if (typeof z === 'string' && z) zones.add(z);
 
-            // Vendor-local yesterday: the service converts using each vendor's own timezone.
-            const yesterday = subDays(new Date(), 1);
-
-            for (const vendor of active) {
-                try {
-                    await this.aggregationService.aggregateDailyMetrics(
-                        vendor._id.toString(),
-                        yesterday,
-                        vendor.timezone || 'Africa/Douala',
-                    );
-                } catch (error) {
-                    failures += 1;
-                    // One vendor's bad data must not cost every other vendor their analytics.
-                    console.error(`[AnalyticsAggregation] vendor ${vendor._id} failed:`, error);
-                }
+            for (const timezone of zones) {
+                const result = await this.aggregateZone(timezone);
+                vendors += result.vendors;
+                failures += result.failures;
             }
 
             /**
@@ -149,6 +157,90 @@ class AnalyticsAggregationWorker implements ObservableWorker {
         } finally {
             this.inFlight = false;
         }
+    }
+
+    /**
+     * One timezone: find the span to (re)compute, compute every vendor with activity in it,
+     * store their non-empty days, then mark the span covered.
+     *
+     * ⚠ **The coverage markers are written only when EVERY vendor in the zone succeeded.** A
+     * marker means "a missing row is a real zero"; writing it after a vendor failed would turn
+     * that vendor's sales into zeros on the dashboard instead of letting the read compute them
+     * live.
+     */
+    private async aggregateZone(timezone: string): Promise<{ vendors: number; failures: number }> {
+        const today = localDay(new Date(), timezone);
+        const yesterday = addDays(today, -1);
+        const oldest = addDays(today, -COVERAGE_DAYS);
+
+        const markers = await VendorMoneyDailyModel.find({
+            vendor_id: null,
+            timezone,
+            day: { $gte: oldest, $lt: today },
+        })
+            .select('day')
+            .lean<{ day: string }[]>();
+        const covered = new Set(markers.map((m) => m.day));
+        const firstUncovered = daysOf({ from: oldest, to: yesterday }).find((d) => !covered.has(d));
+        const recomputeFrom = addDays(today, -RECOMPUTE_DAYS);
+        const from = firstUncovered && firstUncovered < recomputeFrom ? firstUncovered : recomputeFrom;
+        const period = toAnalyticsPeriod(from, yesterday, timezone);
+        const window = { $gte: period.start, $lt: period.end };
+
+        // Vendors with ANY money activity in the span. A vendor with none needs no row: the
+        // coverage marker already makes their missing days read as zero.
+        const [created, reversed, refunded] = await Promise.all([
+            EarningsAllocationModel.distinct('beneficiary_id', { beneficiary_type: 'vendor', created_at: window }),
+            EarningsAllocationModel.distinct('beneficiary_id', { beneficiary_type: 'vendor', reversed_at: window }),
+            RefundTransactionModel.distinct('vendorId', { status: 'completed', completedAt: window }),
+        ]);
+        const active = [...new Set([...created, ...reversed, ...refunded].filter(Boolean).map(String))];
+        const inZone = active.length
+            ? await VendorModel.find({ _id: { $in: active } }).select('timezone').lean<{ _id: Types.ObjectId; timezone?: string }[]>()
+            : [];
+        const vendorIds = inZone
+            .filter((v) => (v.timezone || DEFAULT_TIMEZONE) === timezone)
+            .map((v) => v._id.toString());
+
+        let failures = 0;
+        for (const vendorId of vendorIds) {
+            try {
+                const facts = await this.analytics.computeFacts(vendorId, period);
+                const now = new Date();
+                const vendor = new Types.ObjectId(vendorId);
+                const writes = facts.map((f) =>
+                    isEmptyDay(f)
+                        ? { deleteOne: { filter: { vendor_id: vendor, timezone, day: f.day } } }
+                        : {
+                              updateOne: {
+                                  filter: { vendor_id: vendor, timezone, day: f.day },
+                                  update: { $set: { ...f, vendor_id: vendor, timezone, computed_at: now } },
+                                  upsert: true,
+                              },
+                          },
+                );
+                if (writes.length) await VendorMoneyDailyModel.bulkWrite(writes as never, { ordered: false });
+            } catch (error) {
+                failures += 1;
+                // One vendor's bad data must not cost every other vendor their analytics.
+                console.error(`[AnalyticsAggregation] vendor ${vendorId} (${timezone}) failed:`, error);
+            }
+        }
+
+        if (failures === 0) {
+            const now = new Date();
+            await VendorMoneyDailyModel.bulkWrite(
+                daysOf(period).map((day) => ({
+                    updateOne: {
+                        filter: { vendor_id: null, timezone, day },
+                        update: { $set: { vendor_id: null, timezone, day, computed_at: now } },
+                        upsert: true,
+                    },
+                })) as never,
+                { ordered: false },
+            );
+        }
+        return { vendors: vendorIds.length, failures };
     }
 }
 

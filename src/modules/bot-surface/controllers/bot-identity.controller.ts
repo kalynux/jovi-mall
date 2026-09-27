@@ -3,7 +3,7 @@ import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { sendSuccess } from '../../../core/responses';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
-import { connectionService } from '../../channel-connections';
+import { connectionService, MessagingChannel } from '../../channel-connections';
 import { CustomerRepository } from '../../customers/customer.repository';
 import { CustomerProfileService } from '../../customers/services/customer-profile.service';
 import { ICustomer } from '../../customers/customer.model';
@@ -30,7 +30,9 @@ import { sealBotIdentity } from '../domain/bot-identity-token';
 import { BotSyncDto, toBotIdentityDto, toBotSyncDto } from '../dto/bot-projections';
 import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { botChrome } from '../domain/bot-chrome-copy';
-import { openSurfaceActionId, orderActionId, skipActionId } from '../domain/bot-action-id';
+import { openSurfaceActionId, orderActionId } from '../domain/bot-action-id';
+import { onboardingReplyIntent } from '../domain/onboarding-reply';
+import { replyForHeldBargain } from '../services/bargain-entry.service';
 import { supportFormActionId } from '../domain/bot-ticket-actions';
 import { BotIdentitySyncSchema, BotOnboardingSubmitSchema } from '../validators/bot.validators';
 import { __toSavedAddressInput as toSavedAddressInput } from './bot-profile.controller';
@@ -263,7 +265,11 @@ export class BotIdentityController {
 
             const dto = await describe(req, outcome);
             if (!wasComplete && isOnboardingComplete(currentRecords(outcome.customer))) {
-                setWelcomeReply(req, outcome.customer.preferences?.language ?? null);
+                await setCompletionReply(
+                    req,
+                    { owner: outcome.account.userId, channel: envelope.channel, externalId: envelope.externalId },
+                    outcome.customer.preferences?.language ?? null,
+                );
             }
 
             sendSuccess(res, dto, { status: outcome.createdAccount ? 201 : 200 });
@@ -349,7 +355,11 @@ export class BotIdentityController {
          * gains a branch for `next: null`.
          */
         if (!wasComplete && isOnboardingComplete(currentRecords(updated))) {
-            setWelcomeReply(req, updated.preferences?.language ?? null);
+            await setCompletionReply(
+                req,
+                { owner: caller.userId, channel: envelope.channel, externalId: envelope.externalId },
+                updated.preferences?.language ?? null,
+            );
         }
 
         sendSuccess(res, dto);
@@ -526,50 +536,33 @@ function setWelcomeReply(req: Request, language: string | null): void {
 }
 
 function setOnboardingReply(req: Request, dto: BotSyncDto, language: string | null): void {
-    const next = dto.onboarding.next;
-    if (!next) return;
+    // The rendering itself lives in `domain/onboarding-reply.ts`, shared with the website's
+    // Bargain link, which asks the same question when it arrives mid-checklist.
+    const intent = onboardingReplyIntent(dto.onboarding.next, language);
+    if (intent) setBotReply(req, intent);
+}
 
-    if (next.requestContact) {
-        // The phone step. A verified contact is its own control, and it is never skippable.
-        setBotReply(req, {
-            kind: 'contact_request',
-            text: next.prompt,
-            buttonLabel: botChrome('contactButton', language),
-        });
+/**
+ * The reply on the turn that COMPLETES the checklist: the welcome, unless the customer arrived
+ * through the website's Bargain link.
+ *
+ * ⭐ **That link is held until setup is done, and this is where it is spent.** A customer who
+ * pressed Bargain on the site and was then asked for their name has been waiting to haggle; the
+ * welcome's Browse · My orders · Help would answer a question they never asked. So a held link
+ * turns this turn into the price question — or into the fixed-price offer, when the vendor closed
+ * the window in the meantime (`bargain-entry.service.ts`). The hand-off itself is still spent by
+ * the NEXT `/identity/sync`, exactly as a screen press is, because that sync is the first one to
+ * see `onboarding.next` null.
+ */
+async function setCompletionReply(
+    req: Request,
+    conversation: { owner: string; channel: MessagingChannel; externalId: string },
+    language: string | null,
+): Promise<void> {
+    const intent = await replyForHeldBargain(conversation, language);
+    if (intent) {
+        setBotReply(req, intent);
         return;
     }
-
-    if (next.requestLocation) {
-        /**
-         * The address step. A pin is the shortcut and typing still works, so this control
-         * replaces the plain `text` + Skip action rather than sitting beside it.
-         *
-         * ⚠ **The Skip travels as `skipLabel`, not as an `action`.** On Telegram a location
-         * request is a reply keyboard and `reply_markup` is a union, so an inline Skip
-         * carrying `skip:address` cannot be on the same message. The renderer puts a second
-         * keyboard button there instead, and the caller is handed the exact string it will
-         * send back (`next.skipLabel`) so it never has to know the word.
-         */
-        setBotReply(req, {
-            kind: 'location_request',
-            text: next.prompt,
-            buttonLabel: botChrome('locationButton', language),
-            ...(next.skipLabel ? { skipLabel: next.skipLabel } : {}),
-        });
-        return;
-    }
-
-    setBotReply(req, {
-        kind: 'text',
-        text: next.prompt,
-        // Absent — not an empty array — on a required step, so the renderer's own
-        // "no actions" branch is what draws a plain message.
-        ...(next.skippable
-            ? {
-                  actions: [
-                      { id: skipActionId(next.step), label: botChrome('skipButton', language) },
-                  ],
-              }
-            : {}),
-    });
+    setWelcomeReply(req, language);
 }

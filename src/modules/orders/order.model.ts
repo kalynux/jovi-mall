@@ -94,6 +94,13 @@ export interface IOrderItem {
    * ⚠ Vendor-facing at most. It must never reach a customer DTO.
    */
   floor_price_snapshot?: number | null;
+  /**
+   * The price the storefront DISPLAYED for this variant at checkout — the ask (`bargain.maxPrice`)
+   * on a bargainable variant, `variant.price` otherwise (`publicDisplayPrice`). Written from
+   * 2026-09-27 so an account statement can show "listed at X, sold at Y"; before it, only the
+   * floor and the price paid were kept. `null` on older lines.
+   */
+  list_price_snapshot?: number | null;
 
   // === DELIVERY (Optional - only for physical products) ===
   delivery?: {
@@ -205,6 +212,12 @@ export interface IOrder extends Document {
   // digital orders and for legacy orders created before this field existed (those
   // readers fall back to the customer's current default saved address).
   delivery_address: IGeoAddress | null;
+  /**
+   * Who placed the order, as they were AT checkout (2026-09-27). Statements read the live
+   * `customers` row otherwise, which shows today's name and phone on a year-old order.
+   * `null` on orders placed before the field existed.
+   */
+  customer_snapshot?: { name: string | null; phone: string | null } | null;
 
   // Timestamps
   created_at: Date;
@@ -277,6 +290,11 @@ const OrderItemSchema = new Schema({
     min: 0
   },
   floor_price_snapshot: {
+    type: Number,
+    default: null,
+    min: 0
+  },
+  list_price_snapshot: {
     type: Number,
     default: null,
     min: 0
@@ -432,7 +450,14 @@ const OrderSchema = new Schema<IOrder>({
 
   // Drop-off (customer delivery) address, geocoded + snapshotted at checkout.
   // Physical orders only; null otherwise.
-  delivery_address: { type: GeoAddressSchema, default: null }
+  delivery_address: { type: GeoAddressSchema, default: null },
+  customer_snapshot: {
+    type: new Schema(
+      { name: { type: String, default: null }, phone: { type: String, default: null } },
+      { _id: false }
+    ),
+    default: null
+  }
 }, {
   timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' }
 });

@@ -115,9 +115,22 @@
     el.sheet.hidden = true;
   }
 
+  /*
+   * "Nothing to pay here" — the read refuses these before a button is drawn (`booking-rows.ts`,
+   * `NOTHING_DUE_CODES`; the suite asserts the two lists agree). Checked BEFORE the 400/422
+   * message branch below, which would otherwise show the registry's English sentence.
+   */
+  var NOTHING_DUE = [
+    "PAYMENT_BOOKING_CANCELLED",
+    "PAYMENT_BOOKING_NO_PAYMENT_REQUIRED",
+    "PAYMENT_BOOKING_ALREADY_PAID",
+    "BOOKING_BALANCE_ALREADY_SETTLED"
+  ];
+
   function explain(res) {
     if (res.status === 410 || res.status === 404) return copy.expired;
     var error = res.body && res.body.error;
+    if (error && NOTHING_DUE.indexOf(error.code) >= 0) return copy.payNothingDue || FALLBACK.payNothingDue;
     /*
      * A refusal the customer can act on carries its own sentence — a mistyped number, a network
      * we cannot resolve. Anything else is the generic line: the boundary replaces internal and
@@ -207,10 +220,12 @@
     payBalanceTitle: "Pay the balance",
     payNumberHint: "Leave empty to use the number on your account.",
     payButton: "Pay now",
-    paySent: "I've sent the request to your phone. Approve it there and I'll tell you in the chat."
+    paySent: "I've sent the request to your phone. Approve it there and I'll tell you in the chat.",
+    payNothingDue: "There is nothing to pay on this appointment."
   };
 
-  json("/api/bot/miniapp/copy?lang=" + encodeURIComponent(lang), { headers: { Accept: "application/json" } })
+  /* ⚠ `base + "/copy"`, as every other screen — see the same line in `bl.html`. */
+  json(base + "/copy?lang=" + encodeURIComponent(lang), { headers: { Accept: "application/json" } })
     .then(function (res) { copy = (res.body && res.body.data && res.body.data.copy) || FALLBACK; })
     .catch(function () { copy = FALLBACK; })
     .then(function () {

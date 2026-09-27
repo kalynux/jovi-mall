@@ -338,12 +338,16 @@ deposits, remittances and discrepancies. Role-specific context:
 | `COD_AGENT_NOT_ASSIGNED` | 422 | COD shipment pickup attempted without an assigned agent | — |
 | `COD_AGENT_EXPOSURE_EXCEEDED` | 422 | Assignment would exceed the agent's cash exposure limit | `{ currentExposure, additionalAmount, effectiveLimit }` |
 | `COD_AGENT_TRUST_TOO_LOW` | 422 | Trust below COD threshold, or open cash-shortfall flag | `{ trustScore, minimum }` or `{ reason }` |
+
+> Since 2026-09-27 the same gate refuses an **unverified** agent first, with
+> `AGENT_KYC_NOT_VERIFIED` (see the contract table below) — KYC gates COD only.
 | ~~`COD_AGENT_HAS_OUTSTANDING_CASH`~~ | ~~422~~ | **UNREACHABLE** — raised by nothing. Ending a contract while the agent still holds cash is `422 CONTRACT_HAS_OUTSTANDING_COD` (`agent-contract.service.ts:738-741`) | `{ outstandingCod }` |
 | `COD_DEPOSIT_INVALID_AMOUNT` | 422 | Deposit amount not a positive integer | `{ amount }` |
 | `COD_DEPOSIT_EXCEEDS_BALANCE` | 422 | Deposit larger than the agent's held cash | `{ amount, outstanding }` |
 | `COD_DEPOSIT_NOT_FOUND` | 404 | Unknown deposit, or not this agency's | — |
 | `COD_DEPOSIT_ALREADY_RESOLVED` | 409 | Deposit already confirmed or rejected | `{ status }` |
-| `COD_DEPOSIT_REFERENCE_REQUIRED` | 422 | Direct-to-platform deposit with no transfer reference | — |
+| `COD_PROOF_FILE_REQUIRED` | 400 | A deposit or remittance declaration with no proof image in multipart field `file` | — |
+| `COD_PROOF_NOT_FOUND` | 404 | The deposit or remittance has no proof image | — |
 | `COD_DEPOSIT_AGENCY_ALREADY_SETTLED` | 422 | Direct payment for cash the agency already remitted — pay the agency instead | `{ amount, agencyOwesPlatform, hint }` |
 | `COD_DEPOSIT_WRONG_RECIPIENT` | 403 | Only the party the cash was handed to may confirm/reject it | `{ hint }` — `recipient` is dropped by the `authorization` allowlist |
 | `DELIVERY_AGENT_NOTIFICATION_NOT_FOUND` | 404 | Notification not found, or not this agent's | — |
@@ -371,7 +375,7 @@ Full documentation: [agency/agent-roster.md](../agency/agent-roster.md) (canonic
 | `CONTRACT_TRANSITION_NOT_PERMITTED` | 403 | Wrong party for this verb. **Keyed on whose TERMS are standing, not on who opened the contract**: the proposer may only `withdraw`, the counterparty may only `approve`/`reject`/`counter`. Also `suspend` raised by an agent | `{ hint }` — `transition`, `party` and `proposer` are dropped by the `authorization` allowlist |
 | `CONTRACT_INVALID_TRANSITION` | 409 | The contract is not in a status this transition can leave | `{ transition, from, allowedFrom }` |
 | `AGENT_MEMBERSHIP_LIMIT_REACHED` | 422 | The agent is at their agency cap. Checked at **approval**, not at request | `{ current, max }` |
-| `AGENT_KYC_NOT_VERIFIED` | 422 | Re-checked at approval, not trusted from request time | `{ kycStatus, hint }` |
+| `AGENT_KYC_NOT_VERIFIED` | 422 | ⚠ **No longer raised by any contract endpoint since 2026-09-27** — an unverified agent may request, approve and be transferred. It is now raised only by the **COD exposure gate**: offering, accepting or reassigning a **cash-on-delivery** shipment to an agent whose KYC is not `verified` (prepaid shipments are unaffected; auto-assign silently skips them for COD). Checked before trust and exposure | `{ kycStatus, hint }` |
 | `AGENT_PLATFORM_BANNED` | 403 | A platform ban overrides every contract | `{ hint }` |
 | `AGENT_NOT_FOUND` | 404 | `agentId` does not resolve | — |
 

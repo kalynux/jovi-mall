@@ -29,6 +29,14 @@ import { parseBotActionId } from '../../src/modules/bot-surface/domain/bot-actio
 import { actionKeyOf } from '../../src/modules/bot-surface/domain/bot-action-dispatch';
 import { parseTicketTap } from '../../src/modules/bot-surface/domain/bot-ticket-actions';
 import { TemplateRegistry } from '../../src/modules/whatsapp/handlers/template/template-registry';
+import { TemplateValidator } from '../../src/modules/whatsapp/handlers/template/template-validator';
+import { AppError } from '../../src/core/errors';
+import { ERROR_CODES } from '../../src/core/error-codes';
+import { DeliveryCodeService } from '../../src/modules/cod/services/delivery-code.service';
+import { DELIVERY_CODE_TEMPLATE_NAME, COPY_CODE_LABEL } from '../../src/modules/cod/domain/delivery-code-copy';
+import { getWhatsAppMessagingService } from '../../src/modules/whatsapp/services/whatsapp-messaging.service';
+import { abandonedCartWorker, buyableTitlesFrom } from '../../src/modules/cart/workers/abandoned-cart.worker';
+import { CART_CONFIG } from '../../src/modules/cart/config/cart.config';
 import {
     CUSTOMER_NOTIFICATION_CATALOG,
     assertCustomerCatalogComplete,
@@ -37,6 +45,10 @@ import {
     renderCustomerWhatsAppTemplateParams,
     renderCustomerButton,
     renderCustomerQuickReplies,
+    renderCustomerTemplateQuickReplies,
+    customerTemplateQuickReplyLabels,
+    IN_WINDOW_ONLY_SITUATIONS,
+    cartItemSummary,
     viewLineFor,
     customerWhatsAppTemplateName,
     deliveryFailureLine,
@@ -166,7 +178,9 @@ const EXPECTED_WA_PARAMS: Record<CustomerNotificationType, number> = {
     // TWO, and the second is a whole sentence. Whether the customer may still reply
     // depends on resolved-vs-closed, so it travels as a parameter rather than being baked
     // into the approved template body — which would make one of the two outcomes a lie.
-    'ticket.resolved': 2
+    'ticket.resolved': 2,
+    // In-window-only: no template, so no template parameters.
+    'cart.abandoned': 0
 };
 
 /** The settlement arithmetic, mirroring CompletionPricingService. */
@@ -221,14 +235,15 @@ function main(): void {
     // charge — `booking.payment_failed`, the same silence for an appointment, and
     // `booking.balance.received` (phase 10), the LAST of that set: a balance paid after the
     // appointment used to return early rather than reuse a "see you then" sentence that had
-    // become false, which told the customer nothing at all. The literal
+    // become false, which told the customer nothing at all. 26 since 2026-09-27: the
+    // abandoned-basket reminder, `cart.abandoned`. The literal
     // is kept rather than derived: this assertion's whole job is to notice a situation appearing
     // on one side and not the other, and `catalog.length === model.length` would pass happily
     // while both drifted away from what anybody meant.
-    assert('catalog and model enum list the same 25 situations', () => {
+    assert('catalog and model enum list the same 26 situations', () => {
         const catalog = Object.keys(CUSTOMER_NOTIFICATION_CATALOG).sort();
         const model = [...CUSTOMER_NOTIFICATION_TYPES].sort();
-        return catalog.length === 25 && JSON.stringify(catalog) === JSON.stringify(model);
+        return catalog.length === 26 && JSON.stringify(catalog) === JSON.stringify(model);
     });
 
     // The aggregate enum is spread from CUSTOMER_AGGREGATE_TYPES rather than hand-kept —
@@ -256,17 +271,24 @@ function main(): void {
 
     console.log('\n── WhatsApp template contract ──');
 
-    assert('every situation declares a template name', () =>
-        CUSTOMER_NOTIFICATION_TYPES.every(s => !!customerWhatsAppTemplateName(s)));
+    /**
+     * Every situation names a template EXCEPT the ones deliberately in-window-only — and that
+     * exception is a named list, not a missing field (owner's ruling 2026-09-27, plan Q-6).
+     */
+    const templated = CUSTOMER_NOTIFICATION_TYPES.filter(s => !IN_WINDOW_ONLY_SITUATIONS.has(s));
+
+    assert('every situation declares a template name, except the named in-window-only ones', () =>
+        templated.every(s => !!customerWhatsAppTemplateName(s))
+        && [...IN_WINDOW_ONLY_SITUATIONS].every(s => customerWhatsAppTemplateName(s) === null));
 
     assert('template names are unique', () => {
-        const names = CUSTOMER_NOTIFICATION_TYPES.map(customerWhatsAppTemplateName);
+        const names = templated.map(customerWhatsAppTemplateName);
         return new Set(names).size === names.length;
     });
 
     assert('template names are all customer_-prefixed', () =>
-        CUSTOMER_NOTIFICATION_TYPES.every(s =>
-            customerWhatsAppTemplateName(s).startsWith('customer_')));
+        templated.every(s =>
+            customerWhatsAppTemplateName(s)!.startsWith('customer_')));
 
     /**
      * ⚠ **The approval doc is the difference between a template existing and WORKING.** All
@@ -280,7 +302,7 @@ function main(): void {
             join(__dirname, '..', '..', 'api-doc', 'notifications', 'whatsapp-templates.md'),
             'utf8'
         );
-        const missing = CUSTOMER_NOTIFICATION_TYPES
+        const missing = templated
             .map(customerWhatsAppTemplateName)
             .filter(name => !doc.includes(`\`${name}\``));
         if (missing.length) console.error('     ↳', missing.join(', '));
@@ -389,8 +411,9 @@ function main(): void {
             .filter((s): s is string => typeof s === 'string')
     )];
 
-    assert('every button carries a suffix and there are six distinct ones', () =>
-        allSuffixes.length === 6);
+    // Seven since 2026-09-27: `shop/cart`, the basket reminder's page.
+    assert('every button carries a suffix and there are seven distinct ones', () =>
+        allSuffixes.length === 7);
 
     assert('no suffix has a leading slash (Meta supplies the separator)', () =>
         allSuffixes.every((s) => !s.startsWith('/')));
@@ -398,9 +421,14 @@ function main(): void {
     assert('no suffix carries a locale prefix (renderCustomerButton adds it)', () =>
         allSuffixes.every((s) => !/^(en|fr|pt|es|ar)\//.test(s)));
 
+    /**
+     * `shop/cart` is the one other exception, and it is not owner-scoped by URL: the storefront
+     * serves the basket at `src/app/[locale]/shop/cart/page.tsx`, beside the catalogue, and
+     * reads the signed-in customer's own basket there. Named, so a third is a deliberate edit.
+     */
     assert('every owner-scoped suffix sits under shop/account/', () =>
         allSuffixes
-            .filter((s) => !s.startsWith('pay/'))
+            .filter((s) => !s.startsWith('pay/') && s !== 'shop/cart')
             .every((s) => s.startsWith('shop/account/')));
 
     assert('the pay link stays OUTSIDE shop/account — it is opened with no session', () =>
@@ -654,7 +682,7 @@ function main(): void {
         const gated = new Set<CustomerNotificationType>([
             'booking.created', 'booking.confirmed', 'booking.rescheduled', 'booking.completed',
             'booking.reminder', 'order.created', 'order.shipped', 'order.out_for_delivery',
-            'order.delivered', 'order.delivery_failed'
+            'order.delivered', 'order.delivery_failed', 'cart.abandoned'
         ]);
         return UNMUTABLE.every(s => !gated.has(s));
     });
@@ -663,7 +691,7 @@ function main(): void {
         const gated = new Set<CustomerNotificationType>([
             'booking.created', 'booking.confirmed', 'booking.rescheduled', 'booking.completed',
             'booking.reminder', 'order.created', 'order.shipped', 'order.out_for_delivery',
-            'order.delivered', 'order.delivery_failed'
+            'order.delivered', 'order.delivery_failed', 'cart.abandoned'
         ]);
         return CUSTOMER_NOTIFICATION_TYPES.every(
             s => gated.has(s) || UNMUTABLE.includes(s)
@@ -821,10 +849,12 @@ function main(): void {
     bites('PROOF: a token with no verb is refused', 'does not start with a verb', () =>
         swapActions([{ token: '{{orderId}}', label: label20 }]));
 
+    // Each mutant carries a `templateFallback` so it isolates the DUPLICATE rule — without one
+    // the missing-fallback rule fires first, and this proof would pass for the wrong reason.
     bites('PROOF: two buttons sharing one token are refused', 'repeats quick-reply token', () =>
         swapActions([
-            { token: 'ord:{{orderId}}', label: label20 },
-            { token: 'ord:{{orderId}}', label: label20 },
+            { token: 'ord:{{orderId}}', label: label20, templateFallback: 'open:ol' },
+            { token: 'ord:{{orderId}}', label: label20, templateFallback: 'open:ol' },
         ]));
 
     console.log('\n── Quick replies: the dead-button guard ──');
@@ -1031,7 +1061,7 @@ function main(): void {
      * Both directions: a submitted name nothing sends is a template at Meta that nothing
      * keeps honest.
      */
-    type NamedCatalog = Record<string, { whatsapp: { template: { name: string } } }>;
+    type NamedCatalog = Record<string, { whatsapp: { template?: { name: string } } }>;
     const catalogTemplateNames = (): Map<string, string> => {
         const out = new Map<string, string>();
         const catalogs: Array<[string, NamedCatalog]> = [
@@ -1042,7 +1072,10 @@ function main(): void {
         ];
         for (const [audience, catalog] of catalogs) {
             for (const [situation, messages] of Object.entries(catalog)) {
-                out.set(messages.whatsapp.template.name, `${audience} catalogue: ${situation}`);
+                // An in-window-only situation names no template, so asks Meta for none.
+                if (messages.whatsapp.template) {
+                    out.set(messages.whatsapp.template.name, `${audience} catalogue: ${situation}`);
+                }
             }
         }
         return out;
@@ -1055,10 +1088,18 @@ function main(): void {
      * it is unset by default and names a MARKETING template outside this file).
      */
     const LITERAL_TEMPLATE_NAME = /type:\s*'template',\s*name:\s*'([a-z0-9_]+)'/g;
+    /**
+     * ⚠ …and a `*TEMPLATE_NAME = '<literal>'` constant, because that is where a literal goes
+     * when it is given a name: `cod_delivery_code` moved from the send site into
+     * `DELIVERY_CODE_TEMPLATE_NAME` so the generator could share it, and a scan that only read
+     * send sites would have lost sight of it in the same change that submitted it.
+     */
+    const CONSTANT_TEMPLATE_NAME = /\b[A-Z_]*TEMPLATE_NAME\s*=\s*'([a-z0-9_]+)'/g;
     const literalTemplateNames = (sources: ReadonlyArray<{ file: string; code: string }>): Map<string, string> => {
         const out = new Map<string, string>();
         for (const { file, code } of sources) {
             for (const m of code.matchAll(LITERAL_TEMPLATE_NAME)) out.set(m[1], `literal at ${file}`);
+            for (const m of code.matchAll(CONSTANT_TEMPLATE_NAME)) out.set(m[1], `constant at ${file}`);
         }
         return out;
     };
@@ -1129,7 +1170,7 @@ function main(): void {
      * that something failed.
      */
     assert('BITE: a catalogue template renamed in memory is reported by name and situation', () => {
-        const entry = CUSTOMER_NOTIFICATION_CATALOG['order.payment_failed'].whatsapp.template;
+        const entry = CUSTOMER_NOTIFICATION_CATALOG['order.payment_failed'].whatsapp.template!;
         const original = entry.name;
         entry.name = 'customer_order_payment_failed_renamed';
         try {
@@ -1156,6 +1197,57 @@ function main(): void {
         return found.has('made_up_template') && !found.has('commented_template')
             && templateNameProblems(new Map([...sentNames(), ...found]), submittedNames)
                 .some(p => p.includes('"made_up_template" (literal at mutant.ts)'));
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Stage 2's first blocker: a template quick reply must be SENDABLE
+    // ─────────────────────────────────────────────────────────────────────────
+    console.log('\n── Template quick-reply payload: accepted when present, refused when empty ──');
+
+    /**
+     * The real validator, on the exact component shape the out-of-window send will build:
+     * the URL button at index 0, then one quick reply per tap, each carrying its token.
+     */
+    const quickReplyTemplate = (payload: string) => ({
+        type: 'template' as const,
+        name: 'customer_order_shipped',
+        language: 'en',
+        components: [
+            { type: 'body' as const, parameters: [{ type: 'text' as const, text: 'ORD-2026-000001' }] },
+            { type: 'button' as const, sub_type: 'url' as const, index: 0,
+                parameters: [{ type: 'text' as const, text: 'orders/x' }] },
+            { type: 'button' as const, sub_type: 'quick_reply' as const, index: 1,
+                parameters: [{ type: 'payload' as const, payload }] },
+        ],
+    });
+    const refusedAs = (fn: () => void): string | null => {
+        try { fn(); return null; } catch (err) { return err instanceof AppError ? err.code : 'NOT_AN_APP_ERROR'; }
+    };
+    const quietly = <T>(fn: () => T): T => {
+        const warn = console.warn;
+        console.warn = () => undefined; // the registry's advisory "not registered" warning
+        try { return fn(); } finally { console.warn = warn; }
+    };
+
+    assert('a quick_reply button carrying a payload token passes the validator', () =>
+        quietly(() => refusedAs(() => new TemplateValidator().validate(quickReplyTemplate('ord:' + 'a'.repeat(24))))) === null);
+
+    assert('⛔ an EMPTY payload is refused as WHATSAPP_INVALID_PAYLOAD, before Meta is called', () =>
+        quietly(() => refusedAs(() => new TemplateValidator().validate(quickReplyTemplate('  '))))
+            === ERROR_CODES.WHATSAPP_INVALID_PAYLOAD);
+
+    /**
+     * ⚠ The two lists are a deliberate duplication — the type stops it compiling, the validator
+     * stops a cast reaching Meta — so the thing to pin is that they AGREE. Read both as source.
+     */
+    assert('the TemplateParameter.type union and the validator\'s allowlist name the same types', () => {
+        const types = readSource('src/modules/whatsapp/types/whatsapp-message.types.ts');
+        const validator = readSource('src/modules/whatsapp/handlers/template/template-validator.ts');
+        const union = types.match(/interface TemplateParameter \{\s*type:\s*([^;]+);/);
+        const list = validator.match(/private validateParameter[\s\S]*?const validTypes = \[([^\]]+)\]/);
+        if (!union || !list) return false;
+        const names = (s: string) => [...s.matchAll(/'([a-z_]+)'/g)].map(m => m[1]).sort().join(',');
+        return names(union[1]).includes('payload') && names(union[1]) === names(list[1]);
     });
 
     assert('⛔ an unapproved language falls back to ENGLISH specifically', () =>
@@ -1459,10 +1551,17 @@ function main(): void {
         cartInitiate.length > 0
         && cartInitiate.indexOf('originChat: { channel: options.originChat }') > 0
         && cartInitiate.indexOf('originChat: { channel: options.originChat }') < cartInitiate.indexOf('gatewayInstance.initiatePayment('));
-    assert('both cart result events carry the chat (payment received AND payment failed)', () =>
-        orchestratorSource.split('originChannel: transaction.originChat?.channel ?? undefined').length - 1 === 2);
-    assert('both customer handlers pass it on, filtered to the two chat channels', () =>
-        originHandlerSource.split('originChat: originChatOf(p.originChannel)').length - 1 === 2
+    /**
+     * ⚠ **Four, not two, since bookings phase 6 (2026-09-27)** — the cart's received + failed, and
+     * the BOOKING's received + failed, which had the same defect one product type over. An exact
+     * count rather than ≥: a fifth site is a new decision somebody should have to look at, and
+     * losing one of the four is the bug. The booking half is pinned per site in
+     * `test:booking-notification`.
+     */
+    assert('all four payment result events carry the chat (cart AND booking; received AND failed)', () =>
+        orchestratorSource.split('originChannel: transaction.originChat?.channel ?? undefined').length - 1 === 4);
+    assert('all four customer handlers pass it on, filtered to the two chat channels', () =>
+        originHandlerSource.split('originChat: originChatOf(p.originChannel)').length - 1 === 4
         && /value === 'whatsapp' \|\| value === 'telegram' \? value : undefined/.test(originHandlerSource));
     assert('the stored value is one of the two chats, and absent (never null) elsewhere', () =>
         /originChat: \{\s*type: \{\s*channel: \{ type: String, enum: \['whatsapp', 'telegram'\], required: true \}\s*\},\s*default: undefined/.test(modelSource));
@@ -1474,6 +1573,206 @@ function main(): void {
     assert('shopNameOf returns the store\'s name, trimmed', () => SHOP_NAME.found === 'Ulrich Shop');
     assert('no store row, a failing lookup or a malformed id → null (the generic wording), never a throw', () =>
         SHOP_NAME.missing === null && SHOP_NAME.throws === null && SHOP_NAME.badId === null && SHOP_NAME.badIdLookups === 0);
+
+    console.log('\n── order.refunded has a trigger — it was built and nothing raised it ──');
+    // Measured by `measureOrderRefunded` before `main` ran: the real handler, two stubs.
+    assert('an order refund produces exactly ONE order.refunded, with this refund\'s amount', () =>
+        ORDER_REFUNDED.order.length === 1
+        && ORDER_REFUNDED.order[0].situation === 'order.refunded'
+        && ORDER_REFUNDED.order[0].amountFormatted === '2,000'
+        && ORDER_REFUNDED.order[0].currency === 'XAF');
+    assert('⛔ a BOOKING refund is dropped — booking.payment.updated already tells that customer', () =>
+        ORDER_REFUNDED.booking.length === 0);
+    assert('⛔ two partial refunds of one order are two messages — the key is per REFUND, not per order', () =>
+        ORDER_REFUNDED.twoPartials.length === 2
+        && ORDER_REFUNDED.twoPartials[0].key !== ORDER_REFUNDED.twoPartials[1].key);
+    console.log('\n── The COD code: the notification channel only; WhatsApp free-form first, template on refusal ──');
+    const orderToken = `ord:6aad69bac51c555c27cc10d9`;
+    assert('Telegram customer → the code arrives on TELEGRAM, with "Order details", and nowhere else', () =>
+        COD_CODE.telegram.result === 'telegram'
+        && COD_CODE.telegram.sends.length === 1
+        && COD_CODE.telegram.sends[0].channel === 'telegram'
+        && (COD_CODE.telegram.sends[0].body ?? '').includes('483920')
+        && JSON.stringify(COD_CODE.telegram.sends[0].tokens) === JSON.stringify([orderToken]));
+    assert('no notification channel → nothing is sent (the code stays in the app)', () =>
+        COD_CODE.none.result === null && COD_CODE.none.sends.length === 0);
+    assert('WhatsApp inside the window → ONE free-form message, and NO template', () =>
+        COD_CODE.waInWindow.result === 'whatsapp'
+        && COD_CODE.waInWindow.sends.length === 1
+        && COD_CODE.waInWindow.sends[0].kind === 'free'
+        && COD_CODE.waInWindow.sends[0].to === '+237600000001');
+    assert('⛔ WhatsApp refused for the window → the AUTHENTICATION template: the code in the body AND the copy button', () => {
+        const [free, template] = COD_CODE.waOutOfWindow.sends;
+        return COD_CODE.waOutOfWindow.result === 'whatsapp'
+            && COD_CODE.waOutOfWindow.sends.length === 2
+            && free.kind === 'free' && (free.body ?? '').includes('483920')
+            && template.kind === 'template'
+            && JSON.stringify(template.templateParams) === JSON.stringify(['483920'])
+            && template.buttonUrlParams?.[0] === '483920';
+    });
+    /**
+     * ⛔ Meta REJECTED `cod_delivery_code` twice as UTILITY (2026-09-27, `INCORRECT_CATEGORY`). The
+     * template is AUTHENTICATION under a new name. Pinned so nobody "restores" a UTILITY body.
+     */
+    assert('⛔ the submitted delivery-code template is AUTHENTICATION: Meta\'s body, no "do not share", a copy button', () =>
+        (['en', 'fr'] as const).every(l => {
+            const p = (payloads.payloads as Array<{ name: string; language: string; category?: string; components?: any[] }>)
+                .find(x => x.name === DELIVERY_CODE_TEMPLATE_NAME && x.language === l);
+            const body = p?.components?.find(c => c.type === 'BODY');
+            const buttons = p?.components?.find(c => c.type === 'BUTTONS')?.buttons ?? [];
+            return p?.category === 'AUTHENTICATION'
+                && body !== undefined && body.text === undefined
+                && body.add_security_recommendation === false
+                && !p.components!.some(c => c.type === 'FOOTER')
+                && buttons.length === 1 && buttons[0].type === 'OTP' && buttons[0].otp_type === 'COPY_CODE'
+                && buttons[0].text === COPY_CODE_LABEL[l];
+        })
+        // The rejected UTILITY name is retired: nothing may generate or send it again.
+        && !payloads.payloads.some(p => p.name === 'cod_delivery_code'));
+    assert('email customer → email, carrying the code', () =>
+        COD_CODE.email.result === 'email' && (COD_CODE.email.sends[0]?.body ?? '').includes('483920'));
+    assert('⛔ the COD path never records to the bot\'s recentlySent — the code is a credential', () =>
+        !readSource('src/modules/cod/services/delivery-code.service.ts').includes('noteSent')
+        && !readSource('src/modules/cod/services/cash-collection.service.ts').includes('noteSent'));
+    assert('⛔ the COD path no longer addresses WhatsApp from Customer.phone', () =>
+        !/customer\??\.phone/.test(readSource('src/modules/cod/services/cash-collection.service.ts'))
+        && !readSource('src/modules/cod/services/delivery-code.service.ts').includes('customerPhone'));
+
+    console.log('\n── Template quick replies: one payload per approved button, never fewer ──');
+    const ctxBase = { orderId: 'a'.repeat(24), orderNumber: 'ORD-1', ticketId: 'b'.repeat(24) };
+    assert('ticket.resolved on a RESOLVED request carries the reopen token', () =>
+        JSON.stringify(renderCustomerTemplateQuickReplies('ticket.resolved', { ...ctxBase, reopenableTicketId: 'b'.repeat(24) }))
+            === JSON.stringify([`tkt:${'b'.repeat(24)}`]));
+    assert('⛔ on a CLOSED request the button is still there, so it carries tkt:new — never nothing', () =>
+        JSON.stringify(renderCustomerTemplateQuickReplies('ticket.resolved', { ...ctxBase, reopenableTicketId: '' }))
+            === JSON.stringify(['tkt:new']));
+    assert('booking.payment_failed: two chat actions, ONE template button, filled by whichever resolved', () =>
+        customerTemplateQuickReplyLabels('booking.payment_failed').length === 1
+        && JSON.stringify(renderCustomerTemplateQuickReplies('booking.payment_failed', { payBalanceBookingId: 'c'.repeat(24) }))
+            === JSON.stringify([`bpay:${'c'.repeat(24)}:b`]));
+    assert('every situation sends exactly as many payloads as its template has quick-reply buttons', () =>
+        (Object.keys(CUSTOMER_NOTIFICATION_CATALOG) as CustomerNotificationType[]).every(s =>
+            renderCustomerTemplateQuickReplies(s, {}).length === customerTemplateQuickReplyLabels(s).length));
+
+    /**
+     * ⛔ **The submitted payloads must hold exactly the buttons the send fills.** A send with a
+     * quick-reply parameter the approved template lacks is refused by Meta — silence — and one
+     * without a parameter for a button it has delivers a tap the bot cannot route. Read from
+     * the committed file, so a catalogue change that was not regenerated turns this red.
+     */
+    assert('⛔ the committed template payloads hold exactly the quick replies the send fills, en and fr', () => {
+        const problems: string[] = [];
+        for (const s of Object.keys(CUSTOMER_NOTIFICATION_CATALOG) as CustomerNotificationType[]) {
+            if (!CUSTOMER_NOTIFICATION_CATALOG[s].whatsapp.template) continue;
+            const name = CUSTOMER_NOTIFICATION_CATALOG[s].whatsapp.template.name;
+            for (const [lang, code] of [['en', 'en'], ['fr', 'fr']] as const) {
+                const payload = (payloads.payloads as Array<{ name: string; language: string; components?: any[] }>)
+                    .find(p => p.name === name && p.language === code);
+                const submitted = (payload?.components?.find(c => c.type === 'BUTTONS')?.buttons ?? [])
+                    .filter((b: any) => b.type === 'QUICK_REPLY').map((b: any) => b.text);
+                const expected = customerTemplateQuickReplyLabels(s).map(l => l[lang]);
+                if (JSON.stringify(submitted) !== JSON.stringify(expected)) {
+                    problems.push(`${name} [${code}]: file ${JSON.stringify(submitted)} vs catalogue ${JSON.stringify(expected)}`);
+                }
+            }
+        }
+        problems.forEach(p => console.error(`     ↳ ${p}`));
+        return problems.length === 0;
+    });
+
+    assert('BITE: a placeholder token with no templateFallback is refused at boot', () => {
+        const action = CUSTOMER_NOTIFICATION_CATALOG['order.shipped'].actions![0];
+        const saved = action.templateFallback;
+        delete action.templateFallback;
+        try {
+            assertCustomerQuickRepliesSendable();
+            return false;
+        } catch (err) {
+            return (err as Error).message.includes('no templateFallback');
+        } finally {
+            action.templateFallback = saved;
+        }
+    });
+
+    assert('the out-of-window send path fills the quick replies with explicit payloads', () => {
+        const handler = readSource('src/modules/notifications/services/customer-notification-event-handler.service.ts');
+        return handler.includes('renderCustomerTemplateQuickReplies(situation, context)')
+            && handler.includes("sub_type: 'quick_reply'")
+            && handler.includes("parameters: [{ type: 'payload', payload }]");
+    });
+
+    console.log('\n── The basket reminder: in-window only, gated, swept once per basket state ──');
+    assert('⛔ OUT of the window the basket reminder sends NOTHING on WhatsApp — no template exists', () =>
+        CART_WA.outOfWindow.delivered === false && CART_WA.outOfWindow.sends === 0);
+    assert('inside the window it is one free-form message (never a template)', () =>
+        CART_WA.inWindow.delivered === true && CART_WA.inWindow.sends === 1 && CART_WA.inWindow.kind !== 'template');
+    assert('cart.abandoned is the in-window-only situation, and it has copy in all five languages', () =>
+        IN_WINDOW_ONLY_SITUATIONS.has('cart.abandoned')
+        && CUSTOMER_NOTIFICATION_CATALOG['cart.abandoned'].whatsapp.template === undefined
+        && SUPPORTED_LANGUAGES.every(l => !!CUSTOMER_NOTIFICATION_CATALOG['cart.abandoned'].base[l]));
+    assert('⛔ the reminder names what is in the basket and NEVER a price', () =>
+        SUPPORTED_LANGUAGES.every(l => {
+            const body = CUSTOMER_NOTIFICATION_CATALOG['cart.abandoned'].base[l].body;
+            return body.includes('{{itemSummary}}') && !/\{\{\s*(amount|price|total|currency)/i.test(body);
+        }));
+    assert('BITE: a situation that loses its template without being listed is refused at boot', () => {
+        const whatsapp = CUSTOMER_NOTIFICATION_CATALOG['order.shipped'].whatsapp;
+        const saved = whatsapp.template;
+        delete whatsapp.template;
+        try {
+            assertCustomerCatalogComplete();
+            return false;
+        } catch (err) {
+            return (err as Error).message.includes('not listed in IN_WINDOW_ONLY_SITUATIONS');
+        } finally {
+            whatsapp.template = saved;
+        }
+    });
+    assert('the item summary: one title, or the first and a localized count', () =>
+        cartItemSummary(['Blue dress'], 'en') === 'Blue dress'
+        && cartItemSummary(['Blue dress', 'Red hat', 'Shoes'], 'en') === 'Blue dress and 2 more'
+        && cartItemSummary(['Robe', 'Chapeau'], 'fr') === 'Robe et 1 autre');
+    const line = (id: string, type: 'physical' | 'digital' = 'physical') =>
+        ({ productId: `p${id}`, variantId: `v${id}`, title: `T${id}`, productType: type }) as never;
+    assert('buyable: an archived product, an archived variant, or no stock is not named', () =>
+        JSON.stringify(buyableTitlesFrom(
+            [line('1'), line('2'), line('3'), line('4'), line('5', 'digital')],
+            [{ _id: 'p1', status: 'active' }, { _id: 'p2', status: 'archived' }, { _id: 'p3', status: 'active' },
+                { _id: 'p4', status: 'active' }, { _id: 'p5', status: 'active' }],
+            [{ _id: 'v1', status: 'active', stock: 3 }, { _id: 'v2', status: 'active', stock: 3 },
+                { _id: 'v3', status: 'archived', stock: 3 }, { _id: 'v4', status: 'active', stock: 0 },
+                { _id: 'v5', status: 'active', stock: 0 }]))
+            === JSON.stringify(['T1', 'T5']));
+    assert('buyable: out of stock but oversell allowed still counts', () =>
+        JSON.stringify(buyableTitlesFrom([line('1')], [{ _id: 'p1', status: 'active' }],
+            [{ _id: 'v1', status: 'active', stock: 0, allow_oversell: true }])) === JSON.stringify(['T1']));
+    {
+        const worker = readSource('src/modules/cart/workers/abandoned-cart.worker.ts');
+        const config = readSource('src/modules/cart/config/cart.config.ts');
+        assert('ships OFF, 12 hours, and reports the SAME interval it schedules with', () =>
+            CART_CONFIG.reminder.enabled === (process.env.CART_REMINDER_ENABLED === 'true')
+            && /enabled: process\.env\.CART_REMINDER_ENABLED === 'true'/.test(config)
+            && /CART_REMINDER_LEAD_MINUTES \|\| '720'/.test(config)
+            && abandonedCartWorker.schedules[0].kind === 'interval'
+            && (abandonedCartWorker.schedules[0] as { everyMs: number }).everyMs === CART_CONFIG.reminder.intervalMs);
+        assert('⛔ the idempotency key carries the basket\'s updatedAt — a basket abandoned again is reminded again', () =>
+            worker.includes('idempotencyKey: `customer.cart.abandoned:${cart._id}:${new Date(cart.updatedAt).getTime()}`'));
+        assert('the sweep tiles [now−lead−interval, now−lead) and skips an empty basket', () =>
+            worker.includes('updatedAt: { $gte: windowStart, $lt: windowEnd }')
+            && worker.includes("'items.0': { $exists: true }")
+            && worker.includes("withWorkerLock('abandoned-cart'"));
+        assert('the cart schema declares the updatedAt index the sweep needs', () =>
+            /CartSchema\.index\(\{ updatedAt: 1 \}/.test(readSource('src/modules/cart/models/cart.model.ts')));
+        assert('⛔ gated by cartReminders — it is not in the ungated list', () =>
+            readSource('src/modules/notifications/services/customer-notification-event-handler.service.ts')
+                .includes("'cart.abandoned': 'cartReminders'")
+            && !UNMUTABLE.includes('cart.abandoned'));
+    }
+
+    assert('the consumer subscribes payment.refunded to the handler (the publisher already existed)', () =>
+        readSource('src/modules/notifications/customer-notification-event-consumer.ts')
+            .includes("eventBus.subscribe('payment.refunded', handler.handleOrderRefunded.bind(handler));"));
+
     const orderCreatedSpan = originHandlerSource.slice(
         originHandlerSource.indexOf('async handleOrderCreated('),
         originHandlerSource.indexOf('async handleOrderPaymentReceived('));
@@ -1592,7 +1891,165 @@ async function measureShopName(): Promise<void> {
     SHOP_NAME.badIdLookups = lookups;
 }
 
-measureOriginChat().then(measureShopName).then(main, (error: unknown) => {
+/**
+ * `handleOrderRefunded`, measured on the REAL method with `customerFromOrder` and `notify`
+ * stubbed as own properties — the same constructor-free handler as above. What is recorded is
+ * what `notify` was asked to send, so the assertions read the handler's decisions directly.
+ */
+type RefundSend = { situation: string; key: string; amountFormatted: string; currency: string };
+const ORDER_REFUNDED: { order: RefundSend[]; booking: RefundSend[]; twoPartials: RefundSend[] } = {
+    order: [], booking: [], twoPartials: [],
+};
+
+async function measureOrderRefunded(): Promise<void> {
+    type Refunder = {
+        handleOrderRefunded(event: unknown): Promise<void>;
+        customerFromOrder: (orderId: string) => Promise<unknown>;
+        notify: (params: { situation: string; idempotencyKey: string; context: Record<string, string> }) => Promise<void>;
+    };
+    const handler = Object.create(CustomerNotificationEventHandler.prototype) as unknown as Refunder;
+    const ORDER = '6aad69bac51c555c27cc10d7';
+    handler.customerFromOrder = async () => ({
+        customer: { _id: '6aad69bac51c555c27cc10d8' }, orderNumber: 'ORD-2026-000001', currency: 'XAF',
+    });
+
+    const run = async (payloads: Array<Record<string, unknown>>): Promise<RefundSend[]> => {
+        const sent: RefundSend[] = [];
+        handler.notify = async (p) => {
+            sent.push({
+                situation: p.situation, key: p.idempotencyKey,
+                amountFormatted: p.context.amountFormatted, currency: p.context.currency,
+            });
+        };
+        for (const payload of payloads) {
+            await handler.handleOrderRefunded({ eventType: 'payment.refunded', payload, occurredAt: new Date() });
+        }
+        return sent;
+    };
+
+    ORDER_REFUNDED.order = await run([
+        { orderId: ORDER, sourceKind: 'order', refundId: 'r1', amount: 2000, currency: 'XAF', fullyRefunded: false },
+    ]);
+    ORDER_REFUNDED.booking = await run([
+        { bookingId: ORDER, sourceKind: 'booking', refundId: 'r2', amount: 2000, currency: 'XAF', fullyRefunded: true },
+    ]);
+    ORDER_REFUNDED.twoPartials = await run([
+        { orderId: ORDER, sourceKind: 'order', refundId: 'r3', amount: 2000, currency: 'XAF', fullyRefunded: false },
+        { orderId: ORDER, sourceKind: 'order', refundId: 'r4', amount: 3000, currency: 'XAF', fullyRefunded: true },
+    ]);
+}
+
+/**
+ * `DeliveryCodeService.sendToCustomer`, measured on the REAL method with every outbound seam
+ * stubbed: Telegram and mail by injection, the WhatsApp messaging singleton's `send` and the
+ * connection lookup as own properties (deleted afterwards, restoring the prototype's).
+ * Records what each channel was asked to send.
+ */
+type CodSend = { channel: string; kind?: string; to?: string; body?: string; tokens: string[]; templateParams?: string[]; buttonUrlParams?: string[] };
+const COD_CODE: Record<'telegram' | 'none' | 'waInWindow' | 'waOutOfWindow' | 'email', { result: string | null; sends: CodSend[] }> = {
+    telegram: { result: 'unmeasured', sends: [] }, none: { result: 'unmeasured', sends: [] },
+    waInWindow: { result: 'unmeasured', sends: [] }, waOutOfWindow: { result: 'unmeasured', sends: [] },
+    email: { result: 'unmeasured', sends: [] },
+};
+
+async function measureCodDeliveryCode(): Promise<void> {
+    const ORDER = '6aad69bac51c555c27cc10d9';
+    const customer = { _id: 'c1', user_id: 'u1', name: 'Test', email: 'test@example.com', email_verified: true };
+    const messaging = getWhatsAppMessagingService() as unknown as { send: (p: unknown) => Promise<unknown> };
+    const lookup = connectionService as unknown as { getConnection: (u: unknown, c: unknown) => Promise<unknown> };
+
+    const run = async (
+        channel: 'telegram' | 'email' | 'whatsapp' | null,
+        freeFormRefused: boolean,
+    ): Promise<{ result: string | null; sends: CodSend[] }> => {
+        const sends: CodSend[] = [];
+        const telegram = { send: async (p: { message: string; quickReplies?: Array<{ token: string }> }) => {
+            sends.push({ channel: 'telegram', body: p.message, tokens: (p.quickReplies ?? []).map(q => q.token) });
+            return { success: true };
+        } };
+        const mail = { send: async (p: { variables: { message: string } }) => {
+            sends.push({ channel: 'email', body: p.variables.message, tokens: [] });
+        } };
+        messaging.send = async (payload: unknown) => {
+            const p = payload as { to: string; type: string; message: any };
+            if (p.type === 'template') {
+                const comps = p.message.components as Array<{ type: string; sub_type?: string; parameters: any[] }>;
+                sends.push({
+                    channel: 'whatsapp', kind: 'template', to: p.to,
+                    templateParams: comps.find(c => c.type === 'body')!.parameters.map(x => x.text),
+                    tokens: comps.filter(c => c.sub_type === 'quick_reply').map(c => c.parameters[0].payload),
+                    buttonUrlParams: comps.filter(c => c.sub_type === 'url').map(c => c.parameters[0].text),
+                });
+                return { success: true };
+            }
+            sends.push({ channel: 'whatsapp', kind: 'free', to: p.to, body: p.message?.body?.text,
+                tokens: (p.message?.action?.buttons ?? []).map((b: any) => b.reply?.id ?? b.id) });
+            return freeFormRefused
+                ? { success: false, error: { code: 'WHATSAPP_POLICY_VIOLATION' } }
+                : { success: true };
+        };
+        lookup.getConnection = async () => ({ external_id: '237600000001' });
+        try {
+            const service = new DeliveryCodeService(undefined, telegram as never, mail as never);
+            const result = await service.sendToCustomer({
+                customer, channels: { notificationChannelFor: async () => channel },
+                code: '483920', orderId: ORDER, orderNumber: 'ORD-2026-000001',
+                expectedAmount: 15000, currency: 'XAF', language: 'fr', dedupeKey: 'k1',
+            });
+            return { result, sends };
+        } finally {
+            delete (messaging as { send?: unknown }).send;
+            delete (lookup as { getConnection?: unknown }).getConnection;
+        }
+    };
+
+    COD_CODE.telegram = await run('telegram', false);
+    COD_CODE.none = await run(null, false);
+    COD_CODE.waInWindow = await run('whatsapp', false);
+    COD_CODE.waOutOfWindow = await run('whatsapp', true);
+    COD_CODE.email = await run('email', false);
+}
+
+/**
+ * The REAL `sendWhatsApp` for the basket reminder, in and out of the 24-hour window, with the
+ * window check, the connection lookup and the messaging singleton stubbed. Records what was
+ * asked of Meta.
+ */
+const CART_WA: { outOfWindow: { delivered: unknown; sends: number }; inWindow: { delivered: unknown; sends: number; kind?: string } } = {
+    outOfWindow: { delivered: 'unmeasured', sends: -1 }, inWindow: { delivered: 'unmeasured', sends: -1 },
+};
+
+async function measureCartWhatsApp(): Promise<void> {
+    type Sender = {
+        sendWhatsApp(customer: unknown, situation: string, lang: string, ctx: unknown, key: string): Promise<boolean>;
+        whatsappWindow: { canSendFreeMessage(id: string): Promise<boolean> };
+        isWhatsAppProviderConfigured(): boolean;
+    };
+    const handler = Object.create(CustomerNotificationEventHandler.prototype) as unknown as Sender;
+    const messaging = getWhatsAppMessagingService() as unknown as { send: (p: unknown) => Promise<unknown> };
+    const lookup = connectionService as unknown as { getConnection: (u: unknown, c: unknown) => Promise<unknown> };
+    handler.isWhatsAppProviderConfigured = () => true;
+
+    const run = async (open: boolean) => {
+        let sends = 0;
+        let kind: string | undefined;
+        handler.whatsappWindow = { canSendFreeMessage: async () => open };
+        messaging.send = async (p: unknown) => { sends++; kind = (p as { type: string }).type; return { success: true }; };
+        lookup.getConnection = async () => ({ external_id: '237600000001' });
+        try {
+            const delivered = await handler.sendWhatsApp(
+                { user_id: 'u1' }, 'cart.abandoned', 'en', { itemSummary: 'Blue dress' }, 'k1');
+            return { delivered, sends, kind };
+        } finally {
+            delete (messaging as { send?: unknown }).send;
+            delete (lookup as { getConnection?: unknown }).getConnection;
+        }
+    };
+    CART_WA.outOfWindow = await run(false);
+    CART_WA.inWindow = await run(true);
+}
+
+measureOriginChat().then(measureShopName).then(measureOrderRefunded).then(measureCodDeliveryCode).then(measureCartWhatsApp).then(main, (error: unknown) => {
     console.error('measurement failed:', error);
     process.exit(1);
 });

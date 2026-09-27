@@ -33,9 +33,9 @@ import { auditLogger } from '../../core/audit/audit-logger';
  * 1. **A dual-role account** is refused outright (ADR-A02 D-1). Anonymising the person
  *    behind a live storefront leaves a shop trading under a name nobody can resolve.
  * 2. **Orders in flight** are refused. This one is NOT in the ADR and is the one judgement
- *    call added here: closure clears `Customer.phone`, which is where
- *    `CashCollectionService.notifyCodeIssued` sends the COD delivery code, and deletes the
- *    messaging connections that carry every other delivery notification — so closing
+ *    call added here: closure deletes the messaging connections (and clears the email) that
+ *    `CashCollectionService.notifyCodeIssued` sends the COD delivery code on — the customer's
+ *    notification channel — and that carry every other delivery notification — so closing
  *    mid-delivery does not merely lose contact, it strands a parcel an agent is holding.
  * 3. **An account that is not `active`** is refused by the compare-and-set, so a second
  *    closure request cannot re-run the cascade over an already-anonymous account.

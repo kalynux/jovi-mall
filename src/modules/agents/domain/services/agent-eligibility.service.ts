@@ -17,9 +17,10 @@ import { getDeviceLocationProvider } from '../../ports/device-location.port';
  */
 export type IneligibilityReason =
   | 'agent_not_found'
-  // Platform gates — evaluated FIRST; they outrank everything below.
+  // Platform gate — evaluated FIRST; it outranks everything below.
+  // ⚠ There is no `kyc_not_verified` here since 2026-09-27: an unverified agent
+  // may take prepaid work. KYC withholds COD cash only (`CodExposureService`).
   | 'platform_banned'
-  | 'kyc_not_verified'
   | 'agent_not_active'
   | 'membership_not_approved'
   | 'not_available'
@@ -98,11 +99,11 @@ export class AgentEligibilityService {
     const deviceLocation = await this.resolveDeviceLocation(agentId);
     const activeShipmentCount = agent.capacity?.active_shipment_count ?? 0;
 
-    // Platform gates lead: an unverified or banned agent must be refused for
-    // THAT, not for happening to be offline as well. Ordering is meaning here —
-    // it decides which reason an operator is sent to fix first.
+    // The platform gate leads: a banned agent must be refused for THAT, not for
+    // happening to be offline as well. Ordering is meaning here — it decides
+    // which reason an operator is sent to fix first.
     const rules: EligibilityRuleResult[] = [
-      ...this.rulePlatformGates(agent),
+      this.rulePlatformBan(agent),
       this.ruleActive(agent),
       this.ruleApproved(membership),
       this.ruleAvailable(agent),
@@ -158,27 +159,22 @@ export class AgentEligibilityService {
   // ─── Individual rules ─────────────────────────────────────────────────────
 
   /**
-   * KYC + platform ban. Both reported when both fail, but the ban is listed
-   * first — a banned agent's KYC status is beside the point.
+   * Platform ban.
+   *
+   * ⚠ KYC is deliberately NOT a dispatch rule (owner decision, 2026-09-27):
+   * verification withholds COD cash, not work. The cash half is the
+   * `cod_exposure` contract gate, which runs on every COD offer, accept and
+   * reassignment and on the auto ranking — so an unverified agent receives
+   * prepaid shipments and is refused COD ones.
    */
-  private rulePlatformGates(agent: IDeliveryAgent): EligibilityRuleResult[] {
+  private rulePlatformBan(agent: IDeliveryAgent): EligibilityRuleResult {
     const banned = agent.platform_ban?.banned === true;
-    const kycStatus = agent.kyc?.status ?? 'unverified';
-
-    return [
-      {
-        rule: 'platform_ban',
-        passed: !banned,
-        reason: banned ? 'platform_banned' : null,
-        observed: { banned, reason: agent.platform_ban?.reason ?? null },
-      },
-      {
-        rule: 'kyc',
-        passed: kycStatus === 'verified',
-        reason: kycStatus === 'verified' ? null : 'kyc_not_verified',
-        observed: { kycStatus },
-      },
-    ];
+    return {
+      rule: 'platform_ban',
+      passed: !banned,
+      reason: banned ? 'platform_banned' : null,
+      observed: { banned, reason: agent.platform_ban?.reason ?? null },
+    };
   }
 
   private ruleActive(agent: IDeliveryAgent): EligibilityRuleResult {

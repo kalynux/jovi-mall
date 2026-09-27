@@ -13,12 +13,18 @@ import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.
 import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { botChrome } from '../domain/bot-chrome-copy';
 import { BotActionHandlers, ParsedBotAction, unknownBotAction } from '../domain/bot-action-dispatch';
-import { parseCheckoutConfirm, parseCheckoutDecline } from '../domain/bot-checkout-actions';
+import {
+    parseCheckoutCashOnDelivery,
+    parseCheckoutChooseAddress,
+    parseCheckoutConfirm,
+    parseCheckoutDecline,
+} from '../domain/bot-checkout-actions';
 import {
     ChatReviewBlocker,
     ChatReviewForReply,
     checkoutDeclinedReply,
     checkoutPlacedReply,
+    checkoutCashOnDeliveryPlacedReply,
     checkoutReviewReply,
 } from '../domain/checkout-chat-reply';
 import { BotReplyIntent } from '../domain/channel-reply';
@@ -30,6 +36,7 @@ import { inAppSurfaceStore } from '../services/inapp-surface.store';
 import {
     mobileMoneyGateway,
     placeCheckout,
+    placeCheckoutCashOnDelivery,
     readChatCheckout,
     storedPayerNumber,
 } from '../miniapp/surfaces/checkout.controller';
@@ -460,6 +467,12 @@ async function reviewChatCheckout(
             method: 'mobile_money' as const,
             /** ⚠ Masked. Null means the account has no number: ask for one, then pass `phone`. */
             phoneMasked: view.phoneMasked,
+            /**
+             * ⭐ Pay on delivery passes every rule for this basket right now, so the drawn
+             * confirmation offers it beside Pay now (owner, 2026-09-27). False for a download, an
+             * agency that does not take cash, or a shop over its cash limit.
+             */
+            cashOnDelivery: view.cashOnDelivery,
         },
         /**
          * The website's address page, only when an address is what would unblock this. Null
@@ -759,6 +772,57 @@ async function confirmCheckoutTap(req: Request, res: Response, action: ParsedBot
 }
 
 /**
+ * `yes:cod:<checkoutRef>:<addressId>` — **Pay on delivery** (owner decision, 2026-09-27).
+ *
+ * The Place order tap's twin, with the same stale-button rule: a lapsed, UNSPENT checkout draws a
+ * fresh confirmation for the same address rather than failing — and a refusal before the spend
+ * (an agency switched cash off since the review) goes through with its own customer sentence, the
+ * checkout still alive, so Pay now remains one tap away on the confirmation above.
+ */
+async function cashOnDeliveryTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    const tap = parseCheckoutCashOnDelivery(action.argument);
+    if (!tap) throw unknownBotAction();
+
+    try {
+        await placeChatCashOnDelivery(req, res, tap.checkoutRef, tap.addressId);
+    } catch (error) {
+        if (res.headersSent || !isUnspentLapsedCheckout(error)) throw error;
+        await reviewChatCheckout(req, res, tap.addressId);
+    }
+}
+
+/**
+ * `yes:coa:<addressId>` — deliver to THIS address: the confirmation for it, which then offers
+ * Pay now · Pay on delivery · Not now. Places nothing; the review checks the address is theirs.
+ */
+async function chooseAddressTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    const addressId = parseCheckoutChooseAddress(action.argument);
+    if (!addressId) throw unknownBotAction();
+    await reviewChatCheckout(req, res, addressId);
+}
+
+/**
+ * Spend the ref and create the orders as pay on delivery — then say so, with the order numbers.
+ *
+ * ⚠ **The drawn message is built AFTER the write and never turns a placed order into a failure**
+ * (`drawnAfterTheWrite`), for the reason `placeChatCheckout` gives.
+ */
+async function placeChatCashOnDelivery(
+    req: Request,
+    res: Response,
+    checkoutRef: string,
+    deliveryAddressId: string,
+): Promise<void> {
+    const placed = await placeCheckoutCashOnDelivery(checkoutRef, {
+        callerCustomerId: botCallerOf(req).customerId,
+        addressId: deliveryAddressId,
+    });
+
+    setBotReply(req, drawnAfterTheWrite(() => checkoutCashOnDeliveryPlacedReply(placed, botResponseLanguageOf(req))));
+    sendSuccess(res, placed);
+}
+
+/**
  * `no:co:<checkoutRef>` — Not now. **Writes nothing**, reads nothing, and says so.
  *
  * ⚠ **The ref is not checked against the store**, and a stale one declines as well as a fresh one:
@@ -797,6 +861,8 @@ function isUnspentLapsedCheckout(error: unknown): boolean {
 export const CHECKOUT_ACTION_HANDLERS: BotActionHandlers = Object.freeze({
     pay: paymentTap,
     'yes:co': confirmCheckoutTap,
+    'yes:cod': cashOnDeliveryTap,
+    'yes:coa': chooseAddressTap,
     'no:co': declineCheckoutTap,
 });
 

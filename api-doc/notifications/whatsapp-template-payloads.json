@@ -1,12 +1,12 @@
 {
-  "generatedAt": "2026-09-27T04:07:13.949Z",
+  "generatedAt": "2026-09-27T14:54:52.729Z",
   "note": "GENERATED from the notification catalogs by scripts/generate-whatsapp-templates.ts. Do not hand-edit: names, placeholder counts and placeholder ORDER are derived from the same functions the send path uses, and editing them here makes the approved template disagree with what is sent.",
   "languages": [
     "en",
     "fr"
   ],
-  "templateCount": 104,
-  "submissionCount": 210,
+  "templateCount": 106,
+  "submissionCount": 212,
   "needsCopyReview": [
     {
       "name": "customer_booking_created",
@@ -1784,6 +1784,10 @@
               "example": [
                 "https://wi-mall.com/en/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Ask to change"
             }
           ]
         }
@@ -1817,6 +1821,10 @@
               "example": [
                 "https://wi-mall.com/fr/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Demander un autre"
             }
           ]
         }
@@ -1850,6 +1858,10 @@
               "example": [
                 "https://wi-mall.com/en/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Book again"
             }
           ]
         }
@@ -1883,6 +1895,10 @@
               "example": [
                 "https://wi-mall.com/fr/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Réserver à nouveau"
             }
           ]
         }
@@ -2186,6 +2202,10 @@
               "example": [
                 "https://wi-mall.com/en/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Try again"
             }
           ]
         }
@@ -2219,6 +2239,10 @@
               "example": [
                 "https://wi-mall.com/fr/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Réessayer"
             }
           ]
         }
@@ -2254,6 +2278,10 @@
               "example": [
                 "https://wi-mall.com/en/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Pay balance"
             }
           ]
         }
@@ -2289,6 +2317,10 @@
               "example": [
                 "https://wi-mall.com/fr/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Payer le solde"
             }
           ]
         }
@@ -2660,6 +2692,10 @@
               "example": [
                 "https://wi-mall.com/en/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Try again"
             }
           ]
         }
@@ -2693,6 +2729,10 @@
               "example": [
                 "https://wi-mall.com/fr/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Réessayer"
             }
           ]
         }
@@ -2726,6 +2766,10 @@
               "example": [
                 "https://wi-mall.com/en/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Order details"
             }
           ]
         }
@@ -2759,6 +2803,10 @@
               "example": [
                 "https://wi-mall.com/fr/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Détails"
             }
           ]
         }
@@ -2852,6 +2900,14 @@
               "example": [
                 "https://wi-mall.com/en/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Leave a review"
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Something's wrong"
             }
           ]
         }
@@ -2883,6 +2939,14 @@
               "example": [
                 "https://wi-mall.com/fr/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Donner un avis"
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Un problème"
             }
           ]
         }
@@ -2914,6 +2978,14 @@
               "example": [
                 "https://wi-mall.com/en/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "I was not there"
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "My address is wrong"
             }
           ]
         }
@@ -2945,6 +3017,14 @@
               "example": [
                 "https://wi-mall.com/fr/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Je n'étais pas là"
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Adresse incorrecte"
             }
           ]
         }
@@ -3104,6 +3184,10 @@
               "example": [
                 "https://wi-mall.com/en/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Reply here"
             }
           ]
         }
@@ -3135,6 +3219,10 @@
               "example": [
                 "https://wi-mall.com/fr/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Répondre ici"
             }
           ]
         }
@@ -3166,6 +3254,10 @@
               "example": [
                 "https://wi-mall.com/en/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Reply here"
             }
           ]
         }
@@ -3197,6 +3289,10 @@
               "example": [
                 "https://wi-mall.com/fr/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Répondre ici"
             }
           ]
         }
@@ -3229,6 +3325,10 @@
               "example": [
                 "https://wi-mall.com/en/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Not sorted"
             }
           ]
         }
@@ -3261,6 +3361,10 @@
               "example": [
                 "https://wi-mall.com/fr/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Pas résolu"
             }
           ]
         }
@@ -6793,6 +6897,48 @@
               ]
             ]
           }
+        }
+      ]
+    },
+    {
+      "name": "wi_mall_delivery_code",
+      "language": "en",
+      "category": "AUTHENTICATION",
+      "components": [
+        {
+          "type": "BODY",
+          "add_security_recommendation": false
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "OTP",
+              "otp_type": "COPY_CODE",
+              "text": "Copy code"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "wi_mall_delivery_code",
+      "language": "fr",
+      "category": "AUTHENTICATION",
+      "components": [
+        {
+          "type": "BODY",
+          "add_security_recommendation": false
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "OTP",
+              "otp_type": "COPY_CODE",
+              "text": "Copier le code"
+            }
+          ]
         }
       ]
     }

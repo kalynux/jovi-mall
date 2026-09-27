@@ -96,6 +96,7 @@
 
   <footer class="screen__foot" id="foot" hidden>
     <button class="btn btn--primary btn--block" id="pay"></button>
+    <button class="btn btn--block" id="cod" hidden></button>
     <div class="note" id="note"></div>
   </footer>
 
@@ -137,6 +138,7 @@
     phone: document.getElementById("phone"),
     foot: document.getElementById("foot"),
     pay: document.getElementById("pay"),
+    cod: document.getElementById("cod"),
     note: document.getElementById("note")
   };
 
@@ -312,10 +314,47 @@
       });
     }
 
+    /*
+     * Pay on delivery, beside Pay now — only where the SERVER said every rule passes (physical
+     * goods, agencies that take cash, within their limits). The page decides nothing about it.
+     */
+    el.cod.hidden = !(data.cashOnDelivery === true && !data.address.digital);
+
     el.state.hidden = true;
     el.sheet.hidden = false;
     el.foot.hidden = false;
   }
+
+  /*
+   * ⚠ **The SAME one-submit latch as Pay now.** Either button spends the handle, so after either
+   * is pressed neither can be pressed again — two orders from one screen is the one outcome this
+   * page must never produce. Every refusal stays latched: the screen door has no pre-spend check,
+   * so the handle is gone whatever the reason, and the copy sends the customer back to the chat.
+   */
+  el.cod.addEventListener("click", function () {
+    if (placed || el.cod.hidden) return;
+    placed = true;
+    el.pay.disabled = true;
+    el.cod.disabled = true;
+    say(copy.loading, false);
+
+    json(base + "/place-cod", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}"
+    }).then(function (res) {
+      if (!res.ok || !res.body || res.body.success === false) {
+        say(explain(res), true);
+        return;
+      }
+      say(copy.checkoutCodPlaced || FALLBACK.checkoutCodPlaced, false);
+      if (tg && tg.HapticFeedback) { try { tg.HapticFeedback.notificationOccurred("success"); } catch (e) {} }
+      window.setTimeout(function () { if (tg && tg.close) { try { tg.close(); } catch (e) {} } }, 2600);
+    }).catch(function () {
+      /* As for Pay now: a lost response is not proof nothing was placed. Never re-submit. */
+      say(copy.failed, true);
+    });
+  });
 
   /*
    * ⚠ **One submit, ever.** `placed` latches before the request leaves, so a double-tap, a
@@ -328,6 +367,7 @@
     if (el.pay.disabled) return;
     placed = true;
     el.pay.disabled = true;
+    el.cod.disabled = true;
     say(copy.loading, false);
 
     /* Empty means "use the number on my account" — this page never holds it in full. */
@@ -365,6 +405,7 @@
           && refusal && refusal.details && refusal.details.spent === false) {
         placed = false;
         el.pay.disabled = false;
+        el.cod.disabled = false;
         el.phone.setAttribute("aria-invalid", "true");
         el.phone.addEventListener("input", function () {
           el.phone.removeAttribute("aria-invalid");
@@ -454,7 +495,9 @@
     checkoutDigitalDelivery: "Sent to your account",
     checkoutPhone: "Mobile money number",
     checkoutPay: "Pay now",
-    checkoutWatchChat: "Approve the payment on your phone. I will tell you in the chat as soon as it lands."
+    checkoutWatchChat: "Approve the payment on your phone. I will tell you in the chat as soon as it lands.",
+    checkoutPayOnDelivery: "Pay on delivery",
+    checkoutCodPlaced: "Order placed. Pay the delivery agent in cash when it arrives — you will receive a delivery code for each parcel."
   };
 
   function boot(d) {
@@ -463,6 +506,7 @@
     document.documentElement.dir = (d && d.direction) || "ltr";
     el.title.textContent = copy.checkoutHeading;
     el.pay.textContent = copy.checkoutPay;
+    el.cod.textContent = copy.checkoutPayOnDelivery || FALLBACK.checkoutPayOnDelivery;
     load();
   }
 

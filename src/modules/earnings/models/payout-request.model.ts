@@ -112,7 +112,7 @@ export type PayoutTriageVerdict = IReviewTriage['verdict'];
  *  2. `assertPending` in wi-admin's dual-control handler
  *     (`admin/src/modules/money/domain/payout-dual-control.ts`), which refuses anything
  *     that is not `pending` — an endorsed payout would become unpayable;
- *  3. the admin queue's status filter and `sumPaidSince`'s allowance window.
+ *  3. the admin queue's status filter.
  *
  * Keeping it beside the status means the entire existing state machine is untouched by
  * triage, which is what makes the pre-screen optional (a tier-1/2 administrator may pay

@@ -7,6 +7,7 @@ import { bookingChatAcknowledgement } from '../../../bot-surface/domain/bot-book
 import type { BotReplyOption } from '../../../bot-surface/domain/channel-reply';
 import {
     addedToCartActions,
+    bookInviteActions,
     purchaseInvitePrompt,
 } from '../../../bot-surface/domain/purchase-chat-copy';
 import { readProductDetail } from '../../../bot-surface/miniapp/surfaces/product-detail.read';
@@ -218,6 +219,13 @@ export const handler: CommandHandler<z.infer<typeof schema>, FlowCompleteReply> 
             return {
                 ...base,
                 message: purchaseInvitePrompt(product.title, verb, language),
+                /**
+                 * ⭐ Book offers the picker here too (owner, 2026-09-27: every Book does). A TAP
+                 * button (`open:bk:<productId>`) rather than a screen minted now: this completion
+                 * is caller-supplied, so the session is minted by the tap's handler, for whoever
+                 * actually tapped, after the product is re-checked. Bargain gets none.
+                 */
+                ...(verb === 'book' ? { actions: bookInviteActions(plan.productId, language) } : {}),
                 language,
             };
         } catch {

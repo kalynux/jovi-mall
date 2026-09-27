@@ -114,48 +114,18 @@ an admin marks it paid, or returns to `available` if the admin rejects it.
 | `pending` | `number` | Sum of net shares from paid/collected-but-not-yet-released sources (still within the completion/hold window, or COD cash not yet settled). Minor currency units. |
 | `available` | `number` | Sum of net shares whose hold window has elapsed (and, for COD, whose cash was settled). Withdrawable via a payout request (see below). Minor currency units. |
 | `reserve` | `number` | Always `0` for vendors (see above). Minor currency units. |
-| `payoutAllowance` | `object|null` | `null` unless a payout limit applies — see below. |
+| `payoutAllowance` | `null` | **Always `null`** since 2026-09-27 — deprecated, no limit applies. See below. |
 
-### `payoutAllowance` — the limit on unverified accounts
+### `payoutAllowance` — retired, always `null`
 
-⚠ **`null` means NO LIMIT, never a limit of zero.** It is `null` for a verified account and on
-any deployment with the feature switched off, which is the default — so this is the normal case.
-A client that renders `remaining: 0` out of a missing object tells every verified owner they
-cannot withdraw.
+⚠ **Always `null` since 2026-09-27, and deprecated.** From 2026-09-15 this could carry a limit on
+how much an account whose KYC was not verified could withdraw per rolling window. That limit was
+**deleted** (owner decision: *"we should not block someone's money just because he is not
+verified"*) — an unverified account now withdraws its whole `available` balance exactly like a
+verified one. The key is kept only so existing clients do not break.
 
-When a limit does apply:
-
-```json
-"payoutAllowance": {
-  "cap": 20000,
-  "used": 15000,
-  "remaining": 5000,
-  "windowDays": 30,
-  "resetsAt": "2026-10-01T12:00:00.000Z"
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `cap` | `number` | The most that may be withdrawn per window while KYC is unverified. Minor currency units. |
-| `used` | `number` | Already **paid** inside the window. |
-| `remaining` | `number` | What is left. **The next payout is capped at this**, not at `available`. |
-| `windowDays` | `number` | Length of the rolling window (default 30). |
-| `resetsAt` | `string\|null` | ISO-8601. When the **first** tranche frees up — ⚠ **not** when the whole cap returns, so do not promise the full allowance on this date. `null` when nothing is counted. |
-
-⚠ **The window is ROLLING, not calendar.** There is no 1st-of-the-month reset to wait for; the
-oldest payout simply ages out. A calendar reset would let twice the cap leave inside 48 hours
-across a month boundary, which is the burst the limit exists to prevent.
-
-⚠ **Only PAID payouts count.** A rejected request returned the money to `available` and is not
-charged against the allowance — nobody is billed for an administrator's decision.
-
-⚠ **Show `remaining` next to `available` whenever it is present.** Otherwise the owner requests a
-payout, receives a fraction of their balance, and nothing on the screen explains why.
-
-✅ **Verification removes the limit entirely.** Surface that as the remedy — it is the only one
-besides waiting.
-
+`null` means **no limit**, never a limit of zero. Do not render a withdrawal limit, a "remaining"
+figure or a "get verified to withdraw more" prompt from it; new clients should ignore the field.
 
 > ⚠ **"Minor currency units" does not mean "divide by 100" here.** `EARNINGS_CURRENCY` defaults to
 > **XAF**, a zero-decimal currency whose minor unit *is* the franc — so `142000` is XAF 142,000,
@@ -181,7 +151,8 @@ your configured secondary channel — see [Notifications](./notifications.md), e
 `payoutUpdates`) and can always track progress via the linked ticket.
 
 - **Full balance only** — there's no partial-amount option; each request takes everything currently
-  `available`. ⚠ **One exception since 2026-09-15:** when `payoutAllowance` is present the request takes `min(available, payoutAllowance.remaining)` instead, and the rest stays available. The requester still names no amount — the allowance does.
+  `available` — whether or not your account is verified. (From 2026-09-15 to 2026-09-27 an
+  unverified account could be limited to an allowance; that limit no longer exists.)
 - **Minimum 10,000 XAF** — `available` must be at least this much to request a payout
   (`EARNINGS_CONFIG.MIN_PAYOUT_AMOUNT`); below it you'll get `409 EARNINGS_PAYOUT_BELOW_MINIMUM`.
 - **One request at a time** — you can't open a second request while one is still `pending`
@@ -252,11 +223,10 @@ Check `origin` on the request (see below) to tell manual (`"manual"`) from autom
 - `409` – `EARNINGS_PAYOUT_METHOD_MISSING` – No payout method configured on the profile yet.
 - `409` – `EARNINGS_PAYOUT_NO_AVAILABLE_BALANCE` – `available` is `0` — nothing to request.
 - `409` – `EARNINGS_PAYOUT_BELOW_MINIMUM` – `available` is below the 10,000 XAF minimum.
-- `409` – `EARNINGS_PAYOUT_UNVERIFIED_CAP_REACHED` – the payout allowance for unverified
-  accounts is spent, or what is left of it is under the minimum. `details` carries `cap`, `used`,
-  `remaining`, `windowDays`, `resetsAt` and a `reason` of `allowance_spent` or
-  `remainder_below_minimum`. ⚠ **Retrying does not help** — the remedies are verification, or
-  waiting until `resetsAt`. Say which, using `reason`.
+
+> ⚠ `409 EARNINGS_PAYOUT_UNVERIFIED_CAP_REACHED` was listed here from 2026-09-15 and was **removed
+> 2026-09-27** together with the unverified-account allowance. The code no longer exists; remove
+> any handling for it.
 
 <a name="get-payout"></a>
 ### GET /api/vendor/earnings/payout

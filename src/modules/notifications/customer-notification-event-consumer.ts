@@ -67,6 +67,10 @@ export function initializeCustomerNotificationEventConsumers(): void {
      * minutes later by the cron is the one who has been in the dark longest.
      */
     eventBus.subscribe('payment.failed', handler.handleOrderPaymentFailed.bind(handler));
+    // Published by the orchestrator after every completed refund and subscribed by NOTHING
+    // until this line — so `order.refunded`, fully built, was never sent. Orders only; a
+    // booking refund is told through `booking.payment.updated` above.
+    eventBus.subscribe('payment.refunded', handler.handleOrderRefunded.bind(handler));
 
     /**
      * ⭐ The BOOKING half of the same two events — one event per payment, each handler filtering

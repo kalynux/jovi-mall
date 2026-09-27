@@ -42,6 +42,7 @@ import {
 } from '../../src/modules/agents/domain/services/agent-cod-pool';
 import { AgentCodPoolService } from '../../src/modules/agents/domain/services/agent-cod-pool.service';
 import { CodExposureService } from '../../src/modules/cod/services/cod-exposure.service';
+import { AgentCodThresholdService } from '../../src/modules/agents/domain/services/agent-cod-threshold.service';
 import { AGENT_CONFIG } from '../../src/modules/agents/config/agent.config';
 import { DeliveryAgentModel, IDeliveryAgent } from '../../src/modules/agents/models/agent.model';
 import { SetAgentThresholdSchema, SetOwnCodPoolSchema } from '../../src/modules/agents/validators/agent.validator';
@@ -343,6 +344,78 @@ async function main(): Promise<void> {
   await assert('the breakdown reports the pool beside the slice, so a dashboard can say which bound', () => {
     const b = exposure.limitBreakdown(agentDoc({ max_threshold: 500_000 }), 1_000_000);
     return b.agentPool === 500_000 && b.contractThreshold === 1_000_000;
+  });
+
+  // ═══ 3b · KYC withholds CASH, and only cash (owner decision, 2026-09-27) ═══
+  // Contracts, dispatch and the directory stopped checking KYC, so this gate is the
+  // ONLY thing between an unvetted agent and a customer's cash. It must read the
+  // verdict itself: a pool of 0 is not enough, because an agent the sync has not
+  // reached yet falls back to the slice. Both cases below short-circuit before any
+  // cash read, so they need no database.
+  console.log('\n── 3b · An unverified agent carries no COD, whatever the numbers say ──\n');
+
+  const shortfallStub = { hasOpenShortfallForAgent: async () => false };
+  const kycExposure = new CodExposureService({} as never, shortfallStub as never);
+
+  for (const status of ['unverified', 'pending', 'rejected']) {
+    await assert(`a ${status} agent with a FULL pool and full trust is refused on KYC`, async () => {
+      const v = await kycExposure.evaluate(agentDoc({ max_threshold: 2_000_000 }, status), 10_000, 500_000);
+      return v.allowed === false && v.blocker === 'kyc_not_verified' && v.kycStatus === status;
+    });
+  }
+
+  await assert('KYC outranks trust — an unverified, untrusted agent is refused for KYC', async () => {
+    const v = await kycExposure.evaluate(agentDoc({ max_threshold: 500_000, trust_score: 0 }, 'unverified'), 1, 500_000);
+    return v.blocker === 'kyc_not_verified';
+  });
+
+  await assert('a VERIFIED agent is never refused on KYC (trust decides here)', async () => {
+    const v = await kycExposure.evaluate(agentDoc({ max_threshold: 500_000, trust_score: 0 }, 'verified'), 1, 500_000);
+    return v.blocker === 'trust_too_low';
+  });
+
+  await assert('the refusal throws AGENT_KYC_NOT_VERIFIED 422 with { kycStatus, hint }', async () => {
+    try {
+      await kycExposure.assertCanTakeCodShipment(agentDoc({ max_threshold: 500_000 }, 'pending'), 10_000, 500_000);
+      return false;
+    } catch (err) {
+      const e = err as { code?: string; statusCode?: number; details?: { kycStatus?: string; hint?: string } };
+      return e.code === 'AGENT_KYC_NOT_VERIFIED' && e.statusCode === 422
+        && e.details?.kycStatus === 'pending' && typeof e.details?.hint === 'string';
+    }
+  });
+
+  // The slice an unverified agent's contract carries is DORMANT: approvable now,
+  // usable once verified. The headroom check would refuse it against a pool of 0.
+  const thresholdFor = (agent: IDeliveryAgent) => new AgentCodThresholdService(
+    { findById: async () => agent } as never,
+    { listAllocating: async () => [] } as never,
+  );
+
+  await assert('an UNVERIFIED agent may hold a contract slice above their pool of 0 (dormant)', async () => {
+    await thresholdFor(agentDoc({ max_threshold: 0 }, 'unverified'))
+      .assertContractThresholdAllowed('a', null, 300_000, {} as never);
+    return true;
+  });
+
+  await assert('a VERIFIED agent is still bounded by their pool', async () => {
+    try {
+      await thresholdFor(agentDoc({ max_threshold: 100_000 }, 'verified'))
+        .assertContractThresholdAllowed('a', null, 300_000, {} as never);
+      return false;
+    } catch (err) {
+      return (err as { code?: string }).code === 'CONTRACT_COD_THRESHOLD_EXCEEDS_HEADROOM';
+    }
+  });
+
+  await assert('the absolute per-contract bounds still apply to an unverified agent', async () => {
+    try {
+      await thresholdFor(agentDoc({ max_threshold: 0 }, 'unverified'))
+        .assertContractThresholdAllowed('a', null, -1, {} as never);
+      return false;
+    } catch (err) {
+      return (err as { code?: string }).code === 'CONTRACT_COD_THRESHOLD_OUT_OF_BOUNDS';
+    }
   });
 
   // ═══ 4 · Validators ═══════════════════════════════════════════════════════

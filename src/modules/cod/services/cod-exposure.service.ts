@@ -11,8 +11,15 @@ import {
   TrustScoreSource,
 } from '../../agents/domain/services/agent-trust-override';
 
-/** Why an agent may not take on more COD cash. Stable codes — surfaced to operators. */
-export type CodCapacityBlocker = 'trust_too_low' | 'open_cash_shortfall' | 'exposure_exceeded';
+/**
+ * Why an agent may not take on more COD cash. Stable codes — surfaced to operators.
+ *
+ * `kyc_not_verified` leads: since 2026-09-27 this is the ONLY place KYC gates an
+ * agent (contracts, dispatch and the directory no longer check it), so an
+ * unverified agent must be refused COD for THAT — not for a trust score or a
+ * zero pool that a verdict would change anyway.
+ */
+export type CodCapacityBlocker = 'kyc_not_verified' | 'trust_too_low' | 'open_cash_shortfall' | 'exposure_exceeded';
 
 /** One COD package already in the agent's hands, and what it becomes on handoff. */
 export interface CodPendingCollection {
@@ -85,6 +92,8 @@ export interface CodCapacityVerdict {
   /** The FIRST rule that refused, in the order the gate applies them. */
   blocker: CodCapacityBlocker | null;
   additionalAmount: number;
+  /** The agent's KYC verdict as read — `kyc_not_verified` refuses on anything but `verified`. */
+  kycStatus: string;
   limit: CodLimitBreakdown;
   openCashShortfall: boolean;
   /**
@@ -114,7 +123,10 @@ export interface CodCapacityVerdict {
  *  - trust ≥ TRUST_FULL_THRESHOLD     → ×1
  *  - trust ≥ TRUST_REDUCED_THRESHOLD  → ×TRUST_REDUCED_MULTIPLIER
  *  - below                            → COD blocked entirely
- * An open cash-shortfall discrepancy also blocks new COD work outright.
+ * An open cash-shortfall discrepancy also blocks new COD work outright, and so
+ * does an unverified KYC — which outranks every other rule, because it is the
+ * only thing standing between an unvetted agent and a customer's cash now that
+ * contracts and dispatch accept them (owner decision, 2026-09-27).
  *
  * ── Where the override comes from ───────────────────────────────────────────
  *
@@ -165,13 +177,19 @@ export class CodExposureService {
     const agentId = agent._id.toString();
     const limit = this.limitBreakdown(agent, maxExposureOverride);
 
+    // ⚠ Read the verdict itself, never the pool. An unverified agent's pool is 0
+    // once synced, but an agent the pool sync has not reached yet carries no pool
+    // and falls back to the contract's slice — so a pool-based refusal would leak
+    // cash to exactly the agent this gate exists to refuse.
+    const kycStatus = agent.kyc?.status ?? 'unverified';
+    const kycBlocks = kycStatus !== 'verified';
     const trustBlocks = limit.trustScore < COD_CONFIG.TRUST_REDUCED_THRESHOLD;
     // Only asked when it can still change the answer, or when the caller wants
     // the whole picture.
     const shortfall =
-      trustBlocks && !opts.full ? false : await this.discrepancies.hasOpenShortfallForAgent(agentId);
+      (kycBlocks || trustBlocks) && !opts.full ? false : await this.discrepancies.hasOpenShortfallForAgent(agentId);
 
-    const blockedEarly = trustBlocks || shortfall;
+    const blockedEarly = kycBlocks || trustBlocks || shortfall;
     const exposure = blockedEarly && !opts.full ? null : await this.exposureBreakdown(agentId);
 
     const headroom = exposure ? Math.max(0, limit.effectiveLimit - exposure.total) : null;
@@ -180,19 +198,23 @@ export class CodExposureService {
 
     // This order is the gate's order, and it is meaning rather than style: an
     // agent refused for trust must be reported as refused for TRUST, not for the
-    // exposure that a zero limit trivially exceeds.
-    const blocker: CodCapacityBlocker | null = trustBlocks
-      ? 'trust_too_low'
-      : shortfall
-        ? 'open_cash_shortfall'
-        : exposureBlocks
-          ? 'exposure_exceeded'
-          : null;
+    // exposure that a zero limit trivially exceeds — and an unverified one for
+    // KYC, which no trust score or deposit can fix.
+    const blocker: CodCapacityBlocker | null = kycBlocks
+      ? 'kyc_not_verified'
+      : trustBlocks
+        ? 'trust_too_low'
+        : shortfall
+          ? 'open_cash_shortfall'
+          : exposureBlocks
+            ? 'exposure_exceeded'
+            : null;
 
     return {
       allowed: blocker === null,
       blocker,
       additionalAmount,
+      kycStatus,
       limit,
       openCashShortfall: shortfall,
       exposure,
@@ -221,12 +243,22 @@ export class CodExposureService {
    *
    * Separate from `assertCanTakeCodShipment` so a caller that has ALREADY
    * evaluated — `ContractPolicyService.assert` has, to build its gate list — can
-   * throw without paying for a second evaluation. The three error shapes below
-   * are consumed by three dashboards and are not free to change.
+   * throw without paying for a second evaluation. The error shapes below
+   * are consumed by three dashboards and are not free to change. The KYC one
+   * (2026-09-27) reuses the exact code and `{ kycStatus, hint }` shape the
+   * contract gate used to throw, so a dashboard that already handled it needs
+   * no change.
    */
   assertVerdict(verdict: CodCapacityVerdict): void {
     if (verdict.allowed) return;
     const additionalAmount = verdict.additionalAmount;
+
+    if (verdict.blocker === 'kyc_not_verified') {
+      throw createAppError(ERROR_CODES.AGENT_KYC_NOT_VERIFIED, 422, undefined, {
+        kycStatus: verdict.kycStatus,
+        hint: 'An unverified agent may take prepaid shipments but cannot carry cash on delivery until an administrator verifies their identity.',
+      });
+    }
 
     if (verdict.blocker === 'trust_too_low') {
       throw createAppError(ERROR_CODES.COD_AGENT_TRUST_TOO_LOW, 422, undefined, {

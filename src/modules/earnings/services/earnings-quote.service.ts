@@ -8,6 +8,8 @@ import {
   agentContractRepository,
 } from '../../agents/repositories/agent-contract.repository';
 import { IContractFeeSplit } from '../../agents/models/agent-agency-membership.model';
+import { EarningsAllocationModel } from '../models/earnings-allocation.model';
+import { CashCollectionModel } from '../../cod/models/cash-collection.model';
 
 /**
  * Why an agent's earning is unavailable, when it is.
@@ -39,7 +41,14 @@ export interface AgentEarningQuote {
   /** The agent's cut, in minor currency units. Legitimately 0 — see the class docs. */
   amount: number;
   currency: string;
-  estimated: true;
+  /**
+   * `false` once the delivery has been SPLIT: `amount` is then the allocation actually
+   * written, not a quote (2026-09-27 — before that a paid delivery went on showing a live
+   * estimate that could disagree with what the agent was paid). See `overlayAgentActual`.
+   */
+  estimated: boolean;
+  /** Present only when `estimated` is false: where the real money is. */
+  allocationStatus?: 'held' | 'released' | 'reversed';
   /** The whole delivery fee this cut is carved out of, for transparency. */
   deliveryFee: number;
   basis: 'contract_percentage' | 'contract_flat';
@@ -188,7 +197,9 @@ export interface AgencyEarningQuote {
   /** What the agency keeps: `earnedFee - agentCut + codHandlingFee`. */
   amount: number;
   currency: string;
-  estimated: true;
+  /** `false` once split — every figure is then read from the allocations. See `overlayAgencyActual`. */
+  estimated: boolean;
+  allocationStatus?: 'held' | 'released' | 'reversed';
   /** The gross delivery fee, before anything is carved out of it. */
   deliveryFee: number;
   /**
@@ -281,6 +292,159 @@ export function deliveryFeeForPickupMix(policies: IAgencyPolicies, mix: PickupMi
   // calc needs item-level granularity below the two flat components above.
 
   return fee;
+}
+
+/**
+ * A COD shipment that came back earns NOTHING, for anybody.
+ *
+ * `splitShipmentDelivery` returns early for COD orders, and the shipment's cash collection is
+ * cancelled on return — so no split ever runs: no `rto_fee`, no agent cut, no handling fee.
+ * The quotes used to show the RTO fee plus a COD fee computed from the cancelled collection's
+ * `expected_amount`: money promised that nobody pays (audit 2026-09-27).
+ */
+export function isReturnedCod(
+  order: Pick<IOrder, 'payment_method'>,
+  shipment: Pick<IShipment, 'status'>
+): boolean {
+  return order.payment_method === 'cash_on_delivery' && shipment.status === 'returned';
+}
+
+/** The fee a run earns, as the split will compute it — outcome-aware and COD-return-aware. */
+export function earnedFeeFor(
+  order: Pick<IOrder, 'payment_method'>,
+  shipment: Pick<IShipment, 'status'>,
+  deliveryFee: number,
+  policies: IAgencyPolicies | null
+): number {
+  if (isReturnedCod(order, shipment)) return 0;
+  return resolveEarnedFee(shipment.status === 'returned' ? 'returned' : 'delivered', deliveryFee, policies);
+}
+
+export interface ShipmentActuals {
+  agencyAmount: number;
+  agencyStatus: 'held' | 'released' | 'reversed';
+  agentId: string | null;
+  agentAmount: number;
+  agentStatus: 'held' | 'released' | 'reversed' | null;
+  cod: boolean;
+}
+
+/**
+ * What was ACTUALLY allocated for each shipment that has been split, keyed by shipment id.
+ *
+ * A prepaid delivery is allocated on source `('shipment', shipmentId)`; a COD one on
+ * `('cod_collection', collectionId)`. The agency always gets a row when a split ran (its cut
+ * plus, on COD, the handling fee), so "an agency row exists" is the test for "this was split".
+ */
+async function loadActuals(shipmentIds: string[]): Promise<Map<string, ShipmentActuals>> {
+  const actuals = new Map<string, ShipmentActuals>();
+  if (shipmentIds.length === 0) return actuals;
+
+  const collections = await CashCollectionModel.find({ shipment_id: { $in: shipmentIds } })
+    .select('_id shipment_id')
+    .lean<{ _id: unknown; shipment_id: unknown }[]>();
+  const shipmentOfCollection = new Map(collections.map((c) => [String(c._id), String(c.shipment_id)]));
+
+  const rows = await EarningsAllocationModel.find({
+    beneficiary_type: { $in: ['agency', 'agent'] },
+    $or: [
+      { source_type: 'shipment', source_id: { $in: shipmentIds } },
+      ...(collections.length
+        ? [{ source_type: 'cod_collection', source_id: { $in: collections.map((c) => c._id) } }]
+        : []),
+    ],
+  })
+    .select('source_type source_id beneficiary_type beneficiary_id amount status')
+    .lean<
+      {
+        source_type: string;
+        source_id: unknown;
+        beneficiary_type: string;
+        beneficiary_id: unknown;
+        amount: number;
+        status: 'held' | 'released' | 'reversed';
+      }[]
+    >();
+
+  for (const a of rows.filter((r) => r.beneficiary_type === 'agency')) {
+    const cod = a.source_type === 'cod_collection';
+    const shipmentId = cod ? shipmentOfCollection.get(String(a.source_id)) : String(a.source_id);
+    if (!shipmentId) continue;
+    const agent = rows.find(
+      (r) =>
+        r.beneficiary_type === 'agent' &&
+        r.source_type === a.source_type &&
+        String(r.source_id) === String(a.source_id)
+    );
+    actuals.set(shipmentId, {
+      agencyAmount: a.amount,
+      agencyStatus: a.status,
+      agentId: agent ? String(agent.beneficiary_id) : null,
+      agentAmount: agent?.amount ?? 0,
+      agentStatus: agent?.status ?? null,
+      cod,
+    });
+  }
+  return actuals;
+}
+
+/**
+ * Replace an agent's estimate with the allocation actually written, once the delivery was split.
+ *
+ * A split with no agent row for THIS agent (a zero cut is not persisted, or the shipment was
+ * carried by someone else) is still a real answer: 0, not an estimate.
+ */
+export function overlayAgentActual(
+  result: AgentEarningQuoteResult,
+  actual: ShipmentActuals | undefined,
+  agentId: string
+): AgentEarningQuoteResult {
+  if (!actual || !result.earning) return result;
+  const mine = actual.agentId === agentId;
+  return {
+    earning: {
+      ...result.earning,
+      amount: mine ? actual.agentAmount : 0,
+      estimated: false,
+      allocationStatus: (mine ? actual.agentStatus : null) ?? actual.agencyStatus,
+    },
+    earningUnavailable: null,
+  };
+}
+
+/**
+ * Replace an agency's estimate with the allocations actually written.
+ *
+ * COD: the agency row is `deliveryFee − agentCut + codFee`, so the handling fee is the residual
+ * against the shipment's `delivery_fee_snapshot` (written at collection). Prepaid: no handling
+ * fee, and the earned fee is agency + agent.
+ */
+export function overlayAgencyActual(
+  result: AgencyEarningQuoteResult,
+  actual: ShipmentActuals | undefined,
+  deliveryFeeSnapshot: number | null
+): AgencyEarningQuoteResult {
+  if (!actual || !result.agencyEarning) return result;
+  const earnedBeforeCod = actual.agencyAmount + actual.agentAmount;
+  let codHandlingFee = 0;
+  if (actual.cod) {
+    codHandlingFee =
+      deliveryFeeSnapshot !== null && deliveryFeeSnapshot <= earnedBeforeCod
+        ? earnedBeforeCod - deliveryFeeSnapshot
+        : result.agencyEarning.codHandlingFee;
+  }
+  return {
+    agencyEarning: {
+      ...result.agencyEarning,
+      amount: actual.agencyAmount,
+      agentCut: actual.agentAmount,
+      earnedFee: earnedBeforeCod - codHandlingFee,
+      codHandlingFee,
+      estimated: false,
+      allocationStatus: actual.agencyStatus,
+    },
+    agencyEarningUnavailable: null,
+  };
 }
 
 export class EarningsQuoteService {
@@ -412,23 +576,29 @@ export class EarningsQuoteService {
     const policies = agency?.policies ?? null;
     if (!policies) return unavailable('no_agency_policy');
 
-    const contract = await this.contracts.findLive(agentId, agencyId);
+    const contract = await this.contracts.findLiveOrLatest(agentId, agencyId);
     if (!contract) return unavailable('no_contract');
 
     const orderItemsById = new Map(order.items.map((i) => [(i._id as any).toString(), i]));
     const deliveryFee = this.resolveDeliveryFee(shipment, policies, orderItemsById, String(order._id));
-    const amount = await this.computeAgentCut(agentId, agencyId, deliveryFee);
+    // The agent's cut comes out of what the run EARNED — the RTO rate on a return, nothing on a
+    // returned COD shipment — exactly as the split computes it. It used to be a cut of the full
+    // fee, so the agent's figure and the agency's `agentCut` disagreed on the same shipment.
+    const earnedFee = earnedFeeFor(order, shipment, deliveryFee, policies);
 
-    return {
+    const result: AgentEarningQuoteResult = {
       earning: {
-        amount,
-        currency: contract.fee_split?.currency ?? order.currency ?? EARNINGS_CONFIG.DEFAULT_CURRENCY,
+        amount: applyFeeSplit(contract.fee_split, earnedFee),
+        currency: order.currency ?? contract.fee_split?.currency ?? EARNINGS_CONFIG.DEFAULT_CURRENCY,
         estimated: true,
         deliveryFee,
         basis: basisOf(contract.fee_split),
       },
       earningUnavailable: null,
     };
+    const shipmentId = String((shipment as any)._id);
+    const actuals = await loadActuals([shipmentId]);
+    return overlayAgentActual(result, actuals.get(shipmentId), agentId);
   }
 
   /**
@@ -453,7 +623,7 @@ export class EarningsQuoteService {
     const contractByAgency = new Map(
       await Promise.all(
         agencyIds.map(
-          async (agencyId) => [agencyId, await this.contracts.findLive(agentId, agencyId)] as const
+          async (agencyId) => [agencyId, await this.contracts.findLiveOrLatest(agentId, agencyId)] as const
         )
       )
     );
@@ -488,10 +658,11 @@ export class EarningsQuoteService {
       // Same arithmetic as computeAgentCut, but against the already-resolved
       // contract — re-fetching per row is what this batch path exists to avoid.
       const split = contract.fee_split;
+      const earnedFee = earnedFeeFor(order, shipment, deliveryFee, policies);
       results.set(shipmentId, {
         earning: {
-          amount: applyFeeSplit(split, deliveryFee),
-          currency: split?.currency ?? order.currency ?? EARNINGS_CONFIG.DEFAULT_CURRENCY,
+          amount: applyFeeSplit(split, earnedFee),
+          currency: order.currency ?? split?.currency ?? EARNINGS_CONFIG.DEFAULT_CURRENCY,
           estimated: true,
           deliveryFee,
           basis: basisOf(split),
@@ -500,6 +671,10 @@ export class EarningsQuoteService {
       });
     }
 
+    const actuals = await loadActuals([...results.keys()]);
+    for (const [shipmentId, result] of results) {
+      results.set(shipmentId, overlayAgentActual(result, actuals.get(shipmentId), agentId));
+    }
     return results;
   }
 
@@ -528,19 +703,19 @@ export class EarningsQuoteService {
     // fee — mirrors the outcome `ShipmentService` passes to
     // `splitShipmentDelivery`. Everything else is quoted as if it will succeed,
     // which is the question the agency is asking.
-    const outcome: ShipmentDeliveryOutcome = shipment.status === 'returned' ? 'returned' : 'delivered';
-    const earnedFee = resolveEarnedFee(outcome, deliveryFee, policies);
+    // A returned COD shipment earns 0 all round — see `isReturnedCod`.
+    const earnedFee = earnedFeeFor(order, shipment, deliveryFee, policies);
 
     const agentCut = applyFeeSplit(contract?.fee_split, earnedFee);
     const codHandlingFee =
-      order.payment_method === 'cash_on_delivery'
+      order.payment_method === 'cash_on_delivery' && !isReturnedCod(order, shipment)
         ? computeCodHandlingFee(policies.pricing?.additional_fees?.cod_handling_fee, codGross)
         : 0;
 
     return {
       agencyEarning: {
         amount: computeAgencyCut(earnedFee, agentCut, codHandlingFee),
-        currency: contract?.fee_split?.currency ?? order.currency ?? EARNINGS_CONFIG.DEFAULT_CURRENCY,
+        currency: order.currency ?? contract?.fee_split?.currency ?? EARNINGS_CONFIG.DEFAULT_CURRENCY,
         estimated: true,
         deliveryFee,
         earnedFee,
@@ -579,8 +754,11 @@ export class EarningsQuoteService {
     const policies = agency?.policies ?? null;
     if (!policies) return agencyUnavailable('no_agency_policy');
 
-    const contract = await this.contracts.findLive(agentId, agencyId);
-    return this.buildAgencyQuote(shipment, order, policies, contract, codGross);
+    const contract = await this.contracts.findLiveOrLatest(agentId, agencyId);
+    const result = this.buildAgencyQuote(shipment, order, policies, contract, codGross);
+    const shipmentId = String((shipment as any)._id);
+    const actuals = await loadActuals([shipmentId]);
+    return overlayAgencyActual(result, actuals.get(shipmentId), shipment.delivery_fee_snapshot ?? null);
   }
 
   /**
@@ -615,7 +793,7 @@ export class EarningsQuoteService {
       await Promise.all(
         pairs.map(async (pair) => {
           const [agentId, agencyId] = pair.split(':');
-          return [pair, await this.contracts.findLive(agentId, agencyId)] as const;
+          return [pair, await this.contracts.findLiveOrLatest(agentId, agencyId)] as const;
         })
       )
     );
@@ -651,6 +829,14 @@ export class EarningsQuoteService {
       );
     }
 
+    const actuals = await loadActuals([...results.keys()]);
+    const snapshotOf = new Map(shipments.map((s) => [String((s as any)._id), s.delivery_fee_snapshot ?? null]));
+    for (const [shipmentId, result] of results) {
+      results.set(
+        shipmentId,
+        overlayAgencyActual(result, actuals.get(shipmentId), snapshotOf.get(shipmentId) ?? null)
+      );
+    }
     return results;
   }
 }

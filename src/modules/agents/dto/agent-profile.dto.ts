@@ -1,3 +1,4 @@
+import { effectiveTrustScore } from '../domain/services/agent-trust-override';
 import {
     IDeliveryAgent,
     IAgentVehicleInfo,
@@ -120,7 +121,17 @@ export interface AgentRosterEntryDto {
     vehicleInfo: AgentVehicleSummaryDto | null;
     availability: IAgentAvailability['state'];
     workingState: IAgentWorkingState['state'];
+    /**
+     * Every shipment the agent is carrying right now, for ANY agency they serve — how busy they
+     * really are (kept deliberately, owner decision 2026-09-27). A count only: which agencies is
+     * never disclosed.
+     */
     activeShipmentCount: number;
+    /**
+     * The part of `activeShipmentCount` that is THIS agency's (2026-09-27). Same status set
+     * (`ACTIVE_SHIPMENT_STATUSES`), so it is always ≤ the total.
+     */
+    activeShipmentsForYou: number;
     trackingAllowed: boolean;
     trustScore: number;
     /**
@@ -242,7 +253,11 @@ export class AgentProfileMapper {
         };
     }
 
-    static toRosterEntryDto(agent: IDeliveryAgent, avatar: FileDetail | null = null): AgentRosterEntryDto {
+    static toRosterEntryDto(
+        agent: IDeliveryAgent,
+        avatar: FileDetail | null = null,
+        activeShipmentsForYou = 0,
+    ): AgentRosterEntryDto {
         return {
             id: agent._id.toString(),
             name: agent.name,
@@ -254,8 +269,11 @@ export class AgentProfileMapper {
             availability: agent.availability?.state ?? 'offline',
             workingState: agent.working_state?.state ?? 'idle',
             activeShipmentCount: agent.capacity?.active_shipment_count ?? 0,
+            activeShipmentsForYou,
             trackingAllowed: agent.tracking?.allowed ?? false,
-            trustScore: agent.cod?.trust_score ?? 100,
+            // The EFFECTIVE score (an administrator's pin wins), as the agent's own /cod/balance and the admin
+            // views show — the raw composite made an agency and its agent see different numbers.
+            trustScore: effectiveTrustScore(agent),
             verified: agent.kyc?.status === 'verified',
         };
     }

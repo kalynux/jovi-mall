@@ -258,6 +258,7 @@ COD) the exposure limit are re-checked at this moment, and a capacity slot is re
 | `AGENT_AT_CAPACITY` | 422 | The agent is already carrying their maximum shipments. |
 | `CONTRACT_COVERAGE_REGION_NOT_COVERED` | 422 | This delivery is outside the regions your contract with that agency covers. `details: { deliveryRegion, coveredRegions }`. |
 | `CONTRACT_SHIPMENT_VALUE_EXCEEDED` | 422 | The parcel is worth more than your contract's per-shipment ceiling. `details: { shipmentValue, ceiling }`. **Not COD-specific** — the risk is the goods. |
+| `AGENT_KYC_NOT_VERIFIED` | 422 | **COD orders only, since 2026-09-27**: your identity is not verified, so you cannot carry cash on delivery. Prepaid offers are unaffected. `details: { kycStatus, hint }` — show `hint`. |
 | `COD_AGENT_EXPOSURE_EXCEEDED` / `COD_AGENT_TRUST_TOO_LOW` | 422 | COD headroom/trust gate (COD orders only). |
 
 > **The contract-term gates are re-checked here, not only when the offer was made.** An offer can

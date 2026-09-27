@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../api/middlewares/auth.middleware';
+import { DeliveryAnalyticsController } from '../earnings/analytics/delivery-analytics.controller';
 import { AgencyProfileController, uploadAgencyPolicyDocuments } from './controllers/agency-profile.controller';
 import { AgencyNetworkController } from './controllers/agency-network.controller';
 import { AgencyNotificationController } from './controllers/agency-notification.controller';
@@ -204,6 +205,16 @@ router.post('/shipments/:id/reassign', AgencyAssignmentController.reassign);
  * that subscription on. See api-doc/agency/live-tracking.md.
  */
 router.get('/tracking/board', TrackingController.getAgencyBoard);
+
+// ─── Analytics (2026-09-27) ───────────────────────────────────────────────────
+
+/**
+ * GET /api/agency/analytics?from=YYYY-MM-DD&to=YYYY-MM-DD&timezone?
+ * Earnings read from the allocations (fee earned, COD fees, agents' shares, net), delivery
+ * outcomes, COD cash position, a per-agent breakdown, payouts. See
+ * `api-doc/agency/analytics.md`.
+ */
+router.get('/analytics', DeliveryAnalyticsController.agency);
 
 // ─── COD (cash management) ────────────────────────────────────────────────────
 

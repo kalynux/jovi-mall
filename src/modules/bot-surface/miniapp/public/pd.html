@@ -526,9 +526,12 @@
    *
    *   { outcome: "cart",     message: string }          → say it, then close
    *   { outcome: "checkout", url: string }               → go there (digital "Buy now")
+   *   { outcome: "chat",     url: string }               → go there: Book, straight to the
+   *                                                        day-and-time picker (2026-09-27)
    *   { outcome: "chat",     message?: string }          → the server has posted into the
    *                                                        thread; close so the customer
-   *                                                        lands on it (Bargain / Book)
+   *                                                        lands on it (Bargain, or Book
+   *                                                        where there is no picker)
    *   …and every answer carries `chatUrl: string | null` — where "Back to chat" goes when
    *   there is no Telegram runtime to close the page. See SEAM 2.
    */
@@ -556,7 +559,7 @@
       }
 
       var out = res.body.data;
-      if (out.outcome === "checkout" && out.url) { window.location.assign(out.url); return; }
+      if ((out.outcome === "checkout" || out.outcome === "chat") && out.url) { window.location.assign(out.url); return; }
 
       say(out.message || "", false);
       if (tg && tg.HapticFeedback) { try { tg.HapticFeedback.notificationOccurred("success"); } catch (e) {} }

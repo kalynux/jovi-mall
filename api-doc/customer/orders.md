@@ -451,7 +451,7 @@ The person on the parcel, **while they are on the parcel**. Design record:
 | `displayName` | Partial by design — `"Jean T."`, first name plus surname initial. Never the full legal name |
 | `photo` | `FileDetail \| null`, same convention as `agency.logo`. Commonly `null` |
 | `visibleFrom` | Always `"shipped"` — the customer status from which this block appears. Echoed so a client can explain the wait without hardcoding the policy |
-| `verified` | The agent's KYC verdict — `kyc.status === 'verified'`, the same test the platform gates contracts and COD cash on. Always a boolean. A platform verdict, not a personal detail: no document, ID number or reviewer is ever sent |
+| `verified` | The agent's KYC verdict — `kyc.status === 'verified'`, the same test the platform gates COD cash on (since 2026-09-27 it no longer gates contracts or prepaid dispatch, so an unverified agent may deliver a prepaid order). Always a boolean. A platform verdict, not a personal detail: no document, ID number or reviewer is ever sent |
 
 **`agent` is `null` far more often than it is set, and each `null` means something different
 to a screen:**

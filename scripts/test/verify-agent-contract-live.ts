@@ -646,10 +646,11 @@ async function scenario7Ban(): Promise<void> {
   const aRestored = await AgentAgencyContractModel.findById(contractA);
   assert('…and every contract is exactly where it was', aRestored?.status === 'active');
 
-  // KYC is the other half of the same gate, and it is evaluated independently.
+  // KYC is NOT part of this gate since 2026-09-27 (owner decision): an unverified
+  // agent may hold a contract. It withholds COD cash only, in CodExposureService.
   await DeliveryAgentModel.updateOne({ _id: AGENT }, { $set: { 'kyc.status': 'rejected' } });
   const kycGate = await agentGateService.evaluate(AGENT.toString());
-  assert('an unverified KYC fails the gate on its own', kycGate.passed === false && kycGate.failures.includes('kyc_not_verified'));
+  assert('a rejected KYC does NOT fail the contract gate', kycGate.passed === true && kycGate.kycStatus === 'rejected');
   assert('…and does NOT report a ban it does not have', kycGate.banned === false);
 }
 

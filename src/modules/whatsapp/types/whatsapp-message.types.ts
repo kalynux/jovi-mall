@@ -121,8 +121,20 @@ export interface TemplateComponent {
 }
 
 export interface TemplateParameter {
-    type: 'text' | 'currency' | 'date_time' | 'image' | 'document' | 'video';
+    /**
+     * ⚠ `'payload'` is repeated as a runtime allowlist in `template-validator.ts`, on purpose:
+     * this union stops a missing type compiling, that list stops a cast one reaching Meta.
+     * Change both or neither — one alone is "registered, validated, and never reached".
+     */
+    type: 'text' | 'currency' | 'date_time' | 'image' | 'document' | 'video' | 'payload';
     text?: string;
+    /**
+     * A quick-reply button's tap token (`sub_type: 'quick_reply'`). ⛔ Always send one: what
+     * Meta returns for a tap on a quick reply sent WITHOUT a payload is undocumented, and it is
+     * believed to be the visible label, which would arrive at the dispatcher where a verb is
+     * expected.
+     */
+    payload?: string;
     currency?: {
         fallback_value: string;
         code: string;

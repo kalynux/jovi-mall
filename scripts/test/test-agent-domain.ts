@@ -13,6 +13,8 @@
  *
  * Run: npx ts-node scripts/test/test-agent-domain.ts   (npm run test:agent-domain)
  */
+import fs from 'fs';
+import path from 'path';
 import { AgentEligibilityService } from '../../src/modules/agents/domain/services/agent-eligibility.service';
 import { AgentAvailabilityService } from '../../src/modules/agents/domain/services/agent-availability.service';
 import {
@@ -287,29 +289,28 @@ async function run(): Promise<void> {
         return !r.eligible && r.reasons.includes('agent_not_found');
     });
 
-    // ─── Platform gates (KYC + ban) ───────────────────────────────────────────
-    // These outrank everything below them: they are the platform's judgement on
-    // the person, not one agency's on a relationship.
-    console.log('\n── Platform gates ─────────────────────────────────────────────────────');
+    // ─── Platform gate (ban) — and KYC is NOT one (owner decision, 2026-09-27) ─
+    // The ban outranks everything below it: it is the platform's judgement on the
+    // person, not one agency's on a relationship. KYC withholds COD cash only —
+    // the `cod_exposure` contract gate — so an unverified agent stays dispatchable.
+    console.log('\n── Platform gate ──────────────────────────────────────────────────────');
 
-    await assert('an unverified agent is rejected (kyc_not_verified)', async () => {
-        const svc = makeEligibility({
-            agent: makeAgent({ kyc: { status: 'unverified', verified_at: null, rejection_reason: null } }),
-            membership: makeMembership(),
-            activeShipments: 0,
+    for (const status of ['unverified', 'pending', 'rejected'] as const) {
+        await assert(`a ${status} KYC does NOT block dispatch`, async () => {
+            const svc = makeEligibility({
+                agent: makeAgent({ kyc: { status, verified_at: null, rejection_reason: null } }),
+                membership: makeMembership(),
+                activeShipments: 0,
+            });
+            const r = await svc.evaluate('agent-1', 'agency-1');
+            return r.eligible && !r.rules.some((rule) => rule.rule === 'kyc');
         });
-        const r = await svc.evaluate('agent-1', 'agency-1');
-        return !r.eligible && r.reasons.includes('kyc_not_verified');
-    });
+    }
 
-    await assert('a pending KYC is not a verified KYC', async () => {
-        const svc = makeEligibility({
-            agent: makeAgent({ kyc: { status: 'pending', verified_at: null, rejection_reason: null } }),
-            membership: makeMembership(),
-            activeShipments: 0,
-        });
-        const r = await svc.evaluate('agent-1', 'agency-1');
-        return !r.eligible && r.reasons.includes('kyc_not_verified');
+    await assert('no eligibility reason can say kyc_not_verified', async () => {
+        const source = fs.readFileSync(
+            path.resolve(__dirname, '../../src/modules/agents/domain/services/agent-eligibility.service.ts'), 'utf8');
+        return !/'kyc_not_verified'/.test(source.replace(/\/\/.*$/gm, ''));
     });
 
     await assert('a banned agent is rejected (platform_banned)', async () => {

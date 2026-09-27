@@ -244,13 +244,14 @@ export async function inboxSection(req: Request, res: Response, rest: string): P
 }
 
 /**
- * The four switches, in the order they are drawn. The keys are the real preference names,
+ * The switches, in the order they are drawn. The keys are the real preference names,
  * read from `BotNotificationPreferencesSchema` rather than invented.
  */
 const NOTIFY_SWITCHES = Object.freeze([
     { key: 'orderUpdates', copy: 'notifyRowOrderUpdates' },
     { key: 'bookingUpdates', copy: 'notifyRowBookingUpdates' },
     { key: 'bookingReminders', copy: 'notifyRowBookingReminders' },
+    { key: 'cartReminders', copy: 'notifyRowCartReminders' },
     { key: 'marketing', copy: 'notifyRowMarketing' },
 ] as const);
 
@@ -268,7 +269,7 @@ function currentChannel(prefs: {
 }
 
 /**
- * The settings, as one list: where to send, then the four switches.
+ * The settings, as one list: where to send, then the switches.
  *
  * ⚠ **Each switch row carries the OPPOSITE of its current state, never a toggle.** A toggle
  * token flips whatever the state happens to be when the button is finally pressed, and a chat

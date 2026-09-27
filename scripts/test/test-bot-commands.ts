@@ -342,9 +342,49 @@ function main(): void {
     // ═════════════════════════════════════════════════════════════════════════
     section('6 · What is live, and what still reaches the model');
 
-    assert('the five live commands are start, help, login, password, connect', () => {
+    /**
+     * ⚠ A dated observation, deliberately exact: going live puts a command in the Telegram menu
+     * (`setMyCommands`), so a sixth arriving should be a change somebody has to look at. It was
+     * five until bookings phase 6 (2026-09-27) made `/bookings` live.
+     */
+    assert('the six live commands are start, help, login, password, connect, bookings', () => {
         const live = LIVE_COMMANDS.map((c) => c.name).sort();
-        return JSON.stringify(live) === JSON.stringify(['connect', 'help', 'login', 'password', 'start']);
+        return JSON.stringify(live) === JSON.stringify(['bookings', 'connect', 'help', 'login', 'password', 'start']);
+    });
+
+    /**
+     * `/bookings` is the customer's only front door to their appointments that does not need them
+     * to have just booked something. Every alias the registry declares must reach it — in four
+     * languages — and the help text is built from the registry, so it now lists it.
+     */
+    assert('/bookings and all six of its aliases resolve to bookings', () =>
+        ['/bookings', '/booking', '/rendezvous', '/rdv', '/appointments', '/reservations', '/citas']
+            .every((typed) => {
+                const a = parse(typed);
+                return a.kind === 'matched' && a.name === 'bookings';
+            }));
+
+    assert('/bookings is live, described in all five languages, so /help lists it', () =>
+        LIVE_COMMANDS.some((c) => c.name === 'bookings')
+        && ['en', 'fr', 'pt', 'es', 'ar'].every((lang) => (commandDescription('bookings', lang) ?? '').length > 0)
+        && commandDescription('bookings', 'fr') !== commandDescription('bookings', 'en'));
+
+    /**
+     * ⚠ The router cannot be imported here (it reaches the command bus), so its branch is pinned
+     * line-anchored. Bare → the screen; with a ref → the model, which already answers one
+     * appointment with `bookings_get`. The controller opens the screen through the SAME function
+     * as the `open:bl` tap.
+     */
+    assert('⛔ bare /bookings opens the screen; /bookings <ref> still reaches the model', () => {
+        const router = read('modules/bot-commands/services/command-router.service.ts');
+        const controller = read('modules/bot-surface/controllers/bot-command.controller.ts');
+        const booking = read('modules/bot-surface/controllers/bot-booking.controller.ts');
+        const refArg = parse('/bookings BKG-2026-000123');
+        return /if \(spec\.handler === 'screen:bookings'\) \{\s*return args\.ref\s*\? \{ kind: 'to_model', reason: 'not_implemented', command: spec\.name \}\s*: \{ kind: 'open_screen', command: spec\.name, screen: 'bookings' \};/.test(router)
+            && refArg.kind === 'matched' && refArg.args.ref === 'BKG-2026-000123'
+            && (parse('/bookings') as { args?: Record<string, string> }).args?.ref === undefined
+            && /if \(outcome\.kind === 'open_screen'\) \{\s*await openBookingsScreen\(req\);/.test(controller)
+            && /const handle = await openBookingsScreen\(req\);/.test(booking);
     });
 
     /**
@@ -363,8 +403,22 @@ function main(): void {
         return true;
     });
 
+    /**
+     * ⚠ This used to compare `LIVE_COMMANDS.length` with the described count, which stood in for
+     * "has a handler" only while every handled command was listed. `/bargain` (2026-09-27) is
+     * handled, described and deliberately NOT listed, so the rule is now stated as itself.
+     */
     assert('a command with no handler has NO menu description', () =>
-        LIVE_COMMANDS.length === COMMANDS.filter((c) => commandDescription(c.name, 'en') !== null).length);
+        COMMANDS.every((c) => (commandDescription(c.name, 'en') !== null) === (c.handler !== null)));
+
+    assert('⭐ /bargain is live but NOT advertised — absent from /help and the Telegram menu', () => {
+        const spec = COMMANDS.find((c) => c.name === 'bargain');
+        return spec !== undefined
+            && spec.handler === 'bargain'
+            && spec.advertised === false
+            && spec.aliases.length === 0
+            && !LIVE_COMMANDS.some((c) => c.name === 'bargain');
+    });
 
     assert('the help text names every live command and nothing else', () => {
         const help = commandSentence('helpIntro', 'en');

@@ -1025,6 +1025,16 @@ shape as for a tap** (`N8N-DEPLOY-DAY-CHANGES.md` § 8.2a), before the flag is r
 - **Why it exists:** a tap travels through you, so you see `outcome: "chat"` and set the flag. A
   screen press goes page → backend and never through you, so without this field the offer reaches
   the main assistant with no product in view.
+- ⭐ **A third source since 2026-09-27: the WEBSITE's Bargain button.** It opens the chat with
+  `/bargain <productId> <variantId>` (WhatsApp) or `/start bargain_<productId>_<variantId>`
+  (Telegram). Both reach `POST /command` through `detect command` like any `/`-message; the
+  backend asks the price question and records the same hand-off, so **this field and your
+  existing § 8.2a nodes carry it with no change on your side**. Two differences you can observe:
+  a customer mid-setup is asked the setup question first and gets the price question as the reply
+  to the step that completes setup, **instead of the welcome**; and a brand-new Telegram chat's
+  `/start bargain_…` is still refused with `BOT_IDENTITY_NEEDS_CONTACT` (render it as today), but
+  the product is kept for the account the contact share creates. Storefront contract:
+  `../public/bargain-deep-link.md`.
 
 ⭐ **`data.customer.memoryEpoch` — which generation of chat memory to read** (added 2026-09-22).
 A number, `0` until an administrator resets this customer's bot memory
@@ -2153,7 +2163,7 @@ refusing a stale decline would refuse the one answer that is always safe.
 | `add:<productId>:<variantId>` | **Add to cart**, on a product card | puts one of that variant in the basket | "Added" with **View cart · Checkout · Browse more** | `{ outcome, verb, productId, variantId }` |
 | `buy:<productId>:<variantId>` | **Buy now**, on a product card | puts one in the basket and points at checkout. **It places no order**: checkout needs an address and a payment method (§ 14.8) | the same three buttons. A digital item on a deployment with screens gets one **Checkout** screen button instead | the same, plus `url` when `outcome` is `checkout` — ⛔ never relay it |
 | `bargain:<productId>:<variantId>` | **Bargain**, on a card whose variant is negotiable | **writes nothing.** It asks the customer for their offer. The customer's answer, as an ordinary message, is what starts the haggle; nothing on this side can start it | the product name and the question, no buttons | as `add:` |
-| `book:<productId>` | **Book**, on a service's card | **writes nothing.** It asks for a day and a time | the product name and the question, no buttons | as `add:`, `variantId` may be null |
+| `book:<productId>` | **Book**, on a service's card | **writes nothing.** It asks for a day and a time and opens the picker in the same step | the product name and the question, with one button: **Choose a time**, which OPENS the day-and-time picker directly (a screen button). Where no screen is configured, the button is the `open:bk:<productId>` tap instead (see Bookings). A customer may still just type a day and a time | as `add:`, `variantId` may be null |
 | `more:<setId>` | **See more**, under a page of cards | opens the list the cards came from as a screen. Without screens (production today) it sends the next five cards instead | a screen button, or the next cards (`replies`) | `{ opened: "listing" }`, or `{ shown, total, hasMore }` |
 | `next:<setId>` | *nothing draws it yet* | the next five cards, in the chat | the cards (`replies`) | `{ shown, total, hasMore }` |
 | `cart:view` | **View cart**, after an add | reads the basket | **none**: the model narrates the basket, as it does for `cart_get` | the basket, the same shape as `cart_get` |
@@ -2256,12 +2266,19 @@ happened.
 
 | token | drawn on | what it does | reply | data |
 |---|---|---|---|---|
-| `open:bl` | **My bookings**, under a booking receipt | the customer's own appointments as a screen | a screen button; without screens the storefront's bookings page — **that second case is production today** | `{ handle, opened: "bookings" }`. ⛔ `handle` is a credential — § 19.5 |
+| `open:bl` | **My bookings**, under a booking receipt (Telegram and WhatsApp) | the customer's own appointments as a screen | a screen button; without screens the storefront's bookings page — **that second case is production today** | `{ handle, opened: "bookings" }`. ⛔ `handle` is a credential — § 19.5 |
+| `open:bk:<productId>` | **Choose a time**, under the Book question where no screen is configured, and after **Book** in the WhatsApp product form | the day-and-time picker for that service: the days that have times, then that day's times. **Writes nothing**: the appointment is made by the Confirm on the screen, which then sends its own receipt with **My bookings** in the same chat — Telegram and WhatsApp. That receipt is the booking's only confirmation: the platform's own `booking.created` is kept in the inbox for a booking made in a chat. An unknown, unpublished or suspended product is `404 CATALOG_BOOKING_PRODUCT_NOT_FOUND`; a product that is not a service is `422 CATALOG_BOOKING_INVALID_PRODUCT_TYPE` — the availability read's own refusals | a screen button; without screens configured, the product's own page | `{ handle, opened: "booking_picker", productId }`. ⛔ `handle` is a credential — § 19.5 |
+| `bpay:<bookingId>` · `bpay:<bookingId>:b` | **Try again**, under the `booking.payment_failed` notification (the first form for the appointment's price, the second for a balance) · **Pay balance**, under `booking.balance.due` | the payment screen for that appointment — its price, or with `:b` the balance a longer job came to. **Charges nothing by itself**: the screen shows the amount and the customer presses Pay there. Refused, with one sentence, when there is nothing to pay any more (cancelled, already paid, no payment required, balance settled) | a screen button; without screens configured, the storefront's page for that booking | `{ handle, opened: "booking_payment", purpose }`. ⛔ `handle` is a credential — § 19.5. Another customer's booking is `404 BOOKING_NOT_FOUND` |
 
-⚠ **`bl` is the only bookings screen a BUTTON can name**, and the other two are absent from this
-table on purpose. A picker handle (`bk`) holds a slot on a shop's calendar and a payment handle
-(`bp`) moves money, so both are minted **server-side on the tap that opens them** and never sit
-in a chat history waiting to be pressed. The same rule keeps a checkout handle out of `open:co`.
+⚠ **A button names a BOOKING or a PRODUCT, never a screen handle.** A picker handle (`bk`)
+lives fifteen minutes and a payment handle (`bp`) moves money, so neither may sit in a chat
+history waiting to be pressed. `open:bk:` carries the product id and `bpay:` the booking id, and
+each session is minted **server-side, on the tap, for whoever tapped** — the same rule that lets
+`open:co` open checkout. Opening the picker holds no slot; Confirm takes it. The amount is never in the button either: the screen resolves it when it opens and
+again when Pay is pressed.
+
+⚠ **`bpay:` replaced `pay:rt:` under a failed booking payment.** `pay:rt:`'s handler serves
+orders only, so a booking's Try again answered the customer about their orders.
 
 #### Reviews
 
@@ -2310,7 +2327,9 @@ bytes.
 
 | token | drawn on | what it does | reply | data |
 |---|---|---|---|---|
-| `yes:co:<ref>:<addressId>` · `yes:co:<ref>` | **Place order**, under the confirmation — and **each address row** when the customer has several deliverable addresses. The short form is a download, which goes nowhere | **places the order**, exactly as `checkout_place` does: to THAT address, charging the number on the account. A stale or unknown `<ref>` places **nothing** — it draws a **fresh confirmation** for the same address, because the basket may have changed since | the placement message (§ 14.3): **Check status**, or **Try again** for a charge refused at open. On a stale ref: the confirmation again | as `checkout_place`: `{ transactionId, state, orderCount, orderNumbers, amountText, payerMasked, instructions }`. On a stale ref: the review's data |
+| `yes:co:<ref>:<addressId>` · `yes:co:<ref>` | **Place order** (labelled **Pay now** when pay on delivery is offered beside it), under the confirmation — and **each address row** when the customer has several deliverable addresses and pay on delivery is NOT on offer. The short form is a download, which goes nowhere | **places the order**, exactly as `checkout_place` does: to THAT address, charging the number on the account. A stale or unknown `<ref>` places **nothing** — it draws a **fresh confirmation** for the same address, because the basket may have changed since | the placement message (§ 14.3): **Check status**, or **Try again** for a charge refused at open. On a stale ref: the confirmation again | as `checkout_place`: `{ transactionId, state, orderCount, orderNumbers, amountText, payerMasked, instructions }`. On a stale ref: the review's data |
+| `yes:cod:<ref>:<addressId>` | **Pay on delivery**, beside **Pay now** on the confirmation — drawn only when the basket passes every pay-on-delivery rule (physical goods; every carrying agency active, verified and accepting cash; each shop within its cash limit and its per-shipment delivery minimum) | **places the order as pay on delivery**, to THAT address: no charge is opened, the stock is committed and the agencies are dispatched, exactly as a website pay-on-delivery order. The rules are re-checked before the ref is spent; a refusal there leaves the ref alive, so **Pay now** still works. A stale ref draws a fresh confirmation, as `yes:co:` does | the order numbers and "pay the agent in cash; you will receive a delivery code per parcel". No button | `{ paymentMethod: "cash_on_delivery", orderCount, orderNumbers }` |
+| `yes:coa:<addressId>` | **each address row** of the confirmation, when the customer has several deliverable addresses AND pay on delivery is on offer | **places nothing** — draws the confirmation for THAT address, which then offers Pay now · Pay on delivery · Not now (a list row is one tap and cannot also carry how to pay) | the confirmation | the review's data |
 | `no:co:<ref>` | **Not now**, beside it, and the last row of the address list | **writes nothing**, however old the button | one sentence: nothing was ordered, and the basket is kept | `{ placed: false }` |
 
 ⚠ **The button carries a checkout credential, and that is safe for two reasons.** The place is
@@ -2327,7 +2346,7 @@ the model with the same `checkoutRef`; the two paths run the same placement.
 | token | drawn on | what it does | reply | data |
 |---|---|---|---|---|
 | `pay:st:<transactionId>` | **Check status**, under the placement message while the prompt is waiting (`checkout_place` and the Place order tap) | asks the gateway where that payment is, unless it has already finished | **none** | `{ transactionId, state, amountText, orderCount }`. `state` is `settled`, `failed` or `waiting` |
-| `pay:rt:<transactionId>` | **Try again**, under a failed payment — the `order.payment_failed` notification, and a placement whose charge was refused as it was opened | a fresh mobile-money charge **for the orders that payment covered**, to the number on the account. **It never places an order again**. If those orders have been paid meanwhile, it answers `settled` instead of charging | **none** | `{ transactionId, state, instructions }`. `instructions` is the operator's own text (the USSD code, "approve on your phone"); it is the one thing the customer must act on, so relay it |
+| `pay:rt:<transactionId>` | **Try again**, under a failed ORDER payment — the `order.payment_failed` notification, and a placement whose charge was refused as it was opened. A failed BOOKING payment draws `bpay:` instead (see Bookings) | a fresh mobile-money charge **for the orders that payment covered**, to the number on the account. **It never places an order again**. If those orders have been paid meanwhile, it answers `settled` instead of charging | **none** | `{ transactionId, state, instructions }`. `instructions` is the operator's own text (the USSD code, "approve on your phone"); it is the one thing the customer must act on, so relay it |
 
 ⚠ **These tokens carry the transaction id; the matching tools do not.** A button outlives the
 payment it was drawn for. A Try again tapped under last week's failure must charge for last

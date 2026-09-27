@@ -176,6 +176,21 @@ export interface IPaymentTransaction extends Document {
   totalRefunded: number;            // Sum of all completed refunds (from RefundTransaction)
   hasPartialRefund: boolean;        // True if 0 < totalRefunded < amountSnapshot
 
+  /**
+   * When the payment SUCCEEDED — stamped by the pre-save hook on the first transition to
+   * `SUCCEEDED` (2026-09-27). Before it, the only record of the instant was inside
+   * `rawGatewayPayloads`, which no reader outside this module may touch. `null` on rows that
+   * never succeeded and on rows written before the field existed.
+   */
+  paidAt: Date | null;
+  /**
+   * Who completed the payment, as they entered it at initiate — NOT necessarily the customer
+   * (`userId`): payment links are shareable (`domain/pay-link.ts`), so a relative can pay. Sent
+   * to the gateway and, since 2026-09-27, kept, because an account statement must say who paid.
+   * `null` on rows written before the field existed.
+   */
+  payer: { name: string | null; phone: string | null; email: string | null } | null;
+
   // Timestamps
   createdAt: Date;
   updatedAt: Date;
@@ -336,9 +351,35 @@ const PaymentTransactionSchema = new Schema<IPaymentTransaction>({
   hasPartialRefund: {
     type: Boolean,
     default: false
+  },
+
+  // Statement facts (2026-09-27) — see the interface.
+  paidAt: { type: Date, default: null },
+  payer: {
+    type: new Schema(
+      {
+        name: { type: String, default: null, trim: true },
+        phone: { type: String, default: null, trim: true },
+        email: { type: String, default: null, trim: true, lowercase: true },
+      },
+      { _id: false }
+    ),
+    default: null,
   }
 }, {
   timestamps: { createdAt: 'createdAt', updatedAt: 'updatedAt' }
+});
+
+/**
+ * Stamp `paidAt` on the FIRST transition to SUCCEEDED. Every success path in the orchestrator
+ * assigns `transaction.status` and saves the document (none uses an atomic update to reach
+ * SUCCEEDED), so a save hook sees them all; `test:statement-mail`'s sibling suite pins that.
+ */
+PaymentTransactionSchema.pre('save', function (next) {
+  if (this.isModified('status') && this.status === 'SUCCEEDED' && !this.paidAt) {
+    this.paidAt = new Date();
+  }
+  next();
 });
 
 // Validation: Exactly one of orderId | bookingId | cartId must be set.

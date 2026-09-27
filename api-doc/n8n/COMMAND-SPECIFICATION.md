@@ -857,11 +857,23 @@ Bot:   Saved "Home": Rue de l'Université, Ngoa-Ekellé, Yaoundé
 
 | | |
 |---|---|
-| **Syntax** | `/bookings[:<booking ref>]` · **Aliases** `/rendezvous` `/rdv` `/appointments` `/reservations` `/citas` |
+| **Syntax** | `/bookings[:<booking ref>]` · **Aliases** `/booking` `/rendezvous` `/rdv` `/appointments` `/reservations` `/citas` |
 | **Identity** | ✅ · **Tools** `bookings_list` `bookings_get` `bookings_cancel` |
-| **Flow** | `bookings` · **Confirmation** ✅ for cancel · **Status** **GAP-001** |
+| **Flow** | `bookings` · **Confirmation** ✅ for cancel · **Status** ✅ **LIVE (bare form)** since bookings phase 6, 2026-09-27 |
 
-**Behaviour.** Read and cancel only. Times in the customer's own timezone.
+**Live behaviour (read from the code, 2026-09-27).** Bare `/bookings` is answered by the
+platform: it opens the customer's appointments screen (`bl`) — the same door as the **My
+bookings** button (`open:bl`), and on a deployment without screens the storefront's bookings
+page. `/bookings <ref>` is **not** answered by the platform; it reaches the model, which reads
+that appointment with `bookings_get`. `/help` lists `/bookings` from the registry.
+
+⚠ **Three lines below were written before the code and disagree with it** — kept, flagged, for
+the owner of this spec: making a booking does NOT hand off to the website any more (the chat
+has `bookings_create`, and Book now opens a day-and-time picker); times are shown in the
+**shop's** timezone, not the customer's (`booking.core.ts`, where the appointment happens); and
+the alias list omitted `/booking`.
+
+**Behaviour (as specified).** Read and cancel only. Times in the customer's own timezone.
 
 ⚠ **Making a booking hands off to the website.** A slot must be locked against a live calendar and used within 15 minutes, and chat abandonment is common — each abandoned flow holds a slot nobody else can take.
 

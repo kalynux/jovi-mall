@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../api/middlewares/auth.middleware';
+import { DeliveryAnalyticsController } from '../earnings/analytics/delivery-analytics.controller';
 import { ShipmentController } from '../shipments/shipment.controller';
 import { AgentDeliveryProofController, uploadDeliveryProof } from '../shipments/agent-delivery-proof.controller';
 import { AgentCodController } from '../cod/controllers/agent-cod.controller';
@@ -170,6 +171,13 @@ router.post('/shipments/:id/cod/collect', AgentCodController.collect);
  * Send a FRESH delivery code to the customer (lost/locked code). Rate-limited.
  */
 router.post('/shipments/:id/cod/resend-code', AgentCodController.resendCode);
+
+/**
+ * GET /api/agent/analytics?from=YYYY-MM-DD&to=YYYY-MM-DD&timezone? (2026-09-27)
+ * The agent's credited earnings (read from the allocations), delivery outcomes, COD cash and
+ * payouts over a period. See `api-doc/agent/analytics.md`.
+ */
+router.get('/analytics', DeliveryAnalyticsController.agent);
 
 /** GET /api/agent/cod/balance — cash this agent currently holds (owed to the agency). */
 router.get('/cod/balance', AgentCodController.getBalance);

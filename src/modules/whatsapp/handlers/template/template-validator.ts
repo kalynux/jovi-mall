@@ -124,7 +124,8 @@ export class TemplateValidator {
             );
         }
 
-        const validTypes = ['text', 'currency', 'date_time', 'image', 'document', 'video'];
+        // ⚠ Mirrors `TemplateParameter.type` deliberately — see the note there.
+        const validTypes = ['text', 'currency', 'date_time', 'image', 'document', 'video', 'payload'];
         if (!validTypes.includes(param.type)) {
             throw createAppError(
                 ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
@@ -136,6 +137,19 @@ export class TemplateValidator {
 
         // Validate type-specific fields
         switch (param.type) {
+            case 'payload':
+                // An empty payload is refused here rather than at Meta: a quick reply with no
+                // token would come back as a tap the dispatcher cannot route.
+                if (typeof param.payload !== 'string' || param.payload.trim().length === 0) {
+                    throw createAppError(
+                        ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                        400,
+                        'Invalid payload for message type: template',
+                        { messageType: 'template', validationErrors: [{ field: 'parameter.payload', message: 'Payload parameter must have a non-empty payload field' }] }
+                    );
+                }
+                break;
+
             case 'text':
                 if (!param.text) {
                     throw createAppError(

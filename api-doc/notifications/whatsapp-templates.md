@@ -408,24 +408,37 @@ Languages are kept in sync with `SUPPORTED_LANGUAGES`
 | es | Almacenamiento casi lleno | Tu almacenamiento multimedia está al {{1}}% ({{2}} de {{3}}). Libera espacio o mejora tu plan. | Almacenamiento |
 | ar | مساحة التخزين ممتلئة تقريبًا | مساحة تخزين الوسائط لديك عند {{1}}% ({{2}} من {{3}}). حرّر مساحة أو قم بترقية باقتك. | إدارة التخزين |
 
-## 8. `cod_delivery_code` (customer-facing, no button)
+## 8. `wi_mall_delivery_code` — the COD delivery code (AUTHENTICATION, copy-code button)
 
-Sent by [`DeliveryCodeService`](../../src/modules/cod/services/delivery-code.service.ts)
-**only as a fallback**: it always tries a free-form text message first (free,
-same copy as below); this template is used only when that specific send fails
-because the customer is outside Meta's 24h customer-service window. Cost is
-minimized by design — the paid template is never the first attempt.
+✅ **APPROVED 2026-09-27**, `en` (`1764181271500924`) + `fr` (`3021733508157901`).
 
-- **Body params:** `{{1}}`=order number, `{{2}}`=delivery code, `{{3}}`=amount, `{{4}}`=currency
-- **Button:** none
+Sent by [`DeliveryCodeService`](../../src/modules/cod/services/delivery-code.service.ts) on the
+customer's **notification channel** only (Telegram, email or WhatsApp — one, by the notification
+stack's own rule). On WhatsApp it tries a **free message first** — the code, the order, the amount
+and "only after you have your package" — and sends this template **only** when that is refused for
+the 24-hour window. The same path serves every reissue: the agent's resend
+(`resendCodeAsAgent`), the customer's, and a redelivery.
 
-| Lang | Header | Body |
-|---|---|---|
-| en | Your delivery code | Your delivery code for order {{1}} is {{2}}. Amount to pay in cash on delivery: {{3}} {{4}}. Only give this code to the delivery agent AFTER you have received your package and paid. |
-| fr | Votre code de livraison | Votre code de livraison pour la commande {{1}} est {{2}}. Montant à payer en espèces à la livraison : {{3}} {{4}}. Ne donnez ce code à l'agent qu'APRÈS avoir reçu votre colis et payé. |
-| pt_PT | O seu código de entrega | O seu código de entrega para o pedido {{1}} é {{2}}. Valor a pagar em dinheiro na entrega: {{3}} {{4}}. Só entregue este código ao agente DEPOIS de receber a sua encomenda e pagar. |
-| es | Tu código de entrega | Tu código de entrega para el pedido {{1}} es {{2}}. Monto a pagar en efectivo contra entrega: {{3}} {{4}}. Entrega este código al agente SOLO después de recibir tu paquete y pagar. |
-| ar | رمز التسليم الخاص بك | رمز التسليم لطلبك {{1}} هو {{2}}. المبلغ المطلوب دفعه نقدًا عند التسليم: {{3}} {{4}}. لا تُعطِ هذا الرمز للمندوب إلا بعد استلام طردك والدفع. |
+| | |
+|---|---|
+| Category | **AUTHENTICATION** |
+| Body | Meta's own, fixed and localised: "*{{1}}* is your verification code." / "Votre code de vérification est *{{1}}*." — **one** parameter, the code |
+| `add_security_recommendation` | **false** — Meta's line is "do not share this code", and this code MUST be given to the delivery agent |
+| Expiry footer | none — a delivery code does not expire in minutes |
+| Button | COPY_CODE "Copy code" / "Copier le code". Meta compiles it to a **URL** button, so the send passes the code again as `sub_type: 'url'`, index 0 — exactly as phone verification |
+
+⚠ **Out of window the customer receives the code alone.** Meta's authentication body cannot carry the
+order or the amount; that context is in the free message whenever the window is open, and the
+out-for-delivery notification names the cash amount.
+
+⛔ **History — why it is AUTHENTICATION, and why the name changed.** The code was sent for months under
+`cod_delivery_code`, which was never submitted (no catalogue held it, so the generator never emitted
+it; the template-name parity guard in `test:customer-notifications` found it). Created as UTILITY on
+2026-09-27 it was **REJECTED as `INCORRECT_CATEGORY`**, and a code-free UTILITY edit was rejected
+again within seconds: to Meta a message whose purpose is a code is authentication, whatever it says.
+A category cannot be changed by an edit, so the AUTHENTICATION template has a new name.
+`cod_delivery_code` (en `1377264577810880`, fr `1603005295202926`) still sits REJECTED on the WABA and
+nothing sends it; it can be deleted from WhatsApp Manager.
 
 ---
 
@@ -1135,8 +1148,13 @@ is now **fully paid**, which is the customer's actual question and the closing h
 
 ## 14. Phase 10 · STAGE 2 — quick-reply buttons on the approved templates
 
-⛔ **NOT BUILT AND NOT SUBMITTED. This section is the specification, written 2026-09-20 so the
-decision can be taken with the cost visible.** Stage 1 (chat quick replies on Telegram and on
+✅ **BUILT AND SUBMITTED 2026-09-27** — the send path fills every template quick reply with an
+explicit payload, and the eleven templates below were edited on the WABA the same day (PENDING
+review at the time of writing). **Not yet proven by a live send** — see § 14.6. What follows was
+written 2026-09-20 as the specification and is kept as the reasoning.
+
+~~NOT BUILT AND NOT SUBMITTED. This section is the specification, written 2026-09-20 so the
+decision can be taken with the cost visible.~~ Stage 1 (chat quick replies on Telegram and on
 WhatsApp *inside* the 24-hour window) is built and green; it required no Meta involvement at all.
 Stage 2 is the same button vocabulary projected onto the **approved templates**, which is the only
 way a proactive button reaches a customer **outside** the window.
@@ -1189,30 +1207,41 @@ otherwise arrive where a verb is expected.
 
 ### 14.4 What each template gains
 
+⛔ **CORRECTED 2026-09-27 — this table used to list 13 situations and a button set the code does
+not ship.** It was the pre-revision draft: three of its rows had no `actions` in the catalogue at
+all (`customer_booking_confirmed`, `customer_booking_completed`, `customer_booking_reminder` —
+their verbs have no handler), and three listed a button withdrawn before shipping (`That works`,
+`Where is it now`, and `Leave a review`, which has since been restored — see below). **Never
+submit from a table in this file; derive the set from the catalogue.** The measured record is
+[`PROACTIVE-MESSAGES-PLAN.md`](PROACTIVE-MESSAGES-PLAN.md) § 3.
+
 The vocabulary is defined once, in `actions` on the customer catalog
 ([`customer-notification-catalog.ts`](../../src/modules/notifications/catalog/customer-notification-catalog.ts)),
-and stage 1 already renders it. Stage 2 adds the **same 13 situations'** buttons to the templates;
-the other 12 templates are **untouched**.
+and stage 1 already renders it. The table below is what that catalogue ships **as of 2026-09-27**,
+limited by the desktop-rendering rule (1 URL + at most 2 quick replies). Every other customer
+template is **untouched**. `test:bot-surface` § 20 proves each token reaches a handler.
 
 | Template | Quick replies to add (after the existing URL button) |
 |---|---|
-| `customer_booking_confirmed` | Cancel booking |
-| `customer_booking_rescheduled` | That works · Ask to change |
-| `customer_booking_cancelled` | Book again |
-| `customer_booking_completed` | Leave a review |
-| `customer_booking_reminder` | Cancel booking |
+| `customer_booking_rescheduled` | Ask to change |
+| `customer_booking_cancelled` | Book again — **an open owner decision** (plan Q-4) |
 | `customer_booking_payment_failed` | Try again |
 | `customer_order_payment_failed` | Try again |
 | `customer_order_shipped` | Order details |
 | `customer_order_delivered` | Leave a review · Something's wrong |
-| `customer_order_delivery_failed` | I was not there · My address is wrong · Where is it now |
+| `customer_order_delivery_failed` | I was not there · My address is wrong |
 | `customer_ticket_replied` | Reply here |
 | `customer_ticket_awaiting_customer` | Reply here |
 | `customer_ticket_resolved` | Not sorted |
 
-⚠ `customer_order_delivery_failed` is the one that would exceed the desktop-rendering limit: URL +
-**three** quick replies. Either drop the URL button for that template alone (the three buttons are
-the owner's specified set) or accept that it renders on mobile only. **Open decision.**
+⚠ **`Leave a review` (`rate:<orderId>`) was withdrawn and is back.** `rate` was unrouted when the
+withdrawal was written. It has been routed since `c39bff7` (2026-09-21, `REVIEW_ACTION_HANDLERS`).
+It stays withdrawn on `booking.completed`: the rate handler resolves an order, and a booking has none.
+
+⚠ `customer_order_delivery_failed` sits **exactly at** the desktop limit: URL + two quick replies.
+"Where is it now" was removed before shipping because the URL button already says "Track
+delivery", and it must not come back: a third quick reply would stop the message rendering on
+WhatsApp desktop.
 
 ⚠ `customer_ticket_resolved`'s button is **conditional at send time**, not in the template: it is
 suppressed for a *closed* request by omitting the id its token carries. A template cannot express
@@ -1234,16 +1263,31 @@ live at all six send sites, and the owner has ruled. Left recorded rather than d
 a reader arriving on deployment day with the old text would have submitted three languages that
 nobody needs.)*
 
-Two groups remain, and **both are owner decisions that are still open**:
+Two groups, both closed:
 
-1. **The 13 above** — re-approval of 13 templates, **× 2 languages**.
-2. **Three templates that do not exist at all** and must be submitted before they can *ever* be
-   delivered out of window: `customer_booking_payment_failed`, `customer_order_payment_failed`
-   **[src — absent from the payloads json and from the registry]**, and the new
-   `customer_booking_balance_received` (§ 13). ⚠ These three are the ones with a real
-   consequence today rather than a cosmetic one: until they exist, a customer whose payment
-   fails outside the 24-hour window is told **nothing at all**. Note the first two are in the
-   list above too — they would be *created* with their buttons rather than edited.
+1. ✅ **SUBMITTED 2026-09-27 as EDITS** — the rows above, en + fr, 22 edits, owner-approved the
+   same day. Plus `customer_booking_balance_due` ("Pay balance", `bpay:<bookingId>:b`), which the
+   bookings stream added to the catalogue that day; the generator derives the button set from the
+   catalogue, so it went with them. Sent by `npm run whatsapp:templates:submit -- --submit --edit
+   --only=<names>` — the submitter gained `--edit` that day; before it, an existing template that
+   differed was silently skipped.
+2. ✅ **SUBMITTED 2026-09-27 — the three templates that did not exist.**
+   `customer_booking_payment_failed`, `customer_order_payment_failed` and
+   `customer_booking_balance_received` were created (jovi-mall `5394781`), along with the six
+   payout templates that had the same defect (`0a5104e`). ⚠ **They were created WITHOUT quick
+   replies**: the payload file holds zero `QUICK_REPLY` buttons. So the two payment-failure rows
+   above are now **edits, and each one costs a re-approval** like every other row. The free
+   chance, adding buttons at creation, was not used.
+
+✅ **The COD delivery code — the one template the codebase sent and never submitted — is now
+`wi_mall_delivery_code`, AUTHENTICATION, APPROVED 2026-09-27** (§ 8). Meta rejected it twice as
+UTILITY first. The name-parity guard in `test:customer-notifications` was red on it until then.
+
+⚠ **A template button cannot be hidden at send time.** § 14.4's note on `customer_ticket_resolved`
+said the button is "simply not sent for a closed request"; that is not possible — the button is part
+of the approved template and is shown regardless, and one sent without a payload returns its LABEL on
+tap. So every placeholder-bearing quick reply declares a `templateFallback` (a closed request's
+"Not sorted" carries `tkt:new`, opening a new request), asserted at boot.
 
 ### 14.6 How to verify stage 2 actually took
 
@@ -1273,7 +1317,16 @@ Then, in order:
 |---|---|
 | `WHATSAPP_ACCESS_TOKEN` | Meta Cloud API permanent token |
 | `WHATSAPP_PHONE_NUMBER_ID` | Sender phone number ID |
-| `WHATSAPP_API_URL` | Optional; defaults to `https://graph.facebook.com/v18.0` |
+| `WHATSAPP_API_URL` | Optional; defaults to `https://graph.facebook.com/v26.0` (`meta-cloud.provider.ts`) |
 | `VENDOR_APP_URL` | Deep-link base for the vendor URL buttons (must match the URL base configured in each vendor template) |
 | `AGENCY_APP_URL` | Deep-link base for agency notification buttons (agency templates) |
 | `AGENT_APP_URL` | Deep-link base for agent notification buttons (agent templates) |
+| `STOREFRONT_URL` | Deep-link base for **customer** notification buttons (customer templates). ⚠ Not `VENDOR_APP_URL`. This row was missing until 2026-09-27, and it is the one the customer templates need |
+
+⚠ **For `npm run whatsapp:templates` (the generator), all four `*_URL` variables are REQUIRED and
+must be the PRODUCTION hosts.** Approval bakes the host into the template permanently. The generator
+refuses an unset, non-https or localhost value before it writes anything. Each one can be
+overridden per run with `--base-<audience>=https://…`. ⚠ **The generator does not load `.env`**:
+set the variables in the shell. The repository's development values are `http://` addresses and
+would be refused. There is **no host allowlist in code**, so the hosts in the committed JSON record
+the last run's environment, not a rule.

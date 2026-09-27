@@ -1,6 +1,6 @@
 {
   "registry_version": "2.0.0",
-  "generated_at": "2026-09-09",
+  "generated_at": "2026-09-27",
   "purpose": "The deterministic half of the customer command system: what a typed command means, before any model sees it. The parser reads this file, produces a Normalized Intent, and only falls through to the AI agent when nothing here matches. Prose reference: ../COMMAND-SPECIFICATION.md",
   "grammar": {
     "form": "/<command>[@botname] [<arg1> [<arg2> ...]]",
@@ -40,9 +40,15 @@
     {
       "name": "start",
       "aliases": [],
-      "syntax": "/start",
+      "syntax": "/start[ <payload>]",
       "purpose": "First contact. Establishes who the sender is and, if they have no account, offers to create one.",
-      "args": [],
+      "args": [
+        {
+          "name": "payload",
+          "type": "identifier",
+          "required": false
+        }
+      ],
       "requires_identity": false,
       "requires_customer_role": false,
       "intent": "session.begin",
@@ -54,7 +60,8 @@
       "platform": {
         "telegram": "The conventional first command; Telegram sends it automatically when a user opens the bot. Register it with BotFather.",
         "whatsapp": "There is no /start convention. ANY first message from an unknown sender enters the same flow."
-      }
+      },
+      "notes": "Telegram deep links arrive as `/start <payload>` (t.me/<bot>?start=<payload>). ONE payload means something: `bargain_<productId>[_<variantId>]` is the website Bargain button and behaves exactly as `/bargain` below. Any other payload, or none, is the plain welcome. Parsed server-side (bargain-entry.ts); n8n forwards the raw text."
     },
     {
       "name": "help",
@@ -471,6 +478,37 @@
       "flow": "checkout",
       "confirmation": true,
       "notes": "Express checkout adds to the SAME cart — there is no separate buy-now basket. When the cart already holds something, say so and offer to check out everything or to empty it first. Silently discarding an existing basket is not acceptable."
+    },
+    {
+      "name": "bargain",
+      "aliases": [],
+      "syntax": "/bargain <productId> [<variantId>] [<any sentence>]",
+      "purpose": "The website Bargain button, typed by a link and not by a person (wa.me/<number>?text=/bargain ...). Asks the price question for that exact product and hands the customer's answer to the bargaining agent.",
+      "args": [
+        {
+          "name": "product",
+          "type": "identifier",
+          "required": true
+        },
+        {
+          "name": "variant",
+          "type": "identifier",
+          "required": false
+        },
+        {
+          "name": "note",
+          "type": "free_text",
+          "required": false
+        }
+      ],
+      "requires_identity": true,
+      "requires_customer_role": true,
+      "intent": "negotiation.begin",
+      "tools": [],
+      "flow": "negotiation",
+      "confirmation": "none",
+      "advertised": false,
+      "notes": "NOT advertised: absent from /help and from the Telegram menu. `note` swallows the sentence the website may add after the ids in the visitor language; nobody reads it. Mid-setup the setup question is asked first and the price question follows when setup completes. A product whose price became fixed is OFFERED (Add to cart / Buy now / Book button), never added. Contract: api-doc/public/bargain-deep-link.md."
     },
     {
       "name": "pay",

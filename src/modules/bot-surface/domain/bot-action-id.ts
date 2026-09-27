@@ -113,6 +113,19 @@ export const BOT_ACTION_VERBS = Object.freeze([
      * check out.
      */
     'pay',
+    /**
+     * `bpay:<bookingId>` — pay for this appointment · `bpay:<bookingId>:b` — pay its balance.
+     *
+     * ⚠ **Not `pay:rt`, and the reason is the bug it replaces.** `pay:rt`'s handler re-opens a
+     * charge for ORDERS (`resolveCheckoutPayment` filters `cartId: { $ne: null }`), so under a
+     * failed booking payment it answered a customer about their orders. A booking is its own
+     * money, with its own screen (`bp`).
+     *
+     * ⚠ **It carries a BOOKING ID, never a screen handle.** The `bp` session is minted on the tap,
+     * by the server, for whoever tapped — the `open:co` property — so a button living in a chat
+     * history for a month holds no credential, and a stranger's tap opens nothing (404).
+     */
+    'bpay',
     // ── Support, reviews, preferences ────────────────────────────────────────
     'tkt',
     'rate',
@@ -258,9 +271,11 @@ export function showMoreActionId(setId: string): string {
  * button's handler must say something worth replying to, and the customer's reply is what
  * engages the haggle. A handler that posted an opening offer and waited would wait forever.
  *
- * `book` reaches the slot picker, which is why it needs no variant: a booking names a product
- * and a slot. Verified in source by the stream that owns the purchase write path; the same
- * correction is recorded in `pd.html`, which carried the same false premise.
+ * `book` needs no variant because a booking names a product and a slot. ⚠ **CORRECTED
+ * 2026-09-27 — this said "`book` reaches the slot picker", and it did not**: the tap answered a
+ * sentence asking the customer to type a day and a time, and nothing anywhere could open the
+ * picker. It now answers that sentence WITH a **Choose a time** button (`open:bk:<productId>`),
+ * which is what reaches the picker.
  */
 export function bargainActionId(productId: string, variantId: string): string {
     return token('bargain', `${productId}:${variantId}`);
@@ -307,10 +322,10 @@ export function cartViewActionId(): string {
  * argument: `open:ol`, not `open:ol:`.
  *
  * ⚠ **A surface in this type is not the same thing as a TAP that reaches it.** Today a tap can
- * ask for `pl`, `pd`, `ol` and `co`; `sl` is reached only by a tool; `bl` arrives with the
- * bookings button; and `bk`/`bp` are minted server-side and are deliberately unreachable from a
- * button at all. `test-bot-surface` § 20 is what keeps that honest — it compares every token
- * this file can BUILD against every key the dispatcher ROUTES.
+ * ask for `pl`, `pd`, `ol`, `co`, `bl` and `bk`; `sl` is reached only by a tool; and `bp` is
+ * reached under its own verb, `bpay:`, because it needs a purpose as well as a booking.
+ * `test-bot-surface` § 20 is what keeps that honest — it compares every token this file can
+ * BUILD against every key the dispatcher ROUTES.
  *
  * ⚠ **`co` was added late, and the reason is worth keeping.** An earlier version of this type
  * excluded checkout on the grounds that "no tap-code should be able to open a screen that can
@@ -325,10 +340,14 @@ export function cartViewActionId(): string {
  * the order. This type governs which screens a tap can ASK for, not what a tap can carry.
  */
 /**
- * ⚠ **`bl` is the only one of the three bookings kinds a BUTTON can name.** `bk` and `bp` are
- * minted server-side on the tap that opens them — a picker handle holds a slot and a payment
- * handle moves money, and neither may sit in a chat history waiting to be pressed. Same rule
- * `open:co` follows.
+ * ⚠ **All three bookings screens are nameable by a button, and NONE of those buttons carries a
+ * handle.** `open:bl` carries nothing, `open:bk:<productId>` a product id, and `bpay:` (its own
+ * verb) a booking id — so each session is minted server-side, on the tap, for whoever tapped: the
+ * `open:co` property. ⚠ **CORRECTED 2026-09-27** — this said `bk` and `bp` were "deliberately
+ * unreachable from a button at all", because a picker handle holds a slot and a payment handle
+ * moves money. That hazard is real for a button carrying a HANDLE and does not apply to one
+ * carrying an id; the rule as written was also the reason neither screen could ever be opened.
+ * (A `bk` session holds no slot anyway: the hold is taken at Confirm.)
  */
 export type BotInAppSurface = 'pd' | 'pl' | 'ol' | 'sl' | 'co' | 'bl' | 'bk' | 'bp';
 
@@ -486,6 +505,27 @@ export function trackActionId(orderId: string): string {
  */
 export function paymentStatusActionId(transactionId: string): string {
     return token('pay', `st:${transactionId}`);
+}
+
+/**
+ * `bpay:<bookingId>[:b]` — open the booking payment screen for this appointment's price, or with
+ * `:b` for the balance a longer job came to. See the verb's note in `BOT_ACTION_VERBS`.
+ *
+ * ⚠ **The notification catalogue writes this as a LITERAL** (`bpay:{{…}}`), because its ids do
+ * not exist until render time; `parseBookingPayArgument` below is what both must agree with, and
+ * `test:inapp-bookings` parses the catalogue's literals with it.
+ */
+export function bookingPayActionId(bookingId: string, purpose: 'primary' | 'balance'): string {
+    return token('bpay', purpose === 'balance' ? `${bookingId}:b` : bookingId);
+}
+
+/** The argument of a `bpay:` token, or null when it is not one this service could have drawn. */
+export function parseBookingPayArgument(
+    argument: string,
+): { bookingId: string; purpose: 'primary' | 'balance' } | null {
+    const match = /^([0-9a-f]{24})(:b)?$/.exec(argument);
+    if (!match) return null;
+    return { bookingId: match[1], purpose: match[2] ? 'balance' : 'primary' };
 }
 
 export function paymentRetryActionId(transactionId: string): string {

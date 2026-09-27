@@ -5,15 +5,18 @@ import { MessagingChannel } from '../../channel-connections';
 import { commandDescription, commandSentence } from '../domain/command-copy';
 import { COMMANDS, CommandSpec, CANONICAL_COMMAND_NAMES, LIVE_COMMANDS } from '../domain/command-registry';
 import { parseCommand } from '../domain/command-parser';
+import { BargainEntryIds, parseBargainStartPayload } from '../domain/bargain-entry';
 import { suggestCommand } from '../domain/command-suggest';
 
 /**
  * One typed message in, one decision out.
  *
- * ── THREE OUTCOMES, AND THE MIDDLE ONE IS THE INTERESTING ONE ───────────────
- *   `answered`   — the platform said something. The controller sets it as the reply intent.
- *   `to_model`   — hand this turn to the AI agent, exactly as today.
- *   (there is no third; an unknown command is `answered`, with a suggestion.)
+ * ── THE OUTCOMES, AND THE MIDDLE ONE IS THE INTERESTING ONE ─────────────────
+ *   `answered`    — the platform said something. The controller sets it as the reply intent.
+ *   `to_model`    — hand this turn to the AI agent, exactly as today.
+ *   `open_screen` — open an in-app screen; the controller mints it, because only the request
+ *                   knows whose it is (`/bookings`, since bookings phase 6).
+ *   (an unknown command is `answered`, with a suggestion — never `to_model`.)
  *
  * ⚠ **A KNOWN command with no handler yet is `to_model`, and an UNKNOWN one never is.**
  * That distinction is the whole safety property. `commands.json` states it in one line —
@@ -25,7 +28,22 @@ import { suggestCommand } from '../domain/command-suggest';
 
 export type CommandOutcome =
     | { kind: 'answered'; command: string | null; intent: BotReplyIntent; data: CommandAnswerData }
-    | { kind: 'to_model'; reason: 'not_a_command' | 'not_implemented'; command: string | null };
+    | { kind: 'to_model'; reason: 'not_a_command' | 'not_implemented'; command: string | null }
+    /**
+     * ⚠ **A third outcome after all, and it is "answered" in every sense but one: this service
+     * cannot mint the screen.** A screen session is bound to the resolved caller and the
+     * conversation, which only the request carries — so the controller opens it, through the
+     * same function the matching tap uses.
+     */
+    | { kind: 'open_screen'; command: string; screen: 'bookings' }
+    /**
+     * ⭐ The website's Bargain link — `/bargain <p> <v>` on WhatsApp, `/start bargain_<p>_<v>` on
+     * Telegram. Same reason as `open_screen`: recording the hand-off to the bargaining agent
+     * needs the resolved caller and the conversation, so the controller finishes it
+     * (`bargain-entry.service.ts`). The ids are passed through RAW, malformed or not — the
+     * service refuses a bad one in words, which is what a customer who pressed a button is owed.
+     */
+    | { kind: 'bargain'; command: string; ids: BargainEntryIds };
 
 export interface CommandAnswerData {
     /** The canonical name, or null when nothing matched. */
@@ -71,7 +89,7 @@ export class CommandRouterService {
             return { kind: 'to_model', reason: 'not_implemented', command: parsed.name };
         }
 
-        return this.dispatch(spec, input);
+        return this.dispatch(spec, input, parsed.args);
     }
 
     /**
@@ -102,7 +120,22 @@ export class CommandRouterService {
         };
     }
 
-    private async dispatch(spec: CommandSpec, input: CommandRouterInput): Promise<CommandOutcome> {
+    private async dispatch(
+        spec: CommandSpec,
+        input: CommandRouterInput,
+        args: Record<string, string> = {},
+    ): Promise<CommandOutcome> {
+        /**
+         * `/bookings` bare opens the list; `/bookings BKG-…` names ONE appointment, which the
+         * model already answers with `bookings_get` — so that form keeps reaching it rather than
+         * getting a screen that does not show what was asked.
+         */
+        if (spec.handler === 'screen:bookings') {
+            return args.ref
+                ? { kind: 'to_model', reason: 'not_implemented', command: spec.name }
+                : { kind: 'open_screen', command: spec.name, screen: 'bookings' };
+        }
+
         if (spec.handler === 'help') {
             return {
                 kind: 'answered',
@@ -112,7 +145,22 @@ export class CommandRouterService {
             };
         }
 
+        if (spec.handler === 'bargain') {
+            return {
+                kind: 'bargain',
+                command: spec.name,
+                ids: { productId: args.product ?? '', variantId: args.variant ?? null },
+            };
+        }
+
         if (spec.handler === 'start') {
+            /**
+             * ⭐ A deep link's payload. Only a `bargain_…` one means anything; every other
+             * payload, and none, is the welcome `/start` has always been.
+             */
+            const bargain = parseBargainStartPayload(args.payload);
+            if (bargain) return { kind: 'bargain', command: spec.name, ids: bargain };
+
             return {
                 kind: 'answered',
                 command: spec.name,

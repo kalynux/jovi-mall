@@ -227,10 +227,6 @@ export class AgentAssignabilityService {
         return rule.passed
           ? 'The agent is not banned from the platform.'
           : `The agent is banned from the platform${seen.reason ? ` (${seen.reason})` : ''}.`;
-      case 'kyc':
-        return rule.passed
-          ? 'KYC is verified.'
-          : `KYC is ${seen.kycStatus ?? 'unverified'} — an agent can only be dispatched once it is verified.`;
       case 'active':
         return rule.passed
           ? 'The agent account is active.'

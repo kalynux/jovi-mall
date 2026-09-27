@@ -19,24 +19,6 @@ import {
   UNKNOWN_VERIFICATION,
   verificationOf,
 } from '../../../core/accounts/verification';
-import { EARNINGS_CONFIG } from '../config/earnings.config';
-import {
-  computeAllowance,
-  PayoutAllowance,
-  UNCAPPED,
-  windowStart,
-} from '../domain/payout-allowance';
-
-/** The allowance as an error-`details` payload / API shape. Dates as ISO, never `Date`. */
-export function describeAllowance(allowance: PayoutAllowance) {
-  return {
-    cap: allowance.cap,
-    used: allowance.used,
-    remaining: allowance.remaining,
-    windowDays: allowance.windowDays,
-    resetsAt: allowance.resetsAt ? allowance.resetsAt.toISOString() : null,
-  };
-}
 import { AdminPayoutRequestDto, toAdminPayoutRequestDto } from '../dto/admin-payout-request.dto';
 import { VendorRepository } from '../../vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.repository';
@@ -65,29 +47,6 @@ import { ActorRole, EntityType, TicketImportance, TicketStatus, TicketType } fro
  * requester never ends up with money stuck in `requested_balance` and no
  * ticket to track it.
  */
-/**
- * Does an allowance apply to this payout at all?
- *
- * Pure and exported, because there are **two exemptions and an off switch** — three separate
- * ways to return "no ceiling", all of them correct, none of them visible in behaviour. An
- * uncapped payout looks exactly like a capped one that came in under the limit, so the only
- * way to know which branch ran is to test it.
- */
-export function allowanceApplies(input: {
-  verified: boolean;
-  origin: PayoutRequestOrigin;
-  cap: number;
-}): boolean {
-  // Exemption 1 — the platform's own sweep. Capping it would leave the platform owing MORE to
-  // precisely the least-vetted accounts, which is the opposite of why the sweep exists, and
-  // the nightly run would fail against them for ever with nothing opened to track it.
-  if (input.origin === 'auto_threshold') return false;
-  // Exemption 2 — a vetted owner is not capped at all.
-  if (input.verified) return false;
-  // `0` (and any negative from a mistyped env) means the feature is off.
-  return input.cap > 0;
-}
-
 /**
  * The gateway payouts are sent through.
  *
@@ -135,50 +94,19 @@ export class PayoutRequestService {
     }
 
     /**
-     * Resolved BEFORE the transaction, and used twice — to cap the move, and to tell the
-     * reviewing administrator where this owner's review stands. One read, one answer: taking
-     * it again after the money moved would let the two disagree if an approval landed in
-     * between, and the ticket would then explain a cap that was no longer being applied.
+     * Resolved BEFORE the transaction, so the ticket states where this owner's review stood
+     * when the money moved — taking it again afterwards could disagree with an approval that
+     * landed in between.
+     *
+     * ⛔ **Verification LIMITS NOTHING here, and must not start to (owner decision,
+     * 2026-09-27).** An unverified owner withdraws their whole available balance exactly as a
+     * verified one does — the platform does not hold somebody's earned money back because an
+     * administrator has not reviewed their documents yet. An allowance for unverified accounts
+     * (`EARNINGS_UNVERIFIED_PAYOUT_CAP`) existed from 2026-09-15 and was DELETED — env
+     * variable, error code and all — so that it cannot be switched back on by setting a number.
+     * The verdict is shown to the reviewing administrator and decides nothing.
      */
     const verification = await this.resolveVerification(ownerType, ownerId);
-    const allowance = await this.allowanceFor(ownerType, ownerId, verification, origin);
-
-    /**
-     * ⚠ **Refused HERE rather than by handing the ledger a ceiling of zero**, because the two
-     * exhausted cases need different sentences and the owner can act on only one of them.
-     *
-     *   - allowance spent — wait for `resetsAt`, or get verified. Nothing else helps.
-     *   - allowance left, but under the platform floor — the money is genuinely there and
-     *     genuinely unreachable this window. Reporting that as a bare "below minimum" would
-     *     have them waiting for a balance they already have.
-     *
-     * Both name the cap, the window and the reset, because "your payout is smaller than your
-     * balance" is otherwise indistinguishable from a bug.
-     */
-    if (allowance.capped) {
-      if (allowance.remaining <= 0) {
-        throw createAppError(
-          ERROR_CODES.EARNINGS_PAYOUT_UNVERIFIED_CAP_REACHED,
-          409,
-          `Unverified accounts may withdraw up to ${allowance.cap} per ${allowance.windowDays} days. Verify this account to lift the limit.`,
-          { ...describeAllowance(allowance), reason: 'allowance_spent' }
-        );
-      }
-      if (allowance.remaining < EARNINGS_CONFIG.MIN_PAYOUT_AMOUNT) {
-        throw createAppError(
-          ERROR_CODES.EARNINGS_PAYOUT_UNVERIFIED_CAP_REACHED,
-          409,
-          `Only ${allowance.remaining} of the ${allowance.cap} allowance for unverified accounts is left this ${allowance.windowDays}-day window, which is below the ${EARNINGS_CONFIG.MIN_PAYOUT_AMOUNT} minimum payout. Verify this account to lift the limit.`,
-          {
-            ...describeAllowance(allowance),
-            minAmount: EARNINGS_CONFIG.MIN_PAYOUT_AMOUNT,
-            reason: 'remainder_below_minimum',
-          }
-        );
-      }
-    }
-
-    const ceiling = allowance.capped ? allowance.remaining : null;
 
     let payoutRequest: IPayoutRequest;
     try {
@@ -186,8 +114,7 @@ export class PayoutRequestService {
         const { amount, currency } = await this.accounts.moveAvailableToRequestedInSession(
           ownerType,
           ownerId,
-          session,
-          ceiling
+          session
         );
         return this.payoutRepo.create(
           {
@@ -232,10 +159,7 @@ export class PayoutRequestService {
        */
       const verificationLine = verification.verified
         ? '\n\nKYC: verified.'
-        : `\n\n⚠ KYC: NOT verified (${verification.verdict}). Check this owner's history before releasing funds.`
-          + (ceiling !== null
-            ? ` This payout was CAPPED at ${payoutRequest.currency} ${ceiling.toLocaleString()} because the account is unverified; the remainder stays in their available balance.`
-            : '');
+        : `\n\n⚠ KYC: NOT verified (${verification.verdict}). Check this owner's history before releasing funds.`;
 
       const description =
         (origin === 'auto_threshold'
@@ -989,55 +913,6 @@ export class PayoutRequestService {
     });
   }
 
-  /**
-   * How much this payout may move — `null` for "everything available".
-   *
-   * ⚠ **The auto-threshold sweep is exempt, and that exemption is the load-bearing part.**
-   * `AUTO_PAYOUT_THRESHOLD` exists so the platform never owes an unbounded amount to one
-   * account. Capping that path would leave the platform owing *more* to exactly the accounts
-   * nobody has vetted, and the nightly sweep would fail against them for ever with nothing
-   * opened to track the exposure. Those requests still reach a human, and the ticket states
-   * the verdict.
-   *
-   * ⚠ A cap of `0` means no cap — see `EARNINGS_CONFIG.UNVERIFIED_PAYOUT_CAP`. The feature is
-   * inert until a deployment sets a number.
-   */
-  /**
-   * What this owner may still take out in the current window.
-   *
-   * Public because the three owner-facing earnings screens read it too: an owner who asks for
-   * a payout and is handed a fraction of their balance with no explanation has been treated
-   * badly, so the remaining allowance has to be visible BEFORE they ask, not only inferable
-   * from a refusal afterwards.
-   */
-  async getAllowance(
-    ownerType: EarningsOwnerType,
-    ownerId: string,
-    origin: PayoutRequestOrigin = 'manual'
-  ): Promise<PayoutAllowance> {
-    const verification = await this.resolveVerification(ownerType, ownerId);
-    return this.allowanceFor(ownerType, ownerId, verification, origin);
-  }
-
-  private async allowanceFor(
-    ownerType: EarningsOwnerType,
-    ownerId: string,
-    verification: OwnerVerification,
-    origin: PayoutRequestOrigin
-  ): Promise<PayoutAllowance> {
-    const cap = EARNINGS_CONFIG.UNVERIFIED_PAYOUT_CAP;
-    if (!allowanceApplies({ verified: verification.verified, origin, cap })) return UNCAPPED;
-
-    const windowDays = EARNINGS_CONFIG.UNVERIFIED_PAYOUT_WINDOW_DAYS;
-    const { total, oldestResolvedAt } = await this.payoutRepo.sumPaidSince(
-      ownerType,
-      ownerId,
-      windowStart(windowDays)
-    );
-
-    return computeAllowance({ cap, windowDays, used: total, oldestResolvedAt });
-  }
-
   private async resolveOwnerNames(requests: IPayoutRequest[]): Promise<Map<string, string>> {
     const result = new Map<string, string>();
     const vendorIds = requests.filter((r) => r.owner_type === 'vendor').map((r) => r.owner_id);
@@ -1080,29 +955,26 @@ export class PayoutRequestService {
 export const payoutRequestService = new PayoutRequestService();
 
 /**
- * The owner-facing earnings view: balances, plus the allowance if one applies.
+ * The owner-facing earnings view: balances, plus the retired `payoutAllowance` key.
  *
  * ⚠ **Shared by all three owner controllers on purpose.** Vendor, agency and agent return the
  * same shape, and three copies of the composition is how one of them ends up without
  * `payoutAllowance` after somebody adds a field — the same drift that left the admin queue's
  * filter stopping at vendor and agency while agents' payouts could not be filtered at all.
  *
- * ⚠ **`payoutAllowance` is `null` when no limit applies** — a verified owner, or a deployment
- * with the cap switched off. `null` means "no limit", never "limit of zero"; a client that
- * renders a remaining balance of 0 from a missing object tells every verified owner they
- * cannot withdraw.
+ * ⚠ **`payoutAllowance` is ALWAYS `null` since 2026-09-27** — the unverified-account payout
+ * limit it described was deleted (owner decision: nobody's earned money is held back for
+ * being unverified). The key stays on the wire so the dashboards that read it keep working;
+ * `null` has always meant "no limit", never "limit of zero".
  */
 export async function ownerEarningsView(
   ownerType: EarningsOwnerType,
   ownerId: string
 ): Promise<Record<string, unknown>> {
-  const [balances, allowance] = await Promise.all([
-    earningsAccountService.getBalances(ownerType, ownerId),
-    payoutRequestService.getAllowance(ownerType, ownerId),
-  ]);
+  const balances = await earningsAccountService.getBalances(ownerType, ownerId);
 
   return {
     ...balances,
-    payoutAllowance: allowance.capped ? describeAllowance(allowance) : null,
+    payoutAllowance: null,
   };
 }

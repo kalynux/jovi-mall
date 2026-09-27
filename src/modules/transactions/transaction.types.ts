@@ -1,7 +1,8 @@
 /**
  * Unified vendor transaction feed — a single normalized shape over the vendor's
  * heterogeneous money/credit movements (plan purchases, credit top-ups, credit
- * usage, and sales earnings). `payout` is reserved for when cash-out is built.
+ * usage, earnings, and payouts). `payout` rows are served since 2026-09-27 — before that the
+ * category existed and always answered empty, although payouts were live.
  */
 
 export type TransactionCategory = 'plan' | 'credit' | 'earning' | 'payout';
@@ -27,8 +28,14 @@ export interface VendorTransaction {
   status: string;
   /** `money` rows carry `currency`; `credit` rows carry credit units. */
   unit: 'money' | 'credit';
-  /** From the vendor's perspective: value coming in vs leaving. */
-  direction: 'in' | 'out';
+  /**
+   * From the owner's perspective: value coming in, leaving, or `internal` — moving between the
+   * owner's own balances (escrow → available on a release; available ↔ COD reserve; available →
+   * requested while a payout is pending). ⚠ Added 2026-09-27. Before it, a hold and its release
+   * were both `in`, so every earning counted TWICE in any sum. Rule now: Σ in − Σ out over the
+   * `earning` and `payout` rows equals the change in the owner's total earnings balance.
+   */
+  direction: 'in' | 'out' | 'internal';
   /** Magnitude in `unit` (always positive; use `direction` for sign). */
   amount: number;
   currency?: string;

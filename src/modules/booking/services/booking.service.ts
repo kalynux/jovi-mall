@@ -1325,7 +1325,13 @@ export class BookingService {
           priceSnapshot: booking.priceSnapshot,
           currency: booking.currency,
           requiresPayment: booking.requiresPayment,
-          paymentStatus: booking.paymentStatus
+          paymentStatus: booking.paymentStatus,
+          /**
+           * The chat this booking was made in, when it was made in one — set by the bot's two
+           * booking doors. The customer handler uses it to send ONE confirmation (the chat's own)
+           * instead of two. Absent for a storefront or vendor booking, which is unchanged.
+           */
+          bookedInChat: (booking.metadata as { bookedInChat?: string } | undefined)?.bookedInChat
         }
       });
 

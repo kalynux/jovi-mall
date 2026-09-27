@@ -140,6 +140,34 @@ export interface BookingScreenCopy {
      * would be reaching a verdict the platform deliberately has not.
      */
     paySent: string;
+    /**
+     * `bk`, once the confirm has been accepted. The receipt itself is the chat's; this line only
+     * says where to look. `bk.html` read `copy.sent` for months while this table had no such key,
+     * so the line was English in every language.
+     */
+    sent: string;
+    /**
+     * `bk`, when somebody else took the time between picking and confirming (a 409).
+     *
+     * ⚠ **"Ask me again", never "choose another"**: the confirm has already SPENT the handle, so
+     * the page cannot go back to the day list — a re-read of a spent handle answers "no longer
+     * available". Re-issuing a picker on the spot is an owner decision (plan Q-3), not something
+     * this sentence may promise.
+     */
+    slotTaken: string;
+    /**
+     * `bp`, when the appointment has nothing left to charge — cancelled, already paid, never
+     * needed paying, or a balance already settled. Said at the READ, before any button is drawn,
+     * so it costs the customer nothing; said at Pay it would have cost the handle.
+     */
+    payNothingDue: string;
+    /** `bl`, the Pay button on an unpaid row. Reuses the screen's own pay word. */
+    payRow: string;
+    /**
+     * `bl`, when Pay was pressed on a row that changed since the list was drawn (paid meanwhile,
+     * cancelled, a payment already on its way). The list redraws under this line.
+     */
+    listChanged: string;
 }
 
 const SCREEN: Record<Language, BookingScreenCopy> = {
@@ -159,6 +187,11 @@ const SCREEN: Record<Language, BookingScreenCopy> = {
         payNumberHint: 'Leave empty to use the number on your account.',
         payButton: 'Pay now',
         paySent: 'I\'ve sent the request to your phone. Approve it there and I\'ll tell you in the chat.',
+        sent: 'Done — I have told you in the chat.',
+        slotTaken: 'Somebody just took that time. Ask me again in the chat and I will show you what is left.',
+        payNothingDue: 'There is nothing to pay on this appointment.',
+        payRow: 'Pay now',
+        listChanged: 'That appointment has changed. Here is where it stands now.',
     },
     fr: {
         listTitle: 'Vos rendez-vous',
@@ -176,6 +209,11 @@ const SCREEN: Record<Language, BookingScreenCopy> = {
         payNumberHint: 'Laissez vide pour utiliser le numéro de votre compte.',
         payButton: 'Payer maintenant',
         paySent: 'J\'ai envoyé la demande sur votre téléphone. Validez-la et je vous préviens dans la conversation.',
+        sent: "C'est fait — je vous l'ai dit dans la conversation.",
+        slotTaken: "Quelqu'un vient de prendre cet horaire. Redemandez-moi dans la conversation et je vous montrerai ce qui reste.",
+        payNothingDue: "Il n'y a rien à payer pour ce rendez-vous.",
+        payRow: 'Payer maintenant',
+        listChanged: "Ce rendez-vous a changé. Voici où il en est.",
     },
     pt: {
         listTitle: 'As suas marcações',
@@ -193,6 +231,11 @@ const SCREEN: Record<Language, BookingScreenCopy> = {
         payNumberHint: 'Deixe vazio para usar o número da sua conta.',
         payButton: 'Pagar agora',
         paySent: 'Enviei o pedido para o seu telemóvel. Aprove-o e aviso-o na conversa.',
+        sent: 'Pronto — já lhe disse na conversa.',
+        slotTaken: 'Alguém acabou de reservar essa hora. Pergunte-me de novo na conversa e mostro-lhe o que resta.',
+        payNothingDue: 'Não há nada a pagar nesta marcação.',
+        payRow: 'Pagar agora',
+        listChanged: 'Essa marcação mudou. Eis o ponto em que está agora.',
     },
     es: {
         listTitle: 'Tus citas',
@@ -210,6 +253,11 @@ const SCREEN: Record<Language, BookingScreenCopy> = {
         payNumberHint: 'Déjalo vacío para usar el número de tu cuenta.',
         payButton: 'Pagar ahora',
         paySent: 'He enviado la solicitud a tu teléfono. Apruébala y te aviso en el chat.',
+        sent: 'Listo — te lo he dicho en el chat.',
+        slotTaken: 'Alguien acaba de reservar esa hora. Pregúntame otra vez en el chat y te muestro lo que queda.',
+        payNothingDue: 'No hay nada que pagar en esta cita.',
+        payRow: 'Pagar ahora',
+        listChanged: 'Esa cita ha cambiado. Así está ahora.',
     },
     ar: {
         listTitle: 'مواعيدك',
@@ -227,6 +275,11 @@ const SCREEN: Record<Language, BookingScreenCopy> = {
         payNumberHint: 'اتركه فارغًا لاستخدام الرقم المسجل في حسابك.',
         payButton: 'ادفع الآن',
         paySent: 'أرسلت الطلب إلى هاتفك. وافق عليه وسأخبرك في المحادثة.',
+        sent: 'تم — لقد أخبرتك في المحادثة.',
+        slotTaken: 'حجز شخص آخر هذا الموعد للتو. اسألني مرة أخرى في المحادثة وسأعرض لك ما تبقّى.',
+        payNothingDue: 'لا يوجد ما يُدفع على هذا الموعد.',
+        payRow: 'ادفع الآن',
+        listChanged: 'تغيّر هذا الموعد. إليك وضعه الحالي.',
     },
 };
 
@@ -263,6 +316,32 @@ const SPOTS_LEFT: Record<Language, (count: number) => string> = {
     es: (n) => (n === 1 ? '1 plaza libre' : `${n} plazas libres`),
     ar: (n) => (n === 1 ? 'مكان واحد متبقٍ' : `${n} أماكن متبقية`),
 };
+
+/**
+ * The one short word a bookings-list row carries beside its reference.
+ *
+ * ⚠ **A cancelled appointment must not read as a live one**, which is the whole reason a row
+ * carries a word at all: the list shows cancelled appointments (so a customer who cancelled sees
+ * that it worked), and without a word they look exactly like the ones they are about to attend.
+ *
+ * ⚠ **Kept to 20 characters**, because it shares the 72-character row description with the
+ * reference (`BKG-2026-000123`, 15) and a separator. `awaitingShop` is the `manual`-mode word —
+ * no surface may call an unaccepted appointment "booked". `missed` exists because the platform
+ * records a `no-show`, and "finished" would tell the customer something happened that did not.
+ */
+export type BookingRowStatus = 'awaitingShop' | 'unpaid' | 'balanceDue' | 'cancelled' | 'done' | 'missed';
+
+const ROW_STATUS: Record<Language, Record<BookingRowStatus, string>> = {
+    en: { awaitingShop: 'Awaiting the shop', unpaid: 'Not paid yet', balanceDue: 'Balance to pay', cancelled: 'Cancelled', done: 'Finished', missed: 'Missed' },
+    fr: { awaitingShop: 'À confirmer', unpaid: 'Non payé', balanceDue: 'Solde à payer', cancelled: 'Annulé', done: 'Terminé', missed: 'Manqué' },
+    pt: { awaitingShop: 'A confirmar', unpaid: 'Não pago', balanceDue: 'Saldo a pagar', cancelled: 'Cancelado', done: 'Concluído', missed: 'Não compareceu' },
+    es: { awaitingShop: 'Por confirmar', unpaid: 'Sin pagar', balanceDue: 'Saldo por pagar', cancelled: 'Cancelado', done: 'Finalizada', missed: 'No asistió' },
+    ar: { awaitingShop: 'في انتظار التأكيد', unpaid: 'غير مدفوع', balanceDue: 'رصيد مستحق', cancelled: 'ملغى', done: 'منتهٍ', missed: 'لم يحضر' },
+};
+
+export function bookingRowStatusLabel(status: BookingRowStatus, language: string | null | undefined): string {
+    return pick(ROW_STATUS, language)[status];
+}
 
 /**
  * The CONTENT-FREE acknowledgement, for a channel that cannot prove whose booking it is.

@@ -4,6 +4,7 @@ import { requireBotWebhookSecret } from '../../api/middlewares/bot-webhook.middl
 import { requireBotIdentity } from './middlewares/bot-identity.middleware';
 import { botIdempotency } from './middlewares/bot-idempotency.middleware';
 import { attachBotReply } from './middlewares/bot-reply.middleware';
+import { holdBargainEntryForUnregisteredSender } from './middlewares/bargain-entry-hold.middleware';
 import { BOT_ROUTES } from './domain/bot-route-table';
 import { BotIdentityController } from './controllers/bot-identity.controller';
 import { BotInAppController } from './controllers/bot-inapp.controller';
@@ -339,5 +340,13 @@ for (const route of BOT_ROUTES) {
         }
     }
 }
+
+/**
+ * ⭐ An ERROR handler, so it runs only after something refused — here, the identity guard refusing
+ * a brand-new Telegram chat that opened the website's Bargain link. It keeps the product for the
+ * account the chat is about to create and passes the SAME error on; the refusal the customer sees
+ * is unchanged. See `bargain-entry-hold.middleware.ts`.
+ */
+router.use(holdBargainEntryForUnregisteredSender);
 
 export default router;

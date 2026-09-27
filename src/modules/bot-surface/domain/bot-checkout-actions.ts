@@ -7,6 +7,9 @@ import { __IN_APP_HANDLE_PREFIX, newInAppHandle } from '../services/inapp-surfac
  *     yes:co:<checkoutRef>:<addressId>   Place order — a physical basket, to THAT address   57 B
  *     yes:co:<checkoutRef>               Place order — a download, which goes nowhere        32 B
  *     no:co:<checkoutRef>                Not now — writes nothing                            31 B
+ *     yes:cod:<checkoutRef>:<addressId>  Pay on delivery — physical only, to THAT address   58 B
+ *     yes:coa:<addressId>                Deliver here — re-draws the confirmation; places    32 B
+ *                                        nothing (several addresses + pay on delivery)
  *
  * `<checkoutRef>` is the `co` handle `checkout_review` minted (`ia_` + 22 base64url characters
  * today); `<addressId>` is one of the customer's own saved addresses, 24 hex.
@@ -75,6 +78,39 @@ export function checkoutConfirmActionId(checkoutRef: string, addressId: string |
 }
 
 /**
+ * `yes:cod:<checkoutRef>:<addressId>` — **Pay on delivery** (owner decision, 2026-09-27).
+ *
+ * ⚠ **Always with an address**: pay on delivery is for physical goods only, so there is always
+ * somewhere it goes, and the address rides the token for the reason `checkoutConfirmActionId`
+ * gives. Its own context rather than a flag on `yes:co`, so a stale or replayed Place order can
+ * never be read as the other method, and § 20 of `test-bot-surface` sees it as its own routed pair.
+ */
+export function checkoutCashOnDeliveryActionId(checkoutRef: string, addressId: string): string {
+    assertButtonRef(checkoutRef);
+    if (!OBJECT_ID.test(addressId)) {
+        // eslint-disable-next-line no-restricted-syntax -- programming fault, not a request outcome
+        throw new Error('[BotSurface] a pay-on-delivery button was built with an address id that is not one');
+    }
+    return confirmActionId('cod', `${checkoutRef}:${addressId}`);
+}
+
+/**
+ * `yes:coa:<addressId>` — "deliver to THIS address": draw the confirmation for it.
+ *
+ * ⚠ **It places nothing.** When a customer has several addresses and pay on delivery is possible,
+ * a row cannot also carry the payment choice (a WhatsApp list row is one tap), so the row chooses
+ * the address and the confirmation that follows offers Pay now · Pay on delivery · Not now. It
+ * carries no checkout ref: the review it re-runs mints a fresh one.
+ */
+export function checkoutChooseAddressActionId(addressId: string): string {
+    if (!OBJECT_ID.test(addressId)) {
+        // eslint-disable-next-line no-restricted-syntax -- programming fault, not a request outcome
+        throw new Error('[BotSurface] an address choice was built with an address id that is not one');
+    }
+    return confirmActionId('coa', addressId);
+}
+
+/**
  * `no:co:<checkoutRef>` — Not now.
  *
  * ⚠ **It carries the ref although declining writes nothing and checks nothing.** A token says
@@ -117,6 +153,19 @@ export function parseCheckoutConfirm(argument: string): CheckoutConfirmTap | nul
     return null;
 }
 
+/** Read the argument after `yes:cod:` — `<ref>:<24-hex addressId>`, exactly. */
+export function parseCheckoutCashOnDelivery(argument: string): { checkoutRef: string; addressId: string } | null {
+    const parts = argument.split(':');
+    return parts.length === 2 && isCheckoutRef(parts[0]) && OBJECT_ID.test(parts[1])
+        ? { checkoutRef: parts[0], addressId: parts[1] }
+        : null;
+}
+
+/** Read the argument after `yes:coa:` — one 24-hex address id. */
+export function parseCheckoutChooseAddress(argument: string): string | null {
+    return OBJECT_ID.test(argument) ? argument : null;
+}
+
 /** Read the argument after `no:co:` — the ref alone. */
 export function parseCheckoutDecline(argument: string): string | null {
     return isCheckoutRef(argument) ? argument : null;
@@ -154,6 +203,8 @@ export function checkoutTokenBudgetProblems(input: { handleLength: number }): st
         ['the Place order button with an address', () => checkoutConfirmActionId(ref, SAMPLE_ADDRESS_ID)],
         ['the Place order button for a download', () => checkoutConfirmActionId(ref, null)],
         ['the Not now button', () => checkoutDeclineActionId(ref)],
+        ['the Pay on delivery button', () => checkoutCashOnDeliveryActionId(ref, SAMPLE_ADDRESS_ID)],
+        ['the choose-this-address row', () => checkoutChooseAddressActionId(SAMPLE_ADDRESS_ID)],
     ];
 
     const problems: string[] = [];

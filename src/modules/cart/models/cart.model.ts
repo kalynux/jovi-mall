@@ -174,6 +174,13 @@ const CartSchema = new Schema<ICart>({
   timestamps: true,
 });
 
+/**
+ * The abandoned-basket sweep filters on `updatedAt` (`AbandonedCartWorker`), and until it
+ * existed nothing did, so the collection declared no index for it. Built in production by
+ * `migrate:declared-indexes` — `autoIndex` is off there.
+ */
+CartSchema.index({ updatedAt: 1 }, { name: 'cart_abandoned_sweep' });
+
 export const CartModel = 
   (mongoose.models.Cart as mongoose.Model<ICart>) || 
   model<ICart>(MODELS.CART, CartSchema, COLLECTIONS.CART);

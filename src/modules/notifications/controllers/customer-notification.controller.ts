@@ -38,6 +38,7 @@ const UpdatePreferencesSchema = z.object({
         .object({
             bookingUpdates: z.boolean().optional(),
             bookingReminders: z.boolean().optional(),
+            cartReminders: z.boolean().optional(),
             orderUpdates: z.boolean().optional(),
             marketing: z.boolean().optional()
         })

@@ -248,7 +248,7 @@ while another's still goes through.
 | `maxThreshold` | `number` | Your whole pool — the most COD cash (XAF) the platform will let you carry, across every agency. **Set automatically** from your plan once your identity is verified. You may lower it (`PUT /cod/pool`, below) but never raise it past `pool.ceiling`. |
 | `allocated` | `number` | Sum of the slices your live contracts hold. No agency can raise its slice past `maxThreshold`. |
 | `headroom` | `number` | `maxThreshold - allocated`, never below 0. What is left for a new agency to be granted. |
-| `overAllocatedBy` | `number` | `allocated - maxThreshold` when your contracts hold **more** than your pool, else `0`. This only happens after your pool went **down** by itself: a plan downgrade, or your identity verification being withdrawn. While it is above 0, no agency can raise your slice, and every dispatch is capped at your pool rather than at the larger slice. |
+| `overAllocatedBy` | `number` | `allocated - maxThreshold` when your contracts hold **more** than your pool, else `0`. This only happens after your pool went **down** by itself: a plan downgrade, or your identity verification being withdrawn — or, since 2026-09-27, verification opening a pool smaller than the dormant slices agencies set while you were unverified. While it is above 0, no agency can raise your slice, and every dispatch is capped at your pool rather than at the larger slice. |
 | `pool.maxThreshold` | `number` | Same number as the top-level `maxThreshold`. |
 | `pool.ceiling` | `number` | The most `maxThreshold` can be: your plan's value, a value an administrator set for you, or `0` while your identity is not verified. |
 | `pool.source` | `string` | Where the ceiling comes from: `"plan"` · `"override"` (an administrator set it for you) · `"not_verified"` (identity not verified yet, so the ceiling is 0). Display only; see the table below. |
@@ -275,7 +275,13 @@ Nobody has to set your pool any more. It follows your **identity verification** 
 | Verified, on **Agent Pro** | `plan` | **2 000 000** |
 | An administrator set a value for you | `override` | whatever they set, higher *or* lower than your plan |
 
+- **Unverified is not "no work"** (since 2026-09-27). You can still join agencies and carry
+  **prepaid** deliveries; only COD shipments are refused (`422 AGENT_KYC_NOT_VERIFIED`). An agency
+  may already set a COD limit on your contract — it shows in `contracts[]` but stays **dormant**,
+  giving you no cash to carry until you are verified.
 - The moment your identity is **verified**, your pool opens at your plan's value. You do nothing.
+  If the limits your agencies set add up to more than that pool, the pool is what binds
+  (`overAllocatedBy > 0` on `/cod/allocation`) until an agency lowers its slice.
 - **Changing plan** resets your pool to the new plan's value. A **renewal of the same plan** leaves it alone.
 - If verification is **withdrawn**, your pool drops to 0. A value an administrator set for you is kept, and it comes back if you are verified again.
 - The platform can change a plan's value; your pool follows automatically. To show what each plan gives, read `max_cod_pool` from `GET /api/agent/plans` (see [billing.md](./billing.md)).
@@ -369,6 +375,15 @@ Query: `page?`, `limit?`.
       "recipient": "agency",
       "status": "confirmed",
       "reference": null,
+      "proof": {
+        "id": "665f1f77bcf86cd799439401",
+        "key": "cod-proofs/2026/07/…webp",
+        "url": null,
+        "access": "authorized",
+        "mimeType": "image/webp",
+        "size": 184320,
+        "originalName": "receipt.jpg"
+      },
       "declaredAt": "2026-07-10T17:40:00.000Z",
       "resolvedAt": "2026-07-10T18:00:00.000Z",
       "rejectionReason": null,
@@ -383,7 +398,8 @@ Query: `page?`, `limit?`.
 |---|---|
 | `recipient` | `agency` (the normal route) or `platform` (you paid the platform directly). |
 | `status` | `declared` = waiting on the receiver; `confirmed` = money moved; `rejected` = they say it didn't happen (see `rejectionReason`). |
-| `reference` | Your transfer/receipt reference. Required for `platform` deposits. |
+| `reference` | Your transfer/receipt reference, if you gave one. Optional on every deposit. |
+| `proof` | The proof image you attached, as a `FileDetail` — `url` is always `null` (private file); fetch the bytes from [`GET /api/agent/cod/deposits/:id/proof/file`](#deposit-proof-file). `null` when the agency recorded the deposit itself at the desk, and on deposits made before proofs were required. |
 | `declaredAt` | When YOU declared it. `null` if the agency recorded it themselves at the desk. |
 
 ---
@@ -399,39 +415,53 @@ declaration is open it also **suspends your late-deposit penalty** for that amou
 on the record, that you handed the cash over, and the clock is now on them. If they reject it, the
 clock resumes.
 
-**Request Body**:
-```json
-{
-  "agencyId": "507f1f77bcf86cd799439099",
-  "amount": 78000,
-  "recipient": "agency",
-  "reference": null,
-  "note": "Evening cash-desk deposit"
-}
-```
+**Request** — `multipart/form-data` (**not JSON**, since 2026-09-27): the proof image in field
+`file`, the other values as text fields beside it.
+
+| Field | Type | |
+|---|---|---|
+| `file` | image | **Required.** One photo — the receipt, the transfer screenshot, or the hand-over itself. JPEG, PNG or WebP, ≤ 10 MB. |
+| `agencyId` | text | Required. |
+| `amount` | text (integer) | Required, minor units — e.g. `78000`. |
+| `recipient` | text | Optional, default `agency`. |
+| `reference` | text | Optional. |
+| `note` | text | Optional. |
+
+- `file` (image, **required**) — the evidence the receiving party checks before confirming. It is
+  stored privately: only you, the agency the cash is for, and platform administrators can see it.
 - `agencyId` (string, required) — the agency whose cash this is. Required even when paying the
   platform: the cash was always collected under one contract, and that is the contract it settles.
 - `amount` (number, required) — minor units. Bounded by what you actually owe **this** agency.
 - `recipient` (string, optional, default `agency`) — `agency`, or `platform` to bypass the agency.
-- `reference` (string, required for `platform`) — bank/mobile-money/receipt id. The platform isn't
-  standing there, so this is the only thing tying your claim to real money. `""` is treated as
-  absent — a `platform` deposit with an empty reference still fails with
-  `COD_DEPOSIT_REFERENCE_REQUIRED`.
-- `note` (string, optional, ≤500 chars). `null` or `""` = no note.
+- `reference` (string, **optional** on both routes, ≤200 chars) — a bank/mobile-money/receipt id
+  if you have one. The proof image is the evidence; the reference just makes reconciling a
+  statement faster. `""` = none.
+- `note` (string, optional, ≤500 chars). `""` = no note.
 
-**Success Response** (`201 Created`): the deposit, `status: "declared"`.
+**Success Response** (`201 Created`): the deposit, `status: "declared"`, including its `proof`.
 
 **Error Responses**:
+- `400` – `COD_PROOF_FILE_REQUIRED` – No image in field `file`. Also what a client still sending
+  the old JSON body gets.
+- `400` – `UPLOAD_POLICY_VIOLATION` – The file is not a JPEG/PNG/WebP image, or is over 10 MB.
 - `404` – `AGENT_MEMBERSHIP_NOT_FOUND` – No live contract with that agency.
 - `422` – `COD_DEPOSIT_INVALID_AMOUNT` – Not a positive integer.
 - `422` – `COD_DEPOSIT_EXCEEDS_BALANCE` – More than the cash you hold across all agencies.
 - `422` – `CONTRACT_SETTLEMENT_EXCEEDS_OUTSTANDING` – More than you owe **this** agency.
   `details.hint` says whether the rest belongs to another agency.
-- `422` – `COD_DEPOSIT_REFERENCE_REQUIRED` – `recipient: "platform"` without a `reference`.
 - `422` – `COD_DEPOSIT_AGENCY_ALREADY_SETTLED` – **Direct payments only.** Your agency has already
   passed this cash to the platform out of its own pocket, so the platform is square and you owe the
   **agency**, not the platform. `details.agencyOwesPlatform` is the most the platform can still take
   directly; pay that much and the rest to your agency.
+
+<a name="deposit-proof-file"></a>
+### GET /api/agent/cod/deposits/:id/proof/file
+
+**The proof image bytes** of one of your own deposits (`Content-Type` is the image type,
+`Cache-Control: private, no-store`). Load it with your normal auth — it is not a public URL.
+
+- `404` – `COD_DEPOSIT_NOT_FOUND` – Not one of your deposits.
+- `404` – `COD_PROOF_NOT_FOUND` – The deposit has no proof (recorded by the agency, or older than the requirement).
 
 > ### Paying the platform directly
 >
@@ -477,6 +507,8 @@ than you handed over**, or nothing at all. An admin reviews it.
 <a name="risk-controls"></a>
 ## Risk controls (what limits your COD work)
 
+- **Identity verification** (since 2026-09-27, checked first) — until an administrator verifies
+  you, every COD assignment fails with `AGENT_KYC_NOT_VERIFIED`. Prepaid work is unaffected.
 - **Exposure limit** — you can never be exposed to more cash than your limit:
   `exposure = cash held + expected cash of assigned uncollected COD shipments`. The limit is the
   platform default (or an agency-set override), scaled by your trust tier. Assignments that would

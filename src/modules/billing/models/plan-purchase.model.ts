@@ -31,6 +31,11 @@ export interface IPlanPurchase extends Document {
   otp_attempts: number;
   /** The SubscriberPlan created when this purchase was applied (null until paid+applied). */
   subscriber_plan_id: mongoose.Types.ObjectId | null;
+  /**
+   * When this purchase was PAID (2026-09-27) — stamped by the repository on the transition to
+   * `paid`, for account statements. `null` until then and on rows written before the field.
+   */
+  paid_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -49,6 +54,7 @@ const PlanPurchaseSchema = new Schema<IPlanPurchase>(
     merchant_ref: { type: String, default: null, unique: true, sparse: true, index: true },
     otp_attempts: { type: Number, default: 0, min: 0 },
     subscriber_plan_id: { type: Schema.Types.ObjectId, ref: MODELS.SUBSCRIBER_PLAN, default: null },
+    paid_at: { type: Date, default: null },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );

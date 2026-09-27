@@ -1072,14 +1072,16 @@ verdict instead. Vendor and agency expose `kyc_details.status`; an agent exposes
 proves a phone stays exactly where an administrator put it — proving a number cannot lift a
 suspension.
 
-⚠ **Activating an agent does not make them dispatchable.** `status` is only the third of five
-ordered eligibility rules: a platform ban and unverified KYC refuse them before it is consulted,
-and an active contract plus Tracking Allow are required after it. Holding COD cash is likewise
-gated on KYC, never on `status`.
+⚠ **Activating an agent does not make them dispatchable.** `status` is only one of the ordered
+eligibility rules: a platform ban refuses them before it is consulted, and an active contract plus
+Tracking Allow are required after it. Holding COD cash is gated on KYC, never on `status`. (Until
+2026-09-27 unverified KYC was also an eligibility rule; it now refuses **COD shipments only**.)
 
-**What being unverified actually costs**, as of this change: **cash**. An agency that no
-administrator has verified cannot carry cash-on-delivery orders, and an unverified owner's payout
-can be capped (see [admin/payout-requests.md](../admin/payout-requests.md)). Everything else is
+**What being unverified actually costs**: **COD cash**. An agency that no administrator has
+verified cannot carry cash-on-delivery orders, and (since 2026-09-27) an unverified agent cannot be
+dispatched a COD shipment. An unverified owner's payout is **not** limited — the allowance that
+could cap it (2026-09-15) was deleted 2026-09-27 (see
+[admin/payout-requests.md](../admin/payout-requests.md)). Everything else is
 open by design — the platform's position is that working with an unverified counterparty is a
 business judgement for the vendor or agency to make, not a refusal for the platform to issue.
 

@@ -223,6 +223,9 @@ E2E path (§7/§8) or a Mongo-backed test.
   matrix, per-contract COD + payment gates on deactivation, conditions
   re-checked at approval time.
 - **`AgentGateService`** — KYC + platform ban, evaluated before COD/capacity.
+  ⚠ *Superseded 2026-09-27 (owner decision): KYC left this gate and dispatch eligibility; it now
+  refuses COD shipments only, in `CodExposureService` (blocker `kyc_not_verified`). The gate
+  refuses a missing or banned agent only. History below is left as written.*
 - **Models built, services not yet written for them:**
   `contract-settlement.model.ts`, `contract-status-request.model.ts` (the
   repository for the latter exists).
@@ -687,7 +690,7 @@ compare-and-set on accept — only that one is now reported.
 
 | Surface | Route(s) | Note |
 |---|---|---|
-| KYC | `PUT /admin/agents/:agentId/kyc` | **The unblocker.** `kyc.status` defaults to `unverified`, eligibility passes only on `verified`, and nothing but the seed script could write it — so in any non-seeded environment no agent could accept an offer at all. |
+| KYC | `PUT /admin/agents/:agentId/kyc` | **The unblocker.** `kyc.status` defaults to `unverified`, eligibility passes only on `verified`, and nothing but the seed script could write it — so in any non-seeded environment no agent could accept an offer at all. *(2026-09-27: no longer true — KYC now gates COD shipments only; an unverified agent can contract and take prepaid work.)* |
 | Platform ban | `PUT /admin/agents/:agentId/ban` | |
 | Agent COD pool | `PUT /admin/agents/:agentId/cod-threshold`, `GET .../cod-allocation`, `GET /agent/cod/allocation` | Pool bounds (`COD_THRESHOLD_*`), not the contract bounds `SetCodLimitSchema` uses. |
 | Contract terms | `PATCH /agency/agents/:membershipId/terms` | `updateEmployment` is now a thin alias. `fee_split` coherence throws the previously-unthrown `CONTRACT_FEE_SPLIT_INVALID`; the patch is merged over the stored split first, so a partial update that changes only `model` is legitimate. |

@@ -54,6 +54,12 @@ export interface ICustomerNotificationPreference extends Document {
          */
         bookingReminders: boolean;
         /**
+         * The abandoned-basket reminder. Default ON, and gated: it is the only proactive
+         * message not caused by something the customer or a counterparty did, so it is the
+         * one that most needs an off switch.
+         */
+        cartReminders: boolean;
+        /**
          * Order created, shipped, out for delivery, delivered, delivery failed.
          * Defaults ON: "out for delivery" is the only prompt to actually be
          * somewhere, and a failed attempt needs answering.
@@ -90,6 +96,7 @@ const CustomerNotificationPreferenceSchema = new Schema<ICustomerNotificationPre
         preferences: {
             bookingUpdates: { type: Boolean, default: true },
             bookingReminders: { type: Boolean, default: true },
+            cartReminders: { type: Boolean, default: true },
             orderUpdates: { type: Boolean, default: true },
             marketing: { type: Boolean, default: false }
         }

@@ -213,16 +213,25 @@ export class CashCollectionService {
     return { collection: revived, code };
   }
 
-  /** Best-effort post-commit customer notification of a (re)issued code. */
+  /**
+   * Best-effort post-commit customer notification of a (re)issued code — on the ONE channel
+   * the customer's notifications use (owner's ruling, 2026-09-27), chosen by the notification
+   * stack's own rule rather than a copy of it. See `DeliveryCodeService`.
+   */
   async notifyCodeIssued(order: IOrder, collection: ICashCollection, code: string): Promise<void> {
     try {
       const customer: any = await CustomerModel.findById(order.customer_id)
-        .select('phone preferences.language')
+        .select('user_id name email email_verified preferences.language')
         .lean()
         .exec();
+      // Imported lazily: the notifications stack reaches into orders, and a top-level import
+      // from this module closes a require cycle at boot.
+      const { getCustomerNotificationHandler } = await import('../../notifications/customer-notification-event-consumer');
       await this.codes.sendToCustomer({
-        customerPhone: customer?.phone ?? null,
+        customer,
+        channels: getCustomerNotificationHandler(),
         code,
+        orderId: order._id.toString(),
         orderNumber: order.order_number,
         expectedAmount: collection.expected_amount,
         currency: collection.currency,

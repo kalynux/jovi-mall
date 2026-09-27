@@ -1,3 +1,4 @@
+import { effectiveTrustScore } from '../domain/services/agent-trust-override';
 import { IDeliveryAgent, AgentAvailabilityState, AgentWorkingState } from '../models/agent.model';
 import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
 import { ContractStatus } from '../models/agent-agency-membership.model';
@@ -107,7 +108,9 @@ export class AgentDirectoryMapper {
         coordinates: agent.home_base?.location?.coordinates ?? null,
         serviceRadiusKm: agent.home_base?.service_radius_km ?? null,
       },
-      trustScore: agent.cod?.trust_score ?? 100,
+      // The EFFECTIVE score (an administrator's pin wins), as the agent's own /cod/balance and the admin
+      // views show — the raw composite made an agency and its agent see different numbers.
+      trustScore: effectiveTrustScore(agent),
       kycVerified: agent.kyc?.status === 'verified',
       availability: agent.availability?.state ?? 'offline',
       workingState: agent.working_state?.state ?? 'idle',

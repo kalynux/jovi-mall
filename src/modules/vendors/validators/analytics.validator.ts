@@ -5,108 +5,65 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
- * Base analytics query schema (without refinements)
+ * Vendor analytics query — rebuilt 2026-09-27 with the live service.
+ *
+ * `from` / `to` are the vendor's LOCAL calendar days, both INCLUSIVE, as `YYYY-MM-DD`. A full
+ * ISO timestamp is still accepted for compatibility and read as its date part — the old
+ * validator took `new Date(value)`, which turned `to=2026-09-30` into UTC midnight at the START
+ * of that day and dropped it. The period itself is built by `toAnalyticsPeriod`, in the
+ * timezone the controller resolves (query → vendor profile → Africa/Douala), which the old
+ * endpoint echoed and never used.
  */
-const AnalyticsQueryBaseSchema = z.object({
-    from: z.string().transform((val) => {
-        const date = new Date(val);
-        if (isNaN(date.getTime())) {
-            throw createAppError(ERROR_CODES.ANALYTICS_INVALID_DATE_RANGE, 400, `Invalid 'from' date: ${val}`);
+
+const MAX_DAYS = 366;
+
+const Day = (field: 'from' | 'to') =>
+    z.string().transform((value) => {
+        const day = value.slice(0, 10);
+        const ms = Date.parse(`${day}T00:00:00Z`);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || Number.isNaN(ms) || new Date(ms).toISOString().slice(0, 10) !== day) {
+            throw createAppError(ERROR_CODES.ANALYTICS_INVALID_DATE_RANGE, 400, `Invalid '${field}' date: ${value}`);
         }
-        return date;
-    }),
-    to: z.string().transform((val) => {
-        const date = new Date(val);
-        if (isNaN(date.getTime())) {
-            throw createAppError(ERROR_CODES.ANALYTICS_INVALID_DATE_RANGE, 400, `Invalid 'to' date: ${val}`);
-        }
-        return date;
-    }),
+        return day;
+    });
+
+const Base = z.object({
+    from: Day('from'),
+    to: Day('to'),
     timezone: z.string().optional(),
-    fiscalCalendar: z.enum(['gregorian']).default('gregorian')
+    fiscalCalendar: z.enum(['gregorian']).default('gregorian'),
 });
 
-/**
- * Base analytics query schema with validation refinements
- */
-export const AnalyticsQuerySchema = AnalyticsQueryBaseSchema.refine((data) => {
-    // Validate from <= to
+function checkRange<T extends { from: string; to: string; timezone?: string; fiscalCalendar: 'gregorian' }>(data: T): true {
     if (data.from > data.to) {
         throw createAppError(ERROR_CODES.ANALYTICS_INVALID_DATE_RANGE, 400, 'Start date must be before or equal to end date');
     }
-
-    // Validate date range not exceeding 365 days
-    const daysDiff = (data.to.getTime() - data.from.getTime()) / (1000 * 60 * 60 * 24);
-    if (daysDiff > 365) {
-        throw createAppError(ERROR_CODES.ANALYTICS_DATE_RANGE_EXCEEDED, 400, 'Date range cannot exceed 365 days');
+    const days = (Date.parse(`${data.to}T00:00:00Z`) - Date.parse(`${data.from}T00:00:00Z`)) / 86_400_000 + 1;
+    if (days > MAX_DAYS) {
+        throw createAppError(ERROR_CODES.ANALYTICS_DATE_RANGE_EXCEEDED, 400, `Date range cannot exceed ${MAX_DAYS} days`);
     }
-
-    // Validate timezone if provided
     if (data.timezone && !validateTimezone(data.timezone)) {
         throw createAppError(ERROR_CODES.ANALYTICS_UNSUPPORTED_TIMEZONE, 400, undefined, { timezone: data.timezone });
     }
-
-    // Validate fiscal calendar (hard check for gregorian)
     validateFiscalCalendar(data.fiscalCalendar);
-
     return true;
-});
+}
 
-/**
- * Sales metrics query schema (extends base with breakdown option)
- */
-export const SalesQuerySchema = AnalyticsQueryBaseSchema.extend({
-    breakdown: z.enum(['daily', 'none']).default('none')
-}).refine((data) => {
-    // Apply the same validations as base schema
-    if (data.from > data.to) {
-        throw createAppError(ERROR_CODES.ANALYTICS_INVALID_DATE_RANGE, 400, 'Start date must be before or equal to end date');
-    }
+export const AnalyticsQuerySchema = Base.refine(checkRange);
 
-    const daysDiff = (data.to.getTime() - data.from.getTime()) / (1000 * 60 * 60 * 24);
-    if (daysDiff > 365) {
-        throw createAppError(ERROR_CODES.ANALYTICS_DATE_RANGE_EXCEEDED, 400, 'Date range cannot exceed 365 days');
-    }
+export const SalesQuerySchema = Base.extend({
+    breakdown: z.enum(['daily', 'none']).default('none'),
+}).refine(checkRange);
 
-    if (data.timezone && !validateTimezone(data.timezone)) {
-        throw createAppError(ERROR_CODES.ANALYTICS_UNSUPPORTED_TIMEZONE, 400, undefined, { timezone: data.timezone });
-    }
-
-    validateFiscalCalendar(data.fiscalCalendar);
-
-    return true;
-});
-
-/**
- * Product metrics query schema (extends base with limit option)
- */
-export const ProductQuerySchema = AnalyticsQueryBaseSchema.extend({
-    limit: z.string().transform((val) => {
-        const num = parseInt(val, 10);
-        if (isNaN(num) || num < 1 || num > 50) {
-            return 5; // Default to 5
-        }
-        return num;
-    }).default('5')
-}).refine((data) => {
-    // Apply the same validations as base schema
-    if (data.from > data.to) {
-        throw createAppError(ERROR_CODES.ANALYTICS_INVALID_DATE_RANGE, 400, 'Start date must be before or equal to end date');
-    }
-
-    const daysDiff = (data.to.getTime() - data.from.getTime()) / (1000 * 60 * 60 * 24);
-    if (daysDiff > 365) {
-        throw createAppError(ERROR_CODES.ANALYTICS_DATE_RANGE_EXCEEDED, 400, 'Date range cannot exceed 365 days');
-    }
-
-    if (data.timezone && !validateTimezone(data.timezone)) {
-        throw createAppError(ERROR_CODES.ANALYTICS_UNSUPPORTED_TIMEZONE, 400, undefined, { timezone: data.timezone });
-    }
-
-    validateFiscalCalendar(data.fiscalCalendar);
-
-    return true;
-});
+export const ProductQuerySchema = Base.extend({
+    limit: z
+        .string()
+        .transform((val) => {
+            const num = parseInt(val, 10);
+            return Number.isNaN(num) || num < 1 || num > 50 ? 5 : num;
+        })
+        .default('5'),
+}).refine(checkRange);
 
 export type AnalyticsQuery = z.infer<typeof AnalyticsQuerySchema>;
 export type SalesQuery = z.infer<typeof SalesQuerySchema>;

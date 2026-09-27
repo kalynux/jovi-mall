@@ -11,6 +11,9 @@ import { PaymentTransactionModel } from '../../payments/models/payment-transacti
 import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
 import { surfacePath, windowForChat } from '../domain/bot-list-window';
 import { openInAppScreen } from './bot-inapp.controller';
+import { parseBookingPayArgument } from '../domain/bot-action-id';
+import { assertSomethingDue } from '../miniapp/surfaces/booking-rows';
+import { readBookingDays } from '../miniapp/surfaces/booking.core';
 import {
     BotActionHandlers,
     ParsedBotAction,
@@ -223,12 +226,20 @@ export class BotBookingController {
                 caller.userId,
                 caller.userId,
                 /**
-                 * ⚠ The ONLY metadata this surface will write. The customer API forwards an
-                 * arbitrary object; `createBooking` renders `metadata.notes` into the
-                 * vendor's calendar event, so that one key has a defined destination and
-                 * nothing else does.
+                 * ⚠ The ONLY TWO metadata keys this surface writes — it was one until
+                 * 2026-09-27. The customer API forwards an arbitrary object; this never does.
+                 *   - `notes` — `createBooking` renders it into the vendor's calendar event.
+                 *   - `bookedInChat` — the ENVELOPE's channel, never a caller-supplied one. It
+                 *     makes the confirmation ONE message: the assistant answers here, and the
+                 *     platform's own "booking created" is kept in the inbox rather than sent
+                 *     again by email or on the other app (owner decision). It is also copied into
+                 *     the calendar event's hidden metadata, as every key is; it is a channel name
+                 *     and nothing personal.
                  */
-                input.notes ? { notes: input.notes } : undefined,
+                {
+                    ...(input.notes ? { notes: input.notes } : {}),
+                    bookedInChat: req.bot!.envelope.channel,
+                },
             );
         } catch (error) {
             /**
@@ -404,6 +415,8 @@ export class BotBookingController {
             bookingId,
             input.gateway,
             channelOf(input),
+            // The result is told in THIS chat — the envelope's, never a caller-supplied one.
+            { originChat: req.bot!.envelope.channel },
         );
         sendSuccess(res, result);
     });
@@ -427,6 +440,7 @@ export class BotBookingController {
             bookingId,
             input.gateway,
             channelOf(input),
+            { originChat: req.bot!.envelope.channel },
         );
         sendSuccess(res, result);
     });
@@ -477,14 +491,102 @@ export class BotBookingController {
 async function bookingsScreenTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
     if (action.argument !== '') throw unknownBotAction();
 
-    const handle = await openInAppScreen(req, {
+    const handle = await openBookingsScreen(req);
+    sendSuccess(res, { handle, opened: 'bookings' });
+}
+
+/**
+ * Mint the caller's `bl` session and set the reply that opens it. **The one way to open the
+ * bookings list**, shared by the `open:bl` tap and the `/bookings` command so the two doors cannot
+ * start disagreeing about where the list falls back to.
+ */
+export async function openBookingsScreen(req: Request): Promise<string> {
+    return openInAppScreen(req, {
         payload: { kind: 'bl' },
         fallbackPath: surfacePath('bookings'),
         labelKey: 'myBookingsButton',
         textKey: 'bookingsScreenPrompt',
     });
+}
 
-    sendSuccess(res, { handle, opened: 'bookings' });
+/**
+ * `bpay:<bookingId>` · `bpay:<bookingId>:b` — open the payment screen for this appointment's
+ * price, or for the balance a longer job came to.
+ *
+ * ── WHY THIS EXISTS ─────────────────────────────────────────────────────────
+ * The `bp` screen was finished, translated and mounted, and NOTHING could open it. Meanwhile a
+ * failed booking payment drew "Try again" as `pay:rt:`, whose handler serves ORDERS only — so the
+ * customer tapped it and was told about their orders. This is that button's real door.
+ *
+ * ⛔ **The token carries a booking id; the session is minted HERE, on the tap, for whoever
+ * tapped** — the `open:co` property. The button can sit in a chat history for a month holding no
+ * credential, and a stranger's tap is a 404 from `getUserBooking`'s owner-scoped query (never a
+ * 403, which would confirm the booking exists).
+ *
+ * ⚠ **Refused BEFORE a session is minted**, with the rule the screen's own read applies
+ * (`assertSomethingDue`), so a button under a failure that has since been paid, or an
+ * appointment since cancelled, answers one sentence instead of opening a screen that would only
+ * refuse. The customer's sentence comes from `bot-error-copy`.
+ *
+ * ⚠ **`fallbackPath` is never null.** `BOT_MINIAPP_BASE_URL` is unset in production, so the
+ * storefront page is the path that actually runs; a null one renders a sentence with nothing to
+ * press. It is the same page the notification's own URL button already names.
+ */
+async function bookingPayTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    const target = parseBookingPayArgument(action.argument);
+    if (!target) throw unknownBotAction();
+
+    const booking = await bookingService.getUserBooking(target.bookingId, botCallerOf(req).userId);
+    assertSomethingDue(booking, target.purpose);
+
+    const bookingPath = `${surfacePath('bookings')}/${target.bookingId}`;
+    const handle = await openInAppScreen(req, {
+        payload: { kind: 'bp', bookingId: target.bookingId, purpose: target.purpose },
+        fallbackPath: target.purpose === 'balance' ? `${bookingPath}/balance` : bookingPath,
+        labelKey: 'payAppointmentButton',
+    });
+
+    sendSuccess(res, { handle, opened: 'booking_payment', purpose: target.purpose });
+}
+
+/**
+ * `open:bk:<productId>` — the day-and-time picker for this service.
+ *
+ * ── WHY THIS EXISTS ─────────────────────────────────────────────────────────
+ * **Book** on a service card asked the customer to TYPE a day and a time, and the model then had
+ * to turn "Tuesday afternoon" into an availability read and a booking. The picker screen was
+ * finished and translated and nothing could open it. This is its door; the button is drawn under
+ * the Book invitation (`bot-purchase.controller.ts`), which keeps its sentence for the customer
+ * who would rather type.
+ *
+ * ⛔ **The token names a PRODUCT; the session is minted here, on the tap.** A `bk` handle lives
+ * fifteen minutes and must never sit in a chat history — so the button carries the id and the
+ * server mints the handle for whoever tapped, as `open:co` does for checkout. It holds NO slot:
+ * the hold is taken at Confirm and released on every failure (`confirmBooking`).
+ *
+ * ⚠ **Refused with the availability read's OWN refusals, by calling it**, not by a copy of its
+ * rules: an unknown, unpublished or suspended product is the same `404
+ * CATALOG_BOOKING_PRODUCT_NOT_FOUND` (a 403 would confirm it exists), and a product that is not
+ * a service is its `422`. Asking up front costs one read and spares the customer a screen that
+ * could only fail.
+ *
+ * ⚠ **`fallbackPath` is the product's own page** — the redirect-stub form `/shop/p/<id>`, which
+ * the availability route above already uses for exactly this: a link that knows an id and not a
+ * store slug. Never null; `BOT_MINIAPP_BASE_URL` is unset in production and this is what runs.
+ */
+async function bookingPickerTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    const productId = action.argument;
+    if (!/^[0-9a-f]{24}$/.test(productId)) throw unknownBotAction();
+
+    await readBookingDays({ productId, language: botResponseLanguageOf(req) });
+
+    const handle = await openInAppScreen(req, {
+        payload: { kind: 'bk', productId, bookingId: null },
+        fallbackPath: `/shop/p/${productId}`,
+        labelKey: 'bookChooseTimeButton',
+    });
+
+    sendSuccess(res, { handle, opened: 'booking_picker', productId });
 }
 
 /**
@@ -501,6 +603,8 @@ async function bookingsScreenTap(req: Request, res: Response, action: ParsedBotA
  */
 export const BOOKING_ACTION_HANDLERS: BotActionHandlers = Object.freeze({
     'open:bl': bookingsScreenTap,
+    'open:bk': bookingPickerTap,
+    bpay: bookingPayTap,
 });
 
 /**

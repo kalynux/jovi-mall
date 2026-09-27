@@ -7,6 +7,7 @@ import { earningsReleaseWorker } from '../earnings/workers/earnings-release.work
 import { unpaidOrderCancelWorker } from '../orders/workers/unpaid-order-cancel.worker';
 import { unpaidBookingCancelWorker } from '../booking/workers/unpaid-booking-cancel.worker';
 import { bookingReminderWorker } from '../booking/workers/booking-reminder.worker';
+import { abandonedCartWorker } from '../cart/workers/abandoned-cart.worker';
 import { inboundCalendarSyncWorker } from '../booking/workers/inbound-calendar-sync.worker';
 import { paymentReconciliationWorker } from '../payments/workers/payment-reconciliation.worker';
 import { codDepositDeadlineWorker } from '../cod/workers/cod-deposit-deadline.worker';
@@ -196,6 +197,12 @@ export const WORKER_REGISTRY = Object.freeze({
         label: 'Booking reminders',
         worker: bookingReminderWorker,
         runOnce: () => runCountedSweep(() => bookingReminderWorker.sweep()),
+    },
+    'abandoned-cart': {
+        label: 'Abandoned-basket reminders',
+        worker: abandonedCartWorker,
+        // Counted; `null` is a pass the lock refused, `0` is "nothing was due".
+        runOnce: () => runCountedSweep(() => abandonedCartWorker.sweep()),
     },
     'cod-deposit-deadline': {
         label: 'COD deposit deadlines',

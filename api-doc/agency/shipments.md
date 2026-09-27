@@ -661,8 +661,13 @@ they have auto-accept on), and `data.shipment.assignmentState` is `offered` (or 
 
 **Key errors**: `SHIPMENT_NOT_OFFERABLE` (422), `SHIPMENT_ALREADY_HAS_AGENT` (409),
 `SHIPMENT_ALREADY_HAS_PENDING_OFFER` (409), `AGENT_NOT_ELIGIBLE_FOR_ASSIGNMENT` (422),
-`COD_AGENT_EXPOSURE_EXCEEDED` / `COD_AGENT_TRUST_TOO_LOW` (422, COD only). Full list in
-[assignment.md](assignment.md#offer).
+`AGENT_KYC_NOT_VERIFIED` / `COD_AGENT_EXPOSURE_EXCEEDED` / `COD_AGENT_TRUST_TOO_LOW` (422, COD only).
+Full list in [assignment.md](assignment.md#offer).
+
+> ⚠ **Since 2026-09-27 only a KYC-verified agent may carry a COD shipment** — the one place
+> verification still gates agent work. An unverified agent takes prepaid shipments normally; a COD
+> one is refused `422 AGENT_KYC_NOT_VERIFIED` (`details: { kycStatus, hint }`) on offer, accept and
+> reassign, before any cash arithmetic.
 
 ---
 

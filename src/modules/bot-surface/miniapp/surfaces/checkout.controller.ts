@@ -8,6 +8,7 @@ import { CartService, CartResponse } from '../../../cart/services/cart.service';
 import { CustomerModel, ICustomer, ICustomerSavedAddress } from '../../../customers/customer.model';
 import { OrderService } from '../../../orders/order.service';
 import { cartQuoteService, CartQuote } from '../../../orders/services/cart-quote.service';
+import { codEligibilityService } from '../../../cod/services/cod-eligibility.service';
 import { StoreRepository } from '../../../store/repositories/store.repository';
 import { PaymentOrchestratorService } from '../../../payments';
 import { PaymentGatewayType, PaymentStatus } from '../../../payments/models/payment-transaction.model';
@@ -150,6 +151,11 @@ export interface CheckoutView {
      * fixtures predate it; `readCheckoutView` always sets it.
      */
     addAddressUrl?: string | null;
+    /**
+     * Every pay-on-delivery rule passes — the page then draws Pay on delivery beside Pay now.
+     * Optional: absent means "do not offer", which is what every reader but the page assumes.
+     */
+    cashOnDelivery?: boolean;
 }
 
 /**
@@ -254,6 +260,8 @@ export async function readCheckoutView(handle: string): Promise<CheckoutView> {
         payment: { phoneMasked: await maskedPayerNumber(customer) },
         language: session.language,
         addAddressUrl: address ? null : botStorefrontLink(surfacePath('addresses'), session.language),
+        /** The page draws Pay on delivery only when this is true (owner decision, 2026-09-27). */
+        cashOnDelivery: await cashOnDeliveryOffered(session.customerId, cart.productType ?? null),
     };
 }
 
@@ -347,9 +355,10 @@ export async function placeCheckout(
         assertNetworkChargeable(gateway, payerNumber, true);
 
         /**
-         * ⚠ **`'online'`, never `'cash_on_delivery'`, and no screen offers a choice.** Mobile money
-         * is the only live method here; a COD checkout takes no payment, produces a delivery code
-         * per shipment, and is refused outright by `initiatePaymentForCart`.
+         * ⚠ **`'online'` — this function is Pay NOW.** Pay on delivery is its sibling,
+         * `placeCheckoutCashOnDelivery` (owner decision 2026-09-27): a COD checkout takes no
+         * payment, produces a delivery code per shipment, and is refused outright by
+         * `initiatePaymentForCart`, so the two must never share this path.
          */
         const { cartId, orders } = await orderService.createOrdersFromCart(
             session.customerId,
@@ -382,6 +391,73 @@ export async function placeCheckout(
             orderNumbers: orders.map((order) => order.order_number),
             payerMasked: maskPhone(payerNumber),
             instructions: payment.instructions ?? null,
+        };
+    } catch (error) {
+        throw markedSpent(error);
+    }
+}
+
+/** What a pay-on-delivery placement knows: orders, and no charge — the cash is taken at the door. */
+export interface CashOnDeliveryPlacement {
+    paymentMethod: 'cash_on_delivery';
+    orderCount: number;
+    orderNumbers: string[];
+}
+
+/**
+ * Spend the handle and create the orders as PAY ON DELIVERY — no charge is opened.
+ *
+ * ── ⚠ THE SAME PROTECTIONS AS `placeCheckout`, IN THE SAME ORDER ──────────────
+ *   1. **Before the spend** (the chat door, which knows its caller): the named address, the
+ *      delivery minimum per shipment, and every pay-on-delivery rule (`cashOnDeliveryRefusal`) —
+ *      each refused with `spent: false`, so the customer can still choose Pay now.
+ *   2. **`consume`** — single use; a double tap finds the handle gone.
+ *   3. **The handle must be the caller's** (chat door) — a forwarded one places nothing.
+ *   4. **Orders are created by the SAME `createOrdersFromCart` the website calls**, with
+ *      `'cash_on_delivery'` — which re-checks every agency inside its transaction, commits the
+ *      stock, dispatches to the agencies and issues the delivery codes. Nothing of that is copied.
+ *
+ * ⚠ **The screen door has no caller up front**, exactly like `placeCheckout`: its rules are
+ * re-asked AFTER the spend (from the session's customer), so a policy that changed in the minutes
+ * since the screen drew the button costs the handle — the chat can open another. The screen only
+ * draws the button when the read said yes.
+ *
+ * ⚠ **No `originChat` and no payment transaction**: there is no payment result to announce. The
+ * customer hears about the order through the order's own notifications and the delivery code.
+ */
+export async function placeCheckoutCashOnDelivery(
+    handle: string,
+    options: PlaceCheckoutOptions = {},
+): Promise<CashOnDeliveryPlacement> {
+    const addressId = options.callerCustomerId
+        ? await precheckChatDoor(options.callerCustomerId, options.addressId ?? null, null, null, 'cash_on_delivery')
+        : null;
+
+    const session = await inAppSurfaceStore.consume('co', plausibleHandle(handle));
+    if (!session) throw handleGone(false);
+    if (options.callerCustomerId && session.customerId !== options.callerCustomerId) {
+        throw handleGone(true);
+    }
+
+    try {
+        const cart = await cartService.getCart(session.customerId);
+        assertBasketStillThere(cart, session, true);
+
+        if (!options.callerCustomerId) {
+            const refusal = await cashOnDeliveryRefusal(session.customerId, cart.productType ?? null);
+            if (refusal) throw refusal;
+        }
+
+        const { orders } = await orderService.createOrdersFromCart(
+            session.customerId,
+            'cash_on_delivery',
+            { addressId, address: null },
+        );
+
+        return {
+            paymentMethod: 'cash_on_delivery',
+            orderCount: orders.length,
+            orderNumbers: orders.map((order) => order.order_number),
         };
     } catch (error) {
         throw markedSpent(error);
@@ -431,7 +507,81 @@ export async function readChatCheckout(
         accountIdentifier: accountIdentifier(customer),
         phoneMasked: await maskedPayerNumber(customer),
         deliveryShortfalls: await deliveryShortfallsOf(quote),
+        cashOnDelivery: await cashOnDeliveryOffered(customerId, cart.productType ?? null),
     };
+}
+
+/**
+ * Whether to OFFER pay on delivery. ⚠ A fault in asking only hides the button — it never blocks
+ * a review that mobile money can still complete; the placement re-asks before the spend anyway.
+ */
+async function cashOnDeliveryOffered(customerId: string, productType: string | null): Promise<boolean> {
+    try {
+        return (await cashOnDeliveryRefusal(customerId, productType)) === null;
+    } catch (error) {
+        console.warn('[BotSurface] could not decide pay on delivery for a checkout review:', (error as Error).message);
+        return false;
+    }
+}
+
+/**
+ * ⭐ **Can this basket be paid ON DELIVERY?** — asked BEFORE any button is drawn and again before
+ * the orders are created, with the rules order creation itself applies (owner decision
+ * 2026-09-27: the bot offers pay on delivery, to anyone, wherever the website would allow it).
+ *
+ * ── WHY IT IS ASKED UP FRONT ─────────────────────────────────────────────────
+ * `createOrdersFromCart` checks these rules INSIDE its transaction, after the checkout handle has
+ * been spent. A Pay on delivery button that could only fail there would cost the customer their
+ * checkout for a refusal we could have seen coming. So the review draws the button only when every
+ * rule passes, and the placement re-asks before the spend (a shop may change its policy meanwhile).
+ *
+ * ── THE RULES, ALL BORROWED ─────────────────────────────────────────────────
+ *   - **Physical goods only** — nothing is handed over for a download (`COD_NOT_AVAILABLE_FOR_DIGITAL`).
+ *   - **Each shop's part meets its delivery minimum, checked PER SHIPMENT** — the quote's own COD
+ *     verdict (ADR-A07), the one checkout uses.
+ *   - **Every agency carrying a shipment accepts cash, is verified, and the shop's order is within
+ *     its cash limit** — `codEligibilityService.assertVendorOrderEligible`, the call order creation
+ *     makes, fed the agencies the quote grouped the shipments by and the shop's order total (the
+ *     subtotal: delivery is the vendor's, tax and discount are pinned to 0).
+ *
+ * ⚠ **A shop the quote could not evaluate is NOT eligible.** "Not evaluated" is not "passed", and
+ * drawing a button that order creation might refuse is the failure this function exists to avoid.
+ *
+ * Answers the refusal as an `AppError` rather than throwing it, so the review can simply omit the
+ * button while the placement throws it with `spent: false`.
+ */
+export async function cashOnDeliveryRefusal(
+    customerId: string,
+    productType: string | null,
+): Promise<AppError | null> {
+    if (productType !== 'physical') {
+        return createAppError(ERROR_CODES.COD_NOT_AVAILABLE_FOR_DIGITAL, 422, 'Cash on delivery is only available for physical orders');
+    }
+
+    const quote = await cartQuoteService.quoteForCustomer(customerId, undefined, 'cash_on_delivery');
+    for (const line of quote.perVendor) {
+        const minimum = line.deliveryMinimum;
+        const agencyIds = (minimum?.units ?? [])
+            .map((unit) => unit.agencyId)
+            .filter((id): id is string => typeof id === 'string' && id.length > 0);
+        if (!minimum || agencyIds.length === 0) {
+            return createAppError(ERROR_CODES.COD_AGENCY_NOT_SUPPORTED, 422, undefined, { vendorId: line.vendorId });
+        }
+        if (!minimum.met) {
+            return createAppError(ERROR_CODES.ORDER_BELOW_DELIVERY_MINIMUM, 422, undefined, { vendorId: line.vendorId });
+        }
+        try {
+            await codEligibilityService.assertVendorOrderEligible({
+                orderType: 'physical',
+                totalAmount: line.subtotal,
+                agencyIds,
+            });
+        } catch (error) {
+            if (error instanceof AppError) return error;
+            throw error;
+        }
+    }
+    return null;
 }
 
 /**
@@ -484,6 +634,8 @@ export interface ChatCheckoutView {
     phoneMasked: string | null;
     /** Shops below their delivery minimum (ADR-A07). Empty when the basket can be placed. */
     deliveryShortfalls: ChatDeliveryShortfall[];
+    /** Every pay-on-delivery rule passes right now — `cashOnDeliveryRefusal`. */
+    cashOnDelivery: boolean;
 }
 
 export class CheckoutController {
@@ -497,7 +649,19 @@ export class CheckoutController {
             address: view.address,
             payment: view.payment,
             addAddressUrl: view.addAddressUrl ?? null,
+            cashOnDelivery: view.cashOnDelivery,
         });
+    });
+
+    /**
+     * `POST /api/bot/miniapp/s/co/:handle/place-cod` — **Pay on delivery**, from the screen. SPENDS
+     * the handle, creates the orders as pay on delivery, opens no charge. A thin wrapper; see
+     * `placeCheckoutCashOnDelivery`. Answers the count and the method only — order numbers are the
+     * chat's, and this page is forwardable.
+     */
+    static placeCashOnDelivery = asyncHandler(async (req: Request, res: Response) => {
+        const placed = await placeCheckoutCashOnDelivery(String(req.params.handle ?? ''));
+        sendSuccess(res, { orderCount: placed.orderCount, paymentMethod: placed.paymentMethod });
     });
 
     /**
@@ -559,7 +723,9 @@ async function precheckChatDoor(
     customerId: string,
     requestedAddressId: string | null,
     typedNumber: string | null,
-    gateway: PaymentGatewayType,
+    gateway: PaymentGatewayType | null,
+    /** Pay on delivery needs no wallet, and has its own rules — see `cashOnDeliveryRefusal`. */
+    method: 'online' | 'cash_on_delivery' = 'online',
 ): Promise<string | null> {
     const cart = await cartService.getCart(customerId);
     if (cart.items.length === 0 || !cart.cartId) {
@@ -604,7 +770,7 @@ async function precheckChatDoor(
         );
     }
 
-    if (!typedNumber) {
+    if (method === 'online' && !typedNumber) {
         const stored = await storedPayerNumber(customer);
         if (!stored) {
             throw createAppError(
@@ -614,16 +780,31 @@ async function precheckChatDoor(
                 { spent: false },
             );
         }
-        assertNetworkChargeable(gateway, stored, false);
+        assertNetworkChargeable(gateway!, stored, false);
     }
 
     /**
      * ⚠ **The delivery minimum (ADR-A07), before the spend** — a shop's part of the basket too
      * small to carry its delivery is something the customer fixes in the same turn by adding to
-     * it. `'online'` because this door only ever places an online checkout (`placeCheckout`).
+     * it. Checked for the method being PLACED: per order online, per shipment on delivery.
      * Checkout re-checks it exactly, with the negotiated floors this cart does not carry.
      */
-    await cartQuoteService.assertDeliveryMinimum(cart, 'online', { spent: false });
+    await cartQuoteService.assertDeliveryMinimum(cart, method, { spent: false });
+
+    /**
+     * ⚠ **Pay on delivery re-asks its own rules here, before the spend** — the review drew the
+     * button minutes ago and an agency may have switched cash off since. Refused unspent, so the
+     * customer can still pay now from the same checkout.
+     */
+    if (method === 'cash_on_delivery') {
+        const refusal = await cashOnDeliveryRefusal(customerId, cart.productType ?? null);
+        if (refusal) {
+            throw new AppError(refusal.message, refusal.statusCode, refusal.code, refusal.isOperational, {
+                ...(refusal.details ?? {}),
+                spent: false,
+            });
+        }
+    }
 
     return destination.kind === 'address' ? String(destination.address._id) : null;
 }

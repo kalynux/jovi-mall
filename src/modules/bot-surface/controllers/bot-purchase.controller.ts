@@ -24,7 +24,7 @@ import {
 } from '../domain/bot-action-dispatch';
 import { inAppBaseUrl, inAppScreenUrl } from '../domain/inapp-url';
 import { PurchaseVerb, resolvePurchaseAffordance } from '../domain/purchase-affordance';
-import { addedToCartActions, purchaseInvitePrompt } from '../domain/purchase-chat-copy';
+import { addedToCartActions, bookInviteActions, purchaseInvitePrompt } from '../domain/purchase-chat-copy';
 import { conversationUrl } from '../domain/conversation-url';
 import { inAppSurfaceStore } from '../services/inapp-surface.store';
 import { pendingBargainStore } from '../services/pending-bargain.store';
@@ -134,7 +134,13 @@ export class BotPurchaseController {
          * So `bargain` and `book` are posted into the conversation by this service, which holds
          * both channels' credentials, and the page goes back to the chat onto the message.
          */
-        if (result.outcome === 'chat') {
+        /**
+         * ⭐ Book with a picker to open: the page goes STRAIGHT there, in the same screen
+         * (owner, 2026-09-27), so nothing is pushed into the chat — a question arriving in the
+         * thread while the customer is choosing a time would be a second, stale conversation.
+         */
+        const straightToPicker = result.verb === 'book' && result.url !== null;
+        if (result.outcome === 'chat' && !straightToPicker) {
             /**
              * ⚠ **Recorded BEFORE the push**, so a customer quick enough to answer the pushed
              * question cannot reach `/identity/sync` ahead of the record. The question is what
@@ -153,7 +159,7 @@ export class BotPurchaseController {
         sendSuccess(res, {
             outcome: result.outcome,
             message: result.message,
-            ...(result.outcome === 'checkout' ? { url: result.url } : {}),
+            ...(result.outcome === 'checkout' || straightToPicker ? { url: result.url } : {}),
             /**
              * Where "Back to chat" goes, for a screen that cannot close itself (WhatsApp). A
              * Telegram page closes instead and ignores it; null draws no button.
@@ -340,7 +346,10 @@ export interface PurchaseContext extends SessionOwner {
     variantId: string | null;
 }
 
-/** What one press resolved to. `url` is populated only for `checkout`. */
+/**
+ * What one press resolved to. `url` is a screen address: the checkout for a `checkout`, the
+ * day-and-time picker for a `book` (since 2026-09-27) — null wherever there is no screen.
+ */
 export interface PurchaseResult {
     /** The rung the SERVER chose. Never the one the caller named. */
     verb: PurchaseVerb;
@@ -462,12 +471,19 @@ export async function executePurchase(ctx: PurchaseContext): Promise<PurchaseRes
                 url: null,
             };
 
+        /**
+         * ⭐ **Book goes straight to the picker** (owner, 2026-09-27): `url` is a freshly minted
+         * `bk` screen for this customer and this product, so every door that runs this — the chat
+         * tap, the product screen — can open it in ONE step. The question stays as `message`,
+         * for the customer who would rather type a day and a time, and for a deployment with no
+         * screen (`url` null), where the chat offers the `open:bk` button instead.
+         */
         case 'book':
             return {
                 ...base,
                 outcome: 'chat',
                 message: purchaseInvitePrompt(product.title, 'book', language),
-                url: null,
+                url: await mintPickerUrl(ctx, productId),
             };
 
         /**
@@ -563,12 +579,26 @@ function splitPurchaseToken(
  */
 function replyForPurchase(result: PurchaseResult, language: string | null): BotReplyIntent {
     /**
-     * ⚠ **`bargain` and `book` carry no actions, deliberately.** The next thing wanted from the
-     * customer is a sentence — an offer, or a day and a time — and a button beside that question
-     * is an invitation to answer it with a tap that means nothing here.
+     * ⚠ **`bargain` carries no actions, deliberately.** The next thing wanted from the customer is
+     * an offer, and a button beside that question is an invitation to answer it with a tap that
+     * means nothing here.
+     *
+     * ⭐ **`book` carries ONE, since bookings phase 6: Choose a time** (`open:bk:<productId>`).
+     * This comment used to say `book` needed none because the answer is "a day and a time" — true
+     * of a customer typing it, and the reason the finished picker screen had no way in. The
+     * question is kept for the customer who would rather type; the button opens the picker.
      */
     if (result.outcome === 'chat') {
-        return { kind: 'text', text: result.message };
+        if (result.verb !== 'book') return { kind: 'text', text: result.message };
+        /**
+         * ⭐ Straight to the picker when there is one: the question AND a button that opens the
+         * screen itself (owner, 2026-09-27 — two steps fewer than a tap that then offers a
+         * second button). Without a screen, the `open:bk` tap button, which falls back to the
+         * product's own page.
+         */
+        return result.url
+            ? { kind: 'inapp', text: result.message, label: botChrome('bookChooseTimeButton', language), url: result.url }
+            : { kind: 'text', text: result.message, actions: bookInviteActions(result.productId, language) };
     }
 
     /**
@@ -650,6 +680,29 @@ async function mintCheckoutUrl(ctx: SessionOwner, cartId: string | null): Promis
         cartId,
     });
     return inAppScreenUrl('co', handle, ctx.language);
+}
+
+/**
+ * Mint the day-and-time picker for this customer and product, or null when there is no screen.
+ *
+ * Checked against `inAppBaseUrl()` first, for `mintCheckoutUrl`'s reason. ⚠ The session holds NO
+ * slot — the hold is taken at Confirm — and lives fifteen minutes, so minting on every Book tap
+ * costs one short-lived Redis key and takes nothing off anybody's calendar.
+ */
+async function mintPickerUrl(ctx: SessionOwner, productId: string): Promise<string | null> {
+    if (!inAppBaseUrl()) return null;
+
+    const handle = await inAppSurfaceStore.mint({
+        kind: 'bk',
+        owner: ctx.userId,
+        customerId: ctx.customerId,
+        channel: ctx.channel,
+        externalId: ctx.externalId,
+        language: ctx.language,
+        productId,
+        bookingId: null,
+    });
+    return inAppScreenUrl('bk', handle, ctx.language);
 }
 
 /** `open:co` — start a checkout. */

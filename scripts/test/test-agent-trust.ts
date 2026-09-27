@@ -441,6 +441,27 @@ function main(): void {
     return start > -1 && !codTrust.slice(start, end).includes("'cod.trust_score'");
   });
 
+  // 2026-09-27: the agency roster and the directory showed the RAW composite, so an agency saw
+  // a different score for an agent than the agent and every admin view did.
+  for (const file of ['agent-profile.dto.ts', 'agent-directory.dto.ts']) {
+    assert(`${file} shows the EFFECTIVE trust score, never the raw composite`, () => {
+      const code = readFileSync(join(__dirname, '../../src/modules/agents/dto', file), 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*$/gm, '');
+      return /trustScore: effectiveTrustScore\(agent\)/.test(code) && !/trustScore: agent\.cod\?\.trust_score/.test(code);
+    });
+  }
+
+  // 2026-09-27: the roster keeps the cross-agency total (owner decision) AND shows this agency's part.
+  assert('roster carries activeShipmentsForYou beside the total, on both roster routes', () => {
+    const dto = readFileSync(join(__dirname, '../../src/modules/agents/dto/agent-profile.dto.ts'), 'utf8');
+    const ctl = readFileSync(join(__dirname, '../../src/modules/agents/controllers/agency-roster.controller.ts'), 'utf8');
+    return /activeShipmentCount: agent\.capacity\?\.active_shipment_count/.test(dto)
+      && /activeShipmentsForYou,/.test(dto)
+      && (ctl.match(/forYou\.get\(/g) ?? []).length === 2
+      && /status: \{ \$in: \[\.\.\.ACTIVE_SHIPMENT_STATUSES\] \}/.test(ctl);
+  });
+
   console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed\n`);
   if (failed > 0) process.exit(1);
 }

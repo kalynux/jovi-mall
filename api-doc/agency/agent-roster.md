@@ -229,9 +229,13 @@ it. Consequences worth knowing:
 is annotated with your current contract state, so the UI can render the right button
 (Request / Pending / Connected / Suspended).
 
-Only agents who could actually accept are listed: `status: active`, **KYC verified**, not
-platform-banned, onboarding complete. That is exactly the gate a request must clear, so a listed
-agent is always a requestable one.
+Only agents who could actually accept are listed: `status: active`, not platform-banned,
+onboarding complete. That is exactly the gate a request must clear, so a listed agent is always a
+requestable one.
+
+> ⚠ **Changed 2026-09-27: unverified agents ARE listed.** KYC no longer gates contracting or prepaid
+> work — only cash on delivery. Render `kycVerified` as a badge (and, if useful, "cannot carry COD
+> until verified"), never as a reason to hide or disable the Request button.
 
 An agent already serving another agency **is listed** — agents are multi-agency by design. So is an
 agent you already contract with; `contract` tells you which, so you can show "Connected" rather
@@ -334,13 +338,16 @@ endpoint; `cod.threshold` has `/cod-limit`.
 | `400` | `CONTRACT_COVERAGE_REGION_INVALID` | A `coverage.regions` entry is not a region of your country. `details: { invalid, requiredCountry, allowedRegions }` |
 | `404` | `AGENT_NOT_FOUND` | `agentId` does not resolve to an agent |
 | `409` | `AGENT_MEMBERSHIP_ALREADY_EXISTS` | A live contract with you already exists. `details: { status, contractId }` |
-| `422` | `AGENT_KYC_NOT_VERIFIED` | `details: { kycStatus, hint }` |
 | `403` | `AGENT_PLATFORM_BANNED` | A platform ban overrides every contract |
 | `400` | `VALIDATION_ERROR` | `agentId` missing or not a valid ObjectId |
 
 > The agent's relationship cap and COD headroom are **not** checked here — a request may always be
 > raised, and it is *approval* that binds. Refusing at request time would hide the queue from the
 > agent and give them nothing to act on.
+>
+> ⚠ **`422 AGENT_KYC_NOT_VERIFIED` is no longer returned here (removed 2026-09-27)** — an unverified
+> agent may hold a contract. The code now comes only from COD offer / accept / reassign; see
+> [shipments.md](./shipments.md).
 
 ---
 
@@ -405,7 +412,8 @@ is working today. Filter by `status`, or use `GET /eligible`, for the live view.
         "vehicleInfo": { "vehicle_type": "bike", "plate_number": "LT-4412", "color": "red" },
         "availability": "online",
         "workingState": "idle",
-        "activeShipmentCount": 0,
+        "activeShipmentCount": 3,
+        "activeShipmentsForYou": 1,
         "trackingAllowed": true,
         "trustScore": 92,
         "verified": true
@@ -422,6 +430,15 @@ is working today. Filter by `status`, or use `GET /eligible`, for the live view.
 > resolved file object or `null`; the list omits the key rather than reporting `photo: null` for a
 > file it never looked up. `color` is a lowercase English token — see
 > [agent/profile.md](../agent/profile.md) for the palette and render your own localized label.
+
+`agent.activeShipmentCount` is **everything the agent is carrying right now, for every agency they
+serve**. That is deliberate: it tells you how busy they really are before you give them more work.
+It is only a count and never shows which other agencies are involved. `agent.activeShipmentsForYou`
+(added 2026-09-27) is the part of that total that is **yours**, counted with the same statuses, so
+it is never more than the total. The same two fields appear on `GET /agents/eligible`.
+
+`agent.trustScore` is the **effective** score: an administrator's pinned value when there is one,
+and the computed score otherwise. It is the same number the agent sees in their own app.
 
 `agent.verified` is the platform's KYC verdict (`kyc.status === "verified"`) — render a verified
 badge beside the name. It is **not** always `true` on a roster: a contract outlives a verification
@@ -470,10 +487,12 @@ rejects an amount above it with `CONTRACT_SETTLEMENT_EXCEEDS_OUTSTANDING`.
 | `404` | `CONTRACT_NOT_FOUND` | Unknown, or not on your roster |
 | `403` | `CONTRACT_TRANSITION_NOT_PERMITTED` | **Your** terms are the ones standing — the agent answers them. `details: { transition, party, proposer, hint }` (`proposer`, **not** `initiator`) |
 | `409` | `CONTRACT_INVALID_TRANSITION` | Not `pending` any more. `details: { transition, from, allowedFrom }` |
-| `422` | `AGENT_KYC_NOT_VERIFIED` | Re-checked **here**, not at request time |
-| `403` | `AGENT_PLATFORM_BANNED` | Likewise |
+| `403` | `AGENT_PLATFORM_BANNED` | Re-checked **here**, not at request time |
 | `422` | `AGENT_MEMBERSHIP_LIMIT_REACHED` | The agent is at their agency cap. `details: { current, max }` |
-| `422` | `CONTRACT_COD_THRESHOLD_EXCEEDS_HEADROOM` | The slice does not fit the agent's pool |
+| `422` | `CONTRACT_COD_THRESHOLD_EXCEEDS_HEADROOM` | The slice does not fit the agent's pool. **Never for an unverified agent** (since 2026-09-27): their slice is accepted and stays dormant until verification |
+
+> ⚠ `422 AGENT_KYC_NOT_VERIFIED` was listed here until 2026-09-27 and is **no longer returned** —
+> approving an unverified agent succeeds.
 
 ---
 
@@ -709,6 +728,13 @@ the default.
 `headroomAfter` reports what is left of the agent's pool, so you learn your room without a second
 request.
 
+> **Unverified agent — the slice is DORMANT (since 2026-09-27).** The pool-headroom check is skipped
+> while the agent's KYC is not `verified` (their pool is 0), so any threshold inside the per-contract
+> bounds is accepted — but it grants no cash: every COD shipment to that agent is refused with
+> `422 AGENT_KYC_NOT_VERIFIED` until an administrator verifies them. On verification the pool opens
+> to their plan's value; if the slices across their agencies exceed it, the exposure gate binds at
+> the pool rather than at your slice. Show "inactive until the agent is verified" beside the value.
+
 **Error Responses**:
 
 | Status | Code | Description |
@@ -866,7 +892,6 @@ objects (the `agent` shape from `GET /`).
     "reasons": ["not_available", "at_capacity"],
     "rules": [
       { "rule": "platform_ban", "passed": true, "reason": null, "observed": { "banned": false, "reason": null } },
-      { "rule": "kyc", "passed": true, "reason": null, "observed": { "kycStatus": "verified" } },
       { "rule": "active", "passed": true, "reason": null, "observed": { "status": "active" } },
       { "rule": "approved", "passed": true, "reason": null, "observed": { "contractStatus": "active" } },
       { "rule": "available", "passed": false, "reason": "not_available", "observed": { "availability": "on_break" } },
@@ -894,9 +919,14 @@ objects (the `agent` shape from `GET /`).
 one at a time. `observed` shows what each rule actually saw, so a denial is explainable without
 re-running anything.
 
-**Reasons**: `agent_not_found`, `platform_banned`, `kyc_not_verified`, `agent_not_active`,
+**Reasons**: `agent_not_found`, `platform_banned`, `agent_not_active`,
 `membership_not_approved`, `not_available`, `tracking_not_allowed`, `device_location_disabled`,
 `device_location_unknown`, `at_capacity`.
+
+> ⚠ **`kyc_not_verified` and the `kyc` rule were removed 2026-09-27.** An unverified agent is
+> eligible for prepaid work. KYC now refuses **COD shipments only**, at assignment time: offering,
+> accepting or reassigning a COD shipment to an unverified agent fails `422 AGENT_KYC_NOT_VERIFIED`
+> (`details: { kycStatus, hint }`), and auto-assignment never picks them for one.
 
 The same rules are enforced when you call
 [`PATCH /api/agency/shipments/:id/assign-agent`](./shipments.md), which fails with
@@ -1183,6 +1213,11 @@ interface AgentDirectoryItemDto {
   avatar: FileDetail | null;
   vehicleType: 'bike' | 'car' | 'van' | 'truck' | null;
   homeBase: { label: string | null; coordinates: [number, number] | null; serviceRadiusKm: number | null };
+  /**
+   * 0–100, the EFFECTIVE score: an administrator's pinned override when there is one, else the
+   * computed composite. The same number the agent sees on /api/agent/cod/balance (fixed
+   * 2026-09-27 — the roster and directory used to show the raw composite, so the two disagreed).
+   */
   trustScore: number;
   kycVerified: boolean;
   availability: 'online' | 'offline' | 'on_break';

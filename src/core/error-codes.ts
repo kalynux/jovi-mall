@@ -1371,8 +1371,9 @@ export const ERROR_CODES = Object.freeze({
      *
      * Not in ADR-A02, and added because the anonymisation makes an in-flight delivery
      * undeliverable rather than merely untidy: `CashCollectionService.notifyCodeIssued`
-     * sends the COD delivery code to `Customer.phone`, which closure clears, and the
-     * messaging connections that carry every other delivery notification are deleted. The
+     * sends the COD delivery code on the customer's notification channel (since 2026-09-27;
+     * before, to `Customer.phone`, which closure clears), and closure deletes the messaging
+     * connections that carry it and every other delivery notification. The
      * agent arrives at an address holding a parcel the recipient can no longer be given a
      * code for.
      *
@@ -1713,6 +1714,8 @@ export const ERROR_CODES = Object.freeze({
     BOOKING_BALANCE_PAYMENT_IN_PROGRESS: 'BOOKING_BALANCE_PAYMENT_IN_PROGRESS',
     /** The booking must be completed before its balance can be settled. */
     BOOKING_NOT_COMPLETED: 'BOOKING_NOT_COMPLETED',
+    /** Owed, but not payable yet — the shop has not accepted it (bookings phase 6, the list's Pay). */
+    BOOKING_NOT_PAYABLE_NOW: 'BOOKING_NOT_PAYABLE_NOW',
     /** An active booking already overlaps the requested interval (commit-time race). */
     BOOKING_SLOT_UNAVAILABLE: 'BOOKING_SLOT_UNAVAILABLE',
     /** The booking is past the point where it can be cancelled by its owner. */
@@ -1758,7 +1761,6 @@ export const ERROR_CODES = Object.freeze({
     EARNINGS_PAYOUT_METHOD_MISSING: 'EARNINGS_PAYOUT_METHOD_MISSING',
     EARNINGS_PAYOUT_NO_AVAILABLE_BALANCE: 'EARNINGS_PAYOUT_NO_AVAILABLE_BALANCE',
     EARNINGS_PAYOUT_BELOW_MINIMUM: 'EARNINGS_PAYOUT_BELOW_MINIMUM',
-    EARNINGS_PAYOUT_UNVERIFIED_CAP_REACHED: 'EARNINGS_PAYOUT_UNVERIFIED_CAP_REACHED',
     EARNINGS_PAYOUT_REQUEST_NOT_FOUND: 'EARNINGS_PAYOUT_REQUEST_NOT_FOUND',
     EARNINGS_PAYOUT_REQUEST_NOT_PENDING: 'EARNINGS_PAYOUT_REQUEST_NOT_PENDING',
 

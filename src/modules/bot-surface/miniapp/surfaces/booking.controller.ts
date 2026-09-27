@@ -8,9 +8,12 @@ import { inAppSurfaceStore } from '../../services/inapp-surface.store';
 import { bookingChatReceipt } from '../../domain/bot-booking-copy';
 import { botChrome } from '../../domain/bot-chrome-copy';
 import { openSurfaceActionId } from '../../domain/bot-action-id';
+import { toBotCopyLanguage } from '../../domain/bot-error-copy';
+import { __IN_APP_SCREEN_PATH } from '../../domain/inapp-url';
 import {
     BookingConfirmed,
     confirmBooking,
+    openPaymentFromList,
     payBooking,
     readBookingPayment,
     readBookingPicker,
@@ -94,6 +97,19 @@ export class BookingScreensController {
         sendSuccess(res, outcome, { status: 201 });
     });
 
+    /**
+     * `POST /api/bot/miniapp/s/bl/:handle/pay` — **Pay** on a row: open that appointment's
+     * payment screen. Answers a SAME-ORIGIN path, for the reason `ProductListingController.open`
+     * gives: it is followed inside the page that asked, never sent anywhere.
+     */
+    static openPay = asyncHandler(async (req: Request, res: Response) => {
+        const body = (req.body ?? {}) as { bookingId?: unknown };
+        const opened = await openPaymentFromList(String(req.params.handle ?? ''), { bookingId: body.bookingId });
+        sendSuccess(res, {
+            url: `${__IN_APP_SCREEN_PATH}/bp/${opened.handle}?lang=${toBotCopyLanguage(opened.language)}`,
+        });
+    });
+
     /** `GET /api/bot/miniapp/s/bp/:handle/data` — what is owed, re-resolved now. Repeatable. */
     static payData = asyncHandler(async (req: Request, res: Response) => {
         sendSuccess(res, await readBookingPayment(String(req.params.handle ?? '')));
@@ -128,13 +144,23 @@ async function sessionOf<K extends 'bl' | 'bk'>(kind: K, req: Request) {
 }
 
 /**
- * Say in the conversation what just happened.
+ * Say in the conversation what just happened — on BOTH chat apps.
  *
- * ⚠ **Telegram only, and the WhatsApp half is stated rather than hidden.** A Mini App page is a
- * Telegram control; on WhatsApp these screens are Flows, and a completed Flow comes back through
- * the ordinary reply renderer — which says a deliberately content-free sentence there, because a
- * completion is a fresh inbound whose payload is caller-supplied and must not be echoed. The same
- * split `ticket-form.controller.ts` already carries.
+ * ⛔ **This used to return early for WhatsApp, on the premise that "on WhatsApp these screens are
+ * Flows". The premise was false**: the booking Flows are unpublished, and a WhatsApp customer
+ * reaches this page as a web page inside WhatsApp — so they confirmed a time and the chat said
+ * NOTHING. `pushIntoConversation` in `bot-purchase.controller.ts` corrected the same premise on
+ * 2026-09-22. And since the platform's own "booking created" message is no longer sent for a
+ * booking made in a chat (owner, 2026-09-27), this receipt is now the ONLY confirmation.
+ *
+ * ⚠ **The full receipt is safe on WhatsApp here**, unlike after a Flow: this request is the page's
+ * own, authenticated by a server-held session, so the reference and time are this customer's. The
+ * content-free sentence (`bookingChatAcknowledgement`) stays for a FLOW completion, whose payload
+ * is caller-supplied.
+ *
+ * ⚠ **Plain service message, inside the 24-hour window** — the customer tapped a button in this
+ * chat minutes ago. The messaging service still enforces the window; outside it the send is
+ * refused and logged, never retried as a template.
  */
 async function pushReceipt(
     channel: string,
@@ -142,15 +168,39 @@ async function pushReceipt(
     language: string | null,
     outcome: BookingConfirmed,
 ): Promise<void> {
+    const text = bookingChatReceipt(
+        { moved: outcome.moved, awaitingShop: outcome.awaitingShop },
+        { reference: outcome.reference, when: outcome.when, service: outcome.service },
+        language,
+    );
+    const myBookings = { label: botChrome('myBookingsButton', language), token: openSurfaceActionId('bl') };
+
+    if (channel === 'whatsapp') {
+        try {
+            /**
+             * Lazily imported, as `pushIntoConversation` does: the WhatsApp stack builds its
+             * provider on load and throws when unconfigured, which must not take this page down.
+             */
+            const { WhatsAppServiceMessenger } = await import('../../../whatsapp/services/whatsapp-service-messenger');
+            const sent = await new WhatsAppServiceMessenger().sendButtons({
+                to: externalId,
+                body: text,
+                buttons: [{ id: myBookings.token, title: myBookings.label }],
+            });
+            if (!sent.success) {
+                console.warn(`[BookingScreens] WhatsApp receipt refused: ${sent.error?.code ?? 'unknown'}`);
+            }
+        } catch (error) {
+            console.error('[BookingScreens] WhatsApp receipt push failed:', error);
+        }
+        return;
+    }
+
     if (channel !== 'telegram') return;
     try {
         await telegramBotService.sendMessage(
             externalId,
-            bookingChatReceipt(
-                { moved: outcome.moved, awaitingShop: outcome.awaitingShop },
-                { reference: outcome.reference, when: outcome.when, service: outcome.service },
-                language,
-            ),
+            text,
             {
                 /**
                  * ⚠ **The button and its handler landed together, button last.** `open:bl` is
@@ -164,8 +214,8 @@ async function pushReceipt(
                  * content-free sentence and still be useful.
                  */
                 buttons: [{
-                    text: botChrome('myBookingsButton', language),
-                    callbackData: openSurfaceActionId('bl'),
+                    text: myBookings.label,
+                    callbackData: myBookings.token,
                 }],
             },
         );

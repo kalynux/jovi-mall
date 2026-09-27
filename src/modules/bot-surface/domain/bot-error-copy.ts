@@ -537,6 +537,39 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         es: 'No hay nada pendiente en esa cita.',
         ar: 'لا يوجد أي مبلغ مستحق على هذا الحجز.',
     },
+    // The other three "nothing to pay" refusals (bookings phase 6). A booking's Pay button
+    // outlives the state it was drawn for — "Try again" under last week's failure, tapped after
+    // the appointment was paid or cancelled — and the category fallbacks ("check what you
+    // sent" / "let me check and try again") both invite a retry that cannot succeed.
+    [ERROR_CODES.BOOKING_BALANCE_ALREADY_SETTLED]: {
+        en: 'The balance on that appointment is already paid. There is nothing left to pay.',
+        fr: "Le solde de ce rendez-vous est déjà payé. Il n'y a plus rien à régler.",
+        pt: 'O saldo desse agendamento já está pago. Não há mais nada a pagar.',
+        es: 'El saldo de esa cita ya está pagado. No queda nada por pagar.',
+        ar: 'تم دفع الرصيد المستحق على هذا الحجز بالفعل. لا يوجد ما يستوجب الدفع.',
+    },
+    // Owed, but the shop has not accepted the appointment yet — paying now could mean a refund.
+    [ERROR_CODES.BOOKING_NOT_PAYABLE_NOW]: {
+        en: 'The shop has not accepted that appointment yet. You can pay once they do — I will tell you.',
+        fr: "Le salon n'a pas encore accepté ce rendez-vous. Vous pourrez payer dès qu'il l'aura fait — je vous préviendrai.",
+        pt: 'A loja ainda não aceitou essa marcação. Poderá pagar assim que aceitar — eu aviso.',
+        es: 'La tienda todavía no ha aceptado esa cita. Podrás pagar en cuanto lo haga — te avisaré.',
+        ar: 'لم يقبل المتجر هذا الموعد بعد. يمكنك الدفع بمجرد أن يقبله — سأخبرك.',
+    },
+    [ERROR_CODES.PAYMENT_BOOKING_CANCELLED]: {
+        en: 'That appointment was cancelled, so there is nothing to pay.',
+        fr: "Ce rendez-vous a été annulé, il n'y a donc rien à payer.",
+        pt: 'Esse agendamento foi cancelado, por isso não há nada a pagar.',
+        es: 'Esa cita se canceló, así que no hay nada que pagar.',
+        ar: 'تم إلغاء هذا الحجز، لذلك لا يوجد ما يستوجب الدفع.',
+    },
+    [ERROR_CODES.PAYMENT_BOOKING_NO_PAYMENT_REQUIRED]: {
+        en: 'That appointment does not need paying in advance. There is nothing to pay.',
+        fr: "Ce rendez-vous n'a pas besoin d'être payé à l'avance. Il n'y a rien à payer.",
+        pt: 'Esse agendamento não precisa de ser pago antecipadamente. Não há nada a pagar.',
+        es: 'Esa cita no necesita pagarse por adelantado. No hay nada que pagar.',
+        ar: 'لا يحتاج هذا الحجز إلى الدفع مسبقًا. لا يوجد ما يستوجب الدفع.',
+    },
     // ── Retryable machinery ──────────────────────────────────────────────────
     // The three idempotency refusals are the automation layer's business, not the
     // customer's — but if one does reach a chat window it must not read as a rejection of

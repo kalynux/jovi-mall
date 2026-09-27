@@ -10,9 +10,14 @@ against `domain/kyc-subject.ts`; the payload against `dto/kyc.dto.ts`; the lock 
 Base path: **`/api/agent/kyc`**
 
 The documents an administrator looks at when deciding whether to verify the agent — **and this
-is the verdict that decides whether the agent can work at all.** Dispatch eligibility passes only
-on `kyc.status === 'verified'`, so an unverified agent is offered nothing, however online and
-available they are.
+is the verdict that decides whether the agent may carry cash on delivery.**
+
+> ⚠ **Changed 2026-09-27 (owner decision): verification is a trust badge, not a licence to work.**
+> An unverified agent can contract with agencies, appears in the agency directory, and is offered
+> and assigned **prepaid** deliveries like anyone else. What verification unlocks is **COD**: while
+> `kyc.status !== 'verified'` the agent's COD pool is 0, any COD slice an agency sets on their
+> contract stays dormant, and every COD shipment is refused (`422 AGENT_KYC_NOT_VERIFIED`). Until
+> that date dispatch eligibility required `verified` and an unverified agent was offered nothing.
 
 Before this existed, the whole of that decision rested on a national ID **number** the agent
 typed in, plus `kyc.reference` — a free-text note an *administrator* had written themselves. The
@@ -44,8 +49,9 @@ pre-filled rejection reason. A backend that refused an incomplete submission wou
 away the only useful outcome of a review: a human telling the agent what is missing.
 
 **What that means for your UI.** You own the "you still need X" guidance — and here it matters
-more than for the other two roles, because until this is approved the agent earns nothing. Show
-the checklist prominently; let them submit anyway if they insist.
+more than for the other two roles, because until this is approved the agent cannot carry cash
+on delivery (since 2026-09-27 they can still take prepaid work — do not tell them they earn
+nothing). Show the checklist prominently; let them submit anyway if they insist.
 
 ### What the administrator checks
 
@@ -96,7 +102,7 @@ form:
 |---|---|---|---|
 | `unverified` | `null` | `false` | Draft. Nobody has looked. Edit freely. |
 | `pending` | set | `true` | Under review. Every write answers `409 KYC_LOCKED`. |
-| `verified` | set | `true` | Approved — the agent can now be dispatched. Frozen for good; changing a document is a support request. |
+| `verified` | set | `true` | Approved — the agent may now carry cash on delivery (their COD pool opens at their plan's value). Frozen for good; changing a document is a support request. |
 | `rejected` | set | `false` | Refused. `rejectionReason` says why; edit and submit again. |
 
 An agent's enum has a distinct `unverified` draft value, so — unlike a vendor or an agency —
@@ -106,8 +112,10 @@ queue filters on.
 Resubmitting clears `rejectionReason` and re-stamps `submittedAt`. The **verdict** stays
 `rejected` until an administrator moves it — an agent cannot verify themselves.
 
-> ⚠ Moving an agent **off** `verified` makes them undispatchable immediately. It does not touch
-> their contracts, and shipments they are already carrying are unaffected.
+> ⚠ Moving an agent **off** `verified` closes their COD pool to 0 and refuses them new COD
+> shipments immediately; prepaid work continues (since 2026-09-27 — before, it made them
+> undispatchable altogether). It does not touch their contracts, and shipments they are already
+> carrying are unaffected.
 
 ---
 

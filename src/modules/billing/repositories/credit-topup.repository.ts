@@ -23,7 +23,7 @@ export class CreditTopupRepository {
   ): Promise<ICreditTopup | null> {
     return CreditTopupModel.findByIdAndUpdate(
       id,
-      { $set: { status, ...updates } },
+      { $set: { status, ...updates, ...(status === 'paid' ? { paid_at: new Date() } : {}) } },
       { new: true, session: session ?? null }
     );
   }

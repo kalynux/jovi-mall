@@ -67,10 +67,23 @@ still an **estimate**: `fee_split` is read live again at split time, so renegoti
 changes what is actually paid. It reads `agencyEarningUnavailable: "no_agent"` until an agent
 accepts — there is no cut to subtract before then.
 
-**If the shipment comes back** (`returned`), the run happened but the delivery did not: the agency
-earns its `policies.pricing.additional_fees.rto_fee` instead of the full delivery fee (capped at
-that fee), the agent takes their contracted share of *that*, and the unused remainder is returned
-to the vendor.
+**Since 2026-09-27, the estimate becomes the real figure once the delivery is paid.** When the
+split has run, the block carries `estimated: false` and an `allocationStatus` (`held`,
+`released` or `reversed`). From then on, `amount`, `agentCut`, `earnedFee` and `codHandlingFee`
+are **read from the entries actually written**, not computed again. A shipment of an agent
+whose contract has since ended now shows those real figures too; before this change it quoted
+the whole fee as yours.
+
+**If the shipment comes back** (`returned`), the run happened but the delivery did not.
+
+- **Online-paid (prepaid) order:** the agency earns its
+  `policies.pricing.additional_fees.rto_fee` instead of the full delivery fee (capped at that
+  fee). The agent takes their contracted share of *that*, and the unused remainder is returned
+  to the vendor.
+- **Cash-on-delivery order:** ⚠ **the agency earns nothing on a returned shipment.** No cash was
+  collected, the collection is cancelled, and no earnings entry is written, so there is no RTO
+  fee, no agent share and no COD fee. Until 2026-09-27 the estimate on such a row wrongly showed
+  the RTO fee plus a COD fee. It now shows `0`.
 
 ---
 
@@ -131,50 +144,20 @@ balance.
 | `pending` | `number` | Sum of fees from paid/collected-but-not-yet-released entries (still within the hold window, or COD cash not yet settled). Minor currency units. |
 | `available` | `number` | Sum of fees whose hold window has elapsed (and, for COD, whose cash was settled). Withdrawable via a payout request (see below). Minor currency units. |
 | `reserve` | `number` | COD rolling reserve: a slice of released COD earnings parked for 30 days, releasing only while the agency has no open cash discrepancies. Minor currency units. |
-| `payoutAllowance` | `object|null` | `null` unless a payout limit applies — see below. |
+| `payoutAllowance` | `null` | **Always `null`** since 2026-09-27 — deprecated, no limit applies. See below. |
 | `requested` | `number` | Earmarked for a pending payout request (see below). Minor currency units. |
 | `currency` | `string` | Currency code for all balances. |
 
-### `payoutAllowance` — the limit on unverified accounts
+### `payoutAllowance` — retired, always `null`
 
-⚠ **`null` means NO LIMIT, never a limit of zero.** It is `null` for a verified account and on
-any deployment with the feature switched off, which is the default — so this is the normal case.
-A client that renders `remaining: 0` out of a missing object tells every verified owner they
-cannot withdraw.
+⚠ **Always `null` since 2026-09-27, and deprecated.** From 2026-09-15 this could carry a limit on
+how much an account whose KYC was not verified could withdraw per rolling window. That limit was
+**deleted** (owner decision: *"we should not block someone's money just because he is not
+verified"*) — an unverified account now withdraws its whole `available` balance exactly like a
+verified one. The key is kept only so existing clients do not break.
 
-When a limit does apply:
-
-```json
-"payoutAllowance": {
-  "cap": 20000,
-  "used": 15000,
-  "remaining": 5000,
-  "windowDays": 30,
-  "resetsAt": "2026-10-01T12:00:00.000Z"
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `cap` | `number` | The most that may be withdrawn per window while KYC is unverified. Minor currency units. |
-| `used` | `number` | Already **paid** inside the window. |
-| `remaining` | `number` | What is left. **The next payout is capped at this**, not at `available`. |
-| `windowDays` | `number` | Length of the rolling window (default 30). |
-| `resetsAt` | `string\|null` | ISO-8601. When the **first** tranche frees up — ⚠ **not** when the whole cap returns, so do not promise the full allowance on this date. `null` when nothing is counted. |
-
-⚠ **The window is ROLLING, not calendar.** There is no 1st-of-the-month reset to wait for; the
-oldest payout simply ages out. A calendar reset would let twice the cap leave inside 48 hours
-across a month boundary, which is the burst the limit exists to prevent.
-
-⚠ **Only PAID payouts count.** A rejected request returned the money to `available` and is not
-charged against the allowance — nobody is billed for an administrator's decision.
-
-⚠ **Show `remaining` next to `available` whenever it is present.** Otherwise the owner requests a
-payout, receives a fraction of their balance, and nothing on the screen explains why.
-
-✅ **Verification removes the limit entirely.** Surface that as the remedy — it is the only one
-besides waiting.
-
+`null` means **no limit**, never a limit of zero. Do not render a withdrawal limit, a "remaining"
+figure or a "get verified to withdraw more" prompt from it; new clients should ignore the field.
 
 **Error Responses**:
 - `401` – `AUTH_MISSING_TOKEN` / `AUTH_TOKEN_EXPIRED` / `AUTH_TOKEN_INVALID` – Missing, expired or malformed token. ⚠ **There is no bare `UNAUTHORIZED` code in the registry.**
@@ -193,7 +176,8 @@ push — see [Notifications](./notifications.md)) and can always track progress 
 ticket.
 
 - **Full balance only** — there's no partial-amount option; each request takes everything currently
-  `available`. ⚠ **One exception since 2026-09-15:** when `payoutAllowance` is present the request takes `min(available, payoutAllowance.remaining)` instead, and the rest stays available. The requester still names no amount — the allowance does.
+  `available` — whether or not your account is verified. (From 2026-09-15 to 2026-09-27 an
+  unverified account could be limited to an allowance; that limit no longer exists.)
 - **Minimum 10,000 XAF** — `available` must be at least this much to request a payout
   (`EARNINGS_CONFIG.MIN_PAYOUT_AMOUNT`); below it you'll get `409 EARNINGS_PAYOUT_BELOW_MINIMUM`.
 - **One request at a time** — you can't open a second request while one is still `pending`
@@ -252,11 +236,10 @@ Check `origin` on the request (see below) to tell manual (`"manual"`) from autom
 - `409` – `EARNINGS_PAYOUT_METHOD_MISSING` – No payout method configured yet.
 - `409` – `EARNINGS_PAYOUT_NO_AVAILABLE_BALANCE` – `available` is `0` — nothing to request.
 - `409` – `EARNINGS_PAYOUT_BELOW_MINIMUM` – `available` is below the 10,000 XAF minimum.
-- `409` – `EARNINGS_PAYOUT_UNVERIFIED_CAP_REACHED` – the payout allowance for unverified
-  accounts is spent, or what is left of it is under the minimum. `details` carries `cap`, `used`,
-  `remaining`, `windowDays`, `resetsAt` and a `reason` of `allowance_spent` or
-  `remainder_below_minimum`. ⚠ **Retrying does not help** — the remedies are verification, or
-  waiting until `resetsAt`. Say which, using `reason`.
+
+> ⚠ `409 EARNINGS_PAYOUT_UNVERIFIED_CAP_REACHED` was listed here from 2026-09-15 and was **removed
+> 2026-09-27** together with the unverified-account allowance. The code no longer exists; remove
+> any handling for it.
 
 ### GET /api/agency/earnings/payout
 

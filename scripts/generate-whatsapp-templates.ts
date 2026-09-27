@@ -55,7 +55,13 @@ import {
     renderCustomerWhatsAppTemplateParams,
     renderCustomerButton,
     renderCustomerChannelText,
+    customerTemplateQuickReplyLabels,
 } from '../src/modules/notifications/catalog/customer-notification-catalog';
+import { CustomerNotificationType } from '../src/modules/notifications/models/customer-notification.model';
+import {
+    DELIVERY_CODE_TEMPLATE_NAME,
+    COPY_CODE_LABEL,
+} from '../src/modules/cod/domain/delivery-code-copy';
 import {
     AGENCY_NOTIFICATION_CATALOG,
     agencyWhatsAppTemplateName,
@@ -156,6 +162,12 @@ interface Row {
     bodies: Partial<Record<Lang, string>>;
     paramCount: number;
     hasUrlButton: boolean;
+    /**
+     * Quick-reply button labels, in template order, AFTER the URL button. Customer rows only —
+     * read from `customerTemplateQuickReplyLabels`, the same groups the send path fills with
+     * payloads, so the approved template and the send cannot disagree on count or order.
+     */
+    quickReplyLabels: Array<Record<string, string>>;
     /** Sentinels in the copy that the send does NOT pass — a real defect, reported per row. */
     unsuppliedValues: string[];
 }
@@ -169,12 +181,20 @@ type ButtonFn = (s: string, lang: Lang, ctx: Record<string, string>, base?: stri
 function collect(
     audience: string,
     catalog: Record<string, unknown>,
-    nameOf: (s: string) => string,
+    nameOf: (s: string) => string | null,
     textOf: TextFn,
     paramsOf: ParamFn,
     buttonOf: ButtonFn,
 ): void {
     for (const situation of Object.keys(catalog)) {
+        /**
+         * ⛔ A situation that names NO template is in-window-only by decision (the customer
+         * catalogue's `IN_WINDOW_ONLY_SITUATIONS`, asserted at boot) — there is nothing to
+         * submit. Emitting a row for it wrote a payload named `null` and failed this run on
+         * its copy.
+         */
+        const name = nameOf(situation);
+        if (!name) continue;
         const params = safe(() => paramsOf(situation, 'en', SENTINEL), [] as string[]);
         const bodies: Partial<Record<Lang, string>> = {};
         const unsupplied = new Set<string>();
@@ -215,10 +235,13 @@ function collect(
         rows.push({
             audience,
             situation,
-            name: nameOf(situation),
+            name,
             bodies,
             paramCount: params.length,
             hasUrlButton: Boolean(safe(() => buttonOf(situation, 'en', SENTINEL, 'https://wi-mall.com'), null)),
+            quickReplyLabels: audience === 'customer'
+                ? customerTemplateQuickReplyLabels(situation as CustomerNotificationType)
+                : [],
             unsuppliedValues: [...unsupplied],
         });
     }
@@ -450,18 +473,31 @@ function payloadFor(row: Row, lang: Lang) {
             : {}),
     }];
 
+    /**
+     * ⚠ **URL first, then the quick replies, consecutively.** Meta rejects alternating button
+     * types, and the send path numbers the quick replies from 1 because the URL button is 0.
+     */
+    const quickReplies = row.quickReplyLabels.map(label => ({
+        type: 'QUICK_REPLY',
+        text: label[lang] ?? label.en,
+    }));
+
+    if (!row.hasUrlButton && quickReplies.length > 0) {
+        components.push({ type: 'BUTTONS', buttons: quickReplies });
+    }
+
     if (row.hasUrlButton) {
         const base = buttonBase(row.audience);
         components.push({
             type: 'BUTTONS',
-            buttons: [{
+            buttons: [...[{
                 type: 'URL',
                 text: BUTTON_LABEL[row.name]?.[lang] ?? (lang === 'fr' ? 'Ouvrir' : 'Open'),
                 // The approved URL is host + ONE placeholder; the service sends the whole path
                 // after the host, locale prefix included (`whatsappSuffix`, not `urlSuffix`).
                 url: `${base}/{{1}}`,
                 example: [`${base}/${lang}/${BUTTON_EXAMPLE_PATH[row.audience] ?? BUTTON_EXAMPLE_PATH.customer}`],
-            }],
+            }], ...quickReplies],
         });
     }
 
@@ -618,10 +654,45 @@ const fallbackPayloads = LANGS.map(lang => ({
     ],
 }));
 
+/**
+ * The cash-on-delivery code — the second entry NOT derived from a notification catalog.
+ *
+ * ⛔ **It was sent for months and never submitted.** `DeliveryCodeService` asked Meta for
+ * `cod_delivery_code` whenever the free message was refused for the 24-hour window, and no
+ * catalog held it, so this generator never emitted it and no run ever submitted it. Found
+ * 2026-09-27 by the template-name parity guard in `test:customer-notifications`.
+ *
+ * Not a catalog situation because the code is a credential: a situation writes an inbox row
+ * and feeds the bot's `recentlySent`. The body comes from `delivery-code-copy.ts`, the same
+ * function the send reads its parameter order from.
+ *
+ * ⛔ **AUTHENTICATION, under a new name — Meta decided it, twice.** As UTILITY (`cod_delivery_code`)
+ * it was REJECTED 2026-09-27 as `INCORRECT_CATEGORY`, first with the code in the body and then
+ * without it: to Meta a message whose purpose is a code is authentication. A category cannot be
+ * edited, so this is `wi_mall_delivery_code`. The body is Meta's fixed sentence (no `text`);
+ * `add_security_recommendation` is FALSE because Meta's line is "do not share this code" and this
+ * code must be given to the agent; no expiry footer, because it does not expire in minutes.
+ * `delivery-code-copy.ts` holds the full reasoning.
+ */
+const deliveryCodePayloads = LANGS.map(lang => ({
+    name: DELIVERY_CODE_TEMPLATE_NAME,
+    language: META_LANGUAGE_CODE[lang],
+    category: 'AUTHENTICATION',
+    components: [
+        // No `text`: Meta owns and localises an authentication body.
+        { type: 'BODY', add_security_recommendation: false },
+        {
+            type: 'BUTTONS',
+            buttons: [{ type: 'OTP', otp_type: 'COPY_CODE', text: COPY_CODE_LABEL[lang as Language] ?? COPY_CODE_LABEL.en }],
+        },
+    ],
+}));
+
 const payloads = [
     ...rows.flatMap(row => LANGS.map(lang => payloadFor(row, lang))),
     ...authPayloads,
     ...fallbackPayloads,
+    ...deliveryCodePayloads,
 ];
 const defective = rows.filter(r => r.unsuppliedValues.length > 0);
 
@@ -630,7 +701,9 @@ writeFileSync(OUT, JSON.stringify({
     generatedAt: new Date().toISOString(),
     note: 'GENERATED from the notification catalogs by scripts/generate-whatsapp-templates.ts. Do not hand-edit: names, placeholder counts and placeholder ORDER are derived from the same functions the send path uses, and editing them here makes the approved template disagree with what is sent.',
     languages: LANGS.map(l => META_LANGUAGE_CODE[l]),
-    templateCount: rows.length + 1,
+    // Distinct NAMES actually written. It was `rows.length + 1`, which forgot the second OTP name
+    // and read 104 beside 105 — a count asserted nowhere and wrong by construction.
+    templateCount: new Set(payloads.map(p => p.name)).size,
     submissionCount: payloads.length,
     needsCopyReview: defective.map(r => ({ name: r.name, unsuppliedValues: r.unsuppliedValues })),
     payloads,

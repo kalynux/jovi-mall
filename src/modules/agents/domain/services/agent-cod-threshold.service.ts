@@ -81,6 +81,18 @@ export interface ThresholdAllocation {
  * and a direct write would be silently undone by the next sync — so every write
  * moved to `AgentCodPoolService`, and this service only reads the pool it
  * sub-allocates.
+ *
+ * ── An unverified agent's slice is DORMANT (owner decision, 2026-09-27) ─────
+ *
+ * An unverified agent may hold a contract, and that contract may carry the COD
+ * threshold the two sides agreed. The headroom check is skipped for them —
+ * their pool is 0 until verified, so enforcing it would force every agency to
+ * write 0 now and come back after the verdict. The slice gives them nothing
+ * meanwhile: `CodExposureService` refuses every COD shipment to an unverified
+ * agent on KYC before it reads any limit. On verification the pool opens to
+ * the plan value, and if the dormant slices sum to more than that, the
+ * exposure gate binds at the pool (`poolBinds`) and `overAllocatedBy` reports
+ * it — the same state a plan downgrade already produces.
  */
 export class AgentCodThresholdService {
   constructor(
@@ -138,7 +150,8 @@ export class AgentCodThresholdService {
 
   /**
    * Validate a contract threshold against BOTH bounds — the absolute per-contract
-   * cap and the agent's remaining headroom.
+   * cap and the agent's remaining headroom. The headroom half is skipped while the
+   * agent is unverified: the slice is dormant (see the class header).
    *
    * Must be called inside the caller's transaction with its session, so the
    * headroom read and the write that depends on it cannot be interleaved by a
@@ -161,6 +174,10 @@ export class AgentCodThresholdService {
         max: AGENT_CONFIG.CONTRACT_COD_THRESHOLD_MAX,
       });
     }
+
+    const agent = await this.agents.findById(agentId, session);
+    if (!agent) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
+    if (agent.kyc?.status !== 'verified') return;
 
     const headroom = await this.headroomFor(agentId, contractId, session);
     if (threshold > headroom) {

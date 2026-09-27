@@ -47,7 +47,20 @@ export type CommandHandlerKey =
      */
     | 'bus:login'
     | 'bus:reset_password'
-    | 'bus:connect';
+    | 'bus:connect'
+    /**
+     * `screen:*` opens an in-app screen for the caller. ⚠ **The router cannot mint one** — a
+     * screen session is bound to the resolved caller and the conversation, which only the
+     * request carries — so it answers `open_screen` and the bot-surface controller opens it
+     * through the SAME function the matching tap uses (`/bookings` and `open:bl` cannot drift).
+     */
+    | 'screen:bookings'
+    /**
+     * The website's Bargain link (`bargain-entry.ts`). Like `screen:*` the router cannot finish
+     * it — recording the hand-off needs the resolved caller — so it answers `bargain` and the
+     * bot-surface controller runs it.
+     */
+    | 'bargain';
 
 export interface CommandSpec extends CommandGrammarSpec {
     name: string;
@@ -66,6 +79,12 @@ export interface CommandSpec extends CommandGrammarSpec {
      * "coming soon" would be a regression on behaviour customers already have.
      */
     handler: CommandHandlerKey | null;
+    /**
+     * `false` keeps a LIVE command out of `/help` and out of the Telegram menu. Absent means
+     * listed. It exists for `/bargain`, which a link types and no person does: its arguments are
+     * two ObjectIds, so advertising it would put a command in the menu nobody can use.
+     */
+    advertised?: false;
 }
 
 const IDENT = (name: string, required = false): CommandArgSpec => ({ name, type: 'identifier', required });
@@ -75,7 +94,12 @@ const ENUM = (name: string, values?: readonly string[]): CommandArgSpec =>
 
 export const COMMANDS: readonly CommandSpec[] = Object.freeze([
     // ── Onboarding and help ──────────────────────────────────────────────────
-    { name: 'start', aliases: [], args: [], requiresIdentity: false, requiresCustomerRole: false, handler: 'start' },
+    /**
+     * ⭐ `payload` is Telegram's deep-link argument — `t.me/<bot>?start=<payload>` arrives as the
+     * text `/start <payload>`. Only `bargain_<productId>[_<variantId>]` means anything
+     * (`bargain-entry.ts`); any other payload, or none, is the plain welcome it always was.
+     */
+    { name: 'start', aliases: [], args: [IDENT('payload')], requiresIdentity: false, requiresCustomerRole: false, handler: 'start' },
     {
         name: 'help',
         aliases: ['aide', 'menu', 'ayuda', 'ajuda', 'commands', '?'],
@@ -189,6 +213,21 @@ export const COMMANDS: readonly CommandSpec[] = Object.freeze([
         requiresIdentity: true,
         requiresCustomerRole: true,
         handler: null,
+    },
+    {
+        /**
+         * ⭐ The website's Bargain button on WhatsApp (`wa.me/…?text=/bargain <p> <v>`). A link
+         * types it, not a person, so it has NO aliases and is not advertised. `note` swallows the
+         * optional sentence the site writes after the ids in the visitor's language; it is read by
+         * nobody. Handled by `bargain-entry.service.ts`, which re-reads every rule live.
+         */
+        name: 'bargain',
+        aliases: [],
+        args: [IDENT('product'), IDENT('variant'), TEXT('note')],
+        requiresIdentity: true,
+        requiresCustomerRole: true,
+        handler: 'bargain',
+        advertised: false,
     },
     {
         name: 'pay',
@@ -341,16 +380,27 @@ export const COMMANDS: readonly CommandSpec[] = Object.freeze([
         args: [IDENT('ref')],
         requiresIdentity: true,
         requiresCustomerRole: true,
-        handler: null,
+        /**
+         * Live since bookings phase 6: bare, it opens the customer's appointments screen (`bl`).
+         * ⚠ **With a `ref` it still reaches the model**, which reads that one appointment with
+         * `bookings_get` exactly as it does today — this surface has no chat rendering of a
+         * single booking, and inventing one here would be a second opinion on the model's.
+         */
+        handler: 'screen:bookings',
     },
 ]);
 
 /** Canonical names only — the candidate set for a typo suggestion. See `command-suggest.ts`. */
 export const CANONICAL_COMMAND_NAMES: readonly string[] = Object.freeze(COMMANDS.map((c) => c.name));
 
-/** The commands a phase has actually implemented. `/help` lists these and nothing else. */
+/**
+ * The commands a phase has actually implemented AND that a person is meant to type. `/help` and
+ * the Telegram menu list these and nothing else. ⚠ **Not "every command with a handler"**:
+ * `/bargain` has one and is `advertised: false` — the router dispatches by `handler`, never by
+ * this list, so leaving a command out of it hides it without disabling it.
+ */
 export const LIVE_COMMANDS: readonly CommandSpec[] = Object.freeze(
-    COMMANDS.filter((command) => command.handler !== null),
+    COMMANDS.filter((command) => command.handler !== null && command.advertised !== false),
 );
 
 export const CANONICAL_NAME_PATTERN = /^[a-z][a-z0-9]{0,31}$/;

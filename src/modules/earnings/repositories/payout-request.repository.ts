@@ -99,47 +99,6 @@ export class PayoutRequestRepository {
     });
   }
 
-  /**
-   * How much has actually been PAID to this owner inside a trailing window, and when the
-   * oldest of those payments was resolved.
-   *
-   * ⚠ **`status: 'paid'` only.** A rejected request put the money back into
-   * `available_balance` (`revertPayoutToAvailableInSession`), so counting it would charge the
-   * owner for an administrator's decision — and could leave them at zero allowance having
-   * received nothing at all. A `failed` one has paid nothing either, and its money is still
-   * held rather than spent.
-   *
-   * ⚠ **Windowed on `resolved_at`, not `created_at`**, because the question is when money left
-   * the platform. A request opened 31 days ago and paid yesterday is recent spending; a
-   * `created_at` window would drop it while the cash was still warm.
-   *
-   * Served by the existing `{owner_type, owner_id, status}` index — the date is a residual
-   * filter over one owner's few resolved payouts, so no new index is needed.
-   */
-  async sumPaidSince(
-    ownerType: EarningsOwnerType,
-    ownerId: string,
-    since: Date,
-  ): Promise<{ total: number; oldestResolvedAt: Date | null }> {
-    const rows = await PayoutRequestModel.find(
-      {
-        owner_type: ownerType,
-        owner_id: new Types.ObjectId(ownerId),
-        status: 'paid',
-        resolved_at: { $gte: since },
-      },
-      { amount: 1, resolved_at: 1 },
-    )
-      .sort({ resolved_at: 1 })
-      .lean();
-
-    if (rows.length === 0) return { total: 0, oldestResolvedAt: null };
-
-    const total = rows.reduce((sum, r: { amount?: number }) => sum + (r.amount ?? 0), 0);
-    const oldest = (rows[0] as { resolved_at?: Date | null }).resolved_at ?? null;
-    return { total, oldestResolvedAt: oldest ? new Date(oldest) : null };
-  }
-
   async findLatestForOwner(ownerType: EarningsOwnerType, ownerId: string): Promise<IPayoutRequest | null> {
     return PayoutRequestModel.findOne({ owner_type: ownerType, owner_id: new Types.ObjectId(ownerId) }).sort({
       created_at: -1,

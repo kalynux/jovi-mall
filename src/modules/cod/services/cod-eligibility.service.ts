@@ -65,9 +65,10 @@ export class CodEligibilityService {
        * `policies.cod.enabled` and start taking cash from customers on delivery.
        *
        * Cash is the one thing the owner's rule names explicitly: **no cash-in-hand until
-       * verified.** The agent half of that rule was already correct and needed no change —
-       * `AgentGateService.assertCanHoldContract` gates COD cash on `kyc.status === 'verified'`
-       * and has never consulted `status`. This is the agency half catching up.
+       * verified.** The agent half of that rule gates COD cash on `kyc.status === 'verified'`
+       * and has never consulted `status` — since 2026-09-27 in `CodExposureService` (blocker
+       * `kyc_not_verified`), no longer in `AgentGateService.assertCanHoldContract`, which now
+       * lets an unverified agent contract and take prepaid work. This is the agency half.
        *
        * ⚠ Do not "simplify" this back to the status check. `test:cod` § COD verification pins
        * it, and the failure it prevents is silent: the order is accepted, the cash is

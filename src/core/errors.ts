@@ -114,8 +114,6 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.EARNINGS_PAYOUT_METHOD_MISSING]: 'No payout method is configured on this profile',
     [ERROR_CODES.EARNINGS_PAYOUT_NO_AVAILABLE_BALANCE]: 'There is no available balance to request a payout for',
     [ERROR_CODES.EARNINGS_PAYOUT_BELOW_MINIMUM]: 'Available balance is below the minimum payout amount',
-    [ERROR_CODES.EARNINGS_PAYOUT_UNVERIFIED_CAP_REACHED]:
-        'This account has reached the payout allowance for unverified accounts — verification lifts it',
     [ERROR_CODES.EARNINGS_PAYOUT_REQUEST_NOT_FOUND]: 'Payout request not found',
     [ERROR_CODES.EARNINGS_PAYOUT_REQUEST_NOT_PENDING]: 'This payout request has already been resolved',
     [ERROR_CODES.EARNINGS_PAYOUT_NOT_SENDABLE]:
@@ -309,6 +307,7 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.PAYMENT_BOOKING_NO_PAYMENT_REQUIRED]: 'This booking does not require payment',
     [ERROR_CODES.PAYMENT_BOOKING_ALREADY_PAID]: 'Booking is already paid',
     [ERROR_CODES.PAYMENT_BOOKING_IN_PROGRESS]: 'Payment already in progress',
+    [ERROR_CODES.BOOKING_NOT_PAYABLE_NOW]: 'This booking cannot be paid until the vendor accepts it',
     [ERROR_CODES.PAYMENT_TRANSACTION_NOT_FOUND]: 'Payment transaction not found',
     [ERROR_CODES.PAYMENT_WEBHOOK_INVALID_PAYLOAD]: 'Could not extract gateway reference from webhook payload',
     [ERROR_CODES.PAYMENT_MISSING_BOOKING_ID]: 'Transaction does not have a bookingId',

@@ -251,8 +251,10 @@ export class AdminAgentController {
    * PUT /api/admin/agents/:agentId/kyc
    * Body: { status, reference?, rejectionReason? } — reason required on reject.
    *
-   * `kyc.status` defaults to `unverified` and eligibility requires `verified`,
-   * so until an admin calls this an agent cannot be dispatched at all.
+   * `kyc.status` defaults to `unverified`. Since 2026-09-27 that no longer stops
+   * an agent contracting or being dispatched prepaid work — it withholds COD
+   * cash only (pool 0, and `CodExposureService` refuses every COD shipment),
+   * so until an admin verifies here the agent carries no cash on delivery.
    */
   static setKyc = asyncHandler(async (req: Request, res: Response) => {
     const { agentId } = AgentIdParamSchema.parse(req.params);

@@ -23,6 +23,10 @@ a hand-copy.
 | Published **product reviews** (`/products/:productId/reviews`) | [../reviews.md](../reviews.md) |
 | The **agent app download** (`/app/:app/latest`, `/app/:app/download`) | [app-downloads.md](./app-downloads.md) |
 
+Not a router, but a storefront contract that lives here: the **Bargain button's chat links**
+(`wa.me/…?text=/bargain …`, `t.me/…?start=bargain_…`) are specified in
+[bargain-deep-link.md](./bargain-deep-link.md).
+
 Everything else in this API is behind `requireAuth`. `/api/public` is the only exception, so the rule
 for anything added here is narrow: **read-only, no identity, and already published on a public page.**
 An endpoint that needs to know who is asking belongs on a role router instead.

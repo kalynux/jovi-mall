@@ -51,12 +51,17 @@ import {
     checkoutDeclinedReply,
     checkoutPlacedReply,
     checkoutReviewReply,
+    checkoutCashOnDeliveryPlacedReply,
 } from '../../src/modules/bot-surface/domain/checkout-chat-reply';
 import {
+    checkoutCashOnDeliveryActionId,
+    checkoutChooseAddressActionId,
     checkoutConfirmActionId,
     checkoutDeclineActionId,
     checkoutTokenBudgetProblems,
     isCheckoutRef,
+    parseCheckoutCashOnDelivery,
+    parseCheckoutChooseAddress,
     parseCheckoutConfirm,
     parseCheckoutDecline,
 } from '../../src/modules/bot-surface/domain/bot-checkout-actions';
@@ -626,11 +631,23 @@ function main(): void {
             && /import \{[^}]*\bmobileMoneyGateway\b[^}]*\} from '\.\.\/miniapp\/surfaces\/checkout\.controller'/.test(chat);
     });
 
-    /** COD takes no payment and produces a delivery code; it does not come through this screen. */
-    assert('⛔ the screen checks out ONLINE and never cash on delivery', () => {
+    /**
+     * COD takes no payment and produces a delivery code, so it never goes through PAY NOW. Since the
+     * owner's decision of 2026-09-27 it has its own function, `placeCheckoutCashOnDelivery` — and
+     * this pins the split both ways: Pay now is online only, pay on delivery opens no charge.
+     */
+    assert('⛔ Pay now checks out ONLINE only; pay on delivery is its own path and opens no charge', () => {
         const src = screenCode();
-        return /createOrdersFromCart\([\s\S]{0,120}'online'/.test(src)
-            && !src.includes('cash_on_delivery');
+        const body = (sig: string): string => {
+            const at = src.indexOf(sig);
+            return at < 0 ? '' : src.slice(at, src.indexOf('\n}\n', at));
+        };
+        const payNow = body('export async function placeCheckout(');
+        const cod = body('export async function placeCheckoutCashOnDelivery(');
+        return /createOrdersFromCart\([\s\S]{0,120}'online'/.test(payNow)
+            && !payNow.includes('cash_on_delivery')
+            && /createOrdersFromCart\([\s\S]{0,120}'cash_on_delivery'/.test(cod)
+            && !cod.includes('initiatePaymentForCart(');
     });
 
     console.log('\n── 8 · A forwarded URL reads out no address and no payable number ──');
@@ -793,7 +810,7 @@ function main(): void {
 
         const reads = ['async function reportPayment(', 'async function retryCharge(', 'export async function paymentTap(']
             .map(span);
-        const drawn = ['async function reviewChatCheckout(', 'async function placeChatCheckout(', 'async function declineCheckoutTap(']
+        const drawn = ['async function reviewChatCheckout(', 'async function placeChatCheckout(', 'async function placeChatCashOnDelivery(', 'async function declineCheckoutTap(']
             .map(span);
         const door = src.slice(src.indexOf('static screen'), src.indexOf('static paymentStatus'));
 
@@ -1325,6 +1342,7 @@ function main(): void {
 
     chatDoorAssertions();
     drawnConfirmationAssertions();
+    cashOnDeliveryAssertions();
 
     console.log(
         failed === 0
@@ -1442,7 +1460,8 @@ function chatDoorAssertions(): void {
         const pre = fn(src, 'async function precheckChatDoor(');
         // A refusal is a `createAppError(` here OR one delegated to a helper that takes the
         // caller's details — the delivery minimum (ADR-A07) — and each must say `spent: false`.
-        const refusals = [...pre.matchAll(/createAppError\(|cartQuoteService\.assertDeliveryMinimum\(/g)].length;
+        // `new AppError(` is the pay-on-delivery re-check re-throwing its rule's own refusal, marked unspent.
+        const refusals = [...pre.matchAll(/createAppError\(|new AppError\(|cartQuoteService\.assertDeliveryMinimum\(/g)].length;
         const alive = [...pre.matchAll(/spent: false/g)].length;
         return pre.length > 0 && refusals >= 4 && alive === refusals
             && !pre.includes('inAppSurfaceStore.')
@@ -1468,7 +1487,8 @@ function chatDoorAssertions(): void {
     assert('the wallet on the chat door is the ACCOUNT\'s, network-checked before the spend', () => {
         const pre = fn(screenCode(), 'async function precheckChatDoor(');
         return pre.includes('storedPayerNumber(customer)')
-            && pre.includes('assertNetworkChargeable(gateway, stored, false)')
+            // `gateway!`: null only on the pay-on-delivery branch, which never reaches this line.
+            && /assertNetworkChargeable\(gateway!?, stored, false\)/.test(pre)
             && pre.includes('ERROR_CODES.PAYMENT_PAYER_NUMBER_REQUIRED');
     });
 
@@ -1689,6 +1709,185 @@ function chatDoorAssertions(): void {
  * bare `ts-node` run), so the reply builders were written PURE in `domain/checkout-chat-reply.ts`
  * and are driven directly; the controller's wiring is pinned by scan, span by span.
  */
+/**
+ * ⭐ PAY ON DELIVERY IN THE BOT (owner decision, 2026-09-27: offer it, to anyone, Pay now first).
+ *
+ * The confirmation is driven through the real reply builder and the real renderer; the core's
+ * money rules — what is checked before the spend, that no charge is opened — are pinned by scan,
+ * span by span, because the controller cannot be imported by a bare `ts-node` run.
+ */
+function cashOnDeliveryAssertions(): void {
+    console.log('\n══ § 13z · Pay on delivery in the chat checkout and on the screen ══');
+
+    const REF = newInAppHandle();
+    const ID = (n: number): string => `64c000000000000000000${String(n).padStart(3, '0')}`;
+    const address = (n: number, over: Partial<BotAddressDto> = {}): BotAddressDto => ({
+        id: ID(n), label: `Place ${n}`, formattedAddress: `${n} Rue Joss, Akwa, Douala`, addressLine2: null,
+        city: 'Douala', state: null, country: 'CM', isDefault: n === 1, deliverable: true, ...over,
+    });
+    const HOME = address(1, { label: 'Home' });
+    const OFFICE = address(2, { label: 'Office' });
+    const review = (over: Partial<ChatReviewForReply> = {}): ChatReviewForReply => ({
+        ready: true, blocker: null, checkoutRef: REF,
+        lines: [{ title: 'Red shoes', variantLabel: '42', quantity: 2, lineTotalText: '20 000 XAF' }],
+        totalText: '21 500 XAF',
+        delivery: { kind: 'address', address: HOME },
+        addresses: [HOME],
+        payment: { method: 'mobile_money', phoneMasked: '+2376••••0001', cashOnDelivery: true },
+        addAddressUrl: null, deliveryShortfalls: [], ...over,
+    });
+    const choiceOf = (intent: BotReplyIntent | null) => (intent?.kind === 'choice' ? intent : null);
+    const chosen = { addressChosen: false };
+
+    const one = choiceOf(checkoutReviewReply(review(), chosen, 'fr'));
+    assert('⛔ offered: Pay now FIRST, then Pay on delivery, then Not now — three, WhatsApp\'s cap', () =>
+        one !== null
+        && one.options.length === 3
+        && one.options[0].id === checkoutConfirmActionId(REF, HOME.id)
+        && one.options[0].label === botChrome('checkoutPayNowButton', 'fr')
+        && one.options[1].id === checkoutCashOnDeliveryActionId(REF, HOME.id)
+        && one.options[1].label === botChrome('checkoutPayOnDeliveryButton', 'fr')
+        && one.options[2].id === checkoutDeclineActionId(REF)
+        && one.text.trimEnd().endsWith(botChrome('checkoutHowToPayQuestion', 'fr')));
+
+    assert('…and it renders as three WhatsApp reply buttons with those exact ids', () => {
+        const wa = (renderBotReply(one!, 'whatsapp', '237600000001').body as {
+            interactive?: { action?: { buttons?: Array<{ reply: { id: string } }> } };
+        }).interactive?.action?.buttons ?? [];
+        return wa.length === 3 && wa[1].reply.id === checkoutCashOnDeliveryActionId(REF, HOME.id);
+    });
+
+    const plain = choiceOf(checkoutReviewReply(review({ payment: { method: 'mobile_money', phoneMasked: '+2376••••0001', cashOnDelivery: false } }), chosen, 'en'));
+    assert('not offered: the confirmation is exactly as before — Place order · Not now', () =>
+        plain !== null && plain.options.length === 2
+        && plain.options[0].label === botChrome('placeOrderButton', 'en')
+        && !plain.options.some((o) => o.id.startsWith('yes:cod:')));
+
+    const noWallet = choiceOf(checkoutReviewReply(review({ payment: { method: 'mobile_money', phoneMasked: null, cashOnDelivery: true } }), chosen, 'en'));
+    assert('no wallet but pay on delivery offered: Pay on delivery · Not now, and no wallet line', () =>
+        noWallet !== null && noWallet.options.length === 2
+        && noWallet.options[0].id === checkoutCashOnDeliveryActionId(REF, HOME.id)
+        && !noWallet.text.includes(botChrome('checkoutMobileMoneyLabel', 'en')));
+
+    /**
+     * ⚠ The case that matters is a download with NO wallet: if the flag let it through, the reply
+     * would draw a Place order that can only fail (no number to charge). A mutant proved the
+     * with-wallet case alone cannot see the rule.
+     */
+    assert('⛔ a DOWNLOAD is never offered pay on delivery — and with no wallet, nothing is drawn', () => {
+        const digital = { delivery: { kind: 'digital' as const, to: 'a•••@x.com' }, addresses: [] };
+        const withWallet = choiceOf(checkoutReviewReply(review(digital), chosen, 'en'));
+        const noWallet = checkoutReviewReply(review({
+            ...digital,
+            payment: { method: 'mobile_money', phoneMasked: null, cashOnDelivery: true },
+        }), chosen, 'en');
+        return withWallet !== null && !withWallet.options.some((o) => o.id.startsWith('yes:cod:'))
+            && noWallet === null;
+    });
+
+    /**
+     * ⚠ Several addresses + pay on delivery: a row CHOOSES the address and places nothing — a list
+     * row is one tap and cannot also carry how to pay. Without pay on delivery, rows place as before.
+     */
+    assert('⛔ several addresses: rows CHOOSE (yes:coa) and place nothing; without COD they place as before', () => {
+        const several = choiceOf(checkoutReviewReply(review({ addresses: [HOME, OFFICE] }), chosen, 'en'));
+        const before = choiceOf(checkoutReviewReply(review({
+            addresses: [HOME, OFFICE],
+            payment: { method: 'mobile_money', phoneMasked: '+2376••••0001', cashOnDelivery: false },
+        }), chosen, 'en'));
+        return several !== null
+            && several.options[0].id === checkoutChooseAddressActionId(HOME.id)
+            && several.options[1].id === checkoutChooseAddressActionId(OFFICE.id)
+            && !several.options.some((o) => o.id.startsWith('yes:co:') || o.id.startsWith('yes:cod:'))
+            && before !== null && before.options[0].id === checkoutConfirmActionId(REF, HOME.id);
+    });
+
+    // 64 is Telegram's callback_data cap in bytes — spelled out, not read from the module.
+    assert('the two new tokens fit 64 bytes and round-trip through their own parsers', () => {
+        const cod = checkoutCashOnDeliveryActionId(REF, HOME.id);
+        const coa = checkoutChooseAddressActionId(HOME.id);
+        const codArg = cod.slice('yes:cod:'.length);
+        return Buffer.byteLength(cod) <= 64 && Buffer.byteLength(coa) <= 64
+            && JSON.stringify(parseCheckoutCashOnDelivery(codArg)) === JSON.stringify({ checkoutRef: REF, addressId: HOME.id })
+            && parseCheckoutChooseAddress(coa.slice('yes:coa:'.length)) === HOME.id
+            && parseCheckoutCashOnDelivery(REF) === null
+            && parseCheckoutCashOnDelivery(`${REF}:${HOME.id}:x`) === null
+            && checkoutTokenBudgetProblems({ handleLength: REF.length }).length === 0;
+    });
+
+    assert('placed: the order numbers and "pay the agent in cash" — no button, no amount', () => {
+        const placed = checkoutCashOnDeliveryPlacedReply({ orderNumbers: ['ORD-2026-000101', 'ORD-2026-000102'] }, 'fr');
+        return placed.kind === 'text'
+            && placed.text.includes('ORD-2026-000101, ORD-2026-000102')
+            && placed.text.includes(botChrome('checkoutCashOnDeliveryPlaced', 'fr'))
+            && !('actions' in placed && (placed as { actions?: unknown[] }).actions?.length);
+    });
+
+    // ── The core's money rules, by scan ──────────────────────────────────────────────────
+    const core = fs.readFileSync(path.join(SCAN_ROOT, 'src/modules/bot-surface/miniapp/surfaces/checkout.controller.ts'), 'utf8')
+        .replace(/\r\n/g, '\n').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    const span = (start: string, end = '\n}\n'): string => {
+        const at = core.indexOf(start);
+        const stop = at < 0 ? -1 : core.indexOf(end, at);
+        return at < 0 || stop < 0 ? '' : core.slice(at, stop + end.length);
+    };
+
+    /**
+     * ⭐ Pay on delivery opens NO charge, and uses the SAME order creation the website does — so
+     * every agency re-check, the stock commit, the dispatch and the delivery codes are its own.
+     * Its checks run BEFORE the spend on the chat door, and the handle must be the caller's.
+     */
+    assert('⛔ placing pay on delivery: pre-check (COD) → spend → owner → createOrdersFromCart(COD); no charge', () => {
+        const place = span('export async function placeCheckoutCashOnDelivery(');
+        const pre = place.indexOf("precheckChatDoor(options.callerCustomerId, options.addressId ?? null, null, null, 'cash_on_delivery')");
+        const spend = place.indexOf("inAppSurfaceStore.consume('co'");
+        const owner = place.indexOf('session.customerId !== options.callerCustomerId');
+        const create = place.indexOf("'cash_on_delivery',");
+        return pre > 0 && spend > pre && owner > spend && create > owner
+            && place.includes('orderService.createOrdersFromCart(')
+            && !/initiatePaymentForCart|paymentOrchestrator|storedPayerNumber/.test(place)
+            && place.includes('throw markedSpent(error);');
+    });
+
+    assert('⛔ the pre-spend check needs no wallet for COD, and re-asks the COD rules unspent', () => {
+        const pre = span('async function precheckChatDoor(');
+        return pre.includes("if (method === 'online' && !typedNumber) {")
+            && pre.includes('await cartQuoteService.assertDeliveryMinimum(cart, method, { spent: false });')
+            && pre.includes("if (method === 'cash_on_delivery') {")
+            && pre.includes('await cashOnDeliveryRefusal(customerId, cart.productType ?? null)')
+            && /spent: false,\s*\}\);/.test(pre.slice(pre.indexOf("if (method === 'cash_on_delivery') {")));
+    });
+
+    /**
+     * The rules are the order path's own: the quote's per-shipment COD verdict, and
+     * `codEligibilityService.assertVendorOrderEligible`. "Not evaluated" is a refusal, never a pass.
+     */
+    assert('⛔ eligibility is the order path\'s own rule; "not evaluated" refuses', () => {
+        const rule = span('export async function cashOnDeliveryRefusal(');
+        return rule.includes("if (productType !== 'physical') {")
+            && rule.includes("cartQuoteService.quoteForCustomer(customerId, undefined, 'cash_on_delivery')")
+            && rule.includes('codEligibilityService.assertVendorOrderEligible({')
+            && rule.includes('if (!minimum || agencyIds.length === 0) {')
+            && rule.includes('if (!minimum.met) {');
+    });
+
+    // ── The screen ───────────────────────────────────────────────────────────────────────
+    const page = fs.readFileSync(path.join(SCAN_ROOT, 'src/modules/bot-surface/miniapp/public/co.html'), 'utf8')
+        .replace(/\r\n/g, '\n').replace(/<!--[\s\S]*?-->/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    const routes = fs.readFileSync(path.join(SCAN_ROOT, 'src/modules/bot-surface/miniapp/miniapp.routes.ts'), 'utf8');
+
+    assert('⛔ the screen draws Pay on delivery only where the server said so, and ONE latch covers both', () => {
+        const codClick = page.slice(page.indexOf('el.cod.addEventListener("click"'), page.indexOf('function load()'));
+        const payClick = page.slice(page.indexOf('el.pay.addEventListener("click"'), page.indexOf('function load()'));
+        return page.includes('el.cod.hidden = !(data.cashOnDelivery === true && !data.address.digital);')
+            && codClick.includes('if (placed || el.cod.hidden) return;')
+            && codClick.includes('placed = true;')
+            && codClick.includes('json(base + "/place-cod"')
+            && payClick.includes('el.cod.disabled = true;')
+            && routes.includes("router.post('/s/co/:handle/place-cod', CheckoutController.placeCashOnDelivery);");
+    });
+}
+
 function drawnConfirmationAssertions(): void {
     console.log('\n══ § 13 · The server draws the money confirmation — review, tap, placement ══');
 
@@ -1726,7 +1925,7 @@ function drawnConfirmationAssertions(): void {
         totalText: '21 500 XAF',
         delivery: { kind: 'address', address: HOME },
         addresses: [HOME],
-        payment: { method: 'mobile_money', phoneMasked: PHONE },
+        payment: { method: 'mobile_money', phoneMasked: PHONE, cashOnDelivery: false },
         addAddressUrl: null,
         deliveryShortfalls: [],
         ...over,
@@ -1927,7 +2126,7 @@ function drawnConfirmationAssertions(): void {
      * after the customer pressed it; the model asks for a number instead, as it always has.
      */
     assert('⛔ no number on the account: NO reply — the model asks; an unknown address and an empty review neither', () =>
-        checkoutReviewReply(review({ payment: { method: 'mobile_money', phoneMasked: null } }), chosen, 'en') === null
+        checkoutReviewReply(review({ payment: { method: 'mobile_money', phoneMasked: null, cashOnDelivery: false } }), chosen, 'en') === null
         && checkoutReviewReply(blocked('address_not_found'), chosen, 'en') === null
         && checkoutReviewReply(review({ lines: [] }), chosen, 'en') === null
         && checkoutReviewReply(review({ checkoutRef: null }), chosen, 'en') === null);

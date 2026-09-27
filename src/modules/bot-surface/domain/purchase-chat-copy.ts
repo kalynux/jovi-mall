@@ -77,3 +77,17 @@ export function purchaseInvitePrompt(
     const key = verb === 'bargain' ? 'bargainInvitePrompt' : 'bookInvitePrompt';
     return `${title}\n\n${botChrome(key, language)}`;
 }
+
+/**
+ * **Choose a time** — the one button under the Book question, opening the day-and-time picker.
+ *
+ * ⚠ **The question stays, and this is a second way to answer it, not a replacement.** A customer
+ * with no screen (or who would rather type "Tuesday at 3") still answers in words; the button is
+ * for everybody else. It carries the PRODUCT id and no screen handle: the `bk` session is minted
+ * on the tap, by the server, for whoever tapped (`open:bk` in `bot-booking.controller.ts`).
+ *
+ * ⚠ **`bargain` gets none, deliberately** — its next step is an offer only the customer can make.
+ */
+export function bookInviteActions(productId: string, language: string | null): BotReplyOption[] {
+    return [{ id: openSurfaceActionId('bk', productId), label: botChrome('bookChooseTimeButton', language) }];
+}

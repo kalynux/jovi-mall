@@ -4,7 +4,24 @@ import { renderTemplate, RenderContext } from './message-renderer';
 import { Language, DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES } from './notification-i18n';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
-import { ChannelText, SituationMessages, ButtonDef, QuickReplyDef } from './notification-catalog';
+import { ChannelText, SituationMessages, ButtonDef, QuickReplyDef, WhatsAppTemplateDef } from './notification-catalog';
+
+/**
+ * A customer situation. The same shape as every stack's, except that the WhatsApp TEMPLATE is
+ * optional — for this stack alone, because only this stack has a situation that is
+ * deliberately in-window-only (`cart.abandoned`; owner's ruling 2026-09-27, plan Q-6). Out of
+ * the 24-hour window such a situation sends NO WhatsApp message at all.
+ *
+ * Scoped here rather than loosened on `SituationMessages`, so the vendor, agency and agent
+ * stacks — every one of whose situations has a template — keep the compiler's guarantee.
+ *
+ * ⛔ Never name a template that was not submitted just to fill the field: that is exactly the
+ * defect the name-parity guard in `test:customer-notifications` exists to catch. Absent is the
+ * honest value.
+ */
+export interface CustomerSituationMessages extends Omit<SituationMessages, 'whatsapp'> {
+    whatsapp: Omit<SituationMessages['whatsapp'], 'template'> & { template?: WhatsAppTemplateDef };
+}
 import { storefrontPath } from '../../../core/utils/storefront-link.util';
 
 /**
@@ -118,6 +135,21 @@ const VIEW_ORDER_LABEL: Record<Language, string> = {
  * segment in front of the id is the only thing stopping it swallowing every single-order
  * link and rendering the group screen against an id it cannot resolve.
  */
+const VIEW_BASKET_LABEL: Record<Language, string> = {
+    en: 'View basket', fr: 'Voir le panier', pt: 'Ver cesto', es: 'Ver carrito', ar: 'عرض السلة'
+};
+
+/** The storefront basket page, `src/app/[locale]/shop/cart/page.tsx` in the landing app. */
+const CART_BUTTON: ButtonDef = {
+    type: 'url',
+    label: VIEW_BASKET_LABEL,
+    urlSuffix: 'shop/cart'
+};
+
+const SHOW_BASKET_LABEL: Record<Language, string> = {
+    en: 'Show my basket', fr: 'Voir mon panier', pt: 'Ver o meu cesto', es: 'Ver mi carrito', ar: 'اعرض سلتي'
+};
+
 const ORDER_BUTTON: ButtonDef = {
     type: 'url',
     label: VIEW_ORDER_LABEL,
@@ -263,7 +295,7 @@ const TRY_AGAIN_LABEL: Record<Language, string> = {
     en: 'Try again', fr: 'Réessayer', pt: 'Tentar de novo', es: 'Intentar otra vez', ar: 'إعادة المحاولة'
 };
 
-const ORDER_DETAILS_LABEL: Record<Language, string> = {
+export const ORDER_DETAILS_LABEL: Record<Language, string> = {
     en: 'Order details', fr: 'Détails', pt: 'Detalhes', es: 'Detalles', ar: 'تفاصيل الطلب'
 };
 
@@ -296,7 +328,23 @@ const ADDRESS_WRONG_LABEL: Record<Language, string> = {
  * that the message already has one.
  */
 
-const TRY_PAYMENT_AGAIN: QuickReplyDef = { token: 'pay:rt:{{transactionId}}', label: TRY_AGAIN_LABEL };
+const TRY_PAYMENT_AGAIN: QuickReplyDef = { token: 'pay:rt:{{transactionId}}', label: TRY_AGAIN_LABEL, templateFallback: 'open:ol' };
+
+/**
+ * ⭐ **A booking's own Pay buttons — `bpay:`, never `pay:rt:`.** `pay:rt:`'s handler re-opens a
+ * charge for ORDERS (`resolveCheckoutPayment` filters `cartId: { $ne: null }`) and a booking
+ * transaction has no cart, so under `booking.payment_failed` it told the customer about their
+ * orders. `bpay:` opens the booking payment screen; grammar owned by `bookingPayActionId` /
+ * `parseBookingPayArgument` in `bot-action-id.ts`, which `test:inapp-bookings` parses these with.
+ *
+ * Two for the failure, ONE of which is ever drawn: the handler fills exactly one id, and an
+ * empty placeholder drops its button — the conditional-button rule `renderCustomerQuickReplies`
+ * documents. The label stays "Try again" for a failure.
+ */
+const RETRY_BOOKING_PRICE: QuickReplyDef = { token: 'bpay:{{payPriceBookingId}}', label: TRY_AGAIN_LABEL, templateFallback: 'open:bl' };
+const RETRY_BOOKING_BALANCE: QuickReplyDef = { token: 'bpay:{{payBalanceBookingId}}:b', label: TRY_AGAIN_LABEL, templateFallback: 'open:bl' };
+/** Reuses `PAY_BALANCE_LABEL` — the URL button's own words — rather than a second construction. */
+const PAY_BOOKING_BALANCE: QuickReplyDef = { token: 'bpay:{{bookingId}}:b', label: PAY_BALANCE_LABEL, templateFallback: 'open:bl' };
 
 // ─── Composed lines ──────────────────────────────────────────────────────────
 
@@ -468,7 +516,7 @@ export function ticketReopenLine(isClosed: boolean, lang: Language): string {
 
 // ─── The catalog ─────────────────────────────────────────────────────────────
 
-export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, SituationMessages> = {
+export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, CustomerSituationMessages> = {
     // ══ Bookings ═════════════════════════════════════════════════════════════
 
     // `{{confirmationLine}}` is substituted by the handler, already localized,
@@ -626,7 +674,7 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
             }
         },
         button: BOOKING_BUTTON,
-        actions: [{ token: 'book:{{productId}}', label: BOOK_AGAIN_LABEL }]
+        actions: [{ token: 'book:{{productId}}', label: BOOK_AGAIN_LABEL, templateFallback: 'open:bl' }]
     },
 
     'booking.completed': {
@@ -839,7 +887,7 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
             }
         },
         button: BOOKING_BUTTON,
-        actions: [TRY_PAYMENT_AGAIN]
+        actions: [RETRY_BOOKING_PRICE, RETRY_BOOKING_BALANCE]
     },
 
     // The platform never charges this silently — this message IS the request, so
@@ -874,7 +922,14 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
                 bodyParams: ['{{vendorName}}', '{{serviceName}}', '{{currency}}', '{{balanceFormatted}}', '{{finalPriceFormatted}}']
             }
         },
-        button: PAY_BALANCE_BUTTON
+        /**
+         * The URL button stays — it is what email, the inbox and the approved WhatsApp TEMPLATE
+         * carry (a template's buttons are frozen at approval and only that URL button is sent
+         * outside the window). The quick reply is the in-chat door: the storefront page needs a
+         * web session a chat customer does not have.
+         */
+        button: PAY_BALANCE_BUTTON,
+        actions: [PAY_BOOKING_BALANCE]
     },
 
     'booking.refunded': {
@@ -1144,7 +1199,7 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
             }
         },
         button: TRACK_BUTTON,
-        actions: [{ token: 'ord:{{orderId}}', label: ORDER_DETAILS_LABEL }]
+        actions: [{ token: 'ord:{{orderId}}', label: ORDER_DETAILS_LABEL, templateFallback: 'open:ol' }]
     },
 
     // The one message worth interrupting someone for — it is the only prompt to
@@ -1232,8 +1287,8 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
              * ⚠ **`hp`, not `ord`.** Topic codes are `rd`/`ad`/`hp` only; `hp` is the
              * SHIPPING_ISSUE topic the in-chat "Get help" button already uses.
              */
-            { token: 'rate:{{orderId}}', label: LEAVE_REVIEW_LABEL },
-            { token: 'tkt:new:hp:{{orderId}}', label: SOMETHING_WRONG_LABEL }
+            { token: 'rate:{{orderId}}', label: LEAVE_REVIEW_LABEL, templateFallback: 'open:ol' },
+            { token: 'tkt:new:hp:{{orderId}}', label: SOMETHING_WRONG_LABEL, templateFallback: 'tkt:new' }
         ]
     },
 
@@ -1291,8 +1346,8 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
          * ADDRESS_CHANGE, and both pre-fill the order.
          */
         actions: [
-            { token: 'tkt:new:rd:{{orderId}}', label: NOT_THERE_LABEL },
-            { token: 'tkt:new:ad:{{orderId}}', label: ADDRESS_WRONG_LABEL }
+            { token: 'tkt:new:rd:{{orderId}}', label: NOT_THERE_LABEL, templateFallback: 'tkt:new' },
+            { token: 'tkt:new:ad:{{orderId}}', label: ADDRESS_WRONG_LABEL, templateFallback: 'tkt:new' }
         ]
     },
 
@@ -1411,7 +1466,7 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
          * (`rp`/`ph`/`cl`), so the reversed form returned null and the tap was refused. This
          * is the shape `ticketReplyActionId` builds and the one the request card already draws.
          */
-        actions: [{ token: 'tkt:{{ticketId}}:rp', label: REPLY_HERE_LABEL }]
+        actions: [{ token: 'tkt:{{ticketId}}:rp', label: REPLY_HERE_LABEL, templateFallback: 'tkt:new' }]
     },
 
     'ticket.awaiting_customer': {
@@ -1451,7 +1506,7 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
          * (`rp`/`ph`/`cl`), so the reversed form returned null and the tap was refused. This
          * is the shape `ticketReplyActionId` builds and the one the request card already draws.
          */
-        actions: [{ token: 'tkt:{{ticketId}}:rp', label: REPLY_HERE_LABEL }]
+        actions: [{ token: 'tkt:{{ticketId}}:rp', label: REPLY_HERE_LABEL, templateFallback: 'tkt:new' }]
     },
 
     // `{{reopenLine}}` is substituted by the handler, already localized, because
@@ -1505,9 +1560,80 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
          * promises a reply will be read, and vanishes at a door the platform has shut. Both are
          * still driven by one boolean.
          */
-        actions: [{ token: 'tkt:{{reopenableTicketId}}', label: NOT_SORTED_LABEL }]
+        actions: [{ token: 'tkt:{{reopenableTicketId}}', label: NOT_SORTED_LABEL, templateFallback: 'tkt:new' }]
+    },
+
+    // ══ The basket ═══════════════════════════════════════════════════════════
+
+    /**
+     * ⭐ The abandoned-basket reminder — raised by `AbandonedCartWorker`, never by an event.
+     *
+     * ⛔ **NO TEMPLATE, on purpose** (owner's ruling 2026-09-27, plan Q-6). It is sent inside
+     * the customer's own 24-hour window or not on WhatsApp at all: a basket built in the chat
+     * was built by messaging, which opened the window. Outside it, the in-app row and
+     * Telegram still go; WhatsApp sends nothing. Listed in `IN_WINDOW_ONLY_SITUATIONS`, which
+     * the boot check requires of any situation without a template.
+     *
+     * ⚠ **Never a price.** A price in a reminder is a promise the catalogue can break before
+     * they come back. `{{itemSummary}}` names what is in it and nothing else.
+     */
+    'cart.abandoned': {
+        base: {
+            en: {
+                subject: 'Still thinking it over?',
+                body: 'Your basket is waiting: {{itemSummary}}. Pick up where you left off whenever you like.'
+            },
+            fr: {
+                subject: 'Toujours en réflexion ?',
+                body: 'Votre panier vous attend : {{itemSummary}}. Reprenez là où vous en étiez quand vous voulez.'
+            },
+            pt: {
+                subject: 'Ainda a pensar?',
+                body: 'O seu cesto está à sua espera: {{itemSummary}}. Continue de onde parou quando quiser.'
+            },
+            es: {
+                subject: '¿Sigues pensándolo?',
+                body: 'Tu carrito te espera: {{itemSummary}}. Continúa donde lo dejaste cuando quieras.'
+            },
+            ar: {
+                subject: 'هل ما زلت تفكر؟',
+                body: 'سلتك بانتظارك: {{itemSummary}}. أكمل من حيث توقفت متى شئت.'
+            }
+        },
+        whatsapp: { text: {} },
+        button: CART_BUTTON,
+        /**
+         * `cart:view` carries no placeholder, so it can never render empty — and its handler
+         * returns the basket in the chat, where checkout is one more tap.
+         */
+        actions: [{ token: 'cart:view', label: SHOW_BASKET_LABEL }]
     }
 };
+
+/**
+ * The situations that deliberately have NO WhatsApp template — sent on WhatsApp only inside
+ * the customer's 24-hour window. The boot check requires a template of every situation NOT
+ * listed here, so a template cannot go missing by accident; it can only be left out on purpose.
+ */
+export const IN_WINDOW_ONLY_SITUATIONS: ReadonlySet<CustomerNotificationType> = new Set(['cart.abandoned']);
+
+/**
+ * "Blue dress" · "Blue dress and 2 more", localized. The basket reminder's one value: what is
+ * in the basket, never what it costs. Titles are the cart's own snapshots.
+ */
+export function cartItemSummary(titles: string[], lang: Language): string {
+    const first = titles[0] ?? '';
+    const more = titles.length - 1;
+    if (more <= 0) return first;
+    const tail: Record<Language, string> = {
+        en: `and ${more} more`,
+        fr: `et ${more} autre${more > 1 ? 's' : ''}`,
+        pt: `e mais ${more}`,
+        es: `y ${more} más`,
+        ar: `و${more} أخرى`,
+    };
+    return `${first} ${tail[lang] ?? tail.en}`;
+}
 
 // ─── Rendering helpers ───────────────────────────────────────────────────────
 
@@ -1518,6 +1644,16 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
  */
 export function assertCustomerCatalogComplete(): void {
     for (const situation of Object.keys(CUSTOMER_NOTIFICATION_CATALOG) as CustomerNotificationType[]) {
+        const hasTemplate = CUSTOMER_NOTIFICATION_CATALOG[situation].whatsapp.template !== undefined;
+        if (hasTemplate === IN_WINDOW_ONLY_SITUATIONS.has(situation)) {
+            throw createAppError(
+                ERROR_CODES.CONFIG_NOTIFICATION_CATALOG_INCOMPLETE,
+                500,
+                hasTemplate
+                    ? `'${situation}' is listed as in-window-only but names a template`
+                    : `'${situation}' has no WhatsApp template and is not listed in IN_WINDOW_ONLY_SITUATIONS — out of window it would reach nobody`
+            );
+        }
         for (const lang of SUPPORTED_LANGUAGES) {
             if (!CUSTOMER_NOTIFICATION_CATALOG[situation].base[lang]) {
                 throw createAppError(
@@ -1612,8 +1748,90 @@ export function assertCustomerQuickRepliesSendable(): void {
                     fail(`Quick-reply label '${label}' (${lang}) on '${situation}' is ${[...label].length} characters; the cap is ${MAX_LABEL_CHARS}`);
                 }
             }
+
+            // ⛔ Out of window a template button cannot be dropped — see `templateFallback`.
+            if (placeholders.length > 0 && !action.templateFallback) {
+                fail(`Quick reply '${action.token}' on '${situation}' carries a placeholder but no templateFallback; out of window its button would be shown with no payload`);
+            }
+            if (action.templateFallback !== undefined
+                && (tokenPlaceholders(action.templateFallback).length > 0
+                    || !/^[a-z]+:\S+$/.test(action.templateFallback))) {
+                fail(`templateFallback '${action.templateFallback}' on '${situation}' must be a placeholder-free verb token`);
+            }
+        }
+
+        /**
+         * WhatsApp desktop does not render a template holding 4+ buttons or a URL + quick-reply
+         * mix beyond one URL and two quick replies. Counted in TEMPLATE buttons, which is what
+         * the approved template holds — not in chat actions.
+         */
+        const templateButtons = customerTemplateQuickReplyLabels(situation).length;
+        if (CUSTOMER_NOTIFICATION_CATALOG[situation].button && templateButtons > MAX_TEMPLATE_QUICK_REPLIES_WITH_URL) {
+            fail(`Situation '${situation}' would give its template ${templateButtons} quick replies beside a URL button; WhatsApp desktop renders at most ${MAX_TEMPLATE_QUICK_REPLIES_WITH_URL}`);
         }
     }
+}
+
+/** 1 URL + 2 quick replies — the desktop-rendering limit, not Meta's larger caps. */
+const MAX_TEMPLATE_QUICK_REPLIES_WITH_URL = 2;
+
+/**
+ * A situation's quick replies as the approved TEMPLATE holds them: adjacent actions that share
+ * one label object are ONE template button.
+ *
+ * ⚠ **Why grouping exists.** A chat message draws only the actions whose ids resolved, so two
+ * mutually exclusive actions with one label (`booking.payment_failed`'s price and balance
+ * "Try again") show as one button there. A template's buttons are fixed at approval, so
+ * listing both would approve a template with "Try again" twice. The group is the button; the
+ * member that resolves at send time supplies its payload.
+ *
+ * Grouping is by label IDENTITY (the same `Record` object), deliberately not by equal text:
+ * two different actions that merely translate alike must stay two buttons.
+ */
+function templateButtonGroups(situation: CustomerNotificationType): QuickReplyDef[][] {
+    const groups: QuickReplyDef[][] = [];
+    for (const action of CUSTOMER_NOTIFICATION_CATALOG[situation].actions ?? []) {
+        const last = groups[groups.length - 1];
+        if (last && last[0].label === action.label) last.push(action);
+        else groups.push([action]);
+    }
+    return groups;
+}
+
+/**
+ * The quick-reply button labels the approved template carries, in order — what the generator
+ * submits. Read from the same groups the send path fills, so the two agree by construction.
+ */
+export function customerTemplateQuickReplyLabels(situation: CustomerNotificationType): Array<Record<Language, string>> {
+    return templateButtonGroups(situation).map(group => group[0].label);
+}
+
+/**
+ * The payload each template quick-reply button carries on THIS send, one per button, in the
+ * template's order — never fewer, because a template button cannot be dropped.
+ *
+ * Per button: the first member whose placeholders all resolve, else the group's
+ * `templateFallback`. The boot assertion guarantees one of the two exists.
+ */
+export function renderCustomerTemplateQuickReplies(
+    situation: CustomerNotificationType,
+    ctx: RenderContext
+): string[] {
+    return templateButtonGroups(situation).map(group => {
+        for (const action of group) {
+            const supplied = tokenPlaceholders(action.token).every(key => {
+                const value = ctx[key];
+                return value !== undefined && value !== null && String(value).length > 0;
+            });
+            if (supplied) return renderTemplate(action.token, ctx);
+        }
+        const fallback = group.find(action => action.templateFallback)?.templateFallback;
+        if (!fallback) {
+            throw createAppError(ERROR_CODES.CONFIG_NOTIFICATION_CATALOG_INCOMPLETE, 500,
+                `No payload for a '${situation}' template quick reply: no member resolved and none declares templateFallback`);
+        }
+        return fallback;
+    });
 }
 
 /** Pick a language's text, falling back to the default language. */
@@ -1663,8 +1881,9 @@ export function renderCustomerChannelText(
 }
 
 /** The Meta template name for a situation. */
-export function customerWhatsAppTemplateName(situation: CustomerNotificationType): string {
-    return CUSTOMER_NOTIFICATION_CATALOG[situation].whatsapp.template.name;
+export function customerWhatsAppTemplateName(situation: CustomerNotificationType): string | null {
+    // null for an in-window-only situation (`IN_WINDOW_ONLY_SITUATIONS`), which has none.
+    return CUSTOMER_NOTIFICATION_CATALOG[situation].whatsapp.template?.name ?? null;
 }
 
 /** Render the ordered WhatsApp template body parameters for a situation. */
@@ -1674,6 +1893,7 @@ export function renderCustomerWhatsAppTemplateParams(
     ctx: RenderContext
 ): string[] {
     const tpl = CUSTOMER_NOTIFICATION_CATALOG[situation].whatsapp.template;
+    if (!tpl) return [];
     const inApp = renderCustomerInApp(situation, lang, ctx);
     const merged: RenderContext = { ...ctx, title: inApp.title, message: inApp.message };
     return tpl.bodyParams.map(param => renderTemplate(param, merged));

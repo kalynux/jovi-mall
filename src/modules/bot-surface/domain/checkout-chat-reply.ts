@@ -2,7 +2,12 @@ import { WA_LIMITS } from '../../whatsapp/constants/whatsapp-limits';
 import type { BotAddressDto } from '../dto/bot-projections';
 import type { ChatDestinationBlocker } from '../miniapp/surfaces/checkout-destination';
 import { paymentRetryActionId, paymentStatusActionId } from './bot-action-id';
-import { checkoutConfirmActionId, checkoutDeclineActionId } from './bot-checkout-actions';
+import {
+    checkoutCashOnDeliveryActionId,
+    checkoutChooseAddressActionId,
+    checkoutConfirmActionId,
+    checkoutDeclineActionId,
+} from './bot-checkout-actions';
 import { botChrome, botChromeFill } from './bot-chrome-copy';
 import type { BotReplyIntent, BotReplyOption } from './channel-reply';
 
@@ -64,7 +69,8 @@ export interface ChatReviewForReply {
     delivery: { kind: 'digital'; to: string } | { kind: 'address'; address: BotAddressDto } | null;
     /** Default first, as the review sorts them. */
     addresses: readonly BotAddressDto[];
-    payment: { method: 'mobile_money'; phoneMasked: string | null };
+    /** `cashOnDelivery`: every pay-on-delivery rule passes — the confirmation then offers it. */
+    payment: { method: 'mobile_money'; phoneMasked: string | null; cashOnDelivery: boolean };
     addAddressUrl: string | null;
     /** Shops below their delivery minimum. Non-empty exactly when `blocker` is `below_delivery_minimum`. */
     deliveryShortfalls: readonly ChatReviewShortfall[];
@@ -185,10 +191,18 @@ export function checkoutReviewReply(
 
     const ref = review.checkoutRef;
     const phone = review.payment.phoneMasked;
-    if (!ref || !phone || !review.delivery || review.lines.length === 0) return null;
+    /**
+     * ⭐ Pay on delivery (owner, 2026-09-27) — physical only, so never for a download, and offered
+     * only when the review found every rule passing. It also means an account with NO wallet can
+     * still be offered a way to finish: Pay on delivery · Not now.
+     */
+    const cod = review.payment.cashOnDelivery && review.delivery?.kind === 'address';
+    if (!ref || !review.delivery || review.lines.length === 0) return null;
+    if (!phone && !cod) return null;
 
     const total = `${botChrome('checkoutTotalLabel', language)} ${review.totalText}`;
-    const wallet = `${botChrome('checkoutMobileMoneyLabel', language)} ${phone}`;
+    /** The wallet line only when there is one — Pay now is only offered with it. */
+    const wallet = phone ? [`${botChrome('checkoutMobileMoneyLabel', language)} ${phone}`] : [];
     const notNow: BotReplyOption = { id: checkoutDeclineActionId(ref), label: botChrome('notNowButton', language) };
     const chooser = {
         listButton: botChrome('chooseListButton', language),
@@ -199,7 +213,7 @@ export function checkoutReviewReply(
         const summary = [
             total,
             `${botChrome('checkoutSentToLabel', language)} ${clip(review.delivery.to, PLACE_CLIP)}`,
-            wallet,
+            ...wallet,
             '',
             botChrome('checkoutPlaceQuestion', language),
         ];
@@ -218,15 +232,27 @@ export function checkoutReviewReply(
         const summary = [
             total,
             `${botChrome('checkoutDeliverToLabel', language)} ${addressText(address)}`,
-            wallet,
+            ...wallet,
             '',
-            botChrome('checkoutPlaceQuestion', language),
+            botChrome(cod ? 'checkoutHowToPayQuestion' : 'checkoutPlaceQuestion', language),
         ];
+        /**
+         * ⭐ **Pay now FIRST, Pay on delivery beside it** (owner's choice), then Not now — three,
+         * WhatsApp's cap. Without pay on delivery the confirmation is exactly as before.
+         */
         return {
             kind: 'choice',
             text: confirmationBody(review, summary, language),
             options: [
-                { id: checkoutConfirmActionId(ref, address.id), label: botChrome('placeOrderButton', language) },
+                ...(phone
+                    ? [{
+                        id: checkoutConfirmActionId(ref, address.id),
+                        label: botChrome(cod ? 'checkoutPayNowButton' : 'placeOrderButton', language),
+                    }]
+                    : []),
+                ...(cod
+                    ? [{ id: checkoutCashOnDeliveryActionId(ref, address.id), label: botChrome('checkoutPayOnDeliveryButton', language) }]
+                    : []),
                 notNow,
             ],
             ...chooser,
@@ -241,13 +267,19 @@ export function checkoutReviewReply(
      * exists for: a Telegram button shows only its label (64 wide), a WhatsApp row shows a
      * 24-character title with a 72-character description under it. The renderer truncates both.
      */
-    const summary = [total, wallet, '', botChrome('checkoutChooseAddressQuestion', language)];
+    /**
+     * ⚠ **With pay on delivery on offer, a row CHOOSES the address instead of placing** — one list
+     * row is one tap and cannot also carry how to pay. The confirmation that follows for that
+     * address (`yes:coa:`) offers Pay now · Pay on delivery · Not now. Without it, rows place with
+     * mobile money exactly as before.
+     */
+    const summary = [total, ...wallet, '', botChrome('checkoutChooseAddressQuestion', language)];
     return {
         kind: 'choice',
         text: confirmationBody(review, summary, language),
         options: [
             ...deliverable.slice(0, MAX_ADDRESS_OPTIONS).map((address): BotReplyOption => ({
-                id: checkoutConfirmActionId(ref, address.id),
+                id: cod ? checkoutChooseAddressActionId(address.id) : checkoutConfirmActionId(ref, address.id),
                 label: addressText(address),
                 shortLabel: address.label?.trim() || clip(address.formattedAddress ?? '', LABEL_CLIP),
                 description: address.formattedAddress || null,
@@ -391,6 +423,26 @@ export function checkoutPlacedReply(
             botChrome('checkoutPaymentWait', language),
         ].join('\n'),
         actions: [{ id: paymentStatusActionId(placement.transactionId), label: botChrome('checkStatusButton', language) }],
+    };
+}
+
+/**
+ * The reply a PAY-ON-DELIVERY placement draws: the order numbers, and what happens at the door.
+ *
+ * ⚠ **No button and no amount** — nothing was charged, so there is no status to check and no
+ * payment to retry, and the cash due is on the delivery code the customer receives per parcel.
+ */
+export function checkoutCashOnDeliveryPlacedReply(
+    placement: { orderNumbers: readonly string[] },
+    language: string | null,
+): BotReplyIntent {
+    return {
+        kind: 'text',
+        text: [
+            `${botChrome('checkoutOrderPlacedLabel', language)} ${placement.orderNumbers.join(', ')}`,
+            '',
+            botChrome('checkoutCashOnDeliveryPlaced', language),
+        ].join('\n'),
     };
 }
 

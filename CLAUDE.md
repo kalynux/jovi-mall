@@ -978,12 +978,19 @@ whether or not its agent has paid up — that independence is what caps the plat
 must not be "simplified" into one balance.
 
 **Every leg is two-sided, and each in its own way.** Customer→agent is proven by the delivery code (a
-secret the payer holds). Agency→platform is declare + admin-confirm with an external transfer
-reference. Agent→agency was the odd one out until step 3f — the agency simply typed a number, which
+secret the payer holds). Agency→platform is declare + admin-confirm. Agent→agency was the odd one out until step 3f — the agency simply typed a number, which
 made its account of a handover unfalsifiable and left the agent wearing a `late_deposit` trust
 penalty for cash the agency had not recorded. It is now declare (agent) → confirm/reject (agency),
 with the agency's one-step `record()` kept for the desk. **A declaration moves no money** — that is
 what stops an agent freeing their own headroom by lying.
+
+**Every DECLARATION carries a required proof image; the reference is optional everywhere**
+(2026-09-27). Both declaring endpoints are `multipart/form-data` (`file` + text fields).
+`CodCashProofService` uploads into the private `cod-proofs/` tree only AFTER the balance rules
+pass, then writes the record and its `file_references` row in one transaction (an unreferenced
+File is swept), soft-deleting the upload if that fails. Quotas are OFF for this config: a full
+media cap must never refuse a cash hand-back. A one-step `record()` carries no proof — the
+receiver has the cash in hand.
 
 `AgentDeposit.recipient: 'platform'` lets an agent bypass the agency entirely: it settles both legs
 in one row (agent, contract, *and* the agency's liability + FIFO collection settlement). It is
@@ -1099,6 +1106,8 @@ The agent is a **platform identity, not an agency-owned record** — they sign u
 
 ⚠ **Since 2026-09-21 the pool itself is DERIVED — plan × KYC × administrator pin (owner decision).** `cod.max_threshold` is `0` while `kyc.status !== 'verified'`, otherwise the plan's new `PricingPlan.max_cod_pool` (seeded Free 500 000 · Plus 1 000 000 · Pro 2 000 000; ⚠ `null` there means **zero**, not unlimited), unless an administrator **pinned** one (`cod.pool_override`, which outranks the plan in both directions but never KYC). The agent may only **lower** it (`PUT /api/agent/cod/pool`); any change of ceiling resets that choice. The rule is pure in `agents/domain/services/agent-cod-pool.ts`; **`AgentCodPoolService` is the only writer** of `cod.max_threshold` / `cod.pool_*`, through one compare-and-set (`AgentRepository.writeCodPool`, keyed on `pool_synced_at`). It runs from four places: in-line after a KYC verdict (`AgentGateService.setKycStatus`), on `plan.activated`, on `pricing_plan.updated` (an in-place plan edit emits no `plan.activated`), and nightly in `AgentCodPoolReconcileWorker` — the lossy-bus backstop, and what converges agents written before the rule. Two consequences worth knowing: a sync can leave the pool **below** what contracts hold (a downgrade cannot be refused), so `CodExposureService.limitBreakdown` now caps each dispatch at `min(slice, pool)` (`poolBinds`); and `setAgentThreshold` / `setCodMaxThreshold` are **deleted** — a direct write of the pool would be undone by the next sync. `test:agent-cod-pool` pins all of it.
 
+⚠ **Since 2026-09-27 an UNVERIFIED agent's contract may carry a COD slice, and it is DORMANT** (owner decision: KYC gates COD cash only, not contracting). `AgentCodThresholdService.assertContractThresholdAllowed` skips the pool-headroom check while `kyc.status !== 'verified'` — the absolute per-contract min/max still apply — so approval with `cod.threshold > 0` or an agency threshold write no longer fails `CONTRACT_COD_THRESHOLD_EXCEEDS_HEADROOM` for them. The slice pays nothing: `CodExposureService` refuses every COD shipment with blocker `kyc_not_verified` (outranks trust / shortfall / exposure; `422 AGENT_KYC_NOT_VERIFIED`, `{ kycStatus, hint }`). Once verified, the pool opens to the plan value; if the dormant slices sum past it, `poolBinds` caps dispatch and `/cod-allocation` shows `overAllocatedBy > 0` — the same state a downgrade produces. COD therefore needs **both** a verified agency (checkout, `CodEligibilityService`) and a verified agent (dispatch).
+
 **The handshake is symmetric, and the terms are NEGOTIATED.** Both directions —
 `requestFromAgency` (an agency naming a specific agent, **terms required**) and `requestToJoin` (an
 agent applying, terms optional) — land in `pending`; neither shortcuts to `active`.
@@ -1140,7 +1149,9 @@ repository, service, and all six routes) was deleted: an agency finds agents thr
 `GET /api/agency/agents/browse` and requests one by id, and an agent finds agencies through
 `GET /api/agent/agencies/browse`. `AgentDirectoryService` owns both, deliberately apart from the
 contract FSM. The directory's hard filter is `assertCanHoldContract` plus completed onboarding —
-listing an agent who cannot accept would render a button whose request dead-ends. Exposure is a
+listing an agent who cannot accept would render a button whose request dead-ends. (Since
+2026-09-27 that means active + not platform-banned only: KYC left the contract gate, so
+unverified agents ARE listed, with `kycVerified: false` as the badge.) Exposure is a
 **public work profile only**: `AgentDirectoryMapper` never emits email, phone, `legal_identity`,
 `payout_details`, `emergency_contact`, device telemetry or raw capacity counters, and load is the
 `working_state` label rather than a count. `AgentRosterEntryDto` *does* carry contact details — the
@@ -1173,7 +1184,12 @@ Four state axes are kept deliberately separate — collapsing any two makes "is 
 | `tracking.allowed` | may he be tracked? | admin (`PUT /api/internal/admin/agents/:agentId/tracking-allow`) — there is no agency or agent write path |
 
 Two more are worth knowing because nothing agent-facing writes them either: `kyc.status` (admin;
-**eligibility passes only on `verified`**, so an unverified agent is undispatchable) and
+⚠ **since 2026-09-27 it gates COD cash ONLY** — owner decision, "verification is a trust badge,
+not a licence to work": an unverified agent may contract, be browsed and be dispatched prepaid
+work, while `CodExposureService` refuses every COD shipment to them with `422
+AGENT_KYC_NOT_VERIFIED` and their pool stays `0`. Before that date eligibility passed only on
+`verified` and an unverified agent was undispatchable — do not restore it, it would take all
+prepaid work from every new agent) and
 `capacity.max_active_shipments` (the billing plan, via `AgentPlanCapacityConsumer` — never the
 agent, or a plan renewal would undo it). Both are readable on the agent's profile.
 
@@ -1214,7 +1230,7 @@ Run `npm run audit:trust-shadow [-- --json]` to see the two numbers side by side
 
 Consume the domain through the barrel (`src/modules/agents/index.ts`) — **except routes**, which the API layer imports directly from `routes/*`. Routers pull in `auth.middleware` → `auth.service` → the barrel; re-exporting routes from it closes a require cycle that crashes at boot with "AuthService is not a constructor".
 
-**Eligibility** (`agent-eligibility.service.ts`) gates assignment on the agent: active · an **`active` contract** with the *dispatching* agency · online · tracking allowed · device location not disabled · under capacity. It reports **every** failed rule at once, never just the first. An agent may hold several active shipments — capacity bounds that, and counts across all agencies. Note the second rule is still **keyed `approved`** on the wire and reports `membership_not_approved`; that is the old vocabulary kept for clients, and what it tests is `findActive` — `paused` and `suspended` contracts fail it even though they still consume the pool.
+**Eligibility** (`agent-eligibility.service.ts`) gates assignment on the agent: active · an **`active` contract** with the *dispatching* agency · online · tracking allowed · device location not disabled · under capacity. It reports **every** failed rule at once, never just the first. An agent may hold several active shipments — capacity bounds that, and counts across all agencies. Note the second rule is still **keyed `approved`** on the wire and reports `membership_not_approved`; that is the old vocabulary kept for clients, and what it tests is `findActive` — `paused` and `suspended` contracts fail it even though they still consume the pool. ⚠ KYC is **not** a rule here since 2026-09-27 — `kyc_not_verified` is gone from the reasons; KYC now refuses COD shipments only, in the `cod_exposure` contract gate below.
 
 **Contract terms gate the SHIPMENT, and live elsewhere.** `evaluate(agentId, agencyId)` takes no shipment, so a rule that needs one cannot go there. `contract-coverage.service.ts` holds the two pure predicates — `contractCoversRegion` (against `order.delivery_address.components.region`) and `contractAllowsShipmentValue` — enforced in `AssignmentCandidateService.buildRanking` (the auto pool) and in `ShipmentAssignmentService.assertContractPolicy`, which runs on **all three** command paths: `offerToAgent`, `accept` and `reassign`. Gate the ranking but miss a command path and a manual assign silently bypasses the term, which is worse than not enforcing it — the rule would appear to work.
 
@@ -1280,7 +1296,7 @@ Generic `BaseRepository<TDoc, TDomain>` provides: `findOne`, `findById`, `pagina
 ### Storage (`src/core/storage/`)
 Factory + Strategy pattern. Active provider is selected via `STORAGE_PROVIDER` env var (`local` | `firebase` | `cloudinary`). Use `getStorageProvider()` singleton — never instantiate providers directly. Interface: `IStorageProvider` in `storage-provider.interface.ts`.
 
-**Several storage trees are PRIVATE, and the classification is `core/storage/storage-trees.ts`** (ADR-A01 D-2) — `digital/`, `shipments/`, `kyc/`, `admin-identity/` and `ticket-attachments/` today. They are off `express.static`; every other tree is mounted, and the mount list is **derived** from that table so the two cannot drift. An **unknown tree is private** — `isPrivateStorageKey` fails closed, so a tree added next year is private until somebody classifies it, and `test:uploads` fails if any `folder:` literal is unclassified rather than letting its files 404 silently.
+**Several storage trees are PRIVATE, and the classification is `core/storage/storage-trees.ts`** (ADR-A01 D-2) — `digital/`, `shipments/`, `cod-proofs/`, `kyc/`, `admin-identity/` and `ticket-attachments/` today. They are off `express.static`; every other tree is mounted, and the mount list is **derived** from that table so the two cannot drift. An **unknown tree is private** — `isPrivateStorageKey` fails closed, so a tree added next year is private until somebody classifies it, and `test:uploads` fails if any `folder:` literal is unclassified rather than letting its files 404 silently.
 
 ⚠ **This sentence said "Three storage trees" until 2026-09-14 and named three.** Two landed that day from separate pieces of work — `kyc/` (a vendor's, agency's or agent's identity documents) and `admin-identity/` (a staff member's) — so **re-read the table rather than this paragraph**; `test:uploads` pins the exact list and is what is authoritative. The two new ones are deliberately **separate trees** despite holding the same kind of document: one holds applicants, the other employees, and a retention or export policy written for either must not silently apply to both.
 

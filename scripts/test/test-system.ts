@@ -1439,7 +1439,13 @@ section('Worker inventory — the thirteenth worker was invisible to every surfa
 // 19 -> 20 (2026-09-21): AgentCodPoolReconcileWorker, the durability half of the agent COD
 // pool rule (plan × KYC verdict × admin pin) — a lost `plan.activated` would otherwise leave a
 // downgraded agent on the larger pool, and it is what converges agents written before the rule.
-assert('the inventory now holds 20 workers', () => WORKER_INVENTORY.length === 20);
+// 20 -> 21 (2026-09-27): AbandonedCartWorker, the basket reminder — ships OFF
+// (CART_REMINDER_ENABLED), so it is registered and triggerable but not scheduled by default.
+assert('the inventory now holds 21 workers', () => WORKER_INVENTORY.length === 21);
+
+assert('abandoned-cart is registered AND triggerable', () =>
+    WORKER_KEYS.includes('abandoned-cart' as never)
+    && WORKER_INVENTORY.some((e) => e.key === 'abandoned-cart' && e.triggerable));
 
 assert('agent-cod-pool-reconcile is registered AND triggerable', () =>
     WORKER_KEYS.includes('agent-cod-pool-reconcile' as never)
@@ -1505,8 +1511,8 @@ const WORKER_SOURCES = [
         readFileSync(join(SRC, 'core', 'jobs', 'aggregation-scheduler.ts'), 'utf8')) },
 ];
 
-assert('the scan sees every worker file — 19 module workers plus the scheduler', () =>
-    WORKER_SOURCES.length === 20);
+assert('the scan sees every worker file — 20 module workers plus the scheduler', () =>
+    WORKER_SOURCES.length === 21);
 
 assert('EVERY worker routes its pass through withWorkerLock', () => {
     const missing = WORKER_SOURCES.filter(({ code }) => !code.includes('withWorkerLock('));

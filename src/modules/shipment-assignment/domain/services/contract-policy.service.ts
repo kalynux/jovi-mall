@@ -45,6 +45,7 @@ export interface GateRemedy {
     | 'raise_trust_score'
     | 'raise_contract_threshold'
     | 'resolve_cash_shortfall'
+    | 'verify_agent_kyc'
     | 'add_coverage_region'
     | 'raise_shipment_value_ceiling'
     | 'activate_contract'
@@ -410,6 +411,7 @@ export class ContractPolicyService {
   // ─── Explanation helpers ──────────────────────────────────────────────────
 
   private codReasonCode(verdict: CodCapacityVerdict): string {
+    if (verdict.blocker === 'kyc_not_verified') return ERROR_CODES.AGENT_KYC_NOT_VERIFIED;
     return verdict.blocker === 'exposure_exceeded'
       ? ERROR_CODES.COD_AGENT_EXPOSURE_EXCEEDED
       : ERROR_CODES.COD_AGENT_TRUST_TOO_LOW;
@@ -425,6 +427,11 @@ export class ContractPolicyService {
           : `trust below ${limit.reducedThreshold} (${limit.trustScore}), which blocks COD entirely`;
 
     switch (verdict.blocker) {
+      case 'kyc_not_verified':
+        return (
+          `Refused on KYC: the agent's identity is ${verdict.kycStatus}, and only a verified agent may carry ` +
+          'cash on delivery. Prepaid shipments are unaffected.'
+        );
       case 'trust_too_low':
         return `Refused on trust: ${tier}.`;
       case 'open_cash_shortfall':
@@ -451,6 +458,12 @@ export class ContractPolicyService {
 
     if (verdict.blocker === 'open_cash_shortfall') {
       return [{ action: 'resolve_cash_shortfall' }];
+    }
+
+    // Nothing an agency can deposit, raise or wait out changes this one — the
+    // remedies below would each send an operator to the wrong screen.
+    if (verdict.blocker === 'kyc_not_verified') {
+      return [{ action: 'verify_agent_kyc', params: { kycStatus: verdict.kycStatus } }];
     }
 
     const remedies: GateRemedy[] = [];

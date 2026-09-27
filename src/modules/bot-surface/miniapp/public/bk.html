@@ -124,6 +124,13 @@
 
   function explain(res) {
     if (res.status === 410 || res.status === 404) return copy.expired;
+    /*
+     * A 409 at Confirm is a time somebody else took first — not our fault and not theirs, so it
+     * is said as that rather than as "something went wrong". ⚠ Back is NOT re-enabled: the
+     * confirm already spent the handle, so the day list would answer "no longer available".
+     * The sentence sends them to the chat, which can open a fresh picker.
+     */
+    if (res.status === 409) return copy.slotTaken || FALLBACK.slotTaken;
     return copy.failed;
   }
 
@@ -240,10 +247,12 @@
     pickTime: "Choose a time",
     confirm: "Confirm",
     back: "Back",
-    sent: "Done — I have told you in the chat."
+    sent: "Done — I have told you in the chat.",
+    slotTaken: "Somebody just took that time. Ask me again in the chat and I will show you what is left."
   };
 
-  json("/api/bot/miniapp/copy?lang=" + encodeURIComponent(lang), { headers: { Accept: "application/json" } })
+  /* ⚠ `base + "/copy"`, as every other screen — see the same line in `bl.html`. */
+  json(base + "/copy?lang=" + encodeURIComponent(lang), { headers: { Accept: "application/json" } })
     .then(function (res) { copy = (res.body && res.body.data && res.body.data.copy) || FALLBACK; })
     .catch(function () { copy = FALLBACK; })
     .then(function () {

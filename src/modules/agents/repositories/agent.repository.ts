@@ -114,8 +114,9 @@ export class AgentRepository {
   /**
    * Agents an agency may browse and send a contract request to.
    *
-   * The four hard filters are exactly `AgentGateService.assertCanHoldContract`
-   * plus completed onboarding — the gate every request must clear anyway.
+   * The hard filters are exactly `AgentGateService.assertCanHoldContract`
+   * (not banned) plus an active account with completed onboarding — the gate
+   * every request must clear anyway. KYC is NOT one of them (2026-09-27).
    * Listing an agent who fails it would render a Request button whose request
    * is refused, so the directory refuses to show them instead.
    *
@@ -138,7 +139,9 @@ export class AgentRepository {
     const match: Record<string, unknown> = {
       status: 'active',
       onboarding_step: AgentOnboardingStep.COMPLETED,
-      'kyc.status': 'verified',
+      // No KYC filter since 2026-09-27: an unverified agent can hold a contract and
+      // take prepaid work, so hiding them would dead-end nothing and cost them
+      // their only way in. `kyc.status` is projected below as the verified badge.
       'platform_ban.banned': { $ne: true },
     };
 
@@ -599,11 +602,11 @@ export class AgentRepository {
    * `AgentEligibilityService`) and appearing in an agency's browse directory.
    *
    * ⚠ **Activating an agent does NOT make them dispatchable, and must not be read that way.**
-   * The eligibility rules are ordered and `status` is only the third: a platform ban and an
-   * unverified KYC still refuse the agent before it is even consulted, and an active contract
-   * and Tracking Allow are still required after it. Holding COD cash likewise remains gated
-   * on KYC via `AgentGateService.assertCanHoldContract`, which reads the verdict and never
-   * this field — which is why the cash rule survived this change untouched.
+   * The eligibility rules are ordered and `status` is only the second: a platform ban still
+   * refuses the agent before it is even consulted, and an active contract and Tracking Allow
+   * are still required after it. Holding COD cash remains gated on KYC — by the
+   * `cod_exposure` gate in `CodExposureService`, which reads the verdict and never this field.
+   * KYC gates nothing else (owner decision 2026-09-27).
    */
   async activateIfFundamentalsMet(userId: string, session?: ClientSession): Promise<IDeliveryAgent | null> {
     const query = DeliveryAgentModel.findOneAndUpdate(

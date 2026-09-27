@@ -54,12 +54,17 @@ import { AppError, createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
 import type { Slot } from '../../../booking/types/booking.types';
 import {
-    BOOKING_TEXT_CAPS,
     bookingScreenCopy,
     bookingSpotsLeft,
     bookingTimesAvailable,
-    fitBookingRowTitle,
 } from '../../domain/bot-booking-copy';
+import {
+    assertSomethingDue,
+    payPurposeOrRefuse,
+    CustomerBookingRow,
+    CustomerBookingSource,
+    projectCustomerBookings,
+} from './booking-rows';
 
 /**
  * ⚠ **Its own instance, exactly as every other door holds one** (`bot-booking.controller.ts`,
@@ -387,7 +392,12 @@ export async function confirmBooking(
             input.slotId,
             session.owner,
             session.owner,
-            input.notes ? { notes: input.notes } : undefined,
+            /**
+             * `bookedInChat` — the SESSION's chat, never anything the page sent — is what makes
+             * this booking's confirmation ONE message: the receipt this conversation sends, with
+             * the platform's own "booking created" kept in the inbox (owner, 2026-09-27).
+             */
+            { ...(input.notes ? { notes: input.notes } : {}), bookedInChat: session.channel },
         );
         return receiptFor(created.booking, productId, false, languageOf(session.language));
     } catch (error) {
@@ -457,6 +467,13 @@ export async function readBookingPayment(handle: string): Promise<{
     }
 
     const { booking, customer } = await payableBooking(session.bookingId, session.owner);
+    /**
+     * ⛔ **Refused HERE, at the read — never left for Pay.** A cancelled or already-paid
+     * appointment used to draw "Pay XAF 15,000" and refuse only when Pay was pressed, by which
+     * time `consume` had spent the handle and the page stayed latched: a dead screen at the moment
+     * of paying. Refused now, it costs nothing and the page says `payNothingDue`.
+     */
+    assertSomethingDue(booking, session.purpose);
     const language = languageOf(session.language);
     const timezone = await shopTimezone(booking.vendorId);
     const product = await ProductModel.findById(booking.productId).select('title').lean();
@@ -519,9 +536,16 @@ export async function payBooking(
         assertNetworkChargeable(gateway, payerNumber, true);
 
         const channel = { phoneNumber: payerNumber };
+        /**
+         * ⭐ **The outcome goes to the chat this screen was opened from.** `session.channel` is the
+         * conversation the tap came from, stamped by `openInAppScreen` and never by the page — so
+         * a browser cannot redirect somebody's receipt. Without it the result took the preference
+         * order (Telegram → email → WhatsApp) and a WhatsApp customer was told by email.
+         */
+        const origin = { originChat: session.channel };
         const result = session.purpose === 'balance'
-            ? await paymentOrchestrator.initiateBookingBalancePayment(String(booking._id), gateway, channel)
-            : await paymentOrchestrator.initiateBookingPayment(String(booking._id), gateway, channel);
+            ? await paymentOrchestrator.initiateBookingBalancePayment(String(booking._id), gateway, channel, origin)
+            : await paymentOrchestrator.initiateBookingPayment(String(booking._id), gateway, channel, origin);
 
         return {
             transactionId: result.transactionId,
@@ -531,6 +555,50 @@ export async function payBooking(
     } catch (error) {
         throw markSpent(error);
     }
+}
+
+/**
+ * **Pay**, pressed on a row of the appointments list — mint the payment screen for that booking.
+ *
+ * ── ⚠ WHAT THIS IS AND IS NOT ───────────────────────────────────────────────
+ * It charges NOTHING. It opens `bp`, which shows the amount (re-resolved there) and takes the
+ * payment only when Pay is pressed on it — every money rule of that screen stays where it is.
+ *
+ * ⛔ **The page sends a booking id and nothing else**, and the id is checked against the LIST'S
+ * owner in the query (`payableBooking`): another customer's id is a 404, never a 403. The new
+ * session inherits the list session's owner, chat and language — the page can name neither,
+ * which is what keeps the payment's result going to this customer's own conversation.
+ *
+ * The `bl` handle is READ, not spent: the list is repeatable, and a customer who backs out of
+ * paying comes back to it.
+ */
+export async function openPaymentFromList(
+    handle: string,
+    input: { bookingId?: unknown },
+): Promise<{ handle: string; language: string | null }> {
+    const session = await inAppSurfaceStore.read('bl', handle);
+    if (!session) {
+        throw createAppError(ERROR_CODES.BOT_SCREEN_SESSION_EXPIRED, 410, undefined, { kind: 'bl' });
+    }
+    const bookingId = typeof input.bookingId === 'string' ? input.bookingId : '';
+    if (!Types.ObjectId.isValid(bookingId)) {
+        throw createAppError(ERROR_CODES.PAYMENT_BOOKING_NOT_FOUND, 404, undefined, { bookingId });
+    }
+
+    const { booking } = await payableBooking(bookingId, session.owner);
+    const purpose = payPurposeOrRefuse(booking);
+
+    const paymentHandle = await inAppSurfaceStore.mint({
+        kind: 'bp',
+        owner: session.owner,
+        customerId: session.customerId,
+        channel: session.channel,
+        externalId: session.externalId,
+        language: session.language,
+        bookingId,
+        purpose,
+    });
+    return { handle: paymentHandle, language: session.language };
 }
 
 /**
@@ -609,42 +677,50 @@ export async function readCustomerBookings(input: {
     userId: string;
     language?: string | null;
     limit?: number;
-}): Promise<{ bookings: Array<{ bookingId: string; reference: string; label: string; when: string; timezone: string; title: string; description: string }> }> {
+    /** Defaults to now. Present so a test can ask about a fixed moment. */
+    now?: Date;
+}): Promise<{ copy: ReturnType<typeof bookingScreenCopy>; bookings: CustomerBookingRow[] }> {
     const language = languageOf(input.language);
     const limit = Math.min(Math.max(input.limit ?? 20, 1), 20);
+    const now = input.now ?? new Date();
+    const mine = { userId: new Types.ObjectId(input.userId), deletedAt: null };
 
-    const rows = await Booking.find({
-        userId: new Types.ObjectId(input.userId),
-        deletedAt: null,
-    })
-        .sort({ startAt: -1 })
+    /**
+     * ⚠ **Two reads, because "the next appointment first" cannot be one sort.** Upcoming ones
+     * ascend from now; past ones descend from now. A single `startAt` sort puts one end of the
+     * calendar on top whichever direction it runs — descending, which this used to be, put the
+     * appointment furthest in the future first and buried the one the customer is about to attend.
+     * The past fills only what the upcoming ones leave of the cap.
+     */
+    const upcoming = await Booking.find({ ...mine, startAt: { $gte: now } })
+        .sort({ startAt: 1 })
         .limit(limit)
         .populate<{ productId: { title?: string } }>('productId', 'title')
         .lean();
+    const past = upcoming.length < limit
+        ? await Booking.find({ ...mine, startAt: { $lt: now } })
+            .sort({ startAt: -1 })
+            .limit(limit - upcoming.length)
+            .populate<{ productId: { title?: string } }>('productId', 'title')
+            .lean()
+        : [];
 
-    const bookings = [];
-    for (const row of rows) {
-        const timezone = await shopTimezone((row as { vendorId: unknown }).vendorId);
-        const startAt = (row as { startAt: Date }).startAt;
-        const service = (row as { productId?: { title?: string } }).productId?.title ?? '';
-        const when = `${dayLabel(startAt, timezone, language)} ${timeLabel(startAt, timezone, language)}`;
-        const reference = String((row as { bookingNumber?: string })?.bookingNumber ?? '');
+    const bookings = await projectCustomerBookings(
+        [...upcoming, ...past] as unknown as CustomerBookingSource[],
+        {
+            language,
+            now,
+            limit,
+            timezoneOf: shopTimezone,
+            when: (startAt, timezone) =>
+                `${dayLabel(startAt, timezone, language)} ${timeLabel(startAt, timezone, language)}`,
+        },
+    );
 
-        bookings.push({
-            bookingId: String((row as { _id: unknown })._id),
-            reference,
-            label: service,
-            when,
-            timezone,
-            /**
-             * ⚠ **The row's own title, with the TIME kept whole.** Two appointments for the same
-             * service differ by nothing but their time, so a title cut before it renders two
-             * identical rows — in the longer languages first. `fitBookingRowTitle` shortens the
-             * service instead.
-             */
-            title: fitBookingRowTitle(service, when),
-            description: reference.slice(0, BOOKING_TEXT_CAPS.rowDescription),
-        });
-    }
-    return { bookings };
+    /**
+     * ⚠ **The screen's words travel WITH the rows**, as the picker's and the payment screen's do.
+     * `bl.html` always read `data.copy`, and this read never sent one — so the whole list, title
+     * and empty state included, was English in all five languages.
+     */
+    return { copy: bookingScreenCopy(language), bookings };
 }

@@ -5,6 +5,8 @@ import { commandRouterService } from '../../bot-commands/services/command-router
 import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
 import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { BotCommandDispatchSchema } from '../validators/bot.validators';
+import { openBookingsScreen } from './bot-booking.controller';
+import { beginBargainFromLink } from '../services/bargain-entry.service';
 
 /**
  * `POST /command` — the typed slash-command door.
@@ -76,6 +78,46 @@ export class BotCommandController {
                 handled: false,
                 command: outcome.command,
                 reason: outcome.reason,
+            });
+            return;
+        }
+
+        /**
+         * `/bookings` — opened HERE because a screen session is bound to the resolved caller and
+         * this conversation, and the router has neither. Same function as the `open:bl` tap.
+         * ⚠ The handle is a credential (§ 19.5) and is deliberately NOT echoed in `data`.
+         */
+        if (outcome.kind === 'open_screen') {
+            await openBookingsScreen(req);
+            sendSuccess(res, { handled: true, command: outcome.command, outcome: 'executed' });
+            return;
+        }
+
+        /**
+         * ⭐ The website's Bargain link (`/bargain <p> <v>`, `/start bargain_<p>_<v>`). Finished
+         * HERE for the reason `/bookings` is: the hand-off to the bargaining agent is recorded
+         * against the resolved caller and this conversation, which only the request carries.
+         * A refusal (a bad id, sold out, taken down) is thrown and answered in the customer's
+         * language like any other refusal on this surface.
+         */
+        if (outcome.kind === 'bargain') {
+            const result = await beginBargainFromLink(
+                {
+                    userId: caller.userId,
+                    customerId: caller.customerId,
+                    channel: caller.channel,
+                    externalId: caller.externalIdentity,
+                    language: botResponseLanguageOf(req),
+                },
+                outcome.ids,
+            );
+            setBotReply(req, result.intent);
+            sendSuccess(res, {
+                handled: true,
+                command: outcome.command,
+                outcome: result.outcome,
+                productId: result.productId,
+                variantId: result.variantId,
             });
             return;
         }

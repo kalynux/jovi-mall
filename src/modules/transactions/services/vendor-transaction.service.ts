@@ -7,6 +7,7 @@ import {
   CreditReasonCode,
 } from '../../billing/models/credit-transaction.model';
 import { EarningsLedgerModel, IEarningsLedger } from '../../earnings/models/earnings-ledger.model';
+import { PayoutRequestModel, IPayoutRequest } from '../../earnings/models/payout-request.model';
 import { earningsAccountService } from '../../earnings/services/earnings-account.service';
 import { VendorTransaction, TransactionCategory } from '../transaction.types';
 import { BillingOwnerType } from '../../billing/billing.types';
@@ -48,7 +49,9 @@ export class VendorTransactionService {
     const wantPlan = !category || category === 'plan';
     const wantCredit = !category || category === 'credit';
     const wantEarning = !category || category === 'earning';
-    // `payout` has no data yet → all flags false → empty feed.
+    // Served since 2026-09-27. Payout movements write no earnings-ledger rows
+    // (`earnings-account.service.ts`), so without these the feed could never reconcile.
+    const wantPayout = !category || category === 'payout';
 
     const planFilter = { owner_type: ownerType, owner_id: ownerId };
     const topupFilter = { owner_type: ownerType, owner_id: ownerId };
@@ -58,11 +61,19 @@ export class VendorTransactionService {
       reason_code: { $nin: TOPUP_REASON_CODES },
     };
     const earningFilter = { owner_type: ownerType, owner_id: ownerId };
+    const payoutFilter = { owner_type: ownerType, owner_id: ownerId };
 
     // Earnings rows don't store their own currency — read it from the account once.
     const earningsCurrency = wantEarning
       ? (await earningsAccountService.getBalances(ownerType, ownerIdStr)).currency
       : 'XAF';
+
+    const [payoutDocs, payoutCount] = await Promise.all([
+      wantPayout
+        ? PayoutRequestModel.find(payoutFilter).sort({ created_at: -1 }).limit(fetchN).exec()
+        : Promise.resolve([] as IPayoutRequest[]),
+      wantPayout ? PayoutRequestModel.countDocuments(payoutFilter) : Promise.resolve(0),
+    ]);
 
     const [planDocs, topupDocs, creditDocs, earningDocs, planCount, topupCount, creditCount, earningCount] =
       await Promise.all([
@@ -88,10 +99,11 @@ export class VendorTransactionService {
       ...planDocs.map(this.mapPlanPurchase),
       ...topupDocs.map(this.mapTopup),
       ...creditDocs.map(this.mapCreditTransaction),
-      ...earningDocs.map((d) => this.mapEarning(d, earningsCurrency)),
+      ...earningDocs.map((d) => mapEarning(d, earningsCurrency, ownerType)),
+      ...payoutDocs.map(mapPayout),
     ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
-    const total = planCount + topupCount + creditCount + earningCount;
+    const total = planCount + topupCount + creditCount + earningCount + payoutCount;
     const start = (page - 1) * limit;
     return { data: merged.slice(start, start + limit), total, page, limit };
   }
@@ -149,28 +161,82 @@ export class VendorTransactionService {
     };
   }
 
-  private mapEarning(e: IEarningsLedger, currency: string): VendorTransaction {
-    const description =
-      e.entry_type === 'hold'
-        ? `Earning held from ${e.source_type} sale`
-        : e.entry_type === 'release'
-          ? 'Earning released to available balance'
-          : 'Earning reversed (refund)';
+}
 
-    return {
-      id: e._id.toString(),
-      category: 'earning',
-      type: `earning_${e.entry_type}`,
-      status: e.entry_type,
-      unit: 'money',
-      direction: e.entry_type === 'reversal' ? 'out' : 'in',
-      amount: e.amount,
-      currency,
-      description,
-      source: { type: e.source_type, id: e.source_id.toString() },
-      createdAt: e.created_at,
-    };
-  }
+const SOURCE_LABEL: Record<string, string> = {
+  order: 'an online order',
+  cod_collection: 'a cash-on-delivery collection',
+  shipment: 'a delivery',
+  booking: 'a booking',
+};
+
+/**
+ * One earnings-ledger row as a feed row. Exported for `test:transactions-feed`.
+ *
+ * ── Directions (2026-09-27) ───────────────────────────────────────────────────
+ *  - `hold` → **in**: money credited to the owner (held in escrow).
+ *  - `release` → **internal**: the SAME money moving escrow → available. It used to be `in`,
+ *    which counted every earning twice.
+ *  - `reversal` → **out**: held money taken back (a full refund).
+ *  - `reserve_hold` / `reserve_release` → **internal**: available ↔ the agency's COD reserve.
+ *    They were labelled "Earning reversed (refund)" and marked `in`.
+ */
+export function mapEarning(e: IEarningsLedger, currency: string, ownerType: string): VendorTransaction {
+  const from = SOURCE_LABEL[e.source_type] ?? e.source_type;
+  const what = ownerType === 'vendor' ? 'Sale' : 'Delivery earning';
+  const byType: Record<string, { direction: VendorTransaction['direction']; description: string }> = {
+    hold: { direction: 'in', description: `${what} credited from ${from} — held in escrow` },
+    release: { direction: 'internal', description: 'Earning released from escrow to your available balance' },
+    reversal: { direction: 'out', description: `Earning reversed — ${from} was refunded` },
+    reserve_hold: { direction: 'internal', description: 'Moved to your COD reserve (security against cash shortfalls)' },
+    reserve_release: { direction: 'internal', description: 'Returned from your COD reserve to your available balance' },
+  };
+  const mapped = byType[e.entry_type] ?? { direction: 'internal' as const, description: 'Earnings movement' };
+
+  return {
+    id: e._id.toString(),
+    category: 'earning',
+    type: `earning_${e.entry_type}`,
+    status: e.entry_type,
+    unit: 'money',
+    direction: mapped.direction,
+    amount: e.amount,
+    currency,
+    description: mapped.description,
+    source: { type: e.source_type, id: e.source_id.toString() },
+    createdAt: e.created_at,
+  };
+}
+
+/**
+ * One payout request as a feed row. Exported for `test:transactions-feed`.
+ *
+ * Only a PAID payout leaves the owner's money (`out`). Pending/processing money is reserved
+ * inside the owner's balances (available → requested), and a rejected or failed one went back to
+ * available — both `internal`. The destination is never printed: the method kind only.
+ */
+export function mapPayout(p: IPayoutRequest): VendorTransaction {
+  const method = (p as unknown as { payout_method_snapshot?: { method?: string } | null }).payout_method_snapshot?.method;
+  const label: Record<string, string> = {
+    paid: 'Payout sent',
+    pending: 'Payout requested — awaiting review',
+    processing: 'Payout being sent',
+    rejected: 'Payout rejected — amount returned to your available balance',
+    failed: 'Payout failed — amount returned to your available balance',
+  };
+  return {
+    id: p._id.toString(),
+    category: 'payout',
+    type: 'payout',
+    status: p.status,
+    unit: 'money',
+    direction: p.status === 'paid' ? 'out' : 'internal',
+    amount: p.amount,
+    currency: p.currency,
+    description: `${label[p.status] ?? 'Payout'}${method ? ` (${method})` : ''}`,
+    source: { type: 'payout', id: p._id.toString() },
+    createdAt: p.created_at,
+  };
 }
 
 export const vendorTransactionService = new VendorTransactionService();

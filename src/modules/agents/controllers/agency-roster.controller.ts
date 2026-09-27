@@ -38,6 +38,29 @@ import { getStorageProvider } from '../../../core/storage';
 import { resolveFileDetail, resolveFileDetails } from '../../catalog/read-models/file-detail.resolver';
 import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
 import { IDeliveryAgent } from '../models/agent.model';
+import { Types } from 'mongoose';
+import { ShipmentModel } from '../../shipments/shipment.model';
+import { ACTIVE_SHIPMENT_STATUSES } from '../config/agent.config';
+
+/**
+ * How many shipments each agent is carrying for THIS agency right now — the roster's
+ * `activeShipmentsForYou`, beside the cross-agency total (2026-09-27). One grouped count for the
+ * page, over the same status set as the agent's capacity counter.
+ */
+async function activeForAgency(agencyIdValue: string, agentIds: string[]): Promise<Map<string, number>> {
+  if (agentIds.length === 0) return new Map();
+  const rows = await ShipmentModel.aggregate<{ _id: unknown; n: number }>([
+    {
+      $match: {
+        agency_id: new Types.ObjectId(agencyIdValue),
+        agent_id: { $in: agentIds.map((id) => new Types.ObjectId(id)) },
+        status: { $in: [...ACTIVE_SHIPMENT_STATUSES] },
+      },
+    },
+    { $group: { _id: '$agent_id', n: { $sum: 1 } } },
+  ]);
+  return new Map(rows.map((r) => [String(r._id), r.n]));
+}
 
 const fileRepository = new FileRepositoryMongo();
 const storageProvider = getStorageProvider();
@@ -305,13 +328,22 @@ export class AgencyRosterController {
     const agentIds = result.data.map((m) => m.agent_id.toString());
     const agents = await agentRepository.findManyByIds(agentIds);
     const agentById = new Map(agents.map((a) => [a._id.toString(), a]));
-    const avatarByAgent = await resolveAgentAvatars(agents);
+    const [avatarByAgent, forYou] = await Promise.all([
+      resolveAgentAvatars(agents),
+      activeForAgency(agencyId(req), agentIds),
+    ]);
 
     const data = result.data.map((membership) => {
       const agent = agentById.get(membership.agent_id.toString());
       return {
         membership: AgentMembershipMapper.toDto(membership),
-        agent: agent ? AgentProfileMapper.toRosterEntryDto(agent, avatarByAgent.get(agent._id.toString()) ?? null) : null,
+        agent: agent
+          ? AgentProfileMapper.toRosterEntryDto(
+              agent,
+              avatarByAgent.get(agent._id.toString()) ?? null,
+              forYou.get(agent._id.toString()) ?? 0,
+            )
+          : null,
         cashHeld: membership.cod?.outstanding_balance ?? 0,
       };
     });
@@ -680,10 +712,19 @@ export class AgencyRosterController {
   static listEligible = asyncHandler(async (req: Request, res: Response) => {
     const agentIds = await agentEligibilityService.listEligibleAgentIds(agencyId(req));
     const agents = await agentRepository.findManyByIds(agentIds);
-    const avatarByAgent = await resolveAgentAvatars(agents);
+    const [avatarByAgent, forYou] = await Promise.all([
+      resolveAgentAvatars(agents),
+      activeForAgency(agencyId(req), agents.map((a) => a._id.toString())),
+    ]);
     res.json({
       success: true,
-      data: agents.map((a) => AgentProfileMapper.toRosterEntryDto(a, avatarByAgent.get(a._id.toString()) ?? null)),
+      data: agents.map((a) =>
+        AgentProfileMapper.toRosterEntryDto(
+          a,
+          avatarByAgent.get(a._id.toString()) ?? null,
+          forYou.get(a._id.toString()) ?? 0,
+        ),
+      ),
     });
   });
 

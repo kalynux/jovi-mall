@@ -40,6 +40,7 @@ The reasoning: a customer is the *counterparty* to someone else's action here, n
 |---|---|---|
 | `bookingUpdates` | booking created · confirmed · rescheduled · completed | `true` |
 | `bookingReminders` | the pre-appointment reminder | `true` |
+| `cartReminders` | the abandoned-basket reminder (`cart.abandoned`) — added 2026-09-27; a preference document written before then has no value and reads as `true` | `true` |
 | `orderUpdates` | order created · shipped · out for delivery · delivered · delivery failed | `true` |
 | `marketing` | nothing yet — reserved so a future campaign cannot be bolted onto `orderUpdates` | **`false`** |
 
@@ -158,7 +159,13 @@ PATCH /api/customer/notifications/read-all
 | `order.delivered` | Delivered. | `orderUpdates` |
 | `order.delivery_failed` | An attempt failed. | `orderUpdates` |
 | `order.cancelled` | Cancelled. | **No** |
-| `order.refunded` | Refunded. | **No** |
+| `order.refunded` | Refunded — once per completed refund, so two partial refunds are two messages, each naming its own amount. Raised from the orchestrator's `payment.refunded` (it had no trigger before 2026-09-27). | **No** |
+
+### The basket
+
+| Type | Sent when | Mutable |
+|---|---|---|
+| `cart.abandoned` | A basket with at least one buyable line, belonging to a customer with a chat connection, untouched for `CART_REMINDER_LEAD_MINUTES` (12 h). Swept, once per basket **state**: adding to it and leaving again reminds again. Names what is in it — **never a price**. `aggregateType: "cart"`. ⚠ **Off by default** (`CART_REMINDER_ENABLED`). ⚠ **No WhatsApp template exists for it, by decision**: outside the customer's 24-hour window it sends no WhatsApp message at all; the in-app row and Telegram still go. | `cartReminders` |
 
 > Only **four** shipment statuses reach the customer. `assigned`, `handing_over` and the rest are internal logistics; forwarding them would train people to ignore the channel that matters.
 

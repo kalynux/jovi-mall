@@ -21,6 +21,7 @@ import { ProductRepositoryMongo } from '../catalog/repositories/mongo/product.re
 import { VariantRepositoryMongo } from '../catalog/repositories/mongo/variant.repository.mongo';
 import { PriceResolverService } from '../catalog/domain/services/pricing-inventory/PriceResolverService';
 import { ProductModel } from '../catalog/models/product.model';
+import { displayPricesForVariants } from '../catalog/read-models/display-price.lookup';
 import { ProductVariantModel } from '../catalog/models/product-variant.model';
 import { VendorCustomerSyncService } from '../vendors/services/vendor-customer-sync.service';
 import { eventBus } from '../../core/events/event-bus';
@@ -878,6 +879,15 @@ export class OrderService {
     // transaction, BEFORE anything is totalled — see `resolveNegotiatedLines`.
     const negotiatedLines = await this.resolveNegotiatedLines(customerId, items, session);
 
+    // Statement facts (2026-09-27): what the storefront displayed for each variant, and who the
+    // customer was at checkout. Read once per vendor order; neither changes a total.
+    const [listPrices, customerSnapshot] = await Promise.all([
+      // Catalog answers "what did the shopper see" — orders must not read the bargain window
+      // itself (test:bargain-price). See `display-price.lookup.ts`.
+      displayPricesForVariants(items),
+      CustomerModel.findById(customerId).select('name phone').lean<{ name?: string; phone?: string | null } | null>(),
+    ]);
+
     /**
      * Price breakdown from THIS vendor's items only.
      *
@@ -929,6 +939,7 @@ export class OrderService {
       currency: cartItem.currency,
       negotiated_unit_price: negotiatedLines.get(cartItem.variantId)?.unitPrice ?? null,
       floor_price_snapshot: negotiatedLines.get(cartItem.variantId)?.floorPrice ?? null,
+      list_price_snapshot: listPrices.get(cartItem.variantId) ?? null,
 
       // Delivery: added for physical orders below
     }));
@@ -1092,7 +1103,10 @@ export class OrderService {
         payment_method: paymentMethod,
         payment_status: 'AWAITING_PAYMENT',  // Ready for payment (COD: paid at handoff)
         fulfillment_status: 'pending',
-        delivery_address: deliveryAddress   // Geocoded drop-off snapshot (null on legacy)
+        delivery_address: deliveryAddress,  // Geocoded drop-off snapshot (null on legacy)
+        customer_snapshot: customerSnapshot
+          ? { name: customerSnapshot.name ?? null, phone: customerSnapshot.phone ?? null }
+          : null,
       }, session);
 
       // CREATE SHIPMENTS & UPDATE ORDER ITEMS
@@ -1145,7 +1159,10 @@ export class OrderService {
       total_amount: total,
       payment_method: paymentMethod,
       payment_status: 'AWAITING_PAYMENT',  // Ready for payment
-      fulfillment_status: 'pending'
+      fulfillment_status: 'pending',
+      customer_snapshot: customerSnapshot
+        ? { name: customerSnapshot.name ?? null, phone: customerSnapshot.phone ?? null }
+        : null
     }, session);
 
     return { order, shipments: [] };

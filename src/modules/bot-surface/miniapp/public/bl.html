@@ -38,6 +38,8 @@
   .row { padding: 12px; border-radius: 12px; background: var(--card); }
   .row__title { font-weight: 600; }
   .row__sub { font-size: 13px; color: var(--muted); margin-block-start: 2px; }
+  .row__pay { margin-block-start: 10px; width: 100%; }
+  .notice { padding: 10px 12px; border-radius: 10px; background: var(--card); font-size: 13px; margin-block-end: 8px; }
 </style>
 </head>
 <body>
@@ -47,6 +49,7 @@
 
   <main class="screen__body">
     <div class="state" id="state"><p class="state__text" id="stateText"></p></div>
+    <div class="notice" id="notice" hidden></div>
     <div class="rows" id="rows" hidden></div>
   </main>
 
@@ -66,8 +69,11 @@
     title: document.getElementById("title"),
     state: document.getElementById("state"),
     stateText: document.getElementById("stateText"),
+    notice: document.getElementById("notice"),
     rows: document.getElementById("rows")
   };
+  /** One Pay at a time: a second press while the first is being answered does nothing. */
+  var opening = false;
 
   var copy = null;
 
@@ -108,16 +114,53 @@
       return;
     }
 
+    /*
+     * A Pay button only where the SERVER said `payable` — the page decides nothing about money.
+     * It carries the booking id; the server re-decides at the tap, and opens the payment screen,
+     * which shows the amount. This page never sees one.
+     */
     el.rows.innerHTML = bookings.map(function (booking) {
       return '<div class="row">'
         + '<div class="row__title">' + esc(booking.title) + "</div>"
         + (booking.description ? '<div class="row__sub">' + esc(booking.description) + "</div>" : "")
+        + (booking.payable
+          ? '<button type="button" class="btn btn--primary row__pay" data-pay="' + esc(booking.bookingId) + '">'
+            + esc(copy.payRow || FALLBACK.payRow) + "</button>"
+          : "")
         + "</div>";
     }).join("");
 
     el.state.hidden = true;
     el.rows.hidden = false;
   }
+
+  el.rows.addEventListener("click", function (event) {
+    var button = event.target.closest ? event.target.closest("[data-pay]") : null;
+    if (!button || opening) return;
+    opening = true;
+    button.disabled = true;
+
+    json(base + "/pay", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ bookingId: button.getAttribute("data-pay") })
+    }).then(function (res) {
+      if (res.ok && res.body && res.body.data && res.body.data.url) {
+        window.location.assign(res.body.data.url);
+        return;
+      }
+      opening = false;
+      if (res.status === 410) { state(copy.expired, true); return; }
+      /* The row changed since it was drawn (paid, cancelled, a payment already on its way):
+         say so, and redraw the list so the row shows where it really stands. */
+      el.notice.textContent = copy.listChanged || FALLBACK.listChanged;
+      el.notice.hidden = false;
+      load();
+    }).catch(function () {
+      opening = false;
+      state(copy.failed, true);
+    });
+  });
 
   function load() {
     state(copy.loading, false);
@@ -146,10 +189,14 @@
     failed: "Something went wrong. Close this and ask me again in the chat.",
     expired: "This page is no longer available. Ask me again in the chat.",
     listTitle: "Your appointments",
-    listEmpty: "You have no appointments yet."
+    listEmpty: "You have no appointments yet.",
+    payRow: "Pay now",
+    listChanged: "That appointment has changed. Here is where it stands now."
   };
 
-  json("/api/bot/miniapp/copy?lang=" + encodeURIComponent(lang), { headers: { Accept: "application/json" } })
+  /* ⚠ `base + "/copy"`, as every other screen: `/api/bot/miniapp/copy` has never existed, and this
+     page fetched it for months, got a 404, and stayed English in all five languages. */
+  json(base + "/copy?lang=" + encodeURIComponent(lang), { headers: { Accept: "application/json" } })
     .then(function (res) { copy = (res.body && res.body.data && res.body.data.copy) || FALLBACK; })
     .catch(function () { copy = FALLBACK; })
     .then(function () {

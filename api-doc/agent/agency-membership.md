@@ -77,8 +77,13 @@ here, on the agency's router, and in the vendor↔agency flow.
   (default 5) allocating contracts in total.
 - Exactly one `active` contract is your **primary** agency. The first you join becomes primary
   automatically; you can change it. If your primary is deactivated, another active one is promoted.
-- You must be **KYC-verified and not platform-banned** to raise or accept any contract, and you only
-  appear in the agency directory once you are. Both are admin-set — see [profile.md](./profile.md).
+- You must be **not platform-banned** (and have completed onboarding) to raise or accept any
+  contract and to appear in the agency directory. ⚠ **KYC verification is no longer required for
+  this (changed 2026-09-27)** — an unverified agent contracts and takes prepaid deliveries normally.
+  Verification unlocks **cash on delivery** only: until an administrator verifies you, your COD pool
+  is 0, any COD slice an agency gives you stays dormant, and COD shipments are refused
+  (`422 AGENT_KYC_NOT_VERIFIED`). Both are admin-set — see [profile.md](./profile.md) and
+  [identity-verification.md](./identity-verification.md).
 - The gates are re-checked **when a request is approved**, not when it was raised. A request may
   always be created; it is approval that binds.
 - **Leaving needs both parties to agree**, and is blocked while you hold that agency's undeposited
@@ -246,8 +251,10 @@ entirely to say "your terms, whatever they are".
 | `400` | `CONTRACT_COVERAGE_REGION_INVALID` | A `coverage.regions` entry is not a region of the agency's country. `details: { invalid, requiredCountry, allowedRegions }` |
 | `404` | `DELIVERY_AGENCY_NOT_FOUND` | `agencyId` does not resolve to an agency |
 | `409` | `AGENT_MEMBERSHIP_ALREADY_EXISTS` | You already have a live contract with them. `details: { status, contractId }` |
-| `422` | `AGENT_KYC_NOT_VERIFIED` | `details: { kycStatus, hint }` |
 | `403` | `AGENT_PLATFORM_BANNED` | |
+
+> ⚠ `422 AGENT_KYC_NOT_VERIFIED` was listed here until 2026-09-27 and is **no longer returned** — an
+> unverified agent may request a contract.
 
 > Deliberately **not** blocked by your relationship cap or COD headroom — a request may always be
 > raised, and it is approval that binds. Refusing here would hide the queue from the agency and
@@ -364,12 +371,14 @@ agency."*
 | `422` | `CONTRACT_TERMS_NOT_PROPOSED` | **Nobody has proposed terms yet.** You applied bare (or this is a legacy contract) — the agency must propose before anyone can approve. `details: { contractId, hint }` |
 | `422` | `CONTRACT_FEE_SPLIT_INVALID` | The standing terms could not pay you — a `percentage` model with no share resolves to a cut of **zero**. Refused rather than agreed to |
 | `409` | `CONTRACT_INVALID_TRANSITION` | Not `pending` any more. `details: { from, allowedFrom }` |
-| `422` | `AGENT_KYC_NOT_VERIFIED` | Platform gates are re-checked **here** |
-| `403` | `AGENT_PLATFORM_BANNED` | Likewise |
+| `403` | `AGENT_PLATFORM_BANNED` | The platform gate is re-checked **here** |
 | `422` | `AGENT_MEMBERSHIP_LIMIT_REACHED` | Too many agencies. `details: { current, max }` |
-| `422` | `CONTRACT_COD_THRESHOLD_EXCEEDS_HEADROOM` | The COD slice does not fit your pool |
+| `422` | `CONTRACT_COD_THRESHOLD_EXCEEDS_HEADROOM` | The COD slice does not fit your pool. Not raised while you are unverified (since 2026-09-27) — the slice is accepted and stays dormant until you are verified |
 
-> **Guard order matters when reading a failure.** Terms are checked *before* KYC and the COD pool, so
+> ⚠ `422 AGENT_KYC_NOT_VERIFIED` was listed here until 2026-09-27 and is **no longer returned** at
+> approval.
+
+> **Guard order matters when reading a failure.** Terms are checked *before* the platform gates and the COD pool, so
 > `CONTRACT_TERMS_NOT_PROPOSED` on a contract you expected to accept means exactly what it says — the
 > agency owes you an offer — and not that something is wrong with your account.
 

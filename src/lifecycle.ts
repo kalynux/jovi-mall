@@ -44,6 +44,7 @@ import { earningsReleaseWorker } from './modules/earnings/workers/earnings-relea
 import { unpaidOrderCancelWorker } from './modules/orders/workers/unpaid-order-cancel.worker';
 import { unpaidBookingCancelWorker } from './modules/booking/workers/unpaid-booking-cancel.worker';
 import { bookingReminderWorker } from './modules/booking/workers/booking-reminder.worker';
+import { abandonedCartWorker } from './modules/cart/workers/abandoned-cart.worker';
 import { inboundCalendarSyncWorker } from './modules/booking/workers/inbound-calendar-sync.worker';
 import { codDepositDeadlineWorker } from './modules/cod/workers/cod-deposit-deadline.worker';
 import { paymentReconciliationWorker } from './modules/payments/workers/payment-reconciliation.worker';
@@ -436,6 +437,10 @@ function startBackgroundWork(): void {
     // Bookings: remind customers ~24h before their appointment. The platform
     // records `no-show` against them, so it owes them the reminder first.
     bookingReminderWorker.start();
+
+    // Baskets: one reminder after a chat customer's basket goes quiet. Ships OFF
+    // (CART_REMINDER_ENABLED) — the first message nobody's action caused.
+    abandonedCartWorker.start();
 
     // Bookings: cache each vendor's EXTERNAL calendar commitments so availability
     // does not hit Google on every request. Availability unions these cached blocks

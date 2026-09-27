@@ -57,8 +57,16 @@ export interface PendingBargain {
 }
 
 interface StoredPendingBargain extends PendingBargain {
-    /** The `users` row that pressed. A sync resolving to anyone else is refused. */
-    owner: string;
+    /**
+     * The `users` row that pressed. A sync resolving to anyone else is refused.
+     *
+     * ⭐ **`null` means the conversation had no account yet** — the website's Bargain link opened
+     * by a Telegram chat that has never shared its contact (`bargain-entry-hold.middleware.ts`).
+     * There is nobody to bind it to, so the first account this conversation resolves to takes it.
+     * That is safe because the entry is a product HINT and nothing more: it names no price and
+     * grants nothing, and every rule is re-read live before the question is asked.
+     */
+    owner: string | null;
     /** The authority on liveness, above the Redis TTL — the rule every store here keeps. */
     expiresAt: string;
 }
@@ -84,7 +92,7 @@ const conversationKey = (channel: MessagingChannel, externalId: string): string 
 export class PendingBargainStore {
     /** Record a press. Overwrites any earlier one for the same conversation — see the header. */
     async record(
-        conversation: { owner: string; channel: MessagingChannel; externalId: string },
+        conversation: { owner: string | null; channel: MessagingChannel; externalId: string },
         bargain: { productId: string; variantId: string },
     ): Promise<void> {
         const redis = await getRedisClient(BOT_SURFACE_DB);
@@ -115,21 +123,49 @@ export class PendingBargainStore {
         const raw = (await redis.eval(CONSUME_SCRIPT, {
             keys: [conversationKey(channel, externalId)],
         })) as string | null;
-        if (!raw) return null;
-
-        let stored: StoredPendingBargain;
-        try {
-            stored = JSON.parse(raw) as StoredPendingBargain;
-        } catch {
-            return null;
-        }
-
-        const expiry = Date.parse(stored.expiresAt);
-        if (!Number.isFinite(expiry) || expiry <= Date.now()) return null;
-        if (stored.owner !== owner || !stored.productId || !stored.variantId) return null;
-
-        return { productId: stored.productId, variantId: stored.variantId, quantity: 1 };
+        return readPendingBargain(raw, owner, Date.now());
     }
+
+    /**
+     * Read without spending. For the turn that completes the setup checklist, which asks the
+     * price question while leaving the hand-off for the NEXT sync to spend — that sync is the
+     * first to see `onboarding.next` null, and the answer to the question is what it routes.
+     */
+    async peek(channel: MessagingChannel, externalId: string, owner: string): Promise<PendingBargain | null> {
+        const redis = await getRedisClient(BOT_SURFACE_DB);
+        const raw = await redis.get(conversationKey(channel, externalId));
+        return readPendingBargain(raw, owner, Date.now());
+    }
+
+    /** Drop a held press that turned out to be unanswerable (sold out, fixed price, gone). */
+    async discard(channel: MessagingChannel, externalId: string): Promise<void> {
+        const redis = await getRedisClient(BOT_SURFACE_DB);
+        await redis.del(conversationKey(channel, externalId));
+    }
+}
+
+/**
+ * The one reading of a stored entry — shared by `consume` and `peek` so the two cannot disagree
+ * about what is live. Null when absent, unparseable, lapsed, incomplete, or another account's.
+ *
+ * ⚠ An entry with `owner: null` is anybody's on this conversation — see `StoredPendingBargain`.
+ */
+export function readPendingBargain(raw: string | null, owner: string, now: number): PendingBargain | null {
+    if (!raw) return null;
+
+    let stored: StoredPendingBargain;
+    try {
+        stored = JSON.parse(raw) as StoredPendingBargain;
+    } catch {
+        return null;
+    }
+
+    const expiry = Date.parse(stored.expiresAt);
+    if (!Number.isFinite(expiry) || expiry <= now) return null;
+    if (stored.owner !== null && stored.owner !== owner) return null;
+    if (!stored.productId || !stored.variantId) return null;
+
+    return { productId: stored.productId, variantId: stored.variantId, quantity: 1 };
 }
 
 export const pendingBargainStore = new PendingBargainStore();

@@ -11,6 +11,7 @@ export interface UpdateCustomerPreferencesPayload {
     preferences?: {
         bookingUpdates?: boolean;
         bookingReminders?: boolean;
+        cartReminders?: boolean;
         orderUpdates?: boolean;
         marketing?: boolean;
     };
@@ -90,6 +91,8 @@ export class CustomerNotificationPreferenceRepository {
                 updates.preferences.bookingUpdates ?? current.preferences.bookingUpdates ?? true;
             updatePayload['preferences.bookingReminders'] =
                 updates.preferences.bookingReminders ?? current.preferences.bookingReminders ?? true;
+            updatePayload['preferences.cartReminders'] =
+                updates.preferences.cartReminders ?? current.preferences.cartReminders ?? true;
             updatePayload['preferences.orderUpdates'] =
                 updates.preferences.orderUpdates ?? current.preferences.orderUpdates ?? true;
             updatePayload['preferences.marketing'] =

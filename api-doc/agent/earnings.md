@@ -45,8 +45,19 @@ either a percentage of the fee or a flat amount per delivery (see
 | **Online-paid (prepaid)** | you mark the shipment `agent_delivered` |
 | **Cash on delivery** | you submit the customer's delivery code and the cash is recorded |
 
-A shipment that ends **`returned`** still earns: the agency's return-to-origin rate replaces the
-delivery fee, and you take your contracted share of that instead.
+What a shipment that ends **`returned`** earns depends on how the order was paid.
+
+- **Online-paid order:** it still earns. The agency's return-to-origin rate replaces the delivery
+  fee, and you take your contracted share of that instead. Since 2026-09-27 the estimate on the
+  shipment row applies this too; before that it quoted a share of the full fee.
+- **Cash on delivery:** ⚠ **it earns nothing.** No cash was collected, so no earnings entry is
+  written. The row's estimate shows `0`.
+
+**Once a delivery has been paid, the row shows the real figure.** The `earning` block then
+carries `estimated: false` and an `allocationStatus` (`held`, `released` or `reversed`). Its
+`amount` is the entry actually credited to you, not a recalculation. Shipments under a contract
+that has since ended keep showing their figures; before this change they read
+`earningUnavailable: "no_contract"`.
 
 Two things are worth knowing about the amount:
 
@@ -109,49 +120,20 @@ still holding. Prepaid earnings have no such gate — that money is already with
 | `available` | Withdrawable now |
 | `reserve` | Always `0` for agents. The rolling reserve applies only to agencies, against COD cash-handling risk; the field is present for shape-parity with the other roles |
 | `requested` | Earmarked for an in-flight payout request |
-| `payoutAllowance` | `null` unless a payout limit applies — see below |
+| `payoutAllowance` | **Always `null`** since 2026-09-27 — deprecated, no limit applies. See below |
 
 Amounts are integers in minor currency units.
 
-### `payoutAllowance` — the limit on unverified accounts
+### `payoutAllowance` — retired, always `null`
 
-⚠ **`null` means NO LIMIT, never a limit of zero.** It is `null` for a verified account and on
-any deployment with the feature switched off, which is the default — so this is the normal case.
-A client that renders `remaining: 0` out of a missing object tells every verified agent they
-cannot withdraw.
+⚠ **Always `null` since 2026-09-27, and deprecated.** From 2026-09-15 this could carry a limit on
+how much an account whose KYC was not verified could withdraw per rolling window. That limit was
+**deleted** (owner decision: *"we should not block someone's money just because he is not
+verified"*) — an unverified account now withdraws its whole `available` balance exactly like a
+verified one. The key is kept only so existing clients do not break.
 
-When a limit does apply:
-
-```json
-"payoutAllowance": {
-  "cap": 20000,
-  "used": 15000,
-  "remaining": 5000,
-  "windowDays": 30,
-  "resetsAt": "2026-10-01T12:00:00.000Z"
-}
-```
-
-| Field | Meaning |
-|---|---|
-| `cap` | The most that may be withdrawn per window while KYC is unverified |
-| `used` | Already **paid** inside the window |
-| `remaining` | What is left. **The next payout is capped at this**, not at `available` |
-| `windowDays` | Length of the rolling window (default 30) |
-| `resetsAt` | When the **first** tranche frees up. ⚠ **Not** when the whole cap returns — do not promise the full allowance on this date. `null` when nothing is counted |
-
-⚠ **The window is ROLLING, not calendar.** There is no 1st-of-the-month reset to wait for; the
-oldest payout simply ages out. A calendar reset would let twice the cap leave in 48 hours across
-a month boundary, which is the burst the limit exists to prevent.
-
-⚠ **Only PAID payouts count.** A rejected request returned the money to `available` and is not
-charged against the allowance — an agent is never billed for an administrator's decision.
-
-⚠ **Show `remaining` next to `available` whenever it is present.** Otherwise an agent requests a
-payout, receives a fraction of their balance, and nothing on the screen explains why.
-
-✅ **Verification removes the limit entirely.** Surface that as the remedy — it is the only one
-besides waiting.
+`null` means **no limit**, never a limit of zero. Do not render a withdrawal limit, a "remaining"
+figure or a "get verified to withdraw more" prompt from it; new clients should ignore the field.
 
 ---
 
@@ -182,7 +164,9 @@ ticket for an admin to process; track it under Tickets.
 
 Rules — the same for every role:
 
-- **All or nothing.** You cannot request a partial amount. ⚠ **One exception since 2026-09-15:** when `payoutAllowance` is present the request takes `min(available, payoutAllowance.remaining)` instead, and the rest stays available. The requester still names no amount — the allowance does.
+- **All or nothing.** You cannot request a partial amount, and verification does not change that:
+  an unverified agent withdraws their whole `available` too. (From 2026-09-15 to 2026-09-27 an
+  unverified account could be limited to an allowance; that limit no longer exists.)
 - **Minimum 10 000** (`EARNINGS_MIN_PAYOUT_AMOUNT`) → `EARNINGS_PAYOUT_BELOW_MINIMUM`.
 - **One at a time.** An open request must be resolved first — and "open" means `pending`,
   `processing` **or** `failed`, because all three are still holding your balance. See below.
@@ -339,6 +323,5 @@ cannot GET the list, edit one entry and PUT it straight back. See
 | `VALIDATION_ERROR` | 400 | A payout destination failed validation — see [Payout methods → Errors](./payout-methods.md#errors) |
 | `EARNINGS_PAYOUT_NO_AVAILABLE_BALANCE` | 409 | `available` is `0` — nothing to request |
 | `EARNINGS_PAYOUT_BELOW_MINIMUM` | 409 | Available balance is under the minimum |
-| `EARNINGS_PAYOUT_UNVERIFIED_CAP_REACHED` | 409 | The unverified-account payout allowance is spent, or its remainder is under the minimum. `details.reason` is `allowance_spent` or `remainder_below_minimum`, alongside `cap`/`used`/`remaining`/`windowDays`/`resetsAt`. ⚠ Retrying does not help — verify, or wait until `resetsAt` |
 | `EARNINGS_PAYOUT_METHOD_MISSING` | 409 | No payout method configured |
 | `EARNINGS_PAYOUT_ALREADY_PENDING` | 409 | A payout request is already in flight |

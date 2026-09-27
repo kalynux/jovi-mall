@@ -150,9 +150,17 @@ export type CustomerNotificationType =
     /** Now `waiting_on_customer` — the platform is blocked on them. */
     | 'ticket.awaiting_customer'
     /** Reached `resolved` or `closed`. */
-    | 'ticket.resolved';
+    | 'ticket.resolved'
 
-export type CustomerAggregateType = 'booking' | 'order' | 'shipment' | 'payment' | 'ticket';
+    // ── The basket (the one proactive message nobody's action caused) ─────────
+    /**
+     * A chat-built basket left untouched for `CART_REMINDER_LEAD_MINUTES`. Swept, not
+     * evented — see `AbandonedCartWorker`. Gated by `cartReminders`, and on WhatsApp sent
+     * only inside the customer's own 24-hour window: it has no template, deliberately.
+     */
+    | 'cart.abandoned';
+
+export type CustomerAggregateType = 'booking' | 'order' | 'shipment' | 'payment' | 'ticket' | 'cart';
 
 /**
  * Deep-link action for a notification, localized in the customer's language.
@@ -200,7 +208,8 @@ export const CUSTOMER_NOTIFICATION_TYPES: readonly CustomerNotificationType[] = 
     'order.refunded',
     'ticket.replied',
     'ticket.awaiting_customer',
-    'ticket.resolved'
+    'ticket.resolved',
+    'cart.abandoned'
 ] as const;
 
 /**
@@ -214,7 +223,8 @@ export const CUSTOMER_AGGREGATE_TYPES: readonly CustomerAggregateType[] = [
     'order',
     'shipment',
     'payment',
-    'ticket'
+    'ticket',
+    'cart'
 ] as const;
 
 const DELIVERY_CHANNELS: readonly CustomerDeliveryChannel[] = [

@@ -17,7 +17,7 @@ is a **slice** of the agent's own **COD pool**, which every agency they serve sh
 | | Before | Since 2026-09-21 |
 |---|---|---|
 | A newly verified agent's pool | `0` until an administrator set it. Every slice you tried to give was refused with `CONTRACT_COD_THRESHOLD_EXCEEDS_HEADROOM` | **Their plan's value, automatically**: Free 500 000 · Plus 1 000 000 · Pro 2 000 000 XAF |
-| An unverified agent's pool | `0` | `0` (unchanged; they can't hold a contract anyway) |
+| An unverified agent's pool | `0` | `0` (unchanged). ⚠ *This row said "they can't hold a contract anyway" — no longer true since 2026-09-27: an unverified agent can hold a contract, its COD slice is accepted but DORMANT, and COD shipments to them are refused `422 AGENT_KYC_NOT_VERIFIED`. See [../FRONTEND-CHANGELOG-verification-no-longer-gates-work.md](../FRONTEND-CHANGELOG-verification-no-longer-gates-work.md)* |
 | Who can lower it | an administrator | the **agent** (`PUT /api/agent/cod/pool`), or an administrator |
 | When it drops (plan downgrade, verification withdrawn) | not applicable | your slice stays as agreed, but no dispatch can use more than the pool |
 
