@@ -107,7 +107,7 @@ Unknown query parameters are rejected (`400 VALIDATION_ERROR`).
         "size": 245678,
         "originalName": "airmax.jpg"
       },
-      "vendor": { "id": "664b...21", "businessName": "SneakerHub SARL" },
+      "vendor": { "id": "664b...21", "businessName": "SneakerHub SARL", "verified": true },
       "location": {
         "id": "6641abc123def458",
         "label": "Bonabéri branch",
@@ -152,6 +152,7 @@ Unknown query parameters are rejected (`400 VALIDATION_ERROR`).
 | `sku` / `productTitle` / `variantTitle` | string \| null | From the variant and product. `null` if either was deleted after the row was derived. |
 | `image` | FileDetail \| null | The thumbnail — `images[0]` from the detail view. |
 | `vendor.businessName` | string \| null | From the vendor's Store, resolved live. |
+| `vendor.verified` | boolean | The vendor's KYC verdict (`kyc_details.legit_verified`) — render a verified badge beside the name. One query per page, resolved live. |
 | `location` | object \| null | The depot. **Null means unresolved** — see below. |
 | `location.isPrimary` | boolean | `true` for the agency's first depot, which is where a product that names none is collected from. |
 | `quantityOnHand` / `quantityReserved` | number | Always `0`. See the banner above. |

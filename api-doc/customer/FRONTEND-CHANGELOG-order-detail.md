@@ -103,7 +103,8 @@ from the response and I can read the payload back.
               "mimeType": "image/png", "size": 24118, "originalName": "logo.png" } | null,
     "supportPhone":    "+2376…" | null,
     "supportEmail":    "…"      | null,
-    "supportWhatsapp": "+2376…" | null
+    "supportWhatsapp": "+2376…" | null,
+    "verified": true | false       // added 2026-09-27: agency kyc_details.legit_verified
   } | null
 }
 ```
@@ -139,7 +140,8 @@ sketched:
 "agent": {
   "displayName": "Jean T.",      // partial: first name + surname initial. Never the full name
   "photo": FileDetail | null,    // ← `photo`, not `photoUrl` — same convention as § 2
-  "visibleFrom": "shipped"       // ← NOT "out_for_delivery". Read this bit
+  "visibleFrom": "shipped",      // ← NOT "out_for_delivery". Read this bit
+  "verified": true | false       // added 2026-09-27: kyc.status === 'verified'. A verdict, no document
 } | null
 ```
 

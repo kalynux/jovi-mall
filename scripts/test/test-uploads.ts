@@ -614,13 +614,16 @@ async function main(): Promise<void> {
      * see the reasoning at the source — so a retention or export policy written for one cannot
      * be silently applied to the other.
      *
+     * `cod-proofs` joined on 2026-09-27: the receipt or transfer screenshot an agent or agency
+     * attaches to a COD cash hand-over declaration, which carries account numbers and names.
+     *
      * ⚠ Changing this line means changing **wi-admin's copy** of the same map in the same
      * commit (`admin/src/infra/storage/storage-trees.ts`); its own `test:files` re-reads this
      * repository's file from disk and fails on any difference, in both directions.
      */
-    assert('the private trees are exactly admin-identity, digital, kyc, shipments, ticket-attachments', () =>
+    assert('the private trees are exactly admin-identity, cod-proofs, digital, kyc, shipments, ticket-attachments', () =>
         [...PRIVATE_STORAGE_TREES].sort().join(',')
-            === 'admin-identity,digital,kyc,shipments,ticket-attachments');
+            === 'admin-identity,cod-proofs,digital,kyc,shipments,ticket-attachments');
     assert('an unknown tree is PRIVATE — a tree added next year is not public by default', () =>
         isPrivateStorageKey('some-new-tree/2027/01/x.pdf'));
     assert('…and so is a key with no tree at all', () =>

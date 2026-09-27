@@ -649,6 +649,18 @@ async function run(): Promise<void> {
     }
 
     /** Deposit service wired to fakes; every assert throws before any DB work. */
+    /**
+     * The proof store, faked. `store` throws a sentinel so a declaration that got past EVERY
+     * guard stops there, with no pipeline and no database — reaching it is the assertion.
+     */
+    let proofUploads = 0;
+    const fakeProofs = {
+        store: async () => {
+            proofUploads += 1;
+            throw Object.assign(new Error("proof reached"), { code: "PROOF_STORED" });
+        },
+    } as any;
+
     function makeDeposits(opts: DepositWorld) {
         return new AgentDepositService(
             {
@@ -670,7 +682,9 @@ async function run(): Promise<void> {
                     makeMembership({
                         cod: { threshold: 500_000, outstanding_balance: opts.contractOutstanding },
                     }),
-            } as any
+            } as any,
+            undefined,
+            fakeProofs
         );
     }
 
@@ -790,6 +804,7 @@ async function run(): Promise<void> {
                 amount,
                 recipient,
                 reference,
+                proof: { buffer: Buffer.from('x'), mimeType: 'image/jpeg' },
                 declaredByUserId: 'user-1',
             });
             return null;
@@ -804,23 +819,26 @@ async function run(): Promise<void> {
         agencyOwesPlatform: 100_000,
     };
 
-    // The platform is not present at the handover, so the transfer reference is
-    // the only thing tying the claim to real money.
-    await assert('a direct declaration without a transfer reference is refused', async () =>
-        (await declareErrorCode(solvent, 50_000, 'platform', null)) ===
-        'COD_DEPOSIT_REFERENCE_REQUIRED'
+    // The reference is OPTIONAL on both routes — the proof image is the evidence now.
+    // Reaching the (fake) proof upload means every guard in front of it passed.
+    await assert('a direct declaration without a transfer reference reaches the proof upload', async () =>
+        (await declareErrorCode(solvent, 50_000, 'platform', null)) === 'PROOF_STORED'
     );
 
-    await assert('whitespace does not count as a reference', async () =>
-        (await declareErrorCode(solvent, 50_000, 'platform', '   ')) ===
-        'COD_DEPOSIT_REFERENCE_REQUIRED'
+    await assert('an agency declaration without a reference reaches the proof upload', async () =>
+        (await declareErrorCode(solvent, 50_000, 'agency', null)) === 'PROOF_STORED'
     );
 
-    // The agency route has a counterparty standing there; no reference needed.
-    await assert('an agency declaration needs no reference', async () =>
-        (await declareErrorCode(solvent, 50_000, 'agency', null)) !==
-        'COD_DEPOSIT_REFERENCE_REQUIRED'
-    );
+    // The upload happens AFTER the balance rules, so a refused declaration leaves no file.
+    await assert('a refused declaration uploads no proof', async () => {
+        const before = proofUploads;
+        const code = await declareErrorCode(
+            { agentCashHeld: 300_000, contractOutstanding: 100_000, agencyOwesPlatform: 300_000 },
+            150_000,
+            'agency'
+        );
+        return code === 'CONTRACT_SETTLEMENT_EXCEEDS_OUTSTANDING' && proofUploads === before;
+    });
 
     // A declaration is still bounded by what the agent could possibly owe — it
     // is evidence, not a wish.

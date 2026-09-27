@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { asyncHandler } from '../../api/middlewares/async-handler';
 import { sendSuccess } from '../../core/responses';
 import { actorFromRequest } from '../../core/types/actor-source.types';
+import { vectorisationService } from '../catalog/domain/services/VectorisationService';
 import { AdminVendorService, toAdminVendorDto } from './admin-vendor.service';
 import {
   AdminApproveVendorKycSchema,
@@ -55,6 +56,10 @@ export class AdminVendorController {
       },
       { message: 'Vendor suspended and their listings taken off sale' }
     );
+
+    // ⚠ PAUSE, never delete: the cascade leaves every vectorisation column alone, and the
+    // index is told the new status only here — after the transaction has committed.
+    vectorisationService.notifyStatusChanges(result.suspendedProductIds, 'suspended');
   });
 
   /**
@@ -77,6 +82,9 @@ export class AdminVendorController {
       },
       { message: 'Vendor restored' }
     );
+
+    // Each with the status it was restored to — not every one comes back `active`.
+    vectorisationService.notifyStatusChanges(result.restoredProducts);
   });
 
   /** POST /vendors/:vendorId/kyc/approve — body `{ note? }`. */
@@ -125,6 +133,9 @@ export class AdminVendorController {
     );
 
     sendSuccess(res, result, { message: 'Product taken off sale' });
+
+    // Paused in the index, not removed — a restore must find it still vectorised.
+    void vectorisationService.notifyStatusChange(result.productId, 'suspended');
   });
 
   /** POST /vendors/:vendorId/products/:productId/restore. */
@@ -135,6 +146,8 @@ export class AdminVendorController {
     );
 
     sendSuccess(res, result, { message: 'Product put back on sale' });
+
+    void vectorisationService.notifyStatusChange(result.productId, result.status);
   });
 
   /** PATCH /vendors/:vendorId/settings — the platform-governed fields only. */

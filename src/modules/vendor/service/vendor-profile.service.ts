@@ -19,6 +19,7 @@ import { DeliveryAgencyRepository, AgencyListQueryParams } from '../../delivery/
 import { IDeliveryAgency } from '../../delivery/delivery-agency.model';
 import { TransactionManager, transactionManager } from '../../../core/database/transaction.manager';
 import { ProductDeliveryAgencySuspensionService } from '../../catalog/domain/services/ProductDeliveryAgencySuspensionService';
+import { vectorisationService } from '../../catalog/domain/services/VectorisationService';
 import { ProductStatus } from '../../catalog/models/product.model';
 import { ProductRepositoryMongo } from '../../catalog/repositories/mongo/product.repository.mongo';
 import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
@@ -345,10 +346,12 @@ export class VendorProfileService {
     // active agency connections so the agency is prompted to reapprove. Only pays
     // the transaction cost when a change is actually detected.
     if (JSON.stringify(updated.policies) !== JSON.stringify(vendor.policies)) {
-      await this.txManager.runInTransaction(async (session) => {
+      const suspended = await this.txManager.runInTransaction(async (session) => {
         await this.vendorRepo.incrementPolicyVersion(vendorId, session);
-        await this.connectionService.pauseConnectionsForPolicyChange('vendor', vendorId, session);
+        return this.connectionService.pauseConnectionsForPolicyChange('vendor', vendorId, session);
       });
+      // Post-commit: the paused connections' products are off sale; pause their search entries.
+      vectorisationService.notifyStatusChanges(suspended, 'suspended');
     }
 
     await this.emitUpdateEvent(vendor, updated, vendorId);
@@ -635,10 +638,11 @@ export class VendorProfileService {
     // Same policy-change hook as updateProfile() — a no-op if no connections
     // exist yet, which is the common case for a first-time onboarding submit.
     if (updates.policies) {
-      await this.txManager.runInTransaction(async (session) => {
+      const suspended = await this.txManager.runInTransaction(async (session) => {
         await this.vendorRepo.incrementPolicyVersion(vendorId, session);
-        await this.connectionService.pauseConnectionsForPolicyChange('vendor', vendorId, session);
+        return this.connectionService.pauseConnectionsForPolicyChange('vendor', vendorId, session);
       });
+      vectorisationService.notifyStatusChanges(suspended, 'suspended');
     }
 
     await this.auditOnboardingStep(vendorId, 'POLICY_SETUP', 4, VendorOnboardingStep.COMPLETED);

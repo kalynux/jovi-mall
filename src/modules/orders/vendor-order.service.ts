@@ -284,7 +284,7 @@ export class VendorOrderService {
                     const [agencyDoc, magazinDoc] = await Promise.all([
                         db.collection(COLLECTIONS.DELIVERY_AGENCY).findOne(
                             { _id: deliveryData.agency_id },
-                            { projection: { phone: 1, email: 1 } }
+                            { projection: { phone: 1, email: 1, 'kyc_details.legit_verified': 1 } }
                         ),
                         db.collection(COLLECTIONS.AGENCY_MAGAZIN).findOne(
                             { agency_id: deliveryData.agency_id },
@@ -313,7 +313,7 @@ export class VendorOrderService {
                 if (!agentCache.has(agentId)) {
                     const agentDoc = await db.collection(COLLECTIONS.DELIVERY_AGENT).findOne(
                         { _id: shipment.agent_id },
-                        { projection: { name: 1, phone: 1, avatar_file_id: 1, avatar_url: 1 } }
+                        { projection: { name: 1, phone: 1, avatar_file_id: 1, avatar_url: 1, 'kyc.status': 1 } }
                     );
                     let built: any = null;
                     if (agentDoc) {
@@ -322,7 +322,11 @@ export class VendorOrderService {
                             id: agentDoc._id.toString(),
                             name: agentDoc.name,
                             phone: agentDoc.phone || null,
-                            avatar
+                            avatar,
+                            // The platform's verdict on the agent's identity check —
+                            // the same test AgentGateService applies. Only the status
+                            // is projected, never the rest of `kyc`.
+                            verified: agentDoc.kyc?.status === 'verified'
                         };
                     }
                     agentCache.set(agentId, built);
@@ -333,6 +337,9 @@ export class VendorOrderService {
             byItem.set(item._id.toString(), {
                 agencyId,
                 agencyName: agency?.agency_name || null,
+                // Admin has checked the agency's business documents. Deliberately
+                // not the deprecated top-level `legit_verified` mirror.
+                agencyVerified: agency?.kyc_details?.legit_verified === true,
                 agencyPhone: agency?.phone || null,
                 deliveryStatus: deliveryData.status,
                 shipmentId,

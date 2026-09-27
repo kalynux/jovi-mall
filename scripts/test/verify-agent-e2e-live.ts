@@ -85,6 +85,10 @@ import { CashCollectionModel } from '../../src/modules/cod/models/cash-collectio
 import { CodCashAccountModel } from '../../src/modules/cod/models/cod-cash-account.model';
 import { CodCashLedgerModel } from '../../src/modules/cod/models/cod-cash-ledger.model';
 import { AgentDepositModel } from '../../src/modules/cod/models/agent-deposit.model';
+import { FileModel } from '../../src/modules/catalog/models/file.model';
+import { FileReferenceModel } from '../../src/modules/catalog/models/file-reference.model';
+import { getStorageProvider } from '../../src/core/storage';
+import sharp from 'sharp';
 import { cashCollectionService } from '../../src/modules/cod/services/cash-collection.service';
 import { agentDepositService } from '../../src/modules/cod/services/agent-deposit.service';
 import { codCashAccountService } from '../../src/modules/cod/services/cod-cash-account.service';
@@ -195,7 +199,13 @@ async function cleanup(): Promise<void> {
   const collections = await CashCollectionModel.find({ agency_id: ID.agency }).select('_id');
   const collectionIds = collections.map((c) => c._id);
 
+  // The deposit proof is a real upload: its bytes, its File row and its reference row.
+  const proofFiles = await FileModel.find({ ownerType: 'agent', ownerId: ID.agent }).select('_id key');
+  await Promise.all(proofFiles.map((f) => getStorageProvider().delete(f.key).catch(() => undefined)));
+
   await Promise.all([
+    FileModel.deleteMany({ _id: { $in: proofFiles.map((f) => f._id) } }),
+    FileReferenceModel.deleteMany({ fileId: { $in: proofFiles.map((f) => f._id) } }),
     UserModel.deleteMany({ _id: { $in: owned } }),
     CustomerModel.deleteMany({ _id: { $in: owned } }),
     VendorModel.deleteMany({ _id: { $in: owned } }),
@@ -685,9 +695,22 @@ async function main(): Promise<void> {
       agencyId: ID.agency.toString(),
       amount: expected,
       recipient: 'agency',
+      // A real image: the proof goes through the real upload pipeline (sniffing, transforms).
+      proof: {
+        buffer: await sharp({ create: { width: 8, height: 8, channels: 3, background: '#ffffff' } })
+          .jpeg()
+          .toBuffer(),
+        originalName: 'receipt.jpg',
+        mimeType: 'image/jpeg',
+      },
       declaredByUserId: ID.agentUser.toString(),
     });
     assert('the agent DECLARES the hand-over', declared.status === 'declared');
+    assert(
+      '…with its proof image stored and referenced — an unreferenced File is swept',
+      !!declared.proof_file_id &&
+        !!(await FileReferenceModel.exists({ fileId: declared.proof_file_id, entityType: 'agent_deposit' }))
+    );
 
     const potAfterDeclare = await codCashAccountService.getBalance('agent', ID.agent.toString());
     assert(

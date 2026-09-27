@@ -5,7 +5,8 @@ import { IReviewTriage, ReviewTriageSchema } from '../../../core/types/review-tr
 
 /**
  * AgencyRemittance - the agency handing collected COD cash up to the platform
- * (bank transfer / mobile money / cash desk — identified by `reference`).
+ * (bank transfer / mobile money / cash desk — evidenced by the required `proof_file_id`,
+ * and by an optional `reference`).
  *
  * Two-step: the AGENCY declares what it sent; an ADMIN confirms receipt.
  * Only a CONFIRMED remittance lowers the agency's cash liability and is
@@ -20,8 +21,14 @@ export interface IAgencyRemittance extends Document {
   agency_id: mongoose.Types.ObjectId;
   amount: number;
   currency: string;
-  /** External money-movement reference (bank/transfer/receipt id). */
-  reference: string;
+  /** External money-movement reference (bank/transfer/receipt id). Optional. */
+  reference: string | null;
+  /**
+   * The image the agency attached to its declaration (a receipt, a transfer screenshot).
+   * Required on every new declaration; null only on rows written before proofs existed.
+   * Private tree (`cod-proofs/`), owned by the agency.
+   */
+  proof_file_id: mongoose.Types.ObjectId | null;
   note: string | null;
   status: AgencyRemittanceStatus;
   /**
@@ -57,7 +64,8 @@ const AgencyRemittanceSchema = new Schema<IAgencyRemittance>(
     agency_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENCY, required: true },
     amount: { type: Number, required: true, min: 1 },
     currency: { type: String, required: true, uppercase: true, trim: true },
-    reference: { type: String, required: true, trim: true, maxlength: 200 },
+    reference: { type: String, default: null, trim: true, maxlength: 200 },
+    proof_file_id: { type: Schema.Types.ObjectId, ref: MODELS.FILE, default: null },
     note: { type: String, default: null, trim: true, maxlength: 500 },
     status: {
       type: String,

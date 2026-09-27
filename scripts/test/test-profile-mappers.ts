@@ -216,6 +216,15 @@ async function main(): Promise<void> {
         return AgentProfileMapper.toRosterEntryDto(agentMock).activeShipmentCount === 3;
     });
 
+    assert('Agent roster entry is verified only on a `verified` KYC verdict', () => {
+        const withKyc = (status?: string) =>
+            AgentProfileMapper.toRosterEntryDto({ ...agentMock, kyc: status ? { status } : undefined } as any).verified;
+        return withKyc('verified') === true
+            && withKyc('pending') === false
+            && withKyc('rejected') === false
+            && withKyc() === false;
+    });
+
     // ─── Admin Mapper — GONE (Phase 5 Part E) ─────────────────────────────────
     //
     // Three assertions stood here over `AdminProfileMapper`: that the public DTO never carries

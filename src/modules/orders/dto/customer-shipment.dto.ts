@@ -139,9 +139,13 @@ export interface CustomerShipmentHistoryEntry {
  * Who is carrying the parcel, as its recipient is allowed to see them (ADR-A06).
  *
  * Present only inside the window `AGENT_IDENTITY_VISIBLE` describes; `null` on the shipment
- * otherwise. Three fields and no more — in particular **no phone number**: the platform's
+ * otherwise. Four fields and no more — in particular **no phone number**: the platform's
  * position is that a customer contacts the AGENCY (`agency.supportPhone`), which is a
  * business line, and never an individual worker's personal handset.
+ *
+ * The fourth, `verified`, was added 2026-09-27 for the storefront's badge. It widens the
+ * disclosure by one bit and nothing personal: it is the platform's own verdict on the agent,
+ * not any part of the identity document that verdict was reached from.
  */
 export interface CustomerShipmentAgent {
     /**
@@ -153,6 +157,13 @@ export interface CustomerShipmentAgent {
     photo: FileDetail | null;
     /** The customer-facing status from which this block appears. Constant; see above. */
     visibleFrom: CustomerShipmentStatus;
+    /**
+     * Is the agent KYC-verified — `agent.kyc.status === 'verified'`, the exact test
+     * `AgentGateService` applies before a contract or COD cash. Only `kyc.status` is ever
+     * projected; never the KYC documents, ID number or reviewer. `false` covers every
+     * other status (unverified, pending, rejected).
+     */
+    verified: boolean;
 }
 
 /**

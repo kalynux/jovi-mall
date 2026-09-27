@@ -212,6 +212,7 @@ Body:
         "delivery": {
           "agencyId": "507f1f77bcf86cd799439099",
           "agencyName": "FastShip Logistics",
+          "agencyVerified": true,
           "agencyPhone": "+237600000000",
           "deliveryStatus": "assigned",
           "shipmentId": "507f1f77bcf86cd799439100",
@@ -222,6 +223,7 @@ Body:
             "id": "507f1f77bcf86cd799439101",
             "name": "John Doe",
             "phone": "+237600000001",
+            "verified": true,
             "avatar": { "id": "507f1f77bcf86cd7994390a1", "key": "images/2026/07/agent-avatar.png", "url": "https://cdn.example.com/agent-avatar.png", "access": "public", "mimeType": "image/png", "size": 15360, "originalName": "avatar.png" }
           }
         }
@@ -240,6 +242,7 @@ Body:
       {
         "agencyId": "507f1f77bcf86cd799439099",
         "agencyName": "FastShip Logistics",
+        "agencyVerified": true,
         "agencyPhone": "+237600000000",
         "deliveryStatus": "assigned",
         "shipmentId": "507f1f77bcf86cd799439100",
@@ -249,13 +252,14 @@ Body:
           "id": "507f1f77bcf86cd799439101",
           "name": "John Doe",
           "phone": "+237600000001",
+          "verified": true,
           "avatar": { "id": "507f1f77bcf86cd7994390a1", "key": "images/2026/07/agent-avatar.png", "url": "https://cdn.example.com/agent-avatar.png", "access": "public", "mimeType": "image/png", "size": 15360, "originalName": "avatar.png" }
         }
       }
     ],
     "deliveryTimeline": [
-      { "shipmentId": "507f1f77bcf86cd799439100", "agencyId": "507f1f77bcf86cd799439099", "agencyName": "FastShip Logistics", "status": "assigned", "changedAt": "2026-07-05T09:00:00.000Z", "changedByRole": "system" },
-      { "shipmentId": "507f1f77bcf86cd799439100", "agencyId": "507f1f77bcf86cd799439099", "agencyName": "FastShip Logistics", "status": "picked_up", "changedAt": "2026-07-05T14:00:00.000Z", "changedByRole": "agency" }
+      { "shipmentId": "507f1f77bcf86cd799439100", "agencyId": "507f1f77bcf86cd799439099", "agencyName": "FastShip Logistics", "agencyVerified": true, "status": "assigned", "changedAt": "2026-07-05T09:00:00.000Z", "changedByRole": "system" },
+      { "shipmentId": "507f1f77bcf86cd799439100", "agencyId": "507f1f77bcf86cd799439099", "agencyName": "FastShip Logistics", "agencyVerified": true, "status": "picked_up", "changedAt": "2026-07-05T14:00:00.000Z", "changedByRole": "agency" }
     ],
     "notes": [
       {
@@ -280,7 +284,8 @@ Body:
 >   - `geo.components` carries **seven** keys — `street`, `neighbourhood`, `city`, `region`, `country`, `country_code`, `postal_code` — each independently nullable. The flattened `state` above is `components.region`, and `country` is `components.country_code` falling back to `components.country`, so the flat pair and the `geo` block can legitimately disagree in spelling.
 > - `items[].delivery` is the authoritative per-item delivery info — an order can be split across several agencies (one per item). It is `null` for digital items, and `delivery.agent` is `null` until an agent is assigned to the item's shipment.
 > - `deliveries` is an order-level overview with one entry per agency/shipment handling the order (de-duplicated by `shipmentId`). It is `null` for digital orders. Use `items[].delivery` when you need to know which agency carries a specific item.
-> - `deliveryTimeline` merges every shipment's status history for this order, labeled by agency and sorted chronologically (see the example above). Each entry is `{ shipmentId, agencyId, agencyName, status, changedAt, changedByRole }` — the **same shape** as `orderTimeline` on [`GET /api/agency/shipments/:id`](../agency/shipments.md#detail). It is unrelated to the generic audit trail returned by `GET /api/vendor/orders/:id/timeline` below — that endpoint returns `eventType`/`oldValue`/`newValue` events, not shipment status history. Empty for digital orders.
+> - **Verified badges (added 2026-09-27).** `agencyVerified` (on `items[].delivery`, `deliveries[]` and `deliveryTimeline[]`) is `true` when admin has verified the agency's business documents — `kyc_details.legit_verified`, never the deprecated top-level mirror. `agent.verified` is `true` when the agent's identity check passed — `kyc.status === 'verified'`, the same test `AgentGateService` applies; only that status is read, never the rest of `kyc`. Both are always booleans (`false` when unknown), so a client can render the badge on `=== true` without a null check.
+> - `deliveryTimeline` merges every shipment's status history for this order, labeled by agency and sorted chronologically (see the example above). Each entry is `{ shipmentId, agencyId, agencyName, agencyVerified, status, changedAt, changedByRole }` — the **same shape** as `orderTimeline` on [`GET /api/agency/shipments/:id`](../agency/shipments.md#detail). It is unrelated to the generic audit trail returned by `GET /api/vendor/orders/:id/timeline` below — that endpoint returns `eventType`/`oldValue`/`newValue` events, not shipment status history. Empty for digital orders.
 > - `deliveryStatus` reflects the per-item delivery status: `pending`, `assigned`, **`handing_over`**, `picked_up`, `in_transit`, `agent_delivered`, `delivered`, `failed`, `returned`, `rejected`, or `pending_agency_reassignment` — **eleven values**, the schema enum at `order.model.ts:253`. ⚠ **`handing_over` was missing from this list until 2026-09-06.** It is the post-pickup reassignment state: the shipment has left one agent and no replacement has accepted it yet, so an item can sit here with nobody carrying it. Treat it as in-flight-but-unassigned rather than as a delivery step.
 > - `delivery.rejection` is `null` unless this item's shipment was **declined**. When set it is `{ reason, note, rejectedAt }` — `reason` is one of `out_of_coverage_area`, `capacity_exceeded`, `invalid_address`, `vendor_item_not_ready`, **`platform_intervention`** or `other` (**six**, `SHIPMENT_REJECTION_REASONS` in `shipment.model.ts:67`); `note` is the free-text explanation (always present when `reason` is `other`, otherwise may be `null`). Use it to decide how to reroute; a `shipment.rejected` notification also fires (see [Notifications](./notifications.md)).
 >   ⚠ **`platform_intervention` is NOT an agency decision and this line used to imply it was** — it is the *administrator's* reason, deliberately kept disjoint from every agency-driven one so a later reader can tell *"the agency could not carry this"* from *"the platform pulled it"* (`shipment.model.ts:61-65`, the same argument ADR-008 makes for `platform_oversight`). Do not show it to a vendor as the agency's doing, and do not fold it into `other`.

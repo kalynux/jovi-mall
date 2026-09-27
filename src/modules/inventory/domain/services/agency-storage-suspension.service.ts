@@ -75,7 +75,9 @@ export class AgencyStorageSuspensionService {
     );
 
     // `suspendProduct` compare-and-sets on `status: 'active'`, so a false return
-    // means the product was draft, archived, already suspended, or mid-vectorisation.
+    // means the product was draft, archived or already suspended. (A product
+    // mid-vectorisation is NOT skipped any more — the `pending` exclusion was removed,
+    // and its in-flight job is corrected by the vectoriser callback.)
     // Non-active products are deliberately left alone (the same rule the cascade
     // follows): they are not on sale, so suspending them would only block editing.
     if (!suspended) {

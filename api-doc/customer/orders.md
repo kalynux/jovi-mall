@@ -112,6 +112,7 @@ transaction. A **cash_on_delivery** checkout requires no payment call — see
 | 422 | `COD_ORDER_AMOUNT_EXCEEDS_LIMIT` | One vendor-order's total exceeds an agency's COD cap. `details: { agencyId, agencyName, maxOrderAmount, orderTotal }`. |
 | 422 | `ORDER_DELIVERY_ADDRESS_REQUIRED` | **New.** A physical checkout resolved no geocoded drop-off. `details.reason` is `no_delivery_address` or `selected_address_not_geocoded`. |
 | 422 | `CATALOG_INSUFFICIENT_STOCK` | **New.** A line cannot be satisfied. `details: { variantId, sku, requested, available }`. |
+| 422 | `ORDER_BELOW_DELIVERY_MINIMUM` | **New 2026-09-27** ([ADR-A07](../../docs/ADR-A07-DELIVERY-COST-CAP.md)). One shop's items are too small to carry their delivery cost, which the vendor pays. Online is checked per shop, cash on delivery per delivery agency. `details: { vendorId, scope, agencyId, subtotal, minimumSubtotal, shortfall, maxDeliveryPercent, reason, currency }` — tell the customer to add `shortfall` more **from that shop**. `minimumSubtotal: null` means no basket size passes (for COD, suggest paying online). Predict it with the cart quote's `perVendor[].deliveryMinimum`. Nothing is created and no stock is held. |
 | 404/409/422 | `NEGOTIATION_LOCK_*` | **New.** A line carrying a price agreed in chat could not spend its lock. Five codes — see [Negotiated lines at checkout](#negotiated-lines-at-checkout). |
 
 ⚠ **`details.agencyName` on the two COD refusals can be `null`.** The business name lives on
@@ -323,7 +324,7 @@ The projection was widened; all of this already existed on the model and simply 
 | Field | Notes |
 |---|---|
 | `cartId` | The checkout group. **Pay an unpaid order with `POST /api/payments/initiate { cartId }`** — this is what makes one resumable |
-| `store` | `{ slug, name }` — the seller's business identity. "Order from `507f1f77bcf86cd799439aaa`" is not a receipt |
+| `store` | `{ slug, name, verified }` — the seller's business identity. "Order from `507f1f77bcf86cd799439aaa`" is not a receipt. `verified` is the vendor's KYC verdict (`kyc_details.legit_verified === true`, always a boolean) for a badge — never the KYC documents |
 | `priceBreakdown` | `{ base, tax, discount, total }`. `tax`/`discount` are pinned zeros — see [cart quote](./cart.md#post-apicustomercartquote) |
 | `deliveryAddress` | Where it is going. `null` on digital orders |
 | `items[].image` | Live-resolved thumbnail (`FileDetail \| null`). Order history with no pictures is unreadable on a phone |
@@ -383,12 +384,14 @@ a gap: both `…/shipments/:shipmentId/confirm-delivery` and `…/resend-deliver
         },
         "supportPhone": "+237670000000",
         "supportEmail": "support@wiexpress.cm",
-        "supportWhatsapp": "+237670000000"
+        "supportWhatsapp": "+237670000000",
+        "verified": true
       },
       "agent": {
         "displayName": "Jean T.",
         "photo": null,
-        "visibleFrom": "shipped"
+        "visibleFrom": "shipped",
+        "verified": true
       },
       "itemIds": ["507f1f77bcf86cd799439055"],
       "statusHistory": [
@@ -433,6 +436,7 @@ whose agency has a Magazin on file; `null` (like `agencyName`) when it does not.
 | `name` | The same string as `agencyName`, which is kept where it is and is not going away |
 | `logo` | `FileDetail \| null` — **not a URL string**, exactly like every other referenced file on this API. Render `agency.logo?.url ?? null`, and draw initials from `name` when it is null. Most agencies have no logo |
 | `supportPhone` · `supportEmail` · `supportWhatsapp` | The agency's own published business lines. Any of them may be `null` |
+| `verified` | The agency's KYC verdict — `kyc_details.legit_verified === true` on the agency account. Always a boolean; `false` means unreviewed **or** refused. For a badge; never the KYC documents |
 
 This is the platform's shared `AgencyIdentity` block — byte-identical to the one the agent and
 agency surfaces serve. There is one answer to "who is this agency", not a customer-only copy.
@@ -447,6 +451,7 @@ The person on the parcel, **while they are on the parcel**. Design record:
 | `displayName` | Partial by design — `"Jean T."`, first name plus surname initial. Never the full legal name |
 | `photo` | `FileDetail \| null`, same convention as `agency.logo`. Commonly `null` |
 | `visibleFrom` | Always `"shipped"` — the customer status from which this block appears. Echoed so a client can explain the wait without hardcoding the policy |
+| `verified` | The agent's KYC verdict — `kyc.status === 'verified'`, the same test the platform gates contracts and COD cash on. Always a boolean. A platform verdict, not a personal detail: no document, ID number or reviewer is ever sent |
 
 **`agent` is `null` far more often than it is set, and each `null` means something different
 to a screen:**

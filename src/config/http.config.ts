@@ -65,6 +65,15 @@ export const JSON_BODY_LIMIT = process.env.JSON_BODY_LIMIT ?? '1mb';
 export const BOT_FILE_BODY_LIMIT = process.env.BOT_FILE_BODY_LIMIT ?? '12mb';
 
 /**
+ * Parser ceiling on `POST /api/internal/admin/mail/statement`, which carries a rendered account
+ * statement as base64. Same shape as {@link BOT_FILE_BODY_LIMIT}: the backstop above a lower
+ * DECODED cap (`STATEMENT_ATTACHMENT_MAX_BYTES`, 8 MB) that produces a coded refusal.
+ * Not an env variable on purpose — the 8 MB cap is set by what the mail providers accept, not
+ * by the deployment.
+ */
+export const STATEMENT_MAIL_BODY_LIMIT = '12mb';
+
+/**
  * Ceiling on a raw gateway webhook body, deliberately larger than the JSON one.
  *
  * A Stripe event carrying a fully expanded object is legitimate traffic we cannot ask the

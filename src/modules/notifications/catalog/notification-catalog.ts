@@ -115,8 +115,8 @@ export interface SituationMessages {
      * interactive reply-button message, and the tightest of the channels.
      *
      * Absent means "this situation's only affordance is the link", which is the
-     * case for 11 of the 24 customer situations by design: a button that merely
-     * repeats the URL costs a Meta re-approval in stage 2 and buys nothing.
+     * case for most customer situations by design: a button that merely repeats
+     * the URL costs a Meta re-approval in stage 2 and buys nothing.
      */
     actions?: QuickReplyDef[];
 }

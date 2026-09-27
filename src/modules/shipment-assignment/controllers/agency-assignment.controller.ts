@@ -100,6 +100,17 @@ export class AgencyAssignmentController {
     });
   });
 
+  /** GET /api/agency/assignment-settings — the stored auto-assignment toggle. */
+  static getSettings = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const agencyId = req.auth!.role_entity._id.toString();
+    const agency = await agencyRepo.findById(agencyId);
+    if (!agency) throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404);
+    res.json({
+      success: true,
+      data: { autoAssignEnabled: agency.assignment_settings?.auto_assign_enabled ?? false },
+    });
+  });
+
   /** PATCH /api/agency/assignment-settings — toggle auto-assignment. Body: { autoAssignEnabled } */
   static updateSettings = asyncHandler(async (req: Request, res: Response): Promise<void> => {
     const agencyId = req.auth!.role_entity._id.toString();

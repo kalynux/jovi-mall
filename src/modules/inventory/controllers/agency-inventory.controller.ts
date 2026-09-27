@@ -4,6 +4,7 @@ import { agencyInventoryService } from '../services/agency-inventory.service';
 import { agencyStoredProductService } from '../services/agency-stored-product.service';
 import { agencyStockCountService } from '../services/agency-stock-count.service';
 import { toMovementDto } from '../dto/stock-movement.dto';
+import { vectorisationService } from '../../catalog/domain/services/VectorisationService';
 import {
   ChangeDepotSchema,
   InventoryQuerySchema,
@@ -96,6 +97,10 @@ export class AgencyInventoryController {
       data: result,
       message: 'Product suspended. It is no longer available to customers.',
     });
+
+    // ⚠ PAUSED in the index, never deleted — the vendor's vectorisation survives the
+    // suspension and resumes on unsuspend. Told after the write, never before it.
+    void vectorisationService.notifyStatusChange(result.productId, result.status);
   });
 
   /** POST /api/agency/inventory/products/:productId/unsuspend */
@@ -107,6 +112,9 @@ export class AgencyInventoryController {
       data: result,
       message: 'Product restored.',
     });
+
+    // The status it was restored to — `previousStatus`, not necessarily `active`.
+    void vectorisationService.notifyStatusChange(result.productId, result.status);
   });
 
   /**

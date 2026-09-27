@@ -6,6 +6,8 @@ import { StoreRepository } from '../store/repositories/store.repository';
 import { MagazinRepository } from '../magazin/repositories/magazin.repository';
 import { ProductRepositoryMongo } from '../catalog/repositories/mongo/product.repository.mongo';
 import { ProductDeliveryAgencySuspensionService } from '../catalog/domain/services/ProductDeliveryAgencySuspensionService';
+import { vectorisationService } from '../catalog/domain/services/VectorisationService';
+import { ProductStatus } from '../catalog/models/product.model';
 import { FileRepositoryMongo } from '../catalog/repositories/mongo/file.repository.mongo';
 import { resolveFileDetails } from '../catalog/read-models/file-detail.resolver';
 import { getStorageProvider, IStorageProvider } from '../../core/storage';
@@ -247,7 +249,7 @@ export class ConnectionService {
     const vendorId = connection.vendor_id.toString();
     const agencyId = connection.agency_id.toString();
 
-    return this.txManager.runInTransaction(async (session) => {
+    const { updated, restored } = await this.txManager.runInTransaction(async (session) => {
       // Re-fetch current policy versions fresh (not from a stale snapshot) so
       // interleaved edits from both sides resolve correctly — see connection.model.ts.
       const [vendor, agency] = await Promise.all([
@@ -294,7 +296,7 @@ export class ConnectionService {
       // Safe when there is nothing to restore (no-op), and never blind — each
       // product re-runs the activation gate first. Runs AFTER the possible
       // auto-default assignment above so the gate sees the fresh default.
-      await this.restoreForConnection(vendorId, agencyId, session);
+      const restored = await this.restoreForConnection(vendorId, agencyId, session);
 
       await auditLogger.log({
         actor: { userId: actorUserId, role: actorRole },
@@ -310,8 +312,13 @@ export class ConnectionService {
         await this.notifyAgency('connection.approved', updated._id.toString(), agencyId, (await this.storeRepo.findNameByVendorId(vendorId)) ?? '');
       }
 
-      return updated;
+      return { updated, restored };
     });
+
+    // After the commit: the restored products are searchable again. Their opt-in was
+    // never touched by the suspension, so telling the index is all a restore owes.
+    vectorisationService.notifyStatusChanges(restored);
+    return updated;
   }
 
   // ─── Reject / withdraw (both only valid from 'pending') ─────────────────────
@@ -416,7 +423,7 @@ export class ConnectionService {
     const vendorId = connection.vendor_id.toString();
     const agencyId = connection.agency_id.toString();
 
-    return this.txManager.runInTransaction(async (session) => {
+    const { updated, suspended } = await this.txManager.runInTransaction(async (session) => {
       const updated = await this.connectionRepo.applyTransition(
         connection._id.toString(),
         {
@@ -437,7 +444,7 @@ export class ConnectionService {
       );
       if (!updated) throw createAppError(ERROR_CODES.CONNECTION_NOT_FOUND, 404);
 
-      await this.suspendForConnection(vendorId, agencyId, session);
+      const suspended = await this.suspendForConnection(vendorId, agencyId, session);
 
       await auditLogger.log({
         actor: { userId: actorUserId, role: actorRole },
@@ -447,8 +454,11 @@ export class ConnectionService {
         timestamp: new Date(),
       });
 
-      return updated;
+      return { updated, suspended };
     });
+
+    vectorisationService.notifyStatusChanges(suspended, 'suspended');
+    return updated;
   }
 
   // ─── Policy-change pause hook ────────────────────────────────────────────────
@@ -461,10 +471,17 @@ export class ConnectionService {
    * each affected pair. Cheap no-op when the entity has no live connections
    * (e.g. during onboarding's first policy submission). Must be called inside
    * the same transaction as the policy write + version bump.
+   *
+   * ⚠ Returns the ids of the products it suspended, and the CALLER must pass them to
+   * `vectorisationService.notifyStatusChanges(ids, 'suspended')` once its transaction
+   * has committed. This method cannot: it runs inside the caller's transaction, and a
+   * notify sent from here would tell the search index about a suspension that may yet
+   * roll back.
    */
-  async pauseConnectionsForPolicyChange(role: ConnectionParty, entityId: string, session: ClientSession): Promise<void> {
+  async pauseConnectionsForPolicyChange(role: ConnectionParty, entityId: string, session: ClientSession): Promise<string[]> {
     const connections = await this.connectionRepo.findActiveOrPausedForEntity(role, entityId, session);
-    if (connections.length === 0) return;
+    if (connections.length === 0) return [];
+    const suspended: string[] = [];
 
     const reapprovalRequiredFrom = opposite(role);
     const pausedReason = role === 'vendor' ? ('vendor_policy_changed' as const) : ('agency_policy_changed' as const);
@@ -491,7 +508,7 @@ export class ConnectionService {
         session,
       );
 
-      await this.suspendForConnection(connection.vendor_id.toString(), connection.agency_id.toString(), session);
+      suspended.push(...await this.suspendForConnection(connection.vendor_id.toString(), connection.agency_id.toString(), session));
 
       if (agencyName) {
         await this.notifyVendor('connection.reapproval_needed', connection._id.toString(), connection.vendor_id.toString(), agencyName);
@@ -499,6 +516,8 @@ export class ConnectionService {
         await this.notifyAgency('connection.reapproval_needed', connection._id.toString(), connection.agency_id.toString(), vendorName);
       }
     }
+
+    return suspended;
   }
 
   // ─── Scoped suspend/restore cascade ──────────────────────────────────────────
@@ -508,30 +527,46 @@ export class ConnectionService {
   // this one relationship. Blindly calling suspensionService.suspendForVendor
   // would over-suspend products tied to the vendor's OTHER, unaffected connections.
 
-  private async suspendForConnection(vendorId: string, agencyId: string, session: ClientSession): Promise<void> {
+  // Both return what they moved, so the transaction's owner can tell the search
+  // index after the commit (see pauseConnectionsForPolicyChange).
+
+  private async suspendForConnection(vendorId: string, agencyId: string, session: ClientSession): Promise<string[]> {
+    const suspended: string[] = [];
     const vendor = await this.vendorRepo.findById(vendorId, session);
     if (vendor?.default_delivery_agency_id?.toString() === agencyId) {
-      await this.suspensionService.suspendForVendor(vendorId, { session }, CONNECTION_PAUSED_REASON);
+      suspended.push(...await this.suspensionService.suspendForVendor(vendorId, { session }, CONNECTION_PAUSED_REASON));
     }
 
     const overridden = await this.productRepo.findPhysicalByVendorAndOwnDeliveryAgency(vendorId, agencyId, { session });
     for (const product of overridden) {
-      await this.suspensionService.suspendProductOwnAgency(product.id, product.vendorId, { session }, CONNECTION_PAUSED_REASON);
+      // The default sweep above may already have taken this product; the per-product
+      // suspend is a no-op then (it compare-and-sets on `active`) and reports false.
+      if (await this.suspensionService.suspendProductOwnAgency(product.id, product.vendorId, { session }, CONNECTION_PAUSED_REASON)) {
+        suspended.push(product.id);
+      }
     }
+    return suspended;
   }
 
-  private async restoreForConnection(vendorId: string, agencyId: string, session: ClientSession): Promise<void> {
+  private async restoreForConnection(
+    vendorId: string,
+    agencyId: string,
+    session: ClientSession,
+  ): Promise<{ productId: string; status: ProductStatus }[]> {
+    const restored: { productId: string; status: ProductStatus }[] = [];
     // Session read: the auto-default assignment in finalizeApproval may have just
     // written default_delivery_agency_id inside this same transaction.
     const vendor = await this.vendorRepo.findById(vendorId, session);
     if (vendor?.default_delivery_agency_id?.toString() === agencyId) {
-      await this.suspensionService.restoreForVendor(vendorId, { session });
+      restored.push(...await this.suspensionService.restoreForVendor(vendorId, { session }));
     }
 
     const overridden = await this.productRepo.findPhysicalByVendorAndOwnDeliveryAgency(vendorId, agencyId, { session });
     for (const product of overridden) {
-      await this.suspensionService.restoreProductOwnAgency(product.id, product.vendorId, { session });
+      const result = await this.suspensionService.restoreProductOwnAgency(product.id, product.vendorId, { session });
+      if (result.restored && result.status) restored.push({ productId: product.id, status: result.status });
     }
+    return restored;
   }
 
   // ─── Browse / search ──────────────────────────────────────────────────────────

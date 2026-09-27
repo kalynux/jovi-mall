@@ -283,8 +283,12 @@ Show the dropped lines — silently losing one is exactly what this endpoint exi
 What this cart will cost, before checking out.
 
 ```json
-{ "deliveryAddressId": "664addr..." }
+{ "deliveryAddressId": "664addr...", "paymentMethod": "online" }
 ```
+
+Both fields are optional. `paymentMethod` (`online` | `cash_on_delivery`, default `online`)
+selects how the [delivery minimum](#the-delivery-minimum) is evaluated — send the method the
+customer has picked, because cash on delivery is checked more strictly.
 
 `deliveryAddressId` is optional (the cart opens before one is chosen). When supplied it is
 **validated against the same rule checkout applies**, which is the main reason to send it: an
@@ -304,8 +308,22 @@ and checkout will refuse it. Far better to learn that here than at the pay butto
     "tax": 0,
     "discount": 0,
     "total": 24000,
+    "paymentMethod": "online",
+    "meetsDeliveryMinimum": true,   // false → checkout will refuse; see below
     "perVendor": [
-      { "vendorId": "507f…aaa", "subtotal": 24000, "delivery": 0, "absorbedByVendor": 1500 }
+      {
+        "vendorId": "507f…aaa", "subtotal": 24000, "delivery": 0, "absorbedByVendor": 1500,
+        "deliveryMinimum": {
+          "met": true,
+          "checkedPer": "order",          // "shipment" for cash on delivery
+          "maxDeliveryPercent": 30,
+          "shortfall": 0,                 // how much more is needed from THIS shop
+          "units": [
+            { "agencyId": null, "subtotal": 24000, "met": true, "reason": null,
+              "minimumSubtotal": 5000, "shortfall": 0 }
+          ]
+        }
+      }
     ]
   }
 }
@@ -333,6 +351,35 @@ they are the same figures written into the order's `price_breakdown` at checkout
 | 400 | `CART_EMPTY_CHECKOUT` | The cart is empty. |
 | 404 | `CUSTOMER_ADDRESS_NOT_FOUND` | `deliveryAddressId` is not one of the customer's. |
 | 422 | `ORDER_DELIVERY_ADDRESS_REQUIRED` | The chosen address has no geocoded location. `details.reason: "selected_address_not_geocoded"`. |
+| 400 | `VALIDATION_ERROR` | `paymentMethod` is not `online` or `cash_on_delivery`. |
+
+The quote never refuses for the delivery minimum — it **reports** it. Checkout refuses.
+
+### The delivery minimum
+
+**New 2026-09-27 — [ADR-A07](../../docs/ADR-A07-DELIVERY-COST-CAP.md).** Because the vendor pays
+the delivery fee, checkout refuses a shop's part of the basket that is too small to carry it,
+with `422 ORDER_BELOW_DELIVERY_MINIMUM`. The quote tells you in advance, per shop:
+
+- **`perVendor[].deliveryMinimum.met: false`** — this shop's items will be refused. Say how
+  much more to add **from that shop**: `shortfall`, in the cart currency. Items from a different
+  shop become a separate order and do not help.
+- **`checkedPer: "order"`** (online) — one unit covering the whole shop, `agencyId: null`.
+- **`checkedPer: "shipment"`** (cash on delivery) — one unit per delivery agency, and **each**
+  must pass on its own. `shortfall` on the shop is the sum; `units[].shortfall` says which
+  agency's items need topping up (the items delivered by that `agencyId`).
+- **`minimumSubtotal: null`** on a unit — no basket size can pass for it (the agency's COD fee
+  alone is too high). Suggest paying online instead, or removing those items.
+- **`deliveryMinimum: null`** — not evaluated: a digital-only shop (no delivery), or the
+  estimate was not possible. Checkout still decides.
+
+Disable or annotate the pay button while `meetsDeliveryMinimum` is `false`. It is an
+**estimate** on the same terms as `absorbedByVendor` — checkout is the authority, and it also
+counts a price agreed in chat, which the quote cannot see.
+
+Never present the rule to the customer in money terms beyond the shortfall: the vendor's
+commission and fee are not the customer's business, and the API deliberately does not return
+them.
 
 ---
 

@@ -643,6 +643,9 @@ below:
   Store/Magazin, the profile holds only `display_name`. With both absent the value is **`''`**,
   not `null`.
 - `avatar`: profile photo/logo where one exists, as a resolved **file object** (`{ id, key, url, access, mimeType, size, originalName }`) — **agency → resolved from `logo_file_id`** — otherwise `null`.
+- `verified` (boolean): **only on `vendor` and `agent` actors** — the platform's KYC verdict
+  (vendor → `kyc_details.legit_verified`, agent → `kyc.status === "verified"`), for the verified badge
+  beside the name. Absent on every other role and on an unresolved fallback; treat absent as "no badge".
 - Unresolvable references fall back to the capitalised role name (e.g. `"Agency"`) with `avatar: null`.
 
 **Administrator snapshot** — used for `assigned_admin` and `created_by_admin`:

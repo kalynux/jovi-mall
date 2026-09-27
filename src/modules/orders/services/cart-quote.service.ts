@@ -36,6 +36,18 @@
  * editing `policies.pricing`, and a vendor re-pointing a product's delivery agency. The
  * customer-facing total is unaffected by both (it is the subtotal), so the drift is
  * confined to the informational field.
+ *
+ * ── The delivery-cost cap is quoted too (ADR-A07) ───────────────────────────
+ *
+ * Because the vendor absorbs the fee, checkout refuses a shop's part of the basket that is too
+ * small to carry it (`ORDER_BELOW_DELIVERY_MINIMUM`). Each `perVendor` line reports that verdict
+ * as `deliveryMinimum`, computed by `DeliveryCostCapService` — the service checkout itself calls
+ * — so a client can say "add 1 200 FCFA from this shop" before the pay button, not after it.
+ *
+ * ⚠ It depends on the payment method (COD adds the agency's handling fee and is checked per
+ * shipment), so the quote takes an optional `paymentMethod`, default `online`. ⚠ It counts no
+ * AI margin: a negotiated line's floor is secret and not on the cart. That only matters when
+ * the vendor's net, not the delivery ratio, is what binds — checkout's verdict is exact.
  */
 import { Types } from 'mongoose';
 import { createAppError } from '../../../core/errors';
@@ -45,8 +57,17 @@ import { ProductRepositoryMongo } from '../../catalog/repositories/mongo/product
 import { resolveEffectiveAgencyId } from '../../catalog/domain/services/effective-delivery-agency';
 import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.repository';
 import { VendorRepository } from '../../vendors/vendor.repository';
-import { deliveryFeeForPickupMix, PickupMix } from '../../earnings/services/earnings-quote.service';
+import { deliveryFeeForPickupMix } from '../../earnings/services/earnings-quote.service';
 import { CustomerModel } from '../../customers/customer.model';
+import { OrderPaymentMethod } from '../order.model';
+import {
+    belowMinimumError,
+    DeliveryCapAgencyGroup,
+    DeliveryCapLine,
+    DeliveryCapUnitVerdict,
+    DeliveryCostCapService,
+    deliveryCostCapService,
+} from './delivery-cost-cap.service';
 
 export interface CartQuoteVendorLine {
     vendorId: string;
@@ -55,6 +76,24 @@ export interface CartQuoteVendorLine {
     delivery: number;
     /** What this vendor will be charged by the agency. Informational. */
     absorbedByVendor: number;
+    /**
+     * Whether this shop's part of the basket can carry its delivery cost (ADR-A07). When `met` is
+     * false, checkout refuses with `ORDER_BELOW_DELIVERY_MINIMUM`. `null` means NOT EVALUATED — a
+     * digital-only shop (no delivery), or a vendor whose plan could not be resolved.
+     */
+    deliveryMinimum: DeliveryMinimumQuote | null;
+}
+
+export interface DeliveryMinimumQuote {
+    met: boolean;
+    /** `order` for an online payment, `shipment` for cash on delivery (one unit per agency). */
+    checkedPer: 'order' | 'shipment';
+    /** The configured cap: delivery may cost the vendor at most this % of the subtotal. */
+    maxDeliveryPercent: number;
+    /** How much more is needed from this shop in total; 0 when met. */
+    shortfall: number;
+    /** One entry per unit checked — a single `agencyId: null` entry for `order`. */
+    units: DeliveryCapUnitVerdict[];
 }
 
 export interface CartQuote {
@@ -75,7 +114,23 @@ export interface CartQuote {
     /** Pinned to 0: there is no coupon model. `price_breakdown.discount` awaits one. */
     discount: number;
     total: number;
+    /** The payment method the delivery minimum was evaluated for (the request's, default `online`). */
+    paymentMethod: OrderPaymentMethod;
+    /**
+     * `false` when any shop's `deliveryMinimum.met` is false. A `null` (not evaluated) shop does not
+     * make it false — checkout is the authority either way.
+     */
+    meetsDeliveryMinimum: boolean;
     perVendor: CartQuoteVendorLine[];
+}
+
+type QuotableCart = { items: Array<{ vendorId: string; productId: string; price: number; quantity: number; productType: string }> };
+
+interface CapInput {
+    vendorId: string;
+    physical: boolean;
+    lines: DeliveryCapLine[];
+    groups: DeliveryCapAgencyGroup[];
 }
 
 export class CartQuoteService {
@@ -84,6 +139,7 @@ export class CartQuoteService {
         private readonly productRepository = new ProductRepositoryMongo(),
         private readonly vendorRepository = new VendorRepository(),
         private readonly agencyRepository = new DeliveryAgencyRepository(),
+        private readonly deliveryCap: DeliveryCostCapService = deliveryCostCapService,
     ) { }
 
     /**
@@ -98,7 +154,11 @@ export class CartQuoteService {
      * `out_of_region_*` TODOs), and when it lands this is where the address starts to
      * matter arithmetically too.
      */
-    async quoteForCustomer(customerId: string, deliveryAddressId?: string): Promise<CartQuote> {
+    async quoteForCustomer(
+        customerId: string,
+        deliveryAddressId?: string,
+        paymentMethod: OrderPaymentMethod = 'online',
+    ): Promise<CartQuote> {
         const cart = await this.cartService.getCart(customerId);
 
         if (cart.items.length === 0) {
@@ -112,7 +172,7 @@ export class CartQuoteService {
             await this.assertAddressUsable(customerId, deliveryAddressId);
         }
 
-        const perVendor = await this.estimatePerVendor(cart);
+        const perVendor = await this.estimatePerVendor(cart, paymentMethod);
 
         const absorbed = perVendor.every((v) => v.absorbedByVendor === 0) && cart.productType === 'digital'
             ? null
@@ -127,8 +187,29 @@ export class CartQuoteService {
             tax: 0,
             discount: 0,
             total: subtotal,
+            paymentMethod,
+            meetsDeliveryMinimum: perVendor.every((v) => v.deliveryMinimum?.met ?? true),
             perVendor,
         };
+    }
+
+    /**
+     * Refuse a cart checkout would refuse for its delivery minimum — the chat door's pre-spend
+     * check. Same service, same verdict as `perVendor[].deliveryMinimum`; `extraDetails` carries
+     * the caller's protocol fields (`spent: false`).
+     */
+    async assertDeliveryMinimum(
+        cart: { items: Array<QuotableCart['items'][number] & { currency: string }> },
+        paymentMethod: OrderPaymentMethod,
+        extraDetails: Record<string, unknown> = {},
+    ): Promise<void> {
+        if (cart.items.length === 0) return;
+        const currency = cart.items[0].currency;
+        for (const input of await this.capInputs(cart)) {
+            if (!input.physical) continue;
+            const verdict = await this.deliveryCap.assessVendor(input, paymentMethod);
+            if (!verdict.met) throw belowMinimumError(verdict, currency, extraDetails);
+        }
     }
 
     /**
@@ -162,30 +243,87 @@ export class CartQuoteService {
      * levels of grouping, or a vendor whose items are split across two agencies would be
      * quoted one fee where they will be charged two.
      */
-    private async estimatePerVendor(cart: { items: Array<{ vendorId: string; productId: string; price: number; quantity: number; productType: string }> }): Promise<CartQuoteVendorLine[]> {
-        const byVendor = new Map<string, typeof cart.items>();
+    private async estimatePerVendor(cart: QuotableCart, paymentMethod: OrderPaymentMethod): Promise<CartQuoteVendorLine[]> {
+        const lines: CartQuoteVendorLine[] = [];
+
+        for (const input of await this.capInputs(cart)) {
+            const subtotal = input.lines.reduce((sum, l) => sum + l.unitPrice * l.quantity, 0);
+
+            // Digital lines never ship, so they carry no delivery cost at all.
+            if (!input.physical) {
+                lines.push({ vendorId: input.vendorId, subtotal, delivery: 0, absorbedByVendor: 0, deliveryMinimum: null });
+                continue;
+            }
+
+            let absorbedByVendor = 0;
+            for (const group of input.groups) {
+                if (!Types.ObjectId.isValid(group.agencyId)) continue;
+                const agency = await this.agencyRepository.findById(group.agencyId);
+                // No policies means no quotable price. `computeShipmentDeliveryFee` falls
+                // back to a constant and logs loudly at split time; an estimate must not
+                // invent a number, so this contributes nothing.
+                if (!agency?.policies) continue;
+                absorbedByVendor += deliveryFeeForPickupMix(agency.policies, group.mix);
+            }
+
+            // Same reasoning as a missing agency above: a vendor whose plan cannot be resolved
+            // (`BILLING_PLAN_NOT_FOUND`) is a misconfiguration the shopper cannot act on, so
+            // the quote reports "not estimated" (`null`) rather than failing the cart page.
+            // Checkout still refuses — the split would fail on the same lookup.
+            let deliveryMinimum: DeliveryMinimumQuote | null = null;
+            try {
+                const verdict = await this.deliveryCap.assessVendor(input, paymentMethod);
+                deliveryMinimum = {
+                    met: verdict.met,
+                    checkedPer: verdict.scope,
+                    maxDeliveryPercent: verdict.maxDeliveryPercent,
+                    shortfall: verdict.shortfall,
+                    units: verdict.units,
+                };
+            } catch (error) {
+                console.error(`[CartQuoteService] Delivery minimum not estimable for vendor ${input.vendorId}:`, error);
+            }
+
+            lines.push({
+                vendorId: input.vendorId,
+                subtotal,
+                delivery: 0,
+                absorbedByVendor,
+                deliveryMinimum,
+            });
+        }
+
+        return lines;
+    }
+
+    /**
+     * The cart grouped per vendor, then per agency — the shape both the fee estimate and the
+     * delivery minimum read. The pickup mix comes from the product's live configuration;
+     * checkout snapshots that same field and the split classifies the snapshot.
+     */
+    private async capInputs(cart: QuotableCart): Promise<CapInput[]> {
+        const byVendor = new Map<string, QuotableCart['items']>();
         for (const item of cart.items) {
             const group = byVendor.get(item.vendorId) ?? [];
             group.push(item);
             byVendor.set(item.vendorId, group);
         }
 
-        const lines: CartQuoteVendorLine[] = [];
+        const out: CapInput[] = [];
 
         for (const [vendorId, items] of byVendor) {
-            const subtotal = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
+            const lines = items.map((i) => ({ unitPrice: i.price, quantity: i.quantity }));
 
-            // Digital lines never ship, so they carry no delivery cost at all.
             if (items.every((i) => i.productType !== 'physical')) {
-                lines.push({ vendorId, subtotal, delivery: 0, absorbedByVendor: 0 });
+                out.push({ vendorId, physical: false, lines, groups: [] });
                 continue;
             }
 
             const vendor = await this.vendorRepository.findById(vendorId);
             const vendorDefaultAgencyId = vendor?.default_delivery_agency_id?.toString() ?? null;
 
-            // agencyId → the fulfilment mix of the shipment it will receive.
-            const mixByAgency = new Map<string, PickupMix>();
+            // agencyId → the shipment it will receive.
+            const byAgency = new Map<string, DeliveryCapAgencyGroup>();
 
             for (const item of items) {
                 const product = await this.productRepository.findByIdUnscoped(item.productId);
@@ -195,30 +333,21 @@ export class CartQuoteService {
                 // No resolvable agency is not an error here — checkout raises
                 // ORDER_NO_DELIVERY_AGENCY for it. A quote that threw would block the cart
                 // page over a misconfiguration the shopper cannot act on.
-                if (!agencyId) continue;
+                if (!agencyId || !Types.ObjectId.isValid(agencyId)) continue;
 
-                const mix = mixByAgency.get(agencyId) ?? { hasPickupBased: false, hasStorageBased: false };
+                const group = byAgency.get(agencyId)
+                    ?? { agencyId, mix: { hasPickupBased: false, hasStorageBased: false }, lines: [] };
                 const source = product.delivery?.pickupLocation?.source;
-                if (source === 'vendor_address') mix.hasPickupBased = true;
-                if (source === 'agency_storage') mix.hasStorageBased = true;
-                mixByAgency.set(agencyId, mix);
+                if (source === 'vendor_address') group.mix.hasPickupBased = true;
+                if (source === 'agency_storage') group.mix.hasStorageBased = true;
+                group.lines.push({ unitPrice: item.price, quantity: item.quantity });
+                byAgency.set(agencyId, group);
             }
 
-            let absorbedByVendor = 0;
-            for (const [agencyId, mix] of mixByAgency) {
-                if (!Types.ObjectId.isValid(agencyId)) continue;
-                const agency = await this.agencyRepository.findById(agencyId);
-                // No policies means no quotable price. `computeShipmentDeliveryFee` falls
-                // back to a constant and logs loudly at split time; an estimate must not
-                // invent a number, so this contributes nothing.
-                if (!agency?.policies) continue;
-                absorbedByVendor += deliveryFeeForPickupMix(agency.policies, mix);
-            }
-
-            lines.push({ vendorId, subtotal, delivery: 0, absorbedByVendor });
+            out.push({ vendorId, physical: true, lines, groups: [...byAgency.values()] });
         }
 
-        return lines;
+        return out;
     }
 }
 

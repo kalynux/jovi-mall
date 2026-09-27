@@ -11,6 +11,7 @@
  */
 import { IOrder } from '../order.model';
 import { StoreRepository } from '../../store/repositories/store.repository';
+import { VendorRepository } from '../../vendors/vendor.repository';
 import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
 import { getStorageProvider } from '../../../core/storage';
 import { resolveProductImages, ProductImageRef } from '../../catalog/read-models/product-image.resolver';
@@ -21,6 +22,7 @@ export class CustomerOrderViewService {
     constructor(
         private readonly storeRepository = new StoreRepository(),
         private readonly fileRepository = new FileRepositoryMongo(),
+        private readonly vendorRepository = new VendorRepository(),
     ) { }
 
     /**
@@ -41,6 +43,11 @@ export class CustomerOrderViewService {
             orders.map((o) => o.vendor_id.toString()),
         );
         const slugsByVendor = await this.resolveSlugs(orders);
+        // The "verified" badge lives on the VENDOR (`kyc_details.legit_verified`), not the
+        // store — one query for every vendor in the set, ids only.
+        const verifiedVendors = await this.vendorRepository.findVerifiedVendorIds(
+            orders.map((o) => o.vendor_id.toString()),
+        );
 
         // ── Thumbnails, one file query for every line in the set ──────────────
         const refs: ProductImageRef[] = orders.flatMap((order) =>
@@ -65,6 +72,7 @@ export class CustomerOrderViewService {
                 order,
                 storeName: namesByVendor.get(vendorId)?.name ?? null,
                 storeSlug: slugsByVendor.get(vendorId) ?? null,
+                storeVerified: verifiedVendors.has(vendorId),
                 imagesByKey,
                 codCollections:
                     order.payment_method === 'cash_on_delivery'

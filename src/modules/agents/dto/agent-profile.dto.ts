@@ -123,6 +123,12 @@ export interface AgentRosterEntryDto {
     activeShipmentCount: number;
     trackingAllowed: boolean;
     trustScore: number;
+    /**
+     * The platform's KYC verdict as a boolean (`kyc.status === 'verified'`) —
+     * drives the badge beside the name. A contract can outlive a verification
+     * (KYC re-opened or rejected on review), so this is NOT always true here.
+     */
+    verified: boolean;
 }
 
 // ─── Mapper ───────────────────────────────────────────────────────────────────
@@ -250,6 +256,7 @@ export class AgentProfileMapper {
             activeShipmentCount: agent.capacity?.active_shipment_count ?? 0,
             trackingAllowed: agent.tracking?.allowed ?? false,
             trustScore: agent.cod?.trust_score ?? 100,
+            verified: agent.kyc?.status === 'verified',
         };
     }
 

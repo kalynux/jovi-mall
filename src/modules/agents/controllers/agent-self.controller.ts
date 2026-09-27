@@ -761,16 +761,25 @@ async function resolveAgencyContexts(
     agencyRepo.findByIds(unique),
   ]);
   const countryById = new Map(agencies.map((a) => [a._id.toString(), a.country ?? null]));
+  const verifiedById = new Map(
+    agencies.map((a) => [a._id.toString(), a.kyc_details?.legit_verified === true])
+  );
 
   for (const id of unique) {
     byId.set(id, {
       name: magazinNames.get(id)?.name ?? null,
       country: countryById.get(id) ?? null,
       coverageAreas: coverageAreas.get(id) ?? [],
+      verified: verifiedById.get(id) ?? false,
     });
   }
   return byId;
 }
 
 /** The context of an agency that could not be resolved at all. */
-const UNKNOWN_AGENCY: ContractAgencyContext = { name: null, country: null, coverageAreas: [] };
+const UNKNOWN_AGENCY: ContractAgencyContext = {
+  name: null,
+  country: null,
+  coverageAreas: [],
+  verified: false,
+};

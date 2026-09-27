@@ -27,6 +27,10 @@ export class ConsoleMailProvider implements IMailProvider {
     console.log(`From:    ${options.from}`);
     console.log(`Subject: ${options.subject}`);
     console.log(`HTML:    ${options.html.substring(0, 50)}...`);
+    // Name and size only — never the bytes: a statement is an account holder's financial record.
+    for (const a of options.attachments ?? []) {
+      console.log(`Attach:  ${a.filename} (${a.contentType}, ${a.content.length} bytes)`);
+    }
     console.log('----------------------------');
   }
 }

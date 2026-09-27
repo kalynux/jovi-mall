@@ -199,9 +199,15 @@ assert('SOURCE: the customer agent block carries NO phone field', () => {
     return !/phone/i.test(body) && !/email/i.test(body);
 });
 
-assert('SOURCE: the agent lookup is a two-field projection, not a full hydrate', () => {
+assert('SOURCE: the agent lookup is a narrow projection (name, photo, KYC verdict), not a full hydrate', () => {
     const repo = readCode('modules/agents/repositories/agent.repository.ts');
-    return /findPublicIdentitiesByIds[\s\S]{0,400}\.select\('name avatar_file_id'\)/.test(repo);
+    // `kyc.status` and never bare `kyc` — the sub-document also holds the ID number and files.
+    return /findPublicIdentitiesByIds[\s\S]{0,800}\.select\('name avatar_file_id kyc\.status'\)/.test(repo);
+});
+
+assert("SOURCE: agent `verified` is the gate's own test, `kyc.status === 'verified'`", () => {
+    const repo = readCode('modules/agents/repositories/agent.repository.ts');
+    return /verified:\s*r\.kyc\?\.status === 'verified'/.test(repo);
 });
 
 // ─── 3 · The projected shipment ──────────────────────────────────────────────
@@ -215,6 +221,7 @@ const agency = {
     supportPhone: '+237670000000',
     supportEmail: 'support@dx.cm',
     supportWhatsapp: null,
+    verified: true,
 };
 
 assert('`agencyName` still shipped, and reads off the same block as `agency.name`', () => {
@@ -227,6 +234,11 @@ assert('no magazin → `agency` and `agencyName` are BOTH null, never disagreein
     return dto.agency === null && dto.agencyName === null;
 });
 
+assert('the agency `verified` flag passes through the shared identity block', () => {
+    const dto = toCustomerShipmentDto(shipmentAt('in_transit'), { agency, agent: null });
+    return dto.agency!.verified === true;
+});
+
 assert('the agency support contacts reach the customer (their own order, that agency)', () => {
     const dto = toCustomerShipmentDto(shipmentAt('in_transit'), { agency, agent: null });
     return dto.agency!.supportPhone === '+237670000000' && dto.agency!.supportEmail === 'support@dx.cm';
@@ -235,10 +247,10 @@ assert('the agency support contacts reach the customer (their own order, that ag
 assert('`agent` is whatever the caller resolved, and null is a first-class answer', () => {
     const withAgent = toCustomerShipmentDto(shipmentAt('in_transit'), {
         agency,
-        agent: { displayName: 'Jean T.', photo: null, visibleFrom: AGENT_IDENTITY_VISIBLE_FROM },
+        agent: { displayName: 'Jean T.', photo: null, visibleFrom: AGENT_IDENTITY_VISIBLE_FROM, verified: true },
     });
     const without = toCustomerShipmentDto(shipmentAt('delivered'), { agency, agent: null });
-    return withAgent.agent!.displayName === 'Jean T.' && without.agent === null;
+    return withAgent.agent!.displayName === 'Jean T.' && withAgent.agent!.verified === true && without.agent === null;
 });
 
 assert('the failure REASON and NOTE are still withheld — only the count is published', () => {

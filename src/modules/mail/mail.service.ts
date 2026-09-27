@@ -66,6 +66,7 @@ export class MailService {
       from,
       subject: options.subject,
       html,
+      ...(options.attachments?.length ? { attachments: options.attachments } : {}),
     });
   }
 

@@ -199,7 +199,7 @@ const TRACK_BUTTON: ButtonDef = {
 // ─── Quick replies (phase 10, stage 1) ───────────────────────────────────────
 
 /**
- * ⭐ **The chat quick-reply vocabulary, designed once for all 24 situations.**
+ * ⭐ **The chat quick-reply vocabulary, designed once for every situation.**
  *
  * A tap here comes back as a TOKEN to the bot's dispatcher, unlike `button`
  * above, which opens a page. See `QuickReplyDef` for the per-channel mechanics
@@ -209,9 +209,10 @@ const TRACK_BUTTON: ButtonDef = {
  *
  * Every situation already has a URL button answering *"let me look at it"*. A
  * quick reply is added **only** where the customer plausibly wants to *do*
- * something the bot can finish in chat without opening a screen. **11 of the 24
- * get none, deliberately** — a button that merely repeats the link costs a Meta
- * re-approval in stage 2 and buys the customer nothing.
+ * something the bot can finish in chat without opening a screen. **Most get
+ * none, deliberately** — a button that merely repeats the link costs a Meta
+ * re-approval in stage 2 and buys the customer nothing. (No count here: this
+ * sentence carried one, and it expired as situations and buttons moved.)
  *
  * ── ⚠ Three constraints every entry below satisfies, all asserted at boot ───
  *
@@ -232,6 +233,12 @@ const TRACK_BUTTON: ButtonDef = {
  * `booking.cancelled` below.
  */
 
+/*
+ * ⚠ `CANCEL_BOOKING_LABEL` and `THAT_WORKS_LABEL` are referenced by NO situation today, on
+ * purpose: their tokens (`yes:bkcnl:` / `no:bkcnl:`, `yes:bkmove:`) have no registered handler,
+ * and a button without one reaches the unknown-action refusal. They are kept, translated, for
+ * the bookings work that registers those keys — see `booking.rescheduled`'s withdrawal note.
+ */
 const CANCEL_BOOKING_LABEL: Record<Language, string> = {
     en: 'Cancel booking', fr: 'Annuler', pt: 'Cancelar', es: 'Cancelar', ar: 'إلغاء الحجز'
 };
@@ -1208,16 +1215,24 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
         button: ORDER_BUTTON,
         actions: [
             /**
-             * ⛔ **"Leave a review" WITHDRAWN, and it was half of a bigger hole.** `rate` is a
-             * declared verb that NO stream registers, and there is no review path behind it at
-             * all: `reviews_create` is `flow_only` so the model cannot call it, and its route
-             * has never had a caller of any kind. The platform was offering to take a review it
-             * had no way to accept — here and on `booking.completed`. Withdrawn on both until
-             * the chain exists; the review path itself belongs to the discovery stream.
+             * ✅ **"Leave a review" RESTORED.** It was withdrawn when `rate` was a declared verb
+             * that no stream registered. That stopped being true in `c39bff7` (2026-09-21):
+             * `REVIEW_ACTION_HANDLERS` in `bot-review.controller.ts` registers `rate`, and
+             * `rate:<orderId>` is exactly its invitation arity — it checks the order is the
+             * caller's (a miss is 404) and answers with the five-star picker. The withdrawal
+             * then sat here, obsolete, for six days, because nothing re-checked it;
+             * `test:bot-surface` now resolves every token in this file against the routed set.
+             *
+             * ⚠ **Still withdrawn on `booking.completed`.** `handleRateTap` resolves an ORDER, a
+             * booking carries no order id, and a booking id where an order id is expected would
+             * parse. Reviewing a service needs its own subject path.
+             *
+             * Positive action first, as `order.delivery_failed` orders its two.
              *
              * ⚠ **`hp`, not `ord`.** Topic codes are `rd`/`ad`/`hp` only; `hp` is the
              * SHIPPING_ISSUE topic the in-chat "Get help" button already uses.
              */
+            { token: 'rate:{{orderId}}', label: LEAVE_REVIEW_LABEL },
             { token: 'tkt:new:hp:{{orderId}}', label: SOMETHING_WRONG_LABEL }
         ]
     },

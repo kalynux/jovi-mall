@@ -21,6 +21,7 @@ import { buildAdminReviewRouter } from '../../modules/reviews/routes/admin-revie
 import { buildAdminKycRouter } from '../../modules/identity-verification/routes/admin-kyc.routes';
 import { buildAdminStaffIdentityRouter } from '../../modules/staff-identity/routes/admin-staff-identity.routes';
 import { buildAdminGeoRouter } from '../../modules/geo/admin-geo.routes';
+import { buildAdminStatementMailRouter } from '../../modules/mail/admin-statement-mail.routes';
 
 /**
  * `/api/internal/admin/*` — the service-to-service surface the **wi-admin** backend calls.
@@ -325,5 +326,14 @@ router.use('/identity-documents', buildAdminStaffIdentityRouter([requireAdminCal
  * second key that nothing counts against the first.
  */
 router.use('/geo', buildAdminGeoRouter([requireAdminCaller]));
+
+/**
+ * Account statements (2026-09-27, owner decision O-8) — a mail RELAY, not a computation.
+ *
+ * wi-admin reads `jovi_mall`, renders the xlsx/pdf and posts it here; this service's only
+ * decision is the recipient, which it resolves from the owner profile and never accepts from the
+ * caller. Its wider body parser is mounted in `app.ts` (`STATEMENT_MAIL_BODY_LIMIT`).
+ */
+router.use('/mail', buildAdminStatementMailRouter([requireAdminCaller]));
 
 export default router;

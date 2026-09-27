@@ -278,7 +278,11 @@ import {
     CUSTOMER_NOTIFICATION_TYPES,
     CustomerNotificationType,
 } from '../../src/modules/notifications/models/customer-notification.model';
-import { customerWhatsAppTemplateName } from '../../src/modules/notifications/catalog/customer-notification-catalog';
+import {
+    customerWhatsAppTemplateName,
+    CUSTOMER_NOTIFICATION_CATALOG,
+} from '../../src/modules/notifications/catalog/customer-notification-catalog';
+import { actionKeyOf } from '../../src/modules/bot-surface/domain/bot-action-dispatch';
 import { evaluateMaintenance, MAINTENANCE_OFF } from '../../src/modules/system/domain/maintenance-mode';
 import { projectDetails } from '../../src/core/error-detail-policy';
 import { ERROR_CODES } from '../../src/core/error-codes';
@@ -669,6 +673,47 @@ function botActionCoverage(
         }
     }
     return { problems, routed, documented, drawn };
+}
+
+/**
+ * ⭐ EVERY TOKEN THE NOTIFICATION CATALOGUE WRITES BY HAND REACHES A HANDLER.
+ *
+ * The blind spot `botActionCoverage` names in its own header, closed. The customer catalogue
+ * cannot call a builder — its ids do not exist until render time — so it writes tokens as
+ * literals with placeholders, and the builder-call scan sees none of them. TEN dead tokens
+ * survived there until a census read the file by hand; and the reverse also happened: a
+ * button withdrawn because its verb was unrouted stayed withdrawn for six days after the
+ * verb WAS routed (`rate`, `c39bff7`), because nothing re-checked it either.
+ *
+ * ── HOW A TOKEN IS JUDGED ───────────────────────────────────────────────────────────────
+ * Placeholders are expanded to a real-shaped id, then the token goes through the
+ * dispatcher's OWN functions — `parseBotActionId` (closed verb set) and `actionKeyOf` (the
+ * sub-dispatch rule) — so this guard cannot hold a different opinion from the door about
+ * what key a token is. The key must then be in ROUTED, which the caller passes in from
+ * `botActionCoverage`: read out of the dispatcher's merge call, never a list kept here.
+ *
+ * ⚠ Comments are stripped first. Withdrawn tokens live in comments in that very file, and a
+ * guard that read them would report buttons nobody draws — or, quoted the other way, be
+ * satisfied by a rule's own explanation.
+ */
+function catalogueTokenProblems(
+    catalogueSource: string,
+    routed: ReadonlyMap<string, string>,
+): { problems: string[]; tokens: string[] } {
+    const code = stripComments(catalogueSource.replace(/\r\n/g, '\n'));
+    const tokens = [...new Set([...code.matchAll(/\btoken:\s*'([^']+)'/g)].map((m) => m[1]))];
+    const problems: string[] = [];
+    const ID = 'a'.repeat(24);
+    for (const token of tokens) {
+        const parsed = parseBotActionId(token.replace(/\{\{\s*\w+\s*\}\}/g, ID));
+        if (!parsed) {
+            problems.push(`UNPARSEABLE: "${token}" — not a declared verb, or no argument`);
+            continue;
+        }
+        const { key } = actionKeyOf(parsed);
+        if (!routed.has(key)) problems.push(`WRITTEN BUT NOT ROUTED: "${token}" resolves to "${key}", which no handler map claims`);
+    }
+    return { problems, tokens };
 }
 
 async function main(): Promise<void> {
@@ -4567,6 +4612,53 @@ async function main(): Promise<void> {
         const { problems } = botActionCoverage(readRepo, sourcesExcept(ID_FILE));
         problems.forEach((p) => console.error(`      ${p}`));
         return problems.length === 0;
+    });
+
+    // ── The notification catalogue's hand-written tokens (the blind spot above) ──────────
+    const CATALOGUE_FILE = 'src/modules/notifications/catalog/customer-notification-catalog.ts';
+    const catalogueSource = readRepo(CATALOGUE_FILE);
+    const { routed: routedKeys } = botActionCoverage(readRepo, sourcesExcept(ID_FILE));
+
+    /**
+     * Non-vacuity, pinned against the RUNTIME catalogue rather than a count: the source scan
+     * must see every token the live object carries. A regex that silently stopped matching
+     * (a quote style change, a reformat) would otherwise pass on an empty list.
+     */
+    assert('the catalogue token scan sees every token the live catalogue carries', () => {
+        const { tokens } = catalogueTokenProblems(catalogueSource, routedKeys);
+        const live = new Set(Object.values(CUSTOMER_NOTIFICATION_CATALOG)
+            .flatMap((m) => (m.actions ?? []).map((a) => a.token)));
+        return live.size > 0 && [...live].every((t) => tokens.includes(t));
+    });
+
+    assert('⛔ every token the customer notification catalogue writes by hand reaches a handler', () => {
+        const { problems } = catalogueTokenProblems(catalogueSource, routedKeys);
+        problems.forEach((p) => console.error(`      ${p}`));
+        return problems.length === 0;
+    });
+
+    /**
+     * ⭐ Shown to BITE on mutated copies of the file's text — the unit a regression actually
+     * arrives in. Each asserts the failure names the right token, not merely that one failed.
+     */
+    const withToken = (token: string): string =>
+        catalogueSource.replace(/actions:\s*\[/, `actions: [\n            { token: '${token}', label: X },`);
+
+    assert('BITE: a token with an undeclared verb is reported UNPARSEABLE', () =>
+        catalogueTokenProblems(withToken('bogus:{{orderId}}'), routedKeys).problems
+            .some((p) => p.startsWith('UNPARSEABLE: "bogus:{{orderId}}"')));
+
+    assert('BITE: a declared verb with an unregistered sub-key is reported (the "That works" case)', () =>
+        catalogueTokenProblems(withToken('yes:bkmove:{{bookingId}}'), routedKeys).problems
+            .some((p) => p.includes('"yes:bkmove:{{bookingId}}" resolves to "yes:bkmove"')));
+
+    assert('BITE: a dead token inside a COMMENT is ignored — a withdrawal note is not a button', () => {
+        const commented = catalogueSource.replace(
+            /actions:\s*\[/, "actions: [\n            // { token: 'bogus:{{orderId}}', label: X },",
+        );
+        const baseline = catalogueTokenProblems(catalogueSource, routedKeys).problems;
+        const mutant = catalogueTokenProblems(commented, routedKeys).problems;
+        return mutant.length === baseline.length && !mutant.some((p) => p.includes('bogus'));
     });
 
     // ═════════════════════════════════════════════════════════════════════════

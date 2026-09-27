@@ -1,5 +1,6 @@
-import { ClientSession } from 'mongoose';
+import { ClientSession, Types } from 'mongoose';
 import { AgencyMagazinModel, IAgencyMagazin } from '../models/magazin.model';
+import { COLLECTIONS } from '../../../core/database/collections';
 
 /**
  * The magazin fields that make up an agency's public identity block — its
@@ -11,6 +12,14 @@ export type AgencyIdentityFields = Pick<
   IAgencyMagazin,
   'name' | 'logo_file_id' | 'support_phone' | 'support_email' | 'support_whatsapp'
 >;
+
+/**
+ * A batch identity row: the magazin's identity fields plus the owning agency's KYC
+ * verdict, `delivery_agency.kyc_details.legit_verified === true`, joined in the same
+ * query. The verdict lives on the agency account, not the magazin, so a hydrated magazin
+ * document alone cannot supply it — the single-entity path passes it explicitly.
+ */
+export type AgencyIdentityRow = AgencyIdentityFields & { agency_verified: boolean };
 
 /**
  * Magazin Repository
@@ -77,13 +86,46 @@ export class MagazinRepository {
    * Wider projection than `findNamesByAgencyIds`, which stays as-is for the
    * name-only paths (timelines, notifications) that shouldn't pay for the rest.
    */
-  async findIdentitiesByAgencyIds(agencyIds: Array<string>): Promise<Map<string, AgencyIdentityFields>> {
-    const ids = [...new Set(agencyIds.filter((id): id is string => !!id))];
+  async findIdentitiesByAgencyIds(agencyIds: Array<string>): Promise<Map<string, AgencyIdentityRow>> {
+    const ids = [...new Set(agencyIds.filter((id): id is string => !!id))]
+      .filter((id) => Types.ObjectId.isValid(id));
     if (ids.length === 0) return new Map();
-    const rows = await AgencyMagazinModel.find({ agency_id: { $in: ids } })
-      .select('agency_id name logo_file_id support_phone support_email support_whatsapp')
-      .lean()
-      .exec();
+    // Still ONE query: the agency's KYC verdict is joined in rather than fetched per row.
+    // The `$lookup` projects the single boolean `kyc_details.legit_verified` — the rest of
+    // the agency document (KYC numbers, document files, payout details) never enters the
+    // pipeline. The deprecated top-level `legit_verified` mirror is deliberately not read.
+    const rows = await AgencyMagazinModel.aggregate<{
+      agency_id: Types.ObjectId;
+      name: string;
+      logo_file_id?: Types.ObjectId | null;
+      support_phone?: string | null;
+      support_email?: string | null;
+      support_whatsapp?: string | null;
+      agency_verified: boolean;
+    }>([
+      { $match: { agency_id: { $in: ids.map((id) => new Types.ObjectId(id)) } } },
+      {
+        $lookup: {
+          from: COLLECTIONS.DELIVERY_AGENCY,
+          localField: 'agency_id',
+          foreignField: '_id',
+          as: 'agency',
+          pipeline: [{ $project: { _id: 0, verified: '$kyc_details.legit_verified' } }],
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          agency_id: 1,
+          name: 1,
+          logo_file_id: 1,
+          support_phone: 1,
+          support_email: 1,
+          support_whatsapp: 1,
+          agency_verified: { $eq: [{ $first: '$agency.verified' }, true] },
+        },
+      },
+    ]).exec();
     return new Map(
       rows.map((r) => [
         r.agency_id.toString(),
@@ -93,6 +135,7 @@ export class MagazinRepository {
           support_phone: r.support_phone ?? null,
           support_email: r.support_email ?? null,
           support_whatsapp: r.support_whatsapp ?? null,
+          agency_verified: r.agency_verified === true,
         },
       ]),
     );

@@ -41,9 +41,23 @@ export interface ChatReviewLine {
  * ⚠ **The SAME object the model receives**, typed here and built once in the controller, so the
  * buttons can never name an address or a total the data does not.
  */
+/**
+ * One shop whose part of the basket is too small to carry its delivery (ADR-A07) — the fields the
+ * drawn reply reads. `shopName` null means the shop has no Store name; the reply says "this shop".
+ */
+export interface ChatReviewShortfall {
+    shopName: string | null;
+    shortfallText: string;
+    /** `false` when no basket size from this shop can pass — adding more will not help. */
+    payable: boolean;
+}
+
+/** Why a review cannot go ahead: an address problem, or a shop below its delivery minimum. */
+export type ChatReviewBlocker = ChatDestinationBlocker | 'below_delivery_minimum';
+
 export interface ChatReviewForReply {
     ready: boolean;
-    blocker: ChatDestinationBlocker | null;
+    blocker: ChatReviewBlocker | null;
     checkoutRef: string | null;
     lines: readonly ChatReviewLine[];
     totalText: string;
@@ -52,6 +66,8 @@ export interface ChatReviewForReply {
     addresses: readonly BotAddressDto[];
     payment: { method: 'mobile_money'; phoneMasked: string | null };
     addAddressUrl: string | null;
+    /** Shops below their delivery minimum. Non-empty exactly when `blocker` is `below_delivery_minimum`. */
+    deliveryShortfalls: readonly ChatReviewShortfall[];
 }
 
 /** The placement's response data — the fields the drawn placement message is built from. */
@@ -85,6 +101,7 @@ const VARIANT_CLIP = 40;
 const LABEL_CLIP = 40;
 const PLACE_CLIP = 150;
 const INSTRUCTION_CLIP = 200;
+const SHOP_CLIP = 60;
 
 function clip(value: string, max: number): string {
     const text = value.trim();
@@ -144,6 +161,8 @@ function confirmationBody(
  *     list, because a row has a description and a button does not.
  *   - **No address to deliver to** — a link to the website's address page (owner's ruling
  *     2026-09-20: an address is added there, never captured in the chat).
+ *   - **A shop below its delivery minimum** (ADR-A07) — how much more to add from each such shop,
+ *     and NO Place order button: checkout would refuse it, and the review minted no ref.
  *
  * ⚠ **Null — the model's turn — for everything else**: no wallet on the account (the model must ask
  * for a number, and a Place order button could only fail), an unknown address id, an address that
@@ -158,7 +177,11 @@ export function checkoutReviewReply(
     options: { addressChosen: boolean },
     language: string | null,
 ): BotReplyIntent | null {
-    if (!review.ready) return addAddressReply(review, language);
+    if (!review.ready) {
+        return review.blocker === 'below_delivery_minimum'
+            ? deliveryMinimumReply(review, language)
+            : addAddressReply(review, language);
+    }
 
     const ref = review.checkoutRef;
     const phone = review.payment.phoneMasked;
@@ -253,6 +276,36 @@ function addAddressReply(review: ChatReviewForReply, language: string | null): B
         text: botChrome('checkoutAddAddressPrompt', language),
         label: botChrome('addAddressButton', language),
         url: review.addAddressUrl,
+    };
+}
+
+/**
+ * A shop below its delivery minimum (ADR-A07): one line per such shop — how much more to add from
+ * it — then what to do. Plain text, no button: the remedy is adding to the basket, and the next
+ * `checkout_review` draws the confirmation once it is met.
+ *
+ * ⚠ **Never the fee or the commission** — the vendor's terms. Only the amount to add.
+ * ⚠ **"From that shop"** is the whole instruction: an item from another shop becomes a separate
+ * order and helps nothing.
+ */
+function deliveryMinimumReply(review: ChatReviewForReply, language: string | null): BotReplyIntent | null {
+    if (review.deliveryShortfalls.length === 0) return null;
+
+    const lines = review.deliveryShortfalls.map((shop) => {
+        const name = shop.shopName?.trim() ? clip(shop.shopName, SHOP_CLIP) : botChrome('checkoutThisShop', language);
+        return shop.payable
+            ? botChromeFill('checkoutDeliveryMinimumLine', language, { shop: name, amount: shop.shortfallText })
+            : botChromeFill('checkoutDeliveryMinimumUnreachable', language, { shop: name });
+    });
+
+    return {
+        kind: 'text',
+        text: [
+            botChrome('checkoutDeliveryMinimumIntro', language),
+            ...lines,
+            '',
+            botChrome('checkoutDeliveryMinimumOutro', language),
+        ].join('\n'),
     };
 }
 

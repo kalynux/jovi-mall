@@ -3,7 +3,7 @@ import { OrderModel } from '../../orders/order.model';
 import { ShipmentModel } from '../../shipments/shipment.model';
 import { ProductModel } from '../../catalog/models/product.model';
 import { CustomerModel } from '../../customers/customer.model';
-import { AgencyMagazinModel } from '../../magazin/models/magazin.model';
+import { MagazinRepository } from '../../magazin/repositories/magazin.repository';
 import { FileModel } from '../../catalog/models/file.model';
 import { getStorageProvider } from '../../../core/storage/storage.instance';
 import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
@@ -136,10 +136,8 @@ export class TicketReferenceService {
 
         // ── Batch-resolve agency names (from the Magazin, keyed by agency_id) ──
         const agencyIds = [...new Set(shipments.map(s => s.agency_id?.toString()).filter(Boolean))] as string[];
-        const magazins = agencyIds.length
-            ? await AgencyMagazinModel.find({ agency_id: { $in: agencyIds } }).select('agency_id name').lean()
-            : [];
-        const agencyNameMap = new Map(magazins.map(m => [(m as any).agency_id.toString(), (m as any).name]));
+        // The identity lookup joins in each agency's KYC verdict in the same query.
+        const agencyIdentities = await new MagazinRepository().findIdentitiesByAgencyIds(agencyIds);
 
         const shipmentsByOrder = new Map<string, any[]>();
         for (const s of shipments) {
@@ -149,7 +147,8 @@ export class TicketReferenceService {
             shipmentsByOrder.get(key)!.push({
                 shipmentId: s._id.toString(),
                 agencyId,
-                agencyName: agencyId ? (agencyNameMap.get(agencyId) ?? null) : null,
+                agencyName: agencyId ? (agencyIdentities.get(agencyId)?.name ?? null) : null,
+                agencyVerified: agencyId ? agencyIdentities.get(agencyId)?.agency_verified === true : false,
                 agentId: s.agent_id ? s.agent_id.toString() : null,
                 trackingNumber: s.tracking_number ?? null,
                 status: s.status

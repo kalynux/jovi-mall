@@ -59,6 +59,8 @@ export interface TrackingBoardAgent {
   avatar: FileDetail | null;
   phone: string | null;
   vehicleType: IAgentVehicleInfo['vehicle_type'] | null;
+  /** The platform's KYC verdict (`kyc.status === 'verified'`) — the badge beside the name. */
+  verified: boolean;
   shipments: TrackingBoardShipment[];
 }
 
@@ -111,6 +113,7 @@ export function buildTrackingBoard(
         avatar: avatarsByAgentId.get(agentId) ?? null,
         phone: agent?.phone ?? null,
         vehicleType: agent?.vehicle_info?.vehicle_type ?? null,
+        verified: agent?.kyc?.status === 'verified',
         shipments: [],
       };
       byAgent.set(agentId, entry);

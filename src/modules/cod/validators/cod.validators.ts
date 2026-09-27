@@ -31,14 +31,14 @@ export const AgentDepositRecipientSchema = z.enum(['agency', 'platform']);
 /**
  * The agent declares a handover they have made.
  *
- * `reference` is only *structurally* optional — the service requires it for
- * `recipient: 'platform'`, where it is the sole evidence tying the claim to real
- * money. Enforced there rather than here so the one rule lives in one place and
- * cannot drift between the routes that reach it.
+ * Parsed from a `multipart/form-data` body (the proof image rides beside it in field
+ * `file`), so every value arrives as a string — hence `z.coerce` on the amount. `reference`
+ * and `note` are both optional on every route; the proof image is the required evidence
+ * and is checked by the controller, since it is not a body field.
  */
 export const DeclareDepositSchema = z.object({
   agencyId: ObjectId,
-  amount: z.number().int().positive('Amount must be a positive integer (minor units)'),
+  amount: z.coerce.number().int().positive('Amount must be a positive integer (minor units)'),
   recipient: AgentDepositRecipientSchema.default('agency'),
   reference: clearable(z.string().trim().min(1).max(200)),
   note: clearable(z.string().trim().max(500)),

@@ -980,7 +980,14 @@ export class ShipmentService {
         // once, so "which one sent me this?" is not answerable from the token —
         // and `agencyId` alone is not an answer a human can act on. The magazin
         // is already loaded above for the HQ address, so only the logo is fetched.
-        const agencyIdentity = await resolveAgencyIdentity(agencyId, agencyMagazin, this.fileRepository, this.storageProvider);
+        // `verified` comes off the agency document loaded above — no extra query.
+        const agencyIdentity = await resolveAgencyIdentity(
+            agencyId,
+            agencyMagazin,
+            agency?.kyc_details?.legit_verified === true,
+            this.fileRepository,
+            this.storageProvider,
+        );
 
         // Resolve the (optional, agency-owned) delivery-proof image.
         const deliveryProof = await resolveFileDetail(shipment.delivery_proof_file_id?.toString(), this.fileRepository, this.storageProvider);
@@ -1030,7 +1037,14 @@ export class ShipmentService {
             // The dispatching agency's identity: name, logo and support contacts.
             // Null only when the agency has no magazin yet (provisioning gap).
             agency: agencyIdentity,
-            vendor: vendor ? { id: vendor._id.toString(), businessName: vendorBusinessName ?? '', phone: vendor.phone ?? null, email: vendor.email ?? null } : null,
+            vendor: vendor ? {
+                id: vendor._id.toString(),
+                businessName: vendorBusinessName ?? '',
+                phone: vendor.phone ?? null,
+                email: vendor.email ?? null,
+                // Admin-verified business legitimacy — drives the badge beside the name.
+                verified: vendor.kyc_details?.legit_verified === true,
+            } : null,
             customer: customer ? {
                 id: customer._id.toString(),
                 name: customer.name,
@@ -1045,7 +1059,14 @@ export class ShipmentService {
                 order,
                 new Map(agency ? [[agency._id.toString(), agencyDepots ?? []]] : [])
             ),
-            agent: agent ? { id: agent._id.toString(), name: agent.name, phone: agent.phone ?? null, avatar: agentAvatar } : null,
+            agent: agent ? {
+                id: agent._id.toString(),
+                name: agent.name,
+                phone: agent.phone ?? null,
+                avatar: agentAvatar,
+                // Platform KYC verdict — drives the badge beside the name.
+                verified: agent.kyc?.status === 'verified',
+            } : null,
             // Reassignment handover: where the (replacement) agent collects this
             // shipment, when it was reassigned. Null for a first-assigned shipment.
             handover: shipment.handover ? {
@@ -2211,7 +2232,13 @@ export class ShipmentService {
         await Promise.all(vendorIds.map(async id => {
             const vendor = await this.vendorRepo.findById(id);
             if (vendor) {
-                map.set(id, { id, businessName: storeNames.get(id)?.name ?? '', phone: vendor.phone ?? null });
+                map.set(id, {
+                    id,
+                    businessName: storeNames.get(id)?.name ?? '',
+                    phone: vendor.phone ?? null,
+                    // Admin-verified business legitimacy — drives the badge beside the name.
+                    verified: vendor.kyc_details?.legit_verified === true,
+                });
             }
         }));
         return map;
@@ -2233,11 +2260,12 @@ export class ShipmentService {
     /** Merge every shipment's status_history for an order into one sorted, agency-labeled timeline. */
     private async _mergeShipmentTimelines(shipments: IShipment[]): Promise<any[]> {
         const agencyIds = [...new Set(shipments.map(s => s.agency_id.toString()))];
-        // Business names live on the Magazin (source of truth), keyed by agency_id.
-        const magazinNames = await this.magazinRepo.findNamesByAgencyIds(agencyIds);
+        // Business names live on the Magazin (source of truth), keyed by agency_id;
+        // the identity lookup joins in the agency's KYC verdict in the same query.
+        const identities = await this.magazinRepo.findIdentitiesByAgencyIds(agencyIds);
         const agencyNameMap = new Map<string, string>();
         for (const id of agencyIds) {
-            const name = magazinNames.get(id)?.name;
+            const name = identities.get(id)?.name;
             if (name) agencyNameMap.set(id, name);
         }
 
@@ -2246,6 +2274,7 @@ export class ShipmentService {
                 shipmentId: (s._id as Types.ObjectId).toString(),
                 agencyId: s.agency_id.toString(),
                 agencyName: agencyNameMap.get(s.agency_id.toString()) ?? null,
+                agencyVerified: identities.get(s.agency_id.toString())?.agency_verified === true,
                 status: h.status,
                 changedAt: h.changed_at,
                 changedByRole: h.changed_by_role,

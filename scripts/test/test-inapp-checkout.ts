@@ -1440,7 +1440,9 @@ function chatDoorAssertions(): void {
     assert('⛔ every chat-door precheck refusal leaves the handle alive (`spent: false`)', () => {
         const src = screenCode();
         const pre = fn(src, 'async function precheckChatDoor(');
-        const refusals = [...pre.matchAll(/createAppError\(/g)].length;
+        // A refusal is a `createAppError(` here OR one delegated to a helper that takes the
+        // caller's details — the delivery minimum (ADR-A07) — and each must say `spent: false`.
+        const refusals = [...pre.matchAll(/createAppError\(|cartQuoteService\.assertDeliveryMinimum\(/g)].length;
         const alive = [...pre.matchAll(/spent: false/g)].length;
         return pre.length > 0 && refusals >= 4 && alive === refusals
             && !pre.includes('inAppSurfaceStore.')
@@ -1726,6 +1728,7 @@ function drawnConfirmationAssertions(): void {
         addresses: [HOME],
         payment: { method: 'mobile_money', phoneMasked: PHONE },
         addAddressUrl: null,
+        deliveryShortfalls: [],
         ...over,
     });
 
@@ -1870,6 +1873,54 @@ function drawnConfirmationAssertions(): void {
 
     assert('never a dead button: with no storefront URL there is no link at all', () =>
         checkoutReviewReply(blocked('no_saved_address', { addresses: [], addAddressUrl: null }), chosen, 'en') === null);
+
+    /**
+     * ⛔ **ADR-A07 — a shop below its delivery minimum draws how much to ADD, and no Place order.**
+     * Checkout would refuse that basket, so a button could only fail after the customer pressed it.
+     */
+    const short = (over: Partial<ChatReviewForReply> = {}): ChatReviewForReply => blocked('below_delivery_minimum', {
+        addAddressUrl: null,
+        deliveryShortfalls: [{ shopName: 'Chez Mama', shortfallText: '2 834 XAF', payable: true }],
+        ...over,
+    });
+
+    assert('⛔ below the delivery minimum: TEXT naming the shop and the amount to add — no button, no ref', () => {
+        const reply = checkoutReviewReply(short(), chosen, 'en');
+        return reply?.kind === 'text'
+            && reply.text.startsWith(botChrome('checkoutDeliveryMinimumIntro', 'en'))
+            && reply.text.includes(botChromeFill('checkoutDeliveryMinimumLine', 'en', { shop: 'Chez Mama', amount: '2 834 XAF' }))
+            && reply.text.endsWith(botChrome('checkoutDeliveryMinimumOutro', 'en'))
+            && !('actions' in reply && reply.actions?.length)
+            && !reply.text.includes(botChrome('checkoutPlaceQuestion', 'en'));
+    });
+
+    assert('…one line per short shop; a shop with no name is "this shop"; an unreachable one says so', () => {
+        const reply = textOf(checkoutReviewReply(short({
+            deliveryShortfalls: [
+                { shopName: null, shortfallText: '500 XAF', payable: true },
+                { shopName: 'Kiosk', shortfallText: '0 XAF', payable: false },
+            ],
+        }), chosen, 'fr'));
+        const text = reply?.text ?? '';
+        return text.includes(botChromeFill('checkoutDeliveryMinimumLine', 'fr', { shop: botChrome('checkoutThisShop', 'fr'), amount: '500 XAF' }))
+            && text.includes(botChromeFill('checkoutDeliveryMinimumUnreachable', 'fr', { shop: 'Kiosk' }))
+            // The unreachable shop names no amount: adding more would not help it.
+            && !text.includes(botChromeFill('checkoutDeliveryMinimumLine', 'fr', { shop: 'Kiosk', amount: '0 XAF' }))
+            && !/[{}]/.test(text);
+    });
+
+    assert('…in all five languages every placeholder is filled', () =>
+        ['en', 'fr', 'pt', 'es', 'ar'].every((lang) => {
+            const text = textOf(checkoutReviewReply(short(), chosen, lang))?.text ?? '';
+            return text.includes('Chez Mama') && text.includes('2 834 XAF') && !/[{}]/.test(text);
+        }));
+
+    assert('⛔ the review controller refuses the ref on a shortfall (blocked → no mint)', () => {
+        const src = fs.readFileSync(path.join(__dirname, '../../src/modules/bot-surface/controllers/bot-checkout.controller.ts'), 'utf8');
+        const fnBody = src.slice(src.indexOf('async function reviewChatCheckout('), src.indexOf('async function placeChatCheckout('));
+        return /view\.deliveryShortfalls\.length > 0 \? 'below_delivery_minimum' : null/.test(fnBody)
+            && /const checkoutRef = blocked\s*\?\s*null/.test(fnBody);
+    });
 
     /**
      * ⛔ **No wallet, no buttons.** A Place order over an account with no number could only fail

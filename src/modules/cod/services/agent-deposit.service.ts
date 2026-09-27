@@ -12,6 +12,8 @@ import {
 } from '../models/agent-deposit.model';
 import { CodCashAccountService, codCashAccountService } from './cod-cash-account.service';
 import { CodSettlementService, codSettlementService } from './cod-settlement.service';
+import { CodCashProofFileInput, CodCashProofService, codCashProofService } from './cod-cash-proof.service';
+import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
 import { AgentRepository, AgentMembershipRepository } from '../../agents';
 
 /**
@@ -70,7 +72,8 @@ export class AgentDepositService {
     private readonly cashAccounts: CodCashAccountService = codCashAccountService,
     private readonly agentRepo: AgentRepository = new AgentRepository(),
     private readonly memberships: AgentMembershipRepository = new AgentMembershipRepository(),
-    private readonly settlement: CodSettlementService = codSettlementService
+    private readonly settlement: CodSettlementService = codSettlementService,
+    private readonly proofs: CodCashProofService = codCashProofService
   ) {}
 
   // ─── Declaration (the agent's claim) ────────────────────────────────────────
@@ -84,6 +87,14 @@ export class AgentDepositService {
    * finds out immediately rather than after a day of silence. Confirmation
    * re-validates, because balances move in between and only the check inside the
    * confirming transaction is authoritative.
+   *
+   * ⚠ **The proof image is REQUIRED; the reference is not, on either route.** The receiving
+   * party answers a declaration, and a photo of the receipt or the transfer screen is what
+   * it answers against — a reference string is a convenience for reconciling a statement,
+   * and many hand-overs (cash at a desk, a mobile-money transfer from a borrowed phone)
+   * have none worth typing. The proof is checked by the controller (it is a multipart
+   * field) and uploaded only AFTER every balance rule has passed, so a refused declaration
+   * leaves no file behind.
    */
   async declare(params: {
     agentId: string;
@@ -92,35 +103,66 @@ export class AgentDepositService {
     recipient: AgentDepositRecipient;
     reference?: string | null;
     note?: string | null;
+    proof: CodCashProofFileInput;
     declaredByUserId: string;
   }): Promise<IAgentDeposit> {
-    const { agentId, agencyId, amount, recipient, reference, note, declaredByUserId } = params;
-
-    if (recipient === 'platform' && !reference?.trim()) {
-      throw createAppError(
-        ERROR_CODES.COD_DEPOSIT_REFERENCE_REQUIRED,
-        422,
-        'A transfer reference is required when paying the platform directly — it is the only evidence tying the payment to this deposit'
-      );
-    }
+    const { agentId, agencyId, amount, recipient, reference, note, proof, declaredByUserId } = params;
 
     const { currency } = await this.assertDepositable({ agentId, agencyId, amount, recipient });
 
-    const deposit = await AgentDepositModel.create({
-      agent_id: agentId,
-      agency_id: agencyId,
-      amount,
-      currency,
-      note: note ?? null,
-      recipient,
-      status: 'declared',
-      reference: reference?.trim() || null,
-      declared_by_user_id: declaredByUserId,
-      declared_at: new Date(),
-    });
+    const owner = { type: 'agent' as const, id: agentId };
+    const proofFileId = await this.proofs.store(proof, owner, declaredByUserId);
 
-    await this.emit('cod.deposit.declared', deposit);
-    return deposit;
+    let deposit: IAgentDeposit | null = null;
+    try {
+      await transactionManager.runInTransaction(async (session) => {
+        const [created] = await AgentDepositModel.create(
+          [
+            {
+              agent_id: agentId,
+              agency_id: agencyId,
+              amount,
+              currency,
+              note: note ?? null,
+              recipient,
+              status: 'declared',
+              reference: reference?.trim() || null,
+              proof_file_id: proofFileId,
+              declared_by_user_id: declaredByUserId,
+              declared_at: new Date(),
+            },
+          ],
+          { session }
+        );
+        await this.proofs.attach(proofFileId, owner, 'agent_deposit', created._id.toString(), session);
+        deposit = created;
+      });
+    } catch (error) {
+      await this.proofs.discard(proofFileId);
+      throw error;
+    }
+
+    await this.emit('cod.deposit.declared', deposit!);
+    return deposit!;
+  }
+
+  /**
+   * The proof image's BYTES, scoped exactly as the deposit reads are: an agent sees their own
+   * deposits, an agency the deposits made under its contracts. 404 for anything else — never
+   * 403, so an agency cannot learn that another agency's deposit id exists.
+   *
+   * An administrator reads it through `GET /api/internal/admin/files/:id/content` with the id
+   * from the deposit, like every other private file.
+   */
+  async streamProof(viewer: { role: 'agent' | 'agency'; id: string }, depositId: string) {
+    const deposit = Types.ObjectId.isValid(depositId) ? await AgentDepositModel.findById(depositId) : null;
+    const owned =
+      deposit &&
+      (viewer.role === 'agent' ? deposit.agent_id : deposit.agency_id).toString() === viewer.id;
+    if (!owned) {
+      throw createAppError(ERROR_CODES.COD_DEPOSIT_NOT_FOUND, 404);
+    }
+    return this.proofs.stream(deposit!.proof_file_id?.toString());
   }
 
   // ─── Confirmation (the receiving party answers) ─────────────────────────────
@@ -620,8 +662,12 @@ export class AgentDepositService {
         .limit(limit)
         .exec(),
     ]);
+    const proofs = await this.proofs.resolveMany(docs.map((d) => d.proof_file_id?.toString()));
     return {
-      data: docs.map((d) => (forAdmin ? this.toAdminDto(d) : this.toDto(d))),
+      data: docs.map((d) => {
+        const proof = (d.proof_file_id && proofs.get(d.proof_file_id.toString())) || null;
+        return forAdmin ? this.toAdminDto(d, proof) : this.toDto(d, proof);
+      }),
       meta: { total, page, limit, pages: Math.ceil(total / limit) },
     };
   }
@@ -675,9 +721,9 @@ export class AgentDepositService {
    * The payout surface draws the same line in the same place: `toAdminPayoutRequestDto` carries
    * triage and the owner-facing read does not.
    */
-  private toAdminDto(deposit: IAgentDeposit) {
+  private toAdminDto(deposit: IAgentDeposit, proof: FileDetail | null) {
     return {
-      ...this.toDto(deposit),
+      ...this.toDto(deposit, proof),
       triage: deposit.triage
         ? {
             verdict: deposit.triage.verdict,
@@ -689,7 +735,12 @@ export class AgentDepositService {
     };
   }
 
-  private toDto(deposit: IAgentDeposit) {
+  /**
+   * `proof` is a `FileDetail` whose `url` is null (private tree) — the bytes come from
+   * `GET /api/{agent,agency}/cod/deposits/:id/proof/file`. Null on a deposit the receiving
+   * party recorded in one step, and on legacy rows.
+   */
+  private toDto(deposit: IAgentDeposit, proof: FileDetail | null) {
     return {
       id: deposit._id.toString(),
       agentId: deposit.agent_id.toString(),
@@ -700,6 +751,7 @@ export class AgentDepositService {
       recipient: deposit.recipient,
       status: deposit.status,
       reference: deposit.reference,
+      proof,
       declaredAt: deposit.declared_at,
       resolvedAt: deposit.resolved_at,
       rejectionReason: deposit.rejection_reason,

@@ -190,6 +190,24 @@ export class VendorRepository {
   }
 
   /**
+   * The subset of `vendorIds` whose `kyc_details.legit_verified` is `true` — one query for
+   * the whole set, for the public "verified" badge on customer-facing store blocks.
+   *
+   * Returns ids only: the projection names the one boolean and nothing else of the KYC
+   * sub-document, so no document number or file reference can ride along. Malformed ids are
+   * skipped rather than thrown on — an unverifiable id simply reads as "not verified".
+   */
+  async findVerifiedVendorIds(vendorIds: Array<string>): Promise<Set<string>> {
+    const ids = [...new Set(vendorIds)].filter((id) => Types.ObjectId.isValid(id));
+    if (ids.length === 0) return new Set();
+    const docs = await VendorModel.find(
+      { _id: { $in: ids.map((id) => new Types.ObjectId(id)) }, 'kyc_details.legit_verified': true },
+      { _id: 1 },
+    ).lean();
+    return new Set(docs.map((d) => d._id.toString()));
+  }
+
+  /**
    * Atomic onboarding update with optional optimistic concurrency check.
    * When expectedVersion is provided, the update only proceeds if the document's
    * current version matches — returning null on a version mismatch.

@@ -64,6 +64,12 @@ export interface CustomerOrderStoreDto {
     /** Null when the vendor has no store row — a should-never-happen, not an error. */
     slug: string | null;
     name: string | null;
+    /**
+     * Is the seller KYC-verified — `vendor.kyc_details.legit_verified === true`, the same
+     * source as the catalog's `store.verified`. Read from the vendor, not the store, in one
+     * batched query per response. A platform verdict for a badge, never the KYC documents.
+     */
+    verified: boolean;
 }
 
 export interface CustomerOrderDto {
@@ -124,6 +130,8 @@ export interface CustomerOrderDtoInput {
     order: IOrder;
     storeName: string | null;
     storeSlug: string | null;
+    /** `vendor.kyc_details.legit_verified === true`. */
+    storeVerified: boolean;
     /** Keyed by `productImageKey(productId, variantId)`. */
     imagesByKey: Map<string, FileDetail[]>;
     codCollections?: unknown[];
@@ -137,7 +145,7 @@ export function toCustomerOrderDto(input: CustomerOrderDtoInput): CustomerOrderD
         orderNumber: order.order_number,
         cartId: order.cart_id ? order.cart_id.toString() : null,
         vendorId: order.vendor_id.toString(),
-        store: { slug: input.storeSlug, name: input.storeName },
+        store: { slug: input.storeSlug, name: input.storeName, verified: input.storeVerified },
         orderType: order.order_type,
         total: order.total_amount,
         currency: order.currency,

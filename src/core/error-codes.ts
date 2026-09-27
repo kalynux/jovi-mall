@@ -907,6 +907,14 @@ export const ERROR_CODES = Object.freeze({
     // Every provider in the chain failed. Carries the last provider's verdict.
     MAIL_ALL_PROVIDERS_FAILED: 'MAIL_ALL_PROVIDERS_FAILED',
 
+    // ── ACCOUNT STATEMENT MAIL (`/api/internal/admin/mail/statement`) ─────────
+    // The recipient is resolved HERE from the profile, never supplied by the caller,
+    // so "who may receive a statement" has no input to get wrong. Both 409s: the
+    // request is well-formed and the account's state refuses it.
+    STATEMENT_RECIPIENT_MISSING: 'STATEMENT_RECIPIENT_MISSING',
+    STATEMENT_RECIPIENT_UNVERIFIED: 'STATEMENT_RECIPIENT_UNVERIFIED',
+    STATEMENT_ATTACHMENT_TOO_LARGE: 'STATEMENT_ATTACHMENT_TOO_LARGE',
+
     // ── VENDORS ─────────────────────────────────────────────────────────────
     VENDOR_UNSUPPORTED_FISCAL_CALENDAR: 'VENDOR_UNSUPPORTED_FISCAL_CALENDAR',
 
@@ -1644,6 +1652,19 @@ export const ERROR_CODES = Object.freeze({
      * choose, typed by hand rather than picked from `GET /api/geo/search`).
      */
     ORDER_DELIVERY_ADDRESS_REQUIRED: 'ORDER_DELIVERY_ADDRESS_REQUIRED',
+    /**
+     * 422 — a vendor's part of the basket is too small to carry its delivery cost
+     * (ADR-A07). The vendor absorbs the agency's delivery fee (+ COD handling fee), so
+     * checkout refuses when that cost is above `ORDER_MAX_DELIVERY_COST_PERCENT` of the
+     * subtotal, or would leave the vendor nothing after commission.
+     *
+     * Raised by checkout (authoritative, inside the order transaction) and by the chat
+     * checkout's pre-spend check (`details.spent: false`). `details`: `vendorId`, `scope`
+     * (`order` online / `shipment` COD), `agencyId`, `subtotal`, `minimumSubtotal`,
+     * `shortfall`, `maxDeliveryPercent`, `reason`, `currency`. Never the commission or the
+     * vendor's net.
+     */
+    ORDER_BELOW_DELIVERY_MINIMUM: 'ORDER_BELOW_DELIVERY_MINIMUM',
 
     // ── CART ──────────────────────────────────────────────────────────────────
     CART_VARIANT_REQUIRED: 'CART_VARIANT_REQUIRED',
@@ -1789,7 +1810,14 @@ export const ERROR_CODES = Object.freeze({
     COD_DEPOSIT_EXCEEDS_BALANCE: 'COD_DEPOSIT_EXCEEDS_BALANCE',
     COD_DEPOSIT_NOT_FOUND: 'COD_DEPOSIT_NOT_FOUND',
     COD_DEPOSIT_ALREADY_RESOLVED: 'COD_DEPOSIT_ALREADY_RESOLVED',
-    COD_DEPOSIT_REFERENCE_REQUIRED: 'COD_DEPOSIT_REFERENCE_REQUIRED',
+    /**
+     * A deposit or remittance declaration carried no proof image. A dedicated code for the
+     * same reason as `SHIPMENT_PROOF_FILE_REQUIRED`: the likely cause is the wrong multipart
+     * field name, or a client still sending the old JSON body.
+     */
+    COD_PROOF_FILE_REQUIRED: 'COD_PROOF_FILE_REQUIRED',
+    /** The deposit/remittance has no proof image (recorded by its receiver, or legacy). */
+    COD_PROOF_NOT_FOUND: 'COD_PROOF_NOT_FOUND',
     /** Direct-to-platform deposit for cash the agency has already remitted. */
     COD_DEPOSIT_AGENCY_ALREADY_SETTLED: 'COD_DEPOSIT_AGENCY_ALREADY_SETTLED',
     COD_DEPOSIT_WRONG_RECIPIENT: 'COD_DEPOSIT_WRONG_RECIPIENT',

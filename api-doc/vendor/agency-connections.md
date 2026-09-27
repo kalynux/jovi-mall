@@ -44,10 +44,14 @@ and are auto-restored the moment the connection goes back to `active`.
 > suspended too. That is deliberate — the vendor default is what an unset product falls back to
 > — but it means one paused connection can take a whole catalogue off sale.
 >
-> ⚠ **A product mid-vectorisation is SKIPPED, not queued.** The same filter excludes
-> `vectorisationStatus: 'pending'`, so a product being indexed at that moment **stays on sale**
-> and no later pass picks it up. Restoration has the same blind spot in reverse. If a suspension
-> looks incomplete, that is the reason — re-run it once indexing settles.
+> **A product mid-vectorisation is suspended like any other** (since 2026-09-27 — until then
+> the filter skipped `vectorisationStatus: 'pending'` and such a product stayed on sale).
+>
+> **Vectorisation is paused, never lost.** A suspension leaves `vectorisationEnabled`,
+> `vectorisationStatus` and `vectorisedDataId` exactly as they were; the search index is told
+> the product is `suspended`, and told again when the restore puts it back. Editing a product
+> while it is suspended is allowed and does **not** re-vectorise it, nor switch its opt-in off.
+> Content edited during a suspension reaches the index on the next edit after the restore.
 
 From `active` or `paused_reapproval`, either side may also `terminate` the connection outright.
 

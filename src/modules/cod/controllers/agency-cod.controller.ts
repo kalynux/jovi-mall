@@ -6,6 +6,8 @@ import { agentDepositService } from '../services/agent-deposit.service';
 import { agencyRemittanceService } from '../services/agency-remittance.service';
 import { codDiscrepancyService } from '../services/cod-discrepancy.service';
 import { codSummaryService } from '../services/cod-summary.service';
+import { codCashProofService } from '../services/cod-cash-proof.service';
+import { requireCodCashProof, sendCodCashProof } from './cod-proof.http';
 import {
   CodPaginationQuerySchema,
   AgentDepositStatusSchema,
@@ -23,9 +25,13 @@ const ListDepositsQuerySchema = CodPaginationQuerySchema.extend({
   status: AgentDepositStatusSchema.optional(),
 });
 
+/**
+ * Parsed from a `multipart/form-data` body (the proof image rides in field `file`), so the
+ * amount arrives as a string. The proof is the required evidence; `reference` is optional.
+ */
 const DeclareRemittanceSchema = z.object({
-  amount: z.number().int().positive('Amount must be a positive integer (minor units)'),
-  reference: z.string().trim().min(1, 'A transfer/receipt reference is required').max(200),
+  amount: z.coerce.number().int().positive('Amount must be a positive integer (minor units)'),
+  reference: clearable(z.string().trim().max(200)),
   note: clearable(z.string().trim().max(500)),
 });
 
@@ -163,6 +169,22 @@ export class AgencyCodController {
   });
 
   /**
+   * GET /api/agency/cod/deposits/:id/proof/file — the proof image an agent attached to a
+   * deposit made under one of this agency's contracts. What the agency looks at before it
+   * confirms or rejects the declaration.
+   */
+  static downloadDepositProof = asyncHandler(async (req: Request, res: Response) => {
+    const agencyId = req.auth!.role_entity._id.toString();
+    sendCodCashProof(res, await agentDepositService.streamProof({ role: 'agency', id: agencyId }, req.params.id));
+  });
+
+  /** GET /api/agency/cod/remittances/:id/proof/file — the proof image of this agency's own remittance. */
+  static downloadRemittanceProof = asyncHandler(async (req: Request, res: Response) => {
+    const agencyId = req.auth!.role_entity._id.toString();
+    sendCodCashProof(res, await agencyRemittanceService.streamProofForAgency(agencyId, req.params.id));
+  });
+
+  /**
    * GET /api/agency/cod/summary
    * The agency's cash position: what it owes the platform, cash out with each
    * agent, and collected cash not yet covered by a confirmed remittance.
@@ -179,17 +201,21 @@ export class AgencyCodController {
    * POST /api/agency/cod/remittances
    * Declare a cash transfer to the platform. An admin confirms receipt, which
    * lowers the agency's liability and settles collections FIFO.
-   * Body: { amount, reference, note? }
+   *
+   * multipart/form-data: `file` (the proof image, REQUIRED) + fields
+   * { amount, reference?, note? }
    */
   static declareRemittance = asyncHandler(async (req: Request, res: Response) => {
     const agencyId = req.auth!.role_entity._id.toString();
     const { amount, reference, note } = DeclareRemittanceSchema.parse(req.body);
+    const proof = requireCodCashProof(req);
 
     const remittance = await agencyRemittanceService.declare({
       agencyId,
       amount,
       reference,
       note,
+      proof,
       declaredByUserId: req.auth!.user.id,
     });
 
@@ -199,7 +225,8 @@ export class AgencyCodController {
         id: remittance._id.toString(),
         amount: remittance.amount,
         currency: remittance.currency,
-        reference: remittance.reference,
+        reference: remittance.reference ?? null,
+        proof: await codCashProofService.resolve(remittance.proof_file_id?.toString()),
         status: remittance.status,
         declaredAt: remittance.declared_at,
       },

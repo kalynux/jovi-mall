@@ -13,6 +13,7 @@ import {
   resolveStorageSize,
 } from '../domain/services/storage-fee.calculator';
 import { StockAdjustmentRequestRepository } from '../../stock-requests/repositories/stock-adjustment-request.repository';
+import { VendorRepository } from '../../vendors/vendor.repository';
 
 /** The depot a stock row sits at, as the screen shows it. Null when unresolved. */
 export interface InventoryLocationDto {
@@ -28,7 +29,8 @@ export interface InventoryRowDto {
   productTitle: string | null;
   variantTitle: string | null;
   image: FileDetail | null;
-  vendor: { id: string; businessName: string | null };
+  /** `verified` is the vendor's `kyc_details.legit_verified` — the badge beside the name. */
+  vendor: { id: string; businessName: string | null; verified: boolean };
   /**
    * Null when the product names a depot the agency has since deleted. The screen
    * should surface these as "unassigned" — the goods are somewhere, but the
@@ -123,6 +125,7 @@ export class InventoryRowResolver {
     private readonly fileRepository: FileRepositoryMongo = new FileRepositoryMongo(),
     private readonly storageProvider?: IStorageProvider,
     private readonly stockRequests: StockAdjustmentRequestRepository = new StockAdjustmentRequestRepository(),
+    private readonly vendors: VendorRepository = new VendorRepository(),
   ) { }
 
   /**
@@ -167,9 +170,10 @@ export class InventoryRowResolver {
   private async loadContext(rows: StockLevelRow[], agencyId: string, storage: IStorageProvider) {
     const vendorIds = [...new Set(rows.map(r => r.vendorId))];
 
-    const [depotLists, vendorNames, imageMap, pendingRequests] = await Promise.all([
+    const [depotLists, vendorNames, verifiedVendorIds, imageMap, pendingRequests] = await Promise.all([
       this.magazins.findHqAddressListsByAgencyIds([agencyId]),
       this.stores.findNamesByVendorIds(vendorIds),
+      this.vendors.findVerifiedVendorIds(vendorIds),
       resolveProductImages(
         rows.map(r => ({ productId: r.productId, variantId: r.variantId })),
         this.fileRepository,
@@ -186,7 +190,7 @@ export class InventoryRowResolver {
     const depotsById = new Map(depots.map(d => [d._id.toString(), d]));
     const primaryId = depots[0]?._id?.toString() ?? null;
 
-    return { depotsById, primaryId, vendorNames, imageMap, pendingRequests };
+    return { depotsById, primaryId, vendorNames, verifiedVendorIds, imageMap, pendingRequests };
   }
 
   private toRow(
@@ -221,6 +225,7 @@ export class InventoryRowResolver {
       vendor: {
         id: row.vendorId,
         businessName: ctx.vendorNames.get(row.vendorId)?.name ?? null,
+        verified: ctx.verifiedVendorIds.has(row.vendorId),
       },
       // A row whose `location_id` points at a deleted depot resolves to null
       // here too — the id is stored, but there is no building to name.

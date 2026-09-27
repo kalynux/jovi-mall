@@ -7,7 +7,8 @@ import { ERROR_CODES } from '../../../../core/error-codes';
 import { CartService, CartResponse } from '../../../cart/services/cart.service';
 import { CustomerModel, ICustomer, ICustomerSavedAddress } from '../../../customers/customer.model';
 import { OrderService } from '../../../orders/order.service';
-import { cartQuoteService } from '../../../orders/services/cart-quote.service';
+import { cartQuoteService, CartQuote } from '../../../orders/services/cart-quote.service';
+import { StoreRepository } from '../../../store/repositories/store.repository';
 import { PaymentOrchestratorService } from '../../../payments';
 import { PaymentGatewayType, PaymentStatus } from '../../../payments/models/payment-transaction.model';
 import { publicCatalogService } from '../../../catalog/services/public-catalog.service';
@@ -98,6 +99,7 @@ const PlaceBodySchema = z.object({ phone: z.unknown().optional() }).strict();
 const cartService = new CartService();
 const orderService = new OrderService();
 const paymentOrchestrator = new PaymentOrchestratorService();
+const storeRepository = new StoreRepository();
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  THE CHECKOUT CORE — exported, transport-neutral, and the ONLY implementation
@@ -428,7 +430,44 @@ export async function readChatCheckout(
         addresses,
         accountIdentifier: accountIdentifier(customer),
         phoneMasked: await maskedPayerNumber(customer),
+        deliveryShortfalls: await deliveryShortfallsOf(quote),
     };
+}
+
+/**
+ * The shops whose part of the basket is too small to carry its delivery (ADR-A07) — read from the
+ * quote's own verdict, so the review and checkout cannot disagree about which shops fail.
+ *
+ * ⚠ **Online only**, because this door only ever places an online checkout. The shop is named by
+ * its Store — the business identity — and `null` when it has none; the reply then says "this shop".
+ */
+async function deliveryShortfallsOf(quote: CartQuote): Promise<ChatDeliveryShortfall[]> {
+    const short = quote.perVendor.filter((line) => line.deliveryMinimum?.met === false);
+    if (short.length === 0) return [];
+
+    const names = await storeRepository.findNamesByVendorIds(short.map((line) => line.vendorId));
+    return short.map((line) => {
+        const minimum = line.deliveryMinimum!;
+        const payable = minimum.units.every((unit) => unit.met || unit.minimumSubtotal !== null);
+        return {
+            vendorId: line.vendorId,
+            shopName: names.get(line.vendorId)?.name ?? null,
+            shortfall: minimum.shortfall,
+            shortfallText: formatBotPrice(minimum.shortfall, quote.currency),
+            payable,
+        };
+    });
+}
+
+/** One shop below its delivery minimum, as the chat review reports it. */
+export interface ChatDeliveryShortfall {
+    vendorId: string;
+    shopName: string | null;
+    /** How much more is needed from THIS shop, minor units. */
+    shortfall: number;
+    shortfallText: string;
+    /** `false` when no basket size from this shop can pass — adding more will not help. */
+    payable: boolean;
 }
 
 /** What `readChatCheckout` answers. The chat controller shapes it for the model. */
@@ -443,6 +482,8 @@ export interface ChatCheckoutView {
     /** Where a DOWNLOAD lands — the screen's own wording for a digital basket. */
     accountIdentifier: string;
     phoneMasked: string | null;
+    /** Shops below their delivery minimum (ADR-A07). Empty when the basket can be placed. */
+    deliveryShortfalls: ChatDeliveryShortfall[];
 }
 
 export class CheckoutController {
@@ -575,6 +616,14 @@ async function precheckChatDoor(
         }
         assertNetworkChargeable(gateway, stored, false);
     }
+
+    /**
+     * ⚠ **The delivery minimum (ADR-A07), before the spend** — a shop's part of the basket too
+     * small to carry its delivery is something the customer fixes in the same turn by adding to
+     * it. `'online'` because this door only ever places an online checkout (`placeCheckout`).
+     * Checkout re-checks it exactly, with the negotiated floors this cart does not carry.
+     */
+    await cartQuoteService.assertDeliveryMinimum(cart, 'online', { spent: false });
 
     return destination.kind === 'address' ? String(destination.address._id) : null;
 }

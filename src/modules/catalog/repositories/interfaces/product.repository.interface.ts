@@ -134,10 +134,10 @@ export interface IProductRepository {
    * suspended, where a digital download and a bookable service must stop selling
    * exactly as a parcel does.
    *
-   * Same two exclusions as the physical sweep, for the same reasons: only `active`
-   * products are touched, and a product mid-vectorisation is skipped because
-   * `VectorisationService` writes `status: 'active'` on completion and would silently
-   * undo the suspension.
+   * Only `active` products are touched, as in the physical sweep. A product
+   * mid-vectorisation is suspended like any other — the old `pending` exclusion rested
+   * on `VectorisationService` writing `status: 'active'` on completion, which it never
+   * did (see `suspendVendorPhysicalProducts` in the Mongo repository).
    *
    * Returns the affected product ids.
    */

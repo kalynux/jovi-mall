@@ -82,13 +82,14 @@ function shipment(
   } as unknown as IShipment;
 }
 
-function agent(id: string, name: string, opts: { phone?: string; vehicle?: string } = {}): IDeliveryAgent {
+function agent(id: string, name: string, opts: { phone?: string; vehicle?: string; kyc?: string } = {}): IDeliveryAgent {
   return {
     _id: { toString: () => id },
     name,
     phone: opts.phone,
     vehicle_info: opts.vehicle ? { vehicle_type: opts.vehicle } : null,
     avatar_file_id: null,
+    kyc: opts.kyc ? { status: opts.kyc } : undefined,
   } as unknown as IDeliveryAgent;
 }
 
@@ -114,12 +115,14 @@ function main(): void {
         ['s3', { pickup: pickup({ lat: 4.01, lng: 9.6 }), deliveryAddress: address({ lat: 4.02, lng: 9.61 }) }],
       ]),
       NO_ORDERS,
-      new Map([['a1', agent('a1', 'Awa')], ['a2', agent('a2', 'Bilal')]]),
+      new Map([['a1', agent('a1', 'Awa', { kyc: 'verified' })], ['a2', agent('a2', 'Bilal', { kyc: 'pending' })]]),
       NO_AVATARS,
       false,
     );
 
     assert('two agents from three shipments', () => board.agents.length === 2);
+    assert('verified is the KYC verdict, and only `verified` counts', () =>
+      board.agents[0].verified === true && board.agents[1].verified === false);
     assert('an agent running two deliveries carries both', () => board.agents[0].shipments.length === 2);
     assert('agents appear in first-seen (newest-shipment) order', () =>
       board.agents.map((a) => a.agentId).join(',') === 'a1,a2');

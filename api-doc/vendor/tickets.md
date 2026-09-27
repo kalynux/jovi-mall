@@ -196,6 +196,7 @@ item assigned to them, agent → orders with a shipment assigned to them).
           "shipmentId": "507f1f77bcf86cd799439100",
           "agencyId": "507f1f77bcf86cd799439099",
           "agencyName": "FastShip Logistics",
+          "agencyVerified": true,
           "agentId": null,
           "trackingNumber": "FS-1234567890",
           "status": "assigned"
@@ -208,7 +209,7 @@ item assigned to them, agent → orders with a shipment assigned to them).
 ```
 
 > - `customerName` / `customerAvatar` are the picker's primary row label and thumbnail; both `null` when the customer profile cannot be resolved. **`customerAvatar` is a resolved FileDetail object** (`{ id, key, url, access, mimeType, size, originalName }`), never a URL string — the platform-wide convention.
-> - `shipments[].agencyName` labels each tracking number with the agency in charge of that shipment.
+> - `shipments[].agencyName` labels each tracking number with the agency in charge of that shipment; `shipments[].agencyVerified` (added 2026-09-27) is `true` when admin has verified that agency's business documents, for the verified badge.
 > - `shipments[].trackingNumber` is `null` until the agency/agent records one (order not yet dispatched). An order split across agencies lists multiple shipments — each with its own agency + tracking number.
 
 ---

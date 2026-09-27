@@ -69,9 +69,10 @@ export class AgentRepository {
   }
 
   /**
-   * Batch-resolve agent ids → the two fields a NON-STAFF audience may be shown:
-   * their name and their photo. Keyed by agent id string; ids with no agent are
-   * absent from the map.
+   * Batch-resolve agent ids → the fields a NON-STAFF audience may be shown:
+   * their name, their photo, and the platform's KYC verdict as a boolean
+   * (`kyc.status === 'verified'`). Keyed by agent id string; ids with no agent
+   * are absent from the map.
    *
    * A narrow projection rather than `findManyByIds`, and the narrowness is the
    * point rather than a performance note. The agent document carries legal
@@ -86,17 +87,24 @@ export class AgentRepository {
    */
   async findPublicIdentitiesByIds(
     agentIds: string[],
-  ): Promise<Map<string, { name: string; avatarFileId: string | null }>> {
+  ): Promise<Map<string, { name: string; avatarFileId: string | null; verified: boolean }>> {
     const ids = [...new Set(agentIds.filter((id): id is string => !!id))];
     if (ids.length === 0) return new Map();
+    // `kyc.status` ONLY — the verdict, never the rest of the `kyc` sub-document (ID number,
+    // document files, reviewer). Reduced to a boolean below with the exact test
+    // `AgentGateService` applies, so "verified" means one thing across the platform.
     const rows = await DeliveryAgentModel.find({ _id: { $in: ids } })
-      .select('name avatar_file_id')
+      .select('name avatar_file_id kyc.status')
       .lean()
       .exec();
     return new Map(
       rows.map((r) => [
         r._id.toString(),
-        { name: r.name, avatarFileId: r.avatar_file_id ? r.avatar_file_id.toString() : null },
+        {
+          name: r.name,
+          avatarFileId: r.avatar_file_id ? r.avatar_file_id.toString() : null,
+          verified: r.kyc?.status === 'verified',
+        },
       ]),
     );
   }

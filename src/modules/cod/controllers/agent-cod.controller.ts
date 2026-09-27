@@ -21,6 +21,8 @@ import {
   outcomeFromError,
 } from '../../tracking-integration/services/agent-action-audit.service';
 import { AgentActionOutcome } from '../../tracking-integration/models/tracking-outbox.model';
+import { requireCodCashProof, sendCodCashProof } from './cod-proof.http';
+import { codCashProofService } from '../services/cod-cash-proof.service';
 
 const ListDepositsQuerySchema = CodPaginationQuerySchema.extend({
   status: AgentDepositStatusSchema.optional(),
@@ -202,15 +204,18 @@ export class AgentCodController {
    * and that is when the agent's balance falls.
    *
    * `recipient: 'agency'` is the normal route; `'platform'` means the agent paid
-   * the platform directly, bypassing the agency, and needs a transfer
-   * `reference`. Either way the declaration is a timestamped claim the receiver
-   * has to answer, which is what an agent previously had no way to create.
+   * the platform directly, bypassing the agency. Either way the declaration is a
+   * timestamped claim the receiver has to answer, which is what an agent
+   * previously had no way to create — and a proof image is what they answer it
+   * against.
    *
-   * Body: { agencyId, amount, recipient?, reference?, note? }
+   * multipart/form-data: `file` (the proof image, REQUIRED) + fields
+   * { agencyId, amount, recipient?, reference?, note? }
    */
   static declareDeposit = asyncHandler(async (req: Request, res: Response) => {
     const agentId = req.auth!.role_entity._id.toString();
     const { agencyId, amount, recipient, reference, note } = DeclareDepositSchema.parse(req.body);
+    const proof = requireCodCashProof(req);
 
     const deposit = await agentDepositService.declare({
       agentId,
@@ -219,6 +224,7 @@ export class AgentCodController {
       recipient,
       reference,
       note,
+      proof,
       declaredByUserId: req.auth!.user.id,
     });
 
@@ -232,6 +238,7 @@ export class AgentCodController {
         recipient: deposit.recipient,
         status: deposit.status,
         reference: deposit.reference,
+        proof: await codCashProofService.resolve(deposit.proof_file_id?.toString()),
         declaredAt: deposit.declared_at,
       },
       message:
@@ -239,6 +246,12 @@ export class AgentCodController {
           ? 'Deposit declared — the platform will confirm receipt, which clears it with your agency too.'
           : 'Deposit declared — your agency will confirm receipt. Your cash balance falls when they do.',
     });
+  });
+
+  /** GET /api/agent/cod/deposits/:id/proof/file — the proof image of one of this agent's deposits. */
+  static downloadDepositProof = asyncHandler(async (req: Request, res: Response) => {
+    const agentId = req.auth!.role_entity._id.toString();
+    sendCodCashProof(res, await agentDepositService.streamProof({ role: 'agent', id: agentId }, req.params.id));
   });
 
   /**

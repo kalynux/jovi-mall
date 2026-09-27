@@ -76,6 +76,12 @@ export const STORAGE_TREE_VISIBILITY: Readonly<Record<string, TreeVisibility>> =
     // An agent's delivery-proof photo: a place and a time, about a real address. Reachable
     // through the shipment reads, whose scoping already answers "may this viewer see it".
     shipments: 'private',
+    // The photo an agent or agency attaches when handing COD cash on — a deposit to the
+    // agency or the platform, or an agency's remittance. Usually a receipt or a transfer
+    // screenshot, which carries account numbers, names and phone numbers. Read by the
+    // declaring party and the party that must confirm it (`modules/cod/`), and by an
+    // administrator through `GET /api/internal/admin/files/:id/content`.
+    'cod-proofs': 'private',
     // Identity-verification documents — a scan of somebody's national identity card, front
     // and back, and a photograph of their face holding it. The most disclosing thing this
     // platform stores about any person, and the one tree where a misclassification is not a

@@ -103,7 +103,7 @@ customers or products is capped at the first 500 of each.
       "trackingNumber": "FDO-260705-090000-K7Q2M",
       "orderNumber": "ORD-2026-000123",
       "paymentMethod": "cash_on_delivery",
-      "vendor": { "id": "...", "businessName": "TechHub Douala", "phone": "+2376..." },
+      "vendor": { "id": "...", "businessName": "TechHub Douala", "phone": "+2376...", "verified": true },
       "customer": { "id": "...", "name": "Jane D.", "phone": "+2376..." },
       "itemCount": 2,
       "itemImages": [
@@ -241,9 +241,10 @@ multi-agency timeline — and, for cash-on-delivery orders, the **cash to collec
       "logo": { "id": "...", "key": "images/2026/07/logo.png", "url": "https://…/logo.png", "access": "public", "mimeType": "image/png", "size": 8213, "originalName": "logo.png" },
       "supportPhone": "+2376...",
       "supportEmail": "support@douala-express.cm",
-      "supportWhatsapp": "+2376..."
+      "supportWhatsapp": "+2376...",
+      "verified": true
     },
-    "vendor": { "id": "...", "businessName": "TechHub Douala", "phone": "+2376...", "email": "..." },
+    "vendor": { "id": "...", "businessName": "TechHub Douala", "phone": "+2376...", "email": "...", "verified": true },
     "customer": {
       "id": "...",
       "name": "Jane D.",

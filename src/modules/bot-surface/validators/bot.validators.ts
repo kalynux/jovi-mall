@@ -162,8 +162,12 @@ export const BotCartSetQuantitySchema = z
     .object({ quantity: z.number().int().min(1).max(999) })
     .strict();
 
+/** `paymentMethod` (default `online`) selects how the delivery minimum is evaluated — ADR-A07. */
 export const BotCartQuoteSchema = z
-    .object({ deliveryAddressId: objectId.optional() })
+    .object({
+        deliveryAddressId: objectId.optional(),
+        paymentMethod: z.enum(['online', 'cash_on_delivery']).optional(),
+    })
     .strict();
 
 // ─────────────────────────────────────────────────────────────────────────────

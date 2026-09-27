@@ -3,6 +3,7 @@ import { requireAuth, requireRole } from '../../api/middlewares/auth.middleware'
 import { ShipmentController } from '../shipments/shipment.controller';
 import { AgentDeliveryProofController, uploadDeliveryProof } from '../shipments/agent-delivery-proof.controller';
 import { AgentCodController } from '../cod/controllers/agent-cod.controller';
+import { uploadCodCashProof } from '../cod/controllers/cod-proof.http';
 import { AgentOfferController } from '../shipment-assignment/controllers/agent-offer.controller';
 import { AgentNotificationController } from './controllers/agent-notification.controller';
 import { DeviceTokenController } from '../notifications/controllers/device-token.controller';
@@ -197,10 +198,13 @@ router.get('/cod/deposits', AgentCodController.listDeposits);
 /**
  * POST /api/agent/cod/deposits
  * Declare cash handed back — to the agency, or straight to the platform
- * (`recipient: 'platform'`, which needs a transfer `reference`). Moves no money;
- * the receiving party confirms. Body: { agencyId, amount, recipient?, reference?, note? }
+ * (`recipient: 'platform'`). Moves no money; the receiving party confirms.
+ * multipart/form-data: `file` (proof image, REQUIRED) + { agencyId, amount, recipient?, reference?, note? }
  */
-router.post('/cod/deposits', AgentCodController.declareDeposit);
+router.post('/cod/deposits', uploadCodCashProof, AgentCodController.declareDeposit);
+
+/** GET /api/agent/cod/deposits/:id/proof/file — the proof image of one of this agent's deposits. */
+router.get('/cod/deposits/:id/proof/file', AgentCodController.downloadDepositProof);
 
 /**
  * POST /api/agent/cod/discrepancies

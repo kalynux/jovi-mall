@@ -45,6 +45,26 @@ function assert(name: string, fn: () => boolean): void {
     }
 }
 
+/** Async checks run in order; the summary waits for all of them. */
+const asyncAsserts: Array<() => Promise<void>> = [];
+
+function assertAsync(name: string, fn: () => Promise<boolean>): void {
+    asyncAsserts.push(async () => {
+        try {
+            if (await fn()) {
+                console.log(`  ✅ ${name}`);
+                passed++;
+            } else {
+                console.error(`  ❌ FAIL: ${name}`);
+                failed++;
+            }
+        } catch (err) {
+            console.error(`  ❌ THROW: ${name} — ${(err as Error).message}`);
+            failed++;
+        }
+    });
+}
+
 function section(title: string): void {
     console.log(`\n── ${title} ${'─'.repeat(Math.max(0, 62 - title.length))}`);
 }
@@ -391,10 +411,54 @@ assert('the same point is zero distance', () =>
     haversineKm({ type: 'Point', coordinates: [9.70, 4.05] }, { type: 'Point', coordinates: [9.70, 4.05] }) === 0
 );
 
+// ─── Vendor block: the verified badge ─────────────────────────────────────────
+//
+// The agent app draws a verified badge beside a vendor's name from `verified`
+// on the vendor block of list rows and offers. It is read from
+// `kyc_details.legit_verified`, so a rename or reshape upstream would turn
+// every badge off without failing anything else — hence pinned here.
+//
+// ⚠ Covers the list/offer path (`_batchResolveVendorNames`) ONLY. The shipment
+// detail endpoint builds its vendor object inline in `_buildDetail`, which is
+// NOT covered here — a green run says nothing about the badge on that screen.
+
+const vendorSvc = Object.create(ShipmentService.prototype) as any;
+vendorSvc.storeRepo = {
+    findNamesByVendorIds: async (ids: string[]) =>
+        new Map(ids.map((id) => [id, { name: `Store ${id}` }])),
+};
+const vendorDocs: Record<string, any> = {
+    'v-verified': { phone: '+237600000001', kyc_details: { legit_verified: true, status: 'verified' } },
+    'v-pending': { phone: '+237600000002', kyc_details: { legit_verified: false, status: 'pending' } },
+    'v-legacy': { phone: null },
+};
+vendorSvc.vendorRepo = { findById: async (id: string) => vendorDocs[id] ?? null };
+
+assertAsync('a verified vendor\'s block carries verified: true', async () => {
+    const map = await vendorSvc._batchResolveVendorNames(['v-verified']);
+    const v = map.get('v-verified');
+    return v?.verified === true && v?.businessName === 'Store v-verified';
+});
+
+assertAsync('an unverified vendor\'s block carries verified: false', async () => {
+    const map = await vendorSvc._batchResolveVendorNames(['v-pending']);
+    return map.get('v-pending')?.verified === false;
+});
+
+assertAsync('a vendor with no kyc_details at all reads as unverified, not undefined', async () => {
+    const map = await vendorSvc._batchResolveVendorNames(['v-legacy']);
+    return map.get('v-legacy')?.verified === false;
+});
+
 // ─── Summary ──────────────────────────────────────────────────────────────────
 
-console.log(`\n${'─'.repeat(72)}`);
-console.log(`  ${passed} passed, ${failed} failed`);
-console.log(`${'─'.repeat(72)}\n`);
+(async () => {
+    section('Vendor block — verified badge');
+    for (const run of asyncAsserts) await run();
 
-process.exit(failed > 0 ? 1 : 0);
+    console.log(`\n${'─'.repeat(72)}`);
+    console.log(`  ${passed} passed, ${failed} failed`);
+    console.log(`${'─'.repeat(72)}\n`);
+
+    process.exit(failed > 0 ? 1 : 0);
+})();

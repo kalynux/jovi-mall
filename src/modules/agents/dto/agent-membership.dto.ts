@@ -181,6 +181,13 @@ export interface AgentMembershipWithAgencyDto extends AgentMembershipDto {
      * it before it declares it.
      */
     agencyCoverageAreas: string[];
+    /**
+     * Admin-verified business legitimacy of the agency
+     * (`kyc_details.legit_verified`) — the badge beside its name. The same fact
+     * the directory row calls `kycVerified`; `false` for an agency that could not
+     * be resolved.
+     */
+    agencyVerified: boolean;
 }
 
 /** The counterparty fields `toDtoWithAgency` resolves. */
@@ -188,6 +195,7 @@ export interface ContractAgencyContext {
     name: string | null;
     country: string | null;
     coverageAreas: string[];
+    verified: boolean;
 }
 
 export interface MembershipEventDto {
@@ -302,6 +310,7 @@ export class AgentMembershipMapper {
             agencyName: agency.name,
             agencyCountry: agency.country,
             agencyCoverageAreas: agency.coverageAreas,
+            agencyVerified: agency.verified,
         };
     }
 

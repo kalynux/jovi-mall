@@ -1,0 +1,25 @@
+{{> mail-head preheader=title}}
+
+{{!-- The account statement mail (wi-admin renders the file; this service only carries it).
+      The body deliberately repeats NO figure from the statement: the attachment is the record,
+      and a total quoted here would be a second copy that can disagree with it. --}}
+{{#if recipientName}}
+<p class="tx-muted" style="margin:0 0 8px;font-size:15px;line-height:24px;color:#6b7280;">Hi {{recipientName}},</p>
+{{/if}}
+
+<h1 class="h1 tx" style="margin:0 0 16px;font-size:24px;line-height:32px;font-weight:700;color:#111827;letter-spacing:-0.3px;">{{title}}</h1>
+
+<p class="tx" style="margin:0 0 28px;font-size:16px;line-height:26px;color:#374151;">
+  Your account statement for the period <strong>{{from}}</strong> to <strong>{{to}}</strong> is attached
+  ({{fileName}}). It lists every order, fee, cash-on-delivery settlement, payout, credit and plan
+  movement recorded on your account for that period.
+</p>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td class="rule" style="border-top:1px solid #e6e8eb;font-size:0;line-height:0;height:1px;">&nbsp;</td></tr></table>
+
+<p class="tx-muted" style="margin:24px 0 0;font-size:13px;line-height:20px;color:#9ca3af;">
+  This statement was sent at the request of {{brandName}} support. If you did not expect it, or
+  a figure looks wrong, reply to our support team.
+</p>
+
+{{> mail-foot}}

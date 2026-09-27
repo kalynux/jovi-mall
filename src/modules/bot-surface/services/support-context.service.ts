@@ -490,7 +490,7 @@ const defaultAgencyPort: SupportAgencyPort = {
         // other caller of this resolver applies.
         if (!fields) return null;
 
-        const identity = toAgencyIdentity(agencyId, fields, null);
+        const identity = toAgencyIdentity(agencyId, fields, null, fields.agency_verified === true);
         return {
             id: identity.id,
             name: identity.name,

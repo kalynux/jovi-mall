@@ -10,6 +10,21 @@ export interface SendEmailOptions {
   template: string;
   variables: Record<string, any>;
   from?: string; // Optional override
+  attachments?: MailAttachment[];
+}
+
+/**
+ * One file carried with a message.
+ *
+ * Bytes, not a path or URL: every provider in the chain must be able to carry the same
+ * attachment, and Brevo/Resend take base64 in the JSON body while nodemailer takes a Buffer —
+ * a Buffer converts to both. First caller: account statements rendered by wi-admin
+ * (`POST /api/internal/admin/mail/statement`).
+ */
+export interface MailAttachment {
+  filename: string;
+  contentType: string;
+  content: Buffer;
 }
 
 // Internal API for Providers
@@ -19,6 +34,8 @@ export interface ProviderSendOptions {
   subject: string;
   html: string;
   text?: string;
+  /** ⚠ Every provider must forward these. A provider that drops them sends a "successful" mail with no file. */
+  attachments?: MailAttachment[];
 }
 
 export interface IMailProvider {

@@ -84,6 +84,11 @@ export class SmtpMailProvider implements IMailProvider {
                 subject: options.subject,
                 html: options.html,
                 text: options.text,
+                attachments: options.attachments?.map((a) => ({
+                    filename: a.filename,
+                    content: a.content,
+                    contentType: a.contentType,
+                })),
             });
         } catch (err) {
             observedError = err;

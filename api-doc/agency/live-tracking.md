@@ -65,6 +65,7 @@ Two consequences worth knowing:
         },
         "phone": "+237670000003",
         "vehicleType": "bike",
+        "verified": true,
         "shipments": [
           {
             "shipmentId": "507f1f77bcf86cd799439100",
@@ -117,6 +118,7 @@ right now" is an answer, not a missing resource.
 |---|---|
 | `agents[].agentId` | Use this verbatim as the `agentId` in geo-tracker's `subscribe` frame. |
 | `agents[].avatar` | The standard file object `{ id, key, url, access, mimeType, size, originalName }`, or `null`. Never a bare URL string. |
+| `agents[].verified` | The platform's KYC verdict for this agent (`kyc.status === "verified"`) — render a verified badge beside the name. Always present. |
 | `agents[].shipments` | Newest first. An agent running several deliveries has several entries — geo-tracker opens one tracking session per shipment, all fed by the agent's single GPS stream. |
 | `origin` | **The start pin.** Where the parcel is collected: the vendor's business address, this agency's HQ, or — after a reassignment — the handover point. `mode` is `pickup_based` \| `storage_based` \| `mixed` \| `null`; `count > 1` means there are further collection points, which [`GET /api/agency/shipments/:id`](./shipments.md#detail) lists in full. |
 | `destination` | **The end pin.** The customer address geocoded at checkout, snapshotted onto the order. Deliberately *not* the customer's current saved address — reading that live would silently re-route a delivery already on the road. |

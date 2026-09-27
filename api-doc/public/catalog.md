@@ -156,7 +156,7 @@ you like) — the backend does not block the cart on it.
 
       "rating": { "average": 4.25, "count": 12 },   // null when nobody has reviewed it
 
-      "store": { "slug": "maison-bella", "name": "Maison Bella", "isOpen": true },
+      "store": { "slug": "maison-bella", "name": "Maison Bella", "isOpen": true, "verified": true },
 
       "freeDelivery": false,
       "updatedAt": "2026-07-30T09:20:00.000Z"
@@ -173,6 +173,10 @@ you like) — the backend does not block the cart on it.
   `aggregateRating` in your JSON-LD; see [SEO](#seo) and [reviews.md](../reviews.md).
 - An empty result is `data: []` with `meta.total: 0`. Never a 404.
 - Build the product URL as `/shop/stores/{store.slug}/products/{slug}` — see decision 1.
+- `store.verified` is the seller's KYC verdict, `vendor.kyc_details.legit_verified === true` —
+  the same source as the detail page's `store.verified`, for a "verified" badge on the card.
+  Always present; `false` means unreviewed **or** refused. Never the KYC documents. Every
+  surface that reuses this list row (saved items, recently viewed, related products) carries it.
 
 ### ⚠ A bargainable variant is quoted at its ASK
 

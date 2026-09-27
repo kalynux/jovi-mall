@@ -53,6 +53,7 @@ to the agency's own shipments; a shipment outside scope is `404 SHIPMENT_NOT_FOU
 - [`POST /api/agency/shipments/:id/offer/cancel`](#cancel) — withdraw the live offer
 - [`POST /api/agency/shipments/:id/reassign`](#reassign) — change agents (release the current agent, offer a replacement)
 - [`PATCH /api/agency/assignment-settings`](#settings) — toggle auto-assignment participation
+- [`GET /api/agency/assignment-settings`](#settings) — read the stored toggle
 
 ---
 
@@ -285,6 +286,15 @@ defaults and are **not** configurable per agency. Stored on `assignment_settings
 
 ```json
 { "success": true, "message": "Assignment settings updated", "data": { "autoAssignEnabled": true } }
+```
+
+### GET /api/agency/assignment-settings
+
+Read the stored toggle (added 2026-09-27 — before this the value could only be written). Returns
+the same `data` shape as the PATCH; `false` when never set.
+
+```json
+{ "success": true, "data": { "autoAssignEnabled": true } }
 ```
 
 ---

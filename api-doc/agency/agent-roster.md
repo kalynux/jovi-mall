@@ -407,7 +407,8 @@ is working today. Filter by `status`, or use `GET /eligible`, for the live view.
         "workingState": "idle",
         "activeShipmentCount": 0,
         "trackingAllowed": true,
-        "trustScore": 92
+        "trustScore": 92,
+        "verified": true
       },
       "cashHeld": 45000
     }
@@ -421,6 +422,10 @@ is working today. Filter by `status`, or use `GET /eligible`, for the live view.
 > resolved file object or `null`; the list omits the key rather than reporting `photo: null` for a
 > file it never looked up. `color` is a lowercase English token — see
 > [agent/profile.md](../agent/profile.md) for the palette and render your own localized label.
+
+`agent.verified` is the platform's KYC verdict (`kyc.status === "verified"`) — render a verified
+badge beside the name. It is **not** always `true` on a roster: a contract outlives a verification
+that is later re-opened or rejected, and `GET /agents/eligible` is the only list that guarantees it.
 
 `cashHeld` mirrors `membership.codOutstandingBalance`: cash this agent holds that is attributable to
 **your** contract, and the figure that gates termination. It is deliberately **not** the agent's pot

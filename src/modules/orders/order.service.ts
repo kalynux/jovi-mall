@@ -27,6 +27,8 @@ import { eventBus } from '../../core/events/event-bus';
 import { earningsSplitService } from '../earnings/services/earnings-split.service';
 import { codEligibilityService } from '../cod/services/cod-eligibility.service';
 import { orderStockService } from './services/order-stock.service';
+import { deliveryCostCapService, DeliveryCapLine } from './services/delivery-cost-cap.service';
+import { PickupMix } from '../earnings/services/earnings-quote.service';
 import { MagazinRepository } from '../magazin/repositories/magazin.repository';
 import {
   AGENT_IDENTITY_VISIBLE_FROM,
@@ -341,6 +343,7 @@ export class OrderService {
               displayName,
               photo: (identity.avatarFileId && agentPhotos.get(identity.avatarFileId)) || null,
               visibleFrom: AGENT_IDENTITY_VISIBLE_FROM,
+              verified: identity.verified,
             }
             : null,
       });
@@ -887,6 +890,8 @@ export class OrderService {
      * `vendorNet = gross − commission − deliveryTotal` off this same `total`. Adding it here
      * as well would collect it twice. Moving delivery onto the customer is a business-model
      * change that has to be paired with `splitOrder` no longer deducting it.
+     * Because the vendor pays it, a basket too small to carry it is refused below — the
+     * delivery-cost cap, ADR-A07.
      *
      * `tax` and `discount` are pinned zeros rather than absent: there is no tax engine and
      * no coupon model (`price_breakdown.discount` is the field a coupon feature would fill).
@@ -1038,6 +1043,40 @@ export class OrderService {
           agencyIds: Object.keys(agencyGroups),
         });
       }
+
+      /**
+       * The delivery-cost cap (ADR-A07): the vendor absorbs the delivery fee, so a basket too
+       * small to carry it is refused HERE rather than by `EARNINGS_INVALID_SPLIT` after the
+       * customer has paid or handed over cash.
+       *
+       * Inside the transaction on purpose — a refusal rolls back the stock holds and the
+       * negotiation-lock consumption above. Built from what the split will read: the
+       * negotiated prices and floors (exact AI margin) and each item's pickup SNAPSHOT, which
+       * is what `computeShipmentDeliveryFee` classifies. Online is checked per order, COD per
+       * shipment — `DeliveryCostCapService` says why.
+       */
+      const capLineOf = (orderItem: any): DeliveryCapLine => ({
+        unitPrice: orderItem.price,
+        quantity: orderItem.quantity,
+        floorPrice: orderItem.floor_price_snapshot ?? null,
+      });
+      await deliveryCostCapService.assertVendor(
+        {
+          vendorId,
+          lines: orderItemsPayload.map(capLineOf),
+          groups: Object.entries(agencyGroups).map(([agencyId, groupItems]) => {
+            const mix: PickupMix = { hasPickupBased: false, hasStorageBased: false };
+            for (const { orderItem } of groupItems) {
+              const source = orderItem.delivery?.pickup_location?.source;
+              if (source === 'vendor_address') mix.hasPickupBased = true;
+              if (source === 'agency_storage') mix.hasStorageBased = true;
+            }
+            return { agencyId, mix, lines: groupItems.map(({ orderItem }) => capLineOf(orderItem)) };
+          }),
+        },
+        paymentMethod,
+        currency,
+      );
 
       // CREATE ORDER (Physical)
       const order = await this.orderRepo.create({

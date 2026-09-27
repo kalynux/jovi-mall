@@ -925,6 +925,22 @@ export class VectorisationService {
    * IMPORTANT: Call fire-and-forget (void, no await).
    */
   async vectoriseSingle(productId: string): Promise<void> {
+    // ⚠ A SUSPENDED product is left exactly as it is. Suspension is a system lock
+    // (a delivery-agency cascade, a vendor suspension, an agency storage freeze, a
+    // quota cut, an administrator's takedown) and is editable on purpose — but
+    // prepareForVectorisation treats "not active" as "ineligible" and switches the
+    // vendor's opt-in OFF. Every edit path reaches this wrapper, so without this
+    // guard an innocent edit during a suspension silently cost the product its
+    // vectorisation (and its bargaining window, which reads the same flag) for good:
+    // the restore brings the status back and nothing brings the flag back.
+    // The index is told about the suspension separately (notifyStatusChange), and
+    // the explicit vendor actions — the toggle and retry — still use prepare directly.
+    const current = await ProductModel.findOne({ _id: productId, deletedAt: null }).select('status').lean();
+    if (current?.status === 'suspended') {
+      log('info', 'vectoriseSingle: product is suspended — left untouched', { productId });
+      return;
+    }
+
     const { payload } = await this.prepareForVectorisation(productId);
     if (payload) {
       await this.executePreparedVectorisation(productId, payload);
@@ -1053,6 +1069,26 @@ export class VectorisationService {
         ...ctx,
         error: err.message,
       });
+    }
+  }
+
+  /**
+   * notifyStatusChange for a batch — the shape every suspend/restore cascade returns.
+   * Accepts bare ids (all moved to one `status`) or `{ productId, status }` pairs.
+   *
+   * ⚠ Call it AFTER the transaction that moved the statuses has committed, never
+   * inside it: a rolled-back suspension must not leave the index saying `suspended`.
+   * Fire-and-forget, like the single form; it never rejects.
+   */
+  notifyStatusChanges(
+    entries: ReadonlyArray<string | { productId: string; status: string }>,
+    status?: string,
+  ): void {
+    for (const entry of entries) {
+      const productId = typeof entry === 'string' ? entry : entry.productId;
+      const newStatus = typeof entry === 'string' ? status : entry.status;
+      if (!newStatus) continue;
+      void this.notifyStatusChange(productId, newStatus);
     }
   }
 
@@ -1398,7 +1434,7 @@ export class VectorisationService {
         claimed = await ProductModel.findOneAndUpdate(
           { _id: productId, 'vectorisationJob.jobId': jobId },
           { $set },
-          { new: false, projection: { vendorId: 1, vectorisationJob: 1 } },
+          { new: false, projection: { vendorId: 1, vectorisationJob: 1, status: 1 } },
         ).lean();
       } catch (dbErr: any) {
         // A DB failure is NOT "ignored" — nothing was claimed, so the product is
@@ -1421,6 +1457,15 @@ export class VectorisationService {
       out.applied++;
       if (status === 'completed') {
         out.completed++;
+        // ⚠ The payload was built while the product was `active`, so the document the
+        // vectoriser just indexed says so. A product suspended while its job was in
+        // flight (the suspend cascades no longer skip `pending` ones) would otherwise
+        // come out of the index searchable — and the notify sent at suspension time
+        // could not reach it, because there was no vectorisedDataId yet. Correct it
+        // now; the `$set` above wrote no status, so `claimed.status` is current.
+        if (claimed.status && claimed.status !== 'active') {
+          void this.notifyStatusChange(productId, claimed.status);
+        }
         continue;
       }
 

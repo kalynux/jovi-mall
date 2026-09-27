@@ -7,6 +7,7 @@ import { ShipmentController } from '../shipments/shipment.controller';
 import { AgencyDeliveryProofController } from '../shipments/agent-delivery-proof.controller';
 import { AgencyAssignmentController } from '../shipment-assignment/controllers/agency-assignment.controller';
 import { AgencyCodController } from '../cod/controllers/agency-cod.controller';
+import { uploadCodCashProof } from '../cod/controllers/cod-proof.http';
 import { TrackingController } from '../tracking-integration/controllers/tracking.controller';
 import { DeviceTokenController } from '../notifications/controllers/device-token.controller';
 
@@ -31,6 +32,12 @@ router.get('/profile', AgencyProfileController.getProfile);
 
 /** PATCH /api/agency/profile */
 router.patch('/profile', AgencyProfileController.updateProfile);
+
+/**
+ * GET /api/agency/assignment-settings
+ * The stored auto-assignment toggle. Response: { autoAssignEnabled: boolean }
+ */
+router.get('/assignment-settings', AgencyAssignmentController.getSettings);
 
 /**
  * PATCH /api/agency/assignment-settings
@@ -222,6 +229,13 @@ router.post('/cod/deposits', AgencyCodController.recordDeposit);
 router.get('/cod/deposits', AgencyCodController.listDeposits);
 
 /**
+ * GET /api/agency/cod/deposits/:id/proof/file
+ * The proof image the agent attached to a declared hand-over — what the agency checks
+ * before confirming or rejecting it.
+ */
+router.get('/cod/deposits/:id/proof/file', AgencyCodController.downloadDepositProof);
+
+/**
  * POST /api/agency/cod/deposits/:id/confirm
  * Confirm a hand-over an agent declared. This is where the money moves.
  */
@@ -236,9 +250,12 @@ router.post('/cod/deposits/:id/reject', AgencyCodController.rejectDeposit);
 /**
  * POST /api/agency/cod/remittances
  * Declare a cash transfer to the platform (admin confirms receipt).
- * Body: { amount, reference, note? }
+ * multipart/form-data: `file` (proof image, REQUIRED) + { amount, reference?, note? }
  */
-router.post('/cod/remittances', AgencyCodController.declareRemittance);
+router.post('/cod/remittances', uploadCodCashProof, AgencyCodController.declareRemittance);
+
+/** GET /api/agency/cod/remittances/:id/proof/file — the proof image of this agency's remittance. */
+router.get('/cod/remittances/:id/proof/file', AgencyCodController.downloadRemittanceProof);
 
 /** GET /api/agency/cod/remittances — remittance history. Query: status?, page?, limit? */
 router.get('/cod/remittances', AgencyCodController.listRemittances);

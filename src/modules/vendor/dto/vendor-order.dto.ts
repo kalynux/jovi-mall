@@ -65,11 +65,15 @@ export interface DeliveryAgentDTO {
     name: string;
     phone: string | null;
     avatar: FileDetail | null;
+    /** Admin has verified the agent's identity (`kyc.status === 'verified'`). */
+    verified: boolean;
 }
 
 export interface OrderDeliveryDTO {
     agencyId: string | null;
     agencyName: string | null;
+    /** Admin has verified the agency's business documents (`kyc_details.legit_verified`). */
+    agencyVerified: boolean;
     agencyPhone: string | null;
     deliveryStatus: string;
     shipmentId: string | null;

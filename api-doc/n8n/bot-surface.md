@@ -286,6 +286,30 @@ twice, each time because a step added one and nobody re-counted.
 | `account_close` | POST | `/account/close` | ✔ |
 | `chat_answer_question` | POST | `/chat/answer` | ✔ |
 
+#### The delivery minimum — `cart_quote` and `checkout_create_orders` (2026-09-27)
+
+[ADR-A07](../../docs/ADR-A07-DELIVERY-COST-CAP.md). The vendor pays the delivery fee, so checkout
+refuses a shop's part of the basket that is too small to carry it: **`422
+ORDER_BELOW_DELIVERY_MINIMUM`**, with `error.customerMessage` in the customer's language ("add a
+little more from the same shop"). `details.shortfall` is the amount, in `details.currency`.
+
+- `cart_quote` accepts an optional **`paymentMethod`** (`online` | `cash_on_delivery`, default
+  `online`) and reports `meetsDeliveryMinimum` and `perVendor[].deliveryMinimum` — check it
+  **before** asking the customer to confirm, and name the shop and the shortfall.
+- Cash on delivery is checked **per delivery agency**, online per shop: a basket can pass online
+  and fail as COD. Quote with the method the customer chose.
+- The chat checkout (`checkout_place`) refuses it **before** spending its handle
+  (`details.spent: false`), so the same turn can add an item and try again.
+- ⭐ **`checkout_review` catches it first.** A short shop makes the review answer `ready: false`,
+  `blocker: "below_delivery_minimum"`, no `checkoutRef`, and `deliveryShortfalls[]`
+  (`shopName`, `shortfallText`, `payable`) — and the tool **draws the message itself**: one line
+  per shop with the amount to add, and **no Place order button** (a button checkout would refuse).
+  An address blocker takes precedence and keeps its own reply. Copy: `bot-chrome-copy.ts`
+  `checkoutDeliveryMinimum*` + `checkoutThisShop`, five languages. Published to `UP-wi-mall-mcp`
+  on 2026-09-27 as version `65a8d170` (tool description only; rollback `0db01028`).
+- Never quote the vendor's fee or commission to the customer — the API does not return them.
+
+
 Argument shapes are in [`tools/catalog.json`](./tools/catalog.json), which is the contract
 the automation layer is generated from. The route table asserts itself against it.
 

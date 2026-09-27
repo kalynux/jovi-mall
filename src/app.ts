@@ -14,7 +14,14 @@ import { metricsRoutes } from './modules/system/metrics/metrics.routes';
 import { errorHandlerMiddleware } from './api/middlewares/error-handler.middleware';
 import { ERROR_CODES } from './core/error-codes';
 import { createAppError } from './core/errors';
-import { ALLOWED_ORIGINS, BOT_FILE_BODY_LIMIT, JSON_BODY_LIMIT, TRUST_PROXY, WEBHOOK_BODY_LIMIT } from './config/http.config';
+import {
+    ALLOWED_ORIGINS,
+    BOT_FILE_BODY_LIMIT,
+    JSON_BODY_LIMIT,
+    STATEMENT_MAIL_BODY_LIMIT,
+    TRUST_PROXY,
+    WEBHOOK_BODY_LIMIT,
+} from './config/http.config';
 import { logger } from './core/logging';
 import { globalRateLimiter } from './api/rate-limit/rate-limit.middleware';
 
@@ -187,6 +194,8 @@ app.use(
 // parsed and does nothing. Mounted the other way round, the 1 MB limit would fire first
 // and this would never be reached.
 app.use('/api/internal/bot/files/inbound', express.json({ limit: BOT_FILE_BODY_LIMIT }));
+// Same reason, second path: an account statement rendered by wi-admin, as base64.
+app.use('/api/internal/admin/mail/statement', express.json({ limit: STATEMENT_MAIL_BODY_LIMIT }));
 
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
 app.use(express.urlencoded({ extended: true, limit: JSON_BODY_LIMIT }));

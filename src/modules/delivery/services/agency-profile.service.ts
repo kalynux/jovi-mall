@@ -27,6 +27,7 @@ import { transactionManager, TransactionManager } from '../../../core/database/t
 import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
 import { FileReferenceRepositoryMongo } from '../../catalog/repositories/mongo/file-reference.repository.mongo';
 import { FileReferenceService } from '../../catalog/domain/services/media/FileReferenceService';
+import { vectorisationService } from '../../catalog/domain/services/VectorisationService';
 import { getStorageProvider, IStorageProvider } from '../../../core/storage';
 import { MagazinProvisioningService } from '../../magazin/service/magazin-provisioning.service';
 import { MagazinRepository } from '../../magazin/repositories/magazin.repository';
@@ -257,10 +258,12 @@ export class AgencyProfileService {
         // the vendor is prompted to reapprove. Only pays the transaction cost
         // when a change is actually detected.
         if (payload.policies && JSON.stringify(payload.policies) !== JSON.stringify(agency.policies)) {
-            await this.txManager.runInTransaction(async (session) => {
+            const suspended = await this.txManager.runInTransaction(async (session) => {
                 await this.agencyRepo.incrementPolicyVersion(agencyId, session);
-                await this.connectionService.pauseConnectionsForPolicyChange('agency', agencyId, session);
+                return this.connectionService.pauseConnectionsForPolicyChange('agency', agencyId, session);
             });
+            // Post-commit: the paused connections' products are off sale; pause their search entries.
+            vectorisationService.notifyStatusChanges(suspended, 'suspended');
         }
 
         return AgencyProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider);
@@ -625,10 +628,11 @@ export class AgencyProfileService {
             );
             if (!updated) throw createAppError(ERROR_CODES.DELIVERY_ONBOARDING_CONCURRENT_MODIFICATION, 409);
             if (policiesChanged) {
-                await this.txManager.runInTransaction(async (session) => {
+                const suspended = await this.txManager.runInTransaction(async (session) => {
                     await this.agencyRepo.incrementPolicyVersion(agencyId, session);
-                    await this.connectionService.pauseConnectionsForPolicyChange('agency', agencyId, session);
+                    return this.connectionService.pauseConnectionsForPolicyChange('agency', agencyId, session);
                 });
+                vectorisationService.notifyStatusChanges(suspended, 'suspended');
             }
             await this.auditOnboardingStep(userId, agencyId, 'POLICY_DATA_UPDATED', 4, agency.onboarding_step);
             return {
@@ -652,10 +656,11 @@ export class AgencyProfileService {
         }
 
         if (policiesChanged) {
-            await this.txManager.runInTransaction(async (session) => {
+            const suspended = await this.txManager.runInTransaction(async (session) => {
                 await this.agencyRepo.incrementPolicyVersion(agencyId, session);
-                await this.connectionService.pauseConnectionsForPolicyChange('agency', agencyId, session);
+                return this.connectionService.pauseConnectionsForPolicyChange('agency', agencyId, session);
             });
+            vectorisationService.notifyStatusChanges(suspended, 'suspended');
         }
 
         await this.emitStepCompletedEvent(agencyId, userId, AgencyOnboardingStep.POLICY_SETUP, AgencyOnboardingStep.COMPLETED);

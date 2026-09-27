@@ -42,6 +42,13 @@ export interface ActorSummary {
     name: string;
     /** The actor's picture (avatar, or logo for vendor/agency) as a resolved file object. */
     avatar: FileDetail | null;
+    /**
+     * The platform's KYC verdict — the badge beside the name. Present ONLY on
+     * `vendor` (`kyc_details.legit_verified`) and `agent` (`kyc.status ===
+     * 'verified'`) actors; absent on every other role and on an unresolved
+     * fallback, where "verified" is not a question the badge answers.
+     */
+    verified?: boolean;
 }
 
 export interface EntitySummary {
@@ -305,7 +312,7 @@ export class TicketEnrichmentService {
                 case ActorRole.VENDOR: {
                     // Business name/logo live on the Store (keyed by vendor _id).
                     const docs = await VendorModel.find({ user_id: { $in: ids } })
-                        .select('user_id display_name').lean();
+                        .select('user_id display_name kyc_details.legit_verified').lean();
                     const vendorIds = docs.map(d => d._id.toString());
                     const stores = vendorIds.length
                         ? await StoreModel.find({ vendor_id: { $in: vendorIds } }).select('vendor_id name logo_file_id').lean()
@@ -320,7 +327,8 @@ export class TicketEnrichmentService {
                         result.set(this.actorKey(d.user_id.toString(), role), {
                             user_id: d.user_id.toString(), role,
                             name: d.display_name || store?.name || '',
-                            avatar: (logoFileId ? logoByFileId.get(logoFileId) : undefined) ?? null
+                            avatar: (logoFileId ? logoByFileId.get(logoFileId) : undefined) ?? null,
+                            verified: d.kyc_details?.legit_verified === true,
                         });
                     }
                     break;
@@ -341,8 +349,9 @@ export class TicketEnrichmentService {
                     break;
                 }
                 case ActorRole.AGENT: {
+                    // `kyc.status` only — never the rest of the KYC sub-document.
                     const docs = await DeliveryAgentModel.find({ user_id: { $in: ids } })
-                        .select('user_id name avatar_file_id avatar_url').lean();
+                        .select('user_id name avatar_file_id avatar_url kyc.status').lean();
                     const avatarByFileId = await this.resolveActorFiles(
                         docs.map(d => d.avatar_file_id?.toString()).filter((id): id is string => !!id),
                     );
@@ -350,7 +359,8 @@ export class TicketEnrichmentService {
                         const fileId = d.avatar_file_id?.toString();
                         result.set(this.actorKey(d.user_id.toString(), role), {
                             user_id: d.user_id.toString(), role, name: d.name,
-                            avatar: (fileId ? avatarByFileId.get(fileId) : undefined) ?? null
+                            avatar: (fileId ? avatarByFileId.get(fileId) : undefined) ?? null,
+                            verified: d.kyc?.status === 'verified',
                         });
                     }
                     break;

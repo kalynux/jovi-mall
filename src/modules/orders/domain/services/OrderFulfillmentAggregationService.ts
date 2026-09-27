@@ -7,10 +7,20 @@ import { OrderModel, FulfillmentStatus } from '../../order.model';
 const SHIPPED_OR_BEYOND: readonly string[] = ['handing_over', 'picked_up', 'in_transit', 'agent_delivered', 'delivered'];
 
 // fulfillment_status values this service is allowed to move the order out of.
-// Never touches 'pending' (vendor hasn't started processing) or 'cancelled'/
-// 'returned'/'fulfilled' (terminal or digital-only) — those stay vendor/system
-// owned via their own dedicated paths.
-const RECOMPUTABLE_FROM: readonly FulfillmentStatus[] = ['processing', 'partially_shipped', 'shipped', 'partially_delivered', 'delivered'];
+// Never touches 'cancelled'/'returned'/'fulfilled' (terminal or digital-only) —
+// those stay vendor/system owned via their own dedicated paths.
+//
+// ⚠ 'pending' IS recomputable, and must be. A prepaid order leaves 'pending' at
+// payment (→ 'processing'), but a CASH-ON-DELIVERY order has no payment moment
+// before fulfilment, and neither dispatch path (auto-redirect or the vendor's
+// manual dispatch) moves it. Excluding 'pending' here left every COD order the
+// vendor never hand-marked 'processing' at 'pending' for its whole life — the
+// agent picked up, the customer read out the code, the shipment went
+// 'delivered', and the order still said 'pending'; `CashCollectionService.collect`
+// then never completed it, so the escrow hold window never started. Recomputing
+// from 'pending' is safe: it only moves once an item has actually left
+// (SHIPPED_OR_BEYOND), and a still-pending order returns null below.
+const RECOMPUTABLE_FROM: readonly FulfillmentStatus[] = ['pending', 'processing', 'partially_shipped', 'shipped', 'partially_delivered', 'delivered'];
 
 /**
  * Derives `Order.fulfillment_status` from the order's own physical items'

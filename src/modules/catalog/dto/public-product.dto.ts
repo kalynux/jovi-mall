@@ -73,6 +73,12 @@ export interface PublicProductStoreDto {
      * button. See BACKEND-SHOP-REQUIREMENTS §2.7e.
      */
     isOpen: boolean;
+    /**
+     * Is the seller KYC-verified — `vendor.kyc_details.legit_verified === true`, the same
+     * source as `PublicProductDetailStoreDto.verified`. A platform verdict for a badge, never
+     * the KYC documents behind it; `false` covers both "never reviewed" and "refused".
+     */
+    verified: boolean;
 }
 
 /**

@@ -268,8 +268,8 @@ is your relationship history, not only where you work today.
 | `page` | integer | `1` | |
 | `limit` | integer | `20` | Max 100 |
 
-**Success Response** (`200 OK`): an array of `AgentMembershipDto` each carrying three extra
-counterparty fields — `agencyName`, `agencyCountry`, `agencyCoverageAreas` — plus `meta`.
+**Success Response** (`200 OK`): an array of `AgentMembershipDto` each carrying four extra
+counterparty fields — `agencyName`, `agencyCountry`, `agencyCoverageAreas`, `agencyVerified` — plus `meta`.
 
 ```json
 {
@@ -282,6 +282,7 @@ counterparty fields — `agencyName`, `agencyCountry`, `agencyCoverageAreas` —
       "agencyName": "Douala Express Logistics",
       "agencyCountry": "CM",
       "agencyCoverageAreas": ["littoral", "centre"],
+      "agencyVerified": true,
       "status": "active",
       "origin": "join_request",
       "initiatedBy": "agent",
@@ -335,7 +336,7 @@ Field meanings are in the
 
 **Description**: One contract, with the agency's business surface resolved.
 
-**Success Response** (`200 OK`): a single `AgentMembershipDto` + `agencyName`, `agencyCountry` and
+**Success Response** (`200 OK`): a single `AgentMembershipDto` + `agencyName`, `agencyCountry`, `agencyVerified` and
 `agencyCoverageAreas`, same shape as a row above. **This is the payload a terms editor renders
 from** — the last two are what its coverage picker needs.
 
@@ -638,7 +639,7 @@ wrong:
 > but after a counter the right to approve moves and `initiatedBy` does not — driving buttons from it
 > shows Accept to whoever just made the offer.
 
-Your views add three counterparty fields:
+Your views add four counterparty fields:
 
 ```typescript
 interface AgentMembershipWithAgencyDto extends AgentMembershipDto {
@@ -655,6 +656,12 @@ interface AgentMembershipWithAgencyDto extends AgentMembershipDto {
    * them), never a bound — a contract may name any region of `agencyCountry`.
    */
   agencyCoverageAreas: string[];
+  /**
+   * Admin-verified business legitimacy (`kyc_details.legit_verified`) — show the
+   * verified badge beside `agencyName`. The same fact the directory row calls
+   * `kycVerified`. Added 2026-09-27.
+   */
+  agencyVerified: boolean;
 }
 ```
 

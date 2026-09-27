@@ -1660,6 +1660,54 @@ const CHECKOUT_ADD_ADDRESS_PROMPT: Copy = {
     ar: 'لإتمام هذا الطلب، أضف عنوان توصيل على الموقع — ثم أخبرني وسأكمل.',
 };
 
+/**
+ * ADR-A07 — a shop's part of the basket is too small to carry its delivery, which the vendor pays.
+ * Drawn by `checkout_review` in place of the confirmation. ⚠ Only the amount to ADD is ever named —
+ * never the fee or the commission, which are the vendor's terms.
+ */
+const CHECKOUT_DELIVERY_MINIMUM_INTRO: Copy = {
+    en: "I can't place this order yet — delivery isn't covered for part of your basket:",
+    fr: "Je ne peux pas encore passer cette commande — la livraison n'est pas couverte pour une partie de votre panier :",
+    pt: 'Ainda não posso fazer esta encomenda — a entrega não está coberta para parte do seu cesto:',
+    es: 'Todavía no puedo hacer este pedido: la entrega no está cubierta para parte de tu cesta:',
+    ar: 'لا يمكنني إتمام هذا الطلب بعد — التوصيل غير مغطى لجزء من سلتك:',
+};
+
+/** One shop: `{shop}` is its Store name (or `checkoutThisShop`), `{amount}` a formatted price. */
+const CHECKOUT_DELIVERY_MINIMUM_LINE: Copy = {
+    en: '• {shop}: add {amount} more',
+    fr: '• {shop} : ajoutez encore {amount}',
+    pt: '• {shop}: adicione mais {amount}',
+    es: '• {shop}: añade {amount} más',
+    ar: '• {shop}: أضف {amount} إضافية',
+};
+
+/** No basket size from this shop can pass (the rule's backstop binds) — adding more will not help. */
+const CHECKOUT_DELIVERY_MINIMUM_UNREACHABLE: Copy = {
+    en: "• {shop}: these items can't be delivered on their own right now",
+    fr: '• {shop} : ces articles ne peuvent pas être livrés seuls pour le moment',
+    pt: '• {shop}: estes artigos não podem ser entregues sozinhos de momento',
+    es: '• {shop}: estos artículos no se pueden entregar solos por ahora',
+    ar: '• {shop}: لا يمكن توصيل هذه المنتجات وحدها حاليًا',
+};
+
+const CHECKOUT_DELIVERY_MINIMUM_OUTRO: Copy = {
+    en: 'Add more from the same shop, then ask me to check out again.',
+    fr: 'Ajoutez des articles de la même boutique, puis demandez-moi de valider à nouveau.',
+    pt: 'Adicione mais artigos da mesma loja e depois peça-me para finalizar novamente.',
+    es: 'Añade más de la misma tienda y luego pídeme que finalice la compra de nuevo.',
+    ar: 'أضف المزيد من نفس المتجر، ثم اطلب مني إتمام الطلب مرة أخرى.',
+};
+
+/** Stands in for `{shop}` when the shop has no Store name. */
+const CHECKOUT_THIS_SHOP: Copy = {
+    en: 'This shop',
+    fr: 'Cette boutique',
+    pt: 'Esta loja',
+    es: 'Esta tienda',
+    ar: 'هذا المتجر',
+};
+
 const CHECKOUT_ORDER_PLACED_LABEL: Copy = {
     en: 'Order placed:',
     fr: 'Commande passée :',
@@ -1903,6 +1951,11 @@ const CHROME = Object.freeze({
     checkoutChooseAddressQuestion: { copy: CHECKOUT_CHOOSE_ADDRESS_QUESTION, cap: null },
     checkoutDeclined: { copy: CHECKOUT_DECLINED, cap: null },
     checkoutAddAddressPrompt: { copy: CHECKOUT_ADD_ADDRESS_PROMPT, cap: null },
+    checkoutDeliveryMinimumIntro: { copy: CHECKOUT_DELIVERY_MINIMUM_INTRO, cap: null },
+    checkoutDeliveryMinimumLine: { copy: CHECKOUT_DELIVERY_MINIMUM_LINE, cap: null },
+    checkoutDeliveryMinimumUnreachable: { copy: CHECKOUT_DELIVERY_MINIMUM_UNREACHABLE, cap: null },
+    checkoutDeliveryMinimumOutro: { copy: CHECKOUT_DELIVERY_MINIMUM_OUTRO, cap: null },
+    checkoutThisShop: { copy: CHECKOUT_THIS_SHOP, cap: null },
     checkoutOrderPlacedLabel: { copy: CHECKOUT_ORDER_PLACED_LABEL, cap: null },
     checkoutPaymentRequestSent: { copy: CHECKOUT_PAYMENT_REQUEST_SENT, cap: null },
     checkoutPaymentWait: { copy: CHECKOUT_PAYMENT_WAIT, cap: null },
@@ -1931,6 +1984,8 @@ export type BotChromeKey = keyof typeof CHROME;
 const CHROME_TEMPLATES: Readonly<Partial<Record<BotChromeKey, readonly string[]>>> = Object.freeze({
     checkoutMoreLines: Object.freeze(['count']),
     checkoutPaymentRequestSent: Object.freeze(['amount', 'phone']),
+    checkoutDeliveryMinimumLine: Object.freeze(['shop', 'amount']),
+    checkoutDeliveryMinimumUnreachable: Object.freeze(['shop']),
 });
 
 /** `{name}` — the one placeholder syntax. Static, never built from input. */

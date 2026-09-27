@@ -118,9 +118,10 @@ and what it pays — because the shipment itself is not readable until you accep
         "logo": { "id": "...", "key": "images/2026/07/logo.png", "url": "https://…/logo.png", "access": "public", "mimeType": "image/png", "size": 8213, "originalName": "logo.png" },
         "supportPhone": "+2376...",
         "supportEmail": "support@douala-express.cm",
-        "supportWhatsapp": "+2376..."
+        "supportWhatsapp": "+2376...",
+        "verified": true
       },
-      "vendor": { "id": "...", "businessName": "TechHub Douala", "phone": "+2376..." },
+      "vendor": { "id": "...", "businessName": "TechHub Douala", "phone": "+2376...", "verified": true },
       "customer": { "name": "Marie", "phone": null, "redacted": true },
       "pickup": {
         "address": { "formattedAddress": "Rue 1234, Akwa, Douala", "coordinates": { "lat": 4.0511, "lng": 9.7043 }, "...": "AddressDetail" },

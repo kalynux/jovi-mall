@@ -622,6 +622,26 @@ export function getDeliveryProofUploadConfig(): UploadPolicyConfig {
 }
 
 /**
+ * COD cash proofs — the ONE image an agent attaches to a deposit declaration, or an agency
+ * to a remittance declaration (a receipt, a transfer screenshot, a photo of the handover).
+ *
+ * The delivery-proof policy with ONE deliberate difference: **quotas are OFF.** The file is
+ * still owner-stamped, so it shows up in that owner's usage, but a full media cap must never
+ * refuse a cash hand-back — refusing to take money back from someone who owes it is exactly
+ * the wrong failure, the same reasoning that lets a suspended agent still deposit.
+ */
+export function getCodCashProofUploadConfig(): UploadPolicyConfig {
+  const config = getDeliveryProofUploadConfig();
+  return {
+    ...config,
+    // Restated rather than inherited: `test:uploads` requires every factory to resolve its
+    // own scanner, so no config can come to depend on another one having done it.
+    virusScan: resolveVirusScanConfig(),
+    userQuotas: { ...config.userQuotas, enabled: false },
+  };
+}
+
+/**
  * Policy documents — the vendor's and the agency's `policies.documents` addenda.
  *
  * ── Why this config exists at all (plan step 4.A.4c / 25.2) ───────────────────

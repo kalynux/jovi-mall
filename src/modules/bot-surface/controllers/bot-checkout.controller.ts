@@ -15,6 +15,7 @@ import { botChrome } from '../domain/bot-chrome-copy';
 import { BotActionHandlers, ParsedBotAction, unknownBotAction } from '../domain/bot-action-dispatch';
 import { parseCheckoutConfirm, parseCheckoutDecline } from '../domain/bot-checkout-actions';
 import {
+    ChatReviewBlocker,
     ChatReviewForReply,
     checkoutDeclinedReply,
     checkoutPlacedReply,
@@ -409,7 +410,14 @@ async function reviewChatCheckout(
     const language = botResponseLanguageOf(req);
 
     const view = await readChatCheckout(caller.customerId, deliveryAddressId);
-    const blocked = view.destination.kind === 'blocked' ? view.destination.blocker : null;
+    /**
+     * ⚠ **The address comes first, then the delivery minimum (ADR-A07).** Both refuse the ref; an
+     * address problem keeps its own reply (a link), unchanged. A shop too small to carry its
+     * delivery draws how much to add instead of Place order — a button checkout would refuse.
+     */
+    const blocked: ChatReviewBlocker | null = view.destination.kind === 'blocked'
+        ? view.destination.blocker
+        : view.deliveryShortfalls.length > 0 ? 'below_delivery_minimum' : null;
 
     const checkoutRef = blocked
         ? null
@@ -461,6 +469,15 @@ async function reviewChatCheckout(
         addAddressUrl: blocked === 'no_saved_address' || blocked === 'address_not_deliverable'
             ? botStorefrontLink(surfacePath('addresses'), language)
             : null,
+        /**
+         * Shops below their delivery minimum — the amount to ADD from each, never the fee or the
+         * commission (the vendor's terms). The model reads it too, for a customer who asks why.
+         */
+        deliveryShortfalls: view.deliveryShortfalls.map((shop) => ({
+            shopName: shop.shopName,
+            shortfallText: shop.shortfallText,
+            payable: shop.payable,
+        })),
     } satisfies ChatReviewForReply;
 
     setBotReply(req, checkoutReviewReply(review, { addressChosen: deliveryAddressId !== null }, language));

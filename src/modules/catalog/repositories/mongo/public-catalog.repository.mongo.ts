@@ -79,6 +79,8 @@ export interface PublicProductListRow {
     storeSlug: string;
     storeName: string;
     storeIsOpen: boolean;
+    /** `vendor.kyc_details.legit_verified`, as `vendorJoinStages` projects it. Never the KYC documents. */
+    storeVerified: boolean;
     freeDelivery: boolean;
     updatedAt: Date;
 }
@@ -398,6 +400,9 @@ export class PublicCatalogRepositoryMongo {
                 storeSlug: '$store.slug',
                 storeName: '$store.name',
                 storeIsOpen: '$store.is_open',
+                // The boolean verdict `vendorJoinStages` already projected — the KYC
+                // sub-document itself never enters this pipeline.
+                storeVerified: { $ifNull: ['$vendor.verified', false] },
                 freeDelivery: { $ifNull: ['$delivery.free_delivery', false] },
                 updatedAt: 1,
             },

@@ -6,6 +6,7 @@ import { ProductRepositoryMongo } from '../../../catalog/repositories/mongo/prod
 import { FileRepositoryMongo } from '../../../catalog/repositories/mongo/file.repository.mongo';
 import { VariantRepositoryMongo } from '../../../catalog/repositories/mongo/variant.repository.mongo';
 import { ProductStatusValidationService } from '../../../catalog/domain/services/ProductStatusValidationService';
+import { vectorisationService } from '../../../catalog/domain/services/VectorisationService';
 import { DigitalAssetModel } from '../../../digital-delivery/models/digital-asset.model';
 import { PlanQuotaStateModel } from '../../models/plan-quota-state.model';
 import { PLAN_QUOTA_REASONS, ProductStatus } from '../../../catalog/models/product.model';
@@ -169,7 +170,15 @@ export class PlanQuotaEnforcementService {
         const suspendedIds = await this.productRepo.suspendProductsForQuota(vendorId, plan.toBlock);
         const restored = await this.restoreProducts(vendorId, plan.toRelease);
 
-        return { suspended: suspendedIds.length, restored, allowed: plan.allowed.length };
+        // ⚠ PAUSE, never delete: a quota cut leaves every vectorisation column alone and
+        // only tells the index the new status — so an upgrade brings the product back
+        // still vectorised. There is no transaction here (each write above commits on its
+        // own), so "after the write" is now; this is the one place every trigger — the
+        // plan event consumer and the reconcile worker — passes through.
+        vectorisationService.notifyStatusChanges(suspendedIds, 'suspended');
+        vectorisationService.notifyStatusChanges(restored);
+
+        return { suspended: suspendedIds.length, restored: restored.length, allowed: plan.allowed.length };
     }
 
     /**
@@ -188,8 +197,11 @@ export class PlanQuotaEnforcementService {
      * Restores run one at a time rather than as one `updateMany` because each needs its
      * own gate evaluation, and a failure on one must not roll back the others.
      */
-    private async restoreProducts(vendorId: string, ids: string[]): Promise<number> {
-        let restored = 0;
+    private async restoreProducts(
+        vendorId: string,
+        ids: string[],
+    ): Promise<{ productId: string; status: Exclude<ProductStatus, 'suspended'> }[]> {
+        const restored: { productId: string; status: Exclude<ProductStatus, 'suspended'> }[] = [];
 
         for (const id of ids) {
             const product = await this.productRepo.findById(id, vendorId);
@@ -209,7 +221,9 @@ export class PlanQuotaEnforcementService {
                 }
             }
 
-            if (await this.productRepo.restoreProductFromQuota(id, vendorId, target)) restored += 1;
+            if (await this.productRepo.restoreProductFromQuota(id, vendorId, target)) {
+                restored.push({ productId: id, status: target });
+            }
         }
 
         return restored;

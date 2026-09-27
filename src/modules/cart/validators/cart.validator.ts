@@ -81,7 +81,11 @@ export type MergeCartInput = z.infer<typeof MergeCartSchema>;
  * `deliveryAddressId` is optional because a shopper can open the cart before choosing one.
  * When supplied it is validated against the same rule checkout applies, so an unusable
  * address surfaces here rather than at the pay button.
+ *
+ * `paymentMethod` (default `online`) selects how the delivery minimum is evaluated (ADR-A07):
+ * cash on delivery adds the agency's handling fee and is checked per shipment.
  */
 export const QuoteCartSchema = z.object({
   deliveryAddressId: ObjectIdSchema.optional(),
+  paymentMethod: z.enum(['online', 'cash_on_delivery']).optional(),
 });

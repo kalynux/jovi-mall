@@ -411,6 +411,14 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
    * (ProductStatusValidationService requires an active default agency + active
    * connection), so suspending it adds nothing — and would needlessly lock the
    * vendor out of editing it while the agency problem lasts.
+   *
+   * ⚠ A product mid-vectorisation (`vectorisationStatus: 'pending'`) IS suspended.
+   * All three suspend primitives used to skip it, on the belief that a completing job
+   * writes `status: 'active'` and would undo the suspension. It writes no status at
+   * all (see `suspendProductsForQuota`), so the skip only ever left such a product on
+   * sale through the whole outage, with nothing to retry it. The one real hazard —
+   * the job's index entry describing the product as active — is corrected when its
+   * callback lands (`VectorisationService.applyCallbackReport`).
    */
   async suspendVendorPhysicalProducts(
     vendorId: string,
@@ -423,7 +431,6 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
       type: 'physical',
       status: 'active',
       deletedAt: null,
-      vectorisationStatus: { $ne: 'pending' },
     };
 
     const docs = await this.model.find(filter, { _id: 1 }, sessionOpt).lean();
@@ -456,11 +463,9 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
    * where a digital download and a bookable service must stop selling exactly as a
    * parcel does.
    *
-   * The two exclusions are carried over deliberately rather than by habit. Only
-   * `active` products are swept, for the reason above. And a product mid-vectorisation
-   * is skipped because `VectorisationService` writes `status: 'active'` when its job
-   * completes — suspending one would be silently undone by that worker, which is worse
-   * than not suspending it, because the suspension would appear to have taken.
+   * Only `active` products are swept, for the reason above. A product mid-vectorisation
+   * is swept too — see `suspendVendorPhysicalProducts` for why the old `pending`
+   * exclusion was wrong.
    */
   async suspendAllVendorProducts(
     vendorId: string,
@@ -472,7 +477,6 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
       vendorId: vendorId as any,
       status: 'active',
       deletedAt: null,
-      vectorisationStatus: { $ne: 'pending' },
     };
 
     const docs = await this.model.find(filter, { _id: 1 }, sessionOpt).lean();
@@ -540,7 +544,7 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
         type: { $in: types },
         status: 'active',
         deletedAt: null,
-        vectorisationStatus: { $ne: 'pending' },
+        // No `vectorisationStatus: { $ne: 'pending' }` — see suspendVendorPhysicalProducts.
       },
       [
         {
@@ -569,12 +573,12 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
    * would be permanently over cap with nothing suspendable and no way back except
    * archiving. This one therefore takes any non-archived status.
    *
-   * ⚠ It deliberately does **not** carry the `vectorisationStatus: { $ne: 'pending' }`
-   * exclusion the other three have. That exclusion exists because a completing
+   * It carries no `vectorisationStatus: { $ne: 'pending' }` exclusion, and since
+   * 2026-09-27 neither do the other three. That exclusion existed because a completing
    * vectorisation job was believed to write `status: 'active'` and would silently undo
-   * the suspension; `VectorisationService` in fact writes no status at all. Either way
-   * the quota is a billing fact rather than a race — an in-flight job must not buy a
-   * vendor a free slot — and `require-product-editable.middleware.ts` already keeps the
+   * the suspension; `VectorisationService` in fact writes no status at all. The quota
+   * is a billing fact rather than a race — an in-flight job must not buy a vendor a
+   * free slot — and `require-product-editable.middleware.ts` already keeps the
    * *vendor* out while a job runs.
    *
    * Returns the ids actually moved, which is what the caller stamps on the state row.

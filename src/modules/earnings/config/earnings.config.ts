@@ -159,6 +159,20 @@ export const EARNINGS_CONFIG = {
    * return 400.
    */
   AI_MARGIN_PERCENT: Math.min(100, intEnv('NEGOTIATION_AI_MARGIN_PERCENT', 30)),
+
+  /**
+   * The most of a sale that delivery may cost the vendor, as a percentage of the subtotal
+   * (ADR-A07). Checkout refuses a vendor order (online) or a shipment (COD) whose
+   * `deliveryFee + codHandlingFee` exceeds this share of what the customer pays for it — so
+   * the vendor keeps at least `100 − this`% before commission, and never sells at a loss.
+   *
+   * ⚠ Commission is NOT counted against it; see `delivery-cost-cap.ts` for why. A separate
+   * `vendorNet > 0` check covers commission.
+   *
+   * Clamped to `[1, 100]`. `100` does not switch the rule off — it still refuses a delivery
+   * that costs more than the whole sale, and the `vendorNet > 0` check still applies.
+   */
+  MAX_DELIVERY_COST_PERCENT: Math.max(1, Math.min(100, intEnv('ORDER_MAX_DELIVERY_COST_PERCENT', 30))),
 } as const;
 
 /** A `Date` `days` in the future relative to `now`. */

@@ -57,6 +57,8 @@ import {
 } from '../../src/modules/notifications/models/customer-notification.model';
 import { AGENT_NOTIFICATION_TYPES } from '../../src/modules/notifications/models/agent-notification.model';
 import { AGENT_NOTIFICATION_CATALOG } from '../../src/modules/notifications/catalog/agent-notification-catalog';
+import { AGENCY_NOTIFICATION_CATALOG } from '../../src/modules/notifications/catalog/agency-notification-catalog';
+import { NOTIFICATION_CATALOG } from '../../src/modules/notifications/catalog/notification-catalog';
 import {
     SUPPORTED_LANGUAGES,
     Language,
@@ -996,6 +998,164 @@ function main(): void {
             console.error(`     ↳ registry claims unsubmitted languages: ${langs} (${overclaimed.length} entries)`);
         }
         return overclaimed.length === 0;
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Template NAMES — the same silence, one level down from the language
+    // ─────────────────────────────────────────────────────────────────────────
+    console.log('\n── Template names: every name a send asks Meta for was submitted ──');
+
+    /**
+     * ⛔ **NOTHING COMPARED THE NAME SET, AND NINE TEMPLATES DRIFTED UNDER A GREEN SUITE.**
+     *
+     * Everything above is about LANGUAGES. The registry check filters on the language alone,
+     * so a registry name absent from the file passed. Three customer situations — two of
+     * them payment failures — named templates Meta never held, and six payout situations did
+     * the same for vendors, agencies and agents. Out of window a template is the only way to
+     * reach a WhatsApp recipient, so each was refused and the recipient was told nothing.
+     * All nine were submitted on 2026-09-27; this is what stops the tenth.
+     *
+     * ⚠ **The expected set is read as DATA, never by running the generator.** The generator
+     * refuses without four URL variables, so a CI run would skip it — and skipped looks like
+     * passing.
+     *
+     * Three sources of a name a send can ask for, all derived:
+     *   1. the four notification catalogues, read through their exported objects;
+     *   2. a template name written as a LITERAL at a send site elsewhere in `src/modules`,
+     *      found by a comment-stripped scan — a name outside every catalogue is exactly the
+     *      one no generator emits, and so the one most likely never to have been submitted;
+     *   3. the two phone-verification OTP names, which are hand-built by the generator
+     *      because Meta accepts an OTP body only as AUTHENTICATION. They are the ONLY names
+     *      allowlisted, by name, below.
+     *
+     * Both directions: a submitted name nothing sends is a template at Meta that nothing
+     * keeps honest.
+     */
+    type NamedCatalog = Record<string, { whatsapp: { template: { name: string } } }>;
+    const catalogTemplateNames = (): Map<string, string> => {
+        const out = new Map<string, string>();
+        const catalogs: Array<[string, NamedCatalog]> = [
+            ['vendor', NOTIFICATION_CATALOG as unknown as NamedCatalog],
+            ['customer', CUSTOMER_NOTIFICATION_CATALOG as unknown as NamedCatalog],
+            ['agency', AGENCY_NOTIFICATION_CATALOG as unknown as NamedCatalog],
+            ['agent', AGENT_NOTIFICATION_CATALOG as unknown as NamedCatalog],
+        ];
+        for (const [audience, catalog] of catalogs) {
+            for (const [situation, messages] of Object.entries(catalog)) {
+                out.set(messages.whatsapp.template.name, `${audience} catalogue: ${situation}`);
+            }
+        }
+        return out;
+    };
+
+    /**
+     * `{ type: 'template', name: '<literal>' }` — the shape every template send in this tree
+     * builds. A name taken from a catalogue, a config value or an env variable is not a
+     * literal and is covered by source 1 or 3 (or, for the optional carousel, by nobody:
+     * it is unset by default and names a MARKETING template outside this file).
+     */
+    const LITERAL_TEMPLATE_NAME = /type:\s*'template',\s*name:\s*'([a-z0-9_]+)'/g;
+    const literalTemplateNames = (sources: ReadonlyArray<{ file: string; code: string }>): Map<string, string> => {
+        const out = new Map<string, string>();
+        for (const { file, code } of sources) {
+            for (const m of code.matchAll(LITERAL_TEMPLATE_NAME)) out.set(m[1], `literal at ${file}`);
+        }
+        return out;
+    };
+
+    const moduleSources = (): Array<{ file: string; code: string }> => {
+        const out: Array<{ file: string; code: string }> = [];
+        const walk = (rel: string): void => {
+            for (const entry of readdirSync(join(scanRoot, rel), { withFileTypes: true })) {
+                const child = `${rel}/${entry.name}`;
+                if (entry.isDirectory()) walk(child);
+                else if (entry.name.endsWith('.ts')) out.push({ file: child, code: readSource(child) });
+            }
+        };
+        walk('src/modules');
+        return out;
+    };
+
+    /**
+     * ⚠ **The allowlist is two NAMES, and the reason is here rather than a pattern.** These are
+     * the phone-verification OTP pair (`PHONE_VERIFY_TEMPLATE_NAME` /
+     * `PHONE_VERIFY_FALLBACK_TEMPLATE_NAME` defaults). The generator hand-builds them because
+     * Meta classifies OTP content as AUTHENTICATION and refuses it anywhere else, so no
+     * catalogue can hold them, and the send site reads the name from config rather than a
+     * literal. A prefix rule (`wi_mall_*`) would admit the next unsubmitted name for free.
+     */
+    const HAND_BUILT_OTP_NAMES = new Set(['wi_mall_phone_verification', 'wi_mall_phone_verification_utility']);
+
+    const templateNameProblems = (
+        sentNames: Map<string, string>,
+        submittedNames: Set<string>,
+    ): string[] => {
+        const problems: string[] = [];
+        for (const [name, where] of sentNames) {
+            if (!submittedNames.has(name)) problems.push(`SENT BUT NEVER SUBMITTED: "${name}" (${where})`);
+        }
+        for (const name of submittedNames) {
+            if (!sentNames.has(name) && !HAND_BUILT_OTP_NAMES.has(name)) {
+                problems.push(`SUBMITTED BUT NOTHING SENDS IT: "${name}"`);
+            }
+        }
+        for (const name of HAND_BUILT_OTP_NAMES) {
+            if (!submittedNames.has(name)) problems.push(`OTP TEMPLATE NOT SUBMITTED: "${name}"`);
+        }
+        return problems;
+    };
+
+    const submittedNames = new Set(payloads.payloads.map(p => p.name));
+    const sentNames = (): Map<string, string> =>
+        new Map([...catalogTemplateNames(), ...literalTemplateNames(moduleSources())]);
+
+    // Non-vacuity first: an empty set on either side satisfies "every X is in Y" for nothing.
+    assert('the name scan read all four catalogues and found a send-site literal', () => {
+        const fromCatalogs = catalogTemplateNames();
+        const literals = literalTemplateNames(moduleSources());
+        const audiences = new Set([...fromCatalogs.values()].map(w => w.split(' ')[0]));
+        return audiences.size === 4 && literals.size > 0 && submittedNames.size > 0;
+    });
+
+    assert('⛔ every template name a send can ask for was submitted, and every submitted name is sent', () => {
+        const problems = templateNameProblems(sentNames(), submittedNames);
+        problems.forEach(p => console.error(`     ↳ ${p}`));
+        return problems.length === 0;
+    });
+
+    /**
+     * ⭐ **Shown to BITE**, each against an in-memory copy — no file is mutated, so a crash
+     * cannot leave the tree broken. Each checks the failure names the RIGHT thing, not merely
+     * that something failed.
+     */
+    assert('BITE: a catalogue template renamed in memory is reported by name and situation', () => {
+        const entry = CUSTOMER_NOTIFICATION_CATALOG['order.payment_failed'].whatsapp.template;
+        const original = entry.name;
+        entry.name = 'customer_order_payment_failed_renamed';
+        try {
+            const problems = templateNameProblems(sentNames(), submittedNames);
+            return problems.some(p => p.includes('"customer_order_payment_failed_renamed"')
+                    && p.includes('customer catalogue: order.payment_failed'))
+                && problems.some(p => p.includes('SUBMITTED BUT NOTHING SENDS IT: "customer_order_payment_failed"'));
+        } finally {
+            entry.name = original;
+        }
+    });
+
+    assert('BITE: a name missing from the submitted set is reported (the 2026-09-27 defect, replayed)', () => {
+        const before = new Set(submittedNames);
+        before.delete('customer_booking_payment_failed');
+        return templateNameProblems(sentNames(), before)
+            .some(p => p.startsWith('SENT BUT NEVER SUBMITTED: "customer_booking_payment_failed"'));
+    });
+
+    assert('BITE: a literal template name at a send site is seen, and a commented-out one is not', () => {
+        const live = `x({ type: 'template', name: 'made_up_template' })`;
+        const commented = stripComments(`/* x({ type: 'template', name: 'commented_template' }) */`);
+        const found = literalTemplateNames([{ file: 'mutant.ts', code: live }, { file: 'c.ts', code: commented }]);
+        return found.has('made_up_template') && !found.has('commented_template')
+            && templateNameProblems(new Map([...sentNames(), ...found]), submittedNames)
+                .some(p => p.includes('"made_up_template" (literal at mutant.ts)'));
     });
 
     assert('⛔ an unapproved language falls back to ENGLISH specifically', () =>

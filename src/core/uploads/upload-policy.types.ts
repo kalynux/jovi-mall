@@ -23,6 +23,11 @@ export type PurposeUploadFolder =
   | 'system'
   | 'shipments'
   /**
+   * The proof image an agent or agency attaches to a COD cash hand-over declaration (a
+   * receipt, a transfer screenshot). PRIVATE — see `core/storage/storage-trees.ts`.
+   */
+  | 'cod-proofs'
+  /**
    * The vendor's and the agency's `policies.documents` addenda (plan step 4.A.4c / 25.2).
    *
    * ⚠ **These two existed on disk long before they existed here.** Both endpoints wrote to

@@ -80,6 +80,9 @@ export class BrevoMailProvider implements IMailProvider {
             // Omitted rather than sent empty: Brevo rejects a blank `textContent`, and it derives
             // a plain-text part from the HTML when the field is absent.
             ...(options.text ? { textContent: options.text } : {}),
+            ...(options.attachments?.length
+                ? { attachment: options.attachments.map((a) => ({ name: a.filename, content: a.content.toString('base64') })) }
+                : {}),
         });
     }
 

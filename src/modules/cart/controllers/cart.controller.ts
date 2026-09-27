@@ -101,8 +101,8 @@ export class CartController {
    */
   static quoteCart = asyncHandler(async (req: Request, res: Response) => {
     const userId = req.auth!.role_entity._id.toString();
-    const { deliveryAddressId } = QuoteCartSchema.parse(req.body ?? {});
-    const quote = await cartQuoteService.quoteForCustomer(userId, deliveryAddressId);
+    const { deliveryAddressId, paymentMethod } = QuoteCartSchema.parse(req.body ?? {});
+    const quote = await cartQuoteService.quoteForCustomer(userId, deliveryAddressId, paymentMethod);
     res.status(200).json({ success: true, data: quote });
   });
 

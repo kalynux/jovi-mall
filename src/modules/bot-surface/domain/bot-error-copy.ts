@@ -711,6 +711,20 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         es: 'Tu carrito está vacío ahora. Si acabas de hacer un pedido, pídeme tus pedidos para verlo.',
         ar: 'سلتك فارغة الآن. إذا كنت قد قدمت طلبًا للتو، اطلب مني عرض طلباتك لرؤيته.',
     },
+    /**
+     * ADR-A07. The customer's question is "so what do I do?", and the answer is always the same:
+     * add more from THAT shop — a line from another shop becomes a separate order and helps
+     * nothing. The amount is not in the sentence (this copy is static per code); it is in
+     * `details.shortfall`, and the cart quote reports it per shop before checkout.
+     * ⚠ Never says why in money terms — the vendor's fee and commission are not the customer's.
+     */
+    [ERROR_CODES.ORDER_BELOW_DELIVERY_MINIMUM]: {
+        en: "The items from one shop don't reach the minimum amount for delivery yet. Add a little more from the same shop, then check out again.",
+        fr: "Les articles d'une boutique n'atteignent pas encore le montant minimum pour la livraison. Ajoutez un peu plus de la même boutique, puis validez à nouveau.",
+        pt: 'Os artigos de uma loja ainda não atingem o valor mínimo para entrega. Adicione um pouco mais da mesma loja e finalize novamente.',
+        es: 'Los artículos de una tienda aún no alcanzan el importe mínimo para la entrega. Añade un poco más de la misma tienda y vuelve a finalizar la compra.',
+        ar: 'منتجات أحد المتاجر لم تبلغ بعد الحد الأدنى للتوصيل. أضف المزيد قليلًا من نفس المتجر، ثم أكمل الطلب مرة أخرى.',
+    },
     [ERROR_CODES.PAYMENT_PAYER_NUMBER_REQUIRED]: {
         en: 'I need a mobile money number to take this payment. Send me the number you want to pay with.',
         fr: "J'ai besoin d'un numéro mobile money pour ce paiement. Envoyez-moi le numéro avec lequel vous souhaitez payer.",

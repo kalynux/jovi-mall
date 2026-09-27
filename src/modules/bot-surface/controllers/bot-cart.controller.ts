@@ -135,10 +135,11 @@ export class BotCartController {
      * button costs the whole conversation.
      */
     static quote = asyncHandler(async (req: Request, res: Response) => {
-        const { deliveryAddressId } = BotCartQuoteSchema.parse(req.body ?? {});
+        const { deliveryAddressId, paymentMethod } = BotCartQuoteSchema.parse(req.body ?? {});
         const quote = await cartQuoteService.quoteForCustomer(
             botCallerOf(req).customerId,
             deliveryAddressId,
+            paymentMethod,
         );
         sendSuccess(res, quote);
     });

@@ -164,7 +164,8 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.COD_DEPOSIT_EXCEEDS_BALANCE]: 'That deposit is more than the agent is holding',
     [ERROR_CODES.COD_DEPOSIT_NOT_FOUND]: 'Deposit not found',
     [ERROR_CODES.COD_DEPOSIT_ALREADY_RESOLVED]: 'This deposit has already been confirmed or rejected',
-    [ERROR_CODES.COD_DEPOSIT_REFERENCE_REQUIRED]: 'A payment reference is required for this deposit',
+    [ERROR_CODES.COD_PROOF_FILE_REQUIRED]: 'A proof image is required (multipart field "file")',
+    [ERROR_CODES.COD_PROOF_NOT_FOUND]: 'No proof image is attached to this record',
     [ERROR_CODES.COD_DEPOSIT_AGENCY_ALREADY_SETTLED]: 'The agency has already remitted this cash to the platform',
     [ERROR_CODES.COD_DEPOSIT_WRONG_RECIPIENT]: 'This deposit was declared to a different recipient',
     [ERROR_CODES.COD_REMITTANCE_INVALID_AMOUNT]: 'That remittance amount is not valid',
@@ -518,6 +519,11 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.MAIL_PROVIDER_AUTH_FAILED]: 'The email provider refused this platform\'s credentials',
     [ERROR_CODES.MAIL_SEND_REJECTED]: 'The email provider refused this message',
     [ERROR_CODES.MAIL_ALL_PROVIDERS_FAILED]: 'The message could not be sent by any configured email provider',
+    [ERROR_CODES.STATEMENT_RECIPIENT_MISSING]: 'This account has no email address on file; download the statement instead',
+    [ERROR_CODES.STATEMENT_RECIPIENT_UNVERIFIED]:
+        'This account\'s email address is not verified; download the statement instead',
+    [ERROR_CODES.STATEMENT_ATTACHMENT_TOO_LARGE]:
+        'The statement is too large to email; download it or choose a shorter period',
     [ERROR_CODES.CONFIG_INVALID_MAIL_PROVIDER]: 'Invalid mail provider configuration',
 
     [ERROR_CODES.VENDOR_FISCAL_CALENDAR_INVALID]: 'Invalid fiscal calendar configuration',
@@ -700,6 +706,7 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.ORDER_CART_EMPTY]: 'order cart empty',
     [ERROR_CODES.ORDER_CART_INVALID]: 'order cart invalid',
     [ERROR_CODES.ORDER_DELIVERY_ADDRESS_REQUIRED]: 'A delivery address is required for physical orders',
+    [ERROR_CODES.ORDER_BELOW_DELIVERY_MINIMUM]: "This shop's items do not reach the minimum amount needed for delivery",
     [ERROR_CODES.ORDER_PRODUCT_NOT_FOUND]: 'order product not found',
     [ERROR_CODES.ORDER_VENDOR_NOT_FOUND]: 'order vendor not found',
     [ERROR_CODES.ORDER_NO_DELIVERY_AGENCY]: 'order no delivery agency',

@@ -224,6 +224,7 @@ export class PublicCatalogService {
                     slug: row.storeSlug,
                     name: row.storeName,
                     isOpen: row.storeIsOpen,
+                    verified: row.storeVerified === true,
                 },
                 freeDelivery: row.freeDelivery,
                 updatedAt: new Date(row.updatedAt).toISOString(),

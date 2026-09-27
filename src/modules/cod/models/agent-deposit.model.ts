@@ -71,11 +71,19 @@ export interface IAgentDeposit extends Document {
   triage: IReviewTriage | null;
 
   /**
-   * External money-movement reference (bank/transfer/receipt id). Required for
-   * `recipient: 'platform'` — the platform is not physically present at the
-   * handover, so the reference is the only thing tying the claim to real money.
+   * External money-movement reference (bank/transfer/receipt id). Optional on every route —
+   * the proof image below is the required evidence; a reference is a convenience for
+   * reconciling against a statement when the payer has one.
    */
   reference: string | null;
+
+  /**
+   * The image the AGENT attached to their declaration (a receipt, a transfer screenshot, a
+   * photo of the handover). Required on every agent declaration; null on a deposit the
+   * receiving party recorded in one step, and on rows written before proofs existed.
+   * Private tree (`cod-proofs/`), owned by the agent.
+   */
+  proof_file_id: mongoose.Types.ObjectId | null;
 
   /** The agent's user, when THEY declared it; null when the agency recorded it. */
   declared_by_user_id: mongoose.Types.ObjectId | null;
@@ -124,6 +132,7 @@ const AgentDepositSchema = new Schema<IAgentDeposit>(
     triage: { type: ReviewTriageSchema, default: null },
 
     reference: { type: String, default: null, trim: true, maxlength: 200 },
+    proof_file_id: { type: Schema.Types.ObjectId, ref: MODELS.FILE, default: null },
 
     declared_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
     declared_at: { type: Date, default: null },

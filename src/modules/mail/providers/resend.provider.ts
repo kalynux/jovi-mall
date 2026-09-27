@@ -87,6 +87,15 @@ export class ResendMailProvider implements IMailProvider {
             subject: options.subject,
             html: options.html,
             ...(options.text ? { text: options.text } : {}),
+            ...(options.attachments?.length
+                ? {
+                      attachments: options.attachments.map((a) => ({
+                          filename: a.filename,
+                          content: a.content.toString('base64'),
+                          content_type: a.contentType,
+                      })),
+                  }
+                : {}),
         });
     }
 

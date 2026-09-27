@@ -81,10 +81,10 @@ async function handleProductAgencyOverrideChange(
     vendorId: string,
     previousAgencyId: string | null,
     newAgencyId: string | null,
-): Promise<{ restored: boolean; reassignedCount: number }> {
-    const { restored } = await productDeliveryAgencySuspensionService.restoreProductOwnAgency(productId, vendorId);
+): Promise<{ restored: boolean; status?: string; reassignedCount: number }> {
+    const { restored, status } = await productDeliveryAgencySuspensionService.restoreProductOwnAgency(productId, vendorId);
 
-    if (!previousAgencyId) return { restored, reassignedCount: 0 };
+    if (!previousAgencyId) return { restored, status, reassignedCount: 0 };
 
     let targetAgencyId: string | null = null;
     if (newAgencyId) {
@@ -99,7 +99,7 @@ async function handleProductAgencyOverrideChange(
         }
     }
 
-    if (!targetAgencyId) return { restored, reassignedCount: 0 };
+    if (!targetAgencyId) return { restored, status, reassignedCount: 0 };
 
     const { reassignedCount } = await vendorOrderService.reassignItemsForProduct(
         vendorId,
@@ -107,7 +107,7 @@ async function handleProductAgencyOverrideChange(
         previousAgencyId,
         targetAgencyId,
     );
-    return { restored, reassignedCount };
+    return { restored, status, reassignedCount };
 }
 
 /**
@@ -243,7 +243,7 @@ export class VendorProductController {
         // If the product's own delivery-agency override changed, restore the
         // product if it's eligible again and reassign its held/pending order
         // items to the resolved new agency. See handleProductAgencyOverrideChange.
-        let agencyFixup: { restored: boolean; reassignedCount: number } | null = null;
+        let agencyFixup: { restored: boolean; status?: string; reassignedCount: number } | null = null;
         if (input.delivery?.agencyId !== undefined && input.delivery.agencyId !== previousAgencyId) {
             agencyFixup = await handleProductAgencyOverrideChange(id, vendorId, previousAgencyId, input.delivery.agencyId);
         }
@@ -259,6 +259,14 @@ export class VendorProductController {
 
         // Return response immediately — vectorisation is async and must not block
         res.json({ success: true, data: detail, message });
+
+        // ⚠ The delivery-agency suspension only PAUSED this product in the index; tell it
+        // the restored status explicitly. The re-vectorise below does not cover it — it is
+        // skipped whenever the body carries `vectorisationEnabled`, and only resubmits an
+        // eligible (`active`) product.
+        if (agencyFixup?.restored && agencyFixup.status) {
+            void vectorisationService.notifyStatusChange(id, agencyFixup.status);
+        }
 
         // Vectorisation side-effect, after response.
         if (input.vectorisationEnabled !== undefined) {

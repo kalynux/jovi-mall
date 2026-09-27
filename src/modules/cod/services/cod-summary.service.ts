@@ -57,8 +57,8 @@ export class CodSummaryService {
       this.unsettledCollections({ agency_id: new Types.ObjectId(agencyId) }),
     ]);
 
-    const nameByAgentId = new Map(
-      agents.map((a: IDeliveryAgent) => [a._id.toString(), a.name])
+    const agentById = new Map(
+      agents.map((a: IDeliveryAgent) => [a._id.toString(), a])
     );
 
     return {
@@ -69,9 +69,12 @@ export class CodSummaryService {
       },
       agents: contracts.map((contract) => {
         const agentId = contract.agent_id.toString();
+        const agent = agentById.get(agentId);
         return {
           id: agentId,
-          name: nameByAgentId.get(agentId) ?? null,
+          name: agent?.name ?? null,
+          // The platform's KYC verdict — the badge beside the name.
+          verified: agent?.kyc?.status === 'verified',
           // Cash this agent holds that is attributable to THIS agency.
           cashHeld: contract.cod?.outstanding_balance ?? 0,
         };

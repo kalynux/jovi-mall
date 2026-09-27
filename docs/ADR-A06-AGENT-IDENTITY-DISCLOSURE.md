@@ -46,9 +46,18 @@ Concretely, on `GET /api/customer/orders/:orderId/shipments`:
 "agent": {
   "displayName": "Jean T.",        // first name + surname initial, never the full name
   "photo": { … } | null,           // FileDetail, the platform's canonical file reference
-  "visibleFrom": "shipped"
+  "visibleFrom": "shipped",
+  "verified": true                 // added 2026-09-27 — see the amendment below
 } | null
 ```
+
+> **Amendment, 2026-09-27 — a fourth field, `verified`.** The block gained one boolean for the
+> storefront's "verified" badge: `kyc.status === 'verified'`, the exact test
+> `AgentGateService` applies before a contract or COD cash. It widens the disclosure by one
+> bit and nothing personal — it is the platform's own verdict on the agent, never any part of
+> the identity document it was reached from. Only `kyc.status` is projected
+> (`AgentRepository.findPublicIdentitiesByIds`), never the rest of `kyc`. It follows the
+> same window as the other fields: no `agent` block, no `verified`.
 
 Four constraints are the decision, not decoration. Removing any one of them makes this a
 different (and unapproved) disclosure:
@@ -94,7 +103,8 @@ vocabulary collapses `failed` and `returned` into one word, and they are opposit
 an agent up, so an agent outside the window is never fetched at all. There is nothing in
 memory for a later projection, log line or spread to leak.
 
-The lookup itself is `AgentRepository.findPublicIdentitiesByIds`, a two-field projection. The
+The lookup itself is `AgentRepository.findPublicIdentitiesByIds`, a narrow projection
+(`name avatar_file_id kyc.status` — two fields plus, since 2026-09-27, the KYC verdict alone). The
 agent document carries legal identity, payout details, an emergency contact, device telemetry,
 trust signals and a cash balance; a caller that hydrates the whole thing to render a name is
 one careless spread from publishing all of it. Same argument `AgentDirectoryMapper` already

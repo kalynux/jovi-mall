@@ -97,8 +97,8 @@ counts a projected amount; it is a planning figure, not a liability.
   "data": {
     "liability": { "balance": 325000, "currency": "XAF" },
     "agents": [
-      { "id": "507f1f77bcf86cd799439101", "name": "Paul N.", "cashHeld": 130000 },
-      { "id": "507f1f77bcf86cd799439102", "name": "Marie K.", "cashHeld": 0 }
+      { "id": "507f1f77bcf86cd799439101", "name": "Paul N.", "verified": true, "cashHeld": 130000 },
+      { "id": "507f1f77bcf86cd799439102", "name": "Marie K.", "verified": false, "cashHeld": 0 }
     ],
     "unsettledCollections": { "count": 7, "amount": 325000 }
   }
@@ -108,6 +108,7 @@ counts a projected amount; it is a planning figure, not a liability.
 | Field | Description |
 |---|---|
 | `liability.balance` | What your agency still owes the platform (falls on confirmed remittances). |
+| `agents[].verified` | The platform's KYC verdict for this agent (`kyc.status === "verified"`) — render a verified badge beside the name. |
 | `agents[].cashHeld` | Cash this agent holds **for you** and hasn't deposited yet — their contract's outstanding balance. |
 | `unsettledCollections` | Collected cash not yet covered by a confirmed remittance (what's blocking your COD earnings from releasing). |
 
