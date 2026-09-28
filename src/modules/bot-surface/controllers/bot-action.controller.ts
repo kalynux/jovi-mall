@@ -15,6 +15,7 @@ import { BARGAIN_ACTION_HANDLERS } from './bot-negotiation.controller';
 import { DIGITAL_ACTION_HANDLERS } from './bot-catalog.controller';
 import { REVIEW_ACTION_HANDLERS } from './bot-review.controller';
 import { BOOKING_ACTION_HANDLERS } from './bot-booking.controller';
+import { IDENTITY_ACTION_HANDLERS } from './bot-identity.controller';
 
 /**
  * THE TAP-CODE DISPATCHER — `POST /catalog/action`, the surface's single tap handler.
@@ -109,6 +110,8 @@ const HANDLERS = mergeActionHandlers([
      * them, so neither may sit in a chat history waiting to be pressed.
      */
     ['bookings', BOOKING_ACTION_HANDLERS],
+    /** yes:tos — the Accept button on the last onboarding step (terms of service). */
+    ['identity', IDENTITY_ACTION_HANDLERS],
 ]);
 
 export class BotActionController {

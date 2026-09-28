@@ -97,10 +97,17 @@ export class UserRepository {
     return changedAt;
   }
 
-  async addRoleToUser(userId: string, role: string): Promise<IUser | null> {
+  async addRoleToUser(userId: string, role: string, termsAcceptedAt?: Date): Promise<IUser | null> {
     return await UserModel.findByIdAndUpdate(
       userId,
-      { $addToSet: { roles: role } },
+      {
+        $addToSet: { roles: role },
+        // In the same update as the role, so a role never exists without the
+        // consent it was granted under.
+        ...(termsAcceptedAt
+          ? { $push: { terms_acceptances: { role, accepted_at: termsAcceptedAt } } }
+          : {}),
+      },
       { new: true }
     );
   }

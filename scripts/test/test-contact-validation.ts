@@ -30,7 +30,7 @@ import {
   PhoneNumberSchema,
   toE164,
 } from '../../src/core/validation/phone';
-import { RegisterSchema, LoginSchema } from '../../src/modules/auth/auth.schemas';
+import { RegisterSchema, LoginSchema, AddRoleSchema } from '../../src/modules/auth/auth.schemas';
 import { isPayoutMethodEnabled, PayoutDetailsZodSchema } from '../../src/core/types/payout.types';
 import { PaymentChannelSchema } from '../../src/modules/payments/validators/payment.validators';
 import { UpdateStoreProfileSchema } from '../../src/modules/store/validators/store.validator';
@@ -178,6 +178,7 @@ function main(): void {
       phone: '+237670000000',
       name: 'Ada',
       password: 'secret1',
+      terms_accepted: true,
     }).success);
   assert('register: a national phone is rejected', () =>
     rejects(RegisterSchema, { phone: '670000000', name: 'Ada', password: 'secret1' }));
@@ -194,9 +195,39 @@ function main(): void {
       email: '  Ada@Example.COM ',
       name: 'Ada',
       password: 'secret1',
+      terms_accepted: true,
     });
     return parsed.phone === '+237670000000' && parsed.email === 'ada@example.com';
   });
+
+  console.log('\n▶ Terms consent (vendor, agency and agent required; customer via the bot)');
+
+  const base = { phone: '+237670000000', name: 'Ada', password: 'secret1' };
+  const termsIssue = (r: { success: boolean; error?: { issues: { path: (string | number)[] }[] } }) =>
+    !r.success && !!r.error?.issues.some((i) => i.path.join('.') === 'terms_accepted');
+
+  assert('register: a vendor without terms_accepted is refused on that field', () =>
+    termsIssue(RegisterSchema.safeParse({ ...base, role: 'vendor' })));
+  assert('register: role defaults to vendor, so an omitted role needs consent too', () =>
+    termsIssue(RegisterSchema.safeParse(base)));
+  assert('register: an agency with terms_accepted: false is refused', () =>
+    termsIssue(RegisterSchema.safeParse({ ...base, role: 'agency', terms_accepted: false })));
+  assert('register: an agency with terms_accepted: true is accepted', () =>
+    RegisterSchema.safeParse({ ...base, role: 'agency', terms_accepted: true }).success);
+  assert('register: an agent without terms_accepted is refused on that field', () =>
+    termsIssue(RegisterSchema.safeParse({ ...base, role: 'agent' })));
+  assert('register: an agent with terms_accepted: true is accepted', () =>
+    RegisterSchema.safeParse({ ...base, role: 'agent', terms_accepted: true }).success);
+  assert('register: a customer never needs it (bot sign-up)', () =>
+    RegisterSchema.safeParse({ phone: '+237670000000', name: 'Ada', role: 'customer' }).success);
+  assert('add-role: vendor without terms_accepted is refused on that field', () =>
+    termsIssue(AddRoleSchema.safeParse({ role: 'vendor' })));
+  assert('add-role: agency with terms_accepted: true is accepted', () =>
+    AddRoleSchema.safeParse({ role: 'agency', terms_accepted: true }).success);
+  assert('add-role: agent without terms_accepted is refused on that field', () =>
+    termsIssue(AddRoleSchema.safeParse({ role: 'agent' })));
+  assert('add-role: customer is not refused', () =>
+    AddRoleSchema.safeParse({ role: 'customer' }).success);
 
   assert('login: an email identifier is lowercased to match the stored row', () =>
     LoginSchema.parse({ identifier: 'Ada@Example.COM', password: 'x' }).identifier ===

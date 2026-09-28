@@ -94,6 +94,46 @@ const LoginIdentifierSchema = z
  * `POST /auth/login` will not accept it. That is the intended behaviour change,
  * and it is why the storefront must route customers to the messaging flow.
  */
+/**
+ * Consent to the Terms of Service and Privacy Policy (hosted on the CDN).
+ *
+ * REQUIRED for vendor, agency and agent accounts, on register AND add-role — the
+ * owner's decision of 2026-09-28. Every Wi-Mall frontend that creates one ships the
+ * checkbox (landing /register + /add-role, the vendor and agency dashboards, the
+ * agent app from 0.1.3).
+ *
+ * ⚠ The agent app drew its checkbox a build BEFORE it sent the field: 0.1.2 showed
+ * the box and posted nothing, so no agent acceptance was ever recorded. That is
+ * why 'agent' joined this list in the same change that made the app send it.
+ *
+ * Not required for customers — they register through the bot, whose last
+ * onboarding step (`terms`, `bot-surface/domain/bot-onboarding.ts`) records the
+ * same `{ role: 'customer' }` entry. The field is accepted and recorded when sent.
+ *
+ * ⚠ Enforced immediately: an older vendor, agency or agent app build that
+ * predates the checkbox can no longer create an account. That was the decision.
+ *
+ * The acceptance is stamped on the user as `terms_acceptances[]` by AuthService.
+ */
+export const TERMS_REQUIRED_ROLES: readonly string[] = ['vendor', 'agency', 'agent'];
+
+export const TERMS_REQUIRED_MESSAGE = 'You must accept the Terms of Service and Privacy Policy';
+
+const TermsAcceptedSchema = z.boolean().optional();
+
+function requireTermsForRole(
+  value: { role: string; terms_accepted?: boolean },
+  ctx: z.RefinementCtx,
+): void {
+  if (TERMS_REQUIRED_ROLES.includes(value.role) && value.terms_accepted !== true) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['terms_accepted'],
+      message: TERMS_REQUIRED_MESSAGE,
+    });
+  }
+}
+
 export const RegisterSchema = z.object({
   // Required, and the account's unique key - so it is held to full E.164 here,
   // where the account is created, rather than being repaired later.
@@ -108,6 +148,7 @@ export const RegisterSchema = z.object({
   role: z.enum(AUTHENTICATABLE_ROLES).default('vendor'),
   business_name: z.string().optional(), // For vendors
   agency_name: z.string().optional(), // For agencies
+  terms_accepted: TermsAcceptedSchema,
 })
   .superRefine((value, ctx) => {
     if (value.role !== 'customer' && !value.password) {
@@ -117,6 +158,7 @@ export const RegisterSchema = z.object({
         message: 'Password required',
       });
     }
+    requireTermsForRole(value, ctx);
   })
   // Runs AFTER the refinement, so a customer's password is dropped rather than
   // validated-then-honoured. `AuthService.register` sees `undefined` and mints one.
@@ -184,7 +226,8 @@ export const AddRoleSchema = z.object({
   name: z.string().min(2, 'Name required').optional(),          // customer / agent
   business_name: z.string().optional(),                          // vendor
   agency_name: z.string().optional(),                            // agency
-});
+  terms_accepted: TermsAcceptedSchema,
+}).superRefine(requireTermsForRole);
 
 /**
  * `POST /auth/mobile/refresh`.

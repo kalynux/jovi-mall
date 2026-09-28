@@ -56,6 +56,15 @@ import { botChrome } from './bot-chrome-copy';
 type Copy = Record<BotCopyLanguage, string>;
 
 /**
+ * The published legal documents — stable keys on the public bucket; an update overwrites the
+ * object and the URL never changes. The `.html` is the canonical link: a chat client's
+ * in-app browser renders it, where a PDF would download.
+ */
+function legalUrl(doc: 'terms-of-service' | 'privacy-policy', lang: 'en' | 'fr'): string {
+    return `https://cdn.wi-mall.com/legal/${doc}-${lang}.html`;
+}
+
+/**
  * ⚠ **The phone prompt is CHANNEL-SPECIFIC and the WhatsApp half is nearly unreachable.**
  *
  * On WhatsApp the sender id IS the number, so the step is `provided` before anybody could be
@@ -113,12 +122,29 @@ const PROMPTS: Readonly<Record<Exclude<BotOnboardingStep, 'phone'>, Copy>> = Obj
         es: '¿Quieres añadir un correo electrónico? Envíalo aquí.',
         ar: 'هل تودّ إضافة بريد إلكتروني؟ أرسله هنا.',
     },
+    /**
+     * ⚠ Not "last one" any more — `terms` follows it for every new account. An account whose
+     * checklist predates `terms` also reads this, so the wording is true for both.
+     */
     address: {
-        en: 'Last one: where should I deliver to? Tap the button to send your location, or type a street and city.',
-        fr: "Dernière question : où dois-je livrer ? Appuyez sur le bouton pour envoyer votre position, ou tapez une rue et une ville.",
-        pt: 'Última pergunta: onde devo entregar? Toque no botão para enviar a sua localização, ou escreva uma rua e cidade.',
-        es: 'Última pregunta: ¿dónde te entrego? Toca el botón para enviar tu ubicación, o escribe una calle y ciudad.',
-        ar: 'السؤال الأخير: إلى أين أوصل طلبك؟ اضغط على الزر لإرسال موقعك، أو اكتب اسم شارع ومدينة.',
+        en: 'Almost done: where should I deliver to? Tap the button to send your location, or type a street and city.',
+        fr: "Presque fini : où dois-je livrer ? Appuyez sur le bouton pour envoyer votre position, ou tapez une rue et une ville.",
+        pt: 'Quase a terminar: onde devo entregar? Toque no botão para enviar a sua localização, ou escreva uma rua e cidade.',
+        es: 'Ya casi terminamos: ¿dónde te entrego? Toca el botón para enviar tu ubicación, o escribe una calle y ciudad.',
+        ar: 'اقتربنا من الانتهاء: إلى أين أوصل طلبك؟ اضغط على الزر لإرسال موقعك، أو اكتب اسم شارع ومدينة.',
+    },
+    /**
+     * The consent step. A QUESTION, like every prompt here, answered by the one Accept button
+     * `onboardingReplyIntent` draws (`yes:tos`). The links are the published documents
+     * (`legal/` on the public bucket). They exist in English and French only, so pt/es/ar link
+     * the English pair — see `legalUrl`.
+     */
+    terms: {
+        en: `Last step: do you agree to our Terms of Service and Privacy Policy?\n\nTerms: ${legalUrl('terms-of-service', 'en')}\nPrivacy: ${legalUrl('privacy-policy', 'en')}`,
+        fr: `Dernière étape : acceptez-vous nos Conditions d'utilisation et notre Politique de confidentialité ?\n\nConditions : ${legalUrl('terms-of-service', 'fr')}\nConfidentialité : ${legalUrl('privacy-policy', 'fr')}`,
+        pt: `Último passo: aceita os nossos Termos de Serviço e a nossa Política de Privacidade?\n\nTermos: ${legalUrl('terms-of-service', 'en')}\nPrivacidade: ${legalUrl('privacy-policy', 'en')}`,
+        es: `Último paso: ¿aceptas nuestros Términos de Servicio y nuestra Política de Privacidad?\n\nTérminos: ${legalUrl('terms-of-service', 'en')}\nPrivacidad: ${legalUrl('privacy-policy', 'en')}`,
+        ar: `الخطوة الأخيرة: هل توافق على شروط الخدمة وسياسة الخصوصية؟\n\nالشروط: ${legalUrl('terms-of-service', 'en')}\nالخصوصية: ${legalUrl('privacy-policy', 'en')}`,
     },
 });
 

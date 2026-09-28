@@ -418,7 +418,8 @@ export class BotRegistrationService {
      */
     private async backfillOnboarding(customer: ICustomer, envelope: BotIdentityEnvelope): Promise<void> {
         const now = new Date();
-        let records = seedOnboarding([], now);
+        // An existing account: the `terms` step is for customers created from 2026-09-28 on.
+        let records = seedOnboarding([], now, { existingAccount: true });
 
         const satisfied: BotOnboardingStep[] = [];
         if (customer.phone) satisfied.push('phone');
@@ -498,6 +499,21 @@ export class BotRegistrationService {
                  */
                 customer.email = email;
                 customer.email_verified = false;
+                break;
+            }
+            case 'terms': {
+                /**
+                 * The consent itself lives on the USER, beside every other role's
+                 * (`users.terms_acceptances[]`), so one query answers "who agreed, as what,
+                 * when" for the whole platform. Guarded on `$ne`, so a second tap — an old
+                 * button still in the chat — records nothing twice. Written before the checklist
+                 * row: a row saying `provided` with no acceptance behind it is the one outcome
+                 * that must not exist.
+                 */
+                await UserModel.updateOne(
+                    { _id: customer.user_id, 'terms_acceptances.role': { $ne: 'customer' } },
+                    { $push: { terms_acceptances: { role: 'customer', accepted_at: now } } },
+                );
                 break;
             }
             case 'phone':

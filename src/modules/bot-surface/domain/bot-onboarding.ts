@@ -49,12 +49,18 @@
  * confirmation rather than an interrogation. `email` and `address` are skippable: a person
  * who messaged a shop to ask a price is entitled to decline both, and checkout collects a
  * delivery address of its own accord when the time comes.
+ *
+ * `terms` is LAST and required: one Accept button under a message linking the Terms of
+ * Service and the Privacy Policy (owner, 2026-09-28). Accepting stamps
+ * `users.terms_acceptances[] = { role: 'customer' }` — the same record a vendor's checkbox
+ * writes. ⚠ It is `newAccountsOnly`: see `isStepInChecklist`.
  */
 export const BOT_ONBOARDING_STEPS = Object.freeze([
-    Object.freeze({ step: 'phone', required: true }),
-    Object.freeze({ step: 'name', required: true }),
-    Object.freeze({ step: 'email', required: false }),
-    Object.freeze({ step: 'address', required: false }),
+    Object.freeze({ step: 'phone', required: true, newAccountsOnly: false }),
+    Object.freeze({ step: 'name', required: true, newAccountsOnly: false }),
+    Object.freeze({ step: 'email', required: false, newAccountsOnly: false }),
+    Object.freeze({ step: 'address', required: false, newAccountsOnly: false }),
+    Object.freeze({ step: 'terms', required: true, newAccountsOnly: true }),
 ] as const);
 
 export type BotOnboardingStep = (typeof BOT_ONBOARDING_STEPS)[number]['step'];
@@ -90,7 +96,9 @@ export type BotOnboardingInputKind =
     | 'text'
     | 'email'
     /** A `candidateRef` from `/geo/search` or `/geo/reverse` — never coordinates (GAP-005). */
-    | 'geo_candidate';
+    | 'geo_candidate'
+    /** A single Accept button (`yes:tos`). Nothing is typed. */
+    | 'consent';
 
 export interface BotOnboardingNext {
     step: BotOnboardingStep;
@@ -115,6 +123,7 @@ const INPUT: Readonly<Record<BotOnboardingStep, { field: string; kind: BotOnboar
         name: { field: 'name', kind: 'text' },
         email: { field: 'email', kind: 'email' },
         address: { field: 'address', kind: 'geo_candidate' },
+        terms: { field: 'accept', kind: 'consent' },
     });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -131,13 +140,31 @@ export function isRequiredStep(step: BotOnboardingStep): boolean {
 }
 
 /**
+ * Whether a step belongs to THIS account's checklist.
+ *
+ * ⚠ **A `newAccountsOnly` step is in the checklist iff a row for it was stored**, and only
+ * `seedOnboarding` for a NEW account writes that row. The owner decided (2026-09-28) that the
+ * `terms` step asks customers created from then on, and not the ones already chatting — so for
+ * an account whose stored checklist predates the step, the step does not exist, rather than
+ * reading `pending` the way the paragraph below describes for every other step. Reading it as
+ * `provided` instead would have written a consent nobody gave.
+ */
+function isStepInChecklist(
+    step: (typeof BOT_ONBOARDING_STEPS)[number],
+    byStep: ReadonlyMap<BotOnboardingStep, BotOnboardingRecord>,
+): boolean {
+    return !step.newAccountsOnly || byStep.has(step.step);
+}
+
+/**
  * The stored answers, completed into the full ordered checklist.
  *
  * A step with no row reads `pending`, which is what makes ADDING a step to the list above a
  * one-line change rather than a migration: every existing customer reads as not-yet-asked
- * for it, which is exactly true. An unrecognised stored step — one REMOVED from the list
- * later — is dropped rather than surfaced, so retiring a step cannot strand a customer on a
- * question nobody can answer any more.
+ * for it, which is exactly true. The exception is a `newAccountsOnly` step, which an existing
+ * account never has (`isStepInChecklist`). An unrecognised stored step — one REMOVED from the
+ * list later — is dropped rather than surfaced, so retiring a step cannot strand a customer on
+ * a question nobody can answer any more.
  */
 export function normalizeOnboarding(
     stored: readonly BotOnboardingRecord[] | null | undefined,
@@ -147,7 +174,7 @@ export function normalizeOnboarding(
         if (row && isOnboardingStep(row.step)) byStep.set(row.step, row);
     }
 
-    return BOT_ONBOARDING_STEPS.map(({ step }) => {
+    return BOT_ONBOARDING_STEPS.filter((s) => isStepInChecklist(s, byStep)).map(({ step }) => {
         const row = byStep.get(step);
         const state = row && BOT_ONBOARDING_STATES.includes(row.state) ? row.state : 'pending';
         return { step, state, at: row?.at ?? null };
@@ -252,6 +279,7 @@ export function onboardingChanged(
     const a = normalizeOnboarding(before);
     const b = normalizeOnboarding(after);
 
+    if (a.length !== b.length) return true;
     return a.some((row, i) =>
         row.step !== b[i].step
         || row.state !== b[i].state
@@ -266,12 +294,16 @@ export function onboardingChanged(
  * because the sender id IS the number and the inbound message is the proof. Passing it here
  * rather than patching afterwards means a freshly created account is never briefly
  * described as needing something it does not.
+ *
+ * `existingAccount: true` leaves out the `newAccountsOnly` steps — the backfill of a customer
+ * who existed before the chat checklist did, and who is therefore not a new account.
  */
 export function seedOnboarding(
     satisfied: readonly BotOnboardingStep[],
     now: Date,
+    options: { existingAccount?: boolean } = {},
 ): BotOnboardingRecord[] {
-    return BOT_ONBOARDING_STEPS.map(({ step }) =>
+    return BOT_ONBOARDING_STEPS.filter((s) => !(options.existingAccount && s.newAccountsOnly)).map(({ step }) =>
         satisfied.includes(step)
             ? { step, state: 'provided' as const, at: now }
             : { step, state: 'pending' as const, at: null },

@@ -358,7 +358,8 @@ Creates a new user and a role profile in one step. Sets both auth cookies on suc
   "role": "vendor",
   "email": "john@example.com",
   "business_name": "John's Shop",
-  "agency_name": "Fast Riders"
+  "agency_name": "Fast Riders",
+  "terms_accepted": true
 }
 ```
 
@@ -371,6 +372,7 @@ Creates a new user and a role profile in one step. Sets both auth cookies on suc
 | `email` | string | ❌ | Optional for **every** role, including vendor. Must be unique. Validated and **lowercased** — see [Contact formats](../README.md#contact-formats-phone--email). |
 | `business_name` | string | ❌ | For `vendor`. Falls back to `name`. Stored on the vendor's **Store**, not on the vendor profile — see [`role_entity` Shapes](#role_entity-shapes). |
 | `agency_name` | string | ❌ | For `agency`. Falls back to `name`. Stored on the agency's **Magazin**, not on the agency profile. |
+| `terms_accepted` | boolean | **conditionally** | **Must be `true` for `vendor`, `agency` and `agent`** (vendor/agency since 2026-09-28, agent from agent app 0.1.3 the same day): the person ticked "I agree to the Terms of Service and Privacy Policy". Missing or `false` → `400 VALIDATION_ERROR` with `details.fields[].path = "terms_accepted"`. Not required for `customer` — a bot customer accepts with one button on the last onboarding step, which writes the same record (`role: "customer"`); accepted and recorded here if sent. Stored as `user.terms_acceptances[] = { role, accepted_at }`. |
 
 > **Customer registration**: only `phone`, `name`, and `role: "customer"` are needed — but a
 > storefront should not call this. Customers register in the bot; see
@@ -441,7 +443,7 @@ Sets cookies `access_token` and `refresh_token`.
 | `AUTH_PHONE_TAKEN` | `409` | `phone` already registered |
 | `AUTH_EMAIL_TAKEN` | `409` | `email` already registered |
 | `AUTH_UNSUPPORTED_ROLE` | `400` | A role the service cannot provision |
-| `VALIDATION_ERROR` | `400` | Missing/invalid fields, including a missing `password` on a non-customer role. `details.fields[]` names them |
+| `VALIDATION_ERROR` | `400` | Missing/invalid fields, including a missing `password` on a non-customer role, or `terms_accepted` not `true` for a vendor, agency or agent. `details.fields[]` names them |
 
 ---
 
@@ -870,6 +872,7 @@ Adds a second role to an **already authenticated** user. Sets cookies scoped to 
 | `name` | string | ❌ | For `customer` and `agent` |
 | `business_name` | string | ❌ | For `vendor`. Provisions the Store |
 | `agency_name` | string | ❌ | For `agency`. Provisions the Magazin |
+| `terms_accepted` | boolean | **conditionally** | **Must be `true` when adding `vendor`, `agency` or `agent`**, same rule and same `VALIDATION_ERROR` as [register](#post-authregister). Appends `{ role, accepted_at }` to `user.terms_acceptances` in the same update that adds the role |
 
 > **The new pair does not restart the 90-day clock.** This route sits behind `requireAuth`, so
 > the caller presented a token rather than a credential; `auth_time` is copied from the token

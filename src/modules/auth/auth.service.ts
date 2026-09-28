@@ -245,7 +245,9 @@ export class AuthService {
       login_email: input.email,
       password_hash: passwordHash,
       roles: [role],
-      status: 'active'
+      status: 'active',
+      // Required for vendor/agency by RegisterSchema; recorded for any role that sends it.
+      terms_acceptances: input.terms_accepted ? [{ role, accepted_at: new Date() }] : [],
     });
 
     let roleEntity;
@@ -504,7 +506,7 @@ export class AuthService {
         throw createAppError(ERROR_CODES.AUTH_UNSUPPORTED_ROLE, 400, undefined, { role });
     }
 
-    await this.userRepo.addRoleToUser(userId, role);
+    await this.userRepo.addRoleToUser(userId, role, input.terms_accepted ? new Date() : undefined);
 
     // COPIED — see the note on this method.
     const tokens = this.issueTokenPair(user, role, authTime);

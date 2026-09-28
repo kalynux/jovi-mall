@@ -1,5 +1,5 @@
 import type { BotSyncDto } from '../dto/bot-projections';
-import { skipActionId } from './bot-action-id';
+import { acceptTermsActionId, skipActionId } from './bot-action-id';
 import { botChrome } from './bot-chrome-copy';
 import type { BotReplyIntent } from './channel-reply';
 
@@ -46,6 +46,16 @@ export function onboardingReplyIntent(next: BotOnboardingNextDto, language: stri
             text: next.prompt,
             buttonLabel: botChrome('locationButton', language),
             ...(next.skipLabel ? { skipLabel: next.skipLabel } : {}),
+        };
+    }
+
+    if (next.step === 'terms') {
+        // The consent step: the links are in the prompt, and agreeing is one tap. Required, so
+        // there is no Skip — a customer who does not agree simply does not press it.
+        return {
+            kind: 'text',
+            text: next.prompt,
+            actions: [{ id: acceptTermsActionId(), label: botChrome('acceptTermsButton', language) }],
         };
     }
 

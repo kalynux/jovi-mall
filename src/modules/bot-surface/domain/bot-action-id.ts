@@ -207,6 +207,20 @@ export function skipActionId(step: BotOnboardingStep): string {
 }
 
 /**
+ * `yes:tos` — accept the Terms of Service and Privacy Policy, the last onboarding step.
+ *
+ * Goes through `POST /catalog/action` like every other tap and is handled by
+ * `bot-identity.controller.ts`. ⚠ **It needs ONE n8n condition to get there** (owner's choice,
+ * 2026-09-28, over dressing it as a `skip:`): `wi-mall-core` → `route turn` sends every turn to
+ * the onboarding router while `onboarding.next` is set, and that router knows only `skip:` and
+ * `gc_` taps — anything else re-sends the question. The `onboarding` rule must exclude
+ * `yes:tos` so it falls to the `tap` rule. Exact edit: `api-doc/n8n/bot-surface.md` § 11.5.
+ */
+export function acceptTermsActionId(): string {
+    return confirmActionId('tos');
+}
+
+/**
  * `add:<productId>:<variantId>` and `buy:<productId>:<variantId>` — the two buy buttons on a
  * product card.
  *

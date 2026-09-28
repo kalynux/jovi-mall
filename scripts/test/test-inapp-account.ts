@@ -35,10 +35,13 @@ import {
     BOT_ONBOARDING_STEP_VALUES,
     isOnboardingComplete,
     nextOnboardingStep,
+    normalizeOnboarding,
     onboardingChanged,
     seedOnboarding,
     type BotOnboardingRecord,
 } from '../../src/modules/bot-surface/domain/bot-onboarding';
+import { onboardingReplyIntent } from '../../src/modules/bot-surface/domain/onboarding-reply';
+import { onboardingPromptFor } from '../../src/modules/bot-surface/domain/bot-onboarding-copy';
 import {
     CONTACT_RESEND_COOLDOWN_SECONDS,
     resendWaitSeconds,
@@ -362,7 +365,7 @@ function main(): void {
         && stateOf(staleSkip, 'email').at!.getTime() === MAR.getTime());
 
     assert('⛔ a stale Skip cannot un-complete a finished account (the REQUIRED-step case)', () => {
-        const done = ['name', 'email', 'address'].reduce(
+        const done = ['name', 'email', 'address', 'terms'].reduce(
             (rows, step) => applyOnboardingStep(rows, step as typeof BOT_ONBOARDING_STEP_VALUES[number], 'provided', JAN),
             seeded,
         );
@@ -385,6 +388,46 @@ function main(): void {
         return stateOf(skipped, 'email').state === 'skipped'
             && stateOf(skipped, 'email').at!.getTime() === MAR.getTime()
             && nextOnboardingStep(skipped)?.step === 'address';
+    });
+
+    // ── The `terms` step (2026-09-28): last, required, and for NEW accounts only ──────────
+    const answeredAllButTerms = ['name', 'email', 'address'].reduce(
+        (rows, step) => applyOnboardingStep(rows, step as typeof BOT_ONBOARDING_STEP_VALUES[number], 'provided', JAN),
+        seeded,
+    );
+
+    assert('a new account asks terms LAST, and is not complete until it is accepted', () =>
+        seeded[seeded.length - 1].step === 'terms'
+        && nextOnboardingStep(answeredAllButTerms)?.step === 'terms'
+        && nextOnboardingStep(answeredAllButTerms)?.skippable === false
+        && !isOnboardingComplete(answeredAllButTerms)
+        && isOnboardingComplete(applyOnboardingStep(answeredAllButTerms, 'terms', 'provided', MAR)));
+
+    assert('terms cannot be skipped away — a required step stays pending on a Skip', () =>
+        !isOnboardingComplete(applyOnboardingStep(answeredAllButTerms, 'terms', 'skipped', MAR)));
+
+    assert('⛔ an EXISTING account is never asked: backfill seeds no terms row', () =>
+        !seedOnboarding([], JAN, { existingAccount: true }).some((r) => r.step === 'terms'));
+
+    assert('⛔ a checklist stored BEFORE the step existed stays complete (not asked, not faked)', () => {
+        const legacy = answeredAllButTerms.filter((r) => r.step !== 'terms');
+        const read = normalizeOnboarding(legacy);
+        return !read.some((r) => r.step === 'terms')
+            && isOnboardingComplete(read)
+            && nextOnboardingStep(read) === null;
+    });
+
+    assert('the terms question draws exactly ONE button, yes:tos, and links both documents', () => {
+        const next = nextOnboardingStep(answeredAllButTerms)!;
+        const intent = onboardingReplyIntent(
+            { ...next, ...onboardingPromptFor('terms', 'whatsapp', 'fr') } as never,
+            'fr',
+        );
+        return intent?.kind === 'text'
+            && intent.actions?.length === 1
+            && intent.actions[0].id === 'yes:tos'
+            && intent.text.includes('https://cdn.wi-mall.com/legal/terms-of-service-fr.html')
+            && intent.text.includes('https://cdn.wi-mall.com/legal/privacy-policy-fr.html');
     });
 
     /**
@@ -807,10 +850,11 @@ function main(): void {
     const completion = completionFrom >= 0 ? stripComments(identity.slice(completionFrom)) : '';
     const completionCallSites = completionFrom >= 0 ? identity.slice(0, completionFrom) : '';
 
-    assert('the scan found setWelcomeReply, and the file still has both call sites', () =>
+    // Three: the onboarding route, the contact share, and the `yes:tos` Accept tap.
+    assert('the scan found setWelcomeReply, and the file still has all three call sites', () =>
         welcome.length > 0
         && completion.length > 0
-        && (completionCallSites.match(/setCompletionReply\(\s*req/g) ?? []).length === 2
+        && (completionCallSites.match(/setCompletionReply\(\s*req/g) ?? []).length === 3
         && (callSites.match(/setWelcomeReply\(req/g) ?? []).length === 1
         && /return;\s*\}\s*setWelcomeReply\(req/.test(completion));
 
@@ -829,8 +873,8 @@ function main(): void {
      * sites must test it, including the rare one where sharing a contact completes a
      * backfilled account.
      */
-    assert('⛔ both call sites fire on the TRANSITION (!wasComplete && …), never on the state', () =>
-        (identity.match(/if\s*\(!wasComplete\s*&&\s*isOnboardingComplete\([\s\S]{0,80}?setCompletionReply\(\s*req/g) ?? []).length === 2);
+    assert('⛔ every call site fires on the TRANSITION (!wasComplete && …), never on the state', () =>
+        (identity.match(/if\s*\(!wasComplete\s*&&\s*isOnboardingComplete\([\s\S]{0,80}?setCompletionReply\(\s*req/g) ?? []).length === 3);
 
     assert('⛔ each `wasComplete` is read BEFORE its write, not after', () => {
         const stripped = stripComments(identity);

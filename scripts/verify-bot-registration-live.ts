@@ -420,12 +420,32 @@ async function main(): Promise<void> {
         return steps.find((s) => s.step === 'email')?.state === 'skipped';
     });
 
-    const done = await onboard(wa(NEW_WA_PHONE_ID), { step: 'address', action: 'skip' });
+    const skippedAddress = await onboard(wa(NEW_WA_PHONE_ID), { step: 'address', action: 'skip' });
 
-    await check('skipping the last step COMPLETES onboarding', () =>
+    await check('after the address, a NEW account is asked to accept the terms — and is not complete', () =>
+        skippedAddress.status === 200
+        && onboarding(skippedAddress).complete === false
+        && next(skippedAddress).step === 'terms'
+        && next(skippedAddress).skippable === false);
+
+    await check('the terms step cannot be skipped', async () => {
+        const refused = await onboard(wa(NEW_WA_PHONE_ID), { step: 'terms', action: 'skip' });
+        return refused.status === 422 && err(refused).code === 'BOT_ONBOARDING_STEP_NOT_SKIPPABLE';
+    });
+
+    const done = await onboard(wa(NEW_WA_PHONE_ID), { step: 'terms' });
+
+    await check('accepting the terms COMPLETES onboarding', () =>
         done.status === 200
         && onboarding(done).complete === true
         && onboarding(done).next === null);
+
+    await check('⛔ the acceptance is recorded on the USER, once, as role customer', async () => {
+        const user = await UserModel.findOne({ login_phone: NEW_PHONE_E164 }).lean();
+        const rows = ((user as { terms_acceptances?: Array<{ role: string; accepted_at: Date }> } | null)
+            ?.terms_acceptances ?? []).filter((r) => r.role === 'customer');
+        return rows.length === 1 && rows[0].accepted_at instanceof Date;
+    });
 
     await check('completion is persisted, not just reported', async () => {
         const customer = await CustomerModel.findOne({ phone: NEW_PHONE_E164 });

@@ -34,6 +34,7 @@ import { openSurfaceActionId, orderActionId } from '../domain/bot-action-id';
 import { onboardingReplyIntent } from '../domain/onboarding-reply';
 import { replyForHeldBargain } from '../services/bargain-entry.service';
 import { supportFormActionId } from '../domain/bot-ticket-actions';
+import { BotActionHandlers, ParsedBotAction, unknownBotAction } from '../domain/bot-action-dispatch';
 import { BotIdentitySyncSchema, BotOnboardingSubmitSchema } from '../validators/bot.validators';
 import { __toSavedAddressInput as toSavedAddressInput } from './bot-profile.controller';
 
@@ -365,6 +366,63 @@ export class BotIdentityController {
         sendSuccess(res, dto);
     });
 }
+
+/**
+ * `yes:tos` — the Accept button under the onboarding `terms` question.
+ *
+ * Exactly what `POST /identity/onboarding` with `{ step: 'terms' }` does, reached by a tap: the
+ * dispatcher is the door every button already uses, so the button needs no workflow change.
+ * Same answer shape too — the sync DTO, with the welcome on the completing turn.
+ *
+ * ⚠ **A second tap on an old button answers, and writes nothing.** Consent is already on the
+ * user; re-running the step would re-stamp the checklist row's date and re-send the welcome.
+ */
+async function acceptTermsTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    const caller = botCallerOf(req);
+    if (action.argument !== '') throw unknownBotAction();
+    const envelope = botEnvelopeOf(req);
+
+    const customer = await customerRepository.findById(caller.customerId);
+    if (!customer) {
+        throw createAppError(ERROR_CODES.AUTH_PROFILE_NOT_FOUND, 404, undefined, { role: 'customer' });
+    }
+
+    const before = currentRecords(customer);
+    if (before.find((row) => row.step === 'terms')?.state === 'provided') {
+        setBotReply(req, {
+            kind: 'text',
+            text: botChrome('termsAlreadyAccepted', customer.preferences?.language ?? null),
+        });
+        sendSuccess(res, { accepted: true, alreadyAccepted: true });
+        return;
+    }
+
+    const wasComplete = isOnboardingComplete(before);
+    const updated = await botRegistrationService.applyStep(customer, 'terms', 'provide', {}, envelope.channel);
+
+    const dto = await describe(req, {
+        account: { ...caller, customerId: caller.customerId, roles: [] },
+        createdAccount: false,
+        createdCustomerProfile: false,
+        customer: updated,
+    });
+
+    // After `describe`, for the reason given in `onboarding` above.
+    if (!wasComplete && isOnboardingComplete(currentRecords(updated))) {
+        await setCompletionReply(
+            req,
+            { owner: caller.userId, channel: envelope.channel, externalId: envelope.externalId },
+            updated.preferences?.language ?? null,
+        );
+    }
+
+    sendSuccess(res, dto);
+}
+
+/** The identity stream's taps. Registered in `bot-action.controller.ts`. */
+export const IDENTITY_ACTION_HANDLERS: BotActionHandlers = Object.freeze({
+    'yes:tos': acceptTermsTap,
+});
 
 /**
  * The shared response body for every registration and onboarding turn.

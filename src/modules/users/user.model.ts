@@ -35,6 +35,11 @@ export interface IPendingPhoneChange {
   expires_at: Date;
 }
 
+export interface ITermsAcceptance {
+  role: UserRole;
+  accepted_at: Date;
+}
+
 export interface IUser extends Document {
   login_email?: string;
   login_phone?: string;
@@ -76,6 +81,16 @@ export interface IUser extends Document {
    * `core/auth/password-epoch.ts`.
    */
   password_changed_at: Date | null;
+
+  /**
+   * Proof of consent to the Terms of Service and Privacy Policy — one entry per
+   * business role, appended when that role's account is created with
+   * `terms_accepted: true` (register or add-role). See `RegisterSchema`.
+   * A customer created by the bot gets `{ role: 'customer' }` from the Accept button on
+   * the last onboarding step (`bot-surface/domain/bot-onboarding.ts`); bot customers
+   * created before 2026-09-28 have none.
+   */
+  terms_acceptances: ITermsAcceptance[];
 
   /**
    * When the account owner closed this account — the only durable record here that they did
@@ -155,6 +170,19 @@ const UserSchema = new Schema<IUser>(
     // A hash that lands without its stamp is the whole defect: the new password is live and
     // every token issued under the old one still works.
     password_changed_at: { type: Date, default: null },
+
+    terms_acceptances: {
+      type: [
+        new Schema(
+          {
+            role: { type: String, required: true },
+            accepted_at: { type: Date, required: true },
+          },
+          { _id: false },
+        ),
+      ],
+      default: [],
+    },
 
     // Account closure. Written with `status: 'closed'` in ONE $set, for the same reason the
     // suspension stamp above is written whole: a date that outlives its status describes a

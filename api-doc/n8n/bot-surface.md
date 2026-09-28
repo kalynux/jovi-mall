@@ -981,15 +981,16 @@ Takes **no arguments** — the identity envelope is the whole input.
         { "step": "phone",   "required": true,  "state": "provided", "at": "2026-08-26T…" },
         { "step": "name",    "required": true,  "state": "pending",  "at": null },
         { "step": "email",   "required": false, "state": "pending",  "at": null },
-        { "step": "address", "required": false, "state": "pending",  "at": null }
+        { "step": "address", "required": false, "state": "pending",  "at": null },
+        { "step": "terms",   "required": true,  "state": "pending",  "at": null }   // new accounts only
       ],
       "next": {
         "step": "name", "required": true, "skippable": false,
         "field": "name", "kind": "text",
         "prompt": "Quel nom dois-je utiliser pour vous ?…"   // ⭐ RELAY THIS VERBATIM
       },
-      "outstandingRequired": ["name"],
-      "remaining": 3
+      "outstandingRequired": ["name", "terms"],
+      "remaining": 4
     },
     "fallback": {
       "assistantUnavailable": "Désolé, je n'ai pas pu répondre à l'instant. Veuillez réessayer dans un moment."
@@ -1199,6 +1200,41 @@ correct — no account can be created while the platform is read-only. Fall back
 
 `action` defaults to `"provide"`. The response is **the same body `/identity/sync` returns**,
 so a caller parses one shape throughout.
+
+**`terms` — the last step, required, NEW accounts only (2026-09-28).** `next.kind` is
+`"consent"`; the prompt links the Terms of Service and the Privacy Policy
+(`https://cdn.wi-mall.com/legal/…`, French for `fr`, English otherwise) and the reply carries
+**one button, `yes:tos`**, which goes through `POST /catalog/action` like every other tap
+(§ 14.9, Account). `{ "identity": {…}, "step": "terms" }` here does the same thing. Either
+records `users.terms_acceptances[] = { role: "customer", accepted_at }` and completes setup. It
+cannot be skipped (`422 BOT_ONBOARDING_STEP_NOT_SKIPPABLE`). A customer whose checklist was
+created before 2026-09-28 has no `terms` row and is never asked. Typed text on this step is not
+an answer: `kind: "consent"` matches no `route onboarding` rule, so it falls to `relay prompt`
+and the question is asked again — nobody can accept by typing.
+
+⛔ **`wi-mall-core` needed ONE condition changed, landed BEFORE the backend deploys.**
+While `onboarding.next` is set, `route turn` sends every turn to `route onboarding`, which
+recognises only `skip:` and `gc_` taps; `yes:tos` would fall to `relay prompt` and the
+customer would be asked again forever. In `route turn`, rule **`onboarding`**, replace the left
+value
+
+```
+{{ $json.data?.onboarding?.next != null }}
+```
+
+with
+
+```
+{{ $json.data?.onboarding?.next != null && !($('Inbound').item.json.kind === 'token' && $('Inbound').item.json.token === 'yes:tos') }}
+```
+
+The tap then matches the next rule, `tap`, and goes `product action` → `has reply?` → send,
+exactly like any other button. Nothing else changes, and the edit is inert until the backend
+draws the button, so doing it first is safe.
+
+✅ **Applied and published 2026-09-28** — `UP-wi-mall-core` version `fc55c23e`. Verified by
+re-fetch: one node (`route turn`) and one value changed, connections identical. Rollback:
+publish `b962350d`.
 
 ⚠ **THE GUARD THE TELEGRAM FLOW RESTS ON: `contact.userId` must be the sender's own.** A
 Telegram user can share somebody else's contact card and it arrives in exactly this shape.
@@ -2118,6 +2154,7 @@ the model is at the end of this section.
 |---|---|---|---|---|
 | `yes:close:<ref>` | **Confirm**, under the close-account question (`account_close_preview`) | **Closes the account. It cannot be undone.** `<ref>` is a signed reference bound to this account and this channel for ten minutes. A stale or foreign one closes nothing: it asks the question again with fresh buttons | the account-closed sentence, which is the last thing the platform says to this customer as themselves | `{ closed: true, closedAt }`. On a stale ref: `{ closed: false, confirmation, …preview }` and the question again |
 | `no:close` | **Keep my account**, beside it | changes nothing, however old the button | **none** | `{ closed: false, kept: true }` |
+| `yes:tos` | **I accept**, under the last setup question (`onboarding.next.step: "terms"`, new accounts from 2026-09-28) | records the customer's acceptance of the Terms of Service and Privacy Policy (`users.terms_acceptances[]`, `role: "customer"`) and finishes setup. Same effect as `POST /identity/onboarding` `{ "step": "terms" }` | the welcome (or the held Bargain question), as on any completing step. A second tap on an old button: one "already accepted" sentence | the `/identity/sync` body. Second tap: `{ accepted: true, alreadyAccepted: true }` |
 
 ⚠ **The question draws no buttons at all when the account cannot be closed** (another role on
 the account, or orders still moving). The sentence says why, in the same words the close

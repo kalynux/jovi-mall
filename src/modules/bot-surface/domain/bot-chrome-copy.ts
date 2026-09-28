@@ -100,6 +100,30 @@ const SKIP_BUTTON: Copy = {
     ar: 'تخطٍّ',
 };
 
+/**
+ * The one button under the onboarding `terms` question (`yes:tos`). Agreeing is the only
+ * answer on offer: a customer who does not agree simply does not tap.
+ */
+const ACCEPT_TERMS_BUTTON: Copy = {
+    en: '✅ I accept',
+    fr: "✅ J'accepte",
+    pt: '✅ Aceito',
+    es: '✅ Acepto',
+    ar: '✅ أوافق',
+};
+
+/**
+ * The answer to an Accept tapped a second time — an old button still in the chat history.
+ * The consent is already on record, so this only says so.
+ */
+const TERMS_ALREADY_ACCEPTED: Copy = {
+    en: 'You have already accepted the Terms of Service and Privacy Policy. Thank you!',
+    fr: "Vous avez déjà accepté les Conditions d'utilisation et la Politique de confidentialité. Merci !",
+    pt: 'Já aceitou os Termos de Serviço e a Política de Privacidade. Obrigado!',
+    es: 'Ya aceptaste los Términos de Servicio y la Política de Privacidad. ¡Gracias!',
+    ar: 'لقد وافقت بالفعل على شروط الخدمة وسياسة الخصوصية. شكرًا لك!',
+};
+
 /** The body above a payment link. */
 const PAY_PROMPT: Copy = {
     en: 'Tap below to pay securely.',
@@ -1904,6 +1928,8 @@ const CHROME = Object.freeze({
     chooseListButton: { copy: CHOOSE_LIST_BUTTON, cap: 20 },
     chooseSectionTitle: { copy: CHOOSE_SECTION_TITLE, cap: 24 },
     skipButton: { copy: SKIP_BUTTON, cap: 20 },
+    acceptTermsButton: { copy: ACCEPT_TERMS_BUTTON, cap: 20 },
+    termsAlreadyAccepted: { copy: TERMS_ALREADY_ACCEPTED, cap: null },
     payPrompt: { copy: PAY_PROMPT, cap: null },
     payButton: { copy: PAY_BUTTON, cap: 20 },
     assistantUnavailable: { copy: ASSISTANT_UNAVAILABLE, cap: null },
