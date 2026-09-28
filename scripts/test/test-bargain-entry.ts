@@ -321,8 +321,9 @@ async function main(): Promise<void> {
     );
 
     await guardBites(
-        'BOTH setup-completing turns go through setCompletionReply — never the bare welcome',
-        (src) => (src.match(/await setCompletionReply\(/g) ?? []).length === 2
+        // Three since 2026-09-28: onboarding, the contact share, and the `yes:tos` Accept tap.
+        'ALL THREE setup-completing turns go through setCompletionReply — never the bare welcome',
+        (src) => (src.match(/await setCompletionReply\(/g) ?? []).length === 3
             // CALLS only (`req,`) — the definition reads `setWelcomeReply(req: Request`.
             && (src.match(/setWelcomeReply\(req,/g) ?? []).length === 1,
         IDENTITY,

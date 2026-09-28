@@ -1476,6 +1476,9 @@ function tokenContainmentSection(): void {
             // `domain/bot-checkout-actions.ts` by builders, and parse-tested in test:inapp-checkout § 13.
             'modules/bot-surface/controllers/bot-checkout.controller.ts': { shape: 'keys-only', reason: 'registry keys' },
             'modules/bot-surface/controllers/bot-discovery.controller.ts': { shape: 'keys-only', reason: 'registry keys' },
+            // `'yes:tos'` (2026-09-28), the terms Accept tap. The token is built by
+            // `acceptTermsActionId()` (`confirmActionId('tos')`) and asserted in test:inapp-account.
+            'modules/bot-surface/controllers/bot-identity.controller.ts': { shape: 'keys-only', reason: 'registry keys' },
             'modules/bot-surface/controllers/bot-order.controller.ts': { shape: 'keys-only', reason: 'registry keys' },
             'modules/bot-surface/controllers/bot-purchase.controller.ts': { shape: 'keys-only', reason: 'registry keys' },
             // This stream's builders, plus the byte-budget worst-case samples that exist to be literals.
