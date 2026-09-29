@@ -138,12 +138,12 @@ export class PriceResolverService {
      * Re-read at resolve time from the same function the storefront quotes from,
      * so the two cannot drift.
      *
-     * ⚠ This makes D-5's "only on orders carrying a negotiation lock" do real
-     * work rather than describe an edge case: an un-negotiated sale of a
-     * bargainable variant now has `P === ask` and therefore a non-zero uplift
-     * over the floor — and must still yield NO AI margin, because no model was
-     * involved. `EarningsSplitService` gates on the lock explicitly for that
-     * reason; see the `negotiated_unit_price != null` test at both call sites.
+     * An un-negotiated sale of a bargainable variant therefore has `P === ask`
+     * and a non-zero uplift over the floor — and since 2026-09-28 it DOES pay the
+     * bargain fee on that uplift (owner decision, reversing D-5's "only on orders
+     * carrying a negotiation lock"). Checkout snapshots the floor for such a line
+     * (`bargainFloorsForVariants`); `EarningsSplitService.bargainLineOf` has no
+     * lock gate.
      */
     const unitPrice = negotiated
       ? negotiated.unitPrice

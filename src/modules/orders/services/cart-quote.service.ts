@@ -45,9 +45,10 @@
  * — so a client can say "add 1 200 FCFA from this shop" before the pay button, not after it.
  *
  * ⚠ It depends on the payment method (COD adds the agency's handling fee and is checked per
- * shipment), so the quote takes an optional `paymentMethod`, default `online`. ⚠ It counts no
- * AI margin: a negotiated line's floor is secret and not on the cart. That only matters when
- * the vendor's net, not the delivery ratio, is what binds — checkout's verdict is exact.
+ * shipment), so the quote takes an optional `paymentMethod`, default `online`. It counts the
+ * bargain fee from the vendor's CURRENT minimum on every bargainable line (the fee is owed haggled
+ * or not, 2026-09-28); checkout uses the snapshotted floor — a negotiated line's lock verdict — so
+ * the two can differ only if the vendor moves their minimum in between. Checkout's verdict is exact.
  */
 import { Types } from 'mongoose';
 import { createAppError } from '../../../core/errors';
@@ -58,6 +59,7 @@ import { resolveEffectiveAgencyId } from '../../catalog/domain/services/effectiv
 import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.repository';
 import { VendorRepository } from '../../vendors/vendor.repository';
 import { deliveryFeeForPickupMix } from '../../earnings/services/earnings-quote.service';
+import { bargainFloorsForVariants } from '../../catalog/read-models/display-price.lookup';
 import { CustomerModel } from '../../customers/customer.model';
 import { OrderPaymentMethod } from '../order.model';
 import {
@@ -124,7 +126,7 @@ export interface CartQuote {
     perVendor: CartQuoteVendorLine[];
 }
 
-type QuotableCart = { items: Array<{ vendorId: string; productId: string; price: number; quantity: number; productType: string }> };
+type QuotableCart = { items: Array<{ vendorId: string; productId: string; variantId: string; price: number; quantity: number; productType: string }> };
 
 interface CapInput {
     vendorId: string;
@@ -311,8 +313,14 @@ export class CartQuoteService {
 
         const out: CapInput[] = [];
 
+        // The vendor's minimum per bargainable line, so the vendor-net half of the cap counts the
+        // bargain fee checkout will deduct. Server-side only — a floor never reaches the quote body.
+        const floors = await bargainFloorsForVariants(cart.items);
+        const capLineOf = (i: QuotableCart['items'][number]): DeliveryCapLine =>
+            ({ unitPrice: i.price, quantity: i.quantity, floorPrice: floors.get(i.variantId) ?? null });
+
         for (const [vendorId, items] of byVendor) {
-            const lines = items.map((i) => ({ unitPrice: i.price, quantity: i.quantity }));
+            const lines = items.map(capLineOf);
 
             if (items.every((i) => i.productType !== 'physical')) {
                 out.push({ vendorId, physical: false, lines, groups: [] });
@@ -340,7 +348,7 @@ export class CartQuoteService {
                 const source = product.delivery?.pickupLocation?.source;
                 if (source === 'vendor_address') group.mix.hasPickupBased = true;
                 if (source === 'agency_storage') group.mix.hasStorageBased = true;
-                group.lines.push({ unitPrice: item.price, quantity: item.quantity });
+                group.lines.push(capLineOf(item));
                 byAgency.set(agencyId, group);
             }
 

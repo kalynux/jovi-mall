@@ -45,29 +45,27 @@ export { resolveEarnedFee };
 export type { ShipmentDeliveryOutcome };
 
 /**
- * One order item, as the AI-margin arithmetic sees it — and the single place
- * D-5's **"only on orders carrying a negotiation lock"** is enforced.
+ * One order item, as the bargain-fee arithmetic sees it.
  *
- * ⚠ That condition does real work; it is not a description of an edge case.
- * Since D-1 flipped the storefront, a bargainable variant is sold at its ASK and
- * `variant.price` is the vendor's floor — so an ORDINARY, un-haggled sale of one
- * also has `P > floor` and therefore a non-zero uplift. Keying the margin on the
- * uplift alone would take 30% of it on a sale no model touched, which is the
- * opposite of what D-5 says and would quietly reduce every such vendor's payout.
+ * ⚠ **The fee is owed on EVERY bargainable line, haggled or not** (owner decision
+ * 2026-09-28, reversing D-5's "only on orders carrying a negotiation lock"). A
+ * bargainable variant is sold at its ask unless the customer haggles, and the
+ * platform takes 30% of whatever the line sold for above the vendor's minimum:
+ * a sale at the ask pays it on the whole window, a sale at the minimum pays
+ * nothing, and a haggled sale pays it on what the haggling left.
  *
- * The gate is `negotiated_unit_price`, which is written ONLY when
- * `PriceResolverService` honoured a lock at order creation. `floor_price_snapshot`
- * alone would be a weaker test — it is written in the same breath today, but they
- * are two columns and a future writer could set one without the other.
- *
- * Returning a `null` floor is what makes the line arithmetically ordinary: zero
- * uplift, zero margin, and the vendor keeps the whole line.
+ * So the floor is `floor_price_snapshot` as checkout wrote it — the lock
+ * verdict's floor on a negotiated line, the vendor's minimum at checkout on any
+ * other bargainable line — with no lock gate in front of it. A `null` floor
+ * means the variant was not bargainable, which makes the line arithmetically
+ * ordinary: zero uplift, zero fee, and the vendor keeps the whole line. Orders
+ * placed before that date carry no floor on un-haggled lines and so pay nothing,
+ * which is what they were quoted.
  */
-function negotiatedLineOf(item: IOrderItem): NegotiatedLineInput {
-  const locked = item.negotiated_unit_price != null;
+function bargainLineOf(item: IOrderItem): NegotiatedLineInput {
   return {
     unitPrice: item.price,
-    floorPrice: locked ? item.floor_price_snapshot : null,
+    floorPrice: item.floor_price_snapshot ?? null,
     quantity: item.quantity,
   };
 }
@@ -144,9 +142,10 @@ export class EarningsSplitService {
    *              + Σ(agency + agent + vendor-refund per shipment)
    *
    * ⚠ `aiMargin` is the newest term (BARGAINING-AGENT-PLAN D-5) and it comes off
-   * FIRST, before commission and delivery. It is the platform's 30% of the
-   * uplift the bargaining agent won on a negotiated line — zero on every
-   * ordinary order, which is why the reconciliation above still describes one.
+   * FIRST, before commission and delivery. It is the platform's 30% of what a
+   * bargainable line sold for above the vendor's minimum, haggled or not (the
+   * bargain fee — see `bargainLineOf`) — zero on every order with no
+   * bargainable line, which is why the reconciliation above still describes one.
    * Commission is then a percentage of `vendorGross` (gross minus the AI margin)
    * rather than of the gross: the platform does not take commission on money it
    * has already taken as margin.
@@ -163,11 +162,11 @@ export class EarningsSplitService {
     const gross = order.total_amount;
     const currency = order.currency;
 
-    // The platform's share of the bargaining uplift, summed over the lines that
-    // carry one. An order may mix negotiated and ordinary lines, and the total is
-    // the sum of the PER-LINE margins — never a margin on the summed uplift, which
-    // would round differently and leave the reconciliation a franc short.
-    const aiMargin = computeOrderAiMargin(order.items.map(negotiatedLineOf));
+    // The bargain fee, summed over the lines that carry one. An order may mix
+    // bargainable and ordinary lines, and the total is the sum of the PER-LINE
+    // fees — never a fee on the summed uplift, which would round differently and
+    // leave the reconciliation a franc short.
+    const aiMargin = computeOrderAiMargin(order.items.map(bargainLineOf));
     const vendorGross = gross - aiMargin;
 
     const { commissionPercent } = await this.entitlements.getEntitlements(vendorId);
@@ -507,7 +506,7 @@ export class EarningsSplitService {
    * `computeExpectedAmount`, which hard-throws. The asymmetry is deliberate:
    * there, a missing join means the platform does not know how much cash to
    * collect, and guessing is worse than failing. Here it means the platform
-   * cannot prove that line was negotiated — so it takes nothing, the vendor keeps
+   * cannot read that line's floor — so it takes nothing, the vendor keeps
    * the whole line, and the money still reconciles. Failing the split instead
    * would strand a delivered COD collection nobody is ever paid for.
    */
@@ -519,8 +518,8 @@ export class EarningsSplitService {
       shipment.items.flatMap((shipmentItem) => {
         const orderItem = orderItemsById.get(shipmentItem.order_item_id.toString());
         if (!orderItem) return [];
-        // Same lock gate as the prepaid path, with the SHIPMENT's quantity.
-        return [{ ...negotiatedLineOf(orderItem), quantity: shipmentItem.quantity }];
+        // Same floor as the prepaid path, with the SHIPMENT's quantity.
+        return [{ ...bargainLineOf(orderItem), quantity: shipmentItem.quantity }];
       })
     );
   }

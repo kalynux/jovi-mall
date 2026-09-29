@@ -40,7 +40,7 @@ import {
 } from '../../earnings/services/delivery-cost-cap';
 import { OrderPaymentMethod } from '../order.model';
 
-/** One priced line. `floorPrice` only on a negotiated line whose lock was consumed. */
+/** One priced line. `floorPrice` on every line of a bargainable variant (the bargain fee is owed haggled or not). */
 export interface DeliveryCapLine {
     unitPrice: number;
     quantity: number;

@@ -21,7 +21,7 @@ import { ProductRepositoryMongo } from '../catalog/repositories/mongo/product.re
 import { VariantRepositoryMongo } from '../catalog/repositories/mongo/variant.repository.mongo';
 import { PriceResolverService } from '../catalog/domain/services/pricing-inventory/PriceResolverService';
 import { ProductModel } from '../catalog/models/product.model';
-import { displayPricesForVariants } from '../catalog/read-models/display-price.lookup';
+import { bargainFloorsForVariants, displayPricesForVariants } from '../catalog/read-models/display-price.lookup';
 import { ProductVariantModel } from '../catalog/models/product-variant.model';
 import { VendorCustomerSyncService } from '../vendors/services/vendor-customer-sync.service';
 import { eventBus } from '../../core/events/event-bus';
@@ -881,10 +881,13 @@ export class OrderService {
 
     // Statement facts (2026-09-27): what the storefront displayed for each variant, and who the
     // customer was at checkout. Read once per vendor order; neither changes a total.
-    const [listPrices, customerSnapshot] = await Promise.all([
+    const [listPrices, bargainFloors, customerSnapshot] = await Promise.all([
       // Catalog answers "what did the shopper see" — orders must not read the bargain window
       // itself (test:bargain-price). See `display-price.lookup.ts`.
       displayPricesForVariants(items),
+      // …and "what is the vendor's minimum", for a bargainable line with no lock: the bargain
+      // fee is owed on anything above it, haggled or not (owner decision 2026-09-28).
+      bargainFloorsForVariants(items),
       CustomerModel.findById(customerId).select('name phone').lean<{ name?: string; phone?: string | null } | null>(),
     ]);
 
@@ -938,7 +941,11 @@ export class OrderService {
       price: unitPriceOf(cartItem),
       currency: cartItem.currency,
       negotiated_unit_price: negotiatedLines.get(cartItem.variantId)?.unitPrice ?? null,
-      floor_price_snapshot: negotiatedLines.get(cartItem.variantId)?.floorPrice ?? null,
+      // The floor the bargain fee is measured from. A negotiated line keeps its verdict's
+      // floor; any other line of a bargainable variant takes the vendor's minimum now. Null
+      // only on a variant that is not bargainable — the one case with no fee at all.
+      floor_price_snapshot:
+        negotiatedLines.get(cartItem.variantId)?.floorPrice ?? bargainFloors.get(cartItem.variantId) ?? null,
       list_price_snapshot: listPrices.get(cartItem.variantId) ?? null,
 
       // Delivery: added for physical orders below

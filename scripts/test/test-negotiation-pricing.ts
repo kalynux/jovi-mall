@@ -589,25 +589,28 @@ async function main(): Promise<void> {
   });
 
   // ───────────────────────────────────────────────────────────────────────────
-  originalConsole.log('\n▶ 5c. D-5\'s lock condition — an un-haggled uplift earns the platform NOTHING');
+  originalConsole.log('\n▶ 5c. The bargain fee is owed on an UN-HAGGLED sale too (owner decision 2026-09-28)');
 
   /**
-   * The consequence of 5b, and the reason D asked for the condition to be
-   * explicit. An ordinary sale of a bargainable variant now has P = ask, so
-   * `P − floor > 0`. Keying the margin on the uplift alone would take 30% of it
-   * on a sale no model touched — quietly reducing the payout of every vendor who
-   * configured a window.
+   * The consequence of 5b, and the rule D-5 used to state the other way. An
+   * ordinary sale of a bargainable variant has P = ask, so `P − floor > 0`, and
+   * the platform takes 30% of it exactly as it would of a haggled uplift. Only a
+   * variant that is not bargainable — no floor snapshotted — pays nothing.
    */
-  assert('an un-locked line with a real uplift still yields ZERO margin', () => {
-    // The split passes `floorPrice: null` for a line with no negotiated price;
-    // that is what `negotiatedLineOf` does, and it is what makes this true.
-    const unlocked = computeNegotiatedLineSplit(line(48_000, null, 2));
-    return unlocked.uplift === 0 && unlocked.aiMargin === 0 && unlocked.vendorGross === 96_000;
+  assert('an un-haggled line sold at the ask pays 30% of the WHOLE window', () => {
+    // Floor 30 001, ask 48 000, qty 2 — checkout snapshots the floor with no lock.
+    const atAsk = computeNegotiatedLineSplit(line(48_000, 30_001, 2));
+    return atAsk.uplift === 35_998 && atAsk.aiMargin === 10_799;
   });
 
-  assert('the SAME numbers with a lock DO earn the platform its share', () => {
-    const locked = computeNegotiatedLineSplit(line(48_000, 30_001, 2));
-    return locked.uplift === 35_998 && locked.aiMargin === 10_799;
+  assert('a line sold AT the minimum pays nothing', () => {
+    const atFloor = computeNegotiatedLineSplit(line(30_001, 30_001, 2));
+    return atFloor.uplift === 0 && atFloor.aiMargin === 0 && atFloor.vendorGross === 60_002;
+  });
+
+  assert('a line of a NON-bargainable variant (no floor) pays nothing', () => {
+    const ordinary = computeNegotiatedLineSplit(line(48_000, null, 2));
+    return ordinary.uplift === 0 && ordinary.aiMargin === 0 && ordinary.vendorGross === 96_000;
   });
 
   // Every refusal must survive the Phase-16 boundary filter, or the chat cannot
@@ -663,13 +666,22 @@ async function main(): Promise<void> {
       && !body.includes('vendorGross');
   });
 
-  assert('D-5\'s lock gate is EXPLICIT, in one place, and both paths go through it', () => {
+  assert('the fee has NO lock gate: one helper, both paths, the snapshotted floor', () => {
     const src = stripComments(read('modules/earnings/services/earnings-split.service.ts'));
-    // Since the storefront flip, an ordinary sale of a bargainable variant also
-    // has an uplift — so the margin must be keyed on the LOCK, not on the uplift.
-    // One helper, two call sites, and the gate is a visible condition in it.
-    return src.includes('item.negotiated_unit_price != null')
-      && (src.match(/negotiatedLineOf/g) ?? []).length === 3; // the definition + both paths
+    // Owner decision 2026-09-28: the fee is owed haggled or not, so a lock test
+    // here would silently exempt every un-haggled sale of a bargainable variant.
+    // One helper, two call sites, reading the snapshotted floor with no gate.
+    return !src.includes('negotiated_unit_price')
+      && src.includes('floorPrice: item.floor_price_snapshot ?? null')
+      && (src.match(/bargainLineOf/g) ?? []).length === 3; // the definition + both paths
+  });
+
+  assert('checkout snapshots a floor for UN-HAGGLED bargainable lines, from catalog', () => {
+    const src = stripComments(read('modules/orders/order.service.ts'));
+    // Without this the split has no floor to measure from, and the fee is zero
+    // on exactly the sales the owner decision is about.
+    return src.includes('bargainFloorsForVariants(items)')
+      && src.includes('floorPrice ?? bargainFloors.get(cartItem.variantId) ?? null');
   });
 
   assert('PriceResolverService quotes the storefront\'s own rule, not a second copy', () => {

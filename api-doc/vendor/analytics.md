@@ -26,7 +26,7 @@ missed cash-on-delivery sales.
 | Term | Meaning |
 |---|---|
 | **Gross sales** | What customers paid: the order total (online) or the cash collected (cash on delivery). |
-| **Bargain fee** | The platform's 30% share of the amount agreed **above your floor price** on bargained items. Nothing is charged on a sale at the listed price. |
+| **Bargain fee** | The platform's 30% share of what a bargainable item sold for **above your minimum (floor) price** — whether or not the customer bargained. A sale at the listed (maximum) price pays it on the whole difference; a sale at your minimum pays nothing; items with no bargain range never pay it. (Since 2026-09-28; before that only bargained sales paid it.) |
 | **Commission** | Your plan's commission, taken on gross − bargain fee. |
 | **Delivery fee** | The delivery charged for the shipment, which is taken out of your side of the sale. |
 | **COD fee** | The agency's cash-handling fee, on cash-on-delivery sales only. |

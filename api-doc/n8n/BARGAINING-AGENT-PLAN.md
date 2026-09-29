@@ -63,8 +63,15 @@ The `PriceResolverService` guard stays as a backstop and should never fire.
 
 **D-5 · The platform keeps 30% of the uplift.** `U = (P − floor) × qty`,
 `aiMargin = floor(0.30 × U)`, `vendorGross = (P × qty) − aiMargin`. It funds the model
-spend. **Only on orders carrying a negotiation lock** — a storefront sale at the ask used
-no AI and the whole uplift is the vendor's.
+spend. ~~**Only on orders carrying a negotiation lock** — a storefront sale at the ask used
+no AI and the whole uplift is the vendor's.~~
+
+⚠ **Reversed by the owner 2026-09-28.** The fee is owed on EVERY line of a bargainable
+variant, haggled or not: `U = (P − floor) × qty` where `P` is the price paid. A storefront
+sale at the ask pays 30% of the whole window; a sale at the floor pays nothing. Checkout
+snapshots `floor_price_snapshot` for un-locked bargainable lines
+(`bargainFloorsForVariants`), and `EarningsSplitService.bargainLineOf` has no lock gate.
+The sections below that describe the lock gate are history.
 
 **D-6 · Bargaining is chat-only.** No "make an offer" control on the storefront.
 

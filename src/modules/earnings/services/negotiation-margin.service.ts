@@ -11,9 +11,15 @@ import { EARNINGS_CONFIG } from '../config/earnings.config';
  *
  * ── What it computes (BARGAINING-AGENT-PLAN D-5) ─────────────────────────────
  *
- *   U          = (P − floor) × qty          the uplift the bargaining agent won
- *   aiMargin   = floor(0.30 × U)            the platform's share of it
+ *   U          = (P − floor) × qty          what the line sold for above the minimum
+ *   aiMargin   = floor(0.30 × U)            the platform's share of it (the bargain fee)
  *   vendorGross= (P × qty) − aiMargin       what commission and delivery come off
+ *
+ * ⚠ Since 2026-09-28 (owner decision) this applies to EVERY line of a
+ * bargainable variant, haggled or not — D-5 limited it to lines carrying a
+ * negotiation lock. A line sold at the ask pays it on the whole window, one sold
+ * at the minimum pays nothing. Whether a line has a floor is decided at checkout
+ * (`floor_price_snapshot`); nothing here knows about locks.
  *
  * ⚠ **`vendorGross` is `P×qty − aiMargin`, NEVER `floor×qty + 0.7×U`.** The two
  * are equal only when `0.30 × U` is a whole number and differ by a franc
@@ -34,11 +40,11 @@ import { EARNINGS_CONFIG } from '../config/earnings.config';
 
 /** One line's contribution, as the split paths see it. */
 export interface NegotiatedLineInput {
-  /** The agreed unit price, P. */
+  /** The unit price the customer paid, P — agreed by haggling or not. */
   unitPrice: number;
   /**
-   * The vendor's floor as of the verdict that honoured the lock, NOT re-read
-   * now. `null`/`undefined` means the line was never negotiated.
+   * The vendor's floor as snapshotted at checkout, NOT re-read now.
+   * `null`/`undefined` means the variant was not bargainable — no fee.
    */
   floorPrice?: number | null;
   /** The quantity being split — see the note above on which one. */

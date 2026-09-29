@@ -75,15 +75,19 @@ export interface IOrderItem {
    * The haggled price, and the marker that this line was haggled. Equal to
    * `price` above, which stays the one field every existing reader uses.
    *
-   * `EarningsSplitService` keys the platform's AI margin on the PAIR of this and
-   * `floor_price_snapshot` — a line with neither yields zero uplift and zero
-   * margin, which is what makes a mixed order work with no branch at the call
-   * site.
+   * ⚠ It no longer gates the bargain fee (owner decision 2026-09-28):
+   * `EarningsSplitService` keys the fee on `price` and `floor_price_snapshot`
+   * alone, so an un-haggled sale of a bargainable variant pays it too. This
+   * column now only says WHETHER the price was haggled — statements print it.
    */
   negotiated_unit_price?: number | null;
   /**
-   * The vendor's floor as of the verdict that CONSUMED the lock at checkout —
-   * not the cart's copy, and not a live read.
+   * The vendor's floor — their minimum price — that the bargain fee is measured
+   * from: `fee = 30% × (price − floor) × qty`. Written at checkout on EVERY line
+   * of a bargainable variant: on a negotiated line it is the floor as of the
+   * verdict that CONSUMED the lock, on any other it is the vendor's minimum at
+   * checkout (`bargainFloorsForVariants`). Never the cart's copy, never a live
+   * read. `null` means the variant was not bargainable — no fee.
    *
    * ⚠ This is the input to invariant 1 (`vendorGross >= floor x qty`). Re-reading
    * `variant.price` at split time would read a number the vendor may have
