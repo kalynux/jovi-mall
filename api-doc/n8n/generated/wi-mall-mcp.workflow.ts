@@ -7,7 +7,7 @@ const auth_send_login_link = tool({
     name: "auth_send_login_link",
     position: [40,328],
     parameters: {
-      "toolDescription": "Send the customer a magic link to tap and an 8-character code to type, delivered straight to this chat. Both sign them in on the website, both last 10 minutes, and using one kills the other. USE IT WHEN: When the customer asks to sign in on the website, or for their login code or link, in their own words. The slash command /login does the same thing without you. NOT THIS TOOL: Not to authorise anything in chat — the bot surface never uses this credential, and a customer does not need it to shop through the bot. Not for a vendor, agency or agent: they must use /reset-password, which is a slash command only. ⚠ The credential is delivered by the backend, not by you. The result carries NO code, NO link and NO token — say that it has been sent and stop there.",
+      "toolDescription": "Sends the customer a sign-in link and an 8-character code for the WEBSITE, straight to this chat. Both last 10 minutes; using one cancels the other. USE IT WHEN: The customer asks, in their own words, to sign in on the website or for their login code or link. NOT THIS TOOL: Not needed to shop in the chat. Not for a vendor, agency or agent — they use /reset-password. ⚠ The result carries NO code, link or token — say it has been sent and stop.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/auth/login-link",
       "authentication": "genericCredentialType",
@@ -54,7 +54,7 @@ const catalog_search_products = tool({
     name: "catalog_search_products",
     position: [240,328],
     parameters: {
-      "toolDescription": "Find products on sale, by words, category, price range, type or store. Returns a page of product cards with price, stock, rating and the store that sells them. USE IT WHEN: Any time the customer describes something they want to buy, asks what is available, or narrows a previous search. NOT THIS TOOL: Not to look up a product code printed on a package — `q` is a whole-word text search over title, tags and description and does not match SKUs. Use catalog_resolve_sku. Not to fetch one known product: catalog_get_product returns far more. ⚠ Render at most 10 rows as an interactive list; row title is capped at 24 characters and the description at 72, so the title must be truncated rather than the price dropped.",
+      "toolDescription": "Exact FILTERED product search: whole-word text plus filters Search-Products does not have — one shop (storeSlug), a price range with a minimum, product type (physical/digital/service) — and sorting (price_asc, price_desc, newest). USE IT WHEN: Only when the customer needs one of those filters or sorts: \"cheapest first\", \"between 5,000 and 10,000\", \"only from this shop\", \"services only\", \"newest\". NOT THIS TOOL: Not for an ordinary description of what they want, a typo, another language or a photo — that is Search-Products. `q` is whole-word: 'dres' does not find 'dress'. Not for a product code (catalog_resolve_sku) or one known product (catalog_get_product). ⚠ To show more than one result, pass the ids to Show-Products — never list them in your text.",
       "method": "GET",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/products",
       "sendQuery": true,
@@ -80,7 +80,7 @@ const catalog_get_product = tool({
     name: "catalog_get_product",
     position: [440,328],
     parameters: {
-      "toolDescription": "Everything about one product: description, images, options, every variant with its own price and stock, the store, and the store's return and cancellation policies. USE IT WHEN: Before answering any question about a specific product, and always before adding one to a cart — the variant id you need comes from here. NOT THIS TOOL: Not for browsing; the list rows from catalog_search_products are enough to choose from. ⚠ A service variant's price is a UNIT RATE per durationMinutes, not the price — quote priceFrom with priceUnit or the customer is misquoted.",
+      "toolDescription": "Everything about one product: description, images, options, every variant with its own price and stock, the store, and its return and cancellation policies. USE IT WHEN: Before answering a question about a specific product, and always before adding one to the basket — the variant id comes from here. NOT THIS TOOL: Not for browsing; search results are enough to choose from. ⚠ A service variant's price is a UNIT RATE per durationMinutes — quote priceFrom with priceUnit, or the customer is misquoted.",
       "method": "GET",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/products/{{ $fromAI(\"productId\", \"The 24-character product id. Never a SKU and never a slug.\", \"string\") }}",
       "options": {
@@ -103,7 +103,7 @@ const catalog_get_product_by_slug = tool({
     name: "catalog_get_product_by_slug",
     position: [640,328],
     parameters: {
-      "toolDescription": "The same product detail, addressed the way a shared storefront link addresses it. USE IT WHEN: When the customer pastes a storefront product URL. Product slugs are unique per vendor, not globally, so both halves are required. NOT THIS TOOL: When you hold a product id — catalog_get_product returns an identical body with one parameter.",
+      "toolDescription": "The same product detail as catalog_get_product, looked up from a shared storefront link (store slug + product slug). USE IT WHEN: The customer pastes a storefront product link. Both slugs are required. NOT THIS TOOL: When you already have the product id — use catalog_get_product.",
       "method": "GET",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/stores/{{ $fromAI(\"storeSlug\", \"The seller's slug — the first slug in a storefront product URL, or a product card's store.slug.\", \"string\") }}/products/{{ $fromAI(\"productSlug\", \"The product's slug — the second slug in a storefront product URL, or a product card's slug. Never the 24-character id.\", \"string\") }}",
       "options": {
@@ -126,7 +126,7 @@ const catalog_resolve_sku = tool({
     name: "catalog_resolve_sku",
     position: [840,328],
     parameters: {
-      "toolDescription": "Turn a product code printed on a package, a label or an advertisement into the product and variant it identifies. USE IT WHEN: When the customer types something that looks like a product code rather than words. NOT THIS TOOL: Not for a search phrase — catalog_search_products handles words.",
+      "toolDescription": "Turns a product code printed on a package, label or advert into the product and variant it identifies. USE IT WHEN: The customer types something that looks like a product code rather than words. NOT THIS TOOL: Not for words — use Search-Products.",
       "method": "GET",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/variants/by-sku/{{ $fromAI(\"sku\", \"The code as the customer typed it. Case is forgiven both ways (as-typed, upper and lower are all tried, and the as-typed spelling wins), EXCEPT for a SKU stored in mixed case, which resolves only when typed exactly. Send it unchanged — do not upper-case it first, or the as-typed rule works against you. At most 64 characters.\", \"string\") }}",
       "options": {
@@ -149,7 +149,7 @@ const catalog_list_categories = tool({
     name: "catalog_list_categories",
     position: [1040,328],
     parameters: {
-      "toolDescription": "The categories that currently have something for sale in them, with a count each. USE IT WHEN: When the customer asks what is sold here, or before filtering a search by category — the values are free text and must come from this list. NOT THIS TOOL: Not as a substitute for search when the customer already described what they want. ⚠ A complete small set, not a page — but still cap the rendered list at 10 rows and offer the rest as a second page.",
+      "toolDescription": "The categories that currently have products for sale, with a count each. Data only; it draws nothing. USE IT WHEN: To get exact category names before filtering a search by category — the names must come from this list. NOT THIS TOOL: Not to SHOW categories to the customer — that is catalog_browse_categories. Not instead of a search when they already described what they want.",
       "method": "GET",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/categories",
       "options": {
@@ -172,7 +172,7 @@ const catalog_list_related_products = tool({
     name: "catalog_list_related_products",
     position: [1240,328],
     parameters: {
-      "toolDescription": "Up to eight products related to this one, and — importantly — which kind of relation it is. USE IT WHEN: After showing a product card, when the customer asks for alternatives or similar items. To SHOW them, pass their ids to catalog_show_products rather than describing them. NOT THIS TOOL: Never describe the result as 'customers also bought' unless meta.source is co_purchase. On a young catalogue the fallback is the common case and saying otherwise is a false claim about other shoppers. ⚠ meta.source is part of the contract. co_purchase -> 'Frequently bought together'; same_category -> 'More in this category'. `orders` is always null on the fallback. An empty list is a successful answer.",
+      "toolDescription": "Up to eight products related to one product, and which kind of relation it is (meta.source). USE IT WHEN: After showing a product, when the customer asks for alternatives or similar items. To show them, pass their ids to Show-Products. NOT THIS TOOL: Never say 'customers also bought' unless meta.source is co_purchase; same_category means 'more in this category'. ⚠ An empty list is a successful answer.",
       "method": "GET",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/products/{{ $fromAI(\"productId\", \"The 24-character id of the product to find alternatives for.\", \"string\") }}/related",
       "options": {
@@ -195,7 +195,7 @@ const catalog_get_store = tool({
     name: "catalog_get_store",
     position: [1440,328],
     parameters: {
-      "toolDescription": "A seller's public page: name, description, city, whether they are verified, whether they are currently open, and the support contacts they chose to publish. USE IT WHEN: When the customer asks who is selling something, or asks how to contact a seller — this is the source for the vendor branch of the support flow. NOT THIS TOOL: Not for the delivery company's contacts; those come from orders_list_shipments, because an agency is attached to a shipment rather than to a product. ⚠ Any support field may be null. A closed store (isOpen:false) still sells — say 'the seller is on holiday', never 'unavailable'.",
+      "toolDescription": "A seller's public page: name, description, city, verified, currently open, and the support contacts they published. USE IT WHEN: The customer asks who sells something or how to contact a seller. NOT THIS TOOL: Not for the delivery company's contacts — those come from orders_list_shipments. ⚠ Any contact field may be null. A closed store (isOpen false) still sells — say 'the seller is on holiday', never 'unavailable'.",
       "method": "GET",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/stores/{{ $fromAI(\"slug\", \"The seller's slug, from a product card's store.slug.\", \"string\") }}",
       "options": {
@@ -218,7 +218,7 @@ const catalog_list_store_products = tool({
     name: "catalog_list_store_products",
     position: [40,528],
     parameters: {
-      "toolDescription": "What a particular seller currently has for sale. USE IT WHEN: When the customer wants to see more from a seller they have already seen. NOT THIS TOOL: Use catalog_search_products with storeSlug when you also need to filter or sort within that store — the contract is identical and one call does both.",
+      "toolDescription": "What one seller currently has for sale. USE IT WHEN: The customer wants to see more from a seller they have already seen. NOT THIS TOOL: To also filter or sort within that shop, use catalog_search_products with storeSlug instead.",
       "method": "GET",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/stores/{{ $fromAI(\"slug\", \"The seller's slug, from a product card's store.slug.\", \"string\") }}/products",
       "sendQuery": true,
@@ -244,7 +244,7 @@ const catalog_list_product_reviews = tool({
     name: "catalog_list_product_reviews",
     position: [240,528],
     parameters: {
-      "toolDescription": "What buyers said about a product, and the star breakdown. USE IT WHEN: When the customer asks whether a product is any good, or asks for opinions. NOT THIS TOOL: Not for delivery reviews — those are internal, feed an agent's trust score and have no public endpoint. ⚠ A product nobody has reviewed carries rating: null on the product card — never report that as zero stars.",
+      "toolDescription": "Raw review rows and the star breakdown for one product, for your own reasoning. USE IT WHEN: You need to read what buyers actually wrote to answer a specific question. NOT THIS TOOL: To SHOW reviews to the customer use catalog_product_reviews_summary. Not for delivery reviews — they are internal. ⚠ rating null means nobody has reviewed it — never say zero stars.",
       "method": "GET",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/products/{{ $fromAI(\"productId\", \"The 24-character id of the product whose reviews to read.\", \"string\") }}/reviews",
       "options": {
@@ -267,7 +267,7 @@ const cart_get = tool({
     name: "cart_get",
     position: [440,528],
     parameters: {
-      "toolDescription": "What is currently in the customer's basket, line by line, with quantities and prices. USE IT WHEN: Whenever the customer asks about their cart, and at the start of any checkout flow. NOT THIS TOOL: Not for the total payable — that is cart_quote, which adds delivery and validates the address. ⚠ An empty cart is a successful answer with items: [] and no cartId, never an error.",
+      "toolDescription": "What is in the customer's basket, line by line, with quantities and prices. USE IT WHEN: The customer asks about their basket, and before adding something that may already be there. NOT THIS TOOL: Not for the total with delivery — checkout_review shows that. ⚠ An empty basket is a successful answer (items: []), never an error.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/cart/get",
       "authentication": "genericCredentialType",
@@ -310,7 +310,7 @@ const cart_add_item = tool({
     name: "cart_add_item",
     position: [640,528],
     parameters: {
-      "toolDescription": "Put a product variant in the customer's basket. If that exact variant is already there, its quantity goes up. USE IT WHEN: When the customer asks to add something, and you already hold the variant id from catalog_get_product. NOT THIS TOOL: Never guess a variant id, and never add a product that has more than one variant without asking which one. Never for a service product — services are booked, not carted, and the call is refused. ⚠ A cart may hold items from several vendors but only ONE product type, and never a service.",
+      "toolDescription": "Puts a product variant in the basket; if that exact variant is already there, its quantity goes up. USE IT WHEN: The customer asks to add something and you hold the variant id from catalog_get_product. NOT THIS TOOL: Never guess a variant id, and never add a product with more than one variant without asking which one (or open it with inapp_open_product). Never a service — services are booked, not added. ⚠ A basket may hold items from several shops but only ONE product type, and never a service.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/cart/items",
       "authentication": "genericCredentialType",
@@ -357,7 +357,7 @@ const cart_set_item_quantity = tool({
     name: "cart_set_item_quantity",
     position: [840,528],
     parameters: {
-      "toolDescription": "Change a basket line to exactly this many. USE IT WHEN: When the customer names a number they want — 'make it three'. NOT THIS TOOL: Not to remove a line: zero is refused. Use cart_remove_item.",
+      "toolDescription": "Sets a basket line to exactly this quantity. USE IT WHEN: The customer names the number they want — 'make it three'. NOT THIS TOOL: Not to remove a line (zero is refused) — use cart_remove_item.",
       "method": "PATCH",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/cart/items/{{ $fromAI(\"variantId\", \"The variant id of the basket line to change, from cart_get items[].variantId. A 24-character hexadecimal id.\", \"string\") }}",
       "authentication": "genericCredentialType",
@@ -404,7 +404,7 @@ const cart_remove_item = tool({
     name: "cart_remove_item",
     position: [1040,528],
     parameters: {
-      "toolDescription": "Take one variant out of the basket. USE IT WHEN: When the customer asks to remove a specific item. NOT THIS TOOL: Not to empty the whole basket — that is cart_clear and it needs confirmation.",
+      "toolDescription": "Takes one variant out of the basket. USE IT WHEN: The customer asks to remove a specific item. NOT THIS TOOL: Not to empty the whole basket — you cannot do that; remove items one by one only if they ask.",
       "method": "DELETE",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/cart/items/{{ $fromAI(\"variantId\", \"The variant id of the basket line to remove, from cart_get items[].variantId. A 24-character hexadecimal id.\", \"string\") }}",
       "authentication": "genericCredentialType",
@@ -451,7 +451,7 @@ const checkout_review = tool({
     name: "checkout_review",
     position: [1240,528],
     parameters: {
-      "toolDescription": "What the customer is about to agree to, read live: the basket lines, the total (already formatted), where it will be delivered (one of their SAVED addresses — the default unless they chose another), and the masked mobile-money number the payment prompt will go to. When it can go ahead it returns a single-use checkoutRef (10 minutes) for checkout_place. ⚠ When ready is true and payment.phoneMasked is set, THIS TOOL ITSELF SENDS THE CUSTOMER the order summary and the question, with Place order / Not now buttons (or one button per address when they have several deliverable addresses and named none) — do NOT repeat the summary and do NOT ask for confirmation again yourself. If the customer then confirms in words (\"yes\", \"place it\"), call checkout_place with the checkoutRef; a tap on Place order places the order without you. With no saved address it also sends the website link itself. When phoneMasked is null nothing is sent: ask for a number. ⚠ When blocker is below_delivery_minimum (ADR-A07) one shop’s items are too small to carry their delivery: nothing can be placed, no checkoutRef is returned, and THIS TOOL ITSELF SENDS THE CUSTOMER how much more to add from each such shop (deliveryShortfalls) — do not repeat it. USE IT WHEN: When the customer wants to buy / check out / pay for their basket in the chat. The summary and the question reach the customer from the tool itself (see description) — write nothing of your own over it; only when phoneMasked is null, ask for a number. Call it again with deliveryAddressId when they want a different saved address. NOT THIS TOOL: It places nothing. Never ask for an address or a phone number the review already shows. If blocker is no_saved_address or address_not_deliverable, offer a deliverable address from `addresses`, or send addAddressUrl (the website) — never collect an address in the chat. address_not_found: call addresses_list and ask again. below_delivery_minimum: help the customer add more from THAT shop (an item from another shop becomes a separate order and does not help), then call checkout_review again. Never mention the delivery fee or the seller’s commission — only the amount to add. ⚠ payment.phoneMasked null means the account has no number: ask for one, then pass it as `phone` to checkout_place.",
+      "toolDescription": "Live order summary for the basket: lines, total (formatted), delivery address (a SAVED one — the default unless deliveryAddressId is given) and the masked mobile-money number. Places nothing. Returns a single-use checkoutRef (10 minutes) for checkout_place. ⚠ When ready is true and payment.phoneMasked is set, THIS TOOL SENDS THE CUSTOMER the summary with Place order / Not now buttons (or one button per address when several are deliverable and none was named): answer [sent] — never repeat it or ask again. With no saved address it sends the website link itself. ⚠ blocker below_delivery_minimum: no checkoutRef; the tool sends how much more to add from each shop — do not repeat it. USE IT WHEN: The customer wants to check out / buy / pay for their basket. Call it again with deliveryAddressId for a different saved address. NOT THIS TOOL: Never ask for an address or phone number the review shows, and never collect an address in the chat. no_saved_address / address_not_deliverable: offer a deliverable saved address or send addAddressUrl. address_not_found: call addresses_list and ask again. below_delivery_minimum: help them add more from THAT shop (another shop's item is a separate order and does not help), then review again; never mention the delivery fee or the seller's commission. ⚠ payment.phoneMasked null: nothing was sent — ask for a number, then pass it as `phone` to checkout_place.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/checkout/chat/review",
       "authentication": "genericCredentialType",
@@ -498,7 +498,7 @@ const checkout_place = tool({
     name: "checkout_place",
     position: [1440,528],
     parameters: {
-      "toolDescription": "Spends the checkoutRef from checkout_review: creates the customer's orders from their basket (prices re-resolved, bargained price locks honoured) and pushes a mobile-money payment prompt to the account's own wallet. The customer approves it on their phone; the result arrives in the chat. ⚠ On success THIS TOOL ITSELF SENDS THE CUSTOMER the order numbers and the payment instructions (where the prompt went, for how much, the operator's own instruction) with a Check status button — or, when the charge was refused as it was opened (state failed), that no money was taken, with a Try again button. Do NOT repeat any of it. Call this when the customer confirms the review in WORDS; a customer who tapped the Place order button has already placed the order — never call it again after that tap. USE IT WHEN: Only right after checkout_review returned ready: true AND the customer explicitly confirmed the total, the address and the masked number it showed. NOT THIS TOOL: Never without that confirmation, never twice, never with an invented checkoutRef. Pass deliveryAddressId = the delivery.address.id the review showed (required for physical goods). Pass phone ONLY if the customer typed a different number themselves. On an error whose details.spent is not false, do NOT place again — use checkout_payment_status. When customer.pendingQuestion.context is 'co', the customer's 'yes' answers the drawn Place order question — use chat_answer_question instead, which places to the address that question named. ⚠ state 'failed' = the gateway refused the charge as it opened: the orders exist, NO prompt is coming — say so and offer checkout_retry_payment. state 'waiting' = tell them to approve on their phone; the result arrives as a message.",
+      "toolDescription": "Spends the checkoutRef: creates the orders (prices re-resolved, agreed price locks honoured) and sends a mobile-money prompt to the account's wallet; the result arrives later in the chat. ⚠ On success THIS TOOL SENDS THE CUSTOMER the order numbers and payment instructions with a Check status button — or, if the charge was refused at once (state failed), that no money was taken, with Try again. Do not repeat any of it. USE IT WHEN: Only right after checkout_review returned ready: true AND the customer explicitly confirmed its total, address and masked number in words. NOT THIS TOOL: Never without that confirmation, never twice, never with an invented checkoutRef, never after they tapped Place order (that already placed it). If customer.pendingQuestion.context is 'co', use chat_answer_question instead. Pass deliveryAddressId = the review's delivery.address.id (required for physical goods); pass phone only if the customer typed a different number. On an error whose details.spent is not false, do NOT place again — use checkout_payment_status. ⚠ state 'failed': the orders exist but NO prompt is coming — say so and offer checkout_retry_payment. state 'waiting': tell them to approve on their phone; the result arrives as a message.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/checkout/chat/place",
       "authentication": "genericCredentialType",
@@ -545,7 +545,7 @@ const checkout_payment_status = tool({
     name: "checkout_payment_status",
     position: [40,728],
     parameters: {
-      "toolDescription": "Asks the payment gateway (not just our record) where the customer's most recent checkout payment is: settled, failed, or still waiting. USE IT WHEN: When the customer asks whether their payment went through, or after checkout_place/checkout_retry_payment when they say they approved it. NOT THIS TOOL: Takes no transaction id — never invent one. A waiting payment has not failed: kindly ask the customer to be patient (mobile money can take a few minutes after it is approved, and a message arrives in the chat when it lands), and never offer or send a new request while it waits.",
+      "toolDescription": "Asks the payment gateway live whether the customer's most recent checkout payment is settled, failed or still waiting. Takes no transaction id. USE IT WHEN: The customer asks whether their payment went through, or says they approved it. NOT THIS TOOL: Never invent a transaction id. waiting is NOT failed: ask them kindly to be patient (it can take a few minutes; a message arrives when it lands) and never offer or send a new request while it waits.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/checkout/payment-status",
       "authentication": "genericCredentialType",
@@ -588,7 +588,7 @@ const checkout_retry_payment = tool({
     name: "checkout_retry_payment",
     position: [240,728],
     parameters: {
-      "toolDescription": "Opens a fresh mobile-money charge for the orders of the customer's most recent checkout that are still unpaid, to the account's wallet (or a number the customer typed). Creates no new order. USE IT WHEN: When a checkout payment failed or was not approved and the customer wants to try again (after they confirm). NOT THIS TOOL: Never to start a new purchase (that is checkout_review), and never while the last payment is still waiting — check checkout_payment_status first. Never ask for a number the account has; pass phone only if the customer typed one.",
+      "toolDescription": "Sends a fresh mobile-money charge for the still-unpaid orders of the most recent checkout, to the account's wallet or a number the customer typed. Creates no new order. USE IT WHEN: A checkout payment failed or was not approved and the customer agrees to try again. NOT THIS TOOL: Never for a new purchase (checkout_review), never while the last payment is still waiting (check checkout_payment_status first). Pass phone only if the customer typed a number.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/checkout/retry-payment",
       "authentication": "genericCredentialType",
@@ -635,7 +635,7 @@ const payment_get_transaction = tool({
     name: "payment_get_transaction",
     position: [440,728],
     parameters: {
-      "toolDescription": "The stored details of one of the customer's own payments. USE IT WHEN: When the customer asks what happened to a specific payment. NOT THIS TOOL: Not during a checkout poll — payment_verify is the live answer. Not on the public payment surface: reading a transaction requires ownership and the bot surface supplies it.",
+      "toolDescription": "The stored record of one of the customer's own payments, by transactionId. USE IT WHEN: The customer asks what happened to a specific payment and you hold its transactionId. NOT THIS TOOL: Not for the latest checkout payment — checkout_payment_status asks the gateway live.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/payments/{{ $fromAI(\"transactionId\", \"The payment's transaction id, from bookings_payment_status transaction.transactionId or from the payment that was just initiated. Must be one of this customer's own.\", \"string\") }}",
       "authentication": "genericCredentialType",
@@ -678,7 +678,7 @@ const orders_list_groups = tool({
     name: "orders_list_groups",
     position: [640,728],
     parameters: {
-      "toolDescription": "The customer's order history, newest first, grouped the way they placed them — one group per checkout, however many sellers were in it. The result is drawn IN THE CHAT as a list they can pick from: up to five orders, and a Load more row that opens the rest; it is sent automatically. USE IT WHEN: Whenever the customer asks to see, show or check their orders — \"show my orders\", \"my orders\", \"what have I bought\", \"did my order go through\" — and as the first step of anything that needs an order the customer has not named. NOT THIS TOOL: Not to answer 'where is my parcel' — that needs orders_list_shipments, which carries the delivery status. Never type the orders out yourself: the list is already in the chat. ⚠ The group paymentStatus is an aggregate: paid, awaiting_payment, partially_paid (including a cash order partway through per-shipment collection), refunded, failed, disputed, unknown, or mixed.",
+      "toolDescription": "Draws the customer's five most recent orders IN THE CHAT as a list they can pick from, with a Load more row — sent automatically. One entry per checkout, however many sellers. USE IT WHEN: Whenever they ask to see or check their orders ('my orders', 'what have I bought', 'did my order go through'), and first when you need an order they have not named. NOT THIS TOOL: Not for 'where is my parcel' — that is orders_list_shipments. Never type the orders out yourself. ⚠ paymentStatus is an aggregate: paid, awaiting_payment, partially_paid, refunded, failed, disputed, unknown or mixed.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/orders/list",
       "authentication": "genericCredentialType",
@@ -721,7 +721,7 @@ const orders_get_group = tool({
     name: "orders_get_group",
     position: [840,728],
     parameters: {
-      "toolDescription": "Everything the customer bought in one checkout, across every seller, with line items — and, for cash orders, the collection each shipment is waiting on. USE IT WHEN: When the customer wants the detail of one purchase and it spanned several sellers. NOT THIS TOOL: Not for a single seller's order when you hold its id — orders_get_order is narrower. ⚠ codCollections[].deliveryCode is present on this response and MUST be stripped before the result reaches the model. It is the customer's proof-of-payment lever and is only ever disclosed by orders_get_cod_code, on explicit request, with its warning.",
+      "toolDescription": "Everything bought in one checkout, across every seller, with line items — and for cash orders, what each shipment is waiting to collect. USE IT WHEN: The customer wants the detail of one purchase that spanned several sellers. NOT THIS TOOL: Not for a single seller's order when you hold its id — use orders_get_order. ⚠ Never reveal a deliveryCode from this result — it is the customer's proof of payment and is never given out here.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/orders/groups/{{ $fromAI(\"cartId\", \"The order-group id, from orders_list_groups cartId. One checkout, not one seller’s order.\", \"string\") }}",
       "authentication": "genericCredentialType",
@@ -764,7 +764,7 @@ const orders_get_order = tool({
     name: "orders_get_order",
     position: [1040,728],
     parameters: {
-      "toolDescription": "One seller's order in full: what was bought, what it cost, where it is going, and how each line is being delivered. USE IT WHEN: When the customer names an order number, or follows up on one order from a list. NOT THIS TOOL: Not to answer a delivery question on its own — pair it with orders_list_shipments. ⚠ cartId is what makes an unpaid order resumable — payment_initiate takes the group, not the order.",
+      "toolDescription": "One seller's order in full: what was bought, what it cost, where it is going, and how each line is delivered. USE IT WHEN: The customer names an order number or follows up on one order from a list. NOT THIS TOOL: For a delivery question, pair it with orders_list_shipments.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/orders/{{ $fromAI(\"orderId\", \"The order id, or the order number the customer quoted — the bot surface accepts either.\", \"string\") }}",
       "authentication": "genericCredentialType",
@@ -807,7 +807,7 @@ const orders_list_shipments = tool({
     name: "orders_list_shipments",
     position: [1240,728],
     parameters: {
-      "toolDescription": "Each parcel on an order: its current stage, the history of how it got there, the delivery company and their support contacts, and — while it is actually moving — the first name of the person carrying it. USE IT WHEN: This is the answer to 'where is my order'. Use it for every tracking, delivery-timing or delivery-problem question, and as the source for the delivery-company branch of the support flow. NOT THIS TOOL: There is no live map in chat. Live GPS is a WebSocket in a separate service that needs a per-viewer token the bot deliberately never holds — describe the stage, never a position. ⚠ The status vocabulary is five words — preparing, shipped, out_for_delivery, delivered, delivery_failed — and they are the same five the customer's notifications use. `agent` is null far more often than set and each null means something different: no agent bound yet at preparing, and revoked on settlement at delivered. Never publish an agent phone number or full name; a customer with a question contacts the AGENCY. estimatedDelivery is always null — nothing estimates a delivery date, so never invent one.",
+      "toolDescription": "Each parcel on an order: its stage, its history, the delivery company and its support contacts, and — while it is moving — the carrier's first name. USE IT WHEN: The answer to 'where is my order': every tracking, delivery-timing or delivery-problem question, and the delivery company's contacts. NOT THIS TOOL: There is no live map in chat — describe the stage, never a position. ⚠ Stages: preparing, shipped, out_for_delivery, delivered, delivery_failed. `agent` is often null — that is normal. Never give an agent's phone or full name; questions go to the delivery company. estimatedDelivery is always null — never invent a date.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/orders/{{ $fromAI(\"orderId\", \"One seller's order id, from orders_list_groups orders[].id. NOT the group's cartId.\", \"string\") }}/shipments",
       "authentication": "genericCredentialType",
@@ -850,7 +850,7 @@ const orders_record_cancellation_reason = tool({
     name: "orders_record_cancellation_reason",
     position: [1440,728],
     parameters: {
-      "toolDescription": "Attach the customer's own words about why they cancelled an order to that order's history, where the shop and support can read them. USE IT WHEN: Immediately after a cancellation, when the customer tells you what went wrong. The cancel tap answers with no reply and you ask for the reason; this is where their answer goes. Send their words, not a summary. NOT THIS TOOL: Never to cancel anything — use orders_cancel for that. Not for a complaint about an order that is still live: that is a support request. Not twice for one order; a second call is refused. ⚠ Answers as data with no `reply`. Acknowledge it in your own words — briefly; the customer has just told you something they are unhappy about.",
+      "toolDescription": "Attaches the customer's own words about why they cancelled to that order's history, for the shop and support to read. USE IT WHEN: Right after a cancellation, when the customer tells you why. Send their words, not a summary. NOT THIS TOOL: It cancels nothing. Not for a complaint about a live order (that is a support request). Not twice for one order. ⚠ No `reply` comes back — acknowledge it briefly and kindly in your own words.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/orders/{{ $fromAI(\"orderId\", \"The order they cancelled, as the catalogue returned it. At most 64 characters.\", \"string\") }}/cancellation-reason",
       "authentication": "genericCredentialType",
@@ -897,7 +897,7 @@ const profile_get_summary = tool({
     name: "profile_get_summary",
     position: [40,928],
     parameters: {
-      "toolDescription": "The handful of profile facts that matter in a chat: display name, language, currency, whether contact details are verified, and how many addresses are saved. USE IT WHEN: When the customer asks what the platform knows about them, or before a settings change. NOT THIS TOOL: Not to fetch an address to deliver to — addresses_list is narrower and returns the ids checkout needs. ⚠ The bot surface returns MASKED contact details. A chat window is a shared, screenshotted, sometimes-shoulder-surfed place, and the customer already knows their own number.",
+      "toolDescription": "The customer's profile in brief: name, language, currency, whether contacts are verified, and how many addresses are saved. Contact details come back masked. USE IT WHEN: The customer asks what the platform knows about them, or before a settings change. NOT THIS TOOL: Not for addresses — use addresses_list.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/profile",
       "authentication": "genericCredentialType",
@@ -940,7 +940,7 @@ const profile_update = tool({
     name: "profile_update",
     position: [240,928],
     parameters: {
-      "toolDescription": "Change the name the customer is called. USE IT WHEN: When they ask to be called something else, or correct the name the bot greets them by. NOT THIS TOOL: Not for language — profile_set_language owns that. Not for a phone, an email or an address; each has its own tool, and this route accepts nothing but the name. ⚠ This is the ONLY profile field this surface can change. The answer is the whole profile summary, with the email and phone masked — read it back as confirmation rather than reading the number aloud.",
+      "toolDescription": "Changes the name the customer is called. The only profile field this tool can change. USE IT WHEN: They ask to be called something else, or correct their name. NOT THIS TOOL: Not for language (profile_set_language), phone, email or address. ⚠ The answer is the profile summary with contacts masked — confirm the new name, never read the number aloud.",
       "method": "PATCH",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/profile",
       "authentication": "genericCredentialType",
@@ -987,7 +987,7 @@ const profile_set_language = tool({
     name: "profile_set_language",
     position: [440,928],
     parameters: {
-      "toolDescription": "Set the language the platform writes to this customer in — in chat, in notifications and in email. USE IT WHEN: When the customer asks to change language, or writes consistently in a language other than the one on their profile and confirms the switch. NOT THIS TOOL: Do not switch on a single message in another language. People code-switch; a preference change is durable and reaches their email too. ⚠ Product text is NOT translated — it is vendor-authored in one language and the product carries contentLanguage saying which. Say so rather than appearing to have translated it.",
+      "toolDescription": "Sets the language the platform writes to this customer in — chat, notifications and email. USE IT WHEN: The customer asks to change language, or keeps writing in another language and confirms the switch. NOT THIS TOOL: Never on a single message in another language — people mix languages, and this also changes their emails. ⚠ Product text is NOT translated — it stays in the seller's language. Say so rather than appearing to translate it.",
       "method": "PATCH",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/profile/language",
       "authentication": "genericCredentialType",
@@ -1034,7 +1034,7 @@ const addresses_list = tool({
     name: "addresses_list",
     position: [640,928],
     parameters: {
-      "toolDescription": "The customer's saved addresses, which is the default, and — crucially — whether each one can actually be delivered to. USE IT WHEN: As the address step of checkout, and whenever the customer asks where their orders go. NOT THIS TOOL: Not to find a new address — that is geo_search_address. ⚠ `deliverable` is the bot surface's rendering of 'has a geocoded location'. An address without one is refused at checkout, so an undeliverable address must be shown as needing to be re-picked rather than offered as a choice.",
+      "toolDescription": "The customer's saved addresses, which one is the default, and whether each can actually be delivered to. USE IT WHEN: For checkout's address step, and when the customer asks where their orders go. NOT THIS TOOL: Not to add a new address — new addresses are added on the website. ⚠ An address with deliverable false is refused at checkout — present it as needing to be re-picked, never as a choice.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/addresses/list",
       "authentication": "genericCredentialType",
@@ -1077,7 +1077,7 @@ const support_resolve_contacts = tool({
     name: "support_resolve_contacts",
     position: [840,928],
     parameters: {
-      "toolDescription": "For the thing the customer most recently dealt with, who to contact: the seller, the delivery company, or the platform — with each one's published contacts and why it is relevant. USE IT WHEN: For any 'I need help' that is not obviously about one specific thing, and as the first step of the support flow. A product question goes to the seller; a parcel question goes to the delivery company; a money or account question goes to the platform. NOT THIS TOOL: Not for a question you can answer from the catalogue or the customer's own orders. Routing someone to a phone number is a worse answer than telling them where their parcel is. ⚠ An agency has no contacts until an order has a shipment, so /support:agency on a product-only context legitimately has nothing to answer with. Any contact field may be null; offer the ones that exist and fall through to a ticket.",
+      "toolDescription": "For what the customer most recently dealt with, who to contact — the seller, the delivery company or the platform — with each one's published contacts and why. USE IT WHEN: For an 'I need help' that is not clearly about one thing, and as the first step of support: product → seller, parcel → delivery company, money or account → platform. NOT THIS TOOL: Not when you can answer from the catalogue or their orders yourself — a phone number is a worse answer than the actual answer. ⚠ Any contact may be null; offer those that exist, otherwise open a ticket. A delivery company has no contacts until an order has a shipment.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/support/context",
       "authentication": "genericCredentialType",
@@ -1120,7 +1120,7 @@ const tickets_list = tool({
     name: "tickets_list",
     position: [1040,928],
     parameters: {
-      "toolDescription": "The support tickets this customer has open, and their current status. USE IT WHEN: When the customer asks about a support request they already made, or before opening a new one — an existing open ticket about the same thing should be added to rather than duplicated. NOT THIS TOOL: Not as the answer to a first-time question. Most questions are answered better than by opening a ticket. ⚠ The pagination block on ticket lists is called `pagination`, not `meta`. assigned_admin is null until a human takes the ticket, which is the state almost every ticket is in — say 'waiting to be picked up', never invent a handler.",
+      "toolDescription": "The customer's open support tickets and their status. USE IT WHEN: They ask about a request they already made, or before opening a new one — add to an existing ticket rather than duplicating it. NOT THIS TOOL: Not as the answer to a first question — most are better answered directly. ⚠ assigned_admin is null until a person takes the ticket — say 'waiting to be picked up', never invent a handler.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/tickets/list",
       "authentication": "genericCredentialType",
@@ -1163,7 +1163,7 @@ const tickets_get = tool({
     name: "tickets_get",
     position: [1240,928],
     parameters: {
-      "toolDescription": "One support ticket with its public conversation. USE IT WHEN: When the customer names a ticket number or asks what happened to a request. NOT THIS TOOL: Not for a list — tickets_list is cheaper and paginated. ⚠ Customers never see internal staff notes; only public ones are returned. Do not imply there is a hidden conversation.",
+      "toolDescription": "One support ticket with its public conversation. USE IT WHEN: The customer names a ticket or asks what happened to a request. NOT THIS TOOL: Not for a list — use tickets_list. ⚠ Only public notes are returned — never imply a hidden conversation.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/tickets/{{ $fromAI(\"ticketId\", \"The ticket id or the TKT- number the customer quoted.\", \"string\") }}",
       "authentication": "genericCredentialType",
@@ -1206,7 +1206,7 @@ const tickets_add_note = tool({
     name: "tickets_add_note",
     position: [1440,928],
     parameters: {
-      "toolDescription": "Add the customer's message to an existing ticket. USE IT WHEN: When the customer says something more about a ticket that is already open. NOT THIS TOOL: Not to record your own summary. A note is attributed to the customer and read by staff as their words.",
+      "toolDescription": "Adds the customer's message to an existing ticket, attributed to them. USE IT WHEN: The customer says something more about a ticket that is already open. NOT THIS TOOL: Never your own summary — staff read it as the customer's words.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/tickets/{{ $fromAI(\"ticketId\", \"The ticket id, from tickets_list.\", \"string\") }}/notes",
       "authentication": "genericCredentialType",
@@ -1253,7 +1253,7 @@ const tickets_add_attachment = tool({
     name: "tickets_add_attachment",
     position: [40,1128],
     parameters: {
-      "toolDescription": "Put a photo or PDF the customer just sent in this chat onto one of their support tickets. You do not upload anything — the file is already stored and you name it by the reference you were given when it arrived. USE IT WHEN: When the customer has sent a file in this conversation and it is evidence for a support request — a damaged item, a wrong delivery, a receipt. Open the ticket first if there is not one yet, then attach. NOT THIS TOOL: Never invent a reference. If you were not given one for a file in this conversation, the file is not available and the customer must send it again. Not for a file the customer sent in an earlier conversation — references expire after 30 minutes. ⚠ The reference is single-use — one call per file. `attachmentCount` and `attachmentLimit` come back on success; when they are equal, say so, because the next photo will be refused. You cannot see what is in the file: describe it as what the customer called it, never as what you assume it shows.",
+      "toolDescription": "Puts a photo or PDF the customer just sent onto one of their tickets. The file is already stored; name it by the reference you were given. USE IT WHEN: The customer sent a file in this conversation as evidence for a support request. Open the ticket first if there is none. NOT THIS TOOL: Never invent a reference; without one the customer must send the file again. References expire after 30 minutes. ⚠ One call per file (single use). When attachmentCount equals attachmentLimit, say the next file will be refused. You cannot see the file — call it what the customer called it.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/tickets/{{ $fromAI(\"ticketId\", \"The ticket id or the TKT- number the customer quoted.\", \"string\") }}/attachments",
       "authentication": "genericCredentialType",
@@ -1300,7 +1300,7 @@ const chat_answer_question = tool({
     name: "chat_answer_question",
     position: [240,1128],
     parameters: {
-      "toolDescription": "Answers the Yes/No question the platform drew on its buttons and is still waiting on — shown to you as customer.pendingQuestion on identity sync — exactly as if the customer had tapped that question's Yes or No button. Whatever the button does happens: place the order (context co), confirm the parcel arrived (cd), cancel the order (cnc), close the support request (tcl), disconnect the other messaging app (unl). ⚠ THIS TOOL ITSELF SENDS THE CUSTOMER the result, word for word what the tap sends. Do NOT repeat or re-word it; add nothing unless the customer asked something else too. USE IT WHEN: When customer.pendingQuestion is not null and the customer's message ANSWERS that question in words, in any language: 'yes', 'yes please', 'go ahead', 'ok', 'place it', 'oui', 'sim', 'sí', 'نعم' → answer 'yes'; 'no', 'not now', 'leave it', 'non', 'não', 'لا' → answer 'no'. Read pendingQuestion.text to be sure the message is about THAT question. NOT THIS TOOL: Never when pendingQuestion is null — there is nothing to answer. Never for closing the account: that question is button-only and never appears as pendingQuestion; ask the customer to tap the button. A question is not an answer: 'how much is delivery?' or 'which address?' does not answer it — answer the question instead. Never guess: if the message could mean either, ask. Never call it twice for one message, and never after the customer tapped the button. For a waiting Place order question (context co) use THIS, not checkout_place: it places to the address the question named. ⚠ The customer's own words ARE the confirmation — the question they answer already named the total, the address, the order or the app. Account closure is never answerable here.",
+      "toolDescription": "Answers the platform's waiting Yes/No question (customer.pendingQuestion) exactly as tapping its Yes or No button would: place the order (co), parcel arrived (cd), cancel the order (cnc), close the support request (tcl), disconnect the other app (unl). ⚠ THIS TOOL SENDS THE CUSTOMER the result, word for word what the tap sends — do not repeat or re-word it. USE IT WHEN: pendingQuestion is not null and the customer's message ANSWERS it in words, in any language: 'yes', 'ok', 'go ahead', 'place it', 'oui', 'sim', 'sí', 'نعم' → 'yes'; 'no', 'not now', 'leave it', 'non', 'não', 'لا' → 'no'. Check pendingQuestion.text to be sure the message is about THAT question. NOT THIS TOOL: Never when pendingQuestion is null, never for closing the account (button-only), never twice for one message or after a tap. A question back ('how much is delivery?') is not an answer — answer it instead. If the message could mean either, ask. For a waiting Place order question (co) use THIS, not checkout_place. ⚠ The customer's own words ARE the confirmation — the question already named the total, the address, the order or the app.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/chat/answer",
       "authentication": "genericCredentialType",
@@ -1347,7 +1347,7 @@ const catalog_browse_categories = tool({
     name: "catalog_browse_categories",
     position: [440,1128],
     parameters: {
-      "toolDescription": "Show the customer the shop's categories as buttons they can tap — the busiest five, plus See all. Tapping one opens that category as a scrollable product grid. USE IT WHEN: When the customer wants to BROWSE by category: \"what do you sell?\", \"show me your categories\", \"what kinds of things do you have?\". NOT THIS TOOL: Not to learn category NAMES in order to filter a search — use catalog_list_categories for that. Not when they already named a category — use inapp_open_listing with category. ⚠ Renders as reply buttons, or as a list when a category name is too long for a button. This tool answers with a ready-made `reply` — send it unmodified. Write nothing of your own alongside it: the question is already in the reply.",
+      "toolDescription": "Shows the customer the shop's categories as tap buttons (the busiest five plus See all); a tap opens that category as a product grid. Sends its own message. USE IT WHEN: The customer wants to BROWSE: 'what do you sell?', 'show me your categories'. NOT THIS TOOL: Not to learn category names for a search filter (catalog_list_categories). Not when they named a category — use inapp_open_listing with category. ⚠ Its message already asks the question — answer [sent], add nothing.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/catalog/categories",
       "authentication": "genericCredentialType",
@@ -1390,7 +1390,7 @@ const catalog_product_reviews_summary = tool({
     name: "catalog_product_reviews_summary",
     position: [640,1128],
     parameters: {
-      "toolDescription": "Show a product's star rating, how many reviews it has, and two short quotes from the most recent written reviews, with a button to read them all inside the app. USE IT WHEN: When the customer asks whether a product is any good, what people think of it, or for reviews or opinions. NOT THIS TOOL: Not to read raw review rows for your own reasoning — use catalog_list_product_reviews for that. Never restate the rating in your own words: it is already in the reply. ⚠ Renders as one message with a Read all reviews button to the product page, until a WhatsApp Flow is published. This tool answers with a ready-made `reply` — send it unmodified, and write nothing of your own alongside it.",
+      "toolDescription": "Shows a product's star rating, review count and two short recent quotes, with a button to read them all. Sends its own message. USE IT WHEN: The customer asks whether a product is good, or for reviews or opinions. NOT THIS TOOL: Not for your own reasoning (catalog_list_product_reviews). Never restate the rating yourself. ⚠ Answer [sent], add nothing.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/catalog/products/{{ $fromAI(\"productId\", \"The product the customer is asking about, as the catalogue returned it. At most 64 characters.\", \"string\") }}/reviews",
       "authentication": "genericCredentialType",
@@ -1433,7 +1433,7 @@ const inapp_open_listing = tool({
     name: "inapp_open_listing",
     position: [840,1128],
     parameters: {
-      "toolDescription": "Open a scrollable product grid the customer can browse properly, with a picture, a price and a buy button on every card. Use it for a whole shelf; use catalog_show_products for a short, specific answer of five or fewer. USE IT WHEN: When the customer wants to BROWSE rather than be answered: a category, a whole store, their saved items, or \"what else do you have\". Also after a page of cards, when they ask to see everything. NOT THIS TOOL: Not for a specific question with a short answer (\"do you have red shoes in 42?\") — five cards answer that better than a grid. Not for one product: use inapp_open_product. ⚠ Renders as a cta_url button to the storefront until a WhatsApp Flow is published for this screen. This tool answers with a ready-made `reply` — send it unmodified. Do not also describe the button in your own words; the customer would get the sentence twice.",
+      "toolDescription": "Opens a scrollable product grid — a category, a whole shop or their saved items — with picture, price and buy button on every card. Sends its own button. USE IT WHEN: The customer wants to BROWSE a whole shelf, or asks to see everything after a page of cards. NOT THIS TOOL: Not for a specific question with a short answer — five cards via Show-Products are better. Not for one product (inapp_open_product). ⚠ Never describe the button in your own words — the customer would read it twice.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/inapp/listing",
       "authentication": "genericCredentialType",
@@ -1480,7 +1480,7 @@ const inapp_open_stores = tool({
     name: "inapp_open_stores",
     position: [1040,1128],
     parameters: {
-      "toolDescription": "Open a browsable directory of the shops on the platform, each with its logo, name, description and city. USE IT WHEN: When the customer asks which shops exist, or wants to find a shop rather than a product. There are far more stores than a chat list can hold, which is why this is a screen and not a list of choices. NOT THIS TOOL: Not when they have already named a shop and want its products — use inapp_open_listing with storeSlug. ⚠ A cta_url button to the storefront directory until a WhatsApp Flow is published. This tool answers with a ready-made `reply` — send it unmodified. Do not also describe the button in your own words; the customer would get the sentence twice.",
+      "toolDescription": "Opens a browsable directory of the shops on the platform. Sends its own button. USE IT WHEN: The customer asks which shops exist or wants to find a shop rather than a product. NOT THIS TOOL: Not when they named a shop and want its products — use inapp_open_listing with storeSlug. ⚠ Never describe the button in your own words — the customer would read it twice.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/inapp/stores",
       "authentication": "genericCredentialType",
@@ -1527,7 +1527,7 @@ const inapp_open_orders = tool({
     name: "inapp_open_orders",
     position: [1240,1128],
     parameters: {
-      "toolDescription": "Open the customer's own order history as a scrollable screen, newest first, each order showing its number, its state and what it cost. USE IT WHEN: Only when the customer asks for ALL their orders, for OLDER ones, or for more than the five the chat list showed. NOT THIS TOOL: NEVER the first answer to \"show my orders\" — that is orders_list_groups, which lists the five most recent in the chat. Not when they asked about ONE order: use orders_get_order. Not for a delivery question about a specific parcel — use orders_list_shipments. ⚠ A cta_url button to the storefront orders page until a WhatsApp Flow is published. This tool answers with a ready-made `reply` — send it unmodified. Do not also describe the button in your own words; the customer would get the sentence twice.",
+      "toolDescription": "Opens the customer's full order history as a scrollable screen. Sends its own button. USE IT WHEN: Only when they ask for ALL their orders, OLDER ones, or more than the five the chat list showed. NOT THIS TOOL: NEVER the first answer to 'show my orders' — that is orders_list_groups. Not for one order (orders_get_order) or a parcel question (orders_list_shipments). ⚠ Never describe the button in your own words — the customer would read it twice.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/inapp/orders",
       "authentication": "genericCredentialType",
@@ -1574,7 +1574,7 @@ const inapp_open_product = tool({
     name: "inapp_open_product",
     position: [1440,1128],
     parameters: {
-      "toolDescription": "Open one product on its own screen, where the customer can pick a size, a colour or any other option, read the full description, and buy the exact variant they chose. USE IT WHEN: Whenever the customer needs to CHOOSE something about a product before buying — a size, a colour, a variant. A chat card can only ever offer the default variant, so a product with options is unbuyable from chat alone. NOT THIS TOOL: Not for answering a passing question about a product — say the answer. Not for several products: use inapp_open_listing. ⚠ A cta_url button to the product page until a WhatsApp Flow is published. This tool answers with a ready-made `reply` — send it unmodified. Do not also describe the button in your own words; the customer would get the sentence twice.",
+      "toolDescription": "Opens one product on its own screen, where the customer can choose size, colour or other option and buy that exact variant. Sends its own button. USE IT WHEN: The customer must CHOOSE an option before buying — a chat card only ever offers the default variant. NOT THIS TOOL: Not for a passing question about a product — just answer it. Not for several products (inapp_open_listing). ⚠ Never describe the button in your own words — the customer would read it twice.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/inapp/products/{{ $fromAI(\"productId\", \"The product id, as the catalogue returned it. At most 64 characters.\", \"string\") }}",
       "authentication": "genericCredentialType",
@@ -1621,7 +1621,7 @@ const wishlist_list = tool({
     name: "wishlist_list",
     position: [40,1328],
     parameters: {
-      "toolDescription": "Products the customer saved for later, newest save first. USE IT WHEN: When the customer asks what they saved, or wants to buy something they saved earlier. To SHOW the saved items, pass their ids to catalog_show_products — the customer gets cards with a button that opens all of them as a grid. NOT THIS TOOL: Not as a browse surface — it is their own short list, not the catalogue. ⚠ An entry's `product` can be null when the product went off sale. Say 'no longer available' and offer to remove it — never drop the row silently, and never say why it went, which would leak a seller's catalogue state.",
+      "toolDescription": "Products the customer saved for later, newest first. USE IT WHEN: They ask what they saved, or want to buy something saved earlier. To show them, pass the ids to Show-Products. NOT THIS TOOL: Not as a way to browse the catalogue. ⚠ product null means it went off sale — say 'no longer available' and offer to remove it; never skip the row or say why.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/wishlist/list",
       "authentication": "genericCredentialType",
@@ -1664,7 +1664,7 @@ const wishlist_add = tool({
     name: "wishlist_add",
     position: [240,1328],
     parameters: {
-      "toolDescription": "Add a product to the customer's saved list. USE IT WHEN: When the customer likes something but is not buying it now. NOT THIS TOOL: Not instead of adding to the cart when they said they want to buy it.",
+      "toolDescription": "Adds a product to the customer's saved list. USE IT WHEN: They like something but are not buying it now. NOT THIS TOOL: Not instead of the basket when they said they want to buy it.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/wishlist",
       "authentication": "genericCredentialType",
@@ -1711,7 +1711,7 @@ const wishlist_remove = tool({
     name: "wishlist_remove",
     position: [440,1328],
     parameters: {
-      "toolDescription": "Take a product off the customer's saved list. USE IT WHEN: When the customer says they are no longer interested, or clears an unavailable entry. NOT THIS TOOL: Not after adding it to the cart. Those are different lists and the customer did not ask.",
+      "toolDescription": "Takes a product off the customer's saved list. USE IT WHEN: They are no longer interested, or clear an unavailable entry. NOT THIS TOOL: Not just because they added it to the basket — they did not ask.",
       "method": "DELETE",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/wishlist/{{ $fromAI(\"productId\", \"The 24-character product id to drop, from wishlist_list productId.\", \"string\") }}",
       "authentication": "genericCredentialType",
@@ -1758,7 +1758,7 @@ const recently_viewed_list = tool({
     name: "recently_viewed_list",
     position: [640,1328],
     parameters: {
-      "toolDescription": "The products the customer has opened recently, newest first. USE IT WHEN: When they refer to something they were looking at earlier — \"the one I saw yesterday\", \"that blue one\" — and you need to know what they mean. NOT THIS TOOL: Not as a recommendation source. It is a history, and it says nothing about what is in stock now. ⚠ An entry whose product is gone comes back with product: null — say it is no longer available rather than skipping the row. This list has NO meta.moreUrl; do not invent a link to a history page, because there is not one.",
+      "toolDescription": "Products the customer opened recently, newest first. USE IT WHEN: They refer to something seen earlier — 'the one I saw yesterday' — and you need to know which. NOT THIS TOOL: Not as recommendations, and it says nothing about current stock. ⚠ product null means no longer available — say so, never skip it. There is no history page link; never invent one.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/recently-viewed/list",
       "authentication": "genericCredentialType",
@@ -1801,7 +1801,7 @@ const digital_list_entitlements = tool({
     name: "digital_list_entitlements",
     position: [840,1328],
     parameters: {
-      "toolDescription": "Everything the customer bought as a download, and whether each one can still be downloaded. USE IT WHEN: When the customer asks about a file they bought. This tool answers with a ready-made `reply` listing the downloadable items as buttons — send it unmodified and write nothing of your own alongside it. Never offer a download link yourself: you cannot mint one, and a link in message text is consumed by the chat app's link preview before the customer taps it. NOT THIS TOOL: Not for physical orders. ⚠ maxDownloads null means unlimited and expiresAt null means never expires — say so in words rather than printing null. canDownload is the single flag that decides whether to offer the download.",
+      "toolDescription": "Everything the customer bought as a download, and whether each can still be downloaded. Sends its own message with download buttons. USE IT WHEN: The customer asks about a file they bought. Answer [sent], add nothing. NOT THIS TOOL: Not for physical orders. Never offer a download link yourself — you cannot create one. ⚠ maxDownloads null = unlimited, expiresAt null = never expires — say it in words. canDownload alone decides whether it can be downloaded.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/digital/my-products",
       "authentication": "genericCredentialType",
@@ -1844,7 +1844,7 @@ const bookings_get_availability = tool({
     name: "bookings_get_availability",
     position: [1040,1328],
     parameters: {
-      "toolDescription": "A service product's bookable time slots, soonest first. USE IT WHEN: Whenever the customer asks when they can have an appointment. Reading availability reserves nothing, so it is always safe to ask. NOT THIS TOOL: Not for a physical product — only a service has a calendar. Not to check an appointment the customer already has: that is bookings_get. ⚠ slotId is OPAQUE — it looks like slot_1757494800000_1757498400000 and must be echoed exactly, never built or edited. Do NOT send from/to unless the customer named a date: a range computed in the chat is how you end up reporting \"no availability\" for a service with plenty. spotsRemaining is null on an ordinary one-at-a-time service and that does NOT mean full; only a class or a group tour reports a number.",
+      "toolDescription": "A service product's bookable time slots, soonest first. Reserves nothing. USE IT WHEN: The customer asks when they can have an appointment. NOT THIS TOOL: Not for a physical product, or an appointment they already have (bookings_get). ⚠ slotId is OPAQUE — copy it exactly, never build or edit one. Send from/to only if the customer named a date. spotsRemaining null does NOT mean full; only group services report a number.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/bookings/availability",
       "authentication": "genericCredentialType",
@@ -1887,7 +1887,7 @@ const bookings_list = tool({
     name: "bookings_list",
     position: [1240,1328],
     parameters: {
-      "toolDescription": "Appointments the customer has booked, with when they are and whether they are confirmed and paid. USE IT WHEN: When the customer asks about an appointment or a service they booked. NOT THIS TOOL: Not to make a booking — booking needs a slot lock against a live calendar and is handed off to the website. ⚠ Read awaitingVendorApproval, NOT status, to say whether an appointment is settled: status:pending means the VENDOR has not accepted it, while payment.status:pending means a charge is live on the handset. Two different pendings on one row. outstandingBalance above zero means a completed appointment cost more than it was quoted — bookings_get_balance explains it. Times are ISO-8601 UTC; render them in the customer timezone. The pagination block here uses totalPages, not pages.",
+      "toolDescription": "The customer's booked appointments: when, whether confirmed, whether paid. USE IT WHEN: The customer asks about an appointment or service they booked. NOT THIS TOOL: It cannot make a booking — booking happens on the website. ⚠ Read awaitingVendorApproval, NOT status: status pending means the SELLER has not accepted; payment.status pending means a charge is live on their phone. outstandingBalance above zero — see bookings_get_balance. Times are UTC; give them in the customer's timezone.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/bookings/list",
       "authentication": "genericCredentialType",
@@ -1930,7 +1930,7 @@ const bookings_get = tool({
     name: "bookings_get",
     position: [1440,1328],
     parameters: {
-      "toolDescription": "One appointment in full: when it is, who provides it, what it costs and where its payment got to. USE IT WHEN: When the customer asks about a specific appointment, or about a balance they were told about. NOT THIS TOOL: Not to list — bookings_list is cheaper. Not for the balance on a completed appointment: bookings_get_balance owns that, and this row carries only the outstanding total. ⚠ Read awaitingVendorApproval, NEVER status: status:pending means the VENDOR has not accepted the appointment, not that a payment is pending. Telling a customer they are booked when the vendor has not looked is the mistake this field exists to prevent. outstandingBalance above zero means the appointment cost more than it was quoted; bookings_get_balance explains the difference, including the overpaid case, which is RECORDED and not refunded.",
+      "toolDescription": "One appointment in full: when, who provides it, what it costs, and its payment state. USE IT WHEN: The customer asks about a specific appointment. NOT THIS TOOL: Not to list (bookings_list). Not for a completed appointment's balance (bookings_get_balance). ⚠ Read awaitingVendorApproval, NEVER status — status pending means the seller has not accepted yet; never say they are booked before that.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/bookings/{{ $fromAI(\"bookingId\", \"The appointment id, from bookings_list.\", \"string\") }}",
       "authentication": "genericCredentialType",
@@ -1973,7 +1973,7 @@ const bookings_get_balance = tool({
     name: "bookings_get_balance",
     position: [40,1528],
     parameters: {
-      "toolDescription": "What a finished appointment actually cost against what it was quoted, and what is still owed. USE IT WHEN: When the customer asks why they owe more, or when a booking row shows outstandingBalance above zero. NOT THIS TOOL: Not before the appointment happened — there is no balance until the vendor settles it. Not for the original price, which is on the booking as price.quoted. ⚠ creditDue is the OTHER direction — the provider settled BELOW the quote, so the customer overpaid. It is recorded and is NOT refunded automatically, by platform decision: say the provider settled below the quote and offer support, never promise money is on its way back. settled:false means the provider has not closed the appointment yet, so every number is provisional.",
+      "toolDescription": "What a finished appointment cost against its quote, and what is still owed. USE IT WHEN: The customer asks why they owe more, or a booking shows outstandingBalance above zero. NOT THIS TOOL: Not before the appointment is settled by the provider — there is no balance yet. ⚠ creditDue means they overpaid: it is recorded and NOT refunded automatically — offer support, never promise money back. settled false means every number is provisional.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/bookings/{{ $fromAI(\"bookingId\", \"The appointment id, from bookings_list. A 24-character hexadecimal id.\", \"string\") }}/balance",
       "authentication": "genericCredentialType",
@@ -2016,7 +2016,7 @@ const bookings_payment_status = tool({
     name: "bookings_payment_status",
     position: [240,1528],
     parameters: {
-      "toolDescription": "The payment state of one appointment, and the live charge behind it when there is one. USE IT WHEN: When the customer asks whether their booking is paid for, or to check whether a mobile-money charge settled. NOT THIS TOOL: Not as a substitute for bookings_get — this answers only about money. ⚠ status:pending means a charge is LIVE on the customer's handset right now — do not suggest paying again while it is. transaction.transactionId is the handle the money tools take: payment_get_transaction, payment_authorize_otp and payment_create_pay_link all want it, and it is named transactionId rather than id precisely so it is not confused with the bookingId beside it.",
+      "toolDescription": "The payment state of one appointment, and the live charge behind it if there is one. USE IT WHEN: The customer asks whether their booking is paid, or whether a mobile-money charge settled. NOT THIS TOOL: It answers only about money — use bookings_get for the rest. ⚠ status pending means a charge is LIVE on their phone right now — never suggest paying again. transaction.transactionId is what payment_get_transaction takes.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/bookings/{{ $fromAI(\"bookingId\", \"The appointment id, from bookings_list. A 24-character hexadecimal id.\", \"string\") }}/payment-status",
       "authentication": "genericCredentialType",
@@ -2059,7 +2059,7 @@ const payment_methods_list = tool({
     name: "payment_methods_list",
     position: [440,1528],
     parameters: {
-      "toolDescription": "The ways to pay the customer has saved — mobile-money wallets, and any cards they added on the website. USE IT WHEN: When they ask what they have saved, before offering to change their default, or when a payment is about to be taken and you want to name the wallet they usually use. NOT THIS TOOL: Not to fill in a payment — the number is never returned, so checkout still asks for it. Not for a booking payment state, which is bookings_payment_status. ⚠ Check `expired` before ever suggesting a card — an expired one stays in the list and still looks usable, and recommending it produces a decline the customer has to work out for themselves. Never work the expiry out yourself from the date; read the field. The wallet's phone number is NEVER returned, so you cannot fill in a payment from this: name the wallet by its label and let the customer give the number. The default is first in the list.",
+      "toolDescription": "The customer's saved ways to pay — mobile-money wallets and cards added on the website. The default comes first. USE IT WHEN: They ask what they have saved, or you want to name the wallet they usually use. NOT THIS TOOL: Not to fill in a payment — the number is never returned. Not for a booking's payment (bookings_payment_status). ⚠ Read `expired` before suggesting a card — an expired card still appears in the list. Name a wallet by its label.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/payment-methods/list",
       "authentication": "genericCredentialType",
@@ -2102,7 +2102,7 @@ const contact_get_state = tool({
     name: "contact_get_state",
     position: [640,1528],
     parameters: {
-      "toolDescription": "The email address and phone number the customer signs in with, masked, plus any change that is waiting to be confirmed. USE IT WHEN: When the customer asks what email or number is on their account, or asks what happened to a change they started. NOT THIS TOOL: Not for the customer's name, language or addresses — profile_get_summary and addresses_list answer those. ⚠ The CURRENT email and number come back MASKED and the field names say so — read emailMasked and phoneMasked, and never present them as the full value. A PENDING change carries its target in full, because the whole point of the read is telling the customer which address to check. If pendingPhone is set, read phoneChangeProved: false means the customer cannot finish that change yet, and the remedy is to connect the new number on WhatsApp first.",
+      "toolDescription": "The customer's sign-in email and phone number (masked), plus any change waiting to be confirmed. USE IT WHEN: They ask what email or number is on their account, or about a change they started. NOT THIS TOOL: Not for name, language or addresses (profile_get_summary, addresses_list). ⚠ emailMasked / phoneMasked are masked — never present them as full. A PENDING change shows its target in full. If pendingPhone is set and phoneChangeProved is false, they must first connect the new number on WhatsApp.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/contact",
       "authentication": "genericCredentialType",
@@ -2145,7 +2145,7 @@ const connections_list = tool({
     name: "connections_list",
     position: [840,1528],
     parameters: {
-      "toolDescription": "Both messaging channels and whether each one is connected to the customer's account, with a hint at the connected identity. USE IT WHEN: When the customer asks which apps are linked to their account, or before offering to disconnect one. NOT THIS TOOL: Not for notification preferences — notifications_get_preferences answers which channels the platform may write to. ⚠ Always exactly two rows, connected or not — there is no paging and nothing is truncated. identityHint is the ONLY form of the identity that ever comes back; there is no full number or chat id and asking for one will not produce it. isCurrentChannel marks the app this conversation is happening in, which is the one connections_disconnect refuses to cut.",
+      "toolDescription": "Both messaging apps (WhatsApp, Telegram) and whether each is connected to the account, with a hint of the connected identity. USE IT WHEN: They ask which apps are linked to their account. NOT THIS TOOL: Not for notification preferences (notifications_get_preferences). ⚠ Always exactly two rows. identityHint is the only identity ever returned. isCurrentChannel marks the app this chat is in.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/connections/list",
       "authentication": "genericCredentialType",
@@ -2188,7 +2188,7 @@ const account_close_preview = tool({
     name: "account_close_preview",
     position: [1040,1528],
     parameters: {
-      "toolDescription": "Whether this account can be closed, what would stop it, and the exact sentence describing what closing does — in the customer's language. USE IT WHEN: Whenever the customer asks about closing or deleting their account, and ALWAYS before account_close. It changes nothing. NOT THIS TOOL: Not for suspending, pausing or hiding an account — none of those exist. This is the only closure there is. ⚠ Relay `consequence` VERBATIM — it is written in the customer's language and it is the sentence they are entitled to read before deciding. Say CLOSED and say that past orders are kept as business records without their details; never say deleted or erased, because that is not what happens. canClose false means it is refused today: blockingRoles non-empty means the account also sells or delivers and support has to handle it, and activeOrderCount above zero means orders are still on the way and closing can happen once they arrive.",
+      "toolDescription": "Whether this account can be closed, what would block it, and the exact sentence (in their language) describing what closing does. Changes nothing. USE IT WHEN: Whenever the customer asks about closing or deleting their account. NOT THIS TOOL: There is no suspend, pause or hide — closing is the only option. ⚠ Relay `consequence` VERBATIM. Say CLOSED, and that past orders are kept as business records without their details — never 'deleted' or 'erased'. canClose false: blockingRoles means support must handle it; activeOrderCount above zero means wait until those orders arrive.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/account/close/preview",
       "authentication": "genericCredentialType",
@@ -2231,7 +2231,7 @@ const reviews_check_eligibility = tool({
     name: "reviews_check_eligibility",
     position: [1240,1528],
     parameters: {
-      "toolDescription": "Whether the customer is allowed to review a product or a delivery — and if not, why. USE IT WHEN: Before offering to take a review, so an ineligible customer is never asked for one. NOT THIS TOOL: Not after a failed submission — this is the check that avoids one. ⚠ A 200 with eligible:false is a successful answer to a question, not a failure. reason is the same code the write path would have raised.",
+      "toolDescription": "Whether the customer may review a product or a delivery, and if not, why. USE IT WHEN: Before offering to take a review, so nobody ineligible is asked for one. NOT THIS TOOL: Not after a failed submission — this is the check that avoids one. ⚠ eligible false is a normal answer, not a failure.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/reviews/eligibility",
       "authentication": "genericCredentialType",
@@ -2274,7 +2274,7 @@ const reviews_list_mine = tool({
     name: "reviews_list_mine",
     position: [1440,1528],
     parameters: {
-      "toolDescription": "The reviews the customer has written themselves, newest first — products and deliveries, in every moderation state. USE IT WHEN: For \"what have I reviewed\", \"did my review go up\", \"why can I not see my review\", and to check whether they have already rated something. NOT THIS TOOL: NOT other people's reviews of a product — that is catalog_list_product_reviews. ⚠ To say whether a review is visible, read publiclyVisible and NEVER status. A delivery review is stored as status:published and appears on no page anywhere, because it is internal feedback about the carrier — so status alone would have you tell the customer their review is live and send them looking for it. subjectLabel is the product's name; it is null on a delivery review and null on a product no longer for sale, and in that case talk about the order via orderId rather than reading an id aloud. There is no subjectType filter, deliberately: pairing it with status would invite a query whose name promises a page nothing will ever appear on.",
+      "toolDescription": "Reviews the customer wrote, newest first — products and deliveries, in every moderation state. USE IT WHEN: 'What have I reviewed', 'did my review go up', 'why can't I see my review', or to check whether they already rated something. NOT THIS TOOL: Not other people's reviews (catalog_list_product_reviews). ⚠ Whether a review is visible is publiclyVisible, NEVER status — a delivery review shows status published but appears nowhere, it is internal. subjectLabel null: refer to the order instead of reading an id aloud.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/reviews/list",
       "authentication": "genericCredentialType",
@@ -2317,7 +2317,7 @@ const notifications_get_preferences = tool({
     name: "notifications_get_preferences",
     position: [40,1728],
     parameters: {
-      "toolDescription": "Which channel the customer gets notifications on and which kinds of update they have switched on. USE IT WHEN: When the customer asks about the messages they get, or complains about too many or too few. NOT THIS TOOL: Not to explain a single notification they received — answer the underlying question instead. ⚠ At most ONE secondary channel is on at a time; enabling one disables the others. Money messages and cancellations always send and no setting silences them — say so plainly rather than implying everything is switchable.",
+      "toolDescription": "Which channel the customer gets notifications on and which kinds of update are switched on. USE IT WHEN: They ask about the messages they receive, or say they get too many or too few. NOT THIS TOOL: Not to explain one notification — answer the underlying question. ⚠ Only one secondary channel can be on at a time. Payment messages and cancellations always send — no setting silences them; say so plainly.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/notifications/preferences",
       "authentication": "genericCredentialType",
@@ -2360,7 +2360,7 @@ const notifications_list = tool({
     name: "notifications_list",
     position: [240,1728],
     parameters: {
-      "toolDescription": "The customer's notifications — order progress, payments, bookings, ticket replies — newest first. USE IT WHEN: When they ask what is new or what they missed, and to work out what a vague reference is about: each row carries subject.type and subject.id, which is exactly what the order or ticket tools want. NOT THIS TOOL: NOT authoritative for live order status — a notification records one past moment. Read the order. ⚠ meta.unreadCount rides on the response, so \"you have N unread\" needs no second call. actionUrl is absolute and already in the customer language — relay it as written and never rebuild one. The five aggregate types are derived from the platform own list, so a sixth appearing later is a backend change rather than something to guess at here.",
+      "toolDescription": "The customer's notifications — orders, payments, bookings, ticket replies — newest first. Each carries subject.type and subject.id for the matching order or ticket tool. USE IT WHEN: They ask what is new or what they missed, or you need to work out what a vague reference is about. NOT THIS TOOL: Not authoritative for an order's current status — read the order. ⚠ meta.unreadCount is included — no second call needed. Relay actionUrl exactly as written; never build one.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/notifications/list",
       "authentication": "genericCredentialType",
@@ -2403,7 +2403,7 @@ const notifications_unread_count = tool({
     name: "notifications_unread_count",
     position: [440,1728],
     parameters: {
-      "toolDescription": "How many notifications the customer has not read — one number. USE IT WHEN: To answer \"anything new?\" without pulling a page of rows. NOT THIS TOOL: Not on every message. It answers a question the customer asked. ⚠ A count of zero is a successful answer, not an error. If the customer then asks what they are, notifications_list already reports the same number in meta.unreadCount — so do not call this first as a matter of routine.",
+      "toolDescription": "How many notifications the customer has not read. USE IT WHEN: They ask 'anything new?'. NOT THIS TOOL: Not on every message, and not before notifications_list (which already includes the count). ⚠ Zero is a normal answer.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/notifications/unread-count",
       "authentication": "genericCredentialType",
@@ -2446,7 +2446,7 @@ const notifications_mark_read = tool({
     name: "notifications_mark_read",
     position: [640,1728],
     parameters: {
-      "toolDescription": "Mark a single notification as read. USE IT WHEN: Right after relaying that notification to the customer — reading it aloud to them IS them seeing it. NOT THIS TOOL: NEVER on a notification you did not show them. There is no way to mark one unread again, so an acknowledgement they did not make cannot be taken back. ⚠ One-way: there is no mark-unread route anywhere on this platform. That is why this tool is model-facing while notifications_mark_all_read is not — acknowledging the one you just read out is honest, and doing it to a whole inbox on your own initiative is not.",
+      "toolDescription": "Marks one notification as read. Cannot be undone. USE IT WHEN: Right after you relayed that notification to the customer. NOT THIS TOOL: NEVER on a notification you did not show them.",
       "method": "PATCH",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/notifications/{{ $fromAI(\"notificationId\", \"The id of the notification you just showed the customer, from notifications_list. A 24-character hexadecimal id.\", \"string\") }}/read",
       "authentication": "genericCredentialType",
@@ -2493,7 +2493,7 @@ const messaging_get_window = tool({
     name: "messaging_get_window",
     position: [840,1728],
     parameters: {
-      "toolDescription": "Whether WhatsApp's 24-hour service window is still open for this customer, and when it closes. Telegram has no such window and always answers open. USE IT WHEN: Before starting a flow that may finish after the customer stops writing — a payment they will approve later, an order that ships in two days. Decides whether the flow can end in the chat or must hand off to messaging_notify_customer. NOT THIS TOOL: Not before an ordinary reply. Answering a message the customer just sent is always inside the window.",
+      "toolDescription": "Whether WhatsApp's 24-hour reply window is still open for this customer and when it closes (Telegram is always open). USE IT WHEN: Before a flow whose result arrives after the customer stops writing, to decide whether it can end in chat or needs messaging_notify_customer. NOT THIS TOOL: Not before an ordinary reply — answering their message is always inside the window.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/messaging/window",
       "authentication": "genericCredentialType",
@@ -2536,7 +2536,7 @@ const messaging_notify_customer = tool({
     name: "messaging_notify_customer",
     position: [1040,1728],
     parameters: {
-      "toolDescription": "Hands one situation to the platform to deliver, in the customer's language, through whichever channel reaches them — free-form inside the WhatsApp window, an approved template outside it. USE IT WHEN: When you have something to tell the customer and cannot send it yourself: the service window has closed, or the flow is ending and the answer comes later. Today the only situation is order.payment_link — a card payment page. NOT THIS TOOL: Never as a general send. It takes a named situation, never a message you wrote. There is no marketing situation and there will not be one.",
+      "toolDescription": "Hands one named situation to the platform to deliver later in the customer's language, on whatever channel reaches them. Today the only situation is order.payment_link. USE IT WHEN: You cannot send it yourself: the WhatsApp window has closed, or the answer comes after the conversation ends. NOT THIS TOOL: Never as a general send or with your own text — it takes a situation name only. Never for marketing.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/messaging/notify",
       "authentication": "genericCredentialType",
