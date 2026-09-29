@@ -12,7 +12,7 @@ import { ERROR_CODES } from '../../../core/error-codes';
  * Why: the vectoriser receives a full snapshot of the product (title, description,
  * variants, options, configs). Allowing edits while a request is still pending would
  * race the upstream pipeline and leave us with inconsistent vector data on the
- * external service at https://the8n.fante.cloud/vectoriser.
+ * external service (the n8n vectoriser workflow, `VECTORISER_BASE_URL`).
  *
  * Resolves the product id from one of:
  *   - req.params.id

@@ -8,7 +8,7 @@
  *   VECTORISER_API_KEY  — secret sent as VECTORISER_API_KEY header
  *
  * Optional env vars (with defaults):
- *   VECTORISER_BASE_URL            — base URL (default: https://the8n.fante.cloud/webhook/vectorise)
+ *   VECTORISER_BASE_URL            — base URL (default: https://the8n.wi-mall.com/webhook/vectorise)
  *   VECTORISER_TIMEOUT_SINGLE_MS   — single product HTTP timeout in ms (default: 30000)
  *   VECTORISER_TIMEOUT_BULK_MS     — bulk HTTP timeout in ms (default: 120000)
  *   VECTORISER_MAX_RETRIES         — max retry attempts on transient failures (default: 3)
@@ -27,8 +27,11 @@ export const vectoriserConfig = {
    * ⚠ The default was `https://the8n.fante.cloud/vectoriser` until 2026-09-06, and
    * that path never existed on any deployment — an n8n production webhook lives under
    * `/webhook/<path>`. A deploy that relied on the default was posting into a 404.
+   *
+   * The host moved to `the8n.wi-mall.com` on 2026-09-29: `fante.cloud` is not being
+   * renewed. Production sets `http://n8n:5678/webhook/vectorise` and never reads this.
    */
-  baseUrl: process.env.VECTORISER_BASE_URL ?? 'https://the8n.fante.cloud/webhook/vectorise',
+  baseUrl: process.env.VECTORISER_BASE_URL ?? 'https://the8n.wi-mall.com/webhook/vectorise',
 
   /**
    * API key sent as the custom header: VECTORISER_API_KEY: <apiKey>
