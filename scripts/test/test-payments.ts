@@ -1455,6 +1455,34 @@ assert('⛔ the pay-link mint refuses an un-offered gateway before a token exist
     && gate < mint.indexOf('mintPayLinkToken(');
 });
 
+section('15. The reconciliation sweep — scoped by capability, never by settings (ADR-A08 W2c)');
+
+// The sweep closes money whose callback never came. A row opened on an aggregator that was
+// switched off afterwards is exactly such money, so the sweep's scope must come from what each
+// adapter IS (`capabilities.settlesAsync`), never from what is currently ACTIVE.
+const RECONCILE_WORKER = lf(
+  PAYMENT_SOURCES.find(({ file }) => file.endsWith('payment-reconciliation.worker.ts'))!.code
+);
+
+assert('the sweep names no gateway literal', () =>
+  !/'(NOTCHPAY|MYCOOLPAY|STRIPE)'/.test(RECONCILE_WORKER));
+
+assert('⛔ the sweep imports no payment settings or routing module', () =>
+  !/from '[^']*(payment-settings|payment-routing)[^']*'/.test(RECONCILE_WORKER));
+
+assert('both passes filter on the capability-derived list, from the registry', () =>
+  (RECONCILE_WORKER.match(/gateway: \{ \$in: asyncSettlingGateways\(\) \}/g) ?? []).length === 2
+    && /PAYMENT_GATEWAYS\.entries\(\)/.test(RECONCILE_WORKER)
+    && /capabilities\.settlesAsync/.test(RECONCILE_WORKER));
+
+assert('the async-settling set is NotchPay and My-CoolPay today — Stripe is not swept', () => {
+  const swept = [...PAYMENT_GATEWAYS.entries()]
+    .filter(([, g]) => g.capabilities.settlesAsync)
+    .map(([name]) => name)
+    .sort();
+  return JSON.stringify(swept) === JSON.stringify(['MYCOOLPAY', 'NOTCHPAY']);
+});
+
 originalConsole.log(`\n${'═'.repeat(76)}`);
 originalConsole.log(`  ${passed} passed, ${failed} failed`);
 originalConsole.log(`${'═'.repeat(76)}\n`);

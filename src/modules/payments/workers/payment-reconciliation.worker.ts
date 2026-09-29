@@ -9,7 +9,26 @@ import { CreditTopupModel } from '../../billing/models/credit-topup.model';
 import { PaymentOrchestratorService } from '../services/payment-orchestrator.service';
 import { planPurchaseService } from '../../billing/services/plan-purchase.service';
 import { creditTopupService } from '../../billing/services/credit-topup.service';
-import { getPaymentGateway } from '../gateways/registry';
+import { getPaymentGateway, PAYMENT_GATEWAYS } from '../gateways/registry';
+import { PaymentGatewayName } from '../gateways/gateway.interface';
+
+/**
+ * The gateways this sweep covers: every REGISTERED adapter that declares
+ * `capabilities.settlesAsync` (ADR-A08 D-2).
+ *
+ * ⛔ **Derived from the registry, never from the payment settings.** A row opened on an
+ * aggregator that has since been switched off still has money moving behind it, and this sweep
+ * is how that money is closed when its callback never arrives. Scoping by "the active
+ * aggregator" would abandon exactly those rows the moment an administrator switched. The two
+ * hardcoded `['NOTCHPAY','MYCOOLPAY']` lists this replaces had the opposite weakness: a new
+ * asynchronous adapter would have been left out of the sweep without anything failing.
+ * `test:payments` pins both halves.
+ */
+function asyncSettlingGateways(): PaymentGatewayName[] {
+  return [...PAYMENT_GATEWAYS.entries()]
+    .filter(([, gateway]) => gateway.capabilities.settlesAsync)
+    .map(([name]) => name);
+}
 
 /**
  * PaymentReconciliationWorker — the sweep that closes a payment whose callback
@@ -125,14 +144,14 @@ export class PaymentReconciliationWorker implements ObservableWorker {
   /**
    * Orders, carts and bookings.
    *
-   * Deliberately scoped to the mobile-money gateways. Stripe settles
-   * synchronously through the Payment Element and its webhook delivery has its
-   * own retry with exponential backoff — sweeping it would poll a provider that
-   * is already telling us.
+   * Scoped to the gateways that settle asynchronously (`asyncSettlingGateways`).
+   * Stripe does not: it settles synchronously through the Payment Element and its
+   * webhook delivery has its own retry with exponential backoff — sweeping it
+   * would poll a provider that is already telling us.
    */
   private async reconcileTransactions(now: Date): Promise<number> {
     const stale = await PaymentTransactionModel.find({
-      gateway: { $in: ['NOTCHPAY', 'MYCOOLPAY'] },
+      gateway: { $in: asyncSettlingGateways() },
       status: { $in: ['INITIATED', 'PENDING'] },
       // A transaction with no gateway reference was never successfully opened —
       // there is nothing to ask about.
@@ -174,7 +193,7 @@ export class PaymentReconciliationWorker implements ObservableWorker {
    */
   private async reconcileBilling(now: Date): Promise<number> {
     const filter = {
-      gateway: { $in: ['NOTCHPAY', 'MYCOOLPAY'] },
+      gateway: { $in: asyncSettlingGateways() },
       status: 'pending',
       gateway_ref: { $nin: ['', null] },
       updated_at: { $lt: this.minAge(now) },
