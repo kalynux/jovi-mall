@@ -26,6 +26,7 @@ import { stopAllWorkers } from './modules/dev-tools/worker-registry';
 import { initializeMetrics, installOutboxDepthProvider, recordMongoError } from './modules/system/metrics/metrics';
 import { outboxDepthForMetrics } from './modules/system/services/queue-depth.service';
 import { primeMaintenanceState } from './modules/system/services/maintenance.service';
+import { primePaymentSettings } from './modules/payments/services/payment-settings.service';
 import { inspectDatabase } from './modules/system/services/database-inspect.service';
 import { SYSTEM_CONFIG } from './modules/system/config/system.config';
 import { closeRedisClients } from './infra/redis/redis.factory';
@@ -244,6 +245,9 @@ export async function startServer(): Promise<Server> {
     // writes against a platform that is supposed to be shut, which is precisely the thing the
     // window exists to prevent, at precisely the worst moment.
     const maintenance = await primeMaintenanceState();
+    // Payment routing (ADR-A08), for the same reason: an instance started after an emergency
+    // aggregator switch must not route its first cache window of charges to the one just left.
+    await primePaymentSettings();
 
     // Swap the rate limiters onto the shared Redis store, now that Mongo is up and the
     // process is committed to serving. Before this they use an in-memory store, which

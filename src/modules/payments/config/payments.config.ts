@@ -116,6 +116,14 @@ export const PAYMENTS_CONFIG = Object.freeze({
    * is what is being attacked.
    */
   OTP_MAX_ATTEMPTS: parseInt(process.env.PAYMENT_OTP_MAX_ATTEMPTS || '5'),
+
+  /**
+   * How long an instance may serve its cached `payment_settings` before re-reading Mongo
+   * (ADR-A08 D-3). It is the cross-instance convergence bound after an aggregator switch, and
+   * it is reported to the administrator as `convergenceSeconds` rather than left to be
+   * discovered mid-incident. Same shape and default as `MAINTENANCE_CACHE_TTL_MS`.
+   */
+  SETTINGS_CACHE_TTL_MS: parseInt(process.env.PAYMENT_SETTINGS_CACHE_TTL_MS || '5000'),
 });
 
 /** True when NotchPay has both the credential to call with and the secret to verify with. */

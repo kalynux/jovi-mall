@@ -184,6 +184,17 @@ the Campay adapter (Phase 2) passes a live-money test, an administrator switches
 runtime, with no deploy. After a soak period, the default changes in code and this ADR gains an
 addendum.
 
+## Transition (W1 → C1)
+
+`gatewayAcceptsNewPayments` (the gate behind `assertGatewayOffered`) applies the ADR-A08 rule
+(configured **and** the active collection aggregator, or Stripe while enabled) **only once a
+`payment_settings` document exists**. While there is none (`version` 0), it answers "configured"
+alone, exactly as before this ADR. The reason is that the client-named doors still take a
+`gateway` until W2a makes it ignored, and the strict rule would have refused `MYCOOLPAY` on them
+the moment W1 deployed. After W2a the only remaining reader is the pay-link mint, where the
+bridge buys nothing. **C1 removes it.** `test:payment-settings` § 4 pins both branches, so C1
+flips a known test.
+
 ---
 
 ## Error codes

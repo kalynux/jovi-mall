@@ -5,6 +5,8 @@ import { StripeGateway } from './stripe.gateway';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { myCoolPayEnabled, notchPayEnabled, stripeEnabled } from '../config/payments.config';
+import { getPaymentSettingsSync } from '../services/payment-settings.service';
+import type { AggregatorFacts, RoutingFacts } from '../domain/payment-routing';
 
 /**
  * The one gateway registry.
@@ -90,21 +92,64 @@ export function getPaymentGateway(name: string): PaymentGateway {
  * special. Setting both Stripe secrets turns cards back on across every door at once; that is a
  * decision for the owner, not a code change.
  */
-const ACCEPTS_NEW_PAYMENTS: Readonly<Record<PaymentGatewayName, () => boolean>> = Object.freeze({
+const CONFIGURED: Readonly<Record<PaymentGatewayName, () => boolean>> = Object.freeze({
   NOTCHPAY: notchPayEnabled,
   MYCOOLPAY: myCoolPayEnabled,
   STRIPE: stripeEnabled,
 });
 
-/** Whether a new charge may be opened on this gateway right now. False for an unknown name. */
-export function gatewayAcceptsNewPayments(name: string): boolean {
+/**
+ * Whether this gateway's credentials are present on this deployment. False for an unknown name.
+ *
+ * Only half of "may a new charge be opened here" since ADR-A08: the other half is the
+ * administrator's `payment_settings`. See `gatewayAcceptsNewPayments`.
+ */
+export function gatewayConfigured(name: string): boolean {
   if (!gateways.has(name as PaymentGatewayName)) return false;
-  return ACCEPTS_NEW_PAYMENTS[name as PaymentGatewayName]();
+  return CONFIGURED[name as PaymentGatewayName]();
 }
 
-/** The gateways a new charge may be opened on, in registration order. */
+/**
+ * Whether a new charge may be opened on this gateway right now. False for an unknown name.
+ *
+ * ADR-A08: configured AND (it is the active collection aggregator, OR it is Stripe while Stripe
+ * is switched on).
+ *
+ * ⚠ **TRANSITION, remove in C1.** While no `payment_settings` document exists (`version` 0) the
+ * answer is "configured" alone, exactly as before ADR-A08. The client-named doors still take a
+ * `gateway` until W2a makes it ignored, and the strict rule would refuse `MYCOOLPAY` on them the
+ * moment this deployed. `test:payments` pins today's answer; `test:payment-settings` pins both
+ * branches, so C1 flips a known test. After W2a the only reader left is the pay-link mint, where
+ * the bridge buys nothing.
+ */
+export function gatewayAcceptsNewPayments(name: string): boolean {
+  if (!gatewayConfigured(name)) return false;
+  const settings = getPaymentSettingsSync();
+  if (settings.version === 0) return true; // TRANSITION (ADR-A08): remove in C1.
+  return name === settings.collection_aggregator || (name === 'STRIPE' && settings.stripe_enabled);
+}
+
+/** The gateways a new charge may be opened on, in registration order. Same rule as above. */
 export function offeredPaymentGateways(): PaymentGatewayName[] {
-  return PAYMENT_GATEWAY_NAMES.filter((name) => ACCEPTS_NEW_PAYMENTS[name]());
+  return PAYMENT_GATEWAY_NAMES.filter((name) => gatewayAcceptsNewPayments(name));
+}
+
+/**
+ * The per-aggregator facts payment routing decides from (ADR-A08). Built here because every
+ * input is the registry's: credentials, the adapter's declared capabilities, and its payout
+ * support. `payments/domain/payment-routing.ts` stays pure by taking these as an argument.
+ */
+export function buildRoutingFacts(): RoutingFacts {
+  const facts = {} as Record<PaymentGatewayName, AggregatorFacts>;
+  for (const name of PAYMENT_GATEWAY_NAMES) {
+    facts[name] = {
+      configured: gatewayConfigured(name),
+      capabilities: gateways.get(name)!.capabilities,
+      payoutImplemented: gatewayImplementsPayout(name),
+      payoutAvailable: gatewaySupportsPayout(name),
+    };
+  }
+  return facts;
 }
 
 /**
