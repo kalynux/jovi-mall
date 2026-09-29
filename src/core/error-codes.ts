@@ -230,6 +230,21 @@ export const ERROR_CODES = Object.freeze({
      * conversation than "which network is this number on?".
      */
     PAYMENT_OPERATOR_UNDETERMINED: 'PAYMENT_OPERATOR_UNDETERMINED',
+
+    // ── PAYMENT ROUTING (ADR-A08, api-doc/payments/routing.md) ────────────────
+    // All five are raised BEFORE anything is written, and all are client-safe categories so
+    // `details` reaches the caller (wi-admin forwards it only for those). `test:errors` pins
+    // their statuses.
+    /** 422. The provider is disabled, or no aggregator can route it now. `details.offered` lists what can. */
+    PAYMENT_PROVIDER_UNAVAILABLE: 'PAYMENT_PROVIDER_UNAVAILABLE',
+    /** 422. The number's prefix belongs to another operator than `provider`. `{ provider, detected, spent: false }`. */
+    PAYMENT_PROVIDER_PHONE_MISMATCH: 'PAYMENT_PROVIDER_PHONE_MISMATCH',
+    /** 400. No `provider`, and none could be derived from a legacy body. */
+    PAYMENT_PROVIDER_REQUIRED: 'PAYMENT_PROVIDER_REQUIRED',
+    /** 422. A payment-settings write broke a hard rule. `details.errors[]` names each one. */
+    PAYMENT_SETTINGS_INVALID: 'PAYMENT_SETTINGS_INVALID',
+    /** 409. `expectedVersion` is not the stored `version`: reload and retry. */
+    PAYMENT_SETTINGS_VERSION_CONFLICT: 'PAYMENT_SETTINGS_VERSION_CONFLICT',
     /**
      * A currency with a minor unit was sent to a mobile-money gateway.
      *

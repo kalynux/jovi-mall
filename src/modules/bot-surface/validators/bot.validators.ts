@@ -6,6 +6,7 @@ import { BOT_CHAT_LIST_MAX } from '../domain/bot-list-window';
 import { PhoneNumberSchema } from '../../../core/validation/phone';
 import { EmailAddressSchema } from '../../../core/validation/email';
 import { ACCOUNT_CLOSURE_CONFIRMATION } from '../../users/user.validator';
+import { PAYMENT_GATEWAY_NAMES } from '../../payments/gateways/gateway.interface';
 import {
     CUSTOMER_AGGREGATE_TYPES,
     CustomerAggregateType,
@@ -777,7 +778,7 @@ export const BotBookingRescheduleSchema = z
  */
 export const BotBookingPaySchema = z
     .object({
-        gateway: z.enum(['NOTCHPAY', 'MYCOOLPAY', 'STRIPE']),
+        gateway: z.enum(PAYMENT_GATEWAY_NAMES),
         phoneNumber: z.string().trim().min(1).max(20).optional(),
         phoneOperator: z.enum(['MTN', 'ORANGE', 'MOOV']).optional(),
         customerEmail: z.string().trim().email().max(254).optional(),

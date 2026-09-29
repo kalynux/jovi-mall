@@ -1,6 +1,7 @@
 import {
   PaymentGateway,
   PaymentGatewayName,
+  GatewayCapabilities,
   PaymentInitPayload,
   PaymentInitResult,
   PaymentVerifyPayload,
@@ -58,6 +59,15 @@ import { recordIntegrationCall } from '../../system/domain/integration-observati
  */
 export class NotchPayGateway implements PaymentGateway {
   readonly name: PaymentGatewayName = 'NOTCHPAY';
+
+  /** Both operators by direct push; the channel (cm.mtn / cm.orange) is resolved from the operator. ADR-A08 D-2. */
+  readonly capabilities: GatewayCapabilities = {
+    collect: {
+      MTN: { flow: 'PUSH', requires: ['phoneNumber'] },
+      ORANGE: { flow: 'PUSH', requires: ['phoneNumber'] },
+    },
+    settlesAsync: true,
+  };
 
   // ── Collection ────────────────────────────────────────────────────────────
 

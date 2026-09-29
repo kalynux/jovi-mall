@@ -316,6 +316,14 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.STRIPE_WEBHOOK_SIGNATURE_INVALID]: 'Stripe webhook signature verification failed',
     [ERROR_CODES.PAYMENT_OPERATOR_UNDETERMINED]:
         'We could not tell which mobile network this number belongs to. Please choose MTN or Orange.',
+    [ERROR_CODES.PAYMENT_PROVIDER_UNAVAILABLE]:
+        'This payment method is not available right now. Please choose another one.',
+    [ERROR_CODES.PAYMENT_PROVIDER_PHONE_MISMATCH]:
+        'This number belongs to a different mobile network than the one you chose. Please check the number or the network.',
+    [ERROR_CODES.PAYMENT_PROVIDER_REQUIRED]: 'Please choose a payment method',
+    [ERROR_CODES.PAYMENT_SETTINGS_INVALID]: 'These payment settings cannot be applied',
+    [ERROR_CODES.PAYMENT_SETTINGS_VERSION_CONFLICT]:
+        'The payment settings changed while you were editing them — reload and retry',
     [ERROR_CODES.PAYMENT_CURRENCY_NOT_SUPPORTED]: 'This currency cannot be charged by mobile money',
     [ERROR_CODES.PAYMENT_WEBHOOK_AMOUNT_MISMATCH]:
         'The confirmed amount does not match the amount recorded for this payment',

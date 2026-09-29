@@ -93,6 +93,9 @@ export const MODELS = Object.freeze({
   // System operations — the maintenance-mode singleton
   SYSTEM_STATE: 'SystemState',
 
+  // Payment routing — the admin-set aggregator/provider singleton (ADR-A08)
+  PAYMENT_SETTINGS: 'PaymentSettings',
+
   /**
    * System logs (Phase 15) — a CAPPED collection with no Mongoose model, deliberately.
    *
@@ -337,6 +340,9 @@ export const COLLECTIONS = Object.freeze({
 
   // System operations — the maintenance-mode singleton
   SYSTEM_STATE: 'system_state',
+
+  // Payment routing — the admin-set aggregator/provider singleton (ADR-A08)
+  PAYMENT_SETTINGS: 'payment_settings',
 
   /** Capped, driver-managed. See the MODELS entry above for why there is no Mongoose model. */
   SYSTEM_LOG: 'system_logs',

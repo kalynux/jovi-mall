@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { OptionalEmailAddressSchema } from '../../../core/validation/email';
 import { OptionalPhoneNumberSchema } from '../../../core/validation/phone';
+import { PAYMENT_GATEWAY_NAMES } from '../gateways/gateway.interface';
 
 /**
  * Payment API validators.
@@ -34,7 +35,8 @@ export const PaymentChannelSchema = z.object({
 
 export type PaymentChannelInput = z.infer<typeof PaymentChannelSchema>;
 
-export const PAYMENT_GATEWAYS = ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE'] as const;
+/** Alias of `PAYMENT_GATEWAY_NAMES`, the one list (ADR-A08). Not the adapter Map of the same name in `registry.ts`. */
+export const PAYMENT_GATEWAYS = PAYMENT_GATEWAY_NAMES;
 
 const PaymentGatewaySchema = z.enum(PAYMENT_GATEWAYS, {
   errorMap: () => ({ message: `Invalid gateway. Must be one of: ${PAYMENT_GATEWAYS.join(', ')}` }),

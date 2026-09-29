@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { PaymentChannelSchema } from '../../payments/validators/payment.validators';
 import { BILLING_OWNER_TYPES } from '../billing.types';
+import { PAYMENT_GATEWAY_NAMES } from '../../payments/gateways/gateway.interface';
 
 // Derived from the module's own list, never retyped beside it — the same rule the
 // notification catalogs follow, for the same reason: two hand-maintained copies of one
@@ -76,13 +77,13 @@ const BillingPaymentChannelSchema = PaymentChannelSchema.default({});
 /** Vendor: start a credit top-up purchase. */
 export const InitiateTopupSchema = z.object({
   packCode: z.string().trim().min(1),
-  gateway: z.enum(['NOTCHPAY', 'MYCOOLPAY', 'STRIPE']),
+  gateway: z.enum(PAYMENT_GATEWAY_NAMES),
   channel: BillingPaymentChannelSchema,
 });
 
 /** Vendor: start a self-serve plan purchase (planId comes from the URL). */
 export const InitiatePlanPurchaseSchema = z.object({
-  gateway: z.enum(['NOTCHPAY', 'MYCOOLPAY', 'STRIPE']),
+  gateway: z.enum(PAYMENT_GATEWAY_NAMES),
   channel: BillingPaymentChannelSchema,
 });
 

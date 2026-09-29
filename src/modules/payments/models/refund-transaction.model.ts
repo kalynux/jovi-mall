@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
+import { PAYMENT_GATEWAY_NAMES, PaymentGatewayName } from '../gateways/gateway.interface';
 
 /**
  * RefundTransaction - Track partial and full refunds
@@ -21,7 +22,7 @@ export interface IRefundTransaction extends Document {
     reason?: string;                                // Refund reason (optional)
     status: 'pending' | 'completed' | 'failed';
 
-    gateway: 'NOTCHPAY' | 'MYCOOLPAY' | 'STRIPE';   // Payment gateway
+    gateway: PaymentGatewayName;                    // Payment gateway
     gatewayRefundRef?: string;                      // Gateway's refund reference
 
     initiatedBy: mongoose.Types.ObjectId;           // User/Admin who initiated refund
@@ -77,7 +78,7 @@ const RefundTransactionSchema = new Schema<IRefundTransaction>(
         },
         gateway: {
             type: String,
-            enum: ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE'],
+            enum: [...PAYMENT_GATEWAY_NAMES],
             required: true
         },
         gatewayRefundRef: {

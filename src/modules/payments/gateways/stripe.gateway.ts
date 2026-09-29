@@ -2,6 +2,7 @@ import Stripe from 'stripe';
 import {
   PaymentGateway,
   PaymentGatewayName,
+  GatewayCapabilities,
   PaymentInitPayload,
   PaymentInitResult,
   PaymentVerifyPayload,
@@ -45,6 +46,14 @@ import { recordIntegrationCall } from '../../system/domain/integration-observati
  */
 export class StripeGateway implements PaymentGateway {
   readonly name: PaymentGatewayName = 'STRIPE';
+
+  /** Cards only, through the Payment Element. Not `settlesAsync`: the reconciliation sweep has never covered Stripe. ADR-A08 D-2. */
+  readonly capabilities: GatewayCapabilities = {
+    collect: {
+      CARD: { flow: 'CARD_ELEMENT', requires: [] },
+    },
+    settlesAsync: false,
+  };
 
   /**
    * Initiate card payment (create PaymentIntent).

@@ -1,6 +1,7 @@
 import {
   PaymentGateway,
   PaymentGatewayName,
+  GatewayCapabilities,
   PaymentInitPayload,
   PaymentInitResult,
   PaymentVerifyPayload,
@@ -54,6 +55,18 @@ import { recordIntegrationCall } from '../../system/domain/integration-observati
  */
 export class MyCoolPayGateway implements PaymentGateway {
   readonly name: PaymentGatewayName = 'MYCOOLPAY';
+
+  /**
+   * Orange Money may answer REQUIRE_OTP (`instructions.requiresOtp`), so its flow is OTP; MTN is a
+   * plain push. My-CoolPay derives the operator from the number itself. ADR-A08 D-2.
+   */
+  readonly capabilities: GatewayCapabilities = {
+    collect: {
+      MTN: { flow: 'PUSH', requires: ['phoneNumber'] },
+      ORANGE: { flow: 'OTP', requires: ['phoneNumber'] },
+    },
+    settlesAsync: true,
+  };
 
   // ── Collection ────────────────────────────────────────────────────────────
 

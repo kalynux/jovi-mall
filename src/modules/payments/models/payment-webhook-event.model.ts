@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 import { PaymentGatewayType } from './payment-transaction.model';
+import { PAYMENT_GATEWAY_NAMES } from '../gateways/gateway.interface';
 
 /**
  * Every gateway callback we accepted, keyed so a redelivery cannot be
@@ -70,7 +71,7 @@ const PaymentWebhookEventSchema = new Schema<IPaymentWebhookEvent>(
   {
     gateway: {
       type: String,
-      enum: ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE'],
+      enum: [...PAYMENT_GATEWAY_NAMES],
       required: true,
     },
     eventId: { type: String, required: true },

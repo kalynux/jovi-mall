@@ -1,4 +1,4 @@
-import { PaymentGateway, PaymentGatewayName } from './gateway.interface';
+import { PaymentGateway, PaymentGatewayName, PAYMENT_GATEWAY_NAMES } from './gateway.interface';
 import { NotchPayGateway } from './notchpay.gateway';
 import { MyCoolPayGateway } from './mycoolpay.gateway';
 import { StripeGateway } from './stripe.gateway';
@@ -43,10 +43,12 @@ const gateways: ReadonlyMap<PaymentGatewayName, PaymentGateway> = new Map<
 
 export const PAYMENT_GATEWAYS = gateways;
 
-/** Every gateway name the platform knows, in registration order. */
-export const PAYMENT_GATEWAY_NAMES: readonly PaymentGatewayName[] = Object.freeze([
-  ...gateways.keys(),
-]);
+/**
+ * Every gateway name the platform knows. Defined once in `gateway.interface.ts` (ADR-A08) and
+ * re-exported here for the importers that already read it from the registry. `test:payment-routing`
+ * asserts the map above registers exactly these names.
+ */
+export { PAYMENT_GATEWAY_NAMES };
 
 /**
  * Resolve a gateway, or refuse.

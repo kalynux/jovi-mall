@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 import { BillingOwnerType, BILLING_OWNER_TYPES } from '../billing.types';
+import { PAYMENT_GATEWAY_NAMES, PaymentGatewayName } from '../../payments/gateways/gateway.interface';
 
 /**
  * PlanPurchase - An owner's self-serve purchase of a paid pricing plan.
@@ -13,7 +14,7 @@ import { BillingOwnerType, BILLING_OWNER_TYPES } from '../billing.types';
  */
 
 export type PlanPurchaseStatus = 'pending' | 'paid' | 'failed' | 'reversed';
-export type PlanPurchaseGateway = 'NOTCHPAY' | 'MYCOOLPAY' | 'STRIPE';
+export type PlanPurchaseGateway = PaymentGatewayName;
 
 export interface IPlanPurchase extends Document {
   owner_type: BillingOwnerType;
@@ -49,7 +50,7 @@ const PlanPurchaseSchema = new Schema<IPlanPurchase>(
     price: { type: Number, required: true, min: 0 },
     currency: { type: String, required: true, trim: true, uppercase: true },
     status: { type: String, enum: ['pending', 'paid', 'failed', 'reversed'], default: 'pending' },
-    gateway: { type: String, enum: ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE'], default: null },
+    gateway: { type: String, enum: [...PAYMENT_GATEWAY_NAMES], default: null },
     gateway_ref: { type: String, default: null },
     merchant_ref: { type: String, default: null, unique: true, sparse: true, index: true },
     otp_attempts: { type: Number, default: 0, min: 0 },

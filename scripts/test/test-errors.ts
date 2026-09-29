@@ -22,6 +22,7 @@
  *                    PRODUCTION AND DEVELOPMENT PRODUCE IDENTICAL OUTPUT for `internal`.
  *   6. Body parser   the branch that did not exist, so malformed JSON returned 500.
  *   7. Rate limits   the policy table's totality, ordering, and the exempt set.
+ *   (8. Default messages, and 9. the ADR-A08 payment-routing codes, came later.)
  *
  * What this cannot cover: that the limiter's Redis store actually counts, and that it fails
  * OPEN when Redis dies. Both need a live server — see `npm run verify:rate-limit`.
@@ -771,6 +772,45 @@ function census(): Map<string, CensusRow> {
             'AGENT_MEMBERSHIP_NOT_APPROVED', 'AGENT_NOT_ELIGIBLE_FOR_ASSIGNMENT',
             'AGENT_NOT_FOUND', 'ORDER_NOT_FOUND', 'CONTRACT_NOT_FOUND',
         ].every((code) => code in DEFAULT_ERROR_MESSAGES));
+
+    // ── 9. Payment routing (ADR-A08) ─────────────────────────────────────────
+    // wi-admin forwards `details` only for client-safe categories, and the settings screen
+    // renders `details.errors[]` from a refused write. A status drifting to 5xx would mask
+    // both silently, so the five codes are pinned here with their statuses.
+    section('9. Payment-routing codes — status, category, details survive');
+
+    const routingCodes: Array<[string, number, ErrorCategory]> = [
+        [ERROR_CODES.PAYMENT_PROVIDER_UNAVAILABLE, 422, ERROR_CATEGORIES.BUSINESS_RULE],
+        [ERROR_CODES.PAYMENT_PROVIDER_PHONE_MISMATCH, 422, ERROR_CATEGORIES.BUSINESS_RULE],
+        [ERROR_CODES.PAYMENT_PROVIDER_REQUIRED, 400, ERROR_CATEGORIES.VALIDATION],
+        [ERROR_CODES.PAYMENT_SETTINGS_INVALID, 422, ERROR_CATEGORIES.BUSINESS_RULE],
+        [ERROR_CODES.PAYMENT_SETTINGS_VERSION_CONFLICT, 409, ERROR_CATEGORIES.CONFLICT],
+    ];
+    for (const [code, status, expected] of routingCodes) {
+        assert(`${code} at ${status} → ${expected}, client-safe, with a default message`, () =>
+            categoryFor(code, status) === expected
+            && CLIENT_SAFE_CATEGORIES.has(expected)
+            && ((DEFAULT_ERROR_MESSAGES as Record<string, string>)[code] ?? '').length > 0);
+    }
+
+    assert('PAYMENT_SETTINGS_INVALID keeps details.errors[] through the projection', () => {
+        const out = projectDetails(ERROR_CATEGORIES.BUSINESS_RULE, {
+            errors: [{ code: 'COLLECTION_AGGREGATOR_NOT_CONFIGURED', message: 'x' }],
+        });
+        return Array.isArray(out?.errors) && (out!.errors as unknown[]).length === 1;
+    });
+
+    assert('PAYMENT_PROVIDER_PHONE_MISMATCH keeps {provider, detected, spent}', () => {
+        const out = projectDetails(ERROR_CATEGORIES.BUSINESS_RULE, {
+            provider: 'ORANGE', detected: 'MTN', spent: false,
+        });
+        return out?.provider === 'ORANGE' && out?.detected === 'MTN' && out?.spent === false;
+    });
+
+    assert('PAYMENT_PROVIDER_UNAVAILABLE keeps details.offered', () => {
+        const out = projectDetails(ERROR_CATEGORIES.BUSINESS_RULE, { provider: 'MTN', offered: ['ORANGE'] });
+        return Array.isArray(out?.offered) && (out!.offered as unknown[])[0] === 'ORANGE';
+    });
 
     originalConsole.log(`\n${'═'.repeat(76)}`);
     originalConsole.log(`  ${passed} passed, ${failed} failed`);

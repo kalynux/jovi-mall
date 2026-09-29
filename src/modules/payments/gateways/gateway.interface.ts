@@ -2,6 +2,7 @@
 // back from here. `import type` guarantees both are erased, so the cycle never
 // exists at runtime.
 import type { WebhookVerification, NormalizedWebhookEvent } from '../domain/webhook-verification';
+import type { PaymentProvider } from '../domain/payment-provider';
 
 /**
  * Payment Gateway Interface
@@ -77,6 +78,13 @@ export interface PaymentInstructions {
   clientSecret?: string;        // For frontend confirmation
   chargedAmount?: number;       // Amount actually charged, in chargedCurrency (e.g. USD)
   chargedCurrency?: string;     // Presentment currency Stripe charges in (e.g. "usd")
+
+  /**
+   * Open this URL to complete the payment (a hosted card page). Reserved for
+   * `flow: 'REDIRECT'` aggregators (Flutterwave cards, ADR-A08 Phase 2); no
+   * current adapter sets it. Clients must honour it whenever present.
+   */
+  redirectUrl?: string;
 
   // Common
   expiresAt?: Date;             // Payment session expiry
@@ -244,6 +252,14 @@ export interface PaymentGateway {
   readonly name: PaymentGatewayName;
 
   /**
+   * Which providers this aggregator can collect, how, and whether it settles
+   * asynchronously (ADR-A08 D-2). A literal on each adapter, never read from
+   * configuration: it is a fact about the integration, and routing
+   * (`domain/payment-routing.ts`) reads it to decide what a new charge may use.
+   */
+  readonly capabilities: GatewayCapabilities;
+
+  /**
    * Initiate a new payment
    * @param payload - Payment initiation data
    * @returns Normalized payment initiation result
@@ -335,4 +351,35 @@ export interface WebhookVerifyInput {
   sourceIp?: string | null;
 }
 
-export type PaymentGatewayName = 'NOTCHPAY' | 'MYCOOLPAY' | 'STRIPE';
+/**
+ * Every aggregator the platform knows: the ONE list (ADR-A08 D-2).
+ *
+ * Model enums, validators and the registry all derive from this tuple, so adding
+ * Campay or Flutterwave is one entry here plus its adapter. `registry.ts`
+ * re-exports it under the same name for the importers that already read it there.
+ */
+export const PAYMENT_GATEWAY_NAMES = ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE'] as const;
+
+export type PaymentGatewayName = (typeof PAYMENT_GATEWAY_NAMES)[number];
+
+/** How a customer completes a collection, which decides the client's screen. */
+export type CollectFlow = 'PUSH' | 'OTP' | 'CARD_ELEMENT' | 'REDIRECT';
+
+/** The `PaymentChannelInfo` fields a capability can require. */
+export type CollectField = 'phoneNumber' | 'customerEmail' | 'customerName';
+
+export interface ProviderCollectCapability {
+  readonly flow: CollectFlow;
+  /** Channel fields that must be present before the charge is opened. */
+  readonly requires: readonly CollectField[];
+}
+
+export interface GatewayCapabilities {
+  /** An absent provider key means this aggregator cannot collect it. */
+  readonly collect: Readonly<Partial<Record<PaymentProvider, ProviderCollectCapability>>>;
+  /**
+   * The terminal status arrives later, by webhook or reconciliation. The
+   * reconciliation sweep's scope is derived from this, never from settings.
+   */
+  readonly settlesAsync: boolean;
+}

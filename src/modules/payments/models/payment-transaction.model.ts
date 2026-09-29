@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document, Types } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
+import { PAYMENT_GATEWAY_NAMES, PaymentGatewayName } from '../gateways/gateway.interface';
 
 /**
  * PaymentTransaction - Enterprise-grade payment tracking
@@ -31,10 +32,8 @@ export type PaymentMethod =
   | 'CARD'          // Card payment (Stripe)
   | 'CASH';         // Cash payment (manual)
 
-export type PaymentGatewayType =
-  | 'NOTCHPAY'      // Primary mobile money gateway
-  | 'MYCOOLPAY'     // Fallback mobile money gateway
-  | 'STRIPE';       // Card payment gateway
+/** The aggregator that carried this payment. One list: `PAYMENT_GATEWAY_NAMES` (ADR-A08). */
+export type PaymentGatewayType = PaymentGatewayName;
 
 /**
  * What a payment is FOR, when the source id alone is ambiguous.
@@ -235,7 +234,7 @@ const PaymentTransactionSchema = new Schema<IPaymentTransaction>({
   // Gateway info
   gateway: {
     type: String,
-    enum: ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE'],
+    enum: [...PAYMENT_GATEWAY_NAMES],
     required: true,
     index: true  // Analytics by gateway
   },

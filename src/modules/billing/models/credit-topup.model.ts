@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 import { BillingOwnerType, BILLING_OWNER_TYPES } from '../billing.types';
+import { PAYMENT_GATEWAY_NAMES, PaymentGatewayName } from '../../payments/gateways/gateway.interface';
 
 /**
  * CreditTopup - An owner's purchase of a credit pack.
@@ -13,7 +14,7 @@ import { BillingOwnerType, BILLING_OWNER_TYPES } from '../billing.types';
 export type CreditTopupStatus = 'pending' | 'paid' | 'failed' | 'reversed';
 
 /** Gateways reused from the payments module for charging a top-up. */
-export type CreditTopupGateway = 'NOTCHPAY' | 'MYCOOLPAY' | 'STRIPE';
+export type CreditTopupGateway = PaymentGatewayName;
 
 export interface ICreditTopup extends Document {
   owner_type: BillingOwnerType;
@@ -70,7 +71,7 @@ const CreditTopupSchema = new Schema<ICreditTopup>(
     price: { type: Number, required: true, min: 0 },
     currency: { type: String, required: true, trim: true, uppercase: true },
     status: { type: String, enum: ['pending', 'paid', 'failed', 'reversed'], default: 'pending' },
-    gateway: { type: String, enum: ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE'], default: null },
+    gateway: { type: String, enum: [...PAYMENT_GATEWAY_NAMES], default: null },
     gateway_ref: { type: String, default: null },
     // Sparse: every row written before this field existed has none, and a plain
     // unique index refuses the second null.

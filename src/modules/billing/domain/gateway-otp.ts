@@ -2,7 +2,7 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES, ErrorCode } from '../../../core/error-codes';
 import { PAYMENTS_CONFIG } from '../../payments/config/payments.config';
 import { getPaymentGateway } from '../../payments/gateways/registry';
-import { PaymentInstructions } from '../../payments/gateways/gateway.interface';
+import { PaymentInstructions, PaymentGatewayName } from '../../payments/gateways/gateway.interface';
 
 /**
  * Relaying a mobile-money one-time code for a BILLING purchase — a credit
@@ -44,7 +44,7 @@ import { PaymentInstructions } from '../../payments/gateways/gateway.interface';
 /** The fields this rule needs. `ICreditTopup` and `IPlanPurchase` both satisfy it. */
 export interface OtpAuthorizableRow {
   status: 'pending' | 'paid' | 'failed' | 'reversed';
-  gateway: 'NOTCHPAY' | 'MYCOOLPAY' | 'STRIPE' | null;
+  gateway: PaymentGatewayName | null;
   gateway_ref: string | null;
   otp_attempts: number;
   save(): Promise<unknown>;
