@@ -533,6 +533,58 @@ assert('the cover alt is the one written for the language being served', () =>
   && frCover?.alt === 'Un étal acceptant un paiement mobile');
 assert('both languages share the one image', () => enCover?.url === frCover?.url);
 
+/**
+ * ⚠ **The fixtures above are PLAIN OBJECTS, and that is why they missed a live bug.**
+ *
+ * On 2026-09-29 the first article ever published went out with
+ * `cover: { $__parent, $__, $isNew, _doc, alt }` — `url`, `width` and `height` undefined at
+ * the top level, the real values buried in `_doc`. The projection was `{ ...article.cover }`,
+ * nothing in this module calls `.lean()`, and spreading a Mongoose subdocument copies its
+ * internals rather than its data. Every assertion above passed the whole time, because a
+ * spread of a plain object is fine.
+ *
+ * The consumer fared worse than with no cover at all: the marketing frontend branches on
+ * `cover` being **truthy**, so it rendered `<img src="undefined">` instead of its generated
+ * fallback art, and `og:image` went out with no URL — no WhatsApp or Facebook preview.
+ *
+ * So this stands in for a real subdocument: values reachable as properties, but held in
+ * `_doc` and exposed through non-enumerable prototype getters, which is precisely the shape
+ * that makes a spread lose them.
+ */
+function asSubdocument<T extends object>(data: T): T {
+  const proto = Object.create(null) as Record<string, unknown>;
+  for (const key of Object.keys(data)) {
+    Object.defineProperty(proto, key, {
+      get: () => (data as Record<string, unknown>)[key],
+      enumerable: false,
+      configurable: true,
+    });
+  }
+  const doc = Object.create(proto) as Record<string, unknown>;
+  doc.$__ = { activePaths: {} };
+  doc._doc = { ...data };
+  doc.$isNew = false;
+  doc.$__parent = {};
+  return doc as T;
+}
+
+const hydrated = makeArticle({
+  cover: asSubdocument(COVER),
+  translations: [translation({ cover_alt: 'A market stall taking a mobile payment' })],
+} as unknown as Partial<IArticle>);
+const hydratedCover = toPublicArticleSummaryDto(hydrated, hydrated.translations[0], author).cover;
+
+assert('a cover stored as a Mongoose subdocument projects the same four fields', () =>
+  JSON.stringify(Object.keys(hydratedCover ?? {}).sort())
+    === JSON.stringify(['alt', 'height', 'url', 'width']));
+assert('a subdocument cover carries the real url, width and height — not undefined', () =>
+  hydratedCover?.url === COVER.url
+  && hydratedCover?.width === COVER.width
+  && hydratedCover?.height === COVER.height);
+assert('no Mongoose internal reaches a public response', () =>
+  !JSON.stringify(hydratedCover).includes('_doc')
+  && !JSON.stringify(hydratedCover).includes('$__'));
+
 // Unreachable from this route — wi-admin refuses to publish a live language whose cover has
 // no alt — so this pins the DEFENSIVE branch: never blank, never the wrong language.
 assert('an unwritten alt falls back to the title in that same language, never to blank', () => {

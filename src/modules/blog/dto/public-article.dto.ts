@@ -149,10 +149,31 @@ function baseSummary(
  *
  * The stand-in is the article's own title in that **same** language, so it is never blank and
  * never the wrong language — this is not the cross-locale fallback the module rules out.
+ *
+ * ── Why the fields are listed out instead of spread ───────────────────────────
+ * This was `{ ...article.cover, alt }` until 2026-09-29, and that shipped a broken cover on
+ * the first article ever published. Nothing in this module calls `.lean()`, so `article.cover`
+ * is a Mongoose **subdocument**, and spreading one copies its internals — the response went
+ * out as `{ $__parent, $__, $isNew, _doc, alt }`, with `url`, `width` and `height` undefined
+ * at the top level and the real values buried in `_doc`.
+ *
+ * It broke the consumer worse than a missing cover would have: the marketing frontend branches
+ * on `cover` being **truthy**, so the wrapper rendered `<img src="undefined">` instead of its
+ * generated fallback art, and `og:image` went out with no URL — costing every article its
+ * WhatsApp and Facebook preview.
+ *
+ * Naming the three fields is immune to that: it reads through a subdocument's getters and a
+ * plain object alike, and it cannot leak a future internal field into a public response. Do
+ * not "simplify" it back to a spread.
  */
 function coverFor(article: IArticle, translation: IArticleTranslation): PublicArticleCover | null {
   if (!article.cover) return null;
-  return { ...article.cover, alt: translation.cover_alt ?? translation.title };
+  return {
+    url: article.cover.url,
+    width: article.cover.width,
+    height: article.cover.height,
+    alt: translation.cover_alt ?? translation.title,
+  };
 }
 
 export function toPublicArticleSummaryDto(
