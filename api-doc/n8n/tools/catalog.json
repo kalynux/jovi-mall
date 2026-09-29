@@ -6051,7 +6051,7 @@
       "surface": "bot_internal",
       "description": "Answers the platform's waiting Yes/No question (customer.pendingQuestion) exactly as tapping its Yes or No button would: place the order (co), parcel arrived (cd), cancel the order (cnc), close the support request (tcl), disconnect the other app (unl). ⚠ THIS TOOL SENDS THE CUSTOMER the result, word for word what the tap sends — do not repeat or re-word it.",
       "when_to_use": "pendingQuestion is not null and the customer's message ANSWERS it in words, in any language: 'yes', 'ok', 'go ahead', 'place it', 'oui', 'sim', 'sí', 'نعم' → 'yes'; 'no', 'not now', 'leave it', 'non', 'não', 'لا' → 'no'. Check pendingQuestion.text to be sure the message is about THAT question.",
-      "when_not_to_use": "Never when pendingQuestion is null, never for closing the account (button-only), never twice for one message or after a tap. A question back ('how much is delivery?') is not an answer — answer it instead. If the message could mean either, ask. For a waiting Place order question (co) use THIS, not checkout_place.",
+      "when_not_to_use": "Never when pendingQuestion is null, never for closing the account (button-only), never twice for one message or after a tap. A question is not an answer ('how much is delivery?') — answer it instead. If the message could mean either, ask. For a waiting Place order question (co) use THIS, not checkout_place.",
       "operation": {
         "method": "POST",
         "path": "/api/internal/bot/chat/answer"
