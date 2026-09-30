@@ -291,21 +291,27 @@ async function main(): Promise<void> {
      * ⚠ **The gateway is the server's choice.** Every other entry point takes it from its caller
      * because those callers are the platform's own code; this one's caller is a browser, and a
      * gateway name from a browser is a caller choosing where a stranger's money goes.
+     *
+     * ADR-A08: nor does the page name the PROVIDER — the payer's number decides it, through the
+     * one `mobileMoneyRoute`, and the settings decide who collects.
      */
     assert('⛔ the page never names the gateway', () =>
-        pay.includes('mobileMoneyGateway()')
+        pay.includes('mobileMoneyRoute(')
+        && !pay.includes('mobileMoneyGateway(')
         && !/input\.(gateway|provider)/.test(pay));
 
     /**
      * ⚠ **Checked before the spend for a typed number, after it for the account's.** The typed
      * one can be judged immediately; the account's needs the session to find the customer. A
-     * number no network can be resolved for must not cost the customer their screen.
+     * number no network can be resolved for must not cost the customer their screen. Before
+     * either, whether any mobile provider is on offer at all.
      */
     assert('⛔ the mobile network is checked on both numbers, in that order', () => {
-        const typedAt = pay.indexOf('assertNetworkChargeable(gateway, typed, false)');
+        const offeredAt = pay.indexOf('assertMobileMoneyOffered()');
+        const typedAt = pay.indexOf('mobileMoneyRoute(typed, false)');
         const spendAt = pay.indexOf("inAppSurfaceStore.consume('bp'");
-        const accountAt = pay.indexOf('assertNetworkChargeable(gateway, payerNumber, true)');
-        return typedAt > 0 && spendAt > typedAt && accountAt > spendAt;
+        const accountAt = pay.indexOf('const route = mobileMoneyRoute(payer.number, true, payer.savedProvider)');
+        return offeredAt > 0 && typedAt > offeredAt && spendAt > typedAt && accountAt > spendAt;
     });
 
     assert('⛔ every refusal after the spend is marked spent', () =>
@@ -676,8 +682,8 @@ async function phase6(): Promise<void> {
     assert('⛔ payBooking hands the orchestrator the SESSION\'s chat, on both purposes', () => {
         const pay = spanOf(core, 'export async function payBooking(', '\n}\n');
         return /\n\s*const origin = \{ originChat: session\.channel \};\n/.test(pay)
-            && /initiateBookingBalancePayment\(String\(booking\._id\), gateway, channel, origin\)/.test(pay)
-            && /initiateBookingPayment\(String\(booking\._id\), gateway, channel, origin\)/.test(pay)
+            && /initiateBookingBalancePayment\(String\(booking\._id\), route, channel, origin\)/.test(pay)
+            && /initiateBookingPayment\(String\(booking\._id\), route, channel, origin\)/.test(pay)
             && !/originChat:\s*input\./.test(pay);
     });
 

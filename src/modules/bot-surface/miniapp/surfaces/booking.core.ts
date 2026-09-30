@@ -44,10 +44,10 @@ import { inAppSurfaceStore } from '../../services/inapp-surface.store';
 import { CustomerModel, ICustomer } from '../../../customers/customer.model';
 import { PaymentOrchestratorService } from '../../../payments/services/payment-orchestrator.service';
 import {
-    assertNetworkChargeable,
+    assertMobileMoneyOffered,
     maskedPayerNumber,
-    mobileMoneyGateway,
-    storedPayerNumber,
+    mobileMoneyRoute,
+    storedPayer,
     validatedPayerNumber,
 } from './checkout-payer';
 import { AppError, createAppError } from '../../../../core/errors';
@@ -512,9 +512,12 @@ export async function payBooking(
     input: { phone?: unknown },
 ): Promise<{ transactionId: string; status: string; instructions?: unknown }> {
     const typed = validatedPayerNumber(input.phone);
-    const gateway = mobileMoneyGateway();
-    /** Before the spend: a number no network can be resolved for must not cost the handle. */
-    if (typed) assertNetworkChargeable(gateway, typed, false);
+    /**
+     * Before the spend (ADR-A08): mobile money must be on offer, and a typed number must resolve
+     * to a provider that can be routed — neither may cost the handle.
+     */
+    assertMobileMoneyOffered();
+    if (typed) mobileMoneyRoute(typed, false);
 
     const session = await inAppSurfaceStore.consume('bp', handle);
     if (!session) {
@@ -523,8 +526,8 @@ export async function payBooking(
 
     try {
         const { booking, customer } = await payableBooking(session.bookingId, session.owner);
-        const payerNumber = typed ?? (await storedPayerNumber(customer));
-        if (!payerNumber) {
+        const payer = typed ? { number: typed, savedProvider: null } : await storedPayer(customer);
+        if (!payer) {
             throw createAppError(
                 ERROR_CODES.PAYMENT_PAYER_NUMBER_REQUIRED,
                 422,
@@ -533,9 +536,9 @@ export async function payBooking(
             );
         }
         /** After the spend, because the account's number needs the session to find the customer. */
-        assertNetworkChargeable(gateway, payerNumber, true);
+        const route = mobileMoneyRoute(payer.number, true, payer.savedProvider);
 
-        const channel = { phoneNumber: payerNumber };
+        const channel = { phoneNumber: payer.number };
         /**
          * ⭐ **The outcome goes to the chat this screen was opened from.** `session.channel` is the
          * conversation the tap came from, stamped by `openInAppScreen` and never by the page — so
@@ -544,8 +547,8 @@ export async function payBooking(
          */
         const origin = { originChat: session.channel };
         const result = session.purpose === 'balance'
-            ? await paymentOrchestrator.initiateBookingBalancePayment(String(booking._id), gateway, channel, origin)
-            : await paymentOrchestrator.initiateBookingPayment(String(booking._id), gateway, channel, origin);
+            ? await paymentOrchestrator.initiateBookingBalancePayment(String(booking._id), route, channel, origin)
+            : await paymentOrchestrator.initiateBookingPayment(String(booking._id), route, channel, origin);
 
         return {
             transactionId: result.transactionId,

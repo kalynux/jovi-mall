@@ -624,7 +624,7 @@ for (const handler of ['handleBookingPaymentReceived', 'handleBookingPaymentFail
  */
 assert('the storefront booking payment names no chat', () => {
     const route = stripComments(read('modules/booking/routes/booking-payment.routes.ts'));
-    return route.includes('initiateBookingPayment(bookingId, gateway, channel)')
+    return route.includes('initiateBookingPayment(bookingId, selection, body.channel)')
         && !route.includes('originChat');
 });
 

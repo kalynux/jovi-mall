@@ -34,11 +34,11 @@ import { inAppBaseUrl, inAppScreenUrl } from '../domain/inapp-url';
 import { toBotAddressDto } from '../dto/bot-projections';
 import { inAppSurfaceStore } from '../services/inapp-surface.store';
 import {
-    mobileMoneyGateway,
+    mobileMoneyRoute,
     placeCheckout,
     placeCheckoutCashOnDelivery,
     readChatCheckout,
-    storedPayerNumber,
+    storedPayer,
 } from '../miniapp/surfaces/checkout.controller';
 
 /**
@@ -286,7 +286,7 @@ export class BotCheckoutController {
      *
      * ── ⭐ NO RULE LIVES HERE ──────────────────────────────────────────────────
      * The read is `readChatCheckout` — the screen's projection (`toCheckoutLines`, the quote
-     * service's total, the masked wallet, `mobileMoneyGateway`) plus the one thing a chat can do
+     * service's total, the masked wallet, `assertMobileMoneyOffered`) plus the one thing a chat can do
      * that a screen deliberately cannot: choose among the saved addresses
      * (`resolveChatDestination`). The address is CHOSEN, never captured — a customer with none
      * gets `blocker: 'no_saved_address'` and `addAddressUrl`, the website's address page (the
@@ -618,20 +618,23 @@ async function retryCharge(
     }
 
     const customer = await loadCustomer(caller.customerId);
-    const payerNumber = phone ?? (await storedPayerNumber(customer));
-    if (!payerNumber) {
+    const payer = phone ? { number: phone, savedProvider: null } : await storedPayer(customer);
+    if (!payer) {
         throw createAppError(
             ERROR_CODES.PAYMENT_PAYER_NUMBER_REQUIRED,
             422,
             'A mobile money number is needed to take this payment',
         );
     }
+    const payerNumber = payer.number;
+    // The provider comes from the number (ADR-A08); the settings choose who collects.
+    const route = mobileMoneyRoute(payerNumber, false, payer.savedProvider);
 
     let payment: Awaited<ReturnType<PaymentOrchestratorService['initiatePaymentForCart']>>;
     try {
         payment = await paymentOrchestrator.initiatePaymentForCart(
             cartId,
-            mobileMoneyGateway(),
+            route,
             { phoneNumber: payerNumber, customerName: customer.name },
             // The retry is asked for in THIS chat, so its result is told here — see `placeCheckout`.
             { originChat: req.bot!.envelope.channel },

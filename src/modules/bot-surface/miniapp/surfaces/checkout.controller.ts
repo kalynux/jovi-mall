@@ -11,7 +11,7 @@ import { cartQuoteService, CartQuote } from '../../../orders/services/cart-quote
 import { codEligibilityService } from '../../../cod/services/cod-eligibility.service';
 import { StoreRepository } from '../../../store/repositories/store.repository';
 import { PaymentOrchestratorService } from '../../../payments';
-import { PaymentGatewayType, PaymentStatus } from '../../../payments/models/payment-transaction.model';
+import { PaymentStatus } from '../../../payments/models/payment-transaction.model';
 import { publicCatalogService } from '../../../catalog/services/public-catalog.service';
 import { formatBotPrice, toPublicMediaUrl } from '../../domain/product-card';
 import { botStorefrontLink, surfacePath } from '../../domain/bot-list-window';
@@ -20,9 +20,12 @@ import { InAppSurfaceSession, inAppSurfaceStore } from '../../services/inapp-sur
 import { accountIdentifier, maskAddress } from './checkout-masking';
 import { ChatDestination, resolveChatDestination } from './checkout-destination';
 import {
+    assertMobileMoneyOffered,
     assertNetworkChargeable,
     maskedPayerNumber,
     mobileMoneyGateway,
+    mobileMoneyRoute,
+    storedPayer,
     storedPayerNumber,
     validatedPayerNumber,
 } from './checkout-payer';
@@ -33,9 +36,12 @@ import {
  * this module keeps working. New callers should import from `./checkout-payer` directly.
  */
 export {
+    assertMobileMoneyOffered,
     assertNetworkChargeable,
     maskedPayerNumber,
     mobileMoneyGateway,
+    mobileMoneyRoute,
+    storedPayer,
     storedPayerNumber,
     validatedPayerNumber,
 };
@@ -279,7 +285,7 @@ export async function readCheckoutView(handle: string): Promise<CheckoutView> {
  * may exist": send the customer to the chat, which knows the truth.
  *
  * ── THE ORDER OF THE WORK IS THE PROTECTION ─────────────────────────────────
- *   1. **Validate the number, then check a gateway exists** — neither needs the session, both
+ *   1. **Validate the number, then check mobile money is offered** — neither needs the session, both
  *      are deterministic, and a refusal here must not cost the customer their handle.
  *   2. **`consume`** — before anything that takes time. A double-tap, a refreshed tab, a
  *      forwarded URL and a Meta retry all find the handle gone, and no `Idempotency-Key`
@@ -303,8 +309,9 @@ export async function placeCheckout(
     options: PlaceCheckoutOptions = {},
 ): Promise<CheckoutPlacement> {
     const typedNumber = validatedPayerNumber(phone);
-    const gateway = mobileMoneyGateway();
-    if (typedNumber) assertNetworkChargeable(gateway, typedNumber, false);
+    // Before the spend (ADR-A08): is any mobile provider on offer, and can a typed number's be routed?
+    assertMobileMoneyOffered();
+    if (typedNumber) mobileMoneyRoute(typedNumber, false);
 
     /**
      * ⚠ **The chat door is checked BEFORE the spend, because it can be.** The screen learns its
@@ -314,7 +321,7 @@ export async function placeCheckout(
      * instead of re-opening the checkout.
      */
     const addressId = options.callerCustomerId
-        ? await precheckChatDoor(options.callerCustomerId, options.addressId ?? null, typedNumber, gateway)
+        ? await precheckChatDoor(options.callerCustomerId, options.addressId ?? null, typedNumber)
         : null;
 
     const session = await inAppSurfaceStore.consume('co', plausibleHandle(handle));
@@ -334,8 +341,8 @@ export async function placeCheckout(
         assertBasketStillThere(cart, session, true);
 
         const customer = await loadCustomer(session.customerId);
-        const payerNumber = typedNumber ?? (await storedPayerNumber(customer));
-        if (!payerNumber) {
+        const payer = typedNumber ? { number: typedNumber, savedProvider: null } : await storedPayer(customer);
+        if (!payer) {
             throw createAppError(
                 ERROR_CODES.PAYMENT_PAYER_NUMBER_REQUIRED,
                 422,
@@ -343,6 +350,7 @@ export async function placeCheckout(
                 { spent: true },
             );
         }
+        const payerNumber = payer.number;
 
         /**
          * ⚠ **Checked again for the ACCOUNT's number, and BEFORE the orders exist.** The typed
@@ -352,7 +360,7 @@ export async function placeCheckout(
          * the chat" and "go back to the chat, and there is now an unpaid order and a thirty-minute
          * stock hold behind you that you never asked for".
          */
-        assertNetworkChargeable(gateway, payerNumber, true);
+        const route = mobileMoneyRoute(payerNumber, true, payer.savedProvider);
 
         /**
          * ⚠ **`'online'` — this function is Pay NOW.** Pay on delivery is its sibling,
@@ -379,7 +387,7 @@ export async function placeCheckout(
          * Measured 2026-09-22: without it, a WhatsApp order's "payment received" went to
          * Telegram, the account's first-priority channel.
          */
-        const payment = await paymentOrchestrator.initiatePaymentForCart(cartId, gateway, {
+        const payment = await paymentOrchestrator.initiatePaymentForCart(cartId, route, {
             phoneNumber: payerNumber,
             customerName: customer.name,
         }, { originChat: session.channel });
@@ -430,7 +438,7 @@ export async function placeCheckoutCashOnDelivery(
     options: PlaceCheckoutOptions = {},
 ): Promise<CashOnDeliveryPlacement> {
     const addressId = options.callerCustomerId
-        ? await precheckChatDoor(options.callerCustomerId, options.addressId ?? null, null, null, 'cash_on_delivery')
+        ? await precheckChatDoor(options.callerCustomerId, options.addressId ?? null, null, 'cash_on_delivery')
         : null;
 
     const session = await inAppSurfaceStore.consume('co', plausibleHandle(handle));
@@ -469,15 +477,15 @@ export async function placeCheckoutCashOnDelivery(
  *
  * ── ⭐ THE SAME PROJECTION AS `readCheckoutView`, NOT A SECOND ONE ───────────
  * Lines through `toCheckoutLines`, the total through `cartQuoteService`, the wallet through
- * `maskedPayerNumber`, the gateway through `mobileMoneyGateway` — every figure a customer is told
+ * `maskedPayerNumber`, the provider check through `assertMobileMoneyOffered` — every figure a customer is told
  * in the chat is the figure the screen would have shown them. What differs is only what a chat
  * can do and a screen deliberately cannot: choose among the saved addresses.
  *
  * ⚠ **Read live and holds nothing** — the handle the chat door mints beside it carries a cart id
  * and no money, exactly as the screen's does.
  *
- * ⚠ **The gateway is asked for here, before anything is minted**, so a deployment with no mobile
- * money refuses in the review rather than after the customer has said yes.
+ * ⚠ **Mobile money is asked for here, before anything is minted**, so a deployment offering no
+ * mobile provider refuses in the review rather than after the customer has said yes.
  *
  * Refuses an empty basket with `CART_EMPTY_CHECKOUT` (400), the chat's own sentence for it — the
  * screen door (`POST /checkout/screen`) refuses it the same way.
@@ -486,7 +494,7 @@ export async function readChatCheckout(
     customerId: string,
     requestedAddressId: string | null,
 ): Promise<ChatCheckoutView> {
-    mobileMoneyGateway();
+    assertMobileMoneyOffered();
 
     const cart = await cartService.getCart(customerId);
     if (cart.items.length === 0 || !cart.cartId) {
@@ -723,7 +731,6 @@ async function precheckChatDoor(
     customerId: string,
     requestedAddressId: string | null,
     typedNumber: string | null,
-    gateway: PaymentGatewayType | null,
     /** Pay on delivery needs no wallet, and has its own rules — see `cashOnDeliveryRefusal`. */
     method: 'online' | 'cash_on_delivery' = 'online',
 ): Promise<string | null> {
@@ -771,7 +778,7 @@ async function precheckChatDoor(
     }
 
     if (method === 'online' && !typedNumber) {
-        const stored = await storedPayerNumber(customer);
+        const stored = await storedPayer(customer);
         if (!stored) {
             throw createAppError(
                 ERROR_CODES.PAYMENT_PAYER_NUMBER_REQUIRED,
@@ -780,7 +787,7 @@ async function precheckChatDoor(
                 { spent: false },
             );
         }
-        assertNetworkChargeable(gateway!, stored, false);
+        mobileMoneyRoute(stored.number, false, stored.savedProvider);
     }
 
     /**

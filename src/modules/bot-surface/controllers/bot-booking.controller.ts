@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { ZodError } from 'zod';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { sendSuccess } from '../../../core/responses';
 import { createAppError } from '../../../core/errors';
@@ -8,6 +9,9 @@ import { BookingStatus } from '../../booking/types/booking.types';
 import { productBookingService } from '../../catalog/domain/services/booking/product-booking.instance';
 import { PaymentOrchestratorService } from '../../payments/services/payment-orchestrator.service';
 import { PaymentTransactionModel } from '../../payments/models/payment-transaction.model';
+import { deriveProviderOrThrow } from '../../payments/services/payment-routing.service';
+import { ChargeSelection } from '../../payments/services/payment-orchestrator.service';
+import { PaymentDoor, recordDeprecatedGatewayField } from '../../system/metrics/metrics';
 import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
 import { surfacePath, windowForChat } from '../domain/bot-list-window';
 import { openInAppScreen } from './bot-inapp.controller';
@@ -393,11 +397,12 @@ export class BotBookingController {
      * ⚠ **This moves real money and pushes a prompt to a real handset**, which is why it is
      * `flow_only`: the model never holds it. The answer is a `transactionId` and, on the
      * mobile-money path, `instructions` — a USSD code to dial or an OTP to relay back
-     * through `payment_authorize_otp`. On `STRIPE` it is a client secret no chat can use,
+     * through `payment_authorize_otp`. On `CARD` it is a client secret no chat can use,
      * and the answer there is `payment_create_pay_link`.
      *
-     * ⚠ **`phoneOperator` must be ASKED.** Guessing MTN for an Orange number reaches the
-     * customer as "payment declined".
+     * ⚠ **`provider` must be ASKED** (ADR-A08) — see `chargeSelectionOf`. A number on the other
+     * network is refused before anything is written, rather than reaching the customer as
+     * "payment declined".
      *
      * The orchestrator refuses a second live charge itself (`PAYMENT_BOOKING_IN_PROGRESS`)
      * and keys its own idempotency on `(bookingId, userId, price)`, so the surface's
@@ -413,7 +418,7 @@ export class BotBookingController {
 
         const result = await paymentOrchestrator.initiateBookingPayment(
             bookingId,
-            input.gateway,
+            chargeSelectionOf(input, 'bot_booking_pay'),
             channelOf(input),
             // The result is told in THIS chat — the envelope's, never a caller-supplied one.
             { originChat: req.bot!.envelope.channel },
@@ -438,7 +443,7 @@ export class BotBookingController {
 
         const result = await paymentOrchestrator.initiateBookingBalancePayment(
             bookingId,
-            input.gateway,
+            chargeSelectionOf(input, 'bot_booking_pay_balance'),
             channelOf(input),
             { originChat: req.bot!.envelope.channel },
         );
@@ -639,6 +644,44 @@ export function referencedIdOf(ref: unknown): string {
  * absent from the schema entirely — a card token has no business arriving over a chat
  * transport, and the platform knows the customer's name better than a model does.
  */
+/**
+ * What the chat's booking pay asks the orchestrator to charge through (ADR-A08).
+ *
+ * The provider as the model sent it — asked of the customer — or, for a workflow built before
+ * `provider` existed, derived from its `gateway`/operator/number exactly as the customer API
+ * derives it (`400 PAYMENT_PROVIDER_REQUIRED` when nothing says). A sent `gateway` is counted
+ * and never used.
+ *
+ * A missing number keeps this door's own refusal: the `400 VALIDATION_ERROR` on `phoneNumber`
+ * its schema raised before the rule moved to the route.
+ */
+function chargeSelectionOf(
+    input: {
+        provider?: 'MTN' | 'ORANGE' | 'CARD';
+        gateway?: string;
+        phoneNumber?: string;
+        phoneOperator?: 'MTN' | 'ORANGE' | 'MOOV';
+    },
+    door: PaymentDoor,
+): ChargeSelection {
+    if (input.gateway !== undefined) recordDeprecatedGatewayField(door);
+    const provider = deriveProviderOrThrow({
+        provider: input.provider,
+        gateway: input.gateway,
+        channel: { phoneOperator: input.phoneOperator, phoneNumber: input.phoneNumber },
+    });
+    return {
+        provider,
+        onMissingField: (missing) => new ZodError(missing.map((field) => ({
+            code: 'custom' as const,
+            path: [field],
+            message: field === 'phoneNumber'
+                ? 'phoneNumber is required for mobile money payments'
+                : `${field} is required for this payment method`,
+        }))),
+    };
+}
+
 function channelOf(input: {
     phoneNumber?: string;
     phoneOperator?: 'MTN' | 'ORANGE' | 'MOOV';

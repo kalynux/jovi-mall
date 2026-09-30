@@ -51,6 +51,12 @@ export interface PayLinkSession {
     transactionId: string;
     state: PayLinkState;
     gateway: string;
+    /**
+     * What the customer pays WITH (`MTN`, `ORANGE`, `CARD`, …) — ADR-A08's customer-facing layer,
+     * where `gateway` is the aggregator. Null on a row written before provider routing.
+     * Read-only here: minting and paying stay on the stored `gateway`.
+     */
+    provider: string | null;
     /** What the customer agreed to pay, in the catalogue's currency. */
     amount: number;
     currency: string;
@@ -242,7 +248,7 @@ export class PayLinkService {
         // to prove the payer and our gateway references are not in it, and a concatenation
         // would make that guard match nothing and pass on an empty field list.
         const transaction = await PaymentTransactionModel.findOne({ 'payLink.token': token })
-            .select('gateway status amountSnapshot currencySnapshot rawGatewayPayloads payLink orderId bookingId cartId orderIds')
+            .select('gateway provider status amountSnapshot currencySnapshot rawGatewayPayloads payLink orderId bookingId cartId orderIds')
             .lean();
 
         if (!transaction?.payLink) throw this.notFound();
@@ -260,6 +266,7 @@ export class PayLinkService {
             transactionId: String(transaction._id),
             state,
             gateway: transaction.gateway,
+            provider: transaction.provider ?? null,
             amount: transaction.amountSnapshot,
             currency: transaction.currencySnapshot,
             chargedAmount: typeof instructions.chargedAmount === 'number' ? instructions.chargedAmount : null,

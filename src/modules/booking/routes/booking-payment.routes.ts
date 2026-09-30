@@ -82,7 +82,8 @@ router.get('/:id/payment-status', requireAuth, requireRole(['customer', 'vendor'
       priceSnapshot: booking.priceSnapshot,
       currency: booking.currency,
       requiresPayment: booking.requiresPayment,
-      transaction: transaction ? { id: transaction._id, status: transaction.status, gateway: transaction.gateway, gatewayRef: transaction.gatewayRef } : null,
+      // `provider` (ADR-A08): what the customer paid WITH; null on a row from before provider routing.
+      transaction: transaction ? { id: transaction._id, status: transaction.status, gateway: transaction.gateway, provider: transaction.provider ?? null, gatewayRef: transaction.gatewayRef } : null,
     },
   });
 }));

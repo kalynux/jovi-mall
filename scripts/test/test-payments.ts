@@ -68,6 +68,10 @@ import { deriveProviderOrThrow } from '../../src/modules/payments/services/payme
 import { __resetPaymentSettingsCacheForTests } from '../../src/modules/payments/services/payment-settings.service';
 import { DEFAULT_PAYMENT_SETTINGS, PaymentSettingsRecord } from '../../src/modules/payments/domain/payment-routing';
 import {
+  assertMobileMoneyOffered,
+  mobileMoneyRoute,
+} from '../../src/modules/bot-surface/miniapp/surfaces/checkout-payer';
+import {
   notchPaySignature,
   myCoolPaySignature,
   timingSafeEqualString,
@@ -1587,6 +1591,81 @@ assert('the booking body takes the same provider/gateway pair', () =>
     && InitiateBookingPaymentRequestSchema.safeParse({ gateway: 'STRIPE' }).success
     && !InitiateBookingPaymentRequestSchema.safeParse({ provider: 'moov' }).success);
 
+section('18. The read side names the provider (ADR-A08, routing.md § Read side)');
+
+// Two reads a client uses to show a payment in progress. Each is an explicit projection, so
+// `provider` exists on them only if it is named — a spread would have carried it silently, and
+// would carry everything else the model gains next.
+assert('the pay-link session selects `provider` and returns it, nullable', () => {
+  const service = lf(PAYMENT_SOURCES.find(({ file }) => file.endsWith('pay-link.service.ts'))!.code);
+  const select = /\.select\('([^']*)'\)/.exec(service.slice(service.indexOf("'payLink.token': token")))?.[1] ?? '';
+  return select.split(/\s+/).includes('provider')
+    && /provider: transaction\.provider \?\? null,/.test(service)
+    && /provider: string \| null;/.test(service);
+});
+
+assert('the pay-link mint still decides on the STORED gateway, never the provider', () => {
+  const service = lf(PAYMENT_SOURCES.find(({ file }) => file.endsWith('pay-link.service.ts'))!.code);
+  const start = service.indexOf('async mint(');
+  const mint = start < 0 ? '' : service.slice(start, service.indexOf('\n    }\n', start));
+  return mint.includes('gatewayRequiresHostedPage(transaction.gateway)') && !/transaction\.provider/.test(mint);
+});
+
+assert('GET /bookings/:id/payment-status carries `provider` beside `gateway`, nullable', () => {
+  const route = stripComments(readFileSync(
+    join(SRC, 'modules', 'booking', 'routes', 'booking-payment.routes.ts'), 'utf8'));
+  return /gateway: transaction\.gateway, provider: transaction\.provider \?\? null, gatewayRef:/.test(route);
+});
+
+section('19. The server-picked doors (chat, mini-app, WhatsApp) — the number decides the provider');
+
+const isAppError = (e: any, code: string, status: number) =>
+  e instanceof AppError && e.code === code && e.statusCode === status;
+
+/** Run `fn` under `settings`, then put the defaults back. Returns what it threw, or null. */
+function thrownUnder(settings: PaymentSettingsRecord, fn: () => unknown): any {
+  __resetPaymentSettingsCacheForTests(settings);
+  try { fn(); return null; } catch (error) { return error; } finally { __resetPaymentSettingsCacheForTests(); }
+}
+function resultUnder<T>(settings: PaymentSettingsRecord, fn: () => T): T {
+  __resetPaymentSettingsCacheForTests(settings);
+  try { return fn(); } finally { __resetPaymentSettingsCacheForTests(); }
+}
+const settingsV1 = (providers: Partial<Record<'MTN' | 'ORANGE', { enabled: boolean }>> = {}) =>
+  ({ ...DEFAULT_PAYMENT_SETTINGS, version: 1, providers: { ...DEFAULT_PAYMENT_SETTINGS.providers, ...providers } }) as PaymentSettingsRecord;
+
+assert('the prefix decides: an MTN number routes as MTN, an Orange one as ORANGE', () =>
+  resultUnder(settingsV1(), () => mobileMoneyRoute('+237670000001', false)).provider === 'MTN'
+    && resultUnder(settingsV1(), () => mobileMoneyRoute('+237690000001', false)).provider === 'ORANGE');
+
+assert('a known prefix OUTRANKS a contradicting saved-wallet label (the number is what is charged)', () =>
+  resultUnder(settingsV1(), () => mobileMoneyRoute('+237670000001', true, 'orange_money')).provider === 'MTN');
+
+assert('an unknown prefix defers to the saved wallet\'s network (owner decision 7)', () =>
+  resultUnder(settingsV1(), () => mobileMoneyRoute('+237220000001', true, 'orange_money')).provider === 'ORANGE');
+
+assert('underivable → 422 PAYMENT_OPERATOR_UNDETERMINED, carrying `spent` exactly as stated', () => {
+  const before = thrownUnder(settingsV1(), () => mobileMoneyRoute('+237220000001', false));
+  const after = thrownUnder(settingsV1(), () => mobileMoneyRoute('+237220000001', true, 'stripe'));
+  return isAppError(before, ERROR_CODES.PAYMENT_OPERATOR_UNDETERMINED, 422) && before.details?.spent === false
+    && isAppError(after, ERROR_CODES.PAYMENT_OPERATOR_UNDETERMINED, 422) && after.details?.spent === true;
+});
+
+assert('a disabled provider → 422 PAYMENT_PROVIDER_UNAVAILABLE, with `spent` added to the router\'s details', () => {
+  const error = thrownUnder(settingsV1({ MTN: { enabled: false } }), () => mobileMoneyRoute('+237670000001', true));
+  return isAppError(error, ERROR_CODES.PAYMENT_PROVIDER_UNAVAILABLE, 422)
+    && error.details?.provider === 'MTN' && error.details?.spent === true
+    && Array.isArray(error.details?.offered);
+});
+
+assert('nothing mobile on offer is refused up front, unspent and with no `provider`', () => {
+  const none = thrownUnder(settingsV1({ MTN: { enabled: false }, ORANGE: { enabled: false } }), () => assertMobileMoneyOffered());
+  const some = thrownUnder(settingsV1({ MTN: { enabled: false } }), () => assertMobileMoneyOffered());
+  return isAppError(none, ERROR_CODES.PAYMENT_PROVIDER_UNAVAILABLE, 422)
+    && none.details?.spent === false && none.details?.provider === undefined
+    && some === null;
+});
+
 // ─── 17. Routing, run for real (offline) ─────────────────────────────────────
 //
 // The orchestrator is driven with its two model calls and its order lookup stubbed, and the two
@@ -1676,8 +1755,6 @@ async function runScenario(
   return out;
 }
 
-const isAppError = (e: any, code: string, status: number) =>
-  e instanceof AppError && e.code === code && e.statusCode === status;
 
 (async () => {
   const notchpayActive = settingsWith({ collection_aggregator: 'NOTCHPAY' });

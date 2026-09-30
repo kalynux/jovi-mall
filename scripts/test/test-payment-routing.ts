@@ -174,9 +174,14 @@ function enumOf(model: { schema: { eachPath(fn: (path: string, type: any) => voi
     same(InitiateTopupSchema.shape.gateway.options, PAYMENT_GATEWAY_NAMES));
   assert('billing InitiatePlanPurchaseSchema.gateway options equal the tuple', () =>
     same(InitiatePlanPurchaseSchema.shape.gateway.options, PAYMENT_GATEWAY_NAMES));
-  assert('bot BotBookingPaySchema still accepts every gateway and nothing else', () =>
+  // W2b (ADR-A08): the bot's `gateway` is accepted and IGNORED, like the HTTP doors' — so any
+  // string parses, a known name or not. What the chat may choose is the PROVIDER, and that is closed.
+  assert('bot BotBookingPaySchema ignores `gateway` (any string parses) and closes `provider`', () =>
     PAYMENT_GATEWAY_NAMES.every((g) => BotBookingPaySchema.safeParse({ gateway: g, phoneNumber: '+237670000001' }).success)
-    && !BotBookingPaySchema.safeParse({ gateway: 'CAMPAY', phoneNumber: '+237670000001' }).success);
+    && BotBookingPaySchema.safeParse({ gateway: 'CAMPAY', phoneNumber: '+237670000001' }).success
+    && ['MTN', 'ORANGE', 'CARD'].every((p) => BotBookingPaySchema.safeParse({ provider: p, phoneNumber: '+237670000001' }).success)
+    && !BotBookingPaySchema.safeParse({ provider: 'MOOV', phoneNumber: '+237670000001' }).success
+    && !BotBookingPaySchema.safeParse({ provider: 'NOTCHPAY', phoneNumber: '+237670000001' }).success);
 
   const SRC = join(__dirname, '../../src');
   const handCopied = /['"]NOTCHPAY['"]\s*,\s*['"]MYCOOLPAY['"]\s*,\s*['"]STRIPE['"]/;

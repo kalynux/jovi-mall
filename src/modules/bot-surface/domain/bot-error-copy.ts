@@ -806,6 +806,38 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         es: 'No pude identificar el operador de mobile money de ese número. Revísalo o envíame otro número.',
         ar: 'لم أتمكن من تحديد شبكة المحفظة المحمولة لهذا الرقم. تحقق منه أو أرسل لي رقمًا آخر.',
     },
+    /**
+     * ADR-A08, owner decision 7: the customer chose one network and typed a number on the other.
+     * Refused before anything is written (`details.spent` false), so the copy invites the fix in
+     * the same turn — and names no payment company, because the customer never chose one.
+     */
+    [ERROR_CODES.PAYMENT_PROVIDER_PHONE_MISMATCH]: {
+        en: 'That number is on a different mobile money network from the one you chose. Check the number, or pay with the network it belongs to.',
+        fr: "Ce numéro appartient à un autre réseau mobile money que celui que vous avez choisi. Vérifiez le numéro ou payez avec le réseau auquel il appartient.",
+        pt: 'Esse número pertence a uma rede de mobile money diferente da que escolheu. Verifique o número ou pague com a rede a que ele pertence.',
+        es: 'Ese número pertenece a una red de mobile money distinta de la que elegiste. Revisa el número o paga con la red a la que pertenece.',
+        ar: 'هذا الرقم تابع لشبكة محفظة محمولة غير التي اخترتها. تحقق من الرقم أو ادفع بالشبكة التي ينتمي إليها.',
+    },
+    /**
+     * An administrator switched that way of paying off, or nothing can route it right now. Also
+     * raised before a screen is spent when NO mobile provider is on offer. Neutral on purpose: it
+     * must read correctly for one method or for all of them.
+     */
+    [ERROR_CODES.PAYMENT_PROVIDER_UNAVAILABLE]: {
+        en: 'That way of paying is not available right now. Try another one, or try again a little later.',
+        fr: "Ce moyen de paiement n'est pas disponible pour le moment. Essayez-en un autre ou réessayez un peu plus tard.",
+        pt: 'Essa forma de pagamento não está disponível de momento. Experimente outra ou tente novamente daqui a pouco.',
+        es: 'Ese medio de pago no está disponible ahora mismo. Prueba con otro o vuelve a intentarlo un poco más tarde.',
+        ar: 'طريقة الدفع هذه غير متاحة حاليًا. جرّب طريقة أخرى أو أعد المحاولة بعد قليل.',
+    },
+    /** Nothing said which network the customer pays with, and the number did not tell either. */
+    [ERROR_CODES.PAYMENT_PROVIDER_REQUIRED]: {
+        en: 'Tell me how you want to pay: MTN Mobile Money or Orange Money.',
+        fr: 'Dites-moi comment vous souhaitez payer : MTN Mobile Money ou Orange Money.',
+        pt: 'Diga-me como quer pagar: MTN Mobile Money ou Orange Money.',
+        es: 'Dime cómo quieres pagar: MTN Mobile Money u Orange Money.',
+        ar: 'أخبرني كيف تريد الدفع: MTN Mobile Money أو Orange Money.',
+    },
 
     /**
      * A maintenance window.

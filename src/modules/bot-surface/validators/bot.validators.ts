@@ -6,7 +6,6 @@ import { BOT_CHAT_LIST_MAX } from '../domain/bot-list-window';
 import { PhoneNumberSchema } from '../../../core/validation/phone';
 import { EmailAddressSchema } from '../../../core/validation/email';
 import { ACCOUNT_CLOSURE_CONFIRMATION } from '../../users/user.validator';
-import { PAYMENT_GATEWAY_NAMES } from '../../payments/gateways/gateway.interface';
 import {
     CUSTOMER_AGGREGATE_TYPES,
     CustomerAggregateType,
@@ -772,22 +771,25 @@ export const BotBookingRescheduleSchema = z
  * card token has no business arriving from a chat transport. `customerName` goes too — the
  * platform knows the customer's name and does not need a model's version of it.
  *
- * ⚠ **`phoneOperator` must be ASKED, never guessed.** Sending MTN for an Orange number
- * reaches the customer as "payment declined", and the catalogue says so on
- * `payment_initiate` for the same reason.
+ * ⚠ **`provider` must be ASKED, never guessed** (ADR-A08). It names what the customer pays
+ * WITH; the server picks who collects, so `gateway` is accepted, ignored and counted, exactly
+ * as on the customer API. A number on the other network is refused with
+ * `PAYMENT_PROVIDER_PHONE_MISMATCH` before anything is written.
+ *
+ * Flat, not the customer API's `channel` object — the chat's shape was always flat, and the
+ * coordinator kept it so. "A number unless CARD" is no longer a refine here: which fields a
+ * charge needs belongs to the route, and the orchestrator raises it in this door's own shape.
  */
 export const BotBookingPaySchema = z
     .object({
-        gateway: z.enum(PAYMENT_GATEWAY_NAMES),
+        provider: z.enum(['MTN', 'ORANGE', 'CARD']).optional(),
+        /** @deprecated accepted and ignored — the server picks the aggregator. */
+        gateway: z.string().trim().max(32).optional(),
         phoneNumber: z.string().trim().min(1).max(20).optional(),
         phoneOperator: z.enum(['MTN', 'ORANGE', 'MOOV']).optional(),
         customerEmail: z.string().trim().email().max(254).optional(),
     })
-    .strict()
-    .refine((d) => d.gateway === 'STRIPE' || Boolean(d.phoneNumber), {
-        message: 'phoneNumber is required for mobile money payments',
-        path: ['phoneNumber'],
-    });
+    .strict();
 
 /** ⚠ `delivery` takes a SHIPMENT id, never an order id. Same rule as the customer API. */
 export const BotReviewEligibilitySchema = z

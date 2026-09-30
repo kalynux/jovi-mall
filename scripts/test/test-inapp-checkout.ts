@@ -452,10 +452,11 @@ function main(): void {
 
     /**
      * ⛔ **The cheap, deterministic refusals come BEFORE the spend** — a mistyped number and a
-     * deployment with no gateway must not cost a customer their handle — and everything that
-     * takes time comes after it.
+     * deployment offering no mobile provider must not cost a customer their handle — and
+     * everything that takes time comes after it. (ADR-A08: the provider check replaced the
+     * gateway check at the same place.)
      */
-    assert('⛔ number and gateway are checked before `consume`; orders and charge after it', () => {
+    assert('⛔ number and mobile-money offer are checked before `consume`; orders and charge after it', () => {
         const src = screenCode();
         const start = src.indexOf('export async function placeCheckout(');
         const place = src.slice(start, src.indexOf('\n}\n', start));
@@ -463,7 +464,7 @@ function main(): void {
         const spend = at("inAppSurfaceStore.consume('co'");
         return spend > 0
             && at('validatedPayerNumber(phone)') > 0 && at('validatedPayerNumber(phone)') < spend
-            && at('mobileMoneyGateway()') > 0 && at('mobileMoneyGateway()') < spend
+            && at('assertMobileMoneyOffered()') > 0 && at('assertMobileMoneyOffered()') < spend
             && at('createOrdersFromCart(') > spend
             && at('initiatePaymentForCart(') > spend;
     });
@@ -598,7 +599,8 @@ function main(): void {
      */
     assert('⛔ the gateway is chosen server-side and never read from the request', () => {
         const src = screenCode();
-        return src.includes('mobileMoneyGateway()')
+        // ADR-A08: the page picks no aggregator AND no provider — the number decides the provider.
+        return src.includes('mobileMoneyRoute(')
             && !/gateway\s*[:=][^;\n]*req\./.test(src)
             && !src.includes('STRIPE')
             && !src.includes('cardToken');
@@ -615,20 +617,30 @@ function main(): void {
      * of which carried a docstring claiming the copies "word a refusal differently" (they threw the
      * identical error). The copy is gone; the chat imports the screen's. A third door (the booking
      * pay screen) imports it too, so agreement is by construction rather than by inspection.
+     *
+     * ⚠ **ADR-A08 moved the rule, not the principle.** Which AGGREGATOR collects is now the payment
+     * settings' decision (`resolveCollectionRoute`), made in one place for every door. What these
+     * doors still decide is the PROVIDER, from the payer's number — and that is `mobileMoneyRoute`,
+     * pinned here as ONE definition, imported by the chat, exactly as the preference was. The old
+     * preference survives as a deprecated wrapper until C1, still defined once, called by no one.
      */
-    assert('⛔ the gateway preference is defined ONCE, refundable one first, and imported by the chat', () => {
+    assert('⛔ the provider choice is defined ONCE, routed by the settings, and imported by the chat', () => {
         const screen = screenCode();
         const chat = chatCode();
-        const start = screen.indexOf('export function mobileMoneyGateway(');
+        const start = screen.indexOf('export function mobileMoneyRoute(');
         const rule = start < 0 ? '' : screen.slice(start, screen.indexOf('\n}\n', start));
-        const notch = rule.indexOf("'NOTCHPAY'");
-        const cool = rule.indexOf("'MYCOOLPAY'");
         return start > 0
-            && notch > 0 && cool > notch
-            && (screen.match(/function mobileMoneyGateway\(/g) ?? []).length === 1
-            && !/function mobileMoneyGateway\(/.test(chat)
+            && rule.includes('resolveCameroonOperator(payerNumber) ?? providerForSavedWallet(savedProvider)')
+            && rule.includes('resolveCollectionRoute(provider)')
+            && !rule.includes("'NOTCHPAY'") && !rule.includes("'MYCOOLPAY'")
+            && (screen.match(/function mobileMoneyRoute\(/g) ?? []).length === 1
+            && !/function mobileMoneyRoute\(/.test(chat)
             && !chat.includes("'NOTCHPAY'") && !chat.includes("'MYCOOLPAY'")
-            && /import \{[^}]*\bmobileMoneyGateway\b[^}]*\} from '\.\.\/miniapp\/surfaces\/checkout\.controller'/.test(chat);
+            && /import \{[^}]*\bmobileMoneyRoute\b[^}]*\} from '\.\.\/miniapp\/surfaces\/checkout\.controller'/.test(chat)
+            // The deprecated wrapper (removed in C1): defined once, and no door CALLS it any more.
+            && (screen.match(/function mobileMoneyGateway\(/g) ?? []).length === 1
+            && !/mobileMoneyGateway\(\)(?!\s*:)/.test(screen)
+            && !/mobileMoneyGateway\(/.test(chat);
     });
 
     /**
@@ -1026,8 +1038,10 @@ function main(): void {
      * different handsets for one customer — discovered by them, while trying to pay.
      */
     assert('⛔ the chat and the screen resolve the payable number the same way', () =>
-        /import \{[^}]*\bstoredPayerNumber\b[^}]*\} from '\.\.\/miniapp\/surfaces\/checkout\.controller'/.test(chatCode())
-        && !chatCode().includes('gateway_customer_id'));
+        /import \{[^}]*\bstoredPayer\b[^}]*\} from '\.\.\/miniapp\/surfaces\/checkout\.controller'/.test(chatCode())
+        && !chatCode().includes('gateway_customer_id')
+        // One rule under both names: `storedPayerNumber` reads through `storedPayer`.
+        && /return \(await storedPayer\(customer\)\)\?\.number \?\? null;/.test(screenCode()));
 
     /**
      * ⚠ **A missing payer number has its own code, and the borrowed one must not come back.**
@@ -1063,23 +1077,39 @@ function main(): void {
      * the orders exist — so without this a number outside `cm-operator.ts`'s table cost the
      * customer their screen AND left an unpaid order and a stock hold behind. The typed number is
      * checked before the spend; the account's, which needs the session, before the orders.
+     *
+     * ADR-A08: `mobileMoneyRoute` is the check now, for EVERY aggregator — a charge is routed by
+     * its provider, so an underivable number cannot be routed at all, whoever collects. The
+     * account's number is routed with its wallet's saved network, which counts only when the
+     * prefix is unknown.
      */
     assert('⛔ the mobile network is checked before the spend (typed) and before the orders (account)', () => {
         const src = screenCode();
         const start = src.indexOf('export async function placeCheckout(');
         const place = start < 0 ? '' : src.slice(start, src.indexOf('\n}\n', start));
         const spend = place.indexOf("inAppSurfaceStore.consume('co'");
-        const typed = place.indexOf('assertNetworkChargeable(gateway, typedNumber, false)');
-        const account = place.indexOf('assertNetworkChargeable(gateway, payerNumber, true)');
+        const typed = place.indexOf('mobileMoneyRoute(typedNumber, false)');
+        const account = place.indexOf('const route = mobileMoneyRoute(payerNumber, true, payer.savedProvider)');
         const orders = place.indexOf('createOrdersFromCart(');
-        const checkAt = src.indexOf('function assertNetworkChargeable(');
+        const charge = place.indexOf('initiatePaymentForCart(cartId, route,');
+        const checkAt = src.indexOf('export function mobileMoneyRoute(');
         const check = checkAt < 0 ? '' : src.slice(checkAt, src.indexOf('\n}\n', checkAt));
         return spend > 0
             && typed > 0 && typed < spend
             && account > spend && account < orders
-            && check.includes("gateway !== 'NOTCHPAY'")
+            && charge > orders
+            && !check.includes("'NOTCHPAY'")
             && check.includes('resolveCameroonOperator(')
-            && check.includes('ERROR_CODES.PAYMENT_OPERATOR_UNDETERMINED');
+            && check.includes('ERROR_CODES.PAYMENT_OPERATOR_UNDETERMINED')
+            && check.includes('{ spent, field: \'phone\' }');
+    });
+
+    /** The deprecated guard (removed in C1) is no longer keyed on NotchPay. */
+    assert('assertNetworkChargeable, while it survives, refuses an underivable number for every gateway', () => {
+        const src = screenCode();
+        const at = src.indexOf('function assertNetworkChargeable(');
+        const check = at < 0 ? '' : src.slice(at, src.indexOf('\n}\n', at));
+        return at > 0 && !check.includes("'NOTCHPAY'") && check.includes('resolveCameroonOperator(payerNumber)');
     });
 
     console.log('\n── 10 · ⭐ The trigger — the silence at the moment the order is lost ──');
@@ -1486,9 +1516,8 @@ function chatDoorAssertions(): void {
 
     assert('the wallet on the chat door is the ACCOUNT\'s, network-checked before the spend', () => {
         const pre = fn(screenCode(), 'async function precheckChatDoor(');
-        return pre.includes('storedPayerNumber(customer)')
-            // `gateway!`: null only on the pay-on-delivery branch, which never reaches this line.
-            && /assertNetworkChargeable\(gateway!?, stored, false\)/.test(pre)
+        return pre.includes('await storedPayer(customer)')
+            && pre.includes('mobileMoneyRoute(stored.number, false, stored.savedProvider)')
             && pre.includes('ERROR_CODES.PAYMENT_PAYER_NUMBER_REQUIRED');
     });
 
@@ -1839,13 +1868,13 @@ function cashOnDeliveryAssertions(): void {
      */
     assert('⛔ placing pay on delivery: pre-check (COD) → spend → owner → createOrdersFromCart(COD); no charge', () => {
         const place = span('export async function placeCheckoutCashOnDelivery(');
-        const pre = place.indexOf("precheckChatDoor(options.callerCustomerId, options.addressId ?? null, null, null, 'cash_on_delivery')");
+        const pre = place.indexOf("precheckChatDoor(options.callerCustomerId, options.addressId ?? null, null, 'cash_on_delivery')");
         const spend = place.indexOf("inAppSurfaceStore.consume('co'");
         const owner = place.indexOf('session.customerId !== options.callerCustomerId');
         const create = place.indexOf("'cash_on_delivery',");
         return pre > 0 && spend > pre && owner > spend && create > owner
             && place.includes('orderService.createOrdersFromCart(')
-            && !/initiatePaymentForCart|paymentOrchestrator|storedPayerNumber/.test(place)
+            && !/initiatePaymentForCart|paymentOrchestrator|storedPayer|mobileMoneyRoute/.test(place)
             && place.includes('throw markedSpent(error);');
     });
 

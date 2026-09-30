@@ -1,10 +1,16 @@
-import { createAppError } from '../../../../core/errors';
+import { AppError, createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
 import { OptionalPhoneNumberSchema } from '../../../../core/validation/phone';
 import { ICustomer } from '../../../customers/customer.model';
 import { PaymentGatewayType } from '../../../payments/models/payment-transaction.model';
 import { notchPayEnabled, myCoolPayEnabled } from '../../../payments/config/payments.config';
 import { resolveCameroonOperator } from '../../../payments/domain/cm-operator';
+import {
+    isMobileMoneyProvider,
+    MobileMoneyProvider,
+    providerForSavedWallet,
+} from '../../../payments/domain/payment-provider';
+import { offeredProviders, resolveCollectionRoute } from '../../../payments/services/payment-routing.service';
 import { UserPaymentMethodRepository } from '../../../payment-methods/repositories/user-payment-method.repository';
 import { maskPhone } from '../../dto/bot-projections';
 
@@ -99,9 +105,13 @@ export function validatedPayerNumber(phone: unknown): string | null {
  * same gap. `spent` is the caller's to state: pass `false` for a check made before anything
  * irreversible happened, `true` otherwise — the flag is what a screen reads to decide whether a
  * retry is honest.
+ *
+ * @deprecated ADR-A08: `mobileMoneyRoute` is the check now, and it applies to EVERY aggregator —
+ * a charge is routed by its provider, so a number no provider can be worked out for cannot be
+ * routed at all, whoever collects. This stays only as the underivable-number guard, no longer
+ * keyed on NotchPay, until C1 removes it. `gateway` is ignored.
  */
-export function assertNetworkChargeable(gateway: PaymentGatewayType, payerNumber: string, spent: boolean): void {
-    if (gateway !== 'NOTCHPAY') return;
+export function assertNetworkChargeable(_gateway: PaymentGatewayType, payerNumber: string, spent: boolean): void {
     if (resolveCameroonOperator(payerNumber)) return;
     throw createAppError(
         ERROR_CODES.PAYMENT_OPERATOR_UNDETERMINED,
@@ -153,14 +163,8 @@ export async function maskedPayerNumber(customer: ICustomer): Promise<string | n
  * moment they are trying to pay. Both are Stream D's files precisely so this stays one rule.
  */
 export async function storedPayerNumber(customer: ICustomer): Promise<string | null> {
-    /** Already sorted default-first, then newest, by the repository itself. */
-    const methods = await paymentMethods.list('customer', String(customer._id));
-    const wallet = methods.find((method) => method.method_type === 'mobile_money') ?? null;
-
-    const number = wallet?.gateway_customer_id?.trim();
-    if (number) return number;
-
-    return customer.phone?.trim() || null;
+    /** Already sorted default-first, then newest, by the repository itself — see `storedPayer`. */
+    return (await storedPayer(customer))?.number ?? null;
 }
 
 /**
@@ -196,6 +200,10 @@ export async function storedPayerNumber(customer: ICustomer): Promise<string | n
  * chat's retry (`bot-checkout.controller.ts`) and the booking pay screen (`bp`) both import it.
  * Three copies of one preference is how a customer ends up with two charges for one basket — or
  * one basket and one appointment — under different refund rules, decided by which door they used.
+ *
+ * @deprecated ADR-A08: no charge path calls this any more. The aggregator is chosen by the payment
+ * settings (`resolveCollectionRoute`), and these doors pass a provider through `mobileMoneyRoute`.
+ * Kept, unchanged, until C1.
  */
 export function mobileMoneyGateway(): PaymentGatewayType {
     if (notchPayEnabled()) return 'NOTCHPAY';
@@ -205,4 +213,96 @@ export function mobileMoneyGateway(): PaymentGatewayType {
         500,
         'No mobile money gateway is configured on this deployment',
     );
+}
+
+/** The wallet a server-picked charge goes to, with the network its saved method names (if any). */
+export interface StoredPayer {
+    number: string;
+    /** The saved method's own `provider` (`mtn_momo`, …) — null for the profile phone. */
+    savedProvider: string | null;
+}
+
+/**
+ * `storedPayerNumber`, plus what the saved wallet says its network is.
+ *
+ * Same rule, same order — a saved wallet first, the profile phone second — and it IS the rule:
+ * `storedPayerNumber` now reads through this, so the two cannot pick different handsets.
+ * `savedProvider` feeds `mobileMoneyRoute` when a number's prefix is not one the table knows.
+ */
+export async function storedPayer(customer: ICustomer): Promise<StoredPayer | null> {
+    const methods = await paymentMethods.list('customer', String(customer._id));
+    const wallet = methods.find((method) => method.method_type === 'mobile_money') ?? null;
+
+    const number = wallet?.gateway_customer_id?.trim();
+    if (number) return { number, savedProvider: wallet?.provider ?? null };
+
+    const phone = customer.phone?.trim();
+    return phone ? { number: phone, savedProvider: null } : null;
+}
+
+/**
+ * Refuse, before anything is spent, when no mobile-money provider can be charged at all.
+ *
+ * The screens and the chat learn the payer's number — and so its provider — only after the handle
+ * is spent when the customer relies on the number on their account. This is the question that CAN
+ * be answered up front: is any mobile provider offered? If none is (every one disabled by an
+ * administrator, or no aggregator configured), the customer is told now, with the handle alive.
+ *
+ * `PAYMENT_PROVIDER_UNAVAILABLE` 422, the code the router raises for one provider, so a client
+ * handles one refusal whichever side of the spend it lands on.
+ */
+export function assertMobileMoneyOffered(): void {
+    const offered = offeredProviders();
+    if (offered.some(isMobileMoneyProvider)) return;
+    throw createAppError(
+        ERROR_CODES.PAYMENT_PROVIDER_UNAVAILABLE,
+        422,
+        'Mobile money payments are not available right now.',
+        { offered, spent: false },
+    );
+}
+
+/**
+ * ⭐ THE answer, on the server-picked doors, to "which provider does this charge go through"
+ * (ADR-A08). Replaces `mobileMoneyGateway` on every charge path.
+ *
+ * Nobody on these doors DECLARED a provider — the customer confirmed a number — so the number
+ * decides, by its prefix. Only when the prefix is not one the table knows does the saved wallet's
+ * own network count (owner decision 7: an unknown prefix defers to what was stated). A saved
+ * label that contradicts a known prefix is NOT refused: the number is what gets charged, and the
+ * customer said nothing in this turn that the number could contradict.
+ *
+ * Then the provider is routed now, so a disabled provider or an unroutable one is refused on
+ * THIS side of the spend when it can be. The orchestrator routes again when it opens the charge;
+ * that second answer is the one that counts.
+ *
+ * Refusals, both 422 and both carrying `spent` as the caller states it:
+ *   - `PAYMENT_OPERATOR_UNDETERMINED` `{ spent, field: 'phone' }` — no provider can be worked out;
+ *   - `PAYMENT_PROVIDER_UNAVAILABLE` `{ provider, offered, spent }`.
+ */
+export function mobileMoneyRoute(
+    payerNumber: string,
+    spent: boolean,
+    savedProvider: string | null = null,
+): { provider: MobileMoneyProvider } {
+    const provider: MobileMoneyProvider | null =
+        resolveCameroonOperator(payerNumber) ?? providerForSavedWallet(savedProvider);
+    if (!provider) {
+        throw createAppError(
+            ERROR_CODES.PAYMENT_OPERATOR_UNDETERMINED,
+            422,
+            'Could not determine the mobile network for this number.',
+            { spent, field: 'phone' },
+        );
+    }
+
+    try {
+        resolveCollectionRoute(provider);
+    } catch (error) {
+        if (error instanceof AppError && error.code === ERROR_CODES.PAYMENT_PROVIDER_UNAVAILABLE) {
+            throw createAppError(error.code, 422, error.message, { ...(error.details ?? {}), spent });
+        }
+        throw error;
+    }
+    return { provider };
 }

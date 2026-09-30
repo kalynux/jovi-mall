@@ -42,6 +42,8 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { planCheckoutFailure } from '../../src/modules/whatsapp/flows/screens/checkout.adapter';
+import { deriveProvider } from '../../src/modules/payments/domain/payment-routing';
 
 let passed = 0;
 let failed = 0;
@@ -2003,15 +2005,79 @@ async function main(): Promise<void> {
         && BotBookingAvailabilitySchema.safeParse({ productId: '68f0000000000000000000c1', limit: 5 }).success === true);
 
     /**
-     * ⚠ Mobile money without a number reaches the gateway as a charge against nobody. The
-     * customer API refines the same rule; restating it here is what keeps the two doors
-     * refusing the same request.
+     * ⚠ ADR-A08: the chat names a PROVIDER, never an aggregator. `gateway` is accepted (a workflow
+     * built before `provider` existed must not start failing) and ignored; an unknown provider is
+     * a 400. "Mobile money needs a number" moved from this schema to the route, which raises it
+     * in this door's own shape — pinned below, because the rule is still the rule.
      */
-    assert('⚠ mobile money REQUIRES a phone number; Stripe does not', () =>
-        BotBookingPaySchema.safeParse({ gateway: 'NOTCHPAY' }).success === false
-        && BotBookingPaySchema.safeParse({ gateway: 'MYCOOLPAY' }).success === false
-        && BotBookingPaySchema.safeParse({ gateway: 'STRIPE' }).success === true
-        && BotBookingPaySchema.safeParse({ gateway: 'NOTCHPAY', phoneNumber: '+237600124417' }).success === true);
+    assert('⚠ the chat pays by provider; a legacy `gateway` still parses and is ignored', () =>
+        BotBookingPaySchema.safeParse({ provider: 'MTN', phoneNumber: '+237670000001' }).success === true
+        && BotBookingPaySchema.safeParse({ provider: 'CARD' }).success === true
+        && BotBookingPaySchema.safeParse({ provider: 'WAVE' }).success === false
+        && BotBookingPaySchema.safeParse({ gateway: 'NOTCHPAY', phoneNumber: '+237670000001' }).success === true
+        && BotBookingPaySchema.safeParse({ gateway: 'A_REMOVED_AGGREGATOR' }).success === true);
+
+    /**
+     * ⛔ **The LIVE n8n MCP tools keep sending the old body until the workflow is regenerated**,
+     * which happens after this deploys. The schema is `.strict()`, so a dropped legacy key would
+     * turn every chat booking payment into a 400 overnight. The literal old bodies are pinned
+     * here — `phoneOperator` included — and run through the same derivation `chargeSelectionOf`
+     * feeds: `gateway` ignored, the provider from the operator, then the prefix.
+     */
+    assert('⛔ the OLD bookings_pay body still parses and derives its provider (live MCP compatibility)', () => {
+        const oldBodies = [
+            { gateway: 'NOTCHPAY', phoneNumber: '+237690000001', phoneOperator: 'ORANGE', customerEmail: 'ada@example.com' },
+            { gateway: 'MYCOOLPAY', phoneNumber: '+237670000001', phoneOperator: 'MTN' },
+            { gateway: 'NOTCHPAY', phoneNumber: '+237670000001' },
+            { gateway: 'STRIPE', customerEmail: 'ada@example.com' },
+        ];
+        const derived = oldBodies.map((body) => {
+            const parsed = BotBookingPaySchema.safeParse(body);
+            if (!parsed.success) return null;
+            const d = parsed.data;
+            return deriveProvider({
+                provider: d.provider,
+                gateway: d.gateway,
+                channel: { phoneOperator: d.phoneOperator, phoneNumber: d.phoneNumber },
+            });
+        });
+        return JSON.stringify(derived) === JSON.stringify(['ORANGE', 'MTN', 'MTN', 'CARD']);
+    });
+
+    /**
+     * ⚠ Mobile money without a number reaches the gateway as a charge against nobody. It is
+     * still refused, before anything is written, as the SAME 400 on `phoneNumber` this door always
+     * gave — now raised by the orchestrator through the door's `onMissingField`.
+     */
+    assert('⚠ mobile money still REQUIRES a phone number — the door keeps its 400 on phoneNumber', () => {
+        const ctl = fs.readFileSync(
+            path.join(__dirname, '..', '..', 'src', 'modules', 'bot-surface', 'controllers', 'bot-booking.controller.ts'),
+            'utf8',
+        ).replace(/\r\n/g, '\n');
+        const start = ctl.indexOf('function chargeSelectionOf(');
+        const body = start < 0 ? '' : ctl.slice(start, ctl.indexOf('\n}\n', start));
+        return body.includes('deriveProviderOrThrow(')
+            && body.includes('onMissingField: (missing) => new ZodError(')
+            && body.includes('path: [field],')
+            && body.includes("'phoneNumber is required for mobile money payments'")
+            && body.includes('recordDeprecatedGatewayField(door)')
+            && (ctl.match(/chargeSelectionOf\(input, 'bot_booking_pay(_balance)?'\)/g) ?? []).length === 2;
+    });
+
+    /**
+     * ADR-A08 on the WhatsApp checkout form. The router's refusal comes in two shapes before the
+     * spend: ONE provider off (another number can pay — stay on the form) and NO mobile provider
+     * at all (`assertMobileMoneyOffered` — pressing again cannot help, so close, like the old
+     * not-configured row).
+     */
+    assert('⚠ WhatsApp form: nothing offered closes; one provider off keeps the customer on the form', () => {
+        const refusal = (details: Record<string, unknown>) => Object.assign(new Error('x'), {
+            statusCode: 422, code: 'PAYMENT_PROVIDER_UNAVAILABLE', category: 'business_rule', details,
+        });
+        return planCheckoutFailure(refusal({ offered: [], spent: false })).kind === 'unavailable'
+            && planCheckoutFailure(refusal({ provider: 'MTN', offered: ['ORANGE'], spent: false })).kind === 'stay'
+            && planCheckoutFailure(refusal({ provider: 'MTN', offered: ['ORANGE'], spent: true })).kind === 'ask_chat';
+    });
 
     /**
      * ⚠ **A card token must never arrive over a chat transport**, and the platform knows the
@@ -2019,7 +2085,7 @@ async function main(): Promise<void> {
      * neither is offered here — `.strict()` makes sending one a 400 rather than a drop.
      */
     assert('⚠ no cardToken and no customerName may be sent to a booking payment', () => {
-        const base = { gateway: 'STRIPE' as const };
+        const base = { provider: 'CARD' as const };
         return BotBookingPaySchema.safeParse({ ...base, cardToken: 'tok_visa' }).success === false
             && BotBookingPaySchema.safeParse({ ...base, customerName: 'Ada' }).success === false
             && BotBookingPaySchema.safeParse({ ...base, customerEmail: 'ada@example.com' }).success === true;

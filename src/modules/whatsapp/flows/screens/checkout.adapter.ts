@@ -93,7 +93,7 @@ export type CheckoutFailurePlan =
     | { kind: 'stay'; code: string; category: string }
     /** The handle or the basket is gone. 427: restart from the chat. */
     | { kind: 'restart' }
-    /** No payment gateway is configured. Close: pressing again can't change configuration. */
+    /** No payment gateway is configured, or no mobile provider is offered. Close: pressing again can't change that. */
     | { kind: 'unavailable' }
     /**
      * ⛔ Anything else. Orders may exist, so the only honest answer is "look in the chat, which
@@ -108,6 +108,20 @@ export type CheckoutFailurePlan =
 
 /** The code Stream D raises, before the spend, when no gateway is configured. */
 export const GATEWAY_NOT_CONFIGURED = 'PAYMENT_GATEWAY_NOT_CONFIGURED';
+
+/**
+ * ADR-A08: the router's refusal. Raised before the spend in two shapes, and they plan differently:
+ *   - WITH `details.provider` — that one provider is off or unroutable. Another number, on the
+ *     other network, can still pay, so it is an ordinary `stay` (a 422 with `spent: false`).
+ *   - WITHOUT it — `assertMobileMoneyOffered`: NO mobile provider is on offer at all. Exactly the
+ *     not-configured situation in new clothes: pressing again cannot change it, so `unavailable`.
+ */
+export const PROVIDER_UNAVAILABLE = 'PAYMENT_PROVIDER_UNAVAILABLE';
+
+function nothingOffered(error: unknown): boolean {
+    const e = error as { code?: unknown; details?: { provider?: unknown } | null } | null;
+    return e?.code === PROVIDER_UNAVAILABLE && e.details?.provider === undefined;
+}
 
 /**
  * Whether a `placeCheckout` refusal left the handle alive — i.e. provably happened BEFORE the
@@ -155,7 +169,7 @@ export function planCheckoutFailure(error: unknown): CheckoutFailurePlan {
     } | null;
     const status = typeof e?.statusCode === 'number' ? e.statusCode : null;
 
-    if (e?.code === GATEWAY_NOT_CONFIGURED || status === 503) return { kind: 'unavailable' };
+    if (e?.code === GATEWAY_NOT_CONFIGURED || status === 503 || nothingOffered(error)) return { kind: 'unavailable' };
 
     if ((status === 400 || status === 422) && handleSurvived(error)
         && typeof e?.code === 'string' && typeof e.category === 'string') {

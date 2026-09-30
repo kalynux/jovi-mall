@@ -7747,7 +7747,7 @@
     },
     {
       "name": "bookings_pay",
-      "version": 1,
+      "version": 2,
       "title": "Pay for an appointment",
       "tier": "flow_only",
       "status": "available",
@@ -7771,7 +7771,7 @@
         "additionalProperties": false,
         "required": [
           "bookingId",
-          "gateway"
+          "provider"
         ],
         "properties": {
           "bookingId": {
@@ -7779,28 +7779,18 @@
             "pattern": "^[a-f0-9]{24}$",
             "description": "The appointment id, from bookings_list."
           },
-          "gateway": {
+          "provider": {
             "type": "string",
             "enum": [
-              "NOTCHPAY",
-              "MYCOOLPAY",
-              "STRIPE"
+              "MTN",
+              "ORANGE"
             ],
-            "description": "Which processor to charge through. STRIPE is the card path and finishes on a web page, not in chat."
+            "description": "What the customer pays WITH. ASK the customer; never infer it. The server chooses which payment company carries the charge, so never name one."
           },
           "phoneNumber": {
             "type": "string",
             "maxLength": 20,
-            "description": "The mobile-money number to charge. Required for every gateway except STRIPE."
-          },
-          "phoneOperator": {
-            "type": "string",
-            "enum": [
-              "MTN",
-              "ORANGE",
-              "MOOV"
-            ],
-            "description": "The wallet's network. ASK the customer — never infer it from the number."
+            "description": "The mobile-money number to charge. Required for MTN and ORANGE."
           },
           "customerEmail": {
             "type": "string",
@@ -7815,9 +7805,8 @@
           "bookingId"
         ],
         "body": [
-          "gateway",
+          "provider",
           "phoneNumber",
-          "phoneOperator",
           "customerEmail"
         ]
       },
@@ -7857,6 +7846,27 @@
           "customer_action": "explain"
         },
         {
+          "code": "PAYMENT_PROVIDER_PHONE_MISMATCH",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The number belongs to the other network (details.detected). Nothing was charged (details.spent is false)",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "PAYMENT_PROVIDER_UNAVAILABLE",
+          "status": 422,
+          "category": "business_rule",
+          "when": "That payment method is switched off right now. details.offered lists the ones that work",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "PAYMENT_PROVIDER_REQUIRED",
+          "status": 400,
+          "category": "validation",
+          "when": "No provider was sent and none could be worked out from the number",
+          "customer_action": "reprompt"
+        },
+        {
           "code": "VALIDATION_ERROR",
           "status": 400,
           "category": "validation",
@@ -7892,7 +7902,7 @@
     },
     {
       "name": "bookings_pay_balance",
-      "version": 1,
+      "version": 2,
       "title": "Settle what an appointment came to",
       "tier": "flow_only",
       "status": "available",
@@ -7916,7 +7926,7 @@
         "additionalProperties": false,
         "required": [
           "bookingId",
-          "gateway"
+          "provider"
         ],
         "properties": {
           "bookingId": {
@@ -7924,28 +7934,18 @@
             "pattern": "^[a-f0-9]{24}$",
             "description": "The appointment id, from bookings_list."
           },
-          "gateway": {
+          "provider": {
             "type": "string",
             "enum": [
-              "NOTCHPAY",
-              "MYCOOLPAY",
-              "STRIPE"
+              "MTN",
+              "ORANGE"
             ],
-            "description": "Which processor to charge through. STRIPE is the card path and finishes on a web page, not in chat."
+            "description": "What the customer pays WITH. ASK the customer; never infer it. The server chooses which payment company carries the charge, so never name one."
           },
           "phoneNumber": {
             "type": "string",
             "maxLength": 20,
-            "description": "The mobile-money number to charge. Required for every gateway except STRIPE."
-          },
-          "phoneOperator": {
-            "type": "string",
-            "enum": [
-              "MTN",
-              "ORANGE",
-              "MOOV"
-            ],
-            "description": "The wallet's network. ASK the customer — never infer it from the number."
+            "description": "The mobile-money number to charge. Required for MTN and ORANGE."
           },
           "customerEmail": {
             "type": "string",
@@ -7960,9 +7960,8 @@
           "bookingId"
         ],
         "body": [
-          "gateway",
+          "provider",
           "phoneNumber",
-          "phoneOperator",
           "customerEmail"
         ]
       },
@@ -8007,6 +8006,27 @@
           "category": "not_found",
           "when": "Not this customer's booking",
           "customer_action": "explain"
+        },
+        {
+          "code": "PAYMENT_PROVIDER_PHONE_MISMATCH",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The number belongs to the other network (details.detected). Nothing was charged (details.spent is false)",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "PAYMENT_PROVIDER_UNAVAILABLE",
+          "status": 422,
+          "category": "business_rule",
+          "when": "That payment method is switched off right now. details.offered lists the ones that work",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "PAYMENT_PROVIDER_REQUIRED",
+          "status": 400,
+          "category": "validation",
+          "when": "No provider was sent and none could be worked out from the number",
+          "customer_action": "reprompt"
         },
         {
           "code": "VALIDATION_ERROR",
