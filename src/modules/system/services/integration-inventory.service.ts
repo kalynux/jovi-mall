@@ -18,6 +18,7 @@ import {
     myCoolPayEnabled,
 } from '../../payments/config/payments.config';
 import { gatewaySupportsRefund } from '../../payments/gateways/registry';
+import { getPaymentSettingsSync } from '../../payments/services/payment-settings.service';
 import { ConnectedCalendarAccount } from '../../integrations/calendar/google/connected-account.model';
 import { SYSTEM_CONFIG } from '../config/system.config';
 import {
@@ -284,6 +285,9 @@ function configurationOf(key: IntegrationKey): {
                     // a live merchant account or a test one.
                     mode: key.startsWith('sk_live_') ? 'live' : key.startsWith('sk_test_') ? 'test' : null,
                     webhookSecretSet: Boolean(process.env.STRIPE_WEBHOOK_SECRET),
+                    // ADR-A08: configured is not the same as switched on. Stripe has its own
+                    // switch in `payment_settings`, independent of the collection aggregator.
+                    enabledBySettings: getPaymentSettingsSync().stripe_enabled,
                 },
             };
         }
@@ -316,6 +320,11 @@ function configurationOf(key: IntegrationKey): {
                     webhookSecretSet: Boolean(NOTCHPAY_CONFIG.WEBHOOK_SECRET),
                     baseUrl: NOTCHPAY_CONFIG.BASE_URL,
                     refundSupported: gatewaySupportsRefund('NOTCHPAY'),
+                    // ADR-A08: which aggregator the routing switch currently points at. A
+                    // configured gateway that is not active takes no NEW charges, and an operator
+                    // reading `configured: true` alone would be misled into thinking it does.
+                    activeForCollections: getPaymentSettingsSync().collection_aggregator === 'NOTCHPAY',
+                    activeForPayouts: getPaymentSettingsSync().payout_aggregator === 'NOTCHPAY',
                 },
             };
 
@@ -335,6 +344,8 @@ function configurationOf(key: IntegrationKey): {
                     // asked about: My-CoolPay's API has no refund endpoint, so those
                     // refunds go out through the manual-payout ticket.
                     refundSupported: gatewaySupportsRefund('MYCOOLPAY'),
+                    activeForCollections: getPaymentSettingsSync().collection_aggregator === 'MYCOOLPAY',
+                    activeForPayouts: getPaymentSettingsSync().payout_aggregator === 'MYCOOLPAY',
                 },
             };
 

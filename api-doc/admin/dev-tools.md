@@ -11,6 +11,8 @@ feature flag (off by default), and an audit row.
 
 The read-only half is [`system.md`](./system.md). The split is a mount, not a convention.
 
+> **2026-09-30:** `GET`/`PUT /payments` (ADR-A08) added against source; the stamp above covers the rest.
+>
 > The first four tools shipped in Phase 12 and were never documented; this file retro-documents
 > them alongside the two Phase 14 additions and the one Phase 15 addition (`outbox/prune`).
 >
@@ -237,6 +239,85 @@ worse than letting them run.
 
 Refused requests get `503 SYSTEM_MAINTENANCE_ACTIVE` with a `Retry-After` header when the window has
 a known end, and `details: { mode, reason, startedAt, expiresAt }`.
+
+---
+
+## `GET` / `PUT /payments` — payment routing (ADR-A08)
+
+The manual failover switch: which aggregator collects mobile money, which one sends payouts,
+Stripe's own switch, and which providers are offered. Served by
+`src/modules/dev-tools/payment-settings.routes.ts`, mounted from `admin-dev-tools.routes.ts`, so it
+inherits exactly this router's guards. It lives outside `modules/system/**` because it writes
+(ADR-015 D-8).
+
+**Not behind `dev_tools.enabled` on the wi-admin side**, like `/maintenance` (owner decision 5,
+ADR-014 D-7): the switch exists for an aggregator outage, and nobody should first have to find and
+flip an unrelated flag. The tier-1 `developer_tools.payments.set` permission and the fail-closed
+audit row still apply. The full contract, including every settings rule, is
+[`../payments/routing.md`](../payments/routing.md) § Administrator surface. This section is the
+route-level summary.
+
+### `GET /payments`
+
+```jsonc
+{
+  "settings": { "collectionAggregator": "NOTCHPAY", "payoutAggregator": "NOTCHPAY", "stripeEnabled": false,
+                "providers": { "MTN": { "enabled": true }, "ORANGE": { "enabled": true }, "MOOV": { "enabled": false }, "CARD": { "enabled": false } },
+                "version": 0, "updatedAt": null, "updatedBy": null, "reason": null },
+  "aggregators": [
+    { "name": "NOTCHPAY", "configured": true, "capabilities": { "collect": { "MTN": { "flow": "PUSH", "requires": ["phoneNumber"] } }, "settlesAsync": true },
+      "payoutImplemented": true, "payoutAvailable": true, "refundAvailable": true,
+      "activeForCollections": true, "activeForPayouts": true }
+  ],
+  "effectiveProviders": [ { "provider": "MTN", "aggregator": "NOTCHPAY", "capability": { "flow": "PUSH", "requires": ["phoneNumber"] } } ],
+  "warnings": [ { "code": "PAYOUT_UNAVAILABLE", "message": "…", "aggregator": "NOTCHPAY" } ]
+}
+```
+
+- `version: 0` and `updatedBy: null` mean **no document exists yet**. The defaults apply and the
+  platform behaves exactly as it did before ADR-A08.
+- **`aggregators[]` covers every registered adapter**, configured or not. `activeForCollections`
+  means it is `collectionAggregator`. It does not by itself mean it is taking charges; check
+  `configured` too.
+- **`effectiveProviders` names the aggregator.** This is the one surface that does.
+  `/api/payments/options` strips it.
+- **`warnings` are the stored settings' STANDING problems**, computed now by validating the
+  current settings against themselves. They are not the warnings from the last write.
+  Credentials can disappear after a switch, and payout availability is a runtime fact. If the
+  stored state now breaks a **hard** rule (for example `COLLECTION_AGGREGATOR_NOT_CONFIGURED`
+  after a key was removed), those issues are returned **here, first**, because they mean new
+  charges are being refused. The codes are an open set.
+
+### `PUT /payments`
+
+Body, `.strict()`:
+
+```jsonc
+{ "collectionAggregator": "MYCOOLPAY",              // optional
+  "payoutAggregator": "NOTCHPAY",                   // optional
+  "stripeEnabled": false,                           // optional
+  "providers": { "ORANGE": { "enabled": true } },   // optional, partial, merged per provider
+  "expectedVersion": 3,                             // required; 0 when no document exists
+  "reason": "NotchPay outage" }                     // required, 1..500 after trim
+```
+
+Aggregator and provider names are plain strings here. The settings validator owns the lists and
+refuses an unknown one with a named issue code, which tells an operator more than an enum error
+would. The actor comes from `X-Actor-Id` / `X-Actor-Name`, never from the body.
+
+`200`: `data` = `{ previous, settings, changed, warnings, convergenceSeconds }`. `previous` is the
+state the compare-and-set was made against, **read from storage and not the cache**, so wi-admin's
+audit before/after cannot race a second administrator. `changed: []` means nothing moved.
+
+| Status | Code | When |
+|---|---|---|
+| 400 | `VALIDATION_ERROR` | An unknown key (including a legacy `gateway`), a wrong type, a missing `expectedVersion` or `reason` |
+| 409 | `PAYMENT_SETTINGS_VERSION_CONFLICT` | `expectedVersion` is stale. `details: { expectedVersion, currentVersion }` when known. Reload and decide again |
+| 422 | `PAYMENT_SETTINGS_INVALID` | A hard rule was broken. `details.errors[]`: `{ code, message, provider?, aggregator? }`. Nothing was written |
+
+A switch changes **new** charges and payouts only. Rows already open keep the gateway stored on
+them, and every instance follows within `convergenceSeconds` (`PAYMENT_SETTINGS_CACHE_TTL_MS`,
+exposed on `/system/config`).
 
 ---
 

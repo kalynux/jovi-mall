@@ -52,6 +52,9 @@ export const EXPOSED_CONFIG_KEYS = Object.freeze([
     'HEALTH_READY_REQUIRE_REDIS',
     'SYSTEM_INTEGRATION_PROBE_TIMEOUT_MS',
     'MAINTENANCE_CACHE_TTL_MS',
+    // ADR-A08: how long another instance may keep routing to the previous aggregator after a
+    // switch. The same question MAINTENANCE_CACHE_TTL_MS answers for a maintenance window.
+    'PAYMENT_SETTINGS_CACHE_TTL_MS',
     'METRICS_ENABLED',
     'CACHE_FLUSH_MAX_KEYS',
     'CACHE_FLUSH_BUDGET_MS',

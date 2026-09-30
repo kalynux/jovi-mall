@@ -20,6 +20,7 @@ import {
     releaseWorker,
     tryClaimWorker,
 } from './worker-registry';
+import { buildPaymentSettingsRouter } from './payment-settings.routes';
 
 /**
  * `/api/internal/admin/dev-tools` — the operational tools wi-admin drives.
@@ -276,6 +277,13 @@ export function buildAdminDevToolsRouter(guards: RequestHandler[]): Router {
      * cutover, and its row leaves `LEGACY_ENDPOINT_MAP`.
      */
     router.post('/catalogue/vectorise', VendorProductController.bulkVectorise);
+
+    /**
+     * `/payments` — the payment-routing switch (ADR-A08). Its own file, because it writes and
+     * ADR-015 D-8 keeps `modules/system/**` read-only. Inherits the guards above; like
+     * `/maintenance`, wi-admin does not put it behind `dev_tools.enabled` (ADR-014 D-7).
+     */
+    router.use('/payments', buildPaymentSettingsRouter());
 
     /**
      * PUT /maintenance — open or close a maintenance window.
