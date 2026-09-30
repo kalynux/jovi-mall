@@ -120,6 +120,8 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
         'This payout cannot be sent in its current state',
     [ERROR_CODES.EARNINGS_PAYOUT_TRANSFER_IN_FLIGHT]:
         'A transfer for this payout is still in flight and must settle before it can be resolved',
+    [ERROR_CODES.EARNINGS_PAYOUT_NOT_PROCESSING]:
+        'Only a payout whose transfer outcome is unknown (processing) can be resolved this way',
     [ERROR_CODES.EARNINGS_PAYOUT_ALREADY_TRIAGED]: 'This payout request has already been reviewed',
     [ERROR_CODES.EARNINGS_PAYOUT_GATEWAY_UNSUPPORTED]:
         'No configured payment gateway can send to this payout destination',

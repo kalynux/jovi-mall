@@ -58,11 +58,13 @@ import { ActorRole, EntityType, TicketImportance, TicketStatus, TicketType } fro
 /**
  * Who reported a transfer's terminal outcome. `gateway` is a callback, the sweep or the send
  * itself; `administrator` is a person who checked the gateway's dashboard for a transfer whose
- * outcome was unknown. Only the ticket wording differs.
+ * outcome was unknown. The money path is identical; what differs is the ticket wording and,
+ * on a settlement, WHO `resolved_by` names — the administrator who made the call (source
+ * `admin`, name snapshot), never the platform, because a person decided it.
  */
 export type TransferOutcomeSource =
   | { kind: 'gateway' }
-  | { kind: 'administrator'; name: string | null; note: string };
+  | { kind: 'administrator'; actor: ActorRef; note: string };
 
 export class PayoutRequestService {
   constructor(
@@ -485,13 +487,18 @@ export class PayoutRequestService {
   ): Promise<IPayoutRequest | null> {
     const payoutRequest = await this.getByIdOrThrow(payoutRequestId);
     const byAdmin = source.kind === 'administrator'
-      ? `confirmed by administrator ${source.name ?? '(unnamed)'}: ${source.note}`
+      ? `confirmed by administrator ${source.actor.name ?? '(unnamed)'}: ${source.note}`
       : null;
 
     if (payoutRequest.status !== 'processing') {
       // Already settled, or never sent. Record the observation and change nothing — the
       // out-of-order case that matters is a `reversed` landing after a `complete`.
-      if (payoutRequest.status === 'paid' && !outcome.settled) {
+      //
+      // ⛔ GATEWAY ONLY. An administrator's `failed` arriving here has simply lost a race with
+      // the callback that paid it — nothing was reversed. Writing "the gateway reported this
+      // ALREADY-PAID payout as …" would invite a cash adjustment clawing back a legitimate
+      // payment. The caller's 409 {status:'paid'} is the whole answer.
+      if (payoutRequest.status === 'paid' && !outcome.settled && source.kind === 'gateway') {
         await this.payoutRepo.setTransferGatewayRef(payoutRequestId, outcome.gatewayRef);
         await this.noteOnTicketBestEffort(
           payoutRequest,
@@ -540,10 +547,18 @@ export class PayoutRequestService {
      * payout whose `requested_balance` was never debited would let the owner request the
      * same money again.
      *
-     * The resolver is the PLATFORM, not a person: the administrator authorised the send,
-     * and the gateway is what reported it done. `resolved_by` keeps the id of whoever
+     * The resolver is the PLATFORM when the gateway reported it: the administrator authorised
+     * the send, and the gateway is what reported it done. `resolved_by` keeps the id of whoever
      * approved it only insofar as the approval row records that separately in wi-admin.
+     *
+     * It is the ADMINISTRATOR when a person resolved a transfer whose outcome was unknown
+     * (`source.kind === 'administrator'`): nothing reported it done, somebody judged it from
+     * the provider's own records, and the row must name who.
      */
+    const resolver: ActorRef = source.kind === 'administrator'
+      ? source.actor
+      : { userId: payoutRequest.requested_by_user_id.toString(), source: 'platform', name: null };
+
     const settled = await transactionManager.runInTransaction(async (session) => {
       await this.accounts.markPayoutPaidInSession(
         payoutRequest.owner_type,
@@ -553,7 +568,7 @@ export class PayoutRequestService {
       );
       return this.payoutRepo.settleTransferPaid(
         payoutRequestId,
-        { userId: payoutRequest.requested_by_user_id.toString(), source: 'platform', name: null },
+        resolver,
         payoutRequest.transfer_reference,
         outcome.gatewayRef,
         session
@@ -564,7 +579,7 @@ export class PayoutRequestService {
 
     await this.resolveTicketBestEffort(
       settled,
-      settled.requested_by_user_id.toString(),
+      resolver.userId,
       `Payout of ${settled.currency} ${settled.amount.toLocaleString()} `
         + (byAdmin ? `sent; ${byAdmin}` : 'sent and confirmed by the payment gateway')
         + `${settled.transfer_gateway_ref ? ` (transfer: ${settled.transfer_gateway_ref})` : ''}.`

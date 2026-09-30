@@ -83,6 +83,7 @@
         "test:payment-options": "ts-node scripts/test/test-payment-options.ts",
         "test:payout-routing": "ts-node scripts/test/test-payout-routing.ts",
         "test:payout-reconciliation": "ts-node scripts/test/test-payout-reconciliation.ts",
+        "test:payout-resolution": "ts-node scripts/test/test-payout-resolution.ts",
         "test:campay": "ts-node scripts/test/test-campay.ts",
         "test:mycoolpay-payout": "ts-node scripts/test/test-mycoolpay-payout.ts",
         "test:billing-otp": "ts-node scripts/test/test-billing-otp.ts",

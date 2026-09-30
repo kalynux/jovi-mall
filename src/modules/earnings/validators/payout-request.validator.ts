@@ -38,6 +38,22 @@ export const RejectPayoutSchema = z.object({
 export type RejectPayoutDto = z.infer<typeof RejectPayoutSchema>;
 
 /**
+ * An administrator decides a transfer nobody can ask about (`processing`, outcome unknown).
+ *
+ * `.strict()`: the outcome is the whole decision, and a misspelt key must be a 400 rather than
+ * a stripped field. `reason` is required — it lands on the ticket and, for `failed`, as the
+ * payout's `transfer_failure_reason`. `evidence` is what the decision rests on (a statement
+ * line, a provider support reply) and travels with it.
+ */
+export const ResolveUnknownTransferSchema = z.object({
+  outcome: z.enum(['paid', 'failed']),
+  reason: z.string().trim().min(10, 'Say why — at least 10 characters').max(500),
+  evidence: z.string().trim().min(1).max(500).optional(),
+}).strict();
+
+export type ResolveUnknownTransferDto = z.infer<typeof ResolveUnknownTransferSchema>;
+
+/**
  * A tier-3 endorsement.
  *
  * ⚠ There is no `reject` verdict here. A triage rejection is an ordinary

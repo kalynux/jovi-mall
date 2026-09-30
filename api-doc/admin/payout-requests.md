@@ -91,6 +91,7 @@ Unset secret ⇒ `503`; bad token ⇒ `401`; missing or malformed actor ⇒ `400
 | POST | `/api/internal/admin/payout-requests/:id/send` | Send the money through the payment gateway |
 | POST | `/api/internal/admin/payout-requests/:id/mark-paid` | Record a payout sent OUT OF BAND; permanently deducts the earmarked funds |
 | POST | `/api/internal/admin/payout-requests/:id/reject` | Reject the request; returns the earmarked funds to `available` |
+| POST | `/api/internal/admin/payout-requests/:id/resolve-unknown` | Decide a `processing` transfer whose outcome is unknown: `paid` or `failed` (hold kept) |
 
 ---
 
@@ -103,6 +104,8 @@ pending    → processing   send                 transfer submitted, hold retain
 pending    → paid         mark-paid            settled by hand, hold consumed
 processing → paid         gateway callback     hold consumed
 processing → failed       gateway callback     hold retained
+processing → paid         resolve-unknown      an administrator confirmed it; hold consumed
+processing → failed       resolve-unknown      an administrator confirmed it did not; hold retained
 failed     → processing   send (retry)         reuses the same gateway reference
 failed     → rejected     reject               the hold is released
 failed     → paid         mark-paid            reconcile an out-of-band settlement
@@ -353,6 +356,52 @@ notifies the requester.
 - `400` – `VALIDATION_ERROR` – Missing/empty `reason`.
 - `404` – `EARNINGS_PAYOUT_REQUEST_NOT_FOUND`
 - `409` – `EARNINGS_PAYOUT_REQUEST_NOT_PENDING` – Already paid or rejected.
+
+### POST /api/internal/admin/payout-requests/:id/resolve-unknown
+
+**Description**: The manual exit for a transfer whose outcome is **unknown**. The payout is
+`processing` because the transfer POST timed out or threw after the claim. Such a row carries
+`transferFailureReason: "Outcome unknown: …"` naming the reference to look up. It has no provider
+transfer id, so the reconciliation sweep cannot ask about it, and `mark-paid` and `reject` refuse
+`processing` by design. An administrator who has checked the provider's own records decides it.
+
+Both outcomes settle through `applyTransferOutcome`, the same compare-and-set on `processing`
+that a transfer callback uses, so a callback or the sweep landing at the same moment resolves it
+exactly once:
+
+- `paid`: the balance is debited and the payout settles in one transaction. `resolved_by` is **the
+  administrator** (`resolved_by_source: "admin"` plus a name snapshot), not the platform. A
+  gateway-confirmed settlement still stamps the platform.
+- `failed`: the payout moves to `failed` with the **hold kept** (ADR-024 D-7), ready for `send` (a
+  retry that reuses the same reference) or `reject`.
+
+The linked ticket gets a note naming the administrator, the reason and the evidence.
+
+The route applies to **any** `processing` row, with or without a gateway transfer id. A row whose
+gateway cannot be asked, or keeps answering inconclusively, needs the same exit.
+
+**Request Body** (`.strict()`):
+```json
+{ "outcome": "paid", "reason": "MyCoolPay dashboard shows jm_po_8f2… SUCCESS", "evidence": "MCP txn 77812" }
+```
+`outcome` is `paid` | `failed`. `reason` is required, 10–500 characters. `evidence` is optional,
+1–500 characters.
+
+**Who may call it, and whether a large `paid` needs a second administrator, is decided in
+wi-admin**, like everything else on this mount (`paid` requires `money.payouts.mark_paid` and the
+≥ 2,000,000 XAF four-eyes rule; `failed` requires `money.payouts.triage`).
+
+**Success Response** — `200 OK`: the updated `PayoutRequest`.
+
+**Error Responses**:
+- `400` – `VALIDATION_ERROR` – bad `outcome`, a short or missing `reason`, or an unknown key.
+- `404` – `EARNINGS_PAYOUT_REQUEST_NOT_FOUND`
+- `409` – `EARNINGS_PAYOUT_NOT_PROCESSING` – the payout is not `processing` (`details.status`),
+  or a callback or the sweep resolved it between the read and the write.
+- `409` – `EARNINGS_PAYOUT_TRANSFER_IN_FLIGHT` – too soon. The payout has been `processing` for
+  less than `PAYOUT_RECONCILE_MIN_AGE_MINUTES` (default 15), measured from `updated_at`, so a
+  callback may still arrive. `details.settleAfter` (ISO) and `details.minAgeMinutes`. This is the
+  same setting the sweep uses.
 
 ---
 

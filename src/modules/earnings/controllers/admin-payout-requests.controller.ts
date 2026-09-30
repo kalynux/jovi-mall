@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { sendSuccess } from '../../../core/responses';
 import { payoutRequestService } from '../services/payout-request.service';
+import { payoutResolutionService } from '../services/payout-resolution.service';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { actorFromRequest } from '../../../core/types/actor-source.types';
@@ -10,6 +11,7 @@ import {
   ListPayoutRequestsQuerySchema,
   MarkPaidSchema,
   RejectPayoutSchema,
+  ResolveUnknownTransferSchema,
   TriagePayoutSchema,
 } from '../validators/payout-request.validator';
 
@@ -105,6 +107,32 @@ export class AdminPayoutRequestsController {
           : payoutRequest.status === 'failed'
             ? 'The gateway refused the transfer. The funds remain held.'
             : 'Payout submitted to the gateway. It is not settled until the gateway confirms it.',
+    });
+  });
+
+  /**
+   * Decide a transfer whose outcome is unknown — `processing`, and nobody can ask the gateway.
+   *
+   * `paid` settles it exactly as a confirmed transfer does; `failed` parks it in `failed` with
+   * the hold kept, ready to retry or reject. Refused unless the payout is `processing` and has
+   * been quiet for the reconciliation sweep's MIN_AGE (a callback may still be in flight).
+   * Whether the caller may do this — and whether a large `paid` needs a second administrator —
+   * is decided in wi-admin, as for every route on this mount.
+   */
+  static resolveUnknownTransfer = asyncHandler(async (req: Request, res: Response) => {
+    const validated = ResolveUnknownTransferSchema.parse(req.body);
+
+    const payoutRequest = await payoutResolutionService.resolveUnknownTransfer(
+      req.params.id,
+      { outcome: validated.outcome, reason: validated.reason, evidence: validated.evidence ?? null },
+      actorFromRequest(req)
+    );
+
+    sendSuccess(res, toAdminPayoutRequestDto(payoutRequest, null), {
+      message:
+        payoutRequest.status === 'paid'
+          ? 'Transfer resolved as paid. The payout is settled.'
+          : 'Transfer resolved as failed. The funds remain held — retry the transfer or reject the request.',
     });
   });
 

@@ -61,6 +61,13 @@ function attachRoutes(router: Router): Router {
      */
     router.post('/:id/reject', AdminPayoutRequestsController.reject);
 
+    /**
+     * POST /payout-requests/:id/resolve-unknown
+     * An administrator decides a transfer whose outcome is unknown. `processing` only, and only
+     * once it has been quiet for PAYOUT_RECONCILE_MIN_AGE_MINUTES. Body: { outcome, reason, evidence? }
+     */
+    router.post('/:id/resolve-unknown', AdminPayoutRequestsController.resolveUnknownTransfer);
+
     return router;
 }
 

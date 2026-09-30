@@ -1785,6 +1785,8 @@ export const ERROR_CODES = Object.freeze({
     // Payout EXECUTION — NotchPay transfers + tier-3 triage.
     EARNINGS_PAYOUT_NOT_SENDABLE: 'EARNINGS_PAYOUT_NOT_SENDABLE',
     EARNINGS_PAYOUT_TRANSFER_IN_FLIGHT: 'EARNINGS_PAYOUT_TRANSFER_IN_FLIGHT',
+    /** Only a payout whose transfer is in flight (`processing`) can be resolved by hand. 409. */
+    EARNINGS_PAYOUT_NOT_PROCESSING: 'EARNINGS_PAYOUT_NOT_PROCESSING',
     EARNINGS_PAYOUT_ALREADY_TRIAGED: 'EARNINGS_PAYOUT_ALREADY_TRIAGED',
     /**
      * ⚠ **"This payout's DESTINATION cannot be sent to automatically" — a bank or card row

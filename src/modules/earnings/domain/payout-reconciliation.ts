@@ -121,6 +121,46 @@ export async function reconcileStuckPayouts(
     return tally;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The manual exit — an administrator resolves a transfer nobody can ask about
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * May an administrator resolve this payout's transfer by hand, right now? Pure; exported for
+ * `test:payout-reconciliation`.
+ *
+ * The case it exists for: the transfer POST timed out or threw after the claim, so the payout
+ * is `processing` with no provider transfer id — the sweep cannot ask about it (My-CoolPay has
+ * no lookup by our reference) and `markPaid` / `reject` refuse `processing` by design. Without
+ * this, such a payout had no exit at all. It is not limited to rows without a transfer id: a
+ * row whose gateway cannot be asked (no `verifyPayout`) or keeps answering inconclusively needs
+ * the same way out.
+ *
+ * Two refusals, and the second is the one that matters:
+ *   - `not_processing` — anything else already has an exit (`markPaid`, `reject`, a retry).
+ *   - `too_recent` — quieter than the sweep's MIN_AGE. A callback may still be in flight, and
+ *     an administrator racing it is how a payout gets decided twice. The floor is the SAME
+ *     setting the sweep uses, so "the sweep would not ask yet" and "you may not decide yet"
+ *     cannot drift apart. Measured from `updated_at`, as the sweep's own filter is: the claim
+ *     into `processing` sets it, and every later write while `processing` (the gateway ref,
+ *     the "outcome unknown" note) only moves it LATER — never from `created_at`, which would
+ *     let a payout requested days ago be resolved a second after its transfer was sent.
+ */
+export type ManualResolveRefusal =
+    | { kind: 'not_processing'; status: string }
+    | { kind: 'too_recent'; settleAfter: Date };
+
+export function manualResolveRefusal(
+    row: { status: string; updated_at: Date },
+    now: Date,
+    minAgeMinutes: number
+): ManualResolveRefusal | null {
+    if (row.status !== 'processing') return { kind: 'not_processing', status: row.status };
+    const settleAfter = new Date(row.updated_at.getTime() + minAgeMinutes * 60_000);
+    if (now < settleAfter) return { kind: 'too_recent', settleAfter };
+    return null;
+}
+
 /**
  * A verdict → the outcome `applyTransferOutcome` takes, or null for "leave it".
  *
