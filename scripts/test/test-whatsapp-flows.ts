@@ -1522,11 +1522,19 @@ async function main(): Promise<void> {
         planCheckoutFailure(err(410, true)).kind === 'restart' && planCheckoutFailure(err(404, true)).kind === 'restart');
 
     /**
-     * ⚠ The one row keyed on the CODE. No gateway is spent:false, so a retry is honest but
-     * futile, and its status is moving 503 → 500, where it would otherwise fall into the last row.
+     * ADR-A08 C1: `PAYMENT_GATEWAY_NOT_CONFIGURED` was raised only by the deleted
+     * `mobileMoneyGateway`, so its code row went with it. A 500 carrying it is now an ordinary
+     * unknown server fault: look in the chat. "Nothing on offer" is the router's
+     * `PAYMENT_PROVIDER_UNAVAILABLE` without a provider, pinned below.
      */
-    assert('⚠ no gateway → closes, by CODE, even at its new status 500',
-        planCheckoutFailure(err(500, false, 'PAYMENT_GATEWAY_NOT_CONFIGURED')).kind === 'unavailable');
+    assert('C1: the retired PAYMENT_GATEWAY_NOT_CONFIGURED has no row of its own (500 → ask_chat)',
+        planCheckoutFailure(err(500, false, 'PAYMENT_GATEWAY_NOT_CONFIGURED')).kind === 'ask_chat');
+    const unavailable = (details: Record<string, unknown>) =>
+        Object.assign(new Error('x'), { statusCode: 422, code: 'PAYMENT_PROVIDER_UNAVAILABLE', category: 'business_rule', details });
+    assert('⚠ nothing on offer (PAYMENT_PROVIDER_UNAVAILABLE, no provider) → closes',
+        planCheckoutFailure(unavailable({ offered: [], spent: false })).kind === 'unavailable');
+    assert('one provider off (PAYMENT_PROVIDER_UNAVAILABLE WITH a provider, spent false) → stay: another number can pay',
+        planCheckoutFailure(unavailable({ provider: 'MTN', offered: ['ORANGE'], spent: false })).kind === 'stay');
     assert('⚠ no gateway (503, spent false) → closes: a retry can\'t change configuration',
         planCheckoutFailure(err(503, false)).kind === 'unavailable');
 

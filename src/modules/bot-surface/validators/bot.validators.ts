@@ -766,7 +766,7 @@ export const BotBookingRescheduleSchema = z
 /**
  * The money pair, `POST /bookings/:bookingId/{pay,pay-balance}`.
  *
- * Mirrors `InitiateBookingPaymentSchema` rather than importing it, for the reason every
+ * Mirrors `InitiateBookingPaymentRequestSchema` rather than importing it, for the reason every
  * other schema here is restated: the customer API's `channel` carries `cardToken`, and a
  * card token has no business arriving from a chat transport. `customerName` goes too — the
  * platform knows the customer's name and does not need a model's version of it.

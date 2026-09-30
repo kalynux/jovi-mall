@@ -106,15 +106,15 @@ export type CheckoutFailurePlan =
      */
     | { kind: 'ask_chat' };
 
-/** The code Stream D raises, before the spend, when no gateway is configured. */
-export const GATEWAY_NOT_CONFIGURED = 'PAYMENT_GATEWAY_NOT_CONFIGURED';
-
 /**
  * ADR-A08: the router's refusal. Raised before the spend in two shapes, and they plan differently:
  *   - WITH `details.provider` — that one provider is off or unroutable. Another number, on the
  *     other network, can still pay, so it is an ordinary `stay` (a 422 with `spent: false`).
- *   - WITHOUT it — `assertMobileMoneyOffered`: NO mobile provider is on offer at all. Exactly the
- *     not-configured situation in new clothes: pressing again cannot change it, so `unavailable`.
+ *   - WITHOUT it — `assertMobileMoneyOffered`: NO mobile provider is on offer at all. Pressing
+ *     again cannot change it, so `unavailable`.
+ *
+ * It replaced `PAYMENT_GATEWAY_NOT_CONFIGURED`, which only the deprecated `mobileMoneyGateway`
+ * raised; C1 deleted both, so that code no longer has a row here.
  */
 export const PROVIDER_UNAVAILABLE = 'PAYMENT_PROVIDER_UNAVAILABLE';
 
@@ -155,11 +155,9 @@ export function handleSurvived(error: unknown): boolean {
  * also carries `spent: false` (there was nothing left to spend), and keeping a customer on a
  * screen whose handle is gone would give them a button that can only fail.
  *
- * ⚠ **The one row keyed on the CODE, not on `spent`: no gateway configured.** It is raised
- * before the spend (`spent: false`, so a retry would be honest), but a retry can't change
- * configuration, so it's futile. Its status is moving from 503 to 500 to satisfy `test:errors`'
- * one-code-one-status rule, and a 500 would otherwise fall into the last row. Both are matched
- * until the move lands.
+ * ⚠ **The one row keyed on the CODE, not on `spent`: nothing is on offer.** It is raised before
+ * the spend (`spent: false`, so a retry would be honest), but a retry can't change configuration,
+ * so it's futile. A 503 is futile for the same reason.
  */
 export function planCheckoutFailure(error: unknown): CheckoutFailurePlan {
     const e = error as {
@@ -169,7 +167,7 @@ export function planCheckoutFailure(error: unknown): CheckoutFailurePlan {
     } | null;
     const status = typeof e?.statusCode === 'number' ? e.statusCode : null;
 
-    if (e?.code === GATEWAY_NOT_CONFIGURED || status === 503 || nothingOffered(error)) return { kind: 'unavailable' };
+    if (status === 503 || nothingOffered(error)) return { kind: 'unavailable' };
 
     if ((status === 400 || status === 422) && handleSurvived(error)
         && typeof e?.code === 'string' && typeof e.category === 'string') {

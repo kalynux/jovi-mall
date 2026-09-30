@@ -1360,25 +1360,33 @@ function withStripe<T>(secret: string | undefined, webhook: string | undefined, 
   }
 }
 
-assert('with no Stripe secret key, cards are not offered — and mobile money still is', () =>
+// ADR-A08 C1: the version-0 "configured alone" bridge is gone. With no settings document the
+// DEFAULTS apply — NotchPay the one collection aggregator, Stripe off — so a configured
+// My-CoolPay is NOT offered for a new charge until an administrator makes it the active one.
+assert('no settings document: only the default aggregator (NOTCHPAY) is offered; Stripe is off', () =>
   withStripe(undefined, undefined, () =>
     !gatewayAcceptsNewPayments('STRIPE')
     && gatewayAcceptsNewPayments('NOTCHPAY')
-    && gatewayAcceptsNewPayments('MYCOOLPAY')
-    && offeredPaymentGateways().join(',') === 'NOTCHPAY,MYCOOLPAY'));
+    && !gatewayAcceptsNewPayments('MYCOOLPAY')
+    && offeredPaymentGateways().join(',') === 'NOTCHPAY'));
 
-// A whitespace value is what a hand-edited .env line with nothing after `=` often leaves.
-assert('a blank or whitespace key is OFF, not on', () =>
-  withStripe('   ', 'whsec_fixture', () => !gatewayAcceptsNewPayments('STRIPE')));
+const stripeOn = settingsWith({ stripe_enabled: true });
+
+// A whitespace value is what a hand-edited .env line with nothing after `=` often leaves. Run with
+// Stripe switched ON in the settings, so the credentials are the only thing deciding.
+assert('a blank or whitespace key is OFF, not on — even with stripe_enabled', () =>
+  withStripe('   ', 'whsec_fixture', () => resultUnder(stripeOn, () => !gatewayAcceptsNewPayments('STRIPE'))));
 
 // The key alone would switch on a gateway whose every callback is refused (no secret to verify
 // with) — charged customers, unpaid orders. env.ts refuses that boot; this refuses it anywhere.
-assert('the key without its webhook secret is still OFF', () =>
-  withStripe('sk_test_fixture', undefined, () => !gatewayAcceptsNewPayments('STRIPE')));
+assert('the key without its webhook secret is still OFF — even with stripe_enabled', () =>
+  withStripe('sk_test_fixture', undefined, () => resultUnder(stripeOn, () => !gatewayAcceptsNewPayments('STRIPE'))));
 
-assert('both Stripe secrets turn cards back on — configuration, not a code change', () =>
+// Owner decision 2: cards need BOTH the secrets and the administrator's switch.
+assert('both Stripe secrets AND stripe_enabled turn cards on; the secrets alone do not', () =>
   withStripe('sk_test_fixture', 'whsec_fixture', () =>
-    gatewayAcceptsNewPayments('STRIPE') && offeredPaymentGateways().includes('STRIPE')));
+    resultUnder(stripeOn, () => gatewayAcceptsNewPayments('STRIPE') && offeredPaymentGateways().includes('STRIPE'))
+    && !gatewayAcceptsNewPayments('STRIPE')));
 
 assert('an unknown gateway name is never "offered"', () =>
   !gatewayAcceptsNewPayments('PAYPAL') && !gatewayAcceptsNewPayments(''));
@@ -1444,16 +1452,17 @@ assert('⛔ all four charge-starting methods open with the choke point, BEFORE a
   });
 });
 
-// Exactly four: a fifth charge-starting method must add its own. The deprecated gateway-name
-// form keeps the old gate, INSIDE the choke point and nowhere else (removed in C1).
-assert('the choke point appears once per charge-starting method; the old gate only inside it', () => {
+// Exactly four: a fifth charge-starting method must add its own. C1 removed the deprecated
+// gateway-name form and the old gate it kept: no charge in the orchestrator is opened on a
+// gateway a caller named, so the old gate appears nowhere in it.
+assert('the choke point appears once per charge-starting method; the old gate is gone (C1)', () => {
   const prepare = ORCHESTRATOR_LF.slice(
     ORCHESTRATOR_LF.indexOf('private prepareCharge('),
     ORCHESTRATOR_LF.indexOf('\n  }\n', ORCHESTRATOR_LF.indexOf('private prepareCharge(')),
   );
   return countOf('this.prepareCharge(selection, channel)') === 4
-    && countOf('assertGatewayOffered(') === 1
-    && prepare.includes('assertGatewayOffered(selection);')
+    && countOf('assertGatewayOffered(') === 0
+    && !prepare.includes("typeof selection === 'string'")
     && prepare.includes('resolveCollectionRoute(provider)');
 });
 
@@ -1795,9 +1804,6 @@ async function runScenario(
     (orch, id) => orch.initiatePayment(id, { provider: 'MTN' }, { phoneNumber: MTN_NUMBER }),
   );
 
-  // The deprecated gateway-name form the bot and mini-app still use until W2b.
-  const legacyName = await runScenario(notchpayActive, [], (orch, id) =>
-    orch.initiatePayment(id, 'NOTCHPAY', { phoneNumber: MTN_NUMBER }));
 
   let underivable: unknown;
   try { deriveProviderOrThrow({ gateway: 'NOTCHPAY', channel: {} }); } catch (e) { underivable = e; }
@@ -1854,10 +1860,15 @@ async function runScenario(
       && reuse.result?.instructions?.message === 'dial *126#'
       && reuse.creates.length === 0 && reuse.charged.length === 0);
 
-  assert('the deprecated gateway-name form still charges, and derives the provider for the row', () =>
-    !legacyName.error
-      && legacyName.creates[0]?.gateway === 'NOTCHPAY'
-      && legacyName.creates[0]?.provider === 'MTN');
+  // C1: the deprecated gateway-name form is gone. An old app's `gateway` reaches the orchestrator
+  // only as a derived provider (the legacy-body scenario above), never as the aggregator to use.
+  assert('C1: ChargeSelection is provider-only — no caller can name the aggregator', () => {
+    const start = ORCHESTRATOR_LF.indexOf('export interface ChargeSelection');
+    const decl = start < 0 ? '' : ORCHESTRATOR_LF.slice(start, ORCHESTRATOR_LF.indexOf('\n}\n', start));
+    return decl.includes('provider: PaymentProvider;')
+      && !decl.includes('PaymentGatewayType')
+      && !ORCHESTRATOR_LF.includes('export type ChargeSelection');
+  });
 
   assert('a body with no provider, no operator and no number is 400 PAYMENT_PROVIDER_REQUIRED', () =>
     isAppError(underivable, ERROR_CODES.PAYMENT_PROVIDER_REQUIRED, 400));

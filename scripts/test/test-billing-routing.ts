@@ -30,7 +30,7 @@ process.env.MYCOOLPAY_PRIVATE_KEY = 'mcp_private_billing_routing';
 delete process.env.STRIPE_SECRET_KEY;
 delete process.env.STRIPE_WEBHOOK_SECRET;
 
-/* eslint-disable @typescript-eslint/no-var-requires */
+/* eslint-disable @typescript-eslint/no-require-imports -- env fixtures must be set before these modules load */
 import type { PaymentGateway, PaymentGatewayName } from '../../src/modules/payments/gateways/gateway.interface';
 import type { PaymentSettingsRecord } from '../../src/modules/payments/domain/payment-routing';
 

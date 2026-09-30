@@ -1,6 +1,7 @@
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
-import { PaymentGatewayName, ProviderCollectCapability } from '../gateways/gateway.interface';
+import { ZodError } from 'zod';
+import { CollectField, PaymentGatewayName, ProviderCollectCapability } from '../gateways/gateway.interface';
 import { buildRoutingFacts, findPaymentGateway } from '../gateways/registry';
 import { PaymentProvider } from '../domain/payment-provider';
 import {
@@ -106,6 +107,25 @@ export function enforceChargeRequestCheck(check: ChargeRequestCheck): ChargeRequ
     422,
     `This number is on ${check.detected}, not ${check.provider}. Please check the number or choose ${check.detected}.`,
     { provider: check.provider, detected: check.detected, spent: false },
+  );
+}
+
+/**
+ * The HTTP doors' error for a missing channel field: `400 VALIDATION_ERROR` on
+ * `channel.<field>`, in the shape the pre-ADR-A08 request schemas raised it. The payment
+ * orchestrator and the billing doors both use this ONE builder (C1 merged their two copies), so
+ * a checkout and a plan purchase word the refusal identically. Doors with their own error for a
+ * missing number (the bot's `PAYMENT_PAYER_NUMBER_REQUIRED`) pass that instead.
+ */
+export function missingFieldValidationError(missing: CollectField[]): ZodError {
+  return new ZodError(
+    missing.map((field) => ({
+      code: 'custom' as const,
+      path: ['channel', field],
+      message: field === 'phoneNumber'
+        ? 'phoneNumber is required for mobile money payments'
+        : `${field} is required for this payment method`,
+    })),
   );
 }
 

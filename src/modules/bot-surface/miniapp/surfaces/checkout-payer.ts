@@ -2,8 +2,6 @@ import { AppError, createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
 import { OptionalPhoneNumberSchema } from '../../../../core/validation/phone';
 import { ICustomer } from '../../../customers/customer.model';
-import { PaymentGatewayType } from '../../../payments/models/payment-transaction.model';
-import { notchPayEnabled, myCoolPayEnabled } from '../../../payments/config/payments.config';
 import { resolveCameroonOperator } from '../../../payments/domain/cm-operator';
 import {
     isMobileMoneyProvider,
@@ -59,8 +57,8 @@ const paymentMethods = new UserPaymentMethodRepository();
  * honest and useful.
  *
  * ⚠ **EXPORTED, and it must stay THE answer to "what number does this customer want charged".**
- * The fifth member of the set beside `mobileMoneyGateway`, `storedPayerNumber`,
- * `maskedPayerNumber` and `assertNetworkChargeable`, and exported for the same reason: it
+ * One of the set beside `mobileMoneyRoute`, `storedPayerNumber` and `maskedPayerNumber`,
+ * and exported for the same reason: it
  * carries payment SEMANTICS, not just parsing. The empty-string fold decides whether a blank
  * field means "my account's number" or an error, and the `spent: false` on its refusal is the
  * flag a page reads to decide whether its Pay button may unlatch. A second copy would be a
@@ -81,44 +79,6 @@ export function validatedPayerNumber(phone: unknown): string | null {
         );
     }
     return parsed.data ?? null;
-}
-
-/**
- * Refuse a number the chosen gateway cannot route to a mobile network — before it costs anything.
- *
- * ── WHY THIS IS CHECKED HERE WHEN THE GATEWAY CHECKS IT ANYWAY ──────────────
- * NotchPay needs the network (MTN or Orange) to open a charge, and works it out inside
- * `NotchPayGateway.initiatePayment` from the number's prefix. That is **after** the handle is spent
- * and **after** `createOrdersFromCart` — so a number in a prefix range `cm-operator.ts` does not
- * list cost the customer their checkout screen AND left an unpaid order with a stock hold behind
- * it. `resolveCameroonOperator` is pure, so the same verdict can be reached before either.
- * (Found by backend-4d.)
- *
- * ⚠ **Only for NotchPay.** My-CoolPay derives the network server-side and needs nothing from us, so
- * refusing a number it would have accepted would be a regression dressed as a check.
- *
- * ⚠ **The SAME resolver and the SAME code the gateway uses** — `PAYMENT_OPERATOR_UNDETERMINED`,
- * 422 — so a customer meets one refusal whichever side of the spend it lands on, and nobody later
- * "unifies" two vocabularies for one condition.
- *
- * ⚠ **EXPORTED for the booking pay screen (`bp`)**, which opens a NotchPay charge with exactly the
- * same gap. `spent` is the caller's to state: pass `false` for a check made before anything
- * irreversible happened, `true` otherwise — the flag is what a screen reads to decide whether a
- * retry is honest.
- *
- * @deprecated ADR-A08: `mobileMoneyRoute` is the check now, and it applies to EVERY aggregator —
- * a charge is routed by its provider, so a number no provider can be worked out for cannot be
- * routed at all, whoever collects. This stays only as the underivable-number guard, no longer
- * keyed on NotchPay, until C1 removes it. `gateway` is ignored.
- */
-export function assertNetworkChargeable(_gateway: PaymentGatewayType, payerNumber: string, spent: boolean): void {
-    if (resolveCameroonOperator(payerNumber)) return;
-    throw createAppError(
-        ERROR_CODES.PAYMENT_OPERATOR_UNDETERMINED,
-        422,
-        'Could not determine the mobile network for this number.',
-        { spent, field: 'phone' },
-    );
 }
 
 /**
@@ -165,54 +125,6 @@ export async function maskedPayerNumber(customer: ICustomer): Promise<string | n
 export async function storedPayerNumber(customer: ICustomer): Promise<string | null> {
     /** Already sorted default-first, then newest, by the repository itself — see `storedPayer`. */
     return (await storedPayer(customer))?.number ?? null;
-}
-
-/**
- * Which mobile-money gateway this deployment charges through.
- *
- * ⚠ **Chosen here rather than by the page, and that is not a detail.** Every other entry point
- * takes the gateway from its caller — the storefront names one, the billing module names one —
- * because those callers are the platform's own code. This one's caller is a browser, and a
- * gateway name arriving from a browser is a caller choosing where a stranger's money goes.
- *
- * ⚠ **NotchPay first, deliberately and not alphabetically.** It is the gateway with a working
- * refund integration and a real webhook secret, so a payment taken through it can be reversed
- * by an administrator; My-CoolPay has no refund API at all. When both are configured, the one
- * that can be undone is the one to use.
- *
- * Neither configured is a **configuration** state rather than a fault, and it is refused as
- * such: the deployment cannot take mobile money, and no amount of retrying by the customer
- * changes that.
- *
- * ⚠ **`PAYMENT_GATEWAY_NOT_CONFIGURED` at 500, NOT `PAYMENT_GATEWAY_NOT_SUPPORTED` at 503**, and
- * the pair of changes is one decision. `..._NOT_SUPPORTED` means *"that gateway is not on
- * offer"* — a rule, about a gateway the caller named. This is the opposite situation: nobody
- * named a gateway, and the deployment has none. Borrowing the other code made an operator read a
- * missing secret as a customer asking for something unavailable.
- *
- * The **500 is load-bearing too**: at 503 the category rule yields `external_service`
- * (`error-category.ts`), which sends whoever is on call to look at NotchPay — a third party that
- * is perfectly healthy and simply absent from our `.env`. At 500 it derives to `internal`, our
- * own fault, which is what it is. No override row is needed: `PAYMENT_` is not an integration
- * prefix, so the status rule alone gets this right.
- *
- * ⚠ **EXPORTED, and it must stay THE answer to "which gateway takes a mobile-money charge".** The
- * chat's retry (`bot-checkout.controller.ts`) and the booking pay screen (`bp`) both import it.
- * Three copies of one preference is how a customer ends up with two charges for one basket — or
- * one basket and one appointment — under different refund rules, decided by which door they used.
- *
- * @deprecated ADR-A08: no charge path calls this any more. The aggregator is chosen by the payment
- * settings (`resolveCollectionRoute`), and these doors pass a provider through `mobileMoneyRoute`.
- * Kept, unchanged, until C1.
- */
-export function mobileMoneyGateway(): PaymentGatewayType {
-    if (notchPayEnabled()) return 'NOTCHPAY';
-    if (myCoolPayEnabled()) return 'MYCOOLPAY';
-    throw createAppError(
-        ERROR_CODES.PAYMENT_GATEWAY_NOT_CONFIGURED,
-        500,
-        'No mobile money gateway is configured on this deployment',
-    );
 }
 
 /** The wallet a server-picked charge goes to, with the network its saved method names (if any). */
@@ -264,7 +176,7 @@ export function assertMobileMoneyOffered(): void {
 
 /**
  * ⭐ THE answer, on the server-picked doors, to "which provider does this charge go through"
- * (ADR-A08). Replaces `mobileMoneyGateway` on every charge path.
+ * (ADR-A08). Replaced the old env-picked `mobileMoneyGateway` (deleted in C1).
  *
  * Nobody on these doors DECLARED a provider — the customer confirmed a number — so the number
  * decides, by its prefix. Only when the prefix is not one the table knows does the saved wallet's

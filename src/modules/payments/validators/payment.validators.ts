@@ -2,7 +2,6 @@ import { z } from 'zod';
 import { OptionalEmailAddressSchema } from '../../../core/validation/email';
 import { OptionalPhoneNumberSchema } from '../../../core/validation/phone';
 import { PAYMENT_PROVIDERS } from '../domain/payment-provider';
-import { PAYMENT_GATEWAY_NAMES } from '../gateways/gateway.interface';
 
 /**
  * Payment API validators.
@@ -36,59 +35,14 @@ export const PaymentChannelSchema = z.object({
 
 export type PaymentChannelInput = z.infer<typeof PaymentChannelSchema>;
 
-/** Alias of `PAYMENT_GATEWAY_NAMES`, the one list (ADR-A08). Not the adapter Map of the same name in `registry.ts`. */
-export const PAYMENT_GATEWAYS = PAYMENT_GATEWAY_NAMES;
-
-const PaymentGatewaySchema = z.enum(PAYMENT_GATEWAYS, {
-  errorMap: () => ({ message: `Invalid gateway. Must be one of: ${PAYMENT_GATEWAYS.join(', ')}` }),
-});
-
-/**
- * POST /payments/initiate — one payment for a cart, or for a single order.
- *
- * The `cartId` XOR `orderId` rule and the "mobile money needs a number" rule
- * were both already enforced by hand in the route; they are here so the whole
- * body is checked in one place and reported in the platform's standard
- * validation-error shape.
- */
-export const InitiatePaymentSchema = z
-  .object({
-    cartId: z.string().trim().min(1).optional(),
-    orderId: z.string().trim().min(1).optional(),
-    gateway: PaymentGatewaySchema,
-    channel: PaymentChannelSchema,
-  })
-  .refine((body) => Boolean(body.cartId || body.orderId), {
-    message: 'Either cartId or orderId is required',
-    path: ['cartId'],
-  })
-  .refine((body) => body.gateway === 'STRIPE' || Boolean(body.channel.phoneNumber), {
-    message: 'phoneNumber is required for mobile money payments',
-    path: ['channel', 'phoneNumber'],
-  });
-
-export type InitiatePaymentInput = z.infer<typeof InitiatePaymentSchema>;
-
-/** POST /api/bookings/:id/pay — same channel, booking resolved from the URL. */
-export const InitiateBookingPaymentSchema = z
-  .object({
-    gateway: PaymentGatewaySchema,
-    channel: PaymentChannelSchema,
-  })
-  .refine((body) => body.gateway === 'STRIPE' || Boolean(body.channel.phoneNumber), {
-    message: 'phoneNumber is required for mobile money payments',
-    path: ['channel', 'phoneNumber'],
-  });
-
-export type InitiateBookingPaymentInput = z.infer<typeof InitiateBookingPaymentSchema>;
-
 // ── Provider-based requests (ADR-A08) ────────────────────────────────────────
 //
 // The customer names what they HOLD (`provider`: MTN, ORANGE, CARD); the server picks who it
 // calls (the aggregator), from the payment settings, at the moment the charge opens. See
 // `api-doc/payments/routing.md`.
 //
-// ⚠ Neither rule the old schemas enforce survives here, on purpose:
+// ⚠ Neither rule the pre-ADR-A08 schemas enforced survives here, on purpose (C1 deleted those
+// schemas, `InitiatePaymentSchema` and `InitiateBookingPaymentSchema`):
 //   - `gateway` is accepted and IGNORED (owner decision 4). Any string, so an app built against
 //     an aggregator that has since been removed still gets through to routing rather than dying
 //     on a 400 for a field nobody reads. It is counted, not used.
@@ -99,14 +53,24 @@ export type InitiateBookingPaymentInput = z.infer<typeof InitiateBookingPaymentS
 // `provider` is optional while apps that predate it are in use; a missing one is derived
 // (`deriveProvider`) and an underivable one is `400 PAYMENT_PROVIDER_REQUIRED`.
 
-const PaymentProviderSchema = z.enum(PAYMENT_PROVIDERS, {
+/**
+ * `provider` on every charging door. EXPORTED so the billing validators use this one rather than a
+ * copy (C1); the bot's flat schema restates its own on purpose (see `BotBookingPaySchema`).
+ */
+export const PaymentProviderSchema = z.enum(PAYMENT_PROVIDERS, {
   errorMap: () => ({ message: `Invalid provider. Must be one of: ${PAYMENT_PROVIDERS.join(', ')}` }),
 });
 
-/** The deprecated aggregator field — accepted, never validated against a list, never used. */
-const DeprecatedGatewaySchema = z.string().trim().optional();
+/**
+ * The deprecated aggregator field — accepted, never validated against a list, never used.
+ *
+ * ⛔ **Keep it on every door.** Old apps and the live n8n MCP still send `gateway` (owner decision
+ * 4). C1 removed the gateway PARAMETERS in code, never this request field: dropping it from a
+ * `.strict()` schema would turn an ignored field into a 400.
+ */
+export const DeprecatedGatewaySchema = z.string().trim().optional();
 
-/** POST /payments/initiate, provider-based. Replaces `InitiatePaymentSchema` (removed in C1). */
+/** POST /payments/initiate, provider-based. */
 export const InitiatePaymentRequestSchema = z
   .object({
     cartId: z.string().trim().min(1).optional(),
@@ -122,10 +86,7 @@ export const InitiatePaymentRequestSchema = z
 
 export type InitiatePaymentRequest = z.infer<typeof InitiatePaymentRequestSchema>;
 
-/**
- * POST /api/bookings/:id/pay and /api/customer/bookings/:id/pay-balance, provider-based.
- * Replaces `InitiateBookingPaymentSchema` (removed in C1).
- */
+/** POST /api/bookings/:id/pay and /api/customer/bookings/:id/pay-balance, provider-based. */
 export const InitiateBookingPaymentRequestSchema = z.object({
   provider: PaymentProviderSchema.optional(),
   gateway: DeprecatedGatewaySchema,

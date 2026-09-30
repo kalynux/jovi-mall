@@ -8,13 +8,13 @@
  *                     means the defaults; an unreadable field falls back to its default.
  *   3. The write      compare-and-set, the version-0 create race, 422 with details.errors,
  *                     previous / changed / warnings / convergenceSeconds, the cache bust.
- *   4. Registry       gatewayConfigured, buildRoutingFacts, and BOTH branches of the
- *                     transitional accept rule (no document = configured only; a document =
- *                     the ADR-A08 rule). C1 removes the first branch and flips its test here.
+ *   4. Registry       gatewayConfigured, buildRoutingFacts, and the ADR-A08 accept rule with
+ *                     and without a document (C1 removed the version-0 "configured alone" bridge).
  *   5. Resolver       resolveCollectionRoute, offeredProviders, resolvePayoutAggregator,
  *                     deriveProviderOrThrow, the mismatch → error helper.
- *   6. Scans          the boot prime, the lazy registry import, and a REPORT (not a failure,
- *                     until C1) of every routing decision still made from an env predicate.
+ *   6. Scans          the boot prime, the lazy registry import, and — STRICT since C1 — no
+ *                     routing decision from an env predicate or a raw credential read outside
+ *                     the allowlist, and `payments` never imports `bot-surface`.
  *
  * Run: npm run test:payment-settings
  */
@@ -384,14 +384,19 @@ function withStripe<T>(fn: () => T): T {
 
   __setPaymentSettingsStoreForTests(stub(null));
   __resetPaymentSettingsCacheForTests(DEFAULT_PAYMENT_SETTINGS, true);
-  await assert('TRANSITION, no document (version 0): MYCOOLPAY still accepted — today’s behaviour', () =>
-    gatewayAcceptsNewPayments('MYCOOLPAY') && gatewayAcceptsNewPayments('NOTCHPAY')
-    && offeredPaymentGateways().join(',') === 'NOTCHPAY,MYCOOLPAY');
-  await assert('TRANSITION, no document: Stripe follows its keys alone, as today', () =>
-    !gatewayAcceptsNewPayments('STRIPE') && withStripe(() => gatewayAcceptsNewPayments('STRIPE')));
+  // C1 flipped these two: the version-0 transition bridge is gone, so no document means the
+  // DEFAULTS decide — NotchPay only, Stripe off — exactly as a written document would.
+  await assert('C1, no document (version 0): only the default aggregator — MYCOOLPAY is REFUSED', () =>
+    !gatewayAcceptsNewPayments('MYCOOLPAY') && gatewayAcceptsNewPayments('NOTCHPAY')
+    && offeredPaymentGateways().join(',') === 'NOTCHPAY');
+  await assert('C1, no document: Stripe keys alone do NOT turn cards on (stripe_enabled defaults off)', () =>
+    !gatewayAcceptsNewPayments('STRIPE') && !withStripe(() => gatewayAcceptsNewPayments('STRIPE')));
+  await assert('C1: the transition bridge is gone from the registry source', () =>
+    !readFileSync(join(__dirname, '../../src/modules/payments/gateways/registry.ts'), 'utf8')
+      .includes('settings.version === 0'));
 
   __resetPaymentSettingsCacheForTests(record({ collection_aggregator: 'NOTCHPAY', version: 4 }), true);
-  await assert('with a document: a non-active aggregator is REFUSED (C1 makes this the only branch)', () =>
+  await assert('with a document: a non-active aggregator is REFUSED (the one rule since C1)', () =>
     !gatewayAcceptsNewPayments('MYCOOLPAY') && gatewayAcceptsNewPayments('NOTCHPAY')
     && offeredPaymentGateways().join(',') === 'NOTCHPAY');
   const refusal = await caught(() => assertGatewayOffered('MYCOOLPAY'));
@@ -483,16 +488,33 @@ function withStripe<T>(fn: () => T): T {
     return !staticImports.some((i) => i.includes('registry')) && text.includes("await import('../gateways/registry')");
   });
 
-  // REPORT, not a failure: C1 turns this strict. The allowed readers are the registry (which
-  // defines "configured"), the routing service, the integration inventory (a diagnostic, not a
-  // decision), and the config file that defines the predicates.
-  const allowed = new Set([
-    'modules/payments/gateways/registry.ts',
-    'modules/payments/services/payment-routing.service.ts',
-    'modules/system/services/integration-inventory.service.ts',
+  // STRICT since C1 (was a report). "Which aggregator" is decided by the settings; the
+  // environment only says whether one CAN be used, and only the registry asks it that.
+  //
+  // May call the credential predicates: the file that defines them, the registry (its CONFIGURED
+  // table is the one routing input), and the integration inventory (a diagnostic that decides
+  // nothing). May read a raw credential from the environment: the config file, the Stripe client
+  // (builds the client), the Stripe adapter (verifies its own webhook), and the two system
+  // diagnostics. Anything else is a second routing opinion, or a hidden one.
+  const predicateAllowed = new Set([
     'modules/payments/config/payments.config.ts',
+    'modules/payments/gateways/registry.ts',
+    'modules/system/services/integration-inventory.service.ts',
   ]);
-  const hits: string[] = [];
+  const credentialAllowed = new Set([
+    'modules/payments/config/payments.config.ts',
+    'modules/payments/gateways/stripe.client.ts',
+    'modules/payments/gateways/stripe.gateway.ts',
+    'modules/system/domain/exposed-config.ts',
+    'modules/system/services/integration-inventory.service.ts',
+  ]);
+  const PREDICATE_CALL = /\b(notchPayEnabled|myCoolPayEnabled|stripeEnabled)\s*\(/;
+  const PREDICATE_IMPORT = /import\s*\{[^}]*\b(notchPayEnabled|myCoolPayEnabled|stripeEnabled)\b[^}]*\}\s*from\s*'[^']*payments\.config'/;
+  const CREDENTIAL_READ =
+    /process\.env\.(STRIPE_SECRET_KEY|STRIPE_WEBHOOK_SECRET|NOTCHPAY_PUBLIC_KEY|NOTCHPAY_PRIVATE_KEY|NOTCHPAY_WEBHOOK_SECRET|MYCOOLPAY_PUBLIC_KEY|MYCOOLPAY_PRIVATE_KEY)\b/;
+  const predicateHits: string[] = [];
+  const credentialHits: string[] = [];
+  const botSurfaceImports: string[] = [];
   let scanned = 0;
   const walk = (dir: string) => {
     for (const name of readdirSync(dir)) {
@@ -501,18 +523,34 @@ function withStripe<T>(fn: () => T): T {
       else if (full.endsWith('.ts')) {
         scanned++;
         const rel = relative(SRC, full).replace(/\\/g, '/');
-        if (allowed.has(rel)) continue;
-        readFileSync(full, 'utf8').split(/\r?\n/).forEach((line, i) => {
-          const comment = /^\s*(\*|\/\/|\/\*)/.test(line);
-          if (!comment && /\b(notchPayEnabled|myCoolPayEnabled)\s*\(/.test(line)) hits.push(`${rel}:${i + 1}  ${line.trim()}`);
+        const text = readFileSync(full, 'utf8');
+        if (!predicateAllowed.has(rel) && PREDICATE_IMPORT.test(text)) predicateHits.push(`${rel}  (imports a predicate)`);
+        if (rel.startsWith('modules/payments/') && /from\s+'[^']*bot-surface[^']*'|require\('[^']*bot-surface/.test(text)) {
+          botSurfaceImports.push(rel);
+        }
+        text.split(/\r?\n/).forEach((line, i) => {
+          if (/^\s*(\*|\/\/|\/\*)/.test(line)) return;
+          if (!predicateAllowed.has(rel) && PREDICATE_CALL.test(line)) predicateHits.push(`${rel}:${i + 1}  ${line.trim()}`);
+          if (!credentialAllowed.has(rel) && CREDENTIAL_READ.test(line)) credentialHits.push(`${rel}:${i + 1}  ${line.trim()}`);
         });
       }
     }
   };
   walk(SRC);
-  await assert(`the env-predicate scan ran (${scanned} files)`, () => scanned > 500);
-  originalConsole.log(`  ℹ routing decisions still made from an env predicate (REPORT ONLY until C1): ${hits.length}`);
-  for (const hit of hits) originalConsole.log(`      ${hit}`);
+  const show = (hits: string[]) => hits.forEach((hit) => originalConsole.error(`      ${hit}`));
+  await assert(`the scans ran (${scanned} files)`, () => scanned > 500);
+  await assert('⛔ no routing decision from an env predicate outside the registry (strict since C1)', () => {
+    show(predicateHits);
+    return predicateHits.length === 0;
+  });
+  await assert('⛔ no raw gateway-credential read outside the allowlist', () => {
+    show(credentialHits);
+    return credentialHits.length === 0;
+  });
+  await assert('⛔ src/modules/payments never imports bot-surface', () => {
+    show(botSurfaceImports);
+    return botSurfaceImports.length === 0;
+  });
 
   __setPaymentSettingsStoreForTests(null);
 

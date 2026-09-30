@@ -21,9 +21,7 @@ import { accountIdentifier, maskAddress } from './checkout-masking';
 import { ChatDestination, resolveChatDestination } from './checkout-destination';
 import {
     assertMobileMoneyOffered,
-    assertNetworkChargeable,
     maskedPayerNumber,
-    mobileMoneyGateway,
     mobileMoneyRoute,
     storedPayer,
     storedPayerNumber,
@@ -31,15 +29,13 @@ import {
 } from './checkout-payer';
 
 /**
- * ⚠ **Re-exported, not redefined.** The five payment helpers moved to `checkout-payer.ts` so a
+ * ⚠ **Re-exported, not redefined.** The payment helpers moved to `checkout-payer.ts` so a
  * transport-free core can import them; they are re-exported here so every existing caller of
  * this module keeps working. New callers should import from `./checkout-payer` directly.
  */
 export {
     assertMobileMoneyOffered,
-    assertNetworkChargeable,
     maskedPayerNumber,
-    mobileMoneyGateway,
     mobileMoneyRoute,
     storedPayer,
     storedPayerNumber,
@@ -721,9 +717,9 @@ function plausibleHandle(handle: string): string {
  * `CUSTOMER_ADDRESS_NOT_FOUND` 404), so a client handles one vocabulary whichever side of the
  * spend a refusal lands on.
  *
- * ⚠ **The account's number is network-checked here too**, with `spent: false`, for the reason
- * `assertNetworkChargeable` gives: a number no network can be worked out for would otherwise be
- * found only inside the gateway, after the orders and their stock hold exist.
+ * ⚠ **The account's number is network-checked here too** (`mobileMoneyRoute`, `spent: false`): a
+ * number no network can be worked out for would otherwise be found only inside the gateway,
+ * after the orders and their stock hold exist.
  *
  * @returns The address id to place the orders against — null for a digital basket.
  */

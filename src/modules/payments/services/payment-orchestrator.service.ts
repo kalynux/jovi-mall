@@ -8,10 +8,13 @@ import {
 } from '../models/payment-transaction.model';
 import { ZodError } from 'zod';
 import { CollectField, PaymentChannelInfo } from '../gateways/gateway.interface';
-import { assertGatewayOffered, getPaymentGateway } from '../gateways/registry';
+import { getPaymentGateway } from '../gateways/registry';
 import { PaymentProvider, PROVIDER_KIND, isMobileMoneyProvider } from '../domain/payment-provider';
-import { deriveProvider } from '../domain/payment-routing';
-import { checkChargeRequestOrThrow, resolveCollectionRoute } from './payment-routing.service';
+import {
+  checkChargeRequestOrThrow,
+  missingFieldValidationError,
+  resolveCollectionRoute,
+} from './payment-routing.service';
 import { mintMerchantRef } from '../domain/merchant-reference';
 import { NormalizedWebhookEvent } from '../domain/webhook-verification';
 import { WebhookOutcome } from '../domain/webhook-response';
@@ -68,18 +71,19 @@ export type RefundSource =
   | { kind: 'booking'; bookingId: string };
 
 /**
- * How a charging door says what to charge through (ADR-A08).
+ * How a charging door says what to charge through (ADR-A08): the customer's PROVIDER (MTN,
+ * ORANGE, CARD). The aggregator is resolved from the payment settings, at the moment a NEW
+ * attempt is opened; no door names one. `onMissingField` lets a door keep its own error for a
+ * missing number; the default is the HTTP doors' `400 VALIDATION_ERROR` on `channel.<field>`,
+ * exactly as their schemas raised it before.
  *
- * - `{ provider }` — the customer's choice (MTN, ORANGE, CARD). The aggregator is resolved from
- *   the payment settings, at the moment a NEW attempt is opened. `onMissingField` lets a door
- *   keep its own error for a missing number; the default is the HTTP doors' `400
- *   VALIDATION_ERROR` on `channel.<field>`, exactly as their schemas raised it before.
- * - a bare gateway name — @deprecated, for the server-picked bot and mini-app doors until W2b
- *   moves them onto `{ provider }`. Removed in C1.
+ * C1 removed the deprecated bare-gateway-name form. An old app's `gateway` field never reaches
+ * here: the door derives a provider from it (`deriveProviderOrThrow`) and passes that.
  */
-export type ChargeSelection =
-  | { provider: PaymentProvider; onMissingField?: (missing: CollectField[]) => Error }
-  | PaymentGatewayType;
+export interface ChargeSelection {
+  provider: PaymentProvider;
+  onMissingField?: (missing: CollectField[]) => Error;
+}
 
 /**
  * What `prepareCharge` hands back: the no-I/O checks have passed, and `route()` is the step
@@ -88,23 +92,10 @@ export type ChargeSelection =
  * aggregators, or disabled their provider, gets their live prompt back instead of a refusal.
  */
 interface PreparedCharge {
-  provider: PaymentProvider | null;
+  provider: PaymentProvider;
   /** What the adapter receives. On a mobile provider, `phoneOperator` is the provider. */
   channel: PaymentChannelInfo;
   route(): PaymentGatewayType;
-}
-
-/** The HTTP doors' error for a missing field, in the shape their schemas raised it before. */
-function missingFieldValidationError(missing: CollectField[]): Error {
-  return new ZodError(
-    missing.map((field) => ({
-      code: 'custom' as const,
-      path: ['channel', field],
-      message: field === 'phoneNumber'
-        ? 'phoneNumber is required for mobile money payments'
-        : `${field} is required for this payment method`,
-    })),
-  );
 }
 
 /** The row's `method`, from the provider when there is one (legacy rows: from the gateway). */
@@ -186,7 +177,7 @@ export class PaymentOrchestratorService {
    * 9. Return payment instructions
    * 
    * @param orderId - Order to pay for
-   * @param selection - `{ provider }`, or (deprecated) a gateway name — see `ChargeSelection`
+   * @param selection - `{ provider }` — see `ChargeSelection`
    * @param channel - Payment channel info (phone, card, etc.)
    * @returns Payment instructions or existing transaction
    */
@@ -402,7 +393,7 @@ export class PaymentOrchestratorService {
    * return the existing transaction.
    *
    * @param cartId - Checkout group id (cart_id shared by the split orders)
-   * @param selection - `{ provider }`, or (deprecated) a gateway name — see `ChargeSelection`
+   * @param selection - `{ provider }` — see `ChargeSelection`
    * @param channel - Payment channel info (phone, card, etc.)
    * @param options.originChat - The chat the checkout was placed from, so its result is told
    *   there (`IPaymentTransaction.originChat`). Recorded on a NEW attempt only: an existing live
@@ -897,7 +888,7 @@ export class PaymentOrchestratorService {
    * 9. Return payment instructions
    * 
    * @param bookingId - Booking to pay for
-   * @param selection - `{ provider }`, or (deprecated) a gateway name — see `ChargeSelection`
+   * @param selection - `{ provider }` — see `ChargeSelection`
    * @param channel - Payment channel info (phone, card, etc.)
    * @param options.originChat - The chat the payment was asked for from, so its result is told
    *   there (`IPaymentTransaction.originChat`). Recorded on a NEW attempt only, exactly as
@@ -1949,20 +1940,10 @@ export class PaymentOrchestratorService {
    * The aggregator is NOT chosen here: `route()` does that later, once the method knows it is
    * opening a new attempt rather than handing back a live one.
    *
-   * A bare gateway name (deprecated): exactly the old gate, `assertGatewayOffered`, up front.
-   * Its provider is derived for the row when it can be, and never refused for lack of one —
-   * these callers passed no provider and must behave as before until W2b moves them.
+   * (The deprecated bare-gateway-name form, and the `assertGatewayOffered` gate it kept, were
+   * removed in C1.)
    */
   private prepareCharge(selection: ChargeSelection, channel: PaymentChannelInfo): PreparedCharge {
-    if (typeof selection === 'string') {
-      assertGatewayOffered(selection);
-      return {
-        provider: deriveProvider({ gateway: selection, channel }),
-        channel,
-        route: () => selection,
-      };
-    }
-
     const { provider } = selection;
     const onMissing = selection.onMissingField ?? missingFieldValidationError;
     const baseline = checkChargeRequestOrThrow(provider, channel);

@@ -167,9 +167,9 @@ const NOTIFY_CONSUMER_SRC = path.join(SCAN_ROOT, 'src/modules/notifications/cust
 const MASKING_SRC = path.join(SCAN_ROOT, 'src/modules/bot-surface/miniapp/surfaces/checkout-masking.ts');
 
 /**
- * The five payment helpers — `validatedPayerNumber`, `assertNetworkChargeable`,
- * `maskedPayerNumber`, `storedPayerNumber`, `mobileMoneyGateway` — extracted from the
- * controller 2026-09-20.
+ * The payment helpers — `validatedPayerNumber`, `maskedPayerNumber`, `storedPayerNumber` and
+ * (since ADR-A08) `mobileMoneyRoute` — extracted from the controller 2026-09-20.
+ * `assertNetworkChargeable` and `mobileMoneyGateway` were among them until C1 deleted both.
  *
  * ⚠ **The extraction was forced by a guard in ANOTHER suite, and the reason matters here.**
  * The booking pay screen's core needs these five, and that core is imported directly by the
@@ -396,7 +396,7 @@ function main(): void {
             'export function maskAddress(',
             'export function accountIdentifier(',
             'export async function storedPayerNumber(',
-            'function mobileMoneyGateway(',
+            'export function mobileMoneyRoute(',
             // The chat door (2026-09-22): § 12's absence checks are about these three.
             'export async function readChatCheckout(',
             'async function precheckChatDoor(',
@@ -622,7 +622,7 @@ function main(): void {
      * settings' decision (`resolveCollectionRoute`), made in one place for every door. What these
      * doors still decide is the PROVIDER, from the payer's number — and that is `mobileMoneyRoute`,
      * pinned here as ONE definition, imported by the chat, exactly as the preference was. The old
-     * preference survives as a deprecated wrapper until C1, still defined once, called by no one.
+     * env-picked preference (`mobileMoneyGateway`) was deleted in C1 and must not come back.
      */
     assert('⛔ the provider choice is defined ONCE, routed by the settings, and imported by the chat', () => {
         const screen = screenCode();
@@ -637,9 +637,8 @@ function main(): void {
             && !/function mobileMoneyRoute\(/.test(chat)
             && !chat.includes("'NOTCHPAY'") && !chat.includes("'MYCOOLPAY'")
             && /import \{[^}]*\bmobileMoneyRoute\b[^}]*\} from '\.\.\/miniapp\/surfaces\/checkout\.controller'/.test(chat)
-            // The deprecated wrapper (removed in C1): defined once, and no door CALLS it any more.
-            && (screen.match(/function mobileMoneyGateway\(/g) ?? []).length === 1
-            && !/mobileMoneyGateway\(\)(?!\s*:)/.test(screen)
+            // C1: the deprecated env-picked wrapper is GONE, from the screen and the chat alike.
+            && !/mobileMoneyGateway\(/.test(screen)
             && !/mobileMoneyGateway\(/.test(chat);
     });
 
@@ -1104,12 +1103,13 @@ function main(): void {
             && check.includes('{ spent, field: \'phone\' }');
     });
 
-    /** The deprecated guard (removed in C1) is no longer keyed on NotchPay. */
-    assert('assertNetworkChargeable, while it survives, refuses an underivable number for every gateway', () => {
+    /**
+     * C1 deleted the deprecated `assertNetworkChargeable`: `mobileMoneyRoute` (pinned above) is the
+     * underivable-number refusal for every aggregator, on both sides of the spend.
+     */
+    assert('C1: assertNetworkChargeable is gone — mobileMoneyRoute is the one network check', () => {
         const src = screenCode();
-        const at = src.indexOf('function assertNetworkChargeable(');
-        const check = at < 0 ? '' : src.slice(at, src.indexOf('\n}\n', at));
-        return at > 0 && !check.includes("'NOTCHPAY'") && check.includes('resolveCameroonOperator(payerNumber)');
+        return !src.includes('assertNetworkChargeable') && src.includes('export function mobileMoneyRoute(');
     });
 
     console.log('\n── 10 · ⭐ The trigger — the silence at the moment the order is lost ──');

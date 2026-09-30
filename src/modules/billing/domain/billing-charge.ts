@@ -1,8 +1,8 @@
-import { ZodError } from 'zod';
-import { CollectField, PaymentChannelInfo, PaymentGatewayName } from '../../payments/gateways/gateway.interface';
+import { PaymentChannelInfo, PaymentGatewayName } from '../../payments/gateways/gateway.interface';
 import { PaymentProvider, isMobileMoneyProvider } from '../../payments/domain/payment-provider';
 import {
   checkChargeRequestOrThrow,
+  missingFieldValidationError,
   resolveCollectionRoute,
 } from '../../payments/services/payment-routing.service';
 
@@ -39,25 +39,11 @@ export interface BillingChargeRoute {
 }
 
 /**
- * The HTTP billing doors' error for a missing field: a `400 VALIDATION_ERROR` on
- * `channel.<field>`, the same shape the payment doors raise. Billing had no such refusal before
- * (a missing number reached the adapter and failed after the row was written).
- *
- * TODO(C1): the payment orchestrator carries an identical private builder; merge the two when
- * the deprecated overloads go.
+ * A missing field is the payment doors' own `400 VALIDATION_ERROR` on `channel.<field>`
+ * (`missingFieldValidationError`, one builder shared with the orchestrator since C1). Billing had
+ * no such refusal before: a missing number reached the adapter and failed after the row was
+ * written.
  */
-export function missingBillingFieldError(missing: CollectField[]): ZodError {
-  return new ZodError(
-    missing.map((field) => ({
-      code: 'custom' as const,
-      path: ['channel', field],
-      message: field === 'phoneNumber'
-        ? 'phoneNumber is required for mobile money payments'
-        : `${field} is required for this payment method`,
-    })),
-  );
-}
-
 export function resolveBillingCharge(
   selection: BillingChargeSelection,
   channel: PaymentChannelInfo,
@@ -65,12 +51,12 @@ export function resolveBillingCharge(
   const { provider } = selection;
 
   const baseline = checkChargeRequestOrThrow(provider, channel);
-  if (!baseline.ok) throw missingBillingFieldError(baseline.missing);
+  if (!baseline.ok) throw missingFieldValidationError(baseline.missing);
 
   const route = resolveCollectionRoute(provider);
 
   const full = checkChargeRequestOrThrow(provider, channel, route.capability);
-  if (!full.ok) throw missingBillingFieldError(full.missing);
+  if (!full.ok) throw missingFieldValidationError(full.missing);
 
   return {
     aggregator: route.aggregator,

@@ -5,7 +5,7 @@ import { ERROR_CODES } from '../../../core/error-codes';
 import { CreditTopupRepository } from '../repositories/credit-topup.repository';
 import { CreditWalletService, creditWalletService } from './credit-wallet.service';
 import { findCreditPack } from '../config/credit.config';
-import { ICreditTopup, CreditTopupGateway } from '../models/credit-topup.model';
+import { ICreditTopup } from '../models/credit-topup.model';
 import { CreditTopupModel } from '../models/credit-topup.model';
 import { BillingOwnerType } from '../billing.types';
 import { PaymentChannelInfo } from '../../payments/gateways/gateway.interface';
@@ -36,25 +36,20 @@ export class CreditTopupService {
    * `{ provider }` is the ADR-A08 form: the aggregator comes from the settings, and every
    * refusal (a missing number, a number on another operator, a provider nobody can route) is
    * raised by `resolveBillingCharge` BEFORE the pending row is written.
-   *
-   * @deprecated form: a bare gateway name, as clients chose it before ADR-A08. It skips the
-   * offer check and is removed in C1; no controller calls it any more.
    */
   async initiateTopup(
     ownerType: BillingOwnerType,
     ownerId: string,
     packCode: string,
-    selection: CreditTopupGateway | BillingChargeSelection,
+    selection: BillingChargeSelection,
     channel: PaymentChannelInfo
-  ): Promise<{ topup: ICreditTopup; instructions: unknown; provider: PaymentProvider | null }> {
+  ): Promise<{ topup: ICreditTopup; instructions: unknown; provider: PaymentProvider }> {
     const pack = findCreditPack(packCode);
     if (!pack) {
       throw createAppError(ERROR_CODES.BILLING_TOPUP_PACK_NOT_FOUND, 404, `Unknown credit pack '${packCode}'`);
     }
 
-    const charge = typeof selection === 'string'
-      ? { aggregator: selection, provider: null, channel }
-      : resolveBillingCharge(selection, channel);
+    const charge = resolveBillingCharge(selection, channel);
     const gateway = charge.aggregator;
     const adapter = getPaymentGateway(gateway);
 
@@ -108,7 +103,7 @@ export class CreditTopupService {
       await this.completeTopup(topup._id.toString());
     }
     // `provider` at the top, as the payment doors answer it (ADR-A08); `gateway` stays on the row.
-    return { topup: updated ?? topup, instructions: result.instructions ?? null, provider: topup.provider ?? null };
+    return { topup: updated ?? topup, instructions: result.instructions ?? null, provider: charge.provider };
   }
 
   /**

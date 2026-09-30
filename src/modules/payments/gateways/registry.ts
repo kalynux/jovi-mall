@@ -82,15 +82,15 @@ export function getPaymentGateway(name: string): PaymentGateway {
  *
  * ── WHY A TABLE KEYED BY NAME ────────────────────────────────────────────────
  * `Record<PaymentGatewayName, …>` makes a fourth gateway without an answer a compile error, the
- * same property `PAYMENT_GATEWAYS` gives the webhook verifiers. The predicates are the ones the
- * rest of the service already trusts — `notchPayEnabled` and `myCoolPayEnabled` choose the
- * checkout screen's gateway (`checkout-payer.ts`) — so "offered here" and "chosen there" cannot
- * disagree.
+ * same property `PAYMENT_GATEWAYS` gives the webhook verifiers.
  *
- * ⚠ **The owner's rule on 2026-09-22 is "mobile money only, Stripe off", and it is enforced by
- * CONFIGURATION: `STRIPE_SECRET_KEY` is absent from production.** Nothing here names Stripe as
- * special. Setting both Stripe secrets turns cards back on across every door at once; that is a
- * decision for the owner, not a code change.
+ * ⛔ **This is the ONLY routing input read from the environment** (ADR-A08). Credentials say
+ * whether an aggregator CAN be used; the administrator's `payment_settings` say which one IS.
+ * `test:payment-settings` fails if any other file makes a decision from these predicates
+ * (the integration inventory reads them as a diagnostic, and is allowed to).
+ *
+ * ⚠ Cards need BOTH now: Stripe's secrets AND `stripe_enabled` in the settings (owner decision 2).
+ * Setting the secrets alone no longer turns cards on.
  */
 const CONFIGURED: Readonly<Record<PaymentGatewayName, () => boolean>> = Object.freeze({
   NOTCHPAY: notchPayEnabled,
@@ -113,19 +113,15 @@ export function gatewayConfigured(name: string): boolean {
  * Whether a new charge may be opened on this gateway right now. False for an unknown name.
  *
  * ADR-A08: configured AND (it is the active collection aggregator, OR it is Stripe while Stripe
- * is switched on).
+ * is switched on). With no settings document the defaults apply: NotchPay only, Stripe off.
  *
- * ⚠ **TRANSITION, remove in C1.** While no `payment_settings` document exists (`version` 0) the
- * answer is "configured" alone, exactly as before ADR-A08. The client-named doors still take a
- * `gateway` until W2a makes it ignored, and the strict rule would refuse `MYCOOLPAY` on them the
- * moment this deployed. `test:payments` pins today's answer; `test:payment-settings` pins both
- * branches, so C1 flips a known test. After W2a the only reader left is the pay-link mint, where
- * the bridge buys nothing.
+ * Since C1 no door opens a charge on a gateway its caller named; the one reader left is the
+ * pay-link mint (`assertGatewayOffered`), for a transaction that already exists. (The version-0
+ * "configured alone" transition bridge was removed in C1.)
  */
 export function gatewayAcceptsNewPayments(name: string): boolean {
   if (!gatewayConfigured(name)) return false;
   const settings = getPaymentSettingsSync();
-  if (settings.version === 0) return true; // TRANSITION (ADR-A08): remove in C1.
   return name === settings.collection_aggregator || (name === 'STRIPE' && settings.stripe_enabled);
 }
 

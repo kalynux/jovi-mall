@@ -30,8 +30,14 @@ import {
   PAYMENT_GATEWAYS as GATEWAY_MAP,
   PAYMENT_GATEWAY_NAMES as REGISTRY_NAMES,
 } from '../../src/modules/payments/gateways/registry';
-import { PAYMENT_GATEWAYS as VALIDATOR_NAMES } from '../../src/modules/payments/validators/payment.validators';
-import { InitiateTopupSchema, InitiatePlanPurchaseSchema } from '../../src/modules/billing/validators/billing.validators';
+import {
+  InitiatePaymentRequestSchema,
+  InitiateBookingPaymentRequestSchema,
+} from '../../src/modules/payments/validators/payment.validators';
+import {
+  InitiateTopupRequestSchema,
+  InitiatePlanPurchaseRequestSchema,
+} from '../../src/modules/billing/validators/billing.validators';
 import { BotBookingPaySchema } from '../../src/modules/bot-surface/validators/bot.validators';
 import { PaymentTransactionModel } from '../../src/modules/payments/models/payment-transaction.model';
 import { PaymentWebhookEventModel } from '../../src/modules/payments/models/payment-webhook-event.model';
@@ -159,7 +165,6 @@ function enumOf(model: { schema: { eachPath(fn: (path: string, type: any) => voi
   assert('the registry re-exports the SAME tuple (not a second copy)', () => REGISTRY_NAMES === PAYMENT_GATEWAY_NAMES);
   assert('the registry Map registers exactly these names, in order', () =>
     same([...GATEWAY_MAP.keys()], PAYMENT_GATEWAY_NAMES));
-  assert('payment.validators PAYMENT_GATEWAYS is an alias of the tuple', () => VALIDATOR_NAMES === PAYMENT_GATEWAY_NAMES);
 
   for (const [label, model] of [
     ['PaymentTransaction', PaymentTransactionModel],
@@ -170,10 +175,27 @@ function enumOf(model: { schema: { eachPath(fn: (path: string, type: any) => voi
   ] as const) {
     assert(`${label}.gateway enum equals the tuple`, () => same(enumOf(model as any), PAYMENT_GATEWAY_NAMES));
   }
-  assert('billing InitiateTopupSchema.gateway options equal the tuple', () =>
-    same(InitiateTopupSchema.shape.gateway.options, PAYMENT_GATEWAY_NAMES));
-  assert('billing InitiatePlanPurchaseSchema.gateway options equal the tuple', () =>
-    same(InitiatePlanPurchaseSchema.shape.gateway.options, PAYMENT_GATEWAY_NAMES));
+  // C1: the gateway-enum request schemas are gone. Every surviving request schema ACCEPTS the
+  // legacy `gateway` as any string (old apps and the live n8n MCP still send it — owner decision 4)
+  // and closes `provider` to the catalogue.
+  const requestSchemas: Array<[string, { safeParse(v: unknown): { success: boolean } }, Record<string, unknown>]> = [
+    ['InitiatePaymentRequestSchema', InitiatePaymentRequestSchema, { orderId: 'o1' }],
+    ['InitiateBookingPaymentRequestSchema', InitiateBookingPaymentRequestSchema, {}],
+    ['InitiateTopupRequestSchema', InitiateTopupRequestSchema, { packCode: 'P1' }],
+    ['InitiatePlanPurchaseRequestSchema', InitiatePlanPurchaseRequestSchema, {}],
+  ];
+  for (const [label, schema, base] of requestSchemas) {
+    assert(`${label}: legacy gateway (any string) parses; provider is closed`, () =>
+      [...PAYMENT_GATEWAY_NAMES, 'CAMPAY'].every((g) => schema.safeParse({ ...base, gateway: g, provider: 'MTN' }).success)
+      && schema.safeParse({ ...base, provider: 'CARD' }).success
+      && !schema.safeParse({ ...base, provider: 'NOTCHPAY' }).success);
+  }
+  assert('C1: the gateway-enum schemas and the PAYMENT_GATEWAYS validator alias are gone', () => {
+    const payments = readFileSync(join(__dirname, '../../src/modules/payments/validators/payment.validators.ts'), 'utf8');
+    const billing = readFileSync(join(__dirname, '../../src/modules/billing/validators/billing.validators.ts'), 'utf8');
+    return !/export const (InitiatePaymentSchema|InitiateBookingPaymentSchema|PAYMENT_GATEWAYS)\b/.test(payments)
+      && !/export const (InitiateTopupSchema|InitiatePlanPurchaseSchema)\b/.test(billing);
+  });
   // W2b (ADR-A08): the bot's `gateway` is accepted and IGNORED, like the HTTP doors' — so any
   // string parses, a known name or not. What the chat may choose is the PROVIDER, and that is closed.
   assert('bot BotBookingPaySchema ignores `gateway` (any string parses) and closes `provider`', () =>
