@@ -64,6 +64,9 @@ import { StoreModel } from '../src/modules/store/models/store.model';
 import { AgencyMagazinModel } from '../src/modules/magazin/models/magazin.model';
 import { ShipmentModel } from '../src/modules/shipments/shipment.model';
 import { PaymentTransactionModel } from '../src/modules/payments/models/payment-transaction.model';
+import { PaymentSettingsModel, PAYMENT_SETTINGS_ID } from '../src/modules/payments/models/payment-settings.model';
+import { primePaymentSettings } from '../src/modules/payments/services/payment-settings.service';
+import { DEFAULT_PAYMENT_SETTINGS } from '../src/modules/payments/domain/payment-routing';
 import { WhatsappService } from '../src/modules/whatsapp/whatsapp.service';
 import { CustomerNotificationModel } from '../src/modules/notifications/models/customer-notification.model';
 import { TicketModel } from '../src/modules/tickets/models/ticket.model';
@@ -148,6 +151,8 @@ const MOMO_TX_ID = new mongoose.Types.ObjectId('60700000000000000000e288');
 const CARD_CLIENT_SECRET = 'pi_verify_bot_secret_287';
 
 let server: http.Server | null = null;
+/** Puts the `payment_settings` document back as it was before § 10 turned cards on — see there. */
+let restorePaymentSettings: (() => Promise<void>) | null = null;
 let base = '';
 
 /**
@@ -1589,6 +1594,45 @@ async function main(): Promise<void> {
         process.env.STRIPE_SECRET_KEY = 'sk_test_verify_bot_287';
         process.env.STRIPE_WEBHOOK_SECRET = 'whsec_verify_bot_287';
 
+        /**
+         * ⚠ **ADR-A08: keys make Stripe CONFIGURED, the payment settings make it OFFERED.** Since
+         * C1 there is no "no settings document means configured is enough" bridge, so with no
+         * document `stripe_enabled` is false and the card page is refused whatever the keys say.
+         * The switch is turned on here the way an administrator would — a settings document with
+         * Stripe and CARD enabled — and the document that was there before (a developer machine
+         * may hold a real one) is put back by the suite's `finally`, pass or fail. The cache is
+         * re-read from Mongo each time, so no request below sees a stale answer.
+         */
+        const settingsBefore = await PaymentSettingsModel.findById(PAYMENT_SETTINGS_ID).lean();
+        await PaymentSettingsModel.replaceOne(
+            { _id: PAYMENT_SETTINGS_ID },
+            {
+                _id: PAYMENT_SETTINGS_ID,
+                collection_aggregator: settingsBefore?.collection_aggregator ?? DEFAULT_PAYMENT_SETTINGS.collection_aggregator,
+                payout_aggregator: settingsBefore?.payout_aggregator ?? DEFAULT_PAYMENT_SETTINGS.payout_aggregator,
+                stripe_enabled: true,
+                providers: {
+                    ...DEFAULT_PAYMENT_SETTINGS.providers,
+                    ...(settingsBefore?.providers ?? {}),
+                    CARD: { enabled: true },
+                },
+                version: (settingsBefore?.version ?? 0) + 1,
+                updated_at: new Date(),
+                updated_by_id: null,
+                updated_by_name: 'verify-bot-surface-live',
+                reason: 'live suite: card pay-link cases',
+            },
+            { upsert: true },
+        );
+        restorePaymentSettings = async () => {
+            if (settingsBefore) await PaymentSettingsModel.replaceOne({ _id: PAYMENT_SETTINGS_ID }, settingsBefore, { upsert: true });
+            else await PaymentSettingsModel.deleteOne({ _id: PAYMENT_SETTINGS_ID });
+            await primePaymentSettings();
+        };
+        const cardsOffered = await primePaymentSettings();
+        console.log('  ℹ payment settings for the card cases: stripe_enabled=' + cardsOffered.stripe_enabled
+            + ', CARD=' + cardsOffered.providers.CARD.enabled);
+
         let firstToken = '';
 
         await assert('the bot mints a card page link, and it points at the storefront', async () => {
@@ -2042,6 +2086,8 @@ async function main(): Promise<void> {
         if (stripeWebhookBefore === undefined) delete process.env.STRIPE_WEBHOOK_SECRET;
         else process.env.STRIPE_WEBHOOK_SECRET = stripeWebhookBefore;
     } finally {
+        // Before `cleanup()`: the settings document is shared state, never left behind on failure.
+        if (restorePaymentSettings) await restorePaymentSettings();
         console.log(`\n${'─'.repeat(76)}`);
         console.log(`  ${passed} passed, ${failed} failed`);
         console.log(`${'─'.repeat(76)}\n`);

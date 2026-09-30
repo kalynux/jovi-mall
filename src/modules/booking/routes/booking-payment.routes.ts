@@ -32,8 +32,11 @@ router.post('/:id/pay', requireAuth, requireRole(['customer']), asyncHandler(asy
   // the same rules rather than being forwarded as typed.
   const body = InitiateBookingPaymentRequestSchema.parse(req.body);
   if (body.gateway !== undefined) recordDeprecatedGatewayField('booking_pay');
-  // Derived before the ownership reads: an underivable provider is a malformed request.
+  // Derived and checked before the ownership reads (ADR-A08): an underivable provider, or a
+  // mobile-money body with no number, is a malformed request and is refused as one — never
+  // after a booking lookup that would answer 404 first.
   const selection = { provider: deriveProviderOrThrow(body) };
+  paymentOrchestrator.assertChargeRequest(selection, body.channel);
 
   const booking = await Booking.findById(bookingId);
   if (!booking)

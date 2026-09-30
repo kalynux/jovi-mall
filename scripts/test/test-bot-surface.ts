@@ -2065,6 +2065,29 @@ async function main(): Promise<void> {
     });
 
     /**
+     * ⛔ **"At the door" means BEFORE the booking is read.** The schema refine used to refuse a
+     * body with no number before the ownership lookup; when the rule moved into the charge it ran
+     * after it, and `{ gateway: 'NOTCHPAY' }` against an unknown booking answered 404 instead of
+     * 400 — caught only by the live suite, in CI, after a push. Pinned here, offline, per door.
+     */
+    assert('⛔ both chat booking doors run the pure payment checks before reading the booking', () => {
+        const ctl = fs.readFileSync(
+            path.join(__dirname, '..', '..', 'src', 'modules', 'bot-surface', 'controllers', 'bot-booking.controller.ts'),
+            'utf8',
+        ).replace(/\r\n/g, '\n');
+        const door = (from: string, to: string) => ctl.slice(ctl.indexOf(from), ctl.indexOf(to, ctl.indexOf(from)));
+        return [
+            door('static pay = asyncHandler', 'static payBalance = asyncHandler'),
+            door('static payBalance = asyncHandler', 'static cancel = asyncHandler'),
+        ].every((body) => {
+            const check = body.indexOf('paymentOrchestrator.assertChargeRequest(selection, channel);');
+            const read = body.indexOf('await bookingService.getUserBooking(');
+            const charge = body.indexOf('paymentOrchestrator.initiateBooking');
+            return check > 0 && read > check && charge > read && body.includes('            selection,\n');
+        });
+    });
+
+    /**
      * ADR-A08 on the WhatsApp checkout form. The router's refusal comes in two shapes before the
      * spend: ONE provider off (another number can pay — stay on the form) and NO mobile provider
      * at all (`assertMobileMoneyOffered` — pressing again cannot help, so close, like the old

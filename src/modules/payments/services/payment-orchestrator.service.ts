@@ -1946,8 +1946,7 @@ export class PaymentOrchestratorService {
   private prepareCharge(selection: ChargeSelection, channel: PaymentChannelInfo): PreparedCharge {
     const { provider } = selection;
     const onMissing = selection.onMissingField ?? missingFieldValidationError;
-    const baseline = checkChargeRequestOrThrow(provider, channel);
-    if (!baseline.ok) throw onMissing(baseline.missing);
+    this.assertChargeRequest(selection, channel);
 
     return {
       provider,
@@ -1962,6 +1961,22 @@ export class PaymentOrchestratorService {
         return route.aggregator;
       },
     };
+  }
+
+  /**
+   * The no-I/O half of `prepareCharge` — required fields and the provider/number mismatch —
+   * callable by a DOOR before its own reads.
+   *
+   * ⚠ **Why a door needs it.** The booking doors read the booking (ownership, a 404 for anyone
+   * else's) before they call a charge method. Before ADR-A08 a body with no number was refused
+   * by the door's schema refine, BEFORE that read; the rule moved into the charge, which runs
+   * after it, so the same body started answering 404 `BOOKING_NOT_FOUND` — the live bot suite
+   * caught it. A malformed payment is refused at the door, as it was. `prepareCharge` runs the
+   * identical check again, so a door that forgets this call is only later, never wrong.
+   */
+  assertChargeRequest(selection: ChargeSelection, channel: PaymentChannelInfo): void {
+    const check = checkChargeRequestOrThrow(selection.provider, channel);
+    if (!check.ok) throw (selection.onMissingField ?? missingFieldValidationError)(check.missing);
   }
 
   /**

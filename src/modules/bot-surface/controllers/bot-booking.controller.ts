@@ -413,13 +413,19 @@ export class BotBookingController {
         const input = BotBookingPaySchema.parse(req.body ?? {});
         const caller = botCallerOf(req);
 
-        // Ownership first — a 404 for anybody else's booking, before a gateway is touched.
+        // The body first, with no I/O (ADR-A08): a payment that names no provider, or has no
+        // number for one that needs it, is refused at the door — before the booking is read.
+        const selection = chargeSelectionOf(input, 'bot_booking_pay');
+        const channel = channelOf(input);
+        paymentOrchestrator.assertChargeRequest(selection, channel);
+
+        // Then ownership — a 404 for anybody else's booking, before a gateway is touched.
         await bookingService.getUserBooking(bookingId, caller.userId);
 
         const result = await paymentOrchestrator.initiateBookingPayment(
             bookingId,
-            chargeSelectionOf(input, 'bot_booking_pay'),
-            channelOf(input),
+            selection,
+            channel,
             // The result is told in THIS chat — the envelope's, never a caller-supplied one.
             { originChat: req.bot!.envelope.channel },
         );
@@ -439,12 +445,17 @@ export class BotBookingController {
         const input = BotBookingPaySchema.parse(req.body ?? {});
         const caller = botCallerOf(req);
 
+        // The body before the booking, as in `pay`.
+        const selection = chargeSelectionOf(input, 'bot_booking_pay_balance');
+        const channel = channelOf(input);
+        paymentOrchestrator.assertChargeRequest(selection, channel);
+
         await bookingService.getUserBooking(bookingId, caller.userId);
 
         const result = await paymentOrchestrator.initiateBookingBalancePayment(
             bookingId,
-            chargeSelectionOf(input, 'bot_booking_pay_balance'),
-            channelOf(input),
+            selection,
+            channel,
             { originChat: req.bot!.envelope.channel },
         );
         sendSuccess(res, result);

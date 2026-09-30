@@ -1675,6 +1675,44 @@ assert('nothing mobile on offer is refused up front, unspent and with no `provid
     && some === null;
 });
 
+section('22. The booking doors refuse a malformed payment BEFORE reading the booking');
+
+// The live bot suite caught this after a push: once "a number is required" moved from the door's
+// schema into the charge, a numberless body against someone else's booking answered 404 instead
+// of 400. `assertChargeRequest` is the no-I/O half of `prepareCharge`, for the doors to call first.
+assert('assertChargeRequest refuses a numberless MTN body with the HTTP 400 shape, and passes a good one', () => {
+  const orch = new PaymentOrchestratorService();
+  let refused: any = null;
+  try { orch.assertChargeRequest({ provider: 'MTN' }, {}); } catch (e) { refused = e; }
+  let passed = true;
+  try { orch.assertChargeRequest({ provider: 'MTN' }, { phoneNumber: '+237670000001' }); } catch { passed = false; }
+  return refused?.name === 'ZodError'
+    && JSON.stringify(refused.issues?.[0]?.path) === JSON.stringify(['channel', 'phoneNumber'])
+    && passed;
+});
+
+assert('prepareCharge reuses assertChargeRequest — one rule, not two copies', () => {
+  const prepare = ORCHESTRATOR_LF.slice(
+    ORCHESTRATOR_LF.indexOf('private prepareCharge('),
+    ORCHESTRATOR_LF.indexOf('\n  }\n', ORCHESTRATOR_LF.indexOf('private prepareCharge(')),
+  );
+  return prepare.includes('this.assertChargeRequest(selection, channel);');
+});
+
+assert('⛔ both HTTP booking doors check the payment body before the ownership read', () => {
+  const read = (rel: string) => stripComments(readFileSync(join(SRC, ...rel.split('/')), 'utf8')).replace(/\r\n/g, '\n');
+  const route = read('modules/booking/routes/booking-payment.routes.ts');
+  const payRoute = route.slice(route.indexOf("router.post('/:id/pay'"), route.indexOf('}));', route.indexOf("router.post('/:id/pay'")));
+  const ctl = read('modules/booking/controllers/customer-booking.controller.ts');
+  const payBalance = ctl.slice(ctl.indexOf('static payBalance'), ctl.indexOf('});', ctl.indexOf('static payBalance')));
+  const ordered = (body: string, lookup: string) => {
+    const check = body.indexOf('paymentOrchestrator.assertChargeRequest(selection, body.channel);');
+    return check > 0 && body.indexOf(lookup) > check;
+  };
+  return ordered(payRoute, 'Booking.findById(bookingId)')
+    && ordered(payBalance, 'bookingService.getUserBooking(');
+});
+
 // ─── 17. Routing, run for real (offline) ─────────────────────────────────────
 //
 // The orchestrator is driven with its two model calls and its order lookup stubbed, and the two

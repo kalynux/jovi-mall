@@ -166,8 +166,10 @@ export class CustomerBookingController {
         // Provider-based (ADR-A08); a legacy `gateway` is ignored and counted.
         if (body.gateway !== undefined) recordDeprecatedGatewayField('booking_pay_balance');
         const selection = { provider: deriveProviderOrThrow(body) };
+        // The body before the booking: a malformed payment is a 400, never a 404 (see the route).
+        paymentOrchestrator.assertChargeRequest(selection, body.channel);
 
-        // Ownership first — this throws 404 for anyone else's booking.
+        // Ownership next — this throws 404 for anyone else's booking.
         await bookingService.getUserBooking(req.params.id, userId);
 
         const result = await paymentOrchestrator.initiateBookingBalancePayment(
