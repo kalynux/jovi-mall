@@ -84,6 +84,7 @@ import type { NormalizedWebhookEvent } from '../../src/modules/payments/domain/w
 import { decideWebhookResponse } from '../../src/modules/payments/domain/webhook-response';
 import {
   PaymentGateway,
+  PaymentGatewayName,
   gatewayWebhookPath,
   gatewayWebhookSegment,
 } from '../../src/modules/payments/gateways/gateway.interface';
@@ -1566,12 +1567,12 @@ assert('both passes filter on the capability-derived list, from the registry', (
     && /PAYMENT_GATEWAYS\.entries\(\)/.test(RECONCILE_WORKER)
     && /capabilities\.settlesAsync/.test(RECONCILE_WORKER));
 
-assert('the async-settling set is NotchPay and My-CoolPay today — Stripe is not swept', () => {
+assert('the async-settling set is Campay, My-CoolPay and NotchPay — Stripe is not swept', () => {
   const swept = [...PAYMENT_GATEWAYS.entries()]
     .filter(([, g]) => g.capabilities.settlesAsync)
     .map(([name]) => name)
     .sort();
-  return JSON.stringify(swept) === JSON.stringify(['MYCOOLPAY', 'NOTCHPAY']);
+  return JSON.stringify(swept) === JSON.stringify(['CAMPAY', 'MYCOOLPAY', 'NOTCHPAY']);
 });
 
 section('16. The provider-based request body — `provider` in, `gateway` ignored (ADR-A08 W2a)');
@@ -2055,6 +2056,18 @@ async function runScenario(
   assert('NotchPay and Stripe do not implement it — their signatures cover the whole body', () =>
     (['NOTCHPAY', 'STRIPE'] as const).every((name) =>
       typeof PAYMENT_GATEWAYS.get(name)!.confirmWebhookEvent === 'undefined'));
+
+  /**
+   * The registry-wide half of ADR-A08 § "Webhook bodies the signature does not cover": every
+   * registered gateway whose signature leaves the STATUS unsigned must confirm. Listed, because
+   * "does this signature cover the body" is a fact about the provider no code can derive — so a
+   * new gateway must be added to exactly one of these two lists, or this assertion fails.
+   */
+  const SIGNATURE_COVERS_BODY = ['NOTCHPAY', 'STRIPE'];
+  const MUST_CONFIRM = ['MYCOOLPAY', 'CAMPAY'];
+  assert('⛔ every registered gateway is classified, and every one whose signature misses the status confirms', () =>
+    PAYMENT_GATEWAY_NAMES.every((name) => SIGNATURE_COVERS_BODY.includes(name) || MUST_CONFIRM.includes(name))
+      && MUST_CONFIRM.every((name) => typeof PAYMENT_GATEWAYS.get(name as PaymentGatewayName)?.confirmWebhookEvent === 'function'));
 
   // ── 23 ──────────────────────────────────────────────────────────────────────
   section('23. My-CoolPay confirms its callbacks — its MD5 does not sign the status (ADR-A08)');

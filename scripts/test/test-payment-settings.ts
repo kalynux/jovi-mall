@@ -270,7 +270,7 @@ function withStripe<T>(fn: () => T): T {
         && !c.stripe_enabled && c.providers.MTN.enabled && c.providers.ORANGE.enabled && !c.providers.CARD.enabled;
     });
 
-    s.doc = { ...docOf(), collection_aggregator: 'CAMPAY' as PaymentGatewayName, providers: { MTN: { enabled: false } } as never };
+    s.doc = { ...docOf(), collection_aggregator: 'NOT_A_GATEWAY' as PaymentGatewayName, providers: { MTN: { enabled: false } } as never };
     __resetPaymentSettingsCacheForTests(DEFAULT_PAYMENT_SETTINGS, false);
     await primePaymentSettings();
     await assert('an unreadable aggregator (rolled-back build) falls back to its default', () =>
@@ -442,7 +442,7 @@ function withStripe<T>(fn: () => T): T {
     });
   }
 
-  __resetPaymentSettingsCacheForTests(record({ payout_aggregator: 'CAMPAY' as PaymentGatewayName, version: 4 }), true);
+  __resetPaymentSettingsCacheForTests(record({ payout_aggregator: 'NOT_A_GATEWAY' as PaymentGatewayName, version: 4 }), true);
   await assert('resolvePayoutAggregator → null for a name this build does not register', () => resolvePayoutAggregator() === null);
   __resetPaymentSettingsCacheForTests(DEFAULT_PAYMENT_SETTINGS, true);
 

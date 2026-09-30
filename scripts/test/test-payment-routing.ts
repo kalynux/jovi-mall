@@ -160,8 +160,8 @@ function enumOf(model: { schema: { eachPath(fn: (path: string, type: any) => voi
   // ── 1. One list ────────────────────────────────────────────────────────────
   section('1. One gateway list');
 
-  assert('PAYMENT_GATEWAY_NAMES is NOTCHPAY, MYCOOLPAY, STRIPE, in that order', () =>
-    same(PAYMENT_GATEWAY_NAMES, ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE']));
+  assert('PAYMENT_GATEWAY_NAMES is NOTCHPAY, MYCOOLPAY, STRIPE, CAMPAY, in that order', () =>
+    same(PAYMENT_GATEWAY_NAMES, ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE', 'CAMPAY']));
   assert('the registry re-exports the SAME tuple (not a second copy)', () => REGISTRY_NAMES === PAYMENT_GATEWAY_NAMES);
   assert('the registry Map registers exactly these names, in order', () =>
     same([...GATEWAY_MAP.keys()], PAYMENT_GATEWAY_NAMES));
@@ -186,7 +186,7 @@ function enumOf(model: { schema: { eachPath(fn: (path: string, type: any) => voi
   ];
   for (const [label, schema, base] of requestSchemas) {
     assert(`${label}: legacy gateway (any string) parses; provider is closed`, () =>
-      [...PAYMENT_GATEWAY_NAMES, 'CAMPAY'].every((g) => schema.safeParse({ ...base, gateway: g, provider: 'MTN' }).success)
+      [...PAYMENT_GATEWAY_NAMES, 'NOT_A_GATEWAY'].every((g) => schema.safeParse({ ...base, gateway: g, provider: 'MTN' }).success)
       && schema.safeParse({ ...base, provider: 'CARD' }).success
       && !schema.safeParse({ ...base, provider: 'NOTCHPAY' }).success);
   }
@@ -200,7 +200,7 @@ function enumOf(model: { schema: { eachPath(fn: (path: string, type: any) => voi
   // string parses, a known name or not. What the chat may choose is the PROVIDER, and that is closed.
   assert('bot BotBookingPaySchema ignores `gateway` (any string parses) and closes `provider`', () =>
     PAYMENT_GATEWAY_NAMES.every((g) => BotBookingPaySchema.safeParse({ gateway: g, phoneNumber: '+237670000001' }).success)
-    && BotBookingPaySchema.safeParse({ gateway: 'CAMPAY', phoneNumber: '+237670000001' }).success
+    && BotBookingPaySchema.safeParse({ gateway: 'NOT_A_GATEWAY', phoneNumber: '+237670000001' }).success
     && ['MTN', 'ORANGE', 'CARD'].every((p) => BotBookingPaySchema.safeParse({ provider: p, phoneNumber: '+237670000001' }).success)
     && !BotBookingPaySchema.safeParse({ provider: 'MOOV', phoneNumber: '+237670000001' }).success
     && !BotBookingPaySchema.safeParse({ provider: 'NOTCHPAY', phoneNumber: '+237670000001' }).success);
@@ -233,6 +233,7 @@ function enumOf(model: { schema: { eachPath(fn: (path: string, type: any) => voi
     ['NOTCHPAY', { MTN: 'PUSH', ORANGE: 'PUSH', MOOV: '—', CARD: '—' }, true],
     ['MYCOOLPAY', { MTN: 'PUSH', ORANGE: 'OTP', MOOV: '—', CARD: '—' }, true],
     ['STRIPE', { MTN: '—', ORANGE: '—', MOOV: '—', CARD: 'CARD_ELEMENT' }, false],
+    ['CAMPAY', { MTN: 'PUSH', ORANGE: 'PUSH', MOOV: '—', CARD: '—' }, true],
   ];
   for (const [g, row, async] of matrix) {
     assert(`${g}: ${PAYMENT_PROVIDERS.map((p) => `${p}=${row[p]}`).join(' ')}, settlesAsync=${async}`, () =>
@@ -245,8 +246,8 @@ function enumOf(model: { schema: { eachPath(fn: (path: string, type: any) => voi
         return !c || same(c.requires, ['phoneNumber']);
       })));
   assert('Stripe CARD requires nothing up front', () => same(cap('STRIPE').collect.CARD!.requires, []));
-  assert('only NOTCHPAY can send payouts today', () =>
-    PAYMENT_GATEWAY_NAMES.filter((g) => typeof GATEWAY_MAP.get(g)!.createPayout === 'function').join() === 'NOTCHPAY');
+  assert('NOTCHPAY and CAMPAY can send payouts (My-CoolPay and Stripe cannot)', () =>
+    PAYMENT_GATEWAY_NAMES.filter((g) => typeof GATEWAY_MAP.get(g)!.createPayout === 'function').join() === 'NOTCHPAY,CAMPAY');
 
   // ── 3. Catalogue ───────────────────────────────────────────────────────────
   section('3. Provider catalogue, saved wallets, defaults');
@@ -415,12 +416,12 @@ function enumOf(model: { schema: { eachPath(fn: (path: string, type: any) => voi
 
   const CUR = settings();
   const hard: Array<[string, PaymentSettingsCandidate, PaymentSettings, RoutingFacts, SettingsIssueCode]> = [
-    ['unknown collection aggregator', { ...candidate(CUR), collection_aggregator: 'CAMPAY' }, CUR, F, 'COLLECTION_AGGREGATOR_UNKNOWN'],
+    ['unknown collection aggregator', { ...candidate(CUR), collection_aggregator: 'NOT_A_GATEWAY' }, CUR, F, 'COLLECTION_AGGREGATOR_UNKNOWN'],
     ['STRIPE as collection aggregator', { ...candidate(CUR), collection_aggregator: 'STRIPE' }, CUR, facts({ STRIPE: { configured: true } }), 'COLLECTION_AGGREGATOR_IS_STRIPE'],
     ['collection aggregator without credentials', candidate(settings({ collection_aggregator: 'MYCOOLPAY' })), CUR, facts({ MYCOOLPAY: { configured: false } }), 'COLLECTION_AGGREGATOR_NOT_CONFIGURED'],
     ['aggregator serves none of the enabled mobile providers (only MOOV on)', candidate(settings({ providers: { MTN: false, ORANGE: false, MOOV: true } })), CUR, F, 'COLLECTION_AGGREGATOR_NO_ENABLED_PROVIDER'],
     ['turning Stripe ON without credentials', candidate(settings({ stripe_enabled: true })), CUR, F, 'STRIPE_NOT_CONFIGURED'],
-    ['unknown payout aggregator', { ...candidate(CUR), payout_aggregator: 'CAMPAY' }, CUR, F, 'PAYOUT_AGGREGATOR_UNKNOWN'],
+    ['unknown payout aggregator', { ...candidate(CUR), payout_aggregator: 'NOT_A_GATEWAY' }, CUR, F, 'PAYOUT_AGGREGATOR_UNKNOWN'],
     ['payout aggregator without createPayout (MYCOOLPAY)', candidate(settings({ payout_aggregator: 'MYCOOLPAY' })), CUR, F, 'PAYOUT_AGGREGATOR_NOT_IMPLEMENTED'],
     ['payout aggregator without createPayout (STRIPE)', candidate(settings({ payout_aggregator: 'STRIPE' })), CUR, F, 'PAYOUT_AGGREGATOR_NOT_IMPLEMENTED'],
     ['unknown provider name', candidate(CUR, { WAVE: { enabled: true } }), CUR, F, 'PROVIDER_UNKNOWN'],
@@ -433,7 +434,7 @@ function enumOf(model: { schema: { eachPath(fn: (path: string, type: any) => voi
   }
   assert('several faults are all reported at once', () => {
     const v = validateSettingsChange(
-      { ...candidate(CUR, { WAVE: { enabled: true } }), collection_aggregator: 'CAMPAY', payout_aggregator: 'MYCOOLPAY' }, CUR, F);
+      { ...candidate(CUR, { WAVE: { enabled: true } }), collection_aggregator: 'NOT_A_GATEWAY', payout_aggregator: 'MYCOOLPAY' }, CUR, F);
     return !v.ok && ['PROVIDER_UNKNOWN', 'COLLECTION_AGGREGATOR_UNKNOWN', 'PAYOUT_AGGREGATOR_NOT_IMPLEMENTED']
       .every((c) => codes(v).includes(c as SettingsIssueCode));
   });
