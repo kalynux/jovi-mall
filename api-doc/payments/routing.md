@@ -16,7 +16,7 @@ Pure logic: `src/modules/payments/domain/payment-provider.ts` and
 | Layer | What it is | Values | Who chooses |
 |---|---|---|---|
 | **Provider** | what the customer holds and pays with | `MTN` · `ORANGE` · `MOOV` · `CARD` | the **customer**, on the client |
-| **Aggregator** (called `gateway` in code and on stored rows) | the company the backend calls to move the money | `NOTCHPAY` · `MYCOOLPAY` · `STRIPE` (later `CAMPAY`, `FLUTTERWAVE`) | an **administrator**, at runtime, in wi-admin dev tools |
+| **Aggregator** (called `gateway` in code and on stored rows) | the company the backend calls to move the money | `NOTCHPAY` · `MYCOOLPAY` · `STRIPE` · `CAMPAY` (later `FLUTTERWAVE`) | an **administrator**, at runtime, in wi-admin dev tools |
 
 A client shows providers and sends `provider`. It never names, chooses or branches on an
 aggregator for a **new** charge. Switching aggregator is a settings write, with no deploy and no
@@ -84,6 +84,7 @@ interface GatewayCapabilities {
 | `NOTCHPAY` | `PUSH`, requires `phoneNumber` | `PUSH`, requires `phoneNumber` | — | — | `true` | ✅ (behind `NOTCHPAY_PAYOUTS_ENABLED`) |
 | `MYCOOLPAY` | `PUSH`, requires `phoneNumber` | `OTP`, requires `phoneNumber` | — | — | `true` | ❌ |
 | `STRIPE` | — | — | — | `CARD_ELEMENT`, requires nothing | `false` | ❌ |
+| `CAMPAY` | `PUSH`, requires `phoneNumber` | `PUSH`, requires `phoneNumber` | — | — | `true` | ✅ (behind `CAMPAY_PAYOUTS_ENABLED`, **and** "API withdrawals" allowed in the Campay app) |
 
 Flows, for a client:
 
@@ -339,7 +340,7 @@ interface SettingsIssue {
 | `COLLECTION_AGGREGATOR_NO_ENABLED_PROVIDER` | at least one mobile provider is enabled, and the aggregator can serve **none** of them. Turning every mobile provider off is allowed (the "stop taking mobile money" lever) and only warns |
 | `STRIPE_NOT_CONFIGURED` | `stripe_enabled` is being turned **on** (off → on) without Stripe credentials. Leaving an already-on Stripe unconfigured is not an error, so an emergency switch is never blocked by it |
 | `PAYOUT_AGGREGATOR_UNKNOWN` | `payout_aggregator` is not a registered gateway name |
-| `PAYOUT_AGGREGATOR_NOT_IMPLEMENTED` | it has no `createPayout` (today only `NOTCHPAY` has one) |
+| `PAYOUT_AGGREGATOR_NOT_IMPLEMENTED` | it has no `createPayout` (today `NOTCHPAY` and `CAMPAY` have one) |
 | `PROVIDER_UNKNOWN` | a key of `providers` is not in the catalogue |
 
 **Soft warnings: the write is accepted**
@@ -428,3 +429,17 @@ which would race. A `404` from jovi-mall means "platform too old", never success
 `createPayout` may be chosen (a hard rule). One whose account cannot send right now is accepted
 with `PAYOUT_UNAVAILABLE`. The payout service resolves it at the first transfer attempt and stamps
 `transfer_gateway`; everything after that reads the stamp.
+
+Payout capability per aggregator (`createPayout`, and `payoutAvailable()` for "can send right
+now"):
+
+| Aggregator | Can pay out | Available when |
+|---|---|---|
+| `NOTCHPAY` | ✅ | `NOTCHPAY_PAYOUTS_ENABLED=true` and the server's egress IP on NotchPay's payout allowlist |
+| `CAMPAY` | ✅ | `CAMPAY_PAYOUTS_ENABLED=true` **and** "allow withdrawals through the API" on in the Campay app settings. The second is invisible to the server: a refusal for it comes back per call as `unsupported` |
+| `MYCOOLPAY` | ❌ (not implemented) | — |
+| `STRIPE` | ❌ | — |
+<!-- W6-VERIFY: MYCOOLPAY payouts land with S3 (backend-b4). Flip this row to ✅ with its flag once that commit is at HEAD. -->
+
+The owner ops for each (allowlists, toggles, float) are in the workspace
+[`docs/RUNBOOK.md` § Enabling payouts per aggregator](../../../docs/RUNBOOK.md#enabling-payouts-per-aggregator).

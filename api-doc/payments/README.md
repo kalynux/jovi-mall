@@ -35,7 +35,7 @@ payment, a whole multi-vendor cart in one charge, or a service booking.
 - **Response envelope**: standard `{ success, ... }` — see [../README.md](../README.md#the-response-envelope-read-this-first).
 - **Providers** (what the customer pays with): `MTN` and `ORANGE` today; `CARD` and `MOOV` exist
   and are **off**. Only what [`GET /payments/options`](#get-paymentsoptions--what-the-customer-can-pay-with) lists can start a payment.
-- **Aggregators** (who the backend calls): `NOTCHPAY`, `MYCOOLPAY`, `STRIPE`. Chosen by the
+- **Aggregators** (who the backend calls): `NOTCHPAY`, `MYCOOLPAY`, `STRIPE`, `CAMPAY`. Chosen by the
   server. A client never picks one, and must never branch on one.
 
 > ### Two behaviours change with the active aggregator, and a client handles both without knowing which is active
@@ -397,18 +397,37 @@ repeatedly — settlement is idempotent.
 
 Documented here because they are what actually settles a payment; a frontend never calls them.
 
-**All three are signature-verified, and all three are raw-parsed.** `express.raw` is mounted on
-each of the three exact paths before `express.json()` — not on the `/api/webhooks` prefix, which
-also carries the messaging-bot routers.
+**One route per aggregator, generated.** `webhook.routes.ts` registers `POST /api/webhooks/<name>`
+for every entry of `PAYMENT_GATEWAY_NAMES`, and `app.ts` mounts `express.raw` on the same list of
+exact paths before `express.json()` — not on the `/api/webhooks` prefix, which also carries the
+messaging-bot routers. So a new aggregator gets its route and its raw-body mount by construction.
+**Every route is signature-verified and raw-parsed**, through the same sequence.
 
 | Path | Signature | Register it as |
 |---|---|---|
 | `POST /api/webhooks/stripe` | `stripe-signature` verified against `STRIPE_WEBHOOK_SECRET` | Dashboard → Developers → Webhooks |
 | `POST /api/webhooks/notchpay` | `x-notch-signature` — HMAC-SHA256 hex over the raw body, keyed by the dashboard's **Hash Key** (`hsk_…`, not the private key) | Settings → Webhooks |
 | `POST /api/webhooks/mycoolpay` | body field `signature` — MD5 of `transaction_ref + transaction_type + transaction_amount + transaction_currency + transaction_operator + PRIVATE_KEY`, plus `application` matched against our public key | the application's Callback URL |
+| `POST /api/webhooks/campay` | body field `signature` — an HS256 JWT keyed by `CAMPAY_WEBHOOK_KEY`, whose claims are only timestamps | the Campay application's callback, set to **POST** (a GET callback carries its fields in the query string, where this route does not read them) |
 
-Both providers reject a callback URL that is not HTTPS with a valid certificate, so local
-development needs a tunnel.
+The mobile providers reject a callback URL that is not HTTPS with a valid certificate, so local
+development needs a tunnel. Payout (transfer) callbacks arrive on the same route as collection
+callbacks.
+
+### ⛔ When the signature does not cover the body, the aggregator is asked again
+
+A valid signature only proves the sender. For **My-CoolPay** the MD5 covers the reference, type,
+amount, currency and operator, but **not the status**; for **Campay** the JWT covers nothing in
+the body at all. So a genuinely signed callback for a failed charge, replayed with its status
+changed to success, would pass verification.
+
+For both, the callback is treated as a **doorbell**: before anything settles, the adapter's
+`confirmWebhookEvent` re-reads the transaction from the aggregator (`/checkStatus/{ref}` on
+My-CoolPay, `GET /transaction/{ref}/` on Campay) and the status acted on is the aggregator's
+answer, never the body's. If that re-read cannot reach the aggregator, the webhook answers `5xx`
+so the aggregator retries, and the reconciliation sweeps backstop it. NotchPay and Stripe sign the
+whole raw body and need no re-read. A new aggregator whose signature does not cover the body must
+implement the same step.
 
 ### What each status code tells the gateway
 
@@ -445,6 +464,32 @@ Other properties worth knowing:
   `PaymentTransaction`. `charge.dispute.created`, `charge.dispute.closed` and `charge.refunded`
   are handled separately — freeze on open, resume on `won`, unwind on `lost` or a **full** refund
   (a partial `charge.refunded` is deliberately not unwound).
+
+### Payouts whose callback never arrives
+
+A payout in `processing` used to settle only through its transfer callback or an administrator,
+so a lost or refused callback (an IP allowlist, a re-read that threw) left it processing forever
+with the owner's hold intact. My-CoolPay sends each callback once, so this is not an edge case.
+
+The **payout reconciliation sweep** (`payout-reconciliation` worker, jovi-mall `9ab91fa`) closes
+that gap:
+
+- It picks `processing` payouts that have a provider transfer id, have been quiet for at least
+  `PAYOUT_RECONCILE_MIN_AGE_MINUTES` (default 15) and are younger than
+  `PAYOUT_RECONCILE_MAX_AGE_HOURS` (default 168), `PAYOUT_RECONCILE_BATCH_SIZE` (50) at a time,
+  every `PAYOUT_RECONCILE_CRON` (`*/15 * * * *`). It shares the worker lock, pauses in
+  maintenance, and can be triggered from developer tools.
+- It asks the aggregator **stored on the payout** (`transfer_gateway`; `null` means NotchPay),
+  never the current setting, through the adapter's `verifyPayout` (NotchPay: `GET /transfers/{id}`;
+  Campay: `/transaction/{ref}/`, acted on only when the record is a withdrawal carrying our
+  `jm_po_` reference). It never falls back to `verifyPayment`, which asks the wrong question.
+- Only a definite `SUCCEEDED`, `FAILED` or `CANCELLED` moves anything, through the same transition
+  the callback uses (compare-and-set on `processing`, so exactly once). `PENDING` or an
+  inconclusive answer leaves the row alone for the next pass.
+
+What the sweep cannot settle (older than the maximum age, or never conclusive) still needs an
+administrator.
+<!-- W6-VERIFY: the manual "resolve unknown" exit (S4) is not at HEAD yet (payout-resolution.service.ts is uncommitted). Document the admin action here, and in admin/api-doc's changelog, once it lands. -->
 
 ---
 
@@ -673,6 +718,7 @@ transaction**, never the currently active aggregator: a payment taken on My-Cool
 | `STRIPE` | Real API refund |
 | `NOTCHPAY` | Implemented, but **disabled on the merchant account** — `POST /refunds` answers 403 while `GET /refunds` answers 200 with the same credentials (verified against the live sandbox, 2026-08-18). Behaves as `MYCOOLPAY` below until NotchPay enables it and `NOTCHPAY_REFUNDS_ENABLED=true` is set. |
 | `MYCOOLPAY` | **`REFUND_GATEWAY_NOT_SUPPORTED`** — the provider has no refund endpoint at all. |
+| `CAMPAY` | **`REFUND_GATEWAY_NOT_SUPPORTED`** — Campay has no refund endpoint either; the manual path takes over, as for My-CoolPay. |
 
 In the unsupported cases the booking or order goes to `refund_pending`, earnings are reversed,
 and a HIGH support ticket is raised for a manual payout. **The cancellation or refund request
