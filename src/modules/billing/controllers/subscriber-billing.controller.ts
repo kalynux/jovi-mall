@@ -9,11 +9,13 @@ import { entitlementService } from '../services/entitlement.service';
 import { CREDIT_TOPUP_PACKS } from '../config/credit.config';
 import { BillingSettingsRepository } from '../repositories/billing-settings.repository';
 import {
-  InitiateTopupSchema,
-  InitiatePlanPurchaseSchema,
+  InitiateTopupRequestSchema,
+  InitiatePlanPurchaseRequestSchema,
   AuthorizeBillingOtpSchema,
   ExpiryNoticeSchema,
 } from '../validators/billing.validators';
+import { deriveProviderOrThrow } from '../../payments/services/payment-routing.service';
+import { recordDeprecatedGatewayField } from '../../system/metrics/metrics';
 import { BillingOwnerType } from '../billing.types';
 
 /** Optional per-role usage block merged into `getMyPlan` (e.g. agency shipment usage). */
@@ -64,8 +66,11 @@ export function createSubscriberBillingController(
 
     purchasePlan: asyncHandler(async (req: Request, res: Response) => {
       const ownerId = req.auth!.role_entity._id.toString();
-      const { gateway, channel } = InitiatePlanPurchaseSchema.parse(req.body);
-      const result = await planPurchaseService.initiatePurchase(ownerType, ownerId, req.params.planId, gateway, channel);
+      const body = InitiatePlanPurchaseRequestSchema.parse(req.body);
+      // An old app still naming an aggregator: counted, then ignored (ADR-A08).
+      if (body.gateway !== undefined) recordDeprecatedGatewayField('plan_purchase');
+      const provider = deriveProviderOrThrow(body);
+      const result = await planPurchaseService.initiatePurchase(ownerType, ownerId, req.params.planId, { provider }, body.channel);
       res.status(201).json({ success: true, data: result, message: 'Plan purchase initiated' });
     }),
 
@@ -99,8 +104,11 @@ export function createSubscriberBillingController(
 
     initiateTopup: asyncHandler(async (req: Request, res: Response) => {
       const ownerId = req.auth!.role_entity._id.toString();
-      const { packCode, gateway, channel } = InitiateTopupSchema.parse(req.body);
-      const result = await creditTopupService.initiateTopup(ownerType, ownerId, packCode, gateway, channel);
+      const body = InitiateTopupRequestSchema.parse(req.body);
+      // An old app still naming an aggregator: counted, then ignored (ADR-A08).
+      if (body.gateway !== undefined) recordDeprecatedGatewayField('credit_topup');
+      const provider = deriveProviderOrThrow(body);
+      const result = await creditTopupService.initiateTopup(ownerType, ownerId, body.packCode, { provider }, body.channel);
       res.status(201).json({ success: true, data: result, message: 'Top-up initiated' });
     }),
 

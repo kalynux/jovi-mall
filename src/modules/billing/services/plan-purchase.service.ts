@@ -12,6 +12,8 @@ import { PaymentChannelInfo } from '../../payments/gateways/gateway.interface';
 import { getPaymentGateway } from '../../payments/gateways/registry';
 import { mintMerchantRef } from '../../payments/domain/merchant-reference';
 import { submitGatewayOtp, GatewayOtpResult } from '../domain/gateway-otp';
+import { BillingChargeSelection, resolveBillingCharge } from '../domain/billing-charge';
+import { PaymentProvider } from '../../payments/domain/payment-provider';
 
 /**
  * PlanPurchaseService - owner SELF-SERVE plan purchase (vendor/agency/agent).
@@ -30,14 +32,23 @@ export class PlanPurchaseService {
     private readonly plans: SubscriberPlanService = subscriberPlanService
   ) {}
 
-  /** Start a plan purchase: validate, create a pending record, open a gateway charge. */
+  /**
+   * Start a plan purchase: validate, create a pending record, open a gateway charge.
+   *
+   * `{ provider }` is the ADR-A08 form: the aggregator comes from the settings, and every
+   * refusal (a missing number, a number on another operator, a provider nobody can route) is
+   * raised by `resolveBillingCharge` BEFORE the pending row is written.
+   *
+   * @deprecated form: a bare gateway name, as clients chose it before ADR-A08. It skips the
+   * offer check and is removed in C1; no controller calls it any more.
+   */
   async initiatePurchase(
     ownerType: BillingOwnerType,
     ownerId: string,
     planId: string,
-    gateway: PlanPurchaseGateway,
+    selection: PlanPurchaseGateway | BillingChargeSelection,
     channel: PaymentChannelInfo
-  ): Promise<{ purchase: IPlanPurchase; instructions: unknown }> {
+  ): Promise<{ purchase: IPlanPurchase; instructions: unknown; provider: PaymentProvider | null }> {
     const plan = await this.planRepo.findById(planId);
     if (!plan) throw createAppError(ERROR_CODES.BILLING_PLAN_NOT_FOUND, 404, 'Pricing plan not found');
     if (!plan.is_active) throw createAppError(ERROR_CODES.BILLING_PLAN_INACTIVE, 409, 'Plan is not active');
@@ -56,6 +67,10 @@ export class PlanPurchaseService {
       );
     }
 
+    const charge = typeof selection === 'string'
+      ? { aggregator: selection, provider: null, channel }
+      : resolveBillingCharge(selection, channel);
+    const gateway = charge.aggregator;
     const adapter = getPaymentGateway(gateway);
 
     // Don't take money we can't apply: only one pending plan may be queued at a time.
@@ -85,6 +100,7 @@ export class PlanPurchaseService {
       currency: plan.currency,
       status: 'pending',
       gateway,
+      provider: charge.provider,
       merchant_ref: merchantRef,
     });
 
@@ -93,7 +109,7 @@ export class PlanPurchaseService {
       userId: ownerId,
       amount: plan.price,
       currency: plan.currency,
-      channel,
+      channel: charge.channel,
       merchantRef,
       metadata: {
         purpose: 'plan_purchase',
@@ -115,13 +131,15 @@ export class PlanPurchaseService {
       );
     }
 
+    // `provider` at the top, as the payment doors answer it (ADR-A08); `gateway` stays on the row.
+    const provider = purchase.provider ?? null;
     const updated = await this.repo.setStatus(purchase._id, 'pending', { gateway_ref: result.gatewayRef });
     // Already confirmed at initiation (rare for mobile money) → apply immediately.
     if (result.status === 'SUCCEEDED') {
       const { purchase: applied } = await this.completePurchase(purchase._id.toString());
-      return { purchase: applied, instructions: result.instructions ?? null };
+      return { purchase: applied, instructions: result.instructions ?? null, provider };
     }
-    return { purchase: updated ?? purchase, instructions: result.instructions ?? null };
+    return { purchase: updated ?? purchase, instructions: result.instructions ?? null, provider };
   }
 
   /**

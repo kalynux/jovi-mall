@@ -12,6 +12,8 @@ import { PaymentChannelInfo } from '../../payments/gateways/gateway.interface';
 import { getPaymentGateway } from '../../payments/gateways/registry';
 import { mintMerchantRef } from '../../payments/domain/merchant-reference';
 import { submitGatewayOtp, GatewayOtpResult } from '../domain/gateway-otp';
+import { BillingChargeSelection, resolveBillingCharge } from '../domain/billing-charge';
+import { PaymentProvider } from '../../payments/domain/payment-provider';
 
 /**
  * CreditTopupService - an owner's (vendor/agency/agent) purchase of credit packs.
@@ -28,18 +30,32 @@ export class CreditTopupService {
     private readonly wallet: CreditWalletService = creditWalletService
   ) {}
 
-  /** Start a top-up: create a pending record and open a gateway charge. */
+  /**
+   * Start a top-up: create a pending record and open a gateway charge.
+   *
+   * `{ provider }` is the ADR-A08 form: the aggregator comes from the settings, and every
+   * refusal (a missing number, a number on another operator, a provider nobody can route) is
+   * raised by `resolveBillingCharge` BEFORE the pending row is written.
+   *
+   * @deprecated form: a bare gateway name, as clients chose it before ADR-A08. It skips the
+   * offer check and is removed in C1; no controller calls it any more.
+   */
   async initiateTopup(
     ownerType: BillingOwnerType,
     ownerId: string,
     packCode: string,
-    gateway: CreditTopupGateway,
+    selection: CreditTopupGateway | BillingChargeSelection,
     channel: PaymentChannelInfo
-  ): Promise<{ topup: ICreditTopup; instructions: unknown }> {
+  ): Promise<{ topup: ICreditTopup; instructions: unknown; provider: PaymentProvider | null }> {
     const pack = findCreditPack(packCode);
     if (!pack) {
       throw createAppError(ERROR_CODES.BILLING_TOPUP_PACK_NOT_FOUND, 404, `Unknown credit pack '${packCode}'`);
     }
+
+    const charge = typeof selection === 'string'
+      ? { aggregator: selection, provider: null, channel }
+      : resolveBillingCharge(selection, channel);
+    const gateway = charge.aggregator;
     const adapter = getPaymentGateway(gateway);
 
     // Minted BEFORE the charge and stored on the row, because the callback may
@@ -56,6 +72,7 @@ export class CreditTopupService {
       currency: pack.currency,
       status: 'pending',
       gateway,
+      provider: charge.provider,
       merchant_ref: merchantRef,
     });
 
@@ -64,7 +81,7 @@ export class CreditTopupService {
       userId: ownerId,
       amount: pack.price,
       currency: pack.currency,
-      channel,
+      channel: charge.channel,
       merchantRef,
       metadata: {
         purpose: 'credit_topup',
@@ -90,7 +107,8 @@ export class CreditTopupService {
     if (result.status === 'SUCCEEDED') {
       await this.completeTopup(topup._id.toString());
     }
-    return { topup: updated ?? topup, instructions: result.instructions ?? null };
+    // `provider` at the top, as the payment doors answer it (ADR-A08); `gateway` stays on the row.
+    return { topup: updated ?? topup, instructions: result.instructions ?? null, provider: topup.provider ?? null };
   }
 
   /**

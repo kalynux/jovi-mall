@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { PaymentChannelSchema } from '../../payments/validators/payment.validators';
 import { BILLING_OWNER_TYPES } from '../billing.types';
 import { PAYMENT_GATEWAY_NAMES } from '../../payments/gateways/gateway.interface';
+import { PAYMENT_PROVIDERS } from '../../payments/domain/payment-provider';
 
 // Derived from the module's own list, never retyped beside it — the same rule the
 // notification catalogs follow, for the same reason: two hand-maintained copies of one
@@ -84,6 +85,36 @@ export const InitiateTopupSchema = z.object({
 /** Vendor: start a self-serve plan purchase (planId comes from the URL). */
 export const InitiatePlanPurchaseSchema = z.object({
   gateway: z.enum(PAYMENT_GATEWAY_NAMES),
+  channel: BillingPaymentChannelSchema,
+});
+
+// ── Provider-based bodies (ADR-A08) ─────────────────────────────────────────
+//
+// The owner names what they pay with (`provider`); the server picks the aggregator. `gateway`
+// is still accepted from apps that predate `provider`, validated against nothing and never
+// used to route. A missing `provider` is derived by the controller (`deriveProviderOrThrow`),
+// and which `channel` fields a charge needs is judged once its route is known, not here.
+// The two gateway-based schemas above stay until C1 removes them.
+
+const BillingProviderSchema = z.enum(PAYMENT_PROVIDERS, {
+  errorMap: () => ({ message: `Invalid provider. Must be one of: ${PAYMENT_PROVIDERS.join(', ')}` }),
+});
+
+/** The deprecated aggregator field: accepted and ignored. */
+const DeprecatedBillingGatewaySchema = z.string().trim().optional();
+
+/** Owner: start a credit top-up, provider-based. Replaces `InitiateTopupSchema` (removed in C1). */
+export const InitiateTopupRequestSchema = z.object({
+  packCode: z.string().trim().min(1),
+  provider: BillingProviderSchema.optional(),
+  gateway: DeprecatedBillingGatewaySchema,
+  channel: BillingPaymentChannelSchema,
+});
+
+/** Owner: start a plan purchase, provider-based. Replaces `InitiatePlanPurchaseSchema` (removed in C1). */
+export const InitiatePlanPurchaseRequestSchema = z.object({
+  provider: BillingProviderSchema.optional(),
+  gateway: DeprecatedBillingGatewaySchema,
   channel: BillingPaymentChannelSchema,
 });
 

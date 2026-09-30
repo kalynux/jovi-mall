@@ -2,6 +2,7 @@ import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 import { BillingOwnerType, BILLING_OWNER_TYPES } from '../billing.types';
 import { PAYMENT_GATEWAY_NAMES, PaymentGatewayName } from '../../payments/gateways/gateway.interface';
+import { PAYMENT_PROVIDERS, PaymentProvider } from '../../payments/domain/payment-provider';
 
 /**
  * CreditTopup - An owner's purchase of a credit pack.
@@ -27,6 +28,12 @@ export interface ICreditTopup extends Document {
   /** Gateway used to charge this top-up, and its transaction reference. */
   gateway: CreditTopupGateway | null;
   gateway_ref: string | null;
+  /**
+   * What the owner paid with (ADR-A08): `MTN` · `ORANGE` · `MOOV` · `CARD`. `gateway` is the
+   * aggregator that carried it, chosen by the server. Null on rows written before the field
+   * existed; no backfill.
+   */
+  provider: PaymentProvider | null;
   /**
    * OUR reference, echoed back by the gateway on its callback.
    *
@@ -73,6 +80,7 @@ const CreditTopupSchema = new Schema<ICreditTopup>(
     status: { type: String, enum: ['pending', 'paid', 'failed', 'reversed'], default: 'pending' },
     gateway: { type: String, enum: [...PAYMENT_GATEWAY_NAMES], default: null },
     gateway_ref: { type: String, default: null },
+    provider: { type: String, enum: [...PAYMENT_PROVIDERS, null], default: null },
     // Sparse: every row written before this field existed has none, and a plain
     // unique index refuses the second null.
     merchant_ref: { type: String, default: null, unique: true, sparse: true, index: true },

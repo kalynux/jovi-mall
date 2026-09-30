@@ -2,6 +2,7 @@ import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 import { BillingOwnerType, BILLING_OWNER_TYPES } from '../billing.types';
 import { PAYMENT_GATEWAY_NAMES, PaymentGatewayName } from '../../payments/gateways/gateway.interface';
+import { PAYMENT_PROVIDERS, PaymentProvider } from '../../payments/domain/payment-provider';
 
 /**
  * PlanPurchase - An owner's self-serve purchase of a paid pricing plan.
@@ -26,6 +27,12 @@ export interface IPlanPurchase extends Document {
   status: PlanPurchaseStatus;
   gateway: PlanPurchaseGateway | null;
   gateway_ref: string | null;
+  /**
+   * What the owner paid with (ADR-A08): `MTN` · `ORANGE` · `MOOV` · `CARD`. `gateway` is the
+   * aggregator that carried it, chosen by the server. Null on rows written before the field
+   * existed; no backfill.
+   */
+  provider: PaymentProvider | null;
   /** OUR reference, echoed back on the callback. See the note on ICreditTopup.merchant_ref. */
   merchant_ref: string | null;
   /** Wrong OTP submissions on this purchase. See the note on `ICreditTopup.otp_attempts`. */
@@ -52,6 +59,7 @@ const PlanPurchaseSchema = new Schema<IPlanPurchase>(
     status: { type: String, enum: ['pending', 'paid', 'failed', 'reversed'], default: 'pending' },
     gateway: { type: String, enum: [...PAYMENT_GATEWAY_NAMES], default: null },
     gateway_ref: { type: String, default: null },
+    provider: { type: String, enum: [...PAYMENT_PROVIDERS, null], default: null },
     merchant_ref: { type: String, default: null, unique: true, sparse: true, index: true },
     otp_attempts: { type: Number, default: 0, min: 0 },
     subscriber_plan_id: { type: Schema.Types.ObjectId, ref: MODELS.SUBSCRIBER_PLAN, default: null },
