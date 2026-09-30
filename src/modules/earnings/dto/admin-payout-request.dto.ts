@@ -1,6 +1,7 @@
 import { IPayoutRequest } from '../models/payout-request.model';
 import { PayoutMethodMasked, maskPayoutMethod } from '../../../core/types/payout.types';
 import { OwnerVerification, UNKNOWN_VERIFICATION } from '../../../core/accounts/verification';
+import { payoutGatewayFor } from '../domain/payout-gateway';
 
 /**
  * The admin queue's view of a payout request.
@@ -81,6 +82,11 @@ export interface AdminPayoutRequestDto {
      * is the gateway's own id, which is what this carries.
      */
     transferGatewayRef: string | null;
+    /**
+     * Which aggregator carried the transfer (ADR-A08). Informational: never branch on it. Null
+     * until a transfer has been attempted; a row sent before the field existed reads `NOTCHPAY`.
+     */
+    transferGateway: string | null;
     transferFailureReason: string | null;
     ticketId: string | null;
     requestedByUserId: string | null;
@@ -132,6 +138,7 @@ export function toAdminPayoutRequestDto(
               }
             : null,
         transferGatewayRef: row.transfer_gateway_ref ?? null,
+        transferGateway: payoutGatewayFor(row, null),
         transferFailureReason: row.transfer_failure_reason ?? null,
         ticketId: row.ticket_id ? row.ticket_id.toString() : null,
         requestedByUserId: row.requested_by_user_id ? row.requested_by_user_id.toString() : null,

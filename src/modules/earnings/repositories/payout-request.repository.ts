@@ -10,6 +10,7 @@ import {
 import { EarningsOwnerType } from '../models/earnings-account.model';
 import { IPayoutMethod } from '../../../core/types/payout.types';
 import { ActorRef, actorStamp } from '../../../core/types/actor-source.types';
+import { PaymentGatewayName } from '../../payments/gateways/gateway.interface';
 
 export interface CreatePayoutRequestInput {
   owner_type: EarningsOwnerType;
@@ -69,6 +70,7 @@ export class PayoutRequestRepository {
           requested_by_user_id: new Types.ObjectId(input.requested_by_user_id),
           triage: null,
           transfer_reference: null,
+          transfer_gateway: null,
           transfer_gateway_ref: null,
           transfer_failure_reason: null,
           resolved_at: null,
@@ -154,12 +156,20 @@ export class PayoutRequestRepository {
    * resend on its own idempotency instead of paying the owner a second time. Minting a
    * fresh reference per attempt would defeat that completely.
    *
+   * **The aggregator is fixed the same way, and for the same reason** (ADR-A08). A reused
+   * reference only deduplicates at the gateway that first received it, so a retry sent to a
+   * different aggregator after an administrator's switch is exactly the double-send the
+   * reference exists to stop. `transfer_gateway` is kept once set; `candidateGateway` only
+   * fills it on a row that has none (see `earnings/domain/payout-gateway.ts` for how the caller
+   * chooses it, legacy rows included).
+   *
    * ⚠ A pipeline update bypasses Mongoose's timestamp plugin, so `updated_at` is set by
    * hand. Without it a retried payout would keep the timestamp of its first attempt.
    */
   async beginTransfer(
     id: string,
     candidateReference: string,
+    candidateGateway: PaymentGatewayName,
     session?: ClientSession
   ): Promise<IPayoutRequest | null> {
     return PayoutRequestModel.findOneAndUpdate(
@@ -169,6 +179,7 @@ export class PayoutRequestRepository {
           $set: {
             status: 'processing',
             transfer_reference: { $ifNull: ['$transfer_reference', candidateReference] },
+            transfer_gateway: { $ifNull: ['$transfer_gateway', candidateGateway] },
             transfer_failure_reason: null,
             updated_at: '$$NOW',
           },

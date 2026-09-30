@@ -4,6 +4,7 @@ import { EarningsOwnerType } from './earnings-account.model';
 import { PayoutMethodSchema, IPayoutMethod } from '../../../core/types/payout.types';
 import { ActorSource, actorStampFields } from '../../../core/types/actor-source.types';
 import { IReviewTriage, ReviewTriageSchema } from '../../../core/types/review-triage.types';
+import { PAYMENT_GATEWAY_NAMES, PaymentGatewayName } from '../../payments/gateways/gateway.interface';
 
 /**
  * PayoutRequest - a vendor/agency/agent's request to withdraw their ENTIRE
@@ -142,6 +143,13 @@ export interface IPayoutRequest extends Document {
    * reference idempotency rather than paying the owner twice.
    */
   transfer_reference: string | null;
+  /**
+   * Which aggregator carries this payout's transfer (ADR-A08). Stamped in the same atomic claim as
+   * `transfer_reference`, on the first attempt, and never changed: a retry, and the callback that
+   * settles it, use this value and never the current payout setting. Null on rows never sent, and
+   * on rows sent before the field existed, which were all NotchPay's (`earnings/domain/payout-gateway.ts`).
+   */
+  transfer_gateway: PaymentGatewayName | null;
   /** The gateway's own id for the transfer, learned from its response or callback. */
   transfer_gateway_ref: string | null;
   /** Why the last transfer attempt failed, verbatim from the gateway where available. */
@@ -190,6 +198,7 @@ const PayoutRequestSchema = new Schema<IPayoutRequest>(
     requested_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, required: true },
     triage: { type: ReviewTriageSchema, default: null },
     transfer_reference: { type: String, default: null, trim: true },
+    transfer_gateway: { type: String, enum: [...PAYMENT_GATEWAY_NAMES, null], default: null },
     transfer_gateway_ref: { type: String, default: null, trim: true },
     transfer_failure_reason: { type: String, default: null, trim: true, maxlength: 500 },
     resolved_at: { type: Date, default: null },

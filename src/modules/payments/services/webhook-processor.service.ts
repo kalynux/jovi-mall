@@ -8,6 +8,7 @@ import { PaymentOrchestratorService } from './payment-orchestrator.service';
 import { planPurchaseService } from '../../billing/services/plan-purchase.service';
 import { creditTopupService } from '../../billing/services/credit-topup.service';
 import { payoutRequestService } from '../../earnings/services/payout-request.service';
+import { storedPayoutGateway } from '../../earnings/domain/payout-gateway';
 
 /**
  * What happens to a callback after its signature passes.
@@ -154,7 +155,7 @@ export class PaymentWebhookProcessor {
      * looking for an order with the same reference.
      */
     if (event.direction === 'payout') {
-      return this.settlePayout(event);
+      return this.settlePayout(event, gateway);
     }
 
     /**
@@ -204,8 +205,22 @@ export class PaymentWebhookProcessor {
    *
    * `PENDING` is explicitly not terminal — NotchPay reports `sent` and `processing` on the
    * way to a verdict, and acting on either would settle a payout that is still moving.
+   *
+   * ⚠ **The callback must arrive on the route of the gateway the payout was SENT through**
+   * (ADR-A08). The reference alone does not say which gateway may speak for it, and after an
+   * administrator switches the payout aggregator two gateways can be live at once. A verified
+   * callback from one naming a payout sent through the other is refused as `ignored` rather
+   * than allowed to settle or fail it. A payout with no stored gateway was sent before the
+   * field existed, which means through NotchPay. The settings are never read here: after a
+   * switch, a payout still settles through the gateway that sent it.
+   *
+   * `routeGateway` is optional so the check can only ever narrow; the dedup claim above is keyed
+   * on the route gateway and is unchanged.
    */
-  private async settlePayout(event: NormalizedWebhookEvent): Promise<WebhookOutcome> {
+  private async settlePayout(
+    event: NormalizedWebhookEvent,
+    routeGateway?: PaymentGatewayType
+  ): Promise<WebhookOutcome> {
     if (!event.merchantRef) {
       return { kind: 'unknown_transaction' };
     }
@@ -213,6 +228,13 @@ export class PaymentWebhookProcessor {
     const payout = await payoutRequestService.getByTransferReference(event.merchantRef);
     if (!payout) {
       return { kind: 'unknown_transaction' };
+    }
+
+    if (routeGateway && storedPayoutGateway(payout) !== routeGateway) {
+      return {
+        kind: 'ignored',
+        detail: `payout ${payout.id} was not sent through ${routeGateway}; refusing its callback`,
+      };
     }
 
     if (event.status === 'PENDING') {
@@ -226,7 +248,7 @@ export class PaymentWebhookProcessor {
     });
 
     // Null means the payout was not `processing` when the write landed — already settled by
-    // a previous delivery or by the reconciliation poll. Idempotent by construction.
+    // a previous delivery. Idempotent by construction.
     if (!applied) {
       return { kind: 'ignored', detail: `payout ${payout.id} was already resolved` };
     }

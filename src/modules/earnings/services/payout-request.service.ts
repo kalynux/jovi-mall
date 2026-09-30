@@ -14,6 +14,9 @@ import { IPayoutMethod } from '../../../core/types/payout.types';
 import { ActorRef } from '../../../core/types/actor-source.types';
 import { mintMerchantRef } from '../../payments/domain/merchant-reference';
 import { getPaymentGateway, gatewaySupportsPayout } from '../../payments/gateways/registry';
+import { PaymentGatewayName } from '../../payments/gateways/gateway.interface';
+import { resolvePayoutAggregator } from '../../payments/services/payment-routing.service';
+import { payoutGatewayFor } from '../domain/payout-gateway';
 import {
   OwnerVerification,
   UNKNOWN_VERIFICATION,
@@ -46,18 +49,12 @@ import { ActorRole, EntityType, TicketImportance, TicketStatus, TicketType } fro
  * transaction that reverts the funds and drops the orphaned request — a
  * requester never ends up with money stuck in `requested_balance` and no
  * ticket to track it.
- */
-/**
- * The gateway payouts are sent through.
  *
- * A constant rather than an environment variable, because there is exactly one wired
- * disbursement integration and a variable would invite a deployment to name a gateway that
- * cannot send — which `gatewaySupportsPayout` would then refuse at the worst moment, with an
- * error about capability rather than about configuration. When a second provider is wired,
- * this becomes a real choice and deserves a real setting.
+ * The gateway a payout is sent through is an administrator's runtime switch
+ * (`payment_settings.payout_aggregator`, ADR-A08), read through `resolvePayoutAggregator()`.
+ * It used to be a hardcoded `NOTCHPAY`. Once a payout has been sent, its stored
+ * `transfer_gateway` decides instead — see `earnings/domain/payout-gateway.ts`.
  */
-const PAYOUT_GATEWAY = 'NOTCHPAY';
-
 export class PayoutRequestService {
   constructor(
     private readonly payoutRepo: PayoutRequestRepository = new PayoutRequestRepository(),
@@ -427,8 +424,11 @@ export class PayoutRequestService {
    * The returned row carries `transfer_reference` — which may be one minted on a PREVIOUS
    * attempt, because a retry must reuse it. Send exactly what comes back, never
    * `candidateReference`.
+   *
+   * The same holds for `transfer_gateway`: `candidateGateway` is only written on a row that has
+   * none, and the returned row's value is the one to send through.
    */
-  async beginTransfer(payoutRequestId: string): Promise<IPayoutRequest> {
+  async beginTransfer(payoutRequestId: string, candidateGateway: PaymentGatewayName): Promise<IPayoutRequest> {
     const payoutRequest = await this.getByIdOrThrow(payoutRequestId);
 
     if (payoutRequest.status === 'processing') {
@@ -443,7 +443,7 @@ export class PayoutRequestService {
       });
     }
 
-    const claimed = await this.payoutRepo.beginTransfer(payoutRequestId, mintMerchantRef('po'));
+    const claimed = await this.payoutRepo.beginTransfer(payoutRequestId, mintMerchantRef('po'), candidateGateway);
     if (!claimed) {
       // Lost the race. Whoever won is now holding the only valid claim on this payout.
       throw createAppError(ERROR_CODES.EARNINGS_PAYOUT_TRANSFER_IN_FLIGHT, 409);
@@ -454,10 +454,10 @@ export class PayoutRequestService {
   /**
    * Apply a terminal verdict from the gateway to a payout that is `processing`.
    *
-   * Called by the webhook processor and by the reconciliation poll, which is why it is
-   * idempotent by construction: both writes are compare-and-set on `status: 'processing'`,
-   * so a redelivered callback and a poll that raced it settle the payout exactly once and
-   * the loser gets `null` back.
+   * Called by the webhook processor and by `sendPayout` on a refusal the gateway is sure
+   * about; nothing polls payouts. It is idempotent by construction: both
+   * writes are compare-and-set on `status: 'processing'`, so a redelivered callback settles
+   * the payout exactly once and the loser gets `null` back.
    *
    * ⚠ **A `reversed` verdict arriving on an already-`paid` payout is NOT an accounting
    * rollback, and this method deliberately does not attempt one.** `markPayoutPaidInSession`
@@ -587,10 +587,11 @@ export class PayoutRequestService {
    *
    * ⛔ **A THROWN error after step 4 deliberately leaves the payout in `processing`.** That
    * looks wrong and is not. A network failure, a timeout or an aborted request tells us
-   * nothing about whether NotchPay received the transfer — and rolling the row back to
+   * nothing about whether the gateway received the transfer — and rolling the row back to
    * `pending` would release it for a second send while the first may be in flight. Leaving it
-   * `processing` means the hold stays, no second send is possible, and the callback or the
-   * reconciliation poll resolves it. The cost is an administrator waiting; the alternative
+   * `processing` means the hold stays, no second send is possible, and the gateway's callback
+   * resolves it. Nothing polls payouts, so a callback that never comes leaves the row for an
+   * administrator to reconcile against the gateway. The cost is an administrator waiting; the alternative
    * cost is paying twice.
    */
   async sendPayout(payoutRequestId: string): Promise<IPayoutRequest> {
@@ -612,21 +613,31 @@ export class PayoutRequestService {
     }
 
     /**
-     * ⚠ **A DIFFERENT code from the destination check above, and at 500 rather than 503.**
-     * Nobody is down — `PAYOUT_GATEWAY` names a gateway that cannot send payouts, which is
-     * this deployment's configuration. At 503 it derived `external_service` and sent whoever
-     * is on call to look at a third party that was never involved; at 500 it derives
-     * `internal`, which is whose fault it actually is. Sharing one code with the destination
-     * rule also gave that code two categories, which is the conflict `test:errors` § 3 refuses.
+     * Which aggregator. A payout already sent keeps the one it was sent through, whatever the
+     * payout setting says now; only a never-sent row takes the active one (ADR-A08).
      */
-    if (!gatewaySupportsPayout(PAYOUT_GATEWAY)) {
+    const chosen = payoutGatewayFor(payoutRequest, resolvePayoutAggregator());
+
+    /**
+     * ⚠ **A DIFFERENT code from the destination check above, and at 500 rather than 503.**
+     * Nobody is down — the chosen gateway cannot send payouts, or the settings name none this
+     * deployment registers, and both are this deployment's configuration. At 503 it derived
+     * `external_service` and sent whoever is on call to look at a third party that was never
+     * involved; at 500 it derives `internal`, which is whose fault it actually is. Sharing one
+     * code with the destination rule also gave that code two categories, which is the
+     * conflict `test:errors` § 3 refuses.
+     *
+     * Checked for a retry too: a payout sent through an aggregator whose payouts have since
+     * been switched off is refused here, before the claim, and never re-sent elsewhere.
+     */
+    if (!chosen || !gatewaySupportsPayout(chosen)) {
       throw createAppError(ERROR_CODES.EARNINGS_PAYOUT_GATEWAY_NOT_CONFIGURED, 500, undefined, {
-        gateway: PAYOUT_GATEWAY,
+        gateway: chosen,
         hint: 'Automatic payouts are not enabled on this deployment. Settle this one manually.',
       });
     }
 
-    const gateway = getPaymentGateway(PAYOUT_GATEWAY);
+    let gateway = getPaymentGateway(chosen);
 
     /**
      * A float check, not a guarantee.
@@ -650,7 +661,16 @@ export class PayoutRequestService {
     }
 
     // The claim. Everything above could be retried freely; nothing below can.
-    const claimed = await this.beginTransfer(payoutRequestId);
+    const claimed = await this.beginTransfer(payoutRequestId, chosen);
+
+    /**
+     * The stored value is authoritative after the claim. It equals `chosen` unless a concurrent
+     * writer stamped the row between the read above and the claim; then the stored one wins,
+     * because it is the one the reference was first sent with.
+     */
+    if (claimed.transfer_gateway && claimed.transfer_gateway !== chosen) {
+      gateway = getPaymentGateway(claimed.transfer_gateway);
+    }
 
     const result = await gateway.createPayout!({
       reference: claimed.transfer_reference as string,

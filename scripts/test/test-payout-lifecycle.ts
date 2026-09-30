@@ -226,12 +226,17 @@ assert('an absent or unknown type defaults to collection, never payout', () =>
     && directionOfEventType('') === 'collection'
     && directionOfEventType('something.else') === 'collection');
 
-assert('a payout event terminates in the payout branch — no fall-through', () => {
+/**
+ * Also pins that the ROUTE gateway is passed (ADR-A08). `settlePayout` refuses a callback from a
+ * gateway other than the one the payout was sent through, and it can only do that if it is told
+ * which route the callback came in on. Dropping the argument would silently disable that check.
+ */
+assert('a payout event terminates in the payout branch — no fall-through, and the route gateway is passed', () => {
     const route = PROCESSOR.slice(PROCESSOR.indexOf('private async route('));
     const guard = route.indexOf("event.direction === 'payout'");
     const orchestrator = route.indexOf('this.orchestrator.applyWebhookEvent');
     return guard !== -1 && orchestrator !== -1 && guard < orchestrator
-        && route.includes('return this.settlePayout(event);');
+        && route.includes('return this.settlePayout(event, gateway);');
 });
 
 assert('a po reference arriving on a COLLECTION event is refused, not guessed at', () =>
