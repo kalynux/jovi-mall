@@ -1,5 +1,12 @@
 # Order detail — what the storefront needs
 
+> ⚠ **Payment requests superseded on 2026-09-30.** Where this historical page shows a payment
+> body with `gateway` (`NOTCHPAY` / `MYCOOLPAY` / `STRIPE`), a current client sends **`provider`**
+> (`MTN` / `ORANGE` / `CARD`) chosen from `GET /api/payments/options` instead; `gateway` is accepted
+> and ignored. The page is kept as the record of what changed then. Current contract:
+> [../payments/README.md](../payments/README.md) · what to change:
+> [../FRONTEND-CHANGELOG-payment-providers.md](../FRONTEND-CHANGELOG-payment-providers.md).
+
 **Verified against source on 2026-09-08** — the agent-identity block and its window
 (`AGENT_IDENTITY_VISIBLE_FROM = 'shipped'`, `src/modules/orders/dto/customer-shipment.dto.ts:131`;
 `displayName` partial, `photo: FileDetail | null`, **no phone number**), and the agency block as

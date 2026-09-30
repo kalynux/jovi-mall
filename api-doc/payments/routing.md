@@ -274,6 +274,8 @@ Guarantees:
   body. This is the only aggregator-free surface. See [Read side](#read-side-stored-rows-keep-gateway).
 - A stale copy is harmless: charging a provider that has since dropped out answers `422
   PAYMENT_PROVIDER_UNAVAILABLE` with `details.offered`, which is the fresh list.
+- **Every listed provider is payable.** If CARD routes through Stripe but no valid publishable key
+  is configured, CARD is not listed.
 
 ---
 
@@ -401,10 +403,16 @@ The **settings view** is the camelCase projection of the document:
 }
 ```
 
-`GET` returns `{ settings, aggregators, effectiveProviders, warnings }`, where each
+`GET` returns `{ settings, aggregators, effectiveProviders, errors, warnings }`, where each
 `aggregators[]` row is `{ name, configured, capabilities, payoutImplemented, payoutAvailable,
 refundAvailable, activeForCollections, activeForPayouts }`. This is the one surface that names
 aggregators. It is administrator-only.
+
+`errors` and `warnings` are the stored settings' **standing** problems, computed at read time by
+validating the current settings against themselves (not the warnings from the last write).
+`errors` holds hard-rule failures, for example the active aggregator's credentials having been
+removed after the switch: new charges are being refused now. When `errors` is non-empty,
+`warnings` is `[]`. Both are always present (jovi-mall `0b58bb7`).
 
 **wi-admin:** `GET` / `PUT /api/v1/dev-tools/payments`, permissions
 `developer_tools.payments.read` / `developer_tools.payments.set` (tier 1 only), audited as

@@ -158,9 +158,44 @@ line named both until 2026-09-08.
 
 ---
 
+### Paying for a plan or a top-up: providers, not gateways (2026-09-30)
+
+Both paid flows below (plan purchase, credit top-up) take the same payment body as every other
+charging door on the platform. The vendor picks a **provider** (`MTN`, `ORANGE`, later `CARD`);
+the server picks the **aggregator** (NotchPay, My-CoolPay, Stripe…) and an administrator can
+switch it at any time with no app release.
+
+1. `GET /api/payments/options` (no auth) → render one choice per entry of `data.providers`, and
+   ask for the fields each lists. **An empty list** means online payment is switched off: show
+   *"Online payment is unavailable right now"* instead of the pay button.
+2. `POST` the purchase or top-up with `{ provider, channel }`.
+3. Branch on the returned `instructions` (`requiresOtp` → the `/authorize` route; `clientSecret`
+   → Stripe.js with the `/options` `publishableKey`; otherwise approve on the handset), then poll
+   `/verify`.
+
+The same body and the same answers hold under `/api/agency` and `/api/agent`.
+Contract: [../payments/routing.md](../payments/routing.md). Per-role changes:
+[../FRONTEND-CHANGELOG-payment-providers.md](../FRONTEND-CHANGELOG-payment-providers.md).
+
+#### Legacy bodies: `gateway` and no `provider`
+
+Builds released before 2026-09-30 send `gateway` and no `provider`. They keep working:
+
+- `gateway` is **accepted and ignored**. Any value is accepted, including an aggregator that is
+  switched off, and the active aggregator is used.
+- The missing `provider` is derived, in this order: `gateway: "STRIPE"` → `CARD` (refused with
+  `422 PAYMENT_PROVIDER_UNAVAILABLE` while cards are off, and **never** pushed to a phone); then
+  `channel.phoneOperator`; then the phone number's prefix. If none gives an answer, the call is
+  refused with `400 PAYMENT_PROVIDER_REQUIRED`.
+
+An explicit `provider` always wins. `gateway` will be removed from the request in a later
+release, so a current build must not send it.
+
+---
+
 ### POST /api/vendor/plans/:planId/purchase
 
-**Description**: Vendor **self-serve** purchase of a paid plan. Creates a `pending` purchase and starts a gateway payment, returning the gateway `instructions`. After the vendor pays, call the **verify** endpoint — on confirmation the plan is **assigned/activated automatically** (no admin step), applying the two-plan rule:
+**Description**: Vendor **self-serve** purchase of a paid plan. Creates a `pending` purchase and starts a payment on the provider the vendor chose, returning the payment `instructions`. After the vendor pays, call the **verify** endpoint — on confirmation the plan is **assigned/activated automatically** (no admin step), applying the two-plan rule:
 - if the current active plan is **free / never-expiring** (or none) → the bought plan **activates immediately** and its credit allowance is granted;
 - if a **paid** plan is still running → the bought plan is **queued** as `pending_activation`, starting exactly when the current one expires (allowance granted on activation).
 
@@ -174,17 +209,17 @@ Free plans (`price = 0`) cannot be purchased — they are the default tier.
 **Request Body**:
 ```json
 {
-  "gateway": "NOTCHPAY",
+  "provider": "MTN",
   "channel": {
     "phoneNumber": "+237650000000",
-    "phoneOperator": "MTN",
     "customerEmail": "vendor@example.com",
     "customerName": "Jane's Store"
   }
 }
 ```
-- `gateway` (string, **required**) — one of `NOTCHPAY`, `MYCOOLPAY`, `STRIPE`.
-- `channel` (object, optional, defaults `{}`) — same shape as the top-up channel: `phoneNumber` (**E.164**) + `phoneOperator` (`MTN`|`ORANGE`|`MOOV`) for mobile money; for **Stripe** send only optional `customerEmail`/`customerName` (do **not** send `cardToken` — cards are collected client-side with the returned `clientSecret`). See [stripe-payments.md](./stripe-payments.md) and [Contact formats](../README.md#contact-formats-phone--email).
+- `provider` (string, **required** of every current client) — `MTN` | `ORANGE` | `MOOV` | `CARD`: one of the providers [`GET /api/payments/options`](../payments/README.md#get-paymentsoptions--what-the-customer-can-pay-with) lists. Build the payment choices from that endpoint, never from a hard-coded list. (It is optional on the wire only so builds released before 2026-09-30 keep working; see [Legacy bodies](#legacy-bodies-gateway-and-no-provider).)
+- `channel` (object, optional, defaults `{}`) — the fields the provider's `/options` entry lists in `fields`: for mobile money `phoneNumber` (**E.164**), which must be on the chosen network; for `CARD` nothing is required. `customerEmail` / `customerName` are optional. Do **not** send `cardToken` (cards are collected client-side with the returned `clientSecret`) or `phoneOperator` (legacy; the provider is the operator). See [stripe-payments.md](./stripe-payments.md) and [Contact formats](../README.md#contact-formats-phone--email).
+- `gateway` — **deprecated, accepted and ignored.** The server picks the aggregator. Stop sending it.
 
 **Success Response** — `201 Created`:
 ```json
@@ -193,43 +228,53 @@ Free plans (`price = 0`) cannot be purchased — they are the default tier.
   "data": {
     "purchase": {
       "_id": "66cc01", "plan_code": "growth", "price": 5000, "currency": "XAF",
-      "status": "pending", "gateway": "NOTCHPAY", "gateway_ref": "notch_tx_p1",
+      "status": "pending", "provider": "MTN", "gateway": "NOTCHPAY", "gateway_ref": "notch_tx_p1",
       "subscriber_plan_id": null,
       "created_at": "2026-06-19T14:00:00.000Z", "updated_at": "2026-06-19T14:00:00.000Z"
     },
-    "instructions": { "ussdCode": "*126#", "message": "Dial to approve", "expiresAt": "2026-06-19T14:15:00.000Z" }
+    "instructions": { "ussdCode": "*126#", "message": "Dial to approve", "expiresAt": "2026-06-19T14:15:00.000Z" },
+    "provider": "MTN"
   },
   "message": "Plan purchase initiated"
 }
 ```
-`instructions` is gateway-specific and may be `null` (mobile money: `{ ussdCode?, requiresOtp?, message?, expiresAt? }`; **Stripe**: `{ clientSecret?, chargedAmount?, chargedCurrency?, message? }` — note Stripe charges in **USD** while `price`/`currency` stay XAF; see [stripe-payments.md](./stripe-payments.md)).
+`data.provider` is the provider this purchase is charged on, at the top of `data` as on every other charging door. The same value is stored on the row as `purchase.provider` (the field is called `provider`, like the rest of this row's snake_case fields; `null` on a purchase made before 2026-09-30). `purchase.gateway` is **informational only** (which aggregator carried the money): never branch on it.
 
-> **My-CoolPay Orange Money answers `requiresOtp: true` and no `ussdCode`.** The buyer receives an SMS code, and **nothing is charged until it is relayed back**. Send it to [`POST /plan-purchases/:id/authorize`](#post-apivendorplan-purchasesidauthorize) — or, for a top-up, [`POST /credits/topups/:id/authorize`](#post-apivendorcreditstopupsidauthorize).
+`instructions` depends on the provider's flow and may be `null`. Branch on **which fields are present**: mobile money `{ ussdCode?, requiresOtp?, message?, expiresAt? }`; a `CARD` charge `{ clientSecret?, chargedAmount?, chargedCurrency?, message? }` (a card is charged in **USD** while `price`/`currency` stay XAF; see [stripe-payments.md](./stripe-payments.md)).
+
+> **An OTP flow answers `requiresOtp: true` and no `ussdCode`** (today: Orange Money when My-CoolPay is the active aggregator; `/options` shows it as `flow: "OTP"`, but honour `requiresOtp` whatever `/options` said). The buyer receives an SMS code, and **nothing is charged until it is relayed back**. Send it to [`POST /plan-purchases/:id/authorize`](#post-apivendorplan-purchasesidauthorize) — or, for a top-up, [`POST /credits/topups/:id/authorize`](#post-apivendorcreditstopupsidauthorize).
 >
 > ⚠ **Corrected 2026-09-13.** This paragraph used to send you to `POST /payments/:transactionId/authorize`. That endpoint resolves its argument with `PaymentTransactionModel.findById`, and **a billing purchase deliberately creates no `PaymentTransaction`** — so the only id you hold is a purchase id and the call answered `404 PAYMENT_TRANSACTION_NOT_FOUND`. Every Orange Money plan purchase and top-up, for all three owner roles, was reachable and could not complete. The routes above are the fix: owner-scoped, beside the `/verify` you already poll.
 
 > **A mobile-money purchase now settles from the gateway callback**, not only from your `/verify` poll. It used to be poll-only: these rows create no `PaymentTransaction`, so a NotchPay or My-CoolPay callback found nothing and answered success, and a vendor who closed the tab after paying never got their plan. Keep polling while the customer is watching; you no longer have to. If the gateway confirms at initiation, the plan is applied immediately and `purchase.status` is `paid`.
 
 **Error Responses**:
-- `400 VALIDATION_ERROR` — bad `gateway`/`channel`.
+- `400 VALIDATION_ERROR` — bad `channel`, a `provider` that is not one of `MTN`/`ORANGE`/`MOOV`/`CARD`, or a field the provider requires missing (reported at `channel.<field>`, e.g. `channel.phoneNumber`).
+- `400 PAYMENT_PROVIDER_REQUIRED` — no `provider`, and none could be derived from a legacy body.
+- `422 PAYMENT_PROVIDER_UNAVAILABLE` — the provider is switched off or cannot be routed right now. `details.offered` is the fresh provider list: re-render the choices. Nothing was written.
+- `422 PAYMENT_PROVIDER_PHONE_MISMATCH` — the number belongs to another network (`details.detected`). Nothing was written.
 - `404 BILLING_PLAN_NOT_FOUND` — `planId` unknown.
 - `409 BILLING_PLAN_INACTIVE` — plan archived/inactive.
 - `409 BILLING_PLAN_ROLE_MISMATCH` — not a vendor plan.
 - `409 BILLING_PLAN_NOT_PURCHASABLE` — plan is free (price 0).
 - `409 BILLING_PENDING_PLAN_EXISTS` — a plan is already queued (can't buy a second in advance).
-- `400 PAYMENT_GATEWAY_NOT_SUPPORTED` / `502 PAYMENT_INITIATION_FAILED` — gateway issues.
+- `502 PAYMENT_INITIATION_FAILED` — the aggregator could not be reached.
 - `401`, `403`.
+
+> ⚠ **`400 PAYMENT_GATEWAY_NOT_SUPPORTED` is no longer raised here.** Whether a provider is on offer is now decided by routing, the same way as on every other charging door, and an unroutable choice is `422 PAYMENT_PROVIDER_UNAVAILABLE` before anything is written. (Billing used to skip the "is this aggregator offered" check altogether.)
 
 ---
 
 ### POST /api/vendor/plan-purchases/:id/authorize
 
-**Description**: Relay the one-time SMS code for a plan purchase, so the gateway will open the payment prompt.
+**Description**: Relay the one-time SMS code for a plan purchase, so the aggregator will open the payment prompt.
 
-**Only reached when the initiating call answered `instructions.requiresOtp: true`** — today that
-means **My-CoolPay + Orange Money**, the one gateway/operator pair with an OTP step. On that
-branch there is no `ussdCode` and **no money has moved**: My-CoolPay SMSes a code and does
-nothing at all until it comes back here.
+**Only reached when the initiating call answered `instructions.requiresOtp: true`** — an `OTP`
+flow. Today that means **Orange Money while My-CoolPay is the active aggregator**, the one
+aggregator/provider pair with an OTP step. On that branch there is no `ussdCode` and **no money
+has moved**: the aggregator SMSes a code and does nothing at all until it comes back here. The
+code goes to the aggregator stored on the row, so an administrator switching aggregators in
+between does not strand it.
 
 > **This is not `POST /payments/:transactionId/authorize`.** That endpoint is for order, cart and
 > booking payments, it is unauthenticated because a payment link is shareable, and it only knows
@@ -255,7 +300,7 @@ nothing at all until it comes back here.
   "data": {
     "purchase": {
       "_id": "66cc01", "plan_code": "growth", "price": 5000, "currency": "XAF",
-      "status": "pending", "gateway": "MYCOOLPAY", "gateway_ref": "mcp_tx_p1",
+      "status": "pending", "provider": "ORANGE", "gateway": "MYCOOLPAY", "gateway_ref": "mcp_tx_p1",
       "subscriber_plan_id": null,
       "created_at": "2026-06-19T14:00:00.000Z", "updated_at": "2026-06-19T14:01:00.000Z"
     },
@@ -265,7 +310,7 @@ nothing at all until it comes back here.
 }
 ```
 
-⚠ **`status` is still `pending`, and that is correct.** The code only authorises the charge — the buyer still confirms it on the handset, and the purchase is applied by the gateway callback or by your `/verify` poll, exactly as for a NotchPay purchase. **Do not** treat a 200 here as "paid": carry straight on to the polling loop below.
+⚠ **`status` is still `pending`, and that is correct.** The code only authorises the charge — the buyer still confirms it on the handset, and the purchase is applied by the aggregator's callback or by your `/verify` poll, exactly as for a push purchase. **Do not** treat a 200 here as "paid": carry straight on to the polling loop below.
 
 **Error Responses**:
 - `400 VALIDATION_ERROR` — `code` is not 4–8 digits.
@@ -273,7 +318,7 @@ nothing at all until it comes back here.
 - `409 BILLING_PURCHASE_INVALID_STATE` — already `paid`/`failed`/`reversed`, or no gateway reference yet. A settled row refuses a second code: accepting one would be a second charge.
 - `422 PAYMENT_OTP_INVALID` — wrong code. `details.attemptsRemaining` says how many are left.
 - `422 PAYMENT_OTP_ATTEMPTS_EXCEEDED` — too many wrong codes. **The row is now `failed`** — start a new purchase rather than retrying.
-- `422 PAYMENT_OTP_NOT_REQUIRED` — this gateway has no OTP step (NotchPay, Stripe).
+- `422 PAYMENT_OTP_NOT_REQUIRED` — the aggregator holding this row has no OTP step for it.
 - `401`, `403`.
 
 ---
@@ -296,7 +341,7 @@ nothing at all until it comes back here.
   "data": {
     "purchase": {
       "_id": "66cc01", "plan_code": "growth", "price": 5000, "currency": "XAF",
-      "status": "paid", "gateway": "NOTCHPAY", "gateway_ref": "notch_tx_p1",
+      "status": "paid", "provider": "MTN", "gateway": "NOTCHPAY", "gateway_ref": "notch_tx_p1",
       "subscriber_plan_id": "667a0005",
       "created_at": "2026-06-19T14:00:00.000Z", "updated_at": "2026-06-19T14:03:00.000Z"
     },
@@ -365,7 +410,7 @@ nothing at all until it comes back here.
 
 ### POST /api/vendor/credits/topups
 
-**Description**: Start a credit top-up purchase. Creates a `pending` top-up and initiates a payment with the chosen gateway. Returns the top-up and the gateway `instructions` (USSD prompt for mobile money, or a client secret for cards) the frontend should act on. After the user pays, call the **verify** endpoint to credit the wallet.
+**Description**: Start a credit top-up purchase. Creates a `pending` top-up and initiates a payment on the provider the vendor chose. Returns the top-up and the payment `instructions` (USSD prompt for mobile money, or a client secret for cards) the frontend should act on. After the user pays, call the **verify** endpoint to credit the wallet.
 
 **Request Headers**: `Authorization: Bearer <token>`, `Content-Type: application/json`
 
@@ -373,10 +418,9 @@ nothing at all until it comes back here.
 ```json
 {
   "packCode": "pack_100",
-  "gateway": "NOTCHPAY",
+  "provider": "MTN",
   "channel": {
     "phoneNumber": "+237650000000",
-    "phoneOperator": "MTN",
     "customerEmail": "vendor@example.com",
     "customerName": "Jane's Store"
   }
@@ -385,11 +429,12 @@ nothing at all until it comes back here.
 
 Field rules:
 - `packCode` (string, **required**) — must match a `code` from `GET /credits/packs`.
-- `gateway` (string, **required**) — one of `NOTCHPAY`, `MYCOOLPAY`, `STRIPE`.
-- `channel` (object, optional, defaults `{}`) — payment channel details:
-  - `phoneNumber` (string, **E.164** — leading `+` and country code) and `phoneOperator` (`MTN` | `ORANGE` | `MOOV`) — for mobile money (NotchPay/MyCoolPay).
-  - For **Stripe**, do **not** send `cardToken` — the card is collected client-side via the returned `clientSecret`. See [stripe-payments.md](./stripe-payments.md).
-  - `customerEmail` (string, valid email), `customerName` (string) — optional, passed to the gateway.
+- `provider` (string, **required** of every current client) — `MTN` | `ORANGE` | `MOOV` | `CARD`: one of the providers [`GET /api/payments/options`](../payments/README.md#get-paymentsoptions--what-the-customer-can-pay-with) lists. See [Legacy bodies](#legacy-bodies-gateway-and-no-provider) for old builds.
+- `channel` (object, optional, defaults `{}`) — the fields the provider's `/options` entry lists in `fields`:
+  - `phoneNumber` (string, **E.164** — leading `+` and country code) — for a mobile-money provider. It must be on the chosen network, or `422 PAYMENT_PROVIDER_PHONE_MISMATCH`. `phoneOperator` is legacy: do not send it.
+  - For `CARD`, do **not** send `cardToken` — the card is collected client-side via the returned `clientSecret`. See [stripe-payments.md](./stripe-payments.md).
+  - `customerEmail` (string, valid email), `customerName` (string) — optional, passed to the aggregator.
+- `gateway` — **deprecated, accepted and ignored.** Stop sending it.
   - Still optional; the format rule applies only when the field is sent. See [Contact formats](../README.md#contact-formats-phone--email).
 
 **Success Response** — `201 Created`:
@@ -399,7 +444,7 @@ Field rules:
   "data": {
     "topup": {
       "_id": "66bb02", "pack_code": "pack_100", "credits": 100, "price": 600,
-      "currency": "XAF", "status": "pending", "gateway": "NOTCHPAY",
+      "currency": "XAF", "status": "pending", "provider": "MTN", "gateway": "NOTCHPAY",
       "gateway_ref": "notch_tx_def456", "payment_transaction_id": null,
       "created_at": "2026-06-19T12:00:00.000Z", "updated_at": "2026-06-19T12:00:00.000Z"
     },
@@ -407,22 +452,27 @@ Field rules:
       "ussdCode": "*126#",
       "message": "Dial the USSD code to approve the payment",
       "expiresAt": "2026-06-19T12:15:00.000Z"
-    }
+    },
+    "provider": "MTN"
   },
   "message": "Top-up initiated"
 }
 ```
-`instructions` shape varies by gateway and may be `null`:
-- Mobile money: `{ ussdCode?, message?, expiresAt? }`
-- Card (Stripe): `{ clientSecret?, chargedAmount?, chargedCurrency?, message? }` — Stripe charges the converted **USD** amount (`chargedAmount`/`chargedCurrency`) while `price`/`currency` stay XAF. See [stripe-payments.md](./stripe-payments.md).
+`data.provider` / `topup.provider` / `topup.gateway`: as on a plan purchase — `provider` at the top of `data` and on the row (nullable on older rows), and `gateway` informational only.
 
-> If the gateway reports the payment already succeeded at initiation (rare for mobile money), the wallet is credited immediately and the returned `topup.status` is `paid`.
+`instructions` depends on the provider's flow and may be `null`. Branch on which fields are present:
+- Mobile money: `{ ussdCode?, requiresOtp?, message?, expiresAt? }` — `requiresOtp: true` goes to [`/credits/topups/:id/authorize`](#post-apivendorcreditstopupsidauthorize)
+- `CARD`: `{ clientSecret?, chargedAmount?, chargedCurrency?, message? }` — a card is charged the converted **USD** amount (`chargedAmount`/`chargedCurrency`) while `price`/`currency` stay XAF. See [stripe-payments.md](./stripe-payments.md).
+
+> If the aggregator reports the payment already succeeded at initiation (rare for mobile money), the wallet is credited immediately and the returned `topup.status` is `paid`.
 
 **Error Responses**:
-- `400 VALIDATION_ERROR` — missing/invalid `packCode`, `gateway`, or `channel`.
+- `400 VALIDATION_ERROR` — missing/invalid `packCode` or `channel`, a `provider` that is not one of `MTN`/`ORANGE`/`MOOV`/`CARD`, or a field the provider requires missing (reported at `channel.<field>`, e.g. `channel.phoneNumber`).
+- `400 PAYMENT_PROVIDER_REQUIRED` — no `provider`, and none could be derived from a legacy body.
+- `422 PAYMENT_PROVIDER_UNAVAILABLE` — the provider is switched off or cannot be routed right now (`details.offered` is the fresh list). Nothing was written.
+- `422 PAYMENT_PROVIDER_PHONE_MISMATCH` — the number belongs to another network (`details.detected`). Nothing was written.
 - `404 BILLING_TOPUP_PACK_NOT_FOUND` — unknown `packCode`.
-- `400 PAYMENT_GATEWAY_NOT_SUPPORTED` — unsupported `gateway`.
-- `502 PAYMENT_INITIATION_FAILED` — gateway rejected the initiation.
+- `502 PAYMENT_INITIATION_FAILED` — the aggregator could not be reached.
 - `401`, `403`.
 
 ---
@@ -431,10 +481,12 @@ Field rules:
 
 **Description**: Relay the one-time SMS code for a credit top-up. Identical in every respect to the plan-purchase authorize above, on the top-up row.
 
-**Only reached when the initiating call answered `instructions.requiresOtp: true`** — today that
-means **My-CoolPay + Orange Money**, the one gateway/operator pair with an OTP step. On that
-branch there is no `ussdCode` and **no money has moved**: My-CoolPay SMSes a code and does
-nothing at all until it comes back here.
+**Only reached when the initiating call answered `instructions.requiresOtp: true`** — an `OTP`
+flow. Today that means **Orange Money while My-CoolPay is the active aggregator**, the one
+aggregator/provider pair with an OTP step. On that branch there is no `ussdCode` and **no money
+has moved**: the aggregator SMSes a code and does nothing at all until it comes back here. The
+code goes to the aggregator stored on the row, so an administrator switching aggregators in
+between does not strand it.
 
 > **This is not `POST /payments/:transactionId/authorize`.** That endpoint is for order, cart and
 > booking payments, it is unauthenticated because a payment link is shareable, and it only knows
@@ -459,7 +511,7 @@ nothing at all until it comes back here.
   "data": {
     "topup": {
       "_id": "66bb02", "pack_code": "pack_100", "credits": 100, "price": 600,
-      "currency": "XAF", "status": "pending", "gateway": "MYCOOLPAY",
+      "currency": "XAF", "status": "pending", "provider": "ORANGE", "gateway": "MYCOOLPAY",
       "gateway_ref": "mcp_tx_def456",
       "created_at": "2026-06-19T12:00:00.000Z", "updated_at": "2026-06-19T12:01:00.000Z"
     },
@@ -477,7 +529,7 @@ nothing at all until it comes back here.
 - `409 BILLING_TOPUP_INVALID_STATE` — already `paid`/`failed`/`reversed`, or no gateway reference yet. A settled row refuses a second code: accepting one would be a second charge.
 - `422 PAYMENT_OTP_INVALID` — wrong code. `details.attemptsRemaining` says how many are left.
 - `422 PAYMENT_OTP_ATTEMPTS_EXCEEDED` — too many wrong codes. **The row is now `failed`** — start a new purchase rather than retrying.
-- `422 PAYMENT_OTP_NOT_REQUIRED` — this gateway has no OTP step (NotchPay, Stripe).
+- `422 PAYMENT_OTP_NOT_REQUIRED` — the aggregator holding this row has no OTP step for it.
 - `401`, `403`.
 
 ---
@@ -499,7 +551,7 @@ nothing at all until it comes back here.
   "success": true,
   "data": {
     "_id": "66bb02", "pack_code": "pack_100", "credits": 100, "price": 600,
-    "currency": "XAF", "status": "paid", "gateway": "NOTCHPAY",
+    "currency": "XAF", "status": "paid", "provider": "MTN", "gateway": "NOTCHPAY",
     "gateway_ref": "notch_tx_def456",
     "created_at": "2026-06-19T12:00:00.000Z", "updated_at": "2026-06-19T12:03:00.000Z"
   }

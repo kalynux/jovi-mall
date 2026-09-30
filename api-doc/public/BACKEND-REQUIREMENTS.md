@@ -104,7 +104,7 @@ Sources used:
 | Vendor required onboarding = country + payout details only | `api-doc/vendor/onboarding.md` |
 | Agency required onboarding = coverage + HQ address + payout + policies | `api-doc/agency/onboarding.md` |
 | Agents sign up independently, may hold several agency contracts | `api-doc/agent/agency-membership.md` |
-| Payment methods: NotchPay / MyCoolPay (MTN, Orange, Moov), Stripe, COD | `api-doc/payments/README.md`, `modules/payments/gateways/` |
+| Payment methods: providers MTN / Orange (Moov and card exist, switched off) chosen from `GET /api/payments/options`; the aggregator (NotchPay / MyCoolPay / Stripe) is chosen by the server, never the client; COD | `api-doc/payments/README.md`, `modules/payments/gateways/` |
 | Cameroon only; ten regions; region-keyed coverage | `src/core/constants/locations.json`, `locations.helper.ts` |
 
 If any of those change, the corresponding copy in `messages/*.json` under

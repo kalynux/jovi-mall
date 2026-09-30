@@ -38,7 +38,7 @@ Everything after the purchase lives under `/api/customer/bookings` (beside `/api
 | `POST` | `/api/customer/bookings/:id/cancel` | Cancel. Body: `{ reason? }`. Subject to the vendor's cancellation policy. |
 | `PATCH` | `/api/customer/bookings/:id/reschedule` | Move to another slot. Body: `{ newSlotId }`. **Lock the new slot first** (step 2 above). `pending`/`confirmed` only. Works for capacity services — see below. |
 | `GET` | `/api/customer/bookings/:id/balance` | What is still owed after completion (and what was overpaid). |
-| `POST` | `/api/customer/bookings/:id/pay-balance` | Pay that balance. Body: `{ gateway, channel }` — same shape as step 4. |
+| `POST` | `/api/customer/bookings/:id/pay-balance` | Pay that balance. Body: `{ provider, channel }` — same shape as step 4. |
 
 ---
 
@@ -71,7 +71,7 @@ A service can run longer, or cost more, than the slot you booked. When the provi
 
 You will get a `booking.balance.due` notification explaining why more is owed. Then either:
 
-- **Pay online** — `POST /api/customer/bookings/:id/pay-balance` with the same `{ gateway, channel }` body as the original payment. This creates a **second** payment against the booking.
+- **Pay online** — `POST /api/customer/bookings/:id/pay-balance` with the same `{ provider, channel }` body as the original payment. Re-read `GET /api/payments/options` first: the providers on offer may have changed since the booking was paid. This creates a **second** payment against the booking.
 - **Pay the provider directly** — they record it with `POST /api/vendor/bookings/:id/settle-balance` and the balance closes.
 
 Check what is outstanding at any time:
@@ -377,7 +377,7 @@ In all cases `paymentStatus` starts as `unpaid`.
 POST /api/bookings/:id/pay
 ```
 
-Initiate online payment for a booking the customer owns. Delegates to the payment orchestrator for the selected gateway.
+Initiate online payment for a booking the customer owns. The customer picks a **provider** from `GET /api/payments/options`; the server picks the aggregator. Same rules as the order checkout: [../payments/README.md](../payments/README.md#get-paymentsoptions--what-the-customer-can-pay-with).
 
 **Authorization:** customer role; must own the booking.
 
@@ -391,10 +391,9 @@ Initiate online payment for a booking the customer owns. Delegates to the paymen
 
 ```json
 {
-  "gateway": "NOTCHPAY",
+  "provider": "ORANGE",
   "channel": {
-    "phoneNumber": "+237650000000",
-    "phoneOperator": "MTN",
+    "phoneNumber": "+237690000000",
     "customerEmail": "customer@example.com",
     "customerName": "Jane Doe"
   }
@@ -403,23 +402,37 @@ Initiate online payment for a booking the customer owns. Delegates to the paymen
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `gateway` | string | **Yes** | One of `NOTCHPAY`, `MYCOOLPAY`, `STRIPE` |
-| `channel` | object | **Yes** | Gateway-specific payer details. For mobile-money gateways supply `phoneNumber` (**E.164**, e.g. `+237650000000`) / `phoneOperator`; fields vary per gateway. An optional `customerEmail` must be a valid address. See [Contact formats](../README.md#contact-formats-phone--email). |
+| `provider` | string | **Yes** (see note) | `MTN` \| `ORANGE` \| `MOOV` \| `CARD`: one of the providers `GET /api/payments/options` lists |
+| `channel` | object | No (defaults `{}`) | The fields the provider's `/options` entry lists in `fields`. For mobile money that is `phoneNumber` (**E.164**, e.g. `+237690000000`), and it must be on the chosen network. An optional `customerEmail` must be a valid address. See [Contact formats](../README.md#contact-formats-phone--email). `phoneOperator` is legacy: do not send it |
+| `gateway` | string | No | **Deprecated. Accepted and ignored**; the server picks the aggregator. Stop sending it |
+
+`provider` is optional on the wire only so that builds released before 2026-09-30 keep working; the server then derives it (see [the derivation order](../payments/README.md#request-body)). A current client always sends it.
 
 **Response:** `200 OK`
 
 ```json
 {
   "success": true,
-  "data": { "...": "gateway-specific payment initiation result (transaction reference, status, redirect/USSD info)" }
+  "data": {
+    "transactionId": "664txn...",
+    "status": "PENDING",
+    "provider": "ORANGE",
+    "instructions": { "ussdCode": "#150*50#", "message": "Confirm the prompt on your phone" },
+    "message": "Payment initiated"
+  }
 }
 ```
 
-The exact `data` shape depends on the gateway. Poll **Get Payment Status** (or rely on payment webhooks) to learn when the booking becomes `paid`.
+`data` is the same result `POST /api/payments/initiate` returns flat, here under `data`. `provider` is the resolved provider on a new attempt, or the stored one (possibly `null`) when a live attempt was reused. There is no `gateway`.
+
+Branch on `data.instructions`, never on the aggregator: `requiresOtp: true` means collect the SMS code and send it to `POST /api/payments/:transactionId/authorize`; `clientSecret` means a card confirmed with Stripe.js; otherwise the customer approves the prompt on the handset. See [the instructions object](../payments/README.md#the-instructions-object--branch-on-it-do-not-assume). Poll **Get Payment Status** (or rely on payment webhooks) to learn when the booking becomes `paid`.
 
 **Error Responses:**
 
-- `400 VALIDATION_ERROR`: `gateway` or `channel` missing, or `gateway` not one of the supported values
+- `400 VALIDATION_ERROR`: `channel` missing, or a field the provider requires (e.g. `channel.phoneNumber`) missing
+- `400 PAYMENT_PROVIDER_REQUIRED`: no `provider`, and none could be derived from an old-style body
+- `422 PAYMENT_PROVIDER_UNAVAILABLE`: the provider is switched off or cannot be routed right now. `details.offered` is the fresh list
+- `422 PAYMENT_PROVIDER_PHONE_MISMATCH`: the number belongs to another network. `details.detected` names it; nothing was charged
 - `404 BOOKING_NOT_FOUND`: Booking does not exist
 - `403 BOOKING_UNAUTHORIZED`: You can only pay for your own bookings
 
@@ -448,6 +461,7 @@ Read the current payment state of a booking. Accessible by the customer who owns
     "transaction": {
       "id": "507f1f77bcf86cd799439099",
       "status": "succeeded",
+      "provider": "MTN",
       "gateway": "NOTCHPAY",
       "gatewayRef": "notch_abc123"
     }
@@ -455,7 +469,7 @@ Read the current payment state of a booking. Accessible by the customer who owns
 }
 ```
 
-`transaction` is `null` if no payment has been initiated yet.
+`transaction` is `null` if no payment has been initiated yet. `transaction.provider` is what the customer paid with, or `null` on a payment opened before 2026-09-30. `transaction.gateway` is **informational only** (which aggregator carried the money): never branch on it, and accept values you do not know.
 
 > **Use this, not `GET /api/payments/:transactionId`, for bookings.** This endpoint is already scoped
 > to both parties — the customer who booked *and* the vendor who owns it — and returns the booking's

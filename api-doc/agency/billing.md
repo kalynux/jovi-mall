@@ -26,7 +26,7 @@ Every endpoint is automatically scoped to the authenticated agency (`role_entity
 ## What the dashboard must implement
 
 1. **Plan page** — show the current plan (`GET /agency/plan`), the unterminated-shipment usage meter, and the list of buyable plans (`GET /agency/plans`).
-2. **Buy / upgrade flow** — `POST /agency/plans/:planId/purchase` → gateway → `POST /agency/plan-purchases/:id/verify` (poll). Identical to vendor.
+2. **Buy / upgrade flow** — `GET /api/payments/options` → `POST /agency/plans/:planId/purchase` with `{ provider, channel }` → `POST /agency/plan-purchases/:id/verify` (poll). Identical to vendor.
 3. **Credit wallet** — balance (`GET /agency/credits`), packs (`GET /agency/credits/packs`), top-up (`POST /agency/credits/topups` → verify).
 4. **Billing settings** — plan-expiry notice window (`GET`/`PATCH /agency/settings`).
 5. **Transactions history** — `GET /agency/transactions` (see [Transactions](#transactions)).
@@ -156,7 +156,7 @@ Contrast with the agent cap, which **is** hard (an agent cannot accept an offer 
 
 ### POST /api/agency/plans/:planId/purchase · POST /api/agency/plan-purchases/:id/verify
 
-Self-serve plan purchase and verification. **Flow, request body, gateway `instructions`, Stripe/mobile-money handling, polling, and the two-plan rule (activate-now vs queue-as-pending) are identical to the vendor flow** — see [vendor/billing.md → purchase](../vendor/billing.md#post-apivendorplansplanidpurchase) and [→ verify](../vendor/billing.md#post-apivendorplan-purchasesidverify). Differences for agency:
+Self-serve plan purchase and verification. **Flow, request body (`{ provider, channel }`, never `gateway`), payment `instructions`, card/mobile-money handling, polling, and the two-plan rule (activate-now vs queue-as-pending) are identical to the vendor flow** — see [vendor/billing.md → purchase](../vendor/billing.md#post-apivendorplansplanidpurchase) and [→ verify](../vendor/billing.md#post-apivendorplan-purchasesidverify). Differences for agency:
 
 - Paths are `/api/agency/plans/:planId/purchase` and `/api/agency/plan-purchases/:id/verify`.
 - The verify response's applied-plan key is **`subscriberPlan`** (not `vendorPlan`), and the purchase row carries `owner_type: "agency"`, `owner_id`, and `subscriber_plan_id` (not `vendor_id`/`vendor_plan_id`).
@@ -220,6 +220,6 @@ No agency action/endpoint — these are webhook-driven. Just handle `reversed` i
 ## Reference
 
 - Plan `role` = `"agency"`; free-tier code = `agency_free`.
-- Shared concepts (statuses, two-plan rule, gateways, Stripe): [vendor/billing.md](../vendor/billing.md) and [stripe-payments.md](../vendor/stripe-payments.md).
+- Shared concepts (statuses, two-plan rule, providers and `/payments/options`, cards): [vendor/billing.md](../vendor/billing.md) and [stripe-payments.md](../vendor/stripe-payments.md).
 - Cross-role model: [billing-plans-across-roles.md](../billing-plans-across-roles.md).
 - Error envelope: `{ "success": false, "error": { "code": "...", "message": "..." } }`.

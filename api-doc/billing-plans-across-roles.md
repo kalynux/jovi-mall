@@ -18,8 +18,9 @@ which doc each dashboard team should build from.
 
 Every role has **3 pricing-plan tiers** (a free one + two paid). A subscriber holds
 at most **one active plan + one queued (`pending_activation`)** plan at a time.
-Buying a paid plan charges a payment gateway directly (NotchPay / MyCoolPay /
-Stripe) and, on confirmation, activates or queues the plan automatically — **no
+Buying a paid plan charges the payer's chosen **provider** (`MTN` / `ORANGE`, `CARD` when
+switched on — listed by `GET /api/payments/options`) through whichever aggregator the server has
+active, and, on confirmation, activates or queues the plan automatically — **no
 recurring charge**; a paid term simply **expires** after `term_days` and either
 hands over to the queued plan or **downgrades to the role's free tier** (a daily
 server job). Activating a plan grants its `credit_allowance` once into the role's
@@ -128,10 +129,12 @@ Swap `{role}` for `vendor`, `agency`, or `agent`:
 | GET / PATCH | `/api/{role}/settings` | Plan-expiry notice window (`notifyDaysBeforeExpiry`, 0–90) |
 | GET | `/api/{role}/transactions` | Unified plan + credit + earnings history |
 
-**Payment / verify / polling** mechanics (gateway `instructions`, Stripe client-secret
-flow, the two-plan activate-now-vs-queue rule, idempotent verify, ~3–5s polling) are
-documented once in [vendor/billing.md](./vendor/billing.md) and apply unchanged to
-every role. Stripe specifics: [vendor/stripe-payments.md](./vendor/stripe-payments.md).
+**Payment / verify / polling** mechanics (`/payments/options`, the `{ provider, channel }` body,
+payment `instructions`, the OTP and card flows, the two-plan activate-now-vs-queue rule,
+idempotent verify, ~3–5s polling) are documented once in [vendor/billing.md](./vendor/billing.md)
+and apply unchanged to every role. Card specifics: [vendor/stripe-payments.md](./vendor/stripe-payments.md).
+Since 2026-09-30 a client sends `provider`, never `gateway`:
+[FRONTEND-CHANGELOG-payment-providers.md](./FRONTEND-CHANGELOG-payment-providers.md).
 
 ### Response field names (changed)
 

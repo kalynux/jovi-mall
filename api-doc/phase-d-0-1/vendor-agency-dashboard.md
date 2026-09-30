@@ -1,5 +1,12 @@
 # Phase D · 0 · 1 — vendor and agency dashboards
 
+> ⚠ **Payment requests superseded on 2026-09-30.** Where this historical page shows a payment
+> body with `gateway` (`NOTCHPAY` / `MYCOOLPAY` / `STRIPE`), a current client sends **`provider`**
+> (`MTN` / `ORANGE` / `CARD`) chosen from `GET /api/payments/options` instead; `gateway` is accepted
+> and ignored. The page is kept as the record of what changed then. Current contract:
+> [../payments/README.md](../payments/README.md) · what to change:
+> [../FRONTEND-CHANGELOG-payment-providers.md](../FRONTEND-CHANGELOG-payment-providers.md).
+
 **Verified against source on 2026-09-08** — R7 read the whole page. The eighteen billing routes
 (`modules/billing/routes/vendor-billing.routes.ts:16-32`), the plan codes
 (`billing.types.ts:30-34`, `scripts/seed/seed-pricing-plans.ts:45-52`), `plan_code`'s provenance

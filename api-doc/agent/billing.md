@@ -31,7 +31,7 @@ Every endpoint is automatically scoped to the authenticated agent (`role_entity.
 ## What the dashboard must implement
 
 1. **Plan page** — current plan (`GET /agent/plan`) + the buyable plans (`GET /agent/plans`), highlighting the **concurrent-delivery limit** each tier grants.
-2. **Buy / upgrade flow** — `POST /agent/plans/:planId/purchase` → gateway → `POST /agent/plan-purchases/:id/verify` (poll). Identical to vendor.
+2. **Buy / upgrade flow** — `GET /api/payments/options` → `POST /agent/plans/:planId/purchase` with `{ provider, channel }` → `POST /agent/plan-purchases/:id/verify` (poll). Identical to vendor.
 3. **Credit wallet** — balance, packs, top-up + verify.
 4. **Billing settings** — plan-expiry notice window (`GET`/`PATCH /agent/settings`).
 5. **Transactions history** — `GET /agent/transactions`.
@@ -176,7 +176,7 @@ Dashboard: show `heldDeliveries / maxUnterminatedShipments` and, when full, an "
 
 ### POST /api/agent/plans/:planId/purchase · POST /api/agent/plan-purchases/:id/authorize · POST /api/agent/plan-purchases/:id/verify
 
-Self-serve purchase + verification. **Flow, request body, gateway `instructions`, Stripe/mobile-money handling, polling and the two-plan rule are identical to vendor** — see [vendor/billing.md → purchase](../vendor/billing.md#post-apivendorplansplanidpurchase) / [→ verify](../vendor/billing.md#post-apivendorplan-purchasesidverify). Differences:
+Self-serve purchase + verification. **Flow, request body (`{ provider, channel }`, never `gateway`), payment `instructions`, card/mobile-money handling, polling and the two-plan rule are identical to vendor** — see [vendor/billing.md → purchase](../vendor/billing.md#post-apivendorplansplanidpurchase) / [→ verify](../vendor/billing.md#post-apivendorplan-purchasesidverify). Differences:
 
 - Paths are `/api/agent/...`.
 - The verify response's applied-plan key is **`subscriberPlan`**; rows carry `owner_type: "agent"`, `owner_id`, `subscriber_plan_id`.

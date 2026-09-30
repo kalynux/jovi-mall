@@ -1,4 +1,24 @@
-# Payments — gateway checkout (role-neutral)
+# Payments — checkout (role-neutral)
+
+> ### ⚠ Changed 2026-09-30: the client chooses a **provider**, never an aggregator
+>
+> A client now sends **`provider`** (`MTN` · `ORANGE` · `CARD`), read from
+> [`GET /payments/options`](#get-paymentsoptions--what-the-customer-can-pay-with). It no longer sends `gateway`. The backend picks the
+> company that moves the money (the **aggregator**: NotchPay, My-CoolPay, Stripe…) at runtime,
+> and an administrator can switch it with no app release. `gateway` is still **accepted and
+> ignored**, so old builds keep working. The full contract is [routing.md](./routing.md). What
+> each frontend has to change is in
+> [../FRONTEND-CHANGELOG-payment-providers.md](../FRONTEND-CHANGELOG-payment-providers.md).
+
+**Provider routing verified against source on 2026-09-30, at jovi-mall `39254e2` (after C1)** —
+`/options` and its CARD-key drop (`payments/services/payment-options.service.ts`), the request
+schemas (`payments/validators/payment.validators.ts`), the derivation order (`deriveProvider` in
+`payments/domain/payment-routing.ts`), the three refusals and their messages
+(`payments/services/payment-routing.service.ts`), `provider` on the initiate result, the
+transaction, the booking payment-status and the pay-link session, the stored-gateway check on the
+pay-link mint (`pay-link.service.ts`), and `PAYMENT_OPERATOR_UNDETERMINED` surviving only on the
+server-picked doors. The line below is the earlier pass; its route and auth claims still hold, and
+the census is now **seven** routes with `GET /payments/options`.
 
 **Verified against source on 2026-09-08** — the six-route census and their auth, the `initiate` /
 `verify` / `authorize` request shapes, the pay-link mint and session projection, the OTP attempt
@@ -13,75 +33,133 @@ payment, a whole multi-vendor cart in one charge, or a service booking.
 
 - **Base URL**: `http://localhost:8022/api`
 - **Response envelope**: standard `{ success, ... }` — see [../README.md](../README.md#the-response-envelope-read-this-first).
-- **Gateways**: `NOTCHPAY` and `MYCOOLPAY` (mobile money), `STRIPE` (cards) — but **only the ones
-  this deployment OFFERS may start a payment** — see [Which gateways are offered](#which-gateways-are-offered--cards-are-off-today-2026-09-22).
+- **Providers** (what the customer pays with): `MTN` and `ORANGE` today; `CARD` and `MOOV` exist
+  and are **off**. Only what [`GET /payments/options`](#get-paymentsoptions--what-the-customer-can-pay-with) lists can start a payment.
+- **Aggregators** (who the backend calls): `NOTCHPAY`, `MYCOOLPAY`, `STRIPE`. Chosen by the
+  server. A client never picks one, and must never branch on one.
 
-> ### All three gateways are implemented
+> ### Two behaviours change with the active aggregator, and a client handles both without knowing which is active
 >
-> NotchPay and My-CoolPay were placeholders until Phase 1 — they made no HTTP call at all, and
-> unkeyed they fabricated a `PENDING` response with a hard-coded USSD code so a checkout *looked*
-> like it had started while no money moved. Both are now real, both verify their webhook
-> signatures, and `GET /api/internal/admin/system/integrations` reports each honestly.
->
-> Two behaviours differ per gateway and a client has to handle both:
->
-> - **My-CoolPay Orange Money asks for a one-time code.** `initiate` answers `PENDING` with
->   `instructions.requiresOtp: true` and **no USSD code** — nothing happens until the customer's
->   SMS code is relayed to [`POST /payments/:transactionId/authorize`](#post-paymentstransactionidauthorize).
->   Rendering "dial the USSD code" here shows a prompt that will never arrive.
-> - **My-CoolPay cannot refund.** Its API has no refund endpoint, so a refund on a My-CoolPay
->   payment answers `REFUND_GATEWAY_NOT_SUPPORTED` and is settled by hand — see
->   [Refunds](#refunds-differ-by-gateway).
+> - **An OTP step can appear.** Today that means Orange Money when My-CoolPay is active.
+>   `initiate` then answers `PENDING` with `instructions.requiresOtp: true` and **no USSD code**.
+>   Nothing happens until the customer's SMS code is relayed to
+>   [`POST /payments/:transactionId/authorize`](#post-paymentstransactionidauthorize). Rendering
+>   "dial the USSD code" here shows a prompt that will never arrive. `/options` warns ahead of
+>   time (`flow: "OTP"`, `mayRequireOtp: true`), but **the `initiate` response is the truth**:
+>   always honour `instructions.requiresOtp`, whatever `/options` said. An administrator may have
+>   switched aggregators between the two calls.
+> - **Refunds depend on the aggregator that took the money** (see
+>   [Refunds](#refunds-differ-by-gateway)). That is a server-side and admin concern; a customer
+>   client does nothing different.
 
 > **⚠️ Breaking change (2026-07-29): `GET /api/payments/:transactionId` now requires
 > authentication and returns only the caller's own transaction.** It previously accepted no
 > credentials at all, so any transaction was readable by id. A client polling it must now send the
 > session cookie or a Bearer token. See [Reading a transaction](#get-paymentstransactionid).
 
-## Which gateways are offered — cards are OFF today (2026-09-22)
+## `GET /payments/options` — what the customer can pay with
 
-**Verified against source on 2026-09-22** (`gateways/registry.ts` `assertGatewayOffered`,
-`config/payments.config.ts`, `services/payment-orchestrator.service.ts`, `services/pay-link.service.ts`).
-
-A gateway may open a **new** charge only when it is configured:
-
-| Gateway | Offered when | Production today |
-|---|---|---|
-| `NOTCHPAY` | `NOTCHPAY_PUBLIC_KEY` **and** `NOTCHPAY_WEBHOOK_SECRET` are set | ✅ offered |
-| `MYCOOLPAY` | `MYCOOLPAY_PUBLIC_KEY` **and** `MYCOOLPAY_PRIVATE_KEY` are set | ✅ offered |
-| `STRIPE` | `STRIPE_SECRET_KEY` **and** `STRIPE_WEBHOOK_SECRET` are set | ⛔ **not offered** — the owner's rule: mobile money only |
-
-Naming a gateway that is not offered — on `POST /payments/initiate`, on the booking pay routes,
-or when minting a pay link — answers **`400 PAYMENT_GATEWAY_NOT_SUPPORTED`** *before anything is
-written*:
+**Auth**: none. **`Cache-Control: no-store`**: do not cache the answer beyond the screen that
+shows it. Call it when the payment screen opens; the server recomputes it at most every
+5 seconds. Standard `{ success, data }` envelope (unlike `initiate` / `verify` / `authorize`,
+which are flat). Contract: [routing.md § GET /api/payments/options](./routing.md#get-apipaymentsoptions).
 
 ```jsonc
-{ "success": false, "requestId": "req_…", "error": { "code": "PAYMENT_GATEWAY_NOT_SUPPORTED", "statusCode": 400,
-  "category": "validation",
-  "message": "Card payments are not available right now. Please pay with mobile money.",
-  "details": { "gateway": "STRIPE", "offered": ["NOTCHPAY", "MYCOOLPAY"] } } }
+// 200 — today's production answer
+{
+  "success": true,
+  "data": {
+    "providers": [
+      { "provider": "MTN",    "kind": "MOBILE_MONEY", "flow": "PUSH", "fields": ["phoneNumber"], "mayRequireOtp": false },
+      { "provider": "ORANGE", "kind": "MOBILE_MONEY", "flow": "PUSH", "fields": ["phoneNumber"], "mayRequireOtp": false }
+    ]
+  }
+}
 ```
 
-Pick from `details.offered`; do not retry the same gateway.
+| Field | What the client does with it |
+|---|---|
+| `provider` | Render one choice per entry, in the order given. Send it back unchanged as `provider` |
+| `kind` | `MOBILE_MONEY` (ask for a number) or `CARD` |
+| `flow` | Which screen to **prepare**: `PUSH` (approve on the handset), `OTP` (an SMS code may be asked for), `CARD_ELEMENT` (Stripe Payment Element), `REDIRECT` (open a page; reserved, not used today) |
+| `fields` | The `channel` fields the charge requires, e.g. `["phoneNumber"]`. `[]` for a card |
+| `mayRequireOtp` | `true` exactly when `flow` is `OTP` |
+| `publishableKey` | Only on a `CARD` entry with `flow: "CARD_ELEMENT"`: the Stripe publishable key to load Stripe.js with. Use it **instead of** a key baked into the build (`VITE_STRIPE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`) |
 
-⚠ **What this replaced.** Until 2026-09-22 Stripe was accepted whatever the configuration: the
-request opened a transaction row, only then discovered "Stripe is not configured", and saved the
-row `FAILED` — so the pay-link mint a client made next answered `PAYMENT_LINK_NOT_PAYABLE` for a
-payment nobody had been able to make. That is how a customer met a Stripe error on ORD-2026-000002.
+Rules a client must follow:
 
-⚠ **Switching cards back on is configuration, not code**: set both Stripe secrets and every door
-offers cards again at once. A client should not hard-code a card option — a storefront build that
-shows "Card" while the server refuses it offers the customer a button that can only fail.
+- **Show only what is listed.** Do not hard-code "MTN / Orange / Card". A build that shows a
+  choice the server refuses offers a button that can only fail.
+- **An empty `providers` array is a valid answer.** An administrator can switch all online
+  payment off. Render *"Online payment is unavailable right now"*, and offer cash on delivery
+  where that checkout allows it. It is not an error, so do not show a retry spinner.
+- **`flow` is a hint, never a promise.** Always branch on the `initiate` response's
+  `instructions` (`requiresOtp`, `redirectUrl`, `clientSecret`), whatever `/options` said.
+- **The body never names an aggregator** and holds nothing secret. There is nothing in it to
+  branch on except the fields above.
+- **Every listed provider is payable.** If CARD routes through Stripe but no valid publishable
+  key is configured, CARD is not listed, so a `CARD` entry always carries a usable
+  `publishableKey`.
 
-Payments **already taken** through a gateway that is later switched off still verify, settle by
-webhook, reconcile and refund; only a *new* charge is refused.
+Cards are **off** today (owner decision: mobile money only), so no `CARD` entry appears. When an
+administrator turns them on, the entry appears here with no client release.
+
+### What a charge can be refused for, before anything is written
+
+Every charging door (`initiate`, the booking pay routes, plan purchase, credit top-up) runs these
+checks **first**. Nothing is charged, no row is written, and the customer can correct the choice
+and press Pay again.
+
+| `error.code` | Status | `details` | What happened, and what to show |
+|---|---|---|---|
+| `PAYMENT_PROVIDER_UNAVAILABLE` | 422 | `{ provider, offered }` | The chosen provider is switched off, or nothing can route it right now. `offered` is the **fresh** provider list: re-render the choices from it (or re-fetch `/options`). Do not retry the same provider. An empty `offered` means online payment is unavailable |
+| `PAYMENT_PROVIDER_PHONE_MISMATCH` | 422 | `{ provider, detected, spent: false }` | The number belongs to another network, e.g. `provider: "ORANGE"` with an MTN number (`+23767…`). Say so: *"This is an MTN number. Choose MTN, or enter an Orange number."* `detected` is `MTN` or `ORANGE` |
+| `PAYMENT_PROVIDER_REQUIRED` | 400 | none | No `provider`, and the server could not derive one from an old-style body. A current client always sends `provider` and never sees this |
+| `VALIDATION_ERROR` | 400 | `fields[]` | A field listed in `fields` is missing, e.g. no `channel.phoneNumber` for `MTN` (unchanged) |
+
+```jsonc
+{ "success": false, "requestId": "req_…", "error": { "code": "PAYMENT_PROVIDER_PHONE_MISMATCH",
+  "statusCode": 422, "category": "business_rule",
+  "message": "This number is on MTN, not ORANGE. Please check the number or choose MTN.",
+  "details": { "provider": "ORANGE", "detected": "MTN", "spent": false } } }
+```
+
+The `message` each charging door sends (`payments/services/payment-routing.service.ts`):
+
+| Code | `message` |
+|---|---|
+| `PAYMENT_PROVIDER_UNAVAILABLE` | *Card payments are not available right now. Please choose another payment method.* — or, for a mobile provider, *{provider} payments are not available right now. Please choose another payment method.* |
+| `PAYMENT_PROVIDER_PHONE_MISMATCH` | *This number is on {detected}, not {provider}. Please check the number or choose {detected}.* |
+| `PAYMENT_PROVIDER_REQUIRED` | *Please choose a payment method (provider: MTN, ORANGE or CARD)* |
+
+They are English, and they name the raw provider codes (`MTN`, `ORANGE`). A client that localises
+should key its own copy on `code` and fill the networks in from `details.provider` /
+`details.detected`. (`core/errors.ts` also holds shorter registry defaults for these codes; the
+doors above always pass their own.)
+
+The mismatch check reads the number's **prefix** only. A number whose prefix is neither MTN's nor
+Orange's (Nexttel, Camtel, a ported or foreign number) is **not** refused: the provider the
+customer chose wins. A `CARD` charge does not look at the number.
+
+⚠ **What this replaced.** Until 2026-09-30 the client named the aggregator (`gateway`), and a
+switched-off one answered `400 PAYMENT_GATEWAY_NOT_SUPPORTED` with aggregator names in
+`details.offered`. That code is **no longer raised for a charge**; it survives only on pay-link
+minting (see [The hosted card page](#the-hosted-card-page-gap-008)). Before 2026-09-22 a
+switched-off Stripe was accepted anyway, opened a row, and saved it `FAILED`. That is how a
+customer met a Stripe error on ORD-2026-000002.
+
+Payments **already opened** keep the aggregator that opened them: they verify, settle by webhook,
+reconcile and refund through it even after an administrator switches. A customer who presses Pay
+again while a prompt is still live gets **that** payment back, not a second charge on the new
+aggregator.
 
 ## Endpoints
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
+| `GET` | `/payments/options` | **none** | Which providers the customer can pay with right now, and how each one flows |
 | `POST` | `/payments/initiate` | **none** | Start a payment for a `cartId`, `orderId` or booking |
-| `POST` | `/payments/verify` | **none** | Re-check a transaction against the gateway (idempotent) |
+| `POST` | `/payments/verify` | **none** | Re-check a transaction against the aggregator that holds it (idempotent) |
 | `POST` | `/payments/:transactionId/authorize` | **none** | Submit the one-time code when `initiate` returned `requiresOtp` |
 | `GET` | `/payments/session/:token` | **none** | What a hosted **card** page needs to confirm a payment. Takes a link handle, never a transaction id |
 | `POST` | `/payments/:transactionId/pay-link` | **required, owner-scoped** | Mint (or replace) that link handle |
@@ -122,13 +200,24 @@ transaction rather than charging twice.
 |---|---|---|---|
 | `cartId` | string | one of | Preferred for cart checkout: one payment settles every order in the group |
 | `orderId` | string | one of | Single-order payment (legacy path) |
-| `gateway` | string | ✅ | `NOTCHPAY` \| `MYCOOLPAY` \| `STRIPE` — and it must be **offered** on this deployment, or `400 PAYMENT_GATEWAY_NOT_SUPPORTED` (see [Which gateways are offered](#which-gateways-are-offered--cards-are-off-today-2026-09-22)). `STRIPE` is not offered today |
-| `channel` | object | ✅ | `{ phoneNumber?, phoneOperator?, cardToken?, customerEmail?, customerName? }` |
+| `provider` | string | ✅ (see below) | `MTN` \| `ORANGE` \| `MOOV` \| `CARD` — one of the providers [`/payments/options`](#get-paymentsoptions--what-the-customer-can-pay-with) lists, or `422 PAYMENT_PROVIDER_UNAVAILABLE` |
+| `channel` | object | ❌ (defaults `{}`) | `{ phoneNumber?, customerEmail?, customerName? }`. Send the fields the provider's `/options` entry lists in `fields`. `phoneOperator` and `cardToken` are still accepted and are legacy: do not send them |
+| `gateway` | string | ❌ | **Deprecated. Accepted and ignored.** Any value, including a switched-off aggregator, is not refused; the active aggregator is used. Stop sending it; it will be removed |
 
-`channel.phoneNumber` is **required** unless `gateway` is `STRIPE`.
+`provider` must be one of those four exact uppercase strings; anything else is `400
+VALIDATION_ERROR` on `provider`. `channel.phoneNumber` is **required** for a mobile-money provider
+(`MTN`, `ORANGE`, `MOOV`) — missing, it is `400 VALIDATION_ERROR` on `channel.phoneNumber`, as
+before — and not read for `CARD`. It must belong to the chosen network, or `422 PAYMENT_PROVIDER_PHONE_MISMATCH`
+(see [What a charge can be refused for](#what-a-charge-can-be-refused-for-before-anything-is-written)).
+
+**`provider` is required of every current client.** It is optional on the wire only so that builds
+released before 2026-09-30 keep working. When it is missing, the server derives it in this order:
+`gateway: "STRIPE"` → `CARD` (refused with `422 PAYMENT_PROVIDER_UNAVAILABLE` while cards are
+off, and **never** pushed to a phone), then `channel.phoneOperator`, then the number's prefix. If
+none gives an answer: `400 PAYMENT_PROVIDER_REQUIRED`. An explicit `provider` always wins.
 
 `channel.phoneNumber` must be **E.164** (leading `+` and country code, e.g. `+237670000001`) and
-`channel.customerEmail` must be a valid email — both are forwarded to the gateway, so a malformed
+`channel.customerEmail` must be a valid email. Both are forwarded to the aggregator, so a malformed
 value would otherwise surface as an opaque gateway failure or a receipt nobody receives. Both stay
 **optional**; the rule applies only when the field is sent. See
 [Contact formats](../README.md#contact-formats-phone--email).
@@ -142,8 +231,8 @@ one you mean.
 ```json
 {
   "cartId": "664crt...",
-  "gateway": "NOTCHPAY",
-  "channel": { "phoneNumber": "+237670000001", "phoneOperator": "MTN" }
+  "provider": "MTN",
+  "channel": { "phoneNumber": "+237670000001" }
 }
 ```
 
@@ -154,14 +243,20 @@ one you mean.
   "success": true,
   "transactionId": "664txn...",
   "status": "PENDING",
+  "provider": "MTN",
   "instructions": { "ussdCode": "*126#", "message": "Confirm the prompt on your phone" },
   "message": "Payment initiated"
 }
 ```
 
+`provider` is the provider this attempt is charged on: the resolved one on a new attempt, or the
+**stored** one on a live attempt that was reused (or an already-settled one), which is `null` on
+an attempt opened before 2026-09-30. It can therefore differ from what you just sent, when an
+earlier attempt is still live. The response never names the aggregator (no `gateway`).
+
 `success` is `false` when `status` is `FAILED`; the HTTP status is still `200`.
 
-⚠ **`status` is the thing to branch on, not the HTTP code.** A gateway that *refuses* the
+⚠ **`status` is the thing to branch on, not the HTTP code.** An aggregator that *refuses* the
 charge — wrong credentials, an operator it will not route, a provider 4xx — comes back as a
 `200` carrying `status: "FAILED"` and the provider's reason in `message`. Nothing was sent to
 the customer's handset and nothing is coming; a client that only checks the HTTP status shows
@@ -179,24 +274,38 @@ attempt that poisoned the order would make every retry impossible.
 
 | Field | Present when | What the client must do |
 |---|---|---|
-| `ussdCode` | Mobile money, ordinary flow | Show the code; the customer approves on the handset |
-| `requiresOtp: true` | **My-CoolPay Orange Money** | Collect the SMS code and POST it to `/payments/:transactionId/authorize`. There is **no** `ussdCode` on this branch. |
-| `clientSecret` | Stripe | Confirm with Stripe.js / Payment Element. **A browser is required** — see [The hosted card page](#the-hosted-card-page-gap-008) if you are not in one |
-| `chargedAmount` / `chargedCurrency` | Stripe | The amount actually charged, in the presentment currency (the order stays priced in XAF) |
+| `ussdCode` | Mobile money, ordinary (`PUSH`) flow | Show the code; the customer approves on the handset |
+| `requiresOtp: true` | An `OTP` flow (today: Orange Money when My-CoolPay is active) | Collect the SMS code and POST it to `/payments/:transactionId/authorize`. There is **no** `ussdCode` on this branch. Honour it even when `/options` said `PUSH` |
+| `redirectUrl` | A `REDIRECT` flow (reserved; no aggregator uses it today) | Open the URL, then poll `verify` when the customer returns |
+| `clientSecret` | A `CARD` charge (`CARD_ELEMENT`) | Confirm with Stripe.js / Payment Element, loaded with the `/options` `publishableKey`. **A browser is required**. See [The hosted card page](#the-hosted-card-page-gap-008) if you are not in one |
+| `chargedAmount` / `chargedCurrency` | A `CARD` charge | The amount actually charged, in the presentment currency (the order stays priced in XAF) |
 | `message` | Always | Human-readable copy, already localised for the customer |
 | `expiresAt` | Sometimes | When the payment session lapses |
 
-**Mobile money needs the operator.** NotchPay's direct charge takes an explicit channel, so send
-`channel.phoneOperator` (`MTN` or `ORANGE`) when you know it. If you omit it the server derives it
-from the number's prefix, and refuses with `PAYMENT_OPERATOR_UNDETERMINED` (422) when it cannot —
-a Nexttel or Camtel number, or a typo. Ask the customer rather than guessing; sending the wrong
-channel reaches them as "payment declined".
+Branch on **which fields are present**, never on the aggregator. The same `provider` can come back
+with a different shape after an administrator switches aggregators.
+
+**The provider is the operator.** Sending `provider` settles which network is charged, so
+`channel.phoneOperator` is no longer needed. The customer's choice is checked against the
+number's prefix before anything is written (the mismatch refusal above), and an unrecognised
+prefix is charged on the network the customer chose.
+
+`422 PAYMENT_OPERATOR_UNDETERMINED` (which used to answer an unclassifiable number on this door) no
+longer fires here once `provider` is present: the chosen provider is handed to the aggregator as
+the operator. It survives only on the doors where the server picks everything and no `provider`
+is sent (chat checkout, the mini-app, WhatsApp Flows): there, a number it cannot classify is
+refused with `spent: false`. See [Checkout in the chat](#checkout-in-the-chat-bot-surface-2026-09-22).
+
+⚠ **Deciding the operator yourself still helps the customer.** Pre-selecting the provider from
+the number's prefix is fine, but let the customer change it, and show the mismatch message rather
+than silently flipping their choice.
 
 ---
 
 ## POST `/payments/verify`
 
-**Purpose**: Ask the gateway for the current state of a transaction and apply it. Safe to call
+**Purpose**: Ask the aggregator that holds the transaction (the stored `gateway`, never the
+current setting) for its current state, and apply it. Safe to call
 repeatedly — settlement is idempotent.
 
 **Auth**: None.
@@ -245,6 +354,7 @@ repeatedly — settlement is idempotent.
     "cartId": "664crt...",
     "orderIds": ["664ord...", "664ord..."],
     "userId": "664cus...",
+    "provider": "MTN",
     "gateway": "NOTCHPAY",
     "method": "MOBILE",
     "gatewayRef": "notch_ref_8891",
@@ -266,6 +376,8 @@ repeatedly — settlement is idempotent.
 
 | Field | Notes |
 |---|---|
+| `provider` | `MTN` · `ORANGE` · `MOOV` · `CARD`, or **`null`**: a transaction opened before 2026-09-30 (not backfilled), or opened from an old-style body whose provider could not be derived. What the customer paid with. Safe to display; handle `null` |
+| `gateway` | **Informational only**: which aggregator carried this money. It is kept for support and receipts. **Never branch on it**: branch on `status` and `instructions` |
 | `amountSnapshot` / `currencySnapshot` | The amount **at payment time**, stored here on purpose: order totals can be edited afterwards, and money history must not move with them. |
 | `cartId` + `orderIds` | Set together for a cart-group payment — one charge settling N per-vendor orders. Mutually exclusive with `orderId` and `bookingId`. |
 | `totalRefunded` / `hasPartialRefund` | Refunds live in their own collection; these are the rolled-up view. |
@@ -338,7 +450,9 @@ Other properties worth knowing:
 
 ## `POST /payments/:transactionId/authorize`
 
-Only reached when `initiate` answered `instructions.requiresOtp: true` (My-CoolPay Orange Money).
+Only reached when `initiate` answered `instructions.requiresOtp: true` (an `OTP` flow; today,
+Orange Money when My-CoolPay is the active aggregator). The code goes to the aggregator stored on
+the transaction, so a switch in between does not strand it.
 
 ```jsonc
 // Request
@@ -361,7 +475,7 @@ confirms it on the handset, and the webhook settles it.
 |---|---|---|
 | `PAYMENT_OTP_INVALID` | 422 | Wrong code. `details.attemptsRemaining` says how many are left. |
 | `PAYMENT_OTP_ATTEMPTS_EXCEEDED` | 422 | Too many wrong codes — **the transaction is now `FAILED`**. Start a new payment. |
-| `PAYMENT_OTP_NOT_REQUIRED` | 422 | This gateway has no OTP step, or the transaction is no longer pending. |
+| `PAYMENT_OTP_NOT_REQUIRED` | 422 | The aggregator holding this transaction has no OTP step, or the transaction is no longer pending. |
 
 Unauthenticated, like `initiate` and `verify`. What bounds it is the IP rate limit plus the
 per-transaction attempt counter, not a session.
@@ -381,8 +495,8 @@ per-transaction attempt counter, not a session.
 ## The hosted card page (GAP-008)
 
 **Mobile money completes where the customer is** — a USSD prompt or an OTP typed back into the
-chat — and needs nothing here. **A card cannot.** `initiate` with `gateway: "STRIPE"` answers a
-`clientSecret`, and only Stripe.js running in a browser can confirm one. These two endpoints are
+chat — and needs nothing here. **A card cannot.** `initiate` with `provider: "CARD"` (routed to
+Stripe) answers a `clientSecret`, and only Stripe.js running in a browser can confirm one. These two endpoints are
 the door a standalone payment page reads through.
 
 ⚠ **The page itself is frontend work and is not in this repository.** The backend mints the
@@ -407,11 +521,11 @@ live payment page and must be attributable. The bot surface reaches the same ope
 |---|---|---|
 | `PAYMENT_TRANSACTION_NOT_FOUND` | 404 | Unknown, malformed, or not the caller's — indistinguishable on purpose |
 | `PAYMENT_LINK_NOT_APPLICABLE` | 422 | A mobile-money transaction. It completes on the handset and needs no page |
-| `PAYMENT_GATEWAY_NOT_SUPPORTED` | 400 | The transaction's gateway is not offered on this deployment — today, any card (`STRIPE`) transaction. Checked after `PAYMENT_LINK_NOT_APPLICABLE`, before any token is minted |
+| `PAYMENT_GATEWAY_NOT_SUPPORTED` | 400 | The transaction's stored aggregator is not configured on this deployment any more. The one door that still raises this code. Checked after `PAYMENT_LINK_NOT_APPLICABLE`, before any token is minted |
 | `PAYMENT_LINK_NOT_PAYABLE` | 422 | Already settled, failed or cancelled |
 
-⚠ **While cards are off, a pay link cannot be minted at all** — every pay link is a card page, and
-`initiate` refuses to open a new card transaction. The bot tool `payment_create_pay_link` is
+⚠ **While cards are off, a pay link cannot be minted at all**: every pay link is a card page, and
+`initiate` refuses to open a new `CARD` transaction (`422 PAYMENT_PROVIDER_UNAVAILABLE`). The bot tool `payment_create_pay_link` is
 `flow_only` for the same reason (2026-09-22).
 
 ⚠ **A second mint REVOKES the first**, and that is the only revocation there is. At most one link
@@ -438,7 +552,8 @@ only where somebody deliberately minted one, expires, and is superseded by the n
 { "success": true, "data": {
     "transactionId": "68af…",       // poll POST /payments/verify with this
     "state": "payable",             // payable | settled | closed | expired
-    "gateway": "STRIPE",
+    "provider": "CARD",             // null on a transaction opened before 2026-09-30
+    "gateway": "STRIPE",            // informational only; never branch on it
     "amount": 24000, "currency": "XAF",          // what the customer agreed to
     "chargedAmount": 40, "chargedCurrency": "usd", // what Stripe actually charges
     "clientSecret": "pi_…_secret_…",  // ⚠ only while state is `payable`
@@ -452,6 +567,7 @@ only where somebody deliberately minted one, expires, and is superseded by the n
       "sellers": ["Boutique Ndogbong"] // always [] for a booking — see below
     } } }
 ```
+
 
 **Both amounts are sent, and a page must show both.** The Stripe account settles in USD while the
 catalogue is priced in XAF, so the number the Payment Element renders is not `amount`. Showing XAF
@@ -516,8 +632,8 @@ The owner's rule: the assistant can complete a purchase **with tools**, without 
 for anything the account already has. The address is **chosen** from the customer's saved
 addresses; the mobile-money number is the **account's** (saved mobile-money method first, then the
 profile phone). Both routes are thin wrappers over the checkout screen's own core, so every rule the
-screen has holds here too: the gateway is chosen server-side (mobile money only — no request can
-name one), prices are re-resolved and a bargained price lock is redeemed inside order creation, and
+screen has holds here too: the aggregator is chosen server-side, by the same routing as every other
+door (mobile money only; no request can name one), prices are re-resolved and a bargained price lock is redeemed inside order creation, and
 the order-placing credential is **single-use**.
 
 | Step | Route | Body | Answers (`data`) |
@@ -548,7 +664,9 @@ The result of an approved or declined prompt still arrives in the chat as today 
 ## Refunds differ by gateway
 
 Refunds are not initiated from this surface (see the admin and vendor order docs), but which
-gateway took the money decides what happens:
+aggregator took the money decides what happens. That is the `gateway` **stored on the
+transaction**, never the currently active aggregator: a payment taken on My-CoolPay is refunded
+(or not) as a My-CoolPay payment after an administrator has switched to NotchPay.
 
 | Gateway | Refund |
 |---|---|
@@ -596,6 +714,8 @@ the page open for the payment to settle.
 
 ## Related
 
+- [routing.md](./routing.md) — the provider/aggregator contract: capability matrix, routing rules, settings, error codes
+- [../FRONTEND-CHANGELOG-payment-providers.md](../FRONTEND-CHANGELOG-payment-providers.md) — what each frontend changes for providers
 - [../customer/orders.md](../customer/orders.md) — checkout, cart groups, and where `initiate` fits
 - [../customer/bookings.md](../customer/bookings.md) — booking payment and its own status endpoint
 - [../customer/payment-methods.md](../customer/payment-methods.md) — saved instruments

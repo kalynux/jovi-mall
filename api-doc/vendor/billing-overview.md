@@ -79,7 +79,7 @@ A vendor may not queue a second pending plan while one already exists (`BILLING_
 
 `SubscriberPlan.status` values: `active`, `pending_activation`, `expired`, `cancelled`. (The plan-assignment model is now owner-scoped — `SubscriberPlan`, `owner_type`/`owner_id` — and shared by vendor/agency/agent.)
 
-**How a vendor gets a plan.** New vendors start on free Starter automatically. To upgrade, the vendor **buys a plan themselves** — `POST /vendor/plans/:planId/purchase` opens a gateway payment; once confirmed (via `POST /vendor/plan-purchases/:id/verify`) the plan is **assigned/activated automatically, with no admin step**: immediately if currently on free/lapsed, or queued as `pending_activation` behind a still-running paid plan. Admins can also assign a plan manually for comps/overrides. This mirrors the credit top-up flow exactly.
+**How a vendor gets a plan.** New vendors start on free Starter automatically. To upgrade, the vendor **buys a plan themselves** — `POST /vendor/plans/:planId/purchase` opens a payment on the provider the vendor chose from `GET /api/payments/options`; once confirmed (via `POST /vendor/plan-purchases/:id/verify`) the plan is **assigned/activated automatically, with no admin step**: immediately if currently on free/lapsed, or queued as `pending_activation` behind a still-running paid plan. Admins can also assign a plan manually for comps/overrides. This mirrors the credit top-up flow exactly.
 
 ### 3. Credit wallet (single pooled balance)
 
@@ -140,11 +140,14 @@ Notes:
 
 ### 5. Top-ups
 
-Vendors can buy additional credits in fixed **packs** via a payment gateway (NotchPay / MyCoolPay mobile money, or Stripe card). Flow:
+Vendors can buy additional credits in fixed **packs**, paid with a **provider** from `GET /api/payments/options` (MTN or Orange mobile money today; card when switched on). The server picks the aggregator. Flow:
 
-1. `POST /vendor/credits/topups` → creates a `pending` top-up and returns gateway `instructions`.
-2. Vendor completes the payment on the gateway (USSD / card confirmation).
-3. `POST /vendor/credits/topups/:id/verify` → polls the gateway; on success the wallet is credited and the top-up becomes `paid` (idempotent).
+1. `GET /api/payments/options` → the providers on offer. An empty list means online payment is off.
+2. `POST /vendor/credits/topups` with `{ packCode, provider, channel }` → creates a `pending` top-up and returns payment `instructions`.
+3. Vendor completes the payment (handset prompt, SMS code, or card confirmation, as `instructions` say).
+4. `POST /vendor/credits/topups/:id/verify` → re-checks with the aggregator that holds the top-up; on success the wallet is credited and the top-up becomes `paid` (idempotent).
+
+Request body, refusals and legacy `gateway` handling: [billing.md § Paying for a plan or a top-up](./billing.md#paying-for-a-plan-or-a-top-up-providers-not-gateways-2026-09-30).
 
 Seeded packs (read live via `GET /vendor/credits/packs`):
 
@@ -233,6 +236,7 @@ Vendors choose how many days **before** plan expiry they want to be warned (`not
   "price": 600,
   "currency": "XAF",
   "status": "pending",
+  "provider": "MTN",
   "gateway": "NOTCHPAY",
   "gateway_ref": "notch_tx_abc123",
   "payment_transaction_id": null,
@@ -240,7 +244,7 @@ Vendors choose how many days **before** plan expiry they want to be warned (`not
   "updated_at": "2026-06-19T11:05:00.000Z"
 }
 ```
-`status` ∈ `pending | paid | failed`. `gateway` ∈ `NOTCHPAY | MYCOOLPAY | STRIPE`.
+`status` ∈ `pending | paid | failed`. `provider` ∈ `MTN | ORANGE | MOOV | CARD`, or `null` on a row created before 2026-09-30. `gateway` (`NOTCHPAY | MYCOOLPAY | STRIPE`, more later) is **informational only**: which aggregator carried the money. Never branch on it; a client must accept a value it does not know.
 
 ### `PlanPurchase`
 ```json
@@ -253,6 +257,7 @@ Vendors choose how many days **before** plan expiry they want to be warned (`not
   "price": 5000,
   "currency": "XAF",
   "status": "pending",
+  "provider": "MTN",
   "gateway": "NOTCHPAY",
   "gateway_ref": "notch_tx_p1",
   "subscriber_plan_id": null,
@@ -286,8 +291,12 @@ Vendors choose how many days **before** plan expiry they want to be warned (`not
 | `BILLING_PLAN_NOT_PURCHASABLE` | 409 | Tried to purchase the free/0-price plan (it's the default tier) |
 | `BILLING_PLAN_PURCHASE_NOT_FOUND` | 404 | Plan-purchase id not found / not owned by the vendor |
 | `BILLING_PURCHASE_INVALID_STATE` | 409 | Plan purchase has no gateway reference yet (cannot verify) |
-| `PAYMENT_GATEWAY_NOT_SUPPORTED` | 400 | Unsupported `gateway` value on a top-up or plan purchase |
-| `PAYMENT_INITIATION_FAILED` | 502 | Gateway rejected the top-up / plan-purchase initiation |
+| `PAYMENT_PROVIDER_REQUIRED` | 400 | No `provider`, and none could be derived from a legacy body |
+| `PAYMENT_PROVIDER_UNAVAILABLE` | 422 | The provider is switched off or cannot be routed right now. `details.offered` is the fresh list. Nothing written |
+| `PAYMENT_PROVIDER_PHONE_MISMATCH` | 422 | The number belongs to another network than `provider` (`details.detected`). Nothing written |
+| `PAYMENT_INITIATION_FAILED` | 502 | The aggregator could not be reached for the top-up / plan-purchase initiation |
+
+`PAYMENT_GATEWAY_NOT_SUPPORTED` is **no longer raised** on a top-up or plan purchase (since 2026-09-30): `gateway` is accepted and ignored.
 
 Plus the platform-standard `VALIDATION_ERROR` (400), the `AUTH_*` family on 401/403 — `AUTH_MISSING_TOKEN` · `AUTH_TOKEN_EXPIRED` · `AUTH_TOKEN_INVALID` on 401, `AUTH_ROLE_NOT_FOUND` on 403 — and `INTERNAL_SERVER_ERROR` (500).
 

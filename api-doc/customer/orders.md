@@ -92,8 +92,9 @@ later edit to the customer's saved addresses never rewrites past orders. Digital
 ```
 
 Next step (**online** checkout only): call `POST /api/payments/initiate` with
-`{ "cartId": "<cartId>", "gateway": "...", "channel": {...} }` to pay for the whole group in one
-transaction. A **cash_on_delivery** checkout requires no payment call — see
+`{ "cartId": "<cartId>", "provider": "MTN", "channel": {...} }` to pay for the whole group in one
+transaction. Build the provider choice from `GET /api/payments/options`; see
+[Paying for a checkout group](#payment). A **cash_on_delivery** checkout requires no payment call — see
 [Cash on delivery](#cod).
 
 ### Errors
@@ -498,16 +499,32 @@ day estimates arrive.
 <a name="payment"></a>
 ## Paying for a checkout group
 
+**First, ask what the customer can pay with:** `GET /api/payments/options` (no auth). Render one
+choice per entry of `data.providers` (today `MTN` and `ORANGE`), and ask for the fields each entry
+lists (`["phoneNumber"]` for mobile money). An **empty** list means online payment is switched
+off: say so and offer cash on delivery where the checkout allows it. Full rules:
+[../payments/README.md § GET /payments/options](../payments/README.md#get-paymentsoptions--what-the-customer-can-pay-with).
+
 `POST /api/payments/initiate` accepts **either** `cartId` (pay the whole checkout group in one
 transaction — preferred for cart checkout) **or** `orderId` (single-order payment).
 
 ```json
 {
   "cartId": "664a1f77bcf86cd799439900",
-  "gateway": "NOTCHPAY",
-  "channel": { "phoneNumber": "+237670000000", "phoneOperator": "MTN", "customerEmail": "a@b.com" }
+  "provider": "MTN",
+  "channel": { "phoneNumber": "+237670000000", "customerEmail": "a@b.com" }
 }
 ```
+
+Send **`provider`**, never `gateway`. `gateway` (`NOTCHPAY`…) is still accepted from old builds and
+**ignored**: the server picks the aggregator. `channel.phoneOperator` is no longer needed, because
+the provider is the operator.
+
+**Before anything is written**, the charge can be refused with `422 PAYMENT_PROVIDER_UNAVAILABLE`
+(`details.offered` is the fresh provider list: re-render the choices) or `422
+PAYMENT_PROVIDER_PHONE_MISMATCH` (`details.detected` names the number's real network, e.g. an MTN
+number sent as `ORANGE`). Nothing was charged in either case, so the customer corrects and pays
+again.
 
 The customer is charged the **sum** of the group's order totals once. On payment success the
 settlement **fans out** to every order in the group: each independently becomes `paid`, splits its
@@ -546,12 +563,19 @@ field shape:
 
 ### Watching the payment land
 
-`initiate` returns a `transactionId` and usually `status: "PENDING"`. Two ways to follow it:
+`initiate` returns a `transactionId` and usually `status: "PENDING"`. **Branch on `instructions`
+first**: `requiresOtp: true` means collect the SMS code and send it to
+`POST /api/payments/:transactionId/authorize` before anything reaches the handset. That can happen
+for a provider whose `/options` entry said `flow: "PUSH"`, if an administrator switched
+aggregators in between. See
+[the instructions object](../payments/README.md#the-instructions-object--branch-on-it-do-not-assume).
+
+Then two ways to follow it:
 
 | Call | Auth | Use |
 |---|---|---|
 | `GET /api/payments/:transactionId` | **required** | Read the transaction's current state |
-| `POST /api/payments/verify` | none | Force a gateway re-check now |
+| `POST /api/payments/verify` | none | Force a re-check with the aggregator that holds the payment, now |
 
 > **⚠️ Breaking change (2026-07-29):** `GET /api/payments/:transactionId` now **requires
 > authentication** and returns only the **authenticated customer's own** transaction — it previously

@@ -79,6 +79,24 @@ This is the shape returned by every read/write endpoint (the `data` field). **It
 | `holder_name` | string \| null | Cardholder / account holder name. |
 | `is_default` | boolean | Whether this is the user's default method (pre-selected at checkout). Exactly one method is default at a time. |
 
+> [!WARNING]
+> **This `provider` is not the `provider` you send when paying.** Since 2026-09-30 every charge
+> takes a request field also called `provider`, with **uppercase** values (`MTN` · `ORANGE` ·
+> `MOOV` · `CARD`) read from `GET /api/payments/options`. The saved method's `provider` keeps its
+> stored **lowercase** values (`mtn_momo`, `orange_money`, `stripe`…) and is not renamed.
+>
+> To pre-fill a payment from a saved wallet, map it; never send the saved string as is:
+>
+> | Saved `provider` | Charge `provider` |
+> |---|---|
+> | `mtn_momo` | `MTN` |
+> | `orange_money` | `ORANGE` |
+> | `moov_money` | `MOOV` |
+> | anything else (`stripe`, `notchpay`, `mycoolpay`…) | none: not a mobile wallet; let the customer choose |
+>
+> Then check the result is in `/options` before pre-selecting it. The server's copy of this map is
+> `providerForSavedWallet()` ([routing.md § Two different things are called `provider`](../payments/routing.md#-two-different-things-are-called-provider)).
+
 ---
 
 ## Behavior rules
