@@ -172,7 +172,7 @@ Related surfaces that do **not** live here:
 | Booking payment + its own status poll | `POST /api/bookings/:id/pay`, `GET /api/bookings/:id/payment-status` — [../customer/bookings.md](../customer/bookings.md) |
 | Gateway webhooks (server-to-server) | `POST /api/webhooks/*` — not client-callable |
 | **Plan purchases & credit top-ups** | `/{vendor,agency,agent}/plans/...`, `.../credits/topups` — a **separate** path that creates **no** `PaymentTransaction`. See [../billing-plans-across-roles.md](../billing-plans-across-roles.md) |
-| Saved cards / mobile-money instruments | `/api/me/payment-methods` — [../customer/payment-methods.md](../customer/payment-methods.md) |
+| Saved mobile-money wallets (no card is saved since 2026-09-30) | `/api/me/payment-methods` — [../customer/payment-methods.md](../customer/payment-methods.md) |
 | **Checkout in the chat** (the assistant places the order and sends the prompt) | `POST /api/internal/bot/checkout/chat/{review,place}` — see [Checkout in the chat](#checkout-in-the-chat-bot-surface-2026-09-22) below |
 
 ## Who can read a payment

@@ -666,37 +666,41 @@ payment machinery, and no tool anywhere takes a card number or a PIN.
 
 ### 6e · ⚠ Saved payment methods — wallets only, and the number never comes back
 
-**A card cannot be saved from a chat, and that is structural rather than a policy.**
-`POST /api/me/payment-methods` needs `gateway_customer_id` and `gateway_instrument_id`. For a
-card those are minted by the payment gateway's own SDK, running in a browser, after the shopper
-types a number the platform never sees. A chat has no browser and no SDK, so there is no honest
-way for a chat caller to hold one — a model asked for those fields would supply something
-invented.
+**No card is saved anywhere, on any surface, since 2026-09-30** (owner decision: wallets only
+until card payments exist). The chat was wallets-only before that for a structural reason, since
+a card needed ids minted by a browser SDK, and it is now simply the platform's rule too.
 
-For a **wallet** they are not tokens at all: the customer's phone number is sent as *both*
-values, because for mobile money the customer and the instrument are the same thing. So
-`payment_methods_add` takes `provider` + `phoneNumber` and composes the rest here — including
-`display_label` and `last4`, which a model must not write: the label is what the customer will
-be shown at checkout, and one naming the wrong network is worse than none.
+**The input is unchanged; what is stored is not.** `payment_methods_add` still takes
+`provider` as `mtn_momo` · `orange_money` · `moov_money` plus `phoneNumber` (and `makeDefault`),
+because the live n8n MCP sends exactly that. The door maps the name to the canonical
+`MTN` · `ORANGE` · `MOOV` and saves through the same service every app uses, so a wallet saved in
+chat is stored exactly like one saved in an app: the canonical provider and the phone number, with
+the label composed by the server (`MTN Mobile Money · ••••4417`). A model never writes the label:
+it is what the customer is shown, and one naming the wrong network is worse than none.
+
+That shared path brings the network check with it: a number whose Cameroon prefix belongs to
+another network than `provider` is refused with **`422 PAYMENT_PROVIDER_PHONE_MISMATCH`**
+(`details: { provider, detected }`) and nothing is saved. An unknown prefix is not a mismatch;
+the declared network wins.
+
+**The output keys did not move**, and three of them are now fixed values:
+`{ id, label, type, provider, brand, last4, isDefault, expires, expired }`. `provider` reads in the
+canonical vocabulary (`MTN` · `ORANGE` · `MOOV`, `CARD` for a card saved before 2026-09-30,
+`null` for an old row that named only a payment company), including on rows saved before the
+change. `brand` and `expires` are always `null`, and `expired` is always `false`.
 
 ⚠ **The number is never returned, on any endpoint, and that limits what the tool is worth.** The
-customer API withholds `gateway_customer_id` / `gateway_instrument_id` everywhere and this
-inherits it whole. So a saved wallet lets a chat say *"your MTN wallet ending 4417"* and lets
-the customer set it as the default — it does **not** let a payment be filled in, and
-`bookings_pay` still asks for the number. That is not an oversight here: the storefront hits the
-same wall and works around it by keeping a copy of the number in the browser's own storage,
-which a chat has no equivalent of.
+customer API returns it only masked, and this projection does not even carry the mask. So a
+saved wallet lets a chat say *"your MTN wallet ending 4417"* and lets the customer set it as the
+default. It does **not** let a model fill in a payment. The server-picked checkout reads a
+saved wallet's number itself (the default first, else the newest wallet), server-side, and
+publishes it only masked; a tool that takes a
+number from the model still asks for it. The storefront hits the same wall and keeps a copy of
+the number on the device, which a chat has no equivalent of.
 
-**`expired` is computed, and it is the field to read.** A card whose expiry has passed stays in
-the list and still looks like a way to pay — nothing removes it, and the customer API reports
-the month and the year as two plain numbers for the reader to compare against today. A model
-doing that comparison is a model doing date arithmetic, which fails quietly, and the failure
-lands as *"use your Visa ending 4242"* followed by a decline. It is always `false` for a wallet:
-a phone number does not expire.
-
-⚠ A card is good through the **last day** of its expiry month, so the comparison is against the
-first of the month *after* it. Comparing against the first of the expiry month calls a perfectly
-good card dead for up to 31 days.
+**A card may be removed but never made the default.** Only an old row can be a card, and cards
+cannot pay today, so the saved-methods list draws no "make default" button for one and refuses
+the tap if it is sent anyway.
 
 **The default sorts first**, for the reason `addresses_list` does the same: the cap is five and
 the platform allows ten, so a stored-order list could drop the one method a chat answer is most

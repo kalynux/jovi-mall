@@ -26,12 +26,13 @@ parameter — a customer can only read/write **their own** record.
 | `DELETE` | `/customer/addresses/:id` | Remove a saved address |
 | `PATCH` | `/customer/addresses/:id/default` | Mark a saved address as default |
 | `POST` · `DELETE` | `/customer/devices` | Register / unregister a push token |
-| `POST` | `/customer/payment-methods` | Save payment-method display metadata |
-| `DELETE` | `/customer/payment-methods/:id` | Remove a saved payment method |
+| `POST` | `/customer/payment-methods` | Save a mobile-money wallet (alias of `POST /me/payment-methods`) |
+| `DELETE` | `/customer/payment-methods/:id` | Remove a saved payment method (alias of `DELETE /me/payment-methods/:id`) |
 
 > **Related:** [customer/payment-methods.md](./payment-methods.md) documents the shared
-> `/me/payment-methods` surface used at checkout. The routes here manage the copies stored **on the
-> customer profile**.
+> `/me/payment-methods` surface. Since 2026-09-30 the two `/customer/payment-methods` routes here
+> are **aliases** of it: same handlers, same bodies, same answers. They no longer return the
+> profile.
 
 ---
 
@@ -45,9 +46,10 @@ parameter — a customer can only read/write **their own** record.
 >
 > This page used to show the whole response in snake_case, and that was wrong — it has misled
 > at least one integrator. `CustomerProfileMapper.toResponseDto` renames only the **scalars**
-> and passes `savedAddresses`, `preferences` and `savedPaymentMethods` through verbatim, so
-> their inner keys keep the persistence spelling. `modules/customers/dto/customer-profile.dto.ts`
-> is the authority. The example below is a real response.
+> and passes `savedAddresses` and `preferences` through verbatim, so their inner keys keep the
+> persistence spelling. **`savedPaymentMethods` is the exception since 2026-09-30:** its items are
+> the camelCase [Payment Method object](./payment-methods.md#the-payment-method-object).
+> `modules/customers/dto/customer-profile.dto.ts` is the authority. The example below is a real response.
 
 ### Example success `200`
 
@@ -325,50 +327,60 @@ role-agnostic and keys on the **user**, not the customer record.
 
 ## POST `/customer/payment-methods`
 
-**Purpose**: Save **display metadata** for a gateway-managed payment method. Tokenization lives with the
-provider — this stores only what's needed to show the method in the UI.
+**Purpose**: Save a mobile-money wallet. Since 2026-09-30 this is an **alias** of
+`POST /me/payment-methods`: the same handler, request body, answer and errors. The full reference
+is [payment-methods.md § Add a payment method](./payment-methods.md#3-add-a-payment-method).
 
 **Auth**: Required · **Permissions**: `customer`
 
-### Request body
+### Request body (strict)
 
 | Field | Type | Required | Validation |
 |---|---|---|---|
-| `provider` | string | ✅ | non-empty |
-| `gateway_customer_id` | string | ✅ | non-empty |
-| `gateway_instrument_id` | string | ✅ | non-empty |
-| `display_label` | string | ✅ | 1–100 chars (e.g. "Visa •••• 4242") |
-| `method_type` | enum | ✅ | `card` \| `mobile_money` \| `bank_transfer` |
-| `is_default` | boolean | ❌ | defaults `false` |
+| `provider` | enum | ✅ | `MTN` \| `ORANGE` \| `MOOV`. `CARD` is refused: saving a card is not available yet |
+| `phoneNumber` | string | ✅ | international format (E.164), e.g. `+237670124417`; spaces, dashes, dots and parentheses are stripped first |
+| `label` | string | ❌ | 1–100 chars; composed by the server when absent (`MTN Mobile Money · ••••4417`) |
+| `isDefault` | boolean | ❌ | defaults `false`; the first method saved is always the default |
+
+⚠ **The old body is refused.** `gateway_customer_id`, `gateway_instrument_id`, `display_label`,
+`method_type`, `is_default` and the other old keys answer `400 VALIDATION_ERROR`
+([payment-methods.md § The old shape is refused](./payment-methods.md#the-old-shape-is-refused-2026-09-30)).
+A number on another network than `provider` answers `422 PAYMENT_PROVIDER_PHONE_MISMATCH`.
 
 ### Example success `201`
 
+It returns **the saved method**, no longer the profile:
+
 ```json
-{ "success": true, "data": { "_id": "664cust...", "saved_payment_methods": [{ "_id": "664pm...", "display_label": "Visa •••• 4242", "method_type": "card", "is_default": false }] }, "message": "Payment method added" }
+{ "success": true, "data": { "id": "664pm...", "provider": "MTN", "kind": "MOBILE_MONEY", "label": "MTN Mobile Money · ••••4417", "maskedPhone": "+2376••••4417", "last4": "4417", "isDefault": true, "createdAt": "2026-09-30T10:12:44.000Z", "updatedAt": "2026-09-30T10:12:44.000Z" }, "message": "Payment method added" }
 ```
 
 ---
 
 ## DELETE `/customer/payment-methods/:id`
 
-**Purpose**: Remove a saved payment method. Returns the updated profile.
+**Purpose**: Remove a saved payment method. An **alias** of `DELETE /me/payment-methods/:id`.
 
 **Auth**: Required · **Permissions**: `customer` · **Path param**: `id` = saved-payment-method id (ObjectId)
 
 ### Example success `200`
 
+It no longer returns the profile:
+
 ```json
-{ "success": true, "data": { "_id": "664cust...", "saved_payment_methods": [] }, "message": "Payment method removed" }
+{ "success": true, "message": "Payment method removed" }
 ```
+
+An unknown id answers `404 PAYMENT_METHOD_NOT_FOUND`.
 
 ---
 
 ## Business rules & notes
 
 - Every route is scoped to the caller — there is no way to read or modify another customer's profile.
-- Address/payment mutations return the **whole updated profile**, so the client can replace its cached copy.
+- Address mutations return the **whole updated profile**, so the client can replace its cached copy. **Payment-method mutations do not** (since 2026-09-30): they answer like `/me/payment-methods`, so re-read the profile after one.
 - `country` defaults to `CM` and is stored upper-cased; `currency` is stored upper-cased (ISO-4217).
-- Saved payment methods hold **no secrets** — only provider/display metadata.
+- `savedPaymentMethods[]` items have the [Payment Method object](./payment-methods.md#the-payment-method-object) shape (`id`, `provider`, `kind`, `label`, `maskedPhone`, `last4`, `isDefault`, `createdAt`, `updatedAt`). The full wallet number is never returned.
 
 ## Possible error codes
 
@@ -377,10 +389,13 @@ provider — this stores only what's needed to show the method in the UI.
 | `VALIDATION_ERROR` | 400 | Body fails the Zod schema (see `details.fields`) |
 | `AUTH_MISSING_TOKEN` / `AUTH_TOKEN_EXPIRED` | 401 | Not authenticated |
 | `AUTH_ROLE_NOT_FOUND` | 403 | Authenticated as a non-customer role |
-| `NOT_FOUND` | 404 | Address / payment-method id not found on the profile |
+| `NOT_FOUND` | 404 | Address id not found on the profile |
+| `PAYMENT_METHOD_NOT_FOUND` | 404 | Payment-method id not found for the caller |
+| `PAYMENT_PROVIDER_PHONE_MISMATCH` | 422 | Saving a wallet whose number is on another network than `provider` |
+| `PAYMENT_METHOD_LIMIT_REACHED` | 409 | Saving an 11th payment method |
 
 ## Related
 
 - [../auth/README.md](../auth/README.md) — session & role model
-- [./payment-methods.md](./payment-methods.md) — checkout payment methods (`/me/payment-methods`)
+- [./payment-methods.md](./payment-methods.md) — saved payment methods (`/me/payment-methods`), which the `/customer/payment-methods` routes alias
 - [./orders.md](./orders.md) · [./cart.md](./cart.md)

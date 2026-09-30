@@ -4,7 +4,9 @@
 **Status:** ✅ merged 2026-09-30; live after the next production deploy (see the
 [cross-role page](../FRONTEND-CHANGELOG-payment-providers.md)).
 **Breaks:** almost nothing. A build that still sends `gateway` keeps working; the one exception is an
-old body whose `phoneOperator` contradicts the number, now `422 PAYMENT_PROVIDER_PHONE_MISMATCH`. That matters most here, because installed app
+old body whose `phoneOperator` contradicts the number, now `422 PAYMENT_PROVIDER_PHONE_MISMATCH`.
+The app saves no payment method, so the save change below does not break it, but its **read** of the
+default wallet must change. That matters most here, because installed app
 versions stay in the field for months.
 
 The agent's billing doors take exactly the vendor's body and give exactly the vendor's answers,
@@ -27,6 +29,20 @@ swap the prefix; the full explanation is on the
    when `/options` lists it.
 6. Reads: `provider` is new and nullable. `gateway` is a label only, and **new values will
    appear** (`CAMPAY`, `FLUTTERWAVE`): the enum parse must fall back instead of throwing.
+
+## Saved wallets (2026-09-30)
+
+The app only **reads** the default saved wallet. The saved-method item changed shape:
+`{ id, provider, kind, label, maskedPhone, last4, isDefault, createdAt, updatedAt }`.
+
+- Filter on `kind == "MOBILE_MONEY"` (was `method_type == "mobile_money"`) and `isDefault` (was
+  `is_default`).
+- `provider` is now `MTN`/`ORANGE`/`MOOV` (older rows included), `CARD` or `null`. The mapping
+  from `mtn_momo` is no longer needed; accept the uppercase value as it is.
+- The number is never returned. If the app ever saves wallets, the body is
+  `{ provider, phoneNumber, label?, isDefault? }`, and saving a card is refused.
+
+Reference: [payment-methods.md](./payment-methods.md).
 
 **Where to look in the agent app:** `features/billing/domain/entities/payment_gateway.dart` (the
 enum and its wire parse), `features/billing/data/datasources/billing_remote_datasource.dart`

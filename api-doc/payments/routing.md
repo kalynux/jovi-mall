@@ -25,22 +25,32 @@ app release.
 ### ⚠ Two different things are called `provider`
 
 The **saved payment methods** (`payment-methods` module, `user_payment_methods.provider`, and
-the bot's saved wallets) already have a `provider` field with **lowercase** values:
-`stripe`, `notchpay`, `mycoolpay`, `mtn_momo`, `orange_money`, `moov_money`.
+the bot's saved wallets) also have a stored `provider` field, and **since 2026-09-30 it holds two
+vocabularies**:
 
-That field is **not** this one and is **not renamed**. Stored values stay as they are. The
-request field `provider` on a charge is the uppercase layer-1 value above.
+- **Rows saved since 2026-09-30** store the canonical uppercase value itself: `MTN` · `ORANGE` ·
+  `MOOV`. A saved method no longer names an aggregator, and no card is saved
+  ([customer/payment-methods.md](../customer/payment-methods.md)).
+- **Rows saved before** keep their **lowercase** values: `stripe`, `notchpay`, `mycoolpay`,
+  `mtn_momo`, `orange_money`, `moov_money`. They are **not rewritten**.
 
-The one bridge between them is `providerForSavedWallet()` in `payment-provider.ts`:
+Clients never see the second list: the saved-methods API maps legacy rows to the canonical
+vocabulary on read (`mtn_momo` → `MTN`, a card → `CARD`, an aggregator name → `null`). The mixture
+exists only in the database, and server code reading `user_payment_methods` directly must still
+handle it.
 
-| Saved value | Charge `provider` |
+The one server-side bridge is `providerForSavedWallet()` in `payment-provider.ts`, which reads
+both:
+
+| Stored value | Charge `provider` |
 |---|---|
+| `MTN` · `ORANGE` · `MOOV` (new rows, any case) | the same value |
 | `mtn_momo` | `MTN` |
 | `orange_money` | `ORANGE` |
 | `moov_money` | `MOOV` |
-| anything else (`stripe`, `notchpay`, `mycoolpay`, unknown, null) | `null`: not a mobile wallet the router can name. The caller decides |
+| anything else (`CARD`, `stripe`, `notchpay`, `mycoolpay`, unknown, null) | `null`: not a mobile wallet the router can name. The caller decides |
 
-A door that charges a saved wallet maps it with this function. It never compares the saved
+A door that charges a saved wallet maps it with this function. It never compares the stored
 string to a provider name itself.
 
 ---

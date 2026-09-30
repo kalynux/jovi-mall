@@ -24,6 +24,55 @@ Contract: [payments/routing.md](./payments/routing.md) · reference:
 [agent](./agent/FRONTEND-CHANGELOG-payment-providers.md) ·
 [admin dashboard](../../admin/api-doc/FRONTEND-CHANGELOG-payment-providers.md).
 
+> [!WARNING]
+> **A second change landed the same day and it DOES break old builds: saving a payment method.**
+> See [Saving a payment method](#saving-a-payment-method-2026-09-30) just below.
+
+---
+
+## Saving a payment method (2026-09-30)
+
+**Verified against source at jovi-mall `290c2c8`.**
+
+⚠ **Breaking: an app build that still uses the old save body can no longer save a payment
+method.** `POST /api/me/payment-methods` (and its customer alias `POST /api/customer/payment-methods`)
+used to take a free-text `provider` plus `gateway_customer_id`, `gateway_instrument_id` and display
+fields. **Every one of those keys is now refused with `400 VALIDATION_ERROR`.** Listing, setting
+the default and deleting keep working in old builds, and so does paying. Only saving stops.
+
+⚠ **The customer shop is hit twice.** `POST` and `DELETE /api/customer/payment-methods` also
+**stopped returning the customer profile**: they answer exactly like `/api/me` now. A screen that
+refreshed its profile from that answer must re-read it.
+
+What replaced it, and why: a saved method used to name a payment company, which is exactly what
+the rest of this page takes away from apps. It now names only what the user holds.
+
+| | Before | Now |
+|---|---|---|
+| **What can be saved** | cards, wallets, bank transfers | **mobile-money wallets only**: `MTN`, `ORANGE`, `MOOV`. **Saving a card is refused for now** |
+| **Request** | `{ provider: "mtn_momo"\|"stripe"…, gateway_customer_id, gateway_instrument_id, method_type, display_label, brand?, last4?, exp_month?, exp_year?, holder_name?, is_default? }` | `{ provider: "MTN"\|"ORANGE"\|"MOOV", phoneNumber: "+237…", label?, isDefault? }`, strict |
+| **Response item** | `{ id, provider, method_type, display_label, brand, last4, exp_month, exp_year, holder_name, is_default }` | `{ id, provider, kind, label, maskedPhone, last4, isDefault, createdAt, updatedAt }` |
+| **`provider` values read back** | lowercase (`mtn_momo`, `stripe`…) | `MTN` · `ORANGE` · `MOOV` · `CARD` · `null`. Older rows are mapped on read |
+| **The phone number** | never returned | still never returned; `maskedPhone` (`"+2376••••4417"`) and `last4` are |
+| **Label** | written by the app | optional; the server writes `MTN Mobile Money · ••••4417` when absent |
+| **Wrong network** | not checked | `422 PAYMENT_PROVIDER_PHONE_MISMATCH`, `details: { provider, detected }`, nothing saved |
+| **`/api/customer/payment-methods` POST · DELETE** | answered with the whole customer profile | answer exactly like `/api/me` (`201` + the method; `{ success, message }`) |
+| **`GET /api/customer/profile` → `savedPaymentMethods[]`** | `{ id, provider, display_label, method_type, is_default }` | the new response item |
+
+Errors to handle on save:
+
+| Status | Code | When | Suggested UI |
+|---|---|---|---|
+| `400` | `VALIDATION_ERROR` | a card, a bad or missing number, a blank `label`, any old key | show the field message from `error.details.fields[]`; keep the form |
+| `422` | `PAYMENT_PROVIDER_PHONE_MISMATCH` | the number belongs to `details.detected`, not `details.provider` | *"This number is on {detected}. Choose {detected}, or enter a {provider} number."*; keep the form |
+| `409` | `PAYMENT_METHOD_LIMIT_REACHED` | 10 methods already saved | *"You can save up to 10. Remove one first."* |
+
+No error code was added; all of these already existed. There is no duplicate check: saving the
+same number twice makes two rows.
+
+Full reference: [customer/payment-methods.md](./customer/payment-methods.md) (the four other role
+folders carry the same page).
+
 ---
 
 ## What changed on the platform
@@ -201,19 +250,20 @@ sessions) **keep `gateway`**, now **informational only**: which aggregator carri
 
 ## 6. ⚠ Two different things are called `provider`
 
-Saved payment methods (`/api/me/payment-methods`) already have a `provider` field, with
-**lowercase** stored values: `mtn_momo`, `orange_money`, `moov_money`, `stripe`, `notchpay`,
-`mycoolpay`. It is **not renamed**, and it is **not** the value to send on a charge. To pre-fill
-a charge from a saved wallet, map it:
+**Resolved by [Saving a payment method](#saving-a-payment-method-2026-09-30): it is now one
+vocabulary.** Saved payment methods (`/api/me/payment-methods`) used to answer a lowercase
+`provider` (`mtn_momo`, `stripe`…), which had to be mapped before a charge. Since 2026-09-30 the
+saved method's `provider` reads as `MTN` · `ORANGE` · `MOOV` · `CARD` · `null`, **older rows
+included** (the server maps them on read). So:
 
-| Saved `provider` | Charge `provider` |
+| Saved `provider` | Use on a charge |
 |---|---|
-| `mtn_momo` | `MTN` |
-| `orange_money` | `ORANGE` |
-| `moov_money` | `MOOV` |
-| anything else | none: let the customer choose |
+| `MTN` · `ORANGE` · `MOOV` | the same value, if it is listed in `/options` |
+| `CARD` | don't pre-select (no card is payable from a saved method) |
+| `null` | an old row naming only a payment company: don't pre-select; let the customer choose |
 
-Then check that the result is in `/options` before pre-selecting it.
+Delete any `mtn_momo` → `MTN` mapping table in your app: the API no longer returns those values.
+If you keep one for safety, make it accept the uppercase values unchanged.
 
 ---
 
@@ -240,6 +290,12 @@ The file lists under "where to look" come from a read of each repository on 2026
   `67…` number, they will now get `422 PAYMENT_PROVIDER_PHONE_MISMATCH` rather than a charge.
   Either check the prefix client-side with the same table (`payments/domain/cm-operator.ts` on the
   server) or rely on the 422, but do not assume the declared choice is accepted.
+- **Saving a wallet** (breaking): `app/[locale]/shop/account/payment-methods/page.tsx` sends the
+  old body (`gateway_customer_id`/`gateway_instrument_id` = the number, `display_label`, `last4`,
+  `method_type`). Send `{ provider, phoneNumber, label?, isDefault? }` instead. Update the types in
+  `lib/shop/customer.types.ts` (`SavedPaymentMethod`, `AddPaymentMethodPayload`,
+  `ProfilePaymentMethod`) and `lib/shop/payment-methods.api.ts`. `lib/shop/wallet-numbers.ts`
+  (the on-device copy of the number) is still needed: the server still never returns it.
 
 ### Vendor dashboard — [vendor page](./vendor/FRONTEND-CHANGELOG-payment-providers.md)
 
@@ -250,6 +306,10 @@ The file lists under "where to look" come from a read of each repository on 2026
   `components/billing/StripeCardField.tsx` and `lib/stripe.ts` (`VITE_STRIPE_PUBLISHABLE_KEY`),
   `services/billing.service.ts`, `components/transactions/TransactionsTab.tsx` (renders
   `tx.gateway`: fine, as a label, if unknown values fall through).
+- **Saving a method** (breaking): `components/billing/AddPaymentMethodDialog.tsx` (`buildPayload()`
+  sends the old body, and a card tab through `StripeCardField.tsx`, which must go: saving a card is
+  refused), `services/payment-methods.service.ts`, `types/payment-method.types.ts`,
+  `components/billing/SavedPaymentMethodsCard.tsx`.
 - Card specifics: [vendor/stripe-payments.md](./vendor/stripe-payments.md), rewritten for `CARD`.
 
 ### Agency dashboard — [agency page](./agency/FRONTEND-CHANGELOG-payment-providers.md)
@@ -259,6 +319,9 @@ The file lists under "where to look" come from a read of each repository on 2026
   gateway list, `MYCOOLPAY_BILLING_OTP_ROUTABLE`, which `/options` makes unnecessary),
   `components/billing/PaymentDialog.tsx`, `components/common/payment-options.ts`,
   `services/billing.service.ts`, `types/billing.types.ts`.
+- **Saving a method** (breaking): the same files as the vendor dashboard
+  (`AddPaymentMethodDialog.tsx`, `StripeCardField.tsx`, `services/payment-methods.service.ts`,
+  `types/payment-method.types.ts`, `SavedPaymentMethodsCard.tsx`).
 
 ### Agent app (Flutter) — [agent page](./agent/FRONTEND-CHANGELOG-payment-providers.md)
 
@@ -267,10 +330,14 @@ The file lists under "where to look" come from a read of each repository on 2026
   its wire parse; give it a fallback for unknown values), `features/billing/data/datasources/billing_remote_datasource.dart`
   (`'gateway': gateway.wireValue` on both initiates), `features/billing/presentation/providers/checkout_controller.dart`,
   `features/billing/presentation/widgets/checkout_sheet.dart`.
+- **Saved wallets** (read only, the app saves none): `getDefaultSavedWallet()` in
+  `billing_remote_datasource.dart` filters on `method_type == 'mobile_money'` and reads `provider`.
+  Both changed: filter on `kind == 'MOBILE_MONEY'` and read `isDefault`; `provider` is now `MTN`…,
+  so the mapping in `checkout_controller.dart` must accept the uppercase value as it is.
 
 ### Admin dashboard — [admin page](../../admin/api-doc/FRONTEND-CHANGELOG-payment-providers.md)
 
-No charging doors. **New:** a developer-tools screen that switches aggregators. **Changed:** the
+No charging doors, and it saves no payment method (nothing to change for the save). **New:** a developer-tools screen that switches aggregators. **Changed:** the
 money pages show `provider` beside `gateway`. Details on the admin page.
 
 ---
@@ -281,7 +348,7 @@ Each frontend keeps its own copy of the backend docs, and the copies do not upda
 
 | App | Re-copy |
 |---|---|
-| landing | `payments/README.md`, `payments/routing.md` (new), `customer/orders.md`, `customer/bookings.md`, `customer/payment-methods.md`, `customer/FRONTEND-CHANGELOG-payment-providers.md` (new), this file (new), `error-codes.ts` |
+| landing | `payments/README.md`, `payments/routing.md` (new), `customer/orders.md`, `customer/bookings.md`, `customer/payment-methods.md`, `customer/profile.md`, `customer/FRONTEND-CHANGELOG-payment-providers.md` (new), this file (new), `error-codes.ts` |
 | vendor-dash | `payments/README.md`, `payments/routing.md` (new), `vendor/billing.md`, `vendor/billing-overview.md`, `vendor/stripe-payments.md`, `vendor/payment-methods.md`, `vendor/FRONTEND-CHANGELOG-payment-providers.md` (new), `billing-plans-across-roles.md`, this file (new), `error-codes.ts` |
 | agency-dash | `payments/README.md`, `payments/routing.md` (new), `agency/billing.md`, `agency/payment-methods.md`, `agency/FRONTEND-CHANGELOG-payment-providers.md` (new), `billing-plans-across-roles.md`, this file (new), `error-codes.ts` |
 | agent_app | `payments/README.md`, `payments/routing.md` (new), `agent/billing.md`, `agent/payment-methods.md`, `agent/FRONTEND-CHANGELOG-payment-providers.md` (new), `billing-plans-across-roles.md`, this file (new), `error-codes.ts` |
@@ -306,5 +373,8 @@ every locale it ships.
 - [ ] `422 PAYMENT_PROVIDER_PHONE_MISMATCH` → network message from `details.detected`, form kept
 - [ ] `422 PAYMENT_PROVIDER_UNAVAILABLE` → re-render from `details.offered`
 - [ ] Read types: `gateway` is `string` (unknown values render), `provider` is nullable
-- [ ] Saved wallets mapped `mtn_momo`→`MTN`, `orange_money`→`ORANGE` before pre-selecting
+- [ ] Saved wallets: `provider` read as `MTN`/`ORANGE`/`MOOV`/`CARD`/`null`; only a listed mobile provider is pre-selected
+- [ ] Save sends `{ provider, phoneNumber, label?, isDefault? }`; no old key; no card tab
+- [ ] Save handles `400 VALIDATION_ERROR`, `422 PAYMENT_PROVIDER_PHONE_MISMATCH`, `409 PAYMENT_METHOD_LIMIT_REACHED`
+- [ ] Saved-method types use `kind`, `label`, `maskedPhone`, `last4`, `isDefault`, `createdAt`, `updatedAt`
 - [ ] Docs and `error-codes.ts` re-copied (§ 8); new codes translated

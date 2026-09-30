@@ -3,8 +3,17 @@
 **Applies to:** the shop on the landing site (checkout, order pages, bookings, `/pay/:token`)
 **Status:** ✅ merged 2026-09-30; live after the next production deploy (see the
 [cross-role page](../FRONTEND-CHANGELOG-payment-providers.md)).
-**Breaks:** almost nothing. A build that still sends `gateway` keeps working; the one exception is an
-old body whose `phoneOperator` contradicts the number, now `422 PAYMENT_PROVIDER_PHONE_MISMATCH`.
+**Breaks:** paying, almost nothing: a build that still sends `gateway` keeps working; the one exception
+is an old body whose `phoneOperator` contradicts the number, now `422 PAYMENT_PROVIDER_PHONE_MISMATCH`.
+⚠ **Saving a payment method DOES break** for old builds: see [Saving a payment method](#saving-a-payment-method-2026-09-30).
+
+> [!WARNING]
+> **First, the silent break: `POST` and `DELETE /api/customer/payment-methods` no longer return the
+> customer profile.** (The shop's current code saves through `/api/me/payment-methods`; check that
+> nothing else calls these two.) They now answer exactly like `/api/me/payment-methods`: `POST` gives `201`
+> with the saved method, `DELETE` gives `{ success, message }`. Any screen that replaced its cached
+> profile with that answer must re-read `GET /api/customer/profile` (or the list) itself. And the
+> profile's `savedPaymentMethods[]` items have the new shape too.
 
 The full explanation, the error table and the re-copy list are on the
 [cross-role page](../FRONTEND-CHANGELOG-payment-providers.md). This page is what the shop has to do.
@@ -44,8 +53,28 @@ The full explanation, the error table and the re-copy list are on the
    server no longer agrees: a declared provider that contradicts a known MTN or Orange prefix is
    refused with `PAYMENT_PROVIDER_PHONE_MISMATCH`. Align the picker's pre-selection with the
    server's prefix rule, or let the 422 explain it.
-9. **Saved wallets**: map `mtn_momo` → `MTN`, `orange_money` → `ORANGE` before pre-selecting
-   ([payment-methods.md](./payment-methods.md)).
+9. **Saved wallets** now read `provider` as `MTN`/`ORANGE`/`MOOV` (older rows included), so no
+   mapping is needed; pre-select one only if it is listed in `/options`. See below.
+
+## Saving a payment method (2026-09-30)
+
+⚠ **Breaking: a build that still sends the old save body can no longer save a payment method.**
+The old keys (`gateway_customer_id`, `gateway_instrument_id`, `method_type`, `display_label`,
+`brand`, `last4`, `exp_month`, `exp_year`, `holder_name`, `is_default`) are refused with
+`400 VALIDATION_ERROR`. Listing, default and delete still work.
+
+1. **Save** with `POST /api/me/payment-methods` (or the alias `POST /api/customer/payment-methods`,
+   which now answers the same way, not with the profile):
+   `{ provider: "MTN"|"ORANGE"|"MOOV", phoneNumber: "+237…", label?, isDefault? }`.
+2. **Read the new item**: `{ id, provider, kind, label, maskedPhone, last4, isDefault, createdAt, updatedAt }`,
+   also inside `GET /api/customer/profile` → `savedPaymentMethods[]`.
+3. **Handle** `422 PAYMENT_PROVIDER_PHONE_MISMATCH` and `409 PAYMENT_METHOD_LIMIT_REACHED` on the
+   save form, without losing it.
+4. **Keep the on-device copy of the number** (`lib/shop/wallet-numbers.ts`): the server still never
+   returns it, only `maskedPhone` and `last4`.
+
+Full reference: [payment-methods.md](./payment-methods.md) · summary table and errors:
+[cross-role § Saving a payment method](../FRONTEND-CHANGELOG-payment-providers.md#saving-a-payment-method-2026-09-30).
 
 ## Reference
 

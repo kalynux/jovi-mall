@@ -875,7 +875,7 @@ product linkage.
 |---|---|
 | Read / update profile | `GET`·`PATCH /api/customer/profile` |
 | Add / remove / default address | `POST /api/customer/addresses`, `DELETE …/:id`, `PATCH …/:id/default` |
-| Saved payment methods | `GET`·`POST /api/me/payment-methods`, `GET …/default`, `PATCH …/:id/default`, `DELETE …/:id` |
+| Saved payment methods (mobile-money wallets only; body `{ provider, phoneNumber, label?, isDefault? }` since 2026-09-30 — [customer/payment-methods.md](../customer/payment-methods.md)) | `GET`·`POST /api/me/payment-methods`, `GET …/default`, `PATCH …/:id/default`, `DELETE …/:id` |
 | Change password (knows the old one) | `PATCH /api/me/password` |
 | Email verification | `POST /api/auth/send-email-verification`, `GET /api/auth/verify-email?token=` |
 | WhatsApp verification | `POST /api/auth/request-wa-verification` |
