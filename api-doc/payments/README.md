@@ -482,7 +482,9 @@ that gap:
 - It asks the aggregator **stored on the payout** (`transfer_gateway`; `null` means NotchPay),
   never the current setting, through the adapter's `verifyPayout` (NotchPay: `GET /transfers/{id}`;
   Campay: `/transaction/{ref}/`, acted on only when the record is a withdrawal carrying our
-  `jm_po_` reference). It never falls back to `verifyPayment`, which asks the wrong question.
+  `jm_po_` reference; My-CoolPay: `checkStatus` on **its** reference, acted on only when the
+  record is a `PAYOUT` naming our `app_transaction_ref`, from `83e8535`). For My-CoolPay, which
+  sends each callback once, the sweep is the only recovery for a lost payout callback. It never falls back to `verifyPayment`, which asks the wrong question.
 - Only a definite `SUCCEEDED`, `FAILED` or `CANCELLED` moves anything, through the same transition
   the callback uses (compare-and-set on `processing`, so exactly once). `PENDING` or an
   inconclusive answer leaves the row alone for the next pass.

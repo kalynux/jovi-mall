@@ -82,7 +82,7 @@ interface GatewayCapabilities {
 | Aggregator | MTN | ORANGE | MOOV | CARD | `settlesAsync` | Can send payouts (`createPayout`) |
 |---|---|---|---|---|---|---|
 | `NOTCHPAY` | `PUSH`, requires `phoneNumber` | `PUSH`, requires `phoneNumber` | — | — | `true` | ✅ (behind `NOTCHPAY_PAYOUTS_ENABLED`) |
-| `MYCOOLPAY` | `PUSH`, requires `phoneNumber` | `OTP`, requires `phoneNumber` | — | — | `true` | ❌ |
+| `MYCOOLPAY` | `PUSH`, requires `phoneNumber` | `OTP`, requires `phoneNumber` | — | — | `true` | ✅ (behind `MYCOOLPAY_PAYOUTS_ENABLED`, and the server IP registered with My-CoolPay) |
 | `STRIPE` | — | — | — | `CARD_ELEMENT`, requires nothing | `false` | ❌ |
 | `CAMPAY` | `PUSH`, requires `phoneNumber` | `PUSH`, requires `phoneNumber` | — | — | `true` | ✅ (behind `CAMPAY_PAYOUTS_ENABLED`, **and** "API withdrawals" allowed in the Campay app) |
 
@@ -340,7 +340,7 @@ interface SettingsIssue {
 | `COLLECTION_AGGREGATOR_NO_ENABLED_PROVIDER` | at least one mobile provider is enabled, and the aggregator can serve **none** of them. Turning every mobile provider off is allowed (the "stop taking mobile money" lever) and only warns |
 | `STRIPE_NOT_CONFIGURED` | `stripe_enabled` is being turned **on** (off → on) without Stripe credentials. Leaving an already-on Stripe unconfigured is not an error, so an emergency switch is never blocked by it |
 | `PAYOUT_AGGREGATOR_UNKNOWN` | `payout_aggregator` is not a registered gateway name |
-| `PAYOUT_AGGREGATOR_NOT_IMPLEMENTED` | it has no `createPayout` (today `NOTCHPAY` and `CAMPAY` have one) |
+| `PAYOUT_AGGREGATOR_NOT_IMPLEMENTED` | it has no `createPayout` (today only `STRIPE`: `NOTCHPAY`, `MYCOOLPAY` and `CAMPAY` all have one) |
 | `PROVIDER_UNKNOWN` | a key of `providers` is not in the catalogue |
 
 **Soft warnings: the write is accepted**
@@ -437,9 +437,25 @@ now"):
 |---|---|---|
 | `NOTCHPAY` | ✅ | `NOTCHPAY_PAYOUTS_ENABLED=true` and the server's egress IP on NotchPay's payout allowlist |
 | `CAMPAY` | ✅ | `CAMPAY_PAYOUTS_ENABLED=true` **and** "allow withdrawals through the API" on in the Campay app settings. The second is invisible to the server: a refusal for it comes back per call as `unsupported` |
-| `MYCOOLPAY` | ❌ (not implemented) | — |
+| `MYCOOLPAY` | ✅ (jovi-mall `83e8535`) | `MYCOOLPAY_PAYOUTS_ENABLED=true` (the service refuses to boot with it on unless `MYCOOLPAY_PUBLIC_KEY` and `MYCOOLPAY_PRIVATE_KEY` are both set), and the server's egress IP registered with My-CoolPay. The second is invisible to `payoutAvailable()`: an unregistered IP surfaces per payout as a retryable `FAILED` ("Nothing was sent") |
 | `STRIPE` | ❌ | — |
-<!-- W6-VERIFY: MYCOOLPAY payouts land with S3 (backend-b4). Flip this row to ✅ with its flag once that commit is at HEAD. -->
+
+My-CoolPay payouts are `POST {base}/{public_key}/payout` with `X-PRIVATE-KEY`; our `jm_po_…`
+reference travels as `app_transaction_ref`, the operator (`CM_MOMO` / `CM_OM`) is derived from the
+number, and XAF only. Two properties matter to operations:
+
+- **Callbacks are sent once, with no retry.** A lost payout callback is recovered only by the
+  payout reconciliation sweep. A payout callback's signature does not cover the status either, so
+  it is confirmed with `checkStatus`, as for collections.
+- **An unknown outcome stays `processing`.** A timeout, a `5xx`, a `409` or an unreadable `2xx` on
+  the payout call leaves the payout `processing` with a `transfer_failure_reason` that begins
+  "Outcome unknown … check … dashboard for reference jm_po_…". If My-CoolPay never returned its
+  own reference, the sweep cannot ask about it (`checkStatus` is keyed on their reference only),
+  so it needs an administrator.
+
+**Open questions, not documented by My-CoolPay** (owner actions: ask their support): whether a
+repeated `app_transaction_ref` is refused (the idempotency question), the payout fees, and the
+minimum and maximum amounts.
 
 The owner ops for each (allowlists, toggles, float) are in the workspace
 [`docs/RUNBOOK.md` § Enabling payouts per aggregator](../../../docs/RUNBOOK.md#enabling-payouts-per-aggregator).
