@@ -8,9 +8,19 @@ import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { requireAuth } from '../../../api/middlewares/auth.middleware';
 import { payLinkService } from '../services/pay-link.service';
 import { InitiatePaymentSchema, VerifyPaymentSchema, AuthorizePaymentSchema } from '../validators/payment.validators';
+import { PaymentOptionsService } from '../services/payment-options.service';
+import { createPaymentOptionsHandler } from '../controllers/payment-options.controller';
+import { getPaymentSettingsSync } from '../services/payment-settings.service';
+import { buildRoutingFacts } from '../services/payment-routing.service';
+import { stripePublishableKey } from '../domain/pay-link';
 
 const router = Router();
 const paymentOrchestrator = new PaymentOrchestratorService();
+const paymentOptionsService = new PaymentOptionsService({
+  settings: getPaymentSettingsSync,
+  facts: buildRoutingFacts,
+  publishableKey: stripePublishableKey,
+});
 
 /**
  * POST /payments/initiate
@@ -122,6 +132,17 @@ router.post('/:transactionId/authorize', asyncHandler(async (req: Request, res: 
 
   res.status(200).json({ success: true, ...result });
 }));
+
+/**
+ * GET /payments/options
+ *
+ * Which payment methods a client may offer right now: providers only, never an aggregator
+ * (ADR-A08, `api-doc/payments/routing.md`). Unauthenticated, `no-store`, 5 s server cache.
+ *
+ * ⚠ Declared ABOVE `GET /:transactionId`. There, `options` would be read as a transaction id
+ * and `requireAuth` would answer 401 before anything else ran.
+ */
+router.get('/options', createPaymentOptionsHandler(paymentOptionsService));
 
 /**
  * GET /payments/session/:token
