@@ -45,6 +45,7 @@ import {
 import { describeSchedule, WorkerSchedule } from '../../src/core/jobs/worker-schedule';
 import { withWorkerLock, SWEEP_SKIPPED, __resetWorkerLocksForTest } from '../../src/core/jobs/worker-lock';
 import { WORKER_INVENTORY, WORKER_KEYS, WORKER_REGISTRY } from '../../src/modules/dev-tools/worker-registry';
+import { EARNINGS_CONFIG } from '../../src/modules/earnings/config/earnings.config';
 import {
     MaintenanceState,
     MAINTENANCE_OFF,
@@ -1441,7 +1442,21 @@ section('Worker inventory — the thirteenth worker was invisible to every surfa
 // downgraded agent on the larger pool, and it is what converges agents written before the rule.
 // 20 -> 21 (2026-09-27): AbandonedCartWorker, the basket reminder — ships OFF
 // (CART_REMINDER_ENABLED), so it is registered and triggerable but not scheduled by default.
-assert('the inventory now holds 21 workers', () => WORKER_INVENTORY.length === 21);
+// 21 -> 22 (2026-09-30): PayoutReconciliationWorker — re-reads a transfer stuck in
+// `processing` from the gateway that sent it. Payouts had no sweep at all; a lost transfer
+// callback left the payout processing forever, and My-CoolPay sends each callback once.
+assert('the inventory now holds 22 workers', () => WORKER_INVENTORY.length === 22);
+
+assert('payout-reconciliation is registered AND triggerable', () =>
+    WORKER_KEYS.includes('payout-reconciliation' as never)
+    && WORKER_INVENTORY.some((e) => e.key === 'payout-reconciliation' && e.triggerable));
+
+assert('its schedule is derived from PAYOUT_RECONCILE_CRON, not a literal', () => {
+    const entry = WORKER_INVENTORY.find((e) => e.key === 'payout-reconciliation');
+    const schedule = entry?.worker.schedules[0];
+    return schedule?.kind === 'cron' && schedule.source === 'PAYOUT_RECONCILE_CRON'
+        && schedule.expression === EARNINGS_CONFIG.PAYOUT_RECONCILE_CRON;
+});
 
 assert('abandoned-cart is registered AND triggerable', () =>
     WORKER_KEYS.includes('abandoned-cart' as never)
@@ -1511,8 +1526,9 @@ const WORKER_SOURCES = [
         readFileSync(join(SRC, 'core', 'jobs', 'aggregation-scheduler.ts'), 'utf8')) },
 ];
 
-assert('the scan sees every worker file — 20 module workers plus the scheduler', () =>
-    WORKER_SOURCES.length === 21);
+// 20 -> 21 module workers (2026-09-30): earnings/workers/payout-reconciliation.worker.ts.
+assert('the scan sees every worker file — 21 module workers plus the scheduler', () =>
+    WORKER_SOURCES.length === 22);
 
 assert('EVERY worker routes its pass through withWorkerLock', () => {
     const missing = WORKER_SOURCES.filter(({ code }) => !code.includes('withWorkerLock('));

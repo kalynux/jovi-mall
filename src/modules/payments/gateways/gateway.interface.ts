@@ -241,6 +241,36 @@ export interface PayoutResult {
   raw?: unknown;
 }
 
+/** Input to `verifyPayout`: the provider's transfer id, and OUR reference for the same payout. */
+export interface PayoutVerifyPayload {
+  /** The provider's id for the transfer (`payout_requests.transfer_gateway_ref`). */
+  gatewayRef: string;
+  /**
+   * Our `jm_po_…` reference (`payout_requests.transfer_reference`). When the provider's record
+   * echoes a reference and it is not this one, the record is not this payout's.
+   */
+  reference: string | null;
+}
+
+/**
+ * A payout's state as the provider reports it NOW.
+ *
+ * ⛔ **`PENDING` means "leave it", and it is the answer for everything that is not a sure
+ * verdict**: still moving, a transport failure, a timeout, and a record that does not prove it
+ * is THIS payout (a collection record, or a different reference). Only `SUCCEEDED` and
+ * `FAILED` / `CANCELLED` may move money, so an adapter that is unsure must answer `PENDING`.
+ */
+export interface PayoutVerifyResult {
+  status: PaymentGatewayStatus;
+  /** The provider's transfer id as the record states it, when it states one. */
+  gatewayRef: string | null;
+  /** The provider's wording for a failure, for the payout's `transfer_failure_reason`. */
+  reason?: string | null;
+  /** Why the answer is `PENDING` without the provider having said so (unreachable, mismatch). */
+  inconclusive?: string;
+  raw?: unknown;
+}
+
 /** What a gateway reports about the float it can pay out of. */
 export interface PayoutBalance {
   available: number;
@@ -382,6 +412,22 @@ export interface PaymentGateway {
    * (NotchPay) ignores it. Optional, so existing callers and implementations are unchanged.
    */
   payoutBalance?(currency: string, destinationPhone?: string): Promise<PayoutBalance | null>;
+
+  /**
+   * Read a sent payout's state back from the provider — the payout reconciliation sweep's one
+   * question (`earnings/workers/payout-reconciliation.worker.ts`).
+   *
+   * **Separate from `verifyPayment`, and not optional in spirit for any gateway with
+   * `createPayout`.** A collection lookup is the wrong question for a payout on every provider
+   * here: NotchPay reads transfers on a different endpoint, and Campay and My-CoolPay serve both
+   * directions from one lookup, so a collection record with a matching reference could settle a
+   * payout. So this answers only after the record proves it is a payout AND, when the record
+   * echoes one, that its reference is ours. See `PayoutVerifyResult` for what `PENDING` means.
+   *
+   * Absent → the sweep skips that gateway's payouts and says so; it never falls back to
+   * `verifyPayment`.
+   */
+  verifyPayout?(payload: PayoutVerifyPayload): Promise<PayoutVerifyResult>;
 }
 
 /** Input to `verifyWebhook`: the untouched bytes plus the request headers. */

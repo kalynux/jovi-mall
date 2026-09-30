@@ -9,6 +9,8 @@ import {
   PayoutPayload,
   PayoutResult,
   PayoutBalance,
+  PayoutVerifyPayload,
+  PayoutVerifyResult,
   PaymentGatewayStatus,
   WebhookVerifyInput,
 } from './gateway.interface';
@@ -264,6 +266,27 @@ export class CampayGateway implements PaymentGateway {
   }
 
   /**
+   * Read a sent withdrawal back — `GET /transaction/{reference}/`, the same lookup collections
+   * use, for the payout reconciliation sweep.
+   *
+   * Because the lookup serves BOTH directions, the record has to prove it is this payout before
+   * its status may move money — see `campayWithdrawalVerdict`. A transport error or a timeout is
+   * PENDING: it says nothing about the transfer.
+   */
+  async verifyPayout(payload: PayoutVerifyPayload): Promise<PayoutVerifyResult> {
+    try {
+      const record = await this.call(`/transaction/${encodeURIComponent(payload.gatewayRef)}/`, 'GET');
+      return campayWithdrawalVerdict(record, payload.reference);
+    } catch (error: any) {
+      return {
+        status: 'PENDING',
+        gatewayRef: null,
+        inconclusive: `Campay transaction lookup failed: ${error?.message ?? error}`,
+      };
+    }
+  }
+
+  /**
    * Send money to a beneficiary: `POST /withdraw/`, one call.
    *
    * `reference` is the caller's and is never minted here. It travels as `external_reference`,
@@ -459,6 +482,48 @@ export function normalizeCampayStatus(raw: unknown): PaymentGatewayStatus {
     canceled: 'CANCELLED',
   };
   return map[String(raw ?? '').trim().toLowerCase()] ?? 'PENDING';
+}
+
+/**
+ * A `/transaction/{reference}/` record, reduced to a payout verdict. Pure; exported for
+ * `test:payout-reconciliation`.
+ *
+ * `/transaction/` answers for collections AND withdrawals, so the status is acted on only when
+ * the record proves it is THIS payout:
+ *   - `endpoint`, when present, must be `withdraw` — a `collect` record never settles a payout;
+ *   - our reference (`campayMerchantRef`: `external_user`, else `external_reference`), when
+ *     present, must be the payout's own `jm_po_…`;
+ *   - and at least ONE of the two must be present. A record that states neither proves
+ *     nothing, and its status is not acted on.
+ * Anything short of that is PENDING with the reason in `inconclusive`.
+ */
+export function campayWithdrawalVerdict(record: unknown, reference: string | null): PayoutVerifyResult {
+  if (!record || typeof record !== 'object') {
+    return { status: 'PENDING', gatewayRef: null, inconclusive: 'Campay returned no transaction record', raw: record };
+  }
+  const r = record as Record<string, unknown>;
+  const endpoint = typeof r.endpoint === 'string' ? r.endpoint.trim().toLowerCase() : '';
+  const ours = campayMerchantRef(r);
+
+  if (endpoint && endpoint !== 'withdraw') {
+    return { status: 'PENDING', gatewayRef: null, inconclusive: `Campay record is a "${endpoint}", not a withdrawal`, raw: record };
+  }
+  if (ours && reference && ours !== reference) {
+    return { status: 'PENDING', gatewayRef: null, inconclusive: `Campay record reference ${ours} is not this payout's (${reference})`, raw: record };
+  }
+  if (!endpoint && !(ours && reference)) {
+    return { status: 'PENDING', gatewayRef: null, inconclusive: 'Campay record states neither its direction nor our reference', raw: record };
+  }
+
+  const status = normalizeCampayStatus(r.status);
+  return {
+    status,
+    gatewayRef: typeof r.reference === 'string' && r.reference ? r.reference : null,
+    reason: status === 'FAILED' || status === 'CANCELLED'
+      ? String(r.reason ?? r.message ?? `Campay reported ${String(r.status ?? 'failure')}`)
+      : null,
+    raw: record,
+  };
 }
 
 /** `+237 6 70 00 00 00` / `670000000` / `237670000000` → `237670000000`; null when not a Cameroon mobile. */

@@ -11,6 +11,8 @@ import {
   PayoutPayload,
   PayoutResult,
   PayoutBalance,
+  PayoutVerifyPayload,
+  PayoutVerifyResult,
   PaymentGatewayStatus,
   WebhookVerifyInput,
 } from './gateway.interface';
@@ -580,6 +582,38 @@ const direction = directionOfEventType(type);
   }
 
   /**
+   * Read a sent transfer back — `GET /transfers/{id}` with the X-Grant key, for the payout
+   * reconciliation sweep.
+   *
+   * ⛔ **Not `/payments/{ref}`.** `verifyPayment` reads collections; a transfer id there is a
+   * 404, which `verifyPayment` folds into PENDING — so a sweep built on it would never settle a
+   * NotchPay payout and never say why. Endpoint and response shape (`{ transfer: {...} }`) are
+   * from NotchPay's `openapi.yaml` (`getTransfer`), the only self-consistent source.
+   *
+   * A transfer's `reference` is OURS and its `id` is theirs — the reverse of a payment. When the
+   * record echoes a reference and it is not this payout's, the answer is PENDING rather than a
+   * verdict about somebody else's money. A transport error, a 403 (egress IP not allowlisted)
+   * or a 404 is PENDING too: none of them says the transfer failed.
+   */
+  async verifyPayout(payload: PayoutVerifyPayload): Promise<PayoutVerifyResult> {
+    try {
+      const response = await this.call(
+        `/transfers/${encodeURIComponent(payload.gatewayRef)}`,
+        'GET',
+        undefined,
+        { grant: true }
+      );
+      return notchPayTransferVerdict(response, payload.reference, (raw) => this.normalizeStatus(raw));
+    } catch (error: any) {
+      return {
+        status: 'PENDING',
+        gatewayRef: null,
+        inconclusive: `NotchPay transfer lookup failed: ${error?.message ?? error}`,
+      };
+    }
+  }
+
+  /**
    * Is this failure a knowable "cannot send" rather than a fault?
    *
    * Mirrors `isRefundForbidden` and differs in one respect that matters: a 403 on
@@ -757,4 +791,40 @@ const direction = directionOfEventType(type);
       clearTimeout(timer);
     }
   }
+}
+
+/**
+ * A `GET /transfers/{id}` response, reduced to a payout verdict. Pure; exported for
+ * `test:payout-reconciliation`.
+ *
+ * PENDING, with the reason in `inconclusive`, unless the body is a transfer record whose
+ * reference (ours, on a transfer) matches the payout's whenever both are known.
+ */
+export function notchPayTransferVerdict(
+  response: unknown,
+  reference: string | null,
+  normalize: (raw: unknown) => PaymentGatewayStatus
+): PayoutVerifyResult {
+  const body = (response ?? {}) as Record<string, any>;
+  const transfer = (body.transfer ?? body.data ?? null) as Record<string, any> | null;
+  if (!transfer || typeof transfer !== 'object') {
+    return { status: 'PENDING', gatewayRef: null, inconclusive: 'NotchPay returned no transfer record', raw: response };
+  }
+  const echoed = typeof transfer.reference === 'string' && transfer.reference ? transfer.reference : null;
+  if (reference && echoed && echoed !== reference) {
+    return {
+      status: 'PENDING',
+      gatewayRef: null,
+      inconclusive: `NotchPay transfer reference ${echoed} is not this payout's (${reference})`,
+      raw: response,
+    };
+  }
+  const rawStatus = transfer.status;
+  const status = normalize(rawStatus);
+  return {
+    status,
+    gatewayRef: transfer.id ? String(transfer.id) : null,
+    reason: status === 'FAILED' || status === 'CANCELLED' ? String(transfer.message ?? rawStatus ?? 'failed') : null,
+    raw: response,
+  };
 }

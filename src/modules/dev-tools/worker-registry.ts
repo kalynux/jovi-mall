@@ -10,6 +10,7 @@ import { bookingReminderWorker } from '../booking/workers/booking-reminder.worke
 import { abandonedCartWorker } from '../cart/workers/abandoned-cart.worker';
 import { inboundCalendarSyncWorker } from '../booking/workers/inbound-calendar-sync.worker';
 import { paymentReconciliationWorker } from '../payments/workers/payment-reconciliation.worker';
+import { payoutReconciliationWorker } from '../earnings/workers/payout-reconciliation.worker';
 import { codDepositDeadlineWorker } from '../cod/workers/cod-deposit-deadline.worker';
 import { trackingDispatchWorker } from '../tracking-integration/workers/tracking-dispatch.worker';
 import { agentCapacityReconcileWorker } from '../agents/workers/agent-capacity-reconcile.worker';
@@ -192,6 +193,17 @@ export const WORKER_REGISTRY = Object.freeze({
         // Counted, and the `null` matters: it means the pass was REFUSED by the
         // lock, which is a different statement from `0` ("nothing was due").
         runOnce: () => runCountedSweep(() => paymentReconciliationWorker.runSweep()),
+    },
+    /**
+     * The payout twin. Triggerable because the moment it matters is right after an incident —
+     * a callback outage, an IP allowlist fixed at the provider — when waiting for the next
+     * quarter-hour is pointless. `processed` counts payouts RESOLVED (paid + failed); a payout
+     * the gateway still reports as moving is left `processing` and not counted.
+     */
+    'payout-reconciliation': {
+        label: 'Payout reconciliation',
+        worker: payoutReconciliationWorker,
+        runOnce: () => runCountedSweep(() => payoutReconciliationWorker.runSweep()),
     },
     'booking-reminder': {
         label: 'Booking reminders',

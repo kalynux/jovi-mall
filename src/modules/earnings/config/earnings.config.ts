@@ -70,6 +70,22 @@ export const EARNINGS_CONFIG = {
   BATCH_SIZE: intEnv('EARNINGS_BATCH_SIZE', 200),
 
   /**
+   * The payout reconciliation sweep — re-reads a transfer stuck in `processing` from the
+   * gateway that sent it (`workers/payout-reconciliation.worker.ts`). The same four knobs as
+   * `PAYMENT_RECONCILE_*`, with a longer reach: a payout is rarer and larger than a charge,
+   * and for My-CoolPay (one callback, no retry) this sweep is the ONLY recovery for a lost one.
+   *
+   *   MIN_AGE  a settling window — a transfer minutes old is still moving, and its callback
+   *            may be in flight. ⚠ Also the floor for the manual "resolve an unknown transfer"
+   *            exit: an administrator may not decide a payout the sweep would not yet ask about.
+   *   MAX_AGE  bounds the sweep; anything older is reconciled by an administrator.
+   */
+  PAYOUT_RECONCILE_CRON: process.env.PAYOUT_RECONCILE_CRON || '*/15 * * * *',
+  PAYOUT_RECONCILE_MIN_AGE_MINUTES: intEnv('PAYOUT_RECONCILE_MIN_AGE_MINUTES', 15),
+  PAYOUT_RECONCILE_MAX_AGE_HOURS: intEnv('PAYOUT_RECONCILE_MAX_AGE_HOURS', 168),
+  PAYOUT_RECONCILE_BATCH_SIZE: intEnv('PAYOUT_RECONCILE_BATCH_SIZE', 50),
+
+  /**
    * Minimum `available_balance` a vendor/agency may request a payout for
    * (manual or auto-triggered). Below this, both `POST .../earnings/payout`
    * and the auto-threshold sweep refuse with EARNINGS_PAYOUT_BELOW_MINIMUM.

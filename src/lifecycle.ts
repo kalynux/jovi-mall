@@ -49,6 +49,7 @@ import { abandonedCartWorker } from './modules/cart/workers/abandoned-cart.worke
 import { inboundCalendarSyncWorker } from './modules/booking/workers/inbound-calendar-sync.worker';
 import { codDepositDeadlineWorker } from './modules/cod/workers/cod-deposit-deadline.worker';
 import { paymentReconciliationWorker } from './modules/payments/workers/payment-reconciliation.worker';
+import { payoutReconciliationWorker } from './modules/earnings/workers/payout-reconciliation.worker';
 import { trackingDispatchWorker } from './modules/tracking-integration/workers/tracking-dispatch.worker';
 import { initializeAgentDomain } from './modules/agents';
 // Imported by PATH rather than through a module barrel, deliberately. The port this
@@ -462,6 +463,11 @@ function startBackgroundWork(): void {
     // time the customer has closed the page — so the callback IS the settlement
     // path, and a dropped one is money taken for an order that stays unpaid.
     paymentReconciliationWorker.start();
+
+    // Payouts: re-read a transfer stuck in `processing` from the gateway that sent it. Payouts
+    // settled only through the transfer callback or an administrator, so a lost callback left
+    // the payout processing forever — and My-CoolPay sends each callback exactly once.
+    payoutReconciliationWorker.start();
 
     // Live tracking: stream the outbox to the geo-tracker service so it can revoke tracking on
     // completion. There is no subscriber to register any more — the outbox row is written by
