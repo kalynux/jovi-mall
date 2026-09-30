@@ -399,7 +399,7 @@ export interface WebhookVerifyInput {
  * Campay or Flutterwave is one entry here plus its adapter. `registry.ts`
  * re-exports it under the same name for the importers that already read it there.
  */
-export const PAYMENT_GATEWAY_NAMES = ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE'] as const;
+export const PAYMENT_GATEWAY_NAMES = ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE', 'CAMPAY'] as const;
 
 export type PaymentGatewayName = (typeof PAYMENT_GATEWAY_NAMES)[number];
 

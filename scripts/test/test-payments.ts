@@ -192,9 +192,9 @@ originalConsole.log('\n═══ test:payments ═══════════
 
 section('1. The registry — a gateway cannot ship without a webhook verifier');
 
-assert('the registry holds exactly the three known gateways', () =>
-  PAYMENT_GATEWAY_NAMES.length === 3 &&
-  ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE'].every((n) => PAYMENT_GATEWAY_NAMES.includes(n as never)));
+assert('the registry holds exactly the four known gateways', () =>
+  PAYMENT_GATEWAY_NAMES.length === 4 &&
+  ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE', 'CAMPAY'].every((n) => PAYMENT_GATEWAY_NAMES.includes(n as never)));
 
 /**
  * THE assertion this suite exists for.

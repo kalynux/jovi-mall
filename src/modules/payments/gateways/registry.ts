@@ -2,9 +2,10 @@ import { PaymentGateway, PaymentGatewayName, PAYMENT_GATEWAY_NAMES } from './gat
 import { NotchPayGateway } from './notchpay.gateway';
 import { MyCoolPayGateway } from './mycoolpay.gateway';
 import { StripeGateway } from './stripe.gateway';
+import { CampayGateway } from './campay.gateway';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
-import { myCoolPayEnabled, notchPayEnabled, stripeEnabled } from '../config/payments.config';
+import { campayEnabled, myCoolPayEnabled, notchPayEnabled, stripeEnabled } from '../config/payments.config';
 import { getPaymentSettingsSync } from '../services/payment-settings.service';
 import type { AggregatorFacts, RoutingFacts } from '../domain/payment-routing';
 
@@ -41,6 +42,7 @@ const gateways: ReadonlyMap<PaymentGatewayName, PaymentGateway> = new Map<
   ['NOTCHPAY', new NotchPayGateway()],
   ['MYCOOLPAY', new MyCoolPayGateway()],
   ['STRIPE', new StripeGateway()],
+  ['CAMPAY', new CampayGateway()],
 ]);
 
 export const PAYMENT_GATEWAYS = gateways;
@@ -96,6 +98,7 @@ const CONFIGURED: Readonly<Record<PaymentGatewayName, () => boolean>> = Object.f
   NOTCHPAY: notchPayEnabled,
   MYCOOLPAY: myCoolPayEnabled,
   STRIPE: stripeEnabled,
+  CAMPAY: campayEnabled,
 });
 
 /**
