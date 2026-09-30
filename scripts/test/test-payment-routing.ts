@@ -246,8 +246,8 @@ function enumOf(model: { schema: { eachPath(fn: (path: string, type: any) => voi
         return !c || same(c.requires, ['phoneNumber']);
       })));
   assert('Stripe CARD requires nothing up front', () => same(cap('STRIPE').collect.CARD!.requires, []));
-  assert('NOTCHPAY and CAMPAY can send payouts (My-CoolPay and Stripe cannot)', () =>
-    PAYMENT_GATEWAY_NAMES.filter((g) => typeof GATEWAY_MAP.get(g)!.createPayout === 'function').join() === 'NOTCHPAY,CAMPAY');
+  assert('NOTCHPAY, MYCOOLPAY and CAMPAY can send payouts (Stripe cannot)', () =>
+    PAYMENT_GATEWAY_NAMES.filter((g) => typeof GATEWAY_MAP.get(g)!.createPayout === 'function').join() === 'NOTCHPAY,MYCOOLPAY,CAMPAY');
 
   // ── 3. Catalogue ───────────────────────────────────────────────────────────
   section('3. Provider catalogue, saved wallets, defaults');
@@ -422,7 +422,6 @@ function enumOf(model: { schema: { eachPath(fn: (path: string, type: any) => voi
     ['aggregator serves none of the enabled mobile providers (only MOOV on)', candidate(settings({ providers: { MTN: false, ORANGE: false, MOOV: true } })), CUR, F, 'COLLECTION_AGGREGATOR_NO_ENABLED_PROVIDER'],
     ['turning Stripe ON without credentials', candidate(settings({ stripe_enabled: true })), CUR, F, 'STRIPE_NOT_CONFIGURED'],
     ['unknown payout aggregator', { ...candidate(CUR), payout_aggregator: 'NOT_A_GATEWAY' }, CUR, F, 'PAYOUT_AGGREGATOR_UNKNOWN'],
-    ['payout aggregator without createPayout (MYCOOLPAY)', candidate(settings({ payout_aggregator: 'MYCOOLPAY' })), CUR, F, 'PAYOUT_AGGREGATOR_NOT_IMPLEMENTED'],
     ['payout aggregator without createPayout (STRIPE)', candidate(settings({ payout_aggregator: 'STRIPE' })), CUR, F, 'PAYOUT_AGGREGATOR_NOT_IMPLEMENTED'],
     ['unknown provider name', candidate(CUR, { WAVE: { enabled: true } }), CUR, F, 'PROVIDER_UNKNOWN'],
   ];
@@ -432,9 +431,16 @@ function enumOf(model: { schema: { eachPath(fn: (path: string, type: any) => voi
       return !v.ok && codes(v).includes(code) && v.errors.every((e) => e.message.length > 0);
     });
   }
+  // My-CoolPay implements createPayout now: choosing it for payouts is VALID, and not merely
+  // "not refused for that reason". Stripe is the aggregator that still cannot pay out (the row above).
+  assert('accepted: every aggregator that implements createPayout is a valid payout aggregator', () =>
+    (['NOTCHPAY', 'MYCOOLPAY', 'CAMPAY'] as const).every((g) => {
+      const v = validateSettingsChange(candidate(settings({ payout_aggregator: g })), CUR, F);
+      return v.ok && v.settings.payout_aggregator === g;
+    }));
   assert('several faults are all reported at once', () => {
     const v = validateSettingsChange(
-      { ...candidate(CUR, { WAVE: { enabled: true } }), collection_aggregator: 'NOT_A_GATEWAY', payout_aggregator: 'MYCOOLPAY' }, CUR, F);
+      { ...candidate(CUR, { WAVE: { enabled: true } }), collection_aggregator: 'NOT_A_GATEWAY', payout_aggregator: 'STRIPE' }, CUR, F);
     return !v.ok && ['PROVIDER_UNKNOWN', 'COLLECTION_AGGREGATOR_UNKNOWN', 'PAYOUT_AGGREGATOR_NOT_IMPLEMENTED']
       .every((c) => codes(v).includes(c as SettingsIssueCode));
   });

@@ -84,6 +84,7 @@
         "test:payout-routing": "ts-node scripts/test/test-payout-routing.ts",
         "test:payout-reconciliation": "ts-node scripts/test/test-payout-reconciliation.ts",
         "test:campay": "ts-node scripts/test/test-campay.ts",
+        "test:mycoolpay-payout": "ts-node scripts/test/test-mycoolpay-payout.ts",
         "test:billing-otp": "ts-node scripts/test/test-billing-otp.ts",
         "test:billing-routing": "ts-node scripts/test/test-billing-routing.ts",
         "test:plan-quota": "ts-node scripts/test/test-plan-quota.ts",

@@ -55,6 +55,15 @@ import { ActorRole, EntityType, TicketImportance, TicketStatus, TicketType } fro
  * It used to be a hardcoded `NOTCHPAY`. Once a payout has been sent, its stored
  * `transfer_gateway` decides instead — see `earnings/domain/payout-gateway.ts`.
  */
+/**
+ * Who reported a transfer's terminal outcome. `gateway` is a callback, the sweep or the send
+ * itself; `administrator` is a person who checked the gateway's dashboard for a transfer whose
+ * outcome was unknown. Only the ticket wording differs.
+ */
+export type TransferOutcomeSource =
+  | { kind: 'gateway' }
+  | { kind: 'administrator'; name: string | null; note: string };
+
 export class PayoutRequestService {
   constructor(
     private readonly payoutRepo: PayoutRequestRepository = new PayoutRequestRepository(),
@@ -454,10 +463,13 @@ export class PayoutRequestService {
   /**
    * Apply a terminal verdict from the gateway to a payout that is `processing`.
    *
-   * Called by the webhook processor and by `sendPayout` on a refusal the gateway is sure
-   * about; nothing polls payouts. It is idempotent by construction: both
-   * writes are compare-and-set on `status: 'processing'`, so a redelivered callback settles
+   * Called by the webhook processor, by the payout reconciliation sweep, by `sendPayout` on a
+   * refusal the gateway is sure about, and by an administrator resolving a transfer whose
+   * outcome was unknown (`source.kind === 'administrator'`). It is idempotent by construction:
+   * both writes are compare-and-set on `status: 'processing'`, so a redelivered callback settles
    * the payout exactly once and the loser gets `null` back.
+   *
+   * `source` changes only what the ticket says happened; the money path is identical.
    *
    * ⚠ **A `reversed` verdict arriving on an already-`paid` payout is NOT an accounting
    * rollback, and this method deliberately does not attempt one.** `markPayoutPaidInSession`
@@ -468,9 +480,13 @@ export class PayoutRequestService {
    */
   async applyTransferOutcome(
     payoutRequestId: string,
-    outcome: { settled: boolean; gatewayRef: string | null; reason: string | null }
+    outcome: { settled: boolean; gatewayRef: string | null; reason: string | null },
+    source: TransferOutcomeSource = { kind: 'gateway' }
   ): Promise<IPayoutRequest | null> {
     const payoutRequest = await this.getByIdOrThrow(payoutRequestId);
+    const byAdmin = source.kind === 'administrator'
+      ? `confirmed by administrator ${source.name ?? '(unnamed)'}: ${source.note}`
+      : null;
 
     if (payoutRequest.status !== 'processing') {
       // Already settled, or never sent. Record the observation and change nothing — the
@@ -497,7 +513,7 @@ export class PayoutRequestService {
 
       await this.noteOnTicketBestEffort(
         failed,
-        `Payout transfer failed: ${failed.transfer_failure_reason}.`
+        `Payout transfer failed${byAdmin ? ` (${byAdmin})` : ''}: ${failed.transfer_failure_reason}.`
           + ` The funds remain held — retry the transfer or reject the request to return them.`
       );
 
@@ -549,7 +565,8 @@ export class PayoutRequestService {
     await this.resolveTicketBestEffort(
       settled,
       settled.requested_by_user_id.toString(),
-      `Payout of ${settled.currency} ${settled.amount.toLocaleString()} sent and confirmed by the payment gateway`
+      `Payout of ${settled.currency} ${settled.amount.toLocaleString()} `
+        + (byAdmin ? `sent; ${byAdmin}` : 'sent and confirmed by the payment gateway')
         + `${settled.transfer_gateway_ref ? ` (transfer: ${settled.transfer_gateway_ref})` : ''}.`
     );
 
@@ -674,14 +691,30 @@ export class PayoutRequestService {
       gateway = getPaymentGateway(claimed.transfer_gateway);
     }
 
-    const result = await gateway.createPayout!({
-      reference: claimed.transfer_reference as string,
-      amount: claimed.amount,
-      currency: claimed.currency,
-      phone: mobileMoney.phone_number,
-      name: mobileMoney.account_name || 'Beneficiary',
-      description: `Payout ${claimed.currency} ${claimed.amount} to ${claimed.owner_type}`,
-    });
+    let result: Awaited<ReturnType<NonNullable<typeof gateway.createPayout>>>;
+    try {
+      result = await gateway.createPayout!({
+        reference: claimed.transfer_reference as string,
+        amount: claimed.amount,
+        currency: claimed.currency,
+        phone: mobileMoney.phone_number,
+        name: mobileMoney.account_name || 'Beneficiary',
+        description: `Payout ${claimed.currency} ${claimed.amount} to ${claimed.owner_type}`,
+      });
+    } catch (error) {
+      /**
+       * The outcome is UNKNOWN (see the header: a throw after the claim leaves `processing`).
+       * Say so where an administrator will look, and never as a failure: the transfer may have
+       * gone through. Best-effort both: the row's status is already the safe one.
+       */
+      const reason =
+        `Outcome unknown: ${claimed.transfer_gateway ?? 'the gateway'} gave no answer we could read. `
+        + `Check its dashboard for reference ${claimed.transfer_reference} before doing anything; `
+        + `do not retry or reject this payout until you know whether the money left.`;
+      await this.payoutRepo.noteTransferOutcomeUnknown(claimed.id, reason).catch(() => undefined);
+      await this.noteOnTicketBestEffort(claimed, reason);
+      throw error;
+    }
 
     if (!result.success) {
       /**

@@ -189,6 +189,21 @@ export class PayoutRequestRepository {
     );
   }
 
+  /**
+   * Record why a `processing` payout's outcome is unknown, WITHOUT changing its status.
+   *
+   * A send that threw after the claim may or may not have moved the money, so the row must stay
+   * `processing` (nothing may re-send or release it). This only puts the explanation where the
+   * admin read shows it (`transferFailureReason`). Compare-and-set on `processing`, so it can
+   * never overwrite the reason on a row a callback has already settled or failed.
+   */
+  async noteTransferOutcomeUnknown(id: string, reason: string): Promise<void> {
+    await PayoutRequestModel.updateOne(
+      { _id: id, status: 'processing' },
+      { $set: { transfer_failure_reason: reason.slice(0, 500) } }
+    );
+  }
+
   /** Stamp the gateway's own transfer id once it answers. Never changes status. */
   async setTransferGatewayRef(id: string, gatewayRef: string | null): Promise<void> {
     if (!gatewayRef) return;

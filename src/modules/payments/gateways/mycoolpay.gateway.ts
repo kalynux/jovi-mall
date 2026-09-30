@@ -10,7 +10,13 @@ import {
   PaymentAuthorizeResult,
   PaymentGatewayStatus,
   WebhookVerifyInput,
+  PayoutPayload,
+  PayoutResult,
+  PayoutBalance,
+  PayoutVerifyPayload,
+  PayoutVerifyResult,
 } from './gateway.interface';
+import { resolveCameroonOperator } from '../domain/cm-operator';
 import {
   WebhookVerification,
   NormalizedWebhookEvent,
@@ -49,9 +55,23 @@ import { recordIntegrationCall } from '../../system/domain/integration-observati
  *
  * `payout` could in principle push money back to the customer's phone, but it
  * is a disbursement rather than a refund — the gateway fee is not returned and
- * nothing links it to the original charge — and it requires our server IPs to
- * be pre-authorised. That is a product decision, deliberately not smuggled in
- * here.
+ * nothing links it to the original charge. So refunds stay manual here.
+ *
+ * ── PAYOUTS (ADR-A08) ────────────────────────────────────────────────────────
+ * `payout` IS wired, for owner payouts only (`createPayout`), behind
+ * `MYCOOLPAY_PAYOUTS_ENABLED`. Four facts from the provider shape it, read from
+ * their Postman collection and their PHP SDK on 2026-09-30:
+ *   - Every private-key call (payout, balance) is FIREWALLED to at most three
+ *     server IPs registered by email. From any other address it HANGS rather
+ *     than answering 403, so `createPayout` pre-flights with `GET /balance`
+ *     and turns that into a refusal while nothing has been sent.
+ *   - A payout callback is the collection callback with `transaction_type:
+ *     PAYOUT`, signed the same way, so its status is confirmed the same way.
+ *   - Each callback is sent ONCE, with no retry.
+ *   - Their docs are silent on whether a repeated `app_transaction_ref` is
+ *     refused, and `checkStatus` cannot be searched by it. So an answer that
+ *     leaves the outcome unknown THROWS (the payout stays `processing`), and
+ *     only an answer that proves nothing was sent returns `success: false`.
  */
 export class MyCoolPayGateway implements PaymentGateway {
   readonly name: PaymentGatewayName = 'MYCOOLPAY';
@@ -288,9 +308,9 @@ export class MyCoolPayGateway implements PaymentGateway {
       // a redelivery, distinct across PENDING -> SUCCESS. A hash of the whole
       // body would be neither.
       eventId: deriveEventId([gatewayRef, body.transaction_type, status]),
-      // Collection-only integration: `payout` exists in their API and is deliberately
-      // not wired (see the header), so no callback here can be money leaving.
-      direction: 'collection' as const,
+      // `transaction_type` is PAYIN or PAYOUT, and it is inside the signature. A PAYOUT callback
+      // is money leaving: the processor routes it to the payout branch and never to an order.
+      direction: myCoolPayDirection(body.transaction_type),
       eventType: `${String(body.transaction_type ?? 'PAYIN')}.${status || 'unknown'}`,
       gatewayRef,
       merchantRef: body.app_transaction_ref ? String(body.app_transaction_ref) : null,
@@ -331,6 +351,11 @@ export class MyCoolPayGateway implements PaymentGateway {
     }
 
     const body = (event.raw ?? {}) as Record<string, any>;
+    // The record must be the same KIND of money: a PAYIN record may never confirm a PAYOUT
+    // callback (or the reverse). The processor also refuses a direction change; this refuses it
+    // one step earlier, from the provider's own field.
+    const recordType = record?.transaction_type ?? null;
+    if (recordType !== null && myCoolPayDirection(recordType) !== event.direction) return null;
     const status = String(record?.transaction_status ?? '');
     return {
       ...event,
@@ -339,6 +364,181 @@ export class MyCoolPayGateway implements PaymentGateway {
       status: this.normalizeStatus(status),
       raw: { callback: event.raw, confirmation: record },
     };
+  }
+
+  // ── Payouts ───────────────────────────────────────────────────────────────
+
+  /**
+   * On our account, not merely in their API: the switch, plus both keys (the private key is the
+   * payout credential). Whether our server IP is registered cannot be known without calling, so
+   * `createPayout`'s pre-flight reports that per attempt.
+   */
+  payoutAvailable(): boolean {
+    return MYCOOLPAY_CONFIG.PAYOUTS_ENABLED && !!MYCOOLPAY_CONFIG.PUBLIC_KEY && !!MYCOOLPAY_CONFIG.PRIVATE_KEY;
+  }
+
+  /**
+   * The one float (XAF). `destinationPhone` is ignored: My-CoolPay does not keep a float per
+   * carrier. Null when it cannot be read, which the caller treats as "unknown", never as zero.
+   */
+  async payoutBalance(currency: string, _destinationPhone?: string): Promise<PayoutBalance | null> {
+    if (currency.toUpperCase() !== 'XAF') return null;
+    try {
+      const available = await this.readBalance();
+      return available === null ? null : { available, currency: 'XAF' };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Send an owner payout.
+   *
+   * ⛔ **Two kinds of "no", and they must never be confused.**
+   *   - `success: false` means NOTHING WAS SENT: the number has no known network, the pre-flight
+   *     could not reach the firewalled API, the float is short, or the payout call itself was
+   *     refused with a 400 / 401 / 403 / 422. The payout goes `failed`, the hold stays, and a
+   *     retry with the same reference is safe.
+   *   - A THROW means the outcome is UNKNOWN: a timeout, a 5xx, a 409, or a 2xx we cannot read.
+   *     The payout stays `processing`. Their docs do not say a repeated `app_transaction_ref` is
+   *     refused, so a retry after an unknown outcome could pay twice.
+   *
+   * The reference sent is `payload.reference` (our `jm_po_…`), and the operator is worked out
+   * from the number: `CM_MOMO` for MTN, `CM_OM` for Orange.
+   */
+  async createPayout(payload: PayoutPayload): Promise<PayoutResult> {
+    const refused = (message: string, unsupported = false): PayoutResult => ({
+      success: false,
+      gatewayRef: null,
+      status: 'FAILED',
+      message,
+      ...(unsupported ? { unsupported: true } : {}),
+    });
+
+    if (payload.currency.toUpperCase() !== 'XAF') {
+      return refused(`My-CoolPay pays out in XAF only, not ${payload.currency}.`, true);
+    }
+    const operator = myCoolPayPayoutOperator(payload.phone);
+    if (!operator) {
+      return refused('Could not determine the mobile network (MTN or Orange) for this number.', true);
+    }
+
+    /**
+     * The pre-flight. Same private key and same firewall as the payout, and it moves nothing.
+     * Anything short of a readable answer means the payout would not have gone through either,
+     * and learning that here costs no uncertainty.
+     */
+    let available: number | null;
+    try {
+      available = await this.readBalance();
+    } catch (error: any) {
+      const status = (error?.details as { status?: number } | undefined)?.status;
+      return refused(
+        status === 401 || status === 403
+          ? `My-CoolPay refused the payout credentials (${status}). Check MYCOOLPAY_PRIVATE_KEY and that this server's IP is registered with My-CoolPay.`
+          : 'My-CoolPay did not answer the payout pre-flight. Is this server\'s IP registered with My-CoolPay support? Nothing was sent.',
+        true,
+      );
+    }
+    if (available !== null && available < payload.amount) {
+      return refused(`My-CoolPay float is ${available} XAF, short of the ${payload.amount} XAF payout. Nothing was sent.`);
+    }
+
+    let response: any;
+    try {
+      response = await this.call(
+        '/payout',
+        'POST',
+        {
+          transaction_amount: payload.amount,
+          transaction_currency: 'XAF',
+          transaction_reason: (payload.description ?? 'Payout').slice(0, 120),
+          transaction_operator: operator,
+          app_transaction_ref: payload.reference,
+          customer_phone_number: nationalCameroonNumber(payload.phone),
+          customer_name: payload.name,
+          customer_lang: 'fr',
+        },
+        { privateKey: true },
+      );
+    } catch (error: any) {
+      const status = (error?.details as { status?: number } | undefined)?.status;
+      if (error instanceof AppError && typeof status === 'number' && DEFINITE_PAYOUT_REFUSALS.has(status)) {
+        const body = (error.details as { body?: any } | undefined)?.body;
+        return refused(
+          String(body?.message ?? `My-CoolPay refused the payout (${status})`),
+          status === 401 || status === 403,
+        );
+      }
+      throw error;
+    }
+
+    const gatewayRef = response?.transaction_ref ? String(response.transaction_ref) : null;
+    if (response?.status !== 'success' || !gatewayRef) {
+      // A 2xx that is neither a success nor a refusal we can read. Money may have moved.
+      throw createAppError(
+        ERROR_CODES.MYCOOLPAY_REQUEST_FAILED,
+        502,
+        'My-CoolPay answered the payout with a response we could not read. Its outcome is unknown.',
+        { body: response },
+      );
+    }
+
+    // 200 ("Successful transaction") and 202 ("in progress") alike: accepted, not settled. The
+    // callback, or the status check behind it, decides.
+    return { success: true, gatewayRef, status: 'PENDING' };
+  }
+
+  /**
+   * Re-read a payout from My-CoolPay, for the payout sweep (it replaces a callback they will not
+   * resend). Keyed on THEIR reference only: `checkStatus` cannot be searched by our `jm_po_…`.
+   *
+   * ⛔ **PENDING means "leave it"**, and it is the answer to anything short of a sure verdict: a
+   * payout still moving, a transport failure or timeout, or a record that does not prove it is
+   * THIS payout (not a PAYOUT, or naming another `app_transaction_ref`). The reason for an
+   * unasked-for PENDING goes in `inconclusive`. Only SUCCEEDED, FAILED and CANCELLED move money.
+   *
+   */
+  async verifyPayout(payload: PayoutVerifyPayload): Promise<PayoutVerifyResult> {
+    const leave = (inconclusive: string, raw?: unknown) =>
+      ({ status: 'PENDING' as const, gatewayRef: payload.gatewayRef, inconclusive, raw });
+
+    let record: any;
+    try {
+      record = await this.call(`/checkStatus/${encodeURIComponent(payload.gatewayRef)}`, 'GET');
+    } catch (error: any) {
+      return leave(`My-CoolPay status check failed: ${error?.message ?? String(error)}`);
+    }
+
+    if (record?.transaction_ref != null && String(record.transaction_ref) !== payload.gatewayRef) {
+      return leave('the status record names a different My-CoolPay transaction', record);
+    }
+    if (myCoolPayDirection(record?.transaction_type) !== 'payout') {
+      return leave(`the status record is not a PAYOUT (${String(record?.transaction_type ?? 'no type')})`, record);
+    }
+    const recordRef = record?.app_transaction_ref ?? null;
+    if (recordRef !== null && payload.reference !== null && String(recordRef) !== payload.reference) {
+      return leave('the status record names a different app_transaction_ref', record);
+    }
+
+    const status = this.normalizeStatus(record?.transaction_status);
+    const failed = status === 'FAILED' || status === 'CANCELLED';
+    return {
+      status,
+      gatewayRef: payload.gatewayRef,
+      reason: failed ? String(record?.transaction_message ?? `My-CoolPay reported ${record?.transaction_status}`) : null,
+      ...(status === 'PENDING' && String(record?.transaction_status ?? '').toUpperCase() !== 'PENDING'
+        ? { inconclusive: `unrecognised My-CoolPay status "${String(record?.transaction_status ?? '')}"` }
+        : {}),
+      raw: record,
+    };
+  }
+
+  /** `GET /balance` → the float, or null when the answer carries no number. Throws on transport. */
+  private async readBalance(): Promise<number | null> {
+    const response = await this.call('/balance', 'GET', undefined, { privateKey: true });
+    const value = Number(response?.balance);
+    return response?.status === 'success' && Number.isFinite(value) ? value : null;
   }
 
   // ── Internals ─────────────────────────────────────────────────────────────
@@ -388,9 +588,10 @@ export class MyCoolPayGateway implements PaymentGateway {
   private async call(
     path: string,
     method: 'GET' | 'POST',
-    body?: Record<string, unknown>
+    body?: Record<string, unknown>,
+    options: { privateKey?: boolean } = {}
   ): Promise<any> {
-    const { PUBLIC_KEY } = MYCOOLPAY_CONFIG;
+    const { PUBLIC_KEY, PRIVATE_KEY } = MYCOOLPAY_CONFIG;
     if (!PUBLIC_KEY) {
       throw createAppError(
         ERROR_CODES.PAYMENT_GATEWAY_NOT_IMPLEMENTED,
@@ -401,6 +602,18 @@ export class MyCoolPayGateway implements PaymentGateway {
 
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (body) headers['Content-Type'] = 'application/json';
+    // Payout and balance authenticate with the private key in a header (the body field is
+    // deprecated). Never logged: errors below carry the status and the response body only.
+    if (options.privateKey) {
+      if (!PRIVATE_KEY) {
+        throw createAppError(
+          ERROR_CODES.PAYMENT_GATEWAY_NOT_IMPLEMENTED,
+          503,
+          'My-CoolPay payouts need MYCOOLPAY_PRIVATE_KEY.'
+        );
+      }
+      headers['X-PRIVATE-KEY'] = PRIVATE_KEY;
+    }
 
     const startedAt = Date.now();
     const controller = new AbortController();
@@ -453,3 +666,34 @@ export class MyCoolPayGateway implements PaymentGateway {
     }
   }
 }
+
+// ── Module helpers (exported for test:mycoolpay-payout) ─────────────────────
+
+/** `transaction_type` → direction. Only an explicit PAYOUT is money leaving. */
+export function myCoolPayDirection(transactionType: unknown): 'payout' | 'collection' {
+  return String(transactionType ?? '').toUpperCase() === 'PAYOUT' ? 'payout' : 'collection';
+}
+
+/** My-CoolPay's payout operator for a Cameroonian number, or null when the prefix is unknown. */
+export function myCoolPayPayoutOperator(phone: string): 'CM_MOMO' | 'CM_OM' | null {
+  const operator = resolveCameroonOperator(phone);
+  if (operator === 'MTN') return 'CM_MOMO';
+  if (operator === 'ORANGE') return 'CM_OM';
+  return null;
+}
+
+/**
+ * The nine national digits My-CoolPay's payout docs and SDK both use (`699009900`). A stored
+ * `+237…` or `237…` number is reduced to them; anything else is sent as its digits.
+ */
+export function nationalCameroonNumber(phone: string): string {
+  const digits = String(phone ?? '').replace(/\D/g, '');
+  return digits.length === 12 && digits.startsWith('237') ? digits.slice(3) : digits;
+}
+
+/**
+ * Payout-call statuses that prove the request was REJECTED, so nothing was sent. Everything else
+ * that is not a 2xx (5xx, 409, anything unexpected) leaves the outcome unknown and is rethrown.
+ * 409 is deliberately absent: on a repeated reference it may mean "already sent".
+ */
+export const DEFINITE_PAYOUT_REFUSALS: ReadonlySet<number> = new Set([400, 401, 403, 422]);

@@ -24,6 +24,10 @@
  *   npm run verify:gateways -- --notchpay-pay    NotchPay charge + status + refund
  *   npm run verify:gateways -- --mycoolpay-pay   My-CoolPay payin  ⚠ MAY BE REAL MONEY
  *   npm run verify:gateways -- --payout          payout/transfer probes ⚠ MOVES MONEY OUT
+ *   npm run verify:gateways -- --mycoolpay-payout --to=672745831
+ *                                                My-CoolPay payout through OUR adapter ⚠ MOVES
+ *                                                MONEY OUT; ≤100 XAF, the owner's numbers only
+ *   … --mycoolpay-payout-idem                    also resends the SAME reference (float-bounded)
  *   npm run verify:gateways -- --amount=100      charge amount, default 100 XAF
  *
  * Nothing here writes to our database. It exercises the gateway adapters and
@@ -485,6 +489,8 @@ async function mycoolpay(): Promise<void> {
     }
   }
 
+  await mycoolpayPayoutThroughAdapter();
+
   if (DO_PAYOUT) {
     section('11. My-CoolPay — payout (withdrawal reconnaissance)');
     // ⚠ Sends money OUT. Also IP-allowlisted to at most 3 pre-authorised
@@ -494,6 +500,17 @@ async function mycoolpay(): Promise<void> {
     // prefix, so the obvious `CM_OM` literal would have sent an Orange payout to
     // an MTN line — a refusal that tells us nothing about the integration. This
     // also cross-checks our own prefix table against a real number.
+    // The owner's standing money rules apply to this raw probe too: at most 100 XAF, and only to
+    // one of the owner's two numbers. It used to take any `--amount`.
+    const probeNumber = MYCOOLPAY_TEST.phone.replace(/^237/, '');
+    if (AMOUNT > MYCOOLPAY_PAYOUT_MAX_XAF) {
+      bad(`--amount=${AMOUNT} is above the ${MYCOOLPAY_PAYOUT_MAX_XAF} XAF payout cap; refusing to send`);
+      return;
+    }
+    if (!MYCOOLPAY_PAYOUT_NUMBERS.has(probeNumber)) {
+      bad(`${MYCOOLPAY_TEST.phone} is not one of the owner's payout numbers; refusing to send`);
+      return;
+    }
     const operator = resolveCameroonOperator(MYCOOLPAY_TEST.phone);
     show('resolved operator', String(operator));
     if (!operator) {
@@ -520,6 +537,106 @@ async function mycoolpay(): Promise<void> {
     }
   } else {
     skipped('My-CoolPay payout — pass --payout. ⚠ Moves money OUT of the account.');
+  }
+}
+
+// ═══ My-CoolPay payouts through OUR adapter (ADR-A08) ═══════════════════════
+//
+// Read-only by default: the switch and the float, through the adapter. A real send needs
+// `--mycoolpay-payout --to=<number>` and is bounded three ways, none of them configurable:
+//   - at most MYCOOLPAY_PAYOUT_MAX_XAF (100 XAF), whatever `--amount` says;
+//   - only to one of the owner's two numbers;
+//   - and only with MYCOOLPAY_PAYOUTS_ENABLED=true, i.e. on a host whose IP is registered.
+// `--mycoolpay-payout-idem` additionally resends the SAME reference, to learn whether My-CoolPay
+// refuses a repeated `app_transaction_ref` (their docs do not say). It runs only when the float
+// can fund one payout and not two (2·A > float ≥ A), so a duplicate cannot actually be paid.
+
+const MYCOOLPAY_PAYOUT_MAX_XAF = 100;
+const MYCOOLPAY_PAYOUT_NUMBERS: ReadonlySet<string> = new Set(['672745831', '652705926']);
+
+async function mycoolpayPayoutThroughAdapter(): Promise<void> {
+  const adapter = PAYMENT_GATEWAYS.get('MYCOOLPAY')!;
+  section('11a. My-CoolPay — payout through our adapter (read-only unless opted in)');
+
+  const available = adapter.payoutAvailable?.() ?? false;
+  show('payoutAvailable()', String(available));
+  const balance = await adapter.payoutBalance?.('XAF');
+  show('payoutBalance(XAF)', balance ? `${balance.available} ${balance.currency}` : 'unknown (null)');
+  if (!balance) {
+    finding('the float could not be read through the adapter: from an unregistered IP My-CoolPay HANGS rather than refusing');
+  }
+
+  if (!flag('mycoolpay-payout')) {
+    skipped('My-CoolPay adapter payout — pass --mycoolpay-payout --to=672745831|652705926. ⚠ Moves money OUT.');
+    return;
+  }
+
+  const to = (process.argv.find((a) => a.startsWith('--to=')) ?? '').split('=')[1] ?? '';
+  if (!MYCOOLPAY_PAYOUT_NUMBERS.has(to)) {
+    bad(`--to must be one of ${[...MYCOOLPAY_PAYOUT_NUMBERS].join(', ')}; refusing to send`);
+    return;
+  }
+  if (AMOUNT > MYCOOLPAY_PAYOUT_MAX_XAF) {
+    bad(`--amount=${AMOUNT} is above the ${MYCOOLPAY_PAYOUT_MAX_XAF} XAF cap for this probe; refusing to send`);
+    return;
+  }
+  if (!available) {
+    bad('MYCOOLPAY_PAYOUTS_ENABLED is not true on this host; refusing to send');
+    return;
+  }
+
+  const idem = flag('mycoolpay-payout-idem');
+  if (idem) {
+    const float = balance?.available ?? NaN;
+    if (!(float >= AMOUNT && float < 2 * AMOUNT)) {
+      bad(`--mycoolpay-payout-idem needs 2·${AMOUNT} > float ≥ ${AMOUNT}; the float is ${float}. Refusing: a duplicate could be paid.`);
+      return;
+    }
+  }
+
+  const reference = mintMerchantRef('po');
+  const payload = {
+    reference,
+    amount: AMOUNT,
+    currency: 'XAF',
+    phone: `+237${to}`,
+    name: MYCOOLPAY_TEST.name,
+    description: 'verify:gateways payout probe',
+  };
+  show('our reference', reference);
+
+  const send = async (label: string) => {
+    try {
+      const result = await adapter.createPayout!(payload);
+      show(label, JSON.stringify(result));
+      return result;
+    } catch (error: any) {
+      finding(`${label} THREW (outcome unknown, the way a real payout would stay processing): ${error?.message ?? error}`);
+      return null;
+    }
+  };
+
+  const first = await send('createPayout #1');
+  if (idem) {
+    const second = await send('createPayout #2 (SAME reference)');
+    finding(
+      second?.success
+        ? 'My-CoolPay ACCEPTED a repeated app_transaction_ref: it does NOT deduplicate. Record this; retries must never resend.'
+        : 'My-CoolPay did not accept the repeated reference: record the exact answer above.'
+    );
+  }
+
+  if (first?.success && first.gatewayRef && typeof (adapter as any).verifyPayout === 'function') {
+    section('11b. My-CoolPay — verifyPayout, polled (the sweep\'s check)');
+    for (let i = 0; i < 6; i++) {
+      const verdict = await (adapter as any).verifyPayout({ gatewayRef: first.gatewayRef, reference });
+      show(`verifyPayout #${i + 1}`, JSON.stringify({ ...verdict, raw: undefined }));
+      if (verdict.status !== 'PENDING') {
+        ok(`settled as ${verdict.status}`);
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10_000));
+    }
   }
 }
 

@@ -89,6 +89,20 @@ export const MYCOOLPAY_CONFIG = Object.freeze({
   VERIFY_CALLBACK_IP: (process.env.MYCOOLPAY_VERIFY_CALLBACK_IP || 'false') === 'true',
   /** The single source address My-CoolPay's own SDK accepts callbacks from. */
   CALLBACK_IP: '15.236.140.89',
+  /**
+   * Master switch for My-CoolPay PAYOUTS (ADR-A08). Default OFF, like NotchPay's and Campay's.
+   *
+   * ⚠ My-CoolPay FIREWALLS every private-key call (payout AND balance) to at most three server
+   * IPs registered by email with its support. From an unregistered address the call does not
+   * answer 403: measured 2026-09-30, it HANGS until our timeout. The adapter pre-flights with
+   * `GET /balance` so that shows up as an honest refusal, but turning this on is still a
+   * deploy-time decision paired with registering the egress IP. See docs/RUNBOOK.md.
+   *
+   * ⛔ Keep it OFF in production until a stuck `processing` payout has a way out (a sweep over
+   * `checkStatus`, and a manual exit for a send that never returned a reference). My-CoolPay
+   * sends each callback ONCE and never retries.
+   */
+  PAYOUTS_ENABLED: (process.env.MYCOOLPAY_PAYOUTS_ENABLED || 'false') === 'true',
 });
 
 /** Campay's demo host. Named once: the default below and the production boot warning both read it. */

@@ -334,7 +334,9 @@ function withStripe<T>(fn: () => T): T {
     await assert('expectedVersion 0 against an existing document → 409', () =>
       zeroOnExisting?.code === ERROR_CODES.PAYMENT_SETTINGS_VERSION_CONFLICT);
 
-    const invalid = await caught(() => setPaymentSettings({ payoutAggregator: 'MYCOOLPAY', collectionAggregator: 'STRIPE' }, 3, ACTOR, 'bad', F));
+    // STRIPE is the aggregator with no createPayout (My-CoolPay gained one), so it provokes the
+    // payout refusal beside the collection one: two hard errors from one write, both reported.
+    const invalid = await caught(() => setPaymentSettings({ payoutAggregator: 'STRIPE', collectionAggregator: 'STRIPE' }, 3, ACTOR, 'bad', F));
     await assert('a hard rule → 422 PAYMENT_SETTINGS_INVALID with details.errors[], nothing written', () => {
       const errors = (invalid?.details as { errors?: Array<{ code: string; message: string }> } | undefined)?.errors ?? [];
       return invalid?.code === ERROR_CODES.PAYMENT_SETTINGS_INVALID && invalid.statusCode === 422 && s.writes === writes
@@ -378,7 +380,8 @@ function withStripe<T>(fn: () => T): T {
   await assert('buildRoutingFacts covers every gateway with the adapter’s own capabilities', () => {
     const f = buildRoutingFacts();
     return PAYMENT_GATEWAY_NAMES.every((n) => f[n].capabilities === PAYMENT_GATEWAYS.get(n)!.capabilities)
-      && f.NOTCHPAY.payoutImplemented && !f.MYCOOLPAY.payoutImplemented && !f.STRIPE.payoutImplemented;
+      && f.NOTCHPAY.payoutImplemented && f.MYCOOLPAY.payoutImplemented && f.CAMPAY.payoutImplemented
+      && !f.STRIPE.payoutImplemented;
   });
   await assert('the routing service re-exports the same buildRoutingFacts', () => buildRoutingFactsFromService === buildRoutingFacts);
 

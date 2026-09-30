@@ -217,6 +217,7 @@ const BOOLEAN_VARS: readonly string[] = Object.freeze([
     'HEALTH_READY_REQUIRE_REDIS', 'METRICS_ENABLED',
     'LOG_CONSOLE_BRIDGE', 'LOG_STDOUT', 'LOG_HTTP_ACCESS', 'LOG_PERSIST_ENABLED',
     'MYCOOLPAY_VERIFY_CALLBACK_IP', 'NOTCHPAY_REFUNDS_ENABLED', 'CAMPAY_PAYOUTS_ENABLED',
+    'MYCOOLPAY_PAYOUTS_ENABLED',
 ]);
 
 const BOOLEAN_LITERALS = new Set(['true', 'false', '1', '0']);
@@ -634,6 +635,9 @@ export function validateEnv(source: NodeJS.ProcessEnv = process.env): EnvProblem
     // nothing. It is listed in RENAMED_VARS so an operator who set it is told.
     if (has('MYCOOLPAY_PUBLIC_KEY') && !has('MYCOOLPAY_PRIVATE_KEY')) {
         err('MYCOOLPAY_PRIVATE_KEY', 'is required whenever MYCOOLPAY_PUBLIC_KEY is set. It signs the callback (MD5 over six concatenated fields), so without it every My-CoolPay callback is refused and no mobile-money payment through that gateway ever settles.');
+    }
+    if (get('MYCOOLPAY_PAYOUTS_ENABLED') === 'true' && !(has('MYCOOLPAY_PUBLIC_KEY') && has('MYCOOLPAY_PRIVATE_KEY'))) {
+        err('MYCOOLPAY_PAYOUTS_ENABLED', 'is true but MYCOOLPAY_PUBLIC_KEY and MYCOOLPAY_PRIVATE_KEY are not both set. Every payout is authenticated with the private key (X-PRIVATE-KEY), so no transfer can be sent.');
     }
     // Campay (ADR-A08 P2.1). Calls authenticate with a username + password pair (exchanged for
     // a one-hour token) or with the non-expiring permanent token; callbacks carry an HS256 JWT
