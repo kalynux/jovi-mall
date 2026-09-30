@@ -270,6 +270,7 @@ route-level summary.
       "activeForCollections": true, "activeForPayouts": true }
   ],
   "effectiveProviders": [ { "provider": "MTN", "aggregator": "NOTCHPAY", "capability": { "flow": "PUSH", "requires": ["phoneNumber"] } } ],
+  "errors": [],
   "warnings": [ { "code": "PAYOUT_UNAVAILABLE", "message": "…", "aggregator": "NOTCHPAY" } ]
 }
 ```
@@ -281,12 +282,19 @@ route-level summary.
   `configured` too.
 - **`effectiveProviders` names the aggregator.** This is the one surface that does.
   `/api/payments/options` strips it.
-- **`warnings` are the stored settings' STANDING problems**, computed now by validating the
-  current settings against themselves. They are not the warnings from the last write.
-  Credentials can disappear after a switch, and payout availability is a runtime fact. If the
-  stored state now breaks a **hard** rule (for example `COLLECTION_AGGREGATOR_NOT_CONFIGURED`
-  after a key was removed), those issues are returned **here, first**, because they mean new
-  charges are being refused. The codes are an open set.
+- **`errors` and `warnings` are the stored settings' STANDING problems**, computed now by
+  validating the current settings against themselves. They are not the warnings from the last write.
+  Credentials can disappear after a switch, and payout availability is a runtime fact. **Two keys, two
+  classes:**
+  - **`errors`**: the stored state now breaks a **hard** rule, for example
+    `COLLECTION_AGGREGATOR_NOT_CONFIGURED` after a key was removed. **New charges are being refused
+    right now.** Show it as "payments are broken", not as a note.
+  - **`warnings`**: soft rules on a state that is otherwise valid (`PAYOUT_UNAVAILABLE`,
+    `PROVIDER_UNROUTABLE`, …).
+
+  Both are always present. The validator stops at hard rules, so when `errors` is non-empty
+  `warnings` is `[]`: nothing soft matters until the hard problem is fixed. The codes are an open
+  set. Pinned by `test:admin-payment-settings`.
 
 ### `PUT /payments`
 

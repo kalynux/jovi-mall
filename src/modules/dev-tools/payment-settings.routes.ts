@@ -54,24 +54,29 @@ export const SetPaymentSettingsSchema = z.object({
  * availability is a runtime fact, so `PAYOUT_UNAVAILABLE` on a setting nobody touched is exactly
  * what an operator should see when they open the screen.
  *
- * The stored state is validated against itself. If it now breaks a HARD rule, those issues are
- * returned too — in the same list, because the screen shows every issue by `code` and `message`
- * and treats the codes as an open set. Hard issues come first: they mean new charges are being
- * refused, which outranks every soft warning.
+ * The stored state is validated against itself, and the two classes are kept APART:
  *
- * Exported for `test:payment-settings`.
+ * - `errors`: the stored state now breaks a HARD rule. New charges are being refused, which the
+ *   screen shows as "payments are broken now", not as a note.
+ * - `warnings`: soft rules on a state that is otherwise valid.
+ *
+ * The validator stops at hard errors, so when `errors` is non-empty `warnings` is empty. That is
+ * the right order anyway: nothing soft matters until the hard problem is fixed.
+ *
+ * Exported for `test:admin-payment-settings`.
  */
-export function standingIssues(): SettingsIssue[] {
+export function standingIssues(): { errors: SettingsIssue[]; warnings: SettingsIssue[] } {
     const current = getPaymentSettingsSync();
     const verdict = validateSettingsChange(current, current, buildRoutingFacts());
-    return verdict.ok ? verdict.warnings : verdict.errors;
+    return verdict.ok ? { errors: [], warnings: verdict.warnings } : { errors: verdict.errors, warnings: [] };
 }
 
 export function buildPaymentSettingsRouter(): Router {
     const router = Router();
 
     /**
-     * GET / — the settings, every aggregator's facts, what is offered now, and standing issues.
+     * GET / — the settings, every aggregator's facts, what is offered now, and the standing
+     * `errors` / `warnings` (see `standingIssues`).
      *
      * The one surface that NAMES aggregators; `/api/payments/options` never does. `effectiveProviders`
      * therefore keeps its `aggregator` here and nowhere public.
@@ -95,7 +100,7 @@ export function buildPaymentSettingsRouter(): Router {
                     activeForPayouts: name === settings.payout_aggregator,
                 })),
                 effectiveProviders: effectiveProviders(settings, facts),
-                warnings: standingIssues(),
+                ...standingIssues(),
             },
         });
     }));

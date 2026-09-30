@@ -79,6 +79,7 @@
         "test:payments": "ts-node scripts/test/test-payments.ts",
         "test:payment-routing": "ts-node scripts/test/test-payment-routing.ts",
         "test:payment-settings": "ts-node scripts/test/test-payment-settings.ts",
+        "test:admin-payment-settings": "ts-node scripts/test/test-admin-payment-settings.ts",
         "test:payment-options": "ts-node scripts/test/test-payment-options.ts",
         "test:payout-routing": "ts-node scripts/test/test-payout-routing.ts",
         "test:billing-otp": "ts-node scripts/test/test-billing-otp.ts",
