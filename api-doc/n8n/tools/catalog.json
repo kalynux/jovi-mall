@@ -2578,13 +2578,6 @@
           "category": "business_rule",
           "when": "The basket is empty",
           "customer_action": "explain"
-        },
-        {
-          "code": "PAYMENT_GATEWAY_NOT_CONFIGURED",
-          "status": 500,
-          "category": "internal",
-          "when": "This deployment has no mobile-money gateway",
-          "customer_action": "escalate_to_support"
         }
       ],
       "mutating": true,
