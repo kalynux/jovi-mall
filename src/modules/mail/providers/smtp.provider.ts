@@ -1,4 +1,4 @@
-import nodemailer from 'nodemailer';
+import nodemailer, { type Transporter } from 'nodemailer';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { recordIntegrationCall } from '../../system/domain/integration-observations';
@@ -44,7 +44,7 @@ const NODEMAILER_CODE_KIND: Readonly<Record<string, 'auth' | 'unavailable' | 're
 export class SmtpMailProvider implements IMailProvider {
     readonly name = 'smtp' as const;
 
-    private transporter: nodemailer.Transporter;
+    private transporter: Transporter;
 
     constructor(config?: SmtpMailConfig) {
         this.transporter = nodemailer.createTransport({
