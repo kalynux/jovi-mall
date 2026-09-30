@@ -489,9 +489,27 @@ that gap:
   the callback uses (compare-and-set on `processing`, so exactly once). `PENDING` or an
   inconclusive answer leaves the row alone for the next pass.
 
-What the sweep cannot settle (older than the maximum age, or never conclusive) still needs an
-administrator.
-<!-- W6-VERIFY: the manual "resolve unknown" exit (S4) is not at HEAD yet (payout-resolution.service.ts is uncommitted). Document the admin action here, and in admin/api-doc's changelog, once it lands. -->
+What the sweep cannot settle still needs an administrator. The typical case is a transfer request
+that timed out or gave no readable answer: the payout stays `processing` with a
+`transfer_failure_reason` beginning "Outcome unknown", and **no provider transfer id**, so the
+sweep has nothing to ask about (and `mark-paid` / `reject` refuse a `processing` row).
+
+**The manual exit is `resolve-unknown`** (jovi-mall `d9f4dcf`):
+`POST /api/internal/admin/payout-requests/:id/resolve-unknown` with
+`{ outcome: "paid" | "failed", reason, evidence? }`, reached from wi-admin as
+`POST /api/v1/money/payouts/:payoutId/resolve-unknown`. An administrator checks the provider's own
+dashboard for the `jm_po_…` reference, then records what it shows.
+
+- **`processing` only**, and refused until the sweep's quiet period
+  (`PAYOUT_RECONCILE_MIN_AGE_MINUTES`, default 15) has passed since the transfer was sent:
+  `409 EARNINGS_PAYOUT_TRANSFER_IN_FLIGHT` with `details.settleAfter`, because a callback may still
+  arrive.
+- Both outcomes settle through the same compare-and-set transition as the callback and the sweep,
+  so whichever lands first wins and the others get `409 EARNINGS_PAYOUT_NOT_PROCESSING`.
+- **`paid`** records the administrator as the one who resolved it. **`failed` keeps the owner's
+  hold** (ADR-024 D-7); retrying or rejecting the payout is a separate act.
+
+Full contract: [../admin/payout-requests.md](../admin/payout-requests.md#post-apiinternaladminpayout-requestsidresolve-unknown).
 
 ---
 
