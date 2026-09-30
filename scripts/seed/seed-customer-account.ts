@@ -40,7 +40,7 @@
  *   • two geocoded Douala addresses (Bonamoussadi = default, Akwa = work)
  *   • a WhatsApp channel connection on the account's own number, so the account
  *     is already "connected" and the real bot resolves it the day it lands
- *   • three saved payment methods (MoMo, Orange Money, card)
+ *   • two saved wallets (MTN, Orange) — no card: none is saved since 2026-09-30
  *   • a wishlist and a recently-viewed history
  *   • SEVEN orders spanning the states a storefront has to render differently
  *   • a non-empty cart, so the cart page is not an empty state
@@ -621,7 +621,7 @@ async function seedAccount(): Promise<void> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Payment methods — gateway-managed references, which is all this ever stores
+// Payment methods — wallets in the canonical form (ADR-A08, 2026-09-30)
 // ─────────────────────────────────────────────────────────────────────────────
 async function seedPaymentMethods(): Promise<void> {
   section('Saved payment methods');
@@ -631,49 +631,37 @@ async function seedPaymentMethods(): Promise<void> {
    * passes `req.auth.role_entity._id`, and a row keyed on the user id would be
    * invisible to every read.
    *
-   * No PAN, no CVV, no real gateway token: the ids below are obvious fixtures.
-   * The model stores only what a gateway hands back plus display metadata, and
-   * `gateway_*` is never serialised to a client.
+   * The shape `PaymentMethodService.add` writes: a canonical provider and the
+   * wallet's E.164 number, no gateway field. The numbers are fixtures on the
+   * right network prefixes (67x MTN, 69x Orange) — checkout WILL push a prompt to
+   * them, so they are deliberately unassigned-looking, not anyone's handset.
+   *
+   * ⚠ They used to carry `seed_cus_7e57_<n>` in `gateway_customer_id`, which
+   * checkout read as the payer number. `walletNumberOf` now refuses a non-E.164
+   * value, but a seed should not lean on that.
    */
   const methods = [
     {
-      provider: 'mtn_momo',
-      method_type: 'mobile_money' as const,
-      display_label: 'MTN MoMo •••• 0001',
-      brand: 'MTN',
+      provider: 'MTN',
+      phone_number: '+237670000001',
+      display_label: 'MTN Mobile Money · ••••0001',
       last4: '0001',
       is_default: true,
     },
     {
-      provider: 'orange_money',
-      method_type: 'mobile_money' as const,
-      display_label: 'Orange Money •••• 0044',
-      brand: 'Orange',
+      provider: 'ORANGE',
+      phone_number: '+237690000044',
+      display_label: 'Orange Money · ••••0044',
       last4: '0044',
-      is_default: false,
-    },
-    {
-      provider: 'notchpay',
-      method_type: 'card' as const,
-      display_label: 'VISA •••• 4242',
-      brand: 'visa',
-      last4: '4242',
-      exp_month: 11,
-      exp_year: 2029,
-      holder_name: ACCOUNT.name,
       is_default: false,
     },
   ];
 
-  for (const [index, method] of methods.entries()) {
+  for (const method of methods) {
     await UserPaymentMethodModel.create({
       owner_role: 'customer',
       owner_id: ID.customer,
-      gateway_customer_id: `seed_cus_7e57_${index}`,
-      gateway_instrument_id: `seed_pm_7e57_${index}`,
-      exp_month: null,
-      exp_year: null,
-      holder_name: null,
+      method_type: 'mobile_money',
       ...method,
     });
     log(`   💳 ${method.display_label.padEnd(26)} ${method.is_default ? '(default)' : ''}`);

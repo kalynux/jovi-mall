@@ -3,17 +3,29 @@ import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 import { UserRole } from '../../users/user.model';
 
 /**
- * UserPaymentMethod — a single saved payment instrument for any user role.
+ * UserPaymentMethod — a saved way to pay, for any user role.
  *
  * Role-agnostic, keyed by (owner_role, owner_id) where owner_id is the role
  * profile id (`req.auth.role_entity._id`). Mirrors the owner-keyed pattern used
  * by the billing credit wallet so a single collection serves every role.
  *
+ * ── A SAVED METHOD NAMES NO AGGREGATOR (ADR-A08, owner decision 2026-09-30) ──
+ * Rows written since 2026-09-30 are mobile-money WALLETS only: `provider` is the canonical
+ * provider the customer holds (`MTN` · `ORANGE` · `MOOV`) and `phone_number` is the wallet's
+ * E.164 number. Which aggregator eventually charges it is decided at checkout by the payment
+ * settings, so nothing here may bind a method to NotchPay, My-CoolPay or Stripe. Cards are not
+ * saved until card payments exist.
+ *
+ * ── LEGACY ROWS ARE READ, NEVER REWRITTEN (pre-production, no data migration) ──
+ * Older rows carry a lowercase `provider` (`mtn_momo`, `orange_money`, `moov_money`, or an
+ * aggregator name such as `stripe`), the wallet number in `gateway_customer_id`, and possibly
+ * card display fields. Those columns stay OPTIONAL so the rows still load; nothing writes them
+ * any more. `providerForSavedWallet` and `PaymentMethodMapper` translate on read.
+ *
  * SECURITY:
- * - Only gateway-managed tokens and non-sensitive display metadata are stored.
- *   The payment gateway owns tokenization and PCI compliance.
  * - Full card numbers (PAN) and CVV are NEVER stored here.
- * - `gateway_customer_id` / `gateway_instrument_id` are never returned to clients.
+ * - The wallet number is never returned in full on any endpoint — only masked and its last
+ *   four. Checkout reads it server-side to charge.
  */
 
 export type PaymentMethodType = 'card' | 'mobile_money' | 'bank_transfer';
@@ -21,16 +33,21 @@ export type PaymentMethodType = 'card' | 'mobile_money' | 'bank_transfer';
 export interface IUserPaymentMethod extends Document {
     owner_role: UserRole;
     owner_id: mongoose.Types.ObjectId;
-    provider: string;                 // "stripe", "notchpay", "mtn_momo"
-    gateway_customer_id: string;      // Gateway's customer/wallet id (secret)
-    gateway_instrument_id: string;    // Gateway's card/instrument id (secret)
+    /** `MTN` · `ORANGE` · `MOOV` on new rows; a legacy lowercase value on old ones. */
+    provider: string;
+    /** The wallet's E.164 number. Null on legacy rows, which kept it in `gateway_customer_id`. */
+    phone_number: string | null;
+    /** @deprecated legacy rows only (the wallet number, or an aggregator's customer id). */
+    gateway_customer_id: string | null;
+    /** @deprecated legacy rows only. */
+    gateway_instrument_id: string | null;
     method_type: PaymentMethodType;
-    display_label: string;            // e.g. "VISA •••• 8947"
-    brand: string | null;            // e.g. "visa", "mastercard", "MTN"
-    last4: string | null;            // last 4 digits / msisdn tail
-    exp_month: number | null;        // 1-12
-    exp_year: number | null;         // 4-digit year
-    holder_name: string | null;
+    display_label: string;            // e.g. "MTN Mobile Money · ••••4417"
+    brand: string | null;             // legacy card rows only
+    last4: string | null;             // the wallet number's tail (or a legacy card's)
+    exp_month: number | null;         // legacy card rows only
+    exp_year: number | null;          // legacy card rows only
+    holder_name: string | null;       // legacy card rows only
     is_default: boolean;
     created_at: Date;
     updated_at: Date;
@@ -48,8 +65,9 @@ const UserPaymentMethodSchema = new Schema<IUserPaymentMethod>(
             required: true,
         },
         provider: { type: String, required: true, trim: true },
-        gateway_customer_id: { type: String, required: true, trim: true },
-        gateway_instrument_id: { type: String, required: true, trim: true },
+        phone_number: { type: String, default: null, trim: true },
+        gateway_customer_id: { type: String, default: null, trim: true },
+        gateway_instrument_id: { type: String, default: null, trim: true },
         method_type: {
             type: String,
             required: true,

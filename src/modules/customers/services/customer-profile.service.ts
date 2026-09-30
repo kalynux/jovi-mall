@@ -1,10 +1,10 @@
 import mongoose from 'mongoose';
 import { CustomerRepository } from '../customer.repository';
-import { CustomerProfileMapper, CustomerPaymentMethodDto, GetCustomerProfileResponseDto, CustomerCompletionStatusDto } from '../dto/customer-profile.dto';
+import { CustomerProfileMapper, GetCustomerProfileResponseDto, CustomerCompletionStatusDto } from '../dto/customer-profile.dto';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { ICustomer } from '../customer.model';
-import { UpdateCustomerProfileInput, AddCustomerAddressInput, UpdateCustomerAddressInput, AddCustomerPaymentMethodInput } from '../validators/customer-onboarding.validator';
+import { UpdateCustomerProfileInput, AddCustomerAddressInput, UpdateCustomerAddressInput } from '../validators/customer-onboarding.validator';
 import { paymentMethodService } from '../../payment-methods/services/payment-method.service';
 import { toGeoAddress, dropNullLocation } from '../../../core/types/geo-address.types';
 import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
@@ -52,14 +52,7 @@ export class CustomerProfileService {
      * unified payment-method store (not the deprecated embedded array).
      */
     private async toProfileDto(customer: ICustomer): Promise<GetCustomerProfileResponseDto> {
-        const methods = await paymentMethodService.list('customer', customer._id.toString());
-        const paymentMethods: CustomerPaymentMethodDto[] = methods.map((m) => ({
-            id: m.id,
-            provider: m.provider,
-            display_label: m.display_label,
-            method_type: m.method_type,
-            is_default: m.is_default,
-        }));
+        const paymentMethods = await paymentMethodService.list('customer', customer._id.toString());
         return CustomerProfileMapper.toResponseDto(customer, paymentMethods, this.fileRepository, this.storageProvider);
     }
 
@@ -181,26 +174,5 @@ export class CustomerProfileService {
         const updated = await this.customerRepo.setDefaultAddress(customerId, addressId);
         if (!updated) throw createAppError(ERROR_CODES.CUSTOMER_NOT_FOUND, 404);
         return this.toProfileDto(updated);
-    }
-
-    /**
-     * Payment methods are persisted in the unified `user_payment_methods` store
-     * (owner_role='customer'); these endpoints are kept for backward compatibility.
-     */
-    async addPaymentMethod(customerId: string, input: AddCustomerPaymentMethodInput): Promise<GetCustomerProfileResponseDto> {
-        const customer = await this.customerRepo.findById(customerId);
-        if (!customer) throw createAppError(ERROR_CODES.CUSTOMER_NOT_FOUND, 404);
-
-        await paymentMethodService.add('customer', customerId, input);
-        return this.toProfileDto(customer);
-    }
-
-    async removePaymentMethod(customerId: string, methodId: string): Promise<GetCustomerProfileResponseDto> {
-        const customer = await this.customerRepo.findById(customerId);
-        if (!customer) throw createAppError(ERROR_CODES.CUSTOMER_NOT_FOUND, 404);
-
-        // Surfaces PAYMENT_METHOD_NOT_FOUND (404) if absent / not owned.
-        await paymentMethodService.remove('customer', customerId, methodId);
-        return this.toProfileDto(customer);
     }
 }

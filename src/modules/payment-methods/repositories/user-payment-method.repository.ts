@@ -2,18 +2,19 @@ import { Types } from 'mongoose';
 import { UserPaymentMethodModel, IUserPaymentMethod, PaymentMethodType } from '../models/user-payment-method.model';
 import { UserRole } from '../../users/user.model';
 
-/** Plain field set for creating a payment method (excludes owner + persistence fields). */
+/**
+ * Plain field set for creating a payment method (excludes owner + persistence fields).
+ *
+ * ⚠ Wallet rows only, in the canonical form: no `gateway_*` and no card field is writable
+ * through here any more (ADR-A08, owner decision 2026-09-30). Those columns stay on the model
+ * so legacy rows still load.
+ */
 export interface PaymentMethodCreateData {
     provider: string;
-    gateway_customer_id: string;
-    gateway_instrument_id: string;
-    method_type: PaymentMethodType;
+    phone_number: string;
+    method_type: Extract<PaymentMethodType, 'mobile_money'>;
     display_label: string;
-    brand: string | null;
-    last4: string | null;
-    exp_month: number | null;
-    exp_year: number | null;
-    holder_name: string | null;
+    last4: string;
     is_default: boolean;
 }
 

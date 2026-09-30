@@ -265,6 +265,10 @@ function enumOf(model: { schema: { eachPath(fn: (path: string, type: any) => voi
     [ 'stripe', 'notchpay', 'mycoolpay', 'paystack', '', null, undefined, 'toString', '__proto__' ]
       .every((v) => providerForSavedWallet(v as string) === null));
   assert('saved wallets tolerate case and whitespace', () => providerForSavedWallet(' MTN_MOMO ') === 'MTN');
+  assert('saved wallets: the canonical names rows store since 2026-09-30 read as themselves', () =>
+    providerForSavedWallet('MTN') === 'MTN' && providerForSavedWallet('ORANGE') === 'ORANGE'
+    && providerForSavedWallet('MOOV') === 'MOOV');
+  assert('saved wallets: CARD is not a wallet → null', () => providerForSavedWallet('CARD') === null);
   assert('defaults: NotchPay collects and pays out, Stripe off, version 0', () =>
     DEFAULT_PAYMENT_SETTINGS.collection_aggregator === 'NOTCHPAY'
     && DEFAULT_PAYMENT_SETTINGS.payout_aggregator === 'NOTCHPAY'

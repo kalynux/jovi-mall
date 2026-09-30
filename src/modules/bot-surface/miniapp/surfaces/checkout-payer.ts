@@ -10,6 +10,7 @@ import {
 } from '../../../payments/domain/payment-provider';
 import { offeredProviders, resolveCollectionRoute } from '../../../payments/services/payment-routing.service';
 import { UserPaymentMethodRepository } from '../../../payment-methods/repositories/user-payment-method.repository';
+import { walletNumberOf } from '../../../payment-methods/dto/payment-method.dto';
 import { maskPhone } from '../../dto/bot-projections';
 
 /** Default-first, then newest — the ordering `storedPayerNumber` relies on is the repository's own. */
@@ -107,12 +108,13 @@ export async function maskedPayerNumber(customer: ICustomer): Promise<string | n
  * two are frequently different handsets. Charging the login number when a wallet exists would
  * push the prompt to the wrong device.
  *
- * ⚠ **`gateway_customer_id` IS the phone number for a mobile-money method** — the customer API
- * stores the E.164 value as both gateway ids and returns neither on any endpoint. That rule is
- * inherited whole: it is read here to charge, and it leaves this process only masked.
+ * ⚠ **The wallet number is `phone_number`, or `gateway_customer_id` on a legacy row** — rows
+ * saved before 2026-09-30 kept it there. `walletNumberOf` reads both, and only a value that is
+ * actually E.164 (some legacy rows hold an aggregator's customer id). No endpoint returns it
+ * unmasked: it is read here to charge, and it leaves this process only masked.
  *
  * ⚠ **The REPOSITORY, not `paymentMethodService`, and the difference is the point.** That
- * service projects to `PaymentMethodDto`, which deliberately omits both gateway ids — the rule
+ * service projects to `PaymentMethodDto`, which carries the number only masked — the rule
  * that keeps a saved wallet's number unreadable through every API. Nothing here breaks that:
  * the number is read to open a charge and is published only through `maskedPayerNumber`.
  *
@@ -130,7 +132,7 @@ export async function storedPayerNumber(customer: ICustomer): Promise<string | n
 /** The wallet a server-picked charge goes to, with the network its saved method names (if any). */
 export interface StoredPayer {
     number: string;
-    /** The saved method's own `provider` (`mtn_momo`, …) — null for the profile phone. */
+    /** The saved method's own `provider` (`MTN`, or legacy `mtn_momo`, …) — null for the profile phone. */
     savedProvider: string | null;
 }
 
@@ -145,7 +147,7 @@ export async function storedPayer(customer: ICustomer): Promise<StoredPayer | nu
     const methods = await paymentMethods.list('customer', String(customer._id));
     const wallet = methods.find((method) => method.method_type === 'mobile_money') ?? null;
 
-    const number = wallet?.gateway_customer_id?.trim();
+    const number = wallet ? walletNumberOf(wallet) : null;
     if (number) return { number, savedProvider: wallet?.provider ?? null };
 
     const phone = customer.phone?.trim();

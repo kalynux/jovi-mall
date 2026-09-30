@@ -741,8 +741,8 @@ function main(): void {
 
     /**
      * ⚠ **The number the charge goes to is read through the REPOSITORY, never through
-     * `paymentMethodService`** — that service projects to `PaymentMethodDto`, which omits both
-     * gateway ids, and a saved wallet's number is unreadable through every API by design. It is
+     * `paymentMethodService`** — that service projects to `PaymentMethodDto`, which carries the
+     * number only masked, and a saved wallet's number is unreadable through every API by design. It is
      * read here to charge and leaves the process only through `maskPhone`.
      */
     assert('⛔ the payable number is never published unmasked', () => {

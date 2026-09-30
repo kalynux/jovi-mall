@@ -162,23 +162,17 @@ function assert(condition: boolean, label: string): void {
 }
 
 // ─── Payment methods (add) ────────────────────────────────────────────────────
+// Since 2026-09-30 the body has no clearable field: a wallet is a provider and a number, and
+// the old display fields are REFUSED rather than cleared (`.strict()`). test:payment-methods
+// owns the schema; this pins only that '' can no longer mean "clear" here.
 
 {
-  const base = {
-    provider: 'stripe',
-    gateway_customer_id: 'cus_1',
-    gateway_instrument_id: 'pm_1',
-    method_type: 'card',
-    display_label: 'VISA •••• 4242',
-  };
-
-  const cleared = AddPaymentMethodSchema.safeParse({ ...base, brand: '', last4: '', holder_name: '' });
-  assert(cleared.success
-    && cleared.data.brand === null && cleared.data.last4 === null && cleared.data.holder_name === null,
-    "payment method: ''-valued display fields → null");
-
-  assert(!AddPaymentMethodSchema.safeParse({ ...base, last4: '123' }).success,
-    'payment method: 3-digit last4 still rejected');
+  const base = { provider: 'MTN', phoneNumber: '+237670124417' };
+  assert(AddPaymentMethodSchema.safeParse(base).success, 'payment method: a wallet body parses');
+  assert(!AddPaymentMethodSchema.safeParse({ ...base, brand: '', last4: '', holder_name: '' }).success,
+    "payment method: legacy display fields are refused, even ''-valued");
+  assert(!AddPaymentMethodSchema.safeParse({ ...base, label: '' }).success,
+    "payment method: '' label rejected (omit it to get the composed one)");
 }
 
 // ─── Result ───────────────────────────────────────────────────────────────────

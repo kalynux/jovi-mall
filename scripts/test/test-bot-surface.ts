@@ -1461,7 +1461,7 @@ async function main(): Promise<void> {
             dateOfBirth: new Date('1990-01-01'),
             preferences: { language: 'fr', currency: 'XAF', marketing_opt_in: false, ai_tone: [], ads_compact_mode: false, compact_mode: false },
             recentProductCode: 'SKU-1',
-            savedPaymentMethods: [{ id: 'pm1', provider: 'x', display_label: 'Visa ••1234', method_type: 'card', is_default: true }],
+            savedPaymentMethods: [{ id: 'pm1', provider: 'MTN', kind: 'MOBILE_MONEY', label: 'MTN Mobile Money · ••••4417', maskedPhone: '+2376••••4417', last4: '4417', isDefault: true, createdAt: new Date(), updatedAt: new Date() }],
             timezone: 'Africa/Douala',
             status: 'active',
             onboardingStep: 0,
@@ -2122,75 +2122,58 @@ async function main(): Promise<void> {
 
     // ── Saved payment methods (MCP parity step 5) ────────────────────────────
 
+    /** A saved method as the customer API projects it (`PaymentMethodDto`, 2026-09-30). */
     const aMethod = (over: Record<string, unknown> = {}) => ({
         id: '68f0000000000000000000e1',
-        provider: 'mtn_momo',
-        method_type: 'mobile_money',
-        display_label: 'MTN Mobile Money · ••••4417',
-        brand: null,
+        provider: 'MTN',
+        kind: 'MOBILE_MONEY',
+        label: 'MTN Mobile Money · ••••4417',
+        maskedPhone: '+2376••••4417',
         last4: '4417',
-        exp_month: null,
-        exp_year: null,
-        is_default: false,
+        isDefault: false,
+        createdAt: new Date('2026-09-30T10:00:00Z'),
+        updatedAt: new Date('2026-09-30T10:00:00Z'),
         ...over,
     }) as Parameters<typeof toBotPaymentMethodDto>[0];
 
     /**
-     * ⚠ **THE assertion this projection exists for.** A card whose expiry has passed stays in
-     * the list and still looks like a way to pay. The customer API reports the month and the
-     * year as two plain numbers and leaves the reader to compare them against today — which,
-     * for a model, is date arithmetic, and it fails quietly as "use your Visa ending 4242"
-     * followed by a decline.
-     *
-     * ⚠ And a card is good through the LAST DAY of its expiry month, so the boundary is the
-     * first of the month AFTER it. Comparing against the first of the expiry month itself
-     * calls a perfectly good card dead for up to 31 days — which is the version somebody
-     * writes when they are not thinking about it.
+     * ⚠ The output keys are what the live n8n MCP reads, so they did not move when the customer
+     * API stopped returning card fields (2026-09-30). `brand` / `expires` are null and `expired`
+     * false on every row now; a card is kept from becoming the default on its TYPE instead
+     * (`paymentRows.mayBeDefault`), since no card can pay until card payments exist.
      */
-    assert('⚠ a card is live through the LAST DAY of its expiry month', () => {
-        const card = { brand: 'visa', method_type: 'card', exp_month: 6, exp_year: 2026 };
-        const onTheLastDay = toBotPaymentMethodDto(aMethod(card), new Date('2026-06-30T23:59:59Z'));
-        const theDayAfter = toBotPaymentMethodDto(aMethod(card), new Date('2026-07-01T00:00:01Z'));
-        const firstOfTheMonth = toBotPaymentMethodDto(aMethod(card), new Date('2026-06-01T00:00:00Z'));
-        return onTheLastDay.expired === false
-            && firstOfTheMonth.expired === false
-            && theDayAfter.expired === true;
+    assert('the bot projection keeps its MCP output keys', () => {
+        const dto = toBotPaymentMethodDto(aMethod());
+        return JSON.stringify(Object.keys(dto).sort())
+            === JSON.stringify(['brand', 'expired', 'expires', 'id', 'isDefault', 'label', 'last4', 'provider', 'type']);
     });
 
-    assert('⚠ a WALLET never expires — a phone number has no expiry', () =>
-        toBotPaymentMethodDto(aMethod(), new Date('2099-01-01T00:00:00Z')).expired === false);
-
-    assert('the expiry is rendered MM/YYYY, zero-padded, and null without one', () => {
-        const card = toBotPaymentMethodDto(
-            aMethod({ method_type: 'card', exp_month: 6, exp_year: 2029 }),
-            new Date('2026-01-01T00:00:00Z'),
-        );
-        return card.expires === '06/2029' && toBotPaymentMethodDto(aMethod()).expires === null;
+    assert('a wallet reads as mobile_money on its canonical provider; a legacy card as card', () => {
+        const wallet = toBotPaymentMethodDto(aMethod());
+        const card = toBotPaymentMethodDto(aMethod({ provider: 'CARD', kind: 'CARD', maskedPhone: null, last4: '4242' }));
+        return wallet.type === 'mobile_money' && wallet.provider === 'MTN'
+            && card.type === 'card' && card.provider === 'CARD'
+            && wallet.expired === false && wallet.expires === null && wallet.brand === null;
     });
+
+    assert('⛔ a card row is never offered as the default in the saved-methods list', () =>
+        /mayBeDefault: m\.type !== 'card',/.test(
+            fs.readFileSync(path.join(__dirname, '../../src/modules/bot-surface/controllers/bot-payment-method.controller.ts'), 'utf8')));
 
     /**
-     * ⚠ **The leak assertion for this step.** For a WALLET the two gateway fields ARE the
-     * customer's phone number — the customer API stores the E.164 value as both — and it is
-     * withheld on every endpoint. `holder_name` goes too, as the customer's own name.
+     * ⚠ **The leak assertion for this step.** The customer API returns a wallet's number only
+     * masked; the chat projection drops even the mask.
      */
-    assert('⚠ the payment-method projection leaks no gateway id and no holder name', () => {
-        const dto = toBotPaymentMethodDto(aMethod({
-            gateway_customer_id: '+237600124417',
-            gateway_instrument_id: '+237600124417',
-            holder_name: 'Nadege Fotso',
-        }));
-        const json = JSON.stringify(dto);
-        return !json.includes('+237600124417')
-            && !json.includes('gateway')
-            && !json.includes('Nadege Fotso');
+    assert('⚠ the payment-method projection carries no number, not even masked', () => {
+        const json = JSON.stringify(toBotPaymentMethodDto(aMethod()));
+        return !json.includes('+2376') && !json.includes('maskedPhone') && !json.includes('gateway');
     });
 
     assert('the label survives — it is the only thing a chat can say out loud', () =>
         toBotPaymentMethodDto(aMethod()).label === 'MTN Mobile Money · ••••4417');
 
     /**
-     * ⚠ A card cannot be saved from a chat: the customer API needs gateway tokens minted by a
-     * browser SDK, and a model asked for them would invent them. So the schema offers no
+     * ⚠ A card cannot be saved anywhere (owner decision 2026-09-30). So the schema offers no
      * `method_type`, no `gateway_*` and no card fields at all, and `.strict()` makes sending
      * one a 400 rather than a silently stripped field.
      */

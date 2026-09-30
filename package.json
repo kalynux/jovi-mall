@@ -78,6 +78,7 @@
         "test:tracking-outbox": "ts-node scripts/test/test-tracking-outbox.ts",
         "test:payments": "ts-node scripts/test/test-payments.ts",
         "test:payment-routing": "ts-node scripts/test/test-payment-routing.ts",
+        "test:payment-methods": "ts-node scripts/test/test-payment-methods.ts",
         "test:payment-settings": "ts-node scripts/test/test-payment-settings.ts",
         "test:admin-payment-settings": "ts-node scripts/test/test-admin-payment-settings.ts",
         "test:payment-options": "ts-node scripts/test/test-payment-options.ts",

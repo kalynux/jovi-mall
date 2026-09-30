@@ -20,18 +20,7 @@ import {
     BotPaymentMethodParamSchema,
 } from '../validators/bot.validators';
 
-/**
- * The label a saved wallet is known by, composed here rather than accepted.
- *
- * ⚠ Mirrors the storefront's own format — `"MTN Mobile Money · ••••4417"` — so a customer
- * who saved a wallet on the website and one who saved it in chat see the same wallet
- * described the same way. Two formats for one thing reads as two different wallets.
- */
-const WALLET_LABELS: Readonly<Record<string, string>> = Object.freeze({
-    mtn_momo: 'MTN Mobile Money',
-    orange_money: 'Orange Money',
-    moov_money: 'Moov Money',
-});
+import { providerForSavedWallet } from '../../payments/domain/payment-provider';
 
 /**
  * The customer's saved ways to pay.
@@ -43,9 +32,9 @@ const WALLET_LABELS: Readonly<Record<string, string>> = Object.freeze({
  * neither has to be derived here.
  *
  * ── THE NUMBER NEVER COMES BACK ─────────────────────────────────────────────
- * A saved wallet IS a phone number: the customer API stores the E.164 value as both
- * `gateway_customer_id` and `gateway_instrument_id`, and returns neither on any endpoint.
- * That rule is inherited whole. A chat can name a wallet and set it as the default; it
+ * A saved wallet IS a phone number: the customer API stores the E.164 value in
+ * `phone_number` (legacy rows: `gateway_customer_id`) and returns it only masked. That rule is
+ * inherited whole — this projection does not even carry the mask. A chat can name a wallet and set it as the default; it
  * cannot read the number out, and checkout asks for it again.
  */
 export class BotPaymentMethodController {
@@ -66,7 +55,7 @@ export class BotPaymentMethodController {
 
         const methods = await paymentMethodService.list('customer', caller.customerId);
         const sorted = [...methods].sort(
-            (a, b) => Number(b.is_default) - Number(a.is_default),
+            (a, b) => Number(b.isDefault) - Number(a.isDefault),
         );
 
         const chat = windowForChat({
@@ -82,11 +71,13 @@ export class BotPaymentMethodController {
     /**
      * `POST /payment-methods` — save a mobile-money wallet.
      *
-     * ⚠ **Wallets only. A card cannot be saved from a chat and this is not a policy
-     * choice.** The customer API needs `gateway_customer_id` and `gateway_instrument_id`,
-     * which for a card the payment gateway's SDK mints in a browser after the shopper types
-     * a number the platform never sees. There is no chat equivalent, so a model asked for
-     * those fields would invent them. For a wallet they are simply the phone number, twice.
+     * ⚠ **Wallets only**, as on every surface since 2026-09-30 (owner decision 1): no card is
+     * saved anywhere until card payments exist.
+     *
+     * ⚠ **The INPUT is unchanged — `mtn_momo` / `orange_money` / `moov_money` — because the
+     * live n8n MCP sends it.** What is STORED is the canonical form every other door writes
+     * (`MTN` · `ORANGE` · `MOOV` + `phone_number`), through the one service, so this door also
+     * gets the network check (`422 PAYMENT_PROVIDER_PHONE_MISMATCH`) and the composed label.
      *
      * ⚠ **The number is proven E.164 at the door**, by the platform's own `PhoneNumberSchema`
      * rather than by a check here. The stored value is what a gateway will later be asked to
@@ -97,29 +88,12 @@ export class BotPaymentMethodController {
         const input = BotPaymentMethodAddSchema.parse(req.body ?? {});
         const caller = botCallerOf(req);
 
-        // Already normalised and proven E.164 by `PhoneNumberSchema`, so there is nothing
-        // left to check here — the door did it, in the platform's own words.
-        const e164 = input.phoneNumber;
-        const last4 = e164.slice(-4);
-        const network = WALLET_LABELS[input.provider] ?? 'Mobile money';
-
+        // The enum admits only the three wallet names, each of which maps; the `!` states that.
         const method = await paymentMethodService.add('customer', caller.customerId, {
-            provider: input.provider,
-            /**
-             * ⚠ The same value twice, and that is the customer API's own shape rather than a
-             * shortcut: for mobile money the customer and the instrument are one thing, and
-             * `frontend/landing` sends it exactly this way.
-             */
-            gateway_customer_id: e164,
-            gateway_instrument_id: e164,
-            method_type: 'mobile_money',
-            display_label: `${network} · ${last4.padStart(8, '•')}`,
-            last4,
-            brand: null,
-            exp_month: null,
-            exp_year: null,
-            holder_name: null,
-            is_default: input.makeDefault ?? false,
+            provider: providerForSavedWallet(input.provider)!,
+            // Already normalised and proven E.164 by `PhoneNumberSchema` at the door.
+            phoneNumber: input.phoneNumber,
+            isDefault: input.makeDefault ?? false,
         });
 
         sendSuccess(res, toBotPaymentMethodDto(method), { status: 201 });
@@ -140,7 +114,7 @@ export class BotPaymentMethodController {
         await paymentMethodService.setDefault('customer', caller.customerId, methodId);
 
         const methods = await paymentMethodService.list('customer', caller.customerId);
-        const sorted = [...methods].sort((a, b) => Number(b.is_default) - Number(a.is_default));
+        const sorted = [...methods].sort((a, b) => Number(b.isDefault) - Number(a.isDefault));
         sendSuccess(res, sorted.map((m) => toBotPaymentMethodDto(m)));
     });
 
@@ -163,7 +137,7 @@ export class BotPaymentMethodController {
         sendSuccess(res, {
             removed: true,
             remaining: remaining.length,
-            hasDefault: remaining.some((m) => m.is_default),
+            hasDefault: remaining.some((m) => m.isDefault),
         });
     });
 }
@@ -177,7 +151,7 @@ async function paymentRows(customerId: string): Promise<SavedListRow[]> {
     const methods = await paymentMethodService.list('customer', customerId);
 
     return [...methods]
-        .sort((a, b) => Number(b.is_default) - Number(a.is_default))
+        .sort((a, b) => Number(b.isDefault) - Number(a.isDefault))
         .map((m) => toBotPaymentMethodDto(m))
         .map((m) => ({
             id: m.id,
@@ -185,12 +159,12 @@ async function paymentRows(customerId: string): Promise<SavedListRow[]> {
             detail: m.expires ? `${m.expires}${m.expired ? ' ⚠' : ''}` : null,
             isDefault: m.isDefault,
             /**
-             * ⚠ **An expired card may be REMOVED but not made the default.** The service
-             * accepts it and checkout then declines the charge, so the button's only outcome
-             * is a customer discovering at the till that the thing they just chose cannot
-             * pay. See `SavedListRow.mayBeDefault`.
+             * ⚠ **A card may be REMOVED but not made the default.** Only a legacy row can be a
+             * card (none is saved since 2026-09-30) and card payments do not exist, so the
+             * button's only outcome would be a customer discovering at the till that the thing
+             * they just chose cannot pay. See `SavedListRow.mayBeDefault`.
              */
-            mayBeDefault: !m.expired,
+            mayBeDefault: m.type !== 'card',
         }));
 }
 
@@ -231,9 +205,9 @@ export async function paymentSection(req: Request, res: Response, rest: string):
     if (parsed.op === 'def') {
         /**
          * ⚠ **Re-checked here, not merely left off the keyboard.** `paymentRows` declines to
-         * draw the button for an expired card; this declines to ACT on the token. A tap is a
+         * draw the button for a card; this declines to ACT on the token. A tap is a
          * string a client can send without ever having been drawn one, and the two together
-         * are what make "an expired card cannot become the default" a property rather than a
+         * are what make "a card cannot become the default" a property rather than a
          * rendering habit.
          */
         if (row.mayBeDefault === false) throw unknownBotAction();

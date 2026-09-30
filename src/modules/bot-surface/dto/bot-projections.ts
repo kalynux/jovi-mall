@@ -22,6 +22,7 @@ import {
     pendingQuestionView,
 } from '../domain/bot-pending-question';
 import { BotRecentlySentEntry, recentlySentView } from '../domain/bot-recently-sent';
+import type { PaymentMethodDto } from '../../payment-methods/dto/payment-method.dto';
 
 /**
  * The places the bot surface's output DIFFERS from the customer API's.
@@ -908,89 +909,58 @@ export interface BotBookingPaymentDto {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 11 · Saved payment methods — the card that cannot be used any more
+// 11 · Saved payment methods — wallets, and the legacy card that cannot pay
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface BotPaymentMethodDto {
     id: string;
     /** What to call it out loud — "MTN Mobile Money · ••••4417". Composed at save time. */
     label: string;
-    /** `card` · `mobile_money` · `bank_transfer`. */
+    /** `mobile_money` · `card` · `bank_transfer` — the chat's lowercase vocabulary. */
     type: string;
-    /** `mtn_momo`, `orange_money`, `moov_money`, `stripe`, … */
-    provider: string;
-    /** Card brand, when it is a card. Null on a wallet. */
-    brand: string | null;
-    /** The last four digits — of the card, or of the wallet's phone number. */
+    /**
+     * `MTN` · `ORANGE` · `MOOV` for a wallet, `CARD` for a legacy card row, null for a legacy row
+     * that names only an aggregator. The canonical vocabulary since 2026-09-30 — a legacy
+     * `mtn_momo` row reads as `MTN` here too.
+     */
+    provider: string | null;
+    /**
+     * Always null. Kept so the live MCP's output shape does not move: it was a legacy card's
+     * brand, and the customer API no longer returns card display fields (no card is saved).
+     */
+    brand: null;
+    /** The last four digits of the wallet's number (or of a legacy card). */
     last4: string | null;
     isDefault: boolean;
-    /** `MM/YYYY` for a card, null for everything else. */
-    expires: string | null;
+    /** Always null, for the same reason as `brand`: no expiry is returned any more. */
+    expires: null;
     /**
-     * ⚠ **THE FIELD THIS PROJECTION EXISTS FOR.** A saved card whose expiry has passed is
-     * still in the list and still looks like a way to pay. Nothing removes it, and the
-     * customer API reports the month and the year as two plain numbers, leaving the reader
-     * to compare them against today.
-     *
-     * A model doing that comparison is a model doing date arithmetic, which it does quietly
-     * wrong — and the failure lands as "use your Visa ending 4242", followed by a decline
-     * the customer has to work out for themselves. So the comparison happens here, once.
-     *
-     * Always `false` for a wallet: a phone number does not expire.
+     * Always false, for the same reason. What this used to guard — making an unusable card the
+     * default — is now guarded on `type === 'card'` itself (`paymentRows.mayBeDefault`), since
+     * no card can pay at all until card payments exist.
      */
-    expired: boolean;
+    expired: false;
 }
 
 /**
  * One saved payment method, as a chat may see it.
  *
- * ── THE NUMBER IS NEVER HERE, AND THAT IS THE CUSTOMER API'S RULE, NOT THIS ONE ──
- * `PaymentMethodMapper.toDto` already withholds `gateway_customer_id` and
- * `gateway_instrument_id`, which for a wallet ARE the customer's phone number. This
- * projection inherits that and adds nothing back. A chat can name a wallet; it cannot read
- * the number out, and checkout asks for it again.
- *
- * ⚠ That is a real limitation rather than an oversight, and the storefront meets it too —
- * it keeps a copy of the number in device storage precisely because the server will not
- * return one. A chat has no equivalent, so a saved wallet saves the customer choosing a
- * network, not typing a number.
- *
- * `holder_name` is dropped: it is the customer's own name, which a chat already knows.
+ * ── THE NUMBER IS NEVER HERE, NOT EVEN MASKED ────────────────────────────────
+ * `PaymentMethodMapper.toDto` returns the wallet number only masked; this projection drops the
+ * mask too. A chat can name a wallet ("MTN Mobile Money · ••••4417" already carries the tail);
+ * it cannot read the number out.
  */
-export function toBotPaymentMethodDto(
-    method: {
-        id: string;
-        provider: string;
-        method_type: string;
-        display_label: string;
-        brand: string | null;
-        last4: string | null;
-        exp_month: number | null;
-        exp_year: number | null;
-        is_default: boolean;
-    },
-    /** Injected so the comparison is testable without waiting for a card to expire. */
-    now: Date = new Date(),
-): BotPaymentMethodDto {
-    const month = method.exp_month;
-    const year = method.exp_year;
-    const hasExpiry = typeof month === 'number' && typeof year === 'number';
-
+export function toBotPaymentMethodDto(method: PaymentMethodDto): BotPaymentMethodDto {
     return {
         id: method.id,
-        label: method.display_label,
-        type: method.method_type,
+        label: method.label,
+        type: method.kind.toLowerCase(),
         provider: method.provider,
-        brand: method.brand,
+        brand: null,
         last4: method.last4,
-        isDefault: method.is_default,
-        expires: hasExpiry ? `${String(month).padStart(2, '0')}/${year}` : null,
-        /**
-         * ⚠ A card is good through the LAST DAY of its expiry month, so the comparison is
-         * against the first day of the month AFTER it. Comparing against the first of the
-         * expiry month itself would call a perfectly good card dead for up to 31 days.
-         */
-        expired: hasExpiry ? new Date(Date.UTC(year!, month!, 1)) <= now : false,
+        isDefault: method.isDefault,
+        expires: null,
+        expired: false,
     };
 }
 

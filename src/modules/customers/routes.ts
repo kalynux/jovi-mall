@@ -3,6 +3,7 @@ import { requireAuth, requireRole } from '../../api/middlewares/auth.middleware'
 import { CustomerProfileController } from './controllers/customer-profile.controller';
 import { CustomerCatalogController } from './controllers/customer-catalog.controller';
 import { DeviceTokenController } from '../notifications/controllers/device-token.controller';
+import { PaymentMethodController } from '../payment-methods/controllers/payment-method.controller';
 
 const router = Router();
 
@@ -58,11 +59,17 @@ router.patch('/addresses/:id', CustomerProfileController.updateAddress);
 router.post('/devices', DeviceTokenController.register);
 router.delete('/devices', DeviceTokenController.unregister);
 
-/** POST /api/customer/payment-methods */
-router.post('/payment-methods', CustomerProfileController.addPaymentMethod);
-
-/** DELETE /api/customer/payment-methods/:id */
-router.delete('/payment-methods/:id', CustomerProfileController.removePaymentMethod);
+/**
+ * POST /api/customer/payment-methods · DELETE /api/customer/payment-methods/:id
+ *
+ * ⚠ **A THIN ALIAS of `/api/me/payment-methods`** (2026-09-30): the same handlers, so the same
+ * body schema, the same errors and the same response — the saved method itself, not the whole
+ * profile as these used to answer. Two shapes for one wallet is how a client ends up saving one
+ * the other surface cannot read. The owner is `req.auth.role_entity`, which `requireRole` above
+ * pins to the customer profile.
+ */
+router.post('/payment-methods', PaymentMethodController.add);
+router.delete('/payment-methods/:id', PaymentMethodController.remove);
 
 /**
  * ── The customer's own view of the catalogue (Phase 6 · 6.E.1 / 6.E.2) ───────

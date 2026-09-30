@@ -974,26 +974,19 @@ export const BotCommandDispatchSchema = z
  * The three mobile-money networks the storefront offers, and the only values this surface
  * will save.
  *
- * ⚠ **Copied from `frontend/landing`'s own `MOMO_PROVIDERS`**, which is a hand-typed list
- * there too — the backend column is a free `String`, so nothing checks either side. A
- * fourth network added on the website is a value this schema will refuse until it is added
- * here as well.
+ * ⚠ **The chat's own vocabulary, kept because the live n8n MCP sends it.** Since 2026-09-30
+ * the stored and HTTP vocabulary is the canonical `MTN` · `ORANGE` · `MOOV`; the controller maps
+ * each of these through `providerForSavedWallet`, and a value added here must map there too.
  */
 export const BOT_WALLET_PROVIDERS = ['mtn_momo', 'orange_money', 'moov_money'] as const;
 
 /**
  * `POST /payment-methods` — save a mobile-money wallet.
  *
- * ── WHY THERE IS NO CARD PATH, AND WHY THAT IS NOT CAUTION ──────────────────
- * `POST /api/me/payment-methods` requires `gateway_customer_id` and
- * `gateway_instrument_id`. For a CARD those are produced by the payment gateway's own SDK
- * running in a browser, after the shopper types a number the platform never sees. A chat
- * has no browser and no SDK, so there is no honest way for a chat caller to hold one — a
- * model asked for those two fields would supply something invented.
- *
- * For a WALLET they are not tokens at all: the storefront sends the customer's E.164 number
- * as **both** values, because for mobile money the customer and the instrument are the same
- * thing. So this route takes the number and composes the rest server-side.
+ * ── THERE IS NO CARD PATH ────────────────────────────────────────────────────
+ * No surface saves a card since 2026-09-30 (owner decision 1): card payments do not exist.
+ * A wallet is a provider and a number, and the rest is composed server-side by the one
+ * service every door writes through.
  *
  * ⚠ **`display_label` and `last4` are composed here too, not accepted.** They are what a
  * chat will read back out to the customer, and a model that wrote its own label could

@@ -28,19 +28,6 @@ const PreferencesSchema = z.object({
     compact_mode: z.boolean().optional(),
 });
 
-/**
- * Payment methods are gateway-managed. We record display metadata only.
- * The provider manages all tokenization on their end.
- */
-const SavedPaymentMethodSchema = z.object({
-    provider: z.string().min(1).trim(),
-    gateway_customer_id: z.string().min(1).trim(),
-    gateway_instrument_id: z.string().min(1).trim(),
-    display_label: z.string().min(1).max(100).trim(),
-    method_type: z.enum(['card', 'mobile_money', 'bank_transfer']),
-    is_default: z.boolean().default(false),
-});
-
 // ─── General Profile Update ───────────────────────────────────────────────────
 
 export const UpdateCustomerProfileSchema = z.object({
@@ -85,8 +72,3 @@ export const UpdateCustomerAddressSchema = SavedAddressSchema
     .extend({ country: z.string().length(2).toUpperCase().optional() });
 
 export type UpdateCustomerAddressInput = z.infer<typeof UpdateCustomerAddressSchema>;
-
-// ─── Add Payment Method ───────────────────────────────────────────────────────
-
-export const AddCustomerPaymentMethodSchema = SavedPaymentMethodSchema;
-export type AddCustomerPaymentMethodInput = z.infer<typeof AddCustomerPaymentMethodSchema>;

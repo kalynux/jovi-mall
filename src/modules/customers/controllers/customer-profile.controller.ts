@@ -5,7 +5,6 @@ import {
     UpdateCustomerProfileSchema,
     AddCustomerAddressSchema,
     UpdateCustomerAddressSchema,
-    AddCustomerPaymentMethodSchema,
 } from '../validators/customer-onboarding.validator';
 
 const customerProfileService = new CustomerProfileService();
@@ -66,18 +65,5 @@ export class CustomerProfileController {
         const customerId = req.auth!.role_entity._id.toString();
         const profile = await customerProfileService.setDefaultAddress(customerId, req.params.id);
         res.json({ success: true, data: profile, message: 'Default address updated' });
-    });
-
-    static addPaymentMethod = asyncHandler(async (req: Request, res: Response): Promise<void> => {
-        const customerId = req.auth!.role_entity._id.toString();
-        const input = AddCustomerPaymentMethodSchema.parse(req.body);
-        const profile = await customerProfileService.addPaymentMethod(customerId, input);
-        res.status(201).json({ success: true, data: profile, message: 'Payment method added' });
-    });
-
-    static removePaymentMethod = asyncHandler(async (req: Request, res: Response): Promise<void> => {
-        const customerId = req.auth!.role_entity._id.toString();
-        const profile = await customerProfileService.removePaymentMethod(customerId, req.params.id);
-        res.json({ success: true, data: profile, message: 'Payment method removed' });
     });
 }

@@ -3,17 +3,15 @@ import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repos
 import { IStorageProvider } from '../../../core/storage';
 import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
 import { resolveFileDetail } from '../../catalog/read-models/file-detail.resolver';
+import type { PaymentMethodDto } from '../../payment-methods/dto/payment-method.dto';
 
 // ─── Response DTOs ────────────────────────────────────────────────────────────
 
-/** Payment method display DTO — gateway instrument IDs are never returned. */
-export interface CustomerPaymentMethodDto {
-    id: string;
-    provider: string;
-    display_label: string;
-    method_type: 'card' | 'mobile_money' | 'bank_transfer';
-    is_default: boolean;
-}
+/**
+ * A saved payment method on the profile — EXACTLY `/api/me/payment-methods`' item, so one
+ * wallet has one shape everywhere (2026-09-30). No gateway field, never the full number.
+ */
+export type CustomerPaymentMethodDto = PaymentMethodDto;
 
 export interface GetCustomerProfileResponseDto {
     id: string;
@@ -53,8 +51,8 @@ export class CustomerProfileMapper {
      * (passed in by the service), not the deprecated embedded array.
      *
      * SECURITY:
-     * - gateway_customer_id and gateway_instrument_id are NEVER included
-     * - Only display_label, provider, method_type, is_default exposed
+     * - The payment methods arrive already projected by `PaymentMethodMapper`: no gateway
+     *   field and never the full wallet number
      */
     static async toResponseDto(
         customer: ICustomer,

@@ -385,12 +385,9 @@ export const BOT_ROUTES: readonly BotRouteSpec[] = Object.freeze([
     // ── Saved payment methods ────────────────────────────────────────────────
     { tool: 'payment_methods_list', method: 'POST', path: '/payment-methods/list', mutating: false, requiresCustomerRole: true },
     /**
-     * ⚠ **Mobile money only, and the reason is structural rather than cautious.** The
-     * customer API takes `gateway_customer_id` and `gateway_instrument_id`, which for a CARD
-     * are produced by the gateway's own SDK running in a browser. A chat has no browser and
-     * therefore no way to obtain one — a model asked for those fields would invent them. For
-     * a WALLET the two values are simply the customer's phone number, so this route takes
-     * the number and builds the rest itself. See `BotPaymentMethodController.add`.
+     * ⚠ **Mobile money only**, as on every surface since 2026-09-30: no card is saved anywhere
+     * until card payments exist. This route takes the network and the number and the one
+     * payment-method service builds the rest. See `BotPaymentMethodController.add`.
      */
     { tool: 'payment_methods_add', method: 'POST', path: '/payment-methods', mutating: true, requiresCustomerRole: true },
     { tool: 'payment_methods_set_default', method: 'PATCH', path: '/payment-methods/:methodId/default', mutating: true, requiresCustomerRole: true },

@@ -118,10 +118,14 @@ async function main(): Promise<void> {
 
     const savedPaymentMethods = [{
         id: 'pm-1',
-        provider: 'paystack',
-        display_label: 'Visa •••• 4242',
-        method_type: 'card',
-        is_default: true,
+        provider: 'MTN',
+        kind: 'MOBILE_MONEY',
+        label: 'MTN Mobile Money · ••••4417',
+        maskedPhone: '+2376••••4417',
+        last4: '4417',
+        isDefault: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
     }] as any;
 
     const customerDto = await CustomerProfileMapper.toResponseDto(
@@ -139,8 +143,10 @@ async function main(): Promise<void> {
         return !JSON.stringify(customerDto).includes('inst_SECRET_INSTRUMENT_ID');
     });
 
-    assert('Customer DTO includes display_label for payment method', () => {
-        return customerDto.savedPaymentMethods[0].display_label === 'Visa •••• 4242';
+    assert('Customer DTO carries the /api/me/payment-methods item shape (label, masked number)', () => {
+        const m = customerDto.savedPaymentMethods[0];
+        return m.label === 'MTN Mobile Money · ••••4417' && m.maskedPhone === '+2376••••4417'
+            && m.provider === 'MTN' && m.kind === 'MOBILE_MONEY';
     });
 
     assert('Customer DTO onboarding_step is always 0', () => {
