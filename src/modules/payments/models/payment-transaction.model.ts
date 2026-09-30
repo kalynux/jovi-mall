@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document, Types } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 import { PAYMENT_GATEWAY_NAMES, PaymentGatewayName } from '../gateways/gateway.interface';
+import { PAYMENT_PROVIDERS, PaymentProvider } from '../domain/payment-provider';
 
 /**
  * PaymentTransaction - Enterprise-grade payment tracking
@@ -74,6 +75,13 @@ export interface IPaymentTransaction extends Document {
   gateway: PaymentGatewayType;      // Which gateway processed this
   method: PaymentMethod;            // Payment method type
   gatewayRef: string;               // Gateway's payment reference — '' until the charge is opened
+  /**
+   * What the customer paid WITH (ADR-A08): `MTN`, `ORANGE`, `MOOV` or `CARD` — the layer the
+   * customer chose, where `gateway` is the aggregator the server chose. Null on rows written
+   * before provider routing, and on a legacy body whose provider could not be worked out.
+   * Descriptive only: verify, refund and webhooks key on `gateway`, never on this.
+   */
+  provider?: PaymentProvider | null;
 
   // Status tracking
   status: PaymentStatus;            // Current payment status
@@ -242,6 +250,12 @@ const PaymentTransactionSchema = new Schema<IPaymentTransaction>({
     type: String,
     enum: ['MOBILE', 'CARD', 'CASH'],
     required: true
+  },
+  // See `IPaymentTransaction.provider`. No migration: absent reads as null.
+  provider: {
+    type: String,
+    enum: [...PAYMENT_PROVIDERS, null],
+    default: null
   },
   // Written EMPTY at creation and filled in from the gateway's response — all four
   // initiate paths in `payment-orchestrator.service.ts` commit the row BEFORE the charge

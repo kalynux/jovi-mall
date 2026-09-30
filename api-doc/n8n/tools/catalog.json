@@ -2936,8 +2936,8 @@
     },
     {
       "name": "payment_initiate",
-      "version": 1,
-      "title": "Start a mobile-money or card payment",
+      "version": 2,
+      "title": "Start a mobile-money payment",
       "tier": "flow_only",
       "status": "available",
       "service": "jovi-mall",
@@ -2955,21 +2955,20 @@
         "additionalProperties": false,
         "required": [
           "cartId",
-          "gateway",
-          "channel"
+          "provider"
         ],
         "properties": {
           "cartId": {
             "type": "string",
             "description": "The checkout group. One payment settles every order in it."
           },
-          "gateway": {
+          "provider": {
             "type": "string",
             "enum": [
-              "NOTCHPAY",
-              "MYCOOLPAY",
-              "STRIPE"
-            ]
+              "MTN",
+              "ORANGE"
+            ],
+            "description": "What the customer pays WITH. ASK the customer; never guess. The server chooses which payment company carries the charge, so never name one. A number on the other network is refused with PAYMENT_PROVIDER_PHONE_MISMATCH before anything is charged."
           },
           "channel": {
             "type": "object",
@@ -2977,15 +2976,7 @@
             "properties": {
               "phoneNumber": {
                 "type": "string",
-                "description": "Strict E.164 with a leading +. Required unless the gateway is STRIPE."
-              },
-              "phoneOperator": {
-                "type": "string",
-                "enum": [
-                  "MTN",
-                  "ORANGE"
-                ],
-                "description": "ASK the customer. Guessing wrong reaches them as 'payment declined'."
+                "description": "Strict E.164 with a leading +. Required for MTN and ORANGE."
               },
               "customerEmail": {
                 "type": "string"
@@ -3000,7 +2991,7 @@
       "request": {
         "body": [
           "cartId",
-          "gateway",
+          "provider",
           "channel"
         ]
       },
@@ -3022,10 +3013,24 @@
       },
       "errors": [
         {
-          "code": "PAYMENT_OPERATOR_UNDETERMINED",
+          "code": "PAYMENT_PROVIDER_PHONE_MISMATCH",
           "status": 422,
           "category": "business_rule",
-          "when": "The operator was not sent and cannot be derived from the number",
+          "when": "The number belongs to the other network (details.detected). Nothing was charged (details.spent is false)",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "PAYMENT_PROVIDER_UNAVAILABLE",
+          "status": 422,
+          "category": "business_rule",
+          "when": "That payment method is switched off right now. details.offered lists the ones that work",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "PAYMENT_PROVIDER_REQUIRED",
+          "status": 400,
+          "category": "validation",
+          "when": "No provider was sent and none could be worked out from the number",
           "customer_action": "reprompt"
         },
         {

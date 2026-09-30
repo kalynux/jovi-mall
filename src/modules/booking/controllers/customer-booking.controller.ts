@@ -4,7 +4,9 @@ import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { BookingService } from '../services/booking.service';
 import { BookingStatus } from '../types/booking.types';
 import { PaymentOrchestratorService } from '../../payments/services/payment-orchestrator.service';
-import { InitiateBookingPaymentSchema } from '../../payments/validators/payment.validators';
+import { InitiateBookingPaymentRequestSchema } from '../../payments/validators/payment.validators';
+import { deriveProviderOrThrow } from '../../payments/services/payment-routing.service';
+import { recordDeprecatedGatewayField } from '../../system/metrics/metrics';
 
 const bookingService = new BookingService();
 const paymentOrchestrator = new PaymentOrchestratorService();
@@ -160,15 +162,18 @@ export class CustomerBookingController {
      */
     static payBalance = asyncHandler(async (req: Request, res: Response): Promise<void> => {
         const userId = req.auth!.user._id.toString();
-        const { gateway, channel } = InitiateBookingPaymentSchema.parse(req.body);
+        const body = InitiateBookingPaymentRequestSchema.parse(req.body);
+        // Provider-based (ADR-A08); a legacy `gateway` is ignored and counted.
+        if (body.gateway !== undefined) recordDeprecatedGatewayField('booking_pay_balance');
+        const selection = { provider: deriveProviderOrThrow(body) };
 
         // Ownership first — this throws 404 for anyone else's booking.
         await bookingService.getUserBooking(req.params.id, userId);
 
         const result = await paymentOrchestrator.initiateBookingBalancePayment(
             req.params.id,
-            gateway,
-            channel
+            selection,
+            body.channel
         );
 
         res.json({ success: true, data: result });

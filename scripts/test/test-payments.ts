@@ -60,6 +60,14 @@ import {
 import { AppError } from '../../src/core/errors';
 import { ERROR_CODES } from '../../src/core/error-codes';
 import {
+  InitiatePaymentRequestSchema,
+  InitiateBookingPaymentRequestSchema,
+} from '../../src/modules/payments/validators/payment.validators';
+import { PaymentOrchestratorService } from '../../src/modules/payments/services/payment-orchestrator.service';
+import { deriveProviderOrThrow } from '../../src/modules/payments/services/payment-routing.service';
+import { __resetPaymentSettingsCacheForTests } from '../../src/modules/payments/services/payment-settings.service';
+import { DEFAULT_PAYMENT_SETTINGS, PaymentSettingsRecord } from '../../src/modules/payments/domain/payment-routing';
+import {
   notchPaySignature,
   myCoolPaySignature,
   timingSafeEqualString,
@@ -1410,29 +1418,88 @@ const orchestratorMethodBody = (sig: string): string | null => {
   return open < 0 || end < 0 ? null : ORCHESTRATOR_LF.slice(open + '}> {'.length, end);
 };
 
-assert('⛔ all four charge-starting methods refuse an un-offered gateway BEFORE any read or write', () => {
-  const methods = [
-    'async initiatePayment(',
-    'async initiatePaymentForCart(',
-    'async initiateBookingPayment(',
-    'async initiateBookingBalancePayment(',
-  ].map(orchestratorMethodBody);
+const CHARGE_METHODS = [
+  'async initiatePayment(',
+  'async initiatePaymentForCart(',
+  'async initiateBookingPayment(',
+  'async initiateBookingBalancePayment(',
+];
+const CHOKE_POINT = 'const charge = this.prepareCharge(selection, channel);';
+
+assert('⛔ all four charge-starting methods open with the choke point, BEFORE any read or write', () => {
+  const methods = CHARGE_METHODS.map(orchestratorMethodBody);
   if (methods.some((m) => m === null)) {
     originalConsole.error('     ↳ a charge-starting method was not found — the ordering check would be vacuous');
     return false;
   }
   return methods.every((body) => {
     const first = body!.trim().split('\n')[0].trim();
-    return first === 'assertGatewayOffered(gateway);'
-      && body!.indexOf('assertGatewayOffered(gateway);') < body!.indexOf('await ')
-      && body!.indexOf('assertGatewayOffered(gateway);') < body!.indexOf('this.openAttempt(');
+    return first === CHOKE_POINT
+      && body!.indexOf(CHOKE_POINT) < body!.indexOf('await ')
+      && body!.indexOf(CHOKE_POINT) < body!.indexOf('this.openAttempt(');
   });
 });
 
-// Exactly four: a fifth charge-starting method must add its own gate, and a gate moved into a
-// helper would stop being pinned to the top of each method.
-assert('the gate appears once per charge-starting method, and nowhere else in the orchestrator', () =>
-  countOf('assertGatewayOffered(gateway);') === 4 && countOf('assertGatewayOffered(') === 4);
+// Exactly four: a fifth charge-starting method must add its own. The deprecated gateway-name
+// form keeps the old gate, INSIDE the choke point and nowhere else (removed in C1).
+assert('the choke point appears once per charge-starting method; the old gate only inside it', () => {
+  const prepare = ORCHESTRATOR_LF.slice(
+    ORCHESTRATOR_LF.indexOf('private prepareCharge('),
+    ORCHESTRATOR_LF.indexOf('\n  }\n', ORCHESTRATOR_LF.indexOf('private prepareCharge(')),
+  );
+  return countOf('this.prepareCharge(selection, channel)') === 4
+    && countOf('assertGatewayOffered(') === 1
+    && prepare.includes('assertGatewayOffered(selection);')
+    && prepare.includes('resolveCollectionRoute(provider)');
+});
+
+/**
+ * ⛔ The agreed order inside each method (ADR-A08 W2a): idempotency lookup → live-attempt reuse →
+ * ROUTE → dead-attempt release → open. The route after the reuse is what hands a customer their
+ * live prompt back after an administrator switch; the route before the release and the open is
+ * what keeps a refusal write-free.
+ */
+assert('⛔ each method: idempotency → findLiveAttempt → route → releaseDeadAttempt → openAttempt', () =>
+  CHARGE_METHODS.map(orchestratorMethodBody).every((body) => {
+    if (!body) return false;
+    const at = (needle: string) => body.indexOf(needle);
+    const steps = [
+      at('PaymentTransactionModel.findOne({ idempotencyKey })'),
+      at('await this.findLiveAttempt('),
+      at('charge.route()'),
+      at('await this.releaseDeadAttempt(existingTx)'),
+      at('await this.openAttempt('),
+    ];
+    return steps.every((i) => i > 0) && steps.every((i, n) => n === 0 || steps[n - 1] < i);
+  }));
+
+assert('the adapter is handed the routed channel, never the raw one', () =>
+  CHARGE_METHODS.map(orchestratorMethodBody).every((body) =>
+    !!body && body.includes('channel: charge.channel,') && !/^\s+channel,$/m.test(body)));
+
+/**
+ * ⛔ D-6: money opened on one aggregator settles through it. The paths that act on an EXISTING
+ * transaction read its stored `gateway` and never consult the settings or the router.
+ */
+assert('⛔ verify, refund, authorize, webhook and retry-release read transaction.gateway, never settings', () => {
+  const methodOf = (sig: string) => {
+    const start = ORCHESTRATOR_LF.indexOf(sig);
+    return start < 0 ? '' : ORCHESTRATOR_LF.slice(start, ORCHESTRATOR_LF.indexOf('\n  }\n', start));
+  };
+  const settled = [
+    ['async verifyPayment(', 'getPaymentGateway(transaction.gateway)'],
+    ['async refundPayment(', 'getPaymentGateway(paymentTx.gateway)'],
+    ['async authorizePayment(', 'getPaymentGateway(transaction.gateway)'],
+    ['async applyWebhookEvent(', ''],
+    ['private async releaseDeadAttempt(', 'getPaymentGateway(transaction.gateway)'],
+  ];
+  const banned = /resolveCollectionRoute|getPaymentSettingsSync|charge\.route|prepareCharge/;
+  const processor = lf(PAYMENT_SOURCES.find(({ file }) => file.endsWith('webhook-processor.service.ts'))!.code);
+  return settled.every(([sig, reads]) => {
+    const body = methodOf(sig);
+    return body.length > 0 && !banned.test(body) && (reads === '' || body.includes(reads));
+  }) && !/from '[^']*(payment-settings|payment-routing)[^']*'/.test(processor);
+});
 
 // verify, webhooks, refunds and the reconciliation sweep must keep working for a gateway that
 // was switched off after it took money: only a NEW charge is refused.
@@ -1483,8 +1550,247 @@ assert('the async-settling set is NotchPay and My-CoolPay today — Stripe is no
   return JSON.stringify(swept) === JSON.stringify(['MYCOOLPAY', 'NOTCHPAY']);
 });
 
-originalConsole.log(`\n${'═'.repeat(76)}`);
-originalConsole.log(`  ${passed} passed, ${failed} failed`);
-originalConsole.log(`${'═'.repeat(76)}\n`);
+section('16. The provider-based request body — `provider` in, `gateway` ignored (ADR-A08 W2a)');
 
-process.exit(failed > 0 ? 1 : 0);
+// The schema only decides SHAPE. Which fields a charge needs is the route's question and is
+// answered by the routing service; these assertions pin that the schema no longer answers it.
+const orderBody = (extra: Record<string, unknown>) =>
+  InitiatePaymentRequestSchema.safeParse({ orderId: 'o1', ...extra });
+
+assert('a provider-based body is accepted', () =>
+  orderBody({ provider: 'MTN', channel: { phoneNumber: '+237670000000' } }).success);
+
+assert('an unknown provider is refused by the schema', () =>
+  !orderBody({ provider: 'WAVE', channel: { phoneNumber: '+237670000000' } }).success);
+
+assert('an old-app body carrying only `gateway` still parses — any gateway string', () =>
+  orderBody({ gateway: 'MYCOOLPAY', channel: { phoneNumber: '+237670000000' } }).success
+    && orderBody({ gateway: 'SOME_REMOVED_AGGREGATOR', channel: { phoneNumber: '+237670000000' } }).success);
+
+assert('"phone unless STRIPE" is no longer the schema\'s rule — the route judges fields', () =>
+  orderBody({ provider: 'MTN' }).success && orderBody({ gateway: 'NOTCHPAY', channel: {} }).success);
+
+assert('a card body needs no channel object at all', () => {
+  const parsed = orderBody({ provider: 'CARD' });
+  return parsed.success && JSON.stringify(parsed.data.channel) === '{}';
+});
+
+assert('cartId XOR orderId is still required', () =>
+  !InitiatePaymentRequestSchema.safeParse({ provider: 'MTN' }).success);
+
+assert('the channel is still held to the contact formats', () =>
+  !orderBody({ provider: 'MTN', channel: { phoneNumber: '670000000' } }).success
+    && !orderBody({ provider: 'CARD', channel: { customerEmail: 'buyer@example' } }).success);
+
+assert('the booking body takes the same provider/gateway pair', () =>
+  InitiateBookingPaymentRequestSchema.safeParse({ provider: 'ORANGE', channel: { phoneNumber: '+237690000000' } }).success
+    && InitiateBookingPaymentRequestSchema.safeParse({ gateway: 'STRIPE' }).success
+    && !InitiateBookingPaymentRequestSchema.safeParse({ provider: 'moov' }).success);
+
+// ─── 17. Routing, run for real (offline) ─────────────────────────────────────
+//
+// The orchestrator is driven with its two model calls and its order lookup stubbed, and the two
+// mobile adapters' `initiatePayment` replaced by recorders. Nothing reaches Mongo or a provider.
+// `assert` is synchronous on purpose (a Promise is always truthy), so every scenario RUNS first,
+// here, and section 17 then asserts on what was recorded.
+
+type Scenario = {
+  result?: any;
+  error?: any;
+  reads: number;
+  creates: any[];
+  charged: Array<{ gateway: string; channel: any }>;
+};
+
+const MTN_NUMBER = '+237670000001';
+const ORANGE_NUMBER = '+237690000001';
+
+function settingsWith(patch: Partial<Omit<PaymentSettingsRecord, 'providers'>> & {
+  providers?: Partial<Record<'MTN' | 'ORANGE' | 'MOOV' | 'CARD', { enabled: boolean }>>;
+}): PaymentSettingsRecord {
+  return {
+    ...DEFAULT_PAYMENT_SETTINGS,
+    version: 1,
+    ...patch,
+    providers: { ...DEFAULT_PAYMENT_SETTINGS.providers, ...(patch.providers ?? {}) },
+  } as PaymentSettingsRecord;
+}
+
+async function runScenario(
+  settings: PaymentSettingsRecord,
+  existingRows: any[],
+  act: (orch: PaymentOrchestratorService, orderId: string) => Promise<any>,
+): Promise<Scenario> {
+  const model = PaymentTransactionModel as any;
+  const saved = { findOne: model.findOne, create: model.create };
+  const adapters = ['NOTCHPAY', 'MYCOOLPAY'].map((name) => PAYMENT_GATEWAYS.get(name as any)! as any);
+  const out: Scenario = { reads: 0, creates: [], charged: [] };
+  const orderId = new Types.ObjectId().toString();
+  const rows = [...existingRows];
+
+  model.findOne = async (q: any) => {
+    out.reads++;
+    if ('idempotencyKey' in q) return rows.find((r) => r.idempotencyKey === q.idempotencyKey) ?? null;
+    if (q.status) return rows.find((r) => ['INITIATED', 'PENDING'].includes(r.status)) ?? null;
+    return null;
+  };
+  model.create = async (doc: any) => {
+    const row = { ...doc, _id: new Types.ObjectId(), rawGatewayPayloads: [], save: async () => undefined };
+    out.creates.push(row);
+    rows.push(row);
+    return row;
+  };
+  for (const adapter of adapters) {
+    adapter.initiatePayment = async (payload: any) => {
+      out.charged.push({ gateway: adapter.name, channel: payload.channel });
+      return { success: true, gatewayRef: 'ref_fixture', status: 'PENDING', rawResponse: {}, instructions: { message: 'dial' } };
+    };
+  }
+  __resetPaymentSettingsCacheForTests(settings);
+
+  const orch = new PaymentOrchestratorService();
+  (orch as any).orderRepo = {
+    findById: async () => {
+      out.reads++;
+      return {
+        customer_id: new Types.ObjectId(),
+        payment_method: 'mobile_money',
+        payment_status: 'pending',
+        total_amount: 5000,
+        currency: 'XAF',
+        save: async () => undefined,
+      };
+    },
+  };
+
+  try {
+    out.result = await act(orch, orderId);
+  } catch (error) {
+    out.error = error;
+  } finally {
+    model.findOne = saved.findOne;
+    model.create = saved.create;
+    for (const adapter of adapters) delete adapter.initiatePayment; // back to the prototype method
+    __resetPaymentSettingsCacheForTests();
+  }
+  return out;
+}
+
+const isAppError = (e: any, code: string, status: number) =>
+  e instanceof AppError && e.code === code && e.statusCode === status;
+
+(async () => {
+  const notchpayActive = settingsWith({ collection_aggregator: 'NOTCHPAY' });
+  const mycoolpayActive = settingsWith({ collection_aggregator: 'MYCOOLPAY' });
+
+  const byProvider = await runScenario(notchpayActive, [], (orch, id) =>
+    orch.initiatePayment(id, { provider: 'MTN' }, { phoneNumber: MTN_NUMBER }));
+
+  const afterSwitch = await runScenario(mycoolpayActive, [], (orch, id) =>
+    orch.initiatePayment(id, { provider: 'ORANGE' }, { phoneNumber: ORANGE_NUMBER }));
+
+  const mismatch = await runScenario(notchpayActive, [], (orch, id) =>
+    orch.initiatePayment(id, { provider: 'ORANGE' }, { phoneNumber: MTN_NUMBER }));
+
+  const missingPhone = await runScenario(notchpayActive, [], (orch, id) =>
+    orch.initiatePayment(id, { provider: 'MTN' }, {}));
+
+  const unavailable = await runScenario(settingsWith({ providers: { MTN: { enabled: false } } }), [], (orch, id) =>
+    orch.initiatePayment(id, { provider: 'MTN' }, { phoneNumber: MTN_NUMBER }));
+
+  // The plan's acceptance body, through the real schema and the real derivation, with NO
+  // settings document (version 0): an old app naming MYCOOLPAY is charged through NotchPay.
+  const legacy = await runScenario({ ...DEFAULT_PAYMENT_SETTINGS } as PaymentSettingsRecord, [], (orch, id) => {
+    const body = InitiatePaymentRequestSchema.parse({ orderId: id, gateway: 'MYCOOLPAY', channel: { phoneNumber: MTN_NUMBER } });
+    return orch.initiatePayment(id, { provider: deriveProviderOrThrow(body) }, body.channel);
+  });
+
+  // A live NotchPay prompt, then the administrator switches to My-CoolPay AND disables MTN.
+  // Pressing Pay again must hand back that prompt — not a refusal, not a second charge.
+  const liveId = new Types.ObjectId();
+  const liveRow = {
+    _id: liveId, status: 'PENDING', gateway: 'NOTCHPAY', provider: 'MTN',
+    idempotencyKey: 'a-different-key', rawGatewayPayloads: [{ instructions: { message: 'dial *126#' } }],
+  };
+  const reuse = await runScenario(
+    settingsWith({ collection_aggregator: 'MYCOOLPAY', providers: { MTN: { enabled: false } } }),
+    [liveRow],
+    (orch, id) => orch.initiatePayment(id, { provider: 'MTN' }, { phoneNumber: MTN_NUMBER }),
+  );
+
+  // The deprecated gateway-name form the bot and mini-app still use until W2b.
+  const legacyName = await runScenario(notchpayActive, [], (orch, id) =>
+    orch.initiatePayment(id, 'NOTCHPAY', { phoneNumber: MTN_NUMBER }));
+
+  let underivable: unknown;
+  try { deriveProviderOrThrow({ gateway: 'NOTCHPAY', channel: {} }); } catch (e) { underivable = e; }
+
+  section('17. Routing, run offline — provider in, aggregator out (ADR-A08 W2a)');
+
+  assert('a provider-based charge is routed to the ACTIVE aggregator and stamps the row', () =>
+    !byProvider.error
+      && byProvider.creates.length === 1
+      && byProvider.creates[0].gateway === 'NOTCHPAY'
+      && byProvider.creates[0].provider === 'MTN'
+      && byProvider.creates[0].method === 'MOBILE'
+      && byProvider.result?.provider === 'MTN');
+
+  assert('the adapter is charged with the DECLARED provider as the operator', () =>
+    byProvider.charged.length === 1
+      && byProvider.charged[0].gateway === 'NOTCHPAY'
+      && byProvider.charged[0].channel.phoneOperator === 'MTN');
+
+  assert('after a switch, the same request opens on the new aggregator', () =>
+    !afterSwitch.error
+      && afterSwitch.creates[0]?.gateway === 'MYCOOLPAY'
+      && afterSwitch.creates[0]?.provider === 'ORANGE'
+      && afterSwitch.charged[0]?.gateway === 'MYCOOLPAY');
+
+  assert('⛔ ORANGE with an MTN number is refused with ZERO reads and ZERO writes', () =>
+    isAppError(mismatch.error, ERROR_CODES.PAYMENT_PROVIDER_PHONE_MISMATCH, 422)
+      && mismatch.error.details?.provider === 'ORANGE'
+      && mismatch.error.details?.detected === 'MTN'
+      && mismatch.error.details?.spent === false
+      && mismatch.reads === 0 && mismatch.creates.length === 0 && mismatch.charged.length === 0);
+
+  assert('a missing number keeps the HTTP doors\' 400 validation shape, before any read', () =>
+    missingPhone.error?.name === 'ZodError'
+      && JSON.stringify(missingPhone.error.issues?.[0]?.path) === JSON.stringify(['channel', 'phoneNumber'])
+      && missingPhone.reads === 0 && missingPhone.creates.length === 0);
+
+  assert('a disabled provider is 422 PAYMENT_PROVIDER_UNAVAILABLE with nothing written', () =>
+    isAppError(unavailable.error, ERROR_CODES.PAYMENT_PROVIDER_UNAVAILABLE, 422)
+      && Array.isArray(unavailable.error.details?.offered)
+      && !unavailable.error.details.offered.includes('MTN')
+      && unavailable.creates.length === 0 && unavailable.charged.length === 0);
+
+  assert('⛔ acceptance: old body {gateway:MYCOOLPAY, MTN number} is charged through NotchPay as MTN', () =>
+    !legacy.error
+      && legacy.creates[0]?.gateway === 'NOTCHPAY'
+      && legacy.creates[0]?.provider === 'MTN'
+      && legacy.charged[0]?.gateway === 'NOTCHPAY');
+
+  assert('⛔ a live attempt on the OLD aggregator is handed back after a switch — no second charge', () =>
+    !reuse.error
+      && reuse.result?.transactionId === liveId.toString()
+      && reuse.result?.provider === 'MTN'
+      && reuse.result?.instructions?.message === 'dial *126#'
+      && reuse.creates.length === 0 && reuse.charged.length === 0);
+
+  assert('the deprecated gateway-name form still charges, and derives the provider for the row', () =>
+    !legacyName.error
+      && legacyName.creates[0]?.gateway === 'NOTCHPAY'
+      && legacyName.creates[0]?.provider === 'MTN');
+
+  assert('a body with no provider, no operator and no number is 400 PAYMENT_PROVIDER_REQUIRED', () =>
+    isAppError(underivable, ERROR_CODES.PAYMENT_PROVIDER_REQUIRED, 400));
+
+  originalConsole.log(`\n${'═'.repeat(76)}`);
+  originalConsole.log(`  ${passed} passed, ${failed} failed`);
+  originalConsole.log(`${'═'.repeat(76)}\n`);
+
+  process.exit(failed > 0 ? 1 : 0);
+})().catch((error) => {
+  originalConsole.error('  ❌ THROW: section 17 runner —', error);
+  process.exit(1);
+});

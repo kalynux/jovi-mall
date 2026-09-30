@@ -6,8 +6,12 @@ import {
   PaymentStatus,
   PaymentGatewayType
 } from '../models/payment-transaction.model';
-import { PaymentChannelInfo } from '../gateways/gateway.interface';
+import { ZodError } from 'zod';
+import { CollectField, PaymentChannelInfo } from '../gateways/gateway.interface';
 import { assertGatewayOffered, getPaymentGateway } from '../gateways/registry';
+import { PaymentProvider, PROVIDER_KIND, isMobileMoneyProvider } from '../domain/payment-provider';
+import { deriveProvider } from '../domain/payment-routing';
+import { checkChargeRequestOrThrow, resolveCollectionRoute } from './payment-routing.service';
 import { mintMerchantRef } from '../domain/merchant-reference';
 import { NormalizedWebhookEvent } from '../domain/webhook-verification';
 import { WebhookOutcome } from '../domain/webhook-response';
@@ -39,6 +43,7 @@ import { BookingCalendarSyncService } from '../../booking/services/booking-calen
 type NewPaymentAttempt = {
   userId: Types.ObjectId;
   gateway: PaymentGatewayType;
+  provider: PaymentProvider | null;
   method: 'MOBILE' | 'CARD' | 'CASH';
   status: PaymentStatus;
   gatewayRef: string;
@@ -61,6 +66,52 @@ type NewPaymentAttempt = {
 export type RefundSource =
   | { kind: 'order'; orderId: string }
   | { kind: 'booking'; bookingId: string };
+
+/**
+ * How a charging door says what to charge through (ADR-A08).
+ *
+ * - `{ provider }` — the customer's choice (MTN, ORANGE, CARD). The aggregator is resolved from
+ *   the payment settings, at the moment a NEW attempt is opened. `onMissingField` lets a door
+ *   keep its own error for a missing number; the default is the HTTP doors' `400
+ *   VALIDATION_ERROR` on `channel.<field>`, exactly as their schemas raised it before.
+ * - a bare gateway name — @deprecated, for the server-picked bot and mini-app doors until W2b
+ *   moves them onto `{ provider }`. Removed in C1.
+ */
+export type ChargeSelection =
+  | { provider: PaymentProvider; onMissingField?: (missing: CollectField[]) => Error }
+  | PaymentGatewayType;
+
+/**
+ * What `prepareCharge` hands back: the no-I/O checks have passed, and `route()` is the step
+ * that picks the aggregator. It is DEFERRED on purpose — it runs after idempotency and the
+ * live-attempt reuse, so a customer pressing Pay again after an administrator switched
+ * aggregators, or disabled their provider, gets their live prompt back instead of a refusal.
+ */
+interface PreparedCharge {
+  provider: PaymentProvider | null;
+  /** What the adapter receives. On a mobile provider, `phoneOperator` is the provider. */
+  channel: PaymentChannelInfo;
+  route(): PaymentGatewayType;
+}
+
+/** The HTTP doors' error for a missing field, in the shape their schemas raised it before. */
+function missingFieldValidationError(missing: CollectField[]): Error {
+  return new ZodError(
+    missing.map((field) => ({
+      code: 'custom' as const,
+      path: ['channel', field],
+      message: field === 'phoneNumber'
+        ? 'phoneNumber is required for mobile money payments'
+        : `${field} is required for this payment method`,
+    })),
+  );
+}
+
+/** The row's `method`, from the provider when there is one (legacy rows: from the gateway). */
+function methodFor(provider: PaymentProvider | null, gateway: PaymentGatewayType): 'MOBILE' | 'CARD' {
+  if (provider) return PROVIDER_KIND[provider] === 'CARD' ? 'CARD' : 'MOBILE';
+  return gateway === 'STRIPE' ? 'CARD' : 'MOBILE';
+}
 import { RefundTransactionModel } from '../models/refund-transaction.model';
 import { createAppError, AppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
@@ -135,25 +186,26 @@ export class PaymentOrchestratorService {
    * 9. Return payment instructions
    * 
    * @param orderId - Order to pay for
-   * @param gateway - Which gateway to use
+   * @param selection - `{ provider }`, or (deprecated) a gateway name — see `ChargeSelection`
    * @param channel - Payment channel info (phone, card, etc.)
    * @returns Payment instructions or existing transaction
    */
   async initiatePayment(
     orderId: string,
-    gateway: PaymentGatewayType,
+    selection: ChargeSelection,
     channel: PaymentChannelInfo
   ): Promise<{
     transactionId: string;
     status: PaymentStatus;
+    provider?: PaymentProvider | null;
     instructions?: any;
     message: string;
   }> {
-    // ⛔ FIRST, before any read or write. A gateway this deployment does not offer is refused
-    // here rather than discovered inside the adapter after a transaction row exists — which is
-    // how a customer met "Stripe is not configured" with a FAILED row left behind them. The
-    // same line opens all four charge-starting methods; see `assertGatewayOffered`.
-    assertGatewayOffered(gateway);
+    // ⛔ FIRST, before any read or write. A request that cannot be charged is refused here
+    // rather than discovered inside the adapter after a transaction row exists — which is how a
+    // customer met "Stripe is not configured" with a FAILED row left behind them. The same line
+    // opens all four charge-starting methods; see `prepareCharge`.
+    const charge = this.prepareCharge(selection, channel);
 
     // 1. LOAD AND VALIDATE ORDER
     const order = await this.orderRepo.findById(orderId);
@@ -192,6 +244,7 @@ export class PaymentOrchestratorService {
     const respondWithExisting = (tx: IPaymentTransaction) => ({
       transactionId: tx._id.toString(),
       status: tx.status,
+      provider: tx.provider ?? null,
       instructions: this.lastInstructions(tx),
       message: tx.status === 'SUCCEEDED'
         ? 'Payment already completed'
@@ -206,6 +259,7 @@ export class PaymentOrchestratorService {
         return {
           transactionId: existingTx._id.toString(),
           status: existingTx.status,
+          provider: existingTx.provider ?? null,
           message: 'Payment already completed'
         };
       }
@@ -215,20 +269,8 @@ export class PaymentOrchestratorService {
         return respondWithExisting(existingTx);
       }
 
-      // Failed/cancelled → this is a NEW attempt, and it needs the key the dead one holds.
-      // Only once we KNOW it is dead, though: `FAILED` is written for a refusal AND for a
-      // call that merely errored, and a live charge can be sitting behind the second kind.
-      const settledAttempt = await this.releaseDeadAttempt(existingTx);
-      if (settledAttempt) return respondWithExisting(settledAttempt);
     }
 
-    // 4. CREATE NEW PAYMENT TRANSACTION
-    const gatewayInstance = getPaymentGateway(gateway);
-
-    // Determine payment method
-    const method = gateway === 'STRIPE' ? 'CARD' : 'MOBILE';
-
-    // Create transaction in INITIATED state
     // A second LIVE charge over money that already has one — the hole the idempotency key
     // cannot see, because that key is (source, user, AMOUNT) while this asks about the money
     // itself. Two routes reach the same order (the cart path and the single-order path), and
@@ -236,6 +278,12 @@ export class PaymentOrchestratorService {
     // compute two different keys over overlapping orders and open two charges that nothing
     // links. Answered with the live attempt rather than an error: from the customer's side
     // this IS their payment, and the prompt is already on their phone.
+    //
+    // ⚠ BEFORE the route and before `releaseDeadAttempt` (ADR-A08): a live attempt on an
+    // aggregator that has since been switched away from is still this customer's payment. It is
+    // handed back as it stands — its own gateway, provider and number — and no second charge is
+    // opened on the new aggregator. Read-only, so moving it ahead of the dead-attempt release
+    // changes nothing else: the one row that release could revive was already answered above.
     const liveElsewhere = await this.findLiveAttempt({
       $or: [
         { orderId: new Types.ObjectId(orderId) },
@@ -244,11 +292,26 @@ export class PaymentOrchestratorService {
     });
     if (liveElsewhere) return respondWithExisting(liveElsewhere);
 
+    // 4. ROUTE — only now is a NEW attempt certain to be needed. Throws before any write.
+    const gateway = charge.route();
+
+    // Failed/cancelled → this is a NEW attempt, and it needs the key the dead one holds.
+    // Only once we KNOW it is dead, though: `FAILED` is written for a refusal AND for a
+    // call that merely errored, and a live charge can be sitting behind the second kind.
+    if (existingTx) {
+      const settledAttempt = await this.releaseDeadAttempt(existingTx);
+      if (settledAttempt) return respondWithExisting(settledAttempt);
+    }
+
+    // CREATE NEW PAYMENT TRANSACTION, in INITIATED state
+    const gatewayInstance = getPaymentGateway(gateway);
+
     const attempt = await this.openAttempt({
       orderId: new Types.ObjectId(orderId),
       userId: new Types.ObjectId(userId),
       gateway,
-      method,
+      provider: charge.provider,
+      method: methodFor(charge.provider, gateway),
       status: 'INITIATED',
       gatewayRef: '', // Will be updated after gateway call
       amountSnapshot: order.total_amount,
@@ -268,7 +331,7 @@ export class PaymentOrchestratorService {
         userId,
         amount: order.total_amount,
         currency: order.currency,
-        channel,
+        channel: charge.channel,
         merchantRef: transaction.merchantRef!,
         metadata: { idempotencyKey, merchantRef: transaction.merchantRef }
       });
@@ -313,6 +376,7 @@ export class PaymentOrchestratorService {
       return {
         transactionId: transaction._id.toString(),
         status: transaction.status,
+        provider: charge.provider,
         instructions: gatewayResult.instructions,
         message: gatewayResult.success
           ? 'Payment initiated successfully'
@@ -338,7 +402,7 @@ export class PaymentOrchestratorService {
    * return the existing transaction.
    *
    * @param cartId - Checkout group id (cart_id shared by the split orders)
-   * @param gateway - Which gateway to use
+   * @param selection - `{ provider }`, or (deprecated) a gateway name — see `ChargeSelection`
    * @param channel - Payment channel info (phone, card, etc.)
    * @param options.originChat - The chat the checkout was placed from, so its result is told
    *   there (`IPaymentTransaction.originChat`). Recorded on a NEW attempt only: an existing live
@@ -346,17 +410,18 @@ export class PaymentOrchestratorService {
    */
   async initiatePaymentForCart(
     cartId: string,
-    gateway: PaymentGatewayType,
+    selection: ChargeSelection,
     channel: PaymentChannelInfo,
     options: { originChat?: 'whatsapp' | 'telegram' | null } = {}
   ): Promise<{
     transactionId: string;
     status: PaymentStatus;
+    provider?: PaymentProvider | null;
     instructions?: any;
     message: string;
   }> {
     // ⛔ FIRST — see the same line in `initiatePayment`.
-    assertGatewayOffered(gateway);
+    const charge = this.prepareCharge(selection, channel);
 
     // 1. LOAD THE GROUP'S ORDERS
     const orders = await OrderModel.find({ cart_id: cartId });
@@ -405,6 +470,7 @@ export class PaymentOrchestratorService {
     const respondWithExisting = (tx: IPaymentTransaction) => ({
       transactionId: tx._id.toString(),
       status: tx.status,
+      provider: tx.provider ?? null,
       instructions: this.lastInstructions(tx),
       message: tx.status === 'SUCCEEDED'
         ? 'Payment already completed'
@@ -417,23 +483,14 @@ export class PaymentOrchestratorService {
         return {
           transactionId: existingTx._id.toString(),
           status: existingTx.status,
+          provider: existingTx.provider ?? null,
           message: 'Payment already completed'
         };
       }
       if (existingTx.status === 'INITIATED' || existingTx.status === 'PENDING') {
         return respondWithExisting(existingTx);
       }
-      // Failed/cancelled → this is a NEW attempt, and it needs the key the dead one holds.
-      // Only once we KNOW it is dead, though: `FAILED` is written for a refusal AND for a
-      // call that merely errored, and a live charge can be sitting behind the second kind.
-      const settledAttempt = await this.releaseDeadAttempt(existingTx);
-      if (settledAttempt) return respondWithExisting(settledAttempt);
     }
-
-    // 4. CREATE NEW PAYMENT TRANSACTION (group)
-    const gatewayInstance = getPaymentGateway(gateway);
-
-    const method = gateway === 'STRIPE' ? 'CARD' : 'MOBILE';
 
     // A second LIVE charge over money that already has one — the hole the idempotency key
     // cannot see, because that key is (source, user, AMOUNT) while this asks about the money
@@ -451,12 +508,25 @@ export class PaymentOrchestratorService {
     });
     if (liveElsewhere) return respondWithExisting(liveElsewhere);
 
+    // 4. ROUTE — see the same step in `initiatePayment`. Throws before any write.
+    const gateway = charge.route();
+
+    // Failed/cancelled → see the same step in `initiatePayment`.
+    if (existingTx) {
+      const settledAttempt = await this.releaseDeadAttempt(existingTx);
+      if (settledAttempt) return respondWithExisting(settledAttempt);
+    }
+
+    // CREATE NEW PAYMENT TRANSACTION (group)
+    const gatewayInstance = getPaymentGateway(gateway);
+
     const attempt = await this.openAttempt({
       cartId: new Types.ObjectId(cartId),
       orderIds,
       userId: new Types.ObjectId(userId),
       gateway,
-      method,
+      provider: charge.provider,
+      method: methodFor(charge.provider, gateway),
       status: 'INITIATED',
       gatewayRef: '',
       amountSnapshot: groupTotal,
@@ -480,7 +550,7 @@ export class PaymentOrchestratorService {
         userId,
         amount: groupTotal,
         currency,
-        channel,
+        channel: charge.channel,
         merchantRef: transaction.merchantRef!,
         metadata: { idempotencyKey, cartId, merchantRef: transaction.merchantRef }
       });
@@ -499,6 +569,7 @@ export class PaymentOrchestratorService {
       return {
         transactionId: transaction._id.toString(),
         status: transaction.status,
+        provider: charge.provider,
         instructions: gatewayResult.instructions,
         message: gatewayResult.success
           ? 'Payment initiated successfully'
@@ -826,7 +897,7 @@ export class PaymentOrchestratorService {
    * 9. Return payment instructions
    * 
    * @param bookingId - Booking to pay for
-   * @param gateway - Which gateway to use
+   * @param selection - `{ provider }`, or (deprecated) a gateway name — see `ChargeSelection`
    * @param channel - Payment channel info (phone, card, etc.)
    * @param options.originChat - The chat the payment was asked for from, so its result is told
    *   there (`IPaymentTransaction.originChat`). Recorded on a NEW attempt only, exactly as
@@ -836,17 +907,18 @@ export class PaymentOrchestratorService {
    */
   async initiateBookingPayment(
     bookingId: string,
-    gateway: PaymentGatewayType,
+    selection: ChargeSelection,
     channel: PaymentChannelInfo,
     options: { originChat?: 'whatsapp' | 'telegram' | null } = {}
   ): Promise<{
     transactionId: string;
     status: PaymentStatus;
+    provider?: PaymentProvider | null;
     instructions?: any;
     message: string;
   }> {
     // ⛔ FIRST — see the same line in `initiatePayment`.
-    assertGatewayOffered(gateway);
+    const charge = this.prepareCharge(selection, channel);
 
     // 1. LOAD AND VALIDATE BOOKING
     const booking = await Booking.findById(bookingId);
@@ -894,6 +966,7 @@ export class PaymentOrchestratorService {
     const respondWithExisting = (tx: IPaymentTransaction) => ({
       transactionId: tx._id.toString(),
       status: tx.status,
+      provider: tx.provider ?? null,
       instructions: this.lastInstructions(tx),
       message: tx.status === 'SUCCEEDED'
         ? 'Payment already completed'
@@ -908,6 +981,7 @@ export class PaymentOrchestratorService {
         return {
           transactionId: existingTx._id.toString(),
           status: existingTx.status,
+          provider: existingTx.provider ?? null,
           message: 'Payment already completed'
         };
       }
@@ -917,20 +991,8 @@ export class PaymentOrchestratorService {
         return respondWithExisting(existingTx);
       }
 
-      // Failed/cancelled → this is a NEW attempt, and it needs the key the dead one holds.
-      // Only once we KNOW it is dead, though: `FAILED` is written for a refusal AND for a
-      // call that merely errored, and a live charge can be sitting behind the second kind.
-      const settledAttempt = await this.releaseDeadAttempt(existingTx);
-      if (settledAttempt) return respondWithExisting(settledAttempt);
     }
 
-    // 5. CREATE NEW PAYMENT TRANSACTION
-    const gatewayInstance = getPaymentGateway(gateway);
-
-    // Determine payment method
-    const method = gateway === 'STRIPE' ? 'CARD' : 'MOBILE';
-
-    // Create transaction in INITIATED state
     // A second LIVE charge over money that already has one — the hole the idempotency key
     // cannot see, because that key is (source, user, AMOUNT) while this asks about the money
     // itself. Two routes reach the same order (the cart path and the single-order path), and
@@ -944,11 +1006,24 @@ export class PaymentOrchestratorService {
     });
     if (liveElsewhere) return respondWithExisting(liveElsewhere);
 
+    // ROUTE — see the same step in `initiatePayment`. Throws before any write.
+    const gateway = charge.route();
+
+    // Failed/cancelled → see the same step in `initiatePayment`.
+    if (existingTx) {
+      const settledAttempt = await this.releaseDeadAttempt(existingTx);
+      if (settledAttempt) return respondWithExisting(settledAttempt);
+    }
+
+    // 5. CREATE NEW PAYMENT TRANSACTION, in INITIATED state
+    const gatewayInstance = getPaymentGateway(gateway);
+
     const attempt = await this.openAttempt({
       bookingId: new Types.ObjectId(bookingId),
       userId: new Types.ObjectId(userId),
       gateway,
-      method,
+      provider: charge.provider,
+      method: methodFor(charge.provider, gateway),
       status: 'INITIATED',
       gatewayRef: '', // Will be updated after gateway call
       amountSnapshot: booking.priceSnapshot,
@@ -972,7 +1047,7 @@ export class PaymentOrchestratorService {
         userId,
         amount: booking.priceSnapshot,
         currency: booking.currency,
-        channel,
+        channel: charge.channel,
         merchantRef: transaction.merchantRef!,
         metadata: { idempotencyKey, bookingId, merchantRef: transaction.merchantRef }
       });
@@ -1005,6 +1080,7 @@ export class PaymentOrchestratorService {
       return {
         transactionId: transaction._id.toString(),
         status: transaction.status,
+        provider: charge.provider,
         instructions: gatewayResult.instructions,
         message: gatewayResult.success
           ? 'Payment initiated successfully'
@@ -1043,19 +1119,20 @@ export class PaymentOrchestratorService {
    */
   async initiateBookingBalancePayment(
     bookingId: string,
-    gateway: PaymentGatewayType,
+    selection: ChargeSelection,
     channel: PaymentChannelInfo,
     options: { originChat?: 'whatsapp' | 'telegram' | null } = {}
   ): Promise<{
     transactionId: string;
     status: PaymentStatus;
+    provider?: PaymentProvider | null;
     amount: number;
     currency: string;
     instructions?: any;
     message: string;
   }> {
     // ⛔ FIRST — see the same line in `initiatePayment`.
-    assertGatewayOffered(gateway);
+    const charge = this.prepareCharge(selection, channel);
 
     const booking = await Booking.findById(bookingId);
     if (!booking) {
@@ -1098,6 +1175,7 @@ export class PaymentOrchestratorService {
       status: tx.status,
       amount: outstanding,
       currency: booking.currency,
+      provider: tx.provider ?? null,
       instructions: this.lastInstructions(tx),
       message: tx.status === 'SUCCEEDED'
         ? 'Balance already paid'
@@ -1110,6 +1188,7 @@ export class PaymentOrchestratorService {
         return {
           transactionId: existingTx._id.toString(),
           status: existingTx.status,
+          provider: existingTx.provider ?? null,
           amount: outstanding,
           currency: booking.currency,
           message: 'Balance already paid'
@@ -1118,14 +1197,7 @@ export class PaymentOrchestratorService {
       if (existingTx.status === 'INITIATED' || existingTx.status === 'PENDING') {
         return respondWithExisting(existingTx);
       }
-      // Failed/cancelled → this is a NEW attempt, and it needs the key the dead one holds.
-      // Only once we KNOW it is dead, though: `FAILED` is written for a refusal AND for a
-      // call that merely errored, and a live charge can be sitting behind the second kind.
-      const settledAttempt = await this.releaseDeadAttempt(existingTx);
-      if (settledAttempt) return respondWithExisting(settledAttempt);
     }
-
-    const gatewayInstance = getPaymentGateway(gateway);
 
     // A second LIVE charge over money that already has one — the hole the idempotency key
     // cannot see, because that key is (source, user, AMOUNT) while this asks about the money
@@ -1140,12 +1212,24 @@ export class PaymentOrchestratorService {
     });
     if (liveElsewhere) return respondWithExisting(liveElsewhere);
 
+    // ROUTE — see the same step in `initiatePayment`. Throws before any write.
+    const gateway = charge.route();
+
+    // Failed/cancelled → see the same step in `initiatePayment`.
+    if (existingTx) {
+      const settledAttempt = await this.releaseDeadAttempt(existingTx);
+      if (settledAttempt) return respondWithExisting(settledAttempt);
+    }
+
+    const gatewayInstance = getPaymentGateway(gateway);
+
     const attempt = await this.openAttempt({
       bookingId: new Types.ObjectId(bookingId),
       purpose: 'booking_balance',
       userId: new Types.ObjectId(userId),
       gateway,
-      method: gateway === 'STRIPE' ? 'CARD' : 'MOBILE',
+      provider: charge.provider,
+      method: methodFor(charge.provider, gateway),
       status: 'INITIATED',
       gatewayRef: '',
       amountSnapshot: outstanding,
@@ -1166,7 +1250,7 @@ export class PaymentOrchestratorService {
         userId,
         amount: outstanding,
         currency: booking.currency,
-        channel,
+        channel: charge.channel,
         merchantRef: transaction.merchantRef!,
         metadata: { idempotencyKey, bookingId, purpose: 'booking_balance', merchantRef: transaction.merchantRef }
       });
@@ -1190,6 +1274,7 @@ export class PaymentOrchestratorService {
       return {
         transactionId: transaction._id.toString(),
         status: transaction.status,
+        provider: charge.provider,
         amount: outstanding,
         currency: booking.currency,
         instructions: gatewayResult.instructions,
@@ -1856,6 +1941,48 @@ export class PaymentOrchestratorService {
    * is a pre-existing property of the fall-through branch, not of retiring the key; closing
    * it means verifying the dead attempt against the gateway before allowing the retry.
    */
+  /**
+   * ⛔ THE choke point every charge-starting method opens with, BEFORE any read or write.
+   *
+   * `{ provider }` (ADR-A08): the required fields and the provider/number mismatch are checked
+   * now, with no I/O — a mismatch is `422 PAYMENT_PROVIDER_PHONE_MISMATCH` with nothing written.
+   * The aggregator is NOT chosen here: `route()` does that later, once the method knows it is
+   * opening a new attempt rather than handing back a live one.
+   *
+   * A bare gateway name (deprecated): exactly the old gate, `assertGatewayOffered`, up front.
+   * Its provider is derived for the row when it can be, and never refused for lack of one —
+   * these callers passed no provider and must behave as before until W2b moves them.
+   */
+  private prepareCharge(selection: ChargeSelection, channel: PaymentChannelInfo): PreparedCharge {
+    if (typeof selection === 'string') {
+      assertGatewayOffered(selection);
+      return {
+        provider: deriveProvider({ gateway: selection, channel }),
+        channel,
+        route: () => selection,
+      };
+    }
+
+    const { provider } = selection;
+    const onMissing = selection.onMissingField ?? missingFieldValidationError;
+    const baseline = checkChargeRequestOrThrow(provider, channel);
+    if (!baseline.ok) throw onMissing(baseline.missing);
+
+    return {
+      provider,
+      // The declared provider is what the adapter charges: NotchPay otherwise re-derives the
+      // operator and lets a stale `phoneOperator` from the client outrank the customer's choice.
+      channel: isMobileMoneyProvider(provider) ? { ...channel, phoneOperator: provider } : channel,
+      route: () => {
+        const route = resolveCollectionRoute(provider);
+        // The route's capability may ask for more than the baseline did.
+        const full = checkChargeRequestOrThrow(provider, channel, route.capability);
+        if (!full.ok) throw onMissing(full.missing);
+        return route.aggregator;
+      },
+    };
+  }
+
   /**
    * Is there already a LIVE attempt over this money?
    *

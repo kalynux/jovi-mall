@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { OptionalEmailAddressSchema } from '../../../core/validation/email';
 import { OptionalPhoneNumberSchema } from '../../../core/validation/phone';
+import { PAYMENT_PROVIDERS } from '../domain/payment-provider';
 import { PAYMENT_GATEWAY_NAMES } from '../gateways/gateway.interface';
 
 /**
@@ -80,6 +81,58 @@ export const InitiateBookingPaymentSchema = z
   });
 
 export type InitiateBookingPaymentInput = z.infer<typeof InitiateBookingPaymentSchema>;
+
+// ── Provider-based requests (ADR-A08) ────────────────────────────────────────
+//
+// The customer names what they HOLD (`provider`: MTN, ORANGE, CARD); the server picks who it
+// calls (the aggregator), from the payment settings, at the moment the charge opens. See
+// `api-doc/payments/routing.md`.
+//
+// ⚠ Neither rule the old schemas enforce survives here, on purpose:
+//   - `gateway` is accepted and IGNORED (owner decision 4). Any string, so an app built against
+//     an aggregator that has since been removed still gets through to routing rather than dying
+//     on a 400 for a field nobody reads. It is counted, not used.
+//   - "phoneNumber unless STRIPE" is gone. Which fields a charge needs is a property of the
+//     ROUTE (the active aggregator's capability for that provider), so it can only be judged
+//     once the route is known — by the routing service, before anything is written.
+//
+// `provider` is optional while apps that predate it are in use; a missing one is derived
+// (`deriveProvider`) and an underivable one is `400 PAYMENT_PROVIDER_REQUIRED`.
+
+const PaymentProviderSchema = z.enum(PAYMENT_PROVIDERS, {
+  errorMap: () => ({ message: `Invalid provider. Must be one of: ${PAYMENT_PROVIDERS.join(', ')}` }),
+});
+
+/** The deprecated aggregator field — accepted, never validated against a list, never used. */
+const DeprecatedGatewaySchema = z.string().trim().optional();
+
+/** POST /payments/initiate, provider-based. Replaces `InitiatePaymentSchema` (removed in C1). */
+export const InitiatePaymentRequestSchema = z
+  .object({
+    cartId: z.string().trim().min(1).optional(),
+    orderId: z.string().trim().min(1).optional(),
+    provider: PaymentProviderSchema.optional(),
+    gateway: DeprecatedGatewaySchema,
+    channel: PaymentChannelSchema.default({}),
+  })
+  .refine((body) => Boolean(body.cartId || body.orderId), {
+    message: 'Either cartId or orderId is required',
+    path: ['cartId'],
+  });
+
+export type InitiatePaymentRequest = z.infer<typeof InitiatePaymentRequestSchema>;
+
+/**
+ * POST /api/bookings/:id/pay and /api/customer/bookings/:id/pay-balance, provider-based.
+ * Replaces `InitiateBookingPaymentSchema` (removed in C1).
+ */
+export const InitiateBookingPaymentRequestSchema = z.object({
+  provider: PaymentProviderSchema.optional(),
+  gateway: DeprecatedGatewaySchema,
+  channel: PaymentChannelSchema.default({}),
+});
+
+export type InitiateBookingPaymentRequest = z.infer<typeof InitiateBookingPaymentRequestSchema>;
 
 /** POST /payments/verify */
 export const VerifyPaymentSchema = z.object({

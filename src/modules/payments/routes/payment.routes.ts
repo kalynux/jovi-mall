@@ -1,13 +1,14 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { Types } from 'mongoose';
 import { PaymentOrchestratorService } from '../services/payment-orchestrator.service';
-import { PaymentGatewayType } from '../models/payment-transaction.model';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { requireAuth } from '../../../api/middlewares/auth.middleware';
 import { payLinkService } from '../services/pay-link.service';
-import { InitiatePaymentSchema, VerifyPaymentSchema, AuthorizePaymentSchema } from '../validators/payment.validators';
+import { InitiatePaymentRequestSchema, VerifyPaymentSchema, AuthorizePaymentSchema } from '../validators/payment.validators';
+import { deriveProviderOrThrow } from '../services/payment-routing.service';
+import { recordDeprecatedGatewayField } from '../../system/metrics/metrics';
 import { PaymentOptionsService } from '../services/payment-options.service';
 import { createPaymentOptionsHandler } from '../controllers/payment-options.controller';
 import { getPaymentSettingsSync } from '../services/payment-settings.service';
@@ -36,8 +37,9 @@ const paymentOptionsService = new PaymentOptionsService({
  * {
  *   cartId?: string,   // preferred for cart checkout
  *   orderId?: string,  // single-order payment
- *   gateway: 'NOTCHPAY' | 'MYCOOLPAY' | 'STRIPE',
- *   channel: {
+ *   provider?: 'MTN' | 'ORANGE' | 'CARD',   // what the customer pays with (ADR-A08)
+ *   gateway?: string,  // DEPRECATED — accepted and ignored; the server picks the aggregator
+ *   channel?: {
  *     phoneNumber?: string,
  *     phoneOperator?: 'MTN' | 'ORANGE' | 'MOOV',
  *     cardToken?: string,
@@ -60,11 +62,18 @@ router.post('/initiate', asyncHandler(async (req: Request, res: Response) => {
   // and `channel.customerEmail` to reach the gateway exactly as typed. One schema
   // now covers the same rules plus the contact formats, and reports them in the
   // platform's standard validation-error shape.
-  const { cartId, orderId, gateway, channel } = InitiatePaymentSchema.parse(req.body);
+  const body = InitiatePaymentRequestSchema.parse(req.body);
+  const { cartId, orderId, channel } = body;
+
+  // The customer names a provider; the server picks the aggregator (ADR-A08). An app built
+  // before `provider` existed still works: its `gateway` is ignored and counted, and the
+  // provider is derived from the number. Underivable is `400 PAYMENT_PROVIDER_REQUIRED`.
+  if (body.gateway !== undefined) recordDeprecatedGatewayField('payments_initiate');
+  const selection = { provider: deriveProviderOrThrow(body) };
 
   const result = cartId
-    ? await paymentOrchestrator.initiatePaymentForCart(cartId, gateway as PaymentGatewayType, channel)
-    : await paymentOrchestrator.initiatePayment(orderId!, gateway as PaymentGatewayType, channel);
+    ? await paymentOrchestrator.initiatePaymentForCart(cartId, selection, channel)
+    : await paymentOrchestrator.initiatePayment(orderId!, selection, channel);
 
   res.status(200).json({ success: result.status !== 'FAILED', ...result });
 }));

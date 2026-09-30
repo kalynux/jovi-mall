@@ -257,6 +257,37 @@ export const rateLimitStoreErrorsTotal = new Counter({
     registers: [registry],
 });
 
+// ─── Payments ─────────────────────────────────────────────────────────────────
+
+/**
+ * The seven doors that used to take an aggregator from their caller (ADR-A08). A closed union,
+ * so the label space is 7 series and a caller cannot invent an eighth.
+ */
+export const PAYMENT_DOORS = [
+    'payments_initiate',
+    'booking_pay',
+    'booking_pay_balance',
+    'plan_purchase',
+    'credit_topup',
+    'bot_booking_pay',
+    'bot_booking_pay_balance',
+] as const;
+
+export type PaymentDoor = (typeof PAYMENT_DOORS)[number];
+
+/**
+ * Requests that still send the deprecated `gateway` field. It is accepted and ignored — the
+ * server picks the aggregator (ADR-A08, owner decision 4) — so nothing fails and nothing else
+ * would show that an old app is still in use. When this is flat at zero for a door, the field
+ * can be dropped from that door's contract.
+ */
+export const paymentDeprecatedGatewayFieldTotal = new Counter({
+    name: `${PREFIX}payment_deprecated_gateway_field_total`,
+    help: 'Payment requests still sending the ignored `gateway` field, by door',
+    labelNames: ['door'] as const,
+    registers: [registry],
+});
+
 // ─── Maintenance ──────────────────────────────────────────────────────────────
 
 /**
@@ -392,6 +423,10 @@ export function recordRateLimited(callerClass: string, policy: string): void {
 
 export function recordRateLimitStoreError(operation: string): void {
     rateLimitStoreErrorsTotal.inc({ operation });
+}
+
+export function recordDeprecatedGatewayField(door: PaymentDoor): void {
+    paymentDeprecatedGatewayFieldTotal.inc({ door });
 }
 
 /**
