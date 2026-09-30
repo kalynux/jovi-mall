@@ -12,7 +12,11 @@
  *   npm run verify:campay -- --callback-file=body.json      W: verify a captured callback body
  *   --amount=5      charge / payout amount in XAF (default 5, hard cap 100)
  *   --ref-mode=uuid send external_reference as a UUID instead of the raw jm_ reference
- *   --idempotency   C: resend the first charge with the SAME reference and report what happens
+ *   --idempotency   C: resend the first charge with the SAME reference and report what happens.
+ *                   P: the FLOAT-BOUNDED check. The amount is set so 2·A > carrier float ≥ A,
+ *                   the withdrawal is re-sent at once with the same reference, and a
+ *                   non-idempotent Campay fails ER301 instead of paying twice. Refuses to run
+ *                   when no such amount exists. --amount is ignored.
  *   --live          required for any money stage when CAMPAY_BASE_URL is not the demo host
  *
  * ⛔ MONEY RULES, enforced here rather than trusted to whoever runs it:
@@ -253,7 +257,7 @@ async function poll(gateway: CampayGateway, ref: string, budgetMs: number): Prom
   }
 
   if (DO_COLLECT) await collectStages(gateway, token);
-  if (DO_PAYOUT) await payoutStages(gateway);
+  if (DO_PAYOUT) await payoutStages(gateway, token);
   if (CALLBACK_FILE) await callbackStage(gateway);
 
   finish();
@@ -314,28 +318,95 @@ async function collectStages(gateway: CampayGateway, token: string): Promise<voi
   }
 }
 
-async function payoutStages(gateway: CampayGateway): Promise<void> {
-  stage(`P. Payout (${AMOUNT} XAF) ⚠ money out of the Campay float`);
+/**
+ * The smallest payout amount A with 2·A > F ≥ A, where F is the destination carrier's float.
+ *
+ * With that amount a second, NON-idempotent withdrawal cannot be funded: the float covers one
+ * payout of A and never two. Null when no such amount exists within the money rules (F < 1, or
+ * the amount would exceed the cap).
+ */
+function floatBoundedAmount(float: number, cap: number): number | null {
+  if (!Number.isFinite(float) || float < 1) return null;
+  const amount = Math.floor(float / 2) + 1;
+  return amount <= float && amount <= cap ? amount : null;
+}
+
+async function payoutStages(gateway: CampayGateway, token: string): Promise<void> {
+  stage(`P. Payout ⚠ money out of the Campay float${DO_IDEMPOTENCY ? ' (with the float-bounded idempotency check)' : ''}`);
   const national = moneyTarget('payout');
   if (!national) return;
+  const phone = `+237${national}`;
 
-  const before = await gateway.payoutBalance('XAF', `+237${national}`).catch((e) => describe(e));
+  const before = await gateway.payoutBalance('XAF', phone).catch((e) => describe(e));
   record('P1.carrier_float_before', before);
+
+  /**
+   * ⛔ P-idem. A payout retry re-sends the SAME reference, and only Campay's idempotency on
+   * `external_reference` stands between that retry and a second transfer. Testing it with a
+   * naive re-send would risk the very double payment it is looking for. So the amount is
+   * chosen so the float cannot fund two: if Campay is not idempotent, the re-send fails ER301
+   * instead of paying twice. No bounded amount means no test.
+   */
+  let amount = AMOUNT;
+  if (DO_IDEMPOTENCY) {
+    const float = typeof before === 'object' && before ? before.available : NaN;
+    const bounded = floatBoundedAmount(float, MAX_AMOUNT_XAF);
+    if (bounded === null) {
+      fail(`P-idem: no amount A with 2·A > float ≥ A fits the rules (float ${JSON.stringify(before)}, cap ${MAX_AMOUNT_XAF}). Refusing: a re-send could pay twice.`);
+      return;
+    }
+    amount = bounded;
+    record('P-idem.bounded_amount', { float, amount, secondWouldNeed: 2 * amount });
+    if (arg('amount')) info(`--amount=${AMOUNT} is ignored: P-idem sets the amount from the float`);
+  }
 
   const reference = mintMerchantRef('po');
   const sent = await gateway
-    .createPayout({ reference, amount: AMOUNT, currency: 'XAF', phone: `+237${national}`, name: 'verify:campay', description: 'verify:campay' })
+    .createPayout({ reference, amount, currency: 'XAF', phone, name: 'verify:campay', description: 'verify:campay' })
     .catch((e) => ({ thrown: describe(e) }));
   record('P2.createPayout', sent);
-  if ('success' in sent && sent.success && sent.gatewayRef) {
-    pass(`P2: withdrawal accepted → ${sent.gatewayRef} (${sent.status})`);
-    const final = await poll(gateway, sent.gatewayRef, 180_000);
-    record('P5.final_record', final);
-    if (final?.endpoint === 'withdraw') pass('P5: the record says endpoint "withdraw", so it parses as a payout');
-    else fail(`P5: endpoint came back as ${JSON.stringify(final?.endpoint)}`);
-  } else {
-    fail('P2: the withdrawal was not accepted (see above). If it is a 403, allow API withdrawals in the Campay app.');
+  if (!('success' in sent) || !sent.success || !sent.gatewayRef) {
+    fail('P2: the withdrawal was not accepted (see above). ER301: the carrier float is short. 403: allow API withdrawals in the Campay app. 401 "Unauthorized IP": add this machine to the allowlist.');
+    return;
   }
+  pass(`P2: withdrawal accepted → ${sent.gatewayRef} (${sent.status})`);
+
+  // The re-send goes IMMEDIATELY, while the first is still PENDING: that is the realistic retry
+  // (a timeout), and the window in which a non-idempotent provider would open a second transfer.
+  let secondRef: string | null = null;
+  if (DO_IDEMPOTENCY) {
+    const again = await raw('/withdraw/', 'POST', token, {
+      amount: String(amount), to: `237${national}`, description: 'verify:campay',
+      ...campayReferenceFields(reference, CAMPAY_CONFIG.REF_MODE),
+    }).catch((e) => ({ status: 0, body: describe(e) }));
+    record('P-idem.resend', again);
+    const code = campayErrorCode(again.body);
+    const returned = typeof again.body === 'object' && again.body ? (again.body as any).reference : null;
+    if (again.status === 200 && returned === sent.gatewayRef) {
+      pass('P-idem: the re-send returned the FIRST transfer: Campay is idempotent on external_reference ✅');
+    } else if (code === 'ER301') {
+      fail('P-idem: ⛔ NOT idempotent. Campay tried a SECOND transfer, and only the float bound stopped it (ER301). createPayout must not be retried blindly.');
+    } else if ([400, 409, 422].includes(again.status)) {
+      pass(`P-idem: the re-send was REFUSED (HTTP ${again.status}${code ? `, ${code}` : ''}): no second transfer ✅. Read the body above to confirm it names the duplicate.`);
+    } else if (again.status !== 200) {
+      // 401 (IP allowlist), 403, 5xx, a network error: the question was never asked.
+      fail(`P-idem: INCONCLUSIVE. The re-send answered HTTP ${again.status}, which says nothing about idempotency. Re-run once the cause above is fixed.`);
+    } else {
+      secondRef = returned ? String(returned) : null;
+      fail(`P-idem: ⛔ NOT idempotent. The re-send opened a NEW transfer ${secondRef ?? '(no reference)'}. The float bound should make it FAIL; polling it below.`);
+    }
+  }
+
+  const final = await poll(gateway, sent.gatewayRef, 180_000);
+  record('P5.final_record', final);
+  if (final?.endpoint === 'withdraw') pass('P5: the record says endpoint "withdraw", so it parses as a payout');
+  else fail(`P5: endpoint came back as ${JSON.stringify(final?.endpoint)}`);
+  if (final?.external_user === reference) pass('P5: external_user echoes our jm_po_ reference, which is what payout settlement looks up');
+  else fail(`P5: external_user came back as ${JSON.stringify(final?.external_user)}, expected ${reference}`);
+
+  if (secondRef) record('P-idem.second_transfer_final', await poll(gateway, secondRef, 180_000));
+
+  record('P6.carrier_float_after', await gateway.payoutBalance('XAF', phone).catch((e) => describe(e)));
 }
 
 async function callbackStage(gateway: CampayGateway): Promise<void> {

@@ -350,6 +350,32 @@ const isAppError = (e: any, code: string): boolean => e instanceof AppError && e
   const unreachable = forgedParsed ? await thrown(() => gateway.confirmWebhookEvent(forgedParsed)) : null;
   assert('an unreachable Campay throws CAMPAY_UNREACHABLE', () => isAppError(unreachable, ERROR_CODES.CAMPAY_UNREACHABLE));
 
+  // A WITHDRAWAL callback, confirmed: the path a payout settles by.
+  const withdrawRef = '029e82b2-8450-4ab6-8543-915776063114';
+  const payoutRef = mintMerchantRef('po');
+  const withdrawRecord = {
+    reference: withdrawRef, status: 'SUCCESSFUL', amount: '3.00', currency: 'XAF', operator: 'MTN',
+    endpoint: 'withdraw', external_reference: payoutRef, external_user: payoutRef, reason: 'None',
+  };
+  const withdrawCallback = gateway.verifyWebhook({ rawBody: callbackBody(withdrawRecord), headers: {} });
+  const withdrawParsed = withdrawCallback.ok ? gateway.parseWebhookEvent(withdrawCallback.payload) : null;
+
+  script([tokenRoute, [/\/transaction\//, () => ({ status: 200, body: withdrawRecord })]]);
+  const withdrawConfirmed = withdrawParsed ? await gateway.confirmWebhookEvent(withdrawParsed) : null;
+  assert('a confirmed withdrawal is a PAYOUT, SUCCEEDED, carrying our jm_po_ reference (what settlePayout looks up)', () =>
+    withdrawConfirmed?.direction === 'payout'
+      && withdrawConfirmed.status === 'SUCCEEDED'
+      && withdrawConfirmed.merchantRef === payoutRef
+      && withdrawConfirmed.gatewayRef === withdrawRef
+      && directionOfEventType(withdrawConfirmed.eventType) === 'payout');
+  assert('…confirmed by re-reading /transaction/ with the withdrawal\'s own reference', () =>
+    seen.some((s) => s.url.endsWith(`/transaction/${withdrawRef}/`)));
+
+  script([tokenRoute, [/\/transaction\//, () => ({ status: 200, body: { ...withdrawRecord, status: 'FAILED', reason: 'ER301' } })]]);
+  const withdrawFailed = withdrawParsed ? await gateway.confirmWebhookEvent(withdrawParsed) : null;
+  assert('a withdrawal callback claiming SUCCESSFUL that Campay records as FAILED confirms FAILED (the hold stays)', () =>
+    withdrawFailed?.direction === 'payout' && withdrawFailed.status === 'FAILED');
+
   // ─── 8 ──────────────────────────────────────────────────────────────────────
   section('8. Calls on the wire');
 
