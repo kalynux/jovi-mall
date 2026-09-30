@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
 import type { PaymentGatewayStatus } from '../gateways/gateway.interface';
 
 /**
@@ -176,6 +177,50 @@ export function myCoolPaySignature(fields: MyCoolPaySignatureFields, privateKey:
     String(fields.transaction_operator ?? '') +
     privateKey;
   return crypto.createHash('md5').update(base).digest('hex');
+}
+
+// ── Campay ──────────────────────────────────────────────────────────────────
+
+/**
+ * Tolerance for the `nbf` / `exp` claims on a Campay callback token, in seconds.
+ *
+ * Their clock and ours are not the same clock, and a callback signed a few seconds "in the
+ * future" is a skew, not a forgery. Kept small because a wide window is also a wide replay
+ * window.
+ */
+export const CAMPAY_SIGNATURE_CLOCK_TOLERANCE_S = 60;
+
+/**
+ * Is a Campay callback's `signature` a token Campay minted with our webhook key?
+ *
+ * The token is an HS256 JWT keyed by the application's **webhook key**. It is in the BODY as
+ * the field `signature`, not in a header.
+ *
+ * ⛔ **This authenticates the SENDER, never the body.** The token's claims are timestamps and
+ * `source: "CamPay"`. No transaction field is in them, so a valid token proves the caller
+ * holds our webhook key and says nothing about the `status` or `amount` beside it. A token
+ * captured from one genuine callback could be replayed with forged fields until it expires.
+ * That is why the Campay adapter implements `confirmWebhookEvent` and the processor acts only
+ * on Campay's own record of the transaction (ADR-A08, P2.0).
+ *
+ * The algorithm is PINNED to HS256. `jsonwebtoken` v9 already refuses `none` when a key is
+ * given; the list also refuses a token whose header names an asymmetric algorithm and
+ * presents our HMAC key as its "public key".
+ *
+ * Pure, and it never throws: the key is a parameter, so `test:campay` can sign known tokens
+ * with a fixture key and check both the accept and the refuse.
+ */
+export function campayCallbackTokenValid(signature: unknown, webhookKey: string): boolean {
+  if (typeof signature !== 'string' || signature.trim() === '' || webhookKey === '') return false;
+  try {
+    jwt.verify(signature.trim(), webhookKey, {
+      algorithms: ['HS256'],
+      clockTolerance: CAMPAY_SIGNATURE_CLOCK_TOLERANCE_S,
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

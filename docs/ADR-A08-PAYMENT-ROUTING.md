@@ -205,6 +205,39 @@ the missing-field error. **The request field `gateway` was NOT removed** from an
 decision 4): old apps and the live n8n MCP still send it, and it stays accepted and ignored.
 `PAYMENT_GATEWAY_NOT_CONFIGURED` stays in the error registry, raised by nothing today.
 
+## Webhook bodies the signature does not cover (P2.0, 2026-09-30)
+
+The webhook processor acts on the `status` and `amount` a callback carries. That is safe only
+when the gateway's signature covers them:
+
+| Gateway | What the signature covers | Status covered? | `confirmWebhookEvent` |
+|---|---|---|---|
+| NotchPay | HMAC-SHA256 over the whole raw body | ✅ | not needed |
+| Stripe | `constructEvent` over the whole raw body | ✅ | not needed |
+| **My-CoolPay** | MD5 of ref, type, amount, currency, operator | ❌ | **implemented** (re-reads `checkStatus`) |
+| **Campay** (P2.1) | a JWT signing only timestamps | ❌ | **required** (re-reads `GET /transaction/{ref}/`) |
+| Flutterwave v3 (not planned) | a static `verif-hash` shared secret | ❌ | would be required; v4's HMAC is chosen instead |
+
+**The gap, and why it was real on My-CoolPay.** A captured, genuinely signed callback for a
+FAILED My-CoolPay charge could be replayed with `transaction_status` changed to SUCCESS: the MD5
+still matched, and because My-CoolPay's event id is derived from the status, the replay also passed
+deduplication. The optional callback-IP pin would have stopped it, but it is off by default and off
+in production. The signature was the only guard, and it did not cover the one field that decides
+whether an order is paid.
+
+**The rule.** An adapter whose signature does not cover the status implements the optional
+`confirmWebhookEvent(event)`. The processor calls it after parsing and **before** the dedup claim:
+
+- The provider's own record is what gets acted on: its status, and an event id rebuilt from that
+  status. A status-altered replay then collides with the genuine event instead of minting a new id.
+- A record that names different money (another reference or direction) → `ignored`, nothing claimed.
+- A transport failure throws → the webhook answers 5xx, the provider retries, and the reconciliation
+  sweep is the backstop. It must never be folded into PENDING, which would acknowledge a genuine
+  callback during an outage.
+
+`test:payments` § 21 proves both halves on a fake adapter, and § 23 does the same on the real
+My-CoolPay adapter: the flipped replay verifies (the gap) and settles nothing (the fix).
+
 ---
 
 ## Error codes

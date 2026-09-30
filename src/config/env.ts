@@ -174,7 +174,7 @@ const INTEGER_VARS: readonly string[] = Object.freeze([
     // Orders
     'UNPAID_ORDER_CANCEL_BATCH_SIZE',
     // Payments
-    'NOTCHPAY_REQUEST_TIMEOUT_MS', 'MYCOOLPAY_REQUEST_TIMEOUT_MS',
+    'NOTCHPAY_REQUEST_TIMEOUT_MS', 'MYCOOLPAY_REQUEST_TIMEOUT_MS', 'CAMPAY_REQUEST_TIMEOUT_MS',
     'PAYMENT_RECONCILE_MIN_AGE_MINUTES', 'PAYMENT_RECONCILE_MAX_AGE_HOURS',
     'PAYMENT_RECONCILE_BATCH_SIZE', 'PAYMENT_OTP_MAX_ATTEMPTS', 'PAYMENT_SETTINGS_CACHE_TTL_MS',
     // Lifecycle
@@ -216,7 +216,7 @@ const BOOLEAN_VARS: readonly string[] = Object.freeze([
     'UPLOAD_OBSERVABILITY_ENABLED',
     'HEALTH_READY_REQUIRE_REDIS', 'METRICS_ENABLED',
     'LOG_CONSOLE_BRIDGE', 'LOG_STDOUT', 'LOG_HTTP_ACCESS', 'LOG_PERSIST_ENABLED',
-    'MYCOOLPAY_VERIFY_CALLBACK_IP', 'NOTCHPAY_REFUNDS_ENABLED',
+    'MYCOOLPAY_VERIFY_CALLBACK_IP', 'NOTCHPAY_REFUNDS_ENABLED', 'CAMPAY_PAYOUTS_ENABLED',
 ]);
 
 const BOOLEAN_LITERALS = new Set(['true', 'false', '1', '0']);
@@ -234,6 +234,7 @@ const ENUM_VARS: Readonly<Record<string, readonly string[]>> = Object.freeze({
     UPLOAD_FINGERPRINT_ALGORITHM: ['md5', 'sha1', 'sha256', 'sha512'],
     AGENT_UNKNOWN_DEVICE_LOCATION_POLICY: ['allow', 'deny'],
     SHIPMENT_ASSIGNMENT_OFFER_PII_REVEAL: ['on_accept', 'on_offer'],
+    CAMPAY_REF_MODE: ['raw', 'uuid'],
 });
 
 /**
@@ -633,6 +634,33 @@ export function validateEnv(source: NodeJS.ProcessEnv = process.env): EnvProblem
     // nothing. It is listed in RENAMED_VARS so an operator who set it is told.
     if (has('MYCOOLPAY_PUBLIC_KEY') && !has('MYCOOLPAY_PRIVATE_KEY')) {
         err('MYCOOLPAY_PRIVATE_KEY', 'is required whenever MYCOOLPAY_PUBLIC_KEY is set. It signs the callback (MD5 over six concatenated fields), so without it every My-CoolPay callback is refused and no mobile-money payment through that gateway ever settles.');
+    }
+    // Campay (ADR-A08 P2.1). Calls authenticate with a username + password pair (exchanged for
+    // a one-hour token) or with the non-expiring permanent token; callbacks carry an HS256 JWT
+    // keyed by the separate WEBHOOK key. Any calling credential without that key is a gateway
+    // that charges and never hears back, so it refuses the boot, like the two rules above.
+    const campayCanCall = (has('CAMPAY_USERNAME') && has('CAMPAY_PASSWORD')) || has('CAMPAY_PERMANENT_TOKEN');
+    if (has('CAMPAY_USERNAME') !== has('CAMPAY_PASSWORD')) {
+        err(has('CAMPAY_USERNAME') ? 'CAMPAY_PASSWORD' : 'CAMPAY_USERNAME', 'must be set together with its pair. Campay exchanges the application\'s API username AND password at POST /token/; one without the other cannot authenticate.');
+    }
+    if (campayCanCall && !has('CAMPAY_WEBHOOK_KEY')) {
+        err('CAMPAY_WEBHOOK_KEY', 'is required whenever Campay credentials are set. It verifies the JWT on every Campay callback; without it every callback is refused, so customers are charged and settlement waits on the reconciliation sweep.');
+    }
+    if (has('CAMPAY_PERMANENT_TOKEN') && has('CAMPAY_USERNAME')) {
+        warn('CAMPAY_PERMANENT_TOKEN', 'is set alongside CAMPAY_USERNAME and is ignored: the username + password pair is used whenever it is present. Remove the permanent token; it never expires, so an unused copy is only a liability.');
+    }
+    if (get('CAMPAY_PAYOUTS_ENABLED') === 'true' && !campayCanCall) {
+        err('CAMPAY_PAYOUTS_ENABLED', 'is true but no Campay credential is set, so no withdrawal can be authenticated at all.');
+    }
+    // The base URL defaults to the DEMO host on purpose, so going live is an explicit act. The
+    // failure this catches is the quiet one: a demo account answers every call and moves no
+    // real money, so a production deploy that forgot CAMPAY_BASE_URL "works" and collects
+    // nothing. A warning, not an error: a deliberate demo soak on the production host must boot.
+    if (isProduction && campayCanCall) {
+        const campayBase = (get('CAMPAY_BASE_URL') || 'https://demo.campay.net/api').toLowerCase();
+        if (campayBase.includes('demo.campay.net')) {
+            warn('CAMPAY_BASE_URL', 'points at the Campay DEMO host (demo.campay.net) in production. Demo transactions move no real money. Set CAMPAY_BASE_URL=https://www.campay.net/api to go live.');
+        }
     }
 
     // ── geo-tracker ──────────────────────────────────────────────────────────

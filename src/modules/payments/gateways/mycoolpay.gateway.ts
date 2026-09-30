@@ -301,6 +301,46 @@ export class MyCoolPayGateway implements PaymentGateway {
     };
   }
 
+  /**
+   * Re-read the transaction from My-CoolPay before a callback is acted on (ADR-A08 P2.0).
+   *
+   * ⛔ **Why My-CoolPay needs this.** Its callback signature (`myCoolPaySignature`) covers ref,
+   * type, amount, currency and operator — NOT `transaction_status`. So a genuinely signed callback
+   * for a FAILED charge, replayed with its status changed to SUCCESS, passes `verifyWebhook`; and
+   * because the event id is derived from the status, it passes dedup too. The callback-IP pin
+   * would stop it, but it is off by default and off in production.
+   *
+   * So the status acted on is `checkStatus`'s, never the body's:
+   * - **The event id is rebuilt from the CONFIRMED status**, so a status-altered replay collides
+   *   with the genuine event for the status My-CoolPay actually holds, instead of minting a new id.
+   * - Amount, currency, ref and operator stay the body's: the signature covers them.
+   * - A `checkStatus` answer about a different transaction or reference → null (`ignored`).
+   * - **A transport failure THROWS** (`call` raises `MYCOOLPAY_UNREACHABLE` / `_REQUEST_FAILED` at
+   *   5xx) → the webhook answers 5xx, My-CoolPay retries, the sweep backstops. It deliberately does
+   *   NOT go through `verifyPayment`, which folds a failure into PENDING: that would acknowledge a
+   *   genuine SUCCESS callback with a 200 during an outage and leave it to the sweep alone.
+   */
+  async confirmWebhookEvent(event: NormalizedWebhookEvent): Promise<NormalizedWebhookEvent | null> {
+    const record = await this.call(`/checkStatus/${encodeURIComponent(event.gatewayRef)}`, 'GET');
+
+    const recordRef = record?.transaction_ref ?? null;
+    if (recordRef !== null && String(recordRef) !== event.gatewayRef) return null;
+    const recordMerchantRef = record?.app_transaction_ref ?? null;
+    if (recordMerchantRef !== null && event.merchantRef !== null && String(recordMerchantRef) !== event.merchantRef) {
+      return null;
+    }
+
+    const body = (event.raw ?? {}) as Record<string, any>;
+    const status = String(record?.transaction_status ?? '');
+    return {
+      ...event,
+      eventId: deriveEventId([event.gatewayRef, body.transaction_type, status]),
+      eventType: `${String(body.transaction_type ?? 'PAYIN')}.${status || 'unknown'}`,
+      status: this.normalizeStatus(status),
+      raw: { callback: event.raw, confirmation: record },
+    };
+  }
+
   // ── Internals ─────────────────────────────────────────────────────────────
 
   /** One status table for this gateway — initiate, verify and webhook alike. */

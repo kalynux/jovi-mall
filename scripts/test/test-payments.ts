@@ -57,7 +57,7 @@ import {
   gatewayImplementsRefund,
   offeredPaymentGateways,
 } from '../../src/modules/payments/gateways/registry';
-import { AppError } from '../../src/core/errors';
+import { AppError, createAppError } from '../../src/core/errors';
 import { ERROR_CODES } from '../../src/core/error-codes';
 import {
   InitiatePaymentRequestSchema,
@@ -80,7 +80,16 @@ import {
   parseRawJson,
   NOTCHPAY_SIGNATURE_HEADERS,
 } from '../../src/modules/payments/domain/webhook-verification';
+import type { NormalizedWebhookEvent } from '../../src/modules/payments/domain/webhook-verification';
 import { decideWebhookResponse } from '../../src/modules/payments/domain/webhook-response';
+import {
+  PaymentGateway,
+  gatewayWebhookPath,
+  gatewayWebhookSegment,
+} from '../../src/modules/payments/gateways/gateway.interface';
+import { PaymentWebhookProcessor } from '../../src/modules/payments/services/webhook-processor.service';
+import { PaymentWebhookEventModel } from '../../src/modules/payments/models/payment-webhook-event.model';
+import { paymentWebhookRouter } from '../../src/modules/payments/routes/webhook.routes';
 import { mintMerchantRef, merchantRefKind } from '../../src/modules/payments/domain/merchant-reference';
 import {
   resolveCameroonOperator,
@@ -1071,10 +1080,10 @@ assert('neither gateway still short-circuits on a missing key with a fake succes
  */
 // `includes`, not `new RegExp` — the repo-wide ban on ad-hoc regex construction
 // applies to `scripts/` too, and a literal substring is what is wanted here.
-assert('app.ts mounts express.raw for ALL THREE gateway webhook paths', () =>
-  ['/api/webhooks/stripe', '/api/webhooks/notchpay', '/api/webhooks/mycoolpay'].every((p) =>
-    APP_TS.includes(`'${p}'`)
-  ) && APP_TS.includes('express.raw('));
+// ADR-A08 P2.0: the paths are derived from PAYMENT_GATEWAY_NAMES, not listed — § 20 pins the
+// derivation and the router's registered routes; this keeps the original property.
+assert('app.ts mounts express.raw for EVERY gateway webhook path (derived, not listed)', () =>
+  APP_TS.includes('...PAYMENT_GATEWAY_NAMES.map(gatewayWebhookPath)') && APP_TS.includes('express.raw('));
 
 assert('the raw mount is declared BEFORE express.json', () => {
   const raw = APP_TS.indexOf('express.raw(');
@@ -1090,11 +1099,13 @@ assert('the raw mount is declared BEFORE express.json', () => {
 assert('the raw mount does NOT swallow the bot webhooks', () =>
   !/app\.use\(\s*'\/api\/webhooks'\s*,\s*express\.raw/.test(APP_TS));
 
+// ADR-A08 P2.0: ONE generated registration serves every gateway, so "every route runs the
+// verifier" is a property of that one call. § 20 counts the routes Express actually registered.
 assert('every webhook route runs through the shared verifier', () => {
-  const routes = WEBHOOK_ROUTES.match(/router\.post\('\/[a-z]+'/g) ?? [];
-  const runs = WEBHOOK_ROUTES.match(/runWebhook\(/g) ?? [];
-  // One `runWebhook` per route, plus its own definition.
-  return routes.length === 3 && runs.length >= routes.length;
+  const posts = WEBHOOK_ROUTES.match(/router\.post\(/g) ?? [];
+  const generated = WEBHOOK_ROUTES.indexOf('router.post(gatewayWebhookSegment(name)');
+  const run = WEBHOOK_ROUTES.indexOf('await runWebhook(name, req, res, handle)', generated);
+  return posts.length === 1 && generated !== -1 && run > generated;
 });
 
 assert('verifyWebhook is called before any handler runs', () => {
@@ -1910,6 +1921,232 @@ async function runScenario(
 
   assert('a body with no provider, no operator and no number is 400 PAYMENT_PROVIDER_REQUIRED', () =>
     isAppError(underivable, ERROR_CODES.PAYMENT_PROVIDER_REQUIRED, 400));
+
+  // ── 18 ──────────────────────────────────────────────────────────────────────
+  section('20. Webhook paths are derived — every gateway gets a raw-body route (ADR-A08 P2.0)');
+
+  assert('the three existing paths are byte-identical', () =>
+    gatewayWebhookPath('STRIPE') === '/api/webhooks/stripe'
+      && gatewayWebhookPath('NOTCHPAY') === '/api/webhooks/notchpay'
+      && gatewayWebhookPath('MYCOOLPAY') === '/api/webhooks/mycoolpay');
+
+  assert('app.ts mounts the raw parser on the DERIVED list — every registered gateway, by construction', () =>
+    APP_TS.includes('...PAYMENT_GATEWAY_NAMES.map(gatewayWebhookPath)')
+      && APP_TS.indexOf('...PAYMENT_GATEWAY_NAMES.map(gatewayWebhookPath)') < APP_TS.indexOf('express.raw(')
+      && APP_TS.indexOf('express.raw(') < APP_TS.indexOf('express.json('));
+
+  // What the router actually registered, read off Express's own stack — not a source scan.
+  const webhookRoutes = (paymentWebhookRouter as unknown as {
+    stack: Array<{ route?: { path: string; methods: Record<string, boolean> } }>;
+  }).stack
+    .filter((layer) => layer.route?.methods?.post)
+    .map((layer) => layer.route!.path);
+
+  assert('the router has exactly one POST route per registered gateway, on its derived segment', () =>
+    webhookRoutes.length === PAYMENT_GATEWAY_NAMES.length
+      && PAYMENT_GATEWAY_NAMES.every((name) => webhookRoutes.includes(gatewayWebhookSegment(name))));
+
+  assert('every registered gateway: raw path under /api/webhooks = mount + its router segment', () =>
+    PAYMENT_GATEWAY_NAMES.every((name) =>
+      gatewayWebhookPath(name) === `/api/webhooks${gatewayWebhookSegment(name)}`
+        && gatewayWebhookPath(name).startsWith('/api/webhooks/')));
+
+  assert('Stripe keeps its own handler; nothing else is special-cased', () => {
+    const routes = lf(PAYMENT_SOURCES.find(({ file }) => file.endsWith('webhook.routes.ts'))!.code);
+    const special = routes.slice(routes.indexOf('const SPECIAL_HANDLERS'), routes.indexOf('};', routes.indexOf('const SPECIAL_HANDLERS')));
+    return special.includes('STRIPE: stripeHandler') && !special.includes('NOTCHPAY') && !special.includes('MYCOOLPAY')
+      && routes.includes("paymentDisputeService.onDisputeCreated(")
+      && !/router\.post\('\/(stripe|notchpay|mycoolpay)'/.test(routes);
+  });
+
+  // ── 19 ──────────────────────────────────────────────────────────────────────
+  section('21. confirmWebhookEvent — a body the signature does not cover is re-read (ADR-A08 P2.0)');
+
+  /**
+   * ⛔ THE forgery test. Campay's JWT and Flutterwave v3's `verif-hash` authenticate the SENDER,
+   * not the body — so a replayed or altered callback can carry a valid token and claim
+   * SUCCEEDED for a charge that never paid. Driven through the REAL processor, with the model and
+   * the orchestrator stubbed so nothing touches a database.
+   */
+  const forgedRef = mintMerchantRef('pt');
+  const forged: NormalizedWebhookEvent = {
+    eventId: `evt_${forgedRef}_SUCCEEDED`, eventType: 'payment', direction: 'collection',
+    gatewayRef: 'gw_1', merchantRef: forgedRef, status: 'SUCCEEDED', amount: 5000, currency: 'XAF', raw: {},
+  };
+
+  interface ProcessorRun { outcome?: any; error?: unknown; claims: string[]; applied: string[] }
+  async function runProcessor(adapter: Partial<PaymentGateway>): Promise<ProcessorRun> {
+    const run: ProcessorRun = { claims: [], applied: [] };
+    const model = PaymentWebhookEventModel as any;
+    const saved = { create: model.create, deleteOne: model.deleteOne, updateOne: model.updateOne };
+    model.create = async (doc: { eventId: string }) => { run.claims.push(doc.eventId); return doc; };
+    model.deleteOne = async () => ({ deletedCount: 1 });
+    model.updateOne = async () => ({ modifiedCount: 1 });
+    const orchestrator = {
+      applyWebhookEvent: async (_gateway: string, event: NormalizedWebhookEvent) => {
+        run.applied.push(event.status);
+        return event.status === 'SUCCEEDED' ? { kind: 'processed' } : { kind: 'ignored', detail: event.status };
+      },
+    };
+    try {
+      const processor = new PaymentWebhookProcessor(orchestrator as any);
+      run.outcome = await processor.process('NOTCHPAY', { parseWebhookEvent: () => forged, ...adapter } as PaymentGateway, {});
+    } catch (error) {
+      run.error = error;
+    } finally {
+      Object.assign(model, saved);
+    }
+    return run;
+  }
+
+  const unconfirmed = await runProcessor({});
+  const saysPending = await runProcessor({
+    confirmWebhookEvent: async (event) => ({ ...event, status: 'PENDING', eventId: `evt_${forgedRef}_PENDING` }),
+  });
+  const saysNothing = await runProcessor({ confirmWebhookEvent: async () => null });
+  const otherMoney = await runProcessor({
+    confirmWebhookEvent: async (event) => ({ ...event, merchantRef: mintMerchantRef('pt') }),
+  });
+  const otherDirection = await runProcessor({
+    confirmWebhookEvent: async (event) => ({ ...event, direction: 'payout' }),
+  });
+  const unreachable = await runProcessor({
+    confirmWebhookEvent: async () => {
+      throw Object.assign(new Error('provider down'), { statusCode: 503 });
+    },
+  });
+  const genuine = await runProcessor({ confirmWebhookEvent: async (event) => ({ ...event }) });
+
+  assert('THE GAP: without a confirmation, a forged SUCCEEDED body reaches the orchestrator as SUCCEEDED', () =>
+    unconfirmed.applied.join() === 'SUCCEEDED' && unconfirmed.outcome?.kind === 'processed');
+
+  assert('⛔ THE FIX: a forged SUCCEEDED whose provider record says PENDING settles NOTHING', () =>
+    !saysPending.applied.includes('SUCCEEDED')
+      && saysPending.applied.join() === 'PENDING'
+      && saysPending.outcome?.kind !== 'processed');
+
+  assert('…and the claim is keyed on the CONFIRMED event, so the genuine SUCCEEDED can still land later', () =>
+    saysPending.claims.join() === `evt_${forgedRef}_PENDING` && !saysPending.claims.includes(forged.eventId));
+
+  assert('a confirmation of null → ignored, nothing claimed, nothing applied', () =>
+    saysNothing.outcome?.kind === 'ignored' && saysNothing.claims.length === 0 && saysNothing.applied.length === 0);
+
+  assert('a confirmation naming OTHER money (reference) → ignored, nothing claimed', () =>
+    otherMoney.outcome?.kind === 'ignored' && otherMoney.claims.length === 0 && otherMoney.applied.length === 0);
+
+  assert('a confirmation in the OTHER direction → ignored, nothing claimed', () =>
+    otherDirection.outcome?.kind === 'ignored' && otherDirection.claims.length === 0 && otherDirection.applied.length === 0);
+
+  assert('the provider unreachable → the processor THROWS (the route answers 5xx; the sweep backstops), nothing claimed', () =>
+    unreachable.error instanceof Error && unreachable.claims.length === 0 && unreachable.applied.length === 0
+      && decideWebhookResponse({ kind: 'processing_failed', retryable: true }).status >= 500);
+
+  assert('a genuine callback the provider confirms settles exactly as before', () =>
+    genuine.outcome?.kind === 'processed' && genuine.applied.join() === 'SUCCEEDED'
+      && genuine.claims.join() === forged.eventId);
+
+  assert('the confirmation runs BEFORE the claim in the processor source', () => {
+    const src = lf(PAYMENT_SOURCES.find(({ file }) => file.endsWith('webhook-processor.service.ts'))!.code);
+    const confirm = src.indexOf('adapter.confirmWebhookEvent(parsed)');
+    const claim = src.indexOf('await this.claim(gateway, event)');
+    return confirm > 0 && claim > confirm;
+  });
+
+  assert('NotchPay and Stripe do not implement it — their signatures cover the whole body', () =>
+    (['NOTCHPAY', 'STRIPE'] as const).every((name) =>
+      typeof PAYMENT_GATEWAYS.get(name)!.confirmWebhookEvent === 'undefined'));
+
+  // ── 23 ──────────────────────────────────────────────────────────────────────
+  section('23. My-CoolPay confirms its callbacks — its MD5 does not sign the status (ADR-A08)');
+
+  /**
+   * ⛔ The real adapter, the real verifier, the real processor. Only My-CoolPay's HTTP `call` and
+   * the webhook-event model are stubbed. A callback GENUINELY signed for a FAILED charge is
+   * replayed with `transaction_status` flipped to SUCCESS: the signature still verifies (the
+   * gap), and the confirmation must stop it settling (the fix).
+   */
+  const mcpRef = mintMerchantRef('pt');
+  const signedFailed = mcpBody({ app_transaction_ref: mcpRef, transaction_status: 'FAILED' });
+  const flipped = JSON.parse(signedFailed.toString());
+  flipped.transaction_status = 'SUCCESS';
+  const flippedRaw = Buffer.from(JSON.stringify(flipped));
+
+  async function runMyCoolPay(
+    payload: Record<string, unknown>,
+    checkStatus: () => Promise<unknown>,
+  ): Promise<ProcessorRun & { checked: number }> {
+    const run = { claims: [] as string[], applied: [] as string[], checked: 0 } as ProcessorRun & { checked: number };
+    const model = PaymentWebhookEventModel as any;
+    const saved = { create: model.create, deleteOne: model.deleteOne, updateOne: model.updateOne };
+    const adapter = mycoolpay as any;
+    const savedCall = adapter.call;
+    model.create = async (doc: { eventId: string }) => { run.claims.push(doc.eventId); return doc; };
+    model.deleteOne = async () => ({ deletedCount: 1 });
+    model.updateOne = async () => ({ modifiedCount: 1 });
+    adapter.call = async () => { run.checked++; return checkStatus(); };
+    const orchestrator = {
+      applyWebhookEvent: async (_gateway: string, event: NormalizedWebhookEvent) => {
+        run.applied.push(event.status);
+        return event.status === 'SUCCEEDED' ? { kind: 'processed' } : { kind: 'ignored', detail: event.status };
+      },
+    };
+    try {
+      run.outcome = await new PaymentWebhookProcessor(orchestrator as any).process('MYCOOLPAY', mycoolpay, payload);
+    } catch (error) {
+      run.error = error;
+    } finally {
+      Object.assign(model, saved);
+      adapter.call = savedCall;
+    }
+    return run;
+  }
+
+  const flippedVerification = mycoolpay.verifyWebhook({ rawBody: flippedRaw, headers: {} });
+  const replay = await runMyCoolPay(flipped, async () => ({ transaction_ref: flipped.transaction_ref, transaction_status: 'FAILED' }));
+  const honest = await runMyCoolPay(flipped, async () => ({ transaction_ref: flipped.transaction_ref, transaction_status: 'SUCCESS' }));
+  const foreign = await runMyCoolPay(flipped, async () => ({ transaction_ref: 'SOMEONE_ELSE', transaction_status: 'SUCCESS' }));
+  const down = await runMyCoolPay(flipped, async () => {
+    throw createAppError(ERROR_CODES.MYCOOLPAY_UNREACHABLE, 503, 'down');
+  });
+  const failedId = deriveEventId([flipped.transaction_ref, flipped.transaction_type, 'FAILED']);
+  const successId = deriveEventId([flipped.transaction_ref, flipped.transaction_type, 'SUCCESS']);
+
+  assert('THE GAP: the status-flipped replay still passes verifyWebhook (MD5 does not sign the status)', () =>
+    flippedVerification.ok === true);
+
+  assert('My-CoolPay implements confirmWebhookEvent', () =>
+    typeof mycoolpay.confirmWebhookEvent === 'function');
+
+  assert('⛔ THE FIX: the replayed "SUCCESS" is re-read, found FAILED, and settles NOTHING', () =>
+    replay.checked === 1 && !replay.applied.includes('SUCCEEDED')
+      && replay.applied.join() === 'FAILED' && replay.outcome?.kind !== 'processed');
+
+  assert('⛔ …and its event id is the FAILED one, so it collides with the genuine FAILED callback in dedup', () =>
+    replay.claims.join() === failedId && !replay.claims.includes(successId));
+
+  assert('a genuine SUCCESS that My-CoolPay confirms settles exactly as before, under its SUCCESS id', () =>
+    honest.outcome?.kind === 'processed' && honest.applied.join() === 'SUCCEEDED' && honest.claims.join() === successId);
+
+  assert('a checkStatus answer about another transaction → ignored, nothing claimed', () =>
+    foreign.outcome?.kind === 'ignored' && foreign.claims.length === 0 && foreign.applied.length === 0);
+
+  assert('My-CoolPay unreachable → the processor throws a 5xx (retry + sweep), nothing claimed', () =>
+    down.error instanceof AppError && (down.error as AppError).statusCode === 503
+      && down.claims.length === 0 && down.applied.length === 0);
+
+  assert('the confirmation calls checkStatus directly — NOT verifyPayment, which folds a failure into PENDING', () => {
+    const src = lf(PAYMENT_SOURCES.find(({ file }) => file.endsWith('mycoolpay.gateway.ts'))!.code);
+    const start = src.indexOf('async confirmWebhookEvent(');
+    const body = src.slice(start, src.indexOf('\n  }\n', start));
+    return start > 0 && body.includes("this.call(`/checkStatus/") && !body.includes('verifyPayment(');
+  });
+
+  assert('payoutBalance takes the destination phone, and the payout float check passes it', () => {
+    const iface = lf(PAYMENT_SOURCES.find(({ file }) => file.endsWith('gateway.interface.ts'))!.code);
+    const payout = lf(readFileSync(join(SRC, 'modules/earnings/services/payout-request.service.ts'), 'utf8'));
+    return iface.includes('payoutBalance?(currency: string, destinationPhone?: string)')
+      && payout.includes('gateway.payoutBalance?.(payoutRequest.currency, mobileMoney.phone_number)');
+  });
 
   originalConsole.log(`\n${'═'.repeat(76)}`);
   originalConsole.log(`  ${passed} passed, ${failed} failed`);

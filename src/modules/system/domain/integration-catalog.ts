@@ -43,6 +43,7 @@ export type IntegrationKey =
     | 'stripe'
     | 'notchpay'
     | 'mycoolpay'
+    | 'campay'
     | 'google_calendar'
     | 'wi_admin';
 
@@ -183,6 +184,16 @@ export const INTEGRATION_CATALOG: readonly IntegrationSpec[] = Object.freeze([
             'Same as NotchPay. Note `configured` requires the PRIVATE key as well as the '
             + 'public one: the private key is what verifies the callback, and a gateway that '
             + 'can charge but cannot authenticate the confirmation settles nothing.',
+    },
+    {
+        key: 'campay',
+        label: 'Campay (mobile money)',
+        impact: 'Mobile-money collection through Campay stops, and so do Campay payouts when it is the payout aggregator. Refunds are unaffected: Campay has no refund API, so they go through the manual-payout ticket either way',
+        reachability: 'passive',
+        reachabilityNote:
+            'Same as NotchPay. `configured` requires the WEBHOOK key as well as a calling '
+            + 'credential: without it every callback is refused and settlement rests on the '
+            + 'reconciliation sweep alone.',
     },
     {
         key: 'google_calendar',

@@ -13,7 +13,10 @@ import { storedPayoutGateway } from '../../earnings/domain/payout-gateway';
 /**
  * What happens to a callback after its signature passes.
  *
- * Three responsibilities, in this order, and the order is the design:
+ * Three responsibilities, in this order, and the order is the design — preceded, for an adapter
+ * whose signature does not cover the body, by **confirming the event against the provider's own
+ * record** (`confirmWebhookEvent`, ADR-A08 P2.0). The confirmed event, not the parsed body, is
+ * what gets claimed and routed.
  *
  *   1. **Claim the event id.** The unique index on
  *      `(gateway, eventId)` is the concurrency control — insert-first-wins, so
@@ -49,9 +52,27 @@ export class PaymentWebhookProcessor {
     adapter: PaymentGateway,
     payload: Record<string, unknown>
   ): Promise<WebhookOutcome> {
-    const event = adapter.parseWebhookEvent(payload);
-    if (!event) {
+    const parsed = adapter.parseWebhookEvent(payload);
+    if (!parsed) {
       return { kind: 'ignored', detail: 'no actionable reference in payload' };
+    }
+
+    // Confirm against the provider's own record BEFORE the claim (ADR-A08 P2.0), for an adapter
+    // whose signature does not cover the body. An unconfirmed event claims nothing, so the
+    // genuine callback that may follow is not suppressed as a duplicate. A throw propagates:
+    // the route answers 5xx, the provider retries, and the reconciliation sweep backstops.
+    let event: NormalizedWebhookEvent = parsed;
+    if (typeof adapter.confirmWebhookEvent === 'function') {
+      const confirmed = await adapter.confirmWebhookEvent(parsed);
+      if (!confirmed) {
+        return { kind: 'ignored', detail: "the gateway's own record did not confirm this callback" };
+      }
+      // The provider's record is what counts, but it must be about the SAME money: a
+      // confirmation naming another reference or the other direction is a contradiction.
+      if (confirmed.merchantRef !== parsed.merchantRef || confirmed.direction !== parsed.direction) {
+        return { kind: 'ignored', detail: 'the confirmation names different money than the callback' };
+      }
+      event = confirmed;
     }
 
     // Claim first. If this throws a duplicate-key error the event has already

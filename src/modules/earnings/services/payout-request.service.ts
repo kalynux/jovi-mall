@@ -650,7 +650,9 @@ export class PayoutRequestService {
      * A gateway that cannot report a balance (or reports none for this currency) returns
      * null, and null is not treated as zero — see `payoutBalance`.
      */
-    const balance = await gateway.payoutBalance?.(payoutRequest.currency).catch(() => null);
+    // The destination too: an aggregator with one float PER CARRIER (Campay) answers for the
+    // float this payout will actually draw on; a single-float one (NotchPay) ignores it.
+    const balance = await gateway.payoutBalance?.(payoutRequest.currency, mobileMoney.phone_number).catch(() => null);
     if (balance && balance.available < payoutRequest.amount) {
       throw createAppError(ERROR_CODES.EARNINGS_PAYOUT_TRANSFER_FAILED, 409, undefined, {
         reason: 'insufficient_gateway_balance',

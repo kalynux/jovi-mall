@@ -24,6 +24,7 @@ import {
 } from './config/http.config';
 import { logger } from './core/logging';
 import { globalRateLimiter } from './api/rate-limit/rate-limit.middleware';
+import { PAYMENT_GATEWAY_NAMES, gatewayWebhookPath } from './modules/payments/gateways/gateway.interface';
 
 /**
  * The CORS policy. Mirrors wi-admin's `buildCorsOptions`, including its two subtleties.
@@ -123,10 +124,15 @@ app.use(cors(buildCorsOptions()));
 // with a big expanded object is legitimate traffic we cannot ask the sender to
 // shrink, and a 413 here loses a payment notification.
 //
-// ⚠ Three explicit paths, NOT the `/api/webhooks` prefix. That prefix also
+// ⚠ One explicit path PER GATEWAY, NOT the `/api/webhooks` prefix. That prefix also
 // carries the WhatsApp and Telegram bot routers (`api/index.ts`), which read a
 // parsed JSON body — widening this mount would hand them a Buffer and break
 // every bot command silently.
+//
+// The gateway paths are DERIVED from `PAYMENT_GATEWAY_NAMES` (ADR-A08 P2.0) with the
+// same function `webhook.routes.ts` registers its routes on, so a new gateway gets its
+// raw-body mount by construction: `/api/webhooks/stripe`, `/api/webhooks/notchpay`,
+// `/api/webhooks/mycoolpay`, and so on.
 //
 // `type: () => true` — every content type, not just `application/json`. A
 // gateway posting `x-www-form-urlencoded` would otherwise fall through to
@@ -148,9 +154,7 @@ app.use(cors(buildCorsOptions()));
 // The explanation of the trap had become the trap (found by backend-2d).
 app.use(
     [
-        '/api/webhooks/stripe',
-        '/api/webhooks/notchpay',
-        '/api/webhooks/mycoolpay',
+        ...PAYMENT_GATEWAY_NAMES.map(gatewayWebhookPath),
         /**
          * WhatsApp Flows' encrypted data endpoint. Meta signs the body with
          * `X-Hub-Signature-256`, so verifying it needs the bytes as sent.

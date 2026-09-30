@@ -294,6 +294,40 @@ export interface PaymentGateway {
   parseWebhookEvent(payload: Record<string, unknown>): NormalizedWebhookEvent | null;
 
   /**
+   * Confirm a parsed callback against the aggregator's OWN record of the payment, before
+   * anything acts on it (ADR-A08 P2.0).
+   *
+   * ── WHY THIS EXISTS ─────────────────────────────────────────────────────────
+   * The processor trusts the `status` and `amount` a callback carries. That is safe only when
+   * the signature covers them: NotchPay's HMAC signs the whole body, and so does Stripe's.
+   * Campay's JWT signs nothing but timestamps, and Flutterwave v3's `verif-hash` is a static
+   * shared secret — so for those, a replayed or altered body with a valid token could claim
+   * SUCCESSFUL for a charge that never paid. An adapter whose signature does not cover the body
+   * MUST implement this and re-read the transaction from the provider.
+   *
+   * ⚠ **My-CoolPay implements it too**: its MD5 signs ref, type, amount, currency and operator —
+   * NOT `transaction_status` — and the callback-IP pin that would compensate is off in
+   * production. So a signed FAILED callback replayed as SUCCESS verified, and (the event id being
+   * derived from the status) passed dedup. `MyCoolPayGateway.confirmWebhookEvent` re-reads
+   * `checkStatus`. ADR-A08 § "Webhook bodies the signature does not cover" is the record.
+   *
+   * Called by `PaymentWebhookProcessor` after `parseWebhookEvent` and BEFORE the dedup claim, so
+   * an unconfirmed event claims nothing.
+   *
+   * - Return the event as the PROVIDER'S record states it (its status, its amount): that event,
+   *   not the parsed one, is what is acted on. It must name the same `merchantRef` and
+   *   `direction`, or the processor treats it as a contradiction.
+   * - Return **null** for a contradiction or a record that cannot confirm the callback → the
+   *   callback is `ignored` (a 200; nothing settles).
+   * - **Throw** when the provider cannot be asked (a transport failure, a 5xx) → the webhook
+   *   answers 5xx and the provider retries; the reconciliation sweep is the backstop.
+   *
+   * Absent means the signature already covers the body, and the parsed event is acted on as
+   * before. NotchPay and Stripe do not implement it: their signatures cover the whole body.
+   */
+  confirmWebhookEvent?(event: NormalizedWebhookEvent): Promise<NormalizedWebhookEvent | null>;
+
+  /**
    * Refund a payment. **Absent when the provider has no refund API** — see the
    * header above; do not add a stub.
    */
@@ -339,8 +373,15 @@ export interface PaymentGateway {
    */
   payoutAvailable?(): boolean;
 
-  /** The float this gateway can pay out of, when it can report one. */
-  payoutBalance?(currency: string): Promise<PayoutBalance | null>;
+  /**
+   * The float this gateway can pay out of, when it can report one.
+   *
+   * `destinationPhone` is the beneficiary number the payout is about to go to (ADR-A08 P2.0).
+   * An aggregator that holds a SEPARATE float per carrier (Campay: one for MTN, one for Orange)
+   * uses it to report the balance that payout will actually draw on; one with a single float
+   * (NotchPay) ignores it. Optional, so existing callers and implementations are unchanged.
+   */
+  payoutBalance?(currency: string, destinationPhone?: string): Promise<PayoutBalance | null>;
 }
 
 /** Input to `verifyWebhook`: the untouched bytes plus the request headers. */
@@ -361,6 +402,24 @@ export interface WebhookVerifyInput {
 export const PAYMENT_GATEWAY_NAMES = ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE'] as const;
 
 export type PaymentGatewayName = (typeof PAYMENT_GATEWAY_NAMES)[number];
+
+/**
+ * The webhook route segment for a gateway, relative to the `/api/webhooks` mount: `/notchpay`.
+ *
+ * ⛔ **Derived, never listed** (ADR-A08 P2.0). `app.ts` mounts the raw-body parser on
+ * `gatewayWebhookPath(name)` for every name and `webhook.routes.ts` registers a route on this
+ * segment for every name, so a gateway added to `PAYMENT_GATEWAY_NAMES` gets its raw-body
+ * webhook by construction. Hand-listed paths are how a new gateway's callback arrives parsed
+ * and fails a signature check that looks like a wrong secret.
+ */
+export function gatewayWebhookSegment(name: PaymentGatewayName): string {
+  return `/${name.toLowerCase()}`;
+}
+
+/** The full raw-body webhook path for a gateway: `/api/webhooks/notchpay`. */
+export function gatewayWebhookPath(name: PaymentGatewayName): string {
+  return `/api/webhooks${gatewayWebhookSegment(name)}`;
+}
 
 /** How a customer completes a collection, which decides the client's screen. */
 export type CollectFlow = 'PUSH' | 'OTP' | 'CARD_ELEMENT' | 'REDIRECT';

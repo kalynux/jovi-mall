@@ -14,8 +14,11 @@ import {
 import {
     NOTCHPAY_CONFIG,
     MYCOOLPAY_CONFIG,
+    CAMPAY_CONFIG,
+    CAMPAY_DEMO_BASE_URL,
     notchPayEnabled,
     myCoolPayEnabled,
+    campayEnabled,
 } from '../../payments/config/payments.config';
 import { gatewaySupportsRefund } from '../../payments/gateways/registry';
 import { getPaymentSettingsSync } from '../../payments/services/payment-settings.service';
@@ -346,6 +349,30 @@ function configurationOf(key: IntegrationKey): {
                     refundSupported: gatewaySupportsRefund('MYCOOLPAY'),
                     activeForCollections: getPaymentSettingsSync().collection_aggregator === 'MYCOOLPAY',
                     activeForPayouts: getPaymentSettingsSync().payout_aggregator === 'MYCOOLPAY',
+                },
+            };
+
+        case 'campay':
+            return {
+                configured: campayEnabled(),
+                detail: {
+                    implemented: true,
+                    // Which credential authenticates calls. The permanent token is used only
+                    // when no username is set, and it never expires.
+                    auth: CAMPAY_CONFIG.USERNAME && CAMPAY_CONFIG.PASSWORD
+                        ? 'password'
+                        : CAMPAY_CONFIG.PERMANENT_TOKEN ? 'permanent_token' : null,
+                    webhookKeySet: Boolean(CAMPAY_CONFIG.WEBHOOK_KEY),
+                    baseUrl: CAMPAY_CONFIG.BASE_URL,
+                    // The demo host answers every call and moves no real money. Reported so an
+                    // operator reading `configured: true` is not misled about which account it is.
+                    demo: CAMPAY_CONFIG.BASE_URL === CAMPAY_DEMO_BASE_URL,
+                    referenceMode: CAMPAY_CONFIG.REF_MODE,
+                    // Campay has no refund API: those refunds go through the manual-payout ticket.
+                    refundSupported: gatewaySupportsRefund('CAMPAY'),
+                    payoutsEnabled: CAMPAY_CONFIG.PAYOUTS_ENABLED,
+                    activeForCollections: getPaymentSettingsSync().collection_aggregator === 'CAMPAY',
+                    activeForPayouts: getPaymentSettingsSync().payout_aggregator === 'CAMPAY',
                 },
             };
 

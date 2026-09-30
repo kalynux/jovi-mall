@@ -50,6 +50,7 @@ type DomainPrefix =
     | 'STRIPE'
     | 'NOTCHPAY'
     | 'MYCOOLPAY'
+    | 'CAMPAY'
     | 'VALIDATION';   // VALIDATION_ERROR — ZodError catch in global handler only
 
 // Compile-time check: every key must start with a known domain prefix.
@@ -296,7 +297,7 @@ export const ERROR_CODES = Object.freeze({
     /** A link was asked for on a transaction that is already settled, failed or cancelled. */
     PAYMENT_LINK_NOT_PAYABLE: 'PAYMENT_LINK_NOT_PAYABLE',
 
-    // ── NOTCHPAY / MYCOOLPAY ──────────────────────────────────────────────────
+    // ── NOTCHPAY / MYCOOLPAY / CAMPAY ─────────────────────────────────────────
     // Raised at 5xx only, so `INTEGRATION_PREFIXES` files them as `external_service`
     // and the boundary replaces the message and drops `details`. That is deliberate:
     // the diagnostics are for our logs, and a provider's own error text is not
@@ -307,6 +308,8 @@ export const ERROR_CODES = Object.freeze({
     NOTCHPAY_UNREACHABLE: 'NOTCHPAY_UNREACHABLE',
     MYCOOLPAY_REQUEST_FAILED: 'MYCOOLPAY_REQUEST_FAILED',
     MYCOOLPAY_UNREACHABLE: 'MYCOOLPAY_UNREACHABLE',
+    CAMPAY_REQUEST_FAILED: 'CAMPAY_REQUEST_FAILED',
+    CAMPAY_UNREACHABLE: 'CAMPAY_UNREACHABLE',
 
     // ── REFUND ────────────────────────────────────────────────────────────────
     REFUND_NOT_ELIGIBLE: 'REFUND_NOT_ELIGIBLE',

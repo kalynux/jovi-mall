@@ -340,12 +340,14 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.PAYMENT_LINK_NOT_PAYABLE]:
         'This payment is already finished, so no new payment page can be opened for it',
 
-    // The four below are `external_service`, so THESE strings are what the client
+    // The six below are `external_service`, so THESE strings are what the client
     // receives — the thrown message and `details` are dropped at the boundary.
     [ERROR_CODES.NOTCHPAY_REQUEST_FAILED]: 'The mobile money provider rejected this request',
     [ERROR_CODES.NOTCHPAY_UNREACHABLE]: 'The mobile money provider could not be reached',
     [ERROR_CODES.MYCOOLPAY_REQUEST_FAILED]: 'The mobile money provider rejected this request',
     [ERROR_CODES.MYCOOLPAY_UNREACHABLE]: 'The mobile money provider could not be reached',
+    [ERROR_CODES.CAMPAY_REQUEST_FAILED]: 'The mobile money provider rejected this request',
+    [ERROR_CODES.CAMPAY_UNREACHABLE]: 'The mobile money provider could not be reached',
 
     [ERROR_CODES.BOOKING_NOT_FOUND]: 'Booking not found',
     [ERROR_CODES.BOOKING_INVALID_STATUS_TRANSITION]: 'Invalid status transition',

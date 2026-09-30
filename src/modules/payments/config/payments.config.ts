@@ -91,6 +91,57 @@ export const MYCOOLPAY_CONFIG = Object.freeze({
   CALLBACK_IP: '15.236.140.89',
 });
 
+/** Campay's demo host. Named once: the default below and the production boot warning both read it. */
+export const CAMPAY_DEMO_BASE_URL = 'https://demo.campay.net/api';
+
+/**
+ * Campay — https://www.campay.net/api (live) · https://demo.campay.net/api (demo)
+ *
+ * USERNAME / PASSWORD → the application's API credentials, exchanged at `POST /token/` for
+ *               a JWT that lives `expires_in` seconds (3600 today). The auth scheme is
+ *               `Authorization: Token <jwt>`, NOT `Bearer`.
+ * PERMANENT_TOKEN → the app's non-expiring token (APP KEYS). Used ONLY when no
+ *               username is set. It never expires, so a leak of it lasts until someone
+ *               regenerates it by hand; the username/password pair is preferred.
+ * WEBHOOK_KEY → verifies the HS256 JWT in a callback's `signature` field. It authenticates
+ *               the sender and NOT the body, which is why every Campay callback is
+ *               re-read from `GET /transaction/{ref}/` before anything acts on it
+ *               (`CampayGateway.confirmWebhookEvent`).
+ *
+ * ⚠ BASE_URL defaults to the DEMO host, deliberately (ADR-A08 P2.1). Going live is an
+ * explicit act. `config/env.ts` warns in production when Campay credentials point at the
+ * demo host, because a demo account answers every call happily and moves no real money.
+ */
+export const CAMPAY_CONFIG = Object.freeze({
+  USERNAME: process.env.CAMPAY_USERNAME || '',
+  PASSWORD: process.env.CAMPAY_PASSWORD || '',
+  PERMANENT_TOKEN: process.env.CAMPAY_PERMANENT_TOKEN || '',
+  WEBHOOK_KEY: process.env.CAMPAY_WEBHOOK_KEY || '',
+  BASE_URL: (process.env.CAMPAY_BASE_URL || CAMPAY_DEMO_BASE_URL).replace(/\/+$/, ''),
+  REQUEST_TIMEOUT_MS: parseInt(process.env.CAMPAY_REQUEST_TIMEOUT_MS || '15000'),
+  /** Refresh the temporary token when less than this remains, so no call races its expiry. */
+  TOKEN_REFRESH_MARGIN_MS: 5 * 60 * 1000,
+  /**
+   * How our merchant reference travels as `external_reference`.
+   *
+   * Campay documents that field as "a valid and unique UUID4", and ours is
+   * `jm_<kind>_<32 hex>`. `raw` sends it unchanged; `uuid` sends the 32 hex digits
+   * formatted as a UUID. Either way the FULL `jm_…` reference also travels in
+   * `external_user`, which Campay echoes on the callback and on `/transaction/`, and that is
+   * what routing reads. So the mode decides only whether Campay accepts the request, never
+   * where the callback goes. Measured by `verify:campay`.
+   */
+  REF_MODE: (process.env.CAMPAY_REF_MODE === 'uuid' ? 'uuid' : 'raw') as 'raw' | 'uuid',
+  /**
+   * Whether PAYOUTS (`POST /withdraw/`) are enabled for this deployment.
+   *
+   * ⚠ Default FALSE. Two things must both be true, and only this one is in the environment:
+   * the flag, and "allow withdrawals through the API" switched on in the Campay application
+   * settings. A refusal for the second reason comes back per call as `unsupported`.
+   */
+  PAYOUTS_ENABLED: (process.env.CAMPAY_PAYOUTS_ENABLED || 'false') === 'true',
+});
+
 /**
  * Cross-gateway payment policy.
  *
@@ -134,6 +185,17 @@ export function notchPayEnabled(): boolean {
 /** True when My-CoolPay has both keys. The private key is BOTH the callback signer and the payout credential. */
 export function myCoolPayEnabled(): boolean {
   return MYCOOLPAY_CONFIG.PUBLIC_KEY !== '' && MYCOOLPAY_CONFIG.PRIVATE_KEY !== '';
+}
+
+/**
+ * True when Campay has a way to authenticate (username + password, or the permanent token)
+ * AND the webhook key. Without the key every callback is refused `missing_secret`, and
+ * settlement would rest on the reconciliation sweep alone, so that is not "configured".
+ */
+export function campayEnabled(): boolean {
+  const canCall =
+    (CAMPAY_CONFIG.USERNAME !== '' && CAMPAY_CONFIG.PASSWORD !== '') || CAMPAY_CONFIG.PERMANENT_TOKEN !== '';
+  return canCall && CAMPAY_CONFIG.WEBHOOK_KEY !== '';
 }
 
 /**
