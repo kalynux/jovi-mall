@@ -2633,7 +2633,7 @@
           },
           "phone": {
             "type": "string",
-            "description": "Only a mobile-money number the customer typed, with country code. Omit to use the account's."
+            "description": "Only a mobile-money number the customer typed, exactly as they typed it (the country code is optional: without one, the account's own country is used). Omit to use the account's."
           }
         }
       },
@@ -2853,7 +2853,7 @@
         "properties": {
           "phone": {
             "type": "string",
-            "description": "Only a number the customer typed, with country code."
+            "description": "Only a number the customer typed, exactly as they typed it (the country code is optional: without one, the account's own country is used)."
           }
         }
       },

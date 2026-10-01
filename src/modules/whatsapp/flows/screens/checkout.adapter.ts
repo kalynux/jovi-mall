@@ -7,6 +7,7 @@ import { CHECKOUT_SCREEN } from '../definitions/checkout.flow';
 import type { FlowCopy } from './flow-copy';
 import { noticeResponse } from './listing.adapter';
 import { FLOW_CAPS, fitText, joinFitted } from './flow-text';
+import { dialOptions } from '../../../../core/validation/dial-codes';
 
 /**
  * The checkout, reshaped for the Flow — and what to say when placing it fails.
@@ -48,6 +49,10 @@ export function toCheckoutScreen(view: CheckoutView, copy: FlowCopy): FlowRespon
         phoneHint: fitText(copy.flowPhoneHint, FLOW_CAPS.caption),
         /** ⚠ Verbatim. Empty when nothing is on file; the helper text is simply blank then. */
         phoneMasked: fitText(view.payment.phoneMasked ?? '', 80),
+        dialLabel: fitText(copy.checkoutCountry, 20),
+        /** ⚠ Titles are clipped to the option-title cap; the code leads, so only the name is cut. */
+        dialOptions: dialOptions(view.language, FLOW_CAPS.optionTitle),
+        dialDefault: view.payment.dialCountry,
         payLabel: fitText(copy.checkoutPay, FLOW_CAPS.footerLabel),
     });
 }

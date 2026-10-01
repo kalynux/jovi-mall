@@ -4,7 +4,8 @@ import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { sendSuccess } from '../../../core/responses';
 import { AppError, createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
-import { OptionalPhoneNumberSchema } from '../../../core/validation/phone';
+import { normalizePhoneNumber } from '../../../core/validation/phone';
+import { composeTypedNumber } from '../../../core/validation/dial-codes';
 import { CartService } from '../../cart/services/cart.service';
 import { CustomerModel, ICustomer } from '../../customers/customer.model';
 import { PaymentTransactionModel, IPaymentTransaction } from '../../payments/models/payment-transaction.model';
@@ -40,6 +41,7 @@ import {
     readChatCheckout,
     storedPayer,
 } from '../miniapp/surfaces/checkout.controller';
+import { payerPresentation, validatedPayerNumber } from '../miniapp/surfaces/checkout-payer';
 
 /**
  * The chat half of checkout — the door onto the screen, and the payment's answer afterwards.
@@ -347,6 +349,17 @@ export class BotCheckoutController {
     });
 }
 
+/**
+ * A number the customer TYPED in the chat, as they typed it — with or without its country code.
+ *
+ * ⚠ **Text here, and judged by the platform's E.164 rule one step later** (`chatTypedNumber` →
+ * `validatedPayerNumber`), never by a looser one. A chat has no country picker, so a number with no
+ * `+` is read against the country of the number already on the account (Cameroon when there is
+ * none) — the picker's own default on the screens (owner's request, 2026-10-01: the bot was asking
+ * customers to retype `672745831` as `+237672745831`). Before this the schema refused it outright.
+ */
+const TypedPayerNumberSchema = z.string().trim().max(32).nullable().default(null);
+
 /** A saved address id, checked the way every other id on this surface is. */
 const savedAddressId = z.string().trim().regex(/^[a-fA-F0-9]{24}$/, 'Must be a saved address id');
 
@@ -364,13 +377,13 @@ const ChatReviewSchema = z
  * somewhere else whenever the review had named a different one.
  *
  * ⚠ **`phone` only when the customer TYPED a number** — absent means the account's own wallet.
- * The platform's E.164 schema, the one `RetrySchema` and the screen use.
+ * See `TypedPayerNumberSchema`: it may arrive without its country code.
  */
 const ChatPlaceSchema = z
     .object({
         checkoutRef: z.string().trim().min(1).max(128),
         deliveryAddressId: savedAddressId.nullable().optional(),
-        phone: OptionalPhoneNumberSchema.nullable().default(null),
+        phone: TypedPayerNumberSchema,
     })
     .strict();
 
@@ -380,14 +393,15 @@ const CHAT_REVIEW_ADDRESS_MAX = 10;
 /**
  * A retry may name the wallet to charge. Absent means "the one on my account".
  *
- * ⚠ **The platform's own E.164 schema, the one the screen uses — never a length check.** An
+ * ⚠ **The platform's own E.164 rule, the one the screen uses — never a length check.** An
  * earlier version of this file accepted any 6–20 character string here, which put a typed
  * number in front of NotchPay and My-CoolPay unvalidated: precisely the defect
  * `payments/validators/payment.validators.ts` says it was written to close, reintroduced
- * through a new door. Two doors onto one charge must refuse the same inputs.
+ * through a new door. Two doors onto one charge must refuse the same inputs — so the text this
+ * schema lets through is composed and then judged by `validatedPayerNumber` in `retryCharge`.
  */
 const RetrySchema = z
-    .object({ phone: OptionalPhoneNumberSchema.nullable().default(null) })
+    .object({ phone: TypedPayerNumberSchema })
     .strict();
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -515,6 +529,8 @@ async function placeChatCheckout(
     phone: string | null,
 ): Promise<void> {
     const caller = botCallerOf(req);
+    /** Composed only — `placeCheckout` judges it, before the spend, exactly as it judges the screen's. */
+    phone = await chatTypedNumber(caller.customerId, phone);
 
     const placed = await placeCheckout(checkoutRef, phone, {
         callerCustomerId: caller.customerId,
@@ -618,7 +634,8 @@ async function retryCharge(
     }
 
     const customer = await loadCustomer(caller.customerId);
-    const payer = phone ? { number: phone, savedProvider: null } : await storedPayer(customer);
+    const typed = validatedPayerNumber(await chatTypedNumber(caller.customerId, phone, customer));
+    const payer = typed ? { number: typed, savedProvider: null } : await storedPayer(customer);
     if (!payer) {
         throw createAppError(
             ERROR_CODES.PAYMENT_PAYER_NUMBER_REQUIRED,
@@ -906,6 +923,26 @@ async function resolveCheckoutPayment(
         );
     }
     return transaction;
+}
+
+/**
+ * A number typed in the chat, with the account's country code put in front when it came without one.
+ *
+ * Returns the text unchanged when it is blank (the account's own wallet), already international, or
+ * not digits — so the one validator downstream sees what it would have seen before, and refuses it
+ * the same way. The account is read only when there is something to compose.
+ */
+async function chatTypedNumber(
+    customerId: string,
+    phone: string | null,
+    loaded?: ICustomer,
+): Promise<string | null> {
+    if (!phone || phone.trim().length === 0) return null;
+    if (normalizePhoneNumber(phone.trim()).startsWith('+')) return phone;
+    const customer = loaded ?? await loadCustomer(customerId);
+    const { dialCountry } = await payerPresentation(customer);
+    const composed = composeTypedNumber(phone, dialCountry);
+    return typeof composed === 'string' ? composed : phone;
 }
 
 async function loadCustomer(customerId: string): Promise<ICustomer> {

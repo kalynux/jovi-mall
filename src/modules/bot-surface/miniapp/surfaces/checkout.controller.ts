@@ -16,6 +16,7 @@ import { publicCatalogService } from '../../../catalog/services/public-catalog.s
 import { formatBotPrice, toPublicMediaUrl } from '../../domain/product-card';
 import { botStorefrontLink, surfacePath } from '../../domain/bot-list-window';
 import { maskPhone } from '../../dto/bot-projections';
+import { composeTypedNumber, dialOptions } from '../../../../core/validation/dial-codes';
 import { InAppSurfaceSession, inAppSurfaceStore } from '../../services/inapp-surface.store';
 import { accountIdentifier, maskAddress } from './checkout-masking';
 import { ChatDestination, resolveChatDestination } from './checkout-destination';
@@ -26,6 +27,7 @@ import {
     storedPayer,
     storedPayerNumber,
     validatedPayerNumber,
+    payerPresentation,
 } from './checkout-payer';
 
 /**
@@ -96,8 +98,12 @@ export {
 /**
  * The HTTP body the page submits. Shape only — the VALUE of `phone` is validated inside
  * `placeCheckout`, so the page and the WhatsApp form are refused by one rule, not two.
+ *
+ * `dial` is the country picker's ISO code. It only ever COMPOSES the typed number
+ * (`composeTypedNumber`): an unknown value composes nothing, and the number is then judged exactly
+ * as it was before the picker existed.
  */
-const PlaceBodySchema = z.object({ phone: z.unknown().optional() }).strict();
+const PlaceBodySchema = z.object({ phone: z.unknown().optional(), dial: z.unknown().optional() }).strict();
 
 const cartService = new CartService();
 const orderService = new OrderService();
@@ -136,8 +142,11 @@ export interface CheckoutView {
     totalText: string;
     /** ⚠ MASKED. `null` is the no-address state; `digital` swaps the heading. */
     address: { text: string; digital?: true } | null;
-    /** ⚠ Never the full number — a placeholder, and empty means "use this one". */
-    payment: { phoneMasked: string | null };
+    /**
+     * ⚠ Never the full number — a placeholder, and empty means "use this one". `dialCountry` is the
+     * ISO code the country picker starts on: the account number's own country, else Cameroon.
+     */
+    payment: { phoneMasked: string | null; dialCountry: string };
     language: string | null;
     /**
      * The website's address page, in the customer's language — **only in the no-address state**,
@@ -259,7 +268,7 @@ export async function readCheckoutView(handle: string): Promise<CheckoutView> {
         lines: await toCheckoutLines(cart),
         totalText: formatBotPrice(quote.total, quote.currency),
         address,
-        payment: { phoneMasked: await maskedPayerNumber(customer) },
+        payment: await payerPresentation(customer),
         language: session.language,
         addAddressUrl: address ? null : botStorefrontLink(surfacePath('addresses'), session.language),
         /** The page draws Pay on delivery only when this is true (owner decision, 2026-09-27). */
@@ -652,6 +661,8 @@ export class CheckoutController {
             totalText: view.totalText,
             address: view.address,
             payment: view.payment,
+            /** The country picker's rows, in the customer's language — home country first. */
+            dialOptions: dialOptions(view.language),
             addAddressUrl: view.addAddressUrl ?? null,
             cashOnDelivery: view.cashOnDelivery,
         });
@@ -676,8 +687,8 @@ export class CheckoutController {
      * page whatever the placement gains next.
      */
     static place = asyncHandler(async (req: Request, res: Response) => {
-        const { phone } = PlaceBodySchema.parse(req.body ?? {});
-        const placed = await placeCheckout(String(req.params.handle ?? ''), phone);
+        const { phone, dial } = PlaceBodySchema.parse(req.body ?? {});
+        const placed = await placeCheckout(String(req.params.handle ?? ''), composeTypedNumber(phone, dial));
         const answer: CheckoutPlaced = {
             orderCount: placed.orderCount,
             transactionId: placed.transactionId,

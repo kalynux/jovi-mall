@@ -425,17 +425,29 @@ const FLOW_PHONE_LABEL: Copy = {
 /**
  * The caption under that field.
  *
- * ⚠ **The country code is stated because nothing else on WhatsApp states it.** The platform's phone
- * schema refuses a local number without `+237`; on the Telegram screen a keyboard hint helps, and in
- * a WhatsApp form this sentence is the only thing between the customer and a refusal they cannot
- * explain.
+ * ⚠ **It no longer asks for the country code (2026-10-01).** The form and the page carry a country
+ * picker beside the number (`core/validation/dial-codes.ts`), defaulting to the country of the
+ * number on the account, so the customer types only their own number. The sentence still says what
+ * an EMPTY field means, which nothing else on the screen does.
  */
 const FLOW_PHONE_HINT: Copy = {
-    en: 'Leave this empty to use the number on your account. If you type one, include the country code, for example +237.',
-    fr: "Laissez vide pour utiliser le numéro de votre compte. Si vous en saisissez un, ajoutez l'indicatif du pays, par exemple +237.",
-    pt: 'Deixe em branco para usar o número da sua conta. Se escrever um, inclua o código do país, por exemplo +237.',
-    es: 'Déjalo vacío para usar el número de tu cuenta. Si escribes uno, incluye el código de país, por ejemplo +237.',
-    ar: 'اتركه فارغًا لاستخدام الرقم المسجل في حسابك. إذا كتبت رقمًا، فأضف رمز الدولة، مثل +237.',
+    en: 'Leave this empty to use the number on your account, or choose your country and type your number.',
+    fr: 'Laissez vide pour utiliser le numéro de votre compte, ou choisissez votre pays et saisissez votre numéro.',
+    pt: 'Deixe em branco para usar o número da sua conta, ou escolha o seu país e escreva o seu número.',
+    es: 'Déjalo vacío para usar el número de tu cuenta, o elige tu país y escribe tu número.',
+    ar: 'اتركه فارغًا لاستخدام الرقم المسجل في حسابك، أو اختر بلدك واكتب رقمك.',
+};
+
+/**
+ * The country picker's label, on the form AND the page. ⚠ A Flow dropdown label caps at 20, like a
+ * text input's; the longest here is 7.
+ */
+const CHECKOUT_COUNTRY: Copy = {
+    en: 'Country',
+    fr: 'Pays',
+    pt: 'País',
+    es: 'País',
+    ar: 'البلد',
 };
 
 /**
@@ -491,6 +503,7 @@ const PAGE = Object.freeze({
     flowBackToChat: FLOW_BACK_TO_CHAT,
     flowPhoneLabel: FLOW_PHONE_LABEL,
     flowPhoneHint: FLOW_PHONE_HINT,
+    checkoutCountry: CHECKOUT_COUNTRY,
 });
 
 export type InAppCopyKey = keyof typeof PAGE;
@@ -536,6 +549,7 @@ const FLOW_CAPS: Partial<Record<InAppCopyKey, number>> = Object.freeze({
     flowBackToChat: 35,
     flowPhoneLabel: 20,
     flowPhoneHint: 409,
+    checkoutCountry: 20,
 });
 
 export function assertInAppCopyComplete(): void {

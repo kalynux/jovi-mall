@@ -1023,11 +1023,20 @@ function main(): void {
      * a typed number with a 6–20 character length check, which put it in front of NotchPay and
      * My-CoolPay unvalidated — the exact defect `payment.validators.ts` was written to close.
      */
+    /**
+     * ⚠ **Since 2026-10-01 the schema takes TEXT and the E.164 rule runs one step later** — a chat
+     * has no country picker, so a number typed without `+` is first composed with the account's
+     * country (`chatTypedNumber` → `composeTypedNumber`). What must not change is WHICH rule
+     * judges it: `validatedPayerNumber`, the screen's own function, over `OptionalPhoneNumberSchema`.
+     * A length check here is exactly the defect this assertion was written against.
+     */
     assert('⛔ a number typed in chat is validated with the same E.164 schema as the screen', () => {
         const chat = chatCode();
         const retrySchema = chat.slice(chat.indexOf('const RetrySchema'), chat.indexOf('.strict();', chat.indexOf('const RetrySchema')));
-        return retrySchema.includes('OptionalPhoneNumberSchema')
+        return retrySchema.includes('TypedPayerNumberSchema')
             && !/z\.string\(\)\.trim\(\)\.min\(6\)/.test(retrySchema)
+            && chat.includes('validatedPayerNumber(await chatTypedNumber(caller.customerId, phone, customer))')
+            && chat.includes('composeTypedNumber(phone, dialCountry)')
             && screenCode().includes('OptionalPhoneNumberSchema');
     });
 
@@ -1618,9 +1627,14 @@ function chatDoorAssertions(): void {
         };
         const reviewKeys = schemaKeys('ChatReviewSchema');
         const placeKeys = schemaKeys('ChatPlaceSchema');
+        // The typed number is TEXT here and judged inside `placeCheckout` by `validatedPayerNumber`
+        // (the screen's rule), after `chatTypedNumber` has put the account's country code in front.
+        const place = chat.slice(chat.indexOf('async function placeChatCheckout'));
+        const composedAt = place.indexOf('phone = await chatTypedNumber(caller.customerId, phone);');
         return reviewKeys?.join(',') === 'deliveryAddressId'
             && placeKeys?.join(',') === 'checkoutRef,deliveryAddressId,phone'
-            && chat.slice(chat.indexOf('const ChatPlaceSchema')).includes('OptionalPhoneNumberSchema');
+            && chat.slice(chat.indexOf('const ChatPlaceSchema')).includes('TypedPayerNumberSchema')
+            && composedAt > 0 && composedAt < place.indexOf('await placeCheckout(checkoutRef, phone,');
     });
 
     console.log('\n── 12c · A charge refused AT OPEN is never "approve it on your phone" ──');

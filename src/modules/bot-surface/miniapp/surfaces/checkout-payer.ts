@@ -1,6 +1,7 @@
 import { AppError, createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
 import { OptionalPhoneNumberSchema } from '../../../../core/validation/phone';
+import { DEFAULT_DIAL_COUNTRY, dialCountryOfNumber } from '../../../../core/validation/dial-codes';
 import { ICustomer } from '../../../customers/customer.model';
 import { resolveCameroonOperator } from '../../../payments/domain/cm-operator';
 import {
@@ -98,6 +99,26 @@ export function validatedPayerNumber(phone: unknown): string | null {
 export async function maskedPayerNumber(customer: ICustomer): Promise<string | null> {
     const stored = await storedPayerNumber(customer);
     return stored ? maskPhone(stored) : null;
+}
+
+/**
+ * What a checkout screen shows about the payer: the masked number, and the country its picker
+ * starts on.
+ *
+ * ⚠ **The default country is derived from the SAME number the masked placeholder shows**, read
+ * once. A customer whose wallet is a French number sees France pre-picked under a `+33…` hint; a
+ * second read that chose the profile phone instead would put a Cameroon picker under a French
+ * placeholder. No number on file falls back to the platform's home country.
+ */
+export async function payerPresentation(
+    customer: ICustomer,
+): Promise<{ phoneMasked: string | null; dialCountry: string }> {
+    const stored = await storedPayerNumber(customer);
+    const masked = stored ? maskPhone(stored) : null;
+    return {
+        phoneMasked: masked,
+        dialCountry: dialCountryOfNumber(stored) ?? DEFAULT_DIAL_COUNTRY,
+    };
 }
 
 /**

@@ -64,6 +64,10 @@
   /* Screen-specific only. Anything another screen would also want belongs in shell.css. */
   .block { margin-block-start: 18px; }
   .block__label { font-size: 12px; color: var(--muted); margin-block-end: 6px; }
+  /* The country picker sits beside the number: the code is short, the number takes the rest. */
+  .phone-row { display: flex; gap: 8px; }
+  .phone-row select { flex: 0 0 auto; max-width: 42%; }
+  .phone-row input { flex: 1 1 auto; min-width: 0; }
 </style>
 </head>
 <body>
@@ -89,7 +93,14 @@
 
       <div class="block field">
         <label class="block__label" for="phone" id="phoneLabel"></label>
-        <input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel">
+        <!--
+          ⚠ A <select>, not a second <input>: the country is CHOSEN from the server's list, never
+          typed, and it only composes a TYPED number. Empty phone still means "my account's number".
+        -->
+        <div class="phone-row">
+          <select id="dial" name="dial" aria-label="Country"></select>
+          <input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel-national">
+        </div>
       </div>
     </div>
   </main>
@@ -136,6 +147,7 @@
     address: document.getElementById("address"),
     phoneLabel: document.getElementById("phoneLabel"),
     phone: document.getElementById("phone"),
+    dial: document.getElementById("dial"),
     foot: document.getElementById("foot"),
     pay: document.getElementById("pay"),
     cod: document.getElementById("cod"),
@@ -239,7 +251,8 @@
    *       }],
    *       totalText: string,               // the one figure the customer is agreeing to pay
    *       address:   { text: string, digital?: true } | null,  // ⚠ MASKED. null → no-address
-   *       payment:   { phoneMasked: string | null },
+   *       payment:   { phoneMasked: string | null, dialCountry: string },  // ISO the picker starts on
+   *       dialOptions: [{ id: string, title: string }],                      // "+237 Cameroun", home first
    *       addAddressUrl: string | null     // the website's address page; set ONLY when address is null
    *   }}
    *
@@ -298,6 +311,24 @@
     el.phoneLabel.textContent = copy.checkoutPhone;
     var masked = data.payment && data.payment.phoneMasked;
     if (masked) el.phone.setAttribute("placeholder", masked);
+
+    /*
+     * The country picker. Rows are the server's (ids are ISO codes, titles already localized), set
+     * through `option.textContent` — never markup. No rows (an older server) leaves it empty and
+     * hidden, and the typed number is then sent exactly as before: it must carry its own +code.
+     */
+    el.dial.innerHTML = "";
+    var rows = Array.isArray(data.dialOptions) ? data.dialOptions : [];
+    rows.forEach(function (row) {
+      var o = document.createElement("option");
+      o.value = String(row.id);
+      o.textContent = String(row.title);
+      el.dial.appendChild(o);
+    });
+    el.dial.hidden = rows.length === 0;
+    if (copy.checkoutCountry) el.dial.setAttribute("aria-label", copy.checkoutCountry);
+    var start = data.payment && data.payment.dialCountry;
+    if (start) el.dial.value = start;
 
     /*
      * ⚠ **With no number on the account there is nothing to fall back to, so the button waits
@@ -376,7 +407,11 @@
     json(base + "/place", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phone: typed.length > 0 ? typed : null })
+      body: JSON.stringify({
+        phone: typed.length > 0 ? typed : null,
+        /* Only meaningful with a typed number; the server ignores it otherwise. */
+        dial: el.dial.hidden ? null : el.dial.value || null
+      })
     }).then(function (res) {
       var refusal = res.body && res.body.error;
       /*
@@ -494,6 +529,7 @@
     checkoutAddAddress: "Add an address",
     checkoutDigitalDelivery: "Sent to your account",
     checkoutPhone: "Mobile money number",
+    checkoutCountry: "Country",
     checkoutPay: "Pay now",
     checkoutWatchChat: "Approve the payment on your phone. I will tell you in the chat as soon as it lands.",
     checkoutPayOnDelivery: "Pay on delivery",

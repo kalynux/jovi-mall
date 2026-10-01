@@ -19,9 +19,11 @@ import { FLOW_SCREEN_TITLE, NOTICE_SCREEN, noticeScreen } from './notice.screen'
  *      helper text, verbatim, under an EMPTY input. Leaving it empty means "use my account
  *      number".
  *
- * ── ⚠ EXACTLY ONE INPUT, AND IT IS A PHONE NUMBER ──────────────────────────
- * `co.html` has one input, `type="tel"`, and `test:inapp-checkout` asserts the count. **There is
- * no address field and there must never be one.** `createOrdersFromCart` re-resolves the
+ * ── ⚠ ONE NUMBER, ONE COUNTRY PICKER, AND NOTHING ELSE ─────────────────────
+ * The customer types a phone number and picks the country it belongs to (2026-10-01 — before that
+ * they had to type the `+237` themselves, and most did not). `co.html` carries the same pair, and
+ * both suites assert that nothing else is on either screen. **There is no address field and there
+ * must never be one.** `createOrdersFromCart` re-resolves the
  * destination from the customer's own saved addresses whatever is submitted, so an address box
  * here would be ignored. That's worse than no box, because the customer would believe they had
  * changed where their parcel goes.
@@ -82,11 +84,29 @@ export const CHECKOUT_FLOW: FlowDefinition = {
                 /** ⚠ Coarse by construction. Shown verbatim, never widened. */
                 addressText: { type: 'string', __example__: 'Akwa, Douala' },
                 phoneLabel: { type: 'string', __example__: 'Mobile money number' },
-                /** The country-code hint. The platform refuses a number without it. */
+                /** What an EMPTY field means — the one thing nothing else on the screen says. */
                 phoneHint: {
                     type: 'string',
-                    __example__: 'Leave this empty to use the number on your account. If you type one, include the country code, for example +237.',
+                    __example__: 'Leave this empty to use the number on your account, or choose your country and type your number.',
                 },
+                dialLabel: { type: 'string', __example__: 'Country' },
+                /**
+                 * The picker's rows: ISO code as the id (the US and Canada share `+1`, so the dial
+                 * code cannot be one), "+237 Cameroon" as the title, home country first.
+                 */
+                dialOptions: {
+                    type: 'array',
+                    items: {
+                        type: 'object',
+                        properties: { id: { type: 'string' }, title: { type: 'string' } },
+                    },
+                    __example__: [
+                        { id: 'CM', title: '+237 Cameroon' },
+                        { id: 'NG', title: '+234 Nigeria' },
+                    ],
+                },
+                /** The account number's own country, else Cameroon. */
+                dialDefault: { type: 'string', __example__: 'CM' },
                 /** ⚠ `maskPhone`'s own shape, verbatim, never re-masked. Empty when none is on file. */
                 phoneMasked: { type: 'string', __example__: '+2376••••4417' },
                 payLabel: { type: 'string', __example__: 'Pay now' },
@@ -104,6 +124,19 @@ export const CHECKOUT_FLOW: FlowDefinition = {
                     { type: 'TextCaption', text: '${data.addressLabel}' },
                     { type: 'TextBody', text: '${data.addressText}' },
                     { type: 'TextCaption', text: '${data.phoneHint}' },
+                    {
+                        /**
+                         * ⚠ **Read ONLY to compose a TYPED number** (`composeTypedNumber`). An empty
+                         * phone field still means "use the number on my account", whatever is picked
+                         * here, and a number typed with its own `+` wins over the picker.
+                         */
+                        type: 'Dropdown',
+                        name: 'dial',
+                        label: '${data.dialLabel}',
+                        'data-source': '${data.dialOptions}',
+                        'init-value': '${data.dialDefault}',
+                        required: false,
+                    },
                     {
                         type: 'TextInput',
                         name: 'phone',
@@ -128,7 +161,7 @@ export const CHECKOUT_FLOW: FlowDefinition = {
                          */
                         'on-click-action': {
                             name: 'data_exchange',
-                            payload: { phone: '${form.phone}' },
+                            payload: { phone: '${form.phone}', dial: '${form.dial}' },
                         },
                     },
                 ],

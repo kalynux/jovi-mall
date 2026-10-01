@@ -973,16 +973,22 @@ async function main(): Promise<void> {
             .includes(String(c.type)));
 
     /**
-     * ⛔ `co.html` has exactly one input and it is a phone. An address field here would be
-     * ignored: `createOrdersFromCart` re-resolves the destination from saved addresses. That's
-     * worse than no box, because the customer would believe they had changed where the
-     * parcel goes.
+     * ⛔ The phone number and its COUNTRY PICKER, and nothing else (the picker since 2026-10-01 —
+     * customers were not typing the `+237`). An address field here would be ignored:
+     * `createOrdersFromCart` re-resolves the destination from saved addresses. That's worse than
+     * no box, because the customer would believe they had changed where the parcel goes.
      */
-    assert('⛔ checkout has EXACTLY ONE input of any kind, and it is a phone number',
-        inputs.length === 1 && inputs[0]['input-type'] === 'phone',
+    assert('⛔ checkout has EXACTLY TWO inputs: a country picker and a phone number',
+        inputs.length === 2
+        && inputs[0].type === 'Dropdown' && inputs[0].name === 'dial'
+        && inputs[1]['input-type'] === 'phone' && inputs[1].name === 'phone',
         `${inputs.length} inputs: ${inputs.map((i) => `${String(i.type)}:${String(i.name)}`).join(', ')}`);
+    assert('⚠ the picker starts on the account number\'s country and its rows are data',
+        inputs[0]?.['init-value'] === '${data.dialDefault}'
+        && inputs[0]?.['data-source'] === '${data.dialOptions}'
+        && inputs[0]?.required === false);
 
-    const phoneInput = inputs[0] ?? {};
+    const phoneInput = inputs[1] ?? {};
     assert('⚠ the masked number is helper text, never the input\'s value',
         phoneInput['helper-text'] === '${data.phoneMasked}'
         && !('value' in phoneInput) && !('init-value' in phoneInput));
@@ -993,8 +999,8 @@ async function main(): Promise<void> {
         | { 'on-click-action'?: { name?: string; payload?: Record<string, unknown> } } | undefined;
     assert('⛔ checkout\'s footer is a data_exchange — a complete would place no order',
         checkoutFooter?.['on-click-action']?.name === 'data_exchange');
-    assert('⛔ checkout\'s footer sends only the phone — never an address, total or id',
-        JSON.stringify(Object.keys(checkoutFooter?.['on-click-action']?.payload ?? {})) === '["phone"]');
+    assert('⛔ checkout\'s footer sends only the phone and its country — never an address, total or id',
+        JSON.stringify(Object.keys(checkoutFooter?.['on-click-action']?.payload ?? {})) === '["phone","dial"]');
 
     /**
      * ⚠ The basket is ONE string. `TextBody.text` is a string, and binding it to an array was the
@@ -1241,7 +1247,8 @@ async function main(): Promise<void> {
         checkoutNoAddress: 'No address.', checkoutPay: 'Pay now', checkoutWatchChat: 'Watch the chat.',
         expired: 'No longer available.', failed: 'Something went wrong.',
         flowOpenProduct: 'View product', flowBackToChat: 'Back to chat',
-        flowPhoneLabel: 'Mobile money number', flowPhoneHint: 'Include the country code.',
+        flowPhoneLabel: 'Mobile money number', flowPhoneHint: 'Leave empty for your account number.',
+        checkoutCountry: 'Country',
         bookingOpen: 'Open', bookingSeeTimes: 'See times',
     };
 
@@ -1464,7 +1471,7 @@ async function main(): Promise<void> {
         lines: [{ title: 'Kettle', variantLabel: 'Size: M', quantity: 2, lineTotalText: '25 000 FCFA', imageUrl: null }],
         totalText: '25 000 FCFA',
         address: { text: 'Akwa, Douala' },
-        payment: { phoneMasked: '+2376••••4417' },
+        payment: { phoneMasked: '+2376••••4417', dialCountry: 'CM' },
         language: 'en',
         ...over,
     });
@@ -1490,11 +1497,11 @@ async function main(): Promise<void> {
         noAddress.screen === NOTICE_SCREEN && noAddress.data.message === copy.checkoutNoAddress);
 
     assert('⛔ no number on file + an empty field → refused BEFORE the handle is spent',
-        needsTypedNumber(view({ payment: { phoneMasked: null } }), '')
-        && needsTypedNumber(view({ payment: { phoneMasked: null } }), '   ')
-        && needsTypedNumber(view({ payment: { phoneMasked: null } }), undefined));
+        needsTypedNumber(view({ payment: { phoneMasked: null, dialCountry: 'CM' } }), '')
+        && needsTypedNumber(view({ payment: { phoneMasked: null, dialCountry: 'CM' } }), '   ')
+        && needsTypedNumber(view({ payment: { phoneMasked: null, dialCountry: 'CM' } }), undefined));
     assert('a typed number, or a number on file, goes through',
-        !needsTypedNumber(view({ payment: { phoneMasked: null } }), '+237652705926')
+        !needsTypedNumber(view({ payment: { phoneMasked: null, dialCountry: 'CM' } }), '+237652705926')
         && !needsTypedNumber(view(), ''));
 
     const err = (statusCode: number, spent: unknown, code = 'X') =>
@@ -1631,7 +1638,7 @@ async function main(): Promise<void> {
     const checkoutFixture = (over: Partial<CheckoutView> = {}): CheckoutView => ({
         lines: [{ title: 'Kettle', variantLabel: null, quantity: 1, lineTotalText: '12 500 FCFA', imageUrl: null }],
         totalText: '12 500 FCFA', address: { text: 'Akwa, Douala' },
-        payment: { phoneMasked: '+2376••••4417' }, language: 'fr', ...over,
+        payment: { phoneMasked: '+2376••••4417', dialCountry: 'CM' }, language: 'fr', ...over,
     });
     const gone = () => createAppError(ERROR_CODES.BOT_PRODUCT_LIST_EXPIRED, 404, 'gone', { spent: false });
     /** The words `readBookingPicker` carries, so no form holds a booking string. */
@@ -2056,6 +2063,23 @@ async function main(): Promise<void> {
     }
 
     {
+        /**
+         * The country picker (2026-10-01): the form sends the national number and the ISO code, and
+         * the ONE composed value is what `placeCheckout` receives. An older published form sends no
+         * `dial`, and the typed text must then reach `placeCheckout` exactly as before.
+         */
+        const h = harness({ ia_co: coSession() });
+        await serveFlowScreen(request('data_exchange', 'REVIEW', { phone: '672745831', dial: 'CM' }, 'ia_co'), h.ports);
+        assert('⭐ a national number + the picked country reach placeCheckout as one E.164 number',
+            h.calls.place.length === 1 && h.calls.place[0].phone === '+237672745831');
+
+        const old = harness({ ia_co: coSession() });
+        await serveFlowScreen(request('data_exchange', 'REVIEW', { phone: '+237672745831' }, 'ia_co'), old.ports);
+        assert('⚠ a form published before the picker (no `dial`) is passed through untouched',
+            old.calls.place.length === 1 && old.calls.place[0].phone === '+237672745831');
+    }
+
+    {
         /** ⭐ Pin (1): a failure after the spend is replayed too — never re-executed. */
         const h = harness({ ia_co: coSession() }, {
             placeCheckout: async (handle, phone) => {
@@ -2116,7 +2140,7 @@ async function main(): Promise<void> {
 
     {
         const h = harness({ ia_co: coSession() }, {
-            readCheckoutView: async () => checkoutFixture({ payment: { phoneMasked: null } }),
+            readCheckoutView: async () => checkoutFixture({ payment: { phoneMasked: null, dialCountry: 'CM' } }),
         });
         const v = await serveFlowScreen(pay('  '), h.ports);
         assert('⛔ no number on file and the field left empty → refused BEFORE the spend: nothing placed',

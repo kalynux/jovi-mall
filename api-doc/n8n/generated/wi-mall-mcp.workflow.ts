@@ -518,7 +518,7 @@ const checkout_place = tool({
       },
       "sendBody": true,
       "specifyBody": "json",
-      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, checkoutRef: $fromAI(\"checkoutRef\", \"Exactly as checkout_review returned it. Single use, ten minutes.\", \"string\"), deliveryAddressId: $fromAI(\"deliveryAddressId\", \"The delivery.address.id from the review. Required for physical goods; omit for downloads. A 24-character hexadecimal id.\", \"string\") || undefined, phone: $fromAI(\"phone\", \"Only a mobile-money number the customer typed, with country code. Omit to use the account's.\", \"string\") || undefined }) }}",
+      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, checkoutRef: $fromAI(\"checkoutRef\", \"Exactly as checkout_review returned it. Single use, ten minutes.\", \"string\"), deliveryAddressId: $fromAI(\"deliveryAddressId\", \"The delivery.address.id from the review. Required for physical goods; omit for downloads. A 24-character hexadecimal id.\", \"string\") || undefined, phone: $fromAI(\"phone\", \"Only a mobile-money number the customer typed, exactly as they typed it (the country code is optional: without one, the account's own country is used). Omit to use the account's.\", \"string\") || undefined }) }}",
       "options": {
         "response": {
           "response": {
@@ -608,7 +608,7 @@ const checkout_retry_payment = tool({
       },
       "sendBody": true,
       "specifyBody": "json",
-      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, phone: $fromAI(\"phone\", \"Only a number the customer typed, with country code.\", \"string\") || undefined }) }}",
+      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, phone: $fromAI(\"phone\", \"Only a number the customer typed, exactly as they typed it (the country code is optional: without one, the account's own country is used).\", \"string\") || undefined }) }}",
       "options": {
         "response": {
           "response": {

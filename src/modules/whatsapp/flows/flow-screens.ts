@@ -49,6 +49,7 @@ import { toDetailScreen } from './screens/detail.adapter';
 import type { FlowCopy } from './screens/flow-copy';
 import { FLOW_LISTING_PAGE_SIZE, noticeResponse, toListingScreen } from './screens/listing.adapter';
 import { FLOW_CAPS } from './screens/flow-text';
+import { composeTypedNumber } from '../../../core/validation/dial-codes';
 
 /**
  * Serving a screen: from a decrypted request to the answer that goes back encrypted.
@@ -667,11 +668,19 @@ async function submitCheckout(
     }
 
     /**
+     * The number the customer typed, read against the country they picked. ⚠ Composed ONCE, here,
+     * and that one value is what both the check below and `placeCheckout` see — composing in one
+     * place and passing the raw field to the other would judge a different number from the one
+     * charged. A form published before the picker existed sends no `dial`, and composes nothing.
+     */
+    const phone = composeTypedNumber(data.phone, data.dial);
+
+    /**
      * ⚠ **No number on file and the field left empty: refused HERE, before the spend.** Meta
      * documents no dynamic `required`, so the form cannot disable Pay the way the page does, and
      * `placeCheckout` can only discover this AFTER consuming the handle.
      */
-    if (needsTypedNumber(view, data.phone)) {
+    if (needsTypedNumber(view, phone)) {
         await release();
         return {
             status: 200,
@@ -690,7 +699,7 @@ async function submitCheckout(
     let verdict: FlowScreenVerdict;
     let spent: boolean;
     try {
-        const placed = await ports.placeCheckout(handle, data.phone);
+        const placed = await ports.placeCheckout(handle, phone);
         verdict = { status: 200, body: placedResponse(placed, copy) };
         spent = true;
     } catch (error) {

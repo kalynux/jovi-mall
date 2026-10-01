@@ -28,8 +28,10 @@ export interface FlowCopy {
     flowBackToChat: string;
     /** The phone field's label. ⚠ ≤ 20, which `checkoutPhone` exceeds in pt and es. */
     flowPhoneLabel: string;
-    /** Under-field hint: leave empty for the account number, or include the country code. */
+    /** Under-field hint: leave empty for the account number, or pick a country and type it. */
     flowPhoneHint: string;
+    /** The country picker's label. Dropdown label, ≤ 20. */
+    checkoutCountry: string;
     /**
      * ── THE TWO BOOKING STRINGS A FORM NEEDS AND A PAGE DOES NOT ────────────
      * Every other word on the booking screens comes from `readBookingPicker`'s own `copy`, which

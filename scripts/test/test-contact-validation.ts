@@ -30,6 +30,13 @@ import {
   PhoneNumberSchema,
   toE164,
 } from '../../src/core/validation/phone';
+import {
+  composeTypedNumber,
+  DIAL_COUNTRIES,
+  dialCountryOf,
+  dialCountryOfNumber,
+  dialOptions,
+} from '../../src/core/validation/dial-codes';
 import { RegisterSchema, LoginSchema, AddRoleSchema } from '../../src/modules/auth/auth.schemas';
 import { isPayoutMethodEnabled, PayoutDetailsZodSchema } from '../../src/core/types/payout.types';
 import { PaymentChannelSchema } from '../../src/modules/payments/validators/payment.validators';
@@ -299,6 +306,47 @@ function main(): void {
     rejects(UpdateStoreProfileSchema, { supportEmail: 'help@shop', version: 0 }) &&
     UpdateStoreProfileSchema.safeParse({ supportPhone: '', version: 0 }).success &&
     UpdateStoreProfileSchema.safeParse({ version: 0 }).success);
+
+  // ── The country picker (2026-10-01) ────────────────────────────────────────
+  //
+  // ⚠ `composeTypedNumber` only BUILDS a string; `PhoneNumberSchema` still judges it. So every
+  // case below is also asserted against the schema, and the "unchanged" cases must come back as
+  // the exact input — a composed value the schema would refuse is a refusal moved, not removed.
+  const compose = (typed: unknown, iso: unknown) => composeTypedNumber(typed, iso);
+  assert('dial: a national number takes the picked country\'s code', () =>
+    compose('672745831', 'CM') === '+237672745831' && PhoneNumberSchema.safeParse(compose('672745831', 'CM')).success);
+  assert('dial: visual formatting is stripped before composing', () =>
+    compose(' 6 72-74.58 31 ', 'cm') === '+237672745831');
+  assert('dial: a number typed WITH its code is not given a second one', () =>
+    compose('237672745831', 'CM') === '+237672745831');
+  assert('dial: a "+" number wins over the picker, untouched', () =>
+    compose('+33612345678', 'CM') === '+33612345678');
+  assert('dial: "00" international dialling becomes "+"', () =>
+    compose('0033612345678', 'CM') === '+33612345678');
+  assert('dial: one trunk 0 is dropped (France)', () =>
+    compose('0612345678', 'FR') === '+33612345678');
+  assert('dial: … but Italy keeps it after the code', () =>
+    compose('0612345678', 'IT') === '+390612345678');
+  assert('dial: a national number that merely starts with the code digits stays national', () =>
+    compose('33123456', 'FR') === '+3333123456');
+  assert('dial: blank, unknown country and non-digits all come back UNCHANGED', () =>
+    compose('', 'CM') === '' && compose(null, 'CM') === null && compose(undefined, 'CM') === undefined
+    && compose('672745831', 'XX') === '672745831' && compose('672745831', undefined) === '672745831'
+    && compose('call me', 'CM') === 'call me');
+  assert('dial: the US and Canada share +1 but are different option ids', () =>
+    dialCountryOf('US')?.dial === '1' && dialCountryOf('CA')?.dial === '1'
+    && new Set(DIAL_COUNTRIES.map((c) => c.iso)).size === DIAL_COUNTRIES.length);
+  assert('dial: the default country is read off a number by its LONGEST prefix', () =>
+    dialCountryOfNumber('+237672745831') === 'CM' && dialCountryOfNumber('+2348031234567') === 'NG'
+    && dialCountryOfNumber('+27821234567') === 'ZA' && dialCountryOfNumber('+999123') === null
+    && dialCountryOfNumber(null) === null);
+  assert('dial: options put Cameroon first, localize names, and fit a capped title', () => {
+    const fr = dialOptions('fr', 30);
+    return fr[0].id === 'CM' && fr[0].title.startsWith('+237 ')
+      && fr.length === DIAL_COUNTRIES.length
+      && fr.every((o) => Array.from(o.title).length <= 30)
+      && fr.some((o) => o.id === 'DE' && o.title.includes('Allemagne'));
+  });
 
   console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed\n`);
   if (failed > 0) process.exit(1);
