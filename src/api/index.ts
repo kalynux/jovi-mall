@@ -260,6 +260,12 @@ router.use('/public', publicCatalogRoutes);
 import botPublicAssetRoutes from '../modules/bot-surface/public-assets.routes';
 router.use('/public', botPublicAssetRoutes);
 
+// The website guide — how to do each customer action on wi-mall.com, as plain text for the
+// customer assistant's `Read-Website-Guide` tool. Declares only `/website-guide[/:topic]`. Public
+// because it is the same how-to for everyone and names nobody; see the router's own header.
+import websiteGuideRoutes from '../modules/bot-surface/website-guide.routes';
+router.use('/public', websiteGuideRoutes);
+
 // Published product reviews, for the product page's review tab and its rating
 // histogram. The FOURTH router on this prefix; it declares only
 // `/products/:productId/reviews`, which the catalog router above has no route for,

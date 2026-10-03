@@ -1,4 +1,4 @@
-import { IDeliveryAgency } from '../../delivery/delivery-agency.model';
+import { IAgencyPolicies, IDeliveryAgency } from '../../delivery/delivery-agency.model';
 import { IAgencyHeadquartersAddress } from '../../magazin/models/magazin.model';
 import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
 
@@ -27,12 +27,40 @@ export interface VendorAgencyPolicySummaryDto {
         pickup_based_enabled: boolean;
         /** Free-text pricing notes from the agency. */
         notes: string | null;
+        /**
+         * The figures behind the two flags (2026-10-03, additive). All amounts are
+         * minor units of the agency's currency. Present whatever the flag says —
+         * an agency may keep prices on a mode it has switched off — so read the
+         * flag before showing them as an offer.
+         */
+        storage_based: {
+            monthly_storage_fee_per_sku: number;
+            pick_pack_fee_per_order: number;
+            local_delivery_fee: number;
+            out_of_region_delivery_fee: number;
+        };
+        pickup_based: {
+            base_rate_first_kg: number;
+            additional_per_kg: number;
+            out_of_region_surcharge: number;
+        };
+        additional_fees: {
+            /** `percentage` of the collected amount, or a `fixed` amount per collection. */
+            cod_handling_fee: { type: 'percentage' | 'fixed'; value: number };
+            failed_delivery_fee: number;
+            /** Return-to-origin fee. */
+            rto_fee: number;
+            /** 0 when the agency charges none. */
+            peak_season_surcharge: number;
+        };
     };
     returns: {
         /** Who bears the cost of return shipping. */
         payer: 'vendor' | 'agency' | 'customer';
         /** Days after delivery within which a return may be initiated. 0 = no returns. */
         return_window_days: number;
+        /** Fee per return handled (minor units). Added 2026-10-03. */
+        handling_fee: number;
         /** Additional return conditions. */
         notes: string | null;
     };
@@ -41,9 +69,21 @@ export interface VendorAgencyPolicySummaryDto {
         claim_deadline_days: number;
         /** Maximum compensation the agency will pay per damaged item (XAF). */
         max_refund_per_item: number;
+        /** Who inspects a damage claim — an admin preset, not the agency's choice. Added 2026-10-03. */
+        inspector: 'agency' | 'vendor' | 'admin';
+        /** Fee for investigating a claim (minor units) — admin preset. Added 2026-10-03. */
+        investigation_fee: number;
         /** Additional damage policy notes. */
         notes: string | null;
     };
+    /** Cash-on-delivery participation. Added 2026-10-03. */
+    cod: {
+        enabled: boolean;
+        /** Cap on one COD order's total (minor units); null = no cap. */
+        max_order_amount: number | null;
+    };
+    /** Up to two public PDF URLs with terms the structured fields do not cover. Added 2026-10-03. */
+    documents: string[];
 }
 
 export interface VendorAgencyListItemDto {
@@ -189,25 +229,62 @@ export class VendorAgencyMapper {
             // placeholder the TODO was written to refuse.
             rating: rating && rating.count > 0 ? rating.average : null,
             ratingCount: rating?.count ?? 0,
-            policies: agency.policies
-                ? {
-                      pricing: {
-                          storage_based_enabled: agency.policies.pricing.storage_based.enabled,
-                          pickup_based_enabled: agency.policies.pricing.pickup_based.enabled,
-                          notes: agency.policies.pricing.notes ?? null,
-                      },
-                      returns: {
-                          payer: agency.policies.returns.payer,
-                          return_window_days: agency.policies.returns.return_window_days,
-                          notes: agency.policies.returns.notes ?? null,
-                      },
-                      damage: {
-                          claim_deadline_days: agency.policies.damage.claim_deadline_days,
-                          max_refund_per_item: agency.policies.damage.max_refund_per_item,
-                          notes: agency.policies.damage.notes ?? null,
-                      },
-                  }
-                : null,
+            policies: agency.policies ? VendorAgencyMapper.toPolicySummary(agency.policies) : null,
+        };
+    }
+
+    /**
+     * The agency's terms as a vendor reads them before asking to connect. Every
+     * field a vendor will be charged or bound by is here — prices, fees, COD,
+     * documents — because the connection request IS the vendor accepting them.
+     */
+    static toPolicySummary(policies: IAgencyPolicies): VendorAgencyPolicySummaryDto {
+        const { pricing, returns, damage, cod } = policies;
+        return {
+            pricing: {
+                storage_based_enabled: pricing.storage_based.enabled,
+                pickup_based_enabled: pricing.pickup_based.enabled,
+                notes: pricing.notes ?? null,
+                storage_based: {
+                    monthly_storage_fee_per_sku: pricing.storage_based.monthly_storage_fee_per_sku,
+                    pick_pack_fee_per_order: pricing.storage_based.pick_pack_fee_per_order,
+                    local_delivery_fee: pricing.storage_based.local_delivery_fee,
+                    out_of_region_delivery_fee: pricing.storage_based.out_of_region_delivery_fee,
+                },
+                pickup_based: {
+                    base_rate_first_kg: pricing.pickup_based.base_rate_first_kg,
+                    additional_per_kg: pricing.pickup_based.additional_per_kg,
+                    out_of_region_surcharge: pricing.pickup_based.out_of_region_surcharge,
+                },
+                additional_fees: {
+                    cod_handling_fee: {
+                        type: pricing.additional_fees.cod_handling_fee.type,
+                        value: pricing.additional_fees.cod_handling_fee.value,
+                    },
+                    failed_delivery_fee: pricing.additional_fees.failed_delivery_fee,
+                    rto_fee: pricing.additional_fees.rto_fee,
+                    peak_season_surcharge: pricing.additional_fees.peak_season_surcharge ?? 0,
+                },
+            },
+            returns: {
+                payer: returns.payer,
+                return_window_days: returns.return_window_days,
+                handling_fee: returns.handling_fee,
+                notes: returns.notes ?? null,
+            },
+            damage: {
+                claim_deadline_days: damage.claim_deadline_days,
+                max_refund_per_item: damage.max_refund_per_item,
+                // The schema defaults, for rows written before the two fields existed.
+                inspector: damage.inspector ?? 'admin',
+                investigation_fee: damage.investigation_fee ?? 1000,
+                notes: damage.notes ?? null,
+            },
+            cod: {
+                enabled: cod?.enabled ?? false,
+                max_order_amount: cod?.max_order_amount ?? null,
+            },
+            documents: policies.documents ?? [],
         };
     }
 

@@ -66,9 +66,22 @@ Only vendors with `status ≠ "inactive"` and completed onboarding (`onboardingS
       "kycVerified": true,
       "primaryAddress": { "label": "Main Shop", "addressLine1": "12 Rue de la Paix", "city": "Douala", "state": "Littoral" },
       "policies": {
-        "returnPolicy": { "returnEligible": true, "returnWindowDays": 14, "refundType": "full" },
-        "cancellationPolicy": { "cancellable": true, "cancellationDeadline": "within_24_hours" },
-        "supportPolicy": { "availability": "business_hours", "languages": ["en", "fr"] }
+        "returnPolicy": {
+          "returnEligible": true, "returnWindowDays": 14, "refundType": "full", "refundPercentage": null,
+          "returnShippingPayer": "customer_reimbursed_if_defect", "refundProcessingDays": 5,
+          "returnConditionNotes": "Unused, in original packaging.", "inspector": "admin"
+        },
+        "cancellationPolicy": {
+          "cancellable": true, "cancellationDeadline": "within_24_hours", "cancellationDeadlineDays": null,
+          "cancellationFeeType": "percentage", "cancellationFeeValue": 10,
+          "lateCancellationRefundType": null, "lateCancellationRefundValue": null
+        },
+        "supportPolicy": {
+          "availability": "business_hours", "availabilityDescription": "Mon–Sat, 8:00–18:00",
+          "languages": ["en", "fr"], "channelTypes": ["whatsapp", "email"],
+          "requiredInfo": ["order_number"], "eligibilityNotes": null
+        },
+        "documents": []
       },
       "connection": null
     }
@@ -191,12 +204,42 @@ interface AgencyVendorListItemDto {
   kycVerified: boolean;
   primaryAddress: { label: string; addressLine1: string; city: string; state: string | null } | null;
   policies: {
-    returnPolicy: { returnEligible: boolean; returnWindowDays: number; refundType: 'full' | 'partial' | 'none' } | null;
-    cancellationPolicy: { cancellable: boolean; cancellationDeadline: string | null } | null;
-    supportPolicy: { availability: '24_7' | 'business_hours' | 'limited' | null; languages: string[] } | null;
+    returnPolicy: {
+      returnEligible: boolean;
+      returnWindowDays: number;
+      refundType: 'full' | 'partial' | 'none';
+      refundPercentage: number | null;            // `partial` only
+      returnShippingPayer: 'vendor' | 'customer' | 'customer_reimbursed_if_defect' | null;
+      refundProcessingDays: number | null;
+      returnConditionNotes: string | null;
+      inspector: 'admin' | 'vendor' | 'platform' | null;
+    } | null;
+    cancellationPolicy: {
+      cancellable: boolean;
+      cancellationDeadline: string | null;
+      cancellationDeadlineDays: number | null;    // `anytime_until_days_before_delivery` only
+      cancellationFeeType: 'none' | 'fixed' | 'percentage' | 'full_non_refundable' | null;
+      cancellationFeeValue: number | null;
+      lateCancellationRefundType: 'fixed' | 'percentage' | 'full_non_refundable' | null;
+      lateCancellationRefundValue: number | null;
+    } | null;
+    supportPolicy: {
+      availability: '24_7' | 'business_hours' | 'limited' | null;
+      availabilityDescription: string | null;
+      languages: string[];
+      channelTypes: Array<'email' | 'phone' | 'whatsapp' | 'telegram'>; // kinds only, never contacts
+      requiredInfo: Array<'order_number' | 'product_photo_video' | 'tracking_number'>;
+      eligibilityNotes: string | null;
+    } | null;
+    documents: string[];                          // up to 2 URLs
   } | null;
 }
 ```
+
+> Since 2026-10-03 `policies` carries every structured field the vendor set (refund %, return
+> shipping payer, processing days, condition notes, inspector, cancellation fee and late-refund
+> rules, support notes, required info, channel kinds, documents). All additions are additive; a
+> client written against the older four-field shape keeps working.
 
 ---
 

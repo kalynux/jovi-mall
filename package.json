@@ -198,6 +198,7 @@
         "test:inapp-catalog": "ts-node scripts/test/test-inapp-catalog.ts",
         "test:inapp-purchase": "ts-node scripts/test/test-inapp-purchase.ts",
         "test:screen-bargain": "ts-node scripts/test/test-screen-bargain.ts",
+        "test:website-guide": "ts-node scripts/test/test-website-guide.ts",
         "test:bargain-entry": "ts-node scripts/test/test-bargain-entry.ts",
         "test:inapp-checkout": "ts-node scripts/test/test-inapp-checkout.ts",
         "test:inapp-orders": "ts-node scripts/test/test-inapp-orders.ts",

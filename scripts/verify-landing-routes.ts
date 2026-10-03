@@ -29,6 +29,7 @@
 import fs from 'fs';
 import path from 'path';
 import { BOT_LIST_SURFACES, surfacePath } from '../src/modules/bot-surface/domain/bot-list-window';
+import { WEBSITE_GUIDE } from '../src/modules/bot-surface/domain/website-guide';
 
 /** Where the landing app lives when the two repositories sit side by side, as they do locally. */
 const DEFAULT_LANDING = path.resolve(__dirname, '../../../frontend/landing');
@@ -48,16 +49,29 @@ function landingRoot(): string {
  * grouping, not a route, and must not count — that distinction is the whole reason this walks
  * the tree rather than testing `existsSync` on the directory alone.
  */
+/**
+ * Every directory a URL segment list can resolve to, walking THROUGH route groups.
+ *
+ * ⚠ A Next.js route group — `(auth)`, `(marketing)` — is a folder that adds nothing to the URL,
+ * so `/login` lives at `[locale]/(auth)/login`. The first version of this check joined the
+ * segments directly and could only see routes outside a group; the website guide links to
+ * `/login` and `/faq`, which are both inside one (2026-10-03).
+ */
+function resolveDirs(base: string, segments: readonly string[]): string[] {
+    if (!fs.existsSync(base) || !fs.statSync(base).isDirectory()) return [];
+    const groups = fs.readdirSync(base).filter((d) => /^\(.+\)$/.test(d))
+        .flatMap((g) => resolveDirs(path.join(base, g), segments));
+    if (segments.length === 0) return [base, ...groups];
+    return [...resolveDirs(path.join(base, segments[0]), segments.slice(1)), ...groups];
+}
+
 function servesRoute(appDir: string, routePath: string): boolean {
     const segments = routePath.split('/').filter(Boolean);
     const candidates = [path.join(appDir, '[locale]'), appDir];
 
-    return candidates.some((base) => {
-        const dir = path.join(base, ...segments);
-        if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return false;
-        return ['page.tsx', 'page.ts', 'page.jsx', 'page.js', 'route.ts', 'route.js']
-            .some((file) => fs.existsSync(path.join(dir, file)));
-    });
+    return candidates.some((base) => resolveDirs(base, segments).some((dir) =>
+        ['page.tsx', 'page.ts', 'page.jsx', 'page.js', 'route.ts', 'route.js']
+            .some((file) => fs.existsSync(path.join(dir, file)))));
 }
 
 function main(): void {
@@ -78,7 +92,11 @@ function main(): void {
         process.exit(2);
     }
 
-    const surfaces = [...BOT_LIST_SURFACES];
+    // The list surfaces, then every page the website guide sends a customer to.
+    const surfaces = [
+        ...BOT_LIST_SURFACES.map((surface) => ({ name: String(surface), routePath: surfacePath(surface) })),
+        ...WEBSITE_GUIDE.map((topic) => ({ name: `guide:${topic.key}`, routePath: topic.path })),
+    ];
     if (surfaces.length === 0) {
         console.error('⛔ the surface list is empty — this check is reading the wrong thing');
         process.exit(1);
@@ -87,11 +105,10 @@ function main(): void {
     console.log(`\n══ Storefront paths, against ${appDir} ══\n`);
 
     const missing: string[] = [];
-    for (const surface of surfaces) {
-        const routePath = surfacePath(surface);
+    for (const { name, routePath } of surfaces) {
         const ok = servesRoute(appDir, routePath);
-        console.log(`  ${ok ? '✅' : '❌'} ${surface.padEnd(16)} ${routePath}`);
-        if (!ok) missing.push(`${surface} → ${routePath}`);
+        console.log(`  ${ok ? '✅' : '❌'} ${name.padEnd(22)} ${routePath}`);
+        if (!ok) missing.push(`${name} → ${routePath}`);
     }
 
     if (missing.length > 0) {

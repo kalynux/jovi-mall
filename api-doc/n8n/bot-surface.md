@@ -3061,6 +3061,36 @@ it, and nothing on the backend's side reports that.
 
 ---
 
+## 20 · The website guide — sending the customer to the right page (2026-10-03)
+
+When the customer wants something the chat cannot do (change an address, change the sign-in
+email or phone, notification settings, move a booking, close the account…), the assistant does
+not say "I can't": it reads one topic of the **website guide** and gives the steps and the link.
+
+`GET /api/public/website-guide/:topic?lang=fr` — **public, plain text**, the same how-to for
+every customer. No topic, or an unknown one, answers the topic list (200, never 404). 17 topics:
+`signin addresses paymentmethods orders tracking paylink bookings downloads reviews saved
+notifications emailphone support checkout closeaccount browse help`. Keys are `[a-z]` only,
+because the n8n tool reduces the model's choice to that.
+
+Each answer: title, `LINK` (built with `storefrontUrl`, so a French customer gets `/fr/…`),
+whether sign-in is needed (then the assistant offers `auth_send_login_link`), numbered steps with
+the website's exact button labels in English or French, and what to know first.
+
+- **Content** — `src/modules/bot-surface/domain/website-guide.ts`, read from `frontend/landing`
+  (routes, components, `messages/{en,fr}.json`) on 2026-10-03. ⚠ The **labels** are not checked by
+  anything; when the website renames a button, update the topic.
+- **Paths** — checked against the landing repository by `npm run verify:landing-routes`, which now
+  walks through route groups (`(auth)/login`, `(marketing)/faq`).
+- **Suite** — `npm run test:website-guide`.
+- **n8n** — `UP-wi-mall-core` node `Read-Website-Guide` (httpRequestTool, fixed host
+  `JOVI_MALL_BASE_URL`), plus the prompt section **WHAT THE CUSTOMER DOES ON THE WEBSITE**.
+  ⏳ Saved as draft `8e724e6e`, **not published**: publish it only after a jovi-mall deploy that
+  serves the route. Rollback: `46aff93c`.
+
+⚠ The website itself has **no edit button for an address** — the guide says to add the correct
+one, make it the default, then remove the wrong one. That is the website, not a guide omission.
+
 ## Related
 
 - [BACKEND-GAPS.md](./BACKEND-GAPS.md) · [ARCHITECTURE.md](./ARCHITECTURE.md) ·

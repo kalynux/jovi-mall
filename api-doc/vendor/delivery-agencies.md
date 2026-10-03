@@ -182,6 +182,9 @@ Only agencies that meet **both** of the following conditions are returned:
 | `storage_based_enabled` | `boolean` | `true` = agency can warehouse vendor stock and ship from its facility. |
 | `pickup_based_enabled` | `boolean` | `true` = agency can collect from vendor's location and deliver to customer. |
 | `notes` | `string \| null` | Free-text pricing terms (bulk discounts, minimums, etc.). |
+| `storage_based` | `object` | 🆕 2026-10-03. `monthly_storage_fee_per_sku`, `pick_pack_fee_per_order`, `local_delivery_fee`, `out_of_region_delivery_fee` — minor units. Sent even when `storage_based_enabled` is `false`; check the flag before showing them as an offer. |
+| `pickup_based` | `object` | 🆕 2026-10-03. `base_rate_first_kg`, `additional_per_kg`, `out_of_region_surcharge` — minor units. Same caveat. |
+| `additional_fees` | `object` | 🆕 2026-10-03. `cod_handling_fee: { type: "percentage" \| "fixed", value }`, `failed_delivery_fee`, `rto_fee` (return to origin), `peak_season_surcharge` (`0` = none) — minor units except a percentage `value`. |
 
 #### `pickup_based` / `storage_based` and pickup locations
 
@@ -282,6 +285,7 @@ Returned in the agency's own order; the first entry is the primary.
 |-------|------|-------------|
 | `payer` | `"vendor" \| "agency" \| "customer"` | Who bears the cost of return shipping. |
 | `return_window_days` | `number` | Days after delivery within which a return may be initiated. `0` = no returns accepted. |
+| `handling_fee` | `number` | 🆕 2026-10-03. Fee per return handled, minor units. |
 | `notes` | `string \| null` | Additional return conditions or eligibility criteria. |
 
 #### `policies.damage`
@@ -290,7 +294,23 @@ Returned in the agency's own order; the first entry is the primary.
 |-------|------|-------------|
 | `claim_deadline_days` | `number` | Days after delivery within which a damage claim must be filed. |
 | `max_refund_per_item` | `number` | Maximum compensation per damaged item (XAF). |
+| `inspector` | `"agency" \| "vendor" \| "admin"` | 🆕 2026-10-03. Who inspects a claim. Admin preset (default `"admin"`), not chosen by the agency. |
+| `investigation_fee` | `number` | 🆕 2026-10-03. Fee for investigating a claim, minor units. Admin preset (default `1000`). |
 | `notes` | `string \| null` | Additional damage policy conditions. |
+
+#### `policies.cod` 🆕 2026-10-03
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `enabled` | `boolean` | Whether the agency handles cash-on-delivery orders at all. |
+| `max_order_amount` | `number \| null` | Cap on one COD order's total, minor units. `null` = no cap. |
+
+#### `policies.documents` 🆕 2026-10-03
+
+`string[]`, at most 2 — public PDF URLs with terms the structured fields do not cover. Empty when none.
+
+The same `policies` object is served by `GET /api/vendor/agency-connections/browse` and by the agent
+app's agency directory — one mapper, `VendorAgencyMapper.toPolicySummary`.
 
 ### `meta` (Pagination)
 
