@@ -54,6 +54,14 @@ export interface RankedCandidate {
 export interface RankingResult {
   candidates: RankedCandidate[];
   source: RankingSource;
+  /**
+   * How many agents reached the COD gate and were dropped SOLELY for their COD AMOUNT
+   * (`COD_AGENT_EXPOSURE_EXCEEDED` — the one refusal an agency may force past). Set only on
+   * a COD ranking; absent otherwise. When the ranking is empty and this is > 0, the agency
+   * is told it can force-assign (`shipment.assignment.cod_limit_blocked`) rather than the
+   * generic "nobody accepted".
+   */
+  codExposureDropped?: number;
 }
 
 /** Raw inputs to the pure scorer — kept separate so it can be tested DB-free. */
@@ -221,19 +229,23 @@ export class AssignmentCandidateService {
     // Step 5 — COD headroom gate. Still last: it is the only one that reads the
     // agent's live exposure, so it is the most expensive to be wrong about.
     let survivors = pool;
+    let codExposureDropped: number | undefined;
     if (isCod) {
-      const codOk = await Promise.all(
+      const codVerdicts = await Promise.all(
         pool.map((c) =>
-          this.canTakeCod(
+          this.codVerdict(
             c.agent,
             contractByAgent.get(c.agent._id.toString())?.cod?.threshold ?? 0,
             shipmentValue ?? 0
           )
         )
       );
-      survivors = pool.filter((_, i) => codOk[i]);
+      survivors = pool.filter((_, i) => codVerdicts[i] === 'ok');
+      codExposureDropped = codVerdicts.filter((v) => v === 'exposure_exceeded').length;
     }
-    if (survivors.length === 0) return { candidates: [], source: 'haversine' };
+    if (survivors.length === 0) {
+      return { candidates: [], source: 'haversine', ...(codExposureDropped !== undefined ? { codExposureDropped } : {}) };
+    }
 
     // Step 5 — pre-cut to the nearest MAX_AUTO_CANDIDATES by local haversine, so
     // the Geo Provider is only ever asked about the plausible set (the
@@ -332,16 +344,18 @@ export class AssignmentCandidateService {
    * Takes the threshold rather than looking the contract up: the caller already
    * holds every candidate's contract from one batched query.
    */
-  private async canTakeCod(
+  private async codVerdict(
     agent: IDeliveryAgent,
     codThreshold: number,
     expectedAmount: number
-  ): Promise<boolean> {
+  ): Promise<'ok' | 'exposure_exceeded' | 'other'> {
     try {
       await this.exposure.assertCanTakeCodShipment(agent, expectedAmount, codThreshold);
-      return true;
-    } catch {
-      return false;
+      return 'ok';
+    } catch (err) {
+      // Only the AMOUNT refusal is forceable (`isForceableCodRefusal`); KYC, trust and an
+      // open shortfall throw other codes and must not be counted as "force would help".
+      return (err as { code?: string })?.code === 'COD_AGENT_EXPOSURE_EXCEEDED' ? 'exposure_exceeded' : 'other';
     }
   }
 

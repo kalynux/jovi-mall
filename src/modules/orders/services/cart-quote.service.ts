@@ -49,9 +49,21 @@
  * bargain fee from the vendor's CURRENT minimum on every bargainable line (the fee is owed haggled
  * or not, 2026-09-28); checkout uses the snapshotted floor — a negotiated line's lock verdict — so
  * the two can differ only if the vendor moves their minimum in between. Checkout's verdict is exact.
+ *
+ * ── Whether cash on delivery is possible is quoted too (ADR-A09 G-10, 2026-10-03) ──
+ *
+ * `cashOnDelivery` answers "would checkout refuse this basket as COD?" BEFORE the pay screen, on
+ * every quote whatever `paymentMethod` was asked. The rule is checkout's own:
+ * `codEligibilityService.assertVendorOrderEligible` — vendor COD terms first, then each carrying
+ * agency (COD-capable + verified, order within its per-order maximum) — fed the agencies the cart
+ * groups each shop's shipments by. The Mini App's `cashOnDeliveryRefusal` reads the SAME
+ * refusal (`quoteWithCodRefusal`), so the web shop and the bot cannot disagree. The verdict
+ * carries a reason and the refusing shops' ids only; no vendor setting or agency limit leaves.
+ * ⚠ The COD exposure limits (agency / vendor holds) are deliberately NOT here: a hold never
+ * refuses the customer — the order is placed and held for the vendor.
  */
 import { Types } from 'mongoose';
-import { createAppError } from '../../../core/errors';
+import { AppError, createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { CartService } from '../../cart/services/cart.service';
 import { ProductRepositoryMongo } from '../../catalog/repositories/mongo/product.repository.mongo';
@@ -62,6 +74,7 @@ import { deliveryFeeForPickupMix } from '../../earnings/services/earnings-quote.
 import { bargainFloorsForVariants } from '../../catalog/read-models/display-price.lookup';
 import { CustomerModel } from '../../customers/customer.model';
 import { OrderPaymentMethod } from '../order.model';
+import { CodEligibilityService, codEligibilityService } from '../../cod/services/cod-eligibility.service';
 import {
     belowMinimumError,
     DeliveryCapAgencyGroup,
@@ -98,6 +111,57 @@ export interface DeliveryMinimumQuote {
     units: DeliveryCapUnitVerdict[];
 }
 
+/**
+ * Why cash on delivery is unavailable for a basket — one value per checkout refusal code, 1:1.
+ * A client keys its copy on these; checkout still answers with the code (`COD_REASON_BY_CODE`).
+ */
+export const CASH_ON_DELIVERY_UNAVAILABLE_REASONS = [
+    'vendor_not_accepted',
+    'agency_not_supported',
+    'order_amount_exceeds_limit',
+    'digital_items',
+] as const;
+export type CashOnDeliveryUnavailableReason = (typeof CASH_ON_DELIVERY_UNAVAILABLE_REASONS)[number];
+
+/** The checkout refusal code → the quote's reason. Exhaustive over the four COD refusals. */
+export const COD_REASON_BY_CODE: Readonly<Record<string, CashOnDeliveryUnavailableReason>> = {
+    [ERROR_CODES.COD_VENDOR_NOT_ACCEPTED]: 'vendor_not_accepted',
+    [ERROR_CODES.COD_AGENCY_NOT_SUPPORTED]: 'agency_not_supported',
+    [ERROR_CODES.COD_ORDER_AMOUNT_EXCEEDS_LIMIT]: 'order_amount_exceeds_limit',
+    [ERROR_CODES.COD_NOT_AVAILABLE_FOR_DIGITAL]: 'digital_items',
+};
+
+export interface CashOnDeliveryQuote {
+    /** `true` when checkout would accept this basket as cash on delivery right now. */
+    available: boolean;
+    /**
+     * The FIRST refusal's reason (shops in cart order). `null` when available — and also when
+     * `available` is false because the rules could not be evaluated (a lookup failed): checkout is
+     * the authority then, and a client shows a generic line.
+     */
+    reason: CashOnDeliveryUnavailableReason | null;
+    /** Every shop that refuses (already public on `perVendor[].vendorId`). Empty for `digital_items`. */
+    vendorIds: string[];
+}
+
+/** One refusal, as the pure verdict reads it. `vendorId` is null for the basket-wide digital rule. */
+export interface CodRefusal {
+    vendorId: string | null;
+    error: AppError;
+}
+
+/**
+ * The pure half of the verdict: refusals → the public shape. `null` means "not evaluated", which
+ * is never "available". A refusal whose code is not one of the four (should not happen) still
+ * makes COD unavailable, with `reason: null`.
+ */
+export function cashOnDeliveryVerdictOf(refusals: CodRefusal[] | null): CashOnDeliveryQuote {
+    if (refusals === null) return { available: false, reason: null, vendorIds: [] };
+    if (refusals.length === 0) return { available: true, reason: null, vendorIds: [] };
+    const vendorIds = [...new Set(refusals.map((r) => r.vendorId).filter((id): id is string => !!id))];
+    return { available: false, reason: COD_REASON_BY_CODE[refusals[0].error.code] ?? null, vendorIds };
+}
+
 export interface CartQuote {
     currency: string;
     subtotal: number;
@@ -123,6 +187,12 @@ export interface CartQuote {
      * make it false — checkout is the authority either way.
      */
     meetsDeliveryMinimum: boolean;
+    /**
+     * Would checkout accept this basket as cash on delivery (ADR-A09 G-10)? Independent of
+     * `paymentMethod`. The delivery minimum is NOT part of it — that is `meetsDeliveryMinimum` on a
+     * quote asked with `paymentMethod: 'cash_on_delivery'`.
+     */
+    cashOnDelivery: CashOnDeliveryQuote;
     perVendor: CartQuoteVendorLine[];
 }
 
@@ -142,6 +212,7 @@ export class CartQuoteService {
         private readonly vendorRepository = new VendorRepository(),
         private readonly agencyRepository = new DeliveryAgencyRepository(),
         private readonly deliveryCap: DeliveryCostCapService = deliveryCostCapService,
+        private readonly codEligibility: CodEligibilityService = codEligibilityService,
     ) { }
 
     /**
@@ -161,6 +232,23 @@ export class CartQuoteService {
         deliveryAddressId?: string,
         paymentMethod: OrderPaymentMethod = 'online',
     ): Promise<CartQuote> {
+        return (await this.quoteWithCodRefusal(customerId, deliveryAddressId, paymentMethod)).quote;
+    }
+
+    /**
+     * The quote, plus the first cash-on-delivery refusal as the `AppError` checkout would raise
+     * (`null` when COD is accepted). For a caller that must THROW the refusal — the Mini App's
+     * `cashOnDeliveryRefusal` — so it reads the same verdict the quote publishes.
+     *
+     * ⚠ A lookup that fails with a non-`AppError` does not fail the quote: `cashOnDelivery` reads
+     * `available: false, reason: null` and `codRefusal` is a generic `COD_AGENCY_NOT_SUPPORTED` —
+     * "not evaluated" is never "passed".
+     */
+    async quoteWithCodRefusal(
+        customerId: string,
+        deliveryAddressId?: string,
+        paymentMethod: OrderPaymentMethod = 'online',
+    ): Promise<{ quote: CartQuote; codRefusal: AppError | null }> {
         const cart = await this.cartService.getCart(customerId);
 
         if (cart.items.length === 0) {
@@ -174,13 +262,25 @@ export class CartQuoteService {
             await this.assertAddressUsable(customerId, deliveryAddressId);
         }
 
-        const perVendor = await this.estimatePerVendor(cart, paymentMethod);
+        const inputs = await this.capInputs(cart);
+        const perVendor = await this.estimatePerVendor(inputs, paymentMethod);
+
+        let refusals: CodRefusal[] | null;
+        try {
+            refusals = await this.codRefusalsOf(cart.productType ?? null, inputs, perVendor);
+        } catch (error) {
+            console.error('[CartQuoteService] Cash-on-delivery eligibility not evaluable:', error);
+            refusals = null;
+        }
+        const codRefusal = refusals === null
+            ? createAppError(ERROR_CODES.COD_AGENCY_NOT_SUPPORTED, 422)
+            : refusals[0]?.error ?? null;
 
         const absorbed = perVendor.every((v) => v.absorbedByVendor === 0) && cart.productType === 'digital'
             ? null
             : perVendor.reduce((sum, v) => sum + v.absorbedByVendor, 0);
 
-        return {
+        const quote: CartQuote = {
             currency,
             subtotal,
             // The customer pays for the goods. Delivery is the vendor's cost.
@@ -191,8 +291,60 @@ export class CartQuoteService {
             total: subtotal,
             paymentMethod,
             meetsDeliveryMinimum: perVendor.every((v) => v.deliveryMinimum?.met ?? true),
+            cashOnDelivery: cashOnDeliveryVerdictOf(refusals),
             perVendor,
         };
+        return { quote, codRefusal };
+    }
+
+    /**
+     * Every cash-on-delivery refusal checkout would raise for this basket, shops in cart order.
+     *
+     * Checkout's rules, through checkout's own call: a non-physical basket is refused outright;
+     * each shop's part goes through `assertVendorOrderEligible` with the agencies its shipments
+     * would be grouped by and its subtotal (checkout's order total: delivery is the vendor's, tax
+     * and discount are pinned to 0). A physical shop with NO resolvable agency is refused as
+     * `COD_AGENCY_NOT_SUPPORTED` — checkout refuses it either way (`ORDER_NO_DELIVERY_AGENCY`).
+     * Non-`AppError` failures propagate; the caller turns them into "not evaluated".
+     */
+    private async codRefusalsOf(
+        productType: string | null,
+        inputs: CapInput[],
+        perVendor: CartQuoteVendorLine[],
+    ): Promise<CodRefusal[]> {
+        if (productType !== 'physical') {
+            return [{
+                vendorId: null,
+                error: createAppError(ERROR_CODES.COD_NOT_AVAILABLE_FOR_DIGITAL, 422, 'Cash on delivery is only available for physical orders'),
+            }];
+        }
+
+        const refusals: CodRefusal[] = [];
+        for (const input of inputs) {
+            if (!input.physical) continue;
+            const agencyIds = input.groups.map((g) => g.agencyId);
+            if (agencyIds.length === 0) {
+                refusals.push({
+                    vendorId: input.vendorId,
+                    error: createAppError(ERROR_CODES.COD_AGENCY_NOT_SUPPORTED, 422, undefined, { vendorId: input.vendorId }),
+                });
+                continue;
+            }
+            const subtotal = perVendor.find((v) => v.vendorId === input.vendorId)?.subtotal
+                ?? input.lines.reduce((sum, l) => sum + l.unitPrice * l.quantity, 0);
+            try {
+                await this.codEligibility.assertVendorOrderEligible({
+                    orderType: 'physical',
+                    totalAmount: subtotal,
+                    agencyIds,
+                    vendorId: input.vendorId,
+                });
+            } catch (error) {
+                if (!(error instanceof AppError)) throw error;
+                refusals.push({ vendorId: input.vendorId, error });
+            }
+        }
+        return refusals;
     }
 
     /**
@@ -245,10 +397,10 @@ export class CartQuoteService {
      * levels of grouping, or a vendor whose items are split across two agencies would be
      * quoted one fee where they will be charged two.
      */
-    private async estimatePerVendor(cart: QuotableCart, paymentMethod: OrderPaymentMethod): Promise<CartQuoteVendorLine[]> {
+    private async estimatePerVendor(inputs: CapInput[], paymentMethod: OrderPaymentMethod): Promise<CartQuoteVendorLine[]> {
         const lines: CartQuoteVendorLine[] = [];
 
-        for (const input of await this.capInputs(cart)) {
+        for (const input of inputs) {
             const subtotal = input.lines.reduce((sum, l) => sum + l.unitPrice * l.quantity, 0);
 
             // Digital lines never ship, so they carry no delivery cost at all.

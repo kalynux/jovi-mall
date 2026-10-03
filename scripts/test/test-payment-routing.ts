@@ -160,8 +160,8 @@ function enumOf(model: { schema: { eachPath(fn: (path: string, type: any) => voi
   // ── 1. One list ────────────────────────────────────────────────────────────
   section('1. One gateway list');
 
-  assert('PAYMENT_GATEWAY_NAMES is NOTCHPAY, MYCOOLPAY, STRIPE, CAMPAY, in that order', () =>
-    same(PAYMENT_GATEWAY_NAMES, ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE', 'CAMPAY']));
+  assert('PAYMENT_GATEWAY_NAMES is NOTCHPAY, MYCOOLPAY, STRIPE, CAMPAY, CINETPAY, FAPSHI, in that order', () =>
+    same(PAYMENT_GATEWAY_NAMES, ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE', 'CAMPAY', 'CINETPAY', 'FAPSHI']));
   assert('the registry re-exports the SAME tuple (not a second copy)', () => REGISTRY_NAMES === PAYMENT_GATEWAY_NAMES);
   assert('the registry Map registers exactly these names, in order', () =>
     same([...GATEWAY_MAP.keys()], PAYMENT_GATEWAY_NAMES));
@@ -234,6 +234,8 @@ function enumOf(model: { schema: { eachPath(fn: (path: string, type: any) => voi
     ['MYCOOLPAY', { MTN: 'PUSH', ORANGE: 'OTP', MOOV: '—', CARD: '—' }, true],
     ['STRIPE', { MTN: '—', ORANGE: '—', MOOV: '—', CARD: 'CARD_ELEMENT' }, false],
     ['CAMPAY', { MTN: 'PUSH', ORANGE: 'PUSH', MOOV: '—', CARD: '—' }, true],
+    ['CINETPAY', { MTN: 'PUSH', ORANGE: 'PUSH', MOOV: '—', CARD: '—' }, true],
+    ['FAPSHI', { MTN: 'PUSH', ORANGE: 'PUSH', MOOV: '—', CARD: '—' }, true],
   ];
   for (const [g, row, async] of matrix) {
     assert(`${g}: ${PAYMENT_PROVIDERS.map((p) => `${p}=${row[p]}`).join(' ')}, settlesAsync=${async}`, () =>
@@ -246,8 +248,8 @@ function enumOf(model: { schema: { eachPath(fn: (path: string, type: any) => voi
         return !c || same(c.requires, ['phoneNumber']);
       })));
   assert('Stripe CARD requires nothing up front', () => same(cap('STRIPE').collect.CARD!.requires, []));
-  assert('NOTCHPAY, MYCOOLPAY and CAMPAY can send payouts (Stripe cannot)', () =>
-    PAYMENT_GATEWAY_NAMES.filter((g) => typeof GATEWAY_MAP.get(g)!.createPayout === 'function').join() === 'NOTCHPAY,MYCOOLPAY,CAMPAY');
+  assert('NOTCHPAY, MYCOOLPAY, CAMPAY, CINETPAY and FAPSHI can send payouts (Stripe cannot)', () =>
+    PAYMENT_GATEWAY_NAMES.filter((g) => typeof GATEWAY_MAP.get(g)!.createPayout === 'function').join() === 'NOTCHPAY,MYCOOLPAY,CAMPAY,CINETPAY,FAPSHI');
 
   // ── 3. Catalogue ───────────────────────────────────────────────────────────
   section('3. Provider catalogue, saved wallets, defaults');
@@ -438,7 +440,7 @@ function enumOf(model: { schema: { eachPath(fn: (path: string, type: any) => voi
   // My-CoolPay implements createPayout now: choosing it for payouts is VALID, and not merely
   // "not refused for that reason". Stripe is the aggregator that still cannot pay out (the row above).
   assert('accepted: every aggregator that implements createPayout is a valid payout aggregator', () =>
-    (['NOTCHPAY', 'MYCOOLPAY', 'CAMPAY'] as const).every((g) => {
+    (['NOTCHPAY', 'MYCOOLPAY', 'CAMPAY', 'CINETPAY', 'FAPSHI'] as const).every((g) => {
       const v = validateSettingsChange(candidate(settings({ payout_aggregator: g })), CUR, F);
       return v.ok && v.settings.payout_aggregator === g;
     }));

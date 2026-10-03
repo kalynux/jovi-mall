@@ -148,6 +148,9 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.COD_NOT_AVAILABLE_FOR_DIGITAL]: 'Cash on delivery is not available for digital orders',
     [ERROR_CODES.COD_AGENCY_NOT_SUPPORTED]: 'This agency does not accept cash on delivery',
     [ERROR_CODES.COD_ORDER_AMOUNT_EXCEEDS_LIMIT]: 'This order is worth more than the cash-on-delivery limit allows',
+    [ERROR_CODES.COD_VENDOR_NOT_ACCEPTED]: 'This seller does not accept cash on delivery',
+    [ERROR_CODES.COD_AGENCY_LIMIT_EXCEEDED]:
+        'Handing this shipment over would put the agency above its cash-on-delivery limit — dispatch it with force to proceed anyway',
     [ERROR_CODES.COD_COLLECTION_NOT_FOUND]: 'Cash collection not found',
     [ERROR_CODES.COD_COLLECTION_ALREADY_COLLECTED]: 'This cash has already been collected',
     [ERROR_CODES.COD_COLLECTION_NOT_COLLECTIBLE]: 'This collection cannot be collected in its current state',
@@ -187,6 +190,10 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.AGENT_MEMBERSHIP_NOT_APPROVED]: 'This agent has no active contract with this agency',
     [ERROR_CODES.CONTRACT_COVERAGE_REGION_NOT_COVERED]:
         'This delivery is outside the regions this contract covers',
+    [ERROR_CODES.DELIVERY_AGENCY_NOT_ACTIVE]:
+        'That delivery agency is not active — send force: true to move the shipment anyway',
+    [ERROR_CODES.ADDRESS_REGION_INVALID]:
+        'This address is not in a recognised region of its country — pick the region',
     [ERROR_CODES.CONTRACT_SHIPMENT_VALUE_EXCEEDED]:
         'This shipment is worth more than this contract allows for a single delivery',
 
@@ -342,7 +349,7 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.PAYMENT_LINK_NOT_PAYABLE]:
         'This payment is already finished, so no new payment page can be opened for it',
 
-    // The six below are `external_service`, so THESE strings are what the client
+    // The ten below are `external_service`, so THESE strings are what the client
     // receives — the thrown message and `details` are dropped at the boundary.
     [ERROR_CODES.NOTCHPAY_REQUEST_FAILED]: 'The mobile money provider rejected this request',
     [ERROR_CODES.NOTCHPAY_UNREACHABLE]: 'The mobile money provider could not be reached',
@@ -350,6 +357,10 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.MYCOOLPAY_UNREACHABLE]: 'The mobile money provider could not be reached',
     [ERROR_CODES.CAMPAY_REQUEST_FAILED]: 'The mobile money provider rejected this request',
     [ERROR_CODES.CAMPAY_UNREACHABLE]: 'The mobile money provider could not be reached',
+    [ERROR_CODES.CINETPAY_REQUEST_FAILED]: 'The mobile money provider rejected this request',
+    [ERROR_CODES.CINETPAY_UNREACHABLE]: 'The mobile money provider could not be reached',
+    [ERROR_CODES.FAPSHI_REQUEST_FAILED]: 'The mobile money provider rejected this request',
+    [ERROR_CODES.FAPSHI_UNREACHABLE]: 'The mobile money provider could not be reached',
 
     [ERROR_CODES.BOOKING_NOT_FOUND]: 'Booking not found',
     [ERROR_CODES.BOOKING_INVALID_STATUS_TRANSITION]: 'Invalid status transition',
@@ -565,6 +576,19 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.ORDER_DELIVERY_AGENCY_NOT_FOUND]: 'order delivery agency not found',
     [ERROR_CODES.SHIPMENT_INVALID_STATUS_TRANSITION]: 'Invalid shipment status transition',
     [ERROR_CODES.SHIPMENT_REJECTION_NOT_ALLOWED]: 'This shipment can no longer be rejected',
+    [ERROR_CODES.SHIPMENT_DELIVERY_FEE_PENDING]: 'A delivery-fee change on this shipment is awaiting the vendor — it cannot be picked up until the vendor answers or the proposal is withdrawn',
+    [ERROR_CODES.DELIVERY_FEE_PROPOSAL_NOT_FOUND]: 'Delivery-fee proposal not found',
+    [ERROR_CODES.DELIVERY_FEE_PROPOSAL_ALREADY_PENDING]: 'A delivery-fee proposal on this shipment is already awaiting the vendor',
+    [ERROR_CODES.DELIVERY_FEE_PROPOSAL_NOT_PENDING]: 'This delivery-fee proposal has already been answered or withdrawn',
+    [ERROR_CODES.DELIVERY_FEE_PROPOSAL_WINDOW_CLOSED]: 'The delivery fee can only be renegotiated before the parcel is picked up',
+    [ERROR_CODES.DELIVERY_FEE_PROPOSAL_AGENTS_NOT_ALLOWED]: 'Your agency has not enabled delivery-fee proposals by agents',
+    [ERROR_CODES.DELIVERY_FEE_PROPOSAL_LIMIT_REACHED]: 'No more delivery-fee proposals can be made on this shipment',
+    [ERROR_CODES.DELIVERY_FEE_PROPOSAL_NO_CHANGE]: 'The proposed fee is the fee this shipment already carries',
+    [ERROR_CODES.DELIVERY_FEE_PROPOSAL_VENDOR_NET_NOT_POSITIVE]: 'This fee would leave the vendor earning nothing on this order',
+    [ERROR_CODES.DELIVERY_FEE_PROPOSAL_NOT_YOURS]: 'Only the proposer or its agency can withdraw this proposal',
+    [ERROR_CODES.DELIVERY_FEE_PROPOSAL_STALE]: 'This proposal no longer applies to the shipment as it stands — the agency can withdraw it',
+    [ERROR_CODES.DELIVERY_FEE_PROPOSAL_SETTLEMENT_CONFLICT]: 'The order\'s earnings could not be adjusted for this fee change — nothing was applied',
+    [ERROR_CODES.DELIVERY_FEE_PROPOSAL_VERSION_MISMATCH]: 'This delivery-fee proposal was changed since you loaded it — reload it and answer the current figure',
     [ERROR_CODES.SHIPMENT_AGENT_NOT_IN_AGENCY]: 'This agent does not belong to your agency',
     [ERROR_CODES.SHIPMENT_ACCESS_DENIED]: 'You do not have access to this shipment',
     [ERROR_CODES.SHIPMENT_ALREADY_CONFIRMED]: 'This shipment has already been confirmed as delivered',

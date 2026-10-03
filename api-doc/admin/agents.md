@@ -169,7 +169,7 @@ able to pull an agent off a rival's roster.
         "termsVersion": 3,
         "awaitingDecisionFrom": null,
         "openTermsProposalId": null,
-        "feeSplit": { "model": "percentage", "agentSharePercent": 38, "agentFlatFee": null, "currency": "XAF" },
+        "feeSplit": { "model": "percentage", "agentSharePercent": 38, "agentFlatFee": null, "agentMonthlySalary": null, "currency": "XAF" },
         "remittanceTerms": { "cadence": "weekly", "dayOfWeek": 5, "dayOfMonth": null, "graceHours": 24 },
         "coverage": { "regions": ["littoral"], "area": null },
         "shipmentValueCeiling": 250000,
@@ -364,7 +364,7 @@ Side effects: `verified_at` and `verified_by_user_id` are stamped only on `verif
 ```
 
 > **`codPool` (since 2026-09-21).** The verdict moves the agent's COD pool: `verified` opens it at
-> their plan's `max_cod_pool` (Free 500 000), anything else closes it to 0. `codPool` is the result,
+> the platform default (500 000 — their plan's `max_cod_pool` before 2026-10-02), anything else closes it to 0. `codPool` is the result,
 > read back after the verdict, so a reviewer sees the consequence of what they just decided. The
 > sync is in-line but best-effort: if it fails, the verdict still stands (logged) and the nightly
 > `agent-cod-pool-reconcile` converges the pool, so `codPool` can briefly show the old value.
@@ -407,7 +407,7 @@ Side effects: `verified_at` and `verified_by_user_id` are stamped only on `verif
 **Purpose**: **Pin** the agent's **whole COD pool** (the most cash they may carry across every agency) to a value that replaces their plan's, or **release** the pin.
 
 > ⚠ **Changed 2026-09-21: this no longer SETS the pool.** The pool is derived: `0` while the
-> agent's KYC is not `verified`, otherwise their plan's `max_cod_pool` (Free 500 000 · Plus
+> agent's KYC is not `verified`, otherwise ⚠ **since 2026-10-02 the platform default, 500 000, for every agent** (`pool.source: "default"`, `planCode: null`; before that: their plan's `max_cod_pool`, Free 500 000 · Plus
 > 1 000 000 · Pro 2 000 000), and the agent may choose to carry less (`PUT /api/agent/cod/pool`).
 > This endpoint writes an administrator's **pin**, stored in `cod.pool_override`, which replaces
 > the plan's value, above or below it, until released. No plan change or sync erases a pin. It

@@ -219,14 +219,41 @@ export interface IContractPayment {
  * rather than the agent.
  */
 export interface IContractFeeSplit {
-  /** 'percentage' — agent_share_percent of the delivery fee; 'flat' — fixed per delivery. */
-  model: 'percentage' | 'flat';
+  /**
+   * 'percentage' — agent_share_percent of the delivery fee; 'flat' — fixed per
+   * delivery; 'monthly_salary' — the AGENCY pays the agent a fixed monthly salary
+   * OUTSIDE the platform, so the platform pays the agent NOTHING per delivery
+   * (cut 0) and the agency keeps the whole delivery fee. The salary is stored only
+   * so both parties can see what they agreed; nothing schedules, tracks or pays it.
+   */
+  model: FeeSplitModel;
   /** 0–100. Required when model is 'percentage'. */
   agent_share_percent: number | null;
   /** Minor units. Required when model is 'flat'. */
   agent_flat_fee: number | null;
+  /**
+   * Minor units per month, integer > 0. Required when model is 'monthly_salary';
+   * informational only. Optional in the TYPE (the schema default is null) so the
+   * pre-salary literals across the codebase and its suites stay valid.
+   */
+  agent_monthly_salary?: number | null;
   currency: string;
 }
+
+/** The three pay models. One list, spread into the Mongoose enum and the Zod enum. */
+export const FEE_SPLIT_MODELS = ['percentage', 'flat', 'monthly_salary'] as const;
+export type FeeSplitModel = (typeof FEE_SPLIT_MODELS)[number];
+
+/**
+ * Which `fee_split` amount field each model pays from. A field belonging to a
+ * model other than the one in force is never read (stale values may survive a
+ * model switch — see `updateTerms` — and are ignored by every reader).
+ */
+export const FEE_SPLIT_FIELD_BY_MODEL = {
+  percentage: 'agent_share_percent',
+  flat: 'agent_flat_fee',
+  monthly_salary: 'agent_monthly_salary',
+} as const satisfies Record<FeeSplitModel, keyof IContractFeeSplit>;
 
 /**
  * The agent's operating zone FOR THIS CONTRACT — where, of everywhere the agency
@@ -393,9 +420,10 @@ const CoverageSchema = new Schema(
 
 const FeeSplitSchema = new Schema(
   {
-    model: { type: String, enum: ['percentage', 'flat'], default: 'percentage', required: true },
+    model: { type: String, enum: [...FEE_SPLIT_MODELS], default: 'percentage', required: true },
     agent_share_percent: { type: Number, default: null, min: 0, max: 100 },
     agent_flat_fee: { type: Number, default: null, min: 0 },
+    agent_monthly_salary: { type: Number, default: null, min: 1 },
     currency: { type: String, default: 'XAF', required: true },
   },
   { _id: false }
@@ -432,6 +460,7 @@ export const contractDefaults = {
     model: 'percentage',
     agent_share_percent: null,
     agent_flat_fee: null,
+    agent_monthly_salary: null,
     currency: 'XAF',
   }),
 };

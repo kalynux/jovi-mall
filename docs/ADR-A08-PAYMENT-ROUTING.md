@@ -216,6 +216,8 @@ when the gateway's signature covers them:
 | Stripe | `constructEvent` over the whole raw body | ✅ | not needed |
 | **My-CoolPay** | MD5 of ref, type, amount, currency, operator | ❌ | **implemented** (re-reads `checkStatus`) |
 | **Campay** (P2.1) | a JWT signing only timestamps | ❌ | **required** (re-reads `GET /transaction/{ref}/`) |
+| **CinetPay** (v1, 2026-10-02) | nothing: a per-transaction `notify_token` and the ids, no status, no amount | ❌ | **required** (re-reads `GET /v1/payment/{id}` or `/v1/transfer/{id}`) |
+| **Fapshi** (2026-10-02) | a static shared secret echoed in `x-wh-secret` | ❌ | **required** (re-reads `GET /payment-status/{transId}`) |
 | Flutterwave v3 (not planned) | a static `verif-hash` shared secret | ❌ | would be required; v4's HMAC is chosen instead |
 
 **The gap, and why it was real on My-CoolPay.** A captured, genuinely signed callback for a
@@ -237,6 +239,63 @@ whether an order is paid.
 
 `test:payments` § 21 proves both halves on a fake adapter, and § 23 does the same on the real
 My-CoolPay adapter: the flipped replay verifies (the gap) and settles nothing (the fix).
+
+### CinetPay (added 2026-10-02)
+
+The fifth aggregator, `CinetPayGateway`, against CinetPay **API v1** (`api.cinetpay.co` live,
+`api.cinetpay.net` sandbox). It was written from CinetPay's own JS SDK
+(github.com/cinetpay/cinetpay-js, 2026-03) because `docs.cinetpay.com` no longer resolves; it is
+not the older v2 checkout API (`apikey` + `site_id` + HMAC `x-token`). `test:cinetpay` is the
+offline suite. **Nothing in it has been measured against CinetPay yet.**
+
+Four properties differ from the other adapters:
+
+- **The notification is not authenticated at all.** It carries a `notify_token` that could only
+  be compared with the value returned at initiation, and adapters are stateless. So it is treated
+  as a doorbell: `verifyWebhook` refuses only what is certainly not a notification, and
+  `confirmWebhookEvent` re-reads CinetPay's record and requires it to name the same CinetPay id
+  **and** the same merchant id. A forged notification costs one status lookup and settles nothing.
+- **Our reference does not fit.** `merchant_transaction_id` is capped at 30 characters and
+  `jm_<kind>_<32 hex>` is 38, so it travels re-written in base 36 (`jmpt…`, 29 characters) and is
+  decoded back losslessly on every read. Direction comes from the decoded kind (`po` = payout),
+  which also selects the lookup endpoint.
+- **The callback URL is per request**, not a dashboard setting: `CINETPAY_NOTIFY_URL`, defaulting
+  to `API_PUBLIC_URL` + `/api/webhooks/cinetpay`. `cinetpayEnabled()` requires it.
+- **A `PUSH` charge may come back as a redirect.** With `direct_pay` CinetPay pushes the PIN
+  prompt; an account without direct mode answers `must_be_redirected`, and the client receives
+  CinetPay's hosted page as `instructions.redirectUrl`.
+
+CinetPay also requires a customer email and a first and last name of at least two characters.
+A customer with none gets `CINETPAY_FALLBACK_EMAIL` and the neutral names `Client` / `Wi-Mall`.
+There is no refund API in v1, so `refundPayment` is absent and refunds take the manual path.
+Payouts (`POST /v1/transfer`) are behind `CINETPAY_PAYOUTS_ENABLED` (default off), and a resend
+answered `TRANSACTION_EXIST` is resolved by reading back the existing transfer, never treated as
+a failure.
+
+### Fapshi (added 2026-10-02)
+
+The sixth aggregator, `FapshiGateway`, written from docs.fapshi.com (pages and OpenAPI spec)
+and github.com/Fapshi/SDKs. `test:fapshi` is the offline suite and `verify:fapshi` the live
+one. Chosen because its onboarding asks for a personal ID and pays out to mobile money, with no
+bank account.
+
+- **Two services, two credential pairs.** A Fapshi service either collects or pays out; enabling
+  payouts on one stops it collecting. Collections use `FAPSHI_API_USER`/`_KEY`; payouts, the
+  payout balance and payout status reads use `FAPSHI_PAYOUT_API_USER`/`_KEY`. The boot validator
+  refuses the same apiuser in both.
+- **The webhook secret is static** (`x-wh-secret`, compared in constant time) and covers no
+  field, so every callback is confirmed against `GET /payment-status/{transId}`, read with the
+  pair of the service it names. **Fapshi sends each callback once and never retries**: a callback
+  lost to our outage is recovered only by the reconciliation sweep.
+- **Status reads are rate-limited to 6 per minute per transaction.** `verifyPayment` reuses a
+  PENDING answer for 10 s so a polling client stays under it; confirmations always read fresh.
+- **No documented payout idempotency.** `createPayout` puts our `jm_po_…` reference in both
+  `userId` and `externalId` and first reads `GET /transaction/{reference}`: an earlier attempt
+  that succeeded or is pending is reported and nothing is sent; when that lookup fails, nothing is
+  sent and the answer is a retryable failure. A 4xx from `POST /payout` created nothing; a 5xx or
+  no answer throws (outcome unknown).
+- **Live mode is gated twice by Fapshi**: direct pay and payouts are each disabled on a live
+  service until Fapshi support enables them. Our full reference fits `externalId` unchanged.
 
 ---
 

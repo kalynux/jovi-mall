@@ -8,7 +8,6 @@ import { CartService, CartResponse } from '../../../cart/services/cart.service';
 import { CustomerModel, ICustomer, ICustomerSavedAddress } from '../../../customers/customer.model';
 import { OrderService } from '../../../orders/order.service';
 import { cartQuoteService, CartQuote } from '../../../orders/services/cart-quote.service';
-import { codEligibilityService } from '../../../cod/services/cod-eligibility.service';
 import { StoreRepository } from '../../../store/repositories/store.repository';
 import { PaymentOrchestratorService } from '../../../payments';
 import { PaymentStatus } from '../../../payments/models/payment-transaction.model';
@@ -553,7 +552,8 @@ async function cashOnDeliveryOffered(customerId: string, productType: string | n
  *   - **Each shop's part meets its delivery minimum, checked PER SHIPMENT** — the quote's own COD
  *     verdict (ADR-A07), the one checkout uses.
  *   - **Every agency carrying a shipment accepts cash, is verified, and the shop's order is within
- *     its cash limit** — `codEligibilityService.assertVendorOrderEligible`, the call order creation
+ *     its cash limit** — the cart quote's `cashOnDelivery` refusal (`quoteWithCodRefusal`), which
+ *     is `codEligibilityService.assertVendorOrderEligible`, the call order creation
  *     makes, fed the agencies the quote grouped the shipments by and the shop's order total (the
  *     subtotal: delivery is the vendor's, tax and discount are pinned to 0).
  *
@@ -571,27 +571,20 @@ export async function cashOnDeliveryRefusal(
         return createAppError(ERROR_CODES.COD_NOT_AVAILABLE_FOR_DIGITAL, 422, 'Cash on delivery is only available for physical orders');
     }
 
-    const quote = await cartQuoteService.quoteForCustomer(customerId, undefined, 'cash_on_delivery');
+    /**
+     * The eligibility half is the quote's own `cashOnDelivery` verdict (ADR-A09 G-10) — the same
+     * refusal the web shop reads, so the bot and the website cannot disagree. Checkout asks
+     * eligibility before the delivery minimum, and so does this.
+     */
+    const { quote, codRefusal } = await cartQuoteService.quoteWithCodRefusal(customerId, undefined, 'cash_on_delivery');
+    if (codRefusal) return codRefusal;
     for (const line of quote.perVendor) {
         const minimum = line.deliveryMinimum;
-        const agencyIds = (minimum?.units ?? [])
-            .map((unit) => unit.agencyId)
-            .filter((id): id is string => typeof id === 'string' && id.length > 0);
-        if (!minimum || agencyIds.length === 0) {
+        if (!minimum) {
             return createAppError(ERROR_CODES.COD_AGENCY_NOT_SUPPORTED, 422, undefined, { vendorId: line.vendorId });
         }
         if (!minimum.met) {
             return createAppError(ERROR_CODES.ORDER_BELOW_DELIVERY_MINIMUM, 422, undefined, { vendorId: line.vendorId });
-        }
-        try {
-            await codEligibilityService.assertVendorOrderEligible({
-                orderType: 'physical',
-                totalAmount: line.subtotal,
-                agencyIds,
-            });
-        } catch (error) {
-            if (error instanceof AppError) return error;
-            throw error;
         }
     }
     return null;

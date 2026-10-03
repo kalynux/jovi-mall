@@ -1106,6 +1106,8 @@ The agent is a **platform identity, not an agency-owned record** — they sign u
 
 ⚠ **Since 2026-09-21 the pool itself is DERIVED — plan × KYC × administrator pin (owner decision).** `cod.max_threshold` is `0` while `kyc.status !== 'verified'`, otherwise the plan's new `PricingPlan.max_cod_pool` (seeded Free 500 000 · Plus 1 000 000 · Pro 2 000 000; ⚠ `null` there means **zero**, not unlimited), unless an administrator **pinned** one (`cod.pool_override`, which outranks the plan in both directions but never KYC). The agent may only **lower** it (`PUT /api/agent/cod/pool`); any change of ceiling resets that choice. The rule is pure in `agents/domain/services/agent-cod-pool.ts`; **`AgentCodPoolService` is the only writer** of `cod.max_threshold` / `cod.pool_*`, through one compare-and-set (`AgentRepository.writeCodPool`, keyed on `pool_synced_at`). It runs from four places: in-line after a KYC verdict (`AgentGateService.setKycStatus`), on `plan.activated`, on `pricing_plan.updated` (an in-place plan edit emits no `plan.activated`), and nightly in `AgentCodPoolReconcileWorker` — the lossy-bus backstop, and what converges agents written before the rule. Two consequences worth knowing: a sync can leave the pool **below** what contracts hold (a downgrade cannot be refused), so `CodExposureService.limitBreakdown` now caps each dispatch at `min(slice, pool)` (`poolBinds`); and `setAgentThreshold` / `setCodMaxThreshold` are **deleted** — a direct write of the pool would be undone by the next sync. `test:agent-cod-pool` pins all of it.
 
+⚠ **AMENDED 2026-10-02 — the plan no longer sets the pool, and two new caps sit above the agent** (owner decisions). The ceiling is now `AGENT_CONFIG.COD_POOL_DEFAULT` (500 000) for every verified agent without a pin, sourced `default` (`plan` is retired but still schema-valid until the reconcile rewrites it; `pool_plan_code` is always written `null`). `agent-plan-cod-pool.consumer.ts` and `EntitlementService.resolveAgentCodPool` are **deleted**; `max_cod_pool` stays on plans, dormant. Above the agent: every **agency** may hold at most `COD_CONFIG.AGENCY_COD_LIMIT_DEFAULT` (1 000 000) of un-remitted COD cash (in-flight COD shipments + collected-unsettled collections), pinnable by an administrator (`delivery_agencies.cod_limit_override`, `PUT /api/internal/admin/agencies/:id/cod-limit`), and every **vendor** has COD terms on `vendor_settings.cod_terms` (`codEnabled: false` refuses COD at checkout with `COD_VENDOR_NOT_ACCEPTED`; `maxCashPerAgency` caps that vendor's share). Both caps gate the hand-off of a COD shipment to an agency (`CodLimitsService.evaluateHandoffs`; the rules are pure in `cod/domain/cod-limits.ts`): auto-redirect **holds** (`shipment.cod_limit_hold`), manual dispatch / change-agency **refuse** with `422 COD_AGENCY_LIMIT_EXCEEDED` unless `force` (`shipment.cod_limit_force`). Agency → agent `force` waives only `exposure_exceeded` (`isForceableCodRefusal`) and is persisted on the offer (`cod_limit_forced`) for the accept re-check. Pinned by `npm run test:cod-limits`; contract `api-doc/FRONTEND-CHANGELOG-cod-limits.md`.
+
 ⚠ **Since 2026-09-27 an UNVERIFIED agent's contract may carry a COD slice, and it is DORMANT** (owner decision: KYC gates COD cash only, not contracting). `AgentCodThresholdService.assertContractThresholdAllowed` skips the pool-headroom check while `kyc.status !== 'verified'` — the absolute per-contract min/max still apply — so approval with `cod.threshold > 0` or an agency threshold write no longer fails `CONTRACT_COD_THRESHOLD_EXCEEDS_HEADROOM` for them. The slice pays nothing: `CodExposureService` refuses every COD shipment with blocker `kyc_not_verified` (outranks trust / shortfall / exposure; `422 AGENT_KYC_NOT_VERIFIED`, `{ kycStatus, hint }`). Once verified, the pool opens to the plan value; if the dormant slices sum past it, `poolBinds` caps dispatch and `/cod-allocation` shows `overAllocatedBy > 0` — the same state a downgrade produces. COD therefore needs **both** a verified agency (checkout, `CodEligibilityService`) and a verified agent (dispatch).
 
 **The handshake is symmetric, and the terms are NEGOTIATED.** Both directions —
@@ -1700,6 +1702,39 @@ vendor's agreed number, and the two are allowed to disagree.
 
 Size still does not price anything: dimensions and volume are surfaced so an agency can
 sanity-check a flat rate against what it is shelving, and a client must not multiply by them.
+
+### Per-shipment delivery-fee proposals (`src/modules/delivery-fee-proposals/`) — 2026-10-02
+
+The agency (or the agent holding the accepted offer, if `assignment_settings.agents_can_propose_delivery_fee`)
+proposes a different fee for ONE shipment; the vendor approves or rejects. Window `assigned` /
+`handing_over`; one pending (shipment pointer `pending_delivery_fee_proposal_id`, claimed by CAS,
+plus a partial unique index); two non-withdrawn max; ceiling is `vendorNet > 0` on the split's
+unit — the 30% cap does NOT apply. Pure rules: `domain/delivery-fee-proposal.rules.ts`
+(`test:delivery-fee-proposals`). Four things are load-bearing:
+
+- **The approved fee lives on `shipment.delivery_fee_override` and is read FIRST by
+  `EarningsQuoteService.computeShipmentDeliveryFee`** — the one function every split and quote
+  calls, so COD, unsplit prepaid, the agent's and the agency's quotes all follow it without
+  call-site edits.
+- **An already-split prepaid order is re-priced IN PLACE** (`planFeeApplication`): snapshot
+  rewritten, the vendor's held `('order', vendor)` allocation CAS-adjusted by `snapshot − newFee`,
+  pending balance moved + a `delivery_fee_adjustment` ledger row, all in the approval's
+  transaction. Not an adjusting row: allocations cannot be negative, and a new source type would
+  have to be swept by `onOrderCompleted`. A non-`held` allocation refuses (409).
+- **Pickup is blocked in the SHARED transition core** — pre-check plus
+  `requireNoPendingDeliveryFeeProposal` in `applyStatusChangeIfCurrent`'s filter.
+- **The shipment moving on closes the proposal**: `reject` (decline) withdraws it and cancels a
+  bound agent's pending COD code; `reassignAgent` / `releaseForAgentCancel` withdraw the detached
+  agent's own proposal — all inside their transactions.
+
+**Notified since 2026-10-02** (vendor: received / edited / withdrawn; agency: approved /
+rejected / agent_proposed / agent_edited; agent: its own proposal's approved / rejected /
+edited-by-agency / system-withdrawn). ⚠ `withdrawPendingInSession` emits nothing — it runs
+inside the caller's transaction — so `ShipmentService` publishes `delivery_fee_proposal.withdrawn`
+(`withdrawnBy: 'system'`) post-commit at its three call sites. Record:
+`api-doc/FRONTEND-CHANGELOG-cod-fee-notifications.md`.
+Indexes: `npm run migrate:delivery-fee-proposal-indexes`. Contract:
+`api-doc/FRONTEND-CHANGELOG-delivery-fee-proposals.md`.
 
 ### Two-sided stock adjustment (`src/modules/stock-requests/`)
 

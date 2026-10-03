@@ -157,6 +157,24 @@ connection paused because the vendor changed its policies (`paused_reapproval �
 
 ---
 
+## Vendor COD terms (2026-10-02)
+
+Wherever you look at a vendor you now see their **COD terms**:
+
+- `GET /browse` — every vendor row carries `codTerms: { codEnabled, maxCashPerAgency }`.
+- `GET /` and `GET /:id` — every connection carries `vendorCodTerms: { codEnabled, maxCashPerAgency }`
+  (agency side only; the vendor's own view is unchanged).
+
+`codEnabled: false` — the vendor does not accept cash on delivery; their customers cannot choose
+COD. `maxCashPerAgency` — the most of **this vendor's** COD cash one agency may hold un-remitted
+at once (`null` = no vendor cap). When a dispatch to you would exceed it, the vendor's
+auto-dispatch holds the shipment and a manual dispatch needs the vendor to force it. A vendor
+changing these terms does **not** pause the connection (they are not `policies`). Since the
+notification change of the same day you **are** notified when a vendor you have an **active**
+connection with actually changes a value — `connection.cod_terms_changed` (preference
+`codLimitUpdates`, deep link `vendor-connections/{connectionId}`); a `paused_reapproval`
+connection is not told. ⚠ This paragraph said "you are not notified" until that change.
+
 ## Response Field Reference & TypeScript Reference
 
 Identical `ConnectionDto` shape and `AgencyVendorListItemDto`/`AgencyVendorPolicySummaryDto` browse

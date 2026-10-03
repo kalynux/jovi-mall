@@ -55,6 +55,15 @@ export interface IVendorNotificationPreference extends Document {
          * shares only the word.
          */
         agencyStorageUpdates: boolean;
+        /**
+         * COD limits (2026-10-02) — see each stack's situations. Defaults ON. Rows written
+         * before this flag existed carry no value: handlers treat `undefined` as ON.
+         */
+        codLimitUpdates: boolean;
+        /**
+         * Per-shipment delivery-fee proposals (2026-10-02). Defaults ON; `undefined` = ON.
+         */
+        deliveryFeeProposals: boolean;
     };
 
     updatedAt: Date;
@@ -144,6 +153,14 @@ const VendorNotificationPreferenceSchema = new Schema<IVendorNotificationPrefere
                 default: true
             },
             agencyStorageUpdates: {
+                type: Boolean,
+                default: true
+            },
+            codLimitUpdates: {
+                type: Boolean,
+                default: true
+            },
+            deliveryFeeProposals: {
                 type: Boolean,
                 default: true
             }

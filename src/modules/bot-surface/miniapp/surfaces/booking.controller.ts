@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { asyncHandler } from '../../../../api/middlewares/async-handler';
 import { sendSuccess } from '../../../../core/responses';
 import { TelegramBotService } from '../../../telegram/services/telegram-bot.service';
+import { messagingPhoneToE164 } from '../../../messaging-login/services/identity-resolver.service';
 import { createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
 import { inAppSurfaceStore } from '../../services/inapp-surface.store';
@@ -183,7 +184,8 @@ async function pushReceipt(
              */
             const { WhatsAppServiceMessenger } = await import('../../../whatsapp/services/whatsapp-service-messenger');
             const sent = await new WhatsAppServiceMessenger().sendButtons({
-                to: externalId,
+                // Meta's bare-digit `wa_id` → strict E.164, or the messenger refuses it outright.
+                to: messagingPhoneToE164(externalId) ?? externalId,
                 body: text,
                 buttons: [{ id: myBookings.token, title: myBookings.label }],
             });

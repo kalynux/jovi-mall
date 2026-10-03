@@ -19,6 +19,29 @@ The Vendor Profile Management API allows vendors to view and update their profil
 
 ---
 
+## COD terms (2026-10-02)
+
+`GET /api/vendor/profile/cod-terms` · `PUT /api/vendor/profile/cod-terms`
+
+```json
+{ "codEnabled": true, "maxCashPerAgency": 500000 }
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `codEnabled` | boolean (default `true`) | `false` → checkout refuses cash on delivery for any order containing your items (`422 COD_VENDOR_NOT_ACCEPTED`, web and Telegram Mini App) |
+| `maxCashPerAgency` | integer ≥ 0 or `null` (default `null`) | the most of your orders' COD cash one agency may hold un-remitted at once; `null` = no cap of yours (the agency's own 1 000 000 limit still applies) |
+
+PUT replaces both (`.strict()` — both keys required, no others). The GET answers the defaults plus
+`updatedAt: null` when never set. These terms are **separate from `policies`**: changing them does
+**not** bump `policy_version` and does **not** pause your agency connections. Connected agencies
+see them on their connection screens, and agencies with an **active** connection are notified
+when a PUT actually changes a value (`connection.cod_terms_changed`; a PUT re-sending the same
+terms notifies nobody, and `paused_reapproval` connections are skipped —
+`CodLimitsService.publishVendorTermsChanged`). ⚠ This sentence said "they are not notified" until
+2026-10-02's notification change. How the cap is applied
+at dispatch: [orders.md](./orders.md#cod-limits-on-dispatch-2026-10-02).
+
 ## Endpoints
 
 | Method | Path | Documented |
@@ -32,6 +55,8 @@ The Vendor Profile Management API allows vendors to view and update their profil
 | `PUT` | `/api/vendor/profile/auto-redirect-orders` | [below](#put-apivendorprofileauto-redirect-orders) |
 | `GET` | `/api/vendor/profile/auto-cancel-unpaid-days` | [below](#get-apivendorprofileauto-cancel-unpaid-days) |
 | `PUT` | `/api/vendor/profile/auto-cancel-unpaid-days` | [below](#put-apivendorprofileauto-cancel-unpaid-days) |
+| `GET` | `/api/vendor/profile/cod-terms` | [above](#cod-terms-2026-10-02) (2026-10-02) |
+| `PUT` | `/api/vendor/profile/cod-terms` | [above](#cod-terms-2026-10-02) (2026-10-02) |
 | `GET` | `/api/vendor/profile/completion-status` | Onboarding progress — [onboarding.md](./onboarding.md#option-b--simple-status) |
 | `POST` | `/api/vendor/profile/policy-documents` | [onboarding.md](./onboarding.md) |
 
@@ -335,7 +360,7 @@ All fields are **optional except `version`**. Every field below maps to a profil
 | `preferred_language` | `string` | One of `en`, `fr`, `pt`, `es`, `ar` | — (general) | The vendor's language, stored on this profile and used for **all notifications** (in-app, email, WhatsApp templates). There is no separate "notification language" — this is it. Defaults to `en`. |
 | `avatarFileId` | `string \| null` | MongoDB ObjectId of a file uploaded via `POST /api/files/upload`, or `null` | — (general) | The vendor's **personal profile avatar** (distinct from the business logo/banner, which live on the [Store](./store.md)). A **file reference**: registers the file as *in use* (`entityType: "vendor", field: "avatar"`) and blocks its deletion until detached. *Clearable*: `null` or `""` detaches it. Read back as the populated `avatar` file object. |
 | `payout_details` | `object[]` | 1–3 entries, ordered (index 0 = preferred). **`method` must be `"mobile_money"` today** — `"bank"` and `"card"` are 🚧 switched off | Step 1 (Basic Setup) | Full replace. Sub-schema is identical to onboarding — see [Step 1 field reference](./onboarding.md#step-1-basic-setup-required), or **[Payout methods](./payout-methods.md)** for the full reference. Entries stored before the switch still read back and are still paid; you just cannot re-send one. |
-| `business_addresses` | `object[]` | See onboarding sub-schema | Step 3 (Branding) | Full replace — **include each existing address's `_id`** (from the `GET` response) to preserve its identity, or a fresh id is generated (and the "old" one is treated as removed — see below). These are the vendor's **physical store locations and pickup points**, so every **new or edited** entry must carry a `geo` (selected `/api/geo/search` result; see [Geospatial addresses](../geo/README.md)) that resolves **inside the profile's `country`** — otherwise `400 ADDRESS_GEO_REQUIRED` / `400 ADDRESS_COUNTRY_MISMATCH`. Entries echoed back byte-identical (same loose fields, same `geo`) are grandfathered, so legacy plain-text addresses keep working until next touched. Because it is a full replace, echo `geo` back on unchanged entries or it counts as an edit. See [Step 3 field reference](./onboarding.md#step-3-branding-optional--skippable). |
+| `business_addresses` | `object[]` | See onboarding sub-schema | Step 3 (Branding) | Full replace — **include each existing address's `_id`** (from the `GET` response) to preserve its identity, or a fresh id is generated (and the "old" one is treated as removed — see below). These are the vendor's **physical store locations and pickup points**, so every **new or edited** entry must carry a `geo` (selected `/api/geo/search` result; see [Geospatial addresses](../geo/README.md)) that resolves **inside the profile's `country`** — otherwise `400 ADDRESS_GEO_REQUIRED` / `400 ADDRESS_COUNTRY_MISMATCH` / `400 ADDRESS_REGION_INVALID` (2026-10-02: the region must name one of the country's regions — see [onboarding Step 3](./onboarding.md#step-3-branding-optional--skippable)). Entries echoed back byte-identical (same loose fields, same `geo`) are grandfathered, so legacy plain-text addresses keep working until next touched. Because it is a full replace, echo `geo` back on unchanged entries or it counts as an edit. See [Step 3 field reference](./onboarding.md#step-3-branding-optional--skippable). |
 | `operating_hours` | `object[]` | Per-day `{ day, open_time "HH:MM", close_time "HH:MM", is_closed }` | — (general) | Full replace. |
 | `policies` | `object \| null` | `{ return_policy?, cancellation_policy?, support_policy?, documents? }` (sub-policies nullable) | Step 4 (Policy Setup) | Full replace of the **whole** `policies` object — include every sub-policy you want to keep. `documents` (max 2 URLs) is cleared if omitted. See [Step 4 field reference](./onboarding.md#step-4-policy-setup-optional--skippable). |
 | `kyc_details` | `object` | `{ national_id_number }` | — (general) | `legit_verified` is **admin-only** and ignored if sent. |
@@ -1162,6 +1187,7 @@ both credential paths — every authenticated request and every refresh — refu
 | `AUTH_FORBIDDEN` | 403 | `authorization` | A vendor, but refused — email changes locked, or a plan-gated notification channel (`vendor-profile.service.ts:288,301`) |
 | `USER_INVALID_PASSWORD` | 403 | `authorization` | The current password supplied to the password change is wrong (`users/user.service.ts:70`) |
 | `ADDRESS_GEO_REQUIRED` | 400 | `validation` | A **new or edited** `business_addresses[]` entry carried no `geo` (`address-country.helper.ts:57-64`, reached from `vendor-profile.service.ts:315`). `details` names the offending `{ index, label }` |
+| `ADDRESS_REGION_INVALID` | 400 | `validation` | 2026-10-02. A new/edited business address names no region of its country, by region or by city. `details: { index, label, region, city, countryCode, allowedRegions: [{ key, name }] }` — show a picker, resend with `geo.components.region` = the picked `key` |
 | `ADDRESS_COUNTRY_MISMATCH` | 400 | `validation` | A new/edited address geocodes outside the profile's `country` (`address-country.helper.ts:69-82`) — or, when `country` is being set for the first time on a legacy profile, an **existing** address already sits outside it (`vendor-profile.service.ts:246-252`). The two raise the same code with different `details` |
 | `AUTH_USER_NOT_FOUND` | 404 | `not_found` | No vendor profile for this account (`vendor-profile.service.ts:260`) |
 | `PROFILE_COUNTRY_IMMUTABLE` | 403 | `authorization` | `country` is set once at onboarding Step 1; a *different* value is refused, an echo of the current one is accepted (`vendor-profile.service.ts:226-231`) |

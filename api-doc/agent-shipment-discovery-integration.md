@@ -178,7 +178,9 @@ interface Earning {
   estimated: true;
   /** The whole delivery fee this cut comes out of. */
   deliveryFee: number;
-  basis: 'contract_percentage' | 'contract_flat';
+  basis: 'contract_percentage' | 'contract_flat' | 'contract_salary';
+  /** Non-null only under 'contract_salary' (amount is then 0 — the agency pays a salary off-platform). */
+  salary: { monthlyAmount: number; currency: string; paidBy: 'agency_off_platform' } | null;
 }
 
 type EarningUnavailable = 'no_contract' | 'no_agency_policy' | null;

@@ -90,6 +90,23 @@ const PHONE_TYPED: Copy = {
 };
 
 const PROMPTS: Readonly<Record<Exclude<BotOnboardingStep, 'phone'>, Copy>> = Object.freeze({
+    /**
+     * The FIRST question a new account is asked (owner, 2026-10-02). Its answer is the picker
+     * `onboardingReplyIntent` draws — English and Français only (`CHAT_LANGUAGES`).
+     *
+     * ⚠ **Not sent in one language: `onboardingPromptFor` sends the English AND French lines,
+     * whatever the guess.** At this point the platform knows nothing reliable about the person
+     * (WhatsApp sends no locale), and the owner's market is Cameroon — bilingual English/French
+     * (owner, 2026-10-02: "just ask 2 languages, either French or English, so be the text").
+     * The other three entries remain only so the table stays complete for the boot assert.
+     */
+    language: {
+        en: 'Which language would you like me to use?',
+        fr: 'Dans quelle langue souhaitez-vous que je vous écrive ?',
+        pt: 'Em que idioma prefere que eu escreva?',
+        es: '¿En qué idioma prefieres que te escriba?',
+        ar: 'بأي لغة تفضّل أن أتواصل معك؟',
+    },
     name: {
         en: 'What name should I use for you? This is the name that goes on your deliveries.',
         fr: 'Quel nom dois-je utiliser pour vous ? C\'est le nom qui figurera sur vos livraisons.',
@@ -147,6 +164,40 @@ const PROMPTS: Readonly<Record<Exclude<BotOnboardingStep, 'phone'>, Copy>> = Obj
         ar: `الخطوة الأخيرة: هل توافق على شروط الخدمة وسياسة الخصوصية؟\n\nالشروط: ${legalUrl('terms-of-service', 'en')}\nالخصوصية: ${legalUrl('privacy-policy', 'en')}`,
     },
 });
+
+/**
+ * The lead on the FIRST reply a new customer gets (owner, 2026-10-02): tell them, before the
+ * first setup question, that setup comes first and their request has not been forgotten.
+ *
+ * ⚠ **"Your message" is a promise the automation layer keeps, not this service.** n8n holds the
+ * first message (`wi-mall:firstmsg:<channel>:<externalId>`) and answers it once the checklist is
+ * finished. If that carry is ever removed, this sentence becomes untrue and must change with it.
+ *
+ * ⚠ It never names the platform, for the reason the file header gives.
+ */
+const ONBOARDING_INTRO: Copy = {
+    en: "Hi! Before I can help with your request, I need to set up your account. It only takes a minute, and I'll come back to your message as soon as we're done.",
+    fr: "Bonjour ! Avant de pouvoir répondre à votre demande, je dois créer votre compte. Cela ne prend qu'une minute, et je reviens à votre message dès que c'est fait.",
+    pt: 'Olá! Antes de poder ajudar com o seu pedido, preciso de criar a sua conta. Leva só um minuto, e volto à sua mensagem assim que terminarmos.',
+    es: '¡Hola! Antes de poder ayudarte con tu solicitud, necesito crear tu cuenta. Solo toma un minuto, y volveré a tu mensaje en cuanto terminemos.',
+    ar: 'مرحبًا! قبل أن أتمكن من مساعدتك في طلبك، أحتاج إلى إنشاء حسابك. لن يستغرق ذلك سوى دقيقة، وسأعود إلى رسالتك فور الانتهاء.',
+};
+
+/**
+ * The first-contact lead. Prepended by the identity controller, never alone.
+ *
+ * ⚠ **In BOTH English and French when the question it leads is the language question** — the
+ * person has not chosen yet, so writing the lead in one guessed language would defeat the
+ * question underneath it. Once a language is known (Telegram's contact turn), it is one line.
+ */
+export function onboardingIntroFor(
+    language: string | null | undefined,
+    step?: BotOnboardingStep,
+): string {
+    if (step === 'language') return `${ONBOARDING_INTRO.en}\n\n${ONBOARDING_INTRO.fr}`;
+    const lang = toBotCopyLanguage(language);
+    return ONBOARDING_INTRO[lang] ?? ONBOARDING_INTRO.en;
+}
 
 /** What a caller needs in order to actually ASK for a step. */
 export interface BotOnboardingPrompt {
@@ -210,6 +261,11 @@ export function onboardingPromptFor(
 
     const copy = PROMPTS[step];
     const prompt = copy[lang] ?? copy.en;
+
+    if (step === 'language') {
+        // Both lines, whatever the guess — see the ⚠ on `PROMPTS.language`.
+        return { prompt: `${copy.en}\n${copy.fr}` };
+    }
 
     if (step === 'address') {
         return {

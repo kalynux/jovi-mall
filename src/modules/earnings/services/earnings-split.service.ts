@@ -62,7 +62,7 @@ export type { ShipmentDeliveryOutcome };
  * placed before that date carry no floor on un-haggled lines and so pay nothing,
  * which is what they were quoted.
  */
-function bargainLineOf(item: IOrderItem): NegotiatedLineInput {
+export function bargainLineOf(item: IOrderItem): NegotiatedLineInput {
   return {
     unitPrice: item.price,
     floorPrice: item.floor_price_snapshot ?? null,

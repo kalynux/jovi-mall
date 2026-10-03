@@ -5,7 +5,6 @@ import { transactionManager } from '../../../../core/database/transaction.manage
 import { eventBus } from '../../../../core/events/event-bus';
 import { logger } from '../../../../core/logging';
 import { RoleActorRef, actorStamp } from '../../../../core/types/actor-source.types';
-import { EntitlementService, entitlementService } from '../../../billing/services/entitlement.service';
 import { AgentRepository, agentRepository } from '../../repositories/agent.repository';
 import {
   AgentContractRepository,
@@ -21,11 +20,13 @@ import {
   storedCodPoolOf,
 } from './agent-cod-pool';
 
-/** What made a sync run — logged and carried on the event, never branched on. */
+/**
+ * What made a sync run — logged and carried on the event, never branched on.
+ * `plan_activated` / `plan_edited` are gone (2026-10-02): the plan no longer sets the pool,
+ * so nothing on the billing side triggers a sync any more.
+ */
 export type CodPoolSyncTrigger =
   | 'kyc_verdict'
-  | 'plan_activated'
-  | 'plan_edited'
   | 'agent_request'
   | 'reconcile';
 
@@ -47,8 +48,10 @@ const SYNC_ATTEMPTS = 3;
  *
  * ── Three writers, one compare-and-set ──────────────────────────────────────
  *
- *   sync          the platform — plan activated or edited, KYC verdict, nightly
- *                 reconcile. Never refuses: it records a consequence.
+ *   sync          the platform — KYC verdict, nightly reconcile. Never refuses:
+ *                 it records a consequence. (Plan events stopped triggering it on
+ *                 2026-10-02, when the pool became the platform default for every
+ *                 verified agent, whatever their plan.)
  *   setAgentLimit the agent — may only LOWER, within [allocated, ceiling].
  *   setOverride   an administrator — pins (or clears) the ceiling, with a reason.
  *
@@ -57,7 +60,7 @@ const SYNC_ATTEMPTS = 3;
  *
  * ── Why a sync may leave the pool BELOW what contracts hold ─────────────────
  *
- * A downgrade or a revoked verdict is a fact, not a request — there is nobody to
+ * A revoked verdict (or a lowered default) is a fact, not a request — there is nobody to
  * refuse. So the pool is written as computed and contract slices are left alone
  * (there is deliberately no platform write path to contract terms). Two things
  * make that safe rather than a hole: headroom floors at 0, so no agency can raise
@@ -72,14 +75,13 @@ const SYNC_ATTEMPTS = 3;
 export class AgentCodPoolService {
   constructor(
     private readonly agents: AgentRepository = agentRepository,
-    private readonly contracts: AgentContractRepository = agentContractRepository,
-    private readonly entitlements: EntitlementService = entitlementService
+    private readonly contracts: AgentContractRepository = agentContractRepository
   ) {}
 
   // ─── The platform: sync ───────────────────────────────────────────────────
 
   /**
-   * Recompute this agent's pool from their KYC verdict, pin and plan, and write it
+   * Recompute this agent's pool from their KYC verdict and pin (else the default), and write it
    * if it differs. Idempotent — running it on an in-sync agent writes nothing.
    *
    * Returns `null` for an unknown agent, and when every attempt lost its
@@ -90,11 +92,9 @@ export class AgentCodPoolService {
       const agent = await this.agents.findById(agentId);
       if (!agent) return null;
 
-      const plan = await this.entitlements.resolveAgentCodPool(agentId);
       const ceiling = resolveCodPoolCeiling({
         kycStatus: agent.kyc?.status,
         override: agent.cod?.pool_override,
-        plan,
       });
       const stored = storedCodPoolOf(agent);
       const from = stored.maxThreshold;
@@ -122,8 +122,7 @@ export class AgentCodPoolService {
   }
 
   /**
-   * Sync every agent. The reconcile worker's body, and what an in-place plan edit
-   * runs. Sequential and per-agent fault-isolated: one agent's failure is counted and
+   * Sync every agent. The reconcile worker's body. Sequential and per-agent fault-isolated: one agent's failure is counted and
    * logged, and never stops the sweep.
    */
   async syncAll(trigger: CodPoolSyncTrigger): Promise<{ checked: number; changed: number; failed: number }> {
@@ -148,9 +147,8 @@ export class AgentCodPoolService {
    * The agent chooses their own pool, between what their contracts already hold and
    * their ceiling. `null` means "the whole ceiling" — the way back from a choice.
    *
-   * Syncs first, OUTSIDE the transaction, so the ceiling judged against is today's:
-   * an agent whose upgrade event was lost must be able to use the plan they bought
-   * without waiting for the night.
+   * Syncs first, OUTSIDE the transaction, so the ceiling judged against is today's —
+   * e.g. a verdict or pin whose sync was lost must not wait for the night.
    */
   async setAgentLimit(agentId: string, requested: number | null): Promise<IDeliveryAgent> {
     await this.sync(agentId, 'agent_request');
@@ -172,11 +170,11 @@ export class AgentCodPoolService {
           requested: target,
           ceiling: stored.ceiling,
           source: stored.source,
-          planCode: agent.cod?.pool_plan_code ?? null,
+          planCode: null, // deprecated, always null since 2026-10-02
           hint:
             stored.source === 'not_verified'
               ? 'Your COD pool opens once your identity documents are verified.'
-              : 'Your plan sets the most you can carry. Upgrade to raise it.',
+              : 'This is the most cash on delivery you may carry. Contact support to have it raised.',
         });
       }
       await this.assertNotBelowAllocated(agentId, target, session);
@@ -188,7 +186,7 @@ export class AgentCodPoolService {
           maxThreshold: target,
           ceiling: stored.ceiling,
           source: stored.source,
-          planCode: agent.cod?.pool_plan_code ?? null,
+          planCode: null,
           syncedAt: new Date(),
         },
         session
@@ -198,7 +196,7 @@ export class AgentCodPoolService {
       this.emitChanged(agentId, stored.maxThreshold, target, {
         amount: stored.ceiling,
         source: stored.source,
-        planCode: agent.cod?.pool_plan_code ?? null,
+        planCode: null,
       }, 'agent_request');
       return written;
     });
@@ -207,15 +205,15 @@ export class AgentCodPoolService {
   // ─── An administrator: pin or release ─────────────────────────────────────
 
   /**
-   * Pin a pool that replaces the plan's value as the ceiling — above or below it —
+   * Pin a pool that replaces the platform default as the ceiling — above or below it —
    * or release the pin with `amount: null`. A reason is required either way.
    *
-   * Like the trust override, the pin is a separate field no sync writes, so a plan
-   * renewal cannot erase it. Unlike it, the pin does not outrank KYC: an unverified
+   * Like the trust override, the pin is a separate field no sync writes, so a
+   * re-sync cannot erase it. Unlike it, the pin does not outrank KYC: an unverified
    * agent stays at 0 and the pin waits for the verdict.
    *
    * Refuses (like the agent's own write) to leave the pool below what contracts
-   * already hold — including on RELEASE, when the plan's value is lower than the
+   * already hold — including on RELEASE, when the default is lower than the
    * pin was. An administrator is a person choosing a number, and the refusal names
    * the contracts in the way. Skipped while the agent is unverified: their pool is 0
    * regardless and the pin is only being stored.
@@ -241,9 +239,6 @@ export class AgentCodPoolService {
       });
     }
 
-    // Catalog read, outside the transaction — it touches no document this writes.
-    const plan = await this.entitlements.resolveAgentCodPool(agentId);
-
     const { updated, from, ceiling } = await transactionManager.runInTransaction(async (session) => {
       const agent = await this.requireAgent(agentId, session);
 
@@ -260,7 +255,7 @@ export class AgentCodPoolService {
               >),
             };
 
-      const next = resolveCodPoolCeiling({ kycStatus: agent.kyc?.status, override, plan });
+      const next = resolveCodPoolCeiling({ kycStatus: agent.kyc?.status, override });
       const stored = storedCodPoolOf(agent);
       const to = nextCodPoolValue(stored, next);
       if (next.source !== 'not_verified') {

@@ -18,6 +18,7 @@
 - [`GET /api/agency/shipments/:id`](#detail) — full shipment detail
 - [`PATCH /api/agency/shipments/:id/status`](#status) — advance a shipment (picked up, in transit, delivered by agent, failed/retry)
 - [`POST /api/agency/shipments/:id/reject`](#reject) — decline an assigned shipment
+- [`GET|POST /api/agency/shipments/:id/delivery-fee-proposals`](#delivery-fee-proposals) — propose a different delivery fee for this shipment (vendor approves) · `POST …/:proposalId/withdraw`
 - [`PATCH /api/agency/shipments/:id/assign-agent`](#assign-agent) — **offer** the shipment to one of this agency's agents (agent-acceptance workflow)
 - `GET /api/agency/shipments/:id/delivery-proof/file` — the proof photograph's **bytes**, scoped exactly like `GET /:id` (not yours, or no proof: **404**, never 403)
 
@@ -309,7 +310,7 @@ independently:
 | `codHandlingFee` | your COD handling fee, kept whole and never shared. `0` on a prepaid shipment |
 | `currency` | the contract's currency, else the order's |
 | `estimated` | always `true` |
-| `basis` | `contract_percentage` or `contract_flat` |
+| `basis` | `contract_percentage`, `contract_flat` or `contract_salary` (2026-10-02 — the agent is salaried by you off-platform, so `agentCut` is `0` and you keep the whole `earnedFee`) |
 
 ⚠️ **An estimate, not a promise.** The contract's `fee_split` is read live again when the money is
 actually split, so renegotiating it between now and the delivery changes what is paid. A prepaid
@@ -582,6 +583,7 @@ here — reasons are recorded only when the **agent** reports the outcome
 - `400` – `SHIPMENT_INVALID_STATUS_TRANSITION` – Not a valid transition from the current status. `details` includes `{ from, to, allowed }`.
 - `409` – `SHIPMENT_STATUS_CONFLICT` – The shipment moved between your read and your write — the assigned **agent** (or another dashboard session) transitioned it first. `details` includes `{ expectedStatus, to }`. **Reload the shipment and decide again** rather than blind-retrying the same body: the correct next status may have changed. Same handling as `SHIPMENT_CANCEL_CONFLICT` / `SHIPMENT_REASSIGNMENT_CONFLICT`.
 - `422` – `SHIPMENT_AGENT_NOT_ASSIGNED` – `picked_up` requested but no agent has accepted the shipment yet.
+- `409` – `SHIPMENT_DELIVERY_FEE_PENDING` – **New 2026-10-02.** `picked_up` requested while a [delivery-fee proposal](#delivery-fee-proposals) awaits the vendor. `details.proposalId`. Wait for the vendor, or withdraw it.
 
 ---
 
@@ -639,6 +641,142 @@ they know why it was declined before rerouting.
   rejections appeared to succeed and each fired its own post-commit block (offer
   cancellation, capacity release, vendor notification) for a status nobody was in.
 - `400` – validation error – `reason` missing/invalid, `note` longer than 200 chars, or `note` missing when `reason` is `other`.
+
+**Declining after a rejected fee proposal (2026-10-02).** This endpoint is also the agency's
+answer when the vendor **rejects** a [delivery-fee proposal](#delivery-fee-proposals): decline,
+and the vendor routes the items to another agency. It works **even if an agent has already
+accepted the offer** (the shipment is still `assigned` until pickup). In that case the existing
+mechanics release the agent — pending offers cancelled, their capacity slot returned, and a
+`rejected` tracking event that makes geo-tracker release (not terminate) their session — and,
+new, a COD shipment's still-pending **delivery code is cancelled** (the items get a fresh
+shipment and code at the next agency), and any **pending fee proposal is withdrawn** (by
+`system`, `withdrawalReason: "shipment_declined"`). After pickup a decline is not possible
+(`422 SHIPMENT_REJECTION_NOT_ALLOWED`) — that is what the fee proposal's pickup block is for.
+⚠ **Nor on a `handing_over` shipment**, although that status IS inside the fee-proposal window: this
+endpoint accepts `assigned` only (`ShipmentService.reject`), so after a rejected proposal on a
+hand-over the choices are one more proposal or the original fee.
+
+---
+
+<a name="delivery-fee-proposals"></a>
+### Delivery-fee proposals (2026-10-02)
+
+The delivery fee a shipment carries is computed from your `policies.pricing` — today a **flat
+per-shipment amount**: `pickup_based.base_rate_first_kg` for a vendor-collected item and/or
+`storage_based.local_delivery_fee + pick_pack_fee_per_order` for a warehoused one.
+⚠ `additional_per_kg` and the out-of-region fields are **not used by the formula yet** (no
+weight is snapshotted on an order). The **vendor** pays the fee out of their net; the customer
+never sees it. When one particular parcel needs a different price (bulky, far, awkward), you
+propose one for **that shipment**, and the vendor approves or rejects it.
+
+**Rules**
+- **Window**: only before pickup — shipment `status` `assigned` or `handing_over`. Anything else →
+  `422 DELIVERY_FEE_PROPOSAL_WINDOW_CLOSED` (`details.status`, `details.allowed`).
+- **Pickup is blocked while one is pending**: `PATCH …/status` → `picked_up` (yours or your
+  agent's) answers `409 SHIPMENT_DELIVERY_FEE_PENDING` (`details.proposalId`) until the vendor
+  answers or you withdraw. Shipment payloads carry `deliveryFeeProposalPending` +
+  `pendingDeliveryFeeProposalId` so you can grey out the button.
+- **One pending per shipment** (`409 DELIVERY_FEE_PROPOSAL_ALREADY_PENDING`, `details.proposalId`),
+  and **at most two non-withdrawn proposals per shipment** — the first, and **one more after a
+  rejection** (`422 DELIVERY_FEE_PROPOSAL_LIMIT_REACHED`, `details.used/max`). Withdrawn ones do not count.
+- **Fee**: integer ≥ 0 in minor units, different from the current fee
+  (`422 DELIVERY_FEE_PROPOSAL_NO_CHANGE`, `details.currentFee`). Up **or** down — every change
+  needs the vendor.
+- **Ceiling**: the platform's 30% delivery-cost cap does **not** apply to a negotiated fee. The
+  only limit: it must leave the vendor earning **more than 0** on the unit the earnings split
+  uses (the whole order for an online-paid order, this shipment for cash on delivery), after
+  commission, the bargain fee and — COD — your COD handling fee. Otherwise
+  `422 DELIVERY_FEE_PROPOSAL_VENDOR_NET_NOT_POSITIVE` (no numbers in `details`, by design).
+  Checked when you propose and again when the vendor approves.
+- **Your agents** may propose too, only on shipments they hold the accepted offer for, and only
+  while you have `agentsCanProposeDeliveryFee: true` in
+  [assignment settings](./assignment.md#settings). You may withdraw their proposals.
+
+#### GET /api/agency/shipments/:id/delivery-fee-proposals
+Every proposal on the shipment, newest first (also on the detail as `deliveryFeeProposals`).
+
+#### POST /api/agency/shipments/:id/delivery-fee-proposals
+```json
+{ "proposedFee": 2500, "reason": "Two 25 kg sacks — needs a van, not a bike" }
+```
+`reason` is required (3–500 chars). `201` with the proposal:
+```json
+{
+  "success": true,
+  "message": "Delivery-fee proposal sent to the vendor",
+  "data": {
+    "id": "66fd…01",
+    "shipmentId": "66fc…aa",
+    "orderId": "66fb…10",
+    "agencyId": "66f0…99",
+    "proposedBy": { "role": "agency", "userId": "66e1…01", "agentId": null },
+    "currency": "XAF",
+    "feeBefore": 1500,
+    "proposedFee": 2500,
+    "reason": "Two 25 kg sacks — needs a van, not a bike",
+    "status": "pending",
+    "respondedBy": null,
+    "rejectionNote": null,
+    "withdrawalReason": null,
+    "availableActions": ["withdraw"],
+    "createdAt": "2026-10-02T09:00:00.000Z",
+    "updatedAt": "2026-10-02T09:00:00.000Z"
+  }
+}
+```
+`status` is `pending | approved | rejected | withdrawn`. `respondedBy.role` is `vendor`,
+`agency`, `agent` or `system` (an automatic withdrawal: `withdrawalReason`
+`shipment_declined` or `agent_detached`). `availableActions` is the authority table the API
+enforces — render buttons from it.
+
+#### PATCH /api/agency/shipments/:id/delivery-fee-proposals/:proposalId — edit (2026-10-02)
+Change a **pending** proposal's fee and/or reason — yours **or your agent's** (an agent's
+proposal goes straight to the vendor; you see it here and may edit or withdraw it). Body
+`{ "proposedFee"?: int ≥ 0, "reason"?: string 3–500, "version"?: int }`, at least one of fee /
+reason. It stays the **same single request** — no new proposal, no extra count toward the
+two-per-shipment cap — and stays `pending`. Same window and vendor-net ceiling as creation.
+`version` is bumped on every edit; send the one you loaded to make a concurrent change answer
+`409 DELIVERY_FEE_PROPOSAL_VERSION_MISMATCH` (`details.currentVersion`) instead of overwriting it.
+**Editing your agent's proposal makes it agency-owned** (`agencyEdited: true`): the agent can no
+longer edit or withdraw it, and it survives the agent being reassigned away. The vendor must
+answer the current `version`, so an edit always reaches them before an approval can.
+Errors: `NOT_PENDING` 409 · `VERSION_MISMATCH` 409 · `NO_CHANGE` 422 (nothing changed, or the fee
+equals the shipment's current fee) · `WINDOW_CLOSED` 422 · `VENDOR_NET_NOT_POSITIVE` 422 · `NOT_FOUND` 404.
+
+Proposal payloads now also carry `version`, `edits[]` (`{ editedBy: { role, userId, agentId },
+feeBefore, feeAfter, reasonBefore, reasonAfter, version, at }`, oldest first), `lastEditedBy`
+and `agencyEdited`; `availableActions` includes `edit`.
+
+#### POST /api/agency/shipments/:id/delivery-fee-proposals/:proposalId/withdraw
+Withdraw a pending proposal (yours or your agent's). `409 DELIVERY_FEE_PROPOSAL_NOT_PENDING` if it
+was already answered.
+
+**After an answer**
+- **approved** → the shipment's fee is the proposed one: `deliveryFeeOverride: { amount,
+  proposalId, approvedAt }` appears on the shipment, and `agencyEarning` / the agent's `earning`
+  are computed from it. Pickup is unblocked.
+- **rejected** → the original fee stands; pickup is unblocked. You may send **one** more
+  proposal, or [decline the shipment](#reject) so the vendor picks another agency.
+
+**Shipment payload additions** (list rows, detail, status/reject responses):
+`deliveryFeeProposalPending` (boolean), `pendingDeliveryFeeProposalId` (string|null),
+`deliveryFeeOverride` (`{ amount, proposalId, approvedAt }` | null); the detail adds
+`deliveryFeeProposals` (array, newest first).
+
+| Error | Status | When |
+|---|---|---|
+| `DELIVERY_FEE_PROPOSAL_WINDOW_CLOSED` | 422 | not `assigned` / `handing_over` |
+| `DELIVERY_FEE_PROPOSAL_ALREADY_PENDING` | 409 | one is already pending (`details.proposalId`) |
+| `DELIVERY_FEE_PROPOSAL_LIMIT_REACHED` | 422 | two non-withdrawn proposals already |
+| `DELIVERY_FEE_PROPOSAL_NO_CHANGE` | 422 | same as the current fee |
+| `DELIVERY_FEE_PROPOSAL_VENDOR_NET_NOT_POSITIVE` | 422 | vendor would earn ≤ 0 |
+| `DELIVERY_FEE_PROPOSAL_NOT_FOUND` | 404 | unknown proposal / not on this shipment |
+| `DELIVERY_FEE_PROPOSAL_NOT_PENDING` | 409 | already answered or withdrawn |
+| `SHIPMENT_DELIVERY_FEE_PENDING` | 409 | pickup attempted while one is pending |
+| `DELIVERY_FEE_PROPOSAL_VERSION_MISMATCH` | 409 | edit sent a stale `version` (`details.currentVersion`) |
+| `DELIVERY_FEE_PROPOSAL_NOT_YOURS` | 403 | edit/withdraw not permitted for you |
+| `SHIPMENT_NOT_FOUND` | 404 | not your shipment |
+| `VALIDATION_ERROR` | 400 | fee not an integer ≥ 0, missing/short `reason`, unknown key |
 
 ---
 

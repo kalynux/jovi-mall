@@ -156,7 +156,7 @@ export class AgentCodController {
    * PUT /api/agent/cod/pool — body `{ maxThreshold: number | null }`.
    *
    * The one COD-pool write an agent has, and it only goes DOWN: carry less than the
-   * ceiling their plan (or an administrator's pin) allows, never more — `null` puts
+   * ceiling the platform default (or an administrator's pin) allows, never more — `null` puts
    * them back on the whole ceiling. Unverified agents have a ceiling of 0, so for them
    * this can only confirm 0. Refused below what their contracts already hold, naming
    * the contracts in the way. Answers the same body as `GET /cod/allocation`.

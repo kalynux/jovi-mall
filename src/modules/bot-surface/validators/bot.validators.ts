@@ -420,6 +420,12 @@ export const BotOnboardingSubmitSchema = z
         action: z.enum(['provide', 'skip']).default('provide'),
         /** `step: 'phone'`, Telegram only. */
         contact: BotVerifiedContactSchema.optional(),
+        /**
+         * `step: 'language'`. A code (`fr`) or a typed name (`Français`, `french`) — the service
+         * recognises it (`parseLanguageAnswer`) and refuses anything that names none of the five.
+         * The picker's tap does not come through here; it is `lang:<code>` on `/action`.
+         */
+        language: z.string().trim().min(2).max(40).optional(),
         /** `step: 'name'`. */
         name: z.string().trim().min(2).max(100).optional(),
         /** `step: 'email'`. */

@@ -26,6 +26,7 @@ import {
     seedOnboarding,
 } from '../domain/bot-onboarding';
 import { BotIdentityEnvelope } from './bot-identity.service';
+import { parseLanguageAnswer } from '../domain/language-choice';
 
 /**
  * Registration on first contact, and the chat-collected profile that follows it — GAP-002.
@@ -449,7 +450,7 @@ export class BotRegistrationService {
         customer: ICustomer,
         step: BotOnboardingStep,
         action: 'provide' | 'skip',
-        value: { name?: string; email?: string },
+        value: { name?: string; email?: string; language?: string },
         channel: string,
     ): Promise<ICustomer> {
         const now = new Date();
@@ -477,6 +478,18 @@ export class BotRegistrationService {
         }
 
         switch (step) {
+            case 'language': {
+                /**
+                 * The customer's own choice, so it is written exactly like `/language` writes it —
+                 * `preferences.language`, the setting every later reply and notification reads.
+                 * Recognised rather than validated: a tap sends a code, a typed answer may say
+                 * "Français", and both mean the same thing (`parseLanguageAnswer`).
+                 */
+                const language = parseLanguageAnswer(value.language);
+                if (!language) throw missingValue(step, 'language');
+                customer.set('preferences.language', language);
+                break;
+            }
             case 'name': {
                 const name = cleanName(value.name);
                 if (!name) throw missingValue(step, 'name');

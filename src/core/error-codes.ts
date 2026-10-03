@@ -51,6 +51,8 @@ type DomainPrefix =
     | 'NOTCHPAY'
     | 'MYCOOLPAY'
     | 'CAMPAY'
+    | 'CINETPAY'
+    | 'FAPSHI'
     | 'VALIDATION';   // VALIDATION_ERROR — ZodError catch in global handler only
 
 // Compile-time check: every key must start with a known domain prefix.
@@ -297,7 +299,7 @@ export const ERROR_CODES = Object.freeze({
     /** A link was asked for on a transaction that is already settled, failed or cancelled. */
     PAYMENT_LINK_NOT_PAYABLE: 'PAYMENT_LINK_NOT_PAYABLE',
 
-    // ── NOTCHPAY / MYCOOLPAY / CAMPAY ─────────────────────────────────────────
+    // ── NOTCHPAY / MYCOOLPAY / CAMPAY / CINETPAY / FAPSHI ─────────────────────
     // Raised at 5xx only, so `INTEGRATION_PREFIXES` files them as `external_service`
     // and the boundary replaces the message and drops `details`. That is deliberate:
     // the diagnostics are for our logs, and a provider's own error text is not
@@ -310,6 +312,10 @@ export const ERROR_CODES = Object.freeze({
     MYCOOLPAY_UNREACHABLE: 'MYCOOLPAY_UNREACHABLE',
     CAMPAY_REQUEST_FAILED: 'CAMPAY_REQUEST_FAILED',
     CAMPAY_UNREACHABLE: 'CAMPAY_UNREACHABLE',
+    CINETPAY_REQUEST_FAILED: 'CINETPAY_REQUEST_FAILED',
+    CINETPAY_UNREACHABLE: 'CINETPAY_UNREACHABLE',
+    FAPSHI_REQUEST_FAILED: 'FAPSHI_REQUEST_FAILED',
+    FAPSHI_UNREACHABLE: 'FAPSHI_UNREACHABLE',
 
     // ── REFUND ────────────────────────────────────────────────────────────────
     REFUND_NOT_ELIGIBLE: 'REFUND_NOT_ELIGIBLE',
@@ -861,6 +867,10 @@ export const ERROR_CODES = Object.freeze({
     // A geocoded address resolves outside the profile's registered country
     // (or its provider returned no country code, so it cannot be verified).
     ADDRESS_COUNTRY_MISMATCH: 'ADDRESS_COUNTRY_MISMATCH',
+    // A customer address whose region (or, failing that, city) names none of its
+    // country's regions. Refused so every drop-off carries a region an agency's
+    // coverage can actually match; `details.allowedRegions` is the picker.
+    ADDRESS_REGION_INVALID: 'ADDRESS_REGION_INVALID',
     // Attempt to change a profile country that is already set. Country is
     // chosen during onboarding and immutable afterwards (tax/shipping policy).
     PROFILE_COUNTRY_IMMUTABLE: 'PROFILE_COUNTRY_IMMUTABLE',
@@ -1145,6 +1155,9 @@ export const ERROR_CODES = Object.freeze({
 
     // ── DELIVERY ──────────────────────────────────────────────────────────────
     DELIVERY_AGENCY_NOT_FOUND: 'DELIVERY_AGENCY_NOT_FOUND',
+    // An administrator moved a shipment to an agency that is not `active`, without
+    // `force: true`. With force, the move goes through.
+    DELIVERY_AGENCY_NOT_ACTIVE: 'DELIVERY_AGENCY_NOT_ACTIVE',
     AGENCY_COVERAGE_AREA_INVALID: 'AGENCY_COVERAGE_AREA_INVALID',
     DELIVERY_AGENT_NOT_FOUND: 'DELIVERY_AGENT_NOT_FOUND',
     DELIVERY_AGENCY_ALREADY_EXISTS: 'DELIVERY_AGENCY_ALREADY_EXISTS',
@@ -1576,6 +1589,39 @@ export const ERROR_CODES = Object.freeze({
     STOCK_REQUEST_STALE: 'STOCK_REQUEST_STALE',
     STOCK_REQUEST_NO_CHANGE: 'STOCK_REQUEST_NO_CHANGE',
 
+    // ── DELIVERY-FEE PROPOSALS (agency/agent → vendor, per shipment) ───────────
+    // Each is raised at exactly ONE status (test:errors' census).
+    DELIVERY_FEE_PROPOSAL_NOT_FOUND: 'DELIVERY_FEE_PROPOSAL_NOT_FOUND',          // 404
+    // One pending proposal per shipment. Withdraw it, or wait for the vendor.   // 409
+    DELIVERY_FEE_PROPOSAL_ALREADY_PENDING: 'DELIVERY_FEE_PROPOSAL_ALREADY_PENDING',
+    // A compare-and-set miss on approve/reject/withdraw — the row exists, somebody
+    // else resolved it first. A CONFLICT, never a not-found.                    // 409
+    DELIVERY_FEE_PROPOSAL_NOT_PENDING: 'DELIVERY_FEE_PROPOSAL_NOT_PENDING',
+    // Proposals are allowed only before pickup (`assigned` / `handing_over`).   // 422
+    DELIVERY_FEE_PROPOSAL_WINDOW_CLOSED: 'DELIVERY_FEE_PROPOSAL_WINDOW_CLOSED',
+    // The agent proposed while their agency has not enabled agent proposals.     // 403
+    DELIVERY_FEE_PROPOSAL_AGENTS_NOT_ALLOWED: 'DELIVERY_FEE_PROPOSAL_AGENTS_NOT_ALLOWED',
+    // Two non-withdrawn proposals per shipment, already used.                   // 422
+    DELIVERY_FEE_PROPOSAL_LIMIT_REACHED: 'DELIVERY_FEE_PROPOSAL_LIMIT_REACHED',
+    // The proposed fee equals the fee the shipment already carries.             // 422
+    DELIVERY_FEE_PROPOSAL_NO_CHANGE: 'DELIVERY_FEE_PROPOSAL_NO_CHANGE',
+    // The fee would leave the vendor earning ≤ 0 on the shipment/order. The ONLY
+    // ceiling — the 30% delivery-cost cap does not apply to an approved fee.    // 422
+    DELIVERY_FEE_PROPOSAL_VENDOR_NET_NOT_POSITIVE: 'DELIVERY_FEE_PROPOSAL_VENDOR_NET_NOT_POSITIVE',
+    // Withdrawing a proposal you did not raise (an agent, the agency's).        // 403
+    DELIVERY_FEE_PROPOSAL_NOT_YOURS: 'DELIVERY_FEE_PROPOSAL_NOT_YOURS',
+    // Approval found the shipment no longer in the window, or the proposing agent
+    // no longer on it. The proposal stays pending; the agency may withdraw it.  // 409
+    DELIVERY_FEE_PROPOSAL_STALE: 'DELIVERY_FEE_PROPOSAL_STALE',
+    // Approval could not re-price the vendor's payment-time allocation (it was
+    // released, reversed or concurrently changed). Nothing was applied.        // 409
+    DELIVERY_FEE_PROPOSAL_SETTLEMENT_CONFLICT: 'DELIVERY_FEE_PROPOSAL_SETTLEMENT_CONFLICT',
+    // The proposal was edited since the caller loaded it (`details.currentVersion`). The
+    // vendor must re-read and answer what is current; never apply an unseen figure.  // 409
+    DELIVERY_FEE_PROPOSAL_VERSION_MISMATCH: 'DELIVERY_FEE_PROPOSAL_VERSION_MISMATCH',
+    // Pickup refused: a delivery-fee proposal on this shipment awaits the vendor. // 409
+    SHIPMENT_DELIVERY_FEE_PENDING: 'SHIPMENT_DELIVERY_FEE_PENDING',
+
     // ── REVIEWS & RATINGS (products AND deliveries) ───────────────────────────
     // Each is raised at EXACTLY ONE status — `test:errors` censuses every
     // createAppError site and fails if a code appears at two statuses that
@@ -1818,6 +1864,13 @@ export const ERROR_CODES = Object.freeze({
     COD_NOT_AVAILABLE_FOR_DIGITAL: 'COD_NOT_AVAILABLE_FOR_DIGITAL',
     COD_AGENCY_NOT_SUPPORTED: 'COD_AGENCY_NOT_SUPPORTED',
     COD_ORDER_AMOUNT_EXCEEDS_LIMIT: 'COD_ORDER_AMOUNT_EXCEEDS_LIMIT',
+    /** Checkout: a vendor on the order turned COD off in their COD terms (2026-10-02). */
+    COD_VENDOR_NOT_ACCEPTED: 'COD_VENDOR_NOT_ACCEPTED',
+    /**
+     * Dispatch / change-agency: handing this COD shipment to the agency would push it over
+     * its own cash limit or the vendor's `maxCashPerAgency`. Retry with `force: true`.
+     */
+    COD_AGENCY_LIMIT_EXCEEDED: 'COD_AGENCY_LIMIT_EXCEEDED',
     COD_COLLECTION_NOT_FOUND: 'COD_COLLECTION_NOT_FOUND',
     COD_COLLECTION_ALREADY_COLLECTED: 'COD_COLLECTION_ALREADY_COLLECTED',
     COD_COLLECTION_NOT_COLLECTIBLE: 'COD_COLLECTION_NOT_COLLECTIBLE',

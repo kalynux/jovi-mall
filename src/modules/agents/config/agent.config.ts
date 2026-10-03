@@ -25,6 +25,14 @@ export const AGENT_CONFIG = Object.freeze({
   COD_THRESHOLD_MIN: intEnv('AGENT_COD_THRESHOLD_MIN', 0),
 
   /**
+   * The COD pool ceiling of every KYC-verified agent without an administrator's pin
+   * (owner decision 2026-10-02) — the same for every agent, whatever plan they hold.
+   * Before that date the plan's `max_cod_pool` set it. A constant, deliberately NOT an
+   * env var: it is an owner decision, not a deployment knob. See `agent-cod-pool.ts`.
+   */
+  COD_POOL_DEFAULT: 500_000,
+
+  /**
    * Ceiling / floor on a SINGLE contract's COD threshold. A contract threshold
    * is a sub-allocation of the agent's global threshold, so it is bounded twice:
    * by this absolute cap, and by the agent's remaining headroom.

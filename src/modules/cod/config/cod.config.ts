@@ -31,6 +31,20 @@ export const COD_CONFIG = {
    */
   AGENT_MAX_EXPOSURE_DEFAULT: intEnv('COD_AGENT_MAX_EXPOSURE_DEFAULT', 300_000),
 
+  // ── Agency cash limit (owner decision, 2026-10-02) ──────────────────────────
+  /**
+   * The most COD cash one agency may hold that has not reached the platform —
+   * in-flight COD shipments plus collected-but-unremitted cash. An administrator
+   * may PIN another amount per agency (`cod_limit_override`). See
+   * `cod/domain/cod-limits.ts`.
+   *
+   * A constant, deliberately NOT an env var: it is an owner decision, and a
+   * deployment-time knob would let it drift per environment silently.
+   */
+  AGENCY_COD_LIMIT_DEFAULT: 1_000_000,
+  /** Sanity bound on an administrator's pin — not a policy. */
+  AGENCY_COD_LIMIT_MAX: 100_000_000,
+
   // ── Trust scoring ───────────────────────────────────────────────────────────
   /** Score at/above which the agent gets their full exposure limit. */
   TRUST_FULL_THRESHOLD: intEnv('COD_TRUST_FULL_THRESHOLD', 80),

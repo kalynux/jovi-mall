@@ -2,6 +2,8 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.repository';
 import { MagazinRepository } from '../../magazin/repositories/magazin.repository';
+import { VendorSettingsRepository } from '../../vendors/repositories/vendor-settings.repository';
+import { vendorCodTermsOf } from '../domain/cod-limits';
 
 /**
  * CodEligibilityService - decides whether an order may be placed as
@@ -16,6 +18,7 @@ export class CodEligibilityService {
   constructor(
     private readonly agencyRepo: DeliveryAgencyRepository = new DeliveryAgencyRepository(),
     private readonly magazinRepo: MagazinRepository = new MagazinRepository(),
+    private readonly vendorSettings: VendorSettingsRepository = new VendorSettingsRepository(),
   ) {}
 
   /**
@@ -28,8 +31,14 @@ export class CodEligibilityService {
     orderType: 'physical' | 'digital';
     totalAmount: number;
     agencyIds: string[];
+    /**
+     * The order's vendor (2026-10-02). When given, the vendor's COD terms are checked
+     * first: `codEnabled: false` refuses with `COD_VENDOR_NOT_ACCEPTED`. Optional only
+     * so a caller with no vendor to name keeps compiling — both checkout paths pass it.
+     */
+    vendorId?: string | null;
   }): Promise<void> {
-    const { orderType, totalAmount, agencyIds } = params;
+    const { orderType, totalAmount, agencyIds, vendorId } = params;
 
     // Nothing is physically handed over for digital goods — nowhere to pay cash.
     if (orderType !== 'physical') {
@@ -38,6 +47,15 @@ export class CodEligibilityService {
         422,
         'Cash on delivery is only available for physical orders'
       );
+    }
+
+    // The vendor's own refusal outranks every agency rule: no agency can make a seller
+    // who declined cash accept it. Read-only — never upserts a settings document.
+    if (vendorId) {
+      const terms = vendorCodTermsOf(await this.vendorSettings.findCodTerms(vendorId));
+      if (!terms.codEnabled) {
+        throw createAppError(ERROR_CODES.COD_VENDOR_NOT_ACCEPTED, 422, undefined, { vendorId });
+      }
     }
 
     const distinctIds = [...new Set(agencyIds)];

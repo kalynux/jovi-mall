@@ -175,6 +175,7 @@ const INTEGER_VARS: readonly string[] = Object.freeze([
     'UNPAID_ORDER_CANCEL_BATCH_SIZE',
     // Payments
     'NOTCHPAY_REQUEST_TIMEOUT_MS', 'MYCOOLPAY_REQUEST_TIMEOUT_MS', 'CAMPAY_REQUEST_TIMEOUT_MS',
+    'CINETPAY_REQUEST_TIMEOUT_MS', 'FAPSHI_REQUEST_TIMEOUT_MS',
     'PAYMENT_RECONCILE_MIN_AGE_MINUTES', 'PAYMENT_RECONCILE_MAX_AGE_HOURS',
     'PAYMENT_RECONCILE_BATCH_SIZE', 'PAYMENT_OTP_MAX_ATTEMPTS', 'PAYMENT_SETTINGS_CACHE_TTL_MS',
     // Lifecycle
@@ -217,6 +218,7 @@ const BOOLEAN_VARS: readonly string[] = Object.freeze([
     'HEALTH_READY_REQUIRE_REDIS', 'METRICS_ENABLED',
     'LOG_CONSOLE_BRIDGE', 'LOG_STDOUT', 'LOG_HTTP_ACCESS', 'LOG_PERSIST_ENABLED',
     'MYCOOLPAY_VERIFY_CALLBACK_IP', 'NOTCHPAY_REFUNDS_ENABLED', 'CAMPAY_PAYOUTS_ENABLED',
+    'CINETPAY_PAYOUTS_ENABLED', 'CINETPAY_DIRECT_PAY', 'FAPSHI_PAYOUTS_ENABLED',
     'MYCOOLPAY_PAYOUTS_ENABLED',
 ]);
 
@@ -664,6 +666,79 @@ export function validateEnv(source: NodeJS.ProcessEnv = process.env): EnvProblem
         const campayBase = (get('CAMPAY_BASE_URL') || 'https://demo.campay.net/api').toLowerCase();
         if (campayBase.includes('demo.campay.net')) {
             warn('CAMPAY_BASE_URL', 'points at the Campay DEMO host (demo.campay.net) in production. Demo transactions move no real money. Set CAMPAY_BASE_URL=https://www.campay.net/api to go live.');
+        }
+    }
+    // CinetPay (API v1). A key + password pair, exchanged for a 24-hour token. There is no
+    // webhook secret; what a working CinetPay needs instead is a notify URL, because CinetPay
+    // takes it on every request rather than from its dashboard. The key's prefix names its
+    // environment, and a key sent to the other environment's host cannot authenticate.
+    const cinetpayCanCall = has('CINETPAY_API_KEY') && has('CINETPAY_API_PASSWORD');
+    if (has('CINETPAY_API_KEY') !== has('CINETPAY_API_PASSWORD')) {
+        err(has('CINETPAY_API_KEY') ? 'CINETPAY_API_PASSWORD' : 'CINETPAY_API_KEY', 'must be set together with its pair. CinetPay exchanges the api_key AND api_password at POST /v1/oauth/login; one without the other cannot authenticate.');
+    }
+    if (cinetpayCanCall) {
+        const cinetpayKey = get('CINETPAY_API_KEY') ?? '';
+        const cinetpayLive = cinetpayKey.startsWith('sk_live_');
+        const cinetpayTest = cinetpayKey.startsWith('sk_test_');
+        const cinetpayBase = (get('CINETPAY_BASE_URL') || (cinetpayLive ? 'https://api.cinetpay.co' : 'https://api.cinetpay.net')).toLowerCase();
+        if (!cinetpayLive && !cinetpayTest) {
+            warn('CINETPAY_API_KEY', 'starts with neither sk_test_ nor sk_live_, so its environment cannot be told from the key. The sandbox host is assumed unless CINETPAY_BASE_URL says otherwise.');
+        }
+        if ((cinetpayLive && cinetpayBase.includes('cinetpay.net')) || (cinetpayTest && cinetpayBase.includes('cinetpay.co'))) {
+            err('CINETPAY_BASE_URL', `does not match the key: ${cinetpayLive ? 'a live (sk_live_) key needs https://api.cinetpay.co' : 'a sandbox (sk_test_) key needs https://api.cinetpay.net'}. A key sent to the other environment's host cannot authenticate. Unset CINETPAY_BASE_URL to derive it from the key.`);
+        }
+        if (isProduction && cinetpayTest) {
+            warn('CINETPAY_API_KEY', 'is a SANDBOX key (sk_test_) in production. Sandbox transactions move no real money.');
+        }
+        const notifyUrl = get('CINETPAY_NOTIFY_URL') || (has('API_PUBLIC_URL') ? `${(get('API_PUBLIC_URL') ?? '').replace(/\/+$/, '')}/api/webhooks/cinetpay` : '');
+        if (!notifyUrl) {
+            err('CINETPAY_NOTIFY_URL', 'cannot be derived: set it, or set API_PUBLIC_URL. CinetPay takes the notification URL on every charge, so without one no payment ever hears back and settlement waits on the reconciliation sweep.');
+        } else if (notifyUrl.length > 120) {
+            err('CINETPAY_NOTIFY_URL', `is ${notifyUrl.length} characters; CinetPay refuses any URL over 120. Set CINETPAY_NOTIFY_URL to a shorter public URL for /api/webhooks/cinetpay.`);
+        }
+        const returnUrl = get('CINETPAY_RETURN_URL') || get('STOREFRONT_URL') || get('API_PUBLIC_URL') || '';
+        if (!returnUrl) {
+            err('CINETPAY_RETURN_URL', 'cannot be derived: set it, or STOREFRONT_URL. CinetPay requires success_url and failed_url on every charge.');
+        } else if (returnUrl.length > 120) {
+            err('CINETPAY_RETURN_URL', `is ${returnUrl.length} characters; CinetPay refuses any URL over 120.`);
+        }
+        if (!(get('CINETPAY_FALLBACK_EMAIL') || get('MAIL_SUPPORT_EMAIL') || get('MAIL_FROM_DEFAULT'))) {
+            err('CINETPAY_FALLBACK_EMAIL', 'cannot be derived: set it, or MAIL_SUPPORT_EMAIL. CinetPay requires a customer email on every charge and many customers have none, so without a fallback their payments are refused.');
+        }
+    }
+    if (get('CINETPAY_PAYOUTS_ENABLED') === 'true' && !cinetpayCanCall) {
+        err('CINETPAY_PAYOUTS_ENABLED', 'is true but no CinetPay credential is set, so no transfer can be authenticated at all.');
+    }
+    // Fapshi. Two credential pairs because a Fapshi service either collects or pays out, never
+    // both; and a static webhook secret (`x-wh-secret`). Fapshi sends each callback ONCE, so a
+    // collection pair without the secret is a gateway that charges and never hears back.
+    for (const [user, key] of [['FAPSHI_API_USER', 'FAPSHI_API_KEY'], ['FAPSHI_PAYOUT_API_USER', 'FAPSHI_PAYOUT_API_KEY']] as const) {
+        if (has(user) !== has(key)) {
+            err(has(user) ? key : user, `must be set together with ${has(user) ? user : key}. Fapshi authenticates every call with BOTH the apiuser and apikey headers of one service.`);
+        }
+    }
+    const fapshiCanCollect = has('FAPSHI_API_USER') && has('FAPSHI_API_KEY');
+    const fapshiCanPay = has('FAPSHI_PAYOUT_API_USER') && has('FAPSHI_PAYOUT_API_KEY');
+    // An error in production only. A new Fapshi account gets sandbox credentials before it can set
+    // a webhook secret (that setting arrives with an approved account's services), and a local box
+    // cannot receive Fapshi's callbacks anyway. Without it `fapshiEnabled()` is false, so Fapshi
+    // cannot be chosen for new charges: nothing is silently accepted unauthenticated.
+    if ((fapshiCanCollect || fapshiCanPay) && !has('FAPSHI_WEBHOOK_SECRET')) {
+        (isProduction ? err : warn)('FAPSHI_WEBHOOK_SECRET', 'is not set while Fapshi credentials are. It is compared with the x-wh-secret header on every callback; without it every callback is refused (Fapshi never resends one) and Fapshi cannot be selected for new charges.');
+    }
+    // Only on the LIVE host: a new account has a single sandbox pair before any service exists,
+    // and testing both directions with it is the documented way in.
+    const fapshiLive = (get('FAPSHI_BASE_URL') || '').toLowerCase().includes('live.fapshi.com');
+    if (fapshiLive && fapshiCanCollect && fapshiCanPay && get('FAPSHI_API_USER') === get('FAPSHI_PAYOUT_API_USER')) {
+        err('FAPSHI_PAYOUT_API_USER', 'is the same apiuser as FAPSHI_API_USER on the live host. A Fapshi service with payouts enabled can no longer collect, so payouts need their OWN service and credentials.');
+    }
+    if (get('FAPSHI_PAYOUTS_ENABLED') === 'true' && !fapshiCanPay) {
+        err('FAPSHI_PAYOUTS_ENABLED', 'is true but FAPSHI_PAYOUT_API_USER / FAPSHI_PAYOUT_API_KEY are not set, so no payout can be sent.');
+    }
+    if (isProduction && (fapshiCanCollect || fapshiCanPay)) {
+        const fapshiBase = (get('FAPSHI_BASE_URL') || 'https://sandbox.fapshi.com').toLowerCase();
+        if (fapshiBase.includes('sandbox.fapshi.com')) {
+            warn('FAPSHI_BASE_URL', 'points at the Fapshi SANDBOX (sandbox.fapshi.com) in production. Sandbox transactions move no real money. Set FAPSHI_BASE_URL=https://live.fapshi.com and the LIVE credentials to go live.');
         }
     }
 

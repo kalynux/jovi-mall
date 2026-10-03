@@ -38,10 +38,13 @@ import {
     normalizeOnboarding,
     onboardingChanged,
     seedOnboarding,
+    anonymousOnboarding,
     type BotOnboardingRecord,
 } from '../../src/modules/bot-surface/domain/bot-onboarding';
 import { onboardingReplyIntent } from '../../src/modules/bot-surface/domain/onboarding-reply';
-import { onboardingPromptFor } from '../../src/modules/bot-surface/domain/bot-onboarding-copy';
+import { onboardingIntroFor, onboardingPromptFor } from '../../src/modules/bot-surface/domain/bot-onboarding-copy';
+import { parseLanguageAnswer } from '../../src/modules/bot-surface/domain/language-choice';
+import { onboardingReviewFor } from '../../src/modules/bot-surface/domain/onboarding-review';
 import {
     CONTACT_RESEND_COOLDOWN_SECONDS,
     resendWaitSeconds,
@@ -352,8 +355,12 @@ function main(): void {
     const MAR = new Date('2026-03-02T14:30:00Z');
     const LATER = new Date('2026-03-02T14:35:00Z');
 
-    /** A WhatsApp account: the sender id IS the number, so `phone` is satisfied at creation. */
-    const seeded = seedOnboarding(['phone'], JAN);
+    /**
+     * A WhatsApp account: the sender id IS the number, so `phone` is satisfied at creation —
+     * and its `language` already chosen, the FIRST question since 2026-10-02, so every case
+     * below starts where the rest of the checklist begins.
+     */
+    const seeded = applyOnboardingStep(seedOnboarding(['phone'], JAN), 'language', 'provided', JAN);
     const stateOf = (rows: readonly BotOnboardingRecord[], step: string) =>
         rows.find((r) => r.step === step)!;
 
@@ -428,6 +435,63 @@ function main(): void {
             && intent.actions[0].id === 'yes:tos'
             && intent.text.includes('https://cdn.wi-mall.com/legal/terms-of-service-fr.html')
             && intent.text.includes('https://cdn.wi-mall.com/legal/privacy-policy-fr.html');
+    });
+
+    // ── The `language` step (2026-10-02): FIRST, required, new accounts only ──────────────
+    const fresh = seedOnboarding(['phone'], JAN);
+
+    assert('⭐ a new account is asked its LANGUAGE first, as the five-language picker', () => {
+        const next = nextOnboardingStep(fresh);
+        return fresh[0].step === 'language'
+            && next?.step === 'language'
+            && next.kind === 'language_choice'
+            && next.skippable === false;
+    });
+
+    /** Cameroon (owner, 2026-10-02): two buttons, English and Français — nothing else is offered. */
+    assert('the picker offers exactly English and Français, each labelled in itself', () => {
+        const next = nextOnboardingStep(fresh)!;
+        const intent = onboardingReplyIntent(
+            { ...next, ...onboardingPromptFor('language', 'whatsapp', null) } as never,
+            null,
+        );
+        return intent?.kind === 'choice'
+            && intent.options.map((o) => o.id).join(',') === 'lang:en,lang:fr'
+            && intent.options.map((o) => o.label).join(',') === 'English,Français';
+    });
+
+    /** Nobody has chosen yet, so the question is asked in BOTH — whatever the seeded guess was. */
+    assert('the language question is English AND French, whatever language was guessed', () =>
+        ['en', 'fr', 'ar', null].every((guess) => {
+            const { prompt } = onboardingPromptFor('language', 'whatsapp', guess);
+            return prompt === 'Which language would you like me to use?\nDans quelle langue souhaitez-vous que je vous écrive ?';
+        }));
+
+    assert('⛔ an anonymous Telegram chat is still asked for its CONTACT first — nowhere to keep a language', () =>
+        !anonymousOnboarding(JAN).some((r) => r.step === 'language')
+        && nextOnboardingStep(anonymousOnboarding(JAN))?.step === 'phone');
+
+    assert('⛔ an EXISTING account is never asked: backfill seeds no language row', () =>
+        !seedOnboarding([], JAN, { existingAccount: true }).some((r) => r.step === 'language'));
+
+    assert('a typed answer is recognised by code, own name or foreign name — a sentence is not', () =>
+        parseLanguageAnswer('Français') === 'fr'
+        && parseLanguageAnswer(' french. ') === 'fr'
+        && parseLanguageAnswer('FR') === 'fr'
+        && parseLanguageAnswer('anglais') === 'en'
+        && parseLanguageAnswer('العربية') === 'ar'
+        && parseLanguageAnswer('I speak a bit of French') === null
+        && parseLanguageAnswer('') === null);
+
+    assert('the first-contact lead exists in all five languages and promises to come back', () =>
+        ['en', 'fr', 'pt', 'es', 'ar'].every((l) => onboardingIntroFor(l).length > 40)
+        && onboardingIntroFor('en').includes('your message')
+        && onboardingIntroFor('fr').startsWith('Bonjour'));
+
+    assert('…and leading the language question it is bilingual, English then French', () => {
+        const lead = onboardingIntroFor('en', 'language');
+        return lead.startsWith('Hi!') && lead.includes('\n\nBonjour !')
+            && onboardingIntroFor('fr', 'phone') === onboardingIntroFor('fr');
     });
 
     /**
@@ -850,11 +914,12 @@ function main(): void {
     const completion = completionFrom >= 0 ? stripComments(identity.slice(completionFrom)) : '';
     const completionCallSites = completionFrom >= 0 ? identity.slice(0, completionFrom) : '';
 
-    // Three: the onboarding route, the contact share, and the `yes:tos` Accept tap.
-    assert('the scan found setWelcomeReply, and the file still has all three call sites', () =>
+    // Four: the onboarding route, the contact share, the `yes:tos` Accept tap, and the
+    // `lang:<code>` tap (2026-10-02 — it answers onboarding's first question).
+    assert('the scan found setWelcomeReply, and the file still has all four call sites', () =>
         welcome.length > 0
         && completion.length > 0
-        && (completionCallSites.match(/setCompletionReply\(\s*req/g) ?? []).length === 3
+        && (completionCallSites.match(/setCompletionReply\(\s*req/g) ?? []).length === 4
         && (callSites.match(/setWelcomeReply\(req/g) ?? []).length === 1
         && /return;\s*\}\s*setWelcomeReply\(req/.test(completion));
 
@@ -874,7 +939,7 @@ function main(): void {
      * backfilled account.
      */
     assert('⛔ every call site fires on the TRANSITION (!wasComplete && …), never on the state', () =>
-        (identity.match(/if\s*\(!wasComplete\s*&&\s*isOnboardingComplete\([\s\S]{0,80}?setCompletionReply\(\s*req/g) ?? []).length === 3);
+        (identity.match(/if\s*\(!wasComplete\s*&&\s*isOnboardingComplete\([\s\S]{0,80}?setCompletionReply\(\s*req/g) ?? []).length === 4);
 
     assert('⛔ each `wasComplete` is read BEFORE its write, not after', () => {
         const stripped = stripComments(identity);
@@ -884,6 +949,77 @@ function main(): void {
             return readAt > 0 && readAt < at;
         });
     });
+
+    console.log('\n── The last reply shows what setup recorded (2026-10-03) ──');
+
+    /**
+     * Why it exists: asked for a name, a customer sometimes asks a question instead, and the
+     * question is saved AS the name. The review is how they see it.
+     */
+    const review = onboardingReviewFor({
+        name: 'How much is delivery?',
+        phone: '+237672745831',
+        email: null,
+        address: 'Rue 1.234, Douala',
+        language: 'fr',
+    }, 'fr');
+
+    assert('the review shows every recorded value back, verbatim — a question saved as a name is visible', () =>
+        review.includes('Nom: How much is delivery?')
+        && review.includes('Téléphone: +237672745831')
+        && review.includes('Adresse de livraison: Rue 1.234, Douala')
+        && review.includes('Langue: Français'));
+
+    assert('a declined value reads "not provided", never blank or null', () =>
+        review.includes('E-mail: non renseigné')
+        && !/null|undefined/.test(review));
+
+    assert('it ends by asking whether it is right, and says to just say what to change', () =>
+        review.trim().endsWith('dites-moi simplement quoi changer.'));
+
+    assert('a long address is clamped, so the message stays under WhatsApp\'s 1024-char body', () =>
+        onboardingReviewFor({ name: 'A', phone: null, email: null, address: 'x'.repeat(500), language: 'en' }, 'en')
+            .length < 400);
+
+    assert('⭐ BOTH completion branches are led by the review — the welcome and a held Bargain link', () => {
+        const code = stripComments(identity);
+        const completion = code.slice(code.indexOf('async function setCompletionReply('));
+        return completion.includes('const review = onboardingReviewFor(reviewFactsOf(customer), language);')
+            && completion.includes('setBotReply(req, { ...intent, text: `${review}\\n\\n${intent.text}` });')
+            && completion.includes('setWelcomeReply(req, language, review);');
+    });
+
+    console.log('\n── The first reply says setup comes first (2026-10-02) ──');
+
+    const identityCode = stripComments(identity);
+    const syncBody = identityCode.slice(
+        identityCode.indexOf('static sync = '),
+        identityCode.indexOf('static onboarding = '),
+    );
+
+    assert('the scan found the sync handler', () => syncBody.length > 200);
+
+    assert('⭐ the call that makes someone a customer leads with the intro — and no other call does', () =>
+        /outcome\.createdAccount \|\| outcome\.createdCustomerProfile\s*\?\s*leadWithIntro\(/.test(syncBody)
+        && (identityCode.match(/leadWithIntro\(req,/g) ?? []).length === 2);
+
+    assert('an anonymous Telegram turn leads with it too, over a checklist without `language`', () =>
+        syncBody.includes('records: anonymousOnboarding(new Date())')
+        && /const led = leadWithIntro\(req, dto,/.test(syncBody));
+
+    assert('the intro rides in `next.prompt` as well as the reply, and never goes out alone', () => {
+        const lead = identityCode.slice(identityCode.indexOf('function leadWithIntro('));
+        return /if \(!next\) \{\s*setOnboardingReply\(req, dto, language\);\s*return dto;/.test(lead)
+            && lead.includes('prompt: `${onboardingIntroFor(language, next.step)}\\n\\n${next.prompt}`');
+    });
+
+    assert('⛔ `lang:` has ONE owner — the identity stream, which can move setup on', () => {
+        const account = stripComments(read('modules/bot-surface/controllers/bot-account.controller.ts'));
+        return /lang: languageTap,/.test(identityCode) && !/\blang: setLanguageTap\b/.test(account);
+    });
+
+    assert('…and outside setup it is exactly the plain setter', () =>
+        /if \(!customer \|\| !pending\) \{\s*await setLanguageTap\(req, res, action\);\s*return;/.test(identityCode));
 
     console.log('\n── The account menu: eight rows, and every one of them goes somewhere ──');
 

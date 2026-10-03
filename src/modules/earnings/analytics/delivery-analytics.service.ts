@@ -97,10 +97,17 @@ export class DeliveryAnalyticsService {
                 .lean<{ _id: Id; shipment_id: Id }[]>(),
         ]);
         const shipmentOfCollection = new Map(collections.map((c) => [c._id.toString(), c.shipment_id]));
-        const snapshots = await ShipmentModel.find({ _id: { $in: collections.map((c) => c.shipment_id) } })
-            .select('delivery_fee_snapshot')
-            .lean<{ _id: Id; delivery_fee_snapshot?: number | null }[]>();
+        // Every shipment behind these rows, not only the COD ones: `agent_id` is the
+        // attribution fallback for a delivery that wrote NO agent row — a
+        // `monthly_salary` contract (cut 0 by design; the agency pays off-platform)
+        // or an unconfigured 0% split. Without it those runs vanish from `perAgent`.
+        const snapshots = await ShipmentModel.find({
+            _id: { $in: [...collections.map((c) => c.shipment_id), ...byType('shipment')] },
+        })
+            .select('delivery_fee_snapshot agent_id')
+            .lean<{ _id: Id; delivery_fee_snapshot?: number | null; agent_id?: Id | null }[]>();
         const snapshotOf = new Map(snapshots.map((s) => [s._id.toString(), s.delivery_fee_snapshot ?? null]));
+        const agentOfShipment = new Map(snapshots.map((s) => [s._id.toString(), s.agent_id ? s.agent_id.toString() : null]));
 
         const items: DeliveryEarning[] = own.map((r) => {
             const sib = siblings.filter((s) => s.source_type === r.source_type && s.source_id.equals(r.source_id));
@@ -113,7 +120,11 @@ export class DeliveryAnalyticsService {
             return {
                 sourceType: r.source_type as DeliveryEarning['sourceType'],
                 shipmentId: shipmentId ? shipmentId.toString() : null,
-                agentId: agentRow?.beneficiary_id ? agentRow.beneficiary_id.toString() : null,
+                agentId: agentRow?.beneficiary_id
+                    ? agentRow.beneficiary_id.toString()
+                    : shipmentId
+                      ? agentOfShipment.get(shipmentId.toString()) ?? null
+                      : null,
                 agencyNet,
                 agentCut,
                 codFee: codFeeOf(r.source_type, agencyNet, agentCut, shipmentId ? snapshotOf.get(shipmentId.toString()) ?? null : null),

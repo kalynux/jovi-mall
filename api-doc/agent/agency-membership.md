@@ -297,7 +297,7 @@ counterparty fields — `agencyName`, `agencyCountry`, `agencyCoverageAreas`, `a
       "employment": { "employmentType": "contractor", "employeeRef": null, "startedAt": null, "endsAt": null },
       "remittanceTerms": { "cadence": "daily", "dayOfWeek": null, "dayOfMonth": null, "graceHours": 24 },
       "coverage": { "regions": ["littoral"], "area": null },
-      "feeSplit": { "model": "percentage", "agentSharePercent": 70, "agentFlatFee": null, "currency": "XAF" },
+      "feeSplit": { "model": "percentage", "agentSharePercent": 70, "agentFlatFee": null, "agentMonthlySalary": null, "currency": "XAF" },
       "shipmentValueCeiling": null,
       "codThreshold": 200000,
       "codOutstandingBalance": 45000,
@@ -330,6 +330,15 @@ Field meanings are in the
   negotiated terms travel with it: `remittanceTerms` (how often you settle their cash),
   `coverage` (the zone this contract covers) and `shipmentValueCeiling` (the most one shipment may
   be worth under it, `null` = uncapped).
+- `feeSplit.model` has **three** values: `percentage` (`agentSharePercent` of each fee), `flat`
+  (`agentFlatFee` per delivery) and **`monthly_salary`** (`agentMonthlySalary`, minor units per
+  month). Only the amount matching `model` is meaningful. Under `monthly_salary` **the agency pays
+  your salary directly, outside Wi-Mall**: the platform pays you `0` per delivery (your offers and
+  shipments show `earning.amount: 0`, `basis: "contract_salary"` and an `earning.salary` block),
+  credits nothing to your earnings balance for that agency's runs, and does **not** track whether
+  the salary was paid. The figure is stored so you and the agency both see what you agreed. You
+  can ask for it when applying (`terms.fee_split: { "model": "monthly_salary",
+  "agent_monthly_salary": 150000 }`), counter with it, or propose it on a live contract.
 - `codThreshold` is **that agency's** slice of your global COD pool (minor units), not an
   independent cap. It is a `number` defaulting to `0` — `0` means they have granted you no COD
   headroom at all. The sum across your allocating contracts can never exceed your own
@@ -802,7 +811,7 @@ been proposed at all.
 
 | Term group | You may propose | Meaning |
 |---|---|---|
-| `fee_split` | **yes** | Your cut per delivery — percentage of the delivery fee, or a flat amount |
+| `fee_split` | **yes** | How you are paid — a percentage of each delivery fee, a flat amount per delivery, or (since 2026-10-02) a **monthly salary** paid by the agency itself (see below) |
 | `coverage` | **yes** | The regions you will work under this contract — **picked** from the agency's country, see [above](#coverage-regions-are-picked-not-typed) |
 | `remittance_terms` | no | How often you settle their COD cash, and the grace period. You accept or refuse |
 | `shipment_value_ceiling` | no | The most they will trust you with in one parcel. You accept or refuse |

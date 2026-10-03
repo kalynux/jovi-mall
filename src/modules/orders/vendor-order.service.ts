@@ -10,8 +10,12 @@ import { eventBus } from '../../core/events/event-bus';
 import { CustomerModel } from '../customers/customer.model';
 import { COLLECTIONS } from '../../core/database/collections';
 import { ShipmentRepository } from '../shipments/shipment.repository';
+import { ShipmentModel } from '../shipments/shipment.model';
 import { ShipmentService } from '../shipments/shipment.service';
+import { deliveryFeeProposalService } from '../delivery-fee-proposals/services/delivery-fee-proposal.service';
 import { OrderService } from './order.service';
+import { codLimitsService } from '../cod/services/cod-limits.service';
+import { CodLimitBreach } from '../cod/domain/cod-limits';
 import { IProductRepository } from '../catalog/repositories/interfaces/product.repository.interface';
 import { ProductRepositoryMongo } from '../catalog/repositories/mongo/product.repository.mongo';
 import { FileRepositoryMongo } from '../catalog/repositories/mongo/file.repository.mongo';
@@ -93,6 +97,15 @@ export class VendorOrderService {
         const uniqueCustomerIds = [...new Set(result.data.map(o => o.customer_id.toString()))];
         const customerMap = await this._batchResolveCustomers(uniqueCustomerIds);
 
+        // Orders with a shipment held back by the COD-limit gate (2026-10-02) — one query
+        // for the page, so the list can badge them without opening each order.
+        const heldOrderIds = new Set(
+            (await ShipmentModel.find(
+                { order_id: { $in: result.data.map(o => o._id) }, cod_limit_hold: { $ne: null } },
+                { order_id: 1 }
+            ).lean().exec()).map((s: any) => String(s.order_id))
+        );
+
         // Transform to DTO
         const dtoData = result.data.map(order => {
             const customerId = order.customer_id.toString();
@@ -123,7 +136,11 @@ export class VendorOrderService {
                 paymentStatus: order.payment_status,
 
                 // Item count
-                itemCount: order.items.length
+                itemCount: order.items.length,
+
+                // A shipment of this order is held back by a COD limit — see the detail's
+                // `items[].delivery.codLimitHold` for which and why.
+                codLimitHeld: heldOrderIds.has(order._id.toString())
             };
         });
 
@@ -232,6 +249,13 @@ export class VendorOrderService {
             // Merged multi-agency status timeline (every shipment's history,
             // labeled by agency, chronological). Empty for digital orders.
             deliveryTimeline,
+
+            // Delivery-fee proposals on this order's shipments, newest first — a pending one
+            // carries `availableActions: ['approve','reject']` and blocks that shipment's
+            // pickup until answered (modules/delivery-fee-proposals). [] for digital orders.
+            deliveryFeeProposals: order.order_type === 'physical'
+                ? await deliveryFeeProposalService.listForOrderUnchecked(orderId)
+                : [],
 
             // Vendor-internal notes
             notes: notes.map(note => ({
@@ -355,7 +379,30 @@ export class VendorOrderService {
                         rejectedAt: shipment.rejection.rejectedAt ?? null
                     }
                     : null,
-                freeDelivery: deliveryData.free_delivery ?? false
+                freeDelivery: deliveryData.free_delivery ?? false,
+                // COD limits (2026-10-02). `codLimitHold`: why auto-redirect left this
+                // shipment pending — dispatch it with `force: true` or wait for the agency
+                // to remit. `codLimitForce`: a limit was overridden, by whom and when.
+                codLimitHold: shipment?.cod_limit_hold
+                    ? {
+                        kind: shipment.cod_limit_hold.kind,
+                        currentExposure: shipment.cod_limit_hold.current,
+                        additionalAmount: shipment.cod_limit_hold.additional,
+                        limit: shipment.cod_limit_hold.limit,
+                        evaluatedAt: shipment.cod_limit_hold.evaluated_at,
+                    }
+                    : null,
+                codLimitForce: shipment?.cod_limit_force
+                    ? {
+                        kind: shipment.cod_limit_force.kind,
+                        forcedByUserId: shipment.cod_limit_force.forced_by_user_id ?? null,
+                        forcedByRole: shipment.cod_limit_force.forced_by_role,
+                        forcedAt: shipment.cod_limit_force.forced_at,
+                        currentExposure: shipment.cod_limit_force.current,
+                        additionalAmount: shipment.cod_limit_force.additional,
+                        limit: shipment.cod_limit_force.limit,
+                    }
+                    : null
             });
         }
 
@@ -664,24 +711,30 @@ export class VendorOrderService {
      */
     async bulkDispatchToAgency(
         orderIds: string[],
-        vendorId: string
+        vendorId: string,
+        opts: { force?: boolean; userId?: string | null } = {}
     ): Promise<{
         total: number;
         succeeded: { orderId: string; dispatchedShipments: number }[];
-        failed: { orderId: string; code: string; reason: string }[];
+        failed: { orderId: string; code: string; reason: string; details?: unknown }[];
     }> {
         const succeeded: { orderId: string; dispatchedShipments: number }[] = [];
-        const failed: { orderId: string; code: string; reason: string }[] = [];
+        const failed: { orderId: string; code: string; reason: string; details?: unknown }[] = [];
 
+        // Sequential on purpose: each dispatch commits before the next is evaluated, so the
+        // COD-limit gate (2026-10-02) sees the cash the previous order just handed over.
         for (const orderId of orderIds) {
             try {
-                const result = await this.dispatchToAgency(orderId, vendorId);
+                const result = await this.dispatchToAgency(orderId, vendorId, opts);
                 succeeded.push({ orderId, dispatchedShipments: result.dispatchedShipments });
             } catch (err: any) {
                 failed.push({
                     orderId,
                     code: err.code || 'UNKNOWN_ERROR',
-                    reason: err.message || 'Unknown error'
+                    reason: err.message || 'Unknown error',
+                    // Additive (2026-10-02): a COD-limit refusal carries its numbers, so a
+                    // dashboard can offer "dispatch anyway" without re-asking per order.
+                    ...(err.code === ERROR_CODES.COD_AGENCY_LIMIT_EXCEEDED && err.details ? { details: err.details } : {}),
                 });
             }
         }
@@ -700,13 +753,21 @@ export class VendorOrderService {
      * actual dispatch logic is shared with the payment-webhook auto-dispatch
      * path via OrderService.dispatchToAgency.
      */
-    async dispatchToAgency(orderId: string, vendorId: string): Promise<any> {
+    async dispatchToAgency(
+        orderId: string,
+        vendorId: string,
+        opts: { force?: boolean; userId?: string | null } = {}
+    ): Promise<any> {
         const owned = await this.vendorOrderRepo.findByIdAndVendor(orderId, vendorId);
         if (!owned) {
             throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404);
         }
 
-        const dispatchedShipments = await this.orderService.dispatchToAgency(orderId, { type: 'vendor', id: vendorId });
+        const dispatchedShipments = await this.orderService.dispatchToAgency(
+            orderId,
+            { type: 'vendor', id: vendorId },
+            { force: opts.force === true, forcedBy: { userId: opts.userId ?? null, role: 'vendor' } }
+        );
 
         return {
             ...(await this.getOrderDetails(orderId, vendorId)),
@@ -927,7 +988,18 @@ export class VendorOrderService {
         orderId: string,
         vendorId: string,
         itemId: string,
-        deliveryAgencyId: string
+        deliveryAgencyId: string,
+        opts: {
+            force?: boolean;
+            userId?: string | null;
+            /**
+             * Who is moving the item, when it is not the vendor. An ADMINISTRATOR moves items
+             * through here (`POST /api/internal/admin/shipments/:id/move-agency`) with the
+             * order's own `vendorId` resolved from the record — so the ownership scope is a
+             * tautology, and only the attribution differs.
+             */
+            actor?: { type: 'admin'; id: string | null; name?: string | null; reason?: string | null } | null;
+        } = {}
     ): Promise<any> {
         // 1. Validate order ownership and type
         const order = await this.vendorOrderRepo.findByIdAndVendor(orderId, vendorId);
@@ -998,6 +1070,26 @@ export class VendorOrderService {
         );
         const agencyName = magazinDoc?.name || null;
 
+        // 5b. The COD-limit gate (owner decision 2026-10-02) — the same one dispatch runs.
+        //     Moving a COD item adds its cash to the destination agency's custody (now, if
+        //     the destination shipment is already dispatched; at dispatch otherwise, where it
+        //     is gated again). Refused with 422 COD_AGENCY_LIMIT_EXCEEDED unless `force`.
+        //     ⚠ NOT checked here, and deliberately left alone: whether the vendor has an
+        //     ACTIVE connection with the destination agency (a pre-existing gap).
+        let forcedBreach: CodLimitBreach | null = null;
+        if (order.payment_method === 'cash_on_delivery') {
+            const [verdict] = await codLimitsService.evaluateHandoffs([{
+                shipmentId: `item:${itemId}`,
+                agencyId: deliveryAgencyId,
+                vendorId,
+                amount: (item.price ?? 0) * (item.quantity ?? 0),
+            }], { force: opts.force === true });
+            if (verdict.breach) {
+                if (opts.force !== true) throw codLimitsService.limitExceededError(verdict);
+                forcedBreach = verdict.breach;
+            }
+        }
+
         // 6. Move the item between agency shipments (the dispatch source of truth).
         //    Reuse the destination agency's open shipment for this order if one
         //    exists, otherwise create a fresh one.
@@ -1021,6 +1113,34 @@ export class VendorOrderService {
                     quantity: item.quantity
                 }]
             });
+        }
+
+        if (forcedBreach) {
+            await codLimitsService.markForced(destShipment._id!.toString(), forcedBreach, {
+                userId: opts.actor ? opts.actor.id : (opts.userId ?? null),
+                role: opts.actor ? opts.actor.type : 'vendor',
+            });
+            // Tell the destination agency (`shipment.cod_limit.forced`) — but only when the
+            // item landed on a shipment it can already SEE. A `pending` destination is not on
+            // the agency's list yet (GET /agency/shipments excludes it), so a link there would
+            // 404; that shipment is gated — and, if forced, announced — again at dispatch.
+            if (destShipment.status !== 'pending') {
+                void eventBus.publish('shipment.cod_limit_forced', {
+                    eventType: 'shipment.cod_limit_forced',
+                    aggregateId: destShipment._id!.toString(),
+                    occurredAt: new Date(),
+                    payload: {
+                        shipmentId: destShipment._id!.toString(),
+                        agencyId: deliveryAgencyId,
+                        vendorId,
+                        orderId,
+                        orderNumber: order.order_number,
+                        kind: forcedBreach.kind,
+                        amount: forcedBreach.additionalAmount,
+                        currency: order.currency ?? null,
+                    },
+                }).catch((err) => console.error('[VendorOrderService] shipment.cod_limit_forced emit failed:', err));
+            }
         }
 
         // Detach the item from its previous shipment (deletes it if now empty).
@@ -1054,10 +1174,13 @@ export class VendorOrderService {
                 newAgencyId: deliveryAgencyId,
                 agencyName: agencyName || 'Unknown',
                 previousAgencyId,
-                shipmentId: destShipment._id!.toString()
+                shipmentId: destShipment._id!.toString(),
+                ...(opts.actor
+                    ? { actorName: opts.actor.name ?? null, reason: opts.actor.reason ?? null, forced: opts.force === true }
+                    : {})
             },
-            actorType: 'vendor',
-            actorId: vendorId
+            actorType: opts.actor ? opts.actor.type : 'vendor',
+            actorId: opts.actor ? opts.actor.id : vendorId
         });
 
         // 9. Return updated order

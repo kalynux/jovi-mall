@@ -1,6 +1,7 @@
 import type { BotSyncDto } from '../dto/bot-projections';
 import { acceptTermsActionId, skipActionId } from './bot-action-id';
 import { botChrome } from './bot-chrome-copy';
+import { languageChoiceIntent } from './language-choice';
 import type { BotReplyIntent } from './channel-reply';
 
 /** The next setup question, as `toBotSyncDto` words it. Null once the checklist is finished. */
@@ -24,6 +25,12 @@ export type BotOnboardingNextDto = BotSyncDto['onboarding']['next'];
  */
 export function onboardingReplyIntent(next: BotOnboardingNextDto, language: string | null): BotReplyIntent | null {
     if (!next) return null;
+
+    if (next.step === 'language') {
+        // The first question for a new account: the same picker the account menu draws, so a
+        // tap here and a tap there are one `lang:<code>` token answered by one handler.
+        return languageChoiceIntent(next.prompt, language);
+    }
 
     if (next.requestContact) {
         // The phone step. A verified contact is its own control, and it is never skippable.

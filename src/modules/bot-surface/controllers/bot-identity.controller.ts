@@ -25,7 +25,10 @@ import {
     BotRegistrationOutcome,
     currentRecords,
 } from '../services/bot-registration.service';
-import { BotOnboardingRecord, isOnboardingComplete, seedOnboarding } from '../domain/bot-onboarding';
+import { anonymousOnboarding, BotOnboardingRecord, isOnboardingComplete } from '../domain/bot-onboarding';
+import { onboardingIntroFor } from '../domain/bot-onboarding-copy';
+import { onboardingReviewFor, type OnboardingReviewFacts } from '../domain/onboarding-review';
+import { SUPPORTED_LANGUAGES } from '../../../core/constants/languages';
 import { sealBotIdentity } from '../domain/bot-identity-token';
 import { BotSyncDto, toBotIdentityDto, toBotSyncDto } from '../dto/bot-projections';
 import { setBotReply } from '../middlewares/bot-reply.middleware';
@@ -36,7 +39,7 @@ import { replyForHeldBargain } from '../services/bargain-entry.service';
 import { supportFormActionId } from '../domain/bot-ticket-actions';
 import { BotActionHandlers, ParsedBotAction, unknownBotAction } from '../domain/bot-action-dispatch';
 import { BotIdentitySyncSchema, BotOnboardingSubmitSchema } from '../validators/bot.validators';
-import { __toSavedAddressInput as toSavedAddressInput } from './bot-profile.controller';
+import { __toSavedAddressInput as toSavedAddressInput, setLanguageTap } from './bot-profile.controller';
 
 const customerRepository = new CustomerRepository();
 const customerProfileService = new CustomerProfileService();
@@ -158,7 +161,9 @@ export class BotIdentityController {
                 isNew: false,
                 upgraded: false,
                 customer: null,
-                records: seedOnboarding([], new Date()),
+                // Without `language`: there is no account to hold the answer yet, so the
+                // contact share stays the first question (see `anonymousOnboarding`).
+                records: anonymousOnboarding(new Date()),
                 channel: envelope.channel,
                 // The envelope hint is all we know — there is no profile yet. That is why
                 // the transport should forward Telegram's `from.language_code`: it is the
@@ -166,12 +171,25 @@ export class BotIdentityController {
                 language: envelope.language ?? null,
             });
             // The turn this whole route exists for. `describe` covers every other branch.
-            setOnboardingReply(req, dto, envelope.language ?? null);
-            sendSuccess(res, dto);
+            // ⚠ Led by the intro on EVERY anonymous turn, not only the first: until the contact
+            // is shared the platform cannot tell a first message from a fifth, and "setup comes
+            // first" stays true for as long as this branch is the one answering.
+            const led = leadWithIntro(req, dto, envelope.language ?? null);
+            sendSuccess(res, led);
             return;
         }
 
-        const dto = await describe(req, outcome);
+        /**
+         * ⭐ **The very first reply says that setup comes first** (owner, 2026-10-02). A new
+         * customer's first message is usually a request — a price, a product — and answering it
+         * with a bare setup question reads as being ignored. The lead says the request is kept
+         * and will be answered after; n8n's first-message carry is what keeps that promise.
+         * Only on the call that made this person a customer: every later turn just asks.
+         */
+        const described = await describe(req, outcome);
+        const dto = outcome.createdAccount || outcome.createdCustomerProfile
+            ? leadWithIntro(req, described, outcome.customer.preferences?.language ?? null)
+            : described;
 
         /**
          * ⚠ **Only here, never in `describe`** — the onboarding route shares that and must not
@@ -270,6 +288,7 @@ export class BotIdentityController {
                     req,
                     { owner: outcome.account.userId, channel: envelope.channel, externalId: envelope.externalId },
                     outcome.customer.preferences?.language ?? null,
+                    outcome.customer,
                 );
             }
 
@@ -337,7 +356,7 @@ export class BotIdentityController {
             customer,
             step,
             input.action,
-            { name: input.name, email: input.email },
+            { name: input.name, email: input.email, language: input.language },
             envelope.channel,
         );
 
@@ -360,6 +379,7 @@ export class BotIdentityController {
                 req,
                 { owner: caller.userId, channel: envelope.channel, externalId: envelope.externalId },
                 updated.preferences?.language ?? null,
+                updated,
             );
         }
 
@@ -413,6 +433,7 @@ async function acceptTermsTap(req: Request, res: Response, action: ParsedBotActi
             req,
             { owner: caller.userId, channel: envelope.channel, externalId: envelope.externalId },
             updated.preferences?.language ?? null,
+            updated,
         );
     }
 
@@ -422,7 +443,67 @@ async function acceptTermsTap(req: Request, res: Response, action: ParsedBotActi
 /** The identity stream's taps. Registered in `bot-action.controller.ts`. */
 export const IDENTITY_ACTION_HANDLERS: BotActionHandlers = Object.freeze({
     'yes:tos': acceptTermsTap,
+    /**
+     * ⚠ **Moved here from the account stream** (2026-10-02), because the same tap now answers
+     * two questions: the account menu's "which language?" and onboarding's FIRST question. Only
+     * this file can answer the second — it needs `describe` to ask the next step — and the
+     * dispatcher allows one owner per key. Outside onboarding it is exactly `setLanguageTap`.
+     */
+    lang: languageTap,
 });
+
+/**
+ * `lang:<code>` — set the language, and if setup is waiting on it, move setup on.
+ *
+ * ⚠ **The step is answered only while it is `pending`.** A customer who taps an old picker
+ * after setup finished is changing their language, which is `setLanguageTap`'s confirmation;
+ * re-answering a provided step would re-stamp its row and could re-send the welcome.
+ *
+ * The next question comes back in the language just CHOSEN: `describe` reads the updated
+ * profile, which is the whole point of asking this first.
+ */
+async function languageTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    const caller = botCallerOf(req);
+    const customer = await customerRepository.findById(caller.customerId);
+    const pending = customer
+        ? currentRecords(customer).find((row) => row.step === 'language')?.state === 'pending'
+        : false;
+
+    if (!customer || !pending) {
+        await setLanguageTap(req, res, action);
+        return;
+    }
+    if (!(SUPPORTED_LANGUAGES as readonly string[]).includes(action.argument)) throw unknownBotAction();
+
+    const envelope = botEnvelopeOf(req);
+    const wasComplete = isOnboardingComplete(currentRecords(customer));
+    const updated = await botRegistrationService.applyStep(
+        customer,
+        'language',
+        'provide',
+        { language: action.argument },
+        envelope.channel,
+    );
+
+    const dto = await describe(req, {
+        account: { ...caller, customerId: caller.customerId, roles: [] },
+        createdAccount: false,
+        createdCustomerProfile: false,
+        customer: updated,
+    });
+
+    // After `describe`, for the reason given in `onboarding` above.
+    if (!wasComplete && isOnboardingComplete(currentRecords(updated))) {
+        await setCompletionReply(
+            req,
+            { owner: caller.userId, channel: envelope.channel, externalId: envelope.externalId },
+            updated.preferences?.language ?? null,
+            updated,
+        );
+    }
+
+    sendSuccess(res, dto);
+}
 
 /**
  * The shared response body for every registration and onboarding turn.
@@ -574,10 +655,11 @@ async function recentlySentTo(owner: PendingQuestionOwner): Promise<BotRecentlyS
  * WhatsApp's cap on reply buttons — a fourth would be dropped silently by the renderer.
  * `ord:list` and `tkt:new` belong to the orders stream and are agreed with it.
  */
-function setWelcomeReply(req: Request, language: string | null): void {
+function setWelcomeReply(req: Request, language: string | null, lead: string): void {
     setBotReply(req, {
         kind: 'text',
-        text: botChrome('welcomePrompt', language),
+        // The review of what setup recorded comes first — see `setCompletionReply`.
+        text: `${lead}\n\n${botChrome('welcomePrompt', language)}`,
         actions: [
             { id: openSurfaceActionId('pl'), label: botChrome('browseProductsButton', language) },
             /**
@@ -601,6 +683,31 @@ function setOnboardingReply(req: Request, dto: BotSyncDto, language: string | nu
 }
 
 /**
+ * The same turn, with the first-contact lead in front of the setup question.
+ *
+ * Written into `next.prompt` as well as the reply, because both are relayable and a caller
+ * reading either must get the whole message. A finished checklist has no question to lead, so
+ * it is returned unchanged — the intro never goes out on its own.
+ */
+function leadWithIntro(req: Request, dto: BotSyncDto, language: string | null): BotSyncDto {
+    const next = dto.onboarding.next;
+    if (!next) {
+        setOnboardingReply(req, dto, language);
+        return dto;
+    }
+
+    const led: BotSyncDto = {
+        ...dto,
+        onboarding: {
+            ...dto.onboarding,
+            next: { ...next, prompt: `${onboardingIntroFor(language, next.step)}\n\n${next.prompt}` },
+        },
+    };
+    setOnboardingReply(req, led, language);
+    return led;
+}
+
+/**
  * The reply on the turn that COMPLETES the checklist: the welcome, unless the customer arrived
  * through the website's Bargain link.
  *
@@ -616,11 +723,33 @@ async function setCompletionReply(
     req: Request,
     conversation: { owner: string; channel: MessagingChannel; externalId: string },
     language: string | null,
+    customer: ICustomer,
 ): Promise<void> {
+    /**
+     * ⭐ **Led by the review of what setup recorded** (owner, 2026-10-03), on both branches. A
+     * chat cannot stop a customer asking a question when asked for their name, and that question
+     * is then saved AS their name; showing every value back once is how a wrong one gets seen.
+     * Correcting it is the assistant's job, with the profile tools — this turn is recorded in
+     * `recentlySent`, so the assistant can see what is being corrected.
+     */
+    const review = onboardingReviewFor(reviewFactsOf(customer), language);
     const intent = await replyForHeldBargain(conversation, language);
     if (intent) {
-        setBotReply(req, intent);
+        setBotReply(req, { ...intent, text: `${review}\n\n${intent.text}` });
         return;
     }
-    setWelcomeReply(req, language);
+    setWelcomeReply(req, language, review);
+}
+
+/** The values the review shows, read off the profile the completing call already holds. */
+function reviewFactsOf(customer: ICustomer): OnboardingReviewFacts {
+    const addresses = customer.saved_addresses ?? [];
+    const address = addresses.find((a) => a.is_default) ?? addresses[0] ?? null;
+    return {
+        name: customer.name ?? null,
+        phone: customer.phone ?? null,
+        email: customer.email ?? null,
+        address: address ? [address.address_line1, address.city].filter(Boolean).join(', ') : null,
+        language: customer.preferences?.language ?? null,
+    };
 }

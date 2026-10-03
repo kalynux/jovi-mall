@@ -44,6 +44,8 @@ export type IntegrationKey =
     | 'notchpay'
     | 'mycoolpay'
     | 'campay'
+    | 'cinetpay'
+    | 'fapshi'
     | 'google_calendar'
     | 'wi_admin';
 
@@ -194,6 +196,26 @@ export const INTEGRATION_CATALOG: readonly IntegrationSpec[] = Object.freeze([
             'Same as NotchPay. `configured` requires the WEBHOOK key as well as a calling '
             + 'credential: without it every callback is refused and settlement rests on the '
             + 'reconciliation sweep alone.',
+    },
+    {
+        key: 'cinetpay',
+        label: 'CinetPay (mobile money)',
+        impact: 'Mobile-money collection through CinetPay stops, and so do CinetPay payouts when it is the payout aggregator. Refunds are unaffected: CinetPay has no refund API in v1, so they go through the manual-payout ticket either way',
+        reachability: 'passive',
+        reachabilityNote:
+            'Same as NotchPay. `configured` requires a notify URL as well as the key and '
+            + 'password: CinetPay takes the callback URL on every request, so without one no '
+            + 'notification ever arrives and settlement rests on the reconciliation sweep alone.',
+    },
+    {
+        key: 'fapshi',
+        label: 'Fapshi (mobile money)',
+        impact: 'Mobile-money collection through Fapshi stops, and so do Fapshi payouts when it is the payout aggregator. Refunds are unaffected: Fapshi has no refund API, so they go through the manual-payout ticket either way',
+        reachability: 'passive',
+        reachabilityNote:
+            'Same as NotchPay. `configured` requires the WEBHOOK secret as well as the collection '
+            + 'pair: without it every callback is refused, and Fapshi sends each callback once, so '
+            + 'settlement rests on the reconciliation sweep alone.',
     },
     {
         key: 'google_calendar',

@@ -90,9 +90,9 @@ export interface ThresholdAllocation {
  * write 0 now and come back after the verdict. The slice gives them nothing
  * meanwhile: `CodExposureService` refuses every COD shipment to an unverified
  * agent on KYC before it reads any limit. On verification the pool opens to
- * the plan value, and if the dormant slices sum to more than that, the
+ * the platform default, and if the dormant slices sum to more than that, the
  * exposure gate binds at the pool (`poolBinds`) and `overAllocatedBy` reports
- * it — the same state a plan downgrade already produces.
+ * it — the same state a lowered pin already produces.
  */
 export class AgentCodThresholdService {
   constructor(
@@ -186,7 +186,7 @@ export class AgentCodThresholdService {
         headroom,
         shortfall: threshold - headroom,
         hint:
-          'The agent\'s COD pool has no room for this. Their pool comes from their plan once their identity '
+          'The agent\'s COD pool has no room for this. Their pool is the platform default (500 000) once their identity '
           + 'is verified (they may also have chosen to carry less); otherwise another contract must free capacity.',
       });
     }

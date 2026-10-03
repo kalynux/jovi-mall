@@ -96,8 +96,8 @@ function attachRoutes(router: Router): Router {
     /**
      * PUT /:agentId/cod-threshold
      * Body: { maxThreshold: number | null, reason } — PINS the agent's whole COD pool
-     * (which every contract sub-allocates from), replacing their plan's value until
-     * released with `null`. The pool is otherwise plan × KYC (2026-09-21). Leaving it
+     * (which every contract sub-allocates from), replacing the platform default (500 000) until
+     * released with `null`. The pool is otherwise KYC × the default (2026-10-02; it was plan × KYC from 2026-09-21). Leaving it
      * below what is already allocated is rejected, on release as well.
      */
     router.put('/:agentId/cod-threshold', AdminAgentController.setCodThreshold);

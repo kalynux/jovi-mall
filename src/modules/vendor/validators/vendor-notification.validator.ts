@@ -53,7 +53,9 @@ export const UpdateNotificationPreferencesSchema = z.object({
         connectionUpdated: z.boolean().optional(),
         payoutUpdates: z.boolean().optional(),
         shipmentRejected: z.boolean().optional(),
-        agencyStorageUpdates: z.boolean().optional()
+        agencyStorageUpdates: z.boolean().optional(),
+        codLimitUpdates: z.boolean().optional(),
+        deliveryFeeProposals: z.boolean().optional()
     }).optional()
 });
 

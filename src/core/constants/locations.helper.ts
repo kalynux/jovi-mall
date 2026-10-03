@@ -14,6 +14,11 @@ import { ERROR_CODES } from '../error-codes';
 
 interface RegionEntry {
   name: Record<string, string>;
+  /**
+   * Other spellings geocoders and people use for this region — "Adamawa", "Center",
+   * "Extreme North". Matching only; never displayed.
+   */
+  aliases?: string[];
   cities?: string[];
 }
 interface CountryEntry {
@@ -100,12 +105,59 @@ export function normalizeRegionToken(raw: string | null | undefined): string {
 }
 
 /**
+ * Filler a region name carries around its actual name. Geocoders say "Centre
+ * Region", "Région du Centre", "Région de l'Extrême-Nord", "Littoral Province";
+ * the region is the word that is left once these are gone.
+ *
+ * ⚠ Matching only. Before this existed, "Centre Region" folded to `centre-region`,
+ * matched no key and no name, and an agency whose contract covered `centre`
+ * could never be offered a delivery in Yaoundé.
+ */
+const REGION_FILLER_WORDS = new Set([
+  'region', 'province', 'state', 'departement', 'department',
+  'du', 'de', 'des', 'la', 'le', 'l', 'd', 'of', 'the',
+]);
+
+/**
+ * The form two spellings of one region share: accent-stripped, filler words
+ * dropped, every separator gone. `Région de l'Extrême-Nord` → `extremenord`,
+ * `Centre Region` → `centre`, `North-West` and `North West` → `northwest`.
+ * Empty when nothing but filler was given. Pure.
+ */
+export function compactRegionToken(raw: string | null | undefined): string {
+  if (!raw) return '';
+  return raw
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length > 0 && !REGION_FILLER_WORDS.has(word))
+    .join('');
+}
+
+/** Every compact spelling that names this region: its key, its localized names, its aliases. */
+function regionSpellings(key: string, region: RegionEntry): string[] {
+  return [key, ...Object.values(region.name), ...(region.aliases ?? [])].map(compactRegionToken);
+}
+
+/** The key of the region in `entry` that `raw` names, or null. */
+function findRegionIn(entry: CountryEntry, raw: string | null | undefined): string | null {
+  const compact = compactRegionToken(raw);
+  if (!compact) return null;
+  for (const [key, region] of Object.entries(entry.regions)) {
+    if (regionSpellings(key, region).includes(compact)) return key;
+  }
+  return null;
+}
+
+/**
  * Resolve a free-text region to its canonical key, if it names one.
  *
- * Tries, in order: the normalized token as a key of the given country; the
- * token against each of that country's LOCALIZED names (so the French
- * "Extrême-Nord" and the English "Far North" resolve to the same key); then,
- * when no country is known, the same two passes across every country.
+ * Matches the region's key, each of its LOCALIZED names (so the French
+ * "Extrême-Nord" and the English "Far North" resolve to the same key) and its
+ * aliases, all compared through {@link compactRegionToken} — so "Centre Region",
+ * "Région du Centre" and "Center" all resolve to `centre`. Scoped to the given
+ * country; when none is known, every country is searched.
  *
  * Returns the normalized token itself when nothing matches, rather than null.
  * That is deliberate: two unrecognised free-text strings should still compare
@@ -119,22 +171,64 @@ export function resolveRegionKey(
   const token = normalizeRegionToken(raw);
   if (!token) return '';
 
-  const searchIn = (entry: CountryEntry): string | null => {
-    for (const [key, region] of Object.entries(entry.regions)) {
-      if (normalizeRegionToken(key) === token) return key;
-      for (const localized of Object.values(region.name)) {
-        if (normalizeRegionToken(localized) === token) return key;
-      }
-    }
-    return null;
-  };
-
   const scoped = countryCode ? COUNTRIES[countryCode.toLowerCase()] : undefined;
-  if (scoped) return searchIn(scoped) ?? token;
+  if (scoped) return findRegionIn(scoped, raw) ?? token;
 
   for (const entry of Object.values(COUNTRIES)) {
-    const hit = searchIn(entry);
+    const hit = findRegionIn(entry, raw);
     if (hit) return hit;
   }
   return token;
+}
+
+/** Whether the locations dataset lists regions for this ISO-2 country. */
+export function isKnownCountry(countryCode: string | null | undefined): boolean {
+  return !!countryCode && !!COUNTRIES[countryCode.toLowerCase()];
+}
+
+/**
+ * The region key `raw` names in this country, or null when it names none.
+ *
+ * Unlike {@link resolveRegionKey}, which falls back to the token so free text can
+ * still compare against free text, this answers the strict question an address
+ * write asks: is this one of the country's regions?
+ */
+export function matchCountryRegion(
+  raw: string | null | undefined,
+  countryCode: string | null | undefined
+): string | null {
+  const entry = countryCode ? COUNTRIES[countryCode.toLowerCase()] : undefined;
+  return entry ? findRegionIn(entry, raw) : null;
+}
+
+/**
+ * The region key whose city list contains `city`, or null. The fallback when a
+ * geocoder returned no region, or one that names nothing: Yaoundé is in `centre`
+ * whatever the provider called the region around it.
+ */
+export function regionKeyForCity(
+  city: string | null | undefined,
+  countryCode: string | null | undefined
+): string | null {
+  const entry = countryCode ? COUNTRIES[countryCode.toLowerCase()] : undefined;
+  const compact = compactRegionToken(city);
+  if (!entry || !compact) return null;
+  for (const [key, region] of Object.entries(entry.regions)) {
+    if ((region.cities ?? []).some((c) => compactRegionToken(c) === compact)) return key;
+  }
+  return null;
+}
+
+/** A region's display name in `locale`, falling back to English, then to the key. */
+export function regionDisplayName(key: string, countryCode: string, locale = 'en'): string {
+  const region = COUNTRIES[countryCode.toLowerCase()]?.regions[key];
+  return region?.name[locale] ?? region?.name.en ?? key;
+}
+
+/** A country's regions as `{ key, name }`, for an error a client can build a picker from. */
+export function listCountryRegions(
+  countryCode: string | null | undefined
+): Array<{ key: string; name: Record<string, string> }> {
+  const entry = countryCode ? COUNTRIES[countryCode.toLowerCase()] : undefined;
+  return entry ? Object.entries(entry.regions).map(([key, r]) => ({ key, name: r.name })) : [];
 }

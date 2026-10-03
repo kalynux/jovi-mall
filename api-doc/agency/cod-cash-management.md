@@ -127,6 +127,37 @@ balance reaches zero.
 ---
 
 <a name="record-deposit"></a>
+### GET /api/agency/cod/limit
+
+**(2026-10-02)** Your agency's COD cash limit and what you hold against it. The platform lets an
+agency hold at most **1 000 000 XAF** of cash on delivery that has not yet reached the platform,
+unless an administrator set another amount for you.
+
+```json
+{
+  "success": true,
+  "data": {
+    "agencyId": "66a1…",
+    "limit": 1000000,
+    "source": "default",
+    "defaultLimit": 1000000,
+    "exposure": { "inFlight": 420000, "inFlightCount": 6, "collectedUnremitted": 310000, "collectedCount": 4, "total": 730000 },
+    "headroom": 270000,
+    "overLimit": false
+  }
+}
+```
+
+- `exposure.inFlight` — COD shipments you hold (assigned → agent_delivered) whose cash is not
+  collected yet. `exposure.collectedUnremitted` — cash your agents or you collected that has not
+  been remitted to (and confirmed by) the platform. **Remitting is what frees headroom.**
+- `source`: `default` or `override` (an administrator decided). The administrator's reason is
+  not shown here.
+- What it gates: vendors' dispatches to you. A vendor whose auto-dispatch would push you over
+  your limit (or over that vendor's own `maxCashPerAgency`) sees the shipment **held** instead of
+  dispatched; a manual dispatch is refused unless the vendor forces it. You do not receive those
+  shipments until then.
+
 ### POST /api/agency/cod/deposits
 
 **Description**: Record cash physically received from one of your agents. Single-step — recording

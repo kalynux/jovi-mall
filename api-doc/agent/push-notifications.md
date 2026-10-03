@@ -393,6 +393,7 @@ cover seventeen of them — the eight `agent_contract.*` situations share one �
 | `type` | `aggregateType` | `data.path` | Screen |
 |---|---|---|---|
 | `shipment.offer.received` | `offer` | `offers/{offerId}` | Offer detail — accept/reject |
+| ⭐ `shipment.offer.batch_received` | `offer_batch` | `offers` | Offers **list** — several offers from one agency (bulk assign). OS-drawn, default channel, no buttons |
 | `shipment.offer.reminder` | `offer` | `offers/{offerId}` | Offer detail — still open |
 | `shipment.offer.expired` | `offer` | `offers/{offerId}` | Offer detail (read-only) |
 | `shipment.reassigned_away` | `shipment` | *(none)* | Notifications list |

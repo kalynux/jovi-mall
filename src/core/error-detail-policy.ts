@@ -1,5 +1,7 @@
 import { SENSITIVE_FIELD_NAMES } from './audit/redact';
 import { ERROR_CATEGORIES, ErrorCategory } from './error-category';
+import { AppError, DEFAULT_ERROR_MESSAGES, GENERIC_ERROR_MESSAGE } from './errors';
+import { ERROR_CODES } from './error-codes';
 
 /**
  * What of an error's `details` a CLIENT is allowed to see (Phase 16).
@@ -193,4 +195,41 @@ export function projectMessage(
         return registryDefault ?? 'Something went wrong';
     }
     return thrownMessage;
+}
+
+/** One failed item of a partial-success bulk response — the error envelope's `error` object. */
+export interface ProjectedItemError {
+    code: string;
+    message: string;
+    statusCode: number;
+    category: ErrorCategory;
+    details?: Record<string, unknown>;
+}
+
+/**
+ * The client's copy of an error that does NOT reach the global handler: one item of a
+ * partial-success bulk call, answered inside a 200.
+ *
+ * Such a response is the one way round the boundary this file defends, so it gets the
+ * boundary's own rule rather than a second one — same category, same message substitution,
+ * same detail projection as `error-handler.middleware.ts`. An unknown throw is `internal`
+ * and masked, exactly as it would be there. Logging stays the caller's job (pure module).
+ */
+export function projectItemError(err: unknown): ProjectedItemError {
+    if (err instanceof AppError) {
+        const details = projectDetails(err.category, err.details);
+        return {
+            code: err.code,
+            message: projectMessage(err.category, err.message, DEFAULT_ERROR_MESSAGES[err.code]),
+            statusCode: err.statusCode,
+            category: err.category,
+            ...(details ? { details } : {}),
+        };
+    }
+    return {
+        code: ERROR_CODES.INTERNAL_SERVER_ERROR,
+        message: DEFAULT_ERROR_MESSAGES[ERROR_CODES.INTERNAL_SERVER_ERROR] ?? GENERIC_ERROR_MESSAGE,
+        statusCode: 500,
+        category: ERROR_CATEGORIES.INTERNAL,
+    };
 }

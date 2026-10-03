@@ -54,6 +54,9 @@ export const MODELS = Object.freeze({
   // A proposed change to `ProductVariant.stock` on an agency-warehoused SKU,
   // awaiting the other party's approval — see modules/stock-requests.
   STOCK_ADJUSTMENT_REQUEST: 'StockAdjustmentRequest',
+  // An agency's (or its agent's) proposed per-shipment delivery fee, awaiting the
+  // vendor's approval — see modules/delivery-fee-proposals.
+  DELIVERY_FEE_PROPOSAL: 'DeliveryFeeProposal',
   FILE: 'File',
   FILE_REFERENCE: 'FileReference',
   FILE_CLEANUP_AUDIT: 'FileCleanupAudit',
@@ -305,6 +308,7 @@ export const COLLECTIONS = Object.freeze({
   AGENCY_STOCK_MOVEMENT: 'agency_stock_movements',
   AGENCY_STORAGE_INVOICE: 'agency_storage_invoices',
   STOCK_ADJUSTMENT_REQUEST: 'stock_adjustment_requests',
+  DELIVERY_FEE_PROPOSAL: 'delivery_fee_proposals',
   FILE: 'files',
   FILE_REFERENCE: 'file_references',
   FILE_CLEANUP_AUDIT: 'file_cleanup_audit',

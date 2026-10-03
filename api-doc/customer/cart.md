@@ -310,6 +310,12 @@ and checkout will refuse it. Far better to learn that here than at the pay butto
     "total": 24000,
     "paymentMethod": "online",
     "meetsDeliveryMinimum": true,   // false → checkout will refuse; see below
+    "cashOnDelivery": {             // would a COD checkout be accepted? — see below
+      "available": true,
+      "reason": null,               // when false: vendor_not_accepted | agency_not_supported |
+                                    //   order_amount_exceeds_limit | digital_items | null
+      "vendorIds": []               // the shops that refuse (ids as in perVendor[].vendorId)
+    },
     "perVendor": [
       {
         "vendorId": "507f…aaa", "subtotal": 24000, "delivery": 0, "absorbedByVendor": 1500,
@@ -380,6 +386,36 @@ counts a price agreed in chat, which the quote cannot see.
 Never present the rule to the customer in money terms beyond the shortfall: the vendor's
 commission and fee are not the customer's business, and the API deliberately does not return
 them.
+
+### Can this basket be paid on delivery? — `cashOnDelivery`
+
+**New 2026-10-03 — [ADR-A09](../../docs/ADR-A09-COD-LIMITS-AND-DELIVERY-FEES.md) G-10.** Every
+quote answers whether checkout would **accept this basket as cash on delivery**, whatever
+`paymentMethod` you sent — so the first quote on the checkout screen (usually `online`) already
+tells you whether to offer the cash-on-delivery option at all.
+
+It runs **checkout's own rule** (`CodEligibilityService.assertVendorOrderEligible`, the call order
+creation makes), for every shop in the basket, against the agencies the shop's items would ship
+with. The Telegram Mini App's `cashOnDelivery` boolean reads the same verdict.
+
+| `reason` | Checkout would refuse with | Meaning |
+|---|---|---|
+| `vendor_not_accepted` | `422 COD_VENDOR_NOT_ACCEPTED` | a shop switched cash on delivery off |
+| `agency_not_supported` | `422 COD_AGENCY_NOT_SUPPORTED` | a delivery company does not take cash (or is not verified), or the shop has no delivery company |
+| `order_amount_exceeds_limit` | `422 COD_ORDER_AMOUNT_EXCEEDS_LIMIT` | a shop's part of the basket is above what its delivery company accepts in cash per order |
+| `digital_items` | `422 COD_NOT_AVAILABLE_FOR_DIGITAL` | a digital basket — nothing is handed over |
+| `null` with `available: false` | — | the rules could not be checked right now; checkout decides. Show a generic line, or keep the option and handle the 422 |
+
+- `reason` is the **first** refusal (shops in cart order); `vendorIds` lists **every** shop that
+  refuses, so you can name them from your cart lines or suggest removing their items. Empty for
+  `digital_items`.
+- **Hide or disable the cash-on-delivery option while `available` is `false`.** Still handle the
+  four `422`s at checkout: a vendor or agency may change its terms between the quote and the POST.
+- **Not included, deliberately:** the delivery minimum (that is `meetsDeliveryMinimum` on a quote
+  sent with `paymentMethod: "cash_on_delivery"` — COD is checked per shipment) and the agencies' /
+  vendors' COD **cash limits** — those never refuse a customer; the order is placed and the parcel
+  waits for the vendor.
+- No vendor setting or agency limit is exposed — a boolean, a reason and shop ids only.
 
 ---
 

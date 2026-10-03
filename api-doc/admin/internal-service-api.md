@@ -203,8 +203,28 @@ records nothing beyond the two fields.
 
 ```
 POST   /shipments/:shipmentId/cancel
-POST   /shipments/:shipmentId/reassign
+POST   /shipments/:shipmentId/reassign       { agentId?, reason, pickupLocation?, force? }
+POST   /shipments/:shipmentId/assign-agent   { agentId, reason, force? }        ← 2026-10-02
+POST   /shipments/:shipmentId/move-agency    { agencyId, reason, force? }       ← 2026-10-02
 ```
+
+`force: true` (2026-10-02) is an administrator's override:
+
+- **`reassign` / `assign-agent`** — skips every eligibility rule (availability, tracking, device
+  location, capacity, ban, account status) and every contract gate (region, value ceiling, the whole
+  COD verdict incl. KYC). The one refusal left is `422 AGENT_MEMBERSHIP_NOT_APPROVED`: the agent
+  must hold an **active** contract with the shipment's agency. It is still an **offer** — the agent
+  accepts, and the accept re-check honours the same override (capacity may go past the maximum).
+  Recorded on the offer as `admin_override { by_user_id, by_name, reason, at }`.
+- **`move-agency`** — moves an agent-less shipment (`pending` / `assigned` / `rejected`) to another
+  agency by moving each item (the vendor's item-move path, attributed to `admin`). Skips an inactive
+  destination (`422 DELIVERY_AGENCY_NOT_ACTIVE`) and the COD limits (`422 COD_AGENCY_LIMIT_EXCEEDED`).
+  Never skips: an agent holding it (`409 SHIPMENT_ALREADY_HAS_AGENT`), a status outside those three
+  (`422 SHIPMENT_REASSIGNMENT_NOT_ALLOWED`). A shipment that had already been dispatched is
+  dispatched to the new agency; a `pending` one stays `pending`. Answers
+  `{ shipmentId, previousAgencyId, agencyId, destinationShipmentId, itemsMoved, dispatched, forced }` —
+  ⚠ `destinationShipmentId` may differ from `shipmentId` (items join the destination agency's open
+  shipment for the order, and an emptied source is deleted).
 
 **`/orders/*`** — four of its six are internal-only, and their absence from `/api/admin/orders` is
 deliberate: a refund moves money through a payment gateway, and `requireRole(['admin'])` on a

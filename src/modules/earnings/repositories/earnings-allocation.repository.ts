@@ -169,6 +169,49 @@ export class EarningsAllocationRepository {
     );
   }
 
+  /** One beneficiary's row for a source, or null. Session-aware for in-transaction reads. */
+  async findOneBySourceAndBeneficiary(
+    sourceType: EarningsSourceType,
+    sourceId: string,
+    beneficiaryType: EarningsOwnerType,
+    beneficiaryId: string | null,
+    session?: ClientSession
+  ): Promise<IEarningsAllocation | null> {
+    return EarningsAllocationModel.findOne(
+      {
+        source_type: sourceType,
+        source_id: new Types.ObjectId(sourceId),
+        beneficiary_type: beneficiaryType,
+        beneficiary_id: beneficiaryId ? new Types.ObjectId(beneficiaryId) : null,
+      },
+      null,
+      { session: session ?? undefined }
+    );
+  }
+
+  /**
+   * Re-price a still-`held` allocation in place — the approved delivery-fee change
+   * (modules/delivery-fee-proposals) moves the vendor's payment-time net by the fee delta.
+   *
+   * A compare-and-set on BOTH `status: 'held'` and the amount the caller read: a released
+   * row is money already withdrawable and must never be re-priced silently, and a
+   * concurrent adjustment must not be overwritten. `null` on a miss; the caller aborts its
+   * transaction. The caller owns the matching account movement + ledger row
+   * (`EarningsAccountService.adjustHeldInSession`).
+   */
+  async adjustHeldAmount(
+    allocationId: Types.ObjectId,
+    expectedAmount: number,
+    newAmount: number,
+    session?: ClientSession
+  ): Promise<IEarningsAllocation | null> {
+    return EarningsAllocationModel.findOneAndUpdate(
+      { _id: allocationId, status: 'held', amount: expectedAmount },
+      { $set: { amount: newAmount } },
+      { new: true, session: session ?? null }
+    );
+  }
+
   /**
    * Atomically flip an allocation `held` → `reversed`. Returns the updated doc,
    * or `null` if it was already transitioned.

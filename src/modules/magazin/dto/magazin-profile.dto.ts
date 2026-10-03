@@ -5,7 +5,7 @@ import { IStorageProvider } from '../../../core/storage';
 import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
 import { resolveFileDetail } from '../../catalog/read-models/file-detail.resolver';
 import { toGeoAddress } from '../../../core/types/geo-address.types';
-import { geoAddressEquals } from '../../../core/validation/address-country.helper';
+import { geoAddressEquals, pinAddressRegionIfKnown } from '../../../core/validation/address-country.helper';
 import { MagazinHeadquartersAddressInput } from '../validators/magazin.validator';
 
 /**
@@ -54,7 +54,10 @@ export function toPersistableHeadquarters(
   const availableForContentMatch = previous.filter((p) => !claimed.has(p._id?.toString()));
 
   return entries.map((e) => {
-    const geo = e.geo ? toGeoAddress(e.geo) : null;
+    // Canonical region spelling ("Centre", not "Centre Region") whenever one is found. Never
+    // refuses here: new and edited entries were already checked strictly by
+    // `assertHeadquartersInCountry`, and a grandfathered row must still save.
+    const geo = e.geo ? toGeoAddress(pinAddressRegionIfKnown(e.geo)) : null;
     // ⚠ `undefined`, never `null`. `headquarters_addresses` is 2dsphere-indexed on
     // this leaf, and MongoDB extracts keys for the WHOLE array — one stored null
     // beside one real point refuses every subsequent write to the magazin, not just

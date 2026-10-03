@@ -51,7 +51,26 @@ export interface AgentEarningQuote {
   allocationStatus?: 'held' | 'released' | 'reversed';
   /** The whole delivery fee this cut is carved out of, for transparency. */
   deliveryFee: number;
-  basis: 'contract_percentage' | 'contract_flat';
+  basis: EarningBasis;
+  /**
+   * Present (non-null) only when `basis` is 'contract_salary': the monthly salary the
+   * agency pays OFF-platform, so the agent app can explain why `amount` is 0. Never
+   * paid, tracked or scheduled by the platform. Always set (null or an object) by
+   * this service; optional in the type only for hand-built literals.
+   */
+  salary?: ContractSalaryInfo | null;
+}
+
+/** The wire-level name for a contract's pay model. */
+export type EarningBasis = 'contract_percentage' | 'contract_flat' | 'contract_salary';
+
+/** The agreed monthly salary, echoed on a quote under the 'monthly_salary' model. */
+export interface ContractSalaryInfo {
+  /** Minor units per month. */
+  monthlyAmount: number;
+  currency: string;
+  /** Always 'agency_off_platform' — a literal so clients cannot mistake it for a platform payout. */
+  paidBy: 'agency_off_platform';
 }
 
 export interface AgentEarningQuoteResult {
@@ -74,6 +93,11 @@ function unavailable(reason: EarningUnavailableReason): AgentEarningQuoteResult 
  *
  * Both `fee_split` amounts default to null on a fresh contract, so an
  * unconfigured split yields 0. That is the truthful answer, not an error.
+ *
+ * `monthly_salary` yields 0 BY DESIGN: the agency pays the agent a salary
+ * off-platform, so the platform pays no per-delivery cut and the agency keeps
+ * the whole fee (`computeAgencyCut`). `persist` skips zero-value rows, so no
+ * agent allocation is written for such a delivery.
  */
 export function applyFeeSplit(
   split: IContractFeeSplit | null | undefined,
@@ -81,6 +105,7 @@ export function applyFeeSplit(
   onOverflow?: (raw: number) => void
 ): number {
   if (deliveryFee <= 0) return 0;
+  if (split?.model === 'monthly_salary') return 0;
 
   const raw =
     split?.model === 'flat'
@@ -92,8 +117,19 @@ export function applyFeeSplit(
 }
 
 /** The wire-level name for a contract's split model. */
-function basisOf(split: IContractFeeSplit | null | undefined): AgentEarningQuote['basis'] {
+export function basisOf(split: IContractFeeSplit | null | undefined): EarningBasis {
+  if (split?.model === 'monthly_salary') return 'contract_salary';
   return split?.model === 'flat' ? 'contract_flat' : 'contract_percentage';
+}
+
+/** The salary echo for a quote — null unless the contract is on the salary model. */
+export function salaryOf(split: IContractFeeSplit | null | undefined): ContractSalaryInfo | null {
+  if (split?.model !== 'monthly_salary') return null;
+  return {
+    monthlyAmount: split.agent_monthly_salary ?? 0,
+    currency: split.currency ?? EARNINGS_CONFIG.DEFAULT_CURRENCY,
+    paidBy: 'agency_off_platform',
+  };
 }
 
 /** How a shipment's delivery run ended, for the purposes of dividing its fee. */
@@ -211,7 +247,8 @@ export interface AgencyEarningQuote {
   agentCut: number;
   /** The COD handling fee, kept whole by the agency. 0 on a prepaid shipment. */
   codHandlingFee: number;
-  basis: 'contract_percentage' | 'contract_flat';
+  /** 'contract_salary' ⇒ `agentCut` is 0 and the agency keeps the whole earned fee. */
+  basis: EarningBasis;
 }
 
 export interface AgencyEarningQuoteResult {
@@ -292,6 +329,18 @@ export function deliveryFeeForPickupMix(policies: IAgencyPolicies, mix: PickupMi
   // calc needs item-level granularity below the two flat components above.
 
   return fee;
+}
+
+/**
+ * The vendor-approved per-shipment fee, or null when none was approved
+ * (`shipment.delivery_fee_override`, written only by `DeliveryFeeProposalService.approve`).
+ * Pure, so the suites can pin that an override outranks the formula.
+ */
+export function approvedDeliveryFeeOf(
+  shipment: Pick<IShipment, 'delivery_fee_override'>
+): number | null {
+  const amount = shipment.delivery_fee_override?.amount;
+  return typeof amount === 'number' && Number.isFinite(amount) && amount >= 0 ? amount : null;
 }
 
 /**
@@ -457,6 +506,13 @@ export class EarningsQuoteService {
    * ONE shipment's delivery fee from its agency's `policies.pricing` — the
    * MINIMAL formula shared by the prepaid per-order split (summed per agency),
    * the COD per-collection split, and the agent's offer-time quote.
+   *
+   * ⚠ A VENDOR-APPROVED override wins over the formula (`shipment.delivery_fee_override`,
+   * modules/delivery-fee-proposals). It is checked here — the one function every fee
+   * consumer already calls — rather than at each call site, so the prepaid split, the COD
+   * split, the agent's quote and the agency's quote cannot disagree about which number a
+   * renegotiated shipment carries. It deliberately precedes the `!policies` fallback: an
+   * approved fee is an agreement, not a derivation, and needs no policy to exist.
    */
   computeShipmentDeliveryFee(
     shipment: IShipment,
@@ -464,6 +520,9 @@ export class EarningsQuoteService {
     orderItemsById: Map<string, IOrderItem>,
     orderId: string
   ): number {
+    const override = approvedDeliveryFeeOf(shipment);
+    if (override !== null) return override;
+
     if (!policies) {
       // Defensive fallback, not expected in practice: AgencyOnboardingStep
       // POLICY_SETUP (step 4) is a REQUIRED onboarding step for agencies
@@ -593,6 +652,7 @@ export class EarningsQuoteService {
         estimated: true,
         deliveryFee,
         basis: basisOf(contract.fee_split),
+        salary: salaryOf(contract.fee_split),
       },
       earningUnavailable: null,
     };
@@ -666,6 +726,7 @@ export class EarningsQuoteService {
           estimated: true,
           deliveryFee,
           basis: basisOf(split),
+          salary: salaryOf(split),
         },
         earningUnavailable: null,
       });

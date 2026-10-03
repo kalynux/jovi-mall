@@ -285,6 +285,7 @@ Body:
 > - `items[].delivery` is the authoritative per-item delivery info — an order can be split across several agencies (one per item). It is `null` for digital items, and `delivery.agent` is `null` until an agent is assigned to the item's shipment.
 > - `deliveries` is an order-level overview with one entry per agency/shipment handling the order (de-duplicated by `shipmentId`). It is `null` for digital orders. Use `items[].delivery` when you need to know which agency carries a specific item.
 > - **Verified badges (added 2026-09-27).** `agencyVerified` (on `items[].delivery`, `deliveries[]` and `deliveryTimeline[]`) is `true` when admin has verified the agency's business documents — `kyc_details.legit_verified`, never the deprecated top-level mirror. `agent.verified` is `true` when the agent's identity check passed — `kyc.status === 'verified'`, the same test `AgentGateService` applies; only that status is read, never the rest of `kyc`. Both are always booleans (`false` when unknown), so a client can render the badge on `=== true` without a null check.
+> - **`deliveryFeeProposals` (added 2026-10-02)** — every delivery-fee proposal an agency (or its agent) made on this order's shipments, newest first; `[]` for digital orders. A `pending` one carries `availableActions: ["approve","reject"]` and **blocks that shipment's pickup until you answer**. Shape, rules and the approve/reject endpoints: [delivery-fee-proposals.md](./delivery-fee-proposals.md).
 > - `deliveryTimeline` merges every shipment's status history for this order, labeled by agency and sorted chronologically (see the example above). Each entry is `{ shipmentId, agencyId, agencyName, agencyVerified, status, changedAt, changedByRole }` — the **same shape** as `orderTimeline` on [`GET /api/agency/shipments/:id`](../agency/shipments.md#detail). It is unrelated to the generic audit trail returned by `GET /api/vendor/orders/:id/timeline` below — that endpoint returns `eventType`/`oldValue`/`newValue` events, not shipment status history. Empty for digital orders.
 > - `deliveryStatus` reflects the per-item delivery status: `pending`, `assigned`, **`handing_over`**, `picked_up`, `in_transit`, `agent_delivered`, `delivered`, `failed`, `returned`, `rejected`, or `pending_agency_reassignment` — **eleven values**, the schema enum at `order.model.ts:253`. ⚠ **`handing_over` was missing from this list until 2026-09-06.** It is the post-pickup reassignment state: the shipment has left one agent and no replacement has accepted it yet, so an item can sit here with nobody carrying it. Treat it as in-flight-but-unassigned rather than as a delivery step.
 > - `delivery.rejection` is `null` unless this item's shipment was **declined**. When set it is `{ reason, note, rejectedAt }` — `reason` is one of `out_of_coverage_area`, `capacity_exceeded`, `invalid_address`, `vendor_item_not_ready`, **`platform_intervention`** or `other` (**six**, `SHIPMENT_REJECTION_REASONS` in `shipment.model.ts:67`); `note` is the free-text explanation (always present when `reason` is `other`, otherwise may be `null`). Use it to decide how to reroute; a `shipment.rejected` notification also fires (see [Notifications](./notifications.md)).
@@ -523,6 +524,39 @@ Body:
 - `400` – `VALIDATION_ERROR` – `orderIds` empty, exceeds 50 items, or contains an invalid ID
 
 ---
+
+### COD limits on dispatch (2026-10-02)
+
+Handing a **COD** shipment to an agency is now checked against two caps on the cash that agency
+holds un-remitted (in-flight COD + collected-not-remitted):
+
+1. **The agency's own limit** — 1 000 000 by default, or an administrator's pin (`kind: "agency_limit"`).
+2. **Your COD terms' `maxCashPerAgency`** — measured on *your* orders' cash at that agency
+   (`kind: "vendor_terms"`). See `GET/PUT /api/vendor/profile/cod-terms` in [profile.md](./profile.md).
+
+| Path | When a cap would be exceeded |
+|---|---|
+| **Auto-redirect** (your setting) | The order still goes through; that shipment is **not dispatched**, stays `pending`, and gets a `codLimitHold`. The rest of the order dispatches. A timeline entry says so. |
+| `POST /orders/:id/dispatch` | `422 COD_AGENCY_LIMIT_EXCEEDED`, nothing of the order dispatched — **unless** the body is `{ "force": true }` |
+| `POST /orders/bulk/dispatch` | that order lands in `data.failed[]` with `code: "COD_AGENCY_LIMIT_EXCEEDED"` and `details`; body `force: true` applies to every order in the batch |
+| `PATCH /orders/:id/delivery-agency` | `422 COD_AGENCY_LIMIT_EXCEEDED` unless `"force": true` |
+
+`details`: `{ kind, currentExposure, additionalAmount, limit, agencyId, shipmentId, hint }`.
+A forced shipment records `codLimitForce`; a successful dispatch clears any `codLimitHold`.
+
+Response additions:
+
+- `GET /orders` rows: `codLimitHeld: boolean` — a shipment of this order is held.
+- `GET /orders/:id` → `items[].delivery` (and `deliveries[]`):
+  - `codLimitHold: { kind, currentExposure, additionalAmount, limit, evaluatedAt } | null`
+  - `codLimitForce: { kind, forcedByUserId, forcedByRole, forcedAt, currentExposure, additionalAmount, limit } | null`
+
+Prepaid orders are never affected. A held shipment is not re-tried automatically — dispatch it
+(with `force` if still over) once the agency has remitted cash. You are told about each held
+shipment by the `shipment.cod_limit_held` notification (preference `codLimitUpdates`, link
+`orders/{orderId}`). ⚠ The timeline entry's description always reads "…the delivery agency is at
+its cash-on-delivery limit", **even when the hold was your own `maxCashPerAgency`** — read `kind`
+in `metadata.codLimitHeld[]` / `codLimitHold`, not the sentence (`OrderService.maybeDispatchToAgencies`).
 
 ### GET /api/vendor/orders/:id/timeline
 

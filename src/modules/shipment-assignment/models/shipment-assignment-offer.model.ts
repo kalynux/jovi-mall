@@ -130,6 +130,45 @@ export interface IShipmentAssignmentOffer extends Document {
   currency: string | null;
 
   /**
+   * Set when the agency placed this offer with `force: true` AND the agent's COD amount
+   * limit (contract slice / agent pool) would otherwise have refused it (owner decision
+   * 2026-10-02). Persisted so the ACCEPT-time re-check honours the same force — without it
+   * the agent could never accept a forced offer. Waives the amount limit only; KYC, trust
+   * and an open cash shortfall are re-checked and still refuse. `null` on every offer
+   * nobody forced, and on every auto offer (auto-assign never forces).
+   */
+  cod_limit_forced?: {
+    by_user_id: mongoose.Types.ObjectId | null;
+    by_role: 'agency' | 'system' | 'admin';
+    at: Date;
+  } | null;
+
+  /**
+   * Set when the agency placed this offer with `force: true` for an agent whose contract
+   * does not cover the delivery's region (2026-10-02). Same purpose as `cod_limit_forced`:
+   * the accept-time re-check honours it. Waives the region only.
+   */
+  coverage_forced?: {
+    by_user_id: mongoose.Types.ObjectId | null;
+    by_role: 'agency' | 'system' | 'admin';
+    at: Date;
+  } | null;
+
+  /**
+   * Set when an ADMINISTRATOR placed this offer with `force: true` (2026-10-02). At offer
+   * AND accept time it waives every eligibility rule (availability, tracking, device,
+   * capacity, ban, account status) and every contract gate except an active contract with
+   * the shipment's agency. `by_user_id` is a wi-admin `admin_accounts._id` and resolves in
+   * no collection here, so `by_name` is the only record of who it was.
+   */
+  admin_override?: {
+    by_user_id: mongoose.Types.ObjectId | null;
+    by_name: string | null;
+    reason: string;
+    at: Date;
+  } | null;
+
+  /**
    * Where to collect the shipment, for a REASSIGNMENT offer — the handover point
    * computed from the shipment's status when it was reassigned (see
    * IShipmentHandover). Null for an ordinary first-assignment offer, where the
@@ -215,6 +254,41 @@ const ShipmentAssignmentOfferSchema = new Schema<IShipmentAssignmentOffer>(
     is_cod: { type: Boolean, default: false, required: true },
     expected_cod_amount: { type: Number, default: null },
     currency: { type: String, default: null },
+    cod_limit_forced: {
+      type: new Schema(
+        {
+          by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
+          by_role: { type: String, enum: ['agency', 'system', 'admin'], required: true },
+          at: { type: Date, required: true },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+    coverage_forced: {
+      type: new Schema(
+        {
+          by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
+          by_role: { type: String, enum: ['agency', 'system', 'admin'], required: true },
+          at: { type: Date, required: true },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+    admin_override: {
+      type: new Schema(
+        {
+          // A wi-admin id — no `ref`: it resolves in no collection in this database.
+          by_user_id: { type: Schema.Types.ObjectId, default: null },
+          by_name: { type: String, default: null, trim: true, maxlength: 200 },
+          reason: { type: String, required: true, trim: true, maxlength: 500 },
+          at: { type: Date, required: true },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
     pickup_location: {
       type: new Schema<IShipmentHandoverPickup>(
         {

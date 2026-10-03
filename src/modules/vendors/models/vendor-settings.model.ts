@@ -28,6 +28,13 @@ export interface IVendorCustomerFlagSub {
     updated_at: Date;
 }
 
+export interface IVendorCodTermsSub {
+    cod_enabled: boolean;
+    /** XAF; `null` = no vendor cap. */
+    max_cash_per_agency: number | null;
+    updated_at: Date | null;
+}
+
 export interface IVendorSettings extends Document {
     vendor_id: mongoose.Types.ObjectId;
     customer_flags: IVendorCustomerFlagSub[];
@@ -53,6 +60,18 @@ export interface IVendorSettings extends Document {
      * auto-cancels it. Minimum 1 (cannot be 0). Defaults to 3.
      */
     auto_cancel_unpaid_days: number;
+    /**
+     * The vendor's COD terms (owner decision 2026-10-02) — whether they accept cash on
+     * delivery at all, and how much of THEIR orders' cash one agency may hold
+     * un-remitted at once. Absent on legacy documents: read through
+     * `vendorCodTermsOf()` (cod/domain/cod-limits.ts), which applies the defaults
+     * (`cod_enabled: true`, no cap).
+     *
+     * ⚠ Deliberately NOT on `Vendor.policies`: editing policies bumps `policy_version`
+     * and pauses every agency connection for re-approval, and these terms must be
+     * editable without that.
+     */
+    cod_terms?: IVendorCodTermsSub | null;
     created_at: Date;
     updated_at: Date;
 }
@@ -120,6 +139,19 @@ const VendorSettingsSchema = new Schema<IVendorSettings>(
             default: 3,
             min: 1,
             max: 90
+        },
+        // No default document: an absent block reads as the defaults through
+        // vendorCodTermsOf(), so existing documents need no backfill.
+        cod_terms: {
+            type: new Schema<IVendorCodTermsSub>(
+                {
+                    cod_enabled: { type: Boolean, required: true, default: true },
+                    max_cash_per_agency: { type: Number, default: null, min: 0 },
+                    updated_at: { type: Date, default: null },
+                },
+                { _id: false }
+            ),
+            default: null,
         }
     },
     {

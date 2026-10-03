@@ -90,6 +90,13 @@ const VENDOR_VOCABULARY = [
 const AGENCY_VOCABULARY = [
     'agents/{{contractId}}',
     'cod/deposits/{{depositId}}',
+    /**
+     * ⚠ **NEW 2026-10-02** — the agency's COD-limit gauge (`GET /api/agency/cod/limit`), for
+     * `cod.limit.pinned` / `cod.limit.released`. No placeholder: an agency has one limit.
+     * agency-dash has no such route; its translator maps it onto the cash screen
+     * (`FRONTEND-CHANGELOG-cod-fee-notifications.md`).
+     */
+    'cod/limit',
     'plans',
     'settings/storage',
     'shipments/{{shipmentId}}',
@@ -99,6 +106,11 @@ const AGENCY_VOCABULARY = [
 ];
 
 const AGENT_VOCABULARY = [
+    /**
+     * ⚠ **NEW 2026-10-02** — the agent's COD screen, for `cod.pool.pinned` / `.released`.
+     * No placeholder: an agent has one pool. Maps onto the app's `/cod` branch.
+     */
+    'cod',
     'cod/deposits/{{depositId}}',
     /**
      * ⚠ **NEW, and it is a contract change the agent app must act on.** Added with the four
@@ -116,9 +128,22 @@ const AGENT_VOCABULARY = [
      */
     'earnings',
     'memberships/{{contractId}}',
+    /**
+     * ⚠ **NEW 2026-10-03** — the offers LIST, for `shipment.offer.batch_received` (a bulk
+     * offer). No placeholder: a batch is several offers. The agent app must map it onto its
+     * offers screen.
+     */
+    'offers',
     'offers/{{offerId}}',
     'plans',
     'settings/storage',
+    /**
+     * ⚠ **NEW 2026-10-02** — an ACCEPTED shipment (the app's `/shipments/:id`), for the
+     * delivery-fee proposal outcomes on a proposal the agent raised. Never sent once the
+     * shipment has left the agent: the auto-withdrawn situation carries no button, for the
+     * same reason `shipment.reassigned_away` does not.
+     */
+    'shipments/{{shipmentId}}',
 ];
 
 function main(): void {
@@ -128,11 +153,11 @@ function main(): void {
         JSON.stringify(vocabularyOf(NOTIFICATION_CATALOG as unknown as Catalog))
         === JSON.stringify(VENDOR_VOCABULARY));
 
-    assert('the AGENCY app is offered exactly the 8 documented paths', () =>
+    assert('the AGENCY app is offered exactly the 9 documented paths', () =>
         JSON.stringify(vocabularyOf(AGENCY_NOTIFICATION_CATALOG as unknown as Catalog))
         === JSON.stringify(AGENCY_VOCABULARY));
 
-    assert('the AGENT app is offered exactly the 6 documented paths', () =>
+    assert('the AGENT app is offered exactly the 8 documented paths', () =>
         JSON.stringify(vocabularyOf(AGENT_NOTIFICATION_CATALOG as unknown as Catalog))
         === JSON.stringify(AGENT_VOCABULARY));
 
@@ -197,6 +222,14 @@ function main(): void {
      */
     assert('⚠ shipment.reassigned_away deliberately has NO button', () =>
         (AGENT_NOTIFICATION_CATALOG as unknown as Catalog)['shipment.reassigned_away']?.button === undefined);
+
+    /**
+     * Same reason, 2026-10-02: a SYSTEM-withdrawn fee proposal means the shipment left this
+     * agent (declined, or they were detached), so a `shipments/{{shipmentId}}` button would
+     * land on a 404.
+     */
+    assert('⚠ delivery_fee_proposal.withdrawn (agent) deliberately has NO button', () =>
+        (AGENT_NOTIFICATION_CATALOG as unknown as Catalog)['delivery_fee_proposal.withdrawn']?.button === undefined);
 
     /**
      * The agency calls it a contract everywhere else — `AgentAgencyContract`, `contractId`,

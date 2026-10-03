@@ -7,6 +7,7 @@ import { agencyRemittanceService } from '../services/agency-remittance.service';
 import { codDiscrepancyService } from '../services/cod-discrepancy.service';
 import { codSummaryService } from '../services/cod-summary.service';
 import { codCashProofService } from '../services/cod-cash-proof.service';
+import { codLimitsService } from '../services/cod-limits.service';
 import { requireCodCashProof, sendCodCashProof } from './cod-proof.http';
 import {
   CodPaginationQuerySchema,
@@ -195,6 +196,17 @@ export class AgencyCodController {
     const summary = await codSummaryService.agencySummary(agencyId);
 
     res.json({ success: true, data: summary });
+  });
+
+  /**
+   * GET /api/agency/cod/limit — the agency's COD cash limit (2026-10-02): the ceiling,
+   * its source (`default` | `override`), and what the agency holds against it. Without the
+   * administrator's reason or name — that is an internal judgement about the agency.
+   */
+  static limit = asyncHandler(async (req: Request, res: Response) => {
+    const agencyId = req.auth!.role_entity._id.toString();
+    const report = await codLimitsService.reportForAgency(agencyId);
+    res.json({ success: true, data: report });
   });
 
   /**

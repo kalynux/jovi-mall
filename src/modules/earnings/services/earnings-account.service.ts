@@ -63,6 +63,55 @@ export class EarningsAccountService {
     );
   }
 
+  /**
+   * Move a HELD allocation's beneficiary pending balance by `delta` — the account half of an
+   * in-place re-pricing (`EarningsAllocationRepository.adjustHeldAmount`, same transaction).
+   *
+   * Positive `delta` holds more (a `hold` ledger row); negative pulls it back out of pending
+   * (a `reversal` row) and throws on underflow so the caller's transaction aborts. Both rows
+   * carry `delivery_fee_adjustment`, so a beneficiary's history says WHY their pending moved
+   * after the split. A zero delta writes nothing.
+   */
+  async adjustHeldInSession(
+    allocation: IEarningsAllocation,
+    delta: number,
+    session: ClientSession
+  ): Promise<void> {
+    if (delta === 0) return;
+    const account = await this.accountRepo.getOrCreate(
+      allocation.beneficiary_type,
+      allocation.beneficiary_id ? allocation.beneficiary_id.toString() : null,
+      session
+    );
+    const magnitude = Math.abs(delta);
+    const updated =
+      delta > 0
+        ? await this.accountRepo.hold(account._id, magnitude, session)
+        : await this.accountRepo.reverseFromPending(account._id, magnitude, session);
+    if (!updated) {
+      throw createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 500, 'Earnings adjustment underflow', {
+        allocationId: allocation._id.toString(),
+        delta,
+      });
+    }
+    await this.ledgerRepo.create(
+      {
+        account_id: account._id,
+        owner_type: account.owner_type,
+        owner_id: account.owner_id,
+        entry_type: delta > 0 ? 'hold' : 'reversal',
+        amount: magnitude,
+        pending_after: updated.pending_balance,
+        available_after: updated.available_balance,
+        source_type: allocation.source_type,
+        source_id: allocation.source_id.toString(),
+        allocation_id: allocation._id,
+        reason_code: 'delivery_fee_adjustment',
+      },
+      session
+    );
+  }
+
   /** Move an allocation's amount from pending → available (hold released). */
   async releaseInSession(allocation: IEarningsAllocation, session: ClientSession): Promise<void> {
     const account = await this.accountRepo.getOrCreate(

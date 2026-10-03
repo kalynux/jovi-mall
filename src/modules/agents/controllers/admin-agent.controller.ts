@@ -299,7 +299,7 @@ export class AdminAgentController {
    * PUT /api/internal/admin/agents/:agentId/cod-threshold
    * Body: { maxThreshold: number | null, reason }
    *
-   * PINS the agent's COD pool, replacing their plan's value as the ceiling until
+   * PINS the agent's COD pool, replacing the platform default (500 000) as the ceiling until
    * released with `maxThreshold: null` (owner decision 2026-09-21). The pin does
    * not outrank KYC: an unverified agent's pool stays 0 and the pin waits for the
    * verdict. Leaving the pool below what contracts already sub-allocate is

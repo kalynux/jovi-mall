@@ -34,6 +34,7 @@ as `404 SHIPMENT_OFFER_NOT_FOUND` — other agents' offers are never leaked.
 - [`GET /api/agent/offers`](#list) — this agent's offers (pending first)
 - [`GET /api/agent/offers/:id`](#detail) — one offer's detail
 - [`POST /api/agent/offers/:id/accept`](#accept) — take the job
+- ⭐ [`POST /api/agent/offers/accept`](#bulk-accept) — accept up to 10 offers at once (2026-10-03)
 - [`POST /api/agent/offers/:id/reject`](#reject) — decline the job
 
 ---
@@ -270,6 +271,56 @@ COD) the exposure limit are re-checked at this moment, and a capacity slot is re
 > order with no delivery region is never gated, and a null ceiling caps nothing. You will not be
 > refused a job because a field was never filled in.
 
+<a name="bulk-accept"></a>
+## POST /api/agent/offers/accept ⭐ (2026-10-03)
+
+Accept up to **10** pending offers in one call. Built for the agency's bulk offer, where one
+agency sends you several shipments at once, but any of your pending offers can be accepted
+together.
+
+```json
+{ "offerIds": ["665f…", "6660…", "6661…"] }
+```
+
+`offerIds`: 1–10 ids, no duplicates (`400` otherwise).
+
+Each offer is accepted **exactly as** `POST /api/agent/offers/:id/accept` would accept it, one
+after another in the order you sent them: same checks, same binding, same delivery code for COD.
+Each one succeeds or fails on its own, so one lost offer (another agent was faster) does not undo
+the others.
+
+**Response** `200`, always, with one item per offer in request order:
+
+```json
+{
+  "success": true,
+  "message": "2 of 3 offer(s) accepted",
+  "data": {
+    "requested": 3,
+    "accepted": 2,
+    "failed": 1,
+    "items": [
+      { "offerId": "665f…", "ok": true,
+        "offer": { "id": "665f…", "status": "accepted", "...": "…" },
+        "shipment": { "id": "665a…", "agentId": "6612…", "status": "assigned", "assignmentState": "accepted" } },
+      { "offerId": "6660…", "ok": false,
+        "error": { "code": "SHIPMENT_ALREADY_HAS_AGENT", "message": "…", "statusCode": 409, "category": "conflict" } },
+      { "offerId": "6661…", "ok": true, "offer": { "…": "…" }, "shipment": { "…": "…" } }
+    ]
+  }
+}
+```
+
+An `ok: false` item's `error` has the same shape as the error envelope, and its `code` is any of
+the codes in the [accept errors table](#accept) above. Show each row's outcome; don't treat the
+call as all-or-nothing.
+
+> **Capacity is reserved one offer at a time.** If you select more offers than you have free
+> slots, the first ones are accepted and the rest come back as `AGENT_AT_CAPACITY` (with
+> `details.maxActiveShipments`). That is the accurate result, because each reservation is only
+> made when its offer is accepted. To avoid it, compare the selection against your free capacity
+> before sending.
+
 <a name="reject"></a>
 ## POST /api/agent/offers/:id/reject
 
@@ -291,6 +342,13 @@ Decline the job. Body: `{ "reason"?: string }` (optional, ≤ 500 chars).
 
 - **`shipment.offer.received`** — a new offer to answer (push is the load-bearing channel; it's
   time-sensitive). Deep-links to the offer.
+- ⭐ **`shipment.offer.batch_received`** (2026-10-03) — one agency offered you **several**
+  shipments at once ("Rapid is offering you 3 deliveries"). **One** notification for the whole
+  batch instead of one per offer; deep-links to the offers **list** (`path: "offers"`), where
+  [bulk accept](#bulk-accept) takes them together. `aggregateType: "offer_batch"`, and
+  `aggregateId` is the **batch** id. It is not an offer id, so don't open it as one. The push has no
+  Accept / Decline buttons and uses the default channel. A batch that leaves only **one** offer
+  pending sends the ordinary `shipment.offer.received` for it instead, buttons included.
 - **`shipment.offer.reminder`** — a still-open **auto** offer you have not answered, re-pushed on
   round 2 of the broadcast. It is the SAME offer, not a new one: the `offerId` matches the one you
   already hold, so replace the existing card rather than adding a second.

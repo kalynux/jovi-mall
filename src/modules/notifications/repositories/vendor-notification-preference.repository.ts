@@ -20,6 +20,8 @@ export interface UpdatePreferencesPayload {
         payoutUpdates?: boolean;
         shipmentRejected?: boolean;
         agencyStorageUpdates?: boolean;
+        codLimitUpdates?: boolean;
+        deliveryFeeProposals?: boolean;
     };
 }
 
@@ -62,7 +64,9 @@ export class VendorNotificationPreferenceRepository {
                     connectionUpdated: true,
                     payoutUpdates: true,
                     shipmentRejected: true,
-                    agencyStorageUpdates: true
+                    agencyStorageUpdates: true,
+                    codLimitUpdates: true,
+                    deliveryFeeProposals: true
                 }
             });
         }
@@ -142,6 +146,10 @@ export class VendorNotificationPreferenceRepository {
             // value for it, and coalescing to `undefined` would blank the key.
             updatePayload['preferences.agencyStorageUpdates'] =
                 updates.preferences.agencyStorageUpdates ?? current.preferences.agencyStorageUpdates ?? true;
+            updatePayload['preferences.codLimitUpdates'] =
+                updates.preferences.codLimitUpdates ?? current.preferences.codLimitUpdates ?? true;
+            updatePayload['preferences.deliveryFeeProposals'] =
+                updates.preferences.deliveryFeeProposals ?? current.preferences.deliveryFeeProposals ?? true;
         }
 
         const result = await VendorNotificationPreferenceModel.findOneAndUpdate(

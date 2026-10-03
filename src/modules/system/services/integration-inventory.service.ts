@@ -16,9 +16,15 @@ import {
     MYCOOLPAY_CONFIG,
     CAMPAY_CONFIG,
     CAMPAY_DEMO_BASE_URL,
+    CINETPAY_CONFIG,
+    CINETPAY_SANDBOX_BASE_URL,
+    FAPSHI_CONFIG,
+    FAPSHI_SANDBOX_BASE_URL,
     notchPayEnabled,
     myCoolPayEnabled,
     campayEnabled,
+    cinetpayEnabled,
+    fapshiEnabled,
 } from '../../payments/config/payments.config';
 import { gatewaySupportsRefund } from '../../payments/gateways/registry';
 import { getPaymentSettingsSync } from '../../payments/services/payment-settings.service';
@@ -373,6 +379,47 @@ function configurationOf(key: IntegrationKey): {
                     payoutsEnabled: CAMPAY_CONFIG.PAYOUTS_ENABLED,
                     activeForCollections: getPaymentSettingsSync().collection_aggregator === 'CAMPAY',
                     activeForPayouts: getPaymentSettingsSync().payout_aggregator === 'CAMPAY',
+                },
+            };
+
+        case 'cinetpay':
+            return {
+                configured: cinetpayEnabled(),
+                detail: {
+                    implemented: true,
+                    credentialsSet: Boolean(CINETPAY_CONFIG.API_KEY && CINETPAY_CONFIG.API_PASSWORD),
+                    // `sk_test_` keys and the .net host are the sandbox, which moves no real money.
+                    sandbox: CINETPAY_CONFIG.BASE_URL === CINETPAY_SANDBOX_BASE_URL,
+                    baseUrl: CINETPAY_CONFIG.BASE_URL,
+                    notifyUrl: CINETPAY_CONFIG.NOTIFY_URL || null,
+                    returnUrlSet: CINETPAY_CONFIG.RETURN_URL !== '',
+                    fallbackEmailSet: CINETPAY_CONFIG.FALLBACK_EMAIL !== '',
+                    directPay: CINETPAY_CONFIG.DIRECT_PAY,
+                    // No refund API in v1: those refunds go through the manual-payout ticket.
+                    refundSupported: gatewaySupportsRefund('CINETPAY'),
+                    payoutsEnabled: CINETPAY_CONFIG.PAYOUTS_ENABLED,
+                    activeForCollections: getPaymentSettingsSync().collection_aggregator === 'CINETPAY',
+                    activeForPayouts: getPaymentSettingsSync().payout_aggregator === 'CINETPAY',
+                },
+            };
+
+        case 'fapshi':
+            return {
+                configured: fapshiEnabled(),
+                detail: {
+                    implemented: true,
+                    collectionCredentialsSet: Boolean(FAPSHI_CONFIG.API_USER && FAPSHI_CONFIG.API_KEY),
+                    // A separate Fapshi service: one service cannot both collect and pay out.
+                    payoutCredentialsSet: Boolean(FAPSHI_CONFIG.PAYOUT_API_USER && FAPSHI_CONFIG.PAYOUT_API_KEY),
+                    webhookSecretSet: Boolean(FAPSHI_CONFIG.WEBHOOK_SECRET),
+                    // The sandbox moves no real money.
+                    sandbox: FAPSHI_CONFIG.BASE_URL === FAPSHI_SANDBOX_BASE_URL,
+                    baseUrl: FAPSHI_CONFIG.BASE_URL,
+                    // No refund API: those refunds go through the manual-payout ticket.
+                    refundSupported: gatewaySupportsRefund('FAPSHI'),
+                    payoutsEnabled: FAPSHI_CONFIG.PAYOUTS_ENABLED,
+                    activeForCollections: getPaymentSettingsSync().collection_aggregator === 'FAPSHI',
+                    activeForPayouts: getPaymentSettingsSync().payout_aggregator === 'FAPSHI',
                 },
             };
 

@@ -381,7 +381,7 @@ function withStripe<T>(fn: () => T): T {
     const f = buildRoutingFacts();
     return PAYMENT_GATEWAY_NAMES.every((n) => f[n].capabilities === PAYMENT_GATEWAYS.get(n)!.capabilities)
       && f.NOTCHPAY.payoutImplemented && f.MYCOOLPAY.payoutImplemented && f.CAMPAY.payoutImplemented
-      && !f.STRIPE.payoutImplemented;
+      && f.CINETPAY.payoutImplemented && f.FAPSHI.payoutImplemented && !f.STRIPE.payoutImplemented;
   });
   await assert('the routing service re-exports the same buildRoutingFacts', () => buildRoutingFactsFromService === buildRoutingFacts);
 

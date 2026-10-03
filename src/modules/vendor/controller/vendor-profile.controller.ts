@@ -15,6 +15,8 @@ import { vectorisationService } from '../../catalog/domain/services/Vectorisatio
 import { policyDocumentUploadService } from '../../catalog/domain/services/media/PolicyDocumentUploadService';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
+import { vendorCodTermsOf } from '../../cod/domain/cod-limits';
+import { codLimitsService } from '../../cod/services/cod-limits.service';
 
 // Policy documents (return/cancellation/support policy addenda) are a standalone
 // upload path — deliberately separate from the product/ticket media pipeline in
@@ -47,7 +49,24 @@ const SetAutoCancelUnpaidDaysSchema = z.object({
   days: z.number().int().min(1).max(90),
 });
 
+/**
+ * The vendor's COD terms (2026-10-02) — a full replace, `.strict()` so a misspelt key is
+ * a 400 rather than a silently ignored term. `maxCashPerAgency: null` = no vendor cap.
+ */
+const SetCodTermsSchema = z
+  .object({
+    codEnabled: z.boolean(),
+    maxCashPerAgency: z.number().int().min(0).max(100_000_000).nullable(),
+  })
+  .strict();
+
 const vendorProfileService = new VendorProfileService();
+
+/** The wire shape of a vendor's COD terms, defaults applied when never set. */
+function toCodTermsDto(stored: { cod_enabled?: boolean | null; max_cash_per_agency?: number | null; updated_at?: Date | null } | null) {
+  const terms = vendorCodTermsOf(stored);
+  return { ...terms, updatedAt: stored?.updated_at ?? null };
+}
 const vendorSettingsRepository = new VendorSettingsRepository();
 
 export class VendorProfileController {
@@ -264,6 +283,30 @@ export class VendorProfileController {
       data: { autoRedirectOrdersToAgency: updated, autoRedirectThresholdAmount: threshold },
       message: 'Auto-redirect orders setting updated',
     });
+  });
+
+  // ─── COD terms (2026-10-02) ─────────────────────────────────────────────
+  //
+  // Deliberately NOT part of `policies`: editing these must not bump `policy_version`
+  // and pause every agency connection for re-approval. Stored on vendor_settings.
+
+  static getCodTerms = asyncHandler(async (req: Request, res: Response) => {
+    const vendorId = req.auth!.role_entity._id.toString();
+    const stored = await vendorSettingsRepository.findCodTerms(vendorId);
+    res.json({ success: true, data: toCodTermsDto(stored) });
+  });
+
+  static setCodTerms = asyncHandler(async (req: Request, res: Response) => {
+    const vendorId = req.auth!.role_entity._id.toString();
+    const { codEnabled, maxCashPerAgency } = SetCodTermsSchema.parse(req.body);
+    const before = vendorCodTermsOf(await vendorSettingsRepository.findCodTerms(vendorId));
+    const stored = await vendorSettingsRepository.setCodTerms(vendorId, {
+      cod_enabled: codEnabled,
+      max_cash_per_agency: maxCashPerAgency,
+    });
+    // Connected agencies are told (2026-10-02 notifications) — only on an actual change.
+    void codLimitsService.publishVendorTermsChanged(vendorId, before, vendorCodTermsOf(stored));
+    res.json({ success: true, data: toCodTermsDto(stored), message: 'COD terms updated' });
   });
 
   // ─── Auto-cancel Unpaid Orders ──────────────────────────────────────────

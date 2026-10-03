@@ -263,14 +263,15 @@ export interface IAgentCodProfile {
    *
    *   pool_ceiling = 0                        when kyc.status !== 'verified'
    *                = pool_override.amount     when an administrator pinned one
-   *                = plan.max_cod_pool ?? 0   otherwise (the agent's active plan,
-   *                                           or the free tier when they hold none)
+   *                = AGENT_CONFIG.COD_POOL_DEFAULT (500 000) otherwise — the same for
+   *                                           every agent, whatever their plan (2026-10-02;
+   *                                           before that it was plan.max_cod_pool)
    *   max_threshold ∈ [0, pool_ceiling]       the agent may lower it; a CHANGE of
    *                                           ceiling resets it to the new ceiling
    *
    * Every contract's `cod.threshold` is a sub-allocation of this pool, and the
    * sum across allocating contracts may never be RAISED past it. See
-   * AgentCodThresholdService. An automatic sync (plan downgrade, KYC revoked) can
+   * AgentCodThresholdService. An automatic sync (a lowered pin, KYC revoked) can
    * leave the pool below what contracts already hold — it is a consequence and
    * cannot be refused — and then headroom reads 0 and the exposure gate binds at
    * the pool, not at the larger slice.
@@ -286,14 +287,15 @@ export interface IAgentCodProfile {
   /** Which rule produced `pool_ceiling`. */
   pool_source: AgentCodPoolSource;
   /**
-   * The plan whose `max_cod_pool` was read, when `pool_source === 'plan'`.
-   * `null` for the other two sources. Display only — never a branch.
+   * The plan whose `max_cod_pool` was read, when `pool_source` was the retired `plan`.
+   * Always written `null` since 2026-10-02 (the plan no longer sets the pool); kept so
+   * wi-admin's direct read does not change shape. Display only — never a branch.
    */
   pool_plan_code: string | null;
   /** When `AgentCodPoolService` last wrote the four pool fields. */
   pool_synced_at: Date | null;
   /**
-   * An administrator's PERSISTENT pool, which replaces the plan's value as the
+   * An administrator's PERSISTENT pool, which replaces the platform default as the
    * ceiling until an administrator clears it (owner decision 2026-09-21).
    *
    * Same shape and same reasoning as `trust_override`: a separate field that no
@@ -361,18 +363,26 @@ export interface IAgentTrustOverride {
 }
 
 /**
- * Where an agent's COD pool ceiling comes from — see `IAgentCodProfile.max_threshold`.
+ * Where an agent's COD pool ceiling comes from — see `IDeliveryAgent`.cod.max_threshold.
  * Checked in this order; the first that applies wins.
+ *
+ * `default` replaced `plan` on 2026-10-02: the ceiling is now the platform default
+ * (`AGENT_CONFIG.COD_POOL_DEFAULT`, 500 000) for every verified agent, whatever their
+ * plan. ⚠ `plan` is NOT in this list but IS still accepted by the schema
+ * (`AGENT_COD_POOL_SOURCES_STORED`), so a document synced before the change still saves;
+ * the next sync (reconcile worker, KYC verdict, pin) rewrites it to `default`.
  */
-export const AGENT_COD_POOL_SOURCES = ['not_verified', 'override', 'plan'] as const;
+export const AGENT_COD_POOL_SOURCES = ['not_verified', 'override', 'default'] as const;
 export type AgentCodPoolSource = (typeof AGENT_COD_POOL_SOURCES)[number];
+/** What the schema accepts: the live vocabulary plus the retired `plan`. */
+export const AGENT_COD_POOL_SOURCES_STORED = [...AGENT_COD_POOL_SOURCES, 'plan'] as const;
 
 /**
  * An administrator's pinned COD pool. The actor stamp is the three-field
  * `actorStampFields()` convention, exactly as on `IAgentTrustOverride`.
  */
 export interface IAgentCodPoolOverride {
-  /** XAF, within AGENT_CONFIG.COD_THRESHOLD_{MIN,MAX}. May be above OR below the plan. */
+  /** XAF, within AGENT_CONFIG.COD_THRESHOLD_{MIN,MAX}. May be above OR below the default (500 000). */
   amount: number;
   /** Required — an unexplained override on a cash limit is unreviewable. */
   reason: string;
@@ -917,7 +927,7 @@ export const agentDefaults = {
    * everyone at 100 and subtracted) and with a ZERO COD pool, sourced
    * `not_verified` — which is exactly what `AgentCodPoolService` would
    * compute for them, so a brand-new document is already in sync. The pool
-   * opens automatically at the KYC verdict, from their plan.
+   * opens automatically at the KYC verdict, at the platform default (500 000).
    */
   cod: (): IAgentCodProfile => ({
     trust_score: AGENT_CONFIG.TRUST_SCORE_SEED,
@@ -980,7 +990,7 @@ const DeliveryAgentSchema = new Schema<IDeliveryAgent>(
             min: AGENT_CONFIG.COD_THRESHOLD_MIN,
             max: AGENT_CONFIG.COD_THRESHOLD_MAX,
           },
-          pool_source: { type: String, enum: AGENT_COD_POOL_SOURCES, default: 'not_verified' },
+          pool_source: { type: String, enum: AGENT_COD_POOL_SOURCES_STORED, default: 'not_verified' },
           pool_plan_code: { type: String, default: null },
           pool_synced_at: { type: Date, default: null },
           // The administrator's pinned pool. Like trust_override, no sync writes it.

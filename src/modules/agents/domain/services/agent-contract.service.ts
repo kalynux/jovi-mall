@@ -1761,6 +1761,20 @@ export class AgentContractService {
         hint: 'agent_flat_fee is required when the fee split model is "flat".',
       });
     }
+
+    // The salary is informational — the platform never pays it — but it is the
+    // whole of what the agent agreed to under this model, so a salary contract
+    // with no figure is exactly the "consenting to a number nobody showed them"
+    // trap `assertTermsApprovable` exists for.
+    if (
+      next.model === 'monthly_salary' &&
+      (next.agent_monthly_salary === null || next.agent_monthly_salary === undefined)
+    ) {
+      throw createAppError(ERROR_CODES.CONTRACT_FEE_SPLIT_INVALID, 422, undefined, {
+        model: next.model,
+        hint: 'agent_monthly_salary is required when the fee split model is "monthly_salary".',
+      });
+    }
   }
 
   // ─── Admin: transfer ──────────────────────────────────────────────────────

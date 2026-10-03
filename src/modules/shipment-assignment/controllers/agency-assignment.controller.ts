@@ -3,10 +3,24 @@ import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { shipmentAssignmentService } from '../domain/services/shipment-assignment.service';
-import { OfferAgentSchema, ReassignShipmentSchema, UpdateAssignmentSettingsSchema } from '../validators/assignment.validator';
+import {
+  BulkOfferAgentSchema,
+  OfferAgentSchema,
+  ReassignShipmentSchema,
+  UpdateAssignmentSettingsSchema,
+} from '../validators/assignment.validator';
 import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.repository';
+import { eventBus } from '../../../core/events/event-bus';
 
 const agencyRepo = new DeliveryAgencyRepository();
+
+/** The settings payload — both toggles, absent ones read as their default (false). */
+function settingsDto(agency: { assignment_settings?: { auto_assign_enabled?: boolean; agents_can_propose_delivery_fee?: boolean } | null }) {
+  return {
+    autoAssignEnabled: agency.assignment_settings?.auto_assign_enabled ?? false,
+    agentsCanProposeDeliveryFee: agency.assignment_settings?.agents_can_propose_delivery_fee ?? false,
+  };
+}
 
 /**
  * AgencyAssignmentController — the agency's side of the acceptance workflow:
@@ -23,17 +37,49 @@ export class AgencyAssignmentController {
   static offerAgent = asyncHandler(async (req: Request, res: Response): Promise<void> => {
     const agencyId = req.auth!.role_entity._id.toString();
     const actorUserId = req.auth!.user.id;
-    const { agentId } = OfferAgentSchema.parse(req.body);
+    const { agentId, force } = OfferAgentSchema.parse(req.body);
 
-    const result = await shipmentAssignmentService.offerToAgent(agencyId, req.params.id, agentId, {
-      role: 'agency',
-      userId: actorUserId,
-    });
+    const result = await shipmentAssignmentService.offerToAgent(
+      agencyId,
+      req.params.id,
+      agentId,
+      { role: 'agency', userId: actorUserId },
+      null,
+      // The agency's force (2026-10-02): past the agent's COD amount limit AND outside the
+      // contract's coverage regions. Nothing else.
+      { forceCodLimit: force === true, forceCoverage: force === true }
+    );
 
     res.json({
       success: true,
       data: result,
       message: result.autoAccepted ? 'Agent assigned (auto-accepted)' : 'Offer sent to agent',
+    });
+  });
+
+  /**
+   * POST /api/agency/shipments/assign-agent — bulk manual pick.
+   * Body: { agentId, shipmentIds: [1..10], force? }. One offer per shipment, partial
+   * success: 200 with a per-shipment `items` list. The whole call is refused only for the
+   * agent (not eligible, not found) or when the offerable shipments exceed the agent's free
+   * capacity (`422 AGENT_AT_CAPACITY`, nothing offered).
+   */
+  static offerAgentBulk = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const agencyId = req.auth!.role_entity._id.toString();
+    const { agentId, shipmentIds, force } = BulkOfferAgentSchema.parse(req.body);
+
+    const result = await shipmentAssignmentService.offerManyToAgent(
+      agencyId,
+      shipmentIds,
+      agentId,
+      { role: 'agency', userId: req.auth!.user.id },
+      { forceCodLimit: force === true, forceCoverage: force === true }
+    );
+
+    res.json({
+      success: true,
+      data: result,
+      message: `${result.offered} of ${result.requested} shipment(s) offered to the agent`,
     });
   });
 
@@ -86,9 +132,9 @@ export class AgencyAssignmentController {
   static reassign = asyncHandler(async (req: Request, res: Response): Promise<void> => {
     const agencyId = req.auth!.role_entity._id.toString();
     const actorUserId = req.auth!.user.id;
-    const { agentId, reason, pickupLocation } = ReassignShipmentSchema.parse(req.body);
+    const { agentId, reason, pickupLocation, force } = ReassignShipmentSchema.parse(req.body);
 
-    const result = await shipmentAssignmentService.reassign(agencyId, req.params.id, { agentId, reason, pickupLocation }, {
+    const result = await shipmentAssignmentService.reassign(agencyId, req.params.id, { agentId, reason, pickupLocation, forceCodLimit: force === true, forceCoverage: force === true }, {
       role: 'agency',
       userId: actorUserId,
     });
@@ -100,27 +146,38 @@ export class AgencyAssignmentController {
     });
   });
 
-  /** GET /api/agency/assignment-settings — the stored auto-assignment toggle. */
+  /** GET /api/agency/assignment-settings — the stored assignment preferences. */
   static getSettings = asyncHandler(async (req: Request, res: Response): Promise<void> => {
     const agencyId = req.auth!.role_entity._id.toString();
     const agency = await agencyRepo.findById(agencyId);
     if (!agency) throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404);
-    res.json({
-      success: true,
-      data: { autoAssignEnabled: agency.assignment_settings?.auto_assign_enabled ?? false },
-    });
+    res.json({ success: true, data: settingsDto(agency) });
   });
 
-  /** PATCH /api/agency/assignment-settings — toggle auto-assignment. Body: { autoAssignEnabled } */
+  /**
+   * PATCH /api/agency/assignment-settings — partial update.
+   * Body: { autoAssignEnabled?, agentsCanProposeDeliveryFee? } (at least one).
+   */
   static updateSettings = asyncHandler(async (req: Request, res: Response): Promise<void> => {
     const agencyId = req.auth!.role_entity._id.toString();
-    const { autoAssignEnabled } = UpdateAssignmentSettingsSchema.parse(req.body);
-    const agency = await agencyRepo.setAutoAssignEnabled(agencyId, autoAssignEnabled);
+    const patch = UpdateAssignmentSettingsSchema.parse(req.body);
+    const before = await agencyRepo.findById(agencyId);
+    const agency = await agencyRepo.updateAssignmentSettings(agencyId, patch);
     if (!agency) throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404);
-    res.json({
-      success: true,
-      data: { autoAssignEnabled: agency.assignment_settings?.auto_assign_enabled ?? false },
-      message: 'Assignment settings updated',
-    });
+    // The agency's agents are told when the fee-proposal permission actually FLIPS
+    // (`fee_proposals.enabled` / `.disabled` on the agent stack). Post-write, fire-and-forget.
+    const was = before?.assignment_settings?.agents_can_propose_delivery_fee ?? false;
+    const now = agency.assignment_settings?.agents_can_propose_delivery_fee ?? false;
+    if (patch.agentsCanProposeDeliveryFee !== undefined && was !== now) {
+      void eventBus
+        .publish('agency.fee_proposal_permission_changed', {
+          eventType: 'agency.fee_proposal_permission_changed',
+          aggregateId: agencyId,
+          occurredAt: new Date(),
+          payload: { agencyId, enabled: now },
+        })
+        .catch((err) => console.error('[AgencyAssignmentController] permission emit failed:', err));
+    }
+    res.json({ success: true, data: settingsDto(agency), message: 'Assignment settings updated' });
   });
 }

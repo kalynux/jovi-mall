@@ -35,6 +35,26 @@ import { ChannelText } from '../catalog/notification-catalog';
 import { Language, resolveLanguage, templateLanguage } from '../catalog/notification-i18n';
 import { RenderContext, toTelegramNotificationBody, toWhatsAppNotificationBody } from '../catalog/message-renderer';
 import { DomainEvent } from '../../../core/events/event-bus';
+import { renderTemplate } from '../catalog/message-renderer';
+import { AGENT_FEE_WITHDRAWN_REASON, AGENT_OFFER_BATCH_FORCED_LINE, AGENT_OFFER_FORCED_LINE } from '../catalog/agent-notification-catalog';
+import { agentContractRepository } from '../../agents';
+import { OrderModel } from '../../orders/order.model';
+import { EARNINGS_CONFIG } from '../../earnings/config/earnings.config';
+
+/**
+ * `delivery_fee_proposal.edited` payload readers (2026-10-02). The producer was built in a
+ * concurrent change; the documented contract is "the usual payload plus the editor's role and
+ * the fee before/after". Both readers accept the spellings that contract admits, so a
+ * different choice of name degrades to a missing figure rather than a missing notification.
+ */
+function editedByRoleOf(p: any): string | null {
+    return p?.editedByRole ?? p?.editedBy?.role ?? p?.lastEditedBy?.role ?? null;
+}
+function previousProposedFeeOf(p: any): number | null {
+    const v = p?.previousProposedFee ?? p?.proposedFeeBefore ?? p?.previousFee ?? p?.fromFee ?? p?.editedFrom ?? null;
+    return typeof v === 'number' ? v : null;
+}
+
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 
@@ -55,6 +75,21 @@ const ACTIONABLE_OFFER_SITUATIONS: ReadonlySet<AgentNotificationType> = new Set(
     'shipment.offer.received',
     'shipment.offer.reminder'
 ]);
+
+/**
+ * What `shipment.offer.received` reads — off a single offer's `shipment.offer_created`
+ * (which carries `orderNumber`), or off one entry of a bulk batch (which carries `orderId`).
+ */
+interface SingleOfferPayload {
+    offerId: string;
+    agentId: string;
+    agencyId: string;
+    orderNumber?: string | null;
+    orderId?: string;
+    codLimitForced?: boolean;
+    expectedCodAmount?: number | null;
+    currency?: string | null;
+}
 
 interface DispatchParams {
     situation: AgentNotificationType;
@@ -200,25 +235,96 @@ export class AgentNotificationEventHandler {
      */
     async handleOfferReceived(event: DomainEvent): Promise<void> {
         try {
-            const { offerId, agentId, agencyId, orderNumber } = event.payload;
+            // Part of a bulk offer: `shipment.offer_batch_created` tells the agent once.
+            if (event.payload.batchId) return;
+            await this.notifySingleOffer(event.payload as SingleOfferPayload);
+        } catch (error) {
+            console.error('[AgentNotificationHandler] Failed to handle shipment.offer_created:', error);
+        }
+    }
+
+    /**
+     * Handle shipment.offer_batch_created — an agency offered this agent several shipments
+     * in one call (2026-10-03). ONE notification, on the offers list, carrying only the
+     * offers still pending (an auto-accepted one needs no "review and accept").
+     *
+     * A batch that left exactly ONE pending offer is sent as an ordinary
+     * `shipment.offer.received` instead: that situation carries Accept / Decline on the push
+     * and opens the offer itself, and "1 deliveries" is worse copy than the single one.
+     */
+    async handleOfferBatchReceived(event: DomainEvent): Promise<void> {
+        try {
+            const { batchId, agentId, agencyId, offers } = event.payload as {
+                batchId: string;
+                agentId: string;
+                agencyId: string;
+                offers: Array<{
+                    offerId: string;
+                    orderId: string;
+                    codLimitForced: boolean;
+                    expectedCodAmount: number | null;
+                    currency: string | null;
+                }>;
+            };
+            if (!offers?.length) return;
+            if (offers.length === 1) {
+                await this.notifySingleOffer({ ...offers[0], agentId, agencyId });
+                return;
+            }
 
             const prefs = await this.preferenceRepo.getByAgent(agentId);
             if (!prefs.preferences.assignmentOffers) return;
 
             const agencyName = await this.resolveAgencyName(agencyId);
+            const forcedCount = offers.filter((o) => o.codLimitForced).length;
+            const forcedLine = forcedCount > 0
+                ? renderTemplate(AGENT_OFFER_BATCH_FORCED_LINE.forced[await this.resolveAgentLanguage(agentId)], {
+                    forcedCount: String(forcedCount)
+                })
+                : '';
 
             await this.dispatch({
-                situation: 'shipment.offer.received',
+                situation: 'shipment.offer.batch_received',
                 prefs,
                 agentId,
-                aggregateType: 'offer',
-                aggregateId: offerId,
-                idempotencyKey: `shipment.offer.received:${offerId}`,
-                context: { offerId, agencyName, orderNumber: orderNumber ?? '—' }
+                aggregateType: 'offer_batch',
+                aggregateId: batchId,
+                idempotencyKey: `shipment.offer.batch_received:${batchId}`,
+                context: { agencyName, count: String(offers.length), forcedLine }
             });
         } catch (error) {
-            console.error('[AgentNotificationHandler] Failed to handle shipment.offer_created:', error);
+            console.error('[AgentNotificationHandler] Failed to handle shipment.offer_batch_created:', error);
         }
+    }
+
+    /** One offer's `shipment.offer.received` — from a single offer, or a batch of one. */
+    private async notifySingleOffer(p: SingleOfferPayload): Promise<void> {
+        const { offerId, agentId, agencyId, codLimitForced, expectedCodAmount, currency } = p;
+
+        const prefs = await this.preferenceRepo.getByAgent(agentId);
+        if (!prefs.preferences.assignmentOffers) return;
+
+        // A batch entry carries the order id, not its number; a single offer carries both.
+        const orderNumber = await this.orderNumberOf(p);
+        const agencyName = await this.resolveAgencyName(agencyId);
+        // 2026-10-02: the agency pushed this offer past the agent's COD amount limit.
+        // Empty otherwise — `renderTemplate` tidies the trailing space.
+        const forcedLine = codLimitForced
+            ? renderTemplate(AGENT_OFFER_FORCED_LINE.forced[await this.resolveAgentLanguage(agentId)], {
+                currency: currency ?? '',
+                amountFormatted: Number(expectedCodAmount ?? 0).toLocaleString()
+            })
+            : '';
+
+        await this.dispatch({
+            situation: 'shipment.offer.received',
+            prefs,
+            agentId,
+            aggregateType: 'offer',
+            aggregateId: offerId,
+            idempotencyKey: `shipment.offer.received:${offerId}`,
+            context: { offerId, agencyName, orderNumber: orderNumber ?? '—', forcedLine }
+        });
     }
 
     // ─── Contract handshake ──────────────────────────────────────────────────
@@ -806,6 +912,158 @@ export class AgentNotificationEventHandler {
      */
     private async resolveAgentLanguage(agentId: string): Promise<Language> {
         return resolveLanguage(await this.agentRepo.findById(agentId));
+    }
+
+    // ─── COD limits + delivery-fee proposals (2026-10-02) ────────────────────
+
+    /** The vendor's answer to a proposal THIS agent raised. */
+    async handleDeliveryFeeProposalApproved(event: DomainEvent): Promise<void> {
+        await this.ownFeeProposalSituation(event, 'delivery_fee_proposal.approved');
+    }
+
+    async handleDeliveryFeeProposalRejected(event: DomainEvent): Promise<void> {
+        await this.ownFeeProposalSituation(event, 'delivery_fee_proposal.rejected');
+    }
+
+    /** The AGENCY changed this agent's figure (the agent's own edit is echo). */
+    async handleDeliveryFeeProposalEdited(event: DomainEvent): Promise<void> {
+        if (editedByRoleOf(event.payload) !== 'agency') return;
+        await this.ownFeeProposalSituation(event, 'delivery_fee_proposal.edited');
+    }
+
+    /**
+     * Only a SYSTEM withdrawal (`withdrawnBy: 'system'`, from ShipmentService) — the agent
+     * withdrawing their own is echo, and the agency withdrawing it is the agency's call
+     * on its own desk. No button: the shipment is no longer theirs.
+     */
+    async handleDeliveryFeeProposalWithdrawn(event: DomainEvent): Promise<void> {
+        if (event.payload?.withdrawnBy !== 'system') return;
+        await this.ownFeeProposalSituation(event, 'delivery_fee_proposal.withdrawn');
+    }
+
+    private async ownFeeProposalSituation(
+        event: DomainEvent,
+        situation:
+            | 'delivery_fee_proposal.approved'
+            | 'delivery_fee_proposal.rejected'
+            | 'delivery_fee_proposal.edited'
+            | 'delivery_fee_proposal.withdrawn'
+    ): Promise<void> {
+        try {
+            const p = event.payload;
+            if (p?.proposedByRole !== 'agent' || !p?.proposedByAgentId) return;
+            const agentId = String(p.proposedByAgentId);
+            const prefs = await this.preferenceRepo.getByAgent(agentId);
+            if (prefs.preferences.deliveryFeeProposals === false) return;
+            const lang = await this.resolveAgentLanguage(agentId);
+            const reasonRow = (AGENT_FEE_WITHDRAWN_REASON as any)[p.withdrawalReason ?? ''] ?? AGENT_FEE_WITHDRAWN_REASON.agent_detached;
+            const at = new Date(event.occurredAt ?? Date.now()).getTime();
+            await this.dispatch({
+                situation,
+                prefs,
+                agentId,
+                aggregateType: 'shipment',
+                aggregateId: p.shipmentId,
+                idempotencyKey: situation === 'delivery_fee_proposal.edited'
+                    ? `${situation}:${p.proposalId}:${at}`
+                    : `${situation}:${p.proposalId}`,
+                context: {
+                    shipmentId: p.shipmentId,
+                    orderNumber: (await this.orderNumberOf(p)) ?? '—',
+                    agencyName: await this.resolveAgencyName(p.agencyId),
+                    currency: p.currency ?? '',
+                    proposedFeeFormatted: Number(p.proposedFee ?? 0).toLocaleString(),
+                    feeBeforeFormatted: Number(p.feeBefore ?? 0).toLocaleString(),
+                    previousFeeFormatted: Number(previousProposedFeeOf(p) ?? 0).toLocaleString(),
+                    reasonLine: reasonRow[lang]
+                }
+            });
+        } catch (error) {
+            console.error(`[AgentNotificationHandler] Failed to handle ${situation}:`, error);
+        }
+    }
+
+    /**
+     * `agency.fee_proposal_permission_changed` — fanned out to every agent with an ACTIVE
+     * contract at that agency. Keyed per contract + emission time, so toggling twice
+     * notifies twice (each flip is a real change in what the agent may do).
+     */
+    async handleFeeProposalPermissionChanged(event: DomainEvent): Promise<void> {
+        try {
+            const { agencyId, enabled } = event.payload ?? {};
+            if (!agencyId) return;
+            const agentIds = await agentContractRepository.listActiveAgentIds(String(agencyId));
+            if (agentIds.length === 0) return;
+            const contracts = await agentContractRepository.listActiveForAgencyAndAgents(String(agencyId), agentIds);
+            const agencyName = await this.resolveAgencyName(String(agencyId));
+            const situation = enabled ? 'fee_proposals.enabled' : 'fee_proposals.disabled';
+            const at = new Date(event.occurredAt ?? Date.now()).getTime();
+            for (const contract of contracts) {
+                try {
+                    const agentId = contract.agent_id.toString();
+                    const contractId = (contract._id as any).toString();
+                    const prefs = await this.preferenceRepo.getByAgent(agentId);
+                    if (prefs.preferences.deliveryFeeProposals === false) continue;
+                    await this.dispatch({
+                        situation,
+                        prefs,
+                        agentId,
+                        aggregateType: 'contract',
+                        aggregateId: contractId,
+                        idempotencyKey: `${situation}:${contractId}:${at}`,
+                        context: { contractId, agencyName }
+                    });
+                } catch (error) {
+                    console.error('[AgentNotificationHandler] fee-proposal permission fan-out failed for one agent:', error);
+                }
+            }
+        } catch (error) {
+            console.error('[AgentNotificationHandler] Failed to handle agency.fee_proposal_permission_changed:', error);
+        }
+    }
+
+    /**
+     * `agent.cod_threshold_changed` — ONLY `trigger: 'override'` (an administrator's pin or
+     * release). Every other trigger is a sync — KYC verdict, the nightly reconcile, the
+     * 2026-10-02 mass reset to the 500 000 default — and is deliberately silent.
+     * A pin on an UNVERIFIED agent leaves the pool at 0 (`source: 'not_verified'`) and is
+     * silent too: the pool did not move, and it waits for the KYC verdict.
+     */
+    async handleCodPoolChanged(event: DomainEvent): Promise<void> {
+        try {
+            const p = event.payload;
+            if (!p?.agentId || p.trigger !== 'override') return;
+            if (p.source !== 'override' && p.source !== 'default') return;
+            const agentId = String(p.agentId);
+            const prefs = await this.preferenceRepo.getByAgent(agentId);
+            if (prefs.preferences.codLimitUpdates === false) return;
+            const situation = p.source === 'override' ? 'cod.pool.pinned' : 'cod.pool.released';
+            await this.dispatch({
+                situation,
+                prefs,
+                agentId,
+                aggregateType: 'cod_pool',
+                aggregateId: agentId,
+                idempotencyKey: `${situation}:${agentId}:${new Date(event.occurredAt ?? Date.now()).getTime()}`,
+                context: {
+                    currency: EARNINGS_CONFIG.DEFAULT_CURRENCY,
+                    poolFormatted: Number(p.to ?? p.ceiling ?? 0).toLocaleString()
+                }
+            });
+        } catch (error) {
+            console.error('[AgentNotificationHandler] Failed to handle agent.cod_threshold_changed:', error);
+        }
+    }
+
+    private async orderNumberOf(p: { orderNumber?: string | null; orderId?: string }): Promise<string | null> {
+        if (p.orderNumber) return p.orderNumber;
+        if (!p.orderId) return null;
+        try {
+            const order = await OrderModel.findById(p.orderId).select('order_number').lean().exec();
+            return (order as any)?.order_number ?? null;
+        } catch {
+            return null;
+        }
     }
 
     // ─── Dispatch + delivery ─────────────────────────────────────────────────

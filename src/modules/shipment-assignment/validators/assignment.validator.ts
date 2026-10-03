@@ -40,17 +40,70 @@ export const RejectOfferSchema = z.object({
 });
 export type RejectOfferInput = z.infer<typeof RejectOfferSchema>;
 
-/** Agency toggles auto-assignment participation. */
-export const UpdateAssignmentSettingsSchema = z.object({
-  autoAssignEnabled: z.boolean(),
-});
+/**
+ * Agency assignment preferences — a PARTIAL update: send either toggle or both, at least
+ * one. `autoAssignEnabled` used to be required; an old client sending only it is unchanged.
+ */
+export const UpdateAssignmentSettingsSchema = z
+  .object({
+    autoAssignEnabled: z.boolean().optional(),
+    /** Let the agent holding a shipment's accepted offer propose a delivery-fee change. */
+    agentsCanProposeDeliveryFee: z.boolean().optional(),
+  })
+  .refine((v) => v.autoAssignEnabled !== undefined || v.agentsCanProposeDeliveryFee !== undefined, {
+    message: 'Send autoAssignEnabled and/or agentsCanProposeDeliveryFee',
+  });
 export type UpdateAssignmentSettingsInput = z.infer<typeof UpdateAssignmentSettingsSchema>;
 
 /** Manual pick — an agency offers a specific agent. Mirrors AssignAgentSchema. */
 export const OfferAgentSchema = z.object({
   agentId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid agent ID'),
+  /**
+   * Push past two rules — owner decisions 2026-10-02:
+   * - a COD shipment past the agent's cash AMOUNT limit (contract slice / agent pool);
+   * - a delivery outside the regions the agent's contract covers.
+   * Never waives KYC, trust, an open cash shortfall, an inactive contract, or any
+   * eligibility rule. Persisted on the offer so the agent's accept honours it.
+   */
+  force: z.boolean().optional(),
 });
 export type OfferAgentInput = z.infer<typeof OfferAgentSchema>;
+
+/**
+ * How many shipments one bulk call may offer, or one bulk accept may take. Owner decision
+ * 2026-10-03. Both sides share it so an agent can always accept, in one call, a batch the
+ * agency sent in one call.
+ */
+export const BULK_ASSIGNMENT_MAX = 10;
+
+const objectIdList = (label: string) =>
+  z
+    .array(z.string().regex(/^[0-9a-fA-F]{24}$/, `Invalid ${label} ID`))
+    .min(1, `Select at least one ${label}`)
+    .max(BULK_ASSIGNMENT_MAX, `At most ${BULK_ASSIGNMENT_MAX} ${label}s at a time`)
+    // A duplicate is refused rather than collapsed: it is a client bug, and silently
+    // deduplicating would return fewer results than ids sent.
+    .refine((ids) => new Set(ids.map((id) => id.toLowerCase())).size === ids.length, {
+      message: `Each ${label} may appear only once`,
+    });
+
+/**
+ * Bulk manual pick — the agency offers one agent up to {@link BULK_ASSIGNMENT_MAX}
+ * shipments at once. Each shipment becomes its own offer, exactly as `assign-agent`
+ * would make it; `force` applies to every one of them.
+ */
+export const BulkOfferAgentSchema = z.object({
+  agentId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid agent ID'),
+  shipmentIds: objectIdList('shipment'),
+  force: z.boolean().optional(),
+});
+export type BulkOfferAgentInput = z.infer<typeof BulkOfferAgentSchema>;
+
+/** The agent accepts several of their pending offers in one call. */
+export const BulkAcceptOffersSchema = z.object({
+  offerIds: objectIdList('offer'),
+});
+export type BulkAcceptOffersInput = z.infer<typeof BulkAcceptOffersSchema>;
 
 /**
  * The agency's manual override of the automatic pickup location (Part 3). A
@@ -85,5 +138,7 @@ export const ReassignShipmentSchema = z.object({
   agentId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid agent ID').optional(),
   reason: z.string().trim().min(1, 'A reason is required').max(500),
   pickupLocation: ReassignPickupLocationSchema.optional(),
+  /** As on assign-agent; meaningful only with a named `agentId` (auto never forces). */
+  force: z.boolean().optional(),
 });
 export type ReassignShipmentInput = z.infer<typeof ReassignShipmentSchema>;

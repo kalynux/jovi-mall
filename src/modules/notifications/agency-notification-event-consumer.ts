@@ -86,6 +86,16 @@ export function initializeAgencyNotificationEventConsumers(): void {
     eventBus.subscribe('storage.stock_request.received', handler.handleStockRequestReceived.bind(handler));
     eventBus.subscribe('storage.stock_request.approved', handler.handleStockRequestApproved.bind(handler));
     eventBus.subscribe('storage.stock_request.rejected', handler.handleStockRequestRejected.bind(handler));
+    // 2026-10-02 — COD limits. (A forced DISPATCH rides `shipment.assigned` above; this
+    // event is the change-agency path onto an already-dispatched shipment.)
+    eventBus.subscribe('shipment.cod_limit_forced', handler.handleCodLimitForced.bind(handler));
+    eventBus.subscribe('vendor.cod_terms_changed', handler.handleVendorCodTermsChanged.bind(handler));
+    eventBus.subscribe('agency.cod_limit_changed', handler.handleCodLimitChanged.bind(handler));
+    // 2026-10-02 — delivery-fee proposals (shared with the vendor and agent consumers).
+    eventBus.subscribe('delivery_fee_proposal.created', handler.handleDeliveryFeeProposalCreated.bind(handler));
+    eventBus.subscribe('delivery_fee_proposal.edited', handler.handleDeliveryFeeProposalEdited.bind(handler));
+    eventBus.subscribe('delivery_fee_proposal.approved', handler.handleDeliveryFeeProposalApproved.bind(handler));
+    eventBus.subscribe('delivery_fee_proposal.rejected', handler.handleDeliveryFeeProposalRejected.bind(handler));
 
     console.log(
         `[AgencyNotifications] Event handlers registered successfully (FCM push: ${isFcmConfigured() ? 'enabled' : 'disabled'})`

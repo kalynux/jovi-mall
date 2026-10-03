@@ -329,6 +329,8 @@ deposits, remittances and discrepancies. Role-specific context:
 | `COD_NOT_AVAILABLE_FOR_DIGITAL` | 422 | COD checkout on a digital cart | — |
 | `COD_AGENCY_NOT_SUPPORTED` | 422 | A delivery agency on the order doesn't handle COD | `{ agencyId, agencyName }` |
 | `COD_ORDER_AMOUNT_EXCEEDS_LIMIT` | 422 | Order total above an agency's COD cap | `{ agencyName, maxOrderAmount, orderTotal }` |
+| `COD_VENDOR_NOT_ACCEPTED` | 422 | **(2026-10-02)** Checkout (web or Mini App): a vendor on the order set `codEnabled: false` in their COD terms. Checked before any agency rule | `{ vendorId }` |
+| `COD_AGENCY_LIMIT_EXCEEDED` | 422 | **(2026-10-02)** Vendor dispatch (single/bulk) or change-agency-per-item: handing this COD shipment over would push the agency past its own cash limit (`kind: 'agency_limit'`) or past the vendor's `maxCashPerAgency` (`kind: 'vendor_terms'`). Retry with `force: true` to proceed — recorded on the shipment. In a bulk dispatch it lands in `data.failed[]` with the same `details` | `{ kind, currentExposure, additionalAmount, limit, agencyId, shipmentId, hint }` |
 | `COD_COLLECTION_NOT_FOUND` | 404 | No cash collection for the shipment (not COD / not picked up) | — |
 | `COD_COLLECTION_ALREADY_COLLECTED` | 409 | Cash already recorded for this shipment | — |
 | `COD_COLLECTION_NOT_COLLECTIBLE` | 422 | Shipment/collection state doesn't allow collection | `{ shipmentStatus }` or `{ collectionStatus }` |
@@ -398,7 +400,7 @@ Full documentation: [agency/agent-roster.md](../agency/agent-roster.md) (canonic
 | `CONTRACT_TERMS_NOT_PROPOSED` | 422 | **Approving terms nobody proposed.** `termsProposedBy` is `null` — a bare agent join request, or a legacy contract whose split was never configured. The agency must propose first | `{ contractId, hint }` |
 | `CONTRACT_TERMS_NOT_NEGOTIABLE` | 403 | A party wrote a term group that is not theirs. Agents may write `fee_split` and `coverage` only; `employment` and the COD threshold are nobody's to negotiate | `{ hint }` — `party`, `offending` and `negotiable` are dropped by the `authorization` allowlist |
 | `CONTRACT_TERMS_LIVE_EDIT_NOT_ALLOWED` | 409 | `PATCH …/terms` on a live contract. Its agreed split is pricing deliveries right now — raise a proposal instead | `{ status, hint }` |
-| `CONTRACT_FEE_SPLIT_INVALID` | 422 | A `percentage` split with no share, or a `flat` one with no fee. Checked on the patch **merged over the stored split**, so a partial update is not rejected for a field it does not touch | `{ model, hint }` |
+| `CONTRACT_FEE_SPLIT_INVALID` | 422 | A `percentage` split with no share, a `flat` one with no fee, or a `monthly_salary` one with no `agent_monthly_salary`. Checked on the patch **merged over the stored split**, so a partial update is not rejected for a field it does not touch | `{ model, hint }` |
 | `CONTRACT_COD_THRESHOLD_OUT_OF_BOUNDS` | 422 | Outside the absolute per-contract bounds | `{ requested, min, max }` |
 | `CONTRACT_COD_THRESHOLD_EXCEEDS_HEADROOM` | 422 | The agent's shared pool has no room — another agency's slice may be the cause | `{ requested, headroom, shortfall, hint }` |
 | `CONTRACT_COD_THRESHOLD_BELOW_OUTSTANDING` | 422 | Cannot set a threshold beneath cash already held under the contract | `{ requested, outstandingBalance, hint }` |
@@ -509,6 +511,40 @@ The agency-facing product actions
 > and rendering buttons from anything else is how a client offers a verb the API refuses.
 
 ---
+
+## Delivery-fee proposals (agency/agent → vendor, per shipment) — 2026-10-02
+
+Contracts: [agency/shipments.md](../agency/shipments.md#delivery-fee-proposals),
+[agent/shipments.md](../agent/shipments.md#delivery-fee-proposals),
+[vendor/delivery-fee-proposals.md](../vendor/delivery-fee-proposals.md).
+
+| Code | Status | Meaning | `details` |
+|---|---|---|---|
+| `DELIVERY_FEE_PROPOSAL_NOT_FOUND` | 404 | Unknown proposal, or not on this shipment / order | — |
+| `DELIVERY_FEE_PROPOSAL_ALREADY_PENDING` | 409 | One pending proposal per shipment | `{ proposalId }` |
+| `DELIVERY_FEE_PROPOSAL_NOT_PENDING` | 409 | Already answered or withdrawn — **reload, don't retry** | `{ status }` (when known) |
+| `DELIVERY_FEE_PROPOSAL_WINDOW_CLOSED` | 422 | Only before pickup: shipment `assigned` / `handing_over` | `{ status, allowed }` |
+| `DELIVERY_FEE_PROPOSAL_AGENTS_NOT_ALLOWED` | 403 | The agent's agency has not enabled `agentsCanProposeDeliveryFee` | — |
+| `DELIVERY_FEE_PROPOSAL_LIMIT_REACHED` | 422 | Two non-withdrawn proposals already on the shipment | `{ used, max }` |
+| `DELIVERY_FEE_PROPOSAL_NO_CHANGE` | 422 | The proposed fee is the current fee | `{ currentFee }` |
+| `DELIVERY_FEE_PROPOSAL_VENDOR_NET_NOT_POSITIVE` | 422 | The fee would leave the vendor earning ≤ 0 (the 30% cap does NOT apply) | — (deliberately no numbers) |
+| `DELIVERY_FEE_PROPOSAL_NOT_YOURS` | 403 | Withdrawing a proposal you did not raise (an agent, the agency's) | — |
+| `DELIVERY_FEE_PROPOSAL_STALE` | 409 | At approval: the shipment left the window, or the proposing agent is no longer on it | `{ shipmentStatus }` |
+| `DELIVERY_FEE_PROPOSAL_SETTLEMENT_CONFLICT` | 409 | At approval: the vendor's order earnings were released/reversed or changed concurrently; nothing applied | `{ allocationStatus }` |
+| `SHIPMENT_DELIVERY_FEE_PENDING` | 409 | Pickup (`→ picked_up`) refused while a proposal awaits the vendor — agency and agent status endpoints alike | `{ proposalId }` |
+| `DELIVERY_FEE_PROPOSAL_VERSION_MISMATCH` | 409 | The proposal was edited since the caller loaded it — an edit with a stale `version`, or a vendor approve/reject of a figure that has since changed. Reload, never retry blind | `{ currentVersion }` |
+
+---
+
+## Delivery regions and forced pushes — 2026-10-02
+
+| `error.code` | Status | Meaning | `details` |
+|---|---|---|---|
+| `ADDRESS_REGION_INVALID` | 400 | A customer address (saved, edited, or inline at checkout), or a NEW/EDITED vendor business address or agency headquarters address, names no region of its country — not by its region text, not by its city. Show a picker from `allowedRegions` and resend with `geo.components.region` = the picked `key`. See `customer/profile.md` → Region | `{ region, city, countryCode, addressId?, index?, label?, allowedRegions: [{ key, name: { en, fr } }] }` — `addressId` for a customer's saved address, `index`/`label` for an entry of a vendor/agency address list |
+| `DELIVERY_AGENCY_NOT_ACTIVE` | 422 | Internal admin only: a shipment was moved to an agency that is not `active`, without `force: true` | `{ agencyId, status }` |
+
+`CONTRACT_COVERAGE_REGION_NOT_COVERED` (above, under contracts) is now **forceable by the agency**:
+resend the assign/reassign with `force: true`. See `agency/assignment.md`.
 
 ## Blog / editorial
 

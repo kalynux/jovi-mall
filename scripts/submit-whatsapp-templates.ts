@@ -65,6 +65,20 @@ const ONLY = argOf('only');
 const LIMIT = Number(argOf('limit') ?? '0');
 
 /**
+ * ⛔ **Names this script must NEVER create, whatever the flags — `--only` included.**
+ *
+ * `wi_mall_phone_verification_utility` is the UTILITY OTP fallback. Meta rejected it on its
+ * CONTENT (`INCORRECT_CATEGORY`, both languages, 2026-09-14); business verification does not
+ * touch that verdict, so a resubmission is a guaranteed second rejection. Its rejected rows have
+ * since VANISHED from the WABA, so the "already present" check no longer stops it and a plain
+ * `--submit` silently recreated it — only remembering `--only` kept it out (2026-10-02).
+ *
+ * It stays in the generated payloads on purpose: `test:customer-notifications` requires the
+ * hand-built OTP pair there. Refusing here, at the one place that writes to Meta, is the fix.
+ */
+const NEVER_SUBMIT: ReadonlySet<string> = new Set(['wi_mall_phone_verification_utility']);
+
+/**
  * ⚠ **Meta rate-limits template WRITES per WABA, and the limit is not published per-account.**
  * One-at-a-time with a pause is not politeness, it is the difference between 190 creates and a
  * throttle that returns errors indistinguishable from permission failures. Backoff below
@@ -196,6 +210,11 @@ async function main(): Promise<void> {
     if (ONLY) {
         const names = new Set(ONLY.split(',').map(n => n.trim()).filter(Boolean));
         payloads = payloads.filter(p => names.has(p.name));
+    }
+    const refused = payloads.filter(p => NEVER_SUBMIT.has(p.name));
+    if (refused.length) {
+        payloads = payloads.filter(p => !NEVER_SUBMIT.has(p.name));
+        console.log(`\n⛔ Never submitted (Meta rejected on content): ${[...new Set(refused.map(p => p.name))].join(', ')}`);
     }
     if (!payloads.length) {
         console.error(`\n❌ no payloads to submit${ONLY ? ` matching --only=${ONLY}` : ''} in ${IN}\n`);

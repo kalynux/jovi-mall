@@ -59,6 +59,11 @@ export type AgentNotificationType =
     | 'agent_contract.terms_resolved'
     /** A new shipment assignment offer to accept/reject before it times out. */
     | 'shipment.offer.received'
+    /**
+     * A BULK offer (2026-10-03): one agency sent this agent several shipments in one call.
+     * One notification for the batch; a batch of one falls back to `shipment.offer.received`.
+     */
+    | 'shipment.offer.batch_received'
     /** A reminder that a still-open offer is waiting (auto-assignment round 2). */
     | 'shipment.offer.reminder'
     /** An offer the agent didn't answer in time lapsed. */
@@ -90,8 +95,39 @@ export type AgentNotificationType =
     | 'payout.requested'
     | 'payout.paid'
     | 'payout.rejected'
-    | 'payout.transfer_failed';
-export type AgentAggregateType = 'deposit' | 'offer' | 'shipment' | 'contract' | 'plan' | 'storage' | 'payout';
+    | 'payout.transfer_failed'
+    /**
+     * Per-shipment delivery-fee proposals (2026-10-02) — only ones THIS agent raised.
+     * `approved` / `rejected` are the vendor's answer; `edited` is the agency changing the
+     * agent's figure; `withdrawn` is the SYSTEM closing it because the shipment moved on
+     * (declined, or this agent was detached) — never the agent's own withdrawal, which
+     * would be echo. `withdrawn` carries no button: the shipment is no longer theirs.
+     */
+    | 'delivery_fee_proposal.approved'
+    | 'delivery_fee_proposal.rejected'
+    | 'delivery_fee_proposal.edited'
+    | 'delivery_fee_proposal.withdrawn'
+    /** The agency turned its agents' permission to propose delivery fees on / off. */
+    | 'fee_proposals.enabled'
+    | 'fee_proposals.disabled'
+    /**
+     * An administrator pinned / released this agent's COD pool. NOT sent for the mass
+     * reset to the 500 000 default (that rides the reconcile, trigger ≠ 'override').
+     */
+    | 'cod.pool.pinned'
+    | 'cod.pool.released';
+export type AgentAggregateType =
+    | 'deposit'
+    | 'offer'
+    | 'shipment'
+    | 'contract'
+    | 'plan'
+    | 'storage'
+    | 'payout'
+    /** The agent's own COD pool — `aggregateId` is the agent id. */
+    | 'cod_pool'
+    /** A bulk offer — `aggregateId` is the batch id, which is NOT an offer id. */
+    | 'offer_batch';
 
 /**
  * The aggregate types as a runtime array, for the schema enum to spread.
@@ -108,7 +144,9 @@ export const AGENT_AGGREGATE_TYPES: readonly AgentAggregateType[] = [
     'contract',
     'plan',
     'storage',
-    'payout'
+    'payout',
+    'cod_pool',
+    'offer_batch'
 ];
 
 /**
@@ -135,6 +173,7 @@ export const AGENT_NOTIFICATION_TYPES: readonly AgentNotificationType[] = [
     'agent_contract.terms_proposed',
     'agent_contract.terms_resolved',
     'shipment.offer.received',
+    'shipment.offer.batch_received',
     'shipment.offer.reminder',
     'shipment.offer.expired',
     'shipment.reassigned_away',
@@ -144,7 +183,15 @@ export const AGENT_NOTIFICATION_TYPES: readonly AgentNotificationType[] = [
     'payout.requested',
     'payout.paid',
     'payout.rejected',
-    'payout.transfer_failed'
+    'payout.transfer_failed',
+    'delivery_fee_proposal.approved',
+    'delivery_fee_proposal.rejected',
+    'delivery_fee_proposal.edited',
+    'delivery_fee_proposal.withdrawn',
+    'fee_proposals.enabled',
+    'fee_proposals.disabled',
+    'cod.pool.pinned',
+    'cod.pool.released'
 ] as const;
 
 /**

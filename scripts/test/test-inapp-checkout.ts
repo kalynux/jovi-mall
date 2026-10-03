@@ -1902,16 +1902,20 @@ function cashOnDeliveryAssertions(): void {
     });
 
     /**
-     * The rules are the order path's own: the quote's per-shipment COD verdict, and
-     * `codEligibilityService.assertVendorOrderEligible`. "Not evaluated" is a refusal, never a pass.
+     * The rules are the order path's own: the quote's per-shipment COD verdict, and the quote's
+     * `cashOnDelivery` refusal — `codEligibilityService.assertVendorOrderEligible`, the SAME verdict
+     * the web shop reads (ADR-A09 G-10). "Not evaluated" is a refusal, never a pass.
      */
-    assert('⛔ eligibility is the order path\'s own rule; "not evaluated" refuses', () => {
+    assert('⛔ eligibility is the order path\'s own rule (via the quote\'s COD refusal); "not evaluated" refuses', () => {
         const rule = span('export async function cashOnDeliveryRefusal(');
+        const quoteSrc = fs.readFileSync(path.join(SCAN_ROOT, 'src/modules/orders/services/cart-quote.service.ts'), 'utf8');
         return rule.includes("if (productType !== 'physical') {")
-            && rule.includes("cartQuoteService.quoteForCustomer(customerId, undefined, 'cash_on_delivery')")
-            && rule.includes('codEligibilityService.assertVendorOrderEligible({')
-            && rule.includes('if (!minimum || agencyIds.length === 0) {')
-            && rule.includes('if (!minimum.met) {');
+            && rule.includes("cartQuoteService.quoteWithCodRefusal(customerId, undefined, 'cash_on_delivery')")
+            && rule.includes('if (codRefusal) return codRefusal;')
+            && rule.includes('if (!minimum) {')
+            && rule.includes('if (!minimum.met) {')
+            && !rule.includes('assertVendorOrderEligible')
+            && quoteSrc.includes('this.codEligibility.assertVendorOrderEligible({');
     });
 
     // ── The screen ───────────────────────────────────────────────────────────────────────

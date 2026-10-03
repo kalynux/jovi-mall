@@ -6,19 +6,18 @@ import { AgentCodPoolService, agentCodPoolService } from '../domain/services/age
 
 /**
  * AgentCodPoolReconcileWorker — nightly convergence of every agent's COD pool onto
- * the rule in `agent-cod-pool.ts` (KYC verdict → administrator pin → plan).
+ * the rule in `agent-cod-pool.ts` (KYC verdict → administrator pin → platform default).
  *
- * The pool is normally kept in step immediately: a KYC verdict syncs it in-line,
- * `plan.activated` and `pricing_plan.updated` sync it through
- * `AgentCodPoolConsumer`. This is the durability half, for the three ways those
- * miss:
+ * The pool is normally kept in step immediately: a KYC verdict and an administrator
+ * pin sync it in-line. (Plan events stopped mattering on 2026-10-02, when the plan
+ * stopped setting the pool, and their consumer was deleted.) This is the durability
+ * half, for the three ways the in-line path misses:
  *
- *   1. a lost event — the in-memory bus is lossy (R-2), and a crash between a plan
- *      commit and its post-commit publish drops it outright;
+ *   1. a verdict whose in-line sync threw after the verdict committed;
  *   2. a sync that failed or lost every compare-and-set, which is logged and left
  *      here rather than retried in a request;
- *   3. agents written before the rule existed (their provenance fields are absent),
- *      which is how a deploy converges an existing roster with no data migration —
+ *   3. agents written before the rule existed (their provenance fields are absent, or
+ *      still say `plan` from the 2026-09-21 rule), which is how a deploy converges an existing roster with no data migration —
  *      and why an operator may want to TRIGGER it once after deploying rather than
  *      wait for the night (it is triggerable from the dev-tools worker console).
  *

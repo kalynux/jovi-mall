@@ -93,7 +93,33 @@ export type AgencyNotificationType =
      */
     | 'storage.stock_request.received'
     | 'storage.stock_request.approved'
-    | 'storage.stock_request.rejected';
+    | 'storage.stock_request.rejected'
+    /**
+     * Per-shipment delivery-fee proposals (2026-10-02). `approved` / `rejected` are the
+     * vendor's answer to a proposal on one of this agency's shipments (whoever raised it);
+     * `agent_proposed` / `agent_edited` tell the agency its AGENT raised or changed one —
+     * the agency is accountable for the fee and may withdraw or edit it.
+     */
+    | 'delivery_fee_proposal.approved'
+    | 'delivery_fee_proposal.rejected'
+    | 'delivery_fee_proposal.agent_proposed'
+    | 'delivery_fee_proposal.agent_edited'
+    /**
+     * COD limits (2026-10-02).
+     * `shipment.cod_limit.forced` — a vendor dispatched a COD shipment to this agency past a
+     *   limit (its own, or the vendor's `maxCashPerAgency`) with `force: true`.
+     * `shipment.assignment.cod_limit_blocked` — auto-assign found no agent because every
+     *   remaining candidate was over their COD AMOUNT limit; the agency may force-assign.
+     *   Replaces `shipment.assignment.unfilled` for that one cause, never both.
+     * `connection.cod_terms_changed` — a connected vendor changed its COD terms.
+     * `cod.limit.pinned` / `cod.limit.released` — an administrator pinned or released this
+     *   agency's COD cash limit. The pin's REASON is never sent (it is admin-only).
+     */
+    | 'shipment.cod_limit.forced'
+    | 'shipment.assignment.cod_limit_blocked'
+    | 'connection.cod_terms_changed'
+    | 'cod.limit.pinned'
+    | 'cod.limit.released';
 export type AgencyAggregateType =
     | 'connection'
     /** An agent↔agency contract — NOT a vendor↔agency connection. */
@@ -109,7 +135,9 @@ export type AgencyAggregateType =
      * that one means the media-file quota, and one aggregate type meaning two
      * unrelated things is how a deep-link ends up on the wrong screen.
      */
-    | 'stock_request';
+    | 'stock_request'
+    /** The agency's own COD cash limit — `aggregateId` is the agency id. */
+    | 'cod_limit';
 
 /**
  * Deep-link action for a notification, localized in the agency's language.
@@ -190,7 +218,17 @@ const AgencyNotificationSchema = new Schema<IAgencyNotification>(
                 'storage.alert',
                 'storage.stock_request.received',
                 'storage.stock_request.approved',
-                'storage.stock_request.rejected'
+                'storage.stock_request.rejected',
+                // ⚠ Hand-kept: every member of the union above must be here too.
+                'delivery_fee_proposal.approved',
+                'delivery_fee_proposal.rejected',
+                'delivery_fee_proposal.agent_proposed',
+                'delivery_fee_proposal.agent_edited',
+                'shipment.cod_limit.forced',
+                'shipment.assignment.cod_limit_blocked',
+                'connection.cod_terms_changed',
+                'cod.limit.pinned',
+                'cod.limit.released'
             ],
             required: true
         },
@@ -198,7 +236,7 @@ const AgencyNotificationSchema = new Schema<IAgencyNotification>(
         message: { type: String, required: true, trim: true, maxlength: 1000 },
         aggregateType: {
             type: String,
-            enum: ['connection', 'contract', 'shipment', 'payout', 'deposit', 'plan', 'storage', 'stock_request'],
+            enum: ['connection', 'contract', 'shipment', 'payout', 'deposit', 'plan', 'storage', 'stock_request', 'cod_limit'],
             required: true
         },
         aggregateId: { type: Schema.Types.ObjectId, required: true },

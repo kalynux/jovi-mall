@@ -30,7 +30,9 @@ export const UpdateAgentNotificationPreferencesSchema = z.object({
         assignmentOffers: z.boolean().optional(),
         contractUpdated: z.boolean().optional(),
         planUpdates: z.boolean().optional(),
-        storageAlert: z.boolean().optional()
+        storageAlert: z.boolean().optional(),
+        codLimitUpdates: z.boolean().optional(),
+        deliveryFeeProposals: z.boolean().optional()
     }).optional()
 });
 

@@ -17,6 +17,8 @@ export interface UpdateAgencyPreferencesPayload {
         planUpdates?: boolean;
         storageAlert?: boolean;
         stockRequestUpdates?: boolean;
+        codLimitUpdates?: boolean;
+        deliveryFeeProposals?: boolean;
     };
 }
 
@@ -53,7 +55,9 @@ export class AgencyNotificationPreferenceRepository {
                     codDepositUpdates: true,
                     planUpdates: true,
                     storageAlert: true,
-                    stockRequestUpdates: true
+                    stockRequestUpdates: true,
+                    codLimitUpdates: true,
+                    deliveryFeeProposals: true
                 }
             });
         }
@@ -128,6 +132,10 @@ export class AgencyNotificationPreferenceRepository {
             // have no value for it, and coalescing to `undefined` would blank the key.
             updatePayload['preferences.stockRequestUpdates'] =
                 updates.preferences.stockRequestUpdates ?? current.preferences.stockRequestUpdates ?? true;
+            updatePayload['preferences.codLimitUpdates'] =
+                updates.preferences.codLimitUpdates ?? current.preferences.codLimitUpdates ?? true;
+            updatePayload['preferences.deliveryFeeProposals'] =
+                updates.preferences.deliveryFeeProposals ?? current.preferences.deliveryFeeProposals ?? true;
         }
 
         const result = await AgencyNotificationPreferenceModel.findOneAndUpdate(

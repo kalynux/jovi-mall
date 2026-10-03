@@ -100,6 +100,23 @@ export class DeliveryAgencyRepository {
   }
 
   /**
+   * Partial update of the assignment settings — only the keys present are written, so a
+   * client sending one toggle cannot reset the other. Returns the updated agency, or null.
+   */
+  async updateAssignmentSettings(
+    agencyId: string,
+    patch: { autoAssignEnabled?: boolean; agentsCanProposeDeliveryFee?: boolean }
+  ): Promise<IDeliveryAgency | null> {
+    const $set: Record<string, boolean> = {};
+    if (patch.autoAssignEnabled !== undefined) $set['assignment_settings.auto_assign_enabled'] = patch.autoAssignEnabled;
+    if (patch.agentsCanProposeDeliveryFee !== undefined) {
+      $set['assignment_settings.agents_can_propose_delivery_fee'] = patch.agentsCanProposeDeliveryFee;
+    }
+    if (Object.keys($set).length === 0) return DeliveryAgencyModel.findById(agencyId).exec();
+    return DeliveryAgencyModel.findByIdAndUpdate(agencyId, { $set }, { new: true }).exec();
+  }
+
+  /**
    * Check if an agency document exists for the given user_id.
    * Used for idempotency check on creation.
    */

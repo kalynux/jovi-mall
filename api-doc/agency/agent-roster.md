@@ -383,7 +383,7 @@ is working today. Filter by `status`, or use `GET /eligible`, for the live view.
         "employment": { "employmentType": "contractor", "employeeRef": "EMP-042", "startedAt": "2026-01-05T00:00:00.000Z", "endsAt": null },
         "remittanceTerms": { "cadence": "weekly", "dayOfWeek": 3, "dayOfMonth": null, "graceHours": 48 },
         "coverage": { "regions": ["littoral", "centre"], "area": null },
-        "feeSplit": { "model": "percentage", "agentSharePercent": 70, "agentFlatFee": null, "currency": "XAF" },
+        "feeSplit": { "model": "percentage", "agentSharePercent": 70, "agentFlatFee": null, "agentMonthlySalary": null, "currency": "XAF" },
         "shipmentValueCeiling": 500000,
         "codThreshold": 200000,
         "codOutstandingBalance": 45000,
@@ -671,16 +671,26 @@ merges field-by-field, so an omitted key keeps its value.
 | `employment` | `employment_type` (`employee`\|`contractor`\|`freelancer`), `employee_ref` *(clearable)*, `started_at`, `ends_at` |
 | `remittance_terms` | `cadence` (`per_delivery`\|`daily`\|`weekly`\|`biweekly`\|`monthly`\|`on_demand`), `day_of_week` (0–6, weekly/biweekly), `day_of_month` (1–28), `grace_hours` (0–720) |
 | `coverage` | `regions` (≤100 **region keys of your country** — see [Coverage regions are picked, not typed](#coverage-regions-are-picked-not-typed); `[]` = no restriction), `area` (GeoJSON `Polygon` or `null`) |
-| `fee_split` | `model` (`percentage`\|`flat`), `agent_share_percent` (0–100), `agent_flat_fee` (minor units), `currency` (3 letters) |
+| `fee_split` | `model` (`percentage`\|`flat`\|`monthly_salary`), `agent_share_percent` (0–100), `agent_flat_fee` (minor units), `agent_monthly_salary` (minor units per month, integer > 0), `currency` (3 letters). When the body names a `model`, the other models' amount fields must be omitted or `null` — otherwise `400` |
 | `shipment_value_ceiling` | integer minor units, or `null` for no per-shipment cap |
 
 > **`fee_split` is what pays the agent.** The earnings split divides by it three times — the agent's
 > offer-time estimate, **your own estimate** (`agencyEarning.agentCut` on
 > [your shipment views](./shipments.md#money)), and the actual at delivery — so it is validated for
 > coherence up front rather than mispaying weeks later: a `percentage` model must end up with an
-> `agent_share_percent`, a `flat` model with an `agent_flat_fee`. The patch is merged over the
+> `agent_share_percent`, a `flat` model with an `agent_flat_fee`, a `monthly_salary` model with an
+> `agent_monthly_salary` (`422 CONTRACT_FEE_SPLIT_INVALID` otherwise). The patch is merged over the
 > stored split before checking, so switching only `model` on a contract that already carries the
 > other value is fine.
+>
+> **`monthly_salary` (2026-10-02) — you pay the agent a salary yourself, off the platform.** The
+> platform then pays the agent **nothing per delivery**: their cut is `0`, no agent earnings row is
+> written, and **you keep the whole delivery fee** (plus the COD handling fee, as on every model).
+> Your shipment estimates show `agencyEarning.agentCut: 0` with `basis: "contract_salary"`.
+> `agent_monthly_salary` is stored **only so both parties see what was agreed** — the platform does
+> not schedule, track, remind about or pay the salary, and nothing on the platform is evidence it
+> was paid. It is negotiated exactly like the other split terms: you may invite or counter with it,
+> and the agent may ask for it or propose it on a live contract.
 >
 > **The agent's cut comes OUT of your delivery fee, never on top.** The vendor pays the same either
 > way. You owe it; the platform pays it, through the agent's own earnings account. Changing this
@@ -972,7 +982,7 @@ The whole roster's trail, newest first.
 | `employment` | object | `employmentType`, `employeeRef`, `startedAt`, `endsAt` |
 | `remittanceTerms` | object | `cadence`, `dayOfWeek`, `dayOfMonth`, `graceHours` |
 | `coverage` | object | `regions` (string[] of **region keys** — `[]` = no restriction; legacy rows may hold free text), `area` (GeoJSON `Polygon` \| null) |
-| `feeSplit` | object | `model`, `agentSharePercent`, `agentFlatFee`, `currency` |
+| `feeSplit` | object | `model` (`percentage`\|`flat`\|`monthly_salary`), `agentSharePercent`, `agentFlatFee`, `agentMonthlySalary`, `currency`. Only the amount matching `model` is meaningful — a value under another model may be a stale leftover of an earlier switch; ignore it |
 | `shipmentValueCeiling` | number \| null | Per-shipment value cap; `null` = uncapped |
 | `codThreshold` | number | This contract's slice of the agent's pool, minor units. Defaults to `0` |
 | `codOutstandingBalance` | number | Cash the agent holds attributable to **this** contract |
@@ -1050,9 +1060,10 @@ type AgentNegotiableTermGroup = 'fee_split' | 'coverage';
 /** The request/counter/proposal body. Every group optional; at least one required. */
 interface NegotiableTermsInput {
   fee_split?: {
-    model?: 'percentage' | 'flat';
+    model?: 'percentage' | 'flat' | 'monthly_salary';
     agent_share_percent?: number | null;  // 0–100
     agent_flat_fee?: number | null;       // minor units, integer
+    agent_monthly_salary?: number | null; // minor units PER MONTH, integer > 0; paid by the agency off-platform
     currency?: string;                    // 3 letters, upper-cased
   };
   coverage?: {
@@ -1116,9 +1127,10 @@ interface AgentMembershipDto {
     area: { type: 'Polygon'; coordinates: number[][][] } | null;
   };
   feeSplit: {
-    model: 'percentage' | 'flat';
+    model: 'percentage' | 'flat' | 'monthly_salary';
     agentSharePercent: number | null;  // 0–100, when model is 'percentage'
     agentFlatFee: number | null;       // minor units, when model is 'flat'
+    agentMonthlySalary: number | null; // minor units per month, when model is 'monthly_salary' (paid off-platform)
     currency: string;
   };
   shipmentValueCeiling: number | null;

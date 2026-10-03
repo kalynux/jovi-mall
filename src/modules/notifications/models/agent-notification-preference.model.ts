@@ -84,6 +84,15 @@ export interface IAgentNotificationPreference extends Document {
          * are always delivered, as with `assignmentOffers`.
          */
         payoutUpdates: boolean;
+        /**
+         * COD limits (2026-10-02) — see each stack's situations. Defaults ON. Rows written
+         * before this flag existed carry no value: handlers treat `undefined` as ON.
+         */
+        codLimitUpdates: boolean;
+        /**
+         * Per-shipment delivery-fee proposals (2026-10-02). Defaults ON; `undefined` = ON.
+         */
+        deliveryFeeProposals: boolean;
     };
 
     updatedAt: Date;
@@ -149,6 +158,14 @@ const AgentNotificationPreferenceSchema = new Schema<IAgentNotificationPreferenc
                 default: true
             },
             payoutUpdates: {
+                type: Boolean,
+                default: true
+            },
+            codLimitUpdates: {
+                type: Boolean,
+                default: true
+            },
+            deliveryFeeProposals: {
                 type: Boolean,
                 default: true
             }

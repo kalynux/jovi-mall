@@ -15,6 +15,7 @@ import {
 } from './api/middlewares/bot-webhook.middleware';
 import { assertBotErrorCopyComplete } from './modules/bot-surface/domain/bot-error-copy';
 import { assertBotOnboardingCopyComplete } from './modules/bot-surface/domain/bot-onboarding-copy';
+import { assertOnboardingReviewCopyComplete } from './modules/bot-surface/domain/onboarding-review';
 import { assertBotChromeCopyFits } from './modules/bot-surface/domain/bot-chrome-copy';
 import { assertCommandCopyComplete } from './modules/bot-commands/domain/command-copy';
 import { assertMiniAppCopyComplete } from './modules/bot-surface/miniapp/miniapp-copy';
@@ -33,7 +34,6 @@ import { closeRedisClients } from './infra/redis/redis.factory';
 import { planExpiryWorker } from './modules/billing/workers/plan-expiry.worker';
 import { agencyShipmentCapWorker } from './modules/billing/workers/agency-shipment-cap.worker';
 import { registerAgentPlanCapacityConsumer } from './modules/agents/events/agent-plan-capacity.consumer';
-import { registerAgentCodPoolConsumer } from './modules/agents/events/agent-plan-cod-pool.consumer';
 import { registerPlanQuotaConsumer } from './modules/plan-quota/events/plan-quota.consumer';
 import { planQuotaReconcileWorker } from './modules/plan-quota/workers/plan-quota-reconcile.worker';
 import { initializeVendorNotificationEventConsumers } from './modules/notifications/vendor-notification-event-consumer';
@@ -156,6 +156,7 @@ export async function startServer(): Promise<Server> {
     // would produce a `next` the automation layer cannot voice — which is exactly the defect
     // this pair was added to close, arriving again by a different door.
     assertBotOnboardingCopyComplete();
+    assertOnboardingReviewCopyComplete();
     // And the same assert for the CHROME — button labels, list headings. It additionally
     // checks each string against its channel's cap, which is the half worth having: a
     // missing label is loud the first time somebody reads that language, while one two
@@ -394,12 +395,11 @@ function startBackgroundWork(): void {
     registerAgentPlanCapacityConsumer();
     agencyShipmentCapWorker.start();
 
-    // Agent COD pool: plan × KYC verdict × administrator pin (2026-09-21). TWO
-    // registrations for plan-quota's reason — the consumer is the fast path on the lossy
-    // bus (plan.activated, and pricing_plan.updated for an in-place edit, which emits no
-    // plan.activated at all); the worker is the durability guarantee, and is also what
-    // converges agents written before the rule existed. (A KYC verdict syncs in-line.)
-    registerAgentCodPoolConsumer();
+    // Agent COD pool: KYC verdict × administrator pin, else the platform default (500 000).
+    // Since 2026-10-02 the plan no longer sets it, so the plan-event consumer is GONE (it had
+    // nothing left to react to). A KYC verdict and a pin sync in-line; this worker is the
+    // durability backstop and is what converges agents synced under the old plan rule
+    // ('plan' source → 'default') — press it once after deploying that change.
     agentCodPoolReconcileWorker.start();
 
     // Plan quota: bring an owner's catalog and media library inside their plan after a

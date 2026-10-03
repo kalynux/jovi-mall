@@ -7,6 +7,7 @@ import { ICustomer } from '../customer.model';
 import { UpdateCustomerProfileInput, AddCustomerAddressInput, UpdateCustomerAddressInput } from '../validators/customer-onboarding.validator';
 import { paymentMethodService } from '../../payment-methods/services/payment-method.service';
 import { toGeoAddress, dropNullLocation } from '../../../core/types/geo-address.types';
+import { canonicalizeAddressRegion } from '../../../core/validation/address-country.helper';
 import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
 import { FileReferenceRepositoryMongo } from '../../catalog/repositories/mongo/file-reference.repository.mongo';
 import { FileReferenceService } from '../../catalog/domain/services/media/FileReferenceService';
@@ -109,9 +110,14 @@ export class CustomerProfileService {
         // 2dsphere-indexed on the deprecated bare `location`, and a stored null
         // beside a real point on another address refuses EVERY write to this
         // customer document from then on. See `dropNullLocation`.
+        // The region is pinned to one of the country's regions, or the save is refused
+        // (ADDRESS_REGION_INVALID) — it is what agency coverage is matched against. The
+        // legacy `state` field follows it so the two never disagree.
+        const pinned = geo ? canonicalizeAddressRegion(geo) : null;
         const address = {
             ...dropNullLocation(rest),
-            geo: geo ? toGeoAddress(geo) : null,
+            ...(pinned?.components?.region ? { state: pinned.components.region } : {}),
+            geo: pinned ? toGeoAddress(pinned) : null,
         } as ICustomer['saved_addresses'][number];
 
         const updated = await this.customerRepo.addAddress(customerId, address);
@@ -141,10 +147,13 @@ export class CustomerProfileService {
         if (!hasAddress) throw createAppError(ERROR_CODES.CUSTOMER_ADDRESS_NOT_FOUND, 404);
 
         const { geo, ...rest } = input;
+        // Same region rule as `addAddress`.
+        const pinned = geo ? canonicalizeAddressRegion(geo, { addressId }) : geo;
         const updates = {
             ...rest,
+            ...(pinned?.components?.region ? { state: pinned.components.region } : {}),
             // `undefined` (key omitted) leaves the stored value alone; `null` clears it.
-            ...(geo === undefined ? {} : { geo: geo ? toGeoAddress(geo) : null }),
+            ...(pinned === undefined ? {} : { geo: pinned ? toGeoAddress(pinned) : null }),
         } as Partial<ICustomer['saved_addresses'][number]>;
 
         const updated = await this.customerRepo.updateAddress(customerId, addressId, updates);

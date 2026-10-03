@@ -309,6 +309,24 @@ async function main(): Promise<void> {
     await assert('inside Telegram the page still closes, and returns before drawing a way back', () =>
         /if \(tg && tg\.close\) \{[\s\S]{0,120}tg\.close\(\);[\s\S]{0,60}return;\s*\}/.test(PAGE));
 
+    /**
+     * ⛔ 2026-10-02, from production logs: `telegram-web-app.js` defines `Telegram.WebApp` on ANY
+     * page, so testing the object made a WhatsApp page "close" (a no-op) and skip the way back.
+     */
+    await assert('⛔ the page is Telegram only when launched by Telegram (`initData`), not when the script loaded', () =>
+        /var tg = \(window\.Telegram && window\.Telegram\.WebApp && window\.Telegram\.WebApp\.initData\)/.test(PAGE));
+
+    await assert('on WhatsApp a Bargain press goes straight back to the chat it was posted in', () =>
+        /if \(out\.outcome === "chat"\) \{\s*window\.setTimeout\(function \(\) \{ window\.location\.assign\(out\.chatUrl\); \}/.test(PAGE));
+
+    /**
+     * ⛔ The other half of the same report: `externalId` is Meta's bare-digit `wa_id`, and the
+     * messenger refuses anything but strict E.164 — every WhatsApp push was refused with
+     * `WHATSAPP_VALIDATION_ERROR` and nothing reached the chat.
+     */
+    await assert('⛔ the WhatsApp push repairs the bare-digit wa_id to E.164 before sending', () =>
+        /sendText\(\{\s*to: messagingPhoneToE164\(externalId\) \?\? externalId,/.test(PURCHASE));
+
     await assert('the question keeps its line break under the button', () =>
         /#note \{ white-space: pre-line; \}/.test(PAGE));
 

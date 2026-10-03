@@ -2,7 +2,8 @@ import { Types } from 'mongoose';
 import {
     VendorSettingsModel,
     IVendorSettings,
-    IVendorCustomerFlagSub
+    IVendorCustomerFlagSub,
+    IVendorCodTermsSub
 } from '../models/vendor-settings.model';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
@@ -86,6 +87,59 @@ export class VendorSettingsRepository {
         settings.auto_cancel_unpaid_days = days;
         await settings.save();
         return settings.auto_cancel_unpaid_days;
+    }
+
+    // ─── COD terms (2026-10-02) ──────────────────────────────────────────────────
+
+    /**
+     * The vendor's raw COD terms block, or null when never set. READ-ONLY: unlike the
+     * getters above it never upserts, because checkout and dispatch read it and must
+     * not write a settings document as a side effect. Callers apply the defaults with
+     * `vendorCodTermsOf()`.
+     */
+    async findCodTerms(vendorId: string): Promise<IVendorCodTermsSub | null> {
+        const doc = await VendorSettingsModel.findOne(
+            { vendor_id: new Types.ObjectId(vendorId) },
+            { cod_terms: 1 }
+        ).lean().exec();
+        return (doc?.cod_terms as IVendorCodTermsSub | null | undefined) ?? null;
+    }
+
+    /** The same, for many vendors at once — keyed by vendor id; absent = never set. */
+    async findCodTermsForVendors(vendorIds: string[]): Promise<Map<string, IVendorCodTermsSub>> {
+        const ids = [...new Set(vendorIds)].filter((id) => Types.ObjectId.isValid(id));
+        const out = new Map<string, IVendorCodTermsSub>();
+        if (ids.length === 0) return out;
+        const docs = await VendorSettingsModel.find(
+            { vendor_id: { $in: ids.map((id) => new Types.ObjectId(id)) } },
+            { vendor_id: 1, cod_terms: 1 }
+        ).lean().exec();
+        for (const d of docs) {
+            if (d.cod_terms) out.set(String(d.vendor_id), d.cod_terms as IVendorCodTermsSub);
+        }
+        return out;
+    }
+
+    /** Replace the vendor's COD terms wholesale. Upserts the settings document. */
+    async setCodTerms(
+        vendorId: string,
+        terms: { cod_enabled: boolean; max_cash_per_agency: number | null }
+    ): Promise<IVendorCodTermsSub> {
+        const doc = await VendorSettingsModel.findOneAndUpdate(
+            { vendor_id: new Types.ObjectId(vendorId) },
+            {
+                $set: {
+                    cod_terms: {
+                        cod_enabled: terms.cod_enabled,
+                        max_cash_per_agency: terms.max_cash_per_agency,
+                        updated_at: new Date(),
+                    },
+                },
+                $setOnInsert: { vendor_id: new Types.ObjectId(vendorId), customer_flags: [] },
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
+        ).lean().exec();
+        return doc!.cod_terms as IVendorCodTermsSub;
     }
 
     // ─── Customer flags ────────────────────────────────────────────────────────

@@ -545,6 +545,7 @@ Plan templates (`agent_plan_expiring`, `agent_plan_expired`) are in §9.
 | `agent_cod_deposit_confirmed` | `{{1}}`=currency, `{{2}}`=amount, `{{3}}`=confirmed-by name | `cod/deposits/{{depositId}}` · View deposit | Your deposit of {{1}} {{2}} was confirmed by {{3}}. Your balance has been reduced and your COD limit freed up. |
 | `agent_cod_deposit_rejected` | `{{1}}`=confirmed-by name, `{{2}}`=currency, `{{3}}`=amount, `{{4}}`=rejection reason | `cod/deposits/{{depositId}}` · View deposit | {{1}} rejected your declared deposit of {{2}} {{3}}. Reason: {{4}}. The cash is still on your balance and your deposit deadline is running again — sort this out with them, or report it. |
 | `agent_shipment_offer_received` | `{{1}}`=agency name, `{{2}}`=order number | `offers/{{offerId}}` · Review offer | {{1}} is offering you a delivery for order {{2}}. Review and accept it before it expires. |
+| ⭐ `agent_shipment_offer_batch_received` | `{{1}}`=agency name, `{{2}}`=count | `offers` · Review offers | {{1}} is offering you {{2}} deliveries. Review and accept them before they expire. — ⏳ GENERATED 2026-10-03, **NOT SUBMITTED** (see the last section) |
 | `agent_shipment_offer_reminder` | `{{1}}`=agency name, `{{2}}`=order number | `offers/{{offerId}}` · Review offer | Your delivery offer from {{1}} for order {{2}} is still open. Accept it now before another agent takes it. |
 | `agent_shipment_offer_expired` | `{{1}}`=agency name, `{{2}}`=order number | `offers/{{offerId}}` · Review offer | The delivery offer from {{1}} for order {{2}} expired because it wasn't accepted in time. |
 | `agent_shipment_reassigned_away` | `{{1}}`=order number, `{{2}}`=agency name | **none** | The delivery for order {{1}} has been reassigned to another agent by {{2}}. You are no longer responsible for it, and its customer and tracking details are no longer available to you. It stays in your activity history. |
@@ -1330,3 +1331,88 @@ overridden per run with `--base-<audience>=https://…`. ⚠ **The generator doe
 set the variables in the shell. The repository's development values are `http://` addresses and
 would be refused. There is **no host allowlist in code**, so the hosts in the committed JSON record
 the last run's environment, not a rule.
+
+---
+
+## 2026-10-02 — COD limits + delivery-fee proposals: 21 templates SUBMITTED, PENDING Meta review
+
+✅ **Submitted to Meta on 2026-10-02 (`en` + `fr`, 42 submissions); every one is PENDING review.**
+This heading read "GENERATED, NOT SUBMITTED" until the submission later the same day. Generated
+into `whatsapp-template-payloads.json` (`npm run whatsapp:templates`, 106 → **127** names, 212 →
+**254** submissions).
+
+⚠ **How it was submitted, because the one-liner below does not work as written:**
+`scripts/submit-whatsapp-templates.ts` reads `WHATSAPP_WABA_ID` and `WHATSAPP_ACCESS_TOKEN`
+(`:58`; refuses at `:201` when either is empty) and does **not** load `.env` itself — and the
+repository's `.env` names the account `WHATSAPP_BUSINESS_ACCOUNT_ID`, not `WHATSAPP_WABA_ID`. The
+working form is `WHATSAPP_WABA_ID=<waba> npx ts-node -r dotenv/config
+scripts/submit-whatsapp-templates.ts --submit`. ⛔ The script now hard-refuses
+`wi_mall_phone_verification_utility` (`NEVER_SUBMIT`, `:79`), which Meta REJECTED on content —
+pinned by `test:customer-notifications`.
+
+The paragraph below is the pre-submission text, kept for the record: the 21 had been generated
+and **nothing had yet been sent to Meta**. Until they are submitted and APPROVED, these situations deliver on
+in-app, push, email, Telegram and **in-window** WhatsApp only; an out-of-window WhatsApp send
+fails exactly as every new situation's does on day one. Submit with
+`npm run whatsapp:templates:submit -- --submit` (idempotent — it sends only the difference).
+
+The regeneration was checked against the previous file: **all 212 existing submissions are
+byte-identical** (no edits would be sent). That includes `agent_shipment_offer_received`, whose
+base copy gained an optional `{{forcedLine}}` — its WhatsApp copy is pinned to the old body
+through `whatsapp.text`, because the approved template is frozen.
+
+Button hosts baked in: `vendor.wi-mall.com`, `agency.wi-mall.com`, `agent.wi-mall.com` (same as
+every existing template — a different host means a different template name).
+
+| Template name | Audience | Situation | Button path |
+|---|---|---|---|
+| `vendor_shipment_cod_limit_held` | vendor | `shipment.cod_limit_held` | `orders/{{orderId}}` |
+| `vendor_delivery_fee_proposal_received` | vendor | `delivery_fee_proposal.received` | `orders/{{orderId}}` |
+| `vendor_delivery_fee_proposal_edited` | vendor | `delivery_fee_proposal.edited` | `orders/{{orderId}}` |
+| `vendor_delivery_fee_proposal_withdrawn` | vendor | `delivery_fee_proposal.withdrawn` | `orders/{{orderId}}` |
+| `agency_delivery_fee_proposal_approved` | agency | `delivery_fee_proposal.approved` | `shipments/{{shipmentId}}` |
+| `agency_delivery_fee_proposal_rejected` | agency | `delivery_fee_proposal.rejected` | `shipments/{{shipmentId}}` |
+| `agency_delivery_fee_proposal_agent_proposed` | agency | `delivery_fee_proposal.agent_proposed` | `shipments/{{shipmentId}}` |
+| `agency_delivery_fee_proposal_agent_edited` | agency | `delivery_fee_proposal.agent_edited` | `shipments/{{shipmentId}}` |
+| `agency_shipment_cod_limit_forced` | agency | `shipment.cod_limit.forced` | `shipments/{{shipmentId}}` |
+| `agency_shipment_cod_limit_unfilled` | agency | `shipment.assignment.cod_limit_blocked` | `shipments/{{shipmentId}}` |
+| `agency_connection_cod_terms_changed` | agency | `connection.cod_terms_changed` | `vendor-connections/{{connectionId}}` |
+| `agency_cod_limit_pinned` | agency | `cod.limit.pinned` | `cod/limit` ⭐ new |
+| `agency_cod_limit_released` | agency | `cod.limit.released` | `cod/limit` ⭐ new |
+| `agent_delivery_fee_proposal_approved` | agent | `delivery_fee_proposal.approved` | `shipments/{{shipmentId}}` ⭐ new |
+| `agent_delivery_fee_proposal_rejected` | agent | `delivery_fee_proposal.rejected` | `shipments/{{shipmentId}}` ⭐ new |
+| `agent_delivery_fee_proposal_edited` | agent | `delivery_fee_proposal.edited` | `shipments/{{shipmentId}}` ⭐ new |
+| `agent_delivery_fee_proposal_withdrawn` | agent | `delivery_fee_proposal.withdrawn` | *(no button)* |
+| `agent_fee_proposals_enabled` | agent | `fee_proposals.enabled` | `memberships/{{contractId}}` |
+| `agent_fee_proposals_disabled` | agent | `fee_proposals.disabled` | `memberships/{{contractId}}` |
+| `agent_cod_pool_pinned` | agent | `cod.pool.pinned` | `cod` ⭐ new |
+| `agent_cod_pool_released` | agent | `cod.pool.released` | `cod` ⭐ new |
+
+⚠ **Read before submitting.** Four bodies carry a handler-composed, localised clause as one
+parameter (`{{limitReason}}`, `{{termsLine}}`, `{{reasonLine}}`), the same technique as
+`vendor_booking_created`'s `{{actionLine}}`. Several bodies open or close on a parameter and were
+padded by the generator (its "lead"/"tail" report) — read each once to confirm it still scans.
+Meta may re-categorise UTILITY → MARKETING on review; only an APPROVED row states a verdict.
+
+---
+
+## 2026-10-03 — bulk offer: 1 template GENERATED, NOT SUBMITTED
+
+⏳ **Generated into `whatsapp-template-payloads.json`, nothing sent to Meta.** 127 → **128** names,
+254 → **256** submissions (`en` + `fr`). The regeneration was diffed against the previous file:
+the two new submissions are the only difference, and **every existing submission is
+byte-identical**.
+
+| Template name | Audience | Situation | Button path |
+|---|---|---|---|
+| `agent_shipment_offer_batch_received` | agent | `shipment.offer.batch_received` | `offers` ⭐ new (the offers list) |
+
+Body: `{{1}} is offering you {{2}} deliveries. Review and accept them before they expire.`
+(`{{1}}` agency name, `{{2}}` count). The base copy's optional `{{forcedLine}}` ("N of them were
+sent above your cash-on-delivery limit") is deliberately **not** in the WhatsApp body, as on
+`agent_shipment_offer_received`: it would be an empty parameter on every unforced batch.
+
+Until it is submitted and APPROVED, a bulk offer reaches the agent by in-app, push, email,
+Telegram and **in-window** WhatsApp only, and an out-of-window WhatsApp send fails, the same as
+every new situation on its first day. Submit with the working form recorded in the 2026-10-02
+section above (`--submit` is idempotent and sends only the difference).

@@ -298,6 +298,12 @@ little more from the same shop"). `details.shortfall` is the amount, in `details
   **before** asking the customer to confirm, and name the shop and the shortfall.
 - Cash on delivery is checked **per delivery agency**, online per shop: a basket can pass online
   and fail as COD. Quote with the method the customer chose.
+- Since 2026-10-03 every quote also carries **`cashOnDelivery: { available, reason, vendorIds }`**
+  — whether checkout would accept the basket as cash on delivery at all (vendor terms, agency COD
+  support and per-order maximum, digital basket), whatever `paymentMethod` was sent. `reason` is
+  `vendor_not_accepted | agency_not_supported | order_amount_exceeds_limit | digital_items`, 1:1
+  with checkout's `COD_*` codes. Do not offer pay-on-delivery while `available` is `false`.
+  Contract: `api-doc/customer/cart.md` § `cashOnDelivery`.
 - The chat checkout (`checkout_place`) refuses it **before** spending its handle
   (`details.spent: false`), so the same turn can add an item and try again.
 - ⭐ **`checkout_review` catches it first.** A short shop makes the review answer `ready: false`,
@@ -895,19 +901,55 @@ question is already the natural place for it. Product owner's decision, 2026-08-
 
 ### 11.3 · The checklist
 
-Four steps, in this order. **The order is the ask order** and `next` walks it.
+Six steps, in this order — the five below, then `terms` (§ 11.5). **The order is the ask order** and `next` walks it.
 
 | Step | Required | Satisfied by | Notes |
 |---|---|---|---|
-| `phone` | ✔ | WhatsApp: automatically at creation. Telegram: a verified contact | The account's identifier. First, because on Telegram nothing else can be recorded until it exists |
+| `language` | ✔ | the `lang:<code>` picker tap, or `language` (a code or a typed name: `fr`, `Français`, `french`) | **New accounts only, and FIRST** (2026-10-02). `next.kind` is `"language_choice"`; in its `reply` the question is written in English AND French, under two buttons, **English · Français** (owner, 2026-10-02 — the market is Cameroon; the other three languages stay supported, just not offered). Writes `preferences.language`. Left out of an anonymous Telegram chat's checklist — there is no account to hold it until the contact share, after which it is the next question |
+| `phone` | ✔ | WhatsApp: automatically at creation. Telegram: a verified contact | The account's identifier. On Telegram nothing else can be recorded until it exists |
 | `name` | ✔ | `name` (2–100 chars) | Pre-filled from the messaging profile, so the ask is a confirmation. **Cannot be skipped** — it is what a delivery agent reads |
 | `email` | | `email`, or `action: "skip"` | Written to the profile only. Never becomes a login identifier |
 | `address` | | an `address` object, or `action: "skip"` | Same shape as `addresses_add`. The first address saved is always the default |
 
-**Language is never a step.** It is seeded at creation from `identity.language` (Telegram's
-`from.language_code`; WhatsApp sends nothing) when it matches one of `en · fr · pt · es · ar`,
-and corrected afterwards by `profile_set_language`. A later hint never overwrites a stored
-preference.
+**Language IS a step now — the first one** (owner, 2026-10-02: "one of the first things to
+ask is the user's language"). Until then it was seeded silently, and a WhatsApp customer —
+whose channel sends no locale — was registered entirely in English. It is still *seeded* at
+creation from `identity.language` (Telegram's `from.language_code`) when it matches one of
+`en · fr · pt · es · ar`, which decides only the language the picker question itself is written
+in for the lead after it; the language question itself is always English and French, and so is the first-contact lead when it precedes it. Accounts created
+before the step existed are never asked. A later hint never overwrites a stored preference.
+
+⭐ **The last setup reply leads with a REVIEW of what was recorded** (owner, 2026-10-03) — name,
+phone, email, delivery address and language, each shown back (`not provided` for a skipped one),
+ending "Is everything correct? If anything is wrong, just tell me what to change.", then the
+welcome (or a held Bargain link's question). Why: asked for a name, a customer sometimes asks a
+question instead, and the question is saved as the name. Corrections go to the assistant, which
+sees this reply in `recentlySent`. No n8n change. `domain/onboarding-review.ts`.
+
+⭐ **The first reply leads with "setup comes first".** On the sync that creates the customer
+(`isNew`, or `upgraded`), and on every anonymous Telegram turn, `next.prompt` and `reply` both
+begin with a short lead — *"Before I can help with your request, I need to set up your account…
+I'll come back to your message as soon as we're done"* — followed by the question. That
+promise is kept by the first-message carry (§ 11.2); remove the carry and this copy must change.
+
+⛔ **`wi-mall-core` needs the `yes:tos` edit EXTENDED to `lang:` taps, BEFORE the backend
+deploys.** `route turn` sends every turn to `route onboarding` while `onboarding.next` is set,
+and that node knows only `skip:` and `gc_` — so a `lang:fr` tap falls to `relay prompt` and
+the customer is asked for their language forever. Replace rule **`onboarding`**'s left value
+with:
+
+```
+{{ $json.data?.onboarding?.next != null && !($('Inbound').item.json.kind === 'token' && ($('Inbound').item.json.token === 'yes:tos' || String($('Inbound').item.json.token).startsWith('lang:'))) }}
+```
+
+The tap then reaches `POST /catalog/action`, whose `lang:` handler records the step and answers
+with the NEXT question, already in the chosen language. ✅ **Applied and published 2026-10-02** —
+`UP-wi-mall-core` version `46aff93c`, together with the AI Agent rule "reply in the language of the
+latest message; ask before saving a different one via `profile_set_language`". Verified by re-fetch:
+two nodes changed (`route turn`, `AI Agent`), connections identical. Rollback: publish `9cc4422e`. Typed names are accepted by
+`POST /identity/onboarding` (`language`), but no `route onboarding` rule submits
+`kind: "language_choice"` yet, so typed text is answered with the question again — the picker
+is the path.
 
 ⚠ **Forward `identity.language` on Telegram.** Before an account exists it is the only thing
 deciding whether that first prompt is French or English — there is no profile to read yet.

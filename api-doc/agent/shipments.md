@@ -26,6 +26,7 @@ The transition table was re-derived from `TRIGGERABLE_TRANSITIONS` (not copied).
 - [`GET /api/agent/shipments/:id/route`](#route) — the pickup → drop-off line, for drawing on a map
 - [`POST /api/agent/shipments/:id/status`](#status) — advance the shipment (pickup, in transit, delivered, failed, returned)
 - [`POST /api/agent/shipments/:id/cancel`](#cancel) — cancel a shipment mid-delivery (with reason)
+- [`GET|POST /api/agent/shipments/:id/delivery-fee-proposals`](#delivery-fee-proposals) — propose a different delivery fee (only if your agency allows it) · `POST …/:proposalId/withdraw`
 - `POST /api/agent/shipments/:id/cod/collect` — submit the customer's delivery code (see [cod-cash.md](./cod-cash.md#collect))
 - `POST /api/agent/shipments/:id/cod/resend-code` — resend the delivery code (see [cod-cash.md](./cod-cash.md#resend))
 - `POST /api/agent/shipments/:id/delivery-proof` — attach the proof photograph (see [delivery-proof.md](./delivery-proof.md#post-apiagentshipmentsiddelivery-proof))
@@ -178,7 +179,8 @@ what you see, and one who removes it leaves the item without a picture.
 | `amount` | Your cut, in minor units. **`0` is a real answer** — it means your contract's `fee_split` pays nothing for this job (commonly, a contract whose split was never configured). |
 | `estimated` | Always `true`. Your agency's pricing and your contract's split are re-read when the money is actually divided, so a change in between changes what you are paid. |
 | `deliveryFee` | The whole fee your cut comes out of. |
-| `basis` | `contract_percentage` or `contract_flat`. |
+| `basis` | `contract_percentage`, `contract_flat` or `contract_salary` (2026-10-02). Under `contract_salary` `amount` is always `0`: the agency pays you a monthly salary off-platform. |
+| `salary` | `null`, except under `contract_salary`: `{ monthlyAmount, currency, paidBy: "agency_off_platform" }` — the agreed monthly salary, so the app can explain the `0`. Informational; the platform never pays or tracks it. |
 | `earningUnavailable` | Non-null **instead of** `earning` when no quote is possible: `no_contract` (no live contract with the dispatching agency) or `no_agency_policy` (the agency has no pricing configured). |
 
 Both COD and online-paid shipments quote an earning — they pay at different moments (COD off the cash
@@ -477,6 +479,7 @@ three entries, which is exactly the story an agency or a dispute needs.
 - `404` – `SHIPMENT_NOT_FOUND` – Shipment does not exist or is not assigned to this agent.
 - `409` – `SHIPMENT_STATUS_CONFLICT` – Your agency (or another request) moved the shipment between your read and your write. `details: { expectedStatus, to }`. **Reload the shipment and retry** — do not blind-retry the same body.
 - `422` – `SHIPMENT_AGENT_NOT_ASSIGNED` – No agent has accepted this shipment yet.
+- `409` – `SHIPMENT_DELIVERY_FEE_PENDING` – **New 2026-10-02.** `picked_up` while a [delivery-fee proposal](#delivery-fee-proposals) on this shipment awaits the vendor (yours or your agency's). `details.proposalId`. Pickup unblocks when the vendor answers or the proposal is withdrawn.
 
 > Your agency is notified when you set `picked_up`, `agent_delivered`, `failed` or `returned` (with
 > your reason, when you gave one). `in_transit` is not pushed at them.
@@ -541,6 +544,53 @@ offerable, non-terminal state) and a handover collection point is recorded for t
 - `404` – `SHIPMENT_NOT_FOUND` – Shipment does not exist or is not assigned to this agent.
 - `422` – `SHIPMENT_CANCEL_NOT_ALLOWED` – The shipment's status is not agent-cancellable (e.g. already `delivered`/`returned`), or its order is already completed.
 - `409` – `SHIPMENT_CANCEL_CONFLICT` – The shipment moved (a concurrent reassignment/status change) between read and write. `details: { expectedAgentId, expectedStatus }`. Retry from a fresh read.
+
+> Cancelling also **withdraws a pending delivery-fee proposal you raised** on the shipment
+> (`withdrawalReason: "agent_detached"`); the same happens if your agency reassigns it away.
+
+---
+
+<a name="delivery-fee-proposals"></a>
+### Delivery-fee proposals (2026-10-02)
+
+You may propose a different delivery fee for a shipment **only when both hold**:
+1. you hold its **accepted** offer (it is on your list — `agentId` is you), and
+2. your agency has turned on `agentsCanProposeDeliveryFee` in its assignment settings —
+   otherwise `403 DELIVERY_FEE_PROPOSAL_AGENTS_NOT_ALLOWED`. (There is no endpoint telling the
+   agent the setting; a client learns it from this 403, or shows the action and handles it.)
+
+The vendor approves or rejects every change, up or down. Same rules as the agency's
+([agency/shipments.md](../agency/shipments.md#delivery-fee-proposals)): only before pickup
+(`assigned` / `handing_over`), one pending per shipment, two non-withdrawn per shipment, an
+integer fee ≥ 0 that differs from the current one, a required `reason`, and it must leave the
+vendor earning more than 0 (the 30% cap does not apply). **While a proposal is pending you cannot
+mark the shipment `picked_up`** (`409 SHIPMENT_DELIVERY_FEE_PENDING`).
+
+- `GET /api/agent/shipments/:id/delivery-fee-proposals` — the shipment's proposals (yours and the
+  agency's), newest first. Also on the detail as `deliveryFeeProposals`.
+- `POST /api/agent/shipments/:id/delivery-fee-proposals` — body
+  `{ "proposedFee": 2500, "reason": "Customer moved the drop-off 12 km out" }` → `201`, the
+  proposal (same shape as the agency's, `proposedBy.role: "agent"`, `proposedBy.agentId` = you).
+- `POST /api/agent/shipments/:id/delivery-fee-proposals/:proposalId/withdraw` — **your own**
+  proposals only (`403 DELIVERY_FEE_PROPOSAL_NOT_YOURS` for the agency's). Your agency may also
+  withdraw yours.
+- `PATCH /api/agent/shipments/:id/delivery-fee-proposals/:proposalId` — **edit** your own pending
+  proposal: `{ "proposedFee"?, "reason"?, "version"? }` (at least one of fee / reason). Still the
+  same single request, still pending, same rules as creating. Only while your agency's preference
+  is on (`403 DELIVERY_FEE_PROPOSAL_AGENTS_NOT_ALLOWED` otherwise). Stale `version` →
+  `409 DELIVERY_FEE_PROPOSAL_VERSION_MISMATCH`.
+
+Your proposal goes **straight to the vendor**; your agency sees it too and may **edit** it. Once
+the agency has edited it (`agencyEdited: true`) it is the agency's: you can no longer edit or
+withdraw it (`availableActions` is empty for you), and it is **not** withdrawn if you are
+reassigned away. Payloads carry `version`, `edits[]`, `lastEditedBy`, `agencyEdited`.
+
+Once approved, the shipment's `deliveryFeeOverride.amount` is the fee, and your `earning`
+(list, detail, offers) is cut from it — `earning.deliveryFee` shows it.
+
+**Payload additions** on list rows, the detail, the status response and offer rows:
+`deliveryFeeProposalPending`, `pendingDeliveryFeeProposalId`, `deliveryFeeOverride`
+(`{ amount, proposalId, approvedAt }` | null); the detail adds `deliveryFeeProposals`.
 
 ---
 

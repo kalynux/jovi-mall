@@ -41,6 +41,8 @@
  * that has to change, and the `null` becomes a real value at one call site.
  */
 
+import { resolveRegionKey } from '../../../core/constants/locations.helper';
+
 /** Why this product is or is not deliverable, in a closed set the caller can branch on. */
 export type DeliverabilityReason =
     /** Physical, an agency resolves, and it is the agency's to carry. */
@@ -147,13 +149,15 @@ export function buildDeliveryPromise(input: DeliveryPromiseInput): DeliveryPromi
  * telling a customer their town is not served, on the strength of an empty array that means
  * the agency never filled the field in.
  *
- * The comparison is case-insensitive because `coverage_areas` holds region KEYS
+ * Compared through `resolveRegionKey`, because `coverage_areas` holds region KEYS
  * (`normalizeCoverageAreasForCountry`) while the region reaching this tool came out of a
- * chat message.
+ * chat message or a geocoder — "Centre Region", "Région du Centre" and `centre` are one
+ * region. A plain lowercase compare said an agency covering `centre` did not serve
+ * "Centre Region".
  */
 function resolveCoverage(coverageAreas: string[], region: string | undefined): boolean | null {
     if (!region || coverageAreas.length === 0) return null;
-    const needle = region.trim().toLowerCase();
+    const needle = resolveRegionKey(region);
     if (needle.length === 0) return null;
-    return coverageAreas.some((area) => area.trim().toLowerCase() === needle);
+    return coverageAreas.some((area) => resolveRegionKey(area) === needle);
 }

@@ -16,7 +16,7 @@ Pure logic: `src/modules/payments/domain/payment-provider.ts` and
 | Layer | What it is | Values | Who chooses |
 |---|---|---|---|
 | **Provider** | what the customer holds and pays with | `MTN` · `ORANGE` · `MOOV` · `CARD` | the **customer**, on the client |
-| **Aggregator** (called `gateway` in code and on stored rows) | the company the backend calls to move the money | `NOTCHPAY` · `MYCOOLPAY` · `STRIPE` · `CAMPAY` (later `FLUTTERWAVE`) | an **administrator**, at runtime, in wi-admin dev tools |
+| **Aggregator** (called `gateway` in code and on stored rows) | the company the backend calls to move the money | `NOTCHPAY` · `MYCOOLPAY` · `STRIPE` · `CAMPAY` · `CINETPAY` · `FAPSHI` (later `FLUTTERWAVE`) | an **administrator**, at runtime, in wi-admin dev tools |
 
 A client shows providers and sends `provider`. It never names, chooses or branches on an
 aggregator for a **new** charge. Switching aggregator is a settings write, with no deploy and no
@@ -95,6 +95,8 @@ interface GatewayCapabilities {
 | `MYCOOLPAY` | `PUSH`, requires `phoneNumber` | `OTP`, requires `phoneNumber` | — | — | `true` | ✅ (behind `MYCOOLPAY_PAYOUTS_ENABLED`, and the server IP registered with My-CoolPay) |
 | `STRIPE` | — | — | — | `CARD_ELEMENT`, requires nothing | `false` | ❌ |
 | `CAMPAY` | `PUSH`, requires `phoneNumber` | `PUSH`, requires `phoneNumber` | — | — | `true` | ✅ (behind `CAMPAY_PAYOUTS_ENABLED`, **and** "API withdrawals" allowed in the Campay app) |
+| `CINETPAY` | `PUSH`, requires `phoneNumber` | `PUSH`, requires `phoneNumber` | — | — | `true` | ✅ (behind `CINETPAY_PAYOUTS_ENABLED`, and the server IP whitelisted by CinetPay) |
+| `FAPSHI` | `PUSH`, requires `phoneNumber` | `PUSH`, requires `phoneNumber` | — | — | `true` | ✅ (behind `FAPSHI_PAYOUTS_ENABLED`, a separate payout service, and payouts enabled on it by Fapshi support) |
 
 Flows, for a client:
 
@@ -104,6 +106,12 @@ Flows, for a client:
 | `OTP` | the charge **may** answer `instructions.requiresOtp: true`; then collect the SMS code and `POST /payments/:transactionId/authorize` |
 | `CARD_ELEMENT` | mount Stripe's Payment Element with `instructions.clientSecret` (a browser is required) |
 | `REDIRECT` | open `instructions.redirectUrl` (reserved for Flutterwave cards, Phase 2) |
+
+⚠ **`CINETPAY` is `PUSH` and may still answer `instructions.redirectUrl`.** It asks CinetPay to
+push the PIN prompt; an account without CinetPay's "direct" mode answers that the customer must be
+redirected, and the backend then returns CinetPay's hosted payment page as `redirectUrl` (with
+no `ussdCode`). A client that ignores `redirectUrl` on a `PUSH` flow leaves that customer waiting
+for a prompt that never comes.
 
 ⚠ **`flow` is a hint for which screen to prepare, never a promise.** A client must always honour
 `instructions.requiresOtp` and `instructions.redirectUrl` on the `initiate` response, whatever
@@ -350,7 +358,7 @@ interface SettingsIssue {
 | `COLLECTION_AGGREGATOR_NO_ENABLED_PROVIDER` | at least one mobile provider is enabled, and the aggregator can serve **none** of them. Turning every mobile provider off is allowed (the "stop taking mobile money" lever) and only warns |
 | `STRIPE_NOT_CONFIGURED` | `stripe_enabled` is being turned **on** (off → on) without Stripe credentials. Leaving an already-on Stripe unconfigured is not an error, so an emergency switch is never blocked by it |
 | `PAYOUT_AGGREGATOR_UNKNOWN` | `payout_aggregator` is not a registered gateway name |
-| `PAYOUT_AGGREGATOR_NOT_IMPLEMENTED` | it has no `createPayout` (today only `STRIPE`: `NOTCHPAY`, `MYCOOLPAY` and `CAMPAY` all have one) |
+| `PAYOUT_AGGREGATOR_NOT_IMPLEMENTED` | it has no `createPayout` (today only `STRIPE`: `NOTCHPAY`, `MYCOOLPAY`, `CAMPAY`, `CINETPAY` and `FAPSHI` all have one) |
 | `PROVIDER_UNKNOWN` | a key of `providers` is not in the catalogue |
 
 **Soft warnings: the write is accepted**
@@ -448,6 +456,8 @@ now"):
 | `NOTCHPAY` | ✅ | `NOTCHPAY_PAYOUTS_ENABLED=true` and the server's egress IP on NotchPay's payout allowlist |
 | `CAMPAY` | ✅ | `CAMPAY_PAYOUTS_ENABLED=true` **and** "allow withdrawals through the API" on in the Campay app settings. The second is invisible to the server: a refusal for it comes back per call as `unsupported` |
 | `MYCOOLPAY` | ✅ (jovi-mall `83e8535`) | `MYCOOLPAY_PAYOUTS_ENABLED=true` (the service refuses to boot with it on unless `MYCOOLPAY_PUBLIC_KEY` and `MYCOOLPAY_PRIVATE_KEY` are both set), and the server's egress IP registered with My-CoolPay. The second is invisible to `payoutAvailable()`: an unregistered IP surfaces per payout as a retryable `FAILED` ("Nothing was sent") |
+| `CINETPAY` | ✅ | `CINETPAY_PAYOUTS_ENABLED=true` and the server's egress IP whitelisted by CinetPay. An unlisted IP is refused per call as `NOT_ALLOWED` (2011) and surfaces as `unsupported`; nothing is sent |
+| `FAPSHI` | ✅ | `FAPSHI_PAYOUTS_ENABLED=true` and the payout service's own pair (`FAPSHI_PAYOUT_API_USER` / `_KEY`): a Fapshi service that pays out can no longer collect. Live payouts are off until Fapshi support enables them for that service. Fapshi documents no idempotency, so a resend first reads `GET /transaction/{reference}` and sends nothing when an earlier attempt succeeded or is still pending |
 | `STRIPE` | ❌ | — |
 
 My-CoolPay payouts are `POST {base}/{public_key}/payout` with `X-PRIVATE-KEY`; our `jm_po_…`

@@ -1,7 +1,12 @@
 import { Request, Response } from 'express';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { shipmentAssignmentService } from '../domain/services/shipment-assignment.service';
-import { ListOffersQuerySchema, RejectOfferSchema, CancelShipmentSchema } from '../validators/assignment.validator';
+import {
+  BulkAcceptOffersSchema,
+  ListOffersQuerySchema,
+  RejectOfferSchema,
+  CancelShipmentSchema,
+} from '../validators/assignment.validator';
 
 /**
  * AgentOfferController — the agent's side of the acceptance workflow.
@@ -31,6 +36,18 @@ export class AgentOfferController {
     const agentId = req.auth!.role_entity._id.toString();
     const result = await shipmentAssignmentService.accept(agentId, req.params.id);
     res.json({ success: true, data: result, message: 'Offer accepted' });
+  });
+
+  /**
+   * POST /api/agent/offers/accept — take several jobs at once. Body: { offerIds: [1..10] }.
+   * Partial success: 200 with one `items` entry per offer, each accepted exactly as the
+   * single route would accept it.
+   */
+  static acceptMany = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const agentId = req.auth!.role_entity._id.toString();
+    const { offerIds } = BulkAcceptOffersSchema.parse(req.body);
+    const result = await shipmentAssignmentService.acceptMany(agentId, offerIds);
+    res.json({ success: true, data: result, message: `${result.accepted} of ${result.requested} offer(s) accepted` });
   });
 
   /** POST /api/agent/offers/:id/reject — decline the job. Body: { reason? } */

@@ -68,9 +68,17 @@ export class ConnectionController {
       ? await connectionService.listForVendor(entityId, { status }, { page, limit })
       : await connectionService.listForAgency(entityId, { status }, { page, limit });
 
+    // An agency sees each vendor's COD terms beside the connection (2026-10-02).
+    const codTerms = role === 'agency'
+      ? await connectionService.vendorCodTermsFor(result.data.map((c) => c.vendor_id.toString()))
+      : null;
+
     res.json({
       success: true,
-      data: result.data.map(ConnectionMapper.toDto),
+      data: result.data.map((c) => {
+        const dto = ConnectionMapper.toDto(c);
+        return codTerms ? { ...dto, vendorCodTerms: codTerms.get(dto.vendorId) ?? null } : dto;
+      }),
       meta: { total: result.meta.total, page: result.meta.page, limit: result.meta.limit, totalPages: result.meta.pages },
     });
   });
@@ -81,8 +89,14 @@ export class ConnectionController {
     const entityId = req.auth!.role_entity._id.toString();
 
     const connection = await connectionService.getOwnedById(req.params.id, role, entityId);
+    const dto = ConnectionMapper.toDto(connection);
 
-    res.json({ success: true, data: ConnectionMapper.toDto(connection) });
+    if (role === 'agency') {
+      const codTerms = await connectionService.vendorCodTermsFor([dto.vendorId]);
+      res.json({ success: true, data: { ...dto, vendorCodTerms: codTerms.get(dto.vendorId) ?? null } });
+      return;
+    }
+    res.json({ success: true, data: dto });
   });
 
   /** POST .../:id/approve — dispatches on current status (pending or paused_reapproval). */

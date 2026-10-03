@@ -26,7 +26,7 @@ import type { ResolvedBotCaller } from '../services/bot-identity.service';
 import { toBotConnectionDto, toBotProfileSummary } from '../dto/bot-projections';
 import { CustomerProfileService } from '../../customers/services/customer-profile.service';
 import { BotAccountCloseSchema, BotConnectionParamSchema, BotNoArgsSchema } from '../validators/bot.validators';
-import { addressSection, languageChoiceTap, setLanguageTap } from './bot-profile.controller';
+import { addressSection, languageChoiceTap } from './bot-profile.controller';
 import { contactSection } from './bot-contact.controller';
 import { paymentSection } from './bot-payment-method.controller';
 import { inboxSection, notifySection } from './bot-notification.controller';
@@ -672,7 +672,9 @@ export const ACCOUNT_ACTION_HANDLERS: BotActionHandlers = Object.freeze({
      * the registry's owner can be asked for something and forget — the shape that left
      * `yes:close` drawn but unrouted for a round. Stream H asks once.
      */
-    lang: setLanguageTap,
+    // ⚠ `lang:<code>` is answered by `bot-identity.controller.ts` now — the same tap is also
+    // onboarding's first question, and only that file can ask the next one. `acct:lang` (the
+    // picker itself) stays here.
     'yes:close': confirmCloseTap,
     'no:close': keepAccountTap,
     'yes:unl': confirmUnlinkTap,

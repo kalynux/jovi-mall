@@ -53,6 +53,12 @@ import { geoRoutingClient } from '../shipment-assignment/services/geo-routing.cl
 import { haversineKm } from '../../core/utils/geo-distance.util';
 import { IGeoPoint } from '../../core/types/geo.types';
 import { RoleActorRef } from '../../core/types/actor-source.types';
+import { deliveryFeeProposalService } from '../delivery-fee-proposals/services/delivery-fee-proposal.service';
+import { shipmentFeeProposalSummary } from '../delivery-fee-proposals/dto/delivery-fee-proposal.dto';
+import { CashCollectionRepository } from '../cod/repositories/cash-collection.repository';
+
+/** Only the decline path's pending-code cancellation uses it — see `reject`. */
+const cashCollectionRepository = new CashCollectionRepository();
 
 /**
  * Shipment-status transitions that may be triggered directly on the status
@@ -1098,6 +1104,12 @@ export class ShipmentService {
                 reportedByAgentId: f.reported_by_agent_id?.toString() ?? null,
                 reportedAt: f.reported_at,
             })),
+            // Every delivery-fee proposal on this shipment, newest first, each with the
+            // `availableActions` THIS viewer may use (modules/delivery-fee-proposals).
+            deliveryFeeProposals: (await deliveryFeeProposalService.mapForShipments(
+                [shipment._id.toString()],
+                viewer.role === 'agent' ? { role: 'agent', agentId: viewer.agentId } : { role: 'agency' }
+            )).get(shipment._id.toString()) ?? [],
             rejection: shipment.rejection ? {
                 reason: shipment.rejection.reason,
                 note: shipment.rejection.note ?? null,
@@ -1230,6 +1242,16 @@ export class ShipmentService {
                 'An agent must accept this shipment before it can be picked up');
         }
 
+        // A delivery-fee change awaiting the vendor blocks pickup — the run must not start
+        // at a price nobody has agreed (modules/delivery-fee-proposals). Here, in the SHARED
+        // core, so the agency and the agent doors are both closed; the CAS below repeats the
+        // guard as a filter, which is what holds under a race with a proposal being raised.
+        if (newStatus === 'picked_up' && shipment.pending_delivery_fee_proposal_id) {
+            throw createAppError(ERROR_CODES.SHIPMENT_DELIVERY_FEE_PENDING, 409, undefined, {
+                proposalId: shipment.pending_delivery_fee_proposal_id.toString(),
+            });
+        }
+
         if (isCod) {
             // A COD agent MAY claim arrival with `agent_delivered` — it means "I
             // am at the door", not "this is delivered". It is deliberately a
@@ -1289,6 +1311,7 @@ export class ShipmentService {
                 agencyId: actor.role === 'agency' ? actor.agencyId : null,
                 agentId: actor.role === 'agent' ? actor.agentId : null,
                 failure: recordedFailure,
+                requireNoPendingDeliveryFeeProposal: newStatus === 'picked_up',
             }, session);
 
             if (!committed) {
@@ -1598,6 +1621,7 @@ export class ShipmentService {
             throw createAppError(ERROR_CODES.SHIPMENT_REJECTION_NOT_ALLOWED, 422, undefined, { status: shipment.status });
         }
 
+        let autoWithdrawn: Awaited<ReturnType<typeof deliveryFeeProposalService.withdrawPendingInSession>> = null;
         await transactionManager.runInTransaction(async (session) => {
             // Guarded compare-and-set on the (agency, 'assigned') pair read above. A miss
             // means somebody else moved the shipment in between — the agent picked it up,
@@ -1617,6 +1641,20 @@ export class ShipmentService {
             // whole shipment for reassignment, so an outstanding offer must not
             // remain acceptable on a shipment that has left this agency.
             await shipmentAssignmentOfferRepository.cancelPendingForShipment(shipmentId, session);
+
+            // Declining is the agency's answer to a REJECTED fee proposal (owner decision
+            // 2026-10-02), and it may come with an agent already bound. Two things that
+            // were tolerable while a decline was rare are not any more:
+            //  - a still-pending fee proposal would outlive the shipment it prices;
+            //  - an accepted COD agent's delivery code (issued at accept) would stay
+            //    live on a shipment that has left this agency — its items get a fresh
+            //    shipment, and a fresh code, at the next agency.
+            // The agent's tracking release, offer cancellation and capacity return are
+            // the pre-existing reject mechanics below and above.
+            autoWithdrawn = await deliveryFeeProposalService.withdrawPendingInSession(rejected, 'shipment_declined', session);
+            if (rejected.agent_id) {
+                await cashCollectionRepository.cancelPendingByShipment(shipmentId, session);
+            }
 
             // The outbox row, in the transaction (plan step 3.A.1). `rejected` is the CAS
             // result, so the verdicts describe THIS rejection. Note `rejected` is NOT a
@@ -1643,6 +1681,7 @@ export class ShipmentService {
         this._releaseAgentCapacity(updated, 'rejected');
         // Tell the vendor their delivery was declined so they can reassign — the
         // reason + note live on the order view (this only alerts + deep-links).
+        this._emitFeeProposalAutoWithdrawn(autoWithdrawn, 'shipment_declined');
         void this._emitShipmentRejected(updated!, reason, note ?? null)
             .catch((err) => console.error('[ShipmentService] shipment.rejected emit failed:', err));
         return this.toSummary(updated!);
@@ -1757,6 +1796,7 @@ export class ShipmentService {
         // Set when re-opening a RETURNED COD shipment for re-delivery — a fresh
         // delivery code to send the customer post-commit.
         let reopened: { collection: ICashCollection; code: string } | { collection: null; code: null } = { collection: null, code: null };
+        let autoWithdrawn: Awaited<ReturnType<typeof deliveryFeeProposalService.withdrawPendingInSession>> = null;
         await transactionManager.runInTransaction(async (session) => {
             detached = await this.shipmentRepo.claimForReassignment(
                 shipmentId, agencyId, previousAgentId, previousStatus, targetStatus, actor, handover, session
@@ -1785,6 +1825,10 @@ export class ShipmentService {
             // Defensive: a bound agent has no pending offer, but cancel any stray one
             // so nothing can be accepted onto a shipment that just changed hands.
             await shipmentAssignmentOfferRepository.cancelPendingForShipment(shipmentId, session);
+            // A fee proposal the DETACHED agent raised dies with their hold on the job —
+            // the replacement must not inherit, or be priced by, it. The agency's own
+            // proposal survives a reassignment.
+            autoWithdrawn = await deliveryFeeProposalService.withdrawPendingInSession(detached, 'agent_detached', session, previousAgentId);
 
             // Release (not terminate) the OLD agent's tracking session, in the transaction
             // that detached them (plan step 3.A.1). Losing this row was the reassignment case
@@ -1818,6 +1862,7 @@ export class ShipmentService {
         }
         // Business audit of the reassignment + the old agent's "you're off this
         // shipment" notification (the handler keys on this event).
+        this._emitFeeProposalAutoWithdrawn(autoWithdrawn, 'agent_detached');
         this._emitReassigned(detached!, previousAgentId, previousStatus, reason, order?.order_number ?? null);
 
         return { shipment: detached!, previousAgentId, previousStatus };
@@ -1875,6 +1920,7 @@ export class ShipmentService {
         };
 
         let detached: IShipment | null = null;
+        let autoWithdrawn: Awaited<ReturnType<typeof deliveryFeeProposalService.withdrawPendingInSession>> = null;
         await transactionManager.runInTransactionWithRetry(async (session) => {
             detached = await this.shipmentRepo.claimForAgentCancel(
                 shipmentId, agentId, previousStatus, targetStatus, cancellation, handover, session
@@ -1894,6 +1940,9 @@ export class ShipmentService {
             // Deliberately does NOT cancel the OTHER agents' standing offers: those
             // ignored offers stay acceptable, and the broadcast resumes from cursor.
 
+            // The cancelling agent's own pending fee proposal goes with them.
+            autoWithdrawn = await deliveryFeeProposalService.withdrawPendingInSession(detached, 'agent_detached', session, agentId);
+
             // The tracking release, in the transaction that detached them (plan step 3.A.1).
             // Same shape as the reassignment path above — a release, not a terminal: the
             // shipment is not over, it is no longer this agent's.
@@ -1910,9 +1959,51 @@ export class ShipmentService {
         void agentCapacityService
             .release(agentId, 'cancelled')
             .catch((err) => console.error('[ShipmentService] agent-cancel capacity release failed:', err));
+        this._emitFeeProposalAutoWithdrawn(autoWithdrawn, 'agent_detached');
         this._emitAgentCancelled(detached!, agentId, previousStatus, reason, note, order?.order_number ?? null);
 
         return { shipment: detached!, previousStatus };
+    }
+
+    /**
+     * `delivery_fee_proposal.withdrawn` for a proposal the SYSTEM closed inside one of the
+     * three transactions above (the shipment was declined, or the proposing agent detached).
+     * `withdrawPendingInSession` emits nothing — it runs inside a caller's transaction — so
+     * until 2026-10-02 nobody heard about these. Same payload shape as the module's own emit,
+     * plus `withdrawnBy: 'system'` and the reason; post-commit and fire-and-forget.
+     */
+    private _emitFeeProposalAutoWithdrawn(
+        proposal: { _id: unknown; shipment_id: { toString(): string }; order_id: { toString(): string };
+            vendor_id: { toString(): string }; agency_id: { toString(): string }; proposed_by_role: string;
+            proposed_by_agent_id?: { toString(): string } | null; fee_before: number; proposed_fee: number;
+            currency: string; status: string } | null,
+        reason: 'shipment_declined' | 'agent_detached'
+    ): void {
+        if (!proposal) return;
+        void (async () => {
+            const order = await OrderModel.findById(proposal.order_id.toString()).select('order_number').lean().exec();
+            await eventBus.publish('delivery_fee_proposal.withdrawn', {
+                eventType: 'delivery_fee_proposal.withdrawn',
+                aggregateId: String(proposal._id),
+                occurredAt: new Date(),
+                payload: {
+                    proposalId: String(proposal._id),
+                    shipmentId: proposal.shipment_id.toString(),
+                    orderId: proposal.order_id.toString(),
+                    orderNumber: (order as any)?.order_number ?? null,
+                    vendorId: proposal.vendor_id.toString(),
+                    agencyId: proposal.agency_id.toString(),
+                    proposedByRole: proposal.proposed_by_role,
+                    proposedByAgentId: proposal.proposed_by_agent_id ? proposal.proposed_by_agent_id.toString() : null,
+                    feeBefore: proposal.fee_before,
+                    proposedFee: proposal.proposed_fee,
+                    currency: proposal.currency,
+                    status: proposal.status,
+                    withdrawnBy: 'system',
+                    withdrawalReason: reason,
+                },
+            });
+        })().catch((err) => console.error('[ShipmentService] delivery_fee_proposal.withdrawn emit failed:', err));
     }
 
     /**
@@ -2292,6 +2383,10 @@ export class ShipmentService {
             agentId: shipment.agent_id ? shipment.agent_id.toString() : null,
             status: shipment.status,
             trackingNumber: shipment.tracking_number ?? null,
+            // Delivery-fee renegotiation state, off the document itself (no query):
+            // `deliveryFeeProposalPending` (+ its id) blocks pickup; `deliveryFeeOverride`
+            // is the vendor-approved fee this shipment now carries.
+            ...shipmentFeeProposalSummary(shipment),
             createdAt: shipment.created_at,
             updatedAt: shipment.updated_at,
         };

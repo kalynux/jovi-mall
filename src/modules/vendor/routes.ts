@@ -7,6 +7,7 @@ import { VendorNotificationController } from './controller/vendor-notification.c
 import { DeviceTokenController } from '../notifications/controllers/device-token.controller';
 import { VendorCustomerController } from './controller/vendor-customer.controller';
 import { UserController } from '../users/user.controller';
+import { VendorDeliveryFeeProposalController } from '../delivery-fee-proposals/controllers/delivery-fee-proposal.controller';
 
 const router = Router();
 
@@ -141,6 +142,25 @@ router.get('/profile/auto-cancel-unpaid-days', VendorProfileController.getAutoCa
  * Body: { days: number }
  */
 router.put('/profile/auto-cancel-unpaid-days', VendorProfileController.setAutoCancelUnpaidDays);
+
+/**
+ * GET /api/vendor/profile/cod-terms
+ *
+ * The vendor's cash-on-delivery terms (2026-10-02). Defaults when never set:
+ * { codEnabled: true, maxCashPerAgency: null, updatedAt: null }.
+ */
+router.get('/profile/cod-terms', VendorProfileController.getCodTerms);
+
+/**
+ * PUT /api/vendor/profile/cod-terms
+ *
+ * Replace the vendor's COD terms. Body: { codEnabled: boolean, maxCashPerAgency: number | null }.
+ * codEnabled=false refuses COD at checkout (422 COD_VENDOR_NOT_ACCEPTED);
+ * maxCashPerAgency caps how much of this vendor's COD cash one agency may hold un-remitted
+ * (dispatch gate, 422 COD_AGENCY_LIMIT_EXCEEDED unless force). Separate from `policies`:
+ * does NOT bump policy_version or pause agency connections.
+ */
+router.put('/profile/cod-terms', VendorProfileController.setCodTerms);
 
 // ─── Onboarding ───────────────────────────────────────────────────────────────
 
@@ -297,6 +317,21 @@ router.patch('/orders/:id/delivery-agency', VendorOrderController.updateDelivery
  * Check whether the order can be refunded (vendor return policy + order state)
  */
 router.get('/orders/:id/refund-eligibility', VendorOrderController.getRefundEligibility);
+
+/**
+ * Delivery-fee proposals (modules/delivery-fee-proposals) — an agency (or its agent)
+ * proposing a different delivery fee for one shipment of this order. The vendor pays the
+ * fee out of their net, so every change needs the vendor's answer. See
+ * api-doc/vendor/delivery-fee-proposals.md.
+ *   GET  /api/vendor/delivery-fee-proposals?status=pending      — the inbox, across orders
+ *   GET  /api/vendor/orders/:id/delivery-fee-proposals
+ *   POST /api/vendor/orders/:id/delivery-fee-proposals/:proposalId/approve
+ *   POST /api/vendor/orders/:id/delivery-fee-proposals/:proposalId/reject   { note? }
+ */
+router.get('/delivery-fee-proposals', VendorDeliveryFeeProposalController.list);
+router.get('/orders/:id/delivery-fee-proposals', VendorDeliveryFeeProposalController.listForOrder);
+router.post('/orders/:id/delivery-fee-proposals/:proposalId/approve', VendorDeliveryFeeProposalController.approve);
+router.post('/orders/:id/delivery-fee-proposals/:proposalId/reject', VendorDeliveryFeeProposalController.reject);
 
 /**
  * POST /api/vendor/orders/:id/refund

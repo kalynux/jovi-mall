@@ -539,3 +539,20 @@ Each notification carries `aggregateType` + `aggregateId` for frontend deeplinks
   }
 }
 ```
+
+---
+
+## ⭐ 2026-10-02 — COD limits and delivery-fee proposals
+
+Two new preference keys, both default `true` (a row written before them reads as ON):
+`preferences.codLimitUpdates` and `preferences.deliveryFeeProposals`. Both are accepted by
+`PATCH /api/vendor/notification-preferences` and returned by the GET.
+
+| Preference | `type` | `aggregateType` | When | `action.path` |
+|---|---|---|---|---|
+| `codLimitUpdates` | `shipment.cod_limit_held` | `order` | Auto-redirect did **not** dispatch one of the order's cash-on-delivery shipments because the agency is over its COD limit or over your own `maxCashPerAgency`. The message names the agency, the shipment's COD amount and which limit. For your **own** terms it quotes your cap and how much of your cash that agency already holds; for the **agency's** limit it quotes no figure (that total includes other vendors' cash). | `orders/{orderId}` — "Dispatch anyway" (`force: true`) and change-agency live there |
+| `deliveryFeeProposals` | `delivery_fee_proposal.received` | `order` | The agency (or its agent) proposed a different delivery fee for one of the order's shipments. Pickup waits for your answer. Named after the **agency** even when its agent raised it. | `orders/{orderId}` (approve / reject) |
+| `deliveryFeeProposals` | `delivery_fee_proposal.edited` | `order` | The pending figure changed (the agency or its agent edited it). Answer the new version. | `orders/{orderId}` |
+| `deliveryFeeProposals` | `delivery_fee_proposal.withdrawn` | `order` | The proposal was withdrawn — by its author, or automatically because the shipment moved on. Nothing to answer. | `orders/{orderId}` |
+
+The vendor is **not** notified of its own approve / reject (it took the action).

@@ -68,6 +68,9 @@ Kept where they are and linked, never absorbed (E-4):
 | [ADR-A04](./ADR-A04-GEOCODING.md) | cache the geocoding, then rent it |
 | [ADR-A05](./ADR-A05-BARGAIN.md) | the bargain window stays configuration-only |
 | [ADR-A06](./ADR-A06-AGENT-IDENTITY-DISCLOSURE.md) | a customer may see who is carrying their parcel, **while** they are carrying it |
+| [ADR-A07](./ADR-A07-DELIVERY-COST-CAP.md) | a vendor's part of a basket must be able to carry its delivery cost (the 30% rule) |
+| [ADR-A08](./ADR-A08-PAYMENT-ROUTING.md) | customers choose a payment provider; the backend chooses the aggregator |
+| [ADR-A09](./ADR-A09-COD-LIMITS-AND-DELIVERY-FEES.md) | COD cash limits per agent / agency / vendor, `force`, per-shipment delivery-fee proposals and the monthly-salary contract (2026-10-02) |
 
 Four more that govern this service live in wi-admin's folder, because that is where the decision
 was taken: [ADR-014](../../admin/docs/ADR-014-SYSTEM-OPERATIONS.md) (the operations surface and

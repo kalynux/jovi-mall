@@ -71,6 +71,20 @@ function attachRoutes(router: Router): Router {
     /** PATCH /:id/reactivate — the reverse of the above. */
     router.patch('/:id/reactivate', AdminAgencyController.reactivate);
 
+    /**
+     * GET /:id/cod-limit — the agency's COD cash limit, its source, the pin, and its live
+     * exposure (2026-10-02). A verdict READ wi-admin delegates: exposure counts in-flight COD
+     * shipments it has no read model for.
+     */
+    router.get('/:id/cod-limit', AdminAgencyController.getCodLimit);
+
+    /**
+     * PUT /:id/cod-limit — body `{ maxAmount: number | null, reason }`. Pins (or, with
+     * `null`, releases) the agency's cash limit. wi-admin exposes it as two routes and two
+     * audit actions (`agencies.cod_limit.set` / `.release`), like the agent pool pin.
+     */
+    router.put('/:id/cod-limit', AdminAgencyController.setCodLimit);
+
     return router;
 }
 

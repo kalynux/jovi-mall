@@ -1,12 +1,12 @@
 {
-  "generatedAt": "2026-09-27T14:54:52.729Z",
+  "generatedAt": "2026-10-03T01:56:06.026Z",
   "note": "GENERATED from the notification catalogs by scripts/generate-whatsapp-templates.ts. Do not hand-edit: names, placeholder counts and placeholder ORDER are derived from the same functions the send path uses, and editing them here makes the approved template disagree with what is sent.",
   "languages": [
     "en",
     "fr"
   ],
-  "templateCount": 106,
-  "submissionCount": 212,
+  "templateCount": 128,
+  "submissionCount": 256,
   "needsCopyReview": [
     {
       "name": "customer_booking_created",
@@ -1600,6 +1600,280 @@
         {
           "type": "BODY",
           "text": "*Produit de nouveau en vente*\n\n*{{1}}* a levé la suspension de *{{2}}*. Il est de nouveau disponible pour les clients.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_shipment_cod_limit_held",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*COD shipment held back*\n\nOrder #*{{1}}*: a cash-on-delivery shipment of *{{2}}* *{{3}}* was not sent to *{{4}}* because *{{5}}*. Open the order to dispatch it anyway or choose another agency.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_shipment_cod_limit_held",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Expédition à paiement à la livraison en attente*\n\nCommande n°*{{1}}*: une expédition à paiement à la livraison de *{{2}}* *{{3}}* n'a pas été envoyée à *{{4}}* car *{{5}}*. Ouvrez la commande pour l'expédier quand même ou choisir une autre agence.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_delivery_fee_proposal_received",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Delivery fee change to review*\n\n*{{1}}* proposes a delivery fee of *{{2}}* *{{3}}* instead of *{{2}}* *{{4}}* for order #*{{5}}*. Approve or reject it from the order — pickup waits for your answer.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_delivery_fee_proposal_received",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Modification des frais de livraison à examiner*\n\n*{{1}}* propose des frais de livraison de *{{2}}* *{{3}}* au lieu de *{{2}}* *{{4}}* pour la commande n°*{{5}}*. Acceptez ou refusez depuis la commande — l'enlèvement attend votre réponse.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_delivery_fee_proposal_edited",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Proposed delivery fee changed*\n\n*{{1}}* changed its proposed delivery fee for order #*{{2}}* to *{{3}}* *{{4}}* (it was *{{3}}* *{{5}}*). Review the new amount from the order.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_delivery_fee_proposal_edited",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Frais de livraison proposés modifiés*\n\n*{{1}}* a modifié les frais de livraison proposés pour la commande n°*{{2}}*: *{{3}}* *{{4}}* (au lieu de *{{3}}* *{{5}}*). Examinez le nouveau montant depuis la commande.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_delivery_fee_proposal_withdrawn",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Delivery fee proposal withdrawn*\n\nThe delivery fee change proposed by *{{1}}* for order #*{{2}}* was withdrawn. Nothing for you to answer; the current delivery fee is unchanged.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_delivery_fee_proposal_withdrawn",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Proposition de frais de livraison retirée*\n\nLa modification des frais de livraison proposée par *{{1}}* pour la commande n°*{{2}}* a été retirée. Vous n'avez rien à répondre; les frais de livraison actuels restent inchangés.",
           "example": {
             "body_text": [
               [
@@ -5427,6 +5701,614 @@
       ]
     },
     {
+      "name": "agency_delivery_fee_proposal_approved",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Delivery fee approved*\n\n*{{1}}* approved the delivery fee of *{{2}}* *{{3}}* for order #*{{4}}*. The shipment can now be picked up.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_delivery_fee_proposal_approved",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Frais de livraison acceptés*\n\n*{{1}}* a accepté les frais de livraison de *{{2}}* *{{3}}* pour la commande n°*{{4}}*. L'expédition peut maintenant être enlevée.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_delivery_fee_proposal_rejected",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Delivery fee rejected*\n\n*{{1}}* rejected the proposed delivery fee of *{{2}}* *{{3}}* for order #*{{4}}*; the fee stays *{{2}}* *{{5}}*. Open the shipment to deliver at that fee, propose again, or decline it.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_delivery_fee_proposal_rejected",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Frais de livraison refusés*\n\n*{{1}}* a refusé les frais de livraison proposés de *{{2}}* *{{3}}* pour la commande n°*{{4}}*; les frais restent de *{{2}}* *{{5}}*. Ouvrez l'expédition pour livrer à ce tarif, faire une nouvelle proposition ou la refuser.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_delivery_fee_proposal_agent_proposed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Update: {{1}} proposed a delivery fee*\n\n*{{1}}* proposed a delivery fee of *{{2}}* *{{3}}* instead of *{{2}}* *{{4}}* for order #*{{5}}*. It is waiting for the vendor; you can edit or withdraw it from the shipment.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_delivery_fee_proposal_agent_proposed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Mise à jour : {{1}} a proposé des frais de livraison*\n\n*{{1}}* a proposé des frais de livraison de *{{2}}* *{{3}}* au lieu de *{{2}}* *{{4}}* pour la commande n°*{{5}}*. La proposition attend le vendeur; vous pouvez la modifier ou la retirer depuis l'expédition.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_delivery_fee_proposal_agent_edited",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Update: {{1}} changed a proposed fee*\n\n*{{1}}* changed their proposed delivery fee for order #*{{2}}* to *{{3}}* *{{4}}* (it was *{{3}}* *{{5}}*). It is still waiting for the vendor.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_delivery_fee_proposal_agent_edited",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Mise à jour : {{1}} a modifié des frais proposés*\n\n*{{1}}* a modifié ses frais de livraison proposés pour la commande n°*{{2}}*: *{{3}}* *{{4}}* (au lieu de *{{3}}* *{{5}}*). La proposition attend toujours le vendeur.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_shipment_cod_limit_forced",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*COD shipment sent past a limit*\n\n*{{1}}* dispatched order #*{{2}}* to you — *{{3}}* *{{4}}* cash on delivery — even though it exceeds *{{5}}*. Remit collected cash to the platform to free up room.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_shipment_cod_limit_forced",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Expédition à paiement à la livraison envoyée au-delà d'une limite*\n\n*{{1}}* vous a confié la commande n°*{{2}}* — *{{3}}* *{{4}}* à encaisser à la livraison — bien qu'elle dépasse *{{5}}*. Reversez l'argent encaissé à la plateforme pour libérer de la marge.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_shipment_cod_limit_unfilled",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*No agent can carry this COD amount*\n\nAuto-assign could not place order #*{{1}}* (*{{2}}* *{{3}}* cash on delivery): every available agent is at their cash-on-delivery limit. Open the shipment to assign an agent anyway, or wait for agents to hand in cash.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_shipment_cod_limit_unfilled",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Aucun livreur ne peut porter ce montant*\n\nL'attribution automatique n'a pas pu placer la commande n°*{{1}}* (*{{2}}* *{{3}}* à encaisser): tous les livreurs disponibles ont atteint leur limite de paiement à la livraison. Ouvrez l'expédition pour assigner un livreur quand même, ou attendez qu'ils reversent leurs encaissements.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_connection_cod_terms_changed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Update: {{1}} updated its COD terms*\n\n*{{1}}* changed its cash-on-delivery terms: *{{2}}*. They apply to the next shipment it dispatches to you.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_connection_cod_terms_changed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Mise à jour : {{1}} a mis à jour ses conditions de paiement à la livraison*\n\n*{{1}}* a modifié ses conditions de paiement à la livraison: *{{2}}*. Elles s'appliquent à sa prochaine expédition vers vous.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_cod_limit_pinned",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Your COD limit was changed*\n\nAn administrator set your cash-on-delivery limit to *{{1}}* *{{2}}* (the default is *{{1}}* *{{3}}*). It applies to every COD shipment dispatched to you from now on.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_cod_limit_pinned",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Votre limite de paiement à la livraison a changé*\n\nUn administrateur a fixé votre limite de paiement à la livraison à *{{1}}* *{{2}}* (par défaut: *{{1}}* *{{3}}*). Elle s'applique à toute expédition à paiement à la livraison qui vous est confiée désormais.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_cod_limit_released",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Your COD limit is back to the default*\n\nAn administrator released the custom cash-on-delivery limit on your agency. Your limit is the platform default of *{{1}}* *{{2}}* again.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_cod_limit_released",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Votre limite de paiement à la livraison revient à la valeur par défaut*\n\nUn administrateur a levé la limite de paiement à la livraison personnalisée de votre agence. Votre limite est de nouveau la valeur par défaut de la plateforme: *{{1}}* *{{2}}*.\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "agent_cod_deposit_recorded",
       "language": "en",
       "category": "UTILITY",
@@ -5666,6 +6548,70 @@
         {
           "type": "BODY",
           "text": "*Nouvelle offre de livraison*\n\n*{{1}}* vous propose une livraison pour la commande *{{2}}*. Consultez-la et acceptez-la avant qu'elle n'expire.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_shipment_offer_batch_received",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*New delivery offers*\n\n*{{1}}* is offering you *{{2}}* deliveries. Review and accept them before they expire.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_shipment_offer_batch_received",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Nouvelles offres de livraison*\n\n*{{1}}* vous propose *{{2}}* livraisons. Consultez-les et acceptez-les avant qu'elles n'expirent.",
           "example": {
             "body_text": [
               [
@@ -6803,6 +7749,500 @@
             {
               "type": "URL",
               "text": "Voir mes gains",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_delivery_fee_proposal_approved",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Your delivery fee was approved*\n\nThe vendor approved your proposed delivery fee of *{{1}}* *{{2}}* for order #*{{3}}*. You can pick the shipment up now.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_delivery_fee_proposal_approved",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Vos frais de livraison ont été acceptés*\n\nLe vendeur a accepté les frais de livraison que vous avez proposés, *{{1}}* *{{2}}*, pour la commande n°*{{3}}*. Vous pouvez maintenant enlever l'expédition.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_delivery_fee_proposal_rejected",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Your delivery fee was rejected*\n\nThe vendor rejected your proposed delivery fee of *{{1}}* *{{2}}* for order #*{{3}}*; the fee stays *{{1}}* *{{4}}*. Your agency decides what happens next.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_delivery_fee_proposal_rejected",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Vos frais de livraison ont été refusés*\n\nLe vendeur a refusé les frais de livraison que vous avez proposés, *{{1}}* *{{2}}*, pour la commande n°*{{3}}*; les frais restent de *{{1}}* *{{4}}*. Votre agence décide de la suite.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_delivery_fee_proposal_edited",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Your agency changed your proposed fee*\n\n*{{1}}* changed your proposed delivery fee for order #*{{2}}* to *{{3}}* *{{4}}* (it was *{{3}}* *{{5}}*). The vendor will answer the new amount.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_delivery_fee_proposal_edited",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Votre agence a modifié vos frais proposés*\n\n*{{1}}* a modifié les frais de livraison que vous avez proposés pour la commande n°*{{2}}*: *{{3}}* *{{4}}* (au lieu de *{{3}}* *{{5}}*). Le vendeur répondra sur le nouveau montant.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_delivery_fee_proposal_withdrawn",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Your fee proposal was closed*\n\nYour proposed delivery fee for order #*{{1}}* was withdrawn automatically because *{{2}}*.\n\nYou can see the details in the Wi-Mall app.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "agent_delivery_fee_proposal_withdrawn",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Votre proposition de frais a été clôturée*\n\nLes frais de livraison que vous aviez proposés pour la commande n°*{{1}}* ont été retirés automatiquement car *{{2}}*.\n\nVous pouvez voir les détails dans l'application Wi-Mall.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "agent_fee_proposals_enabled",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*You can now propose delivery fees*\n\n*{{1}}* now lets you propose a different delivery fee on shipments you have accepted. The vendor approves or rejects each proposal.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_fee_proposals_enabled",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Vous pouvez désormais proposer des frais de livraison*\n\n*{{1}}* vous permet désormais de proposer d'autres frais de livraison sur les expéditions que vous avez acceptées. Le vendeur accepte ou refuse chaque proposition.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_fee_proposals_disabled",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Delivery fee proposals turned off*\n\n*{{1}}* no longer lets its agents propose delivery fees. Proposals you already sent stay with the vendor; new ones go through your agency.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_fee_proposals_disabled",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Propositions de frais de livraison désactivées*\n\n*{{1}}* ne permet plus à ses livreurs de proposer des frais de livraison. Les propositions déjà envoyées restent chez le vendeur; les nouvelles passent par votre agence.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_cod_pool_pinned",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Your COD limit was changed*\n\nAn administrator set your cash-on-delivery limit to *{{1}}* *{{2}}*. It caps the cash you may carry across all your agencies.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_cod_pool_pinned",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Votre limite de paiement à la livraison a changé*\n\nUn administrateur a fixé votre plafond de paiement à la livraison à *{{1}}* *{{2}}*. Il limite l'argent que vous pouvez porter pour l'ensemble de vos agences.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_cod_pool_released",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Your COD limit is back to the default*\n\nAn administrator released the custom cash-on-delivery limit on your account. Your limit is the platform default of *{{1}}* *{{2}}* again.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_cod_pool_released",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Votre limite de paiement à la livraison revient à la valeur par défaut*\n\nUn administrateur a levé la limite de paiement à la livraison personnalisée de votre compte. Votre limite est de nouveau la valeur par défaut de la plateforme: *{{1}}* *{{2}}*.\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
               "url": "https://agent.wi-mall.com/{{1}}",
               "example": [
                 "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"

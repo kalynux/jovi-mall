@@ -53,6 +53,24 @@ const OFFER_BUTTON: ButtonDef = {
     urlSuffix: 'offers/{{offerId}}'
 };
 
+const VIEW_OFFERS_LABEL: Record<Language, string> = {
+    en: 'Review offers',
+    fr: 'Voir les offres',
+    pt: 'Ver ofertas',
+    es: 'Ver ofertas',
+    ar: 'مراجعة العروض'
+};
+
+/**
+ * ⭐ NEW deep-link token (2026-10-03): the agent's offers LIST, for a bulk offer. No id —
+ * a batch is several offers, and opening one of them would hide the rest.
+ */
+const OFFERS_LIST_BUTTON: ButtonDef = {
+    type: 'url',
+    label: VIEW_OFFERS_LABEL,
+    urlSuffix: 'offers'
+};
+
 const MANAGE_PLAN_LABEL: Record<Language, string> = {
     en: 'Manage plan',
     fr: 'Gérer le forfait',
@@ -249,6 +267,102 @@ export const TERMS_PROPOSAL_RESOLUTION_LABEL: Record<
 // approved in Meta Business Manager before WhatsApp delivery will actually
 // succeed for these situations — in-app/email/telegram/push work today
 // regardless. Same bootstrapping step every new situation needs.
+
+// ─── COD limits + delivery-fee proposals (2026-10-02) ───────────────────────
+
+const VIEW_SHIPMENT_LABEL: Record<Language, string> = {
+    en: 'View shipment',
+    fr: 'Voir l\'expédition',
+    pt: 'Ver remessa',
+    es: 'Ver envío',
+    ar: 'عرض الشحنة'
+};
+
+/**
+ * ⭐ NEW deep-link label (2026-10-02): an ACCEPTED shipment (`/shipments/:id` in the app).
+ * Only on situations whose shipment is still this agent's — a withdrawn proposal sends no
+ * button, for the same reason `shipment.reassigned_away` does not.
+ */
+const SHIPMENT_BUTTON: ButtonDef = {
+    type: 'url',
+    label: VIEW_SHIPMENT_LABEL,
+    urlSuffix: 'shipments/{{shipmentId}}'
+};
+
+const VIEW_COD_LABEL: Record<Language, string> = {
+    en: 'View COD',
+    fr: 'Voir les encaissements',
+    pt: 'Ver pagamentos',
+    es: 'Ver cobros',
+    ar: 'عرض التحصيل'
+};
+
+/** ⭐ NEW deep-link label (2026-10-02): the agent's COD screen (pool + hand-overs). No id. */
+const COD_BUTTON: ButtonDef = {
+    type: 'url',
+    label: VIEW_COD_LABEL,
+    urlSuffix: 'cod'
+};
+
+const VIEW_AGENCY_LABEL: Record<Language, string> = {
+    en: 'View agency',
+    fr: 'Voir l\'agence',
+    pt: 'Ver agência',
+    es: 'Ver agencia',
+    ar: 'عرض الوكالة'
+};
+
+/** The fee-proposal permission is per-agency; it lands on the contract with that agency. */
+const AGENCY_CONTRACT_BUTTON: ButtonDef = {
+    type: 'url',
+    label: VIEW_AGENCY_LABEL,
+    urlSuffix: 'memberships/{{contractId}}'
+};
+
+/** Why the system closed this agent's proposal — `{{reasonLine}}` on `delivery_fee_proposal.withdrawn`. */
+export const AGENT_FEE_WITHDRAWN_REASON = {
+    shipment_declined: {
+        en: 'your agency declined the shipment',
+        fr: 'votre agence a refusé l\'expédition',
+        pt: 'a sua agência recusou a remessa',
+        es: 'tu agencia rechazó el envío',
+        ar: 'رفضت وكالتك الشحنة'
+    },
+    agent_detached: {
+        en: 'you are no longer on this shipment',
+        fr: 'vous n\'êtes plus sur cette expédition',
+        pt: 'já não está nesta remessa',
+        es: 'ya no estás en este envío',
+        ar: 'لم تعد مكلّفًا بهذه الشحنة'
+    }
+} as const;
+
+/**
+ * Appended to `shipment.offer.received` (`{{forcedLine}}`) when the agency pushed the offer
+ * past this agent's COD amount limit (`cod_limit_forced`). In-app / push / email / Telegram
+ * only: the approved WhatsApp template is frozen, so that channel keeps its old copy.
+ */
+export const AGENT_OFFER_FORCED_LINE = {
+    forced: {
+        en: 'Note: your agency sent this offer above your cash-on-delivery limit ({{currency}} {{amountFormatted}} to collect).',
+        fr: 'À noter : votre agence vous a envoyé cette offre au-delà de votre limite de paiement à la livraison ({{currency}} {{amountFormatted}} à encaisser).',
+        pt: 'Nota: a sua agência enviou-lhe esta oferta acima do seu limite de pagamento na entrega ({{currency}} {{amountFormatted}} a cobrar).',
+        es: 'Nota: tu agencia te envió esta oferta por encima de tu límite de contra reembolso ({{currency}} {{amountFormatted}} a cobrar).',
+        ar: 'ملاحظة: أرسلت إليك وكالتك هذا العرض متجاوزًا حدّك للدفع عند الاستلام ({{currency}} {{amountFormatted}} للتحصيل).'
+    }
+} as const;
+
+/** The bulk-offer counterpart: how many of the batch were forced past the COD limit. */
+export const AGENT_OFFER_BATCH_FORCED_LINE = {
+    forced: {
+        en: 'Note: {{forcedCount}} of them were sent above your cash-on-delivery limit.',
+        fr: 'À noter : {{forcedCount}} d\'entre elles vous ont été envoyées au-delà de votre limite de paiement à la livraison.',
+        pt: 'Nota: {{forcedCount}} delas foram enviadas acima do seu limite de pagamento na entrega.',
+        es: 'Nota: {{forcedCount}} de ellas se enviaron por encima de tu límite de contra reembolso.',
+        ar: 'ملاحظة: أُرسل {{forcedCount}} منها متجاوزًا حدّك للدفع عند الاستلام.'
+    }
+} as const;
+
 export const AGENT_NOTIFICATION_CATALOG: Record<AgentNotificationType, SituationMessages> = {
     // The agency recorded a hand-over the agent never declared. THE detection
     // message: "check it" is the whole reason this situation exists.
@@ -360,33 +474,87 @@ export const AGENT_NOTIFICATION_CATALOG: Record<AgentNotificationType, Situation
         base: {
             en: {
                 subject: 'New delivery offer',
-                body: '{{agencyName}} is offering you a delivery for order {{orderNumber}}. Review and accept it before it expires.'
+                body: '{{agencyName}} is offering you a delivery for order {{orderNumber}}. Review and accept it before it expires. {{forcedLine}}'
             },
             fr: {
                 subject: 'Nouvelle offre de livraison',
-                body: '{{agencyName}} vous propose une livraison pour la commande {{orderNumber}}. Consultez-la et acceptez-la avant qu\'elle n\'expire.'
+                body: '{{agencyName}} vous propose une livraison pour la commande {{orderNumber}}. Consultez-la et acceptez-la avant qu\'elle n\'expire. {{forcedLine}}'
             },
             pt: {
                 subject: 'Nova oferta de entrega',
-                body: '{{agencyName}} está a oferecer-lhe uma entrega para a encomenda {{orderNumber}}. Reveja e aceite antes que expire.'
+                body: '{{agencyName}} está a oferecer-lhe uma entrega para a encomenda {{orderNumber}}. Reveja e aceite antes que expire. {{forcedLine}}'
             },
             es: {
                 subject: 'Nueva oferta de entrega',
-                body: '{{agencyName}} te ofrece una entrega para el pedido {{orderNumber}}. Revísala y acéptala antes de que caduque.'
+                body: '{{agencyName}} te ofrece una entrega para el pedido {{orderNumber}}. Revísala y acéptala antes de que caduque. {{forcedLine}}'
             },
             ar: {
                 subject: 'عرض توصيل جديد',
-                body: 'تعرض عليك {{agencyName}} توصيلًا للطلب {{orderNumber}}. راجعه واقبله قبل انتهاء صلاحيته.'
+                body: 'تعرض عليك {{agencyName}} توصيلًا للطلب {{orderNumber}}. راجعه واقبله قبل انتهاء صلاحيته. {{forcedLine}}'
             }
         },
+        // ⚠ `{{forcedLine}}` (2026-10-02) is in the base copy only. The WhatsApp copy below is
+        // the PRE-EXISTING body, pinned, because `agent_shipment_offer_received` is approved by
+        // Meta and an approved template body is frozen — a changed base would make the
+        // generator emit an edit that goes back to review.
         whatsapp: {
-            text: {},
+            text: {
+                en: { body: '{{agencyName}} is offering you a delivery for order {{orderNumber}}. Review and accept it before it expires.' },
+                fr: { body: '{{agencyName}} vous propose une livraison pour la commande {{orderNumber}}. Consultez-la et acceptez-la avant qu\'elle n\'expire.' },
+                pt: { body: '{{agencyName}} está a oferecer-lhe uma entrega para a encomenda {{orderNumber}}. Reveja e aceite antes que expire.' },
+                es: { body: '{{agencyName}} te ofrece una entrega para el pedido {{orderNumber}}. Revísala y acéptala antes de que caduque.' },
+                ar: { body: 'تعرض عليك {{agencyName}} توصيلًا للطلب {{orderNumber}}. راجعه واقبله قبل انتهاء صلاحيته.' }
+            },
             template: {
                 name: 'agent_shipment_offer_received',
                 bodyParams: ['{{agencyName}}', '{{orderNumber}}']
             }
         },
         button: OFFER_BUTTON
+    },
+
+    // A BULK offer (2026-10-03): one agency, several shipments, one notification. Lands on
+    // the offers LIST. A batch of one is sent as `shipment.offer.received` instead, so it
+    // keeps that situation's Accept / Decline push buttons.
+    'shipment.offer.batch_received': {
+        base: {
+            en: {
+                subject: 'New delivery offers',
+                body: '{{agencyName}} is offering you {{count}} deliveries. Review and accept them before they expire. {{forcedLine}}'
+            },
+            fr: {
+                subject: 'Nouvelles offres de livraison',
+                body: '{{agencyName}} vous propose {{count}} livraisons. Consultez-les et acceptez-les avant qu\'elles n\'expirent. {{forcedLine}}'
+            },
+            pt: {
+                subject: 'Novas ofertas de entrega',
+                body: '{{agencyName}} está a oferecer-lhe {{count}} entregas. Reveja e aceite-as antes que expirem. {{forcedLine}}'
+            },
+            es: {
+                subject: 'Nuevas ofertas de entrega',
+                body: '{{agencyName}} te ofrece {{count}} entregas. Revísalas y acéptalas antes de que caduquen. {{forcedLine}}'
+            },
+            ar: {
+                subject: 'عروض توصيل جديدة',
+                body: 'تعرض عليك {{agencyName}} {{count}} عمليات توصيل. راجعها واقبلها قبل انتهاء صلاحيتها. {{forcedLine}}'
+            }
+        },
+        // `{{forcedLine}}` stays out of the WhatsApp body, as on `agent_shipment_offer_received`:
+        // an optional clause would be an EMPTY template parameter on every unforced batch.
+        whatsapp: {
+            text: {
+                en: { body: '{{agencyName}} is offering you {{count}} deliveries. Review and accept them before they expire.' },
+                fr: { body: '{{agencyName}} vous propose {{count}} livraisons. Consultez-les et acceptez-les avant qu\'elles n\'expirent.' },
+                pt: { body: '{{agencyName}} está a oferecer-lhe {{count}} entregas. Reveja e aceite-as antes que expirem.' },
+                es: { body: '{{agencyName}} te ofrece {{count}} entregas. Revísalas y acéptalas antes de que caduquen.' },
+                ar: { body: 'تعرض عليك {{agencyName}} {{count}} عمليات توصيل. راجعها واقبلها قبل انتهاء صلاحيتها.' }
+            },
+            template: {
+                name: 'agent_shipment_offer_batch_received',
+                bodyParams: ['{{agencyName}}', '{{count}}']
+            }
+        },
+        button: OFFERS_LIST_BUTTON
     },
 
     // Round-2 reminder: a delivery offer this agent hasn't answered is STILL open
@@ -930,6 +1098,132 @@ export const AGENT_NOTIFICATION_CATALOG: Record<AgentNotificationType, Situation
             template: { name: 'agent_payout_transfer_failed', bodyParams: ['{{currency}}', '{{amountFormatted}}'] }
         },
         button: EARNINGS_BUTTON
+    },
+
+    // ─── Delivery-fee proposals (2026-10-02) — only ones THIS agent raised ───────
+    'delivery_fee_proposal.approved': {
+        base: {
+            en: { subject: 'Your delivery fee was approved', body: 'The vendor approved your proposed delivery fee of {{currency}} {{proposedFeeFormatted}} for order #{{orderNumber}}. You can pick the shipment up now.' },
+            fr: { subject: 'Vos frais de livraison ont été acceptés', body: 'Le vendeur a accepté les frais de livraison que vous avez proposés, {{currency}} {{proposedFeeFormatted}}, pour la commande n°{{orderNumber}}. Vous pouvez maintenant enlever l\'expédition.' },
+            pt: { subject: 'A sua taxa de entrega foi aprovada', body: 'O vendedor aprovou a taxa de entrega que propôs, {{currency}} {{proposedFeeFormatted}}, para o pedido nº{{orderNumber}}. Já pode recolher a remessa.' },
+            es: { subject: 'Tu tarifa de envío fue aprobada', body: 'El vendedor aprobó la tarifa de envío que propusiste, {{currency}} {{proposedFeeFormatted}}, para el pedido n.º{{orderNumber}}. Ya puedes recoger el envío.' },
+            ar: { subject: 'تمت الموافقة على رسوم التوصيل التي اقترحتها', body: 'وافق البائع على رسوم التوصيل التي اقترحتها، {{currency}} {{proposedFeeFormatted}}، للطلب رقم {{orderNumber}}. يمكنك الآن استلام الشحنة.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agent_delivery_fee_proposal_approved', bodyParams: ['{{currency}}', '{{proposedFeeFormatted}}', '{{orderNumber}}'] }
+        },
+        button: SHIPMENT_BUTTON
+    },
+
+    'delivery_fee_proposal.rejected': {
+        base: {
+            en: { subject: 'Your delivery fee was rejected', body: 'The vendor rejected your proposed delivery fee of {{currency}} {{proposedFeeFormatted}} for order #{{orderNumber}}; the fee stays {{currency}} {{feeBeforeFormatted}}. Your agency decides what happens next.' },
+            fr: { subject: 'Vos frais de livraison ont été refusés', body: 'Le vendeur a refusé les frais de livraison que vous avez proposés, {{currency}} {{proposedFeeFormatted}}, pour la commande n°{{orderNumber}} ; les frais restent de {{currency}} {{feeBeforeFormatted}}. Votre agence décide de la suite.' },
+            pt: { subject: 'A sua taxa de entrega foi recusada', body: 'O vendedor recusou a taxa de entrega que propôs, {{currency}} {{proposedFeeFormatted}}, para o pedido nº{{orderNumber}}; a taxa mantém-se em {{currency}} {{feeBeforeFormatted}}. A sua agência decide o que acontece a seguir.' },
+            es: { subject: 'Tu tarifa de envío fue rechazada', body: 'El vendedor rechazó la tarifa de envío que propusiste, {{currency}} {{proposedFeeFormatted}}, para el pedido n.º{{orderNumber}}; la tarifa sigue siendo {{currency}} {{feeBeforeFormatted}}. Tu agencia decide qué pasa ahora.' },
+            ar: { subject: 'تم رفض رسوم التوصيل التي اقترحتها', body: 'رفض البائع رسوم التوصيل التي اقترحتها، {{currency}} {{proposedFeeFormatted}}، للطلب رقم {{orderNumber}}؛ تبقى الرسوم {{currency}} {{feeBeforeFormatted}}. تقرّر وكالتك الخطوة التالية.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agent_delivery_fee_proposal_rejected', bodyParams: ['{{currency}}', '{{proposedFeeFormatted}}', '{{orderNumber}}', '{{feeBeforeFormatted}}'] }
+        },
+        button: SHIPMENT_BUTTON
+    },
+
+    'delivery_fee_proposal.edited': {
+        base: {
+            en: { subject: 'Your agency changed your proposed fee', body: '{{agencyName}} changed your proposed delivery fee for order #{{orderNumber}} to {{currency}} {{proposedFeeFormatted}} (it was {{currency}} {{previousFeeFormatted}}). The vendor will answer the new amount.' },
+            fr: { subject: 'Votre agence a modifié vos frais proposés', body: '{{agencyName}} a modifié les frais de livraison que vous avez proposés pour la commande n°{{orderNumber}} : {{currency}} {{proposedFeeFormatted}} (au lieu de {{currency}} {{previousFeeFormatted}}). Le vendeur répondra sur le nouveau montant.' },
+            pt: { subject: 'A sua agência alterou a taxa que propôs', body: '{{agencyName}} alterou a taxa de entrega que propôs para o pedido nº{{orderNumber}} para {{currency}} {{proposedFeeFormatted}} (era {{currency}} {{previousFeeFormatted}}). O vendedor responderá ao novo valor.' },
+            es: { subject: 'Tu agencia cambió tu tarifa propuesta', body: '{{agencyName}} cambió la tarifa de envío que propusiste para el pedido n.º{{orderNumber}} a {{currency}} {{proposedFeeFormatted}} (era {{currency}} {{previousFeeFormatted}}). El vendedor responderá al nuevo importe.' },
+            ar: { subject: 'عدّلت وكالتك الرسوم التي اقترحتها', body: 'عدّلت {{agencyName}} رسوم التوصيل التي اقترحتها للطلب رقم {{orderNumber}} إلى {{currency}} {{proposedFeeFormatted}} (كانت {{currency}} {{previousFeeFormatted}}). سيردّ البائع على المبلغ الجديد.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agent_delivery_fee_proposal_edited', bodyParams: ['{{agencyName}}', '{{orderNumber}}', '{{currency}}', '{{proposedFeeFormatted}}', '{{previousFeeFormatted}}'] }
+        },
+        button: SHIPMENT_BUTTON
+    },
+
+    // ⚠ NO button, deliberately: the shipment left this agent (declined, or they were
+    // detached), and every agent-scoped shipment read 404s — same as shipment.reassigned_away.
+    'delivery_fee_proposal.withdrawn': {
+        base: {
+            en: { subject: 'Your fee proposal was closed', body: 'Your proposed delivery fee for order #{{orderNumber}} was withdrawn automatically because {{reasonLine}}.' },
+            fr: { subject: 'Votre proposition de frais a été clôturée', body: 'Les frais de livraison que vous aviez proposés pour la commande n°{{orderNumber}} ont été retirés automatiquement car {{reasonLine}}.' },
+            pt: { subject: 'A sua proposta de taxa foi encerrada', body: 'A taxa de entrega que propôs para o pedido nº{{orderNumber}} foi retirada automaticamente porque {{reasonLine}}.' },
+            es: { subject: 'Tu propuesta de tarifa se cerró', body: 'La tarifa de envío que propusiste para el pedido n.º{{orderNumber}} se retiró automáticamente porque {{reasonLine}}.' },
+            ar: { subject: 'تم إغلاق اقتراح الرسوم الخاص بك', body: 'تم سحب رسوم التوصيل التي اقترحتها للطلب رقم {{orderNumber}} تلقائيًا لأن {{reasonLine}}.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agent_delivery_fee_proposal_withdrawn', bodyParams: ['{{orderNumber}}', '{{reasonLine}}'] }
+        }
+    },
+
+    // The agency's agents_can_propose_delivery_fee switch, fanned out to every agent with an
+    // ACTIVE contract there. Lands on that contract (memberships/{{contractId}}).
+    'fee_proposals.enabled': {
+        base: {
+            en: { subject: 'You can now propose delivery fees', body: '{{agencyName}} now lets you propose a different delivery fee on shipments you have accepted. The vendor approves or rejects each proposal.' },
+            fr: { subject: 'Vous pouvez désormais proposer des frais de livraison', body: '{{agencyName}} vous permet désormais de proposer d\'autres frais de livraison sur les expéditions que vous avez acceptées. Le vendeur accepte ou refuse chaque proposition.' },
+            pt: { subject: 'Agora pode propor taxas de entrega', body: '{{agencyName}} permite-lhe agora propor uma taxa de entrega diferente nas remessas que aceitou. O vendedor aprova ou recusa cada proposta.' },
+            es: { subject: 'Ahora puedes proponer tarifas de envío', body: '{{agencyName}} ahora te permite proponer una tarifa de envío distinta en los envíos que aceptaste. El vendedor aprueba o rechaza cada propuesta.' },
+            ar: { subject: 'يمكنك الآن اقتراح رسوم التوصيل', body: 'تسمح لك {{agencyName}} الآن باقتراح رسوم توصيل مختلفة على الشحنات التي قبلتها. يوافق البائع على كل اقتراح أو يرفضه.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agent_fee_proposals_enabled', bodyParams: ['{{agencyName}}'] }
+        },
+        button: AGENCY_CONTRACT_BUTTON
+    },
+
+    'fee_proposals.disabled': {
+        base: {
+            en: { subject: 'Delivery fee proposals turned off', body: '{{agencyName}} no longer lets its agents propose delivery fees. Proposals you already sent stay with the vendor; new ones go through your agency.' },
+            fr: { subject: 'Propositions de frais de livraison désactivées', body: '{{agencyName}} ne permet plus à ses livreurs de proposer des frais de livraison. Les propositions déjà envoyées restent chez le vendeur ; les nouvelles passent par votre agence.' },
+            pt: { subject: 'Propostas de taxa de entrega desativadas', body: '{{agencyName}} deixou de permitir que os seus agentes proponham taxas de entrega. As propostas já enviadas continuam com o vendedor; as novas passam pela sua agência.' },
+            es: { subject: 'Propuestas de tarifa de envío desactivadas', body: '{{agencyName}} ya no permite a sus agentes proponer tarifas de envío. Las propuestas ya enviadas siguen con el vendedor; las nuevas pasan por tu agencia.' },
+            ar: { subject: 'تم إيقاف اقتراحات رسوم التوصيل', body: 'لم تعد {{agencyName}} تسمح لمندوبيها باقتراح رسوم التوصيل. تبقى الاقتراحات المرسلة لدى البائع؛ أما الجديدة فتمرّ عبر وكالتك.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agent_fee_proposals_disabled', bodyParams: ['{{agencyName}}'] }
+        },
+        button: AGENCY_CONTRACT_BUTTON
+    },
+
+    // ─── COD pool pin / release (2026-10-02) ────────────────────────────────────
+    // Administrator action only — the nightly reset to the 500 000 default is NOT notified.
+    'cod.pool.pinned': {
+        base: {
+            en: { subject: 'Your COD limit was changed', body: 'An administrator set your cash-on-delivery limit to {{currency}} {{poolFormatted}}. It caps the cash you may carry across all your agencies.' },
+            fr: { subject: 'Votre limite de paiement à la livraison a changé', body: 'Un administrateur a fixé votre plafond de paiement à la livraison à {{currency}} {{poolFormatted}}. Il limite l\'argent que vous pouvez porter pour l\'ensemble de vos agences.' },
+            pt: { subject: 'O seu limite de pagamento na entrega mudou', body: 'Um administrador definiu o seu limite de pagamento na entrega em {{currency}} {{poolFormatted}}. Limita o dinheiro que pode transportar para todas as suas agências.' },
+            es: { subject: 'Tu límite de contra reembolso cambió', body: 'Un administrador fijó tu límite de contra reembolso en {{currency}} {{poolFormatted}}. Limita el efectivo que puedes llevar para todas tus agencias.' },
+            ar: { subject: 'تم تغيير حدّك للدفع عند الاستلام', body: 'حدّد أحد المسؤولين حدّك للدفع عند الاستلام عند {{currency}} {{poolFormatted}}. يحدّ من النقد الذي يمكنك حمله لجميع وكالاتك.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agent_cod_pool_pinned', bodyParams: ['{{currency}}', '{{poolFormatted}}'] }
+        },
+        button: COD_BUTTON
+    },
+
+    'cod.pool.released': {
+        base: {
+            en: { subject: 'Your COD limit is back to the default', body: 'An administrator released the custom cash-on-delivery limit on your account. Your limit is the platform default of {{currency}} {{poolFormatted}} again.' },
+            fr: { subject: 'Votre limite de paiement à la livraison revient à la valeur par défaut', body: 'Un administrateur a levé la limite de paiement à la livraison personnalisée de votre compte. Votre limite est de nouveau la valeur par défaut de la plateforme : {{currency}} {{poolFormatted}}.' },
+            pt: { subject: 'O seu limite de pagamento na entrega voltou ao padrão', body: 'Um administrador removeu o limite personalizado de pagamento na entrega da sua conta. O seu limite volta a ser o padrão da plataforma: {{currency}} {{poolFormatted}}.' },
+            es: { subject: 'Tu límite de contra reembolso vuelve al predeterminado', body: 'Un administrador retiró el límite personalizado de contra reembolso de tu cuenta. Tu límite vuelve a ser el predeterminado de la plataforma: {{currency}} {{poolFormatted}}.' },
+            ar: { subject: 'عاد حدّك للدفع عند الاستلام إلى القيمة الافتراضية', body: 'ألغى أحد المسؤولين الحدّ المخصّص للدفع عند الاستلام لحسابك. أصبح حدّك مجددًا الحدّ الافتراضي للمنصة: {{currency}} {{poolFormatted}}.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agent_cod_pool_released', bodyParams: ['{{currency}}', '{{poolFormatted}}'] }
+        },
+        button: COD_BUTTON
     }
 };
 

@@ -55,7 +55,22 @@ export type NotificationType =
      */
     | 'storage.depot_changed'
     | 'storage.product_suspended'
-    | 'storage.product_unsuspended';
+    | 'storage.product_unsuspended'
+    /**
+     * COD limits (2026-10-02). Auto-redirect did NOT dispatch one of this order's COD
+     * shipments: handing it over would push the agency past its own cash limit, or past
+     * this vendor's `maxCashPerAgency`. The order screen is where "dispatch anyway"
+     * (force) and "change agency" live, so it deep-links there.
+     */
+    | 'shipment.cod_limit_held'
+    /**
+     * Per-shipment delivery-fee proposals (2026-10-02). `received` and `edited` are the
+     * vendor's to answer (approve/reject on the order); `withdrawn` is informational — the
+     * proposer took it back, or the shipment moved on and the system closed it.
+     */
+    | 'delivery_fee_proposal.received'
+    | 'delivery_fee_proposal.edited'
+    | 'delivery_fee_proposal.withdrawn';
 
 /**
  * Aggregate Types
@@ -161,7 +176,12 @@ const VendorNotificationSchema = new Schema<IVendorNotification>(
                 'storage.stock_request.rejected',
                 'storage.depot_changed',
                 'storage.product_suspended',
-                'storage.product_unsuspended'
+                'storage.product_unsuspended',
+                // ⚠ Hand-kept: every member of the union above must be here too.
+                'shipment.cod_limit_held',
+                'delivery_fee_proposal.received',
+                'delivery_fee_proposal.edited',
+                'delivery_fee_proposal.withdrawn'
             ],
             required: true
         },

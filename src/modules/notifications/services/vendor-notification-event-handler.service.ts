@@ -32,6 +32,25 @@ import {
 import { Language, DEFAULT_LANGUAGE, resolveLanguage, templateLanguage } from '../catalog/notification-i18n';
 import { RenderContext, toTelegramNotificationBody, toWhatsAppNotificationBody } from '../catalog/message-renderer';
 import { DomainEvent } from '../../../core/events/event-bus';
+import { renderTemplate } from '../catalog/message-renderer';
+import { VENDOR_COD_HOLD_REASON } from '../catalog/notification-catalog';
+import { MagazinRepository } from '../../magazin/repositories/magazin.repository';
+import { OrderModel } from '../../orders/order.model';
+
+/**
+ * `delivery_fee_proposal.edited` payload readers (2026-10-02). The producer was built in a
+ * concurrent change; the documented contract is "the usual payload plus the editor's role and
+ * the fee before/after". Both readers accept the spellings that contract admits, so a
+ * different choice of name degrades to a missing figure rather than a missing notification.
+ */
+function editedByRoleOf(p: any): string | null {
+    return p?.editedByRole ?? p?.editedBy?.role ?? p?.lastEditedBy?.role ?? null;
+}
+function previousProposedFeeOf(p: any): number | null {
+    const v = p?.previousProposedFee ?? p?.proposedFeeBefore ?? p?.previousFee ?? p?.fromFee ?? p?.editedFrom ?? null;
+    return typeof v === 'number' ? v : null;
+}
+
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 
@@ -73,8 +92,10 @@ export class VendorNotificationEventHandler {
     private telegramService: TelegramNotificationService;
     private whatsappWindow: WhatsappService;
     private fcmPushService: FcmPushService;
+    private magazinRepo: MagazinRepository;
 
     constructor() {
+        this.magazinRepo = new MagazinRepository();
         this.notificationRepo = new VendorNotificationRepository();
         this.preferenceRepo = new VendorNotificationPreferenceRepository();
         this.vendorRepo = new VendorRepository();
@@ -872,6 +893,130 @@ export class VendorNotificationEventHandler {
         } catch (error) {
             console.error('[NotificationHandler] Failed to handle storage.product_unsuspended:', error);
         }
+    }
+
+    // ─── COD limits + delivery-fee proposals (2026-10-02) ────────────────────
+
+    /**
+     * `shipment.cod_limit_held` — auto-redirect left one of this vendor's COD shipments at
+     * `pending` because the agency is over a limit. Links to the order, where "dispatch
+     * anyway" and "change agency" live. One per shipment (the hold is evaluated once, at
+     * payment), so the shipment id is the idempotency key.
+     */
+    async handleCodLimitHeld(event: DomainEvent): Promise<void> {
+        try {
+            const p = event.payload;
+            if (!p?.vendorId) return;
+            const prefs = await this.preferenceRepo.getByVendor(p.vendorId);
+            if (prefs.preferences.codLimitUpdates === false) return;
+
+            const lang = resolveLanguage(await this.vendorRepo.findById(String(p.vendorId)));
+            const currency = p.currency ?? '';
+            const reasonTemplate = (VENDOR_COD_HOLD_REASON as any)[p.kind]?.[lang]
+                ?? VENDOR_COD_HOLD_REASON.agency_limit[lang];
+            const limitReason = renderTemplate(reasonTemplate, {
+                currency,
+                capFormatted: Number(p.limit ?? 0).toLocaleString(),
+                heldFormatted: Number(p.currentExposure ?? 0).toLocaleString()
+            });
+
+            await this.dispatch({
+                situation: 'shipment.cod_limit_held',
+                prefs,
+                vendorId: p.vendorId,
+                aggregateType: 'order',
+                aggregateId: p.orderId,
+                idempotencyKey: `shipment.cod_limit_held:${p.shipmentId}`,
+                context: {
+                    orderId: p.orderId,
+                    orderNumber: p.orderNumber ?? '—',
+                    agencyName: p.agencyName || this.fallbackAgencyName(lang),
+                    currency,
+                    amountFormatted: Number(p.additionalAmount ?? 0).toLocaleString(),
+                    limitReason
+                }
+            });
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle shipment.cod_limit_held:', error);
+        }
+    }
+
+    /** `delivery_fee_proposal.created` → the vendor has a fee to approve or reject. */
+    async handleDeliveryFeeProposalCreated(event: DomainEvent): Promise<void> {
+        await this.feeProposalSituation(event, 'delivery_fee_proposal.received');
+    }
+
+    /** `delivery_fee_proposal.edited` → the figure the vendor must answer changed. */
+    async handleDeliveryFeeProposalEdited(event: DomainEvent): Promise<void> {
+        await this.feeProposalSituation(event, 'delivery_fee_proposal.edited');
+    }
+
+    /** `delivery_fee_proposal.withdrawn` → informational; nothing left to answer. */
+    async handleDeliveryFeeProposalWithdrawn(event: DomainEvent): Promise<void> {
+        await this.feeProposalSituation(event, 'delivery_fee_proposal.withdrawn');
+    }
+
+    private async feeProposalSituation(
+        event: DomainEvent,
+        situation: 'delivery_fee_proposal.received' | 'delivery_fee_proposal.edited' | 'delivery_fee_proposal.withdrawn'
+    ): Promise<void> {
+        try {
+            const p = event.payload;
+            if (!p?.vendorId || !p?.orderId) return;
+            const prefs = await this.preferenceRepo.getByVendor(p.vendorId);
+            if (prefs.preferences.deliveryFeeProposals === false) return;
+
+            const lang = resolveLanguage(await this.vendorRepo.findById(String(p.vendorId)));
+            const agencyName = (await this.magazinRepo.findNameByAgencyId(String(p.agencyId)).catch(() => null))
+                || this.fallbackAgencyName(lang);
+            const at = new Date(event.occurredAt ?? Date.now()).getTime();
+
+            await this.dispatch({
+                situation,
+                prefs,
+                vendorId: p.vendorId,
+                aggregateType: 'order',
+                aggregateId: p.orderId,
+                // A proposal is created and withdrawn once; it may be EDITED several times,
+                // so the edit key carries the emission time.
+                idempotencyKey: situation === 'delivery_fee_proposal.edited'
+                    ? `${situation}:${p.proposalId}:${at}`
+                    : `${situation}:${p.proposalId}`,
+                context: {
+                    orderId: p.orderId,
+                    orderNumber: (await this.orderNumberOf(p)) ?? '—',
+                    agencyName,
+                    currency: p.currency ?? '',
+                    proposedFeeFormatted: Number(p.proposedFee ?? 0).toLocaleString(),
+                    feeBeforeFormatted: Number(p.feeBefore ?? 0).toLocaleString(),
+                    previousFeeFormatted: Number(previousProposedFeeOf(p) ?? 0).toLocaleString()
+                }
+            });
+        } catch (error) {
+            console.error(`[NotificationHandler] Failed to handle ${situation}:`, error);
+        }
+    }
+
+    /** The order number — from the payload when the producer sent it, else one read. */
+    private async orderNumberOf(p: { orderNumber?: string | null; orderId?: string }): Promise<string | null> {
+        if (p.orderNumber) return p.orderNumber;
+        if (!p.orderId) return null;
+        try {
+            const order = await OrderModel.findById(p.orderId).select('order_number').lean().exec();
+            return (order as any)?.order_number ?? null;
+        } catch {
+            return null;
+        }
+    }
+
+    private fallbackAgencyName(lang: Language): string {
+        return this.line(lang, {
+            en: 'Your delivery agency',
+            fr: 'Votre agence de livraison',
+            pt: 'A sua agência de entrega',
+            es: 'Tu agencia de entrega',
+            ar: 'وكالة التوصيل الخاصة بك'
+        });
     }
 
     // ─── Dispatch + delivery ─────────────────────────────────────────────────

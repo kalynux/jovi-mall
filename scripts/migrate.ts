@@ -254,6 +254,12 @@ export const MIGRATIONS: Migration[] = [
         note: 'the plan-quota sweep collection-scans every owner it visits, and TWO ENFORCEMENT STAMPS PER OWNER become possible — the unique index is what stops two passes each believing they enforced the current plan',
     },
     {
+        name: 'migrate:delivery-fee-proposal-indexes',
+        file: 'scripts/migrate-delivery-fee-proposal-indexes.ts',
+        dryRun: true,
+        note: 'TWO PENDING DELIVERY-FEE CHANGES CAN STAND ON ONE SHIPMENT — the partial unique index is the independent guarantee behind the shipment-pointer CAS, and without it a vendor could approve both',
+    },
+    {
         name: 'migrate:payout-lifecycle-index',
         file: 'scripts/migrate-payout-lifecycle-index.ts',
         dryRun: true,

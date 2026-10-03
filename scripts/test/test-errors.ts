@@ -828,7 +828,7 @@ function census(): Map<string, CensusRow> {
 function fallbackCategory(code: string, status: number): ErrorCategory {
     const integrationPrefixes = [
         'STRIPE_', 'GOOGLE_', 'WHATSAPP_', 'TELEGRAM_', 'STORAGE_', 'GEO_', 'MAIL_',
-        'NOTCHPAY_', 'MYCOOLPAY_', 'CAMPAY_',
+        'NOTCHPAY_', 'MYCOOLPAY_', 'CAMPAY_', 'CINETPAY_', 'FAPSHI_',
     ];
     if (status >= 500 && integrationPrefixes.some((p) => code.startsWith(p))) {
         return ERROR_CATEGORIES.EXTERNAL_SERVICE;

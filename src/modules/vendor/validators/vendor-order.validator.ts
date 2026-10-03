@@ -60,6 +60,12 @@ export const BulkDispatchToAgencySchema = z.object({
     orderIds: z.array(z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid order ID'))
         .min(1, 'At least one order ID is required')
         .max(50, 'Cannot dispatch more than 50 orders at once'),
+    /**
+     * Push COD shipments past the agency's cash limit / the vendor's own
+     * `maxCashPerAgency` (2026-10-02). Without it such an order lands in `failed` with
+     * `code: COD_AGENCY_LIMIT_EXCEEDED` and `details`. Recorded on every shipment it forces.
+     */
+    force: z.boolean().optional(),
 });
 
 export type BulkDispatchToAgencyDto = z.infer<typeof BulkDispatchToAgencySchema>;
@@ -71,7 +77,17 @@ export const UpdateDeliveryAgencySchema = z.object({
     itemId: z.string()
         .regex(/^[0-9a-fA-F]{24}$/, 'Invalid order item ID'),
     deliveryAgencyId: z.string()
-        .regex(/^[0-9a-fA-F]{24}$/, 'Invalid delivery agency ID')
+        .regex(/^[0-9a-fA-F]{24}$/, 'Invalid delivery agency ID'),
+    /** Move a COD item past the destination agency's cash limit (see DispatchToAgencySchema). */
+    force: z.boolean().optional(),
+});
+
+/**
+ * POST /api/vendor/orders/:id/dispatch — optional body (2026-10-02). An absent or empty body
+ * is `{ force: false }`, so existing clients are unchanged.
+ */
+export const DispatchToAgencySchema = z.object({
+    force: z.boolean().optional(),
 });
 
 export type UpdateDeliveryAgencyDto = z.infer<typeof UpdateDeliveryAgencySchema>;

@@ -36,6 +36,25 @@ import { ChannelText } from '../catalog/notification-catalog';
 import { Language, resolveLanguage, templateLanguage } from '../catalog/notification-i18n';
 import { RenderContext, toTelegramNotificationBody, toWhatsAppNotificationBody } from '../catalog/message-renderer';
 import { DomainEvent } from '../../../core/events/event-bus';
+import { renderTemplate } from '../catalog/message-renderer';
+import { AGENCY_COD_FORCE_REASON, AGENCY_VENDOR_COD_TERMS_LINE } from '../catalog/agency-notification-catalog';
+import { StoreRepository } from '../../store/repositories/store.repository';
+import { OrderModel } from '../../orders/order.model';
+
+/**
+ * `delivery_fee_proposal.edited` payload readers (2026-10-02). The producer was built in a
+ * concurrent change; the documented contract is "the usual payload plus the editor's role and
+ * the fee before/after". Both readers accept the spellings that contract admits, so a
+ * different choice of name degrades to a missing figure rather than a missing notification.
+ */
+function editedByRoleOf(p: any): string | null {
+    return p?.editedByRole ?? p?.editedBy?.role ?? p?.lastEditedBy?.role ?? null;
+}
+function previousProposedFeeOf(p: any): number | null {
+    const v = p?.previousProposedFee ?? p?.proposedFeeBefore ?? p?.previousFee ?? p?.fromFee ?? p?.editedFrom ?? null;
+    return typeof v === 'number' ? v : null;
+}
+
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 
@@ -85,8 +104,10 @@ export class AgencyNotificationEventHandler {
     private telegramService: TelegramNotificationService;
     private whatsappWindow: WhatsappService;
     private fcmPushService: FcmPushService;
+    private storeRepo: StoreRepository;
 
     constructor() {
+        this.storeRepo = new StoreRepository();
         this.notificationRepo = new AgencyNotificationRepository();
         this.preferenceRepo = new AgencyNotificationPreferenceRepository();
         this.agencyRepo = new DeliveryAgencyRepository();
@@ -453,7 +474,24 @@ export class AgencyNotificationEventHandler {
     /** Handle shipment.assigned event (a vendor dispatched an order to this agency). */
     async handleShipmentAssigned(event: DomainEvent): Promise<void> {
         try {
-            const { shipmentId, agencyId, orderNumber, itemCount } = event.payload;
+            const { shipmentId, agencyId, orderNumber, itemCount, codLimitForce } = event.payload;
+
+            // 2026-10-02: a vendor's `force: true` dispatch past a COD limit. ONE
+            // notification for the hand-off, keyed like shipment.assigned so it can never
+            // be followed by a second "new shipment" for the same shipment.
+            if (codLimitForce) {
+                await this.dispatchCodLimitForced({
+                    shipmentId,
+                    agencyId,
+                    vendorId: codLimitForce.vendorId,
+                    orderNumber,
+                    kind: codLimitForce.kind,
+                    amount: codLimitForce.amount,
+                    currency: codLimitForce.currency,
+                    idempotencyKey: `shipment.assigned:${shipmentId}`
+                });
+                return;
+            }
 
             const prefs = await this.preferenceRepo.getByAgency(agencyId);
             if (!prefs.preferences.shipmentAssigned) return;
@@ -502,7 +540,31 @@ export class AgencyNotificationEventHandler {
      */
     async handleAssignmentUnfilled(event: DomainEvent): Promise<void> {
         try {
-            const { shipmentId, agencyId, orderNumber } = event.payload;
+            const { shipmentId, agencyId, orderNumber, reason, expectedCodAmount, currency } = event.payload;
+
+            // 2026-10-02: every candidate was over their COD AMOUNT limit — the one refusal
+            // the agency may force past. Sent INSTEAD of the generic "nobody accepted", and
+            // keyed on the shipment alone (no timestamp): repeated auto-assign attempts on a
+            // shipment still blocked for the same reason must not spam the agency.
+            if (reason === 'cod_exposure_exceeded') {
+                const codPrefs = await this.preferenceRepo.getByAgency(agencyId);
+                if (codPrefs.preferences.codLimitUpdates === false) return;
+                await this.dispatch({
+                    situation: 'shipment.assignment.cod_limit_blocked',
+                    prefs: codPrefs,
+                    agencyId,
+                    aggregateType: 'shipment',
+                    aggregateId: shipmentId,
+                    idempotencyKey: `shipment.assignment.cod_limit_blocked:${shipmentId}`,
+                    context: {
+                        shipmentId,
+                        orderNumber: orderNumber ?? '—',
+                        currency: currency ?? '',
+                        amountFormatted: Number(expectedCodAmount ?? 0).toLocaleString()
+                    }
+                });
+                return;
+            }
 
             const prefs = await this.preferenceRepo.getByAgency(agencyId);
             if (!prefs.preferences.shipmentAssigned) return;
@@ -958,6 +1020,209 @@ export class AgencyNotificationEventHandler {
      */
     private async resolveAgencyLanguage(agencyId: string): Promise<Language> {
         return resolveLanguage(await this.agencyRepo.findById(agencyId));
+    }
+
+    // ─── COD limits + delivery-fee proposals (2026-10-02) ────────────────────
+
+    /**
+     * Shared by `shipment.cod_limit_forced` (change-agency onto an already-dispatched
+     * shipment) and the forced branch of `shipment.assigned`. Keyed on the shipment AND the
+     * emission time: one shipment can be forced past a limit more than once (two items moved
+     * onto it), and each is a new cash commitment.
+     */
+    async handleCodLimitForced(event: DomainEvent): Promise<void> {
+        try {
+            const p = event.payload;
+            if (!p?.agencyId) return;
+            await this.dispatchCodLimitForced({
+                shipmentId: p.shipmentId,
+                agencyId: p.agencyId,
+                vendorId: p.vendorId,
+                orderNumber: p.orderNumber,
+                kind: p.kind,
+                amount: p.amount,
+                currency: p.currency,
+                idempotencyKey: `shipment.cod_limit.forced:${p.shipmentId}:${new Date(event.occurredAt ?? Date.now()).getTime()}`
+            });
+        } catch (error) {
+            console.error('[AgencyNotificationHandler] Failed to handle shipment.cod_limit_forced:', error);
+        }
+    }
+
+    private async dispatchCodLimitForced(args: {
+        shipmentId: string;
+        agencyId: string;
+        vendorId?: string;
+        orderNumber?: string | null;
+        kind?: string;
+        amount?: number;
+        currency?: string | null;
+        idempotencyKey: string;
+    }): Promise<void> {
+        const prefs = await this.preferenceRepo.getByAgency(args.agencyId);
+        if (prefs.preferences.codLimitUpdates === false) return;
+        const lang = await this.resolveAgencyLanguage(args.agencyId);
+        await this.dispatch({
+            situation: 'shipment.cod_limit.forced',
+            prefs,
+            agencyId: args.agencyId,
+            aggregateType: 'shipment',
+            aggregateId: args.shipmentId,
+            idempotencyKey: args.idempotencyKey,
+            context: {
+                shipmentId: args.shipmentId,
+                orderNumber: args.orderNumber ?? '—',
+                vendorName: await this.resolveVendorName(args.vendorId, lang),
+                currency: args.currency ?? '',
+                amountFormatted: Number(args.amount ?? 0).toLocaleString(),
+                limitReason: ((AGENCY_COD_FORCE_REASON as any)[args.kind ?? ''] ?? AGENCY_COD_FORCE_REASON.agency_limit)[lang]
+            }
+        });
+    }
+
+    /** `vendor.cod_terms_changed` — fanned out per ACTIVE connection by CodLimitsService. */
+    async handleVendorCodTermsChanged(event: DomainEvent): Promise<void> {
+        try {
+            const p = event.payload;
+            if (!p?.agencyId || !p?.connectionId) return;
+            const prefs = await this.preferenceRepo.getByAgency(p.agencyId);
+            if (prefs.preferences.codLimitUpdates === false) return;
+            const lang = await this.resolveAgencyLanguage(p.agencyId);
+            const line = p.codEnabled === false
+                ? AGENCY_VENDOR_COD_TERMS_LINE.disabled[lang]
+                : p.maxCashPerAgency === null || p.maxCashPerAgency === undefined
+                    ? AGENCY_VENDOR_COD_TERMS_LINE.noCap[lang]
+                    : renderTemplate(AGENCY_VENDOR_COD_TERMS_LINE.cap[lang], {
+                        currency: p.currency ?? '',
+                        capFormatted: Number(p.maxCashPerAgency).toLocaleString()
+                    });
+            await this.dispatch({
+                situation: 'connection.cod_terms_changed',
+                prefs,
+                agencyId: p.agencyId,
+                aggregateType: 'connection',
+                aggregateId: p.connectionId,
+                idempotencyKey: `connection.cod_terms_changed:${p.connectionId}:${new Date(event.occurredAt ?? Date.now()).getTime()}`,
+                context: {
+                    connectionId: p.connectionId,
+                    vendorName: p.vendorName || (await this.resolveVendorName(p.vendorId, lang)),
+                    termsLine: line
+                }
+            });
+        } catch (error) {
+            console.error('[AgencyNotificationHandler] Failed to handle vendor.cod_terms_changed:', error);
+        }
+    }
+
+    /** `agency.cod_limit_changed` — an administrator pinned or released this agency's limit. */
+    async handleCodLimitChanged(event: DomainEvent): Promise<void> {
+        try {
+            const p = event.payload;
+            if (!p?.agencyId) return;
+            const prefs = await this.preferenceRepo.getByAgency(p.agencyId);
+            if (prefs.preferences.codLimitUpdates === false) return;
+            const situation = p.pinned ? 'cod.limit.pinned' : 'cod.limit.released';
+            await this.dispatch({
+                situation,
+                prefs,
+                agencyId: p.agencyId,
+                aggregateType: 'cod_limit',
+                aggregateId: p.agencyId,
+                idempotencyKey: `${situation}:${p.agencyId}:${new Date(event.occurredAt ?? Date.now()).getTime()}`,
+                context: {
+                    currency: p.currency ?? '',
+                    limitFormatted: Number(p.limit ?? 0).toLocaleString(),
+                    defaultFormatted: Number(p.defaultLimit ?? 0).toLocaleString()
+                }
+            });
+        } catch (error) {
+            console.error('[AgencyNotificationHandler] Failed to handle agency.cod_limit_changed:', error);
+        }
+    }
+
+    /** `delivery_fee_proposal.created` — only an AGENT's proposal is news to the agency. */
+    async handleDeliveryFeeProposalCreated(event: DomainEvent): Promise<void> {
+        if (event.payload?.proposedByRole !== 'agent') return;
+        await this.feeProposalSituation(event, 'delivery_fee_proposal.agent_proposed');
+    }
+
+    /** `delivery_fee_proposal.edited` — only when the AGENT edited (the agency's own edit is echo). */
+    async handleDeliveryFeeProposalEdited(event: DomainEvent): Promise<void> {
+        if (editedByRoleOf(event.payload) !== 'agent') return;
+        await this.feeProposalSituation(event, 'delivery_fee_proposal.agent_edited');
+    }
+
+    /** The vendor's answer — the agency hears it whoever proposed. */
+    async handleDeliveryFeeProposalApproved(event: DomainEvent): Promise<void> {
+        await this.feeProposalSituation(event, 'delivery_fee_proposal.approved');
+    }
+
+    async handleDeliveryFeeProposalRejected(event: DomainEvent): Promise<void> {
+        await this.feeProposalSituation(event, 'delivery_fee_proposal.rejected');
+    }
+
+    private async feeProposalSituation(
+        event: DomainEvent,
+        situation:
+            | 'delivery_fee_proposal.approved'
+            | 'delivery_fee_proposal.rejected'
+            | 'delivery_fee_proposal.agent_proposed'
+            | 'delivery_fee_proposal.agent_edited'
+    ): Promise<void> {
+        try {
+            const p = event.payload;
+            if (!p?.agencyId || !p?.shipmentId) return;
+            const prefs = await this.preferenceRepo.getByAgency(p.agencyId);
+            if (prefs.preferences.deliveryFeeProposals === false) return;
+            const lang = await this.resolveAgencyLanguage(p.agencyId);
+            const at = new Date(event.occurredAt ?? Date.now()).getTime();
+            await this.dispatch({
+                situation,
+                prefs,
+                agencyId: p.agencyId,
+                aggregateType: 'shipment',
+                aggregateId: p.shipmentId,
+                idempotencyKey: situation === 'delivery_fee_proposal.agent_edited'
+                    ? `${situation}:${p.proposalId}:${at}`
+                    : `${situation}:${p.proposalId}`,
+                context: {
+                    shipmentId: p.shipmentId,
+                    orderNumber: (await this.orderNumberOf(p)) ?? '—',
+                    vendorName: await this.resolveVendorName(p.vendorId, lang),
+                    agentName: p.proposedByAgentId ? await this.resolveAgentName(p.proposedByAgentId) : 'An agent',
+                    currency: p.currency ?? '',
+                    proposedFeeFormatted: Number(p.proposedFee ?? 0).toLocaleString(),
+                    feeBeforeFormatted: Number(p.feeBefore ?? 0).toLocaleString(),
+                    previousFeeFormatted: Number(previousProposedFeeOf(p) ?? 0).toLocaleString()
+                }
+            });
+        } catch (error) {
+            console.error(`[AgencyNotificationHandler] Failed to handle ${situation}:`, error);
+        }
+    }
+
+    /** The vendor's store name, or a localized neutral fallback. Never throws. */
+    private async resolveVendorName(vendorId: string | undefined, lang: Language): Promise<string> {
+        const fallback: Record<Language, string> = {
+            en: 'The vendor', fr: 'Le vendeur', pt: 'O vendedor', es: 'El vendedor', ar: 'البائع'
+        };
+        if (!vendorId) return fallback[lang];
+        try {
+            return (await this.storeRepo.findNameByVendorId(String(vendorId))) || fallback[lang];
+        } catch {
+            return fallback[lang];
+        }
+    }
+
+    private async orderNumberOf(p: { orderNumber?: string | null; orderId?: string }): Promise<string | null> {
+        if (p.orderNumber) return p.orderNumber;
+        if (!p.orderId) return null;
+        try {
+            const order = await OrderModel.findById(p.orderId).select('order_number').lean().exec();
+            return (order as any)?.order_number ?? null;
+        } catch {
+            return null;
+        }
     }
 
     // ─── Dispatch + delivery ─────────────────────────────────────────────────

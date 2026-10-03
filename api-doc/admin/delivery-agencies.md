@@ -300,6 +300,51 @@ suspension by editing that product's own delivery agency — see
 
 ---
 
+### GET /api/internal/admin/agencies/:id/cod-limit
+
+**(2026-10-02)** The agency's COD cash limit — how much cash on delivery it may hold that has not
+reached the platform — with its source and its live exposure. wi-admin delegates it as
+`GET /api/v1/agencies/:agencyId/cod-limit`.
+
+```json
+{
+  "success": true,
+  "data": {
+    "agencyId": "66a1…",
+    "limit": 1000000,
+    "source": "default",
+    "defaultLimit": 1000000,
+    "exposure": { "inFlight": 420000, "inFlightCount": 6, "collectedUnremitted": 310000, "collectedCount": 4, "total": 730000 },
+    "headroom": 270000,
+    "overLimit": false,
+    "override": null
+  }
+}
+```
+
+- `source`: `default` (the platform's 1 000 000) or `override` (an administrator's pin).
+- `exposure.inFlight`: the COD amount of every shipment the agency holds in `assigned` ·
+  `handing_over` · `picked_up` · `in_transit` · `agent_delivered` whose cash is not yet collected
+  (the collection's `expected_amount`, or Σ item price × qty before an agent accepted).
+- `exposure.collectedUnremitted`: collected cash (held by its agents or by the agency) that no
+  confirmed remittance / direct-to-platform deposit has settled yet (`expected − settled`).
+- `overLimit`: `true` after a forced dispatch or a pin lowered below current holdings.
+- `override`: `{ amount, reason, setAt, setByUserId, setBySource, setByName }` or `null`.
+
+### PUT /api/internal/admin/agencies/:id/cod-limit
+
+**(2026-10-02)** PIN the agency's cash limit, or release the pin. Body (`.strict()`):
+
+| Field | Type | Notes |
+|---|---|---|
+| `maxAmount` | integer ≥ 0 ≤ 100 000 000, or `null` | `null` releases the pin (back to 1 000 000) |
+| `reason` | string, 3–500 | required in both directions; stored on the pin |
+
+Answers the same body as the GET. A pin **below** what the agency already holds is accepted — it
+blocks the next dispatch and the read reports `overLimit: true`. Errors: `400` validation,
+`404 DELIVERY_AGENCY_NOT_FOUND`. wi-admin splits this into `PUT …/cod-limit` and
+`POST …/cod-limit/release` with two audit actions (`agencies.cod_limit.set` / `.release`).
+
 ### PATCH /api/internal/admin/agencies/:id/deactivate
 
 **Description**: Deactivate the agency and cascade-suspend affected vendors' physical

@@ -52,6 +52,12 @@ export function initializeVendorNotificationEventConsumers(): void {
     eventBus.subscribe('storage.depot_changed', handler.handleStorageDepotChanged.bind(handler));
     eventBus.subscribe('storage.product_suspended', handler.handleStorageProductSuspended.bind(handler));
     eventBus.subscribe('storage.product_unsuspended', handler.handleStorageProductUnsuspended.bind(handler));
+    // 2026-10-02 — COD limits + delivery-fee proposals. The fee events are shared with the
+    // agency and agent consumers; each handler decides which payloads are its audience's.
+    eventBus.subscribe('shipment.cod_limit_held', handler.handleCodLimitHeld.bind(handler));
+    eventBus.subscribe('delivery_fee_proposal.created', handler.handleDeliveryFeeProposalCreated.bind(handler));
+    eventBus.subscribe('delivery_fee_proposal.edited', handler.handleDeliveryFeeProposalEdited.bind(handler));
+    eventBus.subscribe('delivery_fee_proposal.withdrawn', handler.handleDeliveryFeeProposalWithdrawn.bind(handler));
 
     console.log(
         `[VendorNotifications] Event handlers registered successfully (FCM push: ${isFcmConfigured() ? 'enabled' : 'disabled'})`

@@ -1,6 +1,13 @@
 import { createAppError } from '../errors';
 import { ERROR_CODES } from '../error-codes';
 import { GeoAddressInput, IGeoAddress } from '../types/geo-address.types';
+import {
+    isKnownCountry,
+    listCountryRegions,
+    matchCountryRegion,
+    regionDisplayName,
+    regionKeyForCity,
+} from '../constants/locations.helper';
 
 /**
  * Address ⇄ country policy helpers.
@@ -125,5 +132,88 @@ export function assertHeadquartersInCountry(
         );
         if (unchanged) return;
         assertGeoInCountry(entry.geo, country, { index, label: entry.label ?? null });
+        // A headquarters is a pickup point (the `agency_business` handover), so its region
+        // must name one of the country's regions too, as a customer's drop-off must.
+        canonicalizeAddressRegion(entry.geo!, { index, label: entry.label ?? null });
     });
+}
+
+/**
+ * Pin a customer address's region to one of its country's regions, or refuse it.
+ *
+ * ── Why ──────────────────────────────────────────────────────────────────────
+ * A drop-off's `components.region` is what an agency's contract coverage is
+ * matched against. It used to be stored exactly as the geocoder (or the client)
+ * sent it, so a delivery could sit in "Centre Region" while every contract said
+ * `centre`, and no agent was ever offered it.
+ *
+ * ── The rule ─────────────────────────────────────────────────────────────────
+ * - The region is matched leniently (`matchCountryRegion`: "Centre Region",
+ *   "Région du Centre", "Center" → `centre`); failing that, the city is looked up
+ *   in the country's city lists (`regionKeyForCity`: Yaoundé → `centre`).
+ * - A match is written back as the region's canonical English name, so every
+ *   stored drop-off of one region carries one spelling.
+ * - No match → `ADDRESS_REGION_INVALID` (400), with the country's regions in
+ *   `details.allowedRegions`. The client resends with `components.region` set to
+ *   the picked key.
+ * - A country the dataset has no regions for, or no country code at all, is left
+ *   untouched: there is no list to check against, and refusing would block every
+ *   address there.
+ *
+ * Returns a copy; the input is not mutated. Works on both the wire shape and the
+ * stored shape, so a legacy saved address can be checked at checkout too.
+ */
+export function canonicalizeAddressRegion<T extends GeoAddressInput | IGeoAddress>(
+    geo: T,
+    context: { addressId?: string | null; index?: number; label?: string | null } = {},
+): T {
+    const components = geo.components ?? {};
+    const country = components.country_code ?? null;
+    if (!country || !isKnownCountry(country)) return geo;
+
+    const key =
+        matchCountryRegion(components.region, country) ??
+        regionKeyForCity(components.city, country) ??
+        regionKeyForCity(components.neighbourhood, country);
+
+    if (!key) {
+        throw createAppError(
+            ERROR_CODES.ADDRESS_REGION_INVALID,
+            400,
+            `This address is not in a recognised region of ${country.toUpperCase()}. Pick its region and send it as components.region.`,
+            {
+                ...(context.addressId ? { addressId: context.addressId } : {}),
+                // Set for a full-replace address LIST (vendor business addresses, agency
+                // headquarters), where the entry is named by its position, as in
+                // ADDRESS_GEO_REQUIRED / ADDRESS_COUNTRY_MISMATCH.
+                ...(context.index !== undefined ? { index: context.index, label: context.label ?? null } : {}),
+                region: components.region ?? null,
+                city: components.city ?? null,
+                countryCode: country.toUpperCase(),
+                allowedRegions: listCountryRegions(country),
+            },
+        );
+    }
+
+    return {
+        ...geo,
+        components: { ...components, region: regionDisplayName(key, country) },
+    };
+}
+
+/**
+ * {@link canonicalizeAddressRegion} without the refusal: pin the region when it (or the
+ * city) names one, leave the address untouched otherwise.
+ *
+ * For the PERSIST step of a full-replace address list, which maps every entry, including
+ * legacy ones the assertion step grandfathered. An untouched old row must still save; it
+ * just gets the canonical spelling when one can be found. New and edited rows have already
+ * been through the strict check by then.
+ */
+export function pinAddressRegionIfKnown<T extends GeoAddressInput | IGeoAddress>(geo: T): T {
+    try {
+        return canonicalizeAddressRegion(geo);
+    } catch {
+        return geo;
+    }
 }

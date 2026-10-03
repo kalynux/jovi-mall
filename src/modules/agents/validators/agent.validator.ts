@@ -4,6 +4,7 @@ import { AGENT_CONFIG } from '../config/agent.config';
 import { clearable } from '../../../core/validation/zod.helpers';
 import { PhoneNumberSchema } from '../../../core/validation/phone';
 import { PayoutDetailsZodSchema } from '../../../core/types/payout.types';
+import { FEE_SPLIT_MODELS, FEE_SPLIT_FIELD_BY_MODEL } from '../models/agent-agency-membership.model';
 
 // ─── Re-usable sub-schemas ────────────────────────────────────────────────────
 
@@ -236,12 +237,43 @@ const CoverageTermsSchema = z.object({
         .optional(),
 });
 
-const FeeSplitTermsSchema = z.object({
-    model: z.enum(['percentage', 'flat']).optional(),
-    agent_share_percent: z.number().min(0).max(100).nullable().optional(),
-    agent_flat_fee: z.number().int().min(0).nullable().optional(),
-    currency: z.string().length(3).trim().toUpperCase().optional(),
-});
+/**
+ * A fee-split patch.
+ *
+ * Two layers of consistency, split by what each can see. HERE (the body alone):
+ * when the body names a `model`, a field belonging to ANOTHER model may only be
+ * absent or `null` — `{ model: 'monthly_salary', agent_share_percent: 20 }` is a
+ * contradiction the caller wrote and is a 400. In the SERVICE
+ * (`assertFeeSplitCoherent`, merged over the stored split): the model in force
+ * must carry its own field. The second needs the stored split, because a partial
+ * patch that changes only `model` is legitimate.
+ *
+ * `agent_monthly_salary` is minor units per month, integer > 0. Under that model
+ * the platform pays the agent nothing per delivery; the agency pays the salary
+ * off-platform (see `IContractFeeSplit`).
+ */
+const FeeSplitTermsSchema = z
+    .object({
+        model: z.enum(FEE_SPLIT_MODELS).optional(),
+        agent_share_percent: z.number().min(0).max(100).nullable().optional(),
+        agent_flat_fee: z.number().int().min(0).nullable().optional(),
+        agent_monthly_salary: z.number().int().min(1).nullable().optional(),
+        currency: z.string().length(3).trim().toUpperCase().optional(),
+    })
+    .superRefine((v, ctx) => {
+        if (!v.model) return;
+        for (const model of FEE_SPLIT_MODELS) {
+            if (model === v.model) continue;
+            const field = FEE_SPLIT_FIELD_BY_MODEL[model];
+            if (v[field] !== undefined && v[field] !== null) {
+                ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    path: [field],
+                    message: `${field} must be null or omitted when model is "${v.model}"`,
+                });
+            }
+        }
+    });
 
 /**
  * Everything an AGENCY may propose or counter.
@@ -392,7 +424,8 @@ export type UpdateEmploymentInput = z.infer<typeof UpdateEmploymentSchema>;
  * through `counterTerms`; on a live one it refuses.
  *
  * The fee-split *shape* is checked here; its *coherence* (a 'percentage' model
- * carrying a share, a 'flat' one carrying a fee) is checked in the service,
+ * carrying a share, a 'flat' one carrying a fee, a 'monthly_salary' one carrying
+ * a salary) is checked in the service,
  * where the stored split can be merged under the patch — a partial update that
  * changes only `model` is legitimate and must not be rejected for a field it
  * is not touching.

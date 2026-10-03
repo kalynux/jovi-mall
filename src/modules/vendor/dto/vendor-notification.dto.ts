@@ -93,6 +93,8 @@ export interface VendorNotificationPreferencesDTO {
             payoutUpdates: boolean;
             shipmentRejected: boolean;
             agencyStorageUpdates: boolean;
+            codLimitUpdates: boolean;
+            deliveryFeeProposals: boolean;
         };
     };
 }

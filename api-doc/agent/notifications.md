@@ -70,6 +70,7 @@ one secondary channel; a channel delivers only if enabled **and** verified; prio
 | `plan.expired` | Your plan expired — handed over to a queued plan, or **downgraded to `agent_free`**. | A downgrade **lowers your concurrent-delivery cap** (back to 20). Gated by `planUpdates`; `aggregateType: plan`, `action` → `plans`. |
 | `storage.alert` | Your **own media storage** crossed 80 / 90 / 100% of your plan cap (highest crossed band only, ≤ once per month per band). | Free space or upgrade. Gated by `storageAlert`; `aggregateType: storage`, `action` → `settings/storage`. **Delivery proofs are charged to the agency, not counted here.** See [Storage](./storage.md). |
 | `shipment.offer.received` | An agency (or auto-assignment) offered you a delivery. | Time-critical — accept before another agent does. Gated by `assignmentOffers`; `aggregateType: offer`, `action` → `offers/{id}`. Delivered on the dedicated `jovi_agent_offers` push channel. See [Offers](./offers.md). |
+| ⭐ `shipment.offer.batch_received` | An agency offered you **several** deliveries in one go (bulk assign, 2026-10-03). | One notification for the batch. Gated by `assignmentOffers`; `aggregateType: offer_batch` (`aggregateId` is the **batch** id, not an offer id), `action` → `offers` (the list). Default push channel, no Accept / Decline buttons; accept them together with `POST /api/agent/offers/accept`. A batch leaving one pending offer sends `shipment.offer.received` instead. See [Offers](./offers.md#bulk-accept). |
 | `shipment.offer.reminder` | Auto-assignment round 2: an offer you haven't answered is **still open**. | Still acceptable — auto offers don't expire on the timeout. Same gate, channel and deep-link as `.received`. |
 | `shipment.offer.expired` | A **manual** offer lapsed because you didn't answer in time. | Informational, so a missed job doesn't vanish silently. Same gate; default push channel. |
 | `shipment.reassigned_away` | The agency moved a delivery you were handling to another agent. | You are off it: customer PII and live tracking are already revoked; it stays in your activity history. Gated by `assignmentOffers`; `aggregateType: shipment`, **no `action`**. |
@@ -268,3 +269,26 @@ notifications.
 
 **When and how to call both**, plus token-refresh handling:
 [Flutter guide → Register the token](./push-notifications.md#register-the-token).
+
+---
+
+## ⭐ 2026-10-02 — COD limits and delivery-fee proposals
+
+Two new preference keys, both default `true` (a row written before them reads as ON):
+`preferences.codLimitUpdates` and `preferences.deliveryFeeProposals`, accepted by
+`PATCH /api/agent/notification-preferences`. One new `aggregateType`: **`cod_pool`**
+(`aggregateId` = your agent id). Two new deep-link labels: **`shipments/{shipmentId}`** and
+**`cod`**.
+
+| Preference | `type` | `aggregateType` | When | `action.path` |
+|---|---|---|---|---|
+| `deliveryFeeProposals` | `delivery_fee_proposal.approved` | `shipment` | The vendor approved a fee **you** proposed. You can pick up. | ⭐ `shipments/{shipmentId}` |
+| `deliveryFeeProposals` | `delivery_fee_proposal.rejected` | `shipment` | The vendor rejected it; the fee stays. Your agency decides what happens next. | ⭐ `shipments/{shipmentId}` |
+| `deliveryFeeProposals` | `delivery_fee_proposal.edited` | `shipment` | **Your agency** changed the figure you proposed. | ⭐ `shipments/{shipmentId}` |
+| `deliveryFeeProposals` | `delivery_fee_proposal.withdrawn` | `shipment` | Your proposal was closed **automatically** — the agency declined the shipment, or you are no longer on it. Never sent for your own withdrawal. | **none** (the shipment is no longer yours) |
+| `deliveryFeeProposals` | `fee_proposals.enabled` / `fee_proposals.disabled` | `contract` | An agency you hold an **active** contract with turned its agents' permission to propose fees on / off. | `memberships/{contractId}` |
+| `codLimitUpdates` | `cod.pool.pinned` / `cod.pool.released` | `cod_pool` | An administrator pinned your COD pool, or released it back to the 500 000 default. **Not** sent for the platform-wide reset to the default, nor while you are unverified (your pool stays 0). | ⭐ `cod` |
+
+`shipment.offer.received` now ends with an extra sentence when your agency pushed the offer past
+your COD limit (`force: true`). In-app, push, email and Telegram only — the WhatsApp template is
+frozen at approval.

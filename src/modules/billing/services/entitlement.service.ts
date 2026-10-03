@@ -2,7 +2,7 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { SubscriberPlanService, subscriberPlanService } from './subscriber-plan.service';
 import { PricingPlanRepository } from '../repositories/pricing-plan.repository';
-import { BillingOwnerType, freePlanCode } from '../billing.types';
+import { BillingOwnerType } from '../billing.types';
 import { IPricingPlan } from '../models/pricing-plan.model';
 
 export interface VendorEntitlements {
@@ -20,20 +20,6 @@ export interface ShipmentPlanEntitlements {
   maxUnterminatedShipments: number | null;
   /** Whether live tracking is available on this plan (universal today). */
   liveTrackingEnabled: boolean;
-}
-
-/** What an agent's plan says about their COD pool — see `resolveAgentCodPool`. */
-export interface AgentCodPoolEntitlement {
-  /** The plan the value came from; `null` only when no agent plan is configured at all. */
-  planCode: string | null;
-  /** `plan.max_cod_pool ?? 0` — ⚠ an unset value is ZERO, never unlimited. */
-  maxCodPool: number;
-  /**
-   * `false` when the agent holds no `subscriber_plans` row yet and the free tier's
-   * catalog value was read instead. Same number the lazy creation would produce;
-   * reported so a caller can say "free tier (not yet activated)" if it wants to.
-   */
-  assigned: boolean;
 }
 
 /** Fallback storage cap when a (mis-seeded) plan omits `max_storage_bytes`. */
@@ -152,41 +138,12 @@ export class EntitlementService {
     return liveTrackingEnabled;
   }
 
-  // ── Agent COD pool ───────────────────────────────────────────────────────────
-
-  /**
-   * The COD pool an agent's plan grants — the INPUT to the agent's pool, not the pool
-   * itself (that also depends on their KYC verdict and any administrator override, and
-   * is resolved in the agents module by `AgentCodPoolService`).
-   *
-   * ── It never creates a plan ─────────────────────────────────────────────────────
-   * `findActivePlanWithoutCreating`, for the reason `getAdminEntitlements` below gives:
-   * this is read by a KYC verdict and by a nightly sweep over every agent, and neither
-   * may mint a `subscriber_plans` row and a credit grant for an agent who has never
-   * opened their billing screen.
-   *
-   * ── …but, unlike plan-quota, it does not SKIP a plan-less owner ─────────────────
-   * An agent with no row is on the free tier in every sense but the row — the first
-   * read of their plan will create exactly that tier. So the free tier's CATALOG value
-   * applies. Skipping them (plan-quota's choice, right for a quota that only ever takes
-   * things away) would leave every newly verified agent at a pool of 0 until they
-   * happened to open billing, which is the opposite of "set automatically".
-   *
-   * An active row pointing at a plan that no longer resolves falls back the same way.
-   * No free tier configured at all answers 0 — fail closed, this is cash.
-   */
-  async resolveAgentCodPool(agentId: string): Promise<AgentCodPoolEntitlement> {
-    const active = await this.plans.findActivePlanWithoutCreating('agent', agentId);
-    const assignedPlan = active ? await this.planRepo.findById(active.plan_id.toString()) : null;
-    if (assignedPlan) {
-      return { planCode: assignedPlan.code, maxCodPool: assignedPlan.max_cod_pool ?? 0, assigned: true };
-    }
-
-    const free = await this.planRepo.findByCode('agent', freePlanCode('agent'));
-    return free
-      ? { planCode: free.code, maxCodPool: free.max_cod_pool ?? 0, assigned: false }
-      : { planCode: null, maxCodPool: 0, assigned: false };
-  }
+  // ── Agent COD pool ──────────────────────────────────────────────────────────
+  //
+  // `resolveAgentCodPool` was DELETED on 2026-10-02: the plan no longer sets an agent's
+  // COD pool (it is the platform default, AGENT_CONFIG.COD_POOL_DEFAULT, for every verified
+  // agent). `max_cod_pool` stays on the plan schema and in `getAdminEntitlements` below as a
+  // dormant field — nothing decides anything on it.
 
   // ── The administrative read ──────────────────────────────────────────────────
 
@@ -241,7 +198,7 @@ export class EntitlementService {
       maxStorageBytes: plan.max_storage_bytes ?? DEFAULT_MAX_STORAGE_BYTES,
       commissionPercent: plan.commission_percent ?? 0,
       maxUnterminatedShipments: plan.max_unterminated_shipments,
-      // `?? 0` on an agent plan for the same fail-closed reason as `resolveAgentCodPool`.
+      // Dormant since 2026-10-02 — reported, never read for a decision (the pool is the platform default).
       maxCodPool: ownerType === 'agent' ? (plan.max_cod_pool ?? 0) : null,
       liveTrackingEnabled: plan.live_tracking_enabled,
     };

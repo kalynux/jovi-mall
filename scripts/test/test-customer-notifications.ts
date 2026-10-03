@@ -1127,6 +1127,18 @@ function main(): void {
      */
     const HAND_BUILT_OTP_NAMES = new Set(['wi_mall_phone_verification', 'wi_mall_phone_verification_utility']);
 
+    // The rejected UTILITY fallback must stay in the payloads (above) AND be refused by the one
+    // script that writes to Meta — its rejected rows vanished, so "already present" no longer
+    // stops a plain `--submit` from recreating a guaranteed rejection. Source scan: the script
+    // runs main() at import, so it cannot be imported here.
+    assert('submit script refuses the rejected UTILITY OTP fallback, even under --only', () => {
+        const src = readSource('scripts/submit-whatsapp-templates.ts');
+        const declared = /NEVER_SUBMIT[^=]*=\s*new Set\(\[[^\]]*'wi_mall_phone_verification_utility'/.test(src);
+        const onlyAt = src.indexOf('if (ONLY)');
+        const refuseAt = src.indexOf('!NEVER_SUBMIT.has(p.name)');
+        return declared && onlyAt > 0 && refuseAt > onlyAt;
+    });
+
     const templateNameProblems = (
         sentNames: Map<string, string>,
         submittedNames: Set<string>,

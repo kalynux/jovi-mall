@@ -74,6 +74,15 @@ export interface IAgencyNotificationPreference extends Document {
          * answer, exactly as `codDepositUpdates` does not stop the deposit clock.
          */
         stockRequestUpdates: boolean;
+        /**
+         * COD limits (2026-10-02) — see each stack's situations. Defaults ON. Rows written
+         * before this flag existed carry no value: handlers treat `undefined` as ON.
+         */
+        codLimitUpdates: boolean;
+        /**
+         * Per-shipment delivery-fee proposals (2026-10-02). Defaults ON; `undefined` = ON.
+         */
+        deliveryFeeProposals: boolean;
     };
 
     updatedAt: Date;
@@ -147,6 +156,14 @@ const AgencyNotificationPreferenceSchema = new Schema<IAgencyNotificationPrefere
                 default: true
             },
             stockRequestUpdates: {
+                type: Boolean,
+                default: true
+            },
+            codLimitUpdates: {
+                type: Boolean,
+                default: true
+            },
+            deliveryFeeProposals: {
                 type: Boolean,
                 default: true
             }

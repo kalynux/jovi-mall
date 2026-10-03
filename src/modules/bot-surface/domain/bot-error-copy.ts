@@ -258,6 +258,16 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         es: 'Esa búsqueda de dirección ha caducado. Dime la dirección otra vez y la busco.',
         ar: 'انتهت صلاحية البحث عن هذا العنوان. أخبرني بالعنوان مرة أخرى وسأبحث عنه.',
     },
+    // The geocoder placed the address in no region of the country and its city is not one
+    // we know — so no delivery agency could be matched to it. The remedy is a fuller
+    // address, which is what the customer can actually give in a chat.
+    [ERROR_CODES.ADDRESS_REGION_INVALID]: {
+        en: 'I could not tell which region that address is in. Send it again with the town or city, for example "Bastos, Yaoundé".',
+        fr: "Je n'arrive pas à savoir dans quelle région se trouve cette adresse. Renvoyez-la avec la ville, par exemple « Bastos, Yaoundé ».",
+        pt: 'Não consegui perceber em que região fica esse endereço. Envie-o de novo com a cidade, por exemplo "Bastos, Yaoundé".',
+        es: 'No pude saber en qué región está esa dirección. Envíala de nuevo con la ciudad, por ejemplo "Bastos, Yaoundé".',
+        ar: 'لم أتمكن من معرفة المنطقة التي يقع فيها هذا العنوان. أرسله مرة أخرى مع اسم المدينة، مثل "Bastos, Yaoundé".',
+    },
 
     /**
      * The basket already holds a different KIND of thing.

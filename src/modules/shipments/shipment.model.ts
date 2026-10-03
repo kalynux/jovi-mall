@@ -293,6 +293,42 @@ export interface IShipmentHandover {
   reassigned_at: Date;
 }
 
+/** The vendor-approved fee on one shipment — see `IShipment.delivery_fee_override`. */
+export interface IShipmentDeliveryFeeOverride {
+  amount: number;
+  proposal_id: mongoose.Types.ObjectId;
+  approved_at: Date;
+}
+
+/**
+ * The two COD caps above the agent (see `cod/domain/cod-limits.ts`). Duplicated here as a
+ * literal rather than imported so the shipment model does not depend on the cod module;
+ * `test:cod-limits` asserts the two lists are equal.
+ */
+export const COD_LIMIT_KINDS = ['agency_limit', 'vendor_terms'] as const;
+export type ShipmentCodLimitKind = (typeof COD_LIMIT_KINDS)[number];
+
+export interface IShipmentCodLimitHold {
+  kind: ShipmentCodLimitKind;
+  /** The agency's (or the vendor's-share) exposure when evaluated. */
+  current: number;
+  /** This shipment's COD amount. */
+  additional: number;
+  limit: number;
+  evaluated_at: Date;
+}
+
+export interface IShipmentCodLimitForce {
+  kind: ShipmentCodLimitKind;
+  /** The vendor's user id (or an administrator's, which resolves in wi-admin). */
+  forced_by_user_id: string | null;
+  forced_by_role: string;
+  forced_at: Date;
+  current: number;
+  additional: number;
+  limit: number;
+}
+
 export interface IShipment extends Document {
   order_id: mongoose.Types.ObjectId;
   agency_id: mongoose.Types.ObjectId;
@@ -400,6 +436,38 @@ export interface IShipment extends Document {
    * computation and logs when it finds one.
    */
   delivery_fee_snapshot?: number | null;
+  /**
+   * A per-shipment delivery fee the VENDOR approved (modules/delivery-fee-proposals),
+   * replacing what the agency's `policies.pricing` formula would charge. Read by
+   * `EarningsQuoteService.computeShipmentDeliveryFee` BEFORE the formula, so every consumer
+   * of the fee — the prepaid and COD splits, the agent's and the agency's quotes — charges
+   * the approved number. Null when no proposal was ever approved.
+   *
+   * ⚠ The 30% delivery-cost cap (ADR-A07) does NOT apply to it — only `vendorNet > 0`,
+   * checked when the proposal is raised and again at approval.
+   */
+  delivery_fee_override?: IShipmentDeliveryFeeOverride | null;
+  /**
+   * The pending delivery-fee proposal on this shipment, or null. Set and cleared by
+   * compare-and-set in the same transaction as the proposal's own write; the pickup
+   * transition's CAS requires it null, which is what makes "no pickup while a fee change is
+   * awaiting the vendor" a property of the write rather than of a read beforehand.
+   */
+  pending_delivery_fee_proposal_id?: mongoose.Types.ObjectId | null;
+  /**
+   * Why this COD shipment was NOT handed to its agency (owner decision 2026-10-02).
+   * Written by the vendor's auto-redirect when the hand-off would push the agency over
+   * its own cash limit (`agency_limit`) or over the vendor's `maxCashPerAgency`
+   * (`vendor_terms`); the shipment stays `pending` for the vendor to dispatch (with
+   * `force`) once cash comes back. Cleared by any successful dispatch. `null` otherwise.
+   */
+  cod_limit_hold?: IShipmentCodLimitHold | null;
+  /**
+   * Who pushed this shipment past a COD limit with `force: true`, and which limit. The
+   * record survives the hand-off; a second forced dispatch overwrites it. `null` when
+   * no limit was ever overridden.
+   */
+  cod_limit_force?: IShipmentCodLimitForce | null;
   items: IShipmentItem[];
   created_at: Date;
   updated_at: Date;
@@ -568,6 +636,49 @@ const ShipmentSchema = new Schema<IShipment>({
     default: [],
   },
   delivery_fee_snapshot: { type: Number, default: null, min: 0 },
+  delivery_fee_override: {
+    type: new Schema<IShipmentDeliveryFeeOverride>(
+      {
+        amount: { type: Number, required: true, min: 0 },
+        proposal_id: { type: Schema.Types.ObjectId, required: true },
+        approved_at: { type: Date, required: true },
+      },
+      { _id: false }
+    ),
+    default: null,
+  },
+  // No index: read only by id. See IShipment.pending_delivery_fee_proposal_id.
+  pending_delivery_fee_proposal_id: { type: Schema.Types.ObjectId, default: null },
+  // COD limits above the agent (2026-10-02) — see IShipment.cod_limit_hold / cod_limit_force.
+  // No index: read with the shipment, never queried on.
+  cod_limit_hold: {
+    type: new Schema<IShipmentCodLimitHold>(
+      {
+        kind: { type: String, enum: COD_LIMIT_KINDS, required: true },
+        current: { type: Number, required: true },
+        additional: { type: Number, required: true },
+        limit: { type: Number, required: true },
+        evaluated_at: { type: Date, required: true },
+      },
+      { _id: false }
+    ),
+    default: null,
+  },
+  cod_limit_force: {
+    type: new Schema<IShipmentCodLimitForce>(
+      {
+        kind: { type: String, enum: COD_LIMIT_KINDS, required: true },
+        forced_by_user_id: { type: String, default: null },
+        forced_by_role: { type: String, required: true },
+        forced_at: { type: Date, required: true },
+        current: { type: Number, required: true },
+        additional: { type: Number, required: true },
+        limit: { type: Number, required: true },
+      },
+      { _id: false }
+    ),
+    default: null,
+  },
   items: [{
     order_item_id: { type: Schema.Types.ObjectId, required: true },
     product_id: { type: Schema.Types.ObjectId, ref: MODELS.PRODUCT, required: true },

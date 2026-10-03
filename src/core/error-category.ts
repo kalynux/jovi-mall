@@ -197,6 +197,8 @@ const INTEGRATION_PREFIXES: readonly string[] = Object.freeze([
     'NOTCHPAY_',
     'MYCOOLPAY_',
     'CAMPAY_',
+    'CINETPAY_',
+    'FAPSHI_',
 ]);
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 import { Types } from 'mongoose';
-import { createAppError } from '../../../../core/errors';
+import { AppError, createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
+import { ProjectedItemError, projectItemError } from '../../../../core/error-detail-policy';
 import { eventBus } from '../../../../core/events/event-bus';
 import { transactionManager } from '../../../../core/database/transaction.manager';
 import { PaginationOptions, Page } from '../../../../core/repositories/base.repository';
@@ -28,7 +29,12 @@ import {
 } from '../../../agents';
 import { CashCollectionService, cashCollectionService } from '../../../cod/services/cash-collection.service';
 import { ICashCollection } from '../../../cod/models/cash-collection.model';
-import { ContractPolicyService, contractPolicyService } from './contract-policy.service';
+import {
+  ContractPolicyService,
+  contractPolicyService,
+  ContractPolicyForce,
+  ContractPolicyForceOutcome,
+} from './contract-policy.service';
 
 import {
   ShipmentAssignmentOfferRepository,
@@ -44,6 +50,7 @@ import { ASSIGNMENT_CONFIG } from '../../config/assignment.config';
 import { AssignmentCandidateService, assignmentCandidateService, RankedCandidate } from './assignment-candidate.service';
 import { agentAssignmentAuditService } from '../../services/assignment-audit.service';
 import { trackingOutboxEmitter } from '../../../tracking-integration/services/tracking-outbox.emitter';
+import { shipmentFeeProposalSummary } from '../../../delivery-fee-proposals/dto/delivery-fee-proposal.dto';
 
 /**
  * Who is placing an offer. `system` for auto-assignment, `agency` for a manual pick,
@@ -110,6 +117,65 @@ export interface OfferResult {
   autoAccepted: boolean;
 }
 
+/** One shipment of a bulk offer — the offer it became, or why it did not become one. */
+export type BulkOfferItem =
+  | { shipmentId: string; ok: true; autoAccepted: boolean; offer: OfferResult['offer']; shipment: OfferResult['shipment'] }
+  | { shipmentId: string; ok: false; error: ProjectedItemError };
+
+export interface BulkOfferResult {
+  /** Correlates the per-offer `shipment.offer_created` events and the agent's one notification. */
+  batchId: string;
+  agentId: string;
+  requested: number;
+  /** Offers created — `autoAccepted` of them were taken on the spot (agent auto-accept). */
+  offered: number;
+  autoAccepted: number;
+  failed: number;
+  /** In request order, one per shipment id. */
+  items: BulkOfferItem[];
+}
+
+/** One offer of an agent's bulk accept. */
+export type BulkAcceptItem =
+  | { offerId: string; ok: true; offer: OfferResult['offer']; shipment: OfferResult['shipment'] }
+  | { offerId: string; ok: false; error: ProjectedItemError };
+
+export interface BulkAcceptResult {
+  requested: number;
+  accepted: number;
+  failed: number;
+  /** In request order, one per offer id. */
+  items: BulkAcceptItem[];
+}
+
+/** One still-pending offer on the `shipment.offer_batch_created` payload. */
+export interface BatchOfferEntry {
+  offerId: string;
+  shipmentId: string;
+  orderId: string;
+  isCod: boolean;
+  expectedCodAmount: number | null;
+  currency: string | null;
+  codLimitForced: boolean;
+  coverageForced: boolean;
+  expiresAt: Date;
+}
+
+/**
+ * What a manual placement may push past. Auto-assignment never forces anything.
+ *
+ * - `forceCodLimit` / `forceCoverage` — the AGENCY's `force: true`: the agent's COD amount
+ *   limit, and the contract's region list. Nothing else.
+ * - `adminOverride` — an ADMINISTRATOR's `force: true`: every eligibility rule and every
+ *   contract gate except an active contract with the shipment's agency (owner decision
+ *   2026-10-02). Honoured only when the creator's role is `admin`.
+ */
+export interface PlacementForce {
+  forceCodLimit?: boolean;
+  forceCoverage?: boolean;
+  adminOverride?: { reason: string } | null;
+}
+
 /**
  * ShipmentAssignmentService — the agent-acceptance state machine, now driven by a
  * temporary per-shipment RANKING SESSION for auto-assignment.
@@ -150,13 +216,26 @@ export class ShipmentAssignmentService {
 
   // ─── Manual placement ───────────────────────────────────────────────────────
 
-  /** Manual placement: an agency offers a specific agent (one-shot, no session). */
+  /**
+   * Manual placement: an agency offers a specific agent (one-shot, no session).
+   *
+   * `opts.forceCodLimit` (owner decision 2026-10-02) lets the agency push a COD shipment
+   * past the agent's AMOUNT limit (contract slice / agent pool) — and nothing else: KYC,
+   * trust, an open cash shortfall and every non-COD rule still refuse. When it was actually
+   * needed it is persisted on the offer (`cod_limit_forced`), which is what lets the
+   * accept-time re-check honour it.
+   *
+   * `opts.forceCoverage` (2026-10-02) lets the agency send its own contracted agent outside
+   * the regions the contract lists, and `opts.adminOverride` lets an administrator push
+   * past every rule but the active contract — see {@link PlacementForce}.
+   */
   async offerToAgent(
     agencyId: string,
     shipmentId: string,
     agentId: string,
     creator: OfferCreator,
-    pickupLocation: IShipmentHandoverPickup | null = null
+    pickupLocation: IShipmentHandoverPickup | null = null,
+    opts: PlacementForce = {}
   ): Promise<OfferResult> {
     const shipment = await this.shipments.findByIdAndAgency(shipmentId, agencyId);
     if (!shipment) throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
@@ -164,12 +243,155 @@ export class ShipmentAssignmentService {
     this.assertOfferable(shipment);
     await this.assertNoLiveOfferForAgent(shipmentId, agentId);
 
-    await this.eligibility.assertEligible(agentId, agencyId);
+    const adminOverride = creator.role === 'admin' ? (opts.adminOverride ?? null) : null;
+    if (!adminOverride) await this.eligibility.assertEligible(agentId, agencyId);
     const agent = await this.requireAgent(agentId);
-    const order = await this.requireOrder(shipment.order_id.toString());
-    await this.assertContractPolicy(agent, agencyId, shipment, order);
+    return await this.placeCheckedOffer(shipment, agent, agencyId, creator, pickupLocation, opts, adminOverride, null);
+  }
 
-    return await this.placeManualOffer(shipment, order, agent, creator, pickupLocation);
+  /**
+   * Bulk manual placement (2026-10-03): one agent, up to `BULK_ASSIGNMENT_MAX` shipments.
+   *
+   * Each shipment becomes its own ordinary manual offer — same gates, same document, same
+   * accept — so nothing downstream knows a batch happened except the notification. Owner
+   * decisions, in the order they bite:
+   *
+   * 1. **Partial success.** A shipment that cannot be offered is reported in its item and
+   *    the rest still go. Each offer was always independent; all-or-nothing could not be
+   *    atomic anyway, since state moves between a check and a placement.
+   * 2. **Capacity refused UPFRONT, for the whole batch.** When the shipments that pass the
+   *    shipment-level gates outnumber the agent's free slots, nothing is offered and the
+   *    call answers `422 AGENT_AT_CAPACITY` with the numbers. The single path does not do
+   *    this — it lets accept find out — but a batch that cannot all be accepted is a batch
+   *    the agency should resize, not one the agent should half-take. Free slots are read
+   *    from the same counter admission control reserves against (`active_shipment_count`);
+   *    pending offers are not slots, exactly as on the single path.
+   * 3. **One grouped notification** — `shipment.offer_batch_created`, carrying every offer
+   *    still pending. Each offer's own `shipment.offer_created` is still published (other
+   *    consumers keep seeing every offer) but carries `batchId`, which the agent notifier
+   *    reads as "already told".
+   *
+   * Agent-level gates (eligibility, existence) run once and fail the whole call: no
+   * shipment can pass for an ineligible agent, so per-item copies of one error are noise.
+   * Placements run sequentially — ten is small, and order keeps results stable.
+   */
+  async offerManyToAgent(
+    agencyId: string,
+    shipmentIds: string[],
+    agentId: string,
+    creator: OfferCreator,
+    opts: Pick<PlacementForce, 'forceCodLimit' | 'forceCoverage'> = {}
+  ): Promise<BulkOfferResult> {
+    const eligibility = await this.eligibility.assertEligible(agentId, agencyId);
+    const agent = await this.requireAgent(agentId);
+    const batchId = new Types.ObjectId().toString();
+
+    const items: Array<BulkOfferItem | null> = shipmentIds.map(() => null);
+    const viable: Array<{ index: number; shipment: IShipment }> = [];
+
+    // ── 1. Shipment-level gates — cheap, and what decides the capacity count ────
+    for (const [index, shipmentId] of shipmentIds.entries()) {
+      try {
+        const shipment = await this.shipments.findByIdAndAgency(shipmentId, agencyId);
+        if (!shipment) throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
+        this.assertOfferable(shipment);
+        await this.assertNoLiveOfferForAgent(shipmentId, agentId);
+        viable.push({ index, shipment });
+      } catch (err) {
+        items[index] = { shipmentId, ok: false, error: this.itemError(err, 'bulk offer', shipmentId) };
+      }
+    }
+
+    // ── 2. Capacity, for the batch as a whole ───────────────────────────────────
+    const freeSlots = Math.max(0, eligibility.maxConcurrentShipments - eligibility.activeShipmentCount);
+    if (viable.length > freeSlots) {
+      throw createAppError(
+        ERROR_CODES.AGENT_AT_CAPACITY,
+        422,
+        `This agent has ${freeSlots} free slot(s); ${viable.length} offerable shipment(s) were selected`,
+        {
+          activeShipmentCount: eligibility.activeShipmentCount,
+          maxActiveShipments: eligibility.maxConcurrentShipments,
+          freeSlots,
+          requested: viable.length,
+        }
+      );
+    }
+
+    // ── 3. Contract gates + placement, one shipment at a time ───────────────────
+    const pending: BatchOfferEntry[] = [];
+    for (const { index, shipment } of viable) {
+      const shipmentId = shipmentIds[index];
+      try {
+        const result = await this.placeCheckedOffer(shipment, agent, agencyId, creator, null, opts, null, batchId);
+        items[index] = { shipmentId, ok: true, autoAccepted: result.autoAccepted, offer: result.offer, shipment: result.shipment };
+        if (!result.autoAccepted) {
+          pending.push({
+            offerId: result.offer.id,
+            shipmentId,
+            orderId: result.offer.orderId,
+            isCod: result.offer.isCod,
+            expectedCodAmount: result.offer.expectedCodAmount,
+            currency: result.offer.currency,
+            codLimitForced: !!result.offer.codLimitForced,
+            coverageForced: !!result.offer.coverageForced,
+            expiresAt: result.offer.expiresAt,
+          });
+        }
+      } catch (err) {
+        items[index] = { shipmentId, ok: false, error: this.itemError(err, 'bulk offer', shipmentId) };
+      }
+    }
+
+    if (pending.length > 0) this.emitOfferBatchEvent(batchId, agencyId, agentId, pending);
+
+    const done = items as BulkOfferItem[];
+    const placed = done.filter((i): i is Extract<BulkOfferItem, { ok: true }> => i.ok);
+    return {
+      batchId,
+      agentId,
+      requested: shipmentIds.length,
+      offered: placed.length,
+      autoAccepted: placed.filter((i) => i.autoAccepted).length,
+      failed: done.length - placed.length,
+      items: done,
+    };
+  }
+
+  /**
+   * The placement tail shared by the single and bulk paths: everything after the
+   * shipment-level and agent-level gates. Contract policy, then the offer itself.
+   */
+  private async placeCheckedOffer(
+    shipment: IShipment,
+    agent: IDeliveryAgent,
+    agencyId: string,
+    creator: OfferCreator,
+    pickupLocation: IShipmentHandoverPickup | null,
+    opts: PlacementForce,
+    adminOverride: { reason: string } | null,
+    batchId: string | null
+  ): Promise<OfferResult> {
+    const order = await this.requireOrder(shipment.order_id.toString());
+    const forceRequested = opts.forceCodLimit === true;
+    const outcome = await this.assertContractPolicy(agent, agencyId, shipment, order, {
+      forceCodLimit: forceRequested,
+      forceCoverage: opts.forceCoverage === true,
+      adminOverride: !!adminOverride,
+    });
+
+    // Persisted whenever the agency asked for force on a COD shipment — not only when it
+    // was needed right now: exposure can grow between offer and accept, and the agency's
+    // decision was "send it anyway". Still waives the amount limit and nothing else.
+    const persistForce = forceRequested && order.payment_method === 'cash_on_delivery';
+    return await this.placeManualOffer(shipment, order, agent, creator, pickupLocation, {
+      codLimitForced: persistForce,
+      // Only when it was needed: a region does not drift between offer and accept the way
+      // cash exposure does, so an offer is marked "outside coverage" only when it is.
+      coverageForced: outcome.coverageForced,
+      adminOverride,
+      batchId,
+    });
   }
 
   // ─── Auto-assignment ────────────────────────────────────────────────────────
@@ -195,7 +417,23 @@ export class ShipmentAssignmentService {
     const order = await this.requireOrder(shipment.order_id.toString());
     const ranking = await this.candidates.buildRanking(shipment, order);
     if (ranking.candidates.length === 0) {
-      await this.emitNoAgentAvailable(shipment, 'no_candidates');
+      // ⚠ 'cod_exposure_exceeded' only when at least one agent was dropped for the COD AMOUNT
+      // alone — then the agency CAN act (force-assign), and is told so instead of "nobody
+      // accepted". Every other empty ranking keeps the generic reason.
+      const codBlocked = (ranking.codExposureDropped ?? 0) > 0;
+      await this.emitNoAgentAvailable(
+        shipment,
+        codBlocked ? 'cod_exposure_exceeded' : 'no_candidates',
+        codBlocked
+          ? {
+              expectedCodAmount: (() => {
+                try { return this.cashCollection.computeExpectedAmount(order, shipment); } catch { return null; }
+              })(),
+              currency: order.currency ?? null,
+              codExposureDropped: ranking.codExposureDropped,
+            }
+          : {}
+      );
       return null;
     }
 
@@ -473,9 +711,19 @@ export class ShipmentAssignmentService {
     const agent = await this.requireAgent(agentId);
 
     // Hard re-check: the offer may have sat while the agent went offline, filled
-    // up, or had their contract terms renegotiated under it.
-    await this.eligibility.assertEligible(agentId, agencyId);
-    await this.assertContractPolicy(agent, agencyId, shipment, order);
+    // up, or had their contract terms renegotiated under it. An offer the agency FORCED
+    // past the agent's COD amount limit keeps that force here — and only that: the
+    // re-check still refuses on KYC, trust or an open cash shortfall. An offer an agency
+    // forced outside the contract's regions keeps that too. An ADMINISTRATOR's forced offer
+    // skips eligibility and every contract gate but the active contract — and takes a
+    // capacity slot even past the agent's maximum, below.
+    const adminOverride = !!offer.admin_override;
+    if (!adminOverride) await this.eligibility.assertEligible(agentId, agencyId);
+    await this.assertContractPolicy(agent, agencyId, shipment, order, {
+      forceCodLimit: !!offer.cod_limit_forced,
+      forceCoverage: !!offer.coverage_forced,
+      adminOverride,
+    });
     const isCod = order.payment_method === 'cash_on_delivery';
 
     let boundShipment: IShipment | null = null;
@@ -492,7 +740,9 @@ export class ShipmentAssignmentService {
       const bound = await this.shipments.bindAgentIfUnassigned(shipmentId, agentId, OFFERABLE_STATUSES, session);
       if (!bound) throw createAppError(ERROR_CODES.SHIPMENT_ALREADY_HAS_AGENT, 409, 'Another agent has already accepted this shipment');
 
-      const reserved = await this.capacity.tryReserve(agentId, session);
+      const reserved = adminOverride
+        ? await this.capacity.forceReserve(agentId, session)
+        : await this.capacity.tryReserve(agentId, session);
       if (!reserved) {
         throw createAppError(ERROR_CODES.AGENT_AT_CAPACITY, 422, undefined, {
           activeShipmentCount: agent.capacity?.active_shipment_count ?? 0,
@@ -553,6 +803,32 @@ export class ShipmentAssignmentService {
       offer: this.toOfferSummary({ ...offer.toObject(), status: 'accepted', responded_at: new Date() } as any),
       shipment: this.toShipmentSummary(boundShipment!),
     };
+  }
+
+  /**
+   * The agent accepts several pending offers in one call (2026-10-03) — the other half of
+   * the agency's bulk offer, so a batch sent in one call can be taken in one.
+   *
+   * Partial success, like the bulk offer: each offer goes through {@link accept} unchanged,
+   * one transaction apiece, in the order given. There is no batch transaction and should not
+   * be — `accept`'s bind is a per-shipment race against other agents, and one lost race must
+   * not undo nine won ones. Capacity is NOT pre-checked here: `accept` reserves a slot per
+   * offer, so the first one past the agent's maximum fails with `AGENT_AT_CAPACITY` in its
+   * own item and the rest after it do too, which is the true answer. An offer id need not
+   * come from one batch; any of the agent's pending offers may be accepted together.
+   */
+  async acceptMany(agentId: string, offerIds: string[]): Promise<BulkAcceptResult> {
+    const items: BulkAcceptItem[] = [];
+    for (const offerId of offerIds) {
+      try {
+        const result = await this.accept(agentId, offerId);
+        items.push({ offerId, ok: true, offer: result.offer, shipment: result.shipment });
+      } catch (err) {
+        items.push({ offerId, ok: false, error: this.itemError(err, 'bulk accept', offerId) });
+      }
+    }
+    const accepted = items.filter((i) => i.ok).length;
+    return { requested: offerIds.length, accepted, failed: items.length - accepted, items };
   }
 
   // ─── Reject ─────────────────────────────────────────────────────────────────
@@ -711,10 +987,20 @@ export class ShipmentAssignmentService {
   async reassign(
     agencyId: string,
     shipmentId: string,
-    input: { agentId?: string | null; reason: string; pickupLocation?: Parameters<HandoverPickupService['resolve']>[0]['override'] },
+    input: {
+      agentId?: string | null;
+      reason: string;
+      pickupLocation?: Parameters<HandoverPickupService['resolve']>[0]['override'];
+    } & PlacementForce,
     creator: OfferCreator
   ): Promise<{ reassignedFrom: string; previousStatus: ShipmentStatus; pickupLocation: IShipmentHandoverPickup | null } & OfferResult> {
     const { agentId, reason, pickupLocation: override } = input;
+    // What the replacement's offer may push past (2026-10-02). Ignored on auto.
+    const force: PlacementForce = {
+      forceCodLimit: input.forceCodLimit === true,
+      forceCoverage: input.forceCoverage === true,
+      adminOverride: creator.role === 'admin' ? (input.adminOverride ?? null) : null,
+    };
 
     const shipment = await this.shipments.findByIdAndAgency(shipmentId, agencyId);
     if (!shipment) throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
@@ -740,10 +1026,16 @@ export class ShipmentAssignmentService {
     const previousStatus = shipment.status;
     const order = await this.requireOrder(shipment.order_id.toString());
 
+    // Checked BEFORE the old agent is released, so a refusal leaves the shipment where it
+    // was. `offerToAgent` checks again below — same force, same answer.
     if (agentId) {
-      await this.eligibility.assertEligible(agentId, agencyId);
+      if (!force.adminOverride) await this.eligibility.assertEligible(agentId, agencyId);
       const agent = await this.requireAgent(agentId);
-      await this.assertContractPolicy(agent, agencyId, shipment, order);
+      await this.assertContractPolicy(agent, agencyId, shipment, order, {
+        forceCodLimit: force.forceCodLimit,
+        forceCoverage: force.forceCoverage,
+        adminOverride: !!force.adminOverride,
+      });
     }
 
     const pickup = await this.handoverPickup.resolve({
@@ -766,8 +1058,9 @@ export class ShipmentAssignmentService {
       .recomputeWorkingState(detach.previousAgentId)
       .catch((err) => console.error('[ShipmentAssignmentService] reassign working-state recompute failed:', err));
 
+    // Auto-assign never forces (owner decision 2026-10-02).
     const result = agentId
-      ? await this.offerToAgent(agencyId, shipmentId, agentId, creator, pickup)
+      ? await this.offerToAgent(agencyId, shipmentId, agentId, creator, pickup, force)
       : await this.autoAssign(shipmentId, creator);
 
     if (!result) {
@@ -868,6 +1161,11 @@ export class ShipmentAssignmentService {
         ...summary,
         orderNumber: order?.order_number ?? null,
         shipmentStatus: shipment?.status ?? null,
+        // Delivery-fee renegotiation state (modules/delivery-fee-proposals): a pending
+        // proposal blocks pickup; an override is the vendor-approved fee `earning` is cut from.
+        ...(shipment
+          ? shipmentFeeProposalSummary(shipment)
+          : { deliveryFeeProposalPending: false, pendingDeliveryFeeProposalId: null, deliveryFeeOverride: null }),
         itemCount: shipment?.items.length ?? 0,
         items: context?.items ?? [],
         // The agency behind the offer — name, logo, support contacts. NOT gated
@@ -912,8 +1210,16 @@ export class ShipmentAssignmentService {
     order: IOrder,
     agent: IDeliveryAgent,
     creator: OfferCreator,
-    pickupLocation: IShipmentHandoverPickup | null
+    pickupLocation: IShipmentHandoverPickup | null,
+    forces: {
+      codLimitForced?: boolean;
+      coverageForced?: boolean;
+      adminOverride?: { reason: string } | null;
+      /** Set by the bulk path: the agent is told once, by the batch event, not per offer. */
+      batchId?: string | null;
+    } = {}
   ): Promise<OfferResult> => {
+    const { codLimitForced = false, coverageForced = false, adminOverride = null, batchId = null } = forces;
     const shipmentId = (shipment._id as Types.ObjectId).toString();
     const agentId = agent._id.toString();
     const isCod = order.payment_method === 'cash_on_delivery';
@@ -942,10 +1248,37 @@ export class ShipmentAssignmentService {
       expected_cod_amount: expectedCod,
       currency: order.currency ?? null,
       pickup_location: pickupLocation,
+      // Who pushed this offer past the agent's COD amount limit, when anybody did.
+      cod_limit_forced: codLimitForced
+        ? {
+            by_user_id: creator.userId ? new Types.ObjectId(creator.userId) : null,
+            by_role: creator.role,
+            at: new Date(),
+          }
+        : null,
+      // Who sent this offer outside the contract's regions, when anybody did.
+      coverage_forced: coverageForced
+        ? {
+            by_user_id: creator.userId ? new Types.ObjectId(creator.userId) : null,
+            by_role: creator.role,
+            at: new Date(),
+          }
+        : null,
+      // An administrator's force. Recorded whenever asked for, not only when something was
+      // waived: the agent's state can change before they accept, and the decision was
+      // "this agent, regardless".
+      admin_override: adminOverride
+        ? {
+            by_user_id: creator.userId && Types.ObjectId.isValid(creator.userId) ? new Types.ObjectId(creator.userId) : null,
+            by_name: creator.name ?? null,
+            reason: adminOverride.reason,
+            at: new Date(),
+          }
+        : null,
     });
 
     await this.shipments.markOffered(shipmentId, (offer._id as Types.ObjectId).toString(), agentId);
-    this.emitOfferEvent('shipment.offer_created', offer, order);
+    this.emitOfferEvent('shipment.offer_created', offer, order, batchId ? { batchId } : {});
 
     if (agent.settings?.auto_accept_assignments === true) {
       try {
@@ -999,9 +1332,10 @@ export class ShipmentAssignmentService {
     agent: IDeliveryAgent,
     agencyId: string,
     shipment: IShipment,
-    order: IOrder
-  ): Promise<void> {
-    await this.contractPolicy.assert(agent, agencyId, shipment, order);
+    order: IOrder,
+    force: ContractPolicyForce = {}
+  ): Promise<ContractPolicyForceOutcome> {
+    return await this.contractPolicy.assert(agent, agencyId, shipment, order, force);
   }
 
   private async requireAgent(agentId: string): Promise<IDeliveryAgent> {
@@ -1031,7 +1365,35 @@ export class ShipmentAssignmentService {
     };
   }
 
+  /**
+   * One item's error, projected exactly as the global error handler would project it —
+   * a partial-success item travels inside a 200 and so never reaches that handler. A
+   * non-operational failure is logged here because the handler will not see it either.
+   */
+  private itemError(err: unknown, op: string, id: string): ProjectedItemError {
+    if (!(err instanceof AppError) || !err.isOperational) {
+      console.error(`[ShipmentAssignmentService] ${op} failed for ${id}:`, err);
+    }
+    return projectItemError(err);
+  }
+
   // ─── Event emission (post-commit, fire-and-forget) ──────────────────────────
+
+  /**
+   * A bulk offer's ONE notification-facing event. Carries only offers still pending —
+   * an auto-accepted one needs no "review and accept". Per-offer `shipment.offer_created`
+   * events still fire, stamped with the same `batchId`.
+   */
+  private emitOfferBatchEvent(batchId: string, agencyId: string, agentId: string, offers: BatchOfferEntry[]): void {
+    void eventBus
+      .publish('shipment.offer_batch_created', {
+        eventType: 'shipment.offer_batch_created',
+        aggregateId: batchId,
+        occurredAt: new Date(),
+        payload: { batchId, agencyId, agentId, count: offers.length, offers },
+      })
+      .catch((err) => console.error('[ShipmentAssignmentService] shipment.offer_batch_created emit failed:', err));
+  }
 
   private emitOfferEvent(
     type:
@@ -1061,6 +1423,13 @@ export class ShipmentAssignmentService {
           isCod: offer.is_cod,
           expectedCodAmount: offer.expected_cod_amount,
           currency: offer.currency,
+          // Additive (2026-10-02): the agency pushed this offer past the agent's COD amount
+          // limit. The agent's offer notification says so.
+          codLimitForced: !!offer.cod_limit_forced,
+          // Additive (2026-10-02): sent outside the contract's regions / by an administrator
+          // past the eligibility rules.
+          coverageForced: !!offer.coverage_forced,
+          adminOverride: !!offer.admin_override,
           ...extra,
         },
       })
@@ -1087,7 +1456,11 @@ export class ShipmentAssignmentService {
       .catch((err) => console.error('[ShipmentAssignmentService] offer_reminder emit failed:', err));
   }
 
-  private async emitNoAgentAvailable(shipment: IShipment, reason: string): Promise<void> {
+  private async emitNoAgentAvailable(
+    shipment: IShipment,
+    reason: string,
+    extra: Record<string, unknown> = {}
+  ): Promise<void> {
     const order = await OrderModel.findById(shipment.order_id).select('order_number').lean().exec();
     void eventBus
       .publish('shipment.no_agent_available', {
@@ -1100,6 +1473,7 @@ export class ShipmentAssignmentService {
           orderNumber: (order as any)?.order_number ?? null,
           agencyId: shipment.agency_id.toString(),
           reason,
+          ...extra,
         },
       })
       .catch((err) => console.error('[ShipmentAssignmentService] no_agent_available emit failed:', err));
@@ -1152,6 +1526,30 @@ export class ShipmentAssignmentService {
       expectedCodAmount: offer.expected_cod_amount ?? null,
       currency: offer.currency ?? null,
       pickupLocation: offer.pickup_location ?? null,
+      // 2026-10-02: the agency forced this offer past the agent's COD amount limit.
+      codLimitForced: offer.cod_limit_forced
+        ? {
+            byUserId: offer.cod_limit_forced.by_user_id?.toString() ?? null,
+            byRole: offer.cod_limit_forced.by_role,
+            at: offer.cod_limit_forced.at,
+          }
+        : null,
+      // 2026-10-02: the agency sent this offer outside the contract's coverage regions.
+      coverageForced: offer.coverage_forced
+        ? {
+            byUserId: offer.coverage_forced.by_user_id?.toString() ?? null,
+            byRole: offer.coverage_forced.by_role,
+            at: offer.coverage_forced.at,
+          }
+        : null,
+      // 2026-10-02: an administrator forced this offer past the eligibility rules.
+      adminOverride: offer.admin_override
+        ? {
+            byName: offer.admin_override.by_name ?? null,
+            reason: offer.admin_override.reason,
+            at: offer.admin_override.at,
+          }
+        : null,
       score: offer.score ?? null,
       createdAt: offer.created_at,
     };

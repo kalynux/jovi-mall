@@ -47,6 +47,12 @@ export class AgentCapacityService {
     return reserved !== null;
   }
 
+  /** Take a slot even past the agent's maximum — an administrator's forced assignment only. */
+  async forceReserve(agentId: string, session?: ClientSession): Promise<boolean> {
+    const reserved = await this.agents.forceReserveCapacity(agentId, session);
+    return reserved !== null;
+  }
+
   /**
    * Take a slot or throw, with the numbers that explain the refusal.
    *

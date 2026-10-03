@@ -11,6 +11,9 @@
             "en": "Adamaoua",
             "fr": "Adamaoua"
           },
+          "aliases": [
+            "Adamawa"
+          ],
           "cities": [
             "Ngaoundéré",
             "Banyo",
@@ -24,6 +27,9 @@
             "en": "Centre",
             "fr": "Centre"
           },
+          "aliases": [
+            "Center"
+          ],
           "cities": [
             "Yaoundé",
             "Bafia",
@@ -42,6 +48,7 @@
             "en": "East",
             "fr": "Est"
           },
+          "aliases": [],
           "cities": [
             "Bertoua",
             "Batouri",
@@ -55,6 +62,9 @@
             "en": "Far North",
             "fr": "Extrême-Nord"
           },
+          "aliases": [
+            "Extreme North"
+          ],
           "cities": [
             "Maroua",
             "Kousséri",
@@ -69,6 +79,7 @@
             "en": "Littoral",
             "fr": "Littoral"
           },
+          "aliases": [],
           "cities": [
             "Douala",
             "Edéa",
@@ -84,6 +95,7 @@
             "en": "North",
             "fr": "Nord"
           },
+          "aliases": [],
           "cities": [
             "Garoua",
             "Guider",
@@ -97,6 +109,9 @@
             "en": "Northwest",
             "fr": "Nord-Ouest"
           },
+          "aliases": [
+            "North West"
+          ],
           "cities": [
             "Bamenda",
             "Kumbo",
@@ -112,6 +127,7 @@
             "en": "South",
             "fr": "Sud"
           },
+          "aliases": [],
           "cities": [
             "Ebolowa",
             "Sangmélima",
@@ -124,6 +140,9 @@
             "en": "Southwest",
             "fr": "Sud-Ouest"
           },
+          "aliases": [
+            "South West"
+          ],
           "cities": [
             "Buea",
             "Limbe",
@@ -140,6 +159,7 @@
             "en": "West",
             "fr": "Ouest"
           },
+          "aliases": [],
           "cities": [
             "Bafoussam",
             "Dschang",

@@ -18,7 +18,7 @@ import { AdminShipmentController } from './admin-shipment.controller';
  * jovi-mall transactions paired with post-commit events that a second writer would miss.
  *
  * ── Route order ───────────────────────────────────────────────────────────────
- * Both routes sit under a distinct second segment beneath `/:shipmentId`, so Express
+ * Every route sits under a distinct second segment beneath `/:shipmentId`, so Express
  * matches them without ambiguity. A future LITERAL sibling of `/:shipmentId` must be
  * declared above them.
  */
@@ -31,6 +31,24 @@ function attachRoutes(router: Router): Router {
      * 409 `SHIPMENT_REASSIGNMENT_CONFLICT` when the shipment moved under the caller.
      */
     router.post('/:shipmentId/reassign', AdminShipmentController.reassign);
+
+    /**
+     * POST /:shipmentId/assign-agent
+     * Body `{ agentId, reason, force? }`. Offers an agent-less shipment (`assigned` /
+     * `handing_over`) to a named agent of its agency. `force: true` bypasses every
+     * eligibility rule and contract gate except an ACTIVE contract with that agency
+     * (422 `AGENT_MEMBERSHIP_NOT_APPROVED`). The agent still accepts.
+     */
+    router.post('/:shipmentId/assign-agent', AdminShipmentController.assignAgent);
+
+    /**
+     * POST /:shipmentId/move-agency
+     * Body `{ agencyId, reason, force? }`. Moves an agent-less shipment (`pending` /
+     * `assigned` / `rejected`) to another agency and dispatches it there when it had
+     * already been dispatched. `force: true` bypasses an inactive destination
+     * (422 `DELIVERY_AGENCY_NOT_ACTIVE`) and the COD limits (422 `COD_AGENCY_LIMIT_EXCEEDED`).
+     */
+    router.post('/:shipmentId/move-agency', AdminShipmentController.moveAgency);
 
     /**
      * POST /:shipmentId/cancel

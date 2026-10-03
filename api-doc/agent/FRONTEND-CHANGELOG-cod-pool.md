@@ -1,5 +1,7 @@
 # Agent app — COD pool from your plan, and who can see your emergency contact
 
+> ⚠ **PARTLY SUPERSEDED 2026-10-02** — the plan **no longer** sets an agent's COD pool. Every verified agent without an administrator pin gets **500 000**, `pool.source` is `"default"` (was `"plan"`) and `pool.planCode` is always `null`. Plan cards must stop advertising `max_cod_pool` as a benefit. Everything else here (KYC gate, "carry less", the admin pin) still holds. See [FRONTEND-CHANGELOG-cod-limits.md](../FRONTEND-CHANGELOG-cod-limits.md).
+
 > **Date:** 2026-09-21 · **Audience:** the agent mobile app · **Breaking:** no
 >
 > Cross-role summary: [../FRONTEND-CHANGELOG-cod-pool.md](../FRONTEND-CHANGELOG-cod-pool.md)

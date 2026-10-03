@@ -145,7 +145,14 @@
   "use strict";
 
   /* ── Telegram, entirely optional ──────────────────────────────────────── */
-  var tg = (window.Telegram && window.Telegram.WebApp) || null;
+  /*
+   * ⚠ **`window.Telegram.WebApp` EXISTS OUTSIDE TELEGRAM.** `telegram-web-app.js` defines it
+   * unconditionally, so on WhatsApp's in-app browser the object is there, `close()` is there,
+   * and calling it does nothing. Testing the object alone made a WhatsApp Bargain press
+   * "close" a page that cannot close and skip the way back to the chat — the button did
+   * nothing (owner's handset test, 2026-10-02). Only a real launch carries `initData`.
+   */
+  var tg = (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) ? window.Telegram.WebApp : null;
   if (tg) {
     try {
       tg.ready();
@@ -583,6 +590,14 @@
         backTo = out.chatUrl;
         el.act.textContent = copy.flowBackToChat;
         el.act.disabled = false;
+        /*
+         * ⭐ A `chat` outcome (Bargain) has already posted its question into the thread, so
+         * go there now — the nearest thing to closing that a WhatsApp page has. The button
+         * stays as the way back in case the browser refuses the navigation.
+         */
+        if (out.outcome === "chat") {
+          window.setTimeout(function () { window.location.assign(out.chatUrl); }, 900);
+        }
       }
     }).catch(function () {
       busy = false;

@@ -3,6 +3,7 @@ import { IOrder, OrderType, OrderPaymentMethod, FulfillmentStatus } from './orde
 import { OrderRepository } from './order.repository';
 import { CustomerModel } from '../customers/customer.model';
 import { IGeoAddress, GeoAddressInput, toGeoAddress } from '../../core/types/geo-address.types';
+import { canonicalizeAddressRegion } from '../../core/validation/address-country.helper';
 import { CartService, CartResponse } from '../cart/services/cart.service';
 import { transactionManager } from '../../core/database/transaction.manager';
 import { ShipmentRepository } from '../shipments/shipment.repository';
@@ -27,6 +28,8 @@ import { VendorCustomerSyncService } from '../vendors/services/vendor-customer-s
 import { eventBus } from '../../core/events/event-bus';
 import { earningsSplitService } from '../earnings/services/earnings-split.service';
 import { codEligibilityService } from '../cod/services/cod-eligibility.service';
+import { codLimitsService, CodHandoffVerdict } from '../cod/services/cod-limits.service';
+import { expectedCodAmount } from '../cod/domain/cod-limits';
 import { orderStockService } from './services/order-stock.service';
 import { deliveryCostCapService, DeliveryCapLine } from './services/delivery-cost-cap.service';
 import { PickupMix } from '../earnings/services/earnings-quote.service';
@@ -400,15 +403,45 @@ export class OrderService {
         return;
       }
 
-      const assignedShipments = await this.shipmentRepo.assignPendingByOrderId(order._id.toString());
-      if (assignedShipments.length === 0) return; // Nothing pending (e.g. already dispatched)
+      // The COD-limit gate (owner decision 2026-10-02). Auto-redirect NEVER forces: a COD
+      // shipment that would push its agency over the agency's own cash limit, or over the
+      // vendor's `maxCashPerAgency`, is NOT dispatched — it stays `pending` with a
+      // `cod_limit_hold` the vendor sees, and the rest of the order goes out. The order
+      // itself was already accepted; only the hand-off waits.
+      const pending = await this.shipmentRepo.findPendingByOrderId(order._id.toString());
+      if (pending.length === 0) return; // Nothing pending (e.g. already dispatched)
+      const verdicts = await this.evaluateCodHandoffs(order, pending, false);
+      const held = verdicts.filter((v) => v.breach);
+      for (const v of held) {
+        await codLimitsService.markHeld(v.shipmentId, v.breach!);
+      }
+      const assignedShipments = await this.shipmentRepo.assignPendingByIds(
+        order._id.toString(),
+        verdicts.filter((v) => !v.breach).map((v) => v.shipmentId)
+      );
+      if (held.length > 0) {
+        // Tell the vendor (notification `shipment.cod_limit_held`) — one event per held
+        // shipment, post-hold, best-effort. Before 2026-10-02 the order screen was the only
+        // place a hold showed, so a vendor who did not open it never learned the shipment
+        // was sitting at `pending`.
+        void this._publishCodLimitHeld(order, held)
+          .catch((err) => console.error('[OrderService] shipment.cod_limit_held emit failed:', err));
+        await this.timelineRepo.appendEvent({
+          orderId: order._id.toString(),
+          eventType: 'delivery.agency_updated',
+          description: 'Auto-dispatch held back: the delivery agency is at its cash-on-delivery limit',
+          metadata: {
+            auto: true,
+            codLimitHeld: held.map((v) => ({ shipmentId: v.shipmentId, agencyId: v.agencyId, ...v.breach })),
+          },
+          actorType: 'system',
+          actorId: null
+        });
+      }
+      if (assignedShipments.length === 0) return;
 
       // Mirror the hand-off onto the order items so vendor/customer views agree.
-      for (const item of order.items) {
-        if (item.delivery && item.delivery.status === 'pending') {
-          item.delivery.status = 'assigned';
-        }
-      }
+      this.mirrorDispatchOntoItems(order, assignedShipments);
 
       await this.timelineRepo.appendEvent({
         orderId: order._id.toString(),
@@ -441,7 +474,13 @@ export class OrderService {
    */
   async dispatchToAgency(
     orderId: string,
-    actor: { type: 'vendor' | 'system' | 'admin'; id: string | null }
+    actor: { type: 'vendor' | 'system' | 'admin'; id: string | null },
+    opts: {
+      force?: boolean;
+      forcedBy?: { userId: string | null; role: string };
+      /** Dispatch only these of the order's pending shipments (an admin agency push). */
+      shipmentIds?: string[];
+    } = {}
   ): Promise<number> {
     const order = await this.orderRepo.findById(orderId);
     if (!order) {
@@ -465,14 +504,35 @@ export class OrderService {
       });
     }
 
-    const assignedShipments = await this.shipmentRepo.assignPendingByOrderId(orderId);
-    if (assignedShipments.length === 0) return 0;
+    // The COD-limit gate (owner decision 2026-10-02) — the manual path REFUSES rather
+    // than holds: 422 COD_AGENCY_LIMIT_EXCEEDED for the first shipment that would push its
+    // agency over a limit, and nothing of the order is dispatched, unless `force`. A forced
+    // shipment records who forced it. An ADMINISTRATOR's dispatch is not gated — the limit
+    // protects the platform, and the administrator is the platform.
+    const only = opts.shipmentIds ? new Set(opts.shipmentIds) : null;
+    const pending = (await this.shipmentRepo.findPendingByOrderId(orderId))
+      .filter((s) => !only || only.has((s._id as mongoose.Types.ObjectId).toString()));
+    if (pending.length === 0) return 0;
+    const verdicts: Array<{ shipmentId: string; breach: CodHandoffVerdict['breach'] }> = actor.type === 'admin'
+      ? pending.map((s) => ({ shipmentId: (s._id as mongoose.Types.ObjectId).toString(), breach: null }))
+      : await this.evaluateCodHandoffs(order, pending, opts.force === true);
+    const refused = verdicts.find((v) => v.breach);
+    if (refused && opts.force !== true) {
+      throw codLimitsService.limitExceededError(refused as CodHandoffVerdict);
+    }
 
-    for (const item of order.items) {
-      if (item.delivery && item.delivery.status === 'pending') {
-        item.delivery.status = 'assigned';
+    const assignedShipments = await this.shipmentRepo.assignPendingByIds(orderId, verdicts.map((v) => v.shipmentId));
+    if (assignedShipments.length === 0) return 0;
+    const assignedIds = new Set(assignedShipments.map((s) => (s._id as mongoose.Types.ObjectId).toString()));
+    const forcedBreaches = new Map<string, NonNullable<CodHandoffVerdict['breach']>>();
+    for (const v of verdicts) {
+      if (v.breach && assignedIds.has(v.shipmentId)) {
+        await codLimitsService.markForced(v.shipmentId, v.breach, opts.forcedBy ?? { userId: actor.id, role: actor.type });
+        forcedBreaches.set(v.shipmentId, v.breach);
       }
     }
+
+    this.mirrorDispatchOntoItems(order, assignedShipments);
     await order.save();
 
     await this.timelineRepo.appendEvent({
@@ -484,9 +544,44 @@ export class OrderService {
       actorId: actor.id,
     });
 
-    await this._publishShipmentAssigned(assignedShipments, order);
+    // A FORCED shipment's `shipment.assigned` carries the breach, and the agency stack
+    // renders it as `shipment.cod_limit.forced` instead — one notification per hand-off.
+    await this._publishShipmentAssigned(assignedShipments, order, forcedBreaches);
 
     return assignedShipments.length;
+  }
+
+  /**
+   * Judge each pending shipment against the COD limits (cod/domain/cod-limits.ts). A
+   * prepaid order costs no query: every verdict is a pass.
+   */
+  private async evaluateCodHandoffs(order: IOrder, pending: IShipment[], force: boolean): Promise<CodHandoffVerdict[]> {
+    const isCod = order.payment_method === 'cash_on_delivery';
+    return codLimitsService.evaluateHandoffs(
+      pending.map((s) => ({
+        shipmentId: (s._id as mongoose.Types.ObjectId).toString(),
+        agencyId: s.agency_id.toString(),
+        vendorId: order.vendor_id.toString(),
+        amount: isCod ? expectedCodAmount(order.items as any[], s.items as any[]) : 0,
+      })),
+      { force }
+    );
+  }
+
+  /**
+   * Mirror a dispatch onto the order items so vendor/customer views agree — only the items
+   * riding a shipment that actually went out. An item with no `shipment_id` (legacy) follows
+   * its agency's dispatched shipment.
+   */
+  private mirrorDispatchOntoItems(order: IOrder, assigned: IShipment[]): void {
+    const shipmentIds = new Set(assigned.map((s) => (s._id as mongoose.Types.ObjectId).toString()));
+    const agencyIds = new Set(assigned.map((s) => s.agency_id.toString()));
+    for (const item of order.items) {
+      if (!item.delivery || item.delivery.status !== 'pending') continue;
+      const sid = item.delivery.shipment_id?.toString() ?? null;
+      const rides = sid ? shipmentIds.has(sid) : agencyIds.has(item.delivery.agency_id?.toString() ?? '');
+      if (rides) item.delivery.status = 'assigned';
+    }
   }
 
   /**
@@ -495,17 +590,63 @@ export class OrderService {
    * agency, so this is the natural per-recipient granularity — see
    * AgencyNotificationEventHandler.handleShipmentAssigned.
    */
-  private async _publishShipmentAssigned(shipments: IShipment[], order: IOrder): Promise<void> {
+  /**
+   * `shipment.cod_limit_held` — one per shipment auto-redirect held back (vendor stack).
+   * The agency's NAME rides the event; the figures are the breach's. Which of them the
+   * vendor is shown is the catalogue's decision (`VENDOR_COD_HOLD_REASON`), not this one's.
+   */
+  private async _publishCodLimitHeld(order: IOrder, held: CodHandoffVerdict[]): Promise<void> {
+    for (const v of held) {
+      if (!v.breach) continue;
+      const agencyName = await this.magazinRepo.findNameByAgencyId(v.agencyId);
+      await eventBus.publish('shipment.cod_limit_held', {
+        eventType: 'shipment.cod_limit_held',
+        aggregateId: v.shipmentId,
+        occurredAt: new Date(),
+        payload: {
+          shipmentId: v.shipmentId,
+          orderId: order._id.toString(),
+          orderNumber: order.order_number,
+          vendorId: order.vendor_id.toString(),
+          agencyId: v.agencyId,
+          agencyName: agencyName ?? null,
+          currency: order.currency ?? null,
+          kind: v.breach.kind,
+          currentExposure: v.breach.currentExposure,
+          additionalAmount: v.breach.additionalAmount,
+          limit: v.breach.limit,
+        },
+      });
+    }
+  }
+
+  private async _publishShipmentAssigned(
+    shipments: IShipment[],
+    order: IOrder,
+    forcedBreaches: Map<string, NonNullable<CodHandoffVerdict['breach']>> = new Map()
+  ): Promise<void> {
     for (const shipment of shipments) {
+      const shipmentId = (shipment._id as mongoose.Types.ObjectId).toString();
+      const forced = forcedBreaches.get(shipmentId);
       await eventBus.publish('shipment.assigned', {
         eventType: 'shipment.assigned',
-        aggregateId: (shipment._id as mongoose.Types.ObjectId).toString(),
+        aggregateId: shipmentId,
         payload: {
-          shipmentId: (shipment._id as mongoose.Types.ObjectId).toString(),
+          shipmentId,
           agencyId: shipment.agency_id.toString(),
           orderId: order._id.toString(),
           orderNumber: order.order_number,
           itemCount: shipment.items.length,
+          // Additive (2026-10-02): present only when the vendor pushed this shipment past a
+          // COD limit with `force: true`. The agency stack switches situation on it.
+          codLimitForce: forced
+            ? {
+                kind: forced.kind,
+                amount: forced.additionalAmount,
+                currency: order.currency ?? null,
+                vendorId: order.vendor_id.toString(),
+              }
+            : null,
         },
         occurredAt: new Date(),
       });
@@ -744,9 +885,12 @@ export class OrderService {
     customerId: string,
     deliveryInput?: { addressId?: string | null; address?: GeoAddressInput | null } | null
   ): Promise<IGeoAddress | null> {
-    // An inline selected result always wins.
+    // An inline selected result always wins. Every branch pins the region to one of the
+    // country's regions or refuses the checkout (ADDRESS_REGION_INVALID): this snapshot is
+    // what agency coverage is matched against, and a region no contract can name leaves the
+    // delivery with no agent. A saved address predating the rule is checked here too.
     if (deliveryInput?.address) {
-      return toGeoAddress(deliveryInput.address);
+      return toGeoAddress(canonicalizeAddressRegion(deliveryInput.address));
     }
 
     const customer = await CustomerModel.findById(customerId)
@@ -762,12 +906,12 @@ export class OrderService {
           addressId: deliveryInput.addressId,
         });
       }
-      return chosen.geo ?? null;
+      return chosen.geo ? canonicalizeAddressRegion(chosen.geo, { addressId: deliveryInput.addressId }) : null;
     }
 
     // No explicit selection — fall back to the customer's default saved address.
     const fallback = addresses.find(a => a.is_default) ?? addresses[0] ?? null;
-    return fallback?.geo ?? null;
+    return fallback?.geo ? canonicalizeAddressRegion(fallback.geo, { addressId: fallback._id.toString() }) : null;
   }
 
   /**
@@ -1059,6 +1203,7 @@ export class OrderService {
           orderType,
           totalAmount: total,
           agencyIds: Object.keys(agencyGroups),
+          vendorId,
         });
       }
 

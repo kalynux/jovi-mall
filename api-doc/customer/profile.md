@@ -194,6 +194,46 @@ Attach `geo` by letting the user search their address via `GET /api/geo/search` 
 selected candidate (plus `raw_input`). The loose text fields remain for display/back-compat; `geo`
 carries the coordinates + provider place id + admin components used for mapping and proximity.
 
+<a name="region"></a>
+### Region — must be one of the country's regions (2026-10-02)
+
+`geo.components.region` is what delivery agencies' coverage is matched against, so the server
+**pins it to one of the country's regions** when the address is saved (here, on `PATCH`, and on
+the inline `delivery.address` at checkout):
+
+- Spellings are recognised: `"Centre Region"`, `"Région du Centre"`, `"Center"` and `"centre"`
+  all become **`"Centre"`**; `"Far North Region"` / `"Région de l'Extrême-Nord"` become `"Far North"`.
+- No region, or one that names nothing? The **city** is tried: `"Yaoundé"` → `"Centre"`.
+- The stored `geo.components.region` (and `state`) is the region's canonical English name.
+- A country with no region list (anything but `CM` today), or no `country_code`, is not checked.
+
+When neither the region nor the city names a region of the country the save is refused:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "ADDRESS_REGION_INVALID",
+    "statusCode": 400,
+    "details": {
+      "region": "Mars",
+      "city": "Nowhere",
+      "countryCode": "CM",
+      "addressId": "664addr…",
+      "allowedRegions": [
+        { "key": "adamaoua", "name": { "en": "Adamaoua", "fr": "Adamaoua" } },
+        { "key": "centre", "name": { "en": "Centre", "fr": "Centre" } }
+      ]
+    }
+  }
+}
+```
+
+**Client handling:** show a region picker built from `details.allowedRegions` (label with
+`name[locale]`) and resend the same request with `geo.components.region` set to the picked
+**`key`** — keys are accepted. `addressId` is present when a saved address was the culprit (an
+edit, or checkout using an older saved address); offer to edit that address.
+
 ### Example request
 
 ```json
@@ -267,6 +307,7 @@ optional**; only the keys you send are written. Omitting a key leaves the stored
 |---|---|---|
 | `CUSTOMER_ADDRESS_NOT_FOUND` | 404 | No such address on this profile |
 | `VALIDATION_ERROR` | 400 | A supplied field fails its constraint |
+| `ADDRESS_REGION_INVALID` | 400 | `geo` names no region of its country, by region or by city — see [Region](#region). Also on `POST /customer/addresses` and at checkout |
 
 ---
 

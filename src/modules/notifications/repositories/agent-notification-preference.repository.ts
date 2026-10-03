@@ -14,6 +14,8 @@ export interface UpdateAgentPreferencesPayload {
         contractUpdated?: boolean;
         planUpdates?: boolean;
         storageAlert?: boolean;
+        codLimitUpdates?: boolean;
+        deliveryFeeProposals?: boolean;
     };
 }
 
@@ -47,7 +49,9 @@ export class AgentNotificationPreferenceRepository {
                     assignmentOffers: true,
                     contractUpdated: true,
                     planUpdates: true,
-                    storageAlert: true
+                    storageAlert: true,
+                    codLimitUpdates: true,
+                    deliveryFeeProposals: true
                 }
             });
         }
@@ -114,6 +118,10 @@ export class AgentNotificationPreferenceRepository {
                 updates.preferences.planUpdates ?? current.preferences.planUpdates ?? true;
             updatePayload['preferences.storageAlert'] =
                 updates.preferences.storageAlert ?? current.preferences.storageAlert ?? true;
+            updatePayload['preferences.codLimitUpdates'] =
+                updates.preferences.codLimitUpdates ?? current.preferences.codLimitUpdates ?? true;
+            updatePayload['preferences.deliveryFeeProposals'] =
+                updates.preferences.deliveryFeeProposals ?? current.preferences.deliveryFeeProposals ?? true;
         }
 
         const result = await AgentNotificationPreferenceModel.findOneAndUpdate(

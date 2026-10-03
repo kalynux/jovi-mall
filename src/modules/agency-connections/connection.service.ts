@@ -20,6 +20,8 @@ import { PaginationOptions } from '../../core/repositories/base.repository';
 import { VendorAgencyListItemDto, VendorAgencyMapper, AgencyListMeta } from '../vendor/dto/vendor-agency.dto';
 import { reviewAggregateRepository } from '../reviews/repositories/review-aggregate.repository';
 import { AgencyVendorListItemDto, AgencyVendorMapper } from './dto/agency-vendor-browse.dto';
+import { VendorSettingsRepository } from '../vendors/repositories/vendor-settings.repository';
+import { VendorCodTerms, vendorCodTermsOf } from '../cod/domain/cod-limits';
 import {
   IVendorAgencyConnection,
   IConnectionStatusHistoryEntry,
@@ -638,13 +640,18 @@ export class ConnectionService {
     agencyId: string,
     params: VendorListQueryParams,
   ): Promise<{
-    vendors: Array<AgencyVendorListItemDto & { connection: { id: string; status: ConnectionStatus } | null }>;
+    vendors: Array<AgencyVendorListItemDto & {
+      connection: { id: string; status: ConnectionStatus } | null;
+      codTerms: VendorCodTerms;
+    }>;
     meta: AgencyListMeta;
   }> {
     const [{ vendors, total }, connections] = await Promise.all([
       this.vendorRepo.findAvailableForAgencies(params),
       this.connectionRepo.findAllForEntity('agency', agencyId),
     ]);
+    // The vendor's COD terms (2026-10-02) — what an agency is agreeing to carry for them.
+    const codTermsByVendor = await this.vendorCodTermsFor(vendors.map((v) => v._id.toString()));
     const byVendorId = new Map(connections.map((c) => [c.vendor_id.toString(), c]));
 
     // Business name/logo come from the joined Store. Batch-resolve logos.
@@ -662,6 +669,7 @@ export class ConnectionService {
       return {
         ...dto,
         connection: connection ? { id: connection._id.toString(), status: connection.status } : null,
+        codTerms: codTermsByVendor.get(dto.id) ?? vendorCodTermsOf(null),
       };
     });
 
@@ -687,6 +695,17 @@ export class ConnectionService {
 
   async listForAgency(agencyId: string, filters: { status?: ConnectionStatus }, pagination: PaginationOptions) {
     return this.connectionRepo.listForAgency(agencyId, filters, pagination);
+  }
+
+  /**
+   * Each vendor's COD terms (2026-10-02), defaults applied — one query for a page. Shown
+   * to AGENCIES wherever they look at a vendor: the browse list and their connections.
+   */
+  async vendorCodTermsFor(vendorIds: string[]): Promise<Map<string, VendorCodTerms>> {
+    const stored = await new VendorSettingsRepository().findCodTermsForVendors(vendorIds);
+    const out = new Map<string, VendorCodTerms>();
+    for (const id of vendorIds) out.set(id, vendorCodTermsOf(stored.get(id) ?? null));
+    return out;
   }
 
   async findByVendorAndAgency(vendorId: string, agencyId: string): Promise<IVendorAgencyConnection | null> {

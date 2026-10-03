@@ -10,7 +10,12 @@ import { auditLogger } from '../../../core/audit/audit-logger';
 import { VendorOnboardingStep, VendorOnboardingStepValue } from '../../../core/constants/onboarding-steps';
 import { IVendor, IVendorPolicies, IVendorSupportChannel, IVendorSupportPolicy } from '../../vendors/vendor.model';
 import { withGeoAddress } from '../../../core/types/geo-address.types';
-import { assertGeoInCountry, geoAddressEquals } from '../../../core/validation/address-country.helper';
+import {
+  assertGeoInCountry,
+  canonicalizeAddressRegion,
+  geoAddressEquals,
+  pinAddressRegionIfKnown,
+} from '../../../core/validation/address-country.helper';
 import { StoreProvisioningService } from '../../store/service/store-provisioning.service';
 import { StoreRepository } from '../../store/repositories/store.repository';
 import { IStore } from '../../store/models/store.model';
@@ -213,7 +218,28 @@ export class VendorProfileService {
       if (unchanged) return;
 
       assertGeoInCountry(entry.geo, country ?? null, { index, label: entry.label ?? null });
+      // A business address is a pickup point, so its region must name one of the country's
+      // regions, as a customer's drop-off must (2026-10-02). Refuses ADDRESS_REGION_INVALID.
+      canonicalizeAddressRegion(entry.geo!, { index, label: entry.label ?? null });
     });
+  }
+
+  /**
+   * Persist shape for `business_addresses`: the region pinned to its canonical spelling
+   * whenever one is found, with `state` following it. Never refuses: the strict check
+   * above already ran on new and edited entries, and a grandfathered row must still save.
+   */
+  private toPersistableBusinessAddresses(
+    incoming: NonNullable<UpdateVendorProfileInput['business_addresses']>,
+  ): IVendor['business_addresses'] {
+    return incoming
+      .map((entry) => {
+        if (!entry.geo) return entry;
+        const geo = pinAddressRegionIfKnown(entry.geo);
+        const region = geo.components?.region ?? null;
+        return { ...entry, geo, ...(region && region !== entry.geo.components?.region ? { state: region } : {}) };
+      })
+      .map(withGeoAddress) as unknown as IVendor['business_addresses'];
   }
 
   /**
@@ -325,6 +351,10 @@ export class VendorProfileService {
     }
 
     const updatePayload = VendorProfileMapper.toUpdatePayload(input);
+    // Same persist shape as onboarding: the region in its canonical spelling.
+    if (input.business_addresses !== undefined) {
+      updatePayload.business_addresses = this.toPersistableBusinessAddresses(input.business_addresses);
+    }
     const updated = await this.vendorRepo.updateProfileWithVersion(
       vendorId,
       input.version,
@@ -528,7 +558,7 @@ export class VendorProfileService {
         // ObjectId on write, preserving identity instead of minting a new one.
         // `withGeoAddress` normalises each entry's selected geo result into a
         // persistable GeoAddress (assigns resolved_at, null-fills components).
-        brandingData.business_addresses = input.business_addresses.map(withGeoAddress) as unknown as IVendor['business_addresses'];
+        brandingData.business_addresses = this.toPersistableBusinessAddresses(input.business_addresses);
       }
     }
 

@@ -80,9 +80,10 @@ export interface PaymentInstructions {
   chargedCurrency?: string;     // Presentment currency Stripe charges in (e.g. "usd")
 
   /**
-   * Open this URL to complete the payment (a hosted card page). Reserved for
-   * `flow: 'REDIRECT'` aggregators (Flutterwave cards, ADR-A08 Phase 2); no
-   * current adapter sets it. Clients must honour it whenever present.
+   * Open this URL to complete the payment (a hosted page). Reserved for
+   * `flow: 'REDIRECT'` aggregators (Flutterwave cards, ADR-A08 Phase 2), and set
+   * today by CinetPay on a `PUSH` flow when its account cannot push and answers
+   * `must_be_redirected`. Clients must honour it whenever present.
    */
   redirectUrl?: string;
 
@@ -445,7 +446,7 @@ export interface WebhookVerifyInput {
  * Campay or Flutterwave is one entry here plus its adapter. `registry.ts`
  * re-exports it under the same name for the importers that already read it there.
  */
-export const PAYMENT_GATEWAY_NAMES = ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE', 'CAMPAY'] as const;
+export const PAYMENT_GATEWAY_NAMES = ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE', 'CAMPAY', 'CINETPAY', 'FAPSHI'] as const;
 
 export type PaymentGatewayName = (typeof PAYMENT_GATEWAY_NAMES)[number];
 

@@ -62,6 +62,12 @@ export interface MembershipFeeSplitDto {
     agentSharePercent: number | null;
     /** Minor units. Meaningful when `model` is 'flat'. */
     agentFlatFee: number | null;
+    /**
+     * Minor units per month. Meaningful when `model` is 'monthly_salary': the
+     * agency pays it OFF-platform and the platform pays the agent 0 per delivery.
+     * Shown so both parties see what they agreed; nothing tracks its payment.
+     */
+    agentMonthlySalary: number | null;
     currency: string;
 }
 
@@ -279,6 +285,7 @@ export class AgentMembershipMapper {
                 model: feeSplit.model ?? 'percentage',
                 agentSharePercent: feeSplit.agent_share_percent ?? null,
                 agentFlatFee: feeSplit.agent_flat_fee ?? null,
+                agentMonthlySalary: feeSplit.agent_monthly_salary ?? null,
                 currency: feeSplit.currency ?? 'XAF',
             },
             shipmentValueCeiling: membership.shipment_value_ceiling ?? null,

@@ -8,6 +8,7 @@ import { uploadCodCashProof } from '../cod/controllers/cod-proof.http';
 import { AgentOfferController } from '../shipment-assignment/controllers/agent-offer.controller';
 import { AgentNotificationController } from './controllers/agent-notification.controller';
 import { DeviceTokenController } from '../notifications/controllers/device-token.controller';
+import { AgentDeliveryFeeProposalController } from '../delivery-fee-proposals/controllers/delivery-fee-proposal.controller';
 
 /**
  * Agent work routes — mounted at /api/agent alongside the agent domain's own
@@ -52,6 +53,15 @@ router.get('/offers/:id', AgentOfferController.get);
  * agent is no longer eligible / is at capacity.
  */
 router.post('/offers/:id/accept', AgentOfferController.accept);
+
+/**
+ * POST /api/agent/offers/accept
+ * Accept up to 10 pending offers in one call. Body: { offerIds: string[1..10] }.
+ * Partial success — 200 with one `items` entry per offer; each is accepted exactly as
+ * the single route above would accept it (own transaction, own errors). Once the agent
+ * is full, the remaining items fail with AGENT_AT_CAPACITY.
+ */
+router.post('/offers/accept', AgentOfferController.acceptMany);
 
 /**
  * POST /api/agent/offers/:id/reject
@@ -125,6 +135,20 @@ router.post('/shipments/:id/status', ShipmentController.updateStatusByAgent);
  * Body: { reason: <enum>, note?: string(<=200) }  (note required when reason='other')
  */
 router.post('/shipments/:id/cancel', AgentOfferController.cancelShipment);
+
+/**
+ * Delivery-fee proposals — ONLY on a shipment this agent holds the accepted offer for, and
+ * only when their agency enabled `agentsCanProposeDeliveryFee` (403
+ * DELIVERY_FEE_PROPOSAL_AGENTS_NOT_ALLOWED otherwise). See api-doc/agent/shipments.md.
+ *   GET  /api/agent/shipments/:id/delivery-fee-proposals
+ *   POST /api/agent/shipments/:id/delivery-fee-proposals                  { proposedFee, reason }
+ *   POST /api/agent/shipments/:id/delivery-fee-proposals/:proposalId/withdraw  (own proposals)
+ */
+router.get('/shipments/:id/delivery-fee-proposals', AgentDeliveryFeeProposalController.list);
+router.post('/shipments/:id/delivery-fee-proposals', AgentDeliveryFeeProposalController.create);
+router.post('/shipments/:id/delivery-fee-proposals/:proposalId/withdraw', AgentDeliveryFeeProposalController.withdraw);
+// Edit your own pending proposal (while the agency preference is on and the agency has not edited it).
+router.patch('/shipments/:id/delivery-fee-proposals/:proposalId', AgentDeliveryFeeProposalController.edit);
 
 // ─── Delivery proof (optional single image, charged to the AGENCY's storage) ──
 

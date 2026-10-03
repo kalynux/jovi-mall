@@ -322,8 +322,9 @@ async function main(): Promise<void> {
 
     await guardBites(
         // Three since 2026-09-28: onboarding, the contact share, and the `yes:tos` Accept tap.
-        'ALL THREE setup-completing turns go through setCompletionReply — never the bare welcome',
-        (src) => (src.match(/await setCompletionReply\(/g) ?? []).length === 3
+        // Four since 2026-10-02: the `lang:<code>` tap answers onboarding's first question.
+        'ALL FOUR setup-completing turns go through setCompletionReply — never the bare welcome',
+        (src) => (src.match(/await setCompletionReply\(/g) ?? []).length === 4
             // CALLS only (`req,`) — the definition reads `setWelcomeReply(req: Request`.
             && (src.match(/setWelcomeReply\(req,/g) ?? []).length === 1,
         IDENTITY,

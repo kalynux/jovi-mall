@@ -2,8 +2,9 @@ import { Request, Response } from 'express';
 import { AdminAgencyService } from '../services/admin-agency.service';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { vectorisationService } from '../../catalog/domain/services/VectorisationService';
-import { actorFromRequest } from '../../../core/types/actor-source.types';
-import { AdminRejectAgencyKycSchema } from '../validators/admin-agency.validator';
+import { actorFromRequest, roleActorFromRequest } from '../../../core/types/actor-source.types';
+import { AdminRejectAgencyKycSchema, AdminSetAgencyCodLimitSchema } from '../validators/admin-agency.validator';
+import { codLimitsService } from '../../cod/services/cod-limits.service';
 
 const adminAgencyService = new AdminAgencyService();
 
@@ -88,6 +89,39 @@ export class AdminAgencyController {
         for (const productId of affectedProductIds) {
             void vectorisationService.notifyStatusChange(productId, 'suspended');
         }
+    });
+
+    /**
+     * GET /api/internal/admin/agencies/:id/cod-limit
+     *
+     * The agency's COD cash limit (owner decision 2026-10-02): the ceiling, where it comes
+     * from (`default` | `override`), the pin itself with its reason and author, and what the
+     * agency holds right now — in-flight COD shipments plus collected-unremitted cash.
+     */
+    static getCodLimit = asyncHandler(async (req: Request, res: Response) => {
+        const report = await codLimitsService.report(req.params.id);
+        res.json({ success: true, data: report });
+    });
+
+    /**
+     * PUT /api/internal/admin/agencies/:id/cod-limit — body `{ maxAmount: number | null, reason }`.
+     * PINS the agency's cash limit (replacing the 1 000 000 default) until released with
+     * `maxAmount: null`. A pin below what the agency already holds is allowed: it blocks the
+     * next dispatch, and the read reports `overLimit: true`.
+     */
+    static setCodLimit = asyncHandler(async (req: Request, res: Response) => {
+        const { maxAmount, reason } = AdminSetAgencyCodLimitSchema.parse(req.body);
+        const report = await codLimitsService.setOverride({
+            agencyId: req.params.id,
+            amount: maxAmount,
+            reason,
+            actor: roleActorFromRequest(req),
+        });
+        res.json({
+            success: true,
+            data: report,
+            message: maxAmount === null ? 'Agency COD limit pin released.' : 'Agency COD limit pinned.',
+        });
     });
 
     /** PATCH /api/admin/delivery-agencies/:id/reactivate */

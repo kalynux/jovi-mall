@@ -10,6 +10,7 @@ import { AgencyAssignmentController } from '../shipment-assignment/controllers/a
 import { AgencyCodController } from '../cod/controllers/agency-cod.controller';
 import { uploadCodCashProof } from '../cod/controllers/cod-proof.http';
 import { TrackingController } from '../tracking-integration/controllers/tracking.controller';
+import { AgencyDeliveryFeeProposalController } from '../delivery-fee-proposals/controllers/delivery-fee-proposal.controller';
 import { DeviceTokenController } from '../notifications/controllers/device-token.controller';
 
 const router = Router();
@@ -150,12 +151,37 @@ router.patch('/shipments/:id/status', ShipmentController.updateStatus);
 router.post('/shipments/:id/reject', ShipmentController.reject);
 
 /**
+ * Delivery-fee proposals (modules/delivery-fee-proposals) — renegotiate THIS shipment's fee
+ * before pickup; the vendor approves or rejects. While one is pending the shipment cannot
+ * be picked up (409 SHIPMENT_DELIVERY_FEE_PENDING). See api-doc/agency/shipments.md.
+ *   GET  /api/agency/shipments/:id/delivery-fee-proposals
+ *   POST /api/agency/shipments/:id/delivery-fee-proposals                 { proposedFee, reason }
+ *   POST /api/agency/shipments/:id/delivery-fee-proposals/:proposalId/withdraw
+ */
+router.get('/shipments/:id/delivery-fee-proposals', AgencyDeliveryFeeProposalController.list);
+router.post('/shipments/:id/delivery-fee-proposals', AgencyDeliveryFeeProposalController.create);
+router.post('/shipments/:id/delivery-fee-proposals/:proposalId/withdraw', AgencyDeliveryFeeProposalController.withdraw);
+// Edit any pending proposal on this shipment (its agent's too — it becomes agency-owned).
+router.patch('/shipments/:id/delivery-fee-proposals/:proposalId', AgencyDeliveryFeeProposalController.edit);
+
+/**
  * PATCH /api/agency/shipments/:id/assign-agent
  * Offer this shipment to one of the agency's agents (agent-acceptance workflow).
  * No longer a direct assignment: it creates an OFFER the agent must accept
  * (unless the agent has auto-accept enabled). Body: { agentId: string }
  */
 router.patch('/shipments/:id/assign-agent', AgencyAssignmentController.offerAgent);
+
+/**
+ * POST /api/agency/shipments/assign-agent
+ * Bulk form of the above: offer ONE agent up to 10 shipments at once.
+ * Body: { agentId, shipmentIds: string[1..10], force? }. Partial success — 200 with one
+ * `items` entry per shipment (offered / auto-accepted / error). Refused as a whole only for
+ * the agent itself, or with 422 AGENT_AT_CAPACITY when the offerable shipments exceed the
+ * agent's free slots (nothing is offered then). The agent gets ONE grouped notification.
+ * A literal second segment, so it never collides with `/shipments/:id`.
+ */
+router.post('/shipments/assign-agent', AgencyAssignmentController.offerAgentBulk);
 
 /**
  * POST /api/agency/shipments/:id/auto-assign
@@ -224,6 +250,13 @@ router.get('/analytics', DeliveryAnalyticsController.agency);
  * agent, and collected cash not yet covered by a confirmed remittance.
  */
 router.get('/cod/summary', AgencyCodController.summary);
+
+/**
+ * GET /api/agency/cod/limit
+ * The agency's COD cash limit (default 1 000 000, or an administrator's pin) and its
+ * live exposure: in-flight COD shipments + collected cash not yet remitted (2026-10-02).
+ */
+router.get('/cod/limit', AgencyCodController.limit);
 
 /**
  * POST /api/agency/cod/deposits

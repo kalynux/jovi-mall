@@ -34,7 +34,9 @@ export type EarningsLedgerReasonCode =
   | 'hold_release'
   | 'refund_reversal'
   | 'cod_rolling_reserve'
-  | 'reserve_matured';
+  | 'reserve_matured'
+  /** A held allocation re-priced by a vendor-approved delivery-fee change (delivery-fee-proposals). */
+  | 'delivery_fee_adjustment';
 
 export interface IEarningsLedger extends Document {
   account_id: mongoose.Types.ObjectId;
@@ -73,7 +75,7 @@ const EarningsLedgerSchema = new Schema<IEarningsLedger>(
     allocation_id: { type: Schema.Types.ObjectId, ref: MODELS.EARNINGS_ALLOCATION, required: true },
     reason_code: {
       type: String,
-      enum: ['order_split', 'cod_split', 'delivery_split', 'hold_release', 'refund_reversal', 'cod_rolling_reserve', 'reserve_matured'],
+      enum: ['order_split', 'cod_split', 'delivery_split', 'hold_release', 'refund_reversal', 'cod_rolling_reserve', 'reserve_matured', 'delivery_fee_adjustment'],
       required: true,
     },
   },

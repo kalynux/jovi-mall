@@ -333,7 +333,42 @@ export interface IAgencyKycDetails
  */
 export interface IAgencyAssignmentSettings {
   auto_assign_enabled: boolean;
+  /**
+   * Whether the agent holding a shipment's accepted offer may propose a different delivery
+   * fee for it (modules/delivery-fee-proposals). Defaults OFF; the agency itself always may.
+   * Absent on documents written before the field — read it as `?? false`.
+   */
+  agents_can_propose_delivery_fee?: boolean;
 }
+
+/**
+ * An administrator's pinned agency cash limit. The actor stamp is the three-field
+ * `actorStampFields()` convention, exactly as on the agent's `IAgentCodPoolOverride`.
+ */
+export interface IAgencyCodLimitOverride {
+  /** XAF, within [0, COD_CONFIG.AGENCY_COD_LIMIT_MAX]. May be above OR below the default. */
+  amount: number;
+  /** Required — an unexplained override on a cash limit is unreviewable. */
+  reason: string;
+  set_at: Date;
+  set_by_user_id: string | null;
+  set_by_source: ActorSource;
+  set_by_name: string | null;
+}
+
+const AgencyCodLimitOverrideSchema = new Schema(
+  {
+    amount: { type: Number, required: true, min: 0 },
+    reason: { type: String, required: true, trim: true, maxlength: 500 },
+    set_at: { type: Date, required: true, default: Date.now },
+    // Declared explicitly: `actorStampFields` supplies only `_source` and `_name`, and an
+    // undeclared id is stripped by strict mode on write. A String, because an
+    // administrator's id resolves in wi-admin, not here (same as the agent pool pin).
+    set_by_user_id: { type: String, default: null },
+    ...actorStampFields('set_by'),
+  },
+  { _id: false }
+);
 
 export interface IDeliveryAgency extends Document {
   user_id: mongoose.Types.ObjectId;
@@ -376,6 +411,17 @@ export interface IDeliveryAgency extends Document {
    * a policy edit and pause any active connections that need reapproval.
    */
   policy_version: number;
+  /**
+   * An administrator's PINNED cash limit — replaces the platform default
+   * (`COD_CONFIG.AGENCY_COD_LIMIT_DEFAULT`, 1 000 000) as the most COD cash this agency
+   * may hold un-remitted, until an administrator releases it (owner decision 2026-10-02).
+   *
+   * Same shape and posture as the agent's `cod.pool_override`: a separate field nothing
+   * but `AgencyCodLimitService.setOverride` writes, reason required. `null` = the
+   * default applies. Deliberately NOT under `policies` — editing it must not bump
+   * `policy_version` and pause every vendor connection.
+   */
+  cod_limit_override: IAgencyCodLimitOverride | null;
   /** @deprecated Use kyc_details.legit_verified. Kept for backward compat. */
   legit_verified: boolean;
   timezone: string;
@@ -419,13 +465,18 @@ const DeliveryAgencySchema = new Schema<IDeliveryAgency>(
     policies: { type: AgencyPoliciesSchema, default: null },
     assignment_settings: {
       type: new Schema<IAgencyAssignmentSettings>(
-        { auto_assign_enabled: { type: Boolean, required: true, default: false } },
+        {
+          auto_assign_enabled: { type: Boolean, required: true, default: false },
+          agents_can_propose_delivery_fee: { type: Boolean, default: false },
+        },
         { _id: false }
       ),
       required: true,
-      default: () => ({ auto_assign_enabled: false }),
+      default: () => ({ auto_assign_enabled: false, agents_can_propose_delivery_fee: false }),
     },
     policy_version: { type: Number, default: 0 },
+    // The administrator's pinned cash limit — see IDeliveryAgency.cod_limit_override.
+    cod_limit_override: { type: AgencyCodLimitOverrideSchema, default: null },
     /** @deprecated */
     legit_verified: { type: Boolean, default: false },
     timezone: { type: String, default: 'Africa/Douala', required: true },

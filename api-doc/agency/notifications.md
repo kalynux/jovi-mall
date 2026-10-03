@@ -341,3 +341,27 @@ Bearer token and `/api/agency/...` paths where the vendor doc says `/api/vendor/
   }
 }
 ```
+
+---
+
+## ⭐ 2026-10-02 — COD limits and delivery-fee proposals
+
+Two new preference keys, both default `true` (a row written before them reads as ON):
+`preferences.codLimitUpdates` and `preferences.deliveryFeeProposals`, accepted by
+`PATCH /api/agency/notification-preferences`. One new `aggregateType`: **`cod_limit`**
+(`aggregateId` = your agency id). One new deep-link label: **`cod/limit`**.
+
+| Preference | `type` | `aggregateType` | When | `action.path` |
+|---|---|---|---|---|
+| `deliveryFeeProposals` | `delivery_fee_proposal.approved` | `shipment` | The vendor approved a fee proposal on one of your shipments (yours or your agent's). Pickup is unblocked. | `shipments/{shipmentId}` |
+| `deliveryFeeProposals` | `delivery_fee_proposal.rejected` | `shipment` | The vendor rejected it; the fee stays as before. Deliver at that fee, propose again, or decline the shipment. | `shipments/{shipmentId}` |
+| `deliveryFeeProposals` | `delivery_fee_proposal.agent_proposed` | `shipment` | **Your agent** proposed a fee (only possible while `agentsCanProposeDeliveryFee` is on). You may edit or withdraw it. | `shipments/{shipmentId}` |
+| `deliveryFeeProposals` | `delivery_fee_proposal.agent_edited` | `shipment` | Your agent changed their pending figure. | `shipments/{shipmentId}` |
+| `codLimitUpdates` | `shipment.cod_limit.forced` | `shipment` | A vendor sent you a COD shipment **past a limit** with `force: true` — your own COD limit, or the vendor's `maxCashPerAgency`. On a dispatch this **replaces** `shipment.assigned` for that shipment (one notification, not two). | `shipments/{shipmentId}` |
+| `codLimitUpdates` | `shipment.assignment.cod_limit_blocked` | `shipment` | Auto-assign found nobody because **every** remaining candidate was over their COD **amount** limit (`COD_AGENT_EXPOSURE_EXCEEDED`, the one refusal you may force past). **Replaces** `shipment.assignment.unfilled` for that cause, and is sent **once per shipment**. | `shipments/{shipmentId}` — assign with `force: true` |
+| `codLimitUpdates` | `connection.cod_terms_changed` | `connection` | A vendor you have an **active** connection with changed its COD terms (`codEnabled` / `maxCashPerAgency`). Not sent when a PUT re-sends identical terms. | `vendor-connections/{connectionId}` |
+| `codLimitUpdates` | `cod.limit.pinned` / `cod.limit.released` | `cod_limit` | An administrator pinned your agency's COD limit to an amount, or released it back to the platform default. The administrator's reason is never sent. | ⭐ `cod/limit` |
+
+Not notified, deliberately: being over your limit, or a vendor's shipment held back for your
+limit (that shipment is still `pending` and not on your list). Your gauge is
+`GET /api/agency/cod/limit`.

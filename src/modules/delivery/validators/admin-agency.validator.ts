@@ -33,3 +33,18 @@ export const AdminRejectAgencyKycSchema = z
   .strict();
 
 export type AdminRejectAgencyKycInput = z.infer<typeof AdminRejectAgencyKycSchema>;
+
+/**
+ * PIN (or release, with `maxAmount: null`) the agency's COD cash limit — owner decision
+ * 2026-10-02, mirroring the agent's `SetAgentThresholdSchema`. A reason is required either
+ * way: the pin outranks the platform default (1 000 000), and an unexplained override on a
+ * cash limit is unreviewable. The upper bound is a sanity bound, not a policy.
+ */
+export const AdminSetAgencyCodLimitSchema = z
+  .object({
+    maxAmount: z.number().int().min(0).max(100_000_000).nullable(),
+    reason: z.string().trim().min(3).max(500),
+  })
+  .strict();
+
+export type AdminSetAgencyCodLimitInput = z.infer<typeof AdminSetAgencyCodLimitSchema>;

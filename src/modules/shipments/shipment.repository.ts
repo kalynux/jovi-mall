@@ -43,6 +43,12 @@ export interface GuardedStatusChange {
   agentId?: string | null;
   /** Appended to `delivery_failures`; agent-reported `failed`/`returned` only. */
   failure?: IShipmentDeliveryFailure | null;
+  /**
+   * Pickup only: also require that no delivery-fee proposal is pending
+   * (`pending_delivery_fee_proposal_id: null`). The proposal side claims that pointer by its
+   * own CAS, so the two writes serialise on the document.
+   */
+  requireNoPendingDeliveryFeeProposal?: boolean;
 }
 
 export class ShipmentRepository {
@@ -413,6 +419,35 @@ export class ShipmentRepository {
   }
 
   /**
+   * The order's `pending` shipments, unmodified — what a dispatch is about to hand over.
+   * Read first so the COD-limit gate (2026-10-02) can judge each before any is assigned.
+   */
+  async findPendingByOrderId(orderId: string): Promise<IShipment[]> {
+    return await ShipmentModel.find({ order_id: orderId, status: 'pending' });
+  }
+
+  /**
+   * `assignPendingByOrderId` narrowed to named shipments — the COD-limit gate's partial
+   * dispatch, where some of an order's shipments go and some are held back. Same
+   * `status: 'pending'` guard, so a shipment another path already moved is not touched.
+   * Also clears any `cod_limit_hold`: a shipment that is going out is not held.
+   */
+  async assignPendingByIds(orderId: string, shipmentIds: string[]): Promise<IShipment[]> {
+    if (shipmentIds.length === 0) return [];
+    const ids = shipmentIds.map((id) => new Types.ObjectId(id));
+    const pending = await ShipmentModel.find({ _id: { $in: ids }, order_id: orderId, status: 'pending' });
+    if (pending.length === 0) return [];
+
+    await ShipmentModel.updateMany(
+      { _id: { $in: pending.map((s) => s._id) }, status: 'pending' },
+      { $set: { status: 'assigned', cod_limit_hold: null } }
+    );
+
+    pending.forEach(s => { s.status = 'assigned'; s.cod_limit_hold = null; });
+    return pending;
+  }
+
+  /**
    * Apply an already-validated status transition: sets `status` and appends a
    * `status_history` entry in one atomic update. Callers (ShipmentService) own
    * transition validation — this is a dumb write.
@@ -471,6 +506,8 @@ export class ShipmentRepository {
     const filter: FilterQuery<IShipment> = { _id: input.shipmentId, status: input.fromStatus };
     if (input.agencyId) filter.agency_id = input.agencyId;
     if (input.agentId) filter.agent_id = input.agentId;
+    // `null` also matches a document that predates the field.
+    if (input.requireNoPendingDeliveryFeeProposal) filter.pending_delivery_fee_proposal_id = null;
 
     const push: Record<string, unknown> = {
       status_history: {

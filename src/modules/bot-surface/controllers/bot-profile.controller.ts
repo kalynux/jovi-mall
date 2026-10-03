@@ -9,7 +9,7 @@ import {
     AddCustomerAddressInput,
     UpdateCustomerAddressInput,
 } from '../../customers/validators/customer-onboarding.validator';
-import { SUPPORTED_LANGUAGES, type Language } from '../../../core/constants/languages';
+import { SUPPORTED_LANGUAGES } from '../../../core/constants/languages';
 import { geoCandidateStore } from '../services/geo-candidate.store';
 import {
     botCallerOf,
@@ -18,7 +18,7 @@ import {
 } from '../middlewares/bot-identity.middleware';
 import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { botChrome } from '../domain/bot-chrome-copy';
-import { languageActionId } from '../domain/bot-action-id';
+import { languageChoiceIntent } from '../domain/language-choice';
 import { unknownBotAction, type ParsedBotAction } from '../domain/bot-action-dispatch';
 import { toBotAddressList, toBotProfileSummary } from '../dto/bot-projections';
 import {
@@ -325,42 +325,14 @@ export { toSavedAddressInput as __toSavedAddressInput };
 // Language, as a tap — `acct:lang` asks, `lang:<code>` answers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Each language, written in itself.
- *
- * ⚠ **NOT copy, and it must never become copy.** These are endonyms: the French option says
- * *Français* to an Arabic speaker and to an English one, because the person who needs it is
- * precisely the person who cannot read the current language. A copy key would give five
- * translations of five names — twenty-five strings, twenty of them wrong to show anybody — and
- * would let a translator turn *Português* into *Portuguese*, which is the one word a Portuguese
- * speaker scanning the list is not looking for.
- *
- * Derived from `SUPPORTED_LANGUAGES` by a lookup rather than by a parallel array, so a sixth
- * language is a compile error here instead of a silently missing row.
- */
-const LANGUAGE_ENDONYM: Readonly<Record<Language, string>> = Object.freeze({
-    en: 'English',
-    fr: 'Français',
-    pt: 'Português',
-    es: 'Español',
-    ar: 'العربية',
-});
-
 /** `acct:lang` — which language should I use? */
 export async function languageChoiceTap(req: Request, res: Response): Promise<void> {
     botCallerOf(req);
     const language = botResponseLanguageOf(req);
 
-    setBotReply(req, {
-        kind: 'choice',
-        text: botChrome('languagePrompt', language),
-        options: SUPPORTED_LANGUAGES.map((code) => ({
-            id: languageActionId(code),
-            label: LANGUAGE_ENDONYM[code],
-        })),
-        listButton: botChrome('chooseListButton', language),
-        sectionTitle: botChrome('chooseSectionTitle', language),
-    });
+    // The endonyms and the rows live in `domain/language-choice.ts`, shared with the onboarding
+    // `language` step, which asks the same question with the same control.
+    setBotReply(req, languageChoiceIntent(botChrome('languagePrompt', language), language));
     sendSuccess(res, { languages: SUPPORTED_LANGUAGES });
 }
 

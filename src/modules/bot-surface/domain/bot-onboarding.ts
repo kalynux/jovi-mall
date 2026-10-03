@@ -54,8 +54,21 @@
  * Service and the Privacy Policy (owner, 2026-09-28). Accepting stamps
  * `users.terms_acceptances[] = { role: 'customer' }` — the same record a vendor's checkbox
  * writes. ⚠ It is `newAccountsOnly`: see `isStepInChecklist`.
+ *
+ * ⭐ **`language` is FIRST, ahead of `phone`** (owner, 2026-10-02): "one of the first things to
+ * ask is the user's language so communication can be properly established". Before it, a
+ * WhatsApp customer — whose channel volunteers no locale — was registered entirely in English.
+ * It is answered by the same `lang:<code>` picker the account menu draws, required, and
+ * `newAccountsOnly` like `terms`: a customer already chatting has a language already.
+ *
+ * ⚠ **It does not displace `phone` on an anonymous Telegram chat.** There is no account to
+ * record a choice on until the contact share creates one, so `anonymousOnboarding` leaves the
+ * step out of that checklist; the account the share creates seeds it `pending`, and it is the
+ * very next question. The anonymous prompt is already in Telegram's `language_code`, which is
+ * a far better guess than WhatsApp's nothing.
  */
 export const BOT_ONBOARDING_STEPS = Object.freeze([
+    Object.freeze({ step: 'language', required: true, newAccountsOnly: true }),
     Object.freeze({ step: 'phone', required: true, newAccountsOnly: false }),
     Object.freeze({ step: 'name', required: true, newAccountsOnly: false }),
     Object.freeze({ step: 'email', required: false, newAccountsOnly: false }),
@@ -98,7 +111,9 @@ export type BotOnboardingInputKind =
     /** A `candidateRef` from `/geo/search` or `/geo/reverse` — never coordinates (GAP-005). */
     | 'geo_candidate'
     /** A single Accept button (`yes:tos`). Nothing is typed. */
-    | 'consent';
+    | 'consent'
+    /** The five-language picker (`lang:<code>`). A typed name is recognised too. */
+    | 'language_choice';
 
 export interface BotOnboardingNext {
     step: BotOnboardingStep;
@@ -119,6 +134,7 @@ export interface BotOnboardingNext {
  */
 const INPUT: Readonly<Record<BotOnboardingStep, { field: string; kind: BotOnboardingInputKind }>> =
     Object.freeze({
+        language: { field: 'language', kind: 'language_choice' },
         phone: { field: 'contact', kind: 'phone_contact' },
         name: { field: 'name', kind: 'text' },
         email: { field: 'email', kind: 'email' },
@@ -308,4 +324,13 @@ export function seedOnboarding(
             ? { step, state: 'provided' as const, at: now }
             : { step, state: 'pending' as const, at: null },
     );
+}
+
+/**
+ * The checklist reported to an anonymous Telegram chat — the pristine one without `language`.
+ * See the ⚠ on `BOT_ONBOARDING_STEPS`: there is no account to hold the answer yet, so the
+ * contact share stays the first and only actionable question.
+ */
+export function anonymousOnboarding(now: Date): BotOnboardingRecord[] {
+    return seedOnboarding([], now).filter((row) => row.step !== 'language');
 }

@@ -220,6 +220,43 @@ const PRODUCT_BUTTON: ButtonDef = {
     urlSuffix: 'products/{{productId}}'
 };
 
+
+// ─── COD limits + delivery-fee proposals (2026-10-02) ───────────────────────
+
+const REVIEW_DELIVERY_FEE_LABEL: Record<Language, string> = {
+    en: 'Review delivery fee',
+    fr: 'Examiner les frais',
+    pt: 'Rever taxa de entrega',
+    es: 'Revisar tarifa',
+    ar: 'مراجعة رسوم التوصيل'
+};
+
+/**
+ * Why auto-redirect held a COD shipment back — substituted into
+ * `shipment.cod_limit_held`'s `{{limitReason}}` by the handler, in the vendor's language.
+ *
+ * ⚠ **The agency case names NO figure, deliberately.** The agency's exposure is the sum of
+ * every vendor's cash it holds, so quoting it would tell one vendor about the others' volume
+ * on a channel (email, WhatsApp) the vendor may forward. The vendor-terms case quotes only the
+ * vendor's OWN cap and the vendor's OWN cash at that agency.
+ */
+export const VENDOR_COD_HOLD_REASON = {
+    agency_limit: {
+        en: 'the agency has reached its cash-on-delivery limit',
+        fr: 'l\'agence a atteint sa limite de paiement à la livraison',
+        pt: 'a agência atingiu o seu limite de pagamento na entrega',
+        es: 'la agencia alcanzó su límite de contra reembolso',
+        ar: 'الوكالة بلغت حدّها للدفع عند الاستلام'
+    },
+    vendor_terms: {
+        en: 'it would exceed your own limit of {{currency}} {{capFormatted}} per agency (it already holds {{currency}} {{heldFormatted}} of your cash)',
+        fr: 'cela dépasserait votre propre plafond de {{currency}} {{capFormatted}} par agence (elle détient déjà {{currency}} {{heldFormatted}} de votre argent)',
+        pt: 'excederia o seu próprio limite de {{currency}} {{capFormatted}} por agência (ela já detém {{currency}} {{heldFormatted}} do seu dinheiro)',
+        es: 'superaría tu propio límite de {{currency}} {{capFormatted}} por agencia (ya tiene {{currency}} {{heldFormatted}} de tu dinero)',
+        ar: 'ذلك سيتجاوز حدّك البالغ {{currency}} {{capFormatted}} لكل وكالة (لديها بالفعل {{currency}} {{heldFormatted}} من أموالك)'
+    }
+} as const;
+
 // ─── Catalog ─────────────────────────────────────────────────────────────────
 
 export const NOTIFICATION_CATALOG: Record<NotificationType, SituationMessages> = {
@@ -657,6 +694,72 @@ export const NOTIFICATION_CATALOG: Record<NotificationType, SituationMessages> =
             }
         },
         button: PRODUCT_BUTTON
+    },
+
+    // ─── COD limits (2026-10-02) ─────────────────────────────────────────────
+    // Auto-redirect held a COD shipment back. The force-push ("dispatch anyway") and the
+    // change-agency actions both live on the order detail, hence orders/{{orderId}}.
+    'shipment.cod_limit_held': {
+        base: {
+            en: { subject: 'COD shipment held back', body: 'Order #{{orderNumber}}: a cash-on-delivery shipment of {{currency}} {{amountFormatted}} was not sent to {{agencyName}} because {{limitReason}}. Open the order to dispatch it anyway or choose another agency.' },
+            fr: { subject: 'Expédition à paiement à la livraison en attente', body: 'Commande n°{{orderNumber}} : une expédition à paiement à la livraison de {{currency}} {{amountFormatted}} n\'a pas été envoyée à {{agencyName}} car {{limitReason}}. Ouvrez la commande pour l\'expédier quand même ou choisir une autre agence.' },
+            pt: { subject: 'Envio com pagamento na entrega retido', body: 'Pedido nº{{orderNumber}}: um envio com pagamento na entrega de {{currency}} {{amountFormatted}} não foi enviado para {{agencyName}} porque {{limitReason}}. Abra o pedido para o despachar mesmo assim ou escolher outra agência.' },
+            es: { subject: 'Envío contra reembolso retenido', body: 'Pedido n.º{{orderNumber}}: un envío contra reembolso de {{currency}} {{amountFormatted}} no se envió a {{agencyName}} porque {{limitReason}}. Abre el pedido para despacharlo de todos modos o elegir otra agencia.' },
+            ar: { subject: 'تم تعليق شحنة الدفع عند الاستلام', body: 'الطلب رقم {{orderNumber}}: لم تُرسل شحنة دفع عند الاستلام بقيمة {{currency}} {{amountFormatted}} إلى {{agencyName}} لأن {{limitReason}}. افتح الطلب لإرسالها على أي حال أو لاختيار وكالة أخرى.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_shipment_cod_limit_held', bodyParams: ['{{orderNumber}}', '{{currency}}', '{{amountFormatted}}', '{{agencyName}}', '{{limitReason}}'] }
+        },
+        button: { type: 'url', label: VIEW_ORDER_LABEL, urlSuffix: 'orders/{{orderId}}' }
+    },
+
+    // ─── Delivery-fee proposals (2026-10-02) ──────────────────────────────────
+    // Named after the AGENCY even when its agent raised it: the vendor contracts with the
+    // agency, which is accountable for the fee. Approve / reject live on the order detail.
+    'delivery_fee_proposal.received': {
+        base: {
+            en: { subject: 'Delivery fee change to review', body: '{{agencyName}} proposes a delivery fee of {{currency}} {{proposedFeeFormatted}} instead of {{currency}} {{feeBeforeFormatted}} for order #{{orderNumber}}. Approve or reject it from the order — pickup waits for your answer.' },
+            fr: { subject: 'Modification des frais de livraison à examiner', body: '{{agencyName}} propose des frais de livraison de {{currency}} {{proposedFeeFormatted}} au lieu de {{currency}} {{feeBeforeFormatted}} pour la commande n°{{orderNumber}}. Acceptez ou refusez depuis la commande — l\'enlèvement attend votre réponse.' },
+            pt: { subject: 'Alteração da taxa de entrega para rever', body: '{{agencyName}} propõe uma taxa de entrega de {{currency}} {{proposedFeeFormatted}} em vez de {{currency}} {{feeBeforeFormatted}} para o pedido nº{{orderNumber}}. Aprove ou recuse a partir do pedido — a recolha aguarda a sua resposta.' },
+            es: { subject: 'Cambio de tarifa de envío por revisar', body: '{{agencyName}} propone una tarifa de envío de {{currency}} {{proposedFeeFormatted}} en lugar de {{currency}} {{feeBeforeFormatted}} para el pedido n.º{{orderNumber}}. Apruébala o recházala desde el pedido — la recogida espera tu respuesta.' },
+            ar: { subject: 'تعديل رسوم التوصيل بانتظار مراجعتك', body: 'تقترح {{agencyName}} رسوم توصيل قدرها {{currency}} {{proposedFeeFormatted}} بدلًا من {{currency}} {{feeBeforeFormatted}} للطلب رقم {{orderNumber}}. وافق أو ارفض من صفحة الطلب — الاستلام بانتظار ردّك.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_delivery_fee_proposal_received', bodyParams: ['{{agencyName}}', '{{currency}}', '{{proposedFeeFormatted}}', '{{feeBeforeFormatted}}', '{{orderNumber}}'] }
+        },
+        button: { type: 'url', label: REVIEW_DELIVERY_FEE_LABEL, urlSuffix: 'orders/{{orderId}}' }
+    },
+
+    'delivery_fee_proposal.edited': {
+        base: {
+            en: { subject: 'Proposed delivery fee changed', body: '{{agencyName}} changed its proposed delivery fee for order #{{orderNumber}} to {{currency}} {{proposedFeeFormatted}} (it was {{currency}} {{previousFeeFormatted}}). Review the new amount from the order.' },
+            fr: { subject: 'Frais de livraison proposés modifiés', body: '{{agencyName}} a modifié les frais de livraison proposés pour la commande n°{{orderNumber}} : {{currency}} {{proposedFeeFormatted}} (au lieu de {{currency}} {{previousFeeFormatted}}). Examinez le nouveau montant depuis la commande.' },
+            pt: { subject: 'Taxa de entrega proposta alterada', body: '{{agencyName}} alterou a taxa de entrega proposta para o pedido nº{{orderNumber}} para {{currency}} {{proposedFeeFormatted}} (era {{currency}} {{previousFeeFormatted}}). Reveja o novo valor a partir do pedido.' },
+            es: { subject: 'Tarifa de envío propuesta modificada', body: '{{agencyName}} cambió la tarifa de envío propuesta para el pedido n.º{{orderNumber}} a {{currency}} {{proposedFeeFormatted}} (era {{currency}} {{previousFeeFormatted}}). Revisa el nuevo importe desde el pedido.' },
+            ar: { subject: 'تم تعديل رسوم التوصيل المقترحة', body: 'عدّلت {{agencyName}} رسوم التوصيل المقترحة للطلب رقم {{orderNumber}} إلى {{currency}} {{proposedFeeFormatted}} (كانت {{currency}} {{previousFeeFormatted}}). راجع المبلغ الجديد من صفحة الطلب.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_delivery_fee_proposal_edited', bodyParams: ['{{agencyName}}', '{{orderNumber}}', '{{currency}}', '{{proposedFeeFormatted}}', '{{previousFeeFormatted}}'] }
+        },
+        button: { type: 'url', label: REVIEW_DELIVERY_FEE_LABEL, urlSuffix: 'orders/{{orderId}}' }
+    },
+
+    'delivery_fee_proposal.withdrawn': {
+        base: {
+            en: { subject: 'Delivery fee proposal withdrawn', body: 'The delivery fee change proposed by {{agencyName}} for order #{{orderNumber}} was withdrawn. Nothing for you to answer; the current delivery fee is unchanged.' },
+            fr: { subject: 'Proposition de frais de livraison retirée', body: 'La modification des frais de livraison proposée par {{agencyName}} pour la commande n°{{orderNumber}} a été retirée. Vous n\'avez rien à répondre ; les frais de livraison actuels restent inchangés.' },
+            pt: { subject: 'Proposta de taxa de entrega retirada', body: 'A alteração da taxa de entrega proposta por {{agencyName}} para o pedido nº{{orderNumber}} foi retirada. Não precisa de responder; a taxa de entrega atual mantém-se.' },
+            es: { subject: 'Propuesta de tarifa de envío retirada', body: 'El cambio de tarifa de envío propuesto por {{agencyName}} para el pedido n.º{{orderNumber}} fue retirado. No tienes nada que responder; la tarifa de envío actual no cambia.' },
+            ar: { subject: 'تم سحب اقتراح رسوم التوصيل', body: 'تم سحب تعديل رسوم التوصيل الذي اقترحته {{agencyName}} للطلب رقم {{orderNumber}}. لا حاجة لأي ردّ؛ تبقى رسوم التوصيل الحالية دون تغيير.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_delivery_fee_proposal_withdrawn', bodyParams: ['{{agencyName}}', '{{orderNumber}}'] }
+        },
+        button: { type: 'url', label: VIEW_ORDER_LABEL, urlSuffix: 'orders/{{orderId}}' }
     }
 };
 

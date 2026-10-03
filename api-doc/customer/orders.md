@@ -109,6 +109,7 @@ transaction. Build the provider choice from `GET /api/payments/options`; see
 | 400 | `VALIDATION_ERROR` | Malformed body — including sending **both** `deliveryAddressId` and `deliveryAddress`, which is refused rather than resolved. |
 | 422 | `ORDER_NO_DELIVERY_AGENCY` | A physical product has no resolvable delivery agency. |
 | 422 | `COD_NOT_AVAILABLE_FOR_DIGITAL` | `paymentMethod: "cash_on_delivery"` on a digital cart. |
+| 422 | `COD_VENDOR_NOT_ACCEPTED` | **New 2026-10-02.** A shop on the order switched cash on delivery off in its COD terms. `details: { vendorId }`. Checked **before** the agency rules. Offer online payment for that shop's items — see [FRONTEND-CHANGELOG-cod-limits-and-delivery-fees.md](./FRONTEND-CHANGELOG-cod-limits-and-delivery-fees.md). ⚠ Nothing on the web storefront predicts it before checkout. |
 | 422 | `COD_AGENCY_NOT_SUPPORTED` | A delivery agency on the order doesn't handle COD. `details: { agencyId, agencyName }`. |
 | 422 | `COD_ORDER_AMOUNT_EXCEEDS_LIMIT` | One vendor-order's total exceeds an agency's COD cap. `details: { agencyId, agencyName, maxOrderAmount, orderTotal }`. |
 | 422 | `ORDER_DELIVERY_ADDRESS_REQUIRED` | **New.** A physical checkout resolved no geocoded drop-off. `details.reason` is `no_delivery_address` or `selected_address_not_geocoded`. |
@@ -595,8 +596,9 @@ Choosing `paymentMethod: "cash_on_delivery"` at checkout means the customer pays
 agent in cash at handoff** — one payment per shipment. No call to `/api/payments/initiate` is ever
 made for a COD checkout.
 
-**Eligibility** (validated at checkout): physical carts only, and every delivery agency involved
-must support COD (some also cap the per-order amount).
+**Eligibility** (validated at checkout): physical carts only, **every shop on the order accepts
+cash on delivery** (since 2026-10-02 a shop may switch it off — `422 COD_VENDOR_NOT_ACCEPTED`),
+and every delivery agency involved must support COD (some also cap the per-order amount).
 
 **Lifecycle of a COD order:**
 

@@ -7,6 +7,7 @@ import {
     UpdateFulfillmentStatusSchema,
     BulkUpdateFulfillmentStatusSchema,
     BulkDispatchToAgencySchema,
+    DispatchToAgencySchema,
     UpdateDeliveryAgencySchema,
     RevokeEntitlementSchema,
     RestoreEntitlementSchema,
@@ -152,9 +153,12 @@ export class VendorOrderController {
     static bulkDispatchToAgency = asyncHandler(async (req: Request, res: Response): Promise<void> => {
         const vendorId = req.auth!.role_entity._id.toString();
 
-        const { orderIds } = BulkDispatchToAgencySchema.parse(req.body);
+        const { orderIds, force } = BulkDispatchToAgencySchema.parse(req.body);
 
-        const result = await vendorOrderService.bulkDispatchToAgency(orderIds, vendorId);
+        const result = await vendorOrderService.bulkDispatchToAgency(orderIds, vendorId, {
+            force: force === true,
+            userId: req.auth!.user.id,
+        });
 
         res.json({
             success: true,
@@ -176,7 +180,12 @@ export class VendorOrderController {
         const vendorId = req.auth!.role_entity._id.toString();
         const orderId = req.params.id;
 
-        const result = await vendorOrderService.dispatchToAgency(orderId, vendorId);
+        const { force } = DispatchToAgencySchema.parse(req.body ?? {});
+
+        const result = await vendorOrderService.dispatchToAgency(orderId, vendorId, {
+            force: force === true,
+            userId: req.auth!.user.id,
+        });
 
         res.json({
             success: true,
@@ -289,13 +298,14 @@ export class VendorOrderController {
         const orderId = req.params.id;
 
         // Validate request body
-        const { itemId, deliveryAgencyId } = UpdateDeliveryAgencySchema.parse(req.body);
+        const { itemId, deliveryAgencyId, force } = UpdateDeliveryAgencySchema.parse(req.body);
 
         const order = await vendorOrderService.updateDeliveryAgency(
             orderId,
             vendorId,
             itemId,
-            deliveryAgencyId
+            deliveryAgencyId,
+            { force: force === true, userId: req.auth!.user.id }
         );
 
         res.json({

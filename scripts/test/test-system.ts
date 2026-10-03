@@ -1922,8 +1922,12 @@ assert('MIGRATIONS covers every migrate:*/backfill:* binding, and every row has 
 // above (though it builds before it drops, so the constraint never lapses), and it sits above the
 // catch-all for a sharper reason than ordering — the catch-all would build the partial index and
 // never drop `email_1`, the half that actually fixes it.
-assert('all twenty-five are registered — the count is the count on disk', () =>
-    MIGRATIONS.length === 25);
+// ⚠ 25 -> 26 with `migrate:delivery-fee-proposal-indexes` (2026-10-02): the new
+// `delivery_fee_proposals` collection, whose partial unique index (one PENDING proposal per
+// shipment) is the independent guarantee behind the shipment-pointer CAS. A named index build,
+// above the catch-all with the others.
+assert('all twenty-six are registered — the count is the count on disk', () =>
+    MIGRATIONS.length === 26);
 
 // The catch-all is LAST, and unlike the general index-after-data rule below this is a
 // dependency on the OTHER INDEX MIGRATIONS: it builds only what the declared-vs-live diff

@@ -1,5 +1,11 @@
 /**
- * Test: the agent's COD pool — plan × KYC verdict × administrator pin (2026-09-21).
+ * Test: the agent's COD pool — KYC verdict × administrator pin × platform default.
+ *
+ * ⚠ AMENDED 2026-10-02 (owner decision): the plan no longer sets the pool. Every verified
+ * agent without a pin gets AGENT_CONFIG.COD_POOL_DEFAULT (500 000), whatever their plan,
+ * sourced `default` (which replaced `plan`). The plan-event consumer is deleted. The
+ * sections below were rewritten to that rule; the 2026-09-21 notes that follow describe
+ * the shape, with "plan" now read as "the default".
  *
  * Follows the scripts/test convention (plain ts-node, hand-rolled asserts, no
  * framework). DB-free.
@@ -30,7 +36,7 @@
  *
  * Run: npm run test:agent-cod-pool
  */
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import {
   clampCodPool,
@@ -77,8 +83,7 @@ const read = (rel: string): string => readFileSync(join(SRC, rel), 'utf8');
 const stripComments = (s: string): string =>
   s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
-const FREE = { planCode: 'agent_free', maxCodPool: 500_000 };
-const PLUS = { planCode: 'agent_plus', maxCodPool: 1_000_000 };
+const DEFAULT_POOL = AGENT_CONFIG.COD_POOL_DEFAULT;
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -109,7 +114,7 @@ const PIN = (amount: number) => ({
  * compare-and-set key exactly as the Mongo filter does, and can be told to lose the
  * race a number of times first.
  */
-function harness(initial: IDeliveryAgent, plan: { planCode: string | null; maxCodPool: number }) {
+function harness(initial: IDeliveryAgent) {
   let current = initial;
   let loseNext = 0;
   const writes: Array<Record<string, unknown>> = [];
@@ -142,15 +147,12 @@ function harness(initial: IDeliveryAgent, plan: { planCode: string | null; maxCo
     },
   };
   const contracts = { listAllocating: async () => [] };
-  const state = { plan };
-  const entitlements = { resolveAgentCodPool: async () => ({ ...state.plan, assigned: true }) };
-  const service = new AgentCodPoolService(agents as never, contracts as never, entitlements as never);
+  const service = new AgentCodPoolService(agents as never, contracts as never);
   return {
     service,
     writes,
     get agent() { return current; },
     setAgent(next: IDeliveryAgent) { current = next; },
-    setPlan(next: { planCode: string | null; maxCodPool: number }) { state.plan = next; },
     loseRaces(n: number) { loseNext = n; },
   };
 }
@@ -170,38 +172,47 @@ function plainCod(agent: IDeliveryAgent): Record<string, unknown> {
 
 async function main(): Promise<void> {
   // ═══ 1 · The pure rule ═════════════════════════════════════════════════════
-  console.log('\n── 1 · The rule: KYC, then the pin, then the plan ─────────────────────\n');
+  console.log('\n── 1 · The rule: KYC, then the pin, then the platform default ─────────\n');
 
-  await assert('an UNVERIFIED agent\'s ceiling is 0 whatever the plan says', () => {
-    const c = resolveCodPoolCeiling({ kycStatus: 'pending', override: null, plan: PLUS });
+  await assert('the platform default is the owner\'s number: 500 000', () => DEFAULT_POOL === 500_000);
+
+  await assert('an UNVERIFIED agent\'s ceiling is 0', () => {
+    const c = resolveCodPoolCeiling({ kycStatus: 'pending', override: null });
     return c.amount === AGENT_CONFIG.COD_THRESHOLD_MIN && c.source === 'not_verified' && c.planCode === null;
   });
 
   await assert('…and every non-verified status counts: unverified, pending, rejected, absent', () =>
     ['unverified', 'pending', 'rejected', undefined, null].every(
-      (s) => resolveCodPoolCeiling({ kycStatus: s, override: null, plan: FREE }).source === 'not_verified'
+      (s) => resolveCodPoolCeiling({ kycStatus: s, override: null }).source === 'not_verified'
     ));
 
   await assert('the pin does NOT outrank KYC — an unverified agent with a pin still gets 0', () => {
-    const c = resolveCodPoolCeiling({ kycStatus: 'rejected', override: { amount: 900_000 }, plan: FREE });
+    const c = resolveCodPoolCeiling({ kycStatus: 'rejected', override: { amount: 900_000 } });
     return c.amount === 0 && c.source === 'not_verified';
   });
 
-  await assert('a VERIFIED agent on the free tier gets 500 000, sourced to the plan', () => {
-    const c = resolveCodPoolCeiling({ kycStatus: 'verified', override: null, plan: FREE });
-    return c.amount === 500_000 && c.source === 'plan' && c.planCode === 'agent_free';
+  await assert('a VERIFIED agent gets 500 000, sourced `default`, with no plan code — whatever their plan', () => {
+    const c = resolveCodPoolCeiling({ kycStatus: 'verified', override: null });
+    return c.amount === 500_000 && c.source === 'default' && c.planCode === null;
   });
 
-  await assert('a pin outranks the plan ABOVE it (a trusted agent on the free tier)', () =>
-    resolveCodPoolCeiling({ kycStatus: 'verified', override: { amount: 1_500_000 }, plan: FREE }).amount === 1_500_000);
+  await assert('the rule takes NO plan input any more (the plan cannot move the pool)', () => {
+    const src = stripComments(read('modules/agents/domain/services/agent-cod-pool.ts'));
+    const start = src.indexOf('export interface CodPoolInputs');
+    const body = src.slice(start, src.indexOf('}', start));
+    return start > -1 && !body.includes('plan') && !src.includes('maxCodPool');
+  });
 
-  await assert('…and BELOW it (a risky agent on a paid tier) — it is neither a floor nor a ceiling', () => {
-    const c = resolveCodPoolCeiling({ kycStatus: 'verified', override: { amount: 100_000 }, plan: PLUS });
+  await assert('a pin outranks the default ABOVE it (a trusted agent)', () =>
+    resolveCodPoolCeiling({ kycStatus: 'verified', override: { amount: 1_500_000 } }).amount === 1_500_000);
+
+  await assert('…and BELOW it (a risky agent) — it is neither a floor nor a ceiling', () => {
+    const c = resolveCodPoolCeiling({ kycStatus: 'verified', override: { amount: 100_000 } });
     return c.amount === 100_000 && c.source === 'override' && c.planCode === null;
   });
 
-  await assert('a plan value above the platform maximum is CLAMPED, not trusted', () =>
-    resolveCodPoolCeiling({ kycStatus: 'verified', override: null, plan: { planCode: 'x', maxCodPool: 99_000_000 } })
+  await assert('a pin above the platform maximum is CLAMPED, not trusted', () =>
+    resolveCodPoolCeiling({ kycStatus: 'verified', override: { amount: 99_000_000 } })
       .amount === AGENT_CONFIG.COD_THRESHOLD_MAX);
 
   await assert('clampCodPool floors fractions and refuses NaN to the minimum', () =>
@@ -210,36 +221,46 @@ async function main(): Promise<void> {
 
   console.log('\n── 1b · The agent\'s own lower choice ──────────────────────────────────\n');
 
-  const underFree = { maxThreshold: 200_000, ceiling: 500_000, source: 'plan' as const };
+  const underDefault = { maxThreshold: 200_000, ceiling: 500_000, source: 'default' as const };
 
-  await assert('the agent\'s choice SURVIVES a re-sync to the same ceiling (a plan renewal)', () =>
-    nextCodPoolValue(underFree, { amount: 500_000, source: 'plan', planCode: 'agent_free' }) === 200_000);
+  await assert('the agent\'s choice SURVIVES a re-sync to the same ceiling (the nightly reconcile)', () =>
+    nextCodPoolValue(underDefault, { amount: 500_000, source: 'default', planCode: null }) === 200_000);
 
-  await assert('…and is RESET by a new ceiling amount (an upgrade)', () =>
-    nextCodPoolValue(underFree, { amount: 1_000_000, source: 'plan', planCode: 'agent_plus' }) === 1_000_000);
+  await assert('…and is RESET by a new ceiling amount (a changed default)', () =>
+    nextCodPoolValue(underDefault, { amount: 1_000_000, source: 'default', planCode: null }) === 1_000_000);
 
-  await assert('…and by the same amount from a new SOURCE (a pin equal to the plan is still a new ceiling)', () =>
-    nextCodPoolValue(underFree, { amount: 500_000, source: 'override', planCode: null }) === 500_000);
+  await assert('…and by the same amount from a new SOURCE (a pin equal to the default is still a new ceiling)', () =>
+    nextCodPoolValue(underDefault, { amount: 500_000, source: 'override', planCode: null }) === 500_000);
 
   await assert('a revoked verdict takes the pool to 0 regardless of the choice', () =>
-    nextCodPoolValue(underFree, { amount: 0, source: 'not_verified', planCode: null }) === 0);
+    nextCodPoolValue(underDefault, { amount: 0, source: 'not_verified', planCode: null }) === 0);
 
-  await assert('codPoolInSync is false when only the plan CODE moved (same value, different tier)', () =>
-    !codPoolInSync({ maxThreshold: 500_000, ceiling: 500_000, source: 'plan' },
-      { amount: 500_000, source: 'plan', planCode: 'agent_plus' }, 'agent_free'));
+  await assert('codPoolInSync is false while a stale plan CODE is still stored (it is rewritten to null)', () =>
+    !codPoolInSync({ maxThreshold: 500_000, ceiling: 500_000, source: 'default' },
+      { amount: 500_000, source: 'default', planCode: null }, 'agent_free'));
 
   await assert('a brand-new agent document is ALREADY in sync (0, not_verified) — no write on first read', () => {
     const fresh = agentDoc({}, 'unverified');
     const stored = storedCodPoolOf(fresh);
-    return codPoolInSync(stored, resolveCodPoolCeiling({ kycStatus: 'unverified', override: null, plan: FREE }), null);
+    return codPoolInSync(stored, resolveCodPoolCeiling({ kycStatus: 'unverified', override: null }), null);
   });
 
-  await assert('a LEGACY verified agent (no provenance fields) counts as out of sync and lands on the plan', () => {
+  await assert('a LEGACY verified agent (no provenance fields) counts as out of sync and lands on the default', () => {
     const legacy = agentDoc({ max_threshold: 300_000 }, 'verified');
     const stored = storedCodPoolOf(legacy);
-    const next = resolveCodPoolCeiling({ kycStatus: 'verified', override: null, plan: FREE });
+    const next = resolveCodPoolCeiling({ kycStatus: 'verified', override: null });
     return stored.source === 'not_verified' && nextCodPoolValue(stored, next) === 500_000;
   });
+
+  await assert('an agent synced under the RETIRED plan rule (source `plan`, Plus 1 000 000) moves to the default', () => {
+    const old = agentDoc({ max_threshold: 1_000_000, pool_ceiling: 1_000_000, pool_source: 'plan', pool_plan_code: 'agent_plus' }, 'verified');
+    const stored = storedCodPoolOf(old);
+    const next = resolveCodPoolCeiling({ kycStatus: 'verified', override: null });
+    return !codPoolInSync(stored, next, 'agent_plus') && nextCodPoolValue(stored, next) === 500_000;
+  });
+
+  await assert('…and that legacy document still VALIDATES (the schema tolerates the retired `plan`)', () =>
+    agentDoc({ pool_source: 'plan' }, 'verified').validateSync() === undefined);
 
   await assert('describeCodPool reports selfLimited, and never the pin\'s reason or author', () => {
     const view = describeCodPool(agentDoc({
@@ -254,34 +275,29 @@ async function main(): Promise<void> {
   console.log('\n── 2 · AgentCodPoolService.sync against stub repositories ─────────────\n');
 
   {
-    const h = harness(agentDoc({}, 'unverified'), FREE);
+    const h = harness(agentDoc({}, 'unverified'));
     const r = await h.service.sync('a', 'reconcile');
     await assert('an unverified agent already at 0 is read and NOT written', () =>
       r?.changed === false && h.writes.length === 0);
   }
 
   {
-    const h = harness(agentDoc({}, 'unverified'), FREE);
+    const h = harness(agentDoc({}, 'unverified'));
     h.setAgent(agentDoc(plainCod(h.agent), 'verified'));
     const r = await h.service.sync('a', 'kyc_verdict');
-    await assert('THE OWNER\'S CASE — verification opens the pool at the plan value automatically', () =>
+    await assert('THE OWNER\'S CASE — verification opens the pool at the 500 000 default automatically', () =>
       r?.changed === true && r.to === 500_000 && h.agent.cod.max_threshold === 500_000
-      && h.agent.cod.pool_source === 'plan' && h.agent.cod.pool_plan_code === 'agent_free');
+      && h.agent.cod.pool_source === 'default' && h.agent.cod.pool_plan_code === null);
 
     const again = await h.service.sync('a', 'reconcile');
     await assert('…and a second sync is a no-op (idempotent — the reconcile writes nothing)', () =>
       again?.changed === false && h.writes.length === 1);
 
-    // The agent lowers their pool; a plan renewal re-syncs with the same ceiling.
+    // The agent lowers their pool; the nightly reconcile re-syncs with the same ceiling.
     h.setAgent(agentDoc({ ...plainCod(h.agent), max_threshold: 150_000 }, 'verified'));
-    await h.service.sync('a', 'plan_activated');
-    await assert('a plan RENEWAL leaves the agent\'s lower choice alone', () =>
+    await h.service.sync('a', 'reconcile');
+    await assert('a same-ceiling re-sync leaves the agent\'s lower choice alone', () =>
       h.agent.cod.max_threshold === 150_000);
-
-    h.setPlan(PLUS);
-    await h.service.sync('a', 'plan_activated');
-    await assert('an UPGRADE resets the pool to the new plan\'s value', () =>
-      h.agent.cod.max_threshold === 1_000_000 && h.agent.cod.pool_plan_code === 'agent_plus');
 
     h.setAgent(agentDoc(plainCod(h.agent), 'rejected'));
     await h.service.sync('a', 'kyc_verdict');
@@ -290,9 +306,9 @@ async function main(): Promise<void> {
   }
 
   {
-    const h = harness(agentDoc({ pool_override: PIN(800_000) }, 'verified'), FREE);
+    const h = harness(agentDoc({ pool_override: PIN(800_000) }, 'verified'));
     await h.service.sync('a', 'reconcile');
-    await assert('a pin is honoured by the sync (800 000 on the 500 000 free tier)', () =>
+    await assert('a pin is honoured by the sync (800 000 over the 500 000 default)', () =>
       h.agent.cod.max_threshold === 800_000 && h.agent.cod.pool_source === 'override');
 
     await assert('…and the sync NEVER writes the pin itself', () =>
@@ -310,13 +326,13 @@ async function main(): Promise<void> {
   }
 
   {
-    const h = harness(agentDoc({}, 'verified'), FREE);
+    const h = harness(agentDoc({}, 'verified'));
     h.loseRaces(2);
     const r = await h.service.sync('a', 'reconcile');
     await assert('a sync that loses its compare-and-set re-reads and succeeds on a later attempt', () =>
       r?.to === 500_000 && h.agent.cod.max_threshold === 500_000);
 
-    const h2 = harness(agentDoc({}, 'verified'), FREE);
+    const h2 = harness(agentDoc({}, 'verified'));
     h2.loseRaces(10);
     const r2 = await h2.service.sync('a', 'reconcile');
     await assert('…and one that loses EVERY attempt gives up with null rather than looping', () =>
@@ -431,9 +447,9 @@ async function main(): Promise<void> {
 
   await assert('the admin pin requires a reason, in both directions', () =>
     !parses(SetAgentThresholdSchema, { maxThreshold: 100_000 })
-    && parses(SetAgentThresholdSchema, { maxThreshold: null, reason: 'back to the plan' }));
+    && parses(SetAgentThresholdSchema, { maxThreshold: null, reason: 'back to the default' }));
 
-  await assert('a plan can carry max_cod_pool, and it may be null', () =>
+  await assert('a plan can still CARRY max_cod_pool (dormant since 2026-10-02), and it may be null', () =>
     parses(CreatePlanSchema, { role: 'agent', code: 'agent_x', name: 'Agent X', price: 0, term_days: null, credit_allowance: 0, max_cod_pool: 750_000 })
     && parses(CreatePlanSchema, { role: 'agent', code: 'agent_y', name: 'Agent Y', price: 0, term_days: null, credit_allowance: 0, max_cod_pool: null }));
 
@@ -448,29 +464,19 @@ async function main(): Promise<void> {
   });
 
   const lifecycle = stripComments(read('lifecycle.ts'));
-  await assert('lifecycle registers the consumer AND starts the reconcile worker — both halves', () =>
-    lifecycle.includes('registerAgentCodPoolConsumer()') && lifecycle.includes('agentCodPoolReconcileWorker.start()'));
+  await assert('lifecycle starts the reconcile worker, and registers NO plan consumer any more', () =>
+    lifecycle.includes('agentCodPoolReconcileWorker.start()') && !lifecycle.includes('registerAgentCodPoolConsumer'));
 
-  const consumer = stripComments(read('modules/agents/events/agent-plan-cod-pool.consumer.ts'));
-  await assert('the consumer listens to plan.activated AND pricing_plan.updated', () =>
-    consumer.includes("'plan.activated'") && consumer.includes("'pricing_plan.updated'"));
-
-  const planService = stripComments(read('modules/billing/services/pricing-plan.service.ts'));
-  await assert('an in-place plan edit of max_cod_pool publishes pricing_plan.updated', () =>
-    planService.includes("'pricing_plan.updated'") && planService.includes("'max_cod_pool'"));
+  await assert('the plan-event consumer file is GONE (plan events no longer move the pool)', () =>
+    !existsSync(join(SRC, 'modules', 'agents', 'events', 'agent-plan-cod-pool.consumer.ts')));
 
   const entitlement = stripComments(read('modules/billing/services/entitlement.service.ts'));
-  await assert('the pool\'s plan read NEVER mints a plan (findActivePlanWithoutCreating, not getActivePlan)', () => {
-    const start = entitlement.indexOf('async resolveAgentCodPool');
-    const body = entitlement.slice(start, entitlement.indexOf('async getAdminEntitlements'));
-    return start > -1 && body.includes('findActivePlanWithoutCreating') && !body.includes('getActivePlan(');
-  });
+  await assert('the pool\'s plan read is DELETED (nothing resolves a plan for the pool)', () =>
+    !entitlement.includes('resolveAgentCodPool'));
 
-  await assert('…and an unset plan value is ZERO, never unlimited', () => {
-    const start = entitlement.indexOf('async resolveAgentCodPool');
-    const body = entitlement.slice(start, entitlement.indexOf('async getAdminEntitlements'));
-    return (body.match(/max_cod_pool \?\? 0/g) ?? []).length === 2;
-  });
+  const poolService = stripComments(read('modules/agents/domain/services/agent-cod-pool.service.ts'));
+  await assert('AgentCodPoolService no longer depends on billing at all', () =>
+    !poolService.includes('entitlement') && !poolService.includes("'plan_activated'"));
 
   const repo = stripComments(read('modules/agents/repositories/agent.repository.ts'));
   await assert('writeCodPool is the ONLY writer of cod.max_threshold, and it is a compare-and-set', () => {
@@ -495,18 +501,6 @@ async function main(): Promise<void> {
   await assert('the agent has a write: PUT /api/agent/cod/pool', () =>
     routes.includes("router.put('/cod/pool', AgentCodController.setPool)"));
 
-  const subscriberPlan = stripComments(read('modules/billing/services/subscriber-plan.service.ts'));
-  await assert('plan.activated carries maxCodPool', () => subscriberPlan.includes('maxCodPool: plan.max_cod_pool'));
-
-  const publicDto = stripComments(read('modules/billing/dto/public-plan.dto.ts'));
-  await assert('the public plan DTO publishes max_cod_pool (publication is a decision there)', () =>
-    publicDto.includes('max_cod_pool: plan.max_cod_pool ?? null'));
-
-  const seed = readFileSync(join(ROOT, 'scripts', 'seed', 'seed-pricing-plans.ts'), 'utf8');
-  await assert('the seed carries the owner\'s numbers: Free 500 000 · Plus 1 000 000 · Pro 2 000 000', () =>
-    /code: freePlanCode\('agent'\)[\s\S]*?max_cod_pool: 500_000/.test(seed)
-    && /code: 'agent_plus'[\s\S]*?max_cod_pool: 1_000_000/.test(seed)
-    && /code: 'agent_pro'[\s\S]*?max_cod_pool: 2_000_000/.test(seed));
 
   const exposureSrc = stripComments(read('modules/cod/services/cod-exposure.service.ts'));
   await assert('the exposure gate caps the slice at the pool', () =>

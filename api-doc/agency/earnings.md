@@ -58,6 +58,10 @@ takes their contracted cut of it (`fee_split` on their contract with this agency
 agency's entry is **the fee minus the agent's cut**, and the agent's own entry is the remainder.
 The vendor pays the same total either way.
 
+Under a **`monthly_salary`** contract (2026-10-02) the agent's cut is `0`: you pay the agent's
+salary yourself, off-platform, so **your entry is the whole fee** (plus the COD handling fee on a
+cash delivery) and no agent entry is written. The platform does not track the salary.
+
 **You can see the figure before it lands.** Every row on
 [`GET /api/agency/shipments`](./shipments.md#money) and the shipment detail carries an
 `agencyEarning` block — `amount` already net of the agent's cut, itemised into `deliveryFee`,

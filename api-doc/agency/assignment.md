@@ -49,6 +49,7 @@ to the agency's own shipments; a shipment outside scope is `404 SHIPMENT_NOT_FOU
 ## Endpoints
 
 - [`PATCH /api/agency/shipments/:id/assign-agent`](#offer) — offer a specific agent (manual pick)
+- ⭐ [`POST /api/agency/shipments/assign-agent`](#bulk-offer) — offer **one** agent up to **10** shipments at once (2026-10-03)
 - [`POST /api/agency/shipments/:id/auto-assign`](#auto) — let the system pick the best agent now
 - [`GET /api/agency/shipments/:id/assignment-candidates`](#candidates) — preview the ranked agents
 - [`POST /api/agency/shipments/:id/offer/cancel`](#cancel) — withdraw the live offer
@@ -104,6 +105,48 @@ agent is **not** refused prepaid shipments.
 > gate behaves the same on contracts written before that.
 
 <a name="auto"></a>
+### Forcing an offer: the cash limit and the coverage region (2026-10-02)
+
+`PATCH …/assign-agent` and `POST …/reassign` (with a named `agentId`) accept an optional
+`"force": true`. It waives exactly **two** refusals:
+
+| Refusal waived | Code | Since |
+|---|---|---|
+| The agent's COD AMOUNT limit (contract slice / agent pool, scaled by trust) | `422 COD_AGENT_EXPOSURE_EXCEEDED` | 2026-10-02 |
+| The delivery is outside the regions the agent's contract covers | `422 CONTRACT_COVERAGE_REGION_NOT_COVERED` | 2026-10-02 (later the same day) |
+
+It never waives:
+
+- `422 AGENT_MEMBERSHIP_NOT_APPROVED` (no **active** contract with your agency),
+- `422 AGENT_KYC_NOT_VERIFIED` (identity not verified),
+- `422 COD_AGENT_TRUST_TOO_LOW` (trust too low, or an open cash-shortfall),
+- `422 CONTRACT_SHIPMENT_VALUE_EXCEEDED` (the contract's per-shipment value ceiling),
+- `422 AGENT_NOT_ELIGIBLE_FOR_ASSIGNMENT` (availability, tracking, device location, capacity, ban).
+
+```json
+{ "agentId": "66b2…", "force": true }
+```
+
+Each force is **persisted on the offer**, so the agent's accept-time re-check honours it:
+
+- `offer.codLimitForced: { byUserId, byRole, at } | null` — set whenever you forced a COD shipment.
+- `offer.coverageForced: { byUserId, byRole, at } | null` — set only when the region actually
+  needed forcing. Show it on the offer ("outside this agent's regions").
+
+The `shipment.offer_created` event carries `codLimitForced` and `coverageForced` booleans.
+Auto-assign never forces. Typical flow: assign without `force`, get one of the two codes above
+(`COD_AGENT_EXPOSURE_EXCEEDED` carries `{ currentExposure, additionalAmount, effectiveLimit,
+poolBinds }`; `CONTRACT_COVERAGE_REGION_NOT_COVERED` carries `{ deliveryRegion, coveredRegions }`),
+confirm with the user, resend with `force: true`.
+
+> **Why the region became forceable.** A customer's drop-off said `"Centre Region"` while every
+> contract said `centre`; the two never matched and the delivery could not be assigned to anyone.
+> Region matching now sees through such spellings (see `customer/profile.md` → "Region"), but an
+> agency still needs a way to send its own agent one region over when it chooses to.
+>
+> An offer may also carry `offer.adminOverride: { byName, reason, at } | null` — a platform
+> administrator pushed it past the eligibility rules. Your agency cannot set it; display it.
+
 ## POST /api/agency/shipments/:id/auto-assign
 
 Rank eligible agents and start an auto-assignment **broadcast** now, on demand (even if the agency's
@@ -282,27 +325,111 @@ replacement available now).
 <a name="settings"></a>
 ## PATCH /api/agency/assignment-settings
 
-Toggle auto-assignment. Body `{ "autoAssignEnabled": boolean }`. When **on**, a shipment handed to
-this agency (on dispatch) automatically starts the [auto-assignment broadcast](#auto) — no manual pick
-needed. When **off**, shipments wait for a manual pick (you can still trigger auto-assignment
-per-shipment via [`POST .../auto-assign`](#auto)). The offer timeout and broadcast rounds are platform
-defaults and are **not** configurable per agency. Stored on `assignment_settings.auto_assign_enabled`
-(default **off**).
+A **partial** update of the agency's assignment preferences (since 2026-10-02 — before that
+`autoAssignEnabled` was the only field and was required). Send either field or both; at least one
+(an empty body is `400 VALIDATION_ERROR`). A field you omit is left as it is.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `autoAssignEnabled` | boolean | `false` | When **on**, a shipment handed to this agency (on dispatch) automatically starts the [auto-assignment broadcast](#auto). When **off**, shipments wait for a manual pick (you can still trigger auto-assignment per-shipment via [`POST .../auto-assign`](#auto)). The offer timeout and broadcast rounds are platform defaults. Stored on `assignment_settings.auto_assign_enabled`. |
+| `agentsCanProposeDeliveryFee` | boolean | `false` | When **on**, the agent holding a shipment's **accepted** offer may propose a different delivery fee for it ([agent shipments](../agent/shipments.md#delivery-fee-proposals)). The agency itself can always propose ([shipments](./shipments.md#delivery-fee-proposals)). Every proposal still needs the vendor's approval. Stored on `assignment_settings.agents_can_propose_delivery_fee`. |
 
 ```json
-{ "success": true, "message": "Assignment settings updated", "data": { "autoAssignEnabled": true } }
+{
+  "success": true,
+  "message": "Assignment settings updated",
+  "data": { "autoAssignEnabled": true, "agentsCanProposeDeliveryFee": false }
+}
 ```
 
 ### GET /api/agency/assignment-settings
 
-Read the stored toggle (added 2026-09-27 — before this the value could only be written). Returns
-the same `data` shape as the PATCH; `false` when never set.
+Read the stored preferences (added 2026-09-27 — before this the value could only be written).
+Returns the same `data` shape as the PATCH; each field is `false` when never set.
 
 ```json
-{ "success": true, "data": { "autoAssignEnabled": true } }
+{ "success": true, "data": { "autoAssignEnabled": true, "agentsCanProposeDeliveryFee": false } }
 ```
 
 ---
+
+<a name="bulk-offer"></a>
+## POST /api/agency/shipments/assign-agent ⭐ (2026-10-03)
+
+Select several shipments and offer them **all to one agent** in one call. Each shipment becomes
+its own ordinary offer, exactly as `PATCH …/:id/assign-agent` would make it (same checks, same
+offer document, same accept). Only two things differ: the result is **per shipment**, and the
+agent gets **one** notification for the batch instead of one per shipment.
+
+```json
+{ "agentId": "66b2…", "shipmentIds": ["665a…", "665b…", "665c…"], "force": true }
+```
+
+| Field | Rules |
+|---|---|
+| `agentId` | required, 24-hex |
+| `shipmentIds` | required, **1–10** ids, no duplicates (`400` otherwise) |
+| `force` | optional; applies to **every** shipment in the batch, with exactly the meaning in [Forcing an offer](#forcing-an-offer-the-cash-limit-and-the-coverage-region-2026-10-02) |
+
+### Partial success: 200 with one item per shipment
+
+A shipment that cannot be offered does not stop the others. The response is `200` with one entry
+in `items` per id you sent, **in the order you sent them**:
+
+```json
+{
+  "success": true,
+  "message": "2 of 3 shipment(s) offered to the agent",
+  "data": {
+    "batchId": "6710…",
+    "agentId": "66b2…",
+    "requested": 3,
+    "offered": 2,
+    "autoAccepted": 0,
+    "failed": 1,
+    "items": [
+      { "shipmentId": "665a…", "ok": true, "autoAccepted": false,
+        "offer": { "id": "…", "status": "pending", "...": "…" },
+        "shipment": { "id": "665a…", "status": "assigned", "assignmentState": "offered" } },
+      { "shipmentId": "665b…", "ok": false,
+        "error": { "code": "SHIPMENT_ALREADY_HAS_AGENT", "message": "…", "statusCode": 409, "category": "conflict" } },
+      { "shipmentId": "665c…", "ok": true, "autoAccepted": false, "offer": { "…": "…" }, "shipment": { "…": "…" } }
+    ]
+  }
+}
+```
+
+- `ok: true` items carry the same `offer` / `shipment` / `autoAccepted` as the single endpoint.
+- `ok: false` items carry an `error` object in the **same shape as the error envelope**
+  (`code`, `message`, `statusCode`, `category`, `details?`), so the same code → copy mapping you
+  use for the single endpoint works per row. Every per-shipment error the single endpoint can
+  answer can appear here: `SHIPMENT_NOT_FOUND`, `SHIPMENT_NOT_OFFERABLE`,
+  `SHIPMENT_ALREADY_HAS_AGENT`, `SHIPMENT_ALREADY_HAS_PENDING_OFFER`, the contract-term gates and
+  the COD gates.
+- Retrying only the failed rows is safe: a shipment that was offered now answers
+  `SHIPMENT_ALREADY_HAS_PENDING_OFFER` rather than creating a second offer.
+
+### When the whole call is refused (nothing is offered)
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `VALIDATION_ERROR` | bad body: more than 10 ids, a duplicate, a malformed id |
+| `422` | `AGENT_NOT_ELIGIBLE_FOR_ASSIGNMENT` | the **agent** fails eligibility (`details.reasons`), the same as the single endpoint. No shipment could pass for an ineligible agent, so this is not repeated per row |
+| `404` | `AGENT_NOT_FOUND` | unknown agent |
+| `422` | `AGENT_AT_CAPACITY` | the shipments that **can** be offered outnumber the agent's free slots. `details: { activeShipmentCount, maxActiveShipments, freeSlots, requested }`. Nothing is offered: deselect down to `freeSlots` and resend |
+
+**The capacity check counts only the shipments that pass the per-shipment checks.** For example,
+if you select 5 and 2 of them already have an agent, the agent needs 3 free slots, not 5. Free
+slots are `maxActiveShipments − activeShipmentCount`, which counts **accepted** shipments only.
+Offers already pending for this agent don't use up slots, the same as on the single endpoint.
+
+### What the agent sees
+
+One notification, `shipment.offer.batch_received` ("Rapid is offering you 3 deliveries"), which
+opens their offers **list**. It counts only offers still **pending**: one the agent auto-accepted
+on the spot is left out, and if that leaves exactly one pending offer they get the ordinary
+`shipment.offer.received` for it instead. They can accept the whole batch in one call: see
+[`POST /api/agent/offers/accept`](../agent/offers.md#bulk-accept).
 
 ## What acceptance changes
 

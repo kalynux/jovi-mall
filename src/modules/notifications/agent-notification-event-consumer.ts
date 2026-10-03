@@ -61,6 +61,9 @@ export function initializeAgentNotificationEventConsumers(): void {
     // NOT notified — the agent took the action, so telling them is noise (the
     // same reason `cod.deposit.declared` is not sent to the agent).
     eventBus.subscribe('shipment.offer_created', handler.handleOfferReceived.bind(handler));
+    // A bulk offer (2026-10-03): ONE notification for the batch. Each of its offers' own
+    // `shipment.offer_created` carries `batchId` and is skipped by the handler above.
+    eventBus.subscribe('shipment.offer_batch_created', handler.handleOfferBatchReceived.bind(handler));
     // Auto-assignment round-2 reminder that a still-open offer is waiting.
     eventBus.subscribe('shipment.offer_reminder', handler.handleOfferReminder.bind(handler));
     eventBus.subscribe('shipment.offer_expired', handler.handleOfferExpired.bind(handler));
@@ -94,6 +97,16 @@ export function initializeAgentNotificationEventConsumers(): void {
     eventBus.subscribe('payout.paid', handler.handlePayoutPaid.bind(handler));
     eventBus.subscribe('payout.rejected', handler.handlePayoutRejected.bind(handler));
     eventBus.subscribe('payout.transfer_failed', handler.handlePayoutTransferFailed.bind(handler));
+
+    // 2026-10-02 — delivery-fee proposals (only ones THIS agent raised; shared events).
+    eventBus.subscribe('delivery_fee_proposal.approved', handler.handleDeliveryFeeProposalApproved.bind(handler));
+    eventBus.subscribe('delivery_fee_proposal.rejected', handler.handleDeliveryFeeProposalRejected.bind(handler));
+    eventBus.subscribe('delivery_fee_proposal.edited', handler.handleDeliveryFeeProposalEdited.bind(handler));
+    eventBus.subscribe('delivery_fee_proposal.withdrawn', handler.handleDeliveryFeeProposalWithdrawn.bind(handler));
+    eventBus.subscribe('agency.fee_proposal_permission_changed', handler.handleFeeProposalPermissionChanged.bind(handler));
+    // 2026-10-02 — an administrator's pin / release of the agent's COD pool. The handler
+    // ignores every non-'override' trigger (sync, reconcile, the mass reset to the default).
+    eventBus.subscribe('agent.cod_threshold_changed', handler.handleCodPoolChanged.bind(handler));
 
     console.log(
         `[AgentNotifications] Event handlers registered successfully (FCM push: ${isFcmConfigured() ? 'enabled' : 'disabled'})`

@@ -337,6 +337,19 @@ export class AgentRepository {
   }
 
   /**
+   * Take a slot whether or not one is free. ONLY for an administrator's forced
+   * assignment, which is allowed to over-commit an agent on purpose. The counter
+   * still moves, so the slot is returned by the ordinary release on completion.
+   */
+  async forceReserveCapacity(agentId: string, session?: ClientSession): Promise<IDeliveryAgent | null> {
+    return await DeliveryAgentModel.findOneAndUpdate(
+      { _id: agentId },
+      { $inc: { 'capacity.active_shipment_count': 1 } },
+      { new: true, session }
+    );
+  }
+
+  /**
    * Release one capacity slot. Guarded at zero so a double-release cannot drive
    * the counter negative — which would silently hand the agent free capacity
    * forever.

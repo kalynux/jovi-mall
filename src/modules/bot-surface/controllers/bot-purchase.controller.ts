@@ -9,6 +9,7 @@ import { MessagingChannel } from '../../channel-connections';
 import { PublicProductDetailDto } from '../../catalog/dto/public-product.dto';
 import { publicCatalogService } from '../../catalog/services/public-catalog.service';
 import { TelegramBotService } from '../../telegram/services/telegram-bot.service';
+import { messagingPhoneToE164 } from '../../messaging-login/services/identity-resolver.service';
 import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
 import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { botChrome } from '../domain/bot-chrome-copy';
@@ -884,7 +885,16 @@ async function pushIntoConversation(
          * which must not take the purchase path down with it.
          */
         const { WhatsAppServiceMessenger } = await import('../../whatsapp/services/whatsapp-service-messenger');
-        const sent = await new WhatsAppServiceMessenger().sendText({ to: externalId, body: message });
+        /**
+         * ⚠ **`externalId` is Meta's bare-digit `wa_id` (`237600123456`) and the messenger
+         * refuses anything that is not strict E.164.** Sent raw, every push was refused with
+         * `WHATSAPP_VALIDATION_ERROR`, so a WhatsApp Bargain press posted nothing (production
+         * logs, 2026-10-01/02). Same repair `sender-login-delivery.service.ts` applies.
+         */
+        const sent = await new WhatsAppServiceMessenger().sendText({
+            to: messagingPhoneToE164(externalId) ?? externalId,
+            body: message,
+        });
         if (!sent.success) {
             console.warn(`[BotSurface] screen push to WhatsApp was refused: ${sent.error?.code ?? 'unknown'}`);
         }

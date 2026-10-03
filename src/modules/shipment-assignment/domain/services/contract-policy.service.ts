@@ -213,11 +213,16 @@ export class ContractPolicyService {
     agent: IDeliveryAgent,
     agencyId: string,
     shipment: IShipment,
-    order: IOrder
-  ): Promise<void> {
+    order: IOrder,
+    opts: ContractPolicyForce = {}
+  ): Promise<ContractPolicyForceOutcome> {
     const result = await this.evaluate(agent, agencyId, shipment, order, { full: false });
-    const failed = result.gates.find((g) => g.status === 'failed');
-    if (!failed) return;
+    const forced = (g: ContractPolicyGate) => isForceableGate(g, result.codVerdict, opts);
+    const failed = result.gates.find((g) => g.status === 'failed' && !forced(g));
+    const waived = result.gates.filter((g) => g.status === 'failed' && forced(g)).map((g) => g.gate);
+    const codLimitForced = waived.includes('cod_exposure');
+    const coverageForced = waived.includes('coverage_region');
+    if (!failed) return { codLimitForced, coverageForced, waivedGates: waived };
 
     switch (failed.gate) {
       case 'contract_active':
@@ -245,8 +250,9 @@ export class ContractPolicyService {
         // `assertCanTakeCodShipment`, which would evaluate a second time. The
         // three failure shapes stay `CodExposureService`'s, which owns them.
         this.exposure.assertVerdict(result.codVerdict!);
-        return;
+        return { codLimitForced, coverageForced, waivedGates: waived };
     }
+    return { codLimitForced, coverageForced, waivedGates: waived };
   }
 
   // ─── Gates ────────────────────────────────────────────────────────────────
@@ -533,6 +539,56 @@ export class ContractPolicyService {
       return null;
     }
   }
+}
+
+/**
+ * May an agency's `force: true` push past this cash verdict? Only when the ONE thing
+ * refusing is the amount (`exposure_exceeded`). KYC, trust and an open shortfall are
+ * different blockers — the gate orders them ahead of exposure — so a verdict refused for
+ * any of them is never forceable. Pure; `test:cod-limits` pins the whole table.
+ */
+export function isForceableCodRefusal(verdict: CodCapacityVerdict | null | undefined): boolean {
+  return !!verdict && !verdict.allowed && verdict.blocker === 'exposure_exceeded';
+}
+
+/**
+ * Which refusals a caller asked to push past.
+ *
+ * - `forceCodLimit` — the agency's force on the COD AMOUNT (2026-10-02). See
+ *   `isForceableCodRefusal`.
+ * - `forceCoverage` — the agency's force on the region (2026-10-02, the "Centre
+ *   Region" incident): an agency may send its own contracted agent outside the regions
+ *   the contract lists. The contract still has to be active.
+ * - `adminOverride` — an ADMINISTRATOR's force: every gate here except
+ *   `contract_active`. Coverage, the value ceiling and the whole cash verdict — KYC,
+ *   trust and an open shortfall included — are waived. The owner's decision was "an
+ *   admin can bypass every eligibility check, but the agent must be under contract with
+ *   the shipment's agency", so the contract gate is the one line that never moves.
+ */
+export interface ContractPolicyForce {
+  forceCodLimit?: boolean;
+  forceCoverage?: boolean;
+  adminOverride?: boolean;
+}
+
+export interface ContractPolicyForceOutcome {
+  codLimitForced: boolean;
+  coverageForced: boolean;
+  /** Every gate that failed and was pushed past. Empty when nothing needed forcing. */
+  waivedGates: ContractPolicyGateName[];
+}
+
+/** May this failed gate be pushed past under `force`? Pure; `test:cod-limits` pins it. */
+export function isForceableGate(
+  gate: Pick<ContractPolicyGate, 'gate'>,
+  codVerdict: CodCapacityVerdict | null | undefined,
+  force: ContractPolicyForce
+): boolean {
+  if (gate.gate === 'contract_active') return false;
+  if (force.adminOverride === true) return true;
+  if (gate.gate === 'coverage_region') return force.forceCoverage === true;
+  if (gate.gate === 'cod_exposure') return force.forceCodLimit === true && isForceableCodRefusal(codVerdict);
+  return false;
 }
 
 export const contractPolicyService = new ContractPolicyService();

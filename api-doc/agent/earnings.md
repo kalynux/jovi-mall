@@ -38,6 +38,13 @@ shipment. The share is set by `fee_split` on your contract with the agency that 
 either a percentage of the fee or a flat amount per delivery (see
 [cod-cash.md](./cod-cash.md) and your agency's roster settings).
 
+⚠ **Under a `monthly_salary` contract (2026-10-02) the platform pays you NOTHING per delivery.**
+The agency pays your agreed monthly salary itself, outside Wi-Mall, and keeps the whole delivery
+fee. No earnings entry is written for your runs under that contract, so they add nothing to this
+balance, and the platform does not track whether the salary was paid. Quotes show `amount: 0`,
+`basis: "contract_salary"` and `salary: { monthlyAmount, currency, paidBy: "agency_off_platform" }`
+— see [agency-membership.md](./agency-membership.md). Other contracts you hold are unaffected.
+
 **Every physical delivery earns it — cash or card alike.** The moment it lands differs:
 
 | Order type | You are credited when… |

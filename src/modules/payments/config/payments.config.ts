@@ -15,6 +15,7 @@
  *   keys with three distinct jobs and they are not interchangeable; the same
  *   value in the wrong variable fails in a way that looks like a network fault.
  */
+import { gatewayWebhookPath } from '../gateways/gateway.interface';
 
 /**
  * NotchPay — https://api.notchpay.co
@@ -156,6 +157,136 @@ export const CAMPAY_CONFIG = Object.freeze({
   PAYOUTS_ENABLED: (process.env.CAMPAY_PAYOUTS_ENABLED || 'false') === 'true',
 });
 
+/** CinetPay's two hosts. The key prefix picks one; named once for the default and the boot check. */
+export const CINETPAY_SANDBOX_BASE_URL = 'https://api.cinetpay.net';
+export const CINETPAY_LIVE_BASE_URL = 'https://api.cinetpay.co';
+
+/** CinetPay caps every URL it is handed (notify, success, failed) at this many characters. */
+export const CINETPAY_MAX_URL_LENGTH = 120;
+
+/**
+ * The URL CinetPay posts its notifications to, or '' when none can be built.
+ *
+ * Unlike every other gateway here, CinetPay takes the callback URL on EACH request rather than
+ * from a dashboard setting, so it has to be known at call time. `CINETPAY_NOTIFY_URL` wins;
+ * otherwise it is our own webhook route under `API_PUBLIC_URL`, derived with the same function
+ * that registers that route.
+ */
+function cinetpayNotifyUrl(): string {
+  const explicit = (process.env.CINETPAY_NOTIFY_URL ?? '').trim();
+  if (explicit) return explicit;
+  const base = (process.env.API_PUBLIC_URL ?? '').trim().replace(/\/+$/, '');
+  return base ? `${base}${gatewayWebhookPath('CINETPAY')}` : '';
+}
+
+/**
+ * CinetPay — API v1. https://api.cinetpay.co (live) · https://api.cinetpay.net (sandbox)
+ *
+ * Written from CinetPay's own JS SDK (github.com/cinetpay/cinetpay-js, 2026-03), because their
+ * documentation host no longer resolves. It is NOT the older v2 checkout API
+ * (`api-checkout.cinetpay.com`, `apikey` + `site_id`, HMAC `x-token`): v1 has neither a site id
+ * nor a webhook secret.
+ *
+ * API_KEY / API_PASSWORD → exchanged at `POST /v1/oauth/login` for a bearer JWT that lives 24 h.
+ *               Issued PER COUNTRY; this platform uses the Cameroon pair only. The key's prefix
+ *               names its environment: `sk_test_` → sandbox, `sk_live_` → live.
+ * BASE_URL    → derived from that prefix unless set. A key sent to the other environment's host
+ *               fails to authenticate, so `config/env.ts` refuses the mismatch at boot.
+ * NOTIFY_URL  → sent on every charge and transfer. See `cinetpayNotifyUrl`.
+ * RETURN_URL  → where the hosted page sends the customer afterwards, when CinetPay redirects
+ *               at all (`success_url` and `failed_url`; one value for both).
+ * FALLBACK_EMAIL → `client_email` is REQUIRED by CinetPay and many of our customers have none
+ *               (registration is bot-first). This is sent in its place.
+ * DIRECT_PAY  → ask for the PIN prompt on the customer's handset instead of the hosted page.
+ *               An account without direct mode answers `must_be_redirected`, and the adapter
+ *               then hands the client CinetPay's page URL instead.
+ *
+ * ⛔ THE NOTIFICATION IS NOT SIGNED. It carries a per-transaction `notify_token` and the ids; no
+ * status, no amount, no signature. So every CinetPay notification is re-read from CinetPay before
+ * anything acts on it (`CinetPayGateway.confirmWebhookEvent`). The notification is a doorbell.
+ */
+export const CINETPAY_CONFIG = Object.freeze({
+  API_KEY: process.env.CINETPAY_API_KEY || '',
+  API_PASSWORD: process.env.CINETPAY_API_PASSWORD || '',
+  BASE_URL: (
+    process.env.CINETPAY_BASE_URL ||
+    ((process.env.CINETPAY_API_KEY || '').startsWith('sk_live_') ? CINETPAY_LIVE_BASE_URL : CINETPAY_SANDBOX_BASE_URL)
+  ).replace(/\/+$/, ''),
+  NOTIFY_URL: cinetpayNotifyUrl(),
+  RETURN_URL: (
+    process.env.CINETPAY_RETURN_URL ||
+    process.env.STOREFRONT_URL ||
+    process.env.API_PUBLIC_URL ||
+    ''
+  ).trim(),
+  FALLBACK_EMAIL: (
+    process.env.CINETPAY_FALLBACK_EMAIL ||
+    process.env.MAIL_SUPPORT_EMAIL ||
+    process.env.MAIL_FROM_DEFAULT ||
+    ''
+  ).trim(),
+  DIRECT_PAY: (process.env.CINETPAY_DIRECT_PAY || 'true') === 'true',
+  REQUEST_TIMEOUT_MS: parseInt(process.env.CINETPAY_REQUEST_TIMEOUT_MS || '15000'),
+  /** Refresh the 24-hour token when less than this remains, so no call races its expiry. */
+  TOKEN_REFRESH_MARGIN_MS: 60 * 60 * 1000,
+  /**
+   * Whether PAYOUTS (`POST /v1/transfer`) are enabled for this deployment.
+   *
+   * ⚠ Default FALSE. CinetPay answers `NOT_ALLOWED` (2011) to a caller IP it has not
+   * whitelisted, so turning this on is paired with registering the VPS egress IP with CinetPay.
+   * A refusal for that reason comes back per call as `unsupported`.
+   */
+  PAYOUTS_ENABLED: (process.env.CINETPAY_PAYOUTS_ENABLED || 'false') === 'true',
+});
+
+/** Fapshi's two hosts. Named once for the default and the production boot warning. */
+export const FAPSHI_SANDBOX_BASE_URL = 'https://sandbox.fapshi.com';
+export const FAPSHI_LIVE_BASE_URL = 'https://live.fapshi.com';
+
+/**
+ * Fapshi — https://live.fapshi.com (live) · https://sandbox.fapshi.com (sandbox, the default)
+ *
+ * Source: docs.fapshi.com (its OpenAPI spec and pages, read 2026-10-02) and the official SDK at
+ * github.com/Fapshi/SDKs.
+ *
+ * API_USER / API_KEY → the `apiuser` / `apikey` HEADERS on every call. Each Fapshi "service" has
+ *               its own pair, and **one service cannot both collect and pay out** (Fapshi: "After
+ *               enabling payouts for a service, that service can no longer collect payments").
+ *               So there are two pairs: this one is the COLLECTION service.
+ * PAYOUT_API_USER / PAYOUT_API_KEY → the DISBURSEMENT service. Optional; without it no payout.
+ * WEBHOOK_SECRET → the per-service secret Fapshi sends back verbatim in `x-wh-secret`. Set the
+ *               SAME value on both services, since both post to /api/webhooks/fapshi. It is a
+ *               static shared secret, not a signature over the body, which is why every
+ *               callback is re-read from `GET /payment-status/{transId}` before it is acted on
+ *               (`FapshiGateway.confirmWebhookEvent`; Fapshi's own SDK example does the same).
+ *
+ * ⚠ BASE_URL defaults to the SANDBOX host, deliberately, like Campay: going live is an explicit
+ * act, and `config/env.ts` warns in production while it points at the sandbox.
+ * ⚠ In LIVE mode direct pay and payouts are each DISABLED until Fapshi support enables them for
+ * the service (see .env.example).
+ */
+export const FAPSHI_CONFIG = Object.freeze({
+  API_USER: process.env.FAPSHI_API_USER || '',
+  API_KEY: process.env.FAPSHI_API_KEY || '',
+  PAYOUT_API_USER: process.env.FAPSHI_PAYOUT_API_USER || '',
+  PAYOUT_API_KEY: process.env.FAPSHI_PAYOUT_API_KEY || '',
+  WEBHOOK_SECRET: process.env.FAPSHI_WEBHOOK_SECRET || '',
+  BASE_URL: (process.env.FAPSHI_BASE_URL || FAPSHI_SANDBOX_BASE_URL).replace(/\/+$/, ''),
+  REQUEST_TIMEOUT_MS: parseInt(process.env.FAPSHI_REQUEST_TIMEOUT_MS || '15000'),
+  /**
+   * How long a PENDING status answer is reused. Fapshi allows at most 6 status reads per minute
+   * per transaction (429 beyond), and a client polling `verify` every few seconds would exceed
+   * it. Webhook confirmations never use the cache.
+   */
+  STATUS_CACHE_MS: 10_000,
+  /**
+   * Whether PAYOUTS are enabled for this deployment. ⚠ Default FALSE. Live payouts also need
+   * Fapshi support to enable them on the disbursement service (email support@fapshi.com with
+   * that service's LIVE apiuser), after a sandbox test.
+   */
+  PAYOUTS_ENABLED: (process.env.FAPSHI_PAYOUTS_ENABLED || 'false') === 'true',
+});
+
 /**
  * Cross-gateway payment policy.
  *
@@ -210,6 +341,23 @@ export function campayEnabled(): boolean {
   const canCall =
     (CAMPAY_CONFIG.USERNAME !== '' && CAMPAY_CONFIG.PASSWORD !== '') || CAMPAY_CONFIG.PERMANENT_TOKEN !== '';
   return canCall && CAMPAY_CONFIG.WEBHOOK_KEY !== '';
+}
+
+/**
+ * True when CinetPay has its credential pair AND somewhere to send notifications. There is no
+ * webhook secret to require (the notification is unsigned); the notify URL takes its place,
+ * because without one every charge would settle on the reconciliation sweep alone.
+ */
+export function cinetpayEnabled(): boolean {
+  return CINETPAY_CONFIG.API_KEY !== '' && CINETPAY_CONFIG.API_PASSWORD !== '' && CINETPAY_CONFIG.NOTIFY_URL !== '';
+}
+
+/**
+ * True when Fapshi's COLLECTION service has its pair AND the webhook secret. Without the secret
+ * every callback is refused `missing_secret`, and Fapshi sends each callback once, never again.
+ */
+export function fapshiEnabled(): boolean {
+  return FAPSHI_CONFIG.API_USER !== '' && FAPSHI_CONFIG.API_KEY !== '' && FAPSHI_CONFIG.WEBHOOK_SECRET !== '';
 }
 
 /**
