@@ -2863,7 +2863,7 @@ async function main(): Promise<void> {
 
     assert('⚠ no GET is mounted — the identity envelope is a body, never a query string', () => {
         /**
-         * ⚠ **TWO files are excluded by name, and the exemption is narrow on purpose.**
+         * ⚠ **THREE files are excluded by name, and the exemption is narrow on purpose.**
          *
          * What this rule protects is the identity envelope: every route under
          * `/api/internal/bot` carries a real person's WhatsApp number or Telegram chat id in
@@ -2872,6 +2872,9 @@ async function main(): Promise<void> {
          * Neither exempt router is on that mount and neither carries an envelope. The Mini
          * App's URLs hold an opaque random handle naming one product list for thirty minutes;
          * the assets router serves one static PNG that Telegram's and Meta's servers fetch.
+         * The website-guide router (added 2026-10-03) answers the customer assistant's
+         * `Read-Website-Guide` tool with the same how-to text for everyone — no identity in
+         * or out, only a topic and a language hint, mounted on `/public` and cached publicly.
          * A page and an image cannot be retrieved by a `POST`, so the rule does not reach
          * them — and the assertion below is what stops the exemption becoming a loophole:
          * both must be mounted somewhere OTHER than `/internal/bot` and hold neither
@@ -2880,7 +2883,7 @@ async function main(): Promise<void> {
          * ⚠ A NAMED list, not a directory prefix. A third browser-facing router added later
          * fails this assertion and has to be argued for here, which is the point.
          */
-        const BROWSER_FACING = ['miniapp/miniapp.routes.ts', 'public-assets.routes.ts'];
+        const BROWSER_FACING = ['miniapp/miniapp.routes.ts', 'public-assets.routes.ts', 'website-guide.routes.ts'];
         const bad = offenders(/router\.get\(/)
             .filter((name) => !BROWSER_FACING.includes(name.replace(/\\/g, '/')));
         if (bad.length) console.error('     ↳', bad.join(', '));
@@ -2890,7 +2893,8 @@ async function main(): Promise<void> {
     assert('⛔ the browser-facing routers sit OUTSIDE /internal/bot and hold neither credential', () => {
         const index = read('api/index.ts');
         const routes = stripComments(read('modules/bot-surface/miniapp/miniapp.routes.ts'))
-            + stripComments(read('modules/bot-surface/public-assets.routes.ts'));
+            + stripComments(read('modules/bot-surface/public-assets.routes.ts'))
+            + stripComments(read('modules/bot-surface/website-guide.routes.ts'));
         const controller = stripComments(read('modules/bot-surface/miniapp/miniapp.controller.ts'));
 
         /**
@@ -2902,7 +2906,8 @@ async function main(): Promise<void> {
          * still work: nothing else in this suite would notice.
          */
         const mountedSeparately = index.includes("router.use('/bot/miniapp', miniAppRoutes)")
-            && index.includes("router.use('/public', botPublicAssetRoutes)");
+            && index.includes("router.use('/public', botPublicAssetRoutes)")
+            && index.includes("router.use('/public', websiteGuideRoutes)");
         const noCredential = !/requireServiceToken|requireBotWebhookSecret/.test(routes + controller);
         // Its authority is the handle and nothing else — no caller-supplied customer.
         const noIdentityParam = !/customerId\s*:\s*z\.|userId\s*:\s*z\./.test(controller);
