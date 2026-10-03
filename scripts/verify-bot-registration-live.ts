@@ -322,17 +322,24 @@ async function main(): Promise<void> {
         return phone?.state === 'provided';
     });
 
-    await check('next is `name`, required, not skippable', () =>
-        next(first).step === 'name'
+    /**
+     * ⭐ `language` is the FIRST step a new account is asked (owner, 2026-10-02) — ahead of
+     * `name`, and even though the envelope's hint already seeded `preferences.language`: a hint
+     * is a guess, and the person is asked once to confirm it. See `BOT_ONBOARDING_STEPS`.
+     */
+    await check('next is `language`, required, not skippable', () =>
+        next(first).step === 'language'
         && next(first).required === true
         && next(first).skippable === false);
 
     await check('the descriptor says which field and of what kind', () =>
-        next(first).field === 'name' && next(first).kind === 'text');
+        next(first).field === 'language' && next(first).kind === 'language_choice');
 
-    await check('onboarding is not complete, and name is outstanding', () => {
+    await check('onboarding is not complete, and language and name are outstanding', () => {
         const outstanding = onboarding(first).outstandingRequired as string[];
-        return onboarding(first).complete === false && outstanding.includes('name');
+        return onboarding(first).complete === false
+            && outstanding.includes('language')
+            && outstanding.includes('name');
     });
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -365,6 +372,20 @@ async function main(): Promise<void> {
     // ═════════════════════════════════════════════════════════════════════════
     section('4 · Walking the checklist to complete');
     // ═════════════════════════════════════════════════════════════════════════
+
+    const languaged = await onboard(wa(NEW_WA_PHONE_ID), { step: 'language', language: 'fr' });
+
+    await check('answering the language advances to `name`, a required text field', () =>
+        languaged.status === 200
+        && next(languaged).step === 'name'
+        && next(languaged).skippable === false
+        && next(languaged).field === 'name'
+        && next(languaged).kind === 'text');
+
+    await check('the answered language is stored', async () => {
+        const customer = await CustomerModel.findOne({ phone: NEW_PHONE_E164 });
+        return customer?.preferences?.language === 'fr';
+    });
 
     const named = await onboard(wa(NEW_WA_PHONE_ID), { step: 'name', name: 'Ada N.' });
 
@@ -558,8 +579,10 @@ async function main(): Promise<void> {
         return data(again).registered === true && data(again).isNew === false;
     });
 
-    await check('next is `name` — phone is behind them now', () =>
-        next(tgRegistered).step === 'name');
+    // The account exists only from this call on, so the new-accounts-only `language` step
+    // (left out of the anonymous checklist) is what comes next — not `name`.
+    await check('next is `language` — phone is behind them now', () =>
+        next(tgRegistered).step === 'language');
 
     // ═════════════════════════════════════════════════════════════════════════
     section('6 · The two refusals that must never fall through to "create"');
