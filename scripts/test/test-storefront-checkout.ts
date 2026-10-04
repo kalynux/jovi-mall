@@ -317,7 +317,9 @@ assert('the customer total includes ONLY customer-paid delivery (ADR-A11) — ne
     // would collect the fee twice.
     return quoteService.includes('total: subtotal + delivery')
         && pricing.includes("const deliveryCharged = payer === 'customer' ? deliveryFeeTotal : 0;")
-        && split.includes('const deliveryTotal = vendorBorneTotal;');
+        // `computeOrderSplit` (shared by `splitOrder` and the admin money-split view) is where
+        // the vendor's net is formed since 2026-10-04.
+        && split.includes('vendorNet: vendorGross - commission - vendorBorneTotal,');
 });
 
 // ─── 7. Checkout refuses an undeliverable physical order ─────────────────────

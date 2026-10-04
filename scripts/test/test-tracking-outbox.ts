@@ -66,7 +66,9 @@ function read(rel: string): string[] {
 // both simpler and harder to fool than a hand-rolled brace counter that string
 // literals and comments would defeat.
 
-const TXN_OPEN = /^(\s*)(?:await\s+)?transactionManager\.runInTransaction(?:WithRetry)?\(\s*async\s*\(\s*session\s*\)\s*=>\s*\{/;
+// Also opens when the result is assigned (`const { a, b } = await transactionManager…`) — the
+// shape role closure's confirm uses. Detection only: the closing `});` rule is unchanged.
+const TXN_OPEN = /^(\s*)(?:(?:const|let)\s+[^=]+=\s*)?(?:await\s+)?transactionManager\.runInTransaction(?:WithRetry)?\(\s*async\s*\(\s*session\s*\)\s*=>\s*\{/;
 
 interface Range { start: number; end: number; }
 
@@ -154,6 +156,35 @@ const WRITE_SITES: Array<{ file: string; sites: number; what: string }> = [
 ];
 
 /**
+ * Write sites whose transaction is opened by their CALLER rather than in the same file
+ * (role closure, ADR-A10: the manifest runs inside `RoleClosureService.confirm`'s
+ * `runInTransaction` and is handed its session). The lexical check above cannot see such a
+ * transaction, so each is held to three things instead, any one of which a regression breaks:
+ *   - the enclosing method REQUIRES `session: ClientSession` (not optional — an optional one
+ *     is how a session-less write slips in);
+ *   - every emit forwards that session;
+ *   - the declared caller invokes the method INSIDE a `runInTransaction*` range and passes
+ *     `session`.
+ */
+const CALLER_TRANSACTION_SITES: Array<{
+  file: string;
+  sites: number;
+  method: string;
+  caller: string;
+  callerCall: string;
+  what: string;
+}> = [
+  {
+    file: 'modules/role-closure/role-closure.manifest.ts',
+    sites: 1,
+    method: 'async closeAgent(',
+    caller: 'modules/role-closure/services/role-closure.service.ts',
+    callerCall: 'this.manifest.closeAgent(',
+    what: 'agent closure turns Tracking Allow off (ADR-A10)',
+  },
+];
+
+/**
  * The one emitter call in `src/` that is deliberately NOT in a transaction, named here so
  * that "every emit is transactional" stays a checkable statement with one written
  * exception rather than an approximation. A sweep re-states a decision that committed
@@ -207,8 +238,49 @@ async function main(): Promise<void> {
     });
   }
 
+  for (const site of CALLER_TRANSACTION_SITES) {
+    const lines = read(site.file);
+    const calls = emitSites(lines);
+    const name = site.file.split('/').pop();
+
+    await assert(`${name} — ${site.sites} emit site(s): ${site.what}`, () => calls.length === site.sites);
+
+    await assert(`${name} — every emit is inside ${site.method.replace('async ', '').replace('(', '')}, which REQUIRES the session`, () => {
+      const start = lines.findIndex((l) => l.includes(site.method));
+      if (start < 0) return false;
+      // The method's own extent: up to the next member at the same indentation.
+      const indent = (lines[start].match(/^\s*/) ?? [''])[0];
+      let end = lines.length;
+      for (let j = start + 1; j < lines.length; j++) {
+        if (lines[j].startsWith(`${indent}}`)) { end = j; break; }
+      }
+      return /session: ClientSession[,)]/.test(lines[start]) && calls.every((c) => c > start && c < end);
+    });
+
+    await assert(`${name} — every emit forwards the session`, () =>
+      calls.every((line) => /\bsession\b/.test(callText(lines, line))));
+
+    await assert(`${name} — its caller makes the call inside a transaction, passing the session`, () => {
+      const callerLines = read(site.caller);
+      const ranges = transactionRanges(callerLines);
+      const callLines = callerLines
+        .map((l, i) => (l.includes(site.callerCall) ? i : -1))
+        .filter((i) => i >= 0);
+      return (
+        callLines.length > 0 &&
+        callLines.every(
+          (i) => ranges.some((r) => i > r.start && i < r.end) && /\bsession\b/.test(callText(callerLines, i))
+        )
+      );
+    });
+  }
+
   await assert('the ONLY undeclared emitter call in src/ is the reconcile sweep', () => {
-    const declared = new Set([...WRITE_SITES.map((s) => s.file), DECLARED_NON_TRANSACTIONAL]);
+    const declared = new Set([
+      ...WRITE_SITES.map((s) => s.file),
+      ...CALLER_TRANSACTION_SITES.map((s) => s.file),
+      DECLARED_NON_TRANSACTIONAL,
+    ]);
     const stray: string[] = [];
     walk(SRC, (abs, rel) => {
       if (!rel.endsWith('.ts')) return;

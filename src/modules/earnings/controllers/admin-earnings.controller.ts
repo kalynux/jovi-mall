@@ -2,9 +2,11 @@ import { Request, Response } from 'express';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { sendSuccess, sendPaginated } from '../../../core/responses';
 import { earningsAccountService } from '../services/earnings-account.service';
+import { orderMoneySplitService } from '../services/order-money-split.service';
 import {
   ListEarningsAccountsQuerySchema,
   LedgerQuerySchema,
+  OrderIdParamsSchema,
   OwnerParamsSchema,
 } from '../validators/admin-earnings.validator';
 
@@ -23,9 +25,47 @@ import {
  * endpoints. ADR-009 D-1, applied to money.
  */
 export class AdminEarningsController {
+  /**
+   * What the marketplace has earned — BOTH platform accounts.
+   *
+   * ⚠ It used to return the `platform` account alone, i.e. **commission only**, and that
+   * was every administrative answer to "how much have we made": the bargain fee lives in a
+   * SECOND singleton, `platform_ai`, kept apart on purpose so "what did the bargaining agent
+   * bring in" stays answerable (see `earnings-account.model.ts`). Keeping it apart in storage
+   * is right; leaving it out of the total was not (owner, 2026-10-04).
+   *
+   * The top-level fields are still the commission account, unchanged, so a client reading
+   * them keeps working; `accounts` names both and `total` adds them. `earned` is all four
+   * sub-balances: a platform account is never paid out, so what it holds is what it made,
+   * net of anything a refund reversed. `total` is `null` if the two accounts ever disagree
+   * on currency — adding XAF to EUR is not a total.
+   */
   static getPlatformEarnings = asyncHandler(async (_req: Request, res: Response) => {
-    const balances = await earningsAccountService.getBalances('platform', null);
-    sendSuccess(res, balances);
+    const [commission, bargainFee] = await Promise.all([
+      earningsAccountService.getBalances('platform', null),
+      earningsAccountService.getBalances('platform_ai', null),
+    ]);
+    const held = (b: typeof commission): number => b.pending + b.available + b.reserve + b.requested;
+    const total =
+      commission.currency === bargainFee.currency
+        ? {
+            pending: commission.pending + bargainFee.pending,
+            available: commission.available + bargainFee.available,
+            earned: held(commission) + held(bargainFee),
+            currency: commission.currency,
+          }
+        : null;
+    sendSuccess(res, { ...commission, accounts: { commission, bargainFee }, total });
+  });
+
+  /**
+   * Who gets what from one order, on what basis — allocated where the split has run,
+   * projected (from the split's own arithmetic) where it has not. See
+   * `domain/order-money-split.ts`. Read-only; 404 `ORDER_NOT_FOUND`.
+   */
+  static getOrderMoneySplit = asyncHandler(async (req: Request, res: Response) => {
+    const { orderId } = OrderIdParamsSchema.parse(req.params);
+    sendSuccess(res, await orderMoneySplitService.getForOrder(orderId));
   });
 
   static getPlatformLedger = asyncHandler(async (req: Request, res: Response) => {

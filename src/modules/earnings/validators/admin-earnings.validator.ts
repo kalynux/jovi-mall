@@ -32,3 +32,7 @@ export const OwnerParamsSchema = z.object({
 });
 
 export type OwnerParams = z.infer<typeof OwnerParamsSchema>;
+
+export const OrderIdParamsSchema = z.object({
+  orderId: z.string().trim().regex(/^[a-f\d]{24}$/i, 'Not a valid id'),
+});

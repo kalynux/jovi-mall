@@ -54,6 +54,17 @@ function attachRoutes(router: Router): Router {
      */
     router.get('/balances/:ownerType/:ownerId', AdminEarningsController.getOwnerBalances);
 
+    /**
+     * GET /earnings/orders/:orderId/split — who gets what from one order, on what basis.
+     *
+     * Served rather than read for the reason the balances are: before a split runs, its
+     * figures exist only as the split's own arithmetic (`EarningsSplitService.compute*`), and
+     * a copy of that in wi-admin would be a second formula. Lives in `earnings`, not `orders`,
+     * because it is the split's view of an order — and `test:bargain-price` keeps the orders
+     * module out of the bargain fee entirely.
+     */
+    router.get('/orders/:orderId/split', AdminEarningsController.getOrderMoneySplit);
+
     return router;
 }
 

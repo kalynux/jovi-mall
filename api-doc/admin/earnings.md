@@ -1,6 +1,6 @@
 # Admin — Platform Earnings & owner balances
 
-**Verified against source on 2026-09-08** — the four routes and their relative-path mount, the platform balance and ledger shapes, the `/accounts` query schema and its `meta.totals` array, and the zero-not-404 rule on `/balances`, against `jovi-mall/src/modules/earnings/{routes/admin-earnings.routes.ts,controllers/admin-earnings.controller.ts,services/earnings-account.service.ts}`. The page described the deleted `requireRole([\x27admin\x27])` cookie session as its auth model, and omitted `meta.totals`.
+**`/platform` and `/orders/:orderId/split` re-verified against source 2026-10-04.** **Verified against source on 2026-09-08** — the four routes and their relative-path mount, the platform balance and ledger shapes, the `/accounts` query schema and its `meta.totals` array, and the zero-not-404 rule on `/balances`, against `jovi-mall/src/modules/earnings/{routes/admin-earnings.routes.ts,controllers/admin-earnings.controller.ts,services/earnings-account.service.ts}`. The page described the deleted `requireRole([\x27admin\x27])` cookie session as its auth model, and omitted `meta.totals`.
 
 > ## ⚠️ This surface moved at the Phase 5 cutover — read this before the routes below
 >
@@ -49,6 +49,7 @@ vendor / agency / agent").
 | `GET` | `/internal/admin/earnings/platform/ledger` | Paginated platform earnings ledger |
 | `GET` | `/internal/admin/earnings/accounts` | Every owner's balances, ranked by what is withdrawable |
 | `GET` | `/internal/admin/earnings/balances/:ownerType/:ownerId` | One owner's four balances |
+| `GET` | `/internal/admin/earnings/orders/:orderId/split` | Who gets what from one order, on what basis — allocated or projected (2026-10-04) |
 
 > **These four routes used to be mounted publicly at `/api/admin/earnings/*` as well**, behind
 > `requireAuth + requireRole(['admin'])`. That mount was deleted at the Phase 5 cutover — one
@@ -64,7 +65,12 @@ vendor / agency / agent").
 
 ## GET `/internal/admin/earnings/platform`
 
-**Purpose**: Return the platform account's current balances.
+**Purpose**: Return the marketplace's balances — **both** platform accounts and their total.
+
+⚠ **Until 2026-10-04 this returned the `platform` account alone — commission only.** The bargain
+fee (30% of what a bargainable line sold for above the vendor's minimum) is credited to a second
+singleton, `platform_ai`, kept apart so it stays separately answerable; nothing added the two. The
+top-level fields are still the commission account, unchanged; `accounts` and `total` are new.
 
 **Auth**: `requireAdminCaller` · **Permissions**: `admin` (service caller)
 
@@ -78,18 +84,26 @@ vendor / agency / agent").
     "available": 480000,
     "reserve": 0,
     "requested": 0,
-    "currency": "XAF"
+    "currency": "XAF",
+    "accounts": {
+      "commission": { "pending": 125000, "available": 480000, "reserve": 0, "requested": 0, "currency": "XAF" },
+      "bargainFee": { "pending": 9000, "available": 31500, "reserve": 0, "requested": 0, "currency": "XAF" }
+    },
+    "total": { "pending": 134000, "available": 511500, "earned": 645500, "currency": "XAF" }
   }
 }
 ```
 
 | Field | Meaning |
 |---|---|
-| `pending` | Commission held in escrow (order not yet completed / hold not released) |
-| `available` | Released, withdrawable-in-principle (platform doesn't withdraw, but this is the freed balance) |
-| `reserve` | COD rolling-reserve held amount |
+| `pending` … `currency` (top level) | **The commission account** — kept for compatibility |
+| `accounts.commission` / `accounts.bargainFee` | The `platform` and `platform_ai` accounts |
+| `pending` | Held in escrow (order not yet completed / hold not released) |
+| `available` | Released (the platform never withdraws, so this only grows) |
+| `reserve` | COD rolling-reserve held amount (always `0` for the platform) |
 | `requested` | Earmarked by a payout request (always `0` for the platform — no platform payouts) |
-| `currency` | ISO-4217 (default `XAF`) |
+| `total.earned` | Σ all four sub-balances of both accounts — what the platform has made, net of reversals |
+| `total` | `null` if the two accounts ever hold different currencies |
 
 ---
 
@@ -228,6 +242,31 @@ vendor / agency / agent").
 > **Zeroes, never a 404.** An owner with no account row has genuinely been allocated nothing, and
 > the read does not create one. 404ing would make "no earnings yet" indistinguishable from "no such
 > vendor" — and the caller already knows the owner exists, because it looked them up to get here.
+
+## GET `/internal/admin/earnings/orders/:orderId/split`
+
+**Purpose**: Who gets what from one order, and on what basis — the administrator's money-split
+view (owner request 2026-10-04: support must be able to explain a vendor's amount). wi-admin
+serves it as `GET /api/v1/money/orders/:orderId/split` and adds display names; **the full field
+reference is `admin/api-doc/api/money.md` § that route.**
+
+**Auth**: `requireAdminCaller` · **Errors**: `404 ORDER_NOT_FOUND`
+
+One section per split moment — `payment` (prepaid items), `delivery` (one prepaid parcel's fee),
+`cash_collection` (one COD parcel). A section is `allocated` once its split ran (figures read from
+`earnings_allocations`), `projected` before it (figures from `EarningsSplitService.compute*`, the
+**same** methods the splits call — `splitOrder` → `computeOrderSplit`, `splitCodCollection` →
+`computeCodCollectionSplit`, `splitDeliveryFeeCollection` → `computeDeliveryFeeCollectionSplit`,
+`splitShipmentDelivery` → `computeShipmentDeliverySplit`), or `none` / `unavailable`.
+`reconciliation.difference` (charged − Σ non-reversed lines) is 0 on a normal order.
+
+⚠ **Read-only and prices nothing itself** (`services/order-money-split.service.ts`,
+`domain/order-money-split.ts`). `test:order-money-split` pins both by source scan: every `split*`
+computes through its write-free twin, and the view holds no rate, no rounding and no fee helper.
+Lives in `earnings`, not `orders`, because `test:bargain-price` keeps the orders module out of the
+bargain fee.
+
+---
 
 ## Business rules & notes
 
