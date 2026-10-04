@@ -10,7 +10,7 @@ import { AgencyAssignmentController } from '../shipment-assignment/controllers/a
 import { AgencyCodController } from '../cod/controllers/agency-cod.controller';
 import { uploadCodCashProof } from '../cod/controllers/cod-proof.http';
 import { TrackingController } from '../tracking-integration/controllers/tracking.controller';
-import { AgencyDeliveryFeeProposalController } from '../delivery-fee-proposals/controllers/delivery-fee-proposal.controller';
+import { AgencyDeliveryFeeProposalController, AgencyCombinedDeliveryRequestController } from '../delivery-fee-proposals/controllers/delivery-fee-proposal.controller';
 import { DeviceTokenController } from '../notifications/controllers/device-token.controller';
 
 const router = Router();
@@ -163,6 +163,16 @@ router.post('/shipments/:id/delivery-fee-proposals', AgencyDeliveryFeeProposalCo
 router.post('/shipments/:id/delivery-fee-proposals/:proposalId/withdraw', AgencyDeliveryFeeProposalController.withdraw);
 // Edit any pending proposal on this shipment (its agent's too — it becomes agency-owned).
 router.patch('/shipments/:id/delivery-fee-proposals/:proposalId', AgencyDeliveryFeeProposalController.edit);
+
+/**
+ * Combined delivery-price requests (ADR-A11 D-8): a customer asks for ONE price on several of
+ * their parcels this agency carries from one checkout. The agency lowers fees (applied at once)
+ * or declines. See api-doc/agency/shipments.md § Combined delivery-price requests.
+ *   GET  /api/agency/combined-delivery-requests?status=&page=&limit=
+ *   POST /api/agency/combined-delivery-requests/:requestId/respond   { fees:[{shipmentId,proposedFee}] } | { decline: true }, note?
+ */
+router.get('/combined-delivery-requests', AgencyCombinedDeliveryRequestController.list);
+router.post('/combined-delivery-requests/:requestId/respond', AgencyCombinedDeliveryRequestController.respond);
 
 /**
  * PATCH /api/agency/shipments/:id/assign-agent

@@ -49,7 +49,9 @@ export class ProductDuplicateService {
             // moment they expected an identical starting point.
             descriptionRich: originalProduct.descriptionRich ?? null,
             slug: newSlug,
-            category: originalProduct.category,
+            // Ids, not names: the copy is on the same shelves, and stays there through
+            // any later rename or merge of them.
+            categoryIds: [...(originalProduct.categoryIds ?? [])],
             tags: [...(originalProduct.tags ?? [])],
             seo: { ...originalProduct.seo },
             hasVariants: false,

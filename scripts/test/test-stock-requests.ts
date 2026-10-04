@@ -115,7 +115,6 @@ function storedProduct(agencyOverride: string | null): Pick<Product, 'type' | 'd
     type: 'physical',
     delivery: {
       agencyId: agencyOverride,
-      freeDelivery: false,
       pickupLocation: { source: 'agency_storage', vendorAddressId: null, agencyAddressId: null },
     },
   };
@@ -244,7 +243,6 @@ function main(): void {
       type: 'physical' as const,
       delivery: {
         agencyId: AGENCY_A,
-        freeDelivery: false,
         pickupLocation: { source: 'vendor_address' as const, vendorAddressId: null, agencyAddressId: null },
       },
     };

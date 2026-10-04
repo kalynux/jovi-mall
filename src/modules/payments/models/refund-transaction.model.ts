@@ -26,7 +26,7 @@ export interface IRefundTransaction extends Document {
     gatewayRefundRef?: string;                      // Gateway's refund reference
 
     initiatedBy: mongoose.Types.ObjectId;           // User/Admin who initiated refund
-    initiatedByRole: 'vendor' | 'admin' | 'customer';
+    initiatedByRole: 'vendor' | 'admin' | 'customer' | 'system';
 
     createdAt: Date;
     completedAt?: Date;                             // CRITICAL for analytics grouping
@@ -90,7 +90,7 @@ const RefundTransactionSchema = new Schema<IRefundTransaction>(
         },
         initiatedByRole: {
             type: String,
-            enum: ['vendor', 'admin', 'customer'],
+            enum: ['vendor', 'admin', 'customer', 'system'],
             required: true
         },
         completedAt: {

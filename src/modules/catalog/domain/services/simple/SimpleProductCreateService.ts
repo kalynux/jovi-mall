@@ -14,6 +14,11 @@ import { mergeDeliveryConfig } from '../delivery-config.merge';
 import { generateSimpleSku } from './sku-generator';
 import { PickupLocationSource } from '../../../models/product.model';
 import { BargainInput, resolveBargainWrite } from '../bargain-price.rule';
+import {
+    categoryResolutionService,
+    CategoryResolutionService,
+    CategoryInputRef,
+} from '../../../../categories/services/category-resolution.service';
 
 export interface CreateSimpleProductInput {
     vendorId: string;
@@ -21,7 +26,8 @@ export interface CreateSimpleProductInput {
     description: string;
     /** The structured description `description` is the plain-text projection of. */
     descriptionRich?: RichDoc | null;
-    category: string;
+    /** 1–5 categories, ids or typed names — see `CategoryResolutionService`. */
+    categories: CategoryInputRef[];
     tags?: string[];
     fileIds?: string[];
     seoTitle?: string;
@@ -39,7 +45,6 @@ export interface CreateSimpleProductInput {
     width?: number;
     height?: number;
 
-    freeDelivery: boolean;
     pickupLocation?: {
         source: PickupLocationSource;
         vendorAddressId?: string | null;
@@ -76,6 +81,7 @@ export class SimpleProductCreateService {
         private readonly fileReferenceService: FileReferenceService,
         private readonly pickupLocationResolver: PickupLocationResolver,
         private readonly transactionManager: TransactionManager,
+        private readonly categoryResolver: CategoryResolutionService = categoryResolutionService,
     ) { }
 
     async execute(input: CreateSimpleProductInput): Promise<CreateSimpleProductResult> {
@@ -111,6 +117,14 @@ export class SimpleProductCreateService {
             variantLabel: requestedSku || input.title.trim(),
         });
 
+        // Outside the transaction, last of the pre-checks: it may CREATE a category
+        // (a write this transaction should not own — a rolled-back product must not
+        // take a category another vendor may already be using with it), and every
+        // cheaper refusal above has already had its chance.
+        const categoryIds = (
+            await this.categoryResolver.resolveForWrite(input.categories, { source: 'vendor', vendorId: input.vendorId })
+        ).map((id) => id.toString());
+
         return this.transactionManager.runInTransaction(async (session) => {
             // Explicit choice wins; otherwise derive from the vendor's profile.
             // Neither path can fail the create — an underivable location just
@@ -131,7 +145,6 @@ export class SimpleProductCreateService {
                 : await this.pickupLocationResolver.resolveForVendor(input.vendorId, { session });
 
             const delivery = mergeDeliveryConfig(undefined, {
-                freeDelivery: input.freeDelivery,
                 pickupLocation: resolved.pickupLocation
                     ? {
                         source: resolved.pickupLocation.source,
@@ -153,7 +166,7 @@ export class SimpleProductCreateService {
                 // that has no formatting editor at all.
                 descriptionRich: input.descriptionRich ?? null,
                 slug,
-                category: input.category,
+                categoryIds,
                 tags: input.tags ?? [],
                 seo: { title: input.seoTitle ?? '', description: input.seoDescription ?? '' },
                 hasVariants: false,

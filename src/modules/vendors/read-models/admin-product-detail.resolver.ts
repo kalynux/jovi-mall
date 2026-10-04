@@ -23,6 +23,7 @@ import {
 import { MagazinRepository } from '../../magazin/repositories/magazin.repository';
 import { VendorModel } from '../vendor.model';
 import { AgencyStockLevelRepository } from '../../inventory/repositories/agency-stock-level.repository';
+import { categoryCatalogCache, CategoryRef } from '../../categories/services/category-catalog.cache';
 
 /**
  * ── The administrative product detail ────────────────────────────────────────
@@ -121,7 +122,10 @@ export interface AdminProductDetailDto {
     vendorId: string;
     title: string;
     slug: string;
-    category: string;
+    /** The product's categories, resolved, in the vendor's order. */
+    categories: CategoryRef[];
+    /** ⚠ DEPRECATED — `categories[0].name`, or null. */
+    category: string | null;
     tags: string[];
     type: 'physical' | 'digital' | 'service';
     status: string;
@@ -231,12 +235,15 @@ export class AdminProductDetailResolver {
         ),
         );
 
+        const categories = await categoryCatalogCache.refsFor(product.categoryIds);
+
         return {
             id: String(product._id),
             vendorId: product.vendorId.toString(),
             title: product.title,
             slug: product.slug,
-            category: product.category,
+            categories,
+            category: categories[0]?.name ?? null,
             tags: product.tags ?? [],
             type: product.type,
             status: product.status,

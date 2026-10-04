@@ -34,6 +34,9 @@ export const MODELS = Object.freeze({
   // Catalog
   PRODUCT: 'Product',
   PRODUCT_VARIANT: 'ProductVariant',
+  // The ONE marketplace-wide category list. A product holds 1–5 of these by id
+  // (`Product.categoryIds`) — see modules/categories.
+  PRODUCT_CATEGORY: 'ProductCategory',
   PRODUCT_OPTION: 'ProductOption',
   PRODUCT_OPTION_VALUE: 'ProductOptionValue',
   SHIPPING_CONFIG: 'ShippingConfig',
@@ -57,6 +60,13 @@ export const MODELS = Object.freeze({
   // An agency's (or its agent's) proposed per-shipment delivery fee, awaiting the
   // vendor's approval — see modules/delivery-fee-proposals.
   DELIVERY_FEE_PROPOSAL: 'DeliveryFeeProposal',
+  // ADR-A11 (W-E): a customer asking one agency for a combined price on several of their
+  // parcels, and the ledger of delivery-fee money returned to customers.
+  COMBINED_DELIVERY_REQUEST: 'CombinedDeliveryRequest',
+  DELIVERY_FEE_REFUND: 'DeliveryFeeRefund',
+  // An administrator's request to close ONE role of a user, awaiting that user's
+  // confirmation — ADR-A10, modules/role-closure.
+  ROLE_CLOSURE_REQUEST: 'RoleClosureRequest',
   FILE: 'File',
   FILE_REFERENCE: 'FileReference',
   FILE_CLEANUP_AUDIT: 'FileCleanupAudit',
@@ -297,6 +307,7 @@ export const COLLECTIONS = Object.freeze({
   // Catalog
   PRODUCT: 'products',
   PRODUCT_VARIANT: 'product_variants',
+  PRODUCT_CATEGORY: 'product_categories',
   PRODUCT_OPTION: 'product_options',
   PRODUCT_OPTION_VALUE: 'product_option_values',
   SHIPPING_CONFIG: 'shipping_configs',
@@ -309,6 +320,9 @@ export const COLLECTIONS = Object.freeze({
   AGENCY_STORAGE_INVOICE: 'agency_storage_invoices',
   STOCK_ADJUSTMENT_REQUEST: 'stock_adjustment_requests',
   DELIVERY_FEE_PROPOSAL: 'delivery_fee_proposals',
+  COMBINED_DELIVERY_REQUEST: 'combined_delivery_requests',
+  DELIVERY_FEE_REFUND: 'delivery_fee_refunds',
+  ROLE_CLOSURE_REQUEST: 'role_closure_requests',
   FILE: 'files',
   FILE_REFERENCE: 'file_references',
   FILE_CLEANUP_AUDIT: 'file_cleanup_audit',

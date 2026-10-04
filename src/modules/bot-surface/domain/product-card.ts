@@ -6,6 +6,8 @@ import {
     similarItemsActionId,
 } from './bot-action-id';
 import { botStorefrontLink } from './bot-list-window';
+import { botChrome, botChromeFill } from './bot-chrome-copy';
+import type { VendorDeliveryTerms } from '../../vendors/domain/delivery-terms';
 
 /**
  * ONE product, described the way a chat window can draw it — and channel-neutrally.
@@ -101,6 +103,13 @@ export interface BotProductCard {
      */
     similarToken?: string | null;
     saveToken?: string | null;
+    /**
+     * The SHOP's free-delivery terms as one line (ADR-A11 D-1 — there is no product flag any more):
+     * "Free delivery", "Free delivery from 20 000 XAF", or null (the shop charges delivery, shown
+     * at checkout; or nothing ships). Built by `deliveryTermsLine`. Optional for the same
+     * compatibility reason as `similarToken`; `toBotProductCard` always sets it.
+     */
+    deliveryText?: string | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -319,5 +328,32 @@ export function toBotProductCard(
         buyToken: buyable ? buyNowActionId(item.id, buyable) : null,
         similarToken: soldOut ? similarItemsActionId(item.id) : null,
         saveToken: soldOut ? saveForLaterActionId(item.id) : null,
+        // Only a parcel is delivered — a download or a service has no delivery terms to state.
+        deliveryText: item.type === 'physical' ? deliveryTermsLine(item.deliveryTerms, item.currency, language) : null,
     };
+}
+
+/**
+ * The shop's delivery terms as one card / detail line (ADR-A11 D-1 — free delivery is a SHOP
+ * setting; the product `freeDelivery` flag is gone, and the derived DTO boolean says only "always"):
+ *
+ *   always  "Free delivery"
+ *   above   "Free delivery from 20 000 XAF"
+ *   never   null — nothing is drawn; the fee is shown at checkout, where it is known
+ *
+ * ⚠ **`null` for `never`, never "Delivery: X".** A card cannot know the fee: it depends on the
+ * agency, the weight of the whole basket and the drop-off region, all of which checkout reads.
+ * Re-exported by `delivery-lines.ts`, where every other delivery wording lives.
+ */
+export function deliveryTermsLine(
+    terms: VendorDeliveryTerms | null | undefined,
+    currency: string,
+    language: string | null | undefined,
+): string | null {
+    if (!terms) return null;
+    if (terms.mode === 'always') return botChrome('cardFreeDelivery', language);
+    if (terms.mode === 'above' && typeof terms.freeAboveAmount === 'number' && terms.freeAboveAmount > 0) {
+        return botChromeFill('cardFreeDeliveryFrom', language, { amount: formatBotPrice(terms.freeAboveAmount, currency) });
+    }
+    return null;
 }

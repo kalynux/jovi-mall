@@ -297,18 +297,24 @@ and checkout will refuse it. Far better to learn that here than at the pay butto
 
 ### Success — `200 OK`
 
+**Changed 2026-10-04 — [ADR-A11](../../docs/ADR-A11-CUSTOMER-PAID-DELIVERY.md) (customer-paid
+delivery).** Free delivery is now each **shop's** setting (`always` · `never` · `above` a basket
+amount). Where the customer pays, `delivery` is the real fee and **`total` already includes it**.
+Two shops, one free and one customer-paid:
+
 ```jsonc
 {
   "success": true,
   "data": {
     "currency": "XAF",
-    "subtotal": 24000,
-    "delivery": 0,              // what the CUSTOMER is charged for delivery
-    "absorbedByVendor": 1500,   // what the VENDOR pays the agency — informational
+    "subtotal": 30000,
+    "delivery": 1500,           // what the CUSTOMER is charged for delivery (Σ customer-paid shops)
+    "absorbedByVendor": 1800,   // what the free-delivery SHOPS pay their agencies — never show it
     "tax": 0,
     "discount": 0,
-    "total": 24000,
+    "total": 31500,             // subtotal + delivery — exactly what checkout will charge
     "paymentMethod": "online",
+    "regionKnown": true,        // false → priced without a drop-off region (in-region); see below
     "meetsDeliveryMinimum": true,   // false → checkout will refuse; see below
     "cashOnDelivery": {             // would a COD checkout be accepted? — see below
       "available": true,
@@ -318,33 +324,72 @@ and checkout will refuse it. Far better to learn that here than at the pay butto
     },
     "perVendor": [
       {
-        "vendorId": "507f…aaa", "subtotal": 24000, "delivery": 0, "absorbedByVendor": 1500,
+        "vendorId": "507f…aaa",
+        "subtotal": 24000,
+        "delivery": 0,              // the shop pays — show "Free delivery"
+        "total": 24000,
+        "deliveryPayer": "vendor",
+        "deliveryPayerReason": "shop_always",
+        "absorbedByVendor": 1800,
+        "freeDelivery": { "mode": "always", "freeAboveAmount": null, "shortfall": null },
+        "shipments": [
+          { "agencyId": "66ag…01", "weightGrams": 2400, "outOfRegion": false, "fee": 1800,
+            "components": { "pickup_base": 1000, "weight_extra": 800, "region_surcharge": 0,
+                            "storage": 0, "cap_applied": false, "kg": 3, "weight_grams": 2400,
+                            "out_of_region": false, "flat_fallback": false } }
+        ],
         "deliveryMinimum": {
-          "met": true,
-          "checkedPer": "order",          // "shipment" for cash on delivery
-          "maxDeliveryPercent": 30,
-          "shortfall": 0,                 // how much more is needed from THIS shop
-          "units": [
-            { "agencyId": null, "subtotal": 24000, "met": true, "reason": null,
-              "minimumSubtotal": 5000, "shortfall": 0 }
-          ]
+          "met": true, "checkedPer": "order", "maxDeliveryPercent": 30, "shortfall": 0,
+          "units": [ { "agencyId": null, "subtotal": 24000, "met": true, "reason": null,
+                       "minimumSubtotal": 6000, "shortfall": 0 } ]
         }
+      },
+      {
+        "vendorId": "507f…bbb",
+        "subtotal": 6000,
+        "delivery": 1500,           // the customer pays this shop's fee
+        "total": 7500,
+        "deliveryPayer": "customer",
+        "deliveryPayerReason": "threshold_not_met",
+        "absorbedByVendor": 0,
+        "freeDelivery": { "mode": "above", "freeAboveAmount": 10000, "shortfall": 4000 },
+        "shipments": [
+          { "agencyId": "66ag…02", "weightGrams": 800, "outOfRegion": false, "fee": 1500, "components": { "…": "…" } }
+        ],
+        "deliveryMinimum": { "met": true, "checkedPer": "order", "maxDeliveryPercent": 30, "shortfall": 0, "units": [ "…" ] }
       }
     ]
   }
 }
 ```
 
-> **`delivery` is 0 and `total` is the subtotal, and that is the truth rather than a stub.**
-> The agency's delivery fee is real and *is* charged — but to the **vendor**: `splitOrder`
-> computes `vendorNet = gross − commission − deliveryTotal` off the items subtotal. Adding it
-> to the customer's total as well would collect it twice.
->
-> `absorbedByVendor` is reported so the UI can say "delivery included" and mean it. It is an
-> **estimate** — an agency editing its pricing, or a vendor re-pointing a product's delivery
-> agency, moves it. The customer-facing total is unaffected by both. `null` means it could not
-> be estimated (a digital cart, or an agency with no pricing policy configured), which is
-> deliberately distinct from `0`.
+**What each delivery field means:**
+
+| Field | Meaning |
+|---|---|
+| `delivery` | Σ of the shops' `perVendor[].delivery` — what the customer pays for delivery. **Already in `total`.** |
+| `perVendor[].delivery` / `.total` | What the customer pays for THIS shop's delivery (0 when the shop pays), and `subtotal + delivery`. |
+| `perVendor[].deliveryPayer` | `vendor` (free delivery for the customer) · `customer` · `null` for a digital-only shop. |
+| `perVendor[].deliveryPayerReason` | `shop_always` · `shop_threshold_met` (free) · `shop_never` · `threshold_not_met` · `cap_fallback` (the customer pays). |
+| `perVendor[].freeDelivery` | The shop's terms: `mode` (`always` · `never` · `above`), `freeAboveAmount` (the threshold when `above`), and **`shortfall`** — how much more **from that shop** would make delivery free (the threshold's gap, or what the 30% cap needs after a `cap_fallback`). `null` when delivery is already free, the shop never delivers free, or no basket size can make it free. `null` (the whole object) for a digital-only shop. |
+| `perVendor[].shipments[]` | One per delivery agency the shop's items go through (one fee each): `fee`, `weightGrams` (Σ unit weight × qty), `outOfRegion`, and `components` (the formula's itemisation, for an optional breakdown; `null` when the agency has no pricing policy). |
+| `regionKnown` | Whether a drop-off region could be read (the requested `deliveryAddressId`, else the default saved address). `false` ⇒ every shipment was priced **in-region** (never surcharged on a guess); the fee can rise at checkout once the address is chosen. |
+| `absorbedByVendor` | What free-delivery shops pay their agencies — **informational, internal; never show it to the customer** and never add it to anything. `null` for a digital cart. |
+
+**How to render it (storefront cart, checkout, the bots):**
+
+- One delivery line **per shop** that ships: `perVendor[].delivery > 0` → the formatted amount;
+  `0` → **"Free delivery"**. Do not sum anything yourself — `total` is the figure to charge.
+- When `freeDelivery.shortfall` is a positive number, show a non-blocking hint: **"Add 4 000 XAF
+  more from <shop> for free delivery."** Items from another shop do not help.
+- ⚠ **"Delivery included" is now WRONG** as blanket copy. It was true when every shop paid
+  delivery; render the per-shop line instead.
+- Send `deliveryAddressId` once the customer picks an address: the out-of-region surcharge
+  depends on it, so the quote (and `total`) can change with the address.
+
+The quote is an **estimate** on the same terms as before — an agency editing its pricing, a
+vendor editing its delivery terms or re-pointing a product's agency, or a different drop-off
+moves it. Checkout prices with the same function and is the authority.
 
 `tax` and `discount` are pinned zeros: there is no tax engine and no coupon model. They are
 present rather than absent so the receipt shape does not change the day either arrives, and
@@ -363,9 +408,15 @@ The quote never refuses for the delivery minimum — it **reports** it. Checkout
 
 ### The delivery minimum
 
-**New 2026-09-27 — [ADR-A07](../../docs/ADR-A07-DELIVERY-COST-CAP.md).** Because the vendor pays
-the delivery fee, checkout refuses a shop's part of the basket that is too small to carry it,
-with `422 ORDER_BELOW_DELIVERY_MINIMUM`. The quote tells you in advance, per shop:
+**New 2026-09-27 — [ADR-A07](../../docs/ADR-A07-DELIVERY-COST-CAP.md), amended 2026-10-04 by
+[ADR-A11](../../docs/ADR-A11-CUSTOMER-PAID-DELIVERY.md).** Checkout refuses a shop's part of the
+basket that is too small for the shop to sell at all, with `422 ORDER_BELOW_DELIVERY_MINIMUM`.
+
+⚠ **Since ADR-A11 this is rare.** A free-delivery shop whose part cannot carry its fee (the 30%
+cap) no longer refuses — it **falls back to customer-paid** delivery (`deliveryPayerReason:
+"cap_fallback"`) and `freeDelivery.shortfall` says how much more makes it free again. The refusal
+remains only when even customer-paid delivery leaves the shop earning nothing (its commission and
+the cash-on-delivery fee stay the shop's). The quote tells you in advance, per shop:
 
 - **`perVendor[].deliveryMinimum.met: false`** — this shop's items will be refused. Say how
   much more to add **from that shop**: `shortfall`, in the cart currency. Items from a different
@@ -380,7 +431,7 @@ with `422 ORDER_BELOW_DELIVERY_MINIMUM`. The quote tells you in advance, per sho
   estimate was not possible. Checkout still decides.
 
 Disable or annotate the pay button while `meetsDeliveryMinimum` is `false`. It is an
-**estimate** on the same terms as `absorbedByVendor` — checkout is the authority, and it also
+**estimate** like the rest of the quote — checkout is the authority, and it also
 counts a price agreed in chat, which the quote cannot see.
 
 Never present the rule to the customer in money terms beyond the shortfall: the vendor's

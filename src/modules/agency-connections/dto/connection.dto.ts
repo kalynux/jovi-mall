@@ -29,7 +29,7 @@ export interface ConnectionDto {
   termination: {
     terminatedByRole: ConnectionParty;
     terminatedAt: string;
-    reason: 'unilateral' | 'reapproval_declined';
+    reason: 'unilateral' | 'reapproval_declined' | 'role_closed';
     note: string | null;
   } | null;
 

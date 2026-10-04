@@ -82,7 +82,10 @@ export interface ProductListItem {
   status: ProductStatus;
   /** Tells the UI which editor to open for this row — simple or advanced. */
   mode: ProductMode;
-  category: string;
+  /** The product's categories, resolved, in the vendor's order. */
+  categories: Array<{ id: string; name: string; slug: string }>;
+  /** ⚠ DEPRECATED — `categories[0].name`, or null. */
+  category: string | null;
   fileIds: FileDetail[];
   hasVariants: boolean;
   vectorisationEnabled: boolean;
@@ -100,7 +103,7 @@ export interface ProductListProjection {
   type: ProductType;
   status: ProductStatus;
   mode: ProductMode;
-  category: string;
+  categoryIds: string[];
   fileIds: string[];
   hasVariants: boolean;
   vectorisationEnabled: boolean;

@@ -4100,6 +4100,7 @@ async function main(): Promise<void> {
                     rating: null,
                     store: { slug: 'techhub', name: 'TechHub', isOpen: true },
                     freeDelivery: false,
+                    deliveryTerms: { mode: 'never', freeAboveAmount: null },
                     updatedAt: new Date().toISOString(),
                 } as never,
                 'bbbbbbbbbbbbbbbbbbbbbbb1',
@@ -4137,6 +4138,7 @@ async function main(): Promise<void> {
                 rating: null,
                 store: { slug: 'sawa', name: 'Sawa Home', isOpen: true },
                 freeDelivery: false,
+                deliveryTerms: { mode: 'never', freeAboveAmount: null },
                 updatedAt: new Date().toISOString(),
             } as never,
             // A service DOES have a default variant — that is precisely why the type has to
@@ -4164,6 +4166,7 @@ async function main(): Promise<void> {
                 rating: null,
                 store: { slug: 'techhub', name: 'TechHub', isOpen: true },
                 freeDelivery: false,
+                deliveryTerms: { mode: 'never', freeAboveAmount: null },
                 updatedAt: new Date().toISOString(),
             } as never,
             null,

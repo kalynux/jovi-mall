@@ -4,7 +4,14 @@ import { renderTemplate, RenderContext } from './message-renderer';
 import { Language, DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES } from './notification-i18n';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
-import { ChannelText, SituationMessages, ButtonDef } from './notification-catalog';
+import {
+    ChannelText,
+    SituationMessages,
+    ButtonDef,
+    closureRequestedBase,
+    CLOSURE_SUBJECT,
+    CLOSURE_BUTTON
+} from './notification-catalog';
 
 /**
  * Agency Notification Message Catalog (localized)
@@ -1003,6 +1010,24 @@ export const AGENCY_NOTIFICATION_CATALOG: Record<AgencyNotificationType, Situati
         button: SHIPMENT_BUTTON
     },
 
+    // ADR-A11 (D-8): a customer asks for ONE price on several of their parcels this agency
+    // carries. The agency answers by LOWERING fees (applied at once) or declining. Links to the
+    // first parcel — the request lives beside it on the shipments screen.
+    'combined_delivery_request.received': {
+        base: {
+            en: { subject: 'Combined delivery price requested', body: 'A customer asks for a combined price on {{parcelCount}} parcels you carry from one checkout (currently {{currency}} {{totalFeeFormatted}} in delivery fees). Lower the fees or decline from your combined requests.' },
+            fr: { subject: 'Prix de livraison groupé demandé', body: 'Un client demande un prix groupé pour {{parcelCount}} colis que vous transportez d\'une même commande (actuellement {{currency}} {{totalFeeFormatted}} de frais de livraison). Baissez les frais ou refusez depuis vos demandes groupées.' },
+            pt: { subject: 'Preço de entrega conjunto pedido', body: 'Um cliente pede um preço conjunto para {{parcelCount}} encomendas que transporta de uma mesma compra (atualmente {{currency}} {{totalFeeFormatted}} em taxas de entrega). Baixe as taxas ou recuse nos pedidos conjuntos.' },
+            es: { subject: 'Precio de envío combinado solicitado', body: 'Un cliente pide un precio combinado para {{parcelCount}} paquetes que llevas de una misma compra (ahora {{currency}} {{totalFeeFormatted}} en tarifas de envío). Baja las tarifas o rechaza desde tus solicitudes combinadas.' },
+            ar: { subject: 'طلب سعر توصيل مجمّع', body: 'يطلب عميل سعرًا مجمّعًا لـ {{parcelCount}} طرود تنقلها من عملية شراء واحدة (حاليًا {{currency}} {{totalFeeFormatted}} رسوم توصيل). اخفض الرسوم أو ارفض من طلباتك المجمّعة.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agency_combined_delivery_request_received', bodyParams: ['{{parcelCount}}', '{{currency}}', '{{totalFeeFormatted}}'] }
+        },
+        button: SHIPMENT_BUTTON
+    },
+
     // ─── COD limits (2026-10-02) ─────────────────────────────────────────────
     // A vendor's force: true dispatch. Sent INSTEAD of shipment.assigned for that shipment
     // (one notification per hand-off, never two).
@@ -1081,6 +1106,57 @@ export const AGENCY_NOTIFICATION_CATALOG: Record<AgencyNotificationType, Situati
             template: { name: 'agency_cod_limit_released', bodyParams: ['{{currency}}', '{{limitFormatted}}'] }
         },
         button: COD_LIMIT_BUTTON
+    },
+
+    // ─── Role closure (ADR-A10) ──────────────────────────────────────────────
+
+    /** An administrator asked to close this agency account. Ungated — see the model's note. */
+    'account.closure_requested': {
+        base: closureRequestedBase(CLOSURE_SUBJECT.agency),
+        whatsapp: {
+            text: {},
+            template: { name: 'agency_account_closure_requested', bodyParams: ['{{reason}}', '{{expiresAt}}'] }
+        },
+        button: CLOSURE_BUTTON
+    },
+
+    /** A connected VENDOR closed its account, so the connection ended. */
+    'connection.ended_by_closure': {
+        base: {
+            en: { subject: 'Connection ended', body: '{{vendorName}} closed their account on Wi-Mall, so your connection with them has ended.' },
+            fr: { subject: 'Connexion terminée', body: '{{vendorName}} a fermé son compte sur Wi-Mall : votre connexion avec ce vendeur a donc pris fin.' },
+            pt: { subject: 'Conexão terminada', body: '{{vendorName}} encerrou a sua conta na Wi-Mall, por isso a sua conexão com este vendedor terminou.' },
+            es: { subject: 'Conexión finalizada', body: '{{vendorName}} cerró su cuenta en Wi-Mall, así que tu conexión con este vendedor ha finalizado.' },
+            ar: { subject: 'انتهى الاتصال', body: 'أغلق {{vendorName}} حسابه على Wi-Mall، لذا انتهى اتصالك به.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agency_connection_ended_closure', bodyParams: ['{{vendorName}}'] }
+        },
+        button: CONNECTION_BUTTON
+    },
+
+    /**
+     * A contracted AGENT closed their account, so the contract ended. Same `agents/{{contractId}}`
+     * path as every `agent_contract.*`, under its own label — "View request" would be false here.
+     */
+    'agent_contract.ended_by_closure': {
+        base: {
+            en: { subject: 'Agent contract ended', body: '{{agentName}} closed their account on Wi-Mall, so your contract with them has ended.' },
+            fr: { subject: 'Contrat d\'agent terminé', body: '{{agentName}} a fermé son compte sur Wi-Mall : votre contrat avec cet agent a donc pris fin.' },
+            pt: { subject: 'Contrato de agente terminado', body: '{{agentName}} encerrou a sua conta na Wi-Mall, por isso o seu contrato com este agente terminou.' },
+            es: { subject: 'Contrato de agente finalizado', body: '{{agentName}} cerró su cuenta en Wi-Mall, así que tu contrato con este agente ha finalizado.' },
+            ar: { subject: 'انتهى عقد الوكيل', body: 'أغلق {{agentName}} حسابه على Wi-Mall، لذا انتهى عقدك معه.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agency_agent_contract_ended_closure', bodyParams: ['{{agentName}}'] }
+        },
+        button: {
+            type: 'url',
+            label: { en: 'View agent', fr: 'Voir l\'agent', pt: 'Ver agente', es: 'Ver agente', ar: 'عرض الوكيل' },
+            urlSuffix: 'agents/{{contractId}}'
+        }
     }
 };
 

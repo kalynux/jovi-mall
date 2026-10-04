@@ -18,6 +18,11 @@ import {
   assertCountableStockForAgencyStorage,
   requiresCountableStock,
 } from './agency-storage-stock.rule';
+import {
+  categoryResolutionService,
+  CategoryResolutionService,
+  CategoryInputRef,
+} from '../../../categories/services/category-resolution.service';
 
 // Per-variant asset/limits live on ProductVariant.digitalConfig now.
 // Only the product-wide `isActive` kill switch is updatable here.
@@ -27,7 +32,6 @@ export interface UpdateDigitalConfigDto {
 
 export interface UpdateDeliveryConfigDto {
   agencyId?: string | null;
-  freeDelivery?: boolean;
   pickupLocation?: {
     source: 'vendor_address' | 'agency_storage';
     vendorAddressId?: string | null;
@@ -47,7 +51,8 @@ export interface UpdateProductCommand {
    */
   descriptionRich?: RichDoc | null;
   fileIds?: string[];            // Full array replacement for product media
-  category?: string;
+  /** Full replacement of the product's 1–5 categories; absent leaves them alone. */
+  categories?: CategoryInputRef[];
   tags?: string[];
   seoTitle?: string;
   seoDescription?: string;
@@ -73,6 +78,7 @@ export class ProductUpdateService {
     // Read only when pickup becomes `agency_storage` — the countable-stock rule is
     // the one delivery check that needs variants.
     private readonly variantRepository: IVariantRepository = new VariantRepositoryMongo(),
+    private readonly categoryResolver: CategoryResolutionService = categoryResolutionService,
   ) { }
 
   async execute(
@@ -113,7 +119,6 @@ export class ProductUpdateService {
     // guard here would silently turn "the vendor deleted their formatting" into
     // "leave it alone" — the one case this field exists to get right.
     if (command.descriptionRich !== undefined) updates.descriptionRich = command.descriptionRich;
-    if (command.category !== undefined) updates.category = command.category;
     if (command.tags !== undefined) updates.tags = command.tags;
 
     // Full array replacement — frontend must send the complete desired array
@@ -216,6 +221,15 @@ export class ProductUpdateService {
       }
 
       (updates as any).delivery = merged;
+    }
+
+    // Categories last among the checks: resolving may CREATE a category, so every
+    // refusal that can happen without one has already had its chance. Full
+    // replacement, like `fileIds` — the client sends the complete desired list.
+    if (command.categories !== undefined) {
+      updates.categoryIds = (
+        await this.categoryResolver.resolveForWrite(command.categories, { source: 'vendor', vendorId })
+      ).map((id) => id.toString());
     }
 
     // Keep file references in sync with the replaced media array. Runs before the

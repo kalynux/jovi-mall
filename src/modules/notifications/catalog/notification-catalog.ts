@@ -221,6 +221,84 @@ const PRODUCT_BUTTON: ButtonDef = {
 };
 
 
+// ─── Role closure (ADR-A10) — shared by all four stacks ────────────────────
+
+/**
+ * The `account.closure_requested` copy, for one audience's word for what is being closed.
+ *
+ * Exported and shared because the four stacks say the SAME sentence about four different
+ * things (an account, a shop, an agency account, an agent account), and it is a sentence
+ * whose wording is constrained rather than stylistic:
+ *
+ *   - ⛔ **"close", never "delete".** ADR-A02 D-2 forbids describing a closure as deletion:
+ *     the role is anonymised and retained, not removed.
+ *   - **"Nothing happens unless you confirm"** is the load-bearing clause — an administrator
+ *     can only REQUEST; the owner decides while signed in.
+ *   - `{{expiresAt}}` is placed mid-sentence on purpose: Meta refuses a template body that
+ *     ends on a variable, and a mid-sentence date needs no generator padding.
+ *
+ * Both placeholders are always filled by the handlers (`reason` falls back to a neutral
+ * phrase), because an empty WhatsApp parameter is a refused send.
+ */
+export function closureRequestedBase(what: Record<Language, string>): Record<Language, ChannelText> {
+    return {
+        en: {
+            subject: `Confirm closing your ${what.en}`,
+            body: `An administrator has asked to close your ${what.en} on Wi-Mall: {{reason}}. Nothing happens unless you confirm. Open your account settings before {{expiresAt}} to confirm or decline.`
+        },
+        fr: {
+            subject: `Confirmez la fermeture de ${what.fr}`,
+            body: `Un administrateur a demandé la fermeture de ${what.fr} sur Wi-Mall : {{reason}}. Rien ne se passe sans votre confirmation. Ouvrez les paramètres de votre compte avant {{expiresAt}} pour confirmer ou refuser.`
+        },
+        pt: {
+            subject: `Confirme o encerramento d${what.pt}`,
+            body: `Um administrador pediu o encerramento d${what.pt} na Wi-Mall: {{reason}}. Nada acontece sem a sua confirmação. Abra as definições da sua conta antes de {{expiresAt}} para confirmar ou recusar.`
+        },
+        es: {
+            subject: `Confirma el cierre de ${what.es}`,
+            body: `Un administrador ha pedido cerrar ${what.es} en Wi-Mall: {{reason}}. No pasará nada a menos que lo confirmes. Abre los ajustes de tu cuenta antes de {{expiresAt}} para confirmar o rechazar.`
+        },
+        ar: {
+            subject: `أكّد إغلاق ${what.ar}`,
+            body: `طلب أحد المسؤولين إغلاق ${what.ar} على Wi-Mall: {{reason}}. لن يحدث شيء ما لم تؤكّد. افتح إعدادات حسابك قبل {{expiresAt}} للتأكيد أو الرفض.`
+        }
+    };
+}
+
+/**
+ * What each audience is asked to close, in the form `closureRequestedBase` splices in.
+ *
+ * ⚠ The Portuguese value carries its own contraction vowel (`a sua loja` → "d|a sua loja"),
+ * because "do"/"da" agrees with the noun and the sentence frame cannot know it.
+ */
+export const CLOSURE_SUBJECT = {
+    customer: { en: 'account', fr: 'votre compte', pt: 'a sua conta', es: 'tu cuenta', ar: 'حسابك' },
+    vendor: { en: 'shop', fr: 'votre boutique', pt: 'a sua loja', es: 'tu tienda', ar: 'متجرك' },
+    agency: { en: 'agency account', fr: 'votre compte d\'agence', pt: 'a sua conta de agência', es: 'tu cuenta de agencia', ar: 'حساب وكالتك' },
+    agent: { en: 'agent account', fr: 'votre compte d\'agent', pt: 'a sua conta de agente', es: 'tu cuenta de agente', ar: 'حسابك كوكيل' }
+} as const satisfies Record<string, Record<Language, string>>;
+
+/** The dashboard stacks' closure button label. The customer stack has its own. */
+export const REVIEW_CLOSURE_LABEL: Record<Language, string> = {
+    en: 'Review request',
+    fr: 'Examiner la demande',
+    pt: 'Rever o pedido',
+    es: 'Revisar la solicitud',
+    ar: 'مراجعة الطلب'
+};
+
+/**
+ * ⚠ **`account/closure` is a deep-link LABEL, translated by each app** (owner decision
+ * 2026-09-07, `api-doc/notifications/deep-links.md`) — the vendor, agency and agent apps each
+ * map it onto their own account-settings closure screen. No placeholder: an owner has at most
+ * one open closure request per role.
+ */
+export const CLOSURE_BUTTON: ButtonDef = {
+    type: 'url',
+    label: REVIEW_CLOSURE_LABEL,
+    urlSuffix: 'account/closure'
+};
+
 // ─── COD limits + delivery-fee proposals (2026-10-02) ───────────────────────
 
 const REVIEW_DELIVERY_FEE_LABEL: Record<Language, string> = {
@@ -760,6 +838,52 @@ export const NOTIFICATION_CATALOG: Record<NotificationType, SituationMessages> =
             template: { name: 'vendor_delivery_fee_proposal_withdrawn', bodyParams: ['{{agencyName}}', '{{orderNumber}}'] }
         },
         button: { type: 'url', label: VIEW_ORDER_LABEL, urlSuffix: 'orders/{{orderId}}' }
+    },
+
+    // ADR-A11 (D-10): the vendor moved a customer-paid parcel to an agency that costs more, and
+    // the customer declined to pay the difference — the vendor covers it. Money: deducted from the
+    // vendor's net on this order. (A vendor who covered it themselves is not told: they did it.)
+    'delivery_fee_proposal.customer_declined': {
+        base: {
+            en: { subject: 'You cover a delivery difference', body: 'The customer declined to pay the higher delivery fee after you changed the delivery company for order #{{orderNumber}}. The difference of {{currency}} {{differenceFormatted}} is deducted from your earnings on this order.' },
+            fr: { subject: 'Vous prenez en charge une différence de livraison', body: 'Le client a refusé de payer les frais de livraison plus élevés après votre changement de société de livraison pour la commande n°{{orderNumber}}. La différence de {{currency}} {{differenceFormatted}} est déduite de vos gains sur cette commande.' },
+            pt: { subject: 'Cobre uma diferença de entrega', body: 'O cliente recusou pagar a taxa de entrega mais alta depois de mudar a empresa de entregas do pedido nº{{orderNumber}}. A diferença de {{currency}} {{differenceFormatted}} é deduzida dos seus ganhos neste pedido.' },
+            es: { subject: 'Cubres una diferencia de envío', body: 'El cliente rechazó pagar la tarifa de envío más alta tras cambiar la empresa de envíos del pedido n.º{{orderNumber}}. La diferencia de {{currency}} {{differenceFormatted}} se descuenta de tus ganancias en este pedido.' },
+            ar: { subject: 'تتحمل فرق رسوم التوصيل', body: 'رفض العميل دفع رسوم التوصيل الأعلى بعد تغييرك لشركة التوصيل للطلب رقم {{orderNumber}}. يُخصم الفرق البالغ {{currency}} {{differenceFormatted}} من أرباحك على هذا الطلب.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_delivery_fee_customer_declined', bodyParams: ['{{orderNumber}}', '{{currency}}', '{{differenceFormatted}}'] }
+        },
+        button: { type: 'url', label: VIEW_ORDER_LABEL, urlSuffix: 'orders/{{orderId}}' }
+    },
+
+    // ─── Role closure (ADR-A10) ──────────────────────────────────────────────
+
+    /** An administrator asked to close this shop. Ungated — see the model's note. */
+    'account.closure_requested': {
+        base: closureRequestedBase(CLOSURE_SUBJECT.vendor),
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_account_closure_requested', bodyParams: ['{{reason}}', '{{expiresAt}}'] }
+        },
+        button: CLOSURE_BUTTON
+    },
+
+    /** The connected AGENCY closed its account, so the connection ended. */
+    'connection.ended_by_closure': {
+        base: {
+            en: { subject: 'Connection ended', body: '{{agencyName}} closed their account on Wi-Mall, so your connection with them has ended.' },
+            fr: { subject: 'Connexion terminée', body: '{{agencyName}} a fermé son compte sur Wi-Mall : votre connexion avec cette agence a donc pris fin.' },
+            pt: { subject: 'Conexão terminada', body: '{{agencyName}} encerrou a sua conta na Wi-Mall, por isso a sua conexão com esta agência terminou.' },
+            es: { subject: 'Conexión finalizada', body: '{{agencyName}} cerró su cuenta en Wi-Mall, así que tu conexión con esta agencia ha finalizado.' },
+            ar: { subject: 'انتهى الاتصال', body: 'أغلقت {{agencyName}} حسابها على Wi-Mall، لذا انتهى اتصالك بها.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_connection_ended_closure', bodyParams: ['{{agencyName}}'] }
+        },
+        button: { type: 'url', label: VIEW_CONNECTION_LABEL, urlSuffix: 'agency-connections/{{connectionId}}' }
     }
 };
 

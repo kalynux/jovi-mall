@@ -139,8 +139,9 @@ export class PublicCatalogController {
     /**
      * GET /api/public/categories
      *
-     * `Product.category` is a plain indexed string with no Category collection, model or
-     * taxonomy anywhere — so the chip list is derived, over exactly the browse filter.
+     * `{ id, name, slug, productCount }` per category of the shared list that has at least
+     * one publishable product — derived over exactly the browse filter, so an empty shelf
+     * never becomes a chip. Use `slug` (or `id`) for `?category=`.
      * Returns a bare array (no `meta`): it is a small complete set, not a page.
      */
     static listCategories = asyncHandler(async (_req: Request, res: Response) => {

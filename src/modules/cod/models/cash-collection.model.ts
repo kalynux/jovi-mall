@@ -62,8 +62,18 @@ export interface ICashCollection extends Document {
   customer_id: mongoose.Types.ObjectId;
   vendor_id: mongoose.Types.ObjectId;
 
-  /** Cash to collect for this shipment: Σ item price × qty (snapshot). */
+  /**
+   * Cash to collect for this shipment (snapshot): `items_amount + delivery_fee_amount`.
+   * Before ADR-A11 it was the items alone (and those rows carry no breakdown).
+   */
   expected_amount: number;
+  /** Σ order-item price × shipment qty — the goods. The split's gross and the COD fee's base (D-5). */
+  items_amount?: number | null;
+  /**
+   * The delivery fee the customer hands the agent with the goods — the shipment's
+   * `customer_delivery_fee` on a customer-paid shipment, 0 on a vendor-paid one (ADR-A11).
+   */
+  delivery_fee_amount?: number | null;
   currency: string;
 
   status: CashCollectionStatus;
@@ -107,6 +117,9 @@ const CashCollectionSchema = new Schema<ICashCollection>(
     vendor_id: { type: Schema.Types.ObjectId, ref: MODELS.VENDOR, required: true },
 
     expected_amount: { type: Number, required: true, min: 0 },
+    // The breakdown of expected_amount (ADR-A11). Null on rows written before it.
+    items_amount: { type: Number, default: null, min: 0 },
+    delivery_fee_amount: { type: Number, default: null, min: 0 },
     currency: { type: String, required: true, uppercase: true, trim: true },
 
     status: {

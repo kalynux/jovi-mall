@@ -292,13 +292,13 @@ function main(): void {
 
   const existing = {
     agencyId: null,
-    freeDelivery: false,
     pickupLocation: { source: 'agency_storage' as const, vendorAddressId: null, agencyAddressId: ID_B },
   };
 
-  // The bug this whole function exists to prevent, now for the new field.
-  assert('a freeDelivery-only patch does NOT wipe the depot', () =>
-    mergeDeliveryConfig(existing, { freeDelivery: true }).pickup_location?.agency_address_id === ID_B);
+  // The bug this whole function exists to prevent, now for the new field. (Was a
+  // freeDelivery-only patch until ADR-A11 removed that product flag.)
+  assert('an agencyId-only patch does NOT wipe the depot', () =>
+    mergeDeliveryConfig(existing, { agencyId: ID_A }).pickup_location?.agency_address_id === ID_B);
 
   assert('a new depot replaces the old one', () =>
     mergeDeliveryConfig(existing, {

@@ -107,6 +107,13 @@ export function initializeCustomerNotificationEventConsumers(): void {
     eventBus.subscribe('ticket.note_created', handler.handleTicketNoteCreated.bind(handler));
     eventBus.subscribe('ticket.status_changed', handler.handleTicketStatusChanged.bind(handler));
 
+    // ── ADR-A10 role closure ────────────────────────────────────────────────
+    // Shared with the vendor, agency and agent consumers; the handler drops every payload whose
+    // `role` is not 'customer'. A customer is never the counterparty of
+    // `role_closure.relationships_ended` (it carries only contracts and connections), so that
+    // event is deliberately not subscribed here.
+    eventBus.subscribe('role_closure.requested', handler.handleRoleClosureRequested.bind(handler));
+
     console.log(
         `[CustomerNotifications] Event handlers registered successfully (FCM push: ${isFcmConfigured() ? 'enabled' : 'disabled'})`
     );

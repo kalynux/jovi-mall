@@ -85,6 +85,8 @@ export const ObjectIdSchema = z
 export const PublicProductListQuerySchema = z
     .object({
         q: z.string().trim().min(1).max(200).optional(),
+        // A category id, slug or name — resolved by the service (names: exact spelling
+        // variants only). An unknown value answers an empty page.
         category: z.string().trim().min(1).max(200).optional(),
         type: ProductTypesSchema,
         storeSlug: StoreSlugSchema.optional(),

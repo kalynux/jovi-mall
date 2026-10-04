@@ -288,9 +288,11 @@ twice, each time because a step added one and nobody re-counted.
 
 #### The delivery minimum — `cart_quote` and `checkout_create_orders` (2026-09-27)
 
-[ADR-A07](../../docs/ADR-A07-DELIVERY-COST-CAP.md). The vendor pays the delivery fee, so checkout
-refuses a shop's part of the basket that is too small to carry it: **`422
-ORDER_BELOW_DELIVERY_MINIMUM`**, with `error.customerMessage` in the customer's language ("add a
+[ADR-A07](../../docs/ADR-A07-DELIVERY-COST-CAP.md), amended by [ADR-A11](../../docs/ADR-A11-CUSTOMER-PAID-DELIVERY.md)
+(2026-10-04). Checkout refuses a shop's part of the basket that is too small for the shop to sell at
+all (even with the customer paying delivery the shop would earn nothing): **`422
+ORDER_BELOW_DELIVERY_MINIMUM`**. ⚠ Since ADR-A11 this is rare — a free-delivery shop that cannot
+carry its fee falls back to customer-paid delivery instead (see "Customer-paid delivery" below), with `error.customerMessage` in the customer's language ("add a
 little more from the same shop"). `details.shortfall` is the amount, in `details.currency`.
 
 - `cart_quote` accepts an optional **`paymentMethod`** (`online` | `cash_on_delivery`, default
@@ -314,6 +316,41 @@ little more from the same shop"). `details.shortfall` is the amount, in `details
   `checkoutDeliveryMinimum*` + `checkoutThisShop`, five languages. Published to `UP-wi-mall-mcp`
   on 2026-09-27 as version `65a8d170` (tool description only; rollback `0db01028`).
 - Never quote the vendor's fee or commission to the customer — the API does not return them.
+
+#### Customer-paid delivery — `cart_quote`, `checkout_review`, orders, cards (2026-10-04)
+
+[ADR-A11](../../docs/ADR-A11-CUSTOMER-PAID-DELIVERY.md). Free delivery is now each **shop's**
+setting (`always` · `never` · `above` an amount). Where the customer pays, the fee is added to the
+order total. What changed on this surface:
+
+- **`cart_quote`**: `delivery` is the real customer charge and `total` already includes it. Per shop:
+  `delivery`, `total`, `deliveryPayer` (`vendor` = free · `customer`), `deliveryPayerReason`,
+  `freeDelivery { mode, freeAboveAmount, shortfall }`, `shipments[]`; plus `regionKnown`.
+  `absorbedByVendor` (what free-delivery shops pay their agencies) is `never_relay` — never
+  mention it. Contract: `api-doc/customer/cart.md`.
+- **`checkout_review`** returns `deliveryLines[]` (`text`: "Delivery: 1 500 XAF" / "Delivery: Free" /
+  "Delivery · <shop>: …"; `hint`: "Add X more and delivery is free.") and `deliveryCharged`, and the
+  **drawn confirmation shows them before the total** — built server-side from the quote
+  (`domain/delivery-lines.ts`), in the customer's language. The model must not compute, estimate or
+  promise a fee; it quotes `deliveryLines` when asked. With several deliverable addresses and a
+  customer-paid fee, each address row CHOOSES (`yes:coa:<addressId>`) and draws that address's own
+  confirmation — the fee depends on the drop-off region — instead of placing at once. The review is
+  priced at the address it names.
+- **The Telegram checkout page** (`GET /api/bot/miniapp/s/co/:handle/data`) gains
+  `delivery: [{ label, valueText, hint }]`; the page draws rows and computes nothing. The **order
+  screen** gains `deliveryText` per checkout ("Incl. X delivery").
+- **Orders** (`orders_get_order`, `orders_get_group`): `priceBreakdown.delivery`, `deliveryPayer`,
+  `deliveryPayerReason`, `deliveryFees[] { shipmentId, amount, customerFeeRefundable? }`; COD entries
+  carry `itemsAmount` + `deliveryFeeAmount`.
+- **Product cards** (`catalog_show_products`) and the product screen add one line from the shop's
+  terms: "Free delivery" (`always`), "Free delivery from X" (`above`), nothing (`never`). The 5-card
+  WhatsApp carousel TEMPLATE is unchanged (its body parameters are fixed at approval).
+- `below_delivery_minimum` now fires only when even customer-paid delivery leaves the shop earning
+  nothing; its copy was reworded ("part of your basket is too small for its shop to send").
+- New chrome keys (five languages, `bot-chrome-copy.ts`): `checkoutDeliveryLabel`,
+  `checkoutDeliveryShopLabel`, `checkoutDeliveryFree`, `checkoutDeliveryLine`,
+  `checkoutFreeDeliveryHint`, `checkoutFreeDeliveryHintOneShop`, `cardFreeDelivery`,
+  `cardFreeDeliveryFrom`, `orderDeliveryIncluded`.
 
 
 Argument shapes are in [`tools/catalog.json`](./tools/catalog.json), which is the contract

@@ -522,6 +522,39 @@ function main(): void {
     agencyRoutes.includes("router.patch('/shipments/:id/delivery-fee-proposals/:proposalId', AgencyDeliveryFeeProposalController.edit)")
     && agentRoutes.includes("router.patch('/shipments/:id/delivery-fee-proposals/:proposalId', AgentDeliveryFeeProposalController.edit)"));
 
+  // ───────────────────────────────────────────────────────────────────────────
+  section('13. Customer-paid shipments (ADR-A11, W-E) — who answers');
+
+  const legacy = { status: 'pending' as const, proposed_by_role: 'agency' as const, proposed_by_agent_id: null };
+  assert('a row with no approver field reads as vendor-approver (pre-ADR-A11 rows unchanged)', () =>
+    JSON.stringify(resolveAvailableActions(legacy, { role: 'vendor' })) === '["approve","reject"]');
+  assert('a customer-approver proposal gives the VENDOR no verb', () =>
+    resolveAvailableActions({ ...legacy, approver: 'customer' }, { role: 'vendor' }).length === 0);
+  assert('…and the agency keeps withdraw + edit until the customer approves', () =>
+    JSON.stringify(resolveAvailableActions({ ...legacy, approver: 'customer' }, { role: 'agency' })) === '["withdraw","edit"]'
+    && JSON.stringify(resolveAvailableActions({ ...legacy, approver: 'customer', customer_approved: true }, { role: 'agency' })) === '["withdraw"]');
+  assert('the proposing agent loses edit once the customer approved', () =>
+    JSON.stringify(resolveAvailableActions(
+      { status: 'pending', proposed_by_role: 'agent', proposed_by_agent_id: AGENT, approver: 'customer', customer_approved: true },
+      { role: 'agent', agentId: AGENT }
+    )) === '["withdraw"]');
+  const svc13 = src('src/modules/delivery-fee-proposals/services/delivery-fee-proposal.service.ts');
+  assert('propose routes a customer-paid shipment to the customer flow BEFORE the vendor-net ceiling', () => {
+    const body = svc13.slice(svc13.indexOf('async propose('), svc13.indexOf('async raiseSystemProposal('));
+    return body.indexOf("deliveryPayerOf(order, shipment) === 'customer'") > 0
+      && body.indexOf("deliveryPayerOf(order, shipment) === 'customer'") < body.indexOf('checkVendorNet(');
+  });
+  assert('the vendor approve / reject refuse a proposal the customer answers', () =>
+    (svc13.match(/this\.assertVendorAnswers\(proposal\);/g) ?? []).length === 2);
+  assert('a change-agency difference does not spend the agency’s two-proposal cap', () =>
+    src('src/modules/delivery-fee-proposals/repositories/delivery-fee-proposal.repository.ts').includes("origin: { $ne: 'change_agency' }"));
+  assert('vendor cover route exists', () =>
+    src('src/modules/vendor/routes.ts').includes("router.post('/orders/:id/delivery-fee-proposals/:proposalId/cover', VendorDeliveryFeeProposalController.cover)"));
+  for (const code of ['DELIVERY_FEE_PROPOSAL_DIRECTION_CHANGED', 'DELIVERY_FEE_TOPUP_IN_PROGRESS', 'DELIVERY_FEE_TOPUP_NOT_DUE', 'DELIVERY_FEE_PROPOSAL_ORDER_NOT_PAID']) {
+    assert(`${code} exists and has a default message`, () =>
+      (ERROR_CODES as Record<string, string>)[code] === code && !!(DEFAULT_ERROR_MESSAGES as Record<string, string>)[code]);
+  }
+
   console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed\n`);
   if (failed > 0) process.exit(1);
 }

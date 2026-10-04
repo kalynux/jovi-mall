@@ -306,7 +306,11 @@ export class AgentProfileService {
     status: IDeliveryAgent['status'],
     reason: string | null
   ): Promise<GetAgentProfileResponseDto> {
-    await this.requireAgent(agentId);
+    const agent = await this.requireAgent(agentId);
+    // ADR-A10: a closed agent's status is final — its identity is gone, not archived.
+    if (agent.closed_at) {
+      throw createAppError(ERROR_CODES.ROLE_CLOSED, 409, undefined, { role: 'agent' });
+    }
     const updated = await this.agents.setStatus(agentId, status, reason);
     if (!updated) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
     return this.present(updated);

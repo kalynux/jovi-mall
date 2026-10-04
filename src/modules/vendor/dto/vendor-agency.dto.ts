@@ -1,6 +1,7 @@
 import { IAgencyPolicies, IDeliveryAgency } from '../../delivery/delivery-agency.model';
 import { IAgencyHeadquartersAddress } from '../../magazin/models/magazin.model';
 import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
+import { maxFeeCeilingOf } from '../../earnings/domain/delivery-pricing';
 
 /** The Magazin fields a vendor-facing agency list item needs (business surface). */
 export interface AgencyMagazinSummary {
@@ -53,6 +54,16 @@ export interface VendorAgencyPolicySummaryDto {
             /** 0 when the agency charges none. */
             peak_season_surcharge: number;
         };
+        /**
+         * Ceiling on one shipment's delivery fee (minor units); null = no ceiling. Applied last
+         * by the fee formula (ADR-A11). Added 2026-10-03.
+         */
+        max_fee_per_shipment: number | null;
+        /**
+         * Whether a customer may pay this agency's delivery fee in cash to the rider on an
+         * online-paid order (ADR-A11 D-7). Added 2026-10-03.
+         */
+        accepts_cash_delivery_fee: boolean;
     };
     returns: {
         /** Who bears the cost of return shipping. */
@@ -265,6 +276,10 @@ export class VendorAgencyMapper {
                     rto_fee: pricing.additional_fees.rto_fee,
                     peak_season_surcharge: pricing.additional_fees.peak_season_surcharge ?? 0,
                 },
+                // Read through the formula's own guard, so the vendor is shown exactly the
+                // ceiling the fee will honour (a stray 0 on a legacy row reads as none).
+                max_fee_per_shipment: maxFeeCeilingOf(policies),
+                accepts_cash_delivery_fee: pricing.accepts_cash_delivery_fee ?? false,
             },
             returns: {
                 payer: returns.payer,

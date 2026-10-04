@@ -13,6 +13,7 @@ import { PaymentOrchestratorService } from '../../../payments';
 import { PaymentStatus } from '../../../payments/models/payment-transaction.model';
 import { publicCatalogService } from '../../../catalog/services/public-catalog.service';
 import { formatBotPrice, toPublicMediaUrl } from '../../domain/product-card';
+import { BotDeliveryLine, deliveryLinesOf } from '../../domain/delivery-lines';
 import { botStorefrontLink, surfacePath } from '../../domain/bot-list-window';
 import { maskPhone } from '../../dto/bot-projections';
 import { composeTypedNumber, dialOptions } from '../../../../core/validation/dial-codes';
@@ -166,6 +167,24 @@ export interface CheckoutView {
      * Optional: absent means "do not offer", which is what every reader but the page assumes.
      */
     cashOnDelivery?: boolean;
+    /**
+     * ⭐ The delivery row(s), one per shop that ships (ADR-A11, customer-paid delivery): `label`
+     * ("Delivery" / "Delivery · <shop>"), `valueText` (the formatted fee or "Free") and `hint`
+     * (the non-blocking "add X more and delivery is free"). ALL strings, worded and formatted here
+     * from the cart quote by `deliveryLinesOf` — the page draws them and adds nothing up; the
+     * total is still `totalText`. `[]` for a download.
+     *
+     * Optional in the TYPE only because the WhatsApp form's fixtures predate it, exactly like
+     * `addAddressUrl`; `readCheckoutView` always sets it.
+     */
+    delivery?: CheckoutDeliveryRow[];
+}
+
+/** One delivery row as a screen draws it — every value already a string. */
+export interface CheckoutDeliveryRow {
+    label: string;
+    valueText: string;
+    hint: string | null;
 }
 
 /**
@@ -272,7 +291,29 @@ export async function readCheckoutView(handle: string): Promise<CheckoutView> {
         addAddressUrl: address ? null : botStorefrontLink(surfacePath('addresses'), session.language),
         /** The page draws Pay on delivery only when this is true (owner decision, 2026-09-27). */
         cashOnDelivery: await cashOnDeliveryOffered(session.customerId, cart.productType ?? null),
+        /**
+         * ADR-A11 — the delivery row(s), from the SAME quote as `totalText`. Quoted at the default
+         * address, which is exactly where this screen places (`createOrdersFromCart` resolves the
+         * default), so the row and the charge describe one drop-off.
+         */
+        delivery: (await deliveryLinesFor(quote, session.language)).map(({ label, valueText, hint }) => ({ label, valueText, hint })),
     };
+}
+
+/**
+ * The quote's delivery line(s), worded — the shop names from the Store (the business identity),
+ * one batched read. See `domain/delivery-lines.ts`: every number is the quote's.
+ */
+async function deliveryLinesFor(quote: CartQuote, language: string | null): Promise<BotDeliveryLine[]> {
+    const shipping = quote.perVendor.filter((line) => line.deliveryPayer !== null);
+    if (shipping.length === 0) return [];
+    const names = shipping.length > 1
+        ? await storeRepository.findNamesByVendorIds(shipping.map((line) => line.vendorId))
+        : new Map<string, { name: string }>();
+    const shopNames = new Map<string, string | null>(
+        shipping.map((line) => [line.vendorId, names.get(line.vendorId)?.name ?? null]),
+    );
+    return deliveryLinesOf(quote.perVendor, quote.currency, shopNames, language);
 }
 
 /**
@@ -497,6 +538,7 @@ export async function placeCheckoutCashOnDelivery(
 export async function readChatCheckout(
     customerId: string,
     requestedAddressId: string | null,
+    language: string | null = null,
 ): Promise<ChatCheckoutView> {
     assertMobileMoneyOffered();
 
@@ -506,20 +548,33 @@ export async function readChatCheckout(
     }
 
     const customer = await loadCustomer(customerId);
-    const quote = await cartQuoteService.quoteForCustomer(customerId);
     const addresses = customer.saved_addresses ?? [];
+    const destination = resolveChatDestination(cart.productType, addresses, requestedAddressId);
+    /**
+     * ⚠ **Quoted AT the destination the review names (ADR-A11).** A customer-paid delivery fee
+     * carries an out-of-region surcharge, so a total quoted for the default address would be the
+     * wrong figure for a confirmation that names another one. Only a deliverable (geocoded)
+     * address is passed — anything else is a blocked review, quoted as the screen quotes.
+     */
+    const quote = await cartQuoteService.quoteForCustomer(
+        customerId,
+        destination.kind === 'address' ? String(destination.address._id) : undefined,
+    );
+    const deliveryLines = await deliveryLinesFor(quote, language);
 
     return {
         cartId: cart.cartId,
         productType: cart.productType ?? null,
         lines: await toCheckoutLines(cart),
         totalText: formatBotPrice(quote.total, quote.currency),
-        destination: resolveChatDestination(cart.productType, addresses, requestedAddressId),
+        destination,
         addresses,
         accountIdentifier: accountIdentifier(customer),
         phoneMasked: await maskedPayerNumber(customer),
         deliveryShortfalls: await deliveryShortfallsOf(quote),
         cashOnDelivery: await cashOnDeliveryOffered(customerId, cart.productType ?? null),
+        deliveryLines,
+        deliveryCharged: deliveryLines.some((line) => line.charged),
     };
 }
 
@@ -642,6 +697,10 @@ export interface ChatCheckoutView {
     deliveryShortfalls: ChatDeliveryShortfall[];
     /** Every pay-on-delivery rule passes right now — `cashOnDeliveryRefusal`. */
     cashOnDelivery: boolean;
+    /** The delivery line(s), worded in the review's language (ADR-A11) — `[]` for a download. */
+    deliveryLines: BotDeliveryLine[];
+    /** The customer pays delivery on some shop's part — see `ChatReviewForReply.deliveryCharged`. */
+    deliveryCharged: boolean;
 }
 
 export class CheckoutController {
@@ -658,6 +717,8 @@ export class CheckoutController {
             dialOptions: dialOptions(view.language),
             addAddressUrl: view.addAddressUrl ?? null,
             cashOnDelivery: view.cashOnDelivery,
+            /** ADR-A11 — the delivery row(s), every value a string. The page computes nothing. */
+            delivery: view.delivery ?? [],
         });
     });
 

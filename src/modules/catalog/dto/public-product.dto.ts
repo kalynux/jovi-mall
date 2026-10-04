@@ -44,6 +44,13 @@ import { FileDetail } from '../read-models/product-detail.read-model';
 import { isBargainEffective } from '../domain/services/bargain-price.rule';
 import { publicCompareAtPrice, publicDisplayPrice } from '../read-models/public-display-price';
 import type { RatingBreakdownDto, RatingSummaryDto } from '../../reviews/dto/review.dto';
+import { isAlwaysFreeDelivery, VendorDeliveryTerms } from '../../vendors/domain/delivery-terms';
+
+/**
+ * The shop's delivery terms as the storefront sees them (ADR-A11). Public by design —
+ * it is the posted offer ("free delivery from 20 000 XAF"), nothing internal.
+ */
+export type PublicDeliveryTermsDto = VendorDeliveryTerms;
 
 /**
  * What every price mapper here needs from a variant's PRODUCT.
@@ -138,6 +145,26 @@ export interface PublicProductDetailStoreDto {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Category reference
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * One entry of the shared category list as the storefront sees it. `slug` is what a
+ * category URL and `?category=` use; `id` is stable across renames (a slug is not).
+ */
+export interface PublicCategoryRefDto {
+    id: string;
+    name: string;
+    slug: string;
+}
+
+/** `GET /api/public/categories` — one chip. */
+export interface PublicCategoryDto extends PublicCategoryRefDto {
+    /** Publishable products listed under it. A product counts once toward EACH of its categories. */
+    productCount: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  List row
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -146,7 +173,13 @@ export interface PublicProductListItemDto {
     slug: string;
     title: string;
     type: 'physical' | 'digital' | 'service';
-    category: string;
+    /** Every category the product is listed under, vendor's order (first = primary). */
+    categories: PublicCategoryRefDto[];
+    /**
+     * ⚠ DEPRECATED — the primary category's name (`categories[0].name`), or `null`.
+     * Kept so a storefront or bot that still reads one string keeps working.
+     */
+    category: string | null;
     tags: string[];
 
     /**
@@ -218,7 +251,14 @@ export interface PublicProductListItemDto {
 
     store: PublicProductStoreDto;
 
+    /**
+     * DERIVED from the shop's delivery terms (ADR-A11 D-1): `true` iff the shop always
+     * pays delivery (`deliveryTerms.mode === 'always'`). There is no product-level flag any
+     * more. An `above` shop reads `false` here — the badge would be a promise the basket may
+     * not meet; render `deliveryTerms` for "free from X".
+     */
     freeDelivery: boolean;
+    deliveryTerms: PublicDeliveryTermsDto;
     /** Needed by the frontend's `sitemap.ts` for a real `lastModified`. */
     updatedAt: string;
 }
@@ -329,7 +369,10 @@ export interface PublicProductDetailDto {
     title: string;
     description: string;
     type: 'physical' | 'digital' | 'service';
-    category: string;
+    /** Every category the product is listed under, vendor's order (first = primary). */
+    categories: PublicCategoryRefDto[];
+    /** ⚠ DEPRECATED — `categories[0].name`, or `null`. */
+    category: string | null;
     tags: string[];
     seo?: { title?: string; description?: string };
 
@@ -365,7 +408,9 @@ export interface PublicProductDetailDto {
 
     store: PublicProductDetailStoreDto;
 
+    /** Derived from `deliveryTerms` — same rule as the list row's. */
     freeDelivery: boolean;
+    deliveryTerms: PublicDeliveryTermsDto;
     createdAt: string;
     updatedAt: string;
 }
@@ -626,6 +671,14 @@ export interface PublicProductDetailInput {
      * through unchanged rather than re-deciding it.
      */
     rating: RatingBreakdownDto | null;
+    /** The shop's terms with the default applied (`vendorDeliveryTermsOf`) — never raw storage. */
+    deliveryTerms: VendorDeliveryTerms;
+    /**
+     * The product's categories, already resolved by the caller (`categoryCatalogCache`), so
+     * this mapper stays pure. Required: an optional field is how one caller ends up
+     * publishing a product with no categories while the others publish them.
+     */
+    categories: PublicCategoryRefDto[];
 }
 
 export function toPublicProductDetailDto(input: PublicProductDetailInput): PublicProductDetailDto {
@@ -649,7 +702,10 @@ export function toPublicProductDetailDto(input: PublicProductDetailInput): Publi
         title: product.title,
         description: product.description ?? '',
         type: product.type,
-        category: product.category,
+        // Copied field by field — the input carries nothing but id/name/slug, and this is
+        // the boundary that keeps it that way.
+        categories: input.categories.map((c) => ({ id: c.id, name: c.name, slug: c.slug })),
+        category: input.categories[0]?.name ?? null,
         tags: [...(product.tags ?? [])],
         ...(product.seo?.title || product.seo?.description
             ? {
@@ -687,7 +743,8 @@ export function toPublicProductDetailDto(input: PublicProductDetailInput): Publi
         contentLanguage: input.contentLanguage,
         rating: input.rating,
         store: input.store,
-        freeDelivery: product.delivery?.freeDelivery ?? false,
+        freeDelivery: isAlwaysFreeDelivery(input.deliveryTerms),
+        deliveryTerms: { mode: input.deliveryTerms.mode, freeAboveAmount: input.deliveryTerms.freeAboveAmount },
         createdAt: product.createdAt.toISOString(),
         updatedAt: product.updatedAt.toISOString(),
     };

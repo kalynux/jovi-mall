@@ -228,15 +228,34 @@ Same hit shape as § 4, plus `coPurchasedOrders`, and `basis: "co_purchased"`.
 `POST /delivery-promise`
 
 ```jsonc
-{ "productId": "…", "region": "littoral" }   // region optional
+{ "productId": "…", "region": "littoral", "amount": 21000 }   // region, amount optional
 ```
 
-### ⚠ Re-scoped by D-7 — there is no fee to quote and no waiver to grant
+`amount` (🆕 2026-10-04) is the deal's amount **from this shop** (price × quantity, XAF), when
+the agent knows it. It decides whether an `above` shop's free-delivery threshold is met.
 
-`order.total_amount` is the item subtotal; the agency's fee comes out of the **vendor's** net
-inside `splitOrder`. **Delivery is already free to every customer on every order.** So the
-agent may promise free delivery truthfully — it just may not present it as a concession it
-decided to make, because it is not one.
+### ⚠ Free delivery is the SHOP's terms — amended by ADR-A11 (2026-10-04)
+
+Until 2026-10-04 delivery was free to every customer on every order (D-7) and this tool said
+`free: true` unconditionally. **That is no longer true.** Each shop sets its delivery terms
+(`always` · `never` · `above` an amount — [ADR-A11](../../docs/ADR-A11-CUSTOMER-PAID-DELIVERY.md)),
+and the promise is derived from them with the rule checkout applies (`resolveDeliveryPayer`):
+
+| Shop terms | `free` | `customerPays` | `feeBasis` |
+|---|---|---|---|
+| `always` | `true` | `0` | `FEE_BASIS.free` — "you may say delivery is free" (with the small-order caveat) |
+| `above`, `amount` ≥ threshold | `true` | `0` | `FEE_BASIS.free` |
+| `above`, `amount` below or absent | `false` | `null` | `FEE_BASIS.freeFrom` — "free from `terms.freeAboveAmount`"; `freeDeliveryShortfall` is the gap when `amount` was given |
+| `never` | `false` | `null` | `FEE_BASIS.customerPays` — never promise free delivery |
+| digital / service | `true` | `0` | `FEE_BASIS.notShipped` |
+
+⚠ **The agent may promise free delivery ONLY when `free` is `true`, and may NEVER quote a fee**:
+`customerPays` is `0` or `null`, never a positive number — the fee depends on the agency, the
+weight of the whole basket and the drop-off region, and only checkout prices it. Even when free
+it is the shop's posted terms, not a concession the agent decided to make. A very small order on
+a free-delivery shop can still fall back to customer-paid at checkout (the 30% cap, D-6) — the
+`feeBasis` sentence says so. The tool deliberately does not price the basket (`CartQuoteService`
+is not imported on this surface; `test:negotiation-tools` pins it).
 
 ```jsonc
 {
@@ -249,6 +268,9 @@ decided to make, because it is not one.
       "customerPays": 0,
       "currency": "XAF",
       "free": true,
+      "terms": { "mode": "above", "freeAboveAmount": 20000 },
+      "freeDeliveryShortfall": null,
+      "feeBasis": "This shop pays delivery on this order: you may say delivery is free. …",
       "agency": { "id": "…", "name": "Douala Express", "coverageAreas": ["littoral", "centre"] },
       "coversRegion": true,
       "eta": null,
@@ -269,7 +291,7 @@ The plan asked for a date *"if the agency policy model supports it"*. **It does 
 `IAgencyPolicies` carries exactly `pricing` · `returns` · `damage` · `cod` · `documents` —
 there is no lead time, SLA, schedule or per-region delivery window anywhere on the agency or
 its Magazin. `etaBasis` says so in a sentence the model can act on: *say delivery is arranged
-with the agency and free, and do not name a day.* `test:negotiation-tools` § 6 fails if a
+with the agency, and do not name a day.* `test:negotiation-tools` § 6 fails if a
 lead-time field is ever added, so this stays a checked claim rather than a note that goes
 stale.
 

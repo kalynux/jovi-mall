@@ -167,6 +167,15 @@ export const MIGRATIONS: Migration[] = [
         dryRun: true,
         note: "legacy shipments carry null tracking numbers — the platform's public handle for them",
     },
+    // Owner decision C-5 (2026-10-04). A data migration that also DROPS two superseded
+    // indexes on the field it removes — so it runs here, before the index builds, and
+    // `migrate:storefront-indexes` below then builds the multikey replacement.
+    {
+        name: 'migrate:product-categories',
+        file: 'scripts/migrate-product-categories.ts',
+        dryRun: true,
+        note: 'EVERY EXISTING PRODUCT SHOWS NO CATEGORY — the free-text `category` is no longer read, so until this runs they vanish from category browsing on the storefront, the bot and AI search',
+    },
     {
         name: 'backfill:actor-source',
         file: 'scripts/backfill-actor-source.ts',
@@ -258,6 +267,12 @@ export const MIGRATIONS: Migration[] = [
         file: 'scripts/migrate-delivery-fee-proposal-indexes.ts',
         dryRun: true,
         note: 'TWO PENDING DELIVERY-FEE CHANGES CAN STAND ON ONE SHIPMENT — the partial unique index is the independent guarantee behind the shipment-pointer CAS, and without it a vendor could approve both',
+    },
+    {
+        name: 'migrate:role-closure-indexes',
+        file: 'scripts/migrate-role-closure-indexes.ts',
+        dryRun: true,
+        note: 'A USER CAN HOLD TWO PENDING REQUESTS TO CLOSE THE SAME ROLE — two administrators asking at once both pass the pre-check, and the partial unique index is the only thing that stops it',
     },
     {
         name: 'migrate:payout-lifecycle-index',

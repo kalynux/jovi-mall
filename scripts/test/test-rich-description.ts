@@ -882,17 +882,20 @@ function testWiring(): void {
   );
 
   // The read path: being on the domain type is what puts it on GET /:id and on
-  // every write response, since EnrichedProduct is Omit<Product, 'fileIds'>.
+  // every write response, since EnrichedProduct is Omit<Product, …> of the id-shaped
+  // fields only (`fileIds`, and since 2026-10-04 `categoryIds`, both replaced by
+  // resolved objects). What matters is that the Omit never names this field.
   const mapper = read('modules/catalog/repositories/mappers/product.mapper.ts');
   assert(mapper.includes('descriptionRich: RichDoc | null'), 'the domain type carries the field');
   assert(
     /descriptionRich:\s*\(doc\.descriptionRich/.test(mapper),
     'the mapper reads it back onto the domain object',
   );
+  const enrichedOmit = /export type EnrichedProduct = Omit<Product,\s*([^>]+)>/.exec(
+    read('modules/catalog/read-models/enrich-product-detail.ts'),
+  );
   assert(
-    read('modules/catalog/read-models/enrich-product-detail.ts').includes(
-      "Omit<Product, 'fileIds'>",
-    ),
+    enrichedOmit !== null && enrichedOmit[1].includes("'fileIds'") && !enrichedOmit[1].includes('descriptionRich'),
     'EnrichedProduct still spreads the domain product, so the field is returned',
   );
 

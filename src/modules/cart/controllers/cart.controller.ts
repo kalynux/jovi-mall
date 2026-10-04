@@ -91,9 +91,10 @@ export class CartController {
   /**
    * POST /customer/cart/quote — what this cart will cost, before checking out.
    *
-   * `delivery` is `0` and `total` is the subtotal, because the **vendor** absorbs the
-   * agency's delivery fee — see `CartQuoteService`. The real fee is reported as
-   * `absorbedByVendor` so the UI can say "delivery included" and mean it.
+   * `delivery` is what the CUSTOMER pays for delivery (shops whose delivery is not free —
+   * ADR-A11) and `total` includes it; a free-delivery shop's fee is reported as
+   * `absorbedByVendor`. Per shop: `deliveryPayer`, `freeDelivery.shortfall` ("add X for free
+   * delivery") and the per-shipment fees — see `CartQuoteService`.
    *
    * Passing `deliveryAddressId` also validates it, which is the point: an address typed by
    * hand rather than picked from `GET /api/geo/search` has no geocoded location and

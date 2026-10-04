@@ -79,7 +79,7 @@ export class RelatedProductsService {
 
         const ranking =
             (await this.cache.read(productId))
-            ?? (await this.computeAndCache(productId, subject.category, limit));
+            ?? (await this.computeAndCache(productId, subject.categories.map((c) => c.id), limit));
 
         return {
             source: ranking.source,
@@ -98,7 +98,7 @@ export class RelatedProductsService {
      */
     private async computeAndCache(
         productId: string,
-        category: string,
+        categoryIds: string[],
         limit: number,
     ): Promise<CachedRelatedRanking> {
         const coPurchased = await this.repo.coOccurring(productId, limit);
@@ -109,29 +109,30 @@ export class RelatedProductsService {
                       source: 'co_purchase',
                       entries: coPurchased.map((row) => ({ productId: row.productId, orders: row.orders })),
                   }
-                : { source: 'same_category', entries: await this.categoryFallback(productId, category, limit) };
+                : { source: 'same_category', entries: await this.categoryFallback(productId, categoryIds, limit) };
 
         await this.cache.write(productId, ranking);
         return ranking;
     }
 
     /**
-     * The fallback ranking: same category, most recently ordered first, no counts.
+     * The fallback ranking: products sharing ANY of the subject's categories, most recently
+     * ordered first, no counts. (The wire label stays `same_category` — clients branch on it.)
      *
-     * The category comes from the card `forProduct` has **already** loaded, rather than a
-     * second read of the product — and note where it is passed: into the computation, never
-     * into the cached value. A category can be edited, and a cached copy of one would go on
-     * driving a strip for six hours after the product left it. What is cached is the
-     * resulting ranking, which the next expiry recomputes from the live category.
+     * The categories come from the card `forProduct` has **already** loaded, rather than a
+     * second read of the product — and note where they are passed: into the computation,
+     * never into the cached value. Categories can be edited, and a cached copy would go on
+     * driving a strip for six hours after the product left them. What is cached is the
+     * resulting ranking, which the next expiry recomputes from the live categories.
      */
     private async categoryFallback(
         productId: string,
-        category: string,
+        categoryIds: string[],
         limit: number,
     ): Promise<CachedRelatedRanking['entries']> {
-        if (!category) return [];
+        if (categoryIds.length === 0) return [];
 
-        const ids = await this.repo.sameCategoryRecent(productId, category, limit);
+        const ids = await this.repo.sameCategoryRecent(productId, categoryIds, limit);
         return ids.map((id) => ({ productId: id, orders: null }));
     }
 

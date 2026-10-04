@@ -50,6 +50,12 @@ import { RenderContext, toTelegramNotificationBody, toWhatsAppNotificationBody }
 import { DomainEvent } from '../../../core/events/event-bus';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
+import {
+    closureReasonParam,
+    closureDeadlineParam,
+    occurredAtIso,
+    RoleClosureRequestedPayload
+} from './role-closure-context';
 
 /**
  * Which preference group gates a situation, if any.
@@ -79,7 +85,9 @@ const SITUATION_PREFERENCE: Partial<
     //   booking.cancelled, booking.payment.received, booking.balance.due,
     //   booking.refunded, booking.refund.pending,
     //   order.cancelled, order.payment.received, order.refunded,
-    //   ticket.replied, ticket.awaiting_customer, ticket.resolved
+    //   ticket.replied, ticket.awaiting_customer, ticket.resolved,
+    //   account.closure_requested (ADR-A10 — a closure request a setting could silence
+    //   would expire unseen)
     //
     // ⚠ The three `ticket.*` situations are ungated, and the reason is NOT the
     // counterparty argument the money and cancellation groups rest on — a support
@@ -1139,6 +1147,43 @@ export class CustomerNotificationEventHandler {
             customer,
             subject: subject.length > 60 ? `${subject.slice(0, 57)}…` : subject
         };
+    }
+
+    // ─── Role closure (ADR-A10) ──────────────────────────────────────────────
+
+    /**
+     * `role_closure.requested` with `role: 'customer'` → ask the customer to confirm closing
+     * their account. **Unmutable** — `account.closure_requested` has no key in
+     * `SITUATION_PREFERENCE`, on the same footing as money: a closure request that a setting
+     * could silence would simply expire unseen.
+     */
+    async handleRoleClosureRequested(event: DomainEvent): Promise<void> {
+        try {
+            const p = event.payload as RoleClosureRequestedPayload;
+            if (p?.role !== 'customer' || !p.roleEntityId || !p.requestId) return;
+
+            const customer = await this.loadCustomer(p.roleEntityId);
+            if (!customer) return;
+            const lang = resolveLanguage(customer);
+
+            await this.notify({
+                situation: 'account.closure_requested',
+                customerId: customer._id.toString(),
+                aggregateType: 'account',
+                aggregateId: p.requestId,
+                idempotencyKey: `account.closure_requested:${p.requestId}:${occurredAtIso(event.occurredAt)}`,
+                context: {
+                    requestId: p.requestId,
+                    reason: closureReasonParam(p.reason, lang),
+                    // `closureDeadlineParam` formats exactly as `formatMoment` does, in
+                    // `Customer.timezone`, and never returns '' (an empty template parameter
+                    // is a refused send).
+                    expiresAt: closureDeadlineParam(p.expiresAt, customer.timezone, lang)
+                }
+            });
+        } catch (error) {
+            console.error('[CustomerNotifications] Failed to handle role_closure.requested:', error);
+        }
     }
 
     private async loadCustomer(customerId: string | undefined): Promise<ICustomer | null> {

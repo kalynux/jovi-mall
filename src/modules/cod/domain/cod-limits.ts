@@ -97,10 +97,19 @@ export function vendorCodTermsOf(
 
 // ─── Exposure ───────────────────────────────────────────────────────────────
 
-/** Σ order-item price × shipment-item qty. An unmatched item counts 0 (it cannot be priced). */
+/**
+ * The cash a COD shipment collects: Σ order-item price × shipment-item qty, PLUS the delivery
+ * fee the customer pays the agent on a customer-paid shipment (ADR-A11) — pass
+ * `customerDeliveryFeeOf(order, shipment)` (`orders/domain/delivery-payer.ts`); 0 when the
+ * vendor pays. An unmatched item counts 0 (it cannot be priced).
+ *
+ * The pure twin of `CashCollectionService.computeExpectedAmount`; the two must agree, and
+ * `test:customer-delivery-fee` asserts they do.
+ */
 export function expectedCodAmount(
   orderItems: Array<{ _id?: unknown; price: number }>,
-  shipmentItems: Array<{ order_item_id: unknown; quantity: number }>
+  shipmentItems: Array<{ order_item_id: unknown; quantity: number }>,
+  customerDeliveryFee = 0
 ): number {
   const priceById = new Map(orderItems.map((i) => [String(i._id), i.price]));
   let total = 0;
@@ -108,7 +117,7 @@ export function expectedCodAmount(
     const price = priceById.get(String(si.order_item_id));
     if (typeof price === 'number' && Number.isFinite(price)) total += price * si.quantity;
   }
-  return total;
+  return total + Math.max(0, customerDeliveryFee);
 }
 
 /** One shipment the agency holds, already filtered to COD and to `COD_EXPOSURE_SHIPMENT_STATUSES`. */

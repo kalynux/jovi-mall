@@ -678,6 +678,30 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         ar: 'لا تزال لديك طلبات في الطريق. يمكنني إغلاق حسابك بعد وصولها — وإلا فلن تكون لدينا وسيلة للتواصل معك بشأنها.',
     },
 
+    // ── Administrator-requested closure (ADR-A10) ──────────────────────────────
+    // The customer role was closed while the person keeps others; the bot will not reopen it.
+    [ERROR_CODES.AUTH_ROLE_CLOSED]: {
+        en: 'Your Wi-Mall shopping account has been closed, so I can no longer help with shopping here.',
+        fr: "Votre compte client Wi-Mall a été fermé, je ne peux donc plus vous aider à faire des achats ici.",
+        pt: 'A sua conta de cliente Wi-Mall foi encerrada, por isso já não posso ajudar com compras aqui.',
+        es: 'Tu cuenta de cliente de Wi-Mall se ha cerrado, así que ya no puedo ayudarte con compras aquí.',
+        ar: 'تم إغلاق حساب التسوّق الخاص بك على Wi-Mall، لذلك لم يعد بإمكاني مساعدتك في التسوّق هنا.',
+    },
+    [ERROR_CODES.ROLE_CLOSURE_BLOCKED]: {
+        en: 'You still have orders or bookings in progress. Your account can be closed once they are finished — otherwise we would have no way to reach you about them.',
+        fr: "Vous avez encore des commandes ou des réservations en cours. Votre compte pourra être fermé une fois qu'elles seront terminées — sinon nous n'aurions aucun moyen de vous joindre à leur sujet.",
+        pt: 'Ainda tem encomendas ou reservas em curso. A sua conta pode ser encerrada quando terminarem — de outro modo não teríamos como o contactar sobre elas.',
+        es: 'Todavía tienes pedidos o reservas en curso. Tu cuenta podrá cerrarse cuando terminen — de lo contrario no tendríamos forma de contactarte sobre ellos.',
+        ar: 'لا تزال لديك طلبات أو حجوزات قيد التنفيذ. يمكن إغلاق حسابك بعد انتهائها — وإلا فلن تكون لدينا وسيلة للتواصل معك بشأنها.',
+    },
+    [ERROR_CODES.ROLE_CLOSURE_REQUEST_EXPIRED]: {
+        en: 'That closure request is no longer waiting for an answer, so nothing was changed.',
+        fr: "Cette demande de fermeture n'attend plus de réponse, donc rien n'a été modifié.",
+        pt: 'Esse pedido de encerramento já não aguarda resposta, por isso nada foi alterado.',
+        es: 'Esa solicitud de cierre ya no espera respuesta, así que no se ha cambiado nada.',
+        ar: 'طلب الإغلاق هذا لم يعد بانتظار رد، لذلك لم يتغيّر شيء.',
+    },
+
     // ── Orders — cancelling and confirming (Stream G, 2026-09-16) ────────────
     // Each of these earned an entry by the file's own criterion: the category sentence was not
     // merely vague but WRONG under a button. `business_rule`'s "not possible right now" says

@@ -114,7 +114,7 @@ transaction. Build the provider choice from `GET /api/payments/options`; see
 | 422 | `COD_ORDER_AMOUNT_EXCEEDS_LIMIT` | One vendor-order's total exceeds an agency's COD cap. `details: { agencyId, agencyName, maxOrderAmount, orderTotal }`. |
 | 422 | `ORDER_DELIVERY_ADDRESS_REQUIRED` | **New.** A physical checkout resolved no geocoded drop-off. `details.reason` is `no_delivery_address` or `selected_address_not_geocoded`. |
 | 422 | `CATALOG_INSUFFICIENT_STOCK` | **New.** A line cannot be satisfied. `details: { variantId, sku, requested, available }`. |
-| 422 | `ORDER_BELOW_DELIVERY_MINIMUM` | **New 2026-09-27** ([ADR-A07](../../docs/ADR-A07-DELIVERY-COST-CAP.md)). One shop's items are too small to carry their delivery cost, which the vendor pays. Online is checked per shop, cash on delivery per delivery agency. `details: { vendorId, scope, agencyId, subtotal, minimumSubtotal, shortfall, maxDeliveryPercent, reason, currency }` — tell the customer to add `shortfall` more **from that shop**. `minimumSubtotal: null` means no basket size passes (for COD, suggest paying online). Predict it with the cart quote's `perVendor[].deliveryMinimum`. Nothing is created and no stock is held. |
+| 422 | `ORDER_BELOW_DELIVERY_MINIMUM` | **New 2026-09-27** ([ADR-A07](../../docs/ADR-A07-DELIVERY-COST-CAP.md)). One shop's items are too small for the shop to sell at all (since [ADR-A11](../../docs/ADR-A11-CUSTOMER-PAID-DELIVERY.md): even with the customer paying delivery, the shop would earn nothing — a free-delivery shop that merely cannot afford the fee falls back to customer-paid delivery instead of refusing). Online is checked per shop, cash on delivery per delivery agency. `details: { vendorId, scope, agencyId, subtotal, minimumSubtotal, shortfall, maxDeliveryPercent, reason, currency }` — tell the customer to add `shortfall` more **from that shop**. `minimumSubtotal: null` means no basket size passes (for COD, suggest paying online). Predict it with the cart quote's `perVendor[].deliveryMinimum`. Nothing is created and no stock is held. |
 | 404/409/422 | `NEGOTIATION_LOCK_*` | **New.** A line carrying a price agreed in chat could not spend its lock. Five codes — see [Negotiated lines at checkout](#negotiated-lines-at-checkout). |
 
 ⚠ **`details.agencyName` on the two COD refusals can be `null`.** The business name lives on
@@ -253,8 +253,14 @@ authenticated customer.
         "orderNumber": "ORD-2026-000123",
         "vendorId": "507f1f77bcf86cd799439aaa",
         "orderType": "physical",
-        "total": 15000,
+        "total": 16500,
         "currency": "XAF",
+        "priceBreakdown": { "base": 15000, "delivery": 1500, "tax": 0, "discount": 0, "total": 16500 },
+        "deliveryPayer": "customer",
+        "deliveryPayerReason": "threshold_not_met",
+        "deliveryFees": [
+          { "shipmentId": "507f1f77bcf86cd799439100", "amount": 1500 }
+        ],
         "paymentMethod": "cash_on_delivery",
         "paymentStatus": "AWAITING_PAYMENT",
         "fulfillmentStatus": "pending",
@@ -262,7 +268,9 @@ authenticated customer.
         "codCollections": [
           {
             "shipmentId": "507f1f77bcf86cd799439100",
-            "expectedAmount": 15000,
+            "expectedAmount": 16500,
+            "itemsAmount": 15000,
+            "deliveryFeeAmount": 1500,
             "currency": "XAF",
             "status": "pending",
             "collectedAt": null,
@@ -279,8 +287,7 @@ authenticated customer.
             "variantTitle": "Size: Large, Color: Red",
             "quantity": 2,
             "price": 7500,
-            "currency": "XAF",
-            "freeDelivery": false
+            "currency": "XAF"
           }
         ]
       }
@@ -289,7 +296,18 @@ authenticated customer.
 }
 ```
 
-> `items[].freeDelivery` is a snapshot of the product's free-delivery flag taken at checkout time; it does not reflect later changes to the product.
+> `items[].freeDelivery` was **removed** on 2026-10-03 (ADR-A11): free delivery is a shop setting decided per vendor order, not a per-item product flag.
+>
+> **Delivery on an order (2026-10-04, [ADR-A11](../../docs/ADR-A11-CUSTOMER-PAID-DELIVERY.md)).**
+> `priceBreakdown.delivery` is what the customer paid for delivery on THIS order (0 when the shop
+> delivered free), and `total = base + delivery`. `deliveryPayer` is `vendor` (free delivery) or
+> `customer` (`null` on a digital order); `deliveryPayerReason` says why (`shop_always` ·
+> `shop_threshold_met` · `shop_never` · `threshold_not_met` · `cap_fallback`). `deliveryFees[]` is
+> one entry per parcel — `amount` is what the customer paid for that parcel's delivery, and
+> `customerFeeRefundable` (present only when non-zero) is delivery money owed back to them (a
+> returned parcel's unspent fee, or a fee lowered after payment). On a COD order each
+> `codCollections[]` entry now splits `expectedAmount` into `itemsAmount` + `deliveryFeeAmount`
+> (the delivery fee is paid to the agent in cash with the goods).
 >
 > **`codCollections`** — present only on `cash_on_delivery` orders. One entry per shipment, created
 > when that shipment is picked up: `expectedAmount` is the exact cash to pay the agent at handoff;
@@ -327,7 +345,9 @@ The projection was widened; all of this already existed on the model and simply 
 |---|---|
 | `cartId` | The checkout group. **Pay an unpaid order with `POST /api/payments/initiate { cartId }`** — this is what makes one resumable |
 | `store` | `{ slug, name, verified }` — the seller's business identity. "Order from `507f1f77bcf86cd799439aaa`" is not a receipt. `verified` is the vendor's KYC verdict (`kyc_details.legit_verified === true`, always a boolean) for a badge — never the KYC documents |
-| `priceBreakdown` | `{ base, tax, discount, total }`. `tax`/`discount` are pinned zeros — see [cart quote](./cart.md#post-apicustomercartquote) |
+| `priceBreakdown` | `{ base, delivery, tax, discount, total }`. `base` = items, `delivery` = what the customer paid for delivery (ADR-A11; 0 = free), `total = base + delivery`. `tax`/`discount` are pinned zeros — see [cart quote](./cart.md#post-apicustomercartquote) |
+| `deliveryPayer` / `deliveryPayerReason` | Who paid delivery (`vendor` = free for the customer · `customer`) and why. `null` on digital orders. 🆕 2026-10-04 |
+| `deliveryFees[]` | `{ shipmentId, amount, customerFeeRefundable? }` per parcel — the customer-facing delivery fee, and delivery money owed back when non-zero. `[]` on digital orders. 🆕 2026-10-04 |
 | `deliveryAddress` | Where it is going. `null` on digital orders |
 | `items[].image` | Live-resolved thumbnail (`FileDetail \| null`). Order history with no pictures is unreadable on a phone |
 | `items[].delivery` | `{ status, shipmentId }` — per-line delivery state, and the id the shipment endpoints need |
@@ -605,7 +625,9 @@ and every delivery agency involved must support COD (some also cap the per-order
 1. Order created (`paymentStatus: "AWAITING_PAYMENT"`). The vendor prepares and dispatches it —
    COD orders fulfil **before** payment, and are exempt from the unpaid auto-cancel sweep.
 2. When a shipment is picked up by the delivery agency, a `codCollections[]` entry appears on the
-   [group detail](#get-apicustomerordersgroupscartid) with the exact `expectedAmount` and the
+   [group detail](#get-apicustomerordersgroupscartid) with the exact `expectedAmount` (the goods
+   **plus** that parcel's delivery fee when the customer pays delivery — `itemsAmount` +
+   `deliveryFeeAmount`, ADR-A11) and the
    customer's secret 6-digit `deliveryCode` (also sent via WhatsApp when possible).
 3. At the door: the customer receives the package, **pays the agent in cash**, then gives them the
    code. The verified code atomically records the payment and marks the shipment **delivered** —

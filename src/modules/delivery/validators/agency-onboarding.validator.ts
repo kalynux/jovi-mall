@@ -90,6 +90,11 @@ const AgencyPoliciesPricingZodSchema = z.object({
     storage_based: StorageBasedPricingZodSchema,
     pickup_based: PickupBasedPricingZodSchema,
     additional_fees: AdditionalFeesZodSchema,
+    // ADR-A11: per-shipment fee ceiling (minor units). null/absent = no ceiling; 0 is refused
+    // because a ceiling of 0 would silently make every delivery free.
+    max_fee_per_shipment: z.number().int().min(1).nullable().optional().default(null),
+    // ADR-A11 D-7: customer may pay the delivery fee in cash to the rider. Default off.
+    accepts_cash_delivery_fee: z.boolean().optional().default(false),
     notes: z.string().max(700).trim().optional(),
 }).refine(
     (data) => data.storage_based.enabled || data.pickup_based.enabled,

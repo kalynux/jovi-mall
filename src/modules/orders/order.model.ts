@@ -1,6 +1,9 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../core/database/collections';
 import { GeoAddressSchema, IGeoAddress } from '../../core/types/geo-address.types';
+import type { DeliveryPayer, DeliveryPayerReason } from '../vendors/domain/delivery-terms';
+import type { ItemWeightSource } from '../earnings/domain/delivery-pricing';
+import { DELIVERY_PAYERS, DELIVERY_PAYER_REASONS } from './domain/delivery-payer';
 
 /**
  * Order Model
@@ -44,7 +47,12 @@ export type PaymentStatus = 'pending' | 'AWAITING_PAYMENT' | 'partially_paid' | 
 export type FulfillmentStatus = 'pending' | 'processing' | 'partially_shipped' | 'shipped' | 'partially_delivered' | 'delivered' | 'fulfilled' | 'cancelled' | 'returned';
 
 export interface IPriceBreakdown {
-  base: number;      // Subtotal before tax/discount
+  base: number;      // Subtotal before tax/discount — the ITEMS, never delivery
+  /**
+   * What the CUSTOMER was charged for delivery (ADR-A11): Σ the shipments' fees when the shop's
+   * part is customer-paid, 0 when the vendor pays. Absent (read as 0) on orders before ADR-A11.
+   */
+  delivery?: number;
   tax: number;       // Tax amount
   discount: number;  // Discount amount
   total: number;     // Final total
@@ -105,13 +113,21 @@ export interface IOrderItem {
    * floor and the price paid were kept. `null` on older lines.
    */
   list_price_snapshot?: number | null;
+  /**
+   * Grams for ONE unit, snapshotted at checkout (ADR-A11 D-4) — what the shipment's
+   * delivery fee was priced on. `weight_source: 'default'` is the item-count fallback
+   * (`DELIVERY_DEFAULT_ITEM_WEIGHT_GRAMS`). Null on digital lines and on older orders.
+   */
+  weight_grams?: number | null;
+  weight_source?: ItemWeightSource | null;
 
   // === DELIVERY (Optional - only for physical products) ===
   delivery?: {
     agency_id: mongoose.Types.ObjectId;
     shipment_id?: mongoose.Types.ObjectId | null;
     status: 'pending' | 'assigned' | 'handing_over' | 'picked_up' | 'in_transit' | 'agent_delivered' | 'delivered' | 'failed' | 'returned' | 'rejected' | 'pending_agency_reassignment';
-    free_delivery: boolean;
+    // No `free_delivery` snapshot: who pays delivery is decided per VENDOR ORDER from the
+    // shop's delivery terms (ADR-A11 D-1), never per item.
     /**
      * Set when `status` is forced to 'pending_agency_reassignment' because the
      * assigned agency (default or product-level override) went inactive with no
@@ -181,7 +197,19 @@ export interface IOrder extends Document {
   // Pricing
   currency: string;                     // Currency snapshot
   price_breakdown: IPriceBreakdown;     // Detailed price info
-  total_amount: number;                 // Convenience field (same as price_breakdown.total)
+  total_amount: number;                 // Convenience field (same as price_breakdown.total) — items + customer-paid delivery
+  /**
+   * Who pays this order's delivery (ADR-A11) — decided per VENDOR ORDER from the shop's
+   * delivery terms at checkout, copied onto every shipment. `null` on digital orders and on
+   * orders before ADR-A11 (readers treat null as `vendor`, see `deliveryPayerOf`).
+   */
+  delivery_payer?: DeliveryPayer | null;
+  delivery_payer_reason?: DeliveryPayerReason | null;
+  /**
+   * How much more of this shop's items would have made delivery free at checkout — the
+   * `above` threshold's gap or the ADR-A07 cap's (`cap_fallback`). `null` when n/a.
+   */
+  free_delivery_shortfall?: number | null;
 
   // Payment tracking
   payment_method: OrderPaymentMethod;
@@ -303,6 +331,17 @@ const OrderItemSchema = new Schema({
     default: null,
     min: 0
   },
+  // Per-unit weight the delivery fee was priced on (ADR-A11) — see IOrderItem.
+  weight_grams: {
+    type: Number,
+    default: null,
+    min: 0
+  },
+  weight_source: {
+    type: String,
+    enum: ['variant', 'shipping_config', 'default', null],
+    default: null
+  },
 
   // Delivery (optional - only for physical orders)
   delivery: {
@@ -314,7 +353,6 @@ const OrderItemSchema = new Schema({
         enum: ['pending', 'assigned', 'handing_over', 'picked_up', 'in_transit', 'agent_delivered', 'delivered', 'failed', 'returned', 'rejected', 'pending_agency_reassignment'],
         default: 'pending'
       },
-      free_delivery: { type: Boolean, default: false },
       hold: {
         type: {
           previousStatus: { type: String, enum: ['pending', 'assigned'], required: true },
@@ -401,6 +439,7 @@ const OrderSchema = new Schema<IOrder>({
   },
   price_breakdown: {
     base: { type: Number, required: true, min: 0 },
+    delivery: { type: Number, min: 0, default: 0 },
     tax: { type: Number, required: true, min: 0, default: 0 },
     discount: { type: Number, required: true, min: 0, default: 0 },
     total: { type: Number, required: true, min: 0 }
@@ -410,6 +449,10 @@ const OrderSchema = new Schema<IOrder>({
     required: true,
     min: 0
   },
+  // Who pays delivery (ADR-A11) — see IOrder. No index: read with the order, never queried on.
+  delivery_payer: { type: String, enum: [...DELIVERY_PAYERS, null], default: null },
+  delivery_payer_reason: { type: String, enum: [...DELIVERY_PAYER_REASONS, null], default: null },
+  free_delivery_shortfall: { type: Number, default: null, min: 0 },
 
   // Payment tracking
   payment_method: {

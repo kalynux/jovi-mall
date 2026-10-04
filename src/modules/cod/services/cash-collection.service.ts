@@ -27,6 +27,7 @@ import { ShipmentRepository } from '../../shipments/shipment.repository';
 import { CustomerModel } from '../../customers/customer.model';
 import { resolveLanguage } from '../../notifications/catalog/notification-i18n';
 import { trackingOutboxEmitter } from '../../tracking-integration/services/tracking-outbox.emitter';
+import { collectionBreakdownOf, customerDeliveryFeeOf } from '../../orders/domain/delivery-payer';
 
 export interface CollectInput {
   code: string;
@@ -44,7 +45,12 @@ export interface CollectInput {
  * snapshotted. See `getProjectedCodSummaryForShipment`.
  */
 export interface CodShipmentSummary {
+  /** The whole cash to collect: `itemsAmount + deliveryFeeAmount`. */
   expectedAmount: number;
+  /** The goods (ADR-A11) — the COD handling fee's base (D-5). */
+  itemsAmount: number;
+  /** The delivery fee the customer pays in cash on a customer-paid shipment; 0 otherwise. */
+  deliveryFeeAmount: number;
   currency: string;
   status: CashCollectionStatus | null;
   collectedAt: Date | null;
@@ -136,7 +142,12 @@ export class CashCollectionService {
       return { collection: existing, code: null };
     }
 
-    const expectedAmount = this.computeExpectedAmount(order, shipment);
+    // Goods + the delivery fee the customer pays the agent (ADR-A11), each stored so the split
+    // can divide the cash without re-deriving it: the goods are its gross and the COD fee's
+    // base (D-5), the delivery fee goes to the agency side.
+    const itemsAmount = this.computeItemsAmount(order, shipment);
+    const deliveryFeeAmount = customerDeliveryFeeOf(order, shipment);
+    const expectedAmount = itemsAmount + deliveryFeeAmount;
     const code = this.codes.generateCode();
 
     const collection = await this.collectionRepo.create(
@@ -148,6 +159,8 @@ export class CashCollectionService {
         customer_id: order.customer_id,
         vendor_id: order.vendor_id,
         expected_amount: expectedAmount,
+        items_amount: itemsAmount,
+        delivery_fee_amount: deliveryFeeAmount,
         currency: order.currency,
         status: 'pending',
         code_hash: this.codes.hashCode(code),
@@ -766,6 +779,8 @@ export class CashCollectionService {
       list.push({
         shipmentId: c.shipment_id.toString(),
         expectedAmount: c.expected_amount,
+        // ADR-A11: the cash split into goods + the delivery fee the customer pays the agent.
+        ...this.breakdownOf(c),
         currency: c.currency,
         status: c.status,
         collectedAt: c.collected_at,
@@ -782,10 +797,17 @@ export class CashCollectionService {
     if (!collection) return null;
     return {
       expectedAmount: collection.expected_amount,
+      ...this.breakdownOf(collection),
       currency: collection.currency,
       status: collection.status,
       collectedAt: collection.collected_at,
     };
+  }
+
+  /** A collection's cash as goods + delivery fee (legacy rows: all goods). */
+  private breakdownOf(collection: Pick<ICashCollection, 'expected_amount' | 'items_amount' | 'delivery_fee_amount'>) {
+    const { itemsAmount, deliveryFeeAmount } = collectionBreakdownOf(collection);
+    return { itemsAmount, deliveryFeeAmount };
   }
 
   /**
@@ -805,8 +827,12 @@ export class CashCollectionService {
   async getProjectedCodSummaryForShipment(order: IOrder, shipment: IShipment): Promise<CodShipmentSummary> {
     const existing = await this.getCodSummaryForShipment((shipment._id as any).toString());
     if (existing) return existing;
+    const itemsAmount = this.computeItemsAmount(order, shipment);
+    const deliveryFeeAmount = customerDeliveryFeeOf(order, shipment);
     return {
-      expectedAmount: this.computeExpectedAmount(order, shipment),
+      expectedAmount: itemsAmount + deliveryFeeAmount,
+      itemsAmount,
+      deliveryFeeAmount,
       currency: order.currency,
       status: null,
       collectedAt: null,
@@ -846,6 +872,7 @@ export class CashCollectionService {
       if (collection) {
         summaries.set(shipmentId, {
           expectedAmount: collection.expected_amount,
+          ...this.breakdownOf(collection),
           currency: collection.currency,
           status: collection.status,
           collectedAt: collection.collected_at,
@@ -854,8 +881,12 @@ export class CashCollectionService {
       }
 
       try {
+        const itemsAmount = this.computeItemsAmount(order, shipment);
+        const deliveryFeeAmount = customerDeliveryFeeOf(order, shipment);
         summaries.set(shipmentId, {
-          expectedAmount: this.computeExpectedAmount(order, shipment),
+          expectedAmount: itemsAmount + deliveryFeeAmount,
+          itemsAmount,
+          deliveryFeeAmount,
           currency: order.currency,
           status: null,
           collectedAt: null,
@@ -875,11 +906,22 @@ export class CashCollectionService {
   // ─── Internals ──────────────────────────────────────────────────────────────
 
   /**
-   * Expected cash for a shipment: Σ (order item price × shipment item qty).
-   * Public: also used by the exposure gate at agent-assignment time, before
-   * any collection exists.
+   * Expected CASH for a shipment: the goods (`computeItemsAmount`) plus the delivery fee the
+   * customer pays the agent on a customer-paid shipment (ADR-A11, `customerDeliveryFeeOf`).
+   * Public: also used by the exposure gate at agent-assignment time, before any collection
+   * exists — the cash an agent carries includes that fee. The pure twin is
+   * `cod/domain/cod-limits.ts` `expectedCodAmount`; the two must agree.
    */
   computeExpectedAmount(order: IOrder, shipment: IShipment): number {
+    return this.computeItemsAmount(order, shipment) + customerDeliveryFeeOf(order, shipment);
+  }
+
+  /**
+   * The GOODS a shipment carries: Σ (order item price × shipment item qty). The value a contract's
+   * `shipment_value_ceiling` bounds, and the COD handling fee's base (D-5) — never the delivery fee.
+   * Throws `ORDER_ITEM_NOT_FOUND` on an unknown order item (no cash figure, no collection).
+   */
+  computeItemsAmount(order: IOrder, shipment: IShipment): number {
     const itemsById = new Map(order.items.map((i) => [(i._id as any).toString(), i]));
     let total = 0;
     for (const si of shipment.items) {

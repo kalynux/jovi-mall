@@ -7,6 +7,7 @@ import { buildAdminAgentRouter } from '../../modules/agents/routes/admin-agent.r
 import { buildAdminAssignabilityRouter } from '../../modules/shipment-assignment/admin-assignability.routes';
 import { buildAdminAgencyRouter } from '../../modules/delivery/admin-agency.routes';
 import { buildAdminVendorRouter } from '../../modules/vendors/admin-vendor.routes';
+import { buildAdminCategoryRouter } from '../../modules/categories/routes/admin-category.routes';
 import { buildAdminOrderRouter } from '../../modules/orders/admin-order.routes';
 import { buildAdminShipmentRouter } from '../../modules/shipments/admin-shipment.routes';
 import { buildAdminBillingRouter } from '../../modules/billing/routes/admin-billing.routes';
@@ -148,6 +149,14 @@ router.use('/agencies', buildAdminAgencyRouter([requireAdminCaller]));
  * change and miss all of it.
  */
 router.use('/vendors', buildAdminVendorRouter([requireAdminCaller]));
+
+/**
+ * Product categories — rename, merge, delete (owner decision C-4). Writes only: wi-admin
+ * reads `product_categories` directly. A merge rewrites every product holding the source
+ * inside one transaction and records the source's spellings as aliases of the target,
+ * which a second writer would not know to do.
+ */
+router.use('/categories', buildAdminCategoryRouter([requireAdminCaller]));
 
 /**
  * Orders (Phase 10) — the two legacy dispute endpoints plus four new capabilities.

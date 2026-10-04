@@ -7,6 +7,7 @@ import { FileDetail, AssetDetail } from './product-detail.read-model';
 import { toFileDetail } from './file-detail.resolver';
 import { PickupLocationDetail, PickupLocationDetailResolver } from './pickup-location-detail.resolver';
 import { BargainRange, isBargainEffective } from '../domain/services/bargain-price.rule';
+import { categoryCatalogCache, CategoryRef } from '../../categories/services/category-catalog.cache';
 
 /**
  * Fetch File documents for an array of IDs and map them to `FileDetail`.
@@ -55,10 +56,17 @@ function mimeSubtype(mime: string): string {
  * - `digitalConfig` retains only the product-wide `isActive` toggle.
  *   Per-variant asset/limits are surfaced via EnrichedVariant.digital.
  */
-export type EnrichedProduct = Omit<Product, 'fileIds'> & {
+export type EnrichedProduct = Omit<Product, 'fileIds' | 'categoryIds'> & {
   files: FileDetail[];
   /** Null for products with no pickup location (digital, service, unconfigured). */
   pickup: PickupLocationDetail | null;
+  /** The product's categories, resolved, in the vendor's order. */
+  categories: CategoryRef[];
+  /**
+   * ⚠ DEPRECATED — the primary category's NAME (`categories[0].name`), or null.
+   * Kept so a client that still reads the old single field keeps working.
+   */
+  category: string | null;
 };
 
 /**
@@ -73,12 +81,13 @@ export async function enrichProduct(
   storage: IStorageProvider,
   pickupResolver: PickupLocationDetailResolver,
 ): Promise<EnrichedProduct> {
-  const [files, pickup] = await Promise.all([
+  const [files, pickup, categories] = await Promise.all([
     buildFileDetails(product.fileIds, fileRepo, storage),
     pickupResolver.resolve(product),
+    categoryCatalogCache.refsFor(product.categoryIds),
   ]);
-  const { fileIds: _dropped, ...rest } = product;
-  return { ...rest, files, pickup };
+  const { fileIds: _dropped, categoryIds: _ids, ...rest } = product;
+  return { ...rest, files, pickup, categories, category: categories[0]?.name ?? null };
 }
 
 /**

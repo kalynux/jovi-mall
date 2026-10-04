@@ -293,7 +293,7 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
     const countQuery = this.model.countDocuments(query);
     const findQuery = this.model
       .find(query)
-      .select('_id title type status mode category hasVariants vectorisationEnabled vectorisationStatus fileIds')
+      .select('_id title type status mode categoryIds hasVariants vectorisationEnabled vectorisationStatus fileIds')
       .sort(sortObj)
       .skip(skip)
       .limit(limit)
@@ -314,7 +314,7 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
       // Same legacy coercion as ProductMapper.toDomain — this projection is lean
       // and bypasses the mapper entirely.
       mode: doc.mode ?? 'advanced',
-      category: doc.category,
+      categoryIds: Array.isArray(doc.categoryIds) ? doc.categoryIds.map((id: any) => id.toString()) : [],
       hasVariants: doc.hasVariants ?? false,
       vectorisationEnabled: doc.vectorisationEnabled ?? false,
       vectorisationStatus: doc.vectorisationStatus ?? 'not_started',

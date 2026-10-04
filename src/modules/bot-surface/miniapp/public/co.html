@@ -81,6 +81,9 @@
     <div id="sheet" hidden>
       <div class="rows" id="lines"></div>
 
+      <!-- ADR-A11: one delivery row per shipping shop — label, server-formatted fee or "Free", hint. -->
+      <div class="rows" id="delivery"></div>
+
       <div class="row row--total">
         <div class="row__main" id="totalLabel"></div>
         <div class="row__end money" id="total"></div>
@@ -141,6 +144,7 @@
     stateText: document.getElementById("stateText"),
     sheet: document.getElementById("sheet"),
     lines: document.getElementById("lines"),
+    delivery: document.getElementById("delivery"),
     totalLabel: document.getElementById("totalLabel"),
     total: document.getElementById("total"),
     addressLabel: document.getElementById("addressLabel"),
@@ -253,8 +257,17 @@
    *       address:   { text: string, digital?: true } | null,  // ⚠ MASKED. null → no-address
    *       payment:   { phoneMasked: string | null, dialCountry: string },  // ISO the picker starts on
    *       dialOptions: [{ id: string, title: string }],                      // "+237 Cameroun", home first
-   *       addAddressUrl: string | null     // the website's address page; set ONLY when address is null
+   *       addAddressUrl: string | null,    // the website's address page; set ONLY when address is null
+   *       delivery: [{                     // ADR-A11 — one row per shop that ships; [] for a download
+   *         label:     string,             // "Delivery" / "Delivery · <shop>", in the customer's language
+   *         valueText: string,             // FORMATTED fee, or "Free" — the page does no money maths
+   *         hint:      string | null       // "Add 2 000 XAF more and delivery is free." — never blocks
+   *       }]
    *   }}
+   *
+   * ⚠ **The delivery rows are DRAWN, never summed.** `totalText` already includes every fee the
+   * customer pays; a page that added `valueText` to anything would charge delivery twice on the
+   * screen and in no place that is tested.
    *
    * ⚠ **`totalText` is the server's figure and the page never adds anything up.** A WebView
    * that computes a total is a second implementation of delivery fees, discounts and the
@@ -279,6 +292,34 @@
         + "</div>"
         + '<div class="row__end money">' + esc(line.lineTotalText) + "</div>";
       el.lines.appendChild(row);
+    });
+
+    /*
+     * ADR-A11 — delivery rows. Every string is the server's, set through `textContent`; the page
+     * neither formats nor adds a fee (the total below already carries it).
+     */
+    el.delivery.innerHTML = "";
+    (Array.isArray(data.delivery) ? data.delivery : []).forEach(function (d) {
+      var row = document.createElement("div");
+      row.className = "row";
+      var main = document.createElement("div");
+      main.className = "row__main";
+      var title = document.createElement("div");
+      title.className = "row__title";
+      title.textContent = String(d.label == null ? "" : d.label);
+      main.appendChild(title);
+      if (d.hint) {
+        var sub = document.createElement("div");
+        sub.className = "row__sub";
+        sub.textContent = String(d.hint);
+        main.appendChild(sub);
+      }
+      var end = document.createElement("div");
+      end.className = "row__end money";
+      end.textContent = String(d.valueText == null ? "" : d.valueText);
+      row.appendChild(main);
+      row.appendChild(end);
+      el.delivery.appendChild(row);
     });
 
     el.totalLabel.textContent = copy.checkoutTotal;

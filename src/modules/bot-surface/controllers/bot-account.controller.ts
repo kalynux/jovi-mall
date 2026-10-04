@@ -31,6 +31,8 @@ import { contactSection } from './bot-contact.controller';
 import { paymentSection } from './bot-payment-method.controller';
 import { inboxSection, notifySection } from './bot-notification.controller';
 import { ACCOUNT_CLOSURE_CONFIRMATION } from '../../users/user.validator';
+import { roleClosureService } from '../../role-closure/services/role-closure.service';
+import type { RoleClosureBlocker } from '../../role-closure/role-closure.types';
 
 /**
  * The account itself — which messaging apps reach it, and closing it (MCP parity step 7).
@@ -216,6 +218,20 @@ interface ClosurePreview {
      * not use it.
      */
     confirmWith: string;
+    /**
+     * An administrator's pending request to close this customer role (ADR-A10), or null.
+     *
+     * When present it DECIDES the flow: the blockers are the role-closure ones (holding other
+     * roles is not one), Confirm runs the request's confirm, and "Keep my account" declines
+     * it — so the administrator hears the answer either way.
+     */
+    adminRequest: {
+        id: string;
+        reason: string;
+        expiresAt: string;
+        blockers: RoleClosureBlocker[];
+        otherRolesRemain: boolean;
+    } | null;
 }
 
 /**
@@ -227,6 +243,29 @@ async function readClosurePreview(caller: ResolvedBotCaller, language: string | 
     const user = await userRepo.findById(caller.userId);
     if (!user) throw createAppError(ERROR_CODES.USER_NOT_FOUND, 404);
 
+    const pending = await roleClosureService.getForCaller(caller.userId, 'customer', caller.customerId);
+    if (pending) {
+        const otherRolesRemain = (user.roles ?? []).some((role) => role !== 'customer' && role !== 'admin');
+        const prompt = botChrome(otherRolesRemain ? 'closureRequestPromptOtherRoles' : 'accountClosurePrompt', language);
+        return {
+            canClose: pending.blockers.length === 0,
+            blockingRoles: [],
+            activeOrderCount: pending.blockers.find((b) => b.code === 'orders_in_flight')?.count ?? 0,
+            // The administrator's words, quoted and untranslated — they are theirs, not ours.
+            consequence: `${botChrome('closureRequestIntro', language)} “${pending.request.reason}”
+
+${prompt}`,
+            confirmWith: ACCOUNT_CLOSURE_CONFIRMATION,
+            adminRequest: {
+                id: pending.request._id.toString(),
+                reason: pending.request.reason,
+                expiresAt: pending.request.expires_at.toISOString(),
+                blockers: pending.blockers,
+                otherRolesRemain,
+            },
+        };
+    }
+
     const blockingRoles = (user.roles ?? []).filter((role) => role !== 'customer');
     const activeOrderCount = await closureRepo.countActiveOrders(caller.customerId);
 
@@ -236,6 +275,7 @@ async function readClosurePreview(caller: ResolvedBotCaller, language: string | 
         activeOrderCount,
         consequence: botChrome('accountClosurePrompt', language),
         confirmWith: ACCOUNT_CLOSURE_CONFIRMATION,
+        adminRequest: null,
     };
 }
 
@@ -268,7 +308,9 @@ function setClosureReply(
     language: string | null,
 ): void {
     if (!preview.canClose) {
-        const code = preview.blockingRoles.length > 0
+        const code = preview.adminRequest
+            ? ERROR_CODES.ROLE_CLOSURE_BLOCKED
+            : preview.blockingRoles.length > 0
             ? ERROR_CODES.ACCOUNT_CLOSURE_ROLE_NOT_ELIGIBLE
             : ERROR_CODES.ACCOUNT_CLOSURE_ORDERS_IN_FLIGHT;
         setBotReply(req, {
@@ -303,6 +345,27 @@ async function closeAndReply(req: Request, res: Response, caller: ResolvedBotCal
      * dependency worth not having.
      */
     const language = botResponseLanguageOf(req);
+
+    /**
+     * An administrator's pending request takes this path instead (ADR-A10): the customer is
+     * confirming THAT request, which may close only the customer role and leave the person
+     * signed in to their others. `confirm` re-checks its blockers itself.
+     */
+    const pending = await roleClosureService.getForCaller(caller.userId, 'customer', caller.customerId);
+    if (pending) {
+        const { outcome } = await roleClosureService.confirm(caller.userId, 'customer', caller.customerId);
+        setBotReply(req, {
+            kind: 'text',
+            text: botChrome(outcome.accountClosed ? 'accountClosed' : 'closureRequestRoleClosed', language),
+        });
+        sendSuccess(res, {
+            closed: true,
+            closedAt: outcome.closedAt,
+            accountClosed: outcome.accountClosed,
+            via: 'administrator_request',
+        });
+        return;
+    }
 
     const { closedAt } = await accountClosureService.close(caller.userId, caller.customerId);
 
@@ -345,10 +408,20 @@ async function confirmCloseTap(req: Request, res: Response, action: ParsedBotAct
  * out is to press the other button.
  */
 async function keepAccountTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
-    botCallerOf(req);
+    const caller = botCallerOf(req);
     if (action.argument !== '') throw unknownBotAction();
+    const language = botResponseLanguageOf(req);
 
-    setBotReply(req, { kind: 'text', text: botChrome('accountKept', botResponseLanguageOf(req)) });
+    // An administrator asked: "Keep my account" DECLINES their request, so they are told.
+    const pending = await roleClosureService.getForCaller(caller.userId, 'customer', caller.customerId);
+    if (pending) {
+        await roleClosureService.decline(caller.userId, 'customer', caller.customerId, null);
+        setBotReply(req, { kind: 'text', text: botChrome('closureRequestDeclined', language) });
+        sendSuccess(res, { closed: false, kept: true, declined: true });
+        return;
+    }
+
+    setBotReply(req, { kind: 'text', text: botChrome('accountKept', language) });
     sendSuccess(res, { closed: false, kept: true });
 }
 

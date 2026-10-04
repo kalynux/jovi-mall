@@ -205,6 +205,18 @@ export class AuthService {
       throw createAppError(ERROR_CODES.AUTH_ROLE_NOT_FOUND, 403, undefined, { role: payload.role });
     }
 
+    /**
+     * A refresh for a role the account no longer holds — ADR-A10.
+     *
+     * Role closure `$pull`s the role from `users.roles` in the same transaction that stamps the
+     * entity, and this method copies the role out of the token without re-reading anything else.
+     * The user row is already loaded, so this is a comparison, not a query; `requireAuth` closes
+     * the 15-minute access tail from the entity's `closed_at`.
+     */
+    if (!user.roles.includes(payload.role as any)) {
+      throw createAppError(ERROR_CODES.AUTH_ROLE_CLOSED, 403, undefined, { role: payload.role });
+    }
+
     const authTime = resolveAuthTime(payload)!;
     const tokens = this.issueTokenPair(user, payload.role, authTime);
     return { ...tokens, user, role: payload.role };
@@ -460,6 +472,24 @@ export class AuthService {
 
     if (user.roles.includes(role as any)) {
       throw createAppError(ERROR_CODES.AUTH_ROLE_ALREADY_EXISTS, 409, undefined, { role });
+    }
+
+    /**
+     * A role closed on this account cannot be re-added — ADR-A10.
+     *
+     * The closed entity is retained (money and orders point at its `_id`) and every role
+     * collection is unique on `user_id`, so without this the `create` below would fail on the
+     * index as an unexplained 500. Irreversible on purpose: re-adding would hand the person a
+     * profile whose identifiers were destroyed.
+     */
+    const existingEntity: { closed_at?: Date | null } | null =
+      role === 'customer' ? await this.customerRepo.findByUserId(userId)
+        : role === 'vendor' ? await this.vendorRepo.findByUserId(userId)
+          : role === 'agency' ? await this.agencyRepo.findByUserId(userId)
+            : role === 'agent' ? await this.agentRepo.findByUserId(userId)
+              : null;
+    if (existingEntity?.closed_at) {
+      throw createAppError(ERROR_CODES.ROLE_CLOSED, 409, undefined, { role });
     }
 
     let roleEntity;

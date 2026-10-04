@@ -55,6 +55,7 @@ import { StoreModel } from '../../../store/models/store.model';
 import { creditWalletService } from '../../../billing/services/credit-wallet.service';
 import { VECTORISATION_COST } from '../../../billing/config/credit.config';
 import { toFileDetail } from '../../read-models/file-detail.resolver';
+import { categoryCatalogCache } from '../../../categories/services/category-catalog.cache';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -117,7 +118,19 @@ export interface VectoriserPayloadEntry {
   product_id: string;
   title: string;
   description: string;
+  /**
+   * The PRIMARY category's name (`categories[0]`). Kept, under the same key, because the
+   * vectoriser's `product_vectors.category` generated column and every existing row read
+   * `metadata.category` — removing it would null that column for every product the moment
+   * it is re-vectorised, before the n8n side has learned the list.
+   */
   category: string;
+  /**
+   * Every category NAME, vendor's order (owner decision C-6). The n8n `build all texts`
+   * node copies it into `metadata.categories`; `product_search(p_category)` matches either.
+   * See api-doc/n8n/vectoriser/README.md § "Several categories per product".
+   */
+  categories: string[];
   tags: string[];
   type: string;
   status: string;
@@ -304,21 +317,21 @@ export class VectorisationService {
    * Returns true when a product meets all vectorisation conditions:
    *  1. status === 'active'
    *  2. vectorisationEnabled === true
-   *  3. Has a title, description, category (basic completeness gate)
+   *  3. Has a title, description, and at least one category (basic completeness gate)
    */
   isEligible(product: {
     status: string;
     vectorisationEnabled: boolean;
     title?: string;
     description?: string;
-    category?: string;
+    categoryIds?: ReadonlyArray<unknown> | null;
   }): boolean {
     return (
       product.status === 'active' &&
       product.vectorisationEnabled === true &&
       !!product.title &&
       !!product.description &&
-      !!product.category
+      (product.categoryIds?.length ?? 0) > 0
     );
   }
 
@@ -568,11 +581,14 @@ export class VectorisationService {
       source: agencySource,
     };
 
+    const categoryNames = (await categoryCatalogCache.refsFor(product.categoryIds)).map((c) => c.name);
+
     return {
       product_id: product._id.toString(),
       title: product.title,
       description: product.description,
-      category: product.category,
+      category: categoryNames[0] ?? '',
+      categories: categoryNames,
       tags: product.tags ?? [],
       type: product.type,
       status: product.status,

@@ -141,7 +141,7 @@ export class AccountClosureRepository {
    * nobody, and consent to be marketed at does not survive the account it was given on.
    * `timezone` likewise stays — it is a rendering default, not a location.
    */
-  async anonymiseCustomer(customerId: string, session: ClientSession): Promise<void> {
+  async anonymiseCustomer(customerId: string, closedAt: Date, session: ClientSession): Promise<void> {
     await CustomerModel.updateOne(
       { _id: customerId },
       {
@@ -159,6 +159,8 @@ export class AccountClosureRepository {
           saved_payment_methods: [],
           recent_product_code: null,
           status: 'inactive',
+          // ADR-A10: the role-level stamp `requireAuth` refuses, written with the status.
+          closed_at: closedAt,
           'preferences.marketing_opt_in': false,
         },
         $unset: { email: '', phone: '' },

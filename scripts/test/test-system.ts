@@ -1926,8 +1926,16 @@ assert('MIGRATIONS covers every migrate:*/backfill:* binding, and every row has 
 // `delivery_fee_proposals` collection, whose partial unique index (one PENDING proposal per
 // shipment) is the independent guarantee behind the shipment-pointer CAS. A named index build,
 // above the catch-all with the others.
-assert('all twenty-six are registered — the count is the count on disk', () =>
-    MIGRATIONS.length === 26);
+// ⚠ 26 -> 27 with `migrate:role-closure-indexes` (2026-10-04, ADR-A10): the new
+// `role_closure_requests` collection, whose partial unique index (one PENDING request per
+// user + role) is what makes the service's pre-check true under a race. A named index build,
+// above the catch-all.
+// ⚠ 27 -> 28 with `migrate:product-categories` (2026-10-04, PRODUCT-CATEGORIES-PLAN C-5): a DATA
+// migration — every free-text `category` converted into the shared list through the same
+// matcher the editor uses — that also drops the two superseded indexes on the field it removes.
+// Among the data rows, so it runs before the index builds that replace them.
+assert('all twenty-eight are registered — the count is the count on disk', () =>
+    MIGRATIONS.length === 28);
 
 // The catch-all is LAST, and unlike the general index-after-data rule below this is a
 // dependency on the OTHER INDEX MIGRATIONS: it builds only what the declared-vs-live diff

@@ -100,7 +100,10 @@ anyway** → resend with `force: true`. Reference: [assignment.md § Forcing](./
 ## 4 · Delivery-fee proposals — renegotiate one shipment's fee
 
 A shipment's fee comes from your pricing (today a flat per-shipment amount — `additional_per_kg`
-and the out-of-region fields are not used by the formula). The **vendor** pays it. You may now
+and the out-of-region fields are not used by the formula). The **vendor** pays it.
+⚠ **Superseded 2026-10-04 (ADR-A11):** the weight/region formula is live and the customer pays the
+fee wherever the shop's delivery terms say so — see
+[FRONTEND-CHANGELOG-customer-paid-delivery.md](./FRONTEND-CHANGELOG-customer-paid-delivery.md). You may now
 propose a different fee **for one shipment**, with a reason; the vendor approves or rejects every
 change, up or down.
 

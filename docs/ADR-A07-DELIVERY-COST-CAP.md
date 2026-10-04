@@ -11,6 +11,28 @@
 
 ---
 
+> ## ⚠ AMENDED 2026-10-03 by ADR-A11 (customer-paid delivery) — read [ADR-A11](./ADR-A11-CUSTOMER-PAID-DELIVERY.md) first
+>
+> Option 3 below ("vendor-configured free-delivery threshold", which includes option 2) was
+> built. What changed for this rule:
+>
+> - The cap runs **only for a shop part whose delivery the VENDOR pays** (shop terms `always`,
+>   or `above` with the threshold met). Same arithmetic, same units (online per order, COD per
+>   shipment), now with the formula's real fee (weight, region).
+> - **D-5 no longer applies as written.** A vendor-paid part that fails the cap is **not
+>   refused**: it falls back to customer-paid (`delivery_payer_reason: 'cap_fallback'`, owner
+>   decision D-6), and the quote reports the cap's shortfall as `freeDelivery.shortfall`.
+> - `422 ORDER_BELOW_DELIVERY_MINIMUM` survives for ONE case: the part is customer-paid and the
+>   vendor would still net ≤ 0 (commission + bargain fee + the COD handling fee, which stays the
+>   vendor's). Its `details` shape is unchanged.
+> - D-4's enforcement table moved: checkout and the quote both price through
+>   `VendorOrderPricingService` → `priceVendorOrder` (`orders/domain/vendor-order-pricing.ts`),
+>   which calls the unit assessor `assessDeliveryCostUnits` in `delivery-cost-cap.ts`.
+>   `DeliveryCostCapService` remains as the mix-priced vendor-paid evaluation; it is no longer on
+>   the checkout path.
+>
+> Everything below is the vendor-paid-only record of 2026-09-27.
+
 ## Context
 
 The customer pays for the goods only. The delivery agency's fee — and on cash on delivery its

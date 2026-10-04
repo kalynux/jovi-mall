@@ -2,6 +2,7 @@ import { Types } from 'mongoose';
 import { EarningsAllocationModel } from '../../earnings/models/earnings-allocation.model';
 import { CashCollectionModel } from '../../cod/models/cash-collection.model';
 import { ShipmentModel } from '../../shipments/shipment.model';
+import { customerDeliveryFeeOf, deliveryFeeShares } from '../../orders/domain/delivery-payer';
 import { OrderModel } from '../../orders/order.model';
 import { RefundTransactionModel } from '../../payments/models/refund-transaction.model';
 import {
@@ -184,8 +185,13 @@ export class VendorAnalyticsService {
                 .lean<{ _id: Id; order_id: Id; shipment_id: Id }[]>(),
         ]);
         const shipments = await ShipmentModel.find({ _id: { $in: collections.map((c) => c.shipment_id) } })
-            .select('delivery_fee_snapshot')
-            .lean<{ _id: Id; delivery_fee_snapshot?: number | null }[]>();
+            .select('delivery_fee_snapshot delivery_payer customer_delivery_fee')
+            .lean<{
+                _id: Id;
+                delivery_fee_snapshot?: number | null;
+                delivery_payer?: 'vendor' | 'customer' | null;
+                customer_delivery_fee?: number | null;
+            }[]>();
 
         const key = (type: string, id: Id) => `${type}:${id.toString()}`;
         const siblingAmount = new Map<string, number>();
@@ -194,7 +200,18 @@ export class VendorAnalyticsService {
             siblingAmount.set(k, (siblingAmount.get(k) ?? 0) + s.amount);
         }
         const collectionById = new Map(collections.map((c) => [c._id.toString(), c]));
-        const feeByShipment = new Map(shipments.map((s) => [s._id.toString(), s.delivery_fee_snapshot ?? null]));
+        // The VENDOR-BORNE part of each fee (ADR-A11): the whole fee when the vendor pays, what
+        // the customer's cash did not cover when the customer pays (normally 0). That — not the
+        // agency's fee — is what the vendor allocation's residual contains, so NET_FORMULA's
+        // `deliveryFee` term stays exact for both payers.
+        const feeByShipment = new Map(
+            shipments.map((s) => {
+                const snapshot = s.delivery_fee_snapshot ?? null;
+                if (snapshot === null) return [s._id.toString(), null] as const;
+                const vendorBorne = deliveryFeeShares(snapshot, customerDeliveryFeeOf(null, s)).vendorBorne;
+                return [s._id.toString(), vendorBorne] as const;
+            }),
+        );
 
         const sales: SaleFact[] = saleRows.map((a) => {
             const k = key(a.source_type, a.source_id);

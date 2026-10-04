@@ -103,6 +103,7 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     // Says "closed", never "deleted" — ADR-A02 D-2 is explicit that the promise is
     // anonymisation and must not be described to a customer as an erasure.
     [ERROR_CODES.AUTH_ACCOUNT_CLOSED]: 'This account has been closed',
+    [ERROR_CODES.AUTH_ROLE_CLOSED]: 'This role has been closed on your account',
     [ERROR_CODES.AUTH_ROLE_PROFILE_NOT_FOUND]: 'Role profile not found',
 
     [ERROR_CODES.EARNINGS_INVALID_SPLIT]: 'Order fees exceed the paid amount; cannot split earnings',
@@ -589,6 +590,15 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.DELIVERY_FEE_PROPOSAL_STALE]: 'This proposal no longer applies to the shipment as it stands — the agency can withdraw it',
     [ERROR_CODES.DELIVERY_FEE_PROPOSAL_SETTLEMENT_CONFLICT]: 'The order\'s earnings could not be adjusted for this fee change — nothing was applied',
     [ERROR_CODES.DELIVERY_FEE_PROPOSAL_VERSION_MISMATCH]: 'This delivery-fee proposal was changed since you loaded it — reload it and answer the current figure',
+    [ERROR_CODES.DELIVERY_FEE_PROPOSAL_DIRECTION_CHANGED]: 'This change would lower the fee — withdraw the proposal and propose the lower fee, which applies directly',
+    [ERROR_CODES.DELIVERY_FEE_TOPUP_IN_PROGRESS]: 'The customer has approved this fee and may be paying for it — it can no longer be changed',
+    [ERROR_CODES.DELIVERY_FEE_TOPUP_NOT_DUE]: 'There is no delivery-fee top-up to pay on this proposal',
+    [ERROR_CODES.DELIVERY_FEE_PROPOSAL_ORDER_NOT_PAID]: 'This order\'s payment is refunded or disputed, so its delivery fee can no longer be changed',
+    [ERROR_CODES.COMBINED_DELIVERY_REQUEST_NOT_FOUND]: 'Combined delivery-price request not found',
+    [ERROR_CODES.COMBINED_DELIVERY_REQUEST_INELIGIBLE]: 'A combined delivery price needs at least two of your parcels from one checkout, with the same delivery company, not yet picked up',
+    [ERROR_CODES.COMBINED_DELIVERY_REQUEST_ALREADY_OPEN]: 'You already asked this delivery company for a combined price on this checkout',
+    [ERROR_CODES.COMBINED_DELIVERY_REQUEST_NOT_OPEN]: 'This combined delivery-price request has already been answered or cancelled',
+    [ERROR_CODES.COMBINED_DELIVERY_RESPONSE_INVALID]: 'Each answered fee must be lower than the current fee, for a parcel in the request, once',
     [ERROR_CODES.SHIPMENT_AGENT_NOT_IN_AGENCY]: 'This agent does not belong to your agency',
     [ERROR_CODES.SHIPMENT_ACCESS_DENIED]: 'You do not have access to this shipment',
     [ERROR_CODES.SHIPMENT_ALREADY_CONFIRMED]: 'This shipment has already been confirmed as delivered',
@@ -728,6 +738,13 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
         'Only a customer-only account can be closed here. Close your other roles first.',
     [ERROR_CODES.ACCOUNT_CLOSURE_ORDERS_IN_FLIGHT]:
         'You have orders still in progress. They have to finish before this account can be closed.',
+    [ERROR_CODES.ROLE_CLOSURE_REQUEST_NOT_FOUND]: 'There is no closure request waiting',
+    [ERROR_CODES.ROLE_CLOSURE_ALREADY_PENDING]: 'A closure request for this role is already waiting on the user',
+    [ERROR_CODES.ROLE_CLOSURE_ROLE_NOT_HELD]: 'This account does not hold that role',
+    [ERROR_CODES.ROLE_CLOSURE_BLOCKED]:
+        'This role still has work or money in progress. It has to be settled before it can be closed.',
+    [ERROR_CODES.ROLE_CLOSURE_REQUEST_EXPIRED]: 'This closure request has expired',
+    [ERROR_CODES.ROLE_CLOSED]: 'This role has been closed and cannot be reopened',
     [ERROR_CODES.CONTACT_CHANGE_SAME_IDENTIFIER]: 'That is already the address on your account',
     [ERROR_CODES.CONTACT_CHANGE_IDENTIFIER_TAKEN]: 'That address is already in use on another account',
     [ERROR_CODES.CONTACT_CHANGE_NOT_PENDING]: 'There is no change waiting to be confirmed',
@@ -822,6 +839,20 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.REVIEW_SUBJECT_NOT_REVIEWABLE]: 'This cannot be reviewed yet',
     [ERROR_CODES.REVIEW_NOT_PENDING]: 'This review has already been moderated',
     [ERROR_CODES.REVIEW_ROLE_NOT_ALLOWED]: 'Your account type cannot review this',
+
+    // Product categories. The first is a QUESTION to the vendor, not a failure — the
+    // dashboard renders `details.conflicts` as "Did you mean …?" and re-submits with
+    // either the suggested id or `confirmNew: true`.
+    [ERROR_CODES.CATEGORY_SIMILAR_EXISTS]:
+      'A category with a very similar name already exists. Pick it, or confirm that you want a new one.',
+    [ERROR_CODES.CATEGORY_NAME_INVALID]:
+      'A category name must be 2 to 60 characters and contain at least one letter or digit',
+    [ERROR_CODES.CATEGORY_NOT_FOUND]: 'Category not found',
+    [ERROR_CODES.CATEGORY_NAME_TAKEN]:
+      'Another category already has this name (or a spelling of it). Merge the two instead.',
+    [ERROR_CODES.CATEGORY_IN_USE]:
+      'This category is still used by products. Merge it into another category instead of deleting it.',
+    [ERROR_CODES.CATEGORY_MERGE_INVALID]: 'A category can only be merged into a different, live category',
 
     // ── System operations (Phase 14) ──────────────────────────────────────────
     // The maintenance message is the one default here written for a CUSTOMER rather than an

@@ -38,6 +38,7 @@ import { isRenderableImage, productImageKey, resolveProductImages } from '../rea
 import { FileDetail } from '../read-models/product-detail.read-model';
 import {
     buildVariantDisplayName,
+    PublicCategoryDto,
     PublicProductDetailDto,
     PublicProductListItemDto,
     PublicSkuResolutionDto,
@@ -49,7 +50,11 @@ import { pickSkuMatch, skuCandidates } from '../domain/services/sku-resolution';
 import { PublicStoreDto, toPublicStoreDto } from '../../store/dto/public-store.dto';
 import { PublicProductListQuery, PublicStoreListQuery } from '../validators/public-catalog.validator';
 import { reviewAggregateRepository } from '../../reviews/repositories/review-aggregate.repository';
+import { VendorSettingsRepository } from '../../vendors/repositories/vendor-settings.repository';
+import { isAlwaysFreeDelivery, vendorDeliveryTermsOf } from '../../vendors/domain/delivery-terms';
 import { toRatingBreakdownDto, toRatingSummaryDto } from '../../reviews/dto/review.dto';
+import { categoryCatalogCache } from '../../categories/services/category-catalog.cache';
+import { categoryResolutionService } from '../../categories/services/category-resolution.service';
 
 /**
  * The account currency.
@@ -77,6 +82,7 @@ export class PublicCatalogService {
         private readonly variantRepo = new VariantRepositoryMongo(),
         private readonly optionRepo = new OptionRepositoryMongo(),
         private readonly optionValueRepo = new OptionValueRepositoryMongo(),
+        private readonly vendorSettingsRepo = new VendorSettingsRepository(),
     ) { }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -84,9 +90,21 @@ export class PublicCatalogService {
     // ─────────────────────────────────────────────────────────────────────────
 
     async listProducts(query: PublicProductListQuery): Promise<PublicPage<PublicProductListItemDto>> {
+        // `?category=` takes an id, a slug or a name (exact spelling variants only — a typo
+        // must not quietly show a different shelf). Unknown is an EMPTY page, not an error:
+        // a stale chip or a mistyped chat command is a search that found nothing.
+        let categoryId: string | undefined;
+        if (query.category) {
+            const resolved = await categoryResolutionService.resolveFilter(query.category);
+            if (!resolved) {
+                return { data: [], meta: { total: 0, page: query.page, limit: query.limit, pages: 0 } };
+            }
+            categoryId = resolved.id;
+        }
+
         const { rows, total } = await this.repo.search({
             q: query.q,
-            category: query.category,
+            categoryId,
             types: query.type,
             storeSlug: query.storeSlug,
             minPrice: query.minPrice,
@@ -186,24 +204,31 @@ export class PublicCatalogService {
         // same shape as the images one and exists for the same reason: a grid renders
         // a rating on every card, so a per-card query is an N+1 on the busiest
         // unauthenticated endpoint the platform has.
-        const [imagesByKey, ratingByProductId] = await Promise.all([
+        // The shop delivery terms are the third batch read (ADR-A11): `freeDelivery` is
+        // derived from them now, so it is one query per page keyed by vendor, never per card.
+        // Category names come from the in-process list — no query per page at all.
+        const [imagesByKey, ratingByProductId, termsByVendor, categoriesByRow] = await Promise.all([
             resolveProductImages(
                 rows.map((r) => ({ productId: r.id, variantId: r.defaultVariantId })),
                 this.fileRepo,
                 storage,
             ),
             reviewAggregateRepository.findMany('product', rows.map((r) => r.id), 'customer'),
+            this.vendorSettingsRepo.findDeliveryTermsForVendors(rows.map((r) => r.vendorId)),
+            categoryCatalogCache.refsForMany(rows.map((r) => r.categoryIds)),
         ]);
 
-        return rows.map((row) => {
+        return rows.map((row, index) => {
             const image = imagesByKey.get(productImageKey(row.id, row.defaultVariantId))?.[0] ?? null;
+            const deliveryTerms = vendorDeliveryTermsOf(termsByVendor.get(row.vendorId));
 
             return {
                 id: row.id,
                 slug: row.slug,
                 title: row.title,
                 type: row.type,
-                category: row.category,
+                categories: categoriesByRow[index],
+                category: categoriesByRow[index][0]?.name ?? null,
                 tags: row.tags ?? [],
                 price: row.price,
                 compareAtPrice: row.compareAtPrice,
@@ -226,7 +251,8 @@ export class PublicCatalogService {
                     isOpen: row.storeIsOpen,
                     verified: row.storeVerified === true,
                 },
-                freeDelivery: row.freeDelivery,
+                freeDelivery: isAlwaysFreeDelivery(deliveryTerms),
+                deliveryTerms,
                 updatedAt: new Date(row.updatedAt).toISOString(),
             };
         });
@@ -343,13 +369,16 @@ export class PublicCatalogService {
         // so this is a should-never-happen that fails as a 404 rather than a broken page.
         if (!storeRow) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
 
-        const [variants, options, rating] = await Promise.all([
+        const [variants, options, rating, storedDeliveryTerms, categories] = await Promise.all([
             this.variantRepo.findByProduct(productId),
             this.optionRepo.findByProduct(productId),
             // The breakdown rather than the summary: the product page renders the 1–5
             // histogram above its review list, and reading it here saves the client a
             // second request for data this response already had to fetch.
             reviewAggregateRepository.find({ targetType: 'product', targetId: productId, authorRole: 'customer' }),
+            // ADR-A11: the shop's terms decide the derived `freeDelivery` and are shown as-is.
+            this.vendorSettingsRepo.findDeliveryTerms(vendorId),
+            categoryCatalogCache.refsFor(product.categoryIds),
         ]);
 
         const optionValues =
@@ -390,6 +419,8 @@ export class PublicCatalogService {
             currency: DEFAULT_CURRENCY,
             contentLanguage: storeRow.vendorPreferredLanguage ?? DEFAULT_CONTENT_LANGUAGE,
             rating: toRatingBreakdownDto(rating),
+            deliveryTerms: vendorDeliveryTermsOf(storedDeliveryTerms),
+            categories,
             store: {
                 slug: storeRow.slug,
                 name: storeRow.name,
@@ -416,14 +447,23 @@ export class PublicCatalogService {
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * `Product.category` is a plain indexed string — there is no Category collection, model
-     * or taxonomy anywhere in the codebase — so the chip list can only be derived, and it is
-     * derived over exactly the browse filter. A category whose every product is a draft
-     * therefore does not appear, which is the behaviour a shopper expects: a chip that leads
+     * The chip list. The categories themselves live in `product_categories` (one
+     * marketplace-wide list), but the chips are still DERIVED over the browse filter rather
+     * than read off that collection: a category whose every product is a draft — or one a
+     * vendor created on a save that then failed — must not appear, because a chip that leads
      * to an empty grid is worse than no chip.
+     *
+     * A product counts toward each of its categories. Sorted by count, then name.
      */
-    async listCategories(): Promise<Array<{ name: string; productCount: number }>> {
-        return this.repo.listCategories();
+    async listCategories(): Promise<PublicCategoryDto[]> {
+        const rows = await this.repo.listCategories();
+        const out: PublicCategoryDto[] = [];
+        for (const row of rows) {
+            const entry = await categoryCatalogCache.get(row.categoryId);
+            // A category retired between the count and the lookup is skipped, not blanked.
+            if (entry) out.push({ id: entry.id, name: entry.name, slug: entry.slug, productCount: row.productCount });
+        }
+        return out.sort((a, b) => b.productCount - a.productCount || a.name.localeCompare(b.name));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -454,7 +494,10 @@ export class PublicCatalogService {
     private async decorateStores(rows: PublicStoreListRow[]): Promise<PublicStoreDto[]> {
         const storage = getStorageProvider();
         const fileIds = rows.flatMap((r) => [r.logoFileId, r.bannerFileId]);
-        const fileById = await resolveFileDetails(fileIds, this.fileRepo, storage);
+        const [fileById, termsByVendor] = await Promise.all([
+            resolveFileDetails(fileIds, this.fileRepo, storage),
+            this.vendorSettingsRepo.findDeliveryTermsForVendors(rows.map((r) => r.vendorId)),
+        ]);
 
         return rows.map((row) =>
             toPublicStoreDto({
@@ -478,6 +521,7 @@ export class PublicCatalogService {
                 logo: row.logoFileId ? fileById.get(row.logoFileId) ?? null : null,
                 banner: row.bannerFileId ? fileById.get(row.bannerFileId) ?? null : null,
                 productCount: row.productCount,
+                deliveryTerms: vendorDeliveryTermsOf(termsByVendor.get(row.vendorId)),
             }),
         );
     }

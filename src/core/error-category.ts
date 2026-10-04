@@ -151,6 +151,12 @@ export const CATEGORY_OVERRIDES: Partial<Record<ErrorCode, CategoryOverride>> = 
         category: ERROR_CATEGORIES.AUTHENTICATION,
         reason: 'Same as AUTH_ACCOUNT_SUSPENDED, one axis down: the vendor role entity is switched off',
     },
+    [ERROR_CODES.AUTH_ROLE_CLOSED]: {
+        category: ERROR_CATEGORIES.AUTHENTICATION,
+        reason:
+            'Same shape as AUTH_VENDOR_SUSPENDED for any role: the session role entity was closed '
+            + '(ADR-A10), so the remedy is signing out of that role, not a per-resource denial',
+    },
     [ERROR_CODES.AUTH_ACCOUNT_CLOSED]: {
         category: ERROR_CATEGORIES.AUTHENTICATION,
         reason:

@@ -52,7 +52,7 @@ router.post('/alternatives', NegotiationToolsController.findAlternatives);
 /** `find_complementary_products` — bundle candidates from real co-purchase history. */
 router.post('/complements', NegotiationToolsController.findComplements);
 
-/** `quote_delivery` — the delivery PROMISE (D-7). No fee, no ETA, never `absorbedByVendor`. */
+/** `quote_delivery` — the delivery PROMISE (D-7, ADR-A11): free only on the shop's terms; no fee amount, no ETA, never `absorbedByVendor`. */
 router.post('/delivery-promise', NegotiationToolsController.quoteDelivery);
 
 /** `check_promotion` — the deliberate stub. Always `{ available: false }`. */

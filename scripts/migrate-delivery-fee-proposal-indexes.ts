@@ -15,6 +15,10 @@
  *
  * The other three serve the shipment history, the vendor inbox and the order view.
  *
+ * ADR-A11 (W-E) added two more collections of the same feature, with two more CORRECTNESS
+ * indexes: `delivery_fee_refund_one_processing_per_order` (no delivery-fee refund paid twice) and
+ * `combined_delivery_request_one_open_per_cart_agency`.
+ *
  * Mirrors the declarations in `delivery-fee-proposal.model.ts` BY NAME, so the
  * declared-vs-live diff (`GET /api/internal/admin/system/database`) reads "no drift" and
  * `migrate:declared-indexes` (which runs after this) finds nothing missing here.
@@ -65,6 +69,40 @@ const PLANNED: PlannedIndex[] = [
     name: 'delivery_fee_proposal_by_order',
     key: { order_id: 1, created_at: -1 },
     why: 'the proposals on one order (vendor order detail)',
+  },
+  // ── ADR-A11 (W-E, 2026-10-04): customer-paid fee changes. Same feature family, same ledger
+  // entry — this migration had not been deployed when they were added.
+  {
+    collection: COLLECTIONS.DELIVERY_FEE_REFUND,
+    name: 'delivery_fee_refund_one_processing_per_order',
+    key: { order_id: 1 },
+    options: { unique: true, partialFilterExpression: { status: 'processing' } },
+    why: 'ONE delivery-fee refund in flight per order — two triggers can never refund the same money twice',
+  },
+  {
+    collection: COLLECTIONS.DELIVERY_FEE_REFUND,
+    name: 'delivery_fee_refund_by_order',
+    key: { order_id: 1, created_at: -1 },
+    why: "an order's delivery-fee refund ledger (the outstanding amount, the customer's read)",
+  },
+  {
+    collection: COLLECTIONS.COMBINED_DELIVERY_REQUEST,
+    name: 'combined_delivery_request_one_open_per_cart_agency',
+    key: { cart_id: 1, agency_id: 1 },
+    options: { unique: true, partialFilterExpression: { status: 'open' } },
+    why: 'one open combined-price request per (checkout, agency)',
+  },
+  {
+    collection: COLLECTIONS.COMBINED_DELIVERY_REQUEST,
+    name: 'combined_delivery_request_agency_inbox',
+    key: { agency_id: 1, status: 1, created_at: -1 },
+    why: "the agency's combined-request inbox",
+  },
+  {
+    collection: COLLECTIONS.COMBINED_DELIVERY_REQUEST,
+    name: 'combined_delivery_request_by_customer_cart',
+    key: { customer_id: 1, cart_id: 1, created_at: -1 },
+    why: "a customer's requests on one checkout",
   },
 ];
 

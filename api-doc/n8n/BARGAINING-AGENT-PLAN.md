@@ -75,6 +75,12 @@ The sections below that describe the lock gate are history.
 
 **D-6 · Bargaining is chat-only.** No "make an offer" control on the storefront.
 
+> ⛔ **D-7 is SUPERSEDED (2026-10-04, [ADR-A11](../../docs/ADR-A11-CUSTOMER-PAID-DELIVERY.md)).** Free
+> delivery is now each shop's setting (`always` · `never` · `above` an amount). `quote_delivery`
+> derives `free` from the shop's terms (and the deal `amount` for `above`); the agent may promise
+> free delivery only when it says `free: true`, and never quotes a fee. See
+> [negotiation-tools.md § 6](./negotiation-tools.md). The original decision is kept below as history.
+
 **D-7 · Delivery is already free to the customer and no change is needed.**
 `order.total_amount` is the item subtotal; the agency fee comes out of the vendor's net in
 `splitOrder`. `cart-quote.service.ts` reports it as `absorbedByVendor` for information.
@@ -294,7 +300,7 @@ to `catalog/`. **Must not touch** `PriceResolverService`, `earnings-split.servic
 | `get_product_details` | Variants, per-variant window, real stock, images. The agent's truth source — every factual claim must come from here. Add it even though the main agent hands a payload over: the hand-off is composed by a model, the customer can switch product mid-negotiation, and a returning customer has no hand-off at all. |
 | `find_alternative_product` | **Price-bounded** substitute search. `product_search()` already takes `p_price_max`, `p_in_stock_only`, `p_country`, `p_product_type`, `p_category` — this is a parameterisation, not new search work. Return each hit's bargainable flag **and window**, so the agent can pivot into a fresh negotiation. |
 | `find_complementary_products` | Bundle candidates. Same kernel. **Named "complementary", not "compatibility"** — the database cannot answer a technical fit question and a model will treat the name as a capability. |
-| `quote_delivery` | ⚠ **Re-scoped by D-7.** There is no fee to quote and no waiver to grant — delivery is already free to the customer. This reports the delivery **promise**: deliverable, by which agency, and when if the agency policy model supports it. Confirm what it actually supports; do not invent an ETA. Never surface `absorbedByVendor`. |
+| `quote_delivery` | ⚠ **Re-scoped by D-7, amended by ADR-A11 (2026-10-04):** free only on the shop's delivery terms (`free`, `terms`, `freeDeliveryShortfall`, `feeBasis`); never a fee amount. Originally: there is no fee to quote and no waiver to grant — delivery is already free to the customer. This reports the delivery **promise**: deliverable, by which agency, and when if the agency policy model supports it. Confirm what it actually supports; do not invent an ETA. Never surface `absorbedByVendor`. |
 | `check_promotion` | **Stub, returns `{ available: false }`.** There is no coupon model — `cart-quote.service.ts:75` pins `price_breakdown.discount` to zero. The playbook forbids mentioning promotions; the tool exists so the model asks rather than invents. |
 
 **Tests (`test:negotiation-tools`):** the price bound is really applied; a stub that

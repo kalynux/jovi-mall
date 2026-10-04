@@ -21,6 +21,7 @@ import { ERROR_CODES } from '../../src/core/error-codes';
 import { DEFAULT_ERROR_MESSAGES } from '../../src/core/errors';
 import {
     buildDeliveryPromise,
+    FEE_BASIS,
     NO_ETA_BASIS,
 } from '../../src/modules/negotiation/domain/delivery-promise';
 import {
@@ -392,13 +393,75 @@ function main(): void {
 
     const agency = { id: 'a1', name: 'Douala Express', coverageAreas: ['littoral', 'centre'] };
 
-    assert('a physical product with an agency is deliverable and free', () => {
-        const p = buildDeliveryPromise({ productType: 'physical', currency: 'XAF', agency });
-        eq(p.deliverable, true, 'deliverable');
-        eq(p.reason, 'agency_assigned', 'reason');
-        eq(p.customerPays, 0, 'customerPays');
-        eq(p.free, true, 'free');
-        eq(p.agency?.name, 'Douala Express', 'agency name');
+    /**
+     * ADR-A11 (2026-10-04): delivery is no longer free on every order. These four replace the old
+     * "deliverable and free" pin (`customerPays === 0`, `free === true` unconditionally) with the
+     * shop's terms, which is now the truth the promise is derived from.
+     */
+    assert('ADR-A11 · an `always` shop (and the default, no terms) delivers free — customerPays 0', () => {
+        for (const terms of [{ mode: 'always' as const, freeAboveAmount: null }, null, undefined]) {
+            const p = buildDeliveryPromise({ productType: 'physical', currency: 'XAF', agency, terms });
+            eq(p.deliverable, true, 'deliverable');
+            eq(p.reason, 'agency_assigned', 'reason');
+            eq(p.customerPays, 0, 'customerPays');
+            eq(p.free, true, 'free');
+            eq(p.terms?.mode, 'always', 'terms.mode');
+            eq(p.feeBasis, FEE_BASIS.free, 'feeBasis');
+            eq(p.agency?.name, 'Douala Express', 'agency name');
+        }
+    });
+
+    assert('ADR-A11 · a `never` shop is NOT free, and the fee is never a number (customerPays null)', () => {
+        const p = buildDeliveryPromise({
+            productType: 'physical', currency: 'XAF', agency, terms: { mode: 'never', freeAboveAmount: null }, amount: 999_999,
+        });
+        eq(p.free, false, 'free');
+        eq(p.customerPays, null, 'customerPays');
+        eq(p.freeDeliveryShortfall, null, 'no threshold to reach');
+        eq(p.feeBasis, FEE_BASIS.customerPays, 'feeBasis');
+        ok(/never promise free delivery/i.test(p.feeBasis), 'the basis forbids the free promise');
+    });
+
+    assert('ADR-A11 · an `above` shop is free only once the deal amount reaches the threshold (inclusive)', () => {
+        const terms = { mode: 'above' as const, freeAboveAmount: 20_000 };
+        const unknown = buildDeliveryPromise({ productType: 'physical', currency: 'XAF', agency, terms });
+        eq(unknown.free, false, 'no amount ⇒ not free (never guessed in the customer\'s favour)');
+        eq(unknown.customerPays, null, 'customerPays without an amount');
+        eq(unknown.freeDeliveryShortfall, null, 'no amount ⇒ no shortfall');
+        eq(unknown.feeBasis, FEE_BASIS.freeFrom, 'feeBasis without an amount');
+
+        const below = buildDeliveryPromise({ productType: 'physical', currency: 'XAF', agency, terms, amount: 15_000 });
+        eq(below.free, false, 'below');
+        eq(below.freeDeliveryShortfall, 5_000, 'shortfall below');
+
+        const met = buildDeliveryPromise({ productType: 'physical', currency: 'XAF', agency, terms, amount: 20_000 });
+        eq(met.free, true, 'met (inclusive)');
+        eq(met.customerPays, 0, 'customerPays met');
+        eq(met.freeDeliveryShortfall, null, 'no shortfall once met');
+        eq(met.terms?.freeAboveAmount, 20_000, 'terms echoed');
+    });
+
+    assert('ADR-A11 · ⚠ no promise ever carries a positive customer fee', () => {
+        const termsSet = [
+            { mode: 'always' as const, freeAboveAmount: null },
+            { mode: 'never' as const, freeAboveAmount: null },
+            { mode: 'above' as const, freeAboveAmount: 10_000 },
+        ];
+        for (const terms of termsSet) {
+            for (const amount of [undefined, 0, 9_999, 10_000, 50_000]) {
+                const p = buildDeliveryPromise({ productType: 'physical', currency: 'XAF', agency, terms, amount });
+                ok(p.customerPays === 0 || p.customerPays === null, `customerPays ${String(p.customerPays)} on ${terms.mode}/${String(amount)}`);
+                eq(p.customerPays === 0, p.free, `customerPays 0 ⇔ free on ${terms.mode}/${String(amount)}`);
+            }
+        }
+    });
+
+    assert('ADR-A11 · ⚠ the promise is derived — no `free: true` literal survives in the source', () => {
+        const source = stripComments(fileOf('domain/delivery-promise.ts'));
+        ok(!/free:\s*true\s+as\s+const/.test(source), 'the old unconditional `free: true as const`');
+        ok(!/customerPays:\s*0\s+as\s+const/.test(source), 'the old unconditional `customerPays: 0 as const`');
+        ok(source.includes('resolveDeliveryPayer('), 'the promise asks the rule checkout applies');
+        ok(fileOf('services/negotiation-tools.service.ts').includes('findDeliveryTerms('), 'the service loads the shop terms');
     });
 
     assert('a physical product with NO resolvable agency is not deliverable', () => {

@@ -58,6 +58,13 @@ export function initializeVendorNotificationEventConsumers(): void {
     eventBus.subscribe('delivery_fee_proposal.created', handler.handleDeliveryFeeProposalCreated.bind(handler));
     eventBus.subscribe('delivery_fee_proposal.edited', handler.handleDeliveryFeeProposalEdited.bind(handler));
     eventBus.subscribe('delivery_fee_proposal.withdrawn', handler.handleDeliveryFeeProposalWithdrawn.bind(handler));
+    // ADR-A11 D-10 — the customer declined a change-agency difference; the vendor covers it.
+    eventBus.subscribe('delivery_fee_proposal.rejected', handler.handleDeliveryFeeProposalRejected.bind(handler));
+    // ADR-A10 role closure (published by src/modules/role-closure/, post-commit). Both events
+    // are shared by the four stacks; each handler no-ops on payloads that are not its
+    // audience's (`role` / `closingRole`), the same pattern `connection.*` uses.
+    eventBus.subscribe('role_closure.requested', handler.handleRoleClosureRequested.bind(handler));
+    eventBus.subscribe('role_closure.relationships_ended', handler.handleRoleClosureRelationshipsEnded.bind(handler));
 
     console.log(
         `[VendorNotifications] Event handlers registered successfully (FCM push: ${isFcmConfigured() ? 'enabled' : 'disabled'})`

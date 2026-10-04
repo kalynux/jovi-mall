@@ -533,6 +533,22 @@ Contracts: [agency/shipments.md](../agency/shipments.md#delivery-fee-proposals),
 | `DELIVERY_FEE_PROPOSAL_SETTLEMENT_CONFLICT` | 409 | At approval: the vendor's order earnings were released/reversed or changed concurrently; nothing applied | `{ allocationStatus }` |
 | `SHIPMENT_DELIVERY_FEE_PENDING` | 409 | Pickup (`→ picked_up`) refused while a proposal awaits the vendor — agency and agent status endpoints alike | `{ proposalId }` |
 | `DELIVERY_FEE_PROPOSAL_VERSION_MISMATCH` | 409 | The proposal was edited since the caller loaded it — an edit with a stale `version`, or a vendor approve/reject of a figure that has since changed. Reload, never retry blind | `{ currentVersion }` |
+| `DELIVERY_FEE_PROPOSAL_DIRECTION_CHANGED` | 422 | ADR-A11: an edit would turn a customer-approval **increase** into a decrease. Withdraw it and propose the lower fee — a customer-paid decrease applies directly | `{ currentFee }` |
+| `DELIVERY_FEE_TOPUP_IN_PROGRESS` | 409 | ADR-A11: the customer already approved this figure (online) — it can no longer be edited; and while a top-up payment is live it cannot be withdrawn, rejected or covered | — |
+| `DELIVERY_FEE_TOPUP_NOT_DUE` | 409 | ADR-A11: `POST …/pay` on a proposal with no top-up owed (not approved yet, already paid, COD) | — |
+| `DELIVERY_FEE_PROPOSAL_ORDER_NOT_PAID` | 422 | ADR-A11: a customer-paid **online** order whose payment is no longer `paid` (refunded, disputed) — its delivery money cannot move | `{ paymentStatus }` |
+
+`DELIVERY_FEE_PROPOSAL_NOT_YOURS` (403) also answers a **vendor** approve/reject on a customer-paid proposal (the customer answers it), a **customer** answer on a vendor-paid one, and a vendor `cover` on anything but a change-agency difference. `DELIVERY_FEE_PROPOSAL_VENDOR_NET_NOT_POSITIVE` (422) also refuses a **change of agency** (`PATCH /api/vendor/orders/:id/delivery-agency`) whose higher new price the vendor could not cover should the customer decline it (D-10), and a cover/decline that would leave the vendor ≤ 0. The interim customer-paid refusal code (W-C) is retired by W-E (2026-10-04): a customer-paid change now goes to the customer.
+
+### Combined delivery-price requests (customer → agency, ADR-A11 D-8)
+
+| Code | Status | Meaning | `details` |
+|---|---|---|---|
+| `COMBINED_DELIVERY_REQUEST_NOT_FOUND` | 404 | Unknown request, or not the caller's (customer: theirs; agency: addressed to it) | — |
+| `COMBINED_DELIVERY_REQUEST_INELIGIBLE` | 422 | Fewer than two eligible parcels, or a named parcel is not eligible | `{ reason: 'agency'|'cart'|'status'|'payer'|'pending'|'limit'|'too_few', shipmentId?, eligible?, min? }` |
+| `COMBINED_DELIVERY_REQUEST_ALREADY_OPEN` | 409 | One open request per (checkout, agency) | `{ requestId }` |
+| `COMBINED_DELIVERY_REQUEST_NOT_OPEN` | 409 | Already answered, declined or cancelled — reload | `{ status }` |
+| `COMBINED_DELIVERY_RESPONSE_INVALID` | 422 | The agency's answer names a parcel not in the request / twice, a fee not LOWER than the current one, or none of the fees could be applied | `{ reason: 'empty'|'unknown_shipment'|'duplicate_shipment'|'not_lower'|'none_applied', shipmentId?, currentFee?, failed? }` |
 
 ---
 

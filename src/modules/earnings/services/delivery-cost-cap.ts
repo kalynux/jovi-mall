@@ -1,9 +1,17 @@
 import { EARNINGS_CONFIG } from '../config/earnings.config';
 import { ICodHandlingFee } from '../../delivery/delivery-agency.model';
 import { computeCodHandlingFee } from './earnings-quote.service';
+import { computeNegotiatedLineSplit } from './negotiation-margin.service';
 
 /**
  * The delivery-cost cap — the pure half (ADR-A07).
+ *
+ * ⚠ AMENDED by ADR-A11 (customer-paid delivery, 2026-10-03): the cap now runs ONLY for a shop
+ * part whose delivery the VENDOR pays (shop terms `always`, or `above` with the threshold met).
+ * When it fails, checkout no longer refuses — the shop part falls back to customer-paid
+ * (`delivery_payer_reason: 'cap_fallback'`). A customer-paid part is checked with
+ * `enforceRatio: false` (only `vendorNet > 0`, the COD handling fee still on the vendor).
+ * The history below describes the vendor-paid world the rule was written for.
  *
  * ── Why it exists ────────────────────────────────────────────────────────────
  * The customer pays for the goods only; the agency's delivery fee (and, on COD, its handling
@@ -54,6 +62,12 @@ export interface DeliveryCostCapInput {
   codHandling?: ICodHandlingFee | null;
   /** Defaults to `EARNINGS_CONFIG.MAX_DELIVERY_COST_PERCENT`. */
   maxDeliveryPercent?: number;
+  /**
+   * `false` evaluates ONLY half (2), `vendorNet > 0` — the customer-paid sanity check (ADR-A11):
+   * when the customer pays the delivery fee the 30% ratio has nothing to bound (the vendor
+   * carries no delivery fee, only the COD handling fee on cash). Default `true`.
+   */
+  enforceRatio?: boolean;
 }
 
 export interface DeliveryCostCapVerdict {
@@ -92,6 +106,7 @@ interface Terms {
   deliveryFee: number;
   codHandling: ICodHandlingFee | null;
   maxDeliveryPercent: number;
+  enforceRatio: boolean;
 }
 
 function check(subtotal: number, terms: Terms) {
@@ -103,7 +118,7 @@ function check(subtotal: number, terms: Terms) {
   const vendorNet = vendorGross - commission - deliveryCost;
 
   let failure: DeliveryCostCapFailure | null = null;
-  if (deliveryCost * 100 > terms.maxDeliveryPercent * subtotal) failure = 'delivery_cost_ratio';
+  if (terms.enforceRatio && deliveryCost * 100 > terms.maxDeliveryPercent * subtotal) failure = 'delivery_cost_ratio';
   else if (vendorNet <= 0) failure = 'vendor_net_not_positive';
 
   return { codFee, deliveryCost, commission, vendorNet, failure };
@@ -120,8 +135,10 @@ const SCAN_LIMIT = 1_000;
  * one — then a short walk to absorb the floors, so the answer is the value `check` itself
  * accepts rather than one the algebra predicts.
  */
-export function minimumSubtotalFor(terms: Omit<Terms, 'aiMargin'>): number | null {
-  const t: Terms = { ...terms, aiMargin: 0 };
+export function minimumSubtotalFor(
+  terms: Omit<Terms, 'aiMargin' | 'enforceRatio'> & { enforceRatio?: boolean },
+): number | null {
+  const t: Terms = { ...terms, aiMargin: 0, enforceRatio: terms.enforceRatio ?? true };
   const fixed = t.deliveryFee + (t.codHandling?.type === 'fixed' ? t.codHandling.value : 0);
   const pct = t.codHandling?.type === 'percentage' ? t.codHandling.value : 0;
 
@@ -129,7 +146,7 @@ export function minimumSubtotalFor(terms: Omit<Terms, 'aiMargin'>): number | nul
   const netSpan = 100 - t.commissionPercent - pct;
 
   let ratioMin: number;
-  if (fixed === 0 && pct === 0) ratioMin = 1;
+  if (!t.enforceRatio || (fixed === 0 && pct === 0)) ratioMin = 1;
   else if (ratioSpan <= 0) return null;
   else ratioMin = Math.ceil((fixed * 100) / ratioSpan);
 
@@ -160,6 +177,7 @@ export function evaluateDeliveryCostCap(input: DeliveryCostCapInput): DeliveryCo
     deliveryFee: Math.max(0, input.deliveryFee),
     codHandling: input.codHandling ?? null,
     maxDeliveryPercent: resolveMaxDeliveryPercent(input.maxDeliveryPercent),
+    enforceRatio: input.enforceRatio ?? true,
   };
 
   const result = check(input.subtotal, terms);
@@ -177,5 +195,130 @@ export function evaluateDeliveryCostCap(input: DeliveryCostCapInput): DeliveryCo
     maxDeliveryPercent: terms.maxDeliveryPercent,
     minimumSubtotal,
     shortfall: met || minimumSubtotal === null ? 0 : Math.max(0, minimumSubtotal - input.subtotal),
+  };
+}
+
+// ─── Units: the split's unit, over a whole vendor order (pure) ───────────────
+
+/** One priced line. `floorPrice` on every line of a bargainable variant (the bargain fee is owed haggled or not). */
+export interface DeliveryCapLine {
+  unitPrice: number;
+  quantity: number;
+  floorPrice?: number | null;
+}
+
+/** One shipment-to-be (= one agency at checkout) with its fee already priced. */
+export interface DeliveryCostUnitGroup {
+  agencyId: string;
+  /** The shipment's delivery fee — `computeShipmentFee` (weight, region, ceiling) or the flat fallback. */
+  fee: number;
+  /** The agency's COD handling fee config; read only for a cash-on-delivery unit. */
+  codHandling: ICodHandlingFee | null;
+  lines: DeliveryCapLine[];
+}
+
+/** One evaluated unit — safe to show a customer: no commission, no net, no fee breakdown. */
+export interface DeliveryCapUnitVerdict {
+  /** `null` on an online order, which spans every agency. */
+  agencyId: string | null;
+  subtotal: number;
+  met: boolean;
+  reason: DeliveryCostCapFailure | null;
+  minimumSubtotal: number | null;
+  shortfall: number;
+}
+
+export interface DeliveryCostUnitsVerdict {
+  scope: 'order' | 'shipment';
+  maxDeliveryPercent: number;
+  met: boolean;
+  /** Online: the order's shortfall. COD: the sum over failing shipments (each needs its own). */
+  shortfall: number;
+  units: DeliveryCapUnitVerdict[];
+}
+
+export const capLinesSubtotal = (lines: DeliveryCapLine[]): number =>
+  lines.reduce((sum, l) => sum + l.unitPrice * l.quantity, 0);
+
+export const capLinesAiMargin = (lines: DeliveryCapLine[]): number =>
+  lines.reduce(
+    (sum, l) => sum + computeNegotiatedLineSplit({ unitPrice: l.unitPrice, floorPrice: l.floorPrice, quantity: l.quantity }).aiMargin,
+    0,
+  );
+
+/**
+ * Evaluate a vendor order over the SPLIT's units — online = the whole order, COD = one per
+ * shipment — with every fee already priced. THE one place the units are formed; checkout, the
+ * cart quote and `DeliveryCostCapService` all reach it.
+ *
+ * `customerPaysDelivery: true` is the ADR-A11 sanity check: the vendor bears no delivery fee
+ * (each unit's fee counts as 0 against the vendor) and only `vendorNet > 0` is enforced — the
+ * COD handling fee stays on the vendor (D-5) and is computed on the items subtotal.
+ */
+export function assessDeliveryCostUnits(input: {
+  lines: DeliveryCapLine[];
+  groups: DeliveryCostUnitGroup[];
+  commissionPercent: number;
+  paymentMethod: 'online' | 'cash_on_delivery';
+  customerPaysDelivery?: boolean;
+  maxDeliveryPercent?: number;
+}): DeliveryCostUnitsVerdict {
+  const maxDeliveryPercent = resolveMaxDeliveryPercent(input.maxDeliveryPercent);
+  const customerPays = input.customerPaysDelivery === true;
+  const vendorFee = (fee: number) => (customerPays ? 0 : fee);
+
+  let units: DeliveryCapUnitVerdict[];
+  let scope: DeliveryCostUnitsVerdict['scope'];
+  if (input.paymentMethod === 'cash_on_delivery') {
+    scope = 'shipment';
+    units = input.groups.map((group) =>
+      toUnitVerdict(
+        group.agencyId,
+        evaluateDeliveryCostCap({
+          subtotal: capLinesSubtotal(group.lines),
+          aiMargin: capLinesAiMargin(group.lines),
+          commissionPercent: input.commissionPercent,
+          deliveryFee: vendorFee(group.fee),
+          codHandling: group.codHandling ?? null,
+          maxDeliveryPercent,
+          enforceRatio: !customerPays,
+        }),
+      ),
+    );
+  } else {
+    scope = 'order';
+    units = [
+      toUnitVerdict(
+        null,
+        evaluateDeliveryCostCap({
+          subtotal: capLinesSubtotal(input.lines),
+          aiMargin: capLinesAiMargin(input.lines),
+          commissionPercent: input.commissionPercent,
+          deliveryFee: input.groups.reduce((sum, g) => sum + vendorFee(g.fee), 0),
+          codHandling: null,
+          maxDeliveryPercent,
+          enforceRatio: !customerPays,
+        }),
+      ),
+    ];
+  }
+
+  return {
+    scope,
+    maxDeliveryPercent,
+    met: units.every((u) => u.met),
+    shortfall: units.reduce((sum, u) => sum + u.shortfall, 0),
+    units,
+  };
+}
+
+function toUnitVerdict(agencyId: string | null, v: DeliveryCostCapVerdict): DeliveryCapUnitVerdict {
+  return {
+    agencyId,
+    subtotal: v.subtotal,
+    met: v.met,
+    reason: v.failure,
+    minimumSubtotal: v.minimumSubtotal,
+    shortfall: v.shortfall,
   };
 }

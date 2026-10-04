@@ -330,6 +330,16 @@ export class BotRegistrationService {
 
         if (account.customerId) {
             const customer = await CustomerModel.findById(account.customerId);
+            /**
+             * ⚠ A CLOSED customer role is refused, never re-provisioned (ADR-A10). The profile
+             * is retained (orders point at it) and every role collection is unique on
+             * `user_id`, so the create branch below cannot make a second one — and handing
+             * back the anonymised profile would put a closed role back to work. Closure is
+             * irreversible here exactly as `AuthService.addRole` makes it on the dashboards.
+             */
+            if (customer?.closed_at) {
+                throw createAppError(ERROR_CODES.AUTH_ROLE_CLOSED, 403, undefined, { role: 'customer' });
+            }
             if (customer) {
                 if (!customer.bot_onboarding) {
                     await this.backfillOnboarding(customer, envelope);

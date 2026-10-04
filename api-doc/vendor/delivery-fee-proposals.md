@@ -11,6 +11,27 @@ needs your answer.
 
 While a proposal is pending, **that shipment cannot be picked up**, so answer promptly.
 
+> **Customer-paid shipments (ADR-A11, 2026-10-04).** When your shop's delivery terms make the
+> CUSTOMER pay a shipment's delivery (`deliveryPayer: 'customer'`), its fee changes are the
+> customer's to answer, not yours: a lower fee applies at once, a higher one waits for the
+> customer. Such proposals appear in your lists read-only — `approver: 'customer' | 'none'`,
+> `availableActions: []`, and approve/reject answer `403 DELIVERY_FEE_PROPOSAL_NOT_YOURS`. Your net
+> does not move. New fields on every proposal: `approver` (`vendor`·`customer`·`none`), `origin`
+> (`agency`·`change_agency`·`combined_request`), `direction`, `customerApproval`, `topup`,
+> `combinedRequestId`; `application` gains `customerFeeBefore/After`, `customerTopupAmount`,
+> `customerRefundDue`, `codCollectionAdjusted`, `vendorBorneDelta`.
+>
+> **Changing the delivery company on a customer-paid order** (`PATCH /orders/:id/delivery-agency`):
+> moving a whole shipment carries what the customer paid; if the new company is cheaper the
+> customer gets the difference back, if it costs more the customer is asked — and if they decline,
+> **you cover the difference** (out of your net; you are notified: `delivery_fee_proposal.customer_declined`).
+> The move is refused with `422 DELIVERY_FEE_PROPOSAL_VENDOR_NET_NOT_POSITIVE` if you could not
+> afford that. You may cover it immediately instead of waiting:
+>
+> `POST /api/vendor/orders/:id/delivery-fee-proposals/:proposalId/cover` — no body; only on a
+> pending `origin: 'change_agency'` proposal (`availableActions: ["cover"]`). The new company is
+> paid its price, the customer pays nothing more, your net carries the difference.
+
 ## Endpoints
 
 | Method | Path | What |

@@ -8,10 +8,22 @@ export interface DeliveryFeeProposalDto {
   orderId: string;
   agencyId: string;
   proposedBy: {
-    role: 'agency' | 'agent';
+    role: 'agency' | 'agent' | 'system';
     userId: string | null;
     agentId: string | null;
   };
+  /**
+   * ADR-A11. Who answers: `vendor` (vendor-paid), `customer` (an increase on a customer-paid
+   * shipment), `none` (a customer-paid decrease — already applied when created).
+   */
+  approver: 'vendor' | 'customer' | 'none';
+  /** `agency` (an agency/agent proposal) · `change_agency` (D-10 difference) · `combined_request`. */
+  origin: 'agency' | 'change_agency' | 'combined_request';
+  direction: 'increase' | 'decrease' | null;
+  /** The customer approved (online: the top-up it needs is on `topup`) — null otherwise. */
+  customerApproval: { approvedAt: Date; version: number } | null;
+  topup: { amount: number; status: 'awaiting_payment' | 'paid'; paidAt: Date | null } | null;
+  combinedRequestId: string | null;
   currency: string;
   feeBefore: number;
   proposedFee: number;
@@ -26,12 +38,19 @@ export interface DeliveryFeeProposalDto {
     vendorAllocationBefore: number | null;
     vendorAllocationAfter: number | null;
     snapshotRewritten: boolean;
+    /** ADR-A11 — the customer side of a customer-paid change (null on a vendor-paid one). */
+    customerFeeBefore: number | null;
+    customerFeeAfter: number | null;
+    customerTopupAmount: number | null;
+    customerRefundDue: number | null;
+    codCollectionAdjusted: boolean;
+    vendorBorneDelta: number | null;
   } | null;
   /** Bumped by every edit. The vendor sends it back on approve/reject. */
   version: number;
   /** Append-only edit trail, oldest first. */
   edits: Array<{
-    editedBy: { role: 'agency' | 'agent'; userId: string | null; agentId: string | null };
+    editedBy: { role: 'agency' | 'agent' | 'system'; userId: string | null; agentId: string | null };
     feeBefore: number;
     feeAfter: number;
     reasonBefore: string;
@@ -39,7 +58,7 @@ export interface DeliveryFeeProposalDto {
     version: number;
     at: Date;
   }>;
-  lastEditedBy: { role: 'agency' | 'agent'; userId: string | null; agentId: string | null; at: Date } | null;
+  lastEditedBy: { role: 'agency' | 'agent' | 'system'; userId: string | null; agentId: string | null; at: Date } | null;
   /** True once the agency edited it — agency-owned from then on. */
   agencyEdited: boolean;
   /** The verbs THIS viewer may use right now — the same table the service enforces. */
@@ -65,6 +84,14 @@ export function toDeliveryFeeProposalDto(p: IDeliveryFeeProposal, viewer: Propos
       userId: p.proposed_by_user_id ? p.proposed_by_user_id.toString() : null,
       agentId,
     },
+    approver: p.approver ?? 'vendor',
+    origin: p.origin ?? 'agency',
+    direction: p.direction ?? null,
+    customerApproval: p.customer_approval
+      ? { approvedAt: p.customer_approval.approved_at, version: p.customer_approval.version }
+      : null,
+    topup: p.topup ? { amount: p.topup.amount, status: p.topup.status, paidAt: p.topup.paid_at ?? null } : null,
+    combinedRequestId: p.combined_request_id ? p.combined_request_id.toString() : null,
     currency: p.currency,
     feeBefore: p.fee_before,
     proposedFee: p.proposed_fee,
@@ -87,6 +114,12 @@ export function toDeliveryFeeProposalDto(p: IDeliveryFeeProposal, viewer: Propos
                 vendorAllocationBefore: p.application.vendor_allocation_before ?? null,
                 vendorAllocationAfter: p.application.vendor_allocation_after ?? null,
                 snapshotRewritten: p.application.snapshot_rewritten,
+                customerFeeBefore: p.application.customer_fee_before ?? null,
+                customerFeeAfter: p.application.customer_fee_after ?? null,
+                customerTopupAmount: p.application.customer_topup_amount ?? null,
+                customerRefundDue: p.application.customer_refund_due ?? null,
+                codCollectionAdjusted: !!p.application.cod_collection_adjusted,
+                vendorBorneDelta: p.application.vendor_borne_delta ?? null,
               }
             : null,
         }
@@ -120,6 +153,9 @@ export function toDeliveryFeeProposalDto(p: IDeliveryFeeProposal, viewer: Propos
         proposed_by_role: p.proposed_by_role,
         proposed_by_agent_id: agentId,
         agency_edited: !!p.agency_edited,
+        approver: p.approver ?? 'vendor',
+        origin: p.origin ?? 'agency',
+        customer_approved: !!p.customer_approval,
       },
       viewer
     ),
@@ -146,5 +182,64 @@ export function shipmentFeeProposalSummary(shipment: Pick<IShipment, 'pending_de
           approvedAt: override.approved_at,
         }
       : null,
+  };
+}
+
+/**
+ * The CUSTOMER's projection (ADR-A11). Deliberately narrower than the dashboards' one: no user
+ * or agent ids, no edit trail, no money application (the vendor's net is not the customer's
+ * business). What is left is what a customer decides on — the figure, why, and their verbs.
+ */
+export interface CustomerDeliveryFeeProposalDto {
+  id: string;
+  shipmentId: string;
+  orderId: string;
+  /** Who raised it, in the customer's terms: the delivery company, or the platform (a moved parcel). */
+  raisedBy: 'delivery_company' | 'platform';
+  origin: 'agency' | 'change_agency' | 'combined_request';
+  direction: 'increase' | 'decrease' | null;
+  currency: string;
+  feeBefore: number;
+  proposedFee: number;
+  reason: string;
+  status: 'pending' | 'approved' | 'rejected' | 'withdrawn';
+  /** Send back on approve / reject — an edited figure is refused (409). */
+  version: number;
+  /** Online increase approved: what must be paid before pickup. */
+  topup: { amount: number; status: 'awaiting_payment' | 'paid'; paidAt: Date | null } | null;
+  availableActions: ProposalAction[];
+  respondedAt: Date | null;
+  createdAt: Date;
+}
+
+export function toCustomerDeliveryFeeProposalDto(p: IDeliveryFeeProposal): CustomerDeliveryFeeProposalDto {
+  return {
+    id: (p._id as any).toString(),
+    shipmentId: p.shipment_id.toString(),
+    orderId: p.order_id.toString(),
+    raisedBy: p.proposed_by_role === 'system' ? 'platform' : 'delivery_company',
+    origin: p.origin ?? 'agency',
+    direction: p.direction ?? null,
+    currency: p.currency,
+    feeBefore: p.fee_before,
+    proposedFee: p.proposed_fee,
+    reason: p.reason,
+    status: p.status,
+    version: p.version ?? 1,
+    topup: p.topup ? { amount: p.topup.amount, status: p.topup.status, paidAt: p.topup.paid_at ?? null } : null,
+    availableActions: resolveAvailableActions(
+      {
+        status: p.status,
+        proposed_by_role: p.proposed_by_role,
+        proposed_by_agent_id: p.proposed_by_agent_id ? p.proposed_by_agent_id.toString() : null,
+        agency_edited: !!p.agency_edited,
+        approver: p.approver ?? 'vendor',
+        origin: p.origin ?? 'agency',
+        customer_approved: !!p.customer_approval,
+      },
+      { role: 'customer' }
+    ),
+    respondedAt: p.responded_at ?? null,
+    createdAt: p.created_at,
   };
 }

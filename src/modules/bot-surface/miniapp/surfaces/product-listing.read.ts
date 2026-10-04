@@ -4,6 +4,7 @@ import { publicCatalogService } from '../../../catalog/services/public-catalog.s
 import { formatBotPrice, formatBotPriceRange } from '../../domain/product-card';
 import { InAppListingQuery } from '../../services/inapp-surface.store';
 import { ImageSource, toImageSource } from './image-source';
+import { categoryResolutionService } from '../../../categories/services/category-resolution.service';
 
 /**
  * The product listing's READ — one query, one set of rules, rendered by two channels.
@@ -116,7 +117,7 @@ export async function readListingPage(
         ? await pinnedPage(query.productIds, page, pageSize)
         : await queryPage(query, page, pageSize);
 
-    return { heading: headingFor(query, products), products, page, hasMore };
+    return { heading: await headingFor(query, products), products, page, hasMore };
 }
 
 /** One page of a catalogue query. */
@@ -241,8 +242,10 @@ function priceTextOf(item: PublicProductListItemDto): string {
 /**
  * What the shelf is called — the search term, the category, the shop, or nothing.
  *
- * ⚠ **Never translated and never invented.** A search term and a category are echoed from
- * what the customer asked for, so they are already in their words.
+ * ⚠ **Never translated and never invented.** A search term is echoed from what the customer
+ * asked for, so it is already in their words. A category is shown by its NAME from the shared
+ * list — the query usually carries a slug (`maison-electronique`, from a category button), which
+ * is a key, not a heading. An unresolvable one is echoed as given.
  *
  * ⚠ **A shop is named from its PRODUCTS, not from its slug and not by a lookup.** A
  * store-scoped query returns only that store's products, so every row already carries the same
@@ -250,9 +253,11 @@ function priceTextOf(item: PublicProductListItemDto): string {
  * (`electro-shop-douala`) is a database key, and resolving it would be a second catalogue read
  * per page. Null on an empty page: there is no row to read a name from.
  */
-function headingFor(query: InAppListingQuery, products: ListingProduct[]): string | null {
-    const asked = query.q?.trim() || query.category?.trim();
-    if (asked) return asked;
+async function headingFor(query: InAppListingQuery, products: ListingProduct[]): Promise<string | null> {
+    const searched = query.q?.trim();
+    if (searched) return searched;
+    const category = query.category?.trim();
+    if (category) return (await categoryResolutionService.resolveFilter(category))?.name ?? category;
     if (query.storeSlug) return products[0]?.storeName?.trim() || null;
     return null;
 }

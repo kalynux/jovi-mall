@@ -40,6 +40,7 @@ import { initializeVendorNotificationEventConsumers } from './modules/notificati
 import { initializeAgencyNotificationEventConsumers } from './modules/notifications/agency-notification-event-consumer';
 import { initializeAgentNotificationEventConsumers } from './modules/notifications/agent-notification-event-consumer';
 import { initializeCustomerNotificationEventConsumers } from './modules/notifications/customer-notification-event-consumer';
+import { registerDeliveryFeeRefundConsumer } from './modules/delivery-fee-proposals/services/delivery-fee-refund.service';
 import { fileCleanupWorker } from './modules/file-cleanup/workers/file-cleanup.worker';
 import { earningsReleaseWorker } from './modules/earnings/workers/earnings-release.worker';
 import { unpaidOrderCancelWorker } from './modules/orders/workers/unpaid-order-cancel.worker';
@@ -425,6 +426,11 @@ function startBackgroundWork(): void {
     // The customer was the only party the platform never told anything — see
     // customer-notification.model.ts.
     initializeCustomerNotificationEventConsumers();
+
+    // Delivery-fee money owed back to customers (ADR-A11): refund on a customer-paid return's
+    // split. The fast path; the lossy bus is backstopped by the earnings release sweep
+    // (`recoverCustomerDeliveryRefunds`).
+    registerDeliveryFeeRefundConsumer();
 
     // Storage lifecycle: daily file-cleanup sweep (detach → delete → alert)
     fileCleanupWorker.start();

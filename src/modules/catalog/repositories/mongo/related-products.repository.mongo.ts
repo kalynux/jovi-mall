@@ -128,8 +128,8 @@ export class RelatedProductsRepositoryMongo {
     }
 
     /**
-     * The fallback: other publishable products in the same category, most recently ordered
-     * first.
+     * The fallback: other publishable products sharing any of the subject's categories,
+     * most recently ordered first.
      *
      * ⚠ **Carries no count and must never be presented as behavioural.** Nobody "also
      * bought" these — they are simply the neighbours. `lastOrderedAt` is a real maintained
@@ -142,17 +142,20 @@ export class RelatedProductsRepositoryMongo {
      */
     async sameCategoryRecent(
         productId: string,
-        category: string,
+        categoryIds: string[],
         limit: number,
     ): Promise<string[]> {
         if (!Types.ObjectId.isValid(productId)) return [];
+        const validIds = categoryIds.filter((id) => Types.ObjectId.isValid(id));
+        if (validIds.length === 0) return [];
 
         const rows = await this.products
             .aggregate<{ id: string }>([
                 {
                     $match: {
                         ...publishableProductFilter(),
-                        category,
+                        // Shares ANY of the subject's categories.
+                        categoryIds: { $in: validIds.map((id) => new Types.ObjectId(id)) },
                         _id: { $ne: new Types.ObjectId(productId) },
                     },
                 },

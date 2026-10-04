@@ -153,6 +153,9 @@ const SENTINEL_PATTERN = /«[a-zA-Z]+»/g;
 const OPTIONAL_CLAUSES = new Set([
     'confirmationLine', 'refundLine', 'balanceLine', 'paymentLine',
     'codLine', 'reasonLine', 'reasonSuffix',
+    // ADR-A11 (W-E): the delivery-fee money sentence — empty when nothing moves for the customer
+    // (a decrease that only lowered the vendor's share), so it cannot be a template parameter.
+    'moneyLine',
 ]);
 
 interface Row {

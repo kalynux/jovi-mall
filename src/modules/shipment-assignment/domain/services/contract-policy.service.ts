@@ -163,6 +163,9 @@ export class ContractPolicyService {
     let codVerdict: CodCapacityVerdict | null = null;
 
     const shipmentValue = shipment && order ? this.resolveShipmentValue(order, shipment) : null;
+    // The CASH the agent carries — goods + a customer-paid delivery fee (ADR-A11). Distinct from
+    // the goods value above, which is what the value ceiling bounds.
+    const codAmount = shipment && order ? this.resolveCodAmount(order, shipment) : null;
     const paymentMethod = order?.payment_method ?? null;
 
     if (!contract) {
@@ -177,7 +180,7 @@ export class ContractPolicyService {
     } else {
       gates.push(this.gateCoverage(contract, order));
       gates.push(this.gateValueCeiling(contract, shipmentValue, shipment !== null));
-      const cod = await this.gateCodExposure(agent, contract, shipmentValue, order, shipment !== null, opts.full);
+      const cod = await this.gateCodExposure(agent, contract, codAmount, order, shipment !== null, opts.full);
       codVerdict = cod.verdict;
       gates.push(cod.gate);
     }
@@ -529,13 +532,22 @@ export class ContractPolicyService {
    */
   private resolveShipmentValue(order: IOrder, shipment: IShipment): number | null {
     try {
-      return this.cashCollection.computeExpectedAmount(order, shipment);
+      // The GOODS (ADR-A11): a customer-paid delivery fee is not part of what a package is worth.
+      return this.cashCollection.computeItemsAmount(order, shipment);
     } catch (error) {
       console.error(
         `[ContractPolicyService] Could not value shipment ${shipment._id.toString()} ` +
           `on order ${order._id.toString()} — value-ceiling and COD checks will be skipped:`,
         error
       );
+      return null;
+    }
+  }
+  /** The COD cash for the exposure gate — `computeExpectedAmount`, failing open like the value. */
+  private resolveCodAmount(order: IOrder, shipment: IShipment): number | null {
+    try {
+      return this.cashCollection.computeExpectedAmount(order, shipment);
+    } catch {
       return null;
     }
   }

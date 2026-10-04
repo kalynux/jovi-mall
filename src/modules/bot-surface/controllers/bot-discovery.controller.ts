@@ -18,6 +18,7 @@ import { openInAppScreen } from './bot-inapp.controller';
 import { readSimilarProductIds } from '../miniapp/surfaces/similar-products.read';
 import { readProductReviewSummary } from '../miniapp/surfaces/product-reviews.read';
 import { productDisplayService } from '../services/product-display.service';
+import { categoryResolutionService } from '../../categories/services/category-resolution.service';
 
 /**
  * DISCOVERY — the turns where a customer is still looking rather than buying.
@@ -96,12 +97,12 @@ export class BotDiscoveryController {
         const shown = categories.slice(0, CATEGORY_CHOICES);
         const names = shown.map((category) => category.name);
         const options: BotReplyOption[] = shown.map((category) => ({
-            id: categoryActionId(category.name),
+            id: categoryActionId(category.id),
             /** Telegram draws the whole name. */
             label: category.name,
             /**
-             * ⛔ **A WhatsApp list row title is cut at 24 characters and a category name is FREE
-             * TEXT up to 200**, so two categories sharing a long opening render as one row twice:
+             * ⛔ **A WhatsApp list row title is cut at 24 characters and a category name runs to
+             * 60**, so two categories sharing a long opening render as one row twice:
              * "Électroménager et petit…" and "Électroménager et gros …". The customer picks at
              * random. In English the same two names fit, which is why every check any of us ran
              * passed.
@@ -274,20 +275,26 @@ function assertProductId(productId: string): string {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * `cat:<digest>` — a category the customer pressed.
+ * `cat:<categoryId>` — a category the customer pressed.
  *
- * ⚠ **The digest is resolved by RECOMPUTING it over the live category list**, because this platform
- * has no category ids: `Product.category` is free text and `listCategories()` answers names and
- * counts. So the match is against the same string the list returns — no trimming, no case folding —
- * or the digest of a name and the digest of its tidied twin stop agreeing.
+ * The argument is a category id since 2026-10-04 and resolves through the shared list, which
+ * follows a merged-away id to its survivor. ⚠ **A pre-2026-10-04 button carries a NAME DIGEST
+ * instead** (`categoryDigest`) and is still honoured, by recomputing the digest over the current
+ * chip names — a button in a week-old chat must keep working across the change.
  *
- * ⚠ **A category that has gone is NOT an error.** Categories are derived from what is on sale, so
- * the last product leaving one deletes it, and a button in a week-old chat is an ordinary event.
- * The customer gets the whole shelf and a sentence saying why.
+ * ⚠ **A category that has gone is NOT an error.** A chip exists only while something in it is on
+ * sale, so the last product leaving one removes it, and a button in a week-old chat is an
+ * ordinary event. The customer gets the whole shelf and a sentence saying why.
  */
 async function handleCategoryTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
     const categories = await publicCatalogService.listCategories();
-    const match = categories.find((category) => categoryDigest(category.name) === action.argument);
+    let match = categories.find((category) => category.id === action.argument);
+    if (!match && /^[0-9a-f]{24}$/i.test(action.argument)) {
+        // A merged-away id: follow it to the survivor, then look the survivor up among the chips.
+        const survivor = await categoryResolutionService.resolveFilter(action.argument);
+        if (survivor) match = categories.find((category) => category.id === survivor.id);
+    }
+    if (!match) match = categories.find((category) => categoryDigest(category.name) === action.argument);
 
     if (!match) {
         await openInAppScreen(req, {
@@ -301,13 +308,15 @@ async function handleCategoryTap(req: Request, res: Response, action: ParsedBotA
     }
 
     await openInAppScreen(req, {
-        payload: { kind: 'pl', query: { q: null, category: match.name, storeSlug: null, productIds: null } },
+        // The SLUG, not the name: it is what `?category=` resolves first, and it is the
+        // URL-shaped key the storefront's own category links use.
+        payload: { kind: 'pl', query: { q: null, category: match.slug, storeSlug: null, productIds: null } },
         /**
          * The storefront fallback mirrors the query, so a customer landing in a browser sees the
          * same shelf rather than the shop's front page — and in production, where no in-app origin
          * is configured, this is the path that actually runs.
          */
-        fallbackPath: `/shop?category=${encodeURIComponent(match.name)}`,
+        fallbackPath: `/shop?category=${encodeURIComponent(match.slug)}`,
         labelKey: 'browseAllButton',
     });
 

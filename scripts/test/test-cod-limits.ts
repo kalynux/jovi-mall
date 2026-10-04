@@ -501,7 +501,7 @@ async function main(): Promise<void> {
     { findCodTerms: async (vendorId: string) => world.vendors[vendorId] ?? null } as never,
   );
   const quoteOver = (elig: CodEligibilityService) =>
-    new CartQuoteService({} as never, {} as never, {} as never, {} as never, {} as never, elig);
+    new CartQuoteService({} as never, {} as never, elig);
   const AG1 = 'a00000000000000000000001';
   const AG2 = 'a00000000000000000000002';
   const input = (vendorId: string, agencyIds: string[], unitPrice = 10_000) => ({

@@ -409,42 +409,31 @@ export function declineActionId(context: string, ref?: string): string {
 }
 
 /**
- * A short, fixed-length stand-in for a category NAME: the first 16 hex characters of its SHA-256.
+ * ⚠ LEGACY — the token argument category buttons carried before 2026-10-04, kept ONLY so a
+ * button already sitting in a chat history still resolves.
  *
- * ── ⚠ WHY A CATEGORY IS NAMED BY A DIGEST, NOT BY AN ID ─────────────────────
- * **This platform has no category ids.** `Product.category` is a plain indexed string — there is no
- * Category collection, model or taxonomy — and `listCategories()` answers only a name and a count.
- * So the only thing a caller could put in a token is the name, and a name is free text up to 200
- * characters, where every accented letter is two bytes. `cat:` plus
- * « Électroménager, électronique et équipements de la maison » is EXACTLY 64 bytes; one more
- * character and `token()` throws — while BUILDING the reply, so the whole turn fails rather than
- * one button. The first person to add a long French or Arabic category would have broken category
- * browsing for everyone who saw that list.
- *
- * A digest fits for any name, any length, any script (`cat:` + 16 = 20 bytes), and survives the
- * category list re-ordering — it is sorted by product count, so a position would not.
- *
- * ⚠ **Resolving one means RECOMPUTING this over the current category list** and matching. A
- * category that has since disappeared resolves to nothing, which the handler must answer as
- * "gone", never as an error. Hashed exactly as stored — no trimming, no case-folding — because the
- * match is against the same string `listCategories()` returns. 64 bits across one catalogue's
- * categories makes a collision not a practical concern, and one would open a real category rather
- * than fail.
+ * Until then the platform had no category ids (`Product.category` was free text), so a button
+ * could only carry the name — free text up to 200 characters, where « Électroménager,
+ * électronique et équipements de la maison » alone is 64 bytes and one more character makes
+ * `token()` throw while building the reply. A 16-hex SHA-256 prefix of the name was the
+ * stand-in, resolved by recomputing it over the current list. Nothing MINTS one any more;
+ * `handleCategoryTap` still recognises one (an argument that is not a 24-hex id), hashed
+ * exactly as the name is stored.
  */
 export function categoryDigest(categoryName: string): string {
     return createHash('sha256').update(categoryName, 'utf8').digest('hex').slice(0, 16);
 }
 
 /**
- * `cat:<digest>` — a category pick, which then opens the in-app listing.
+ * `cat:<categoryId>` — a category pick, which then opens the in-app listing.
  *
- * ⚠ **Takes the category NAME and digests it here**, so no caller can pass the wrong thing: not a
- * raw name (which would throw past 64 bytes on a long one), and not a hand-made digest that could
- * drift from `categoryDigest`. The builder and the digest live in one file so the two ends of the
- * token cannot disagree.
+ * Categories are entries of one shared list with stable ids now
+ * (PRODUCTION-READINESS/PRODUCT-CATEGORIES-PLAN.md), so the button carries the id: 28 bytes for
+ * any name in any script, and it survives a RENAME (a name digest would not) and a MERGE (the
+ * handler follows `merged_into` to the survivor).
  */
-export function categoryActionId(categoryName: string): string {
-    return token('cat', categoryDigest(categoryName));
+export function categoryActionId(categoryId: string): string {
+    return token('cat', categoryId);
 }
 
 /** `ord:<orderId>` — pick one order out of the five the chat listed. */

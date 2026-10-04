@@ -28,6 +28,7 @@ import {
     UpdateSimpleProductSchema,
 } from '../validators/simple-product.validator';
 import { vectorisationService } from '../domain/services/VectorisationService';
+import { categoryRefsFromBody } from '../../categories/services/category-input';
 import { entitlementService } from '../../billing/services/entitlement.service';
 
 const productRepository = new ProductRepositoryMongo();
@@ -128,7 +129,14 @@ export class VendorSimpleProductController {
         const activeCount = await productRepository.countActiveByVendor(vendorId);
         await entitlementService.assertCanAddProduct(vendorId, activeCount);
 
-        const created = await simpleProductCreateService.execute({ vendorId, ...input });
+        // `categories` / the deprecated `category` folded into one list; the schema's
+        // refine guarantees one of the two is present on a create.
+        const { category: _legacyCategory, categories: _categories, ...rest } = input;
+        const created = await simpleProductCreateService.execute({
+            vendorId,
+            ...rest,
+            categories: categoryRefsFromBody(input)!,
+        });
 
         let product = created.product;
         let outcome: ActivationOutcome = { attempted: false, published: false, blockers: [] };
@@ -166,10 +174,11 @@ export class VendorSimpleProductController {
         const { id } = req.params;
         const input = UpdateSimpleProductSchema.parse(req.body);
 
+        const { category: _legacyCategory, categories: _categories, ...rest } = input;
         const updated = await simpleProductUpdateService.execute(
             id,
             vendorId,
-            input,
+            { ...rest, categories: categoryRefsFromBody(input) },
             req.auth!.user._id.toString(),
         );
 

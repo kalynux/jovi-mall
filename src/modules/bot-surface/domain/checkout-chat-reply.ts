@@ -74,6 +74,19 @@ export interface ChatReviewForReply {
     addAddressUrl: string | null;
     /** Shops below their delivery minimum. Non-empty exactly when `blocker` is `below_delivery_minimum`. */
     deliveryShortfalls: readonly ChatReviewShortfall[];
+    /**
+     * One line per shop that ships (ADR-A11) — `text` is "Delivery: 1 500 XAF" / "Delivery: Free",
+     * `hint` the non-blocking "add X more and delivery is free". Built by `deliveryLinesOf` from
+     * the cart quote; `[]` for a download. Optional only so older fixtures still compile.
+     */
+    deliveryLines?: readonly { text: string; hint: string | null }[];
+    /**
+     * The customer pays delivery on some shop's part (ADR-A11). The fee depends on the drop-off
+     * region, so the several-addresses list then CHOOSES the address (`yes:coa:`) and draws that
+     * address's own confirmation with its own total, rather than placing at a total quoted for
+     * another address.
+     */
+    deliveryCharged?: boolean;
 }
 
 /** The placement's response data — the fields the drawn placement message is built from. */
@@ -200,7 +213,13 @@ export function checkoutReviewReply(
     if (!ref || !review.delivery || review.lines.length === 0) return null;
     if (!phone && !cod) return null;
 
-    const total = `${botChrome('checkoutTotalLabel', language)} ${review.totalText}`;
+    /**
+     * ⭐ The delivery line(s) BEFORE the total (ADR-A11): "Delivery: 1 500 XAF" or "Delivery: Free",
+     * one per shop when several ship, each with its free-delivery hint. Part of the summary, so
+     * they never give way to the basket lines — the customer is agreeing to them.
+     */
+    const delivery = (review.deliveryLines ?? []).flatMap((line) => (line.hint ? [line.text, line.hint] : [line.text]));
+    const total = [...delivery, `${botChrome('checkoutTotalLabel', language)} ${review.totalText}`];
     /** The wallet line only when there is one — Pay now is only offered with it. */
     const wallet = phone ? [`${botChrome('checkoutMobileMoneyLabel', language)} ${phone}`] : [];
     const notNow: BotReplyOption = { id: checkoutDeclineActionId(ref), label: botChrome('notNowButton', language) };
@@ -211,7 +230,7 @@ export function checkoutReviewReply(
 
     if (review.delivery.kind === 'digital') {
         const summary = [
-            total,
+            ...total,
             `${botChrome('checkoutSentToLabel', language)} ${clip(review.delivery.to, PLACE_CLIP)}`,
             ...wallet,
             '',
@@ -230,7 +249,7 @@ export function checkoutReviewReply(
     if (options.addressChosen || deliverable.length <= 1) {
         const address = review.delivery.address;
         const summary = [
-            total,
+            ...total,
             `${botChrome('checkoutDeliverToLabel', language)} ${addressText(address)}`,
             ...wallet,
             '',
@@ -273,13 +292,20 @@ export function checkoutReviewReply(
      * address (`yes:coa:`) offers Pay now · Pay on delivery · Not now. Without it, rows place with
      * mobile money exactly as before.
      */
-    const summary = [total, ...wallet, '', botChrome('checkoutChooseAddressQuestion', language)];
+    /**
+     * ⚠ **With customer-paid delivery on the basket, a row CHOOSES too** (ADR-A11): the fee depends
+     * on the drop-off region, so the total above is the DEFAULT address's, and a row that placed at
+     * another address would charge a total nobody showed. Choosing draws that address's own
+     * confirmation, with its own delivery line and total.
+     */
+    const chooseFirst = cod || review.deliveryCharged === true;
+    const summary = [...total, ...wallet, '', botChrome('checkoutChooseAddressQuestion', language)];
     return {
         kind: 'choice',
         text: confirmationBody(review, summary, language),
         options: [
             ...deliverable.slice(0, MAX_ADDRESS_OPTIONS).map((address): BotReplyOption => ({
-                id: cod ? checkoutChooseAddressActionId(address.id) : checkoutConfirmActionId(ref, address.id),
+                id: chooseFirst ? checkoutChooseAddressActionId(address.id) : checkoutConfirmActionId(ref, address.id),
                 label: addressText(address),
                 shortLabel: address.label?.trim() || clip(address.formattedAddress ?? '', LABEL_CLIP),
                 description: address.formattedAddress || null,
@@ -313,7 +339,9 @@ function addAddressReply(review: ChatReviewForReply, language: string | null): B
 
 /**
  * A shop below its delivery minimum (ADR-A07): one line per such shop — how much more to add from
- * it — then what to do. Plain text, no button: the remedy is adding to the basket, and the next
+ * it — then what to do. ⚠ Since ADR-A11 this fires ONLY when even customer-paid delivery leaves the
+ * shop earning nothing; a free-delivery shop that cannot afford the fee falls back to customer-paid
+ * instead (D-6), and the confirmation shows the fee with a non-blocking free-delivery hint. Plain text, no button: the remedy is adding to the basket, and the next
  * `checkout_review` draws the confirmation once it is met.
  *
  * ⚠ **Never the fee or the commission** — the vendor's terms. Only the amount to add.

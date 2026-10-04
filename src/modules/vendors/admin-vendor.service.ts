@@ -158,6 +158,13 @@ export class AdminVendorService {
     return this.txManager.runInTransaction(async (session) => {
       const vendor = await this.getById(vendorId, session);
 
+      // A CLOSED vendor is also `inactive`, and reinstating it would put a shop with no
+      // identity back on sale — ADR-A10. Refused before the suspension check so the answer
+      // says why, rather than "not suspended".
+      if (vendor.closed_at) {
+        throw createAppError(ERROR_CODES.ROLE_CLOSED, 409, undefined, { role: 'vendor' });
+      }
+
       if (vendor.status !== 'inactive') {
         throw createAppError(
           ERROR_CODES.VENDOR_STATUS_CONFLICT,

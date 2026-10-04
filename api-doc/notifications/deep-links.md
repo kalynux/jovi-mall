@@ -91,14 +91,15 @@ notification with no button, in an app that has not been rebuilt yet.
 
 ## Vendor — `vendor-dash`
 
-`VENDOR_APP_URL` · 8 labels.
+`VENDOR_APP_URL` · 9 labels.
 
 | `path` | Sent by | Carries |
 |---|---|---|
 | `orders/{{orderId}}` | `order.created`, `order.cancelled`, `payment.received.partial`, `payment.received.full`, `shipment.rejected`, ⭐ `shipment.cod_limit_held`, ⭐ `delivery_fee_proposal.received`, ⭐ `delivery_fee_proposal.edited`, ⭐ `delivery_fee_proposal.withdrawn` | an Order id — the order detail is where "dispatch anyway" (force) and fee approve / reject live |
 | `bookings/{{bookingId}}` | `booking.created`, `booking.cancelled` | a Booking id |
 | `products/{{productId}}` | `storage.depot_changed`, `storage.product_suspended`, `storage.product_unsuspended` | a Product id |
-| `agency-connections/{{connectionId}}` | `connection.request_received`, `connection.approved`, `connection.rejected`, `connection.reapproval_needed` | a Connection id |
+| `agency-connections/{{connectionId}}` | `connection.request_received`, `connection.approved`, `connection.rejected`, `connection.reapproval_needed`, ⭐ `connection.ended_by_closure` | a Connection id (for `ended_by_closure` the connection has ENDED — the agency closed its account) |
+| ⭐ **`account/closure`** | **`account.closure_requested`** (ADR-A10, 2026-10-04) | — (one open closure request per role). An administrator asked to close this shop; the screen is where the owner **confirms or declines** while signed in. Must exist before the template is approved |
 | `stock-requests/{{requestId}}` | `storage.stock_request.{received,approved,rejected}` | a StockRequest id |
 | `tickets/{{ticketId}}` | `payout.requested`, `payout.paid`, `payout.rejected` | ⚠ a **Ticket** id — a payout is tracked as a support ticket, and `aggregateId` on these is the **PayoutRequest** id, which is a different thing |
 | `plans` | `plan.expiring`, `plan.expired` | — |
@@ -118,14 +119,15 @@ saying so — that is correct, and the table above is why.
 
 ## Agency — `agency-dash`
 
-`AGENCY_APP_URL` · 9 labels.
+`AGENCY_APP_URL` · 10 labels.
 
 | `path` | Sent by | Carries |
 |---|---|---|
 | `shipments/{{shipmentId}}` | `shipment.assigned`, `shipment.offer.accepted`, `shipment.assignment.unfilled`, `shipment.agent.{picked_up,delivered,failed,returned}`, ⭐ `shipment.cod_limit.forced`, ⭐ `shipment.assignment.cod_limit_blocked`, ⭐ `delivery_fee_proposal.{approved,rejected,agent_proposed,agent_edited}` | a Shipment id |
 | ⭐ **`cod/limit`** | **`cod.limit.pinned`, `cod.limit.released`** | — (one limit per agency) |
-| `agents/{{contractId}}` | the eight `agent_contract.*` situations | ⚠ a **contract** id, not an agent id |
-| `vendor-connections/{{connectionId}}` | `connection.request_received`, `connection.approved`, `connection.rejected`, `connection.reapproval_needed`, ⭐ `connection.cod_terms_changed` | a Connection id |
+| `agents/{{contractId}}` | the eight `agent_contract.*` situations, ⭐ `agent_contract.ended_by_closure` | ⚠ a **contract** id, not an agent id (for `ended_by_closure` the contract has ENDED — the agent closed their account) |
+| ⭐ **`account/closure`** | **`account.closure_requested`** (ADR-A10, 2026-10-04) | — (one open closure request per role). An administrator asked to close this agency account; the screen is where the owner **confirms or declines** while signed in. Must exist before the template is approved |
+| `vendor-connections/{{connectionId}}` | `connection.request_received`, `connection.approved`, `connection.rejected`, `connection.reapproval_needed`, ⭐ `connection.cod_terms_changed`, ⭐ `connection.ended_by_closure` (the vendor closed its account) | a Connection id |
 | `cod/deposits/{{depositId}}` | `cod.deposit.declared`, `cod.deposit.direct_to_platform` | an AgentDeposit id |
 | `stock-requests/{{requestId}}` | `storage.stock_request.{received,approved,rejected}` | a StockRequest id |
 | `tickets/{{ticketId}}` | `payout.requested`, `payout.paid`, `payout.rejected` | a Ticket id |
@@ -152,7 +154,7 @@ route would silently capture it.
 
 ## Agent — `agent_app` (Flutter)
 
-`AGENT_APP_URL` · 8 labels.
+`AGENT_APP_URL` · 9 labels.
 
 | `path` | Sent by | Carries |
 |---|---|---|
@@ -161,7 +163,8 @@ route would silently capture it.
 | ⭐ **`shipments/{{shipmentId}}`** | **`delivery_fee_proposal.approved`, `.rejected`, `.edited`** | a Shipment id — one this agent holds |
 | ⭐ **`cod`** | **`cod.pool.pinned`, `cod.pool.released`** | — (one pool per agent) |
 | `cod/deposits/{{depositId}}` | `cod.deposit.recorded`, `cod.deposit.confirmed`, `cod.deposit.rejected` | an AgentDeposit id |
-| `memberships/{{contractId}}` | the eight `agent_contract.*` situations, ⭐ `fee_proposals.enabled`, ⭐ `fee_proposals.disabled` | ⚠ a **contract** id — see below |
+| `memberships/{{contractId}}` | the eight `agent_contract.*` situations, ⭐ `fee_proposals.enabled`, ⭐ `fee_proposals.disabled`, ⭐ `agent_contract.ended_by_closure` (the agency closed its account) | ⚠ a **contract** id — see below |
+| ⭐ **`account/closure`** | **`account.closure_requested`** (ADR-A10, 2026-10-04) | — (one open closure request per role). An administrator asked to close this agent account; the screen is where the owner **confirms or declines** while signed in. Must exist before the template is approved |
 | `plans` | `plan.expiring`, `plan.expired` | — |
 | `settings/storage` | `storage.alert` | — |
 | ⭐ **`earnings`** | **`payout.requested`, `payout.paid`, `payout.rejected`, `payout.transfer_failed`** | — |

@@ -163,14 +163,15 @@ export interface PickupLocation {
  * Per-product delivery configuration. Only meaningful for physical products.
  * When `agency_id` is null, the order pipeline falls back to the vendor's
  * `default_delivery_agency_id`. If both are unset, the product cannot be
- * activated (see ProductStatusValidationService). `free_delivery` is
- * independent of agency resolution — it's a vendor-set marketing/order flag.
+ * activated (see ProductStatusValidationService). There is NO per-product
+ * free-delivery flag: who pays delivery is a SHOP setting
+ * (`vendor_settings.delivery_terms`, ADR-A11 D-1) — the old `free_delivery`
+ * flag was removed and any value still on a stored document is ignored.
  * `pickup_location` is required to activate a physical product — without it
  * the delivery agency has no way to know where to collect the item from.
  */
 export interface DeliveryConfig {
   agency_id: Types.ObjectId | null;
-  free_delivery: boolean;
   pickup_location: PickupLocation | null;
 }
 
@@ -201,7 +202,21 @@ export interface IProduct extends IBaseDocument {
   descriptionRich?: RichDoc | null;
   slug: string;
 
-  category: string;
+  /**
+   * 1–5 entries of THE marketplace-wide category list (`product_categories`), in the
+   * vendor's order. `[0]` is the "primary" — what the deprecated single-value
+   * `category` field on every DTO reports until clients have moved.
+   *
+   * Ids only, never names: a rename or a merge is then one write in
+   * `modules/categories` instead of a rewrite of every product. Readers resolve them
+   * through `categoryCatalogCache.refsFor`. Written only after
+   * `CategoryResolutionService.resolveForWrite`, which is where duplicates are caught.
+   *
+   * Replaced the free-text `category: string` on 2026-10-04
+   * (PRODUCTION-READINESS/PRODUCT-CATEGORIES-PLAN.md); `migrate:product-categories`
+   * converts the old field and unsets it.
+   */
+  categoryIds: Types.ObjectId[];
   tags: string[];
 
   seo: {
@@ -313,7 +328,11 @@ const ProductSchema = new Schema<IProduct>({
   descriptionRich: { type: Schema.Types.Mixed, default: null },
   slug: { type: String, required: true }, // Composite index with vendorId below
 
-  category: { type: String, required: true, index: true },
+  // Not `required`: Mongoose's required on an array only refuses `undefined`, never `[]`,
+  // so it would promise something it does not check. The 1–5 rule is enforced by the
+  // write validators and `resolveForWrite`. No standalone index — every query that
+  // filters on it is storefront-scoped and served by the compound index below.
+  categoryIds: { type: [{ type: Schema.Types.ObjectId, ref: MODELS.PRODUCT_CATEGORY }], default: [] },
   tags: [{ type: String }],
 
   seo: {
@@ -365,10 +384,6 @@ const ProductSchema = new Schema<IProduct>({
         type: Schema.Types.ObjectId,
         ref: MODELS.DELIVERY_AGENCY,
         default: null,
-      },
-      free_delivery: {
-        type: Boolean,
-        default: false,
       },
       // Required to activate a physical product — see ProductStatusValidationService.
       pickup_location: {
@@ -464,7 +479,10 @@ ProductSchema.index({ vendorId: 1, deletedAt: 1, createdAt: 1 });
 // The leading pair is the publishable predicate itself (see PUBLISHABLE_PRODUCT_FILTER
 // in public-catalog.filter.ts); the trailing key is what each one sorts or narrows by.
 ProductSchema.index({ status: 1, deletedAt: 1, createdAt: -1 });
-ProductSchema.index({ status: 1, deletedAt: 1, category: 1 });
+// Multikey on `categoryIds`: the category filter, the chip counts and the related-products
+// fallback. Replaced `{ status, deletedAt, category }` on 2026-10-04; the named build is
+// `migrate:storefront-indexes`, which also drops the two superseded `category` indexes.
+ProductSchema.index({ status: 1, deletedAt: 1, categoryIds: 1 }, { name: 'product_storefront_categories' });
 
 /**
  * The one full-text index in this codebase.

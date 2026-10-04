@@ -192,8 +192,14 @@ the whole cash chain), three rules change:
    > instruction has to come from this page, which is why it is spelled out above.
 
 Both the [list](#list) and the [detail](#detail) carry a `cod` block for these shipments:
-`{ expectedAmount, currency, status: "pending" | "collected" | "cancelled" | null, collectedAt }`
+`{ expectedAmount, itemsAmount, deliveryFeeAmount, currency, status: "pending" | "collected" | "cancelled" | null, collectedAt }`
 (never contains the customer's code). It is `null` on a prepaid shipment.
+
+**`itemsAmount` / `deliveryFeeAmount` (🆕 2026-10-04, [ADR-A11](../../docs/ADR-A11-CUSTOMER-PAID-DELIVERY.md))** split the
+cash: `expectedAmount = itemsAmount + deliveryFeeAmount`. `deliveryFeeAmount` is the delivery fee the
+**customer** pays the agent in cash with the goods when the shop's delivery terms make the customer pay
+(`0` when the shop pays). Your COD handling fee is computed on `itemsAmount` only — never on the delivery
+fee — and the delivery fee itself is yours exactly as before (it is the fee the split already divides).
 
 **`status` is `null` before an agent accepts**, and `expectedAmount` is then a **projection** rather
 than a snapshot. The cash-collection record is only created at acceptance, so a shipment still out on
@@ -243,6 +249,8 @@ agency-scoped data; `agencyEarning.agentCut` is the agency's view of the same nu
       "paymentMethod": "cash_on_delivery",
       "cod": {
         "expectedAmount": 12500,
+        "itemsAmount": 11000,
+        "deliveryFeeAmount": 1500,
         "currency": "XAF",
         "status": null,
         "collectedAt": null
@@ -373,6 +381,8 @@ beside the name; neither is ever absent.
     "paymentMethod": "cash_on_delivery",
     "cod": {
       "expectedAmount": 12500,
+      "itemsAmount": 11000,
+      "deliveryFeeAmount": 1500,
       "currency": "XAF",
       "status": "pending",
       "collectedAt": null
@@ -661,11 +671,44 @@ hand-over the choices are one more proposal or the original fee.
 <a name="delivery-fee-proposals"></a>
 ### Delivery-fee proposals (2026-10-02)
 
-The delivery fee a shipment carries is computed from your `policies.pricing` — today a **flat
-per-shipment amount**: `pickup_based.base_rate_first_kg` for a vendor-collected item and/or
-`storage_based.local_delivery_fee + pick_pack_fee_per_order` for a warehoused one.
-⚠ `additional_per_kg` and the out-of-region fields are **not used by the formula yet** (no
-weight is snapshotted on an order). The **vendor** pays the fee out of their net; the customer
+> **Customer-paid shipments (ADR-A11, 2026-10-04).** On a shipment whose delivery the CUSTOMER
+> pays (`deliveryPayer: 'customer'`) the same endpoints work, but the **customer** answers:
+> a **lower** fee applies the moment you propose it (the proposal comes back `approved`,
+> `approver: 'none'`; online the customer is refunded, COD the cash to collect drops); a **higher**
+> fee waits for the customer (`approver: 'customer'`). COD: their approval raises the cash to
+> collect at once. Online: their approval asks them to pay the difference, and the fee applies —
+> and pickup unblocks — when that payment succeeds. The vendor-net ceiling does not apply (the
+> vendor's net does not move) and neither does `max_fee_per_shipment` (D-9). You may edit a
+> pending increase until the customer approves it (an edit that would LOWER it →
+> `422 DELIVERY_FEE_PROPOSAL_DIRECTION_CHANGED`: withdraw and propose the lower fee instead), and
+> withdraw it unless their top-up payment is live (`409 DELIVERY_FEE_TOPUP_IN_PROGRESS`). A
+> rejection reaches you as before, naming the customer. Proposals with `origin: 'change_agency'`
+> are raised by the platform when a vendor moves a parcel to you; you have no verb on them and are
+> paid your price whatever the customer answers.
+
+<a name="combined-delivery-requests"></a>
+### Combined delivery-price requests (ADR-A11 D-8)
+
+A customer may ask you for ONE price on ≥ 2 of their parcels from one checkout that you carry
+(customer-paid, not picked up). You are notified (`combined_delivery_request.received`).
+
+- `GET /api/agency/combined-delivery-requests?status=open|answered|declined|cancelled&page=&limit=` →
+  `{ data: [{ id, cartId, agencyId, currency, status, note, shipments: [{ shipmentId, orderId, feeAtRequest }], answer, declineNote, createdAt, closedAt }], meta: { total, page, limit, totalPages } }`
+- `POST /api/agency/combined-delivery-requests/:requestId/respond` — either
+  `{ "fees": [{ "shipmentId": "…", "proposedFee": 1200 }], "note": "…" }` (each fee **lower** than the
+  parcel's current fee; each becomes an applied decrease, `origin: 'combined_request'`) or
+  `{ "decline": true, "note": "…" }`. Answers `{ request, failed: [{ shipmentId, code }] }` — a parcel
+  picked up meanwhile is reported in `failed`, never silently skipped.
+  Errors: `422 COMBINED_DELIVERY_RESPONSE_INVALID` (`details.reason`), `409 COMBINED_DELIVERY_REQUEST_NOT_OPEN`,
+  `404 COMBINED_DELIVERY_REQUEST_NOT_FOUND`.
+
+The delivery fee a shipment carries is computed from your `policies.pricing` by the weight/region
+formula ([ADR-A11](../../docs/ADR-A11-CUSTOMER-PAID-DELIVERY.md), live since 2026-10-04):
+`base_rate_first_kg + additional_per_kg × (kg − 1)` (+ `out_of_region_surcharge`) for a
+vendor-collected item and/or `local_delivery_fee` (or `out_of_region_delivery_fee`) `+
+pick_pack_fee_per_order` for a warehoused one, capped at your `max_fee_per_shipment` when set. kg =
+the shipment's weight rounded up (minimum 1; an item with no weight counts 1 kg per unit). The fee is
+posted (snapshotted) at checkout. The **vendor** pays the fee out of their net; the customer
 never sees it. When one particular parcel needs a different price (bulky, far, awkward), you
 propose one for **that shipment**, and the vendor approves or rejects it.
 

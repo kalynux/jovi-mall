@@ -230,10 +230,14 @@ export function planFeeApplication(input: ApplicationPlanInput): ApplicationPlan
 
 // ── Who may do what to an existing proposal ───────────────────────────────────
 
-export type ProposalAction = 'approve' | 'reject' | 'withdraw' | 'edit';
+/**
+ * `cover` — the vendor takes a change-agency difference on itself (D-10).
+ * `pay`   — the customer pays the top-up an approved increase needs (online, ADR-A11).
+ */
+export type ProposalAction = 'approve' | 'reject' | 'withdraw' | 'edit' | 'cover' | 'pay';
 
 export interface ProposalViewer {
-  role: 'vendor' | 'agency' | 'agent';
+  role: 'vendor' | 'agency' | 'agent' | 'customer';
   /** For an agent: their agent id. */
   agentId?: string | null;
   /**
@@ -259,12 +263,36 @@ export function resolveAvailableActions(
     proposed_by_role: DeliveryFeeProposerRole;
     proposed_by_agent_id: string | null;
     agency_edited?: boolean;
+    /** ADR-A11. Absent on rows before it ⇒ `vendor` (the ADR-A09 flow). */
+    approver?: 'vendor' | 'customer' | 'none' | null;
+    origin?: 'agency' | 'change_agency' | 'combined_request' | null;
+    /** The customer approved an increase that still awaits its top-up (online). */
+    customer_approved?: boolean;
   },
   viewer: ProposalViewer
 ): ProposalAction[] {
   if (proposal.status !== 'pending') return [];
-  if (viewer.role === 'vendor') return ['approve', 'reject'];
-  if (viewer.role === 'agency') return ['withdraw', 'edit'];
+  const approver = proposal.approver ?? 'vendor';
+
+  // A change-agency difference (D-10): the system raised it; the customer answers, and the
+  // vendor — who moved the parcel and is the one covering otherwise — may cover it at once.
+  // Neither agency nor agent has a verb on it: they are paid the new fee either way.
+  if (proposal.origin === 'change_agency') {
+    if (viewer.role === 'vendor') return ['cover'];
+    if (viewer.role === 'customer') return proposal.customer_approved ? ['pay', 'reject'] : ['approve', 'reject'];
+    return [];
+  }
+
+  if (approver === 'customer') {
+    if (viewer.role === 'customer') return proposal.customer_approved ? ['pay', 'reject'] : ['approve', 'reject'];
+    if (viewer.role === 'vendor') return [];
+    // Once the customer has approved (and may be paying), the figure is frozen: no edit.
+    if (viewer.role === 'agency') return proposal.customer_approved ? ['withdraw'] : ['withdraw', 'edit'];
+  } else {
+    if (viewer.role === 'customer') return [];
+    if (viewer.role === 'vendor') return ['approve', 'reject'];
+    if (viewer.role === 'agency') return ['withdraw', 'edit'];
+  }
   if (
     viewer.role === 'agent' &&
     proposal.proposed_by_role === 'agent' &&
@@ -272,6 +300,7 @@ export function resolveAvailableActions(
     !!viewer.agentId &&
     proposal.proposed_by_agent_id === viewer.agentId
   ) {
+    if (approver === 'customer' && proposal.customer_approved) return ['withdraw'];
     return viewer.agentsMayPropose === false ? ['withdraw'] : ['withdraw', 'edit'];
   }
   return [];

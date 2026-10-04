@@ -1004,7 +1004,7 @@ refund obligation.
 
 One order's gross is divided across **two moments**, and that is the whole design. At **payment**
 (`splitOrder`) only the platform commission and the vendor's net are allocated. The vendor's net is
-already reduced by the delivery fee, but that fee is deliberately **not** given to anyone yet: at
+already reduced by the delivery fee **when the shop pays delivery**, but that fee is deliberately **not** given to anyone yet: at
 payment success the shipments exist at `pending` with `agent_id: null`, and the agent who will earn
 a share of that fee has not been dispatched. At **delivery** (`splitShipmentDelivery`, hooked
 post-commit on `agent_delivered`/`returned` in `ShipmentService.updateStatus`) the fee is divided
@@ -1018,6 +1018,19 @@ COD is the same shape with a different trigger: `splitCodCollection` pays all fo
 verified cash handoff, because that is when both the cash and the agent are known. **A prepaid
 order never reaches `splitCodCollection` and a COD order never reaches `splitOrder`.**
 
+⚠ **Since ADR-A11 (2026-10-03/04, `docs/ADR-A11-CUSTOMER-PAID-DELIVERY.md`) the vendor does NOT
+always absorb delivery, and "the customer pays items only" is no longer true.** Free delivery is a
+SHOP setting (`vendor_settings.delivery_terms`: `always` default · `never` · `above` X). On a
+customer-paid vendor order `price_breakdown.delivery` = Σ fees, `total_amount = items + delivery`, the
+COD `expected_amount = items_amount + delivery_fee_amount`, and the vendor's net carries **no** fee;
+commission and the COD handling fee stay on the items only. Every split deducts only the
+**vendor-borne** part (`deliveryFeeShares(fee, customer_delivery_fee).vendorBorne`, `orders/domain/
+delivery-payer.ts`) — which is also what `NET_FORMULA`'s `deliveryFee` term means now. The fee is the
+weight/region formula (`earnings/domain/delivery-pricing.ts`), snapshotted AT CHECKOUT for every
+physical shipment; `customer_delivery_fee` is what the customer paid, kept apart from the agency's
+`delivery_fee_snapshot`. A RETURN's unspent fee goes back to whoever paid it (customer-paid ⇒
+`shipment.customer_fee_refundable`, no vendor row).
+
 Four rules that are load-bearing:
 
 - **The agent's cut comes OUT of the agency's fee, never on top** (`fee_split` on their contract,
@@ -1025,8 +1038,8 @@ Four rules that are load-bearing:
   pays** it, through the agent's own `EarningsAccount` — nobody is paid off-platform.
 - **`delivery_fee_snapshot` on the Shipment is the contract between the two moments.** The fee
   derives from the agency's *mutable* `policies.pricing`; splitting at delivery would otherwise
-  divide a different number than the vendor was charged. `splitOrder` writes it, the delivery split
-  divides exactly it.
+  divide a different number than the payer was charged. Checkout writes it (since ADR-A11;
+  `splitOrder` keeps it, override-first), the delivery split divides exactly it.
 - **`EarningsCompletionService.onOrderCompleted` must sweep EVERY source type an order produced** —
   `order`, `cod_collection` *and* `shipment`. `markCompletedBySource` is keyed by source, and
   `findMaturedHeld` skips a null `hold_release_at`, so a source it forgets is money held forever.
@@ -1034,7 +1047,8 @@ Four rules that are load-bearing:
   It is also what makes the hold uniform: **every actor on an order matures on the same date**,
   `HOLD_DAYS` (7) after the order completes — never at delivery, never per shipment.
 - **A `returned` shipment still splits**, at the agency's `additional_fees.rto_fee` (clamped),
-  with the unspent remainder credited back to the vendor. `failed` does not: it is not terminal
+  with the unspent remainder credited back to whoever paid the fee (the vendor, or — customer-paid —
+  owed to the customer on `customer_fee_refundable`). `failed` does not: it is not terminal
   (`failed → in_transit | returned`), so `failed_delivery_fee` needs its own charge path.
 
 Both splits are post-commit and best-effort, so both have a recovery stage in

@@ -249,6 +249,27 @@ export class AdminAgencyService {
     }
 
     /**
+     * The product + order half of `deactivate`, inside the CALLER's transaction — ADR-A10.
+     *
+     * Role closure needs exactly this cascade, but writes the agency row itself (status, the
+     * `closed_at` stamp and the anonymisation in one `$set`), and must not open a second
+     * transaction. Re-running it over an already-deactivated agency is harmless: the
+     * suspension sweeps touch `active` products only.
+     */
+    async applyDeactivationCascade(agencyId: string, session: ClientSession): Promise<{
+        affectedProductIds: string[];
+        heldOrderItemCount: number;
+    }> {
+        const defaultAgencyProductIds = await this.suspendVendorDefaultProducts(agencyId, session);
+        const ownAgencyProductIds = await this.suspendProductOverrides(agencyId, session);
+        const heldItems = await this.orderRepo.holdItemsByAgency(agencyId, session);
+        return {
+            affectedProductIds: [...defaultAgencyProductIds, ...ownAgencyProductIds],
+            heldOrderItemCount: heldItems.length,
+        };
+    }
+
+    /**
      * Reactivate an agency. Idempotent — no-op if already active.
      */
     async reactivate(agencyId: string, actorUserId: string): Promise<{
@@ -259,6 +280,11 @@ export class AdminAgencyService {
         return this.txManager.runInTransaction(async (session) => {
             const agency = await this.agencyRepo.findById(agencyId, session);
             if (!agency) throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404, 'Delivery agency not found');
+
+            // ADR-A10: a closed agency is `inactive` too, and is never reactivated.
+            if (agency.closed_at) {
+                throw createAppError(ERROR_CODES.ROLE_CLOSED, 409, undefined, { role: 'agency' });
+            }
 
             if (agency.status === 'active') {
                 return { agency: await this.toDto(agency), restoredProducts: [], unheldOrderItemCount: 0 };

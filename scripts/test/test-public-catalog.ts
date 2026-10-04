@@ -178,7 +178,7 @@ const product = (over: Partial<Product> = {}): Product => ({
         ],
     },
     slug: 'ankara-wax-print-maxi-dress',
-    category: 'Fashion',
+    categoryIds: ['507f1f77bcf86cd7994390ca'],
     tags: ['wax', 'handmade'],
     seo: { title: 'Ankara dress', description: 'Handmade' },
     hasVariants: true,
@@ -186,7 +186,6 @@ const product = (over: Partial<Product> = {}): Product => ({
     fileIds: ['507f1f77bcf86cd799439030'],
     delivery: {
         agencyId: '507f1f77bcf86cd799439bbb',
-        freeDelivery: false,
         pickupLocation: {
             source: 'vendor_address',
             // A vendor's HOME address id. Publishing it is the leak this file guards.
@@ -217,6 +216,16 @@ const storeBlock: PublicProductDetailStoreDto = {
     policies: { returnPolicy: null, cancellationPolicy: null },
 };
 
+/**
+ * The product's categories as the service resolves them — two, to prove order is kept and
+ * that `category` (deprecated) is the FIRST one. The extra `match_key` on the second is the
+ * leak probe: the mapper must copy id/name/slug only.
+ */
+const FASHION_REFS = [
+    { id: '507f1f77bcf86cd7994390ca', name: 'Fashion', slug: 'fashion' },
+    { id: '507f1f77bcf86cd7994390cb', name: 'Handmade', slug: 'handmade', match_key: 'internal_key_marker' } as never,
+];
+
 const detail = (p: Product = product(), variants: Variant[] = [variant()]) =>
     toPublicProductDetailDto({
         product: p,
@@ -234,8 +243,28 @@ const detail = (p: Product = product(), variants: Variant[] = [variant()]) =>
         // is what keeps `aggregateRating` out of the storefront's JSON-LD. The
         // non-null case is asserted on its own below.
         rating: null,
-        store: storeBlock,
+        store: storeBlock, categories: FASHION_REFS,
+        deliveryTerms: { mode: 'always', freeAboveAmount: null },
     });
+
+// ─── 0. Categories on the detail DTO ─────────────────────────────────────────
+
+console.log('\n── Categories ──');
+
+assert('detail: categories are published in the given order', () => {
+    const c = detail().categories;
+    return c.length === 2 && c[0].name === 'Fashion' && c[1].name === 'Handmade';
+});
+
+assert('detail: the deprecated `category` is the FIRST category\'s name', () =>
+    detail().category === 'Fashion');
+
+assert('detail: a category ref carries id/name/slug and nothing else (no match_key leak)', () =>
+    !JSON.stringify(detail()).includes('internal_key_marker')
+    && detail().categories.every((c) => Object.keys(c).sort().join() === 'id,name,slug'));
+
+assert('detail: the stored categoryIds never reach the wire under that name', () =>
+    !JSON.stringify(detail()).includes('categoryIds'));
 
 // ─── 1. The publishable predicate ────────────────────────────────────────────
 
@@ -609,7 +638,8 @@ assert('a simple-mode product returns options: [] and one variant', () => {
         // is what keeps `aggregateRating` out of the storefront's JSON-LD. The
         // non-null case is asserted on its own below.
         rating: null,
-        store: storeBlock,
+        store: storeBlock, categories: FASHION_REFS,
+        deliveryTerms: { mode: 'always', freeAboveAmount: null },
     });
     return dto.options.length === 0 && dto.variants.length === 1;
 });
@@ -642,7 +672,8 @@ assert('options are sorted by position, not insertion order', () => {
         // is what keeps `aggregateRating` out of the storefront's JSON-LD. The
         // non-null case is asserted on its own below.
         rating: null,
-        store: storeBlock,
+        store: storeBlock, categories: FASHION_REFS,
+        deliveryTerms: { mode: 'always', freeAboveAmount: null },
     });
     return dto.options[0].name === 'Size' && dto.options[1].name === 'Colour';
 });
@@ -730,7 +761,8 @@ assert('an INERT window leaks no floor either — the number is published, the r
             currency: 'XAF',
             contentLanguage: 'fr',
             rating: null,
-            store: storeBlock,
+            store: storeBlock, categories: FASHION_REFS,
+            deliveryTerms: { mode: 'always', freeAboveAmount: null },
         }),
     );
     return !json.includes('minPrice') && !json.includes('maxPrice') && !json.includes(String(BARGAIN_ASK));
@@ -775,6 +807,7 @@ const storeJson = JSON.stringify(
         logo: null,
         banner: null,
         productCount: 48,
+        deliveryTerms: { mode: 'above', freeAboveAmount: 20000 },
     }),
 );
 
@@ -787,6 +820,39 @@ assert('the store DTO does NOT publish the vendor status it gated on', () =>
     !storeJson.includes('"status"'));
 assert('memberSince is an ISO string, not a Date', () =>
     storeJson.includes('2026-02-01T00:00:00.000Z'));
+assert('the store DTO publishes the shop delivery terms (ADR-A11)', () =>
+    storeJson.includes('"deliveryTerms":{"mode":"above","freeAboveAmount":20000}'));
+
+// ─── ADR-A11: freeDelivery is DERIVED from the shop's terms, never a product flag ───
+
+{
+    const withTerms = (deliveryTerms: { mode: 'always' | 'never' | 'above'; freeAboveAmount: number | null }) =>
+        toPublicProductDetailDto({
+            product: product(), variants: [variant()], options: [], optionValues: [],
+            productImages: [], variantImages: new Map(), currency: 'XAF', contentLanguage: 'fr',
+            rating: null, store: storeBlock, categories: FASHION_REFS, deliveryTerms,
+        });
+    assert('detail: a shop on `always` reads freeDelivery: true', () =>
+        withTerms({ mode: 'always', freeAboveAmount: null }).freeDelivery === true);
+    assert('detail: a shop on `never` reads freeDelivery: false', () =>
+        withTerms({ mode: 'never', freeAboveAmount: null }).freeDelivery === false);
+    assert('detail: a shop on `above` reads freeDelivery: false (the badge would over-promise)', () =>
+        withTerms({ mode: 'above', freeAboveAmount: 15000 }).freeDelivery === false);
+    assert('detail: deliveryTerms is published as-is', () => {
+        const t = withTerms({ mode: 'above', freeAboveAmount: 15000 }).deliveryTerms;
+        return t.mode === 'above' && t.freeAboveAmount === 15000;
+    });
+    assert('detail: a stray stored product free_delivery value cannot reach the wire', () => {
+        const p = product();
+        (p as unknown as { delivery: Record<string, unknown> }).delivery.freeDelivery = true;
+        const dto = toPublicProductDetailDto({
+            product: p, variants: [variant()], options: [], optionValues: [],
+            productImages: [], variantImages: new Map(), currency: 'XAF', contentLanguage: 'fr',
+            rating: null, store: storeBlock, categories: FASHION_REFS, deliveryTerms: { mode: 'never', freeAboveAmount: null },
+        });
+        return dto.freeDelivery === false;
+    });
+}
 
 // ─── 5. Query validators ─────────────────────────────────────────────────────
 

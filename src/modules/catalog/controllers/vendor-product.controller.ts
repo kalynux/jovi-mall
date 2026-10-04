@@ -30,6 +30,7 @@ import {
     SetVectorisationSchema,
 } from '../validators/product.validator';
 import { vectorisationService } from '../domain/services/VectorisationService';
+import { categoryRefsFromBody } from '../../categories/services/category-input';
 import { entitlementService } from '../../billing/services/entitlement.service';
 import { eventBus } from '../../../core/events/event-bus';
 import { ProductDeliveryAgencySuspensionService } from '../domain/services/ProductDeliveryAgencySuspensionService';
@@ -190,7 +191,8 @@ export class VendorProductController {
             title: input.title,
             description: input.description,
             descriptionRich: input.descriptionRich,
-            category: input.category,
+            // The schema's refine guarantees one of the two is present on a create.
+            categories: categoryRefsFromBody(input)!,
             tags: input.tags,
             seoTitle: input.seoTitle,
             seoDescription: input.seoDescription,
@@ -227,7 +229,7 @@ export class VendorProductController {
             title: input.title,
             description: input.description,
             descriptionRich: input.descriptionRich,
-            category: input.category,
+            categories: categoryRefsFromBody(input),
             tags: input.tags,
             seoTitle: input.seoTitle,
             seoDescription: input.seoDescription,

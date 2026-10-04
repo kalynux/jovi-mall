@@ -4,6 +4,7 @@ import { IStorageProvider } from '../../../../core/storage/storage-provider.inte
 import { Page } from '../../repositories/types';
 import { FileDetail, ProductListItem } from '../../read-models/product-detail.read-model';
 import { toFileDetail } from '../../read-models/file-detail.resolver';
+import { categoryCatalogCache } from '../../../categories/services/category-catalog.cache';
 
 export interface ProductListFilters {
     type?: 'physical' | 'digital' | 'service';
@@ -79,13 +80,16 @@ export class ProductListService {
             }
         }
 
-        const data: ProductListItem[] = projection.data.map(p => ({
+        const categoryRefs = await categoryCatalogCache.refsForMany(projection.data.map(p => p.categoryIds));
+
+        const data: ProductListItem[] = projection.data.map((p, i) => ({
             id: p.id,
             title: p.title,
             type: p.type,
             status: p.status,
             mode: p.mode,
-            category: p.category,
+            categories: categoryRefs[i],
+            category: categoryRefs[i][0]?.name ?? null,
             fileIds: p.fileIds
                 .map(id => fileDetailById.get(id))
                 .filter((f): f is FileDetail => Boolean(f)),

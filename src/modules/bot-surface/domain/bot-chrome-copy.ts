@@ -855,6 +855,52 @@ const ACCOUNT_KEPT: Copy = {
     ar: 'حسابك لا يزال مفتوحًا. لم يتغيّر شيء.',
 };
 
+
+// ── Administrator-requested closure (ADR-A10) ───────────────────────────────
+
+/**
+ * Opens the preview when an administrator has asked to close the customer role. The
+ * administrator's reason follows it verbatim, quoted — it is their words, not ours, and is
+ * not translated.
+ */
+const CLOSURE_REQUEST_INTRO: Copy = {
+    en: 'A Wi-Mall administrator has asked to close your shopping account. Their reason:',
+    fr: 'Un administrateur de Wi-Mall a demandé la fermeture de votre compte client. Sa raison :',
+    pt: 'Um administrador da Wi-Mall pediu o encerramento da sua conta de cliente. O motivo:',
+    es: 'Un administrador de Wi-Mall ha pedido cerrar tu cuenta de cliente. Su motivo:',
+    ar: 'طلب أحد مسؤولي Wi-Mall إغلاق حساب التسوّق الخاص بك. السبب:',
+};
+
+/**
+ * The consequence when the person keeps OTHER roles (a shop, an agency…): only the shopping
+ * profile goes, and they still sign in. `ACCOUNT_CLOSURE_PROMPT` is right when it is the last.
+ */
+const CLOSURE_REQUEST_PROMPT_OTHER_ROLES: Copy = {
+    en: 'Closing it removes your name, saved addresses and payment methods from your shopping account. Your past orders are kept as business records, without your details. Your other Wi-Mall accounts are not affected. Nothing happens unless you confirm, and this cannot be undone.',
+    fr: "Sa fermeture supprime votre nom, vos adresses et vos moyens de paiement enregistrés de votre compte client. Vos commandes passées sont conservées comme documents commerciaux, sans vos coordonnées. Vos autres comptes Wi-Mall ne sont pas concernés. Rien ne se passe sans votre confirmation, et c'est irréversible.",
+    pt: 'Encerrá-la remove o seu nome, moradas e métodos de pagamento guardados da sua conta de cliente. As suas encomendas anteriores são mantidas como registos comerciais, sem os seus dados. As suas outras contas Wi-Mall não são afetadas. Nada acontece sem a sua confirmação, e isto não pode ser desfeito.',
+    es: 'Cerrarla elimina tu nombre, direcciones y métodos de pago guardados de tu cuenta de cliente. Tus pedidos anteriores se conservan como registros comerciales, sin tus datos. Tus otras cuentas de Wi-Mall no se ven afectadas. No pasa nada si no confirmas, y no se puede deshacer.',
+    ar: 'إغلاقه يحذف اسمك وعناوينك وطرق الدفع المحفوظة من حساب التسوّق. تُحفظ طلباتك السابقة كسجلات تجارية دون بياناتك. لا تتأثر حساباتك الأخرى على Wi-Mall. لا يحدث شيء ما لم تؤكّد، ولا يمكن التراجع عن هذا.',
+};
+
+/** After "Keep my account" on an administrator's request: it is DECLINED, and they are told. */
+const CLOSURE_REQUEST_DECLINED: Copy = {
+    en: 'You declined. Your account is staying open, and the administrator has been told.',
+    fr: "Vous avez refusé. Votre compte reste ouvert, et l'administrateur en a été informé.",
+    pt: 'Recusou. A sua conta continua aberta e o administrador foi informado.',
+    es: 'Has rechazado. Tu cuenta sigue abierta y se ha informado al administrador.',
+    ar: 'لقد رفضت. حسابك سيبقى مفتوحًا، وتم إبلاغ المسؤول.',
+};
+
+/** After confirming when other roles remain — the person is NOT signed out of those. */
+const CLOSURE_REQUEST_ROLE_CLOSED: Copy = {
+    en: 'Your shopping account is closed and its personal details have been removed. Your other Wi-Mall accounts are unchanged.',
+    fr: 'Votre compte client est fermé et ses données personnelles ont été supprimées. Vos autres comptes Wi-Mall ne changent pas.',
+    pt: 'A sua conta de cliente está encerrada e os seus dados pessoais foram removidos. As suas outras contas Wi-Mall não mudam.',
+    es: 'Tu cuenta de cliente está cerrada y sus datos personales se han eliminado. Tus otras cuentas de Wi-Mall no cambian.',
+    ar: 'أُغلق حساب التسوّق الخاص بك وحُذفت بياناته الشخصية. حساباتك الأخرى على Wi-Mall لم تتغيّر.',
+};
+
 const CONNECTIONS_PROMPT: Copy = {
     en: 'These apps can reach your account. Choose one to disconnect it.',
     fr: 'Ces applications ont accès à votre compte. Choisissez-en une pour la déconnecter.',
@@ -1815,16 +1861,19 @@ const CHECKOUT_ADD_ADDRESS_PROMPT: Copy = {
 };
 
 /**
- * ADR-A07 — a shop's part of the basket is too small to carry its delivery, which the vendor pays.
+ * ADR-A07 as amended by ADR-A11 — a shop's part of the basket is too small for the shop to sell at
+ * all: even with the customer paying delivery, the shop would earn nothing (its commission and the
+ * cash-on-delivery fee stay its own). A shop that merely cannot AFFORD free delivery no longer
+ * refuses — it falls back to customer-paid delivery and the review shows the fee (D-6).
  * Drawn by `checkout_review` in place of the confirmation. ⚠ Only the amount to ADD is ever named —
  * never the fee or the commission, which are the vendor's terms.
  */
 const CHECKOUT_DELIVERY_MINIMUM_INTRO: Copy = {
-    en: "I can't place this order yet — delivery isn't covered for part of your basket:",
-    fr: "Je ne peux pas encore passer cette commande — la livraison n'est pas couverte pour une partie de votre panier :",
-    pt: 'Ainda não posso fazer esta encomenda — a entrega não está coberta para parte do seu cesto:',
-    es: 'Todavía no puedo hacer este pedido: la entrega no está cubierta para parte de tu cesta:',
-    ar: 'لا يمكنني إتمام هذا الطلب بعد — التوصيل غير مغطى لجزء من سلتك:',
+    en: "I can't place this order yet — part of your basket is too small for its shop to send:",
+    fr: "Je ne peux pas encore passer cette commande — une partie de votre panier est trop petite pour que la boutique l'envoie :",
+    pt: 'Ainda não posso fazer esta encomenda — parte do seu cesto é demasiado pequena para a loja a enviar:',
+    es: 'Todavía no puedo hacer este pedido: parte de tu cesta es demasiado pequeña para que la tienda la envíe:',
+    ar: 'لا يمكنني إتمام هذا الطلب بعد — جزء من سلتك صغير جدًا ليرسله المتجر:',
 };
 
 /** One shop: `{shop}` is its Store name (or `checkoutThisShop`), `{amount}` a formatted price. */
@@ -1860,6 +1909,95 @@ const CHECKOUT_THIS_SHOP: Copy = {
     pt: 'Esta loja',
     es: 'Esta tienda',
     ar: 'هذا المتجر',
+};
+
+// ── Customer-paid delivery (ADR-A11, 2026-10-04) ────────────────────────────
+// The delivery line(s) of a checkout — chat review, Mini App, order listing — and the shop's
+// free-delivery terms on a product card. ⚠ Every amount is the SERVER's (`formatBotPrice` over the
+// cart quote / the shop's terms); these strings only place it. Built by `domain/delivery-lines.ts`.
+
+/** The delivery row's label when ONE shop ships in this basket. */
+const CHECKOUT_DELIVERY_LABEL: Copy = {
+    en: 'Delivery',
+    fr: 'Livraison',
+    pt: 'Entrega',
+    es: 'Envío',
+    ar: 'التوصيل',
+};
+
+/** The delivery row's label when SEVERAL shops ship — one row each (one fee per shop and agency). */
+const CHECKOUT_DELIVERY_SHOP_LABEL: Copy = {
+    en: 'Delivery · {shop}',
+    fr: 'Livraison · {shop}',
+    pt: 'Entrega · {shop}',
+    es: 'Envío · {shop}',
+    ar: 'التوصيل · {shop}',
+};
+
+/** The delivery row's value when the shop pays it. */
+const CHECKOUT_DELIVERY_FREE: Copy = {
+    en: 'Free',
+    fr: 'Offerte',
+    pt: 'Grátis',
+    es: 'Gratis',
+    ar: 'مجاني',
+};
+
+/** A delivery row in a chat message: `{label}` from the two above, `{value}` an amount or "Free". */
+const CHECKOUT_DELIVERY_LINE: Copy = {
+    en: '{label}: {value}',
+    fr: '{label} : {value}',
+    pt: '{label}: {value}',
+    es: '{label}: {value}',
+    ar: '{label}: {value}',
+};
+
+/**
+ * The non-blocking free-delivery hint (ADR-A11 D-6): the shop delivers free from a basket amount
+ * (or the 30% cap fell back to customer-paid), and this much more FROM THAT SHOP makes it free.
+ */
+const CHECKOUT_FREE_DELIVERY_HINT: Copy = {
+    en: 'Add {amount} more from {shop} and delivery is free.',
+    fr: 'Ajoutez encore {amount} chez {shop} et la livraison est offerte.',
+    pt: 'Adicione mais {amount} da loja {shop} e a entrega é grátis.',
+    es: 'Añade {amount} más de {shop} y el envío es gratis.',
+    ar: 'أضف {amount} إضافية من {shop} ويصبح التوصيل مجانيًا.',
+};
+
+/** The same hint when only one shop ships — naming it would be noise. */
+const CHECKOUT_FREE_DELIVERY_HINT_ONE_SHOP: Copy = {
+    en: 'Add {amount} more and delivery is free.',
+    fr: 'Ajoutez encore {amount} et la livraison est offerte.',
+    pt: 'Adicione mais {amount} e a entrega é grátis.',
+    es: 'Añade {amount} más y el envío es gratis.',
+    ar: 'أضف {amount} إضافية ويصبح التوصيل مجانيًا.',
+};
+
+/** A product card / detail line for a shop whose terms are `always` (the shop pays delivery). */
+const CARD_FREE_DELIVERY: Copy = {
+    en: 'Free delivery',
+    fr: 'Livraison offerte',
+    pt: 'Entrega grátis',
+    es: 'Envío gratis',
+    ar: 'توصيل مجاني',
+};
+
+/** …and for `above`: free once that shop's part of the basket reaches `{amount}`. */
+const CARD_FREE_DELIVERY_FROM: Copy = {
+    en: 'Free delivery from {amount}',
+    fr: 'Livraison offerte dès {amount}',
+    pt: 'Entrega grátis a partir de {amount}',
+    es: 'Envío gratis desde {amount}',
+    ar: 'توصيل مجاني ابتداءً من {amount}',
+};
+
+/** Under an order group's total on the order screen: how much of it was delivery. */
+const ORDER_DELIVERY_INCLUDED: Copy = {
+    en: 'Incl. {amount} delivery',
+    fr: 'Dont {amount} de livraison',
+    pt: 'Inclui {amount} de entrega',
+    es: 'Incluye {amount} de envío',
+    ar: 'يشمل {amount} للتوصيل',
 };
 
 const CHECKOUT_ORDER_PLACED_LABEL: Copy = {
@@ -2052,6 +2190,10 @@ const CHROME = Object.freeze({
     accountRowLanguage: { copy: ACCOUNT_ROW_LANGUAGE, cap: 24 },
     accountRowClose: { copy: ACCOUNT_ROW_CLOSE, cap: 24 },
     accountKept: { copy: ACCOUNT_KEPT, cap: null },
+    closureRequestIntro: { copy: CLOSURE_REQUEST_INTRO, cap: null },
+    closureRequestPromptOtherRoles: { copy: CLOSURE_REQUEST_PROMPT_OTHER_ROLES, cap: null },
+    closureRequestDeclined: { copy: CLOSURE_REQUEST_DECLINED, cap: null },
+    closureRequestRoleClosed: { copy: CLOSURE_REQUEST_ROLE_CLOSED, cap: null },
     connectionsPrompt: { copy: CONNECTIONS_PROMPT, cap: null },
     connectionsOnlyCurrent: { copy: CONNECTIONS_ONLY_CURRENT, cap: null },
     connectionDisconnectPrompt: { copy: CONNECTION_DISCONNECT_PROMPT, cap: null },
@@ -2125,6 +2267,16 @@ const CHROME = Object.freeze({
     checkoutDeliveryMinimumUnreachable: { copy: CHECKOUT_DELIVERY_MINIMUM_UNREACHABLE, cap: null },
     checkoutDeliveryMinimumOutro: { copy: CHECKOUT_DELIVERY_MINIMUM_OUTRO, cap: null },
     checkoutThisShop: { copy: CHECKOUT_THIS_SHOP, cap: null },
+    // Customer-paid delivery (ADR-A11). Bodies and page rows — no control carries them.
+    checkoutDeliveryLabel: { copy: CHECKOUT_DELIVERY_LABEL, cap: null },
+    checkoutDeliveryShopLabel: { copy: CHECKOUT_DELIVERY_SHOP_LABEL, cap: null },
+    checkoutDeliveryFree: { copy: CHECKOUT_DELIVERY_FREE, cap: null },
+    checkoutDeliveryLine: { copy: CHECKOUT_DELIVERY_LINE, cap: null },
+    checkoutFreeDeliveryHint: { copy: CHECKOUT_FREE_DELIVERY_HINT, cap: null },
+    checkoutFreeDeliveryHintOneShop: { copy: CHECKOUT_FREE_DELIVERY_HINT_ONE_SHOP, cap: null },
+    cardFreeDelivery: { copy: CARD_FREE_DELIVERY, cap: null },
+    cardFreeDeliveryFrom: { copy: CARD_FREE_DELIVERY_FROM, cap: null },
+    orderDeliveryIncluded: { copy: ORDER_DELIVERY_INCLUDED, cap: null },
     checkoutOrderPlacedLabel: { copy: CHECKOUT_ORDER_PLACED_LABEL, cap: null },
     checkoutPaymentRequestSent: { copy: CHECKOUT_PAYMENT_REQUEST_SENT, cap: null },
     checkoutPaymentWait: { copy: CHECKOUT_PAYMENT_WAIT, cap: null },
@@ -2155,6 +2307,13 @@ const CHROME_TEMPLATES: Readonly<Partial<Record<BotChromeKey, readonly string[]>
     checkoutPaymentRequestSent: Object.freeze(['amount', 'phone']),
     checkoutDeliveryMinimumLine: Object.freeze(['shop', 'amount']),
     checkoutDeliveryMinimumUnreachable: Object.freeze(['shop']),
+    // Customer-paid delivery (ADR-A11).
+    checkoutDeliveryShopLabel: Object.freeze(['shop']),
+    checkoutDeliveryLine: Object.freeze(['label', 'value']),
+    checkoutFreeDeliveryHint: Object.freeze(['amount', 'shop']),
+    checkoutFreeDeliveryHintOneShop: Object.freeze(['amount']),
+    cardFreeDeliveryFrom: Object.freeze(['amount']),
+    orderDeliveryIncluded: Object.freeze(['amount']),
 });
 
 /** `{name}` — the one placeholder syntax. Static, never built from input. */

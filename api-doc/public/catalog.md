@@ -158,7 +158,8 @@ you like) — the backend does not block the cart on it.
 
       "store": { "slug": "maison-bella", "name": "Maison Bella", "isOpen": true, "verified": true },
 
-      "freeDelivery": false,
+      "freeDelivery": false,                    // DERIVED: true iff deliveryTerms.mode === "always"
+      "deliveryTerms": { "mode": "above", "freeAboveAmount": 20000 },   // the SHOP's terms (ADR-A11)
       "updatedAt": "2026-07-30T09:20:00.000Z"
     }
   ],
@@ -384,7 +385,8 @@ The product page. `GET /api/public/products/:productId` returns the identical bo
       }
     },
 
-    "freeDelivery": false,
+    "freeDelivery": false,                      // DERIVED from deliveryTerms, see below
+    "deliveryTerms": { "mode": "above", "freeAboveAmount": 20000 },
     "createdAt": "…",
     "updatedAt": "…"
   }
@@ -632,10 +634,19 @@ The directory, and the sitemap's source of store URLs.
     "city": "Douala",
     "verified": true,
     "productCount": 48,
-    "memberSince": "2026-02-01T00:00:00.000Z"
+    "memberSince": "2026-02-01T00:00:00.000Z",
+    "deliveryTerms": { "mode": "above", "freeAboveAmount": 20000 }
   }
 }
 ```
+
+> **`deliveryTerms` (2026-10-03, ADR-A11)** — on the store reads, the product rows and the product
+> detail. Who pays delivery on this shop's part of a basket: `always` (the shop — free delivery),
+> `never` (the customer) or `above` (free once the basket holds at least `freeAboveAmount` of this
+> shop's items; inclusive). A shop that never set it reads `always`. **`freeDelivery` on a product is
+> now derived** — `true` only for `always`; an `above` shop reads `false` because the badge would
+> promise what the basket may not meet, so render "free from X" from `deliveryTerms` instead. There
+> is no per-product free-delivery flag any more.
 
 `404 STORE_NOT_FOUND` when the slug is unknown or the vendor is suspended.
 

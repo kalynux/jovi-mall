@@ -98,11 +98,10 @@ Creates the product, its single variant and its delivery config in **one transac
 | `seoTitle` / `seoDescription` | string | | Max 60 / 160 |
 | `weight` | number | | grams |
 | `length` / `width` / `height` | number | | cm |
-| `freeDelivery` | boolean | | default `false` |
 | `pickupLocation` | object | | `{ source, vendorAddressId?, agencyAddressId? }`. **Omit to auto-derive** — see below. |
 | `publish` | boolean | | default `true`. `false` saves a draft outright. |
 
-**Not accepted** (400 if sent): `type` (simple is physical-only), `mode`, `status`, `deliveryAgencyId`, `optionValueIds`, `digitalConfig`, `serviceConfig`. Each belongs to a capability this editor does not expose; accepting them silently would make `mode: "simple"` a lie.
+**Not accepted** (400 if sent): `type` (simple is physical-only), `mode`, `status`, `deliveryAgencyId`, `optionValueIds`, `digitalConfig`, `serviceConfig`, and — since 2026-10-03 (ADR-A11) — `freeDelivery`: free delivery is a **shop** setting now, `PUT /api/vendor/profile/delivery-terms` ([profile.md](./profile.md#delivery-terms-2026-10-03-adr-a10)). Each belongs to a capability this editor does not expose; accepting them silently would make `mode: "simple"` a lie.
 
 ### Example
 
@@ -147,7 +146,6 @@ Content-Type: application/json
     "files": [{ "id": "6f1a...", "url": "https://...", "mimeType": "image/jpeg", "size": 245678 }],
     "delivery": {
       "agencyId": null,
-      "freeDelivery": false,
       "pickupLocation": { "source": "vendor_address", "vendorAddressId": "68b2..." }
     },
     "defaultVariant": {
@@ -288,7 +286,7 @@ One flat body edits both the product and its variant. Every field optional; at l
 
 | → Product | → its single variant |
 |---|---|
-| `title`, `description`, `descriptionRich`, `category`, `tags`, `fileIds`, `seoTitle`, `seoDescription`, `freeDelivery`, `pickupLocation` | `price`, `compareAtPrice`, `bargain`, `stock`, `isInfiniteStock`, `lowStockThreshold`, `allowOversell`, `sku`, `weight`, `length`, `width`, `height` |
+| `title`, `description`, `descriptionRich`, `category`, `tags`, `fileIds`, `seoTitle`, `seoDescription`, `pickupLocation` | `price`, `compareAtPrice`, `bargain`, `stock`, `isInfiniteStock`, `lowStockThreshold`, `allowOversell`, `sku`, `weight`, `length`, `width`, `height` |
 
 > [!NOTE]
 > `descriptionRich` is three-valued on this endpoint: **absent** leaves the stored

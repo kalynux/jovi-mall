@@ -4,8 +4,10 @@ import {
   PaymentTransactionModel,
   IPaymentTransaction,
   PaymentStatus,
-  PaymentGatewayType
+  PaymentGatewayType,
+  PaymentPurpose
 } from '../models/payment-transaction.model';
+import { planRefundLegs, primaryLegRemaining, RefundLeg } from '../domain/refund-legs';
 import { ZodError } from 'zod';
 import { CollectField, PaymentChannelInfo } from '../gateways/gateway.interface';
 import { getPaymentGateway } from '../gateways/registry';
@@ -55,7 +57,9 @@ type NewPaymentAttempt = {
   idempotencyKey: string;
   merchantRef: string;
   rawGatewayPayloads: unknown[];
-  purpose?: 'primary' | 'booking_balance';
+  purpose?: PaymentPurpose;
+  /** `order_delivery_topup` only — the shipment and proposal the top-up settles (ADR-A11). */
+  deliveryTopup?: { shipmentId: Types.ObjectId; proposalId: Types.ObjectId; appliedAt: null };
   /** The chat the checkout came from, if any — see `IPaymentTransaction.originChat`. */
   originChat?: { channel: 'whatsapp' | 'telegram' };
   /** Who is paying, as entered at initiate — see `payerOf` and `IPaymentTransaction.payer`. */
@@ -599,12 +603,20 @@ export class PaymentOrchestratorService {
   async refundPayment(params: {
     source: RefundSource;
     vendorId: string;
-    initiatedBy: string;   // the acting user's id
-    initiatedByRole?: 'vendor' | 'admin' | 'customer';
+    initiatedBy: string;   // the acting user's id (for `system`: the order id the refund is for)
+    initiatedByRole?: 'vendor' | 'admin' | 'customer' | 'system';
     amount: number;        // amount to refund (already resolved by caller)
     reason?: string;
+    /**
+     * ORDER refunds only (ADR-A11): which of the order's succeeded payments to return money from
+     * first, when it holds a checkout charge AND a delivery top-up. Default `primary_first`; the
+     * delivery-fee refund passes `topup_first`. See `domain/refund-legs.ts`.
+     */
+    prefer?: 'primary_first' | 'topup_first';
   }): Promise<{
     refundId: string;
+    /** Every `refund_transactions` row this call completed — one per payment leg. */
+    refundIds: string[];
     status: 'completed' | 'failed';
     amount: number;
     currency: string;
@@ -616,20 +628,20 @@ export class PaymentOrchestratorService {
     const isBooking = source.kind === 'booking';
     const sourceId = isBooking ? source.bookingId : source.orderId;
 
-    // 1. Resolve the successful payment for this source.
+    // 1. Resolve the successful payment(s) for this source — PURPOSE-AWARE (ADR-A11).
     //
     // `orderIds` as well as `orderId`: a CART checkout writes ONE payment for N orders
     // (`cartId` + `orderIds[]`, and never `orderId` — the model's pre-save hook enforces
     // exactly one source field). Matching on `orderId` alone therefore found nothing for
     // the entire cart-checkout population, so every such order — the overwhelming majority
     // — answered `REFUND_PAYMENT_NOT_FOUND` on the vendor's own refund endpoint.
-    const paymentTx = await PaymentTransactionModel.findOne({
-      ...(isBooking
-        ? { bookingId: new Types.ObjectId(sourceId) }
-        : { $or: [{ orderId: new Types.ObjectId(sourceId) }, { orderIds: new Types.ObjectId(sourceId) }] }),
-      status: 'SUCCEEDED'
-    });
-    if (!paymentTx) {
+    //
+    // ⚠ And an ORDER can now hold money in TWO succeeded transactions: its checkout charge and
+    // a delivery top-up (`purpose: 'order_delivery_topup'`). A `findOne` picked either one
+    // arbitrarily, so a refund above that one's balance was refused although the order held the
+    // money. Every succeeded leg is resolved, each with what it can still return for THIS source.
+    const legs = await this.resolveRefundLegs(source);
+    if (legs.length === 0) {
       throw createAppError(ERROR_CODES.REFUND_PAYMENT_NOT_FOUND, 404);
     }
 
@@ -637,137 +649,179 @@ export class PaymentOrchestratorService {
     //
     // On a group payment the payment's own balance is the WHOLE CART's, so validating
     // against it alone would let one vendor's refund be paid out of another vendor's
-    // customer's money. `refundableCeilingFor` narrows it to this order's own share; on a
-    // single-source payment the two are identical, which is why nothing noticed.
-    const ceiling = await this.refundableCeilingFor(paymentTx, sourceId, isBooking);
-
-    if (paymentTx.amountSnapshot - paymentTx.totalRefunded <= 0 || ceiling.remaining <= 0) {
+    // customer's money. The legs are narrowed to this source's own share; on a single-source,
+    // single-payment order the arithmetic is exactly the old `amountSnapshot - totalRefunded`.
+    const ceiling = await this.sourceCeiling(source, legs);
+    const remaining = Math.min(
+      ceiling.sourceTotal - ceiling.alreadyRefunded,
+      legs.reduce((s, l) => s + l.remaining, 0)
+    );
+    if (remaining <= 0) {
       throw createAppError(ERROR_CODES.REFUND_ALREADY_FULLY_REFUNDED, 409);
     }
-    if (amount <= 0 || amount > ceiling.remaining) {
+    const primaryLeg = legs.find((l) => l.purpose === 'primary') ?? legs[0];
+    if (amount <= 0 || amount > remaining) {
       throw createAppError(ERROR_CODES.REFUND_AMOUNT_EXCEEDS_MAX, 400, undefined, {
         requested: amount,
-        remaining: ceiling.remaining,
-        ...(ceiling.isGrouped ? { scope: 'order', groupPaymentId: paymentTx._id.toString() } : {})
+        remaining,
+        ...(ceiling.isGrouped ? { scope: 'order', groupPaymentId: primaryLeg.tx._id.toString() } : {})
       });
     }
-
-    // 3. Resolve the gateway adapter. Not all providers have a refund API, and
-    //    the ABSENCE of the method is how that is expressed — see the header of
-    //    `MyCoolPayGateway`. This guard was previously dead: both mobile
-    //    gateways defined a `refundPayment` that always failed, so the code
-    //    actually raised was `REFUND_GATEWAY_FAILED` while the api-doc and
-    //    `AdminRefundService` both promised `REFUND_GATEWAY_NOT_SUPPORTED`.
-    const gatewayInstance = getPaymentGateway(paymentTx.gateway);
-    if (typeof gatewayInstance.refundPayment !== 'function') {
-      throw createAppError(ERROR_CODES.REFUND_GATEWAY_NOT_SUPPORTED, 400, undefined, {
-        gateway: paymentTx.gateway
-      });
-    }
-
-    // 4. Create the refund record in 'pending' state (audit trail before gateway call).
-    const refund = await RefundTransactionModel.create({
-      paymentTransactionId: paymentTx._id,
-      ...(isBooking
-        ? { bookingId: new Types.ObjectId(sourceId) }
-        : { orderId: new Types.ObjectId(sourceId) }),
-      vendorId: new Types.ObjectId(vendorId),
-      userId: paymentTx.userId,
-      refundAmount: amount,
-      currency: paymentTx.currencySnapshot,
-      reason,
-      status: 'pending',
-      gateway: paymentTx.gateway,
-      initiatedBy: new Types.ObjectId(initiatedBy),
-      initiatedByRole
-    });
-
-    // 5. Call the gateway (external; kept outside the DB transaction).
-    const gatewayResult = await gatewayInstance.refundPayment({
-      gatewayRef: paymentTx.gatewayRef,
+    const plan = planRefundLegs(
+      legs.map((l) => ({ id: l.tx._id.toString(), purpose: l.purpose, remaining: l.remaining })),
       amount,
-      // The currency the original charge was recorded in. It used to travel
-      // inside `metadata` and Stripe read it as `metadata.currency ?? 'xaf'`,
-      // which is a default in the one operation where a wrong currency means a
-      // wrong refund amount.
-      currency: paymentTx.currencySnapshot,
-      reason,
-      metadata: {
-        [isBooking ? 'bookingId' : 'orderId']: sourceId,
-        vendorId,
-        refundId: refund._id.toString()
-      }
-    });
+      params.prefer ?? 'primary_first'
+    );
+    if (!plan) {
+      throw createAppError(ERROR_CODES.REFUND_AMOUNT_EXCEEDS_MAX, 400, undefined, { requested: amount, remaining });
+    }
 
-    if (!gatewayResult.success) {
-      refund.status = 'failed';
-      await refund.save();
-
-      // A provider that WON'T refund is a different answer from one that
-      // COULDN'T. `REFUND_GATEWAY_NOT_SUPPORTED` is categorised `business_rule`
-      // and is documented as an expected outcome, so `BookingRefundService`
-      // routes it to the manual-payout ticket instead of treating it as an
-      // outage — which is where this money genuinely has to go.
-      if (gatewayResult.unsupported) {
+    // 3. Resolve every leg's gateway adapter BEFORE any money moves. Not all providers have a
+    //    refund API, and the ABSENCE of the method is how that is expressed — see the header of
+    //    `MyCoolPayGateway`. This guard was previously dead: both mobile gateways defined a
+    //    `refundPayment` that always failed, so the code actually raised was
+    //    `REFUND_GATEWAY_FAILED` while the api-doc and `AdminRefundService` both promised
+    //    `REFUND_GATEWAY_NOT_SUPPORTED`.
+    for (const step of plan) {
+      const paymentTx = legs.find((l) => l.tx._id.toString() === step.id)!.tx;
+      const gatewayInstance = getPaymentGateway(paymentTx.gateway);
+      if (typeof gatewayInstance.refundPayment !== 'function') {
         throw createAppError(ERROR_CODES.REFUND_GATEWAY_NOT_SUPPORTED, 400, undefined, {
-          gateway: paymentTx.gateway,
-          reason: gatewayResult.error
+          gateway: paymentTx.gateway
+        });
+      }
+    }
+
+    // 4–6. One gateway refund per leg. Each leg is finalized on its own (refund record +
+    // payment totals) the moment the gateway says yes, so a later leg failing never un-records
+    // money that genuinely moved — the ledger stays the truth, and the next call's ceiling
+    // already counts it.
+    const refundIds: string[] = [];
+    let refundedSoFar = 0;
+    let lastTotalRefunded = 0;
+    const currency = primaryLeg.tx.currencySnapshot;
+    for (const step of plan) {
+      const paymentTx = legs.find((l) => l.tx._id.toString() === step.id)!.tx;
+      const gatewayInstance = getPaymentGateway(paymentTx.gateway);
+      const legAmount = step.amount;
+
+      // 4. Create the refund record in 'pending' state (audit trail before gateway call).
+      const refund = await RefundTransactionModel.create({
+        paymentTransactionId: paymentTx._id,
+        ...(isBooking
+          ? { bookingId: new Types.ObjectId(sourceId) }
+          : { orderId: new Types.ObjectId(sourceId) }),
+        vendorId: new Types.ObjectId(vendorId),
+        userId: paymentTx.userId,
+        refundAmount: legAmount,
+        currency: paymentTx.currencySnapshot,
+        reason,
+        status: 'pending',
+        gateway: paymentTx.gateway,
+        initiatedBy: new Types.ObjectId(initiatedBy),
+        initiatedByRole
+      });
+
+      // 5. Call the gateway (external; kept outside the DB transaction).
+      const gatewayResult = await gatewayInstance.refundPayment!({
+        gatewayRef: paymentTx.gatewayRef,
+        amount: legAmount,
+        // The currency the original charge was recorded in. It used to travel
+        // inside `metadata` and Stripe read it as `metadata.currency ?? 'xaf'`,
+        // which is a default in the one operation where a wrong currency means a
+        // wrong refund amount.
+        currency: paymentTx.currencySnapshot,
+        reason,
+        metadata: {
+          [isBooking ? 'bookingId' : 'orderId']: sourceId,
+          vendorId,
+          refundId: refund._id.toString()
+        }
+      });
+
+      if (!gatewayResult.success) {
+        refund.status = 'failed';
+        await refund.save();
+
+        // A provider that WON'T refund is a different answer from one that
+        // COULDN'T. `REFUND_GATEWAY_NOT_SUPPORTED` is categorised `business_rule`
+        // and is documented as an expected outcome, so `BookingRefundService`
+        // routes it to the manual-payout ticket instead of treating it as an
+        // outage — which is where this money genuinely has to go.
+        //
+        // `refundedSoFar` is non-zero only when an EARLIER leg of this same call already
+        // returned money; it is recorded and counted, and the caller's remainder is what is
+        // still owed.
+        if (gatewayResult.unsupported) {
+          throw createAppError(ERROR_CODES.REFUND_GATEWAY_NOT_SUPPORTED, 400, undefined, {
+            gateway: paymentTx.gateway,
+            reason: gatewayResult.error,
+            ...(refundedSoFar > 0 ? { refundedSoFar } : {})
+          });
+        }
+
+        throw createAppError(ERROR_CODES.REFUND_GATEWAY_FAILED, 502, undefined, {
+          error: gatewayResult.error,
+          ...(refundedSoFar > 0 ? { refundedSoFar } : {})
         });
       }
 
-      throw createAppError(ERROR_CODES.REFUND_GATEWAY_FAILED, 502, undefined, {
-        error: gatewayResult.error
+      // 6. Finalize this leg atomically: refund record + payment totals, and — on the leg that
+      //    squares the source — the source's own status.
+      //
+      // TWO booleans, because a group payment makes them different questions:
+      //
+      //   sourceFullyRefunded  — is THIS order/booking square? Drives the source's own
+      //                          payment_status and the escrow reversal.
+      //   paymentFullyRefunded — is the whole PAYMENT exhausted? Drives the gateway
+      //                          transaction's status.
+      //
+      // On a single-source payment they are always equal. On a two-vendor cart, refunding
+      // one order fully must unwind that order and its earnings while leaving the payment
+      // `SUCCEEDED` with a balance for the other. Using one boolean for both meant a
+      // refunded order kept `payment_status: 'paid'` and its vendor kept the money.
+      const newTotalRefunded = paymentTx.totalRefunded + legAmount;
+      const paymentFullyRefunded = newTotalRefunded >= paymentTx.amountSnapshot;
+      refundedSoFar += legAmount;
+      const sourceFullyRefundedNow = ceiling.alreadyRefunded + refundedSoFar >= ceiling.sourceTotal;
+
+      await transactionManager.runInTransaction(async (session) => {
+        refund.status = 'completed';
+        refund.completedAt = new Date();
+        refund.gatewayRefundRef = gatewayResult.refundRef;
+        await refund.save({ session });
+
+        paymentTx.totalRefunded = newTotalRefunded;
+        paymentTx.hasPartialRefund = !paymentFullyRefunded && newTotalRefunded > 0;
+        if (paymentFullyRefunded) {
+          paymentTx.status = 'REFUNDED';
+        }
+        await paymentTx.save({ session });
+
+        // The source's payment status only flips to 'refunded' on a FULL refund —
+        // a partial refund leaves it paid, with the balance tracked on the payment.
+        if (sourceFullyRefundedNow) {
+          if (isBooking) {
+            await Booking.updateOne(
+              { _id: new Types.ObjectId(sourceId) },
+              { $set: { paymentStatus: 'refunded' } },
+              { session }
+            );
+          } else {
+            await OrderModel.updateOne(
+              { _id: new Types.ObjectId(sourceId) },
+              { $set: { payment_status: 'refunded', updated_at: new Date() } },
+              { session }
+            );
+          }
+        }
       });
+
+      refundIds.push(refund._id.toString());
+      lastTotalRefunded = newTotalRefunded;
     }
 
-    // 6. Finalize atomically: refund record + payment totals + order status.
-    //
-    // TWO booleans, because a group payment makes them different questions:
-    //
-    //   sourceFullyRefunded  — is THIS order/booking square? Drives the source's own
-    //                          payment_status and the escrow reversal.
-    //   paymentFullyRefunded — is the whole PAYMENT exhausted? Drives the gateway
-    //                          transaction's status.
-    //
-    // On a single-source payment they are always equal. On a two-vendor cart, refunding
-    // one order fully must unwind that order and its earnings while leaving the payment
-    // `SUCCEEDED` with a balance for the other. Using one boolean for both meant a
-    // refunded order kept `payment_status: 'paid'` and its vendor kept the money.
-    const newTotalRefunded = paymentTx.totalRefunded + amount;
-    const paymentFullyRefunded = newTotalRefunded >= paymentTx.amountSnapshot;
     const sourceFullyRefunded = ceiling.alreadyRefunded + amount >= ceiling.sourceTotal;
-
-    await transactionManager.runInTransaction(async (session) => {
-      refund.status = 'completed';
-      refund.completedAt = new Date();
-      refund.gatewayRefundRef = gatewayResult.refundRef;
-      await refund.save({ session });
-
-      paymentTx.totalRefunded = newTotalRefunded;
-      paymentTx.hasPartialRefund = !paymentFullyRefunded && newTotalRefunded > 0;
-      if (paymentFullyRefunded) {
-        paymentTx.status = 'REFUNDED';
-      }
-      await paymentTx.save({ session });
-
-      // The source's payment status only flips to 'refunded' on a FULL refund —
-      // a partial refund leaves it paid, with the balance tracked on the payment.
-      if (sourceFullyRefunded) {
-        if (isBooking) {
-          await Booking.updateOne(
-            { _id: new Types.ObjectId(sourceId) },
-            { $set: { paymentStatus: 'refunded' } },
-            { session }
-          );
-        } else {
-          await OrderModel.updateOne(
-            { _id: new Types.ObjectId(sourceId) },
-            { $set: { payment_status: 'refunded', updated_at: new Date() } },
-            { session }
-          );
-        }
-      }
-    });
 
     // On a full refund of THIS source, reverse its still-held earnings out of escrow.
     // Best-effort: a failure must not fail the (already-completed) refund.
@@ -783,7 +837,7 @@ export class PaymentOrchestratorService {
       }
     }
 
-    // 7. Emit a domain event (fire-and-forget).
+    // 7. Emit a domain event (fire-and-forget) — ONE per call, for the whole amount.
     eventBus.publish('payment.refunded', {
       eventType: 'payment.refunded',
       aggregateId: sourceId,
@@ -791,9 +845,9 @@ export class PaymentOrchestratorService {
         ...(isBooking ? { bookingId: sourceId } : { orderId: sourceId }),
         sourceKind: source.kind,
         vendorId,
-        refundId: refund._id.toString(),
+        refundId: refundIds[refundIds.length - 1],
         amount,
-        currency: paymentTx.currencySnapshot,
+        currency,
         // The SOURCE's verdict — subscribers act on the order/booking, not on the cart.
         fullyRefunded: sourceFullyRefunded
       },
@@ -801,12 +855,101 @@ export class PaymentOrchestratorService {
     }).catch(() => { /* non-blocking */ });
 
     return {
-      refundId: refund._id.toString(),
+      refundId: refundIds[refundIds.length - 1],
+      refundIds,
       status: 'completed',
       amount,
-      currency: paymentTx.currencySnapshot,
-      totalRefunded: newTotalRefunded,
+      currency,
+      totalRefunded: lastTotalRefunded,
       fullyRefunded: sourceFullyRefunded
+    };
+  }
+
+  /**
+   * Every succeeded payment that holds money for this source, with what each can still return
+   * FOR THIS SOURCE (ADR-A11).
+   *
+   *  - booking: the single succeeded payment, unchanged (a booking balance is not refunded here).
+   *  - order:   the checkout charge (`primary` — its own or its group's) plus every succeeded
+   *             `order_delivery_topup`. A group charge's share for this order is the order's
+   *             total minus the top-ups it was later paid, less what this charge already
+   *             returned for this order.
+   */
+  private async resolveRefundLegs(
+    source: RefundSource
+  ): Promise<Array<{ tx: IPaymentTransaction; purpose: 'primary' | 'order_delivery_topup'; remaining: number }>> {
+    if (source.kind === 'booking') {
+      const tx = await PaymentTransactionModel.findOne({
+        bookingId: new Types.ObjectId(source.bookingId),
+        status: 'SUCCEEDED'
+      });
+      if (!tx) return [];
+      const c = await this.refundableCeilingFor(tx, source.bookingId, true);
+      return [{ tx, purpose: 'primary', remaining: c.remaining }];
+    }
+
+    const orderObjectId = new Types.ObjectId(source.orderId);
+    const txs = await PaymentTransactionModel.find({
+      $or: [{ orderId: orderObjectId }, { orderIds: orderObjectId }],
+      purpose: { $in: ['primary', 'order_delivery_topup', null] },
+      status: { $in: ['SUCCEEDED', 'REFUNDED'] }
+    });
+    const topups = txs.filter((t) => t.purpose === 'order_delivery_topup');
+    const primary = txs.find((t) => t.purpose !== 'order_delivery_topup' && t.status === 'SUCCEEDED') ?? null;
+    if (!primary && !topups.some((t) => t.status === 'SUCCEEDED')) return [];
+
+    const order = await OrderModel.findById(source.orderId).select('total_amount').lean().exec();
+    if (!order) {
+      throw createAppError(ERROR_CODES.REFUND_ORDER_NOT_FOUND, 404, undefined, { orderId: source.orderId });
+    }
+    const topupsPaid = topups.reduce((s, t) => s + t.amountSnapshot, 0);
+
+    const legs: Array<{ tx: IPaymentTransaction; purpose: 'primary' | 'order_delivery_topup'; remaining: number }> = [];
+    if (primary) {
+      const [onLeg] = await RefundTransactionModel.aggregate<{ total: number }>([
+        { $match: { orderId: orderObjectId, paymentTransactionId: primary._id, status: 'completed' } },
+        { $group: { _id: null, total: { $sum: '$refundAmount' } } }
+      ]);
+      legs.push({
+        tx: primary,
+        purpose: 'primary',
+        remaining: primaryLegRemaining({
+          orderTotal: (order as { total_amount: number }).total_amount,
+          topupsPaid,
+          refundedFromThisLegForOrder: onLeg?.total ?? 0,
+          paymentRemaining: primary.amountSnapshot - primary.totalRefunded
+        })
+      });
+    }
+    for (const t of topups) {
+      if (t.status !== 'SUCCEEDED') continue;
+      legs.push({ tx: t, purpose: 'order_delivery_topup', remaining: Math.max(0, t.amountSnapshot - t.totalRefunded) });
+    }
+    return legs;
+  }
+
+  /** The source's total and what has already been refunded against it, for the two verdicts. */
+  private async sourceCeiling(
+    source: RefundSource,
+    legs: Array<{ tx: IPaymentTransaction }>
+  ): Promise<{ sourceTotal: number; alreadyRefunded: number; isGrouped: boolean }> {
+    if (source.kind === 'booking') {
+      const c = await this.refundableCeilingFor(legs[0].tx, source.bookingId, true);
+      return { sourceTotal: c.sourceTotal, alreadyRefunded: c.alreadyRefunded, isGrouped: false };
+    }
+    const order = await OrderModel.findById(source.orderId).select('total_amount').lean().exec();
+    if (!order) {
+      throw createAppError(ERROR_CODES.REFUND_ORDER_NOT_FOUND, 404, undefined, { orderId: source.orderId });
+    }
+    const [tally] = await RefundTransactionModel.aggregate<{ total: number }>([
+      { $match: { orderId: new Types.ObjectId(source.orderId), status: 'completed' } },
+      { $group: { _id: null, total: { $sum: '$refundAmount' } } }
+    ]);
+    const isGrouped = legs.some((l) => !l.tx.orderId && (l.tx.orderIds?.length ?? 0) > 0);
+    return {
+      sourceTotal: (order as { total_amount: number }).total_amount,
+      alreadyRefunded: tally?.total ?? 0,
+      isGrouped
     };
   }
 
@@ -1283,6 +1426,183 @@ export class PaymentOrchestratorService {
   }
 
   /**
+   * Initiate the TOP-UP an approved delivery-fee increase needs (ADR-A11, owner decision D-8).
+   *
+   * A customer-paid shipment's fee went up after checkout, the customer approved it, and the
+   * difference must be paid before the parcel is picked up. It is a SECOND payment on an order
+   * that is already `paid` — exactly the booking-balance shape, and every guard inverts the same
+   * way: the order must be paid, the amount is the difference, not the total.
+   *
+   * The CALLER (`DeliveryFeeTopupService`) has already checked the proposal: that it is pending,
+   * customer-approved, and that `amount` is what the approval recorded. This method owns only the
+   * charge — idempotency, the live-attempt guard, the route, the gateway.
+   *
+   * The transaction carries `purpose: 'order_delivery_topup'` and `deliveryTopup`, which is what
+   * lets the success handler apply it instead of no-oping on an already-paid order.
+   */
+  async initiateOrderDeliveryTopup(
+    topup: { orderId: string; shipmentId: string; proposalId: string; amount: number },
+    selection: ChargeSelection,
+    channel: PaymentChannelInfo,
+    options: { originChat?: 'whatsapp' | 'telegram' | null } = {}
+  ): Promise<{
+    transactionId: string;
+    status: PaymentStatus;
+    provider?: PaymentProvider | null;
+    amount: number;
+    currency: string;
+    instructions?: any;
+    message: string;
+  }> {
+    // ⛔ FIRST — see the same line in `initiatePayment`.
+    const charge = this.prepareCharge(selection, channel);
+
+    const order = await this.orderRepo.findById(topup.orderId);
+    if (!order) {
+      throw createAppError(ERROR_CODES.PAYMENT_ORDER_NOT_FOUND, 404);
+    }
+    if (order.payment_method === 'cash_on_delivery') {
+      throw createAppError(ERROR_CODES.PAYMENT_ORDER_IS_COD, 422, 'This order is cash on delivery — the delivery difference is paid in cash');
+    }
+    // The top-up is a SECOND payment: the first must have settled.
+    if (order.payment_status !== 'paid') {
+      throw createAppError(ERROR_CODES.PAYMENT_INVALID_ORDER_STATUS, 400, undefined, { status: order.payment_status });
+    }
+    if (!Number.isInteger(topup.amount) || topup.amount <= 0) {
+      throw createAppError(ERROR_CODES.DELIVERY_FEE_TOPUP_NOT_DUE, 409);
+    }
+
+    const userId = order.customer_id.toString();
+    const currency = order.currency;
+
+    // Scoped by purpose AND proposal so it can never collide with the order's own payment, whose
+    // key is hash(orderId, userId, total), nor with a second top-up on another proposal.
+    const idempotencyKey = this.generateIdempotencyKey(
+      `${topup.orderId}:delivery_topup:${topup.proposalId}`,
+      userId,
+      topup.amount
+    );
+
+    const respondWithExisting = (tx: IPaymentTransaction) => ({
+      transactionId: tx._id.toString(),
+      status: tx.status,
+      amount: tx.amountSnapshot,
+      currency,
+      provider: tx.provider ?? null,
+      instructions: this.lastInstructions(tx),
+      message: tx.status === 'SUCCEEDED'
+        ? 'Delivery top-up already paid'
+        : 'Delivery top-up already initiated. Complete the pending payment.'
+    });
+
+    const existingTx = await PaymentTransactionModel.findOne({ idempotencyKey });
+    if (existingTx) {
+      if (existingTx.status === 'SUCCEEDED') {
+        return {
+          transactionId: existingTx._id.toString(),
+          status: existingTx.status,
+          provider: existingTx.provider ?? null,
+          amount: existingTx.amountSnapshot,
+          currency,
+          message: 'Delivery top-up already paid'
+        };
+      }
+      if (existingTx.status === 'INITIATED' || existingTx.status === 'PENDING') {
+        return respondWithExisting(existingTx);
+      }
+    }
+
+    // A second LIVE charge over the same top-up — scoped by purpose and proposal, so the order's
+    // settled checkout charge never answers for it.
+    const liveElsewhere = await this.findLiveAttempt({
+      orderId: new Types.ObjectId(topup.orderId),
+      purpose: 'order_delivery_topup',
+      'deliveryTopup.proposalId': new Types.ObjectId(topup.proposalId)
+    });
+    if (liveElsewhere) return respondWithExisting(liveElsewhere);
+
+    // ROUTE — see the same step in `initiatePayment`. Throws before any write.
+    const gateway = charge.route();
+
+    if (existingTx) {
+      const settledAttempt = await this.releaseDeadAttempt(existingTx);
+      if (settledAttempt) return respondWithExisting(settledAttempt);
+    }
+
+    const gatewayInstance = getPaymentGateway(gateway);
+
+    const attempt = await this.openAttempt({
+      orderId: new Types.ObjectId(topup.orderId),
+      purpose: 'order_delivery_topup',
+      deliveryTopup: {
+        shipmentId: new Types.ObjectId(topup.shipmentId),
+        proposalId: new Types.ObjectId(topup.proposalId),
+        appliedAt: null
+      },
+      userId: new Types.ObjectId(userId),
+      gateway,
+      provider: charge.provider,
+      method: methodFor(charge.provider, gateway),
+      status: 'INITIATED',
+      gatewayRef: '',
+      amountSnapshot: topup.amount,
+      currencySnapshot: currency,
+      idempotencyKey,
+      merchantRef: mintMerchantRef('pt'),
+      payer: payerOf(channel),
+      rawGatewayPayloads: [],
+      ...(options.originChat ? { originChat: { channel: options.originChat } } : {})
+    }, idempotencyKey);
+    if ('raced' in attempt) return respondWithExisting(attempt.raced);
+    const transaction = attempt.opened;
+
+    try {
+      const gatewayResult = await gatewayInstance.initiatePayment({
+        orderId: topup.orderId,
+        userId,
+        amount: topup.amount,
+        currency,
+        channel: charge.channel,
+        merchantRef: transaction.merchantRef!,
+        metadata: { idempotencyKey, orderId: topup.orderId, purpose: 'order_delivery_topup', merchantRef: transaction.merchantRef }
+      });
+
+      transaction.gatewayRef = gatewayResult.gatewayRef;
+      transaction.status = gatewayResult.status as PaymentStatus;
+      transaction.rawGatewayPayloads.push({
+        timestamp: new Date(),
+        type: 'initiate',
+        ...gatewayResult.rawResponse,
+        instructions: gatewayResult.instructions ?? null
+      });
+      transaction.gatewayPayloadHash = this.hashPayload(gatewayResult.rawResponse);
+      await transaction.save();
+
+      // NOTE: `order.payment_status` is deliberately NOT touched — it describes the checkout
+      // charge, which is settled. The top-up's state lives on its own transaction and on the
+      // proposal.
+
+      return {
+        transactionId: transaction._id.toString(),
+        status: transaction.status,
+        provider: charge.provider,
+        amount: topup.amount,
+        currency,
+        instructions: gatewayResult.instructions,
+        message: gatewayResult.success
+          ? 'Delivery top-up initiated successfully'
+          : gatewayResult.error || 'Delivery top-up initiation failed'
+      };
+    } catch (error: any) {
+      await this.recordFailedAttempt(transaction, error);
+
+      throw createAppError(ERROR_CODES.PAYMENT_INITIATION_FAILED, 502, undefined, {
+        cause: error.message
+      });
+    }
+  }
+
+  /**
    * Verify payment status
    *
    * IDEMPOTENT: Can be called multiple times
@@ -1597,6 +1917,17 @@ export class PaymentOrchestratorService {
    */
   private async handlePaymentSuccess(transaction: IPaymentTransaction): Promise<void> {
     try {
+      // ⛔ A DELIVERY TOP-UP (ADR-A11) branches FIRST. It carries `orderId` like a single-order
+      // payment, and `OrderService.handlePaymentSuccess` returns early on an already-paid order —
+      // which a top-up's order always is — so routing it there would swallow the money silently.
+      // The booking-balance lesson, one product type over. Lazy import: the settling service
+      // reaches shipments, COD and earnings, and none of that belongs in this module's load graph.
+      if (transaction.purpose === 'order_delivery_topup') {
+        const { deliveryFeeTopupService } = await import('../../delivery-fee-proposals/services/delivery-fee-topup.service');
+        await deliveryFeeTopupService.onTopupSucceeded(transaction);
+        return;
+      }
+
       // Route based on transaction type
       if (transaction.cartId && transaction.orderIds && transaction.orderIds.length > 0) {
         // CHECKOUT GROUP: one payment settles every order in the group. Each
@@ -1692,6 +2023,16 @@ export class PaymentOrchestratorService {
    */
   private async handlePaymentFailure(transaction: IPaymentTransaction): Promise<void> {
     try {
+      // ⚠ A failed DELIVERY TOP-UP (ADR-A11) is not an order payment failure. `payment.failed`
+      // would tell the customer the ORDER's total did not go through and "your items are still
+      // waiting — try again", about an order that was paid days ago. Its own situation says what
+      // is actually true: the delivery difference was not paid and the parcel waits for it.
+      if (transaction.purpose === 'order_delivery_topup') {
+        const { deliveryFeeTopupService } = await import('../../delivery-fee-proposals/services/delivery-fee-topup.service');
+        await deliveryFeeTopupService.onTopupFailed(transaction);
+        return;
+      }
+
       const orderIds =
         transaction.orderIds && transaction.orderIds.length > 0
           ? transaction.orderIds

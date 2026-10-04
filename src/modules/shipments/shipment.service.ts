@@ -383,7 +383,8 @@ export class ShipmentService {
             ? await this.earningsQuotes.quoteAgencyForShipments(
                   page.data,
                   orderMap as any,
-                  new Map([...codMap].map(([shipmentId, cod]) => [shipmentId, cod.expectedAmount]))
+                  // The GOODS, not the whole cash: the COD fee is on the product price only (ADR-A11 D-5).
+                  new Map([...codMap].map(([shipmentId, cod]) => [shipmentId, cod.itemsAmount]))
               )
             : new Map<string, AgencyEarningQuoteResult>();
 
@@ -1017,7 +1018,7 @@ export class ShipmentService {
             ? await this.earningsQuotes.quoteForShipment(shipment, order as any, viewer.agentId)
             : null;
         const agencyEarning = viewer.role === 'agency'
-            ? await this.earningsQuotes.quoteAgencyForShipment(shipment, order as any, cod?.expectedAmount ?? 0)
+            ? await this.earningsQuotes.quoteAgencyForShipment(shipment, order as any, cod?.itemsAmount ?? 0)
             : null;
 
         return {

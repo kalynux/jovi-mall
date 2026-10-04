@@ -40,6 +40,14 @@ import { AGENT_FEE_WITHDRAWN_REASON, AGENT_OFFER_BATCH_FORCED_LINE, AGENT_OFFER_
 import { agentContractRepository } from '../../agents';
 import { OrderModel } from '../../orders/order.model';
 import { EARNINGS_CONFIG } from '../../earnings/config/earnings.config';
+import {
+    closureReasonParam,
+    closureDeadlineParam,
+    closingPartyName,
+    occurredAtIso,
+    RoleClosureRequestedPayload,
+    RoleClosureRelationshipsEndedPayload
+} from './role-closure-context';
 
 /**
  * `delivery_fee_proposal.edited` payload readers (2026-10-02). The producer was built in a
@@ -1063,6 +1071,79 @@ export class AgentNotificationEventHandler {
             return (order as any)?.order_number ?? null;
         } catch {
             return null;
+        }
+    }
+
+    // ─── Role closure (ADR-A10) ───────────────────────────────────────────────
+
+    /**
+     * `role_closure.requested` with `role: 'agent'` → ask the agent to confirm closing their
+     * agent account. **Deliberately NOT gated by any preference** — a closure request that a
+     * setting could silence would expire unseen.
+     */
+    async handleRoleClosureRequested(event: DomainEvent): Promise<void> {
+        try {
+            const p = event.payload as RoleClosureRequestedPayload;
+            if (p?.role !== 'agent' || !p.roleEntityId || !p.requestId) return;
+
+            const prefs = await this.preferenceRepo.getByAgent(p.roleEntityId);
+            const agent = await this.agentRepo.findById(p.roleEntityId);
+            const lang = resolveLanguage(agent);
+
+            await this.dispatch({
+                situation: 'account.closure_requested',
+                prefs,
+                agentId: p.roleEntityId,
+                aggregateType: 'account',
+                aggregateId: p.requestId,
+                idempotencyKey: `account.closure_requested:${p.requestId}:${occurredAtIso(event.occurredAt)}`,
+                context: {
+                    requestId: p.requestId,
+                    reason: closureReasonParam(p.reason, lang),
+                    expiresAt: closureDeadlineParam(p.expiresAt, agent?.timezone, lang)
+                }
+            });
+        } catch (error) {
+            console.error('[AgentNotificationHandler] Failed to handle role_closure.requested:', error);
+        }
+    }
+
+    /**
+     * `role_closure.relationships_ended` with `closingRole: 'agency'` → one notice per ended
+     * contract, to the agent. Gated by `contractUpdated`, like every `agent_contract.*`.
+     */
+    async handleRoleClosureRelationshipsEnded(event: DomainEvent): Promise<void> {
+        try {
+            const p = event.payload as RoleClosureRelationshipsEndedPayload;
+            if (p?.closingRole !== 'agency') return;
+            const at = occurredAtIso(event.occurredAt);
+
+            for (const c of p.contracts ?? []) {
+                try {
+                    if (!c?.agentId || !c.contractId) continue;
+                    const prefs = await this.preferenceRepo.getByAgent(c.agentId);
+                    if (!prefs.preferences.contractUpdated) continue;
+                    const lang = await this.resolveAgentLanguage(c.agentId);
+
+                    await this.dispatch({
+                        situation: 'agent_contract.ended_by_closure',
+                        prefs,
+                        agentId: c.agentId,
+                        aggregateType: 'contract',
+                        aggregateId: c.contractId,
+                        idempotencyKey: `agent_contract.ended_by_closure:${c.contractId}:${at}`,
+                        context: {
+                            agencyName: closingPartyName(p.closingName, 'agency', lang),
+                            contractId: c.contractId
+                        }
+                    });
+                } catch (error) {
+                    // One recipient's failure must not cost the others their notice.
+                    console.error('[AgentNotificationHandler] Failed to notify agent_contract.ended_by_closure:', error);
+                }
+            }
+        } catch (error) {
+            console.error('[AgentNotificationHandler] Failed to handle role_closure.relationships_ended:', error);
         }
     }
 

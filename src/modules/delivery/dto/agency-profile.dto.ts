@@ -176,6 +176,26 @@ function sanitizePayoutMethod(payout: IPayoutMethod, isPreferred: boolean): Agen
     };
 }
 
+/**
+ * The policies as the agency reads them back, with the two ADR-A11 pricing fields always
+ * present (`max_fee_per_shipment: null`, `accepts_cash_delivery_fee: false`) on rows written
+ * before they existed — so an absent key never has to be told apart from "no ceiling".
+ */
+function withPricingDefaults(policies: IAgencyPolicies | null | undefined): IAgencyPolicies | null {
+    if (!policies) return null;
+    const plain: IAgencyPolicies =
+        typeof (policies as any).toObject === 'function' ? (policies as any).toObject() : policies;
+    if (!plain.pricing) return plain;
+    return {
+        ...plain,
+        pricing: {
+            ...plain.pricing,
+            max_fee_per_shipment: plain.pricing.max_fee_per_shipment ?? null,
+            accepts_cash_delivery_fee: plain.pricing.accepts_cash_delivery_fee ?? false,
+        },
+    };
+}
+
 function sanitizePayoutList(payouts: IPayoutMethod[] | null | undefined): AgencyPayoutMethodSanitized[] {
     // Guard: legacy documents written before the schema change may still have null here
     if (!payouts) return [];
@@ -233,7 +253,7 @@ export class AgencyProfileMapper {
             country: agency.country ?? null,
             payoutDetails: sanitizePayoutList(agency.payout_details),
             kycVerified: agency.kyc_details?.legit_verified ?? false,
-            policies: agency.policies ?? null,
+            policies: withPricingDefaults(agency.policies),
             timezone: agency.timezone,
             preferredLanguage: agency.preferred_language,
             status: agency.status,

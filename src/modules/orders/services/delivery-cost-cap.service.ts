@@ -1,15 +1,12 @@
 /**
  * The delivery-cost cap, applied to a basket (ADR-A07).
  *
- * `delivery-cost-cap.ts` holds the arithmetic for ONE unit. This service decides what the
- * units ARE, loads what the arithmetic needs (each agency's pricing, the vendor's commission)
- * and refuses. It has three callers and they must stay on this one path:
- *
- *   - `OrderService.buildVendorOrder`  — authoritative, inside the checkout transaction, with
- *                                        the negotiated prices and floors (exact AI margin).
- *   - `CartQuoteService`               — the same verdict before checkout, so a client can say
- *                                        "add X from this shop" instead of failing at pay.
- *   - the chat checkout's pre-spend check — refuses while the checkout handle is still alive.
+ * ⚠ ADR-A11 (customer-paid delivery, 2026-10-03) moved the checkout and the cart quote onto
+ * `VendorOrderPricingService` → `priceVendorOrder`, which forms the units with the SAME pure
+ * function this service uses (`assessDeliveryCostUnits`) and runs the cap ONLY for a vendor-paid
+ * shop part — a failure there falls back to customer-paid instead of refusing (D-6). This
+ * service survives as the mix-priced, vendor-paid evaluation for any caller that has no
+ * weight/region facts; it no longer sits on the checkout path.
  *
  * ── The unit is the SPLIT's unit, not a free choice ──────────────────────────
  * The rule exists to keep `EarningsSplitService` from refusing money that has already moved,
@@ -22,6 +19,7 @@
  *            per collection. A small shipment inside a large COD order still fails.
  *
  * ── The fee is the split's fee ───────────────────────────────────────────────
+ * A group's `fee` when the caller priced it (THE formula, weight + region); else
  * `deliveryFeeForPickupMix` for an agency with a pricing policy, `EARNINGS_CONFIG.
  * DELIVERY_FLAT_FEE` for one without — the same fallback `computeShipmentDeliveryFee` charges.
  */
@@ -32,47 +30,35 @@ import { IAgencyPolicies } from '../../delivery/delivery-agency.model';
 import { EntitlementService, entitlementService } from '../../billing/services/entitlement.service';
 import { EARNINGS_CONFIG } from '../../earnings/config/earnings.config';
 import { deliveryFeeForPickupMix, PickupMix } from '../../earnings/services/earnings-quote.service';
-import { computeNegotiatedLineSplit } from '../../earnings/services/negotiation-margin.service';
 import {
-    DeliveryCostCapFailure,
-    evaluateDeliveryCostCap,
-    resolveMaxDeliveryPercent,
+    assessDeliveryCostUnits,
+    DeliveryCapLine,
+    DeliveryCapUnitVerdict,
 } from '../../earnings/services/delivery-cost-cap';
 import { OrderPaymentMethod } from '../order.model';
 
-/** One priced line. `floorPrice` on every line of a bargainable variant (the bargain fee is owed haggled or not). */
-export interface DeliveryCapLine {
-    unitPrice: number;
-    quantity: number;
-    floorPrice?: number | null;
-}
+export type { DeliveryCapLine, DeliveryCapUnitVerdict };
 
 /** The lines one agency will carry for this vendor — one shipment at checkout. */
 export interface DeliveryCapAgencyGroup {
     agencyId: string;
     mix: PickupMix;
     lines: DeliveryCapLine[];
+    /**
+     * The shipment's fee when the caller already priced it (weight, region — ADR-A11). Absent ⇒
+     * `deliveryFeeForPickupMix` (1 kg, in-region) or the flat fallback, as before.
+     */
+    fee?: number;
 }
 
 export interface DeliveryCapVendorInput {
     vendorId: string;
     /**
      * EVERY line of the vendor's order, including any that joined no agency group. The online
-     * unit's subtotal is the order's `total_amount`, which is what `splitOrder` reads as gross.
+     * unit's subtotal is the order's items subtotal, which is what `splitOrder` reads as gross.
      */
     lines: DeliveryCapLine[];
     groups: DeliveryCapAgencyGroup[];
-}
-
-/** One evaluated unit — safe to show a customer: no commission, no net, no fee breakdown. */
-export interface DeliveryCapUnitVerdict {
-    /** `null` on an online order, which spans every agency. */
-    agencyId: string | null;
-    subtotal: number;
-    met: boolean;
-    reason: DeliveryCostCapFailure | null;
-    minimumSubtotal: number | null;
-    shortfall: number;
 }
 
 export interface DeliveryCapVendorVerdict {
@@ -85,27 +71,21 @@ export interface DeliveryCapVendorVerdict {
     units: DeliveryCapUnitVerdict[];
 }
 
-const lineSubtotal = (lines: DeliveryCapLine[]) =>
-    lines.reduce((sum, l) => sum + l.unitPrice * l.quantity, 0);
-
-const lineAiMargin = (lines: DeliveryCapLine[]) =>
-    lines.reduce(
-        (sum, l) => sum + computeNegotiatedLineSplit({ unitPrice: l.unitPrice, floorPrice: l.floorPrice, quantity: l.quantity }).aiMargin,
-        0,
-    );
-
 export class DeliveryCostCapService {
     constructor(
         private readonly agencyRepository = new DeliveryAgencyRepository(),
         private readonly entitlements: EntitlementService = entitlementService,
     ) { }
 
-    /** Evaluate one vendor's part of a PHYSICAL basket. */
+    /**
+     * Evaluate one vendor's part of a PHYSICAL basket as VENDOR-paid (the ADR-A07 cap). The
+     * units and the arithmetic are `assessDeliveryCostUnits` — the same function checkout's
+     * pricing path (`priceVendorOrder`) calls.
+     */
     async assessVendor(
         input: DeliveryCapVendorInput,
         paymentMethod: OrderPaymentMethod,
     ): Promise<DeliveryCapVendorVerdict> {
-        const maxDeliveryPercent = resolveMaxDeliveryPercent();
         const { commissionPercent } = await this.entitlements.getEntitlements(input.vendorId);
 
         const agencyIds = [...new Set(input.groups.map((g) => g.agencyId))];
@@ -115,48 +95,25 @@ export class DeliveryCostCapService {
         );
 
         const feeFor = (group: DeliveryCapAgencyGroup): number => {
+            if (typeof group.fee === 'number') return group.fee;
             const policies = policiesById.get(group.agencyId) ?? null;
             return policies ? deliveryFeeForPickupMix(policies, group.mix) : EARNINGS_CONFIG.DELIVERY_FLAT_FEE;
         };
 
-        let units: DeliveryCapUnitVerdict[];
-        let scope: DeliveryCapVendorVerdict['scope'];
+        const verdict = assessDeliveryCostUnits({
+            lines: input.lines,
+            groups: input.groups.map((g) => ({
+                agencyId: g.agencyId,
+                fee: feeFor(g),
+                codHandling: policiesById.get(g.agencyId)?.pricing?.additional_fees?.cod_handling_fee ?? null,
+                lines: g.lines,
+            })),
+            commissionPercent,
+            paymentMethod,
+            customerPaysDelivery: false,
+        });
 
-        if (paymentMethod === 'cash_on_delivery') {
-            scope = 'shipment';
-            units = input.groups.map((group) => {
-                const policies = policiesById.get(group.agencyId) ?? null;
-                const verdict = evaluateDeliveryCostCap({
-                    subtotal: lineSubtotal(group.lines),
-                    aiMargin: lineAiMargin(group.lines),
-                    commissionPercent,
-                    deliveryFee: feeFor(group),
-                    codHandling: policies?.pricing?.additional_fees?.cod_handling_fee ?? null,
-                    maxDeliveryPercent,
-                });
-                return toUnit(group.agencyId, verdict);
-            });
-        } else {
-            scope = 'order';
-            const verdict = evaluateDeliveryCostCap({
-                subtotal: lineSubtotal(input.lines),
-                aiMargin: lineAiMargin(input.lines),
-                commissionPercent,
-                deliveryFee: input.groups.reduce((sum, g) => sum + feeFor(g), 0),
-                codHandling: null,
-                maxDeliveryPercent,
-            });
-            units = [toUnit(null, verdict)];
-        }
-
-        return {
-            vendorId: input.vendorId,
-            scope,
-            maxDeliveryPercent,
-            met: units.every((u) => u.met),
-            shortfall: units.reduce((sum, u) => sum + u.shortfall, 0),
-            units,
-        };
+        return { vendorId: input.vendorId, ...verdict };
     }
 
     /**
@@ -174,17 +131,6 @@ export class DeliveryCostCapService {
         if (verdict.met) return;
         throw belowMinimumError(verdict, currency, extraDetails);
     }
-}
-
-function toUnit(agencyId: string | null, v: ReturnType<typeof evaluateDeliveryCostCap>): DeliveryCapUnitVerdict {
-    return {
-        agencyId,
-        subtotal: v.subtotal,
-        met: v.met,
-        reason: v.failure,
-        minimumSubtotal: v.minimumSubtotal,
-        shortfall: v.shortfall,
-    };
 }
 
 /**

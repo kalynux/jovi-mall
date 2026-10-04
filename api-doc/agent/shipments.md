@@ -207,6 +207,8 @@ multi-agency timeline — and, for cash-on-delivery orders, the **cash to collec
     "paymentMethod": "cash_on_delivery",
     "cod": {
       "expectedAmount": 52000,
+      "itemsAmount": 50000,
+      "deliveryFeeAmount": 2000,
       "currency": "XAF",
       "status": "pending",
       "collectedAt": null
@@ -277,7 +279,7 @@ has no picture. Same selection and freshness rules as [`itemImages`](#itemimages
 | Money field | Description |
 |---|---|
 | `paymentMethod` | `"online"` or `"cash_on_delivery"` — whether you have to take money at the door. Also on every **list** row. |
-| `cod` | `null` for online orders. Otherwise `expectedAmount` (the exact cash to collect **for this shipment**), `status`, `collectedAt`. **Never** contains the customer's delivery code. `status` runs `pending` → `collected`/`cancelled`, and is **`null`** in the window before any agent has accepted — there is no collection record yet, so `expectedAmount` is a projection of the same Σ (item price × quantity) the record will snapshot. On your own shipment you have accepted, so you will not normally see `null`. |
+| `cod` | `null` for online orders. Otherwise `expectedAmount` (the exact cash to collect **for this shipment**), `itemsAmount` + `deliveryFeeAmount` (🆕 2026-10-04, ADR-A11 — the goods, and the delivery fee the customer pays you in cash when the shop's terms make the customer pay; `0` otherwise; `expectedAmount` is their sum), `status`, `collectedAt`. **Never** contains the customer's delivery code. `status` runs `pending` → `collected`/`cancelled`, and is **`null`** in the window before any agent has accepted — there is no collection record yet, so `expectedAmount` is a projection of the same Σ (item price × quantity) the record will snapshot. On your own shipment you have accepted, so you will not normally see `null`. |
 | `orderValue` | The value of the **whole order**. ⚠️ Not the same number as `cod.expectedAmount`: an order can split into several shipments across different agencies, and you only carry cash for yours. |
 | `earning` / `earningUnavailable` | Your estimated cut — see [the earning table above](#earning). |
 

@@ -205,6 +205,7 @@
    *         cartId:      string,
    *         dateText:    string,        // FORMATTED and localised server-side
    *         totalText:   string,        // FORMATTED server-side — no money maths here
+   *         deliveryText: string | null,// "Incl. 1 500 XAF delivery" (ADR-A11); null = none paid
    *         paymentText: string,        // already a word in the customer's language
    *         summaryText: string | null, // "Blue sneakers · Leather belt +2"
    *         orders: [{
@@ -245,6 +246,10 @@
         + '<div class="group__total">' + esc(group.totalText) + "</div>"
         + "</div>";
 
+      /* ADR-A11 — what part of the total was delivery, worded and formatted by the server. */
+      if (group.deliveryText) {
+        html += '<div class="group__summary">' + esc(group.deliveryText) + "</div>";
+      }
       if (group.summaryText) {
         html += '<div class="group__summary">' + esc(group.summaryText) + "</div>";
       }

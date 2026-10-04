@@ -631,6 +631,7 @@ async function main(): Promise<void> {
             rating: null,
             store: { slug: 'techhub', name: 'TechHub', isOpen: true },
             freeDelivery: false,
+            deliveryTerms: { mode: 'never', freeAboveAmount: null },
             updatedAt: '2026-09-20T12:00:00.000Z',
             ...over,
         }) as never;

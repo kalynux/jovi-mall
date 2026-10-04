@@ -145,6 +145,16 @@ export const EARNINGS_CONFIG = {
    * that costs more than the whole sale, and the `vendorNet > 0` check still applies.
    */
   MAX_DELIVERY_COST_PERCENT: Math.max(1, Math.min(100, intEnv('ORDER_MAX_DELIVERY_COST_PERCENT', 30))),
+
+  /**
+   * What ONE unit of an item weighs, in grams, for the delivery-fee formula when neither its
+   * variant nor its product shipping config carries a weight > 0 (ADR-A11 D-4 — item count
+   * is the fallback for weight). 1000 = every weightless unit counts as 1 kg.
+   *
+   * Read by `resolveItemWeightGrams` in `earnings/domain/delivery-pricing.ts`; nothing else
+   * should consult it.
+   */
+  DELIVERY_DEFAULT_ITEM_WEIGHT_GRAMS: intEnv('DELIVERY_DEFAULT_ITEM_WEIGHT_GRAMS', 1000),
 } as const;
 
 /** A `Date` `days` in the future relative to `now`. */

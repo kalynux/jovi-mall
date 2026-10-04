@@ -41,6 +41,7 @@
  */
 import { IStore } from '../models/store.model';
 import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
+import type { VendorDeliveryTerms } from '../../vendors/domain/delivery-terms';
 
 /**
  * The only vendor fields this DTO may ever see.
@@ -80,6 +81,12 @@ export interface PublicStoreDto {
     productCount: number;
     /** `store.created_at`. */
     memberSince: string;
+    /**
+     * Who pays delivery on this shop's orders (ADR-A11): `always` (free delivery), `never`
+     * (the customer pays) or `above` (free from `freeAboveAmount` of this shop's items).
+     * The posted offer, so public; defaults to `always` for a shop that never set it.
+     */
+    deliveryTerms: VendorDeliveryTerms;
 }
 
 export interface PublicStoreMapperInput {
@@ -91,6 +98,8 @@ export interface PublicStoreMapperInput {
     logo: FileDetail | null;
     banner: FileDetail | null;
     productCount: number;
+    /** The shop's terms with the default applied (`vendorDeliveryTermsOf`) — never raw storage. */
+    deliveryTerms: VendorDeliveryTerms;
 }
 
 /** Pure — `test:public-catalog` asserts the projection without touching Mongo. */
@@ -111,5 +120,6 @@ export function toPublicStoreDto(input: PublicStoreMapperInput): PublicStoreDto 
         verified: vendor.verified,
         productCount: input.productCount,
         memberSince: new Date(store.created_at).toISOString(),
+        deliveryTerms: { mode: input.deliveryTerms.mode, freeAboveAmount: input.deliveryTerms.freeAboveAmount },
     };
 }

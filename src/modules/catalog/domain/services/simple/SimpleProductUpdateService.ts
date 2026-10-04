@@ -13,13 +13,15 @@ import { PickupLocationSource } from '../../../models/product.model';
 import { StockChangeGate, stockChangeGate } from '../../../../stock-requests/services/stock-change-gate';
 import { StockRequestDto } from '../../../../stock-requests/dto/stock-adjustment-request.dto';
 import { BargainInput, resolveBargainWrite } from '../bargain-price.rule';
+import type { CategoryInputRef } from '../../../../categories/services/category-resolution.service';
 
 export interface UpdateSimpleProductInput {
     title?: string;
     description?: string;
     /** Absent leaves the stored document alone; `null` clears it. */
     descriptionRich?: RichDoc | null;
-    category?: string;
+    /** Full replacement of the 1–5 categories; absent leaves them alone. */
+    categories?: CategoryInputRef[];
     tags?: string[];
     fileIds?: string[];
     seoTitle?: string;
@@ -39,7 +41,6 @@ export interface UpdateSimpleProductInput {
     width?: number;
     height?: number;
 
-    freeDelivery?: boolean;
     pickupLocation?: {
         source: PickupLocationSource;
         vendorAddressId?: string | null;
@@ -134,7 +135,7 @@ export class SimpleProductUpdateService {
             variantLabel: variant.name || variant.sku,
         });
 
-        const hasDeliveryPatch = input.freeDelivery !== undefined || input.pickupLocation !== undefined;
+        const hasDeliveryPatch = input.pickupLocation !== undefined;
 
         const updatedProduct = await this.productUpdateService.execute(productId, vendorId, {
             title: input.title,
@@ -142,14 +143,13 @@ export class SimpleProductUpdateService {
             // Passed through as-is, `null` included: ProductUpdateService reads it
             // with `!== undefined`, so the clear survives this hop.
             descriptionRich: input.descriptionRich,
-            category: input.category,
+            categories: input.categories,
             tags: input.tags,
             fileIds: input.fileIds,
             seoTitle: input.seoTitle,
             seoDescription: input.seoDescription,
             ...(hasDeliveryPatch && {
                 delivery: {
-                    freeDelivery: input.freeDelivery,
                     pickupLocation: input.pickupLocation,
                 },
             }),

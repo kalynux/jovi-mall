@@ -28,7 +28,8 @@ export interface IConnectionTermination {
   terminated_by_role: ConnectionParty;
   terminated_by_user_id: mongoose.Types.ObjectId;
   terminated_at: Date;
-  reason: 'unilateral' | 'reapproval_declined';
+  /** `role_closed`: one party's role was closed (ADR-A10) and the connection ended with it. */
+  reason: 'unilateral' | 'reapproval_declined' | 'role_closed';
   note: string | null;
 }
 
@@ -145,7 +146,7 @@ const VendorAgencyConnectionSchema = new Schema<IVendorAgencyConnection>(
         terminated_by_role: { type: String, enum: ['vendor', 'agency'], required: true },
         terminated_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, required: true },
         terminated_at: { type: Date, required: true },
-        reason: { type: String, enum: ['unilateral', 'reapproval_declined'], required: true },
+        reason: { type: String, enum: ['unilateral', 'reapproval_declined', 'role_closed'], required: true },
         note: { type: String, default: null, maxlength: 300, trim: true },
       },
       required: false,

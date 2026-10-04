@@ -1,5 +1,6 @@
 import { RequestHandler, Router } from 'express';
 import { AdminUserController } from './admin-user.controller';
+import { RoleClosureAdminController } from '../role-closure/role-closure.controller';
 
 /**
  * Platform-user administration — the write surface wi-admin delegates to.
@@ -62,6 +63,20 @@ function attachRoutes(router: Router): Router {
      * 200 `{ success, data: { userId, memoryEpoch, resetAt } }`.
      */
     router.post('/:userId/bot-memory/reset', AdminUserController.resetBotMemory);
+
+    /**
+     * Role closure — ADR-A10. An administrator ASKS; only the user can confirm.
+     *
+     * POST   /:userId/roles/:role/closure   body `{ reason }` → 201. Refuses up front
+     *        (422 `ROLE_CLOSURE_BLOCKED`, itemised) on anything the user's confirm would.
+     * DELETE /:userId/roles/:role/closure   withdraw the pending request.
+     * GET    /:userId/closure-requests      every request for the account, newest first.
+     *
+     * There is no confirm here, and there must never be one — see the controller.
+     */
+    router.post('/:userId/roles/:role/closure', RoleClosureAdminController.request);
+    router.delete('/:userId/roles/:role/closure', RoleClosureAdminController.cancel);
+    router.get('/:userId/closure-requests', RoleClosureAdminController.list);
 
     return router;
 }

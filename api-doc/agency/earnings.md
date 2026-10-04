@@ -38,9 +38,16 @@ agency's share of that order is computed from its own pricing policy (`policies.
 - An order whose items are split across multiple shipments to the **same** agency earns **one entry
   per shipment** — each run is paid for separately.
 
-> **Not yet charged (planned, in this order):** per-kg weight surcharges (`additional_per_kg`),
-> out-of-region surcharges (`out_of_region_surcharge` / `out_of_region_delivery_fee`),
-> peak-season surcharges, monthly per-SKU storage rent (`monthly_storage_fee_per_sku` — a
+> **✅ Now charged (2026-10-04, [ADR-A11](../../docs/ADR-A11-CUSTOMER-PAID-DELIVERY.md)):** the
+> per-kg weight surcharge (`additional_per_kg` × (kg − 1), kg = the shipment's weight rounded up,
+> minimum 1; an item with no weight counts as 1 kg per unit), the out-of-region surcharges
+> (`out_of_region_surcharge` on a pickup run, `out_of_region_delivery_fee` replacing
+> `local_delivery_fee` on a storage run — when the drop-off region differs from the pickup region;
+> unknown on either side counts as in-region), and your optional ceiling
+> `max_fee_per_shipment`. The fee is posted (snapshotted) at checkout, and you are paid the same
+> fee whether the shop or the customer paid it. See [profile-schema.md](./profile-schema.md).
+>
+> **Not yet charged:** peak-season surcharges, monthly per-SKU storage rent (`monthly_storage_fee_per_sku` — a
 > recurring charge, not tied to a single order), and the failed-delivery fee
 > (`failed_delivery_fee` — a delivery can fail and be retried, so it needs its own charge path
 > rather than a slice of the delivery fee). `rto_fee` **is** now charged; see below. Do not build

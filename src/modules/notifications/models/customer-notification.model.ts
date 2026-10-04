@@ -132,6 +132,21 @@ export type CustomerNotificationType =
     | 'order.delivery_failed'
     | 'order.cancelled'
     | 'order.refunded'
+    // ── Delivery-fee changes after checkout (ADR-A11, W-E) — all MONEY, none mutable ──
+    /** The delivery company asks a higher fee on a customer-paid parcel; the customer answers. */
+    | 'order.delivery_fee.approval_needed'
+    /** They approved an increase (online): the difference must be paid before pickup. */
+    | 'order.delivery_fee.topup_due'
+    /** A lower fee applied directly — online: the difference is refunded; COD: less cash. */
+    | 'order.delivery_fee.lowered'
+    /** A higher fee now applies — approved (COD), paid (online), or covered by the shop. */
+    | 'order.delivery_fee.updated'
+    /** Delivery money owed back must be returned by hand (mobile money, cash). */
+    | 'order.delivery_fee.refund_pending'
+    /** The top-up payment did not go through. */
+    | 'order.delivery_fee.topup_failed'
+    /** The delivery company answered a combined-price request. */
+    | 'order.combined_delivery.answered'
 
     // ── Support tickets (GAP-012) ───────────────────────────────────────────
     // The one row of GAP-012's "flows that finish after the customer stops
@@ -158,9 +173,21 @@ export type CustomerNotificationType =
      * evented — see `AbandonedCartWorker`. Gated by `cartReminders`, and on WhatsApp sent
      * only inside the customer's own 24-hour window: it has no template, deliberately.
      */
-    | 'cart.abandoned';
+    | 'cart.abandoned'
 
-export type CustomerAggregateType = 'booking' | 'order' | 'shipment' | 'payment' | 'ticket' | 'cart';
+    // ── The account itself (ADR-A10 role closure) ───────────────────────────
+    /**
+     * An administrator asked to close this customer account. Nothing happens unless the
+     * customer confirms while signed in, before the request expires. Unmutable — no key in
+     * `SITUATION_PREFERENCE`: a closure request a setting could silence would simply expire
+     * unseen. Copy says "close", never "delete" (ADR-A02 D-2).
+     */
+    | 'account.closure_requested';
+
+export type CustomerAggregateType =
+    | 'booking' | 'order' | 'shipment' | 'payment' | 'ticket' | 'cart'
+    /** A role-closure request (ADR-A10) — `aggregateId` is the request id. */
+    | 'account';
 
 /**
  * Deep-link action for a notification, localized in the customer's language.
@@ -206,10 +233,18 @@ export const CUSTOMER_NOTIFICATION_TYPES: readonly CustomerNotificationType[] = 
     'order.delivery_failed',
     'order.cancelled',
     'order.refunded',
+    'order.delivery_fee.approval_needed',
+    'order.delivery_fee.topup_due',
+    'order.delivery_fee.lowered',
+    'order.delivery_fee.updated',
+    'order.delivery_fee.refund_pending',
+    'order.delivery_fee.topup_failed',
+    'order.combined_delivery.answered',
     'ticket.replied',
     'ticket.awaiting_customer',
     'ticket.resolved',
-    'cart.abandoned'
+    'cart.abandoned',
+    'account.closure_requested'
 ] as const;
 
 /**
@@ -224,7 +259,8 @@ export const CUSTOMER_AGGREGATE_TYPES: readonly CustomerAggregateType[] = [
     'shipment',
     'payment',
     'ticket',
-    'cart'
+    'cart',
+    'account'
 ] as const;
 
 const DELIVERY_CHANNELS: readonly CustomerDeliveryChannel[] = [

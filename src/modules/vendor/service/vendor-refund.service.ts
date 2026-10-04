@@ -179,13 +179,28 @@ export class VendorRefundService {
  * refund path so both surfaces answer the same question the same way.
  */
 export async function findSuccessfulPaymentForOrder(orderId: string) {
-    return PaymentTransactionModel.findOne({
+    // ⚠ PURPOSE-AWARE (ADR-A11). An order may now hold money in TWO succeeded transactions — its
+    // checkout charge and a delivery top-up the customer paid after approving a higher fee. A bare
+    // `findOne` picked either arbitrarily, so the eligibility below could report the top-up's
+    // small balance as "everything refundable on this order". The checkout charge is returned
+    // (its gateway and currency are the order's), with the top-ups' amounts and refunds folded
+    // into `amountSnapshot` / `totalRefunded`, so `remaining` describes ALL the money the order
+    // holds. `refundPayment` spreads the actual refund over the legs (`payments/domain/refund-legs.ts`).
+    const txs = await PaymentTransactionModel.find({
         $or: [
             { orderId: new Types.ObjectId(orderId) },
             { orderIds: new Types.ObjectId(orderId) },
         ],
         status: 'SUCCEEDED'
     }).lean().exec();
+    if (txs.length === 0) return null;
+    const primary = txs.find((t) => t.purpose !== 'order_delivery_topup') ?? txs[0];
+    const topups = txs.filter((t) => t !== primary && t.purpose === 'order_delivery_topup');
+    return {
+        ...primary,
+        amountSnapshot: primary.amountSnapshot + topups.reduce((s, t) => s + t.amountSnapshot, 0),
+        totalRefunded: primary.totalRefunded + topups.reduce((s, t) => s + t.totalRefunded, 0),
+    };
 }
 
 /**

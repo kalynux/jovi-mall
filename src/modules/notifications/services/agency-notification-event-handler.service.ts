@@ -40,6 +40,14 @@ import { renderTemplate } from '../catalog/message-renderer';
 import { AGENCY_COD_FORCE_REASON, AGENCY_VENDOR_COD_TERMS_LINE } from '../catalog/agency-notification-catalog';
 import { StoreRepository } from '../../store/repositories/store.repository';
 import { OrderModel } from '../../orders/order.model';
+import {
+    closureReasonParam,
+    closureDeadlineParam,
+    closingPartyName,
+    occurredAtIso,
+    RoleClosureRequestedPayload,
+    RoleClosureRelationshipsEndedPayload
+} from './role-closure-context';
 
 /**
  * `delivery_fee_proposal.edited` payload readers (2026-10-02). The producer was built in a
@@ -1152,13 +1160,47 @@ export class AgencyNotificationEventHandler {
         await this.feeProposalSituation(event, 'delivery_fee_proposal.agent_edited');
     }
 
-    /** The vendor's answer — the agency hears it whoever proposed. */
+    /**
+     * The answer — the agency hears it whoever proposed. Since ADR-A11 the answer may be the
+     * CUSTOMER's (customer-paid delivery): the copy then names the customer. Two answers are not
+     * the agency's news and stay silent: a decrease the system applied directly (the agency's own
+     * action, confirmed by its response), and a change-agency difference (the agency is paid the
+     * new fee whoever covers it).
+     */
     async handleDeliveryFeeProposalApproved(event: DomainEvent): Promise<void> {
+        if (event.payload?.respondedByRole === 'system' || event.payload?.origin === 'change_agency') return;
         await this.feeProposalSituation(event, 'delivery_fee_proposal.approved');
     }
 
     async handleDeliveryFeeProposalRejected(event: DomainEvent): Promise<void> {
+        if (event.payload?.origin === 'change_agency') return;
         await this.feeProposalSituation(event, 'delivery_fee_proposal.rejected');
+    }
+
+    /** `combined_delivery_request.created` (ADR-A11 D-8) — a customer asks for one price. */
+    async handleCombinedDeliveryRequestCreated(event: DomainEvent): Promise<void> {
+        try {
+            const p = event.payload;
+            if (!p?.agencyId || !p?.firstShipmentId) return;
+            const prefs = await this.preferenceRepo.getByAgency(p.agencyId);
+            if (prefs.preferences.deliveryFeeProposals === false) return;
+            await this.dispatch({
+                situation: 'combined_delivery_request.received',
+                prefs,
+                agencyId: p.agencyId,
+                aggregateType: 'shipment',
+                aggregateId: p.firstShipmentId,
+                idempotencyKey: `combined_delivery_request.received:${p.requestId}`,
+                context: {
+                    shipmentId: p.firstShipmentId,
+                    parcelCount: String(p.parcelCount ?? ''),
+                    currency: p.currency ?? '',
+                    totalFeeFormatted: Number(p.totalFee ?? 0).toLocaleString()
+                }
+            });
+        } catch (error) {
+            console.error('[AgencyNotificationHandler] Failed to handle combined_delivery_request.created:', error);
+        }
     }
 
     private async feeProposalSituation(
@@ -1188,7 +1230,10 @@ export class AgencyNotificationEventHandler {
                 context: {
                     shipmentId: p.shipmentId,
                     orderNumber: (await this.orderNumberOf(p)) ?? '—',
-                    vendorName: await this.resolveVendorName(p.vendorId, lang),
+                    // ADR-A11: the answer to a customer-paid change is the CUSTOMER's.
+                    vendorName: p.respondedByRole === 'customer'
+                        ? ({ en: 'The customer', fr: 'Le client', pt: 'O cliente', es: 'El cliente', ar: 'العميل' } as Record<Language, string>)[lang]
+                        : await this.resolveVendorName(p.vendorId, lang),
                     agentName: p.proposedByAgentId ? await this.resolveAgentName(p.proposedByAgentId) : 'An agent',
                     currency: p.currency ?? '',
                     proposedFeeFormatted: Number(p.proposedFee ?? 0).toLocaleString(),
@@ -1222,6 +1267,105 @@ export class AgencyNotificationEventHandler {
             return (order as any)?.order_number ?? null;
         } catch {
             return null;
+        }
+    }
+
+    // ─── Role closure (ADR-A10) ───────────────────────────────────────────────
+
+    /**
+     * `role_closure.requested` with `role: 'agency'` → ask the agency to confirm closing its
+     * account. **Deliberately NOT gated by any preference** — a closure request that a setting
+     * could silence would expire unseen.
+     */
+    async handleRoleClosureRequested(event: DomainEvent): Promise<void> {
+        try {
+            const p = event.payload as RoleClosureRequestedPayload;
+            if (p?.role !== 'agency' || !p.roleEntityId || !p.requestId) return;
+
+            const prefs = await this.preferenceRepo.getByAgency(p.roleEntityId);
+            const agency = await this.agencyRepo.findById(p.roleEntityId);
+            const lang = resolveLanguage(agency);
+
+            await this.dispatch({
+                situation: 'account.closure_requested',
+                prefs,
+                agencyId: p.roleEntityId,
+                aggregateType: 'account',
+                aggregateId: p.requestId,
+                idempotencyKey: `account.closure_requested:${p.requestId}:${occurredAtIso(event.occurredAt)}`,
+                context: {
+                    requestId: p.requestId,
+                    reason: closureReasonParam(p.reason, lang),
+                    expiresAt: closureDeadlineParam(p.expiresAt, agency?.timezone, lang)
+                }
+            });
+        } catch (error) {
+            console.error('[AgencyNotificationHandler] Failed to handle role_closure.requested:', error);
+        }
+    }
+
+    /**
+     * `role_closure.relationships_ended` → the agency is the COUNTERPARTY when an agent
+     * (`contracts`, gated by `contractUpdated`) or a vendor (`connections`, gated by
+     * `connectionUpdated`) closed. When the AGENCY itself closed, it is not told here.
+     */
+    async handleRoleClosureRelationshipsEnded(event: DomainEvent): Promise<void> {
+        try {
+            const p = event.payload as RoleClosureRelationshipsEndedPayload;
+            const at = occurredAtIso(event.occurredAt);
+
+            if (p?.closingRole === 'agent') {
+                for (const c of p.contracts ?? []) {
+                    try {
+                        if (!c?.agencyId || !c.contractId) continue;
+                        const prefs = await this.preferenceRepo.getByAgency(c.agencyId);
+                        if (!prefs.preferences.contractUpdated) continue;
+                        const lang = await this.resolveAgencyLanguage(c.agencyId);
+
+                        await this.dispatch({
+                            situation: 'agent_contract.ended_by_closure',
+                            prefs,
+                            agencyId: c.agencyId,
+                            aggregateType: 'contract',
+                            aggregateId: c.contractId,
+                            idempotencyKey: `agent_contract.ended_by_closure:${c.contractId}:${at}`,
+                            context: {
+                                agentName: closingPartyName(p.closingName, 'agent', lang),
+                                contractId: c.contractId
+                            }
+                        });
+                    } catch (error) {
+                        // One recipient's failure must not cost the others their notice.
+                        console.error('[AgencyNotificationHandler] Failed to notify agent_contract.ended_by_closure:', error);
+                    }
+                }
+            } else if (p?.closingRole === 'vendor') {
+                for (const c of p.connections ?? []) {
+                    try {
+                        if (!c?.agencyId || !c.connectionId) continue;
+                        const prefs = await this.preferenceRepo.getByAgency(c.agencyId);
+                        if (!prefs.preferences.connectionUpdated) continue;
+                        const lang = await this.resolveAgencyLanguage(c.agencyId);
+
+                        await this.dispatch({
+                            situation: 'connection.ended_by_closure',
+                            prefs,
+                            agencyId: c.agencyId,
+                            aggregateType: 'connection',
+                            aggregateId: c.connectionId,
+                            idempotencyKey: `connection.ended_by_closure:${c.connectionId}:${at}`,
+                            context: {
+                                vendorName: closingPartyName(p.closingName, 'vendor', lang),
+                                connectionId: c.connectionId
+                            }
+                        });
+                    } catch (error) {
+                        console.error('[AgencyNotificationHandler] Failed to notify connection.ended_by_closure:', error);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('[AgencyNotificationHandler] Failed to handle role_closure.relationships_ended:', error);
         }
     }
 

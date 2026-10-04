@@ -54,7 +54,13 @@ const OID2 = '507f1f77bcf86cd799439012';
     assert(ok.data.stock === 0, 'create: stock defaults to 0');
     assert(ok.data.isInfiniteStock === false, 'create: isInfiniteStock defaults to false');
     assert(ok.data.publish === true, 'create: publish defaults to true');
-    assert(ok.data.freeDelivery === false, 'create: freeDelivery defaults to false');
+    assert(!('freeDelivery' in ok.data), 'create: no freeDelivery field (shop setting since ADR-A11)');
+  }
+  // ADR-A11 D-1: free delivery is a SHOP setting. The schema is `.strict()`, so a stale
+  // client still sending the removed product flag is refused, never silently ignored.
+  assert(!CreateSimpleProductSchema.safeParse({ ...valid, freeDelivery: true }).success,
+    'create: the removed freeDelivery flag is rejected (strict)');
+  {
   }
 
   for (const field of ['title', 'description', 'category', 'price'] as const) {
@@ -154,16 +160,19 @@ const OID2 = '507f1f77bcf86cd799439012';
 {
   const existing: Product['delivery'] = {
     agencyId: OID,
-    freeDelivery: false,
     pickupLocation: { source: 'vendor_address', vendorAddressId: OID2, agencyAddressId: null },
   };
 
   // The bug this helper exists to prevent: $set replaces the whole sub-document,
   // so a patch touching one field must not wipe the others.
-  const onlyFree = mergeDeliveryConfig(existing, { freeDelivery: true });
-  assert(onlyFree.free_delivery === true, 'merge: freeDelivery applied');
-  assert(onlyFree.agency_id === OID, 'merge: agency_id preserved');
-  assert(onlyFree.pickup_location?.vendor_address_id === OID2, 'merge: pickup_location preserved');
+  const onlyAgency = mergeDeliveryConfig(existing, { agencyId: OID2 });
+  assert(onlyAgency.agency_id === OID2, 'merge: agencyId applied');
+  assert(onlyAgency.pickup_location?.vendor_address_id === OID2, 'merge: pickup_location preserved');
+  const onlyPickup = mergeDeliveryConfig(existing, {
+    pickupLocation: { source: 'vendor_address', vendorAddressId: OID },
+  });
+  assert(onlyPickup.agency_id === OID, 'merge: agency_id preserved');
+  assert(!('free_delivery' in onlyAgency), 'merge: no free_delivery key is persisted (ADR-A11)');
 
   assert(mergeDeliveryConfig(existing, { pickupLocation: null }).pickup_location === null,
     'merge: explicit null clears pickup_location');
@@ -175,7 +184,7 @@ const OID2 = '507f1f77bcf86cd799439012';
     'merge: agency_storage forces vendor_address_id null');
 
   const empty = mergeDeliveryConfig(undefined, {});
-  assert(empty.agency_id === null && empty.free_delivery === false && empty.pickup_location === null,
+  assert(empty.agency_id === null && empty.pickup_location === null,
     'merge: empty existing + empty patch → all-null shape');
 
   assert(mergeDeliveryConfig(existing, { agencyId: null }).agency_id === null,
@@ -272,7 +281,7 @@ const OID2 = '507f1f77bcf86cd799439012';
     id: OID, vendorId: OID2, type: 'physical', mode: 'simple', status: 'draft',
     title: 'T', description: 'A description', slug: 't', category: 'c', tags: [],
     seo: {}, hasVariants: true, defaultVariantId: OID2, fileIds: [],
-    delivery: { agencyId: null, freeDelivery: false, pickupLocation: { source: 'agency_storage', vendorAddressId: null } },
+    delivery: { agencyId: null, pickupLocation: { source: 'agency_storage', vendorAddressId: null } },
     vectorisationEnabled: false, vectorisationStatus: 'not_started', vectorisedDataId: null,
     createdAt: new Date(), updatedAt: new Date(),
     ...over,

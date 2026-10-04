@@ -107,6 +107,10 @@ export function initializeAgentNotificationEventConsumers(): void {
     // 2026-10-02 — an administrator's pin / release of the agent's COD pool. The handler
     // ignores every non-'override' trigger (sync, reconcile, the mass reset to the default).
     eventBus.subscribe('agent.cod_threshold_changed', handler.handleCodPoolChanged.bind(handler));
+    // ADR-A10 role closure (published by src/modules/role-closure/, post-commit). Shared by
+    // the four stacks; each handler no-ops on payloads that are not its audience's.
+    eventBus.subscribe('role_closure.requested', handler.handleRoleClosureRequested.bind(handler));
+    eventBus.subscribe('role_closure.relationships_ended', handler.handleRoleClosureRelationshipsEnded.bind(handler));
 
     console.log(
         `[AgentNotifications] Event handlers registered successfully (FCM push: ${isFcmConfigured() ? 'enabled' : 'disabled'})`

@@ -104,6 +104,26 @@ export class EarningsReleaseWorker implements ObservableWorker {
    * unless every write is independently idempotent. The lock removes the need to have verified
    * that for every stage.
    */
+  /**
+   * ADR-A11 — delivery-fee money owed back to customers (a lowered customer-paid fee, an unspent
+   * return fee) is refunded on the bus by `DeliveryFeeRefundService`; the bus is lossy, so this
+   * stage refunds whatever is still owed and closes interrupted claims as manual. Runs AFTER the
+   * delivery-split recovery, which is what writes a return's refundable. Never throws (a refund
+   * service failure must not stop the release of matured holds). Lazy import: that service
+   * reaches the payment orchestrator, which this worker's import graph must not.
+   */
+  private async recoverCustomerDeliveryRefunds(): Promise<void> {
+    try {
+      const { deliveryFeeRefundService } = await import('../../delivery-fee-proposals/services/delivery-fee-refund.service');
+      const result = await deliveryFeeRefundService.sweepOutstanding(EARNINGS_CONFIG.BATCH_SIZE);
+      if (result.staleClosed > 0 || result.attempted > 0) {
+        console.log(`[EarningsReleaseWorker] Customer delivery refunds: ${result.attempted} attempted, ${result.staleClosed} interrupted claim(s) closed as manual`);
+      }
+    } catch (error) {
+      console.error('[EarningsReleaseWorker] Customer delivery refund recovery failed:', error);
+    }
+  }
+
   async runSweep(now: Date = new Date()): Promise<boolean> {
     const outcome = await withWorkerLock('earnings-release', async () => {
       this.sweeping = true;
@@ -118,6 +138,7 @@ export class EarningsReleaseWorker implements ObservableWorker {
         await this.releaseMaturedHolds(now);
         await this.recoverMissedCodSplits(now);
         await this.recoverMissedDeliverySplits(now);
+        await this.recoverCustomerDeliveryRefunds();
         await this.releaseMaturedReserves(now);
         await this.autoTriggerPayoutsOverThreshold();
         console.log('[EarningsReleaseWorker] Earnings sweep complete');

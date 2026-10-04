@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
+import { VENDOR_DELIVERY_TERMS_MODES, VendorDeliveryTermsMode } from '../domain/delivery-terms';
 
 /**
  * VendorSettings - Per-vendor settings document (one per vendor).
@@ -32,6 +33,17 @@ export interface IVendorCodTermsSub {
     cod_enabled: boolean;
     /** XAF; `null` = no vendor cap. */
     max_cash_per_agency: number | null;
+    updated_at: Date | null;
+}
+
+// Who pays delivery for this shop's orders (ADR-A11 D-1) — one definition, in the pure domain file.
+export type { VendorDeliveryTermsMode };
+
+export interface IVendorDeliveryTermsSub {
+    /** `always` = the shop pays (free delivery) · `never` = the customer pays · `above` = free from a basket amount. */
+    mode: VendorDeliveryTermsMode;
+    /** Shop subtotal (XAF) at or above which delivery is free; set only when `mode === 'above'`. */
+    free_above_amount: number | null;
     updated_at: Date | null;
 }
 
@@ -72,6 +84,16 @@ export interface IVendorSettings extends Document {
      * editable without that.
      */
     cod_terms?: IVendorCodTermsSub | null;
+    /**
+     * The shop's delivery terms (ADR-A11 D-1/D-2) — who pays the delivery fee. Absent
+     * on documents that never set it: read through `vendorDeliveryTermsOf()`
+     * (vendors/domain/delivery-terms.ts), which applies the default `always` (the shop
+     * pays — the behaviour before customer-paid delivery existed).
+     *
+     * ⚠ Like `cod_terms`, deliberately NOT on `Vendor.policies` — editing it must not
+     * pause every agency connection for re-approval.
+     */
+    delivery_terms?: IVendorDeliveryTermsSub | null;
     created_at: Date;
     updated_at: Date;
 }
@@ -147,6 +169,19 @@ const VendorSettingsSchema = new Schema<IVendorSettings>(
                 {
                     cod_enabled: { type: Boolean, required: true, default: true },
                     max_cash_per_agency: { type: Number, default: null, min: 0 },
+                    updated_at: { type: Date, default: null },
+                },
+                { _id: false }
+            ),
+            default: null,
+        },
+        // Same no-default shape as cod_terms: absent reads as `always` through
+        // vendorDeliveryTermsOf(), so existing documents need no backfill.
+        delivery_terms: {
+            type: new Schema<IVendorDeliveryTermsSub>(
+                {
+                    mode: { type: String, enum: [...VENDOR_DELIVERY_TERMS_MODES], required: true, default: 'always' },
+                    free_above_amount: { type: Number, default: null, min: 1 },
                     updated_at: { type: Date, default: null },
                 },
                 { _id: false }

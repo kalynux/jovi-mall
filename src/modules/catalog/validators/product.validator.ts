@@ -3,6 +3,9 @@ import { clearable } from '../../../core/validation/zod.helpers';
 // One definition, shared with the two .strict() quick-add schemas — see the
 // header of that file for why all four have to accept the field together.
 import { descriptionRichSchema } from './rich-description.validator';
+// One definition, wired onto all four product write schemas — two of them are
+// .strict(), so a path that forgot it would 400 the whole save.
+import { LegacyCategorySchema, ProductCategoriesSchema } from '../../categories/validators/category.validator';
 
 // Product media. Full-array replacement; duplicates are rejected so the same image
 // can't be attached twice. Shared by create and update; kept in sync with the
@@ -54,8 +57,10 @@ export const CreateProductSchema = z.object({
     descriptionRich: descriptionRichSchema,
     fileIds: productFileIdsSchema.optional(),
 
-    // Categorization
-    category: z.string().min(1, 'Category cannot be empty'),
+    // Categorization — 1–5 from the shared list (`categories`), or the deprecated
+    // single free-text `category`. Exactly one of the two; see categories.validator.
+    categories: ProductCategoriesSchema.optional(),
+    category: LegacyCategorySchema.optional(),
     tags: z.array(
         z.string().min(1, 'Each tag must be a non-empty string')
     ).refine(
@@ -73,7 +78,10 @@ export const CreateProductSchema = z.object({
     }).strict().optional(),
 
     // Service config + price live on the service variant (see variant.validator).
-});
+}).refine(
+    (data) => data.categories !== undefined || data.category !== undefined,
+    { message: 'At least one category is required', path: ['categories'] }
+);
 
 /**
  * Schema for updating a product
@@ -90,8 +98,9 @@ export const UpdateProductSchema = z.object({
     descriptionRich: descriptionRichSchema,
     fileIds: productFileIdsSchema.optional(),
 
-    // Categorization
-    category: z.string().min(1, 'Category cannot be empty').optional(),
+    // Categorization — full replacement; absent leaves the categories alone.
+    categories: ProductCategoriesSchema.optional(),
+    category: LegacyCategorySchema.optional(),
     tags: z.array(
         z.string().min(1, 'Each tag must be a non-empty string')
     ).refine(
@@ -115,11 +124,12 @@ export const UpdateProductSchema = z.object({
     // the existing value in ProductUpdateService); at least one must be present.
     delivery: z.object({
         agencyId: clearable(z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId')),
-        freeDelivery: z.boolean().optional(),
+        // No `freeDelivery`: free delivery is a SHOP setting (ADR-A11 D-1) —
+        // `.strict()` makes a stale client sending it a 400, not a silent no-op.
         pickupLocation: pickupLocationSchema.nullable().optional(),
     }).strict().refine(
-        (d) => d.agencyId !== undefined || d.freeDelivery !== undefined || d.pickupLocation !== undefined,
-        { message: 'At least one of agencyId, freeDelivery, or pickupLocation must be provided' }
+        (d) => d.agencyId !== undefined || d.pickupLocation !== undefined,
+        { message: 'At least one of agencyId or pickupLocation must be provided' }
     ).optional(),
 
     // Vectorisation opt-in toggle — when provided, the update endpoint will

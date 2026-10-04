@@ -300,6 +300,20 @@ export interface IShipmentDeliveryFeeOverride {
   approved_at: Date;
 }
 
+/** `computeShipmentFee`'s itemisation, snapshotted at checkout — see `IShipment.fee_components`. */
+export interface IShipmentFeeComponents {
+  pickup_base: number;
+  weight_extra: number;
+  region_surcharge: number;
+  storage: number;
+  cap_applied: boolean;
+  kg: number;
+  weight_grams: number;
+  out_of_region: boolean;
+  /** True when the agency had no pricing policy and the flat fallback was charged. */
+  flat_fallback: boolean;
+}
+
 /**
  * The two COD caps above the agent (see `cod/domain/cod-limits.ts`). Duplicated here as a
  * literal rather than imported so the shipment model does not depend on the cod module;
@@ -431,9 +445,12 @@ export interface IShipment extends Document {
    * that. COD writes it too (there it is computed once, at collection, so it
    * cannot drift) purely so the number is auditable — nothing else persists it.
    *
-   * Null on shipments created before this field existed, and on any shipment
-   * whose order has not been split yet; the delivery split falls back to a live
-   * computation and logs when it finds one.
+   * ⚠ Since ADR-A11 (2026-10-03) it is written AT CHECKOUT for every physical
+   * shipment — the posted price the payer (vendor or customer) was quoted — and the
+   * splits keep it (`computeShipmentDeliveryFee` reads override → this → formula).
+   * Null only on shipments created before that and on shipments created after
+   * checkout (an item moved to another agency); the delivery split then falls back
+   * to a live computation and logs.
    */
   delivery_fee_snapshot?: number | null;
   /**
@@ -454,6 +471,31 @@ export interface IShipment extends Document {
    * awaiting the vendor" a property of the write rather than of a read beforehand.
    */
   pending_delivery_fee_proposal_id?: mongoose.Types.ObjectId | null;
+  /**
+   * Who pays this shipment's delivery fee (ADR-A11), copied from its order at creation. `null`
+   * on shipments before ADR-A11 — read as `vendor` (`orders/domain/delivery-payer.ts`).
+   */
+  delivery_payer?: 'vendor' | 'customer' | null;
+  /**
+   * What the CUSTOMER was charged for this run (ADR-A11): the checkout fee on a customer-paid
+   * shipment, 0 on a vendor-paid one. Distinct from `delivery_fee_snapshot` (what the agency
+   * is paid) on purpose — a fee change awaiting the customer's money must not make the split
+   * read a number the customer has not paid. Customer-approved fee changes (W-E) move it.
+   * Null on shipments created after checkout (an item moved to another agency) and on older ones.
+   */
+  customer_delivery_fee?: number | null;
+  /**
+   * The formula's itemisation at checkout, for display (base / weight / region / ceiling).
+   * Informational only — no money path reads it; `delivery_fee_snapshot` is the number.
+   */
+  fee_components?: IShipmentFeeComponents | null;
+  /**
+   * Delivery-fee money the platform holds that is owed BACK to the customer (ADR-A11): the
+   * unspent `reserved − earned` of a customer-paid return (RTO), plus anything the customer
+   * paid above the fee finally charged. Written (idempotently, `$set`) by the earnings splits;
+   * the refund itself is W-E's (customer-paid fee changes and refunds). 0 / absent = nothing owed.
+   */
+  customer_fee_refundable?: number | null;
   /**
    * Why this COD shipment was NOT handed to its agency (owner decision 2026-10-02).
    * Written by the vendor's auto-redirect when the hand-off would push the agency over
@@ -649,6 +691,27 @@ const ShipmentSchema = new Schema<IShipment>({
   },
   // No index: read only by id. See IShipment.pending_delivery_fee_proposal_id.
   pending_delivery_fee_proposal_id: { type: Schema.Types.ObjectId, default: null },
+  // Customer-paid delivery (ADR-A11) — see IShipment. No index: read with the shipment.
+  delivery_payer: { type: String, enum: ['vendor', 'customer', null], default: null },
+  customer_delivery_fee: { type: Number, default: null, min: 0 },
+  fee_components: {
+    type: new Schema<IShipmentFeeComponents>(
+      {
+        pickup_base: { type: Number, default: 0 },
+        weight_extra: { type: Number, default: 0 },
+        region_surcharge: { type: Number, default: 0 },
+        storage: { type: Number, default: 0 },
+        cap_applied: { type: Boolean, default: false },
+        kg: { type: Number, default: 1 },
+        weight_grams: { type: Number, default: 0 },
+        out_of_region: { type: Boolean, default: false },
+        flat_fallback: { type: Boolean, default: false },
+      },
+      { _id: false }
+    ),
+    default: null,
+  },
+  customer_fee_refundable: { type: Number, default: null, min: 0 },
   // COD limits above the agent (2026-10-02) — see IShipment.cod_limit_hold / cod_limit_force.
   // No index: read with the shipment, never queried on.
   cod_limit_hold: {

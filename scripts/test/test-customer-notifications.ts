@@ -118,6 +118,14 @@ const UNMUTABLE: CustomerNotificationType[] = [
     'order.cancelled',
     'order.payment.received',
     'order.refunded',
+    // ADR-A11 (W-E): a change to what the customer pays for delivery — money, never mutable.
+    'order.delivery_fee.approval_needed',
+    'order.delivery_fee.topup_due',
+    'order.delivery_fee.lowered',
+    'order.delivery_fee.updated',
+    'order.delivery_fee.refund_pending',
+    'order.delivery_fee.topup_failed',
+    'order.combined_delivery.answered',
     // The card payment page (GAP-008 + GAP-012). Money, so ungated on the same rule as
     // the rest of this list — and a page the customer asked for in a chat must not be
     // silenced by a setting about order progress.
@@ -138,7 +146,10 @@ const UNMUTABLE: CustomerNotificationType[] = [
     // your own question and then hold the request open waiting for you.
     'ticket.replied',
     'ticket.awaiting_customer',
-    'ticket.resolved'
+    'ticket.resolved',
+    // ADR-A10 (2026-10-04). An administrator's request to close the account — about the
+    // account itself, and a setting that silenced it would let the request expire unseen.
+    'account.closure_requested'
 ];
 
 /** Expected WhatsApp body-param counts, mirroring the template registry. */
@@ -173,6 +184,14 @@ const EXPECTED_WA_PARAMS: Record<CustomerNotificationType, number> = {
     // currency + amount + orderNumber. The amount is carried so a customer with two orders
     // in flight can tell which one failed.
     'order.payment_failed': 3,
+    // ADR-A11 (W-E) — delivery-fee changes after checkout.
+    'order.delivery_fee.approval_needed': 4,
+    'order.delivery_fee.topup_due': 4,
+    'order.delivery_fee.lowered': 4,
+    'order.delivery_fee.updated': 3,
+    'order.delivery_fee.refund_pending': 3,
+    'order.delivery_fee.topup_failed': 3,
+    'order.combined_delivery.answered': 3,
     'ticket.replied': 1,
     'ticket.awaiting_customer': 1,
     // TWO, and the second is a whole sentence. Whether the customer may still reply
@@ -180,7 +199,9 @@ const EXPECTED_WA_PARAMS: Record<CustomerNotificationType, number> = {
     // into the approved template body — which would make one of the two outcomes a lie.
     'ticket.resolved': 2,
     // In-window-only: no template, so no template parameters.
-    'cart.abandoned': 0
+    'cart.abandoned': 0,
+    // reason + expiresAt (ADR-A10). Both always filled — each has a localized fallback.
+    'account.closure_requested': 2
 };
 
 /** The settlement arithmetic, mirroring CompletionPricingService. */
@@ -236,14 +257,16 @@ function main(): void {
     // `booking.balance.received` (phase 10), the LAST of that set: a balance paid after the
     // appointment used to return early rather than reuse a "see you then" sentence that had
     // become false, which told the customer nothing at all. 26 since 2026-09-27: the
-    // abandoned-basket reminder, `cart.abandoned`. The literal
+    // abandoned-basket reminder, `cart.abandoned`. 27 since 2026-10-04: ADR-A10's
+    // `account.closure_requested`. The literal
     // is kept rather than derived: this assertion's whole job is to notice a situation appearing
     // on one side and not the other, and `catalog.length === model.length` would pass happily
     // while both drifted away from what anybody meant.
-    assert('catalog and model enum list the same 26 situations', () => {
+    // 34 since 2026-10-04 (W-E): seven delivery-fee-change situations (ADR-A11).
+    assert('catalog and model enum list the same 34 situations', () => {
         const catalog = Object.keys(CUSTOMER_NOTIFICATION_CATALOG).sort();
         const model = [...CUSTOMER_NOTIFICATION_TYPES].sort();
-        return catalog.length === 26 && JSON.stringify(catalog) === JSON.stringify(model);
+        return catalog.length === 34 && JSON.stringify(catalog) === JSON.stringify(model);
     });
 
     // The aggregate enum is spread from CUSTOMER_AGGREGATE_TYPES rather than hand-kept —
@@ -266,8 +289,9 @@ function main(): void {
         return JSON.stringify(catalog) === JSON.stringify(model);
     });
 
+    // 9 since 2026-10-04: ADR-A10's `agent_contract.ended_by_closure` joined the original eight.
     assert('the agent enum includes every agent_contract situation', () =>
-        AGENT_NOTIFICATION_TYPES.filter(t => t.startsWith('agent_contract.')).length === 8);
+        AGENT_NOTIFICATION_TYPES.filter(t => t.startsWith('agent_contract.')).length === 9);
 
     console.log('\n── WhatsApp template contract ──');
 
@@ -411,9 +435,10 @@ function main(): void {
             .filter((s): s is string => typeof s === 'string')
     )];
 
-    // Seven since 2026-09-27: `shop/cart`, the basket reminder's page.
-    assert('every button carries a suffix and there are seven distinct ones', () =>
-        allSuffixes.length === 7);
+    // Seven since 2026-09-27: `shop/cart`, the basket reminder's page. Eight since 2026-10-04:
+    // `shop/account/closure` (ADR-A10), owner-scoped and so under shop/account/.
+    assert('every button carries a suffix and there are eight distinct ones', () =>
+        allSuffixes.length === 8);
 
     assert('no suffix has a leading slash (Meta supplies the separator)', () =>
         allSuffixes.every((s) => !s.startsWith('/')));

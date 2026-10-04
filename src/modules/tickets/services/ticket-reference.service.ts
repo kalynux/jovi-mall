@@ -8,6 +8,7 @@ import { FileModel } from '../../catalog/models/file.model';
 import { getStorageProvider } from '../../../core/storage/storage.instance';
 import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
 import { resolveFileDetails, toFileDetail } from '../../catalog/read-models/file-detail.resolver';
+import { categoryCatalogCache } from '../../categories/services/category-catalog.cache';
 
 /**
  * Ticket Reference Service
@@ -199,12 +200,18 @@ export class TicketReferenceService {
         let filter: Record<string, unknown> = baseFilter;
         if (q && q.trim()) {
             const rx = new RegExp(escapeRegex(q.trim()), 'i');
-            filter = { $and: [baseFilter, { $or: [{ title: rx }, { category: rx }, { tags: rx }] }] };
+            // Categories are ids now; match the NAMES in the shared list, then the ids.
+            const categoryIds = (await categoryCatalogCache.list())
+                .filter(c => rx.test(c.name))
+                .map(c => new Types.ObjectId(c.id));
+            const or: Record<string, unknown>[] = [{ title: rx }, { tags: rx }];
+            if (categoryIds.length > 0) or.push({ categoryIds: { $in: categoryIds } });
+            filter = { $and: [baseFilter, { $or: or }] };
         }
 
         const [products, total] = await Promise.all([
             ProductModel.find(filter)
-                .select('title slug category tags fileIds')
+                .select('title slug categoryIds tags fileIds')
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limit)
@@ -226,14 +233,18 @@ export class TicketReferenceService {
         const fileById = new Map(files.map(f => [f._id.toString(), f as any]));
         const storage = getStorageProvider();
 
-        const data = products.map(p => {
+        const categoryRefs = await categoryCatalogCache.refsForMany(products.map(p => p.categoryIds));
+
+        const data = products.map((p, i) => {
             const firstFileId = p.fileIds && p.fileIds.length ? p.fileIds[0].toString() : null;
             const file = firstFileId ? fileById.get(firstFileId) : null;
             return {
                 id: p._id.toString(),
                 title: p.title,
                 slug: p.slug,
-                category: p.category ?? null,
+                categories: categoryRefs[i],
+                // Deprecated single value — the primary category's name.
+                category: categoryRefs[i][0]?.name ?? null,
                 tags: p.tags ?? [],
                 // Built through the shared resolver rather than `getPublicUrl` directly:
                 // the field name `firstFileUrl` is what hid this site from

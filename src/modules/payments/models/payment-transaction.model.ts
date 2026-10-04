@@ -46,8 +46,22 @@ export type PaymentGatewayType = PaymentGatewayName;
  * balance payment and never credit it.
  *
  * `primary` is the default and covers every pre-existing row.
+ *
+ * `order_delivery_topup` (ADR-A11) is the same shape on an ORDER: the customer paying the
+ * difference after approving a higher delivery fee on a customer-paid shipment. It carries
+ * `orderId` like a single-order payment, so the success handler MUST branch on it before the
+ * order's already-paid early return — exactly the booking-balance lesson.
  */
-export type PaymentPurpose = 'primary' | 'booking_balance';
+export type PaymentPurpose = 'primary' | 'booking_balance' | 'order_delivery_topup';
+export const PAYMENT_PURPOSES: readonly PaymentPurpose[] = ['primary', 'booking_balance', 'order_delivery_topup'];
+
+/** What an `order_delivery_topup` pays for — the shipment and the fee proposal it settles. */
+export interface IDeliveryTopupLink {
+  shipmentId: Types.ObjectId;
+  proposalId: Types.ObjectId;
+  /** Stamped once when the success has been applied — the idempotency marker. */
+  appliedAt: Date | null;
+}
 
 export interface IPaymentTransaction extends Document {
   // Source linkage (exactly one of orderId | bookingId | cartId must be set)
@@ -57,6 +71,8 @@ export interface IPaymentTransaction extends Document {
   orderIds?: Types.ObjectId[];      // The group's orders (required when cartId is set)
   /** What this payment settles. See PaymentPurpose. */
   purpose: PaymentPurpose;
+  /** Set only on `purpose: 'order_delivery_topup'` — see IDeliveryTopupLink. */
+  deliveryTopup?: IDeliveryTopupLink | null;
   /**
    * Who paid — but NOT one kind of id, despite the `ref` below.
    *
@@ -228,9 +244,19 @@ const PaymentTransactionSchema = new Schema<IPaymentTransaction>({
   // Defaults to 'primary' so every existing row reads correctly with no migration.
   purpose: {
     type: String,
-    enum: ['primary', 'booking_balance'],
+    enum: [...PAYMENT_PURPOSES],
     required: true,
     default: 'primary'
+  },
+  // ADR-A11 — see IDeliveryTopupLink. `default: undefined` so no other row carries the key.
+  deliveryTopup: {
+    type: {
+      shipmentId: { type: Schema.Types.ObjectId, ref: MODELS.SHIPMENT, required: true },
+      proposalId: { type: Schema.Types.ObjectId, required: true },
+      appliedAt: { type: Date, default: null }
+    },
+    default: undefined,
+    _id: false
   },
   userId: {
     type: Schema.Types.ObjectId,

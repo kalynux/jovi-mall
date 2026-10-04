@@ -300,18 +300,27 @@ async function main(): Promise<void> {
 
   const orderSrc = stripComments(read('modules/orders/order.service.ts'));
   const buildVendorOrder = spanOf(orderSrc, 'private async buildVendorOrder(', 'async handlePaymentSuccess(');
-  assert('checkout: buildVendorOrder calls deliveryCostCapService.assertVendor', () =>
-    buildVendorOrder.includes('deliveryCostCapService.assertVendor('));
-  assert('… with the real payment method and currency (not a literal)', () =>
-    /assertVendor\([\s\S]*?\},\s*paymentMethod,\s*currency,?\s*\)/.test(buildVendorOrder));
+  // ADR-A11: checkout no longer calls the cap service directly — it prices through
+  // VendorOrderPricingService → priceVendorOrder, which runs the cap for a VENDOR-paid part
+  // (falling back to customer-paid on failure, D-6) and refuses only the customer-paid sanity
+  // failure. These scans pin that wiring.
+  assert('checkout: buildVendorOrder prices through vendorOrderPricingService.price (strict)', () =>
+    /vendorOrderPricingService\.price\(\s*\{[\s\S]*?paymentMethod,[\s\S]*?\},\s*'strict',?\s*\)/.test(buildVendorOrder));
+  assert('… and refuses on the pricing verdict with ORDER_BELOW_DELIVERY_MINIMUM (belowMinimumError)', () =>
+    /if \(pricing\.deliveryMinimum && !pricing\.deliveryMinimum\.met\) \{\s*throw belowMinimumError\(/.test(buildVendorOrder));
   assert('… BEFORE the physical order is created (a refusal must leave no order)', () => {
-    const call = buildVendorOrder.indexOf('deliveryCostCapService.assertVendor(');
+    const call = buildVendorOrder.indexOf('throw belowMinimumError(');
     const create = buildVendorOrder.indexOf('this.orderRepo.create(');
     return call > 0 && create > call;
   });
-  assert('… from the negotiated floor snapshot (exact AI margin)', () => buildVendorOrder.includes('floor_price_snapshot'));
+  assert('… from the negotiated floor snapshot (exact AI margin)', () => buildVendorOrder.includes('floorPrice: orderItem.floor_price_snapshot ?? null'));
   assert('… and the pickup SNAPSHOT the split classifies, not the live product', () =>
-    buildVendorOrder.includes('orderItem.delivery?.pickup_location?.source'));
+    buildVendorOrder.includes('pickupSource: fact.pickupLocation?.source ?? null')
+    && buildVendorOrder.includes('pickup_location: fact.pickupLocation'));
+  const pricingCore = stripComments(read('modules/orders/domain/vendor-order-pricing.ts'));
+  assert('the cap runs ONLY for a vendor-paid part, and its failure falls back to customer-paid (D-6)', () =>
+    /if \(payer === 'vendor'\) \{\s*capCheck = assessDeliveryCostUnits\(/.test(pricingCore)
+    && /if \(!capCheck\.met\) \{[\s\S]*?payer = 'customer';\s*payerReason = 'cap_fallback';/.test(pricingCore));
   assert('buildVendorOrder runs inside the checkout transaction (so the refusal rolls back holds)', () => {
     const create = spanOf(orderSrc, 'async createOrdersFromCart(', 'private async resolveDeliveryAddress(');
     return /runInTransaction\(async \(session\) => \{[\s\S]*this\.buildVendorOrder\(/.test(create);
@@ -327,7 +336,8 @@ async function main(): Promise<void> {
     /method:\s*'online'\s*\|\s*'cash_on_delivery'\s*=\s*'online'/.test(precheck));
 
   const quoteSrc = stripComments(read('modules/orders/services/cart-quote.service.ts'));
-  assert('the quote uses the same service checkout does', () => quoteSrc.includes('this.deliveryCap.assessVendor('));
+  assert('the quote uses the same pricing path checkout does', () =>
+    quoteSrc.includes('this.pricing.priceMethods(') && buildVendorOrder.includes('vendorOrderPricingService.price('));
 
   const splitSrc = stripComments(read('modules/earnings/services/earnings-split.service.ts'));
   assert('the split\'s EARNINGS_INVALID_SPLIT backstop is still there (prepaid + COD)', () =>

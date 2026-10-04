@@ -5,10 +5,12 @@ import { PickupLocationSource } from '../../models/product.model';
  * Camel-cased delivery patch as it arrives from a request body.
  * Every sub-field is independently optional — omitted means "leave alone",
  * and an explicit `null` on `pickupLocation` means "clear it".
+ *
+ * There is no `freeDelivery` here: free delivery is a SHOP setting
+ * (`vendor_settings.delivery_terms`, ADR-A11 D-1), never a product field.
  */
 export interface DeliveryConfigPatch {
     agencyId?: string | null;
-    freeDelivery?: boolean;
     pickupLocation?: {
         source: PickupLocationSource;
         vendorAddressId?: string | null;
@@ -19,7 +21,6 @@ export interface DeliveryConfigPatch {
 /** Snake-cased shape actually stored on the product (see product.model.ts). */
 export interface DeliveryConfigPersistence {
     agency_id: string | null;
-    free_delivery: boolean;
     pickup_location: {
         source: PickupLocationSource;
         vendor_address_id: string | null;
@@ -32,7 +33,7 @@ export interface DeliveryConfigPersistence {
  * return the full snake_case sub-document to persist.
  *
  * This exists because `ProductRepositoryMongo.update` `$set`s the whole
- * `delivery` object — so writing a patch that only carries `freeDelivery` would
+ * `delivery` object — so writing a patch that only carries `agencyId` would
  * silently wipe `pickup_location`. Every write path must merge first.
  *
  * Pure: no repository access and no validation. Whether the chosen agency is
@@ -48,15 +49,11 @@ export function mergeDeliveryConfig(
         ? patch.agencyId
         : (existing?.agencyId ?? null);
 
-    const free_delivery = patch.freeDelivery !== undefined
-        ? patch.freeDelivery
-        : (existing?.freeDelivery ?? false);
-
     let pickup_location: DeliveryConfigPersistence['pickup_location'];
     if (patch.pickupLocation === undefined) {
         // Untouched — carry the persisted value across, re-snake-casing it. EVERY
         // sub-field must be listed here: one omitted is one silently wiped by an
-        // unrelated `freeDelivery`-only patch, which is the whole reason this
+        // unrelated `agencyId`-only patch, which is the whole reason this
         // function exists.
         pickup_location = existing?.pickupLocation
             ? {
@@ -80,5 +77,5 @@ export function mergeDeliveryConfig(
         };
     }
 
-    return { agency_id, free_delivery, pickup_location };
+    return { agency_id, pickup_location };
 }

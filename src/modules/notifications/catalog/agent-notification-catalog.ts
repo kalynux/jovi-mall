@@ -4,7 +4,14 @@ import { renderTemplate, RenderContext } from './message-renderer';
 import { Language, DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES } from './notification-i18n';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
-import { ChannelText, SituationMessages, ButtonDef } from './notification-catalog';
+import {
+    ChannelText,
+    SituationMessages,
+    ButtonDef,
+    closureRequestedBase,
+    CLOSURE_SUBJECT,
+    CLOSURE_BUTTON
+} from './notification-catalog';
 
 /**
  * Agent Notification Message Catalog (localized)
@@ -1224,6 +1231,34 @@ export const AGENT_NOTIFICATION_CATALOG: Record<AgentNotificationType, Situation
             template: { name: 'agent_cod_pool_released', bodyParams: ['{{currency}}', '{{poolFormatted}}'] }
         },
         button: COD_BUTTON
+    },
+
+    // ─── Role closure (ADR-A10) ──────────────────────────────────────────────
+
+    /** An administrator asked to close this agent account. Ungated — see the model's note. */
+    'account.closure_requested': {
+        base: closureRequestedBase(CLOSURE_SUBJECT.agent),
+        whatsapp: {
+            text: {},
+            template: { name: 'agent_account_closure_requested', bodyParams: ['{{reason}}', '{{expiresAt}}'] }
+        },
+        button: CLOSURE_BUTTON
+    },
+
+    /** The contracted AGENCY closed its account, so the contract ended. */
+    'agent_contract.ended_by_closure': {
+        base: {
+            en: { subject: 'Contract ended', body: '{{agencyName}} closed their account on Wi-Mall, so your contract with them has ended.' },
+            fr: { subject: 'Contrat terminé', body: '{{agencyName}} a fermé son compte sur Wi-Mall : votre contrat avec cette agence a donc pris fin.' },
+            pt: { subject: 'Contrato terminado', body: '{{agencyName}} encerrou a sua conta na Wi-Mall, por isso o seu contrato com esta agência terminou.' },
+            es: { subject: 'Contrato finalizado', body: '{{agencyName}} cerró su cuenta en Wi-Mall, así que tu contrato con esta agencia ha finalizado.' },
+            ar: { subject: 'انتهى العقد', body: 'أغلقت {{agencyName}} حسابها على Wi-Mall، لذا انتهى عقدك معها.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agent_contract_ended_closure', bodyParams: ['{{agencyName}}'] }
+        },
+        button: AGENCY_CONTRACT_BUTTON
     }
 };
 

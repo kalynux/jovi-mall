@@ -150,7 +150,7 @@ export class AccountClosureService {
         );
       }
 
-      await this.closureRepo.anonymiseCustomer(customerId, session);
+      await this.closureRepo.anonymiseCustomer(customerId, closedAt, session);
 
       const channelConnections = await this.closureRepo.deleteChannelConnections(userId, session);
       const deviceTokens = await this.closureRepo.deleteDeviceTokens(userId, session);

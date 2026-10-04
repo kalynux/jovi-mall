@@ -77,6 +77,13 @@ function vocabularyOf(catalog: Catalog): string[] {
  * apps hold a case for it.
  */
 const VENDOR_VOCABULARY = [
+    /**
+     * ⚠ **NEW 2026-10-04 (ADR-A10)** — the owner's account-closure screen, for
+     * `account.closure_requested`: an administrator asked to close this role and the owner
+     * must confirm or decline while signed in. No placeholder: one open request per role.
+     * The same label on all three apps, each mapping it onto its own settings screen.
+     */
+    'account/closure',
     'agency-connections/{{connectionId}}',
     'bookings/{{bookingId}}',
     'orders/{{orderId}}',
@@ -88,6 +95,13 @@ const VENDOR_VOCABULARY = [
 ];
 
 const AGENCY_VOCABULARY = [
+    /**
+     * ⚠ **NEW 2026-10-04 (ADR-A10)** — the owner's account-closure screen, for
+     * `account.closure_requested`: an administrator asked to close this role and the owner
+     * must confirm or decline while signed in. No placeholder: one open request per role.
+     * The same label on all three apps, each mapping it onto its own settings screen.
+     */
+    'account/closure',
     'agents/{{contractId}}',
     'cod/deposits/{{depositId}}',
     /**
@@ -106,6 +120,13 @@ const AGENCY_VOCABULARY = [
 ];
 
 const AGENT_VOCABULARY = [
+    /**
+     * ⚠ **NEW 2026-10-04 (ADR-A10)** — the owner's account-closure screen, for
+     * `account.closure_requested`: an administrator asked to close this role and the owner
+     * must confirm or decline while signed in. No placeholder: one open request per role.
+     * The same label on all three apps, each mapping it onto its own settings screen.
+     */
+    'account/closure',
     /**
      * ⚠ **NEW 2026-10-02** — the agent's COD screen, for `cod.pool.pinned` / `.released`.
      * No placeholder: an agent has one pool. Maps onto the app's `/cod` branch.
@@ -149,15 +170,15 @@ const AGENT_VOCABULARY = [
 function main(): void {
     console.log('\n── The vocabulary each app translates (the contract) ──');
 
-    assert('the VENDOR app is offered exactly the 8 documented paths', () =>
+    assert('the VENDOR app is offered exactly the 9 documented paths', () =>
         JSON.stringify(vocabularyOf(NOTIFICATION_CATALOG as unknown as Catalog))
         === JSON.stringify(VENDOR_VOCABULARY));
 
-    assert('the AGENCY app is offered exactly the 9 documented paths', () =>
+    assert('the AGENCY app is offered exactly the 10 documented paths', () =>
         JSON.stringify(vocabularyOf(AGENCY_NOTIFICATION_CATALOG as unknown as Catalog))
         === JSON.stringify(AGENCY_VOCABULARY));
 
-    assert('the AGENT app is offered exactly the 8 documented paths', () =>
+    assert('the AGENT app is offered exactly the 9 documented paths', () =>
         JSON.stringify(vocabularyOf(AGENT_NOTIFICATION_CATALOG as unknown as Catalog))
         === JSON.stringify(AGENT_VOCABULARY));
 

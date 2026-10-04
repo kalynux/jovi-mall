@@ -101,7 +101,8 @@ async function rank(fx: RankingFixture) {
     { listActiveForAgencyAndAgents: async () => fx.contracts ?? [] } as any,
     { findById: async () => ({ business_addresses: [{ _id: 'addr1', location: PICKUP }] }) } as any,
     {} as any,
-    { computeExpectedAmount: () => 200 } as any,
+    // Goods 200 (the value ceiling reads computeItemsAmount since ADR-A11), cash 200 (no customer fee).
+    { computeExpectedAmount: () => 200, computeItemsAmount: () => 200 } as any,
     { assertCanTakeCodShipment: async () => undefined } as any,
     {
       // Mirrors the real client: null for an empty list, else one result per agent.

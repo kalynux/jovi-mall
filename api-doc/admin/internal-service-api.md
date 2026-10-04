@@ -151,10 +151,43 @@ PATCH  /users/:userId
 POST   /users/:userId/password-reset-link      ← below
 POST   /users/:userId/login-link               ← below
 POST   /users/:userId/bot-memory/reset         ← below
+POST   /users/:userId/roles/:role/closure      ← below (ADR-A10)
+DELETE /users/:userId/roles/:role/closure      ← below (ADR-A10)
+GET    /users/:userId/closure-requests         ← below (ADR-A10) — the one READ here
 ```
 
 A suspension is only real by virtue of the checks in `requireAuth`, `login` and the refresh
 rotation — all of which live here.
+
+#### Role closure — `/users/:userId/roles/:role/closure` (ADR-A10)
+
+An administrator **asks** a user to close one role (`customer` · `vendor` · `agency` · `agent`).
+The user confirms or declines at `/api/me/closure-request` (see
+[`../me/role-closure.md`](../me/role-closure.md)), signed in as that role. **There is no admin
+confirm on this surface, and there must never be one.**
+
+| Verb | Body | Answers |
+|---|---|---|
+| `POST` | `{ reason }` (3–500, `.strict()`; shown to the user) | `201` with the request |
+| `DELETE` | none | `200` with the request at `cancelled` |
+| `GET /users/:userId/closure-requests` | none | `200`, every request newest first |
+
+The request DTO: `{ id, userId, role, roleEntityId, status, reason, requestedBy {id, name},
+requestedAt, expiresAt, warnings[], resolvedAt, resolvedBy, declineNote, outcome }`. `status` is
+**effective**: a stored `pending` past `expiresAt` reads `expired`.
+
+| Status | Code | When |
+|---|---|---|
+| 404 | `USER_NOT_FOUND` | no such user |
+| 409 | `USER_STATUS_CONFLICT` | the account is not `active` |
+| 422 | `ROLE_CLOSURE_ROLE_NOT_HELD` | the user does not hold that role |
+| 409 | `ROLE_CLOSED` | that role is already closed |
+| 409 | `ROLE_CLOSURE_ALREADY_PENDING` | one is already waiting (`details.requestId`, `expiresAt`) |
+| 422 | `ROLE_CLOSURE_BLOCKED` | live work or money; `details.blockers` itemised |
+| 404 | `ROLE_CLOSURE_REQUEST_NOT_FOUND` | `DELETE` with nothing pending |
+
+The `GET` exists for symmetry with this service's request DTO. wi-admin itself reads
+`role_closure_requests` directly, per its read-direct rule.
 
 #### `POST /users/:userId/bot-memory/reset` — wipe the bot's conversation memory for one customer
 

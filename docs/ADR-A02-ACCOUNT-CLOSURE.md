@@ -6,6 +6,11 @@
 **Answers:** [Q-2](../../PRODUCTION-READINESS/11-DECISIONS-REGISTER.md#q-2--what-does-delete-my-account-mean-and-is-it-a-legal-obligation-here)
 of the Phase D register
 
+> **Amended 2026-10-04 by [ADR-A10](./ADR-A10-ROLE-CLOSURE.md).** D-1's "a dual-role account is
+> refused" still governs **self-service** (`POST /api/me/close`). An administrator may now *ask*
+> a person to close ONE role, dual-role or not, and the person confirms it themselves; closing
+> their last role closes the account exactly as below. Everything else here stands, including D-2.
+
 ---
 
 ## Context

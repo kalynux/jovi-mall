@@ -98,6 +98,7 @@ import { EarningsLedgerModel } from '../../src/modules/earnings/models/earnings-
 import { TrackingOutboxModel } from '../../src/modules/tracking-integration/models/tracking-outbox.model';
 import { generateSystemPassword } from '../../src/core/auth/system-password';
 import { IGeoAddress, GeoAddressInput } from '../../src/core/types/geo-address.types';
+import { categoryResolutionService } from '../../src/modules/categories/services/category-resolution.service';
 
 const CURRENCY = 'XAF';
 const TAG = 'e2eac-';
@@ -380,6 +381,11 @@ async function buildWorld(): Promise<{ variantId: Types.ObjectId; productId: Typ
 
   const addresses = vendor.business_addresses as unknown as Array<{ _id: Types.ObjectId }>;
 
+  // The same shared-list entry the COD seed uses — resolved, not duplicated.
+  const lampCategory = await categoryResolutionService.resolveUnattended('Maison & Électronique', {
+    source: 'admin',
+    vendorId: null,
+  });
   const product = await ProductModel.create({
     vendorId: ID.vendor,
     type: 'physical',
@@ -387,13 +393,12 @@ async function buildWorld(): Promise<{ variantId: Types.ObjectId; productId: Typ
     title: 'E2E Solar Lamp',
     description: 'verify:agent-e2e fixture product.',
     slug: `${TAG}solar-lamp`,
-    category: 'Maison & Électronique',
+    categoryIds: lampCategory ? [lampCategory.id] : [],
     tags: ['e2e-agent-contract'],
     seo: { title: 'E2E Solar Lamp', description: 'E2E Solar Lamp' },
     hasVariants: false,
     delivery: {
       agency_id: ID.agency,
-      free_delivery: false,
       pickup_location: { source: 'vendor_address', vendor_address_id: addresses[0]._id },
     },
   });

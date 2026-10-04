@@ -1145,6 +1145,21 @@ is now **fully paid**, which is the customer's actual question and the closing h
 | es | Resuelto: "{{1}}" | Hemos marcado tu solicitud sobre "{{1}}" como terminada. {{2}} | Ver solicitud |
 | ar | تم الحل: "{{1}}" | لقد وضعنا علامة على طلبك بخصوص "{{1}}" بأنه منتهٍ. {{2}} | عرض الطلب |
 
+### `customer_account_closure_requested`
+
+- **Situation:** `account.closure_requested` (ADR-A10 role closure) — **unmutable**, no preference key
+- **Body params:** `{{1}}`=reason (the administrator's, flattened to one line, ≤ 300 chars; localized "no reason was given" fallback), `{{2}}`=expiresAt (`yyyy-MM-dd HH:mm` in `Customer.timezone`)
+- **Buttons:** URL → `shop/account/closure` (label "Open my account"); QUICK_REPLY "Review the request" → `acct:close` (built by `accountActionId('close')`, opens the bot's closure preview)
+- ⛔ Copy says **close**, never **delete** (ADR-A02 D-2).
+
+| Lang | Header | Body | Button labels |
+|---|---|---|---|
+| en | Confirm closing your account | An administrator has asked to close your account on Wi-Mall: {{1}}. Nothing happens unless you confirm. Open your account settings before {{2}} to confirm or decline. | Open my account · Review the request |
+| fr | Confirmez la fermeture de votre compte | Un administrateur a demandé la fermeture de votre compte sur Wi-Mall : {{1}}. Rien ne se passe sans votre confirmation. Ouvrez les paramètres de votre compte avant {{2}} pour confirmer ou refuser. | Ouvrir mon compte · Voir la demande |
+| pt_PT | Confirme o encerramento da sua conta | Um administrador pediu o encerramento da sua conta na Wi-Mall: {{1}}. Nada acontece sem a sua confirmação. Abra as definições da sua conta antes de {{2}} para confirmar ou recusar. | Abrir a minha conta · Ver o pedido |
+| es | Confirma el cierre de tu cuenta | Un administrador ha pedido cerrar tu cuenta en Wi-Mall: {{1}}. No pasará nada a menos que lo confirmes. Abre los ajustes de tu cuenta antes de {{2}} para confirmar o rechazar. | Abrir mi cuenta · Ver la solicitud |
+| ar | أكّد إغلاق حسابك | طلب أحد المسؤولين إغلاق حسابك على Wi-Mall: {{1}}. لن يحدث شيء ما لم تؤكّد. افتح إعدادات حسابك قبل {{2}} للتأكيد أو الرفض. | فتح حسابي · مراجعة الطلب |
+
 ---
 
 ## 14. Phase 10 · STAGE 2 — quick-reply buttons on the approved templates
@@ -1416,3 +1431,90 @@ Until it is submitted and APPROVED, a bulk offer reaches the agent by in-app, pu
 Telegram and **in-window** WhatsApp only, and an out-of-window WhatsApp send fails, the same as
 every new situation on its first day. Submit with the working form recorded in the 2026-10-02
 section above (`--submit` is idempotent and sends only the difference).
+
+---
+
+## 2026-10-04 — role closure (ADR-A10): 8 templates GENERATED, NOT SUBMITTED
+
+⏳ **Generated into `whatsapp-template-payloads.json`, nothing sent to Meta.** 128 → **136** names,
+256 → **272** submissions (`en` + `fr`). The regeneration was diffed against the previous file:
+the sixteen new submissions are the only difference, and **every existing submission is
+byte-identical**. All UTILITY.
+
+⛔ **Copy says "close", never "delete"** — ADR-A02 D-2 forbids describing a closure as deletion
+(the role is anonymised and retained). The four `*_account_closure_requested` bodies share one
+sentence frame (`closureRequestedBase` in `notification-catalog.ts`) with the audience's noun
+spliced in; `{{2}}` sits mid-sentence so no body ends on a variable. The four
+`*_ended_closure` bodies open on the name inside a bolded heading, like every `connection.*`
+template already approved.
+
+| Template name | Audience | Situation | Body params | Button path |
+|---|---|---|---|---|
+| `customer_account_closure_requested` | customer | `account.closure_requested` | `{{1}}` reason, `{{2}}` expiresAt | `shop/account/closure` ⭐ new + quick reply `acct:close` |
+| `vendor_account_closure_requested` | vendor | `account.closure_requested` | `{{1}}` reason, `{{2}}` expiresAt | `account/closure` ⭐ new |
+| `agency_account_closure_requested` | agency | `account.closure_requested` | `{{1}}` reason, `{{2}}` expiresAt | `account/closure` ⭐ new |
+| `agent_account_closure_requested` | agent | `account.closure_requested` | `{{1}}` reason, `{{2}}` expiresAt | `account/closure` ⭐ new |
+| `vendor_connection_ended_closure` | vendor | `connection.ended_by_closure` | `{{1}}` agency name | `agency-connections/{{connectionId}}` |
+| `agency_connection_ended_closure` | agency | `connection.ended_by_closure` | `{{1}}` vendor name | `vendor-connections/{{connectionId}}` |
+| `agency_agent_contract_ended_closure` | agency | `agent_contract.ended_by_closure` | `{{1}}` agent name | `agents/{{contractId}}` |
+| `agent_contract_ended_closure` | agent | `agent_contract.ended_by_closure` | `{{1}}` agency name | `memberships/{{contractId}}` |
+
+Approval copy (en; the fr is in the payloads file, generated from the catalog):
+
+- `*_account_closure_requested` — **Confirm closing your {account · shop · agency account · agent account}** / *An administrator has asked to close your {…} on Wi-Mall: {{1}}. Nothing happens unless you confirm. Open your account settings before {{2}} to confirm or decline.*
+- `vendor_connection_ended_closure` / `agency_connection_ended_closure` — **Connection ended** / *{{1}} closed their account on Wi-Mall, so your connection with them has ended.*
+- `agency_agent_contract_ended_closure` — **Agent contract ended** / *{{1}} closed their account on Wi-Mall, so your contract with them has ended.*
+- `agent_contract_ended_closure` — **Contract ended** / *{{1}} closed their account on Wi-Mall, so your contract with them has ended.*
+
+Every parameter is always non-empty: `reason` falls back to "no reason was given", `expiresAt`
+to "the request expires", and an empty `closingName` (the producer sends the name read BEFORE
+anonymisation, which may be `''`) to a neutral phrase — "A partner agency", "A partner vendor",
+"One of your agents" (`role-closure-context.ts`). An empty WhatsApp parameter is a refused send.
+
+⚠ **Two routes must exist before approval** (a URL is baked in permanently): the storefront's
+`shop/account/closure` page, and each dashboard app's translation of the `account/closure`
+label (`deep-links.md`). Submit with the working form recorded in the 2026-10-02 section above.
+
+---
+
+## 2026-10-04 — delivery-fee changes after checkout (ADR-A11, W-E): 9 templates GENERATED, NOT SUBMITTED
+
+⏳ **Generated into `whatsapp-template-payloads.json`, nothing sent to Meta (owner action).**
+136 → **145** names, 272 → **290** submissions (`en` + `fr`). The regeneration was diffed
+against the previous file: the 18 new submissions are the only difference, and **every existing
+submission is byte-identical**. Generated with the production button hosts already baked into
+the approved set (`--base-customer=https://wi-mall.com`, `--base-vendor=https://vendor.wi-mall.com`,
+`--base-agency=https://agency.wi-mall.com`, `--base-agent=https://agent.wi-mall.com`).
+
+All seven customer situations are MONEY situations (no preference key — they cannot be muted).
+`{{moneyLine}}` / `{{reasonLine}}` are optional clauses the in-window message keeps and the
+template drops (`OPTIONAL_CLAUSES`): a static template cannot carry a sometimes-empty sentence and
+Meta refuses an empty parameter.
+
+| Template name | Audience | Situation | Body params | Button |
+|---|---|---|---|---|
+| `customer_order_delivery_fee_approval_needed` | customer | `order.delivery_fee.approval_needed` | currency, proposed fee, fee before, order number | `shop/account/orders/detail/{{orderId}}` |
+| `customer_order_delivery_fee_topup_due` | customer | `order.delivery_fee.topup_due` | currency, proposed fee, order number, top-up amount | same |
+| `customer_order_delivery_fee_lowered` | customer | `order.delivery_fee.lowered` | order number, currency, new fee, old fee | same |
+| `customer_order_delivery_fee_updated` | customer | `order.delivery_fee.updated` | order number, currency, new fee | same |
+| `customer_order_delivery_fee_refund_pending` | customer | `order.delivery_fee.refund_pending` | currency, amount, order number | same |
+| `customer_order_delivery_fee_topup_failed` | customer | `order.delivery_fee.topup_failed` | currency, amount, order number | same |
+| `customer_order_combined_delivery_answered` | customer | `order.combined_delivery.answered` | order number, agency name, answer sentence | same |
+| `vendor_delivery_fee_customer_declined` | vendor | `delivery_fee_proposal.customer_declined` | order number, currency, difference | `orders/{{orderId}}` |
+| `agency_combined_delivery_request_received` | agency | `combined_delivery_request.received` | parcel count, currency, total fee | `shipments/{{shipmentId}}` (first parcel) |
+
+Approval copy (`en`; the `fr` text is the catalog's and is in the payloads file):
+
+- `customer_order_delivery_fee_approval_needed` — *Delivery fee change to approve — {{4}}* · The delivery company asks {{1}} {{2}} instead of {{1}} {{3}} to deliver your order {{4}}. Open the order to approve or decline — your parcel waits for your answer.
+- `customer_order_delivery_fee_topup_due` — *Pay {{1}} {{4}} to confirm your delivery — {{3}}* · You approved a delivery fee of {{1}} {{2}} for order {{3}}. Pay the difference of {{1}} {{4}} and your parcel can be collected.
+- `customer_order_delivery_fee_lowered` — *Your delivery fee went down — {{1}}* · The delivery fee for your order {{1}} is now {{2}} {{3}} instead of {{2}} {{4}}. Tap Open below for the full details.
+- `customer_order_delivery_fee_updated` — *New delivery fee confirmed — {{1}}* · The delivery fee for your order {{1}} is now {{2}} {{3}}. Tap Open below for the full details.
+- `customer_order_delivery_fee_refund_pending` — *Refund on the way: {{1}} {{2}}* · We owe you {{1}} {{2}} of delivery money on order {{3}}. It has to be sent by hand, so our team is processing it — you do not need to do anything, and we will confirm when it is done.
+- `customer_order_delivery_fee_topup_failed` — *Delivery payment did not go through — {{3}}* · We could not take the {{1}} {{2}} delivery difference for order {{3}}. Nothing was charged; your parcel waits until it is paid — open the order to try again.
+- `customer_order_combined_delivery_answered` — *Answer to your combined delivery request — {{1}}* · {{2}} {{3}} Open the order to see your delivery fees. ⚠ `{{3}}` is a whole sentence ("agreed to a combined price: you save XAF 800 on delivery." / "could not offer a combined price — …"); if Meta refuses a sentence-valued parameter, split it into two situations (answered / declined).
+- `vendor_delivery_fee_customer_declined` — *You cover a delivery difference* · The customer declined to pay the higher delivery fee after you changed the delivery company for order #{{1}}. The difference of {{2}} {{3}} is deducted from your earnings on this order.
+- `agency_combined_delivery_request_received` — *Combined delivery price requested* · A customer asks for a combined price on {{1}} parcels you carry from one checkout (currently {{2}} {{3}} in delivery fees). Lower the fees or decline from your combined requests.
+
+Until submitted and APPROVED these reach their audience in-app, by push, email, Telegram and
+**in-window** WhatsApp only. Submit with the working form recorded in the 2026-10-02 section
+(`--submit` is idempotent and sends only the difference).

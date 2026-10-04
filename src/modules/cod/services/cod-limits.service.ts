@@ -27,6 +27,7 @@ import {
   sumCodExposure,
   vendorCodTermsOf,
 } from '../domain/cod-limits';
+import { customerDeliveryFeeOf } from '../../orders/domain/delivery-payer';
 
 /** Every row behind one agency's exposure — gathered once, summed as often as needed. */
 export interface AgencyExposureRows {
@@ -126,7 +127,7 @@ export class CodLimitsService {
     const [shipments, collected] = await Promise.all([
       ShipmentModel.find(
         { agency_id: agencyOid, status: { $in: COD_EXPOSURE_SHIPMENT_STATUSES as unknown as string[] } },
-        { order_id: 1, items: 1 }
+        { order_id: 1, items: 1, delivery_payer: 1, customer_delivery_fee: 1 }
       ).lean().exec(),
       CashCollectionModel.find(
         { agency_id: agencyOid, status: 'collected', $expr: { $lt: ['$settled_amount', '$expected_amount'] } },
@@ -147,7 +148,7 @@ export class CodLimitsService {
     const [orders, shipmentCollections] = await Promise.all([
       OrderModel.find(
         { _id: { $in: orderIds.map((id) => new Types.ObjectId(id)) }, payment_method: 'cash_on_delivery' },
-        { vendor_id: 1, items: 1 }
+        { vendor_id: 1, items: 1, delivery_payer: 1 }
       ).lean().exec(),
       CashCollectionModel.find(
         { shipment_id: { $in: shipments.map((s: any) => s._id) } },
@@ -168,7 +169,7 @@ export class CodLimitsService {
         amount:
           collection && collection.status === 'pending'
             ? collection.expected_amount ?? 0
-            : expectedCodAmount(order.items ?? [], s.items ?? []),
+            : expectedCodAmount(order.items ?? [], s.items ?? [], customerDeliveryFeeOf(order, s)),
         collectionStatus: collection?.status ?? null,
       });
     }

@@ -70,7 +70,19 @@ export type NotificationType =
      */
     | 'delivery_fee_proposal.received'
     | 'delivery_fee_proposal.edited'
-    | 'delivery_fee_proposal.withdrawn';
+    | 'delivery_fee_proposal.withdrawn'
+    /** ADR-A11 (D-10): the customer declined a change-agency difference — the vendor covers it. */
+    | 'delivery_fee_proposal.customer_declined'
+    /**
+     * Role closure (ADR-A10). `account.closure_requested` — an administrator asked to close
+     * this vendor's SHOP; nothing happens unless the vendor confirms while signed in. Gated by
+     * NO preference: a setting that silenced it would let the request expire unseen. Copy
+     * says "close", never "delete" (ADR-A02 D-2).
+     * `connection.ended_by_closure` — the AGENCY on the other end of a connection closed its
+     * account, so the connection ended. Gated by `connectionUpdated`, like every `connection.*`.
+     */
+    | 'account.closure_requested'
+    | 'connection.ended_by_closure';
 
 /**
  * Aggregate Types
@@ -91,7 +103,9 @@ export type AggregateType =
     | 'payout'
     | 'plan'
     | 'stock_request'
-    | 'product';
+    | 'product'
+    /** A role-closure request (ADR-A10) — `aggregateId` is the request id. */
+    | 'account';
 
 /**
  * Delivery Channels
@@ -181,7 +195,11 @@ const VendorNotificationSchema = new Schema<IVendorNotification>(
                 'shipment.cod_limit_held',
                 'delivery_fee_proposal.received',
                 'delivery_fee_proposal.edited',
-                'delivery_fee_proposal.withdrawn'
+                'delivery_fee_proposal.withdrawn',
+                'delivery_fee_proposal.customer_declined',
+                // ⚠ Hand-kept: every member of the union above must be here too.
+                'account.closure_requested',
+                'connection.ended_by_closure'
             ],
             required: true
         },
@@ -199,7 +217,8 @@ const VendorNotificationSchema = new Schema<IVendorNotification>(
         },
         aggregateType: {
             type: String,
-            enum: ['order', 'booking', 'payment', 'storage', 'connection', 'payout', 'plan', 'stock_request', 'product'],
+            // ⚠ Hand-kept: every member of `AggregateType` must be here too.
+            enum: ['order', 'booking', 'payment', 'storage', 'connection', 'payout', 'plan', 'stock_request', 'product', 'account'],
             required: true
         },
         aggregateId: {

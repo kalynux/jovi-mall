@@ -183,7 +183,7 @@ Content-Type: application/json
 | `seoDescription` | string | Max 160 chars |
 | `fileIds` | string[] | **Full replacement** — see [Media Handling](#media-handling) |
 | `digitalConfig` | object | Digital products only — merged with existing |
-| `delivery` | object | Physical products only — configure delivery agency and/or free-delivery flag (contains `agencyId`, `freeDelivery`). Either sub-field may be sent alone — it's merged against the existing value, not replaced. At least one must be provided. |
+| `delivery` | object | Physical products only — configure the delivery agency and/or pickup location (contains `agencyId`, `pickupLocation`). Either sub-field may be sent alone — it's merged against the existing value, not replaced. At least one must be provided. There is no `freeDelivery` any more (a `400` if sent) — see below. |
 
 > Service config + price are **not** on the product — they live on the service variant (`POST /products/:id/variants`). `PATCH /products/:id` does not accept `serviceConfig`.
 
@@ -447,17 +447,13 @@ PATCH /api/vendor/products/507f1f77bcf86cd799439011
 }
 ```
 
-**Mark a Product as Free Delivery:**
-`freeDelivery` is independent of `agencyId` — it can be set on its own without resending the agency:
+**Free delivery is a SHOP setting, not a product flag (2026-10-03, ADR-A11):**
+The per-product `delivery.freeDelivery` flag was removed. Who pays delivery is set once for the whole shop:
 ```json
-PATCH /api/vendor/products/507f1f77bcf86cd799439011
-{
-  "delivery": {
-    "freeDelivery": true
-  }
-}
+PUT /api/vendor/profile/delivery-terms
+{ "mode": "above", "freeAboveAmount": 20000 }
 ```
-This does not change agency resolution or fee calculation — it's a durable flag stored on the product and snapshotted onto each order item at checkout (`items[].freeDelivery` in vendor/customer order responses — see [orders.md](./orders.md)).
+`always` (you pay — the default), `never` (the customer pays) or `above` (free from that amount of your items in one basket). See [profile.md](./profile.md#delivery-terms-2026-10-03-adr-a10). A product write that still sends `freeDelivery` is refused with `400`.
 
 **Frontend responsibility**: Warn the user if they try to activate a physical product without a product-level delivery agency set AND no default delivery agency configured on their vendor profile.
 

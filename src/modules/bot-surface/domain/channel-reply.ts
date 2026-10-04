@@ -859,6 +859,8 @@ function telegramCardCaption(card: BotProductCard): string {
     const lines = [
         `<b>${escapeTelegramHtml(card.title)}</b>`,
         escapeTelegramHtml(`${card.priceText} · ${card.storeName}`),
+        // The SHOP's free-delivery terms (ADR-A11), when it has any to state.
+        ...(card.deliveryText ? [escapeTelegramHtml(card.deliveryText)] : []),
     ];
     return truncate(lines.join('\n'), TG_CAPTION) as string;
 }
@@ -1033,8 +1035,11 @@ function whatsappCardBody(card: BotProductCard): string {
         ? `\n${card.detailUrl}`
         : '';
 
+    /** The SHOP's free-delivery terms (ADR-A11) — "Free delivery" / "Free delivery from X". */
+    const deliveryLine = card.deliveryText ? `\n${card.deliveryText}` : '';
+
     return truncate(
-        `*${card.title}*\n${card.priceText}\n${card.storeName}${detailLine}`,
+        `*${card.title}*\n${card.priceText}\n${card.storeName}${deliveryLine}${detailLine}`,
         WA_LIMITS.INTERACTIVE_BODY,
     ) as string;
 }

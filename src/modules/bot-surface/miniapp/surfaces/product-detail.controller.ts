@@ -127,6 +127,8 @@ export class ProductDetailController {
             title: detail.title,
             storeName: detail.storeName,
             storeCity: detail.storeCity,
+            /** ADR-A11 — the shop's free-delivery terms, worded; null when there are none to state. */
+            deliveryText: detail.deliveryText ?? null,
             imageUrl: browserImageUrl(detail.imageSourceUrl),
             description: detail.description,
             options: detail.options,

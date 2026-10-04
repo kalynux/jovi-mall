@@ -51,7 +51,8 @@ export interface PublicProductListRow {
     slug: string;
     title: string;
     type: ProductType;
-    category: string;
+    /** `product_categories` ids, vendor's order. Named by the service via the category cache. */
+    categoryIds: string[];
     tags: string[];
     /**
      * The **displayed** price of the default variant — its ask when it is bargainable, its
@@ -81,13 +82,24 @@ export interface PublicProductListRow {
     storeIsOpen: boolean;
     /** `vendor.kyc_details.legit_verified`, as `vendorJoinStages` projects it. Never the KYC documents. */
     storeVerified: boolean;
-    freeDelivery: boolean;
+    /**
+     * INTERNAL — never copied onto a DTO (the storefront addresses a seller by store slug).
+     * Carried only so the service can batch-load the shop's delivery terms for a page in
+     * one query (`findDeliveryTermsForVendors`) and DERIVE the card's `freeDelivery` from
+     * them (ADR-A11 D-1 — there is no product free-delivery flag any more).
+     */
+    vendorId: string;
     updatedAt: Date;
 }
 
 export interface PublicProductQuery {
     q?: string;
-    category?: string;
+    /**
+     * An already-RESOLVED category id. The public `?category=` value (id, slug or name) is
+     * resolved by the service through `CategoryResolutionService.resolveFilter`; this layer
+     * never interprets text.
+     */
+    categoryId?: string;
     types?: ProductType[];
     storeSlug?: string;
     minPrice?: number;
@@ -99,6 +111,11 @@ export interface PublicProductQuery {
 }
 
 export interface PublicStoreListRow {
+    /**
+     * INTERNAL — never copied onto `PublicStoreDto` (see that file's header on `vendorId`).
+     * Carried only so the service can batch-load the shop's delivery terms (ADR-A11).
+     */
+    vendorId: string;
     slug: string;
     name: string;
     description: string | null;
@@ -130,8 +147,9 @@ export interface PublicStoreListRow {
     createdAt: Date;
 }
 
+/** One chip: a category id and how many PUBLISHABLE products hold it. Named by the service. */
 export interface PublicCategoryRow {
-    name: string;
+    categoryId: string;
     productCount: number;
 }
 
@@ -380,7 +398,9 @@ export class PublicCatalogRepositoryMongo {
                 slug: 1,
                 title: 1,
                 type: 1,
-                category: 1,
+                categoryIds: {
+                    $map: { input: { $ifNull: ['$categoryIds', []] }, as: 'c', in: { $toString: '$$c' } },
+                },
                 tags: { $ifNull: ['$tags', []] },
                 // The DISPLAYED price and its companion "was" price, decorated onto every
                 // sellable variant by `variantJoinStages`. Never `_defaultVariant.price`,
@@ -403,7 +423,7 @@ export class PublicCatalogRepositoryMongo {
                 // The boolean verdict `vendorJoinStages` already projected — the KYC
                 // sub-document itself never enters this pipeline.
                 storeVerified: { $ifNull: ['$vendor.verified', false] },
-                freeDelivery: { $ifNull: ['$delivery.free_delivery', false] },
+                vendorId: { $toString: '$vendorId' },
                 updatedAt: 1,
             },
         };
@@ -415,13 +435,14 @@ export class PublicCatalogRepositoryMongo {
      * Price filtering runs **after** the variant join, because the price it filters on is
      * derived from the variants rather than stored on the product. That costs index
      * selectivity, which is why the publishable `$match` is first and unconditional: the
-     * compound `{status, deletedAt, createdAt}` / `{status, deletedAt, category}` indexes
+     * compound `{status, deletedAt, createdAt}` / `{status, deletedAt, categoryIds}` indexes
      * narrow the set before any of the joins run.
      */
     async search(query: PublicProductQuery): Promise<{ rows: PublicProductListRow[]; total: number }> {
         const productMatch: Record<string, unknown> = { ...publishableProductFilter() };
 
-        if (query.category) productMatch.category = query.category;
+        // Multikey equality: a product shows under EVERY one of its categories.
+        if (query.categoryId) productMatch.categoryIds = new Types.ObjectId(query.categoryId);
         if (query.types && query.types.length > 0) productMatch.type = { $in: query.types };
 
         // `$text` rather than `$regex`: it is indexed, it carries a relevance score (which
@@ -702,19 +723,22 @@ export class PublicCatalogRepositoryMongo {
     }
 
     /**
-     * Distinct categories with counts, over exactly the browse filter.
+     * Category ids with counts, over exactly the browse filter.
      *
      * A category whose every product is a draft must not appear — which is why this groups
-     * over the same predicate rather than running `distinct()` on the column.
+     * over the same predicate rather than counting the category collection. `$unwind`
+     * because a product counts toward EVERY category it holds (owner decision: a product
+     * appears under each of its categories).
      */
     async listCategories(): Promise<PublicCategoryRow[]> {
         return this.model
             .aggregate<PublicCategoryRow>([
                 { $match: publishableProductFilter() },
                 ...this.vendorJoinStages(),
-                { $group: { _id: '$category', productCount: { $sum: 1 } } },
-                { $project: { _id: 0, name: '$_id', productCount: 1 } },
-                { $sort: { productCount: -1, name: 1 } },
+                { $unwind: '$categoryIds' },
+                { $group: { _id: '$categoryIds', productCount: { $sum: 1 } } },
+                { $project: { _id: 0, categoryId: { $toString: '$_id' }, productCount: 1 } },
+                { $sort: { productCount: -1, categoryId: 1 } },
             ])
             .exec();
     }
@@ -772,6 +796,7 @@ export class PublicCatalogRepositoryMongo {
             {
                 $project: {
                     _id: 0,
+                    vendorId: { $toString: '$_id' },
                     slug: '$store.slug',
                     name: '$store.name',
                     description: { $ifNull: ['$store.description', null] },
@@ -898,6 +923,7 @@ export class PublicCatalogRepositoryMongo {
                 {
                     $project: {
                         _id: 0,
+                        vendorId: { $toString: '$vendor_id' },
                         slug: 1,
                         name: 1,
                         description: { $ifNull: ['$description', null] },

@@ -571,6 +571,15 @@ export interface IDeliveryAgent extends Document {
   preferred_language: Language;
   /** Account lifecycle. Only `active` may be assigned work. */
   status: AgentStatus;
+  /**
+   * When this ROLE was closed — ADR-A10. Null on every role that has not been.
+   *
+   * A closed role is `status: 'inactive'` (the value every business gate already treats as
+   * "off") PLUS this stamp, which is what tells a closure apart from an administrative
+   * suspension: `requireAuth` refuses a stamped role, and every reinstate verb refuses to
+   * switch it back on. Written by `RoleClosureManifest` only, in the same `$set` as the status.
+   */
+  closed_at: Date | null;
   /** Why the account was suspended/deactivated (admin action). */
   status_reason: string | null;
   /**
@@ -1023,6 +1032,8 @@ const DeliveryAgentSchema = new Schema<IDeliveryAgent>(
       enum: ['pending_verification', 'active', 'inactive', 'suspended'],
       default: 'pending_verification',
     },
+    // ADR-A10 — see the interface. Never written apart from `status: 'inactive'`.
+    closed_at: { type: Date, default: null },
     status_reason: { type: String, default: null, trim: true },
     onboarding_step: {
       type: Number,

@@ -13,6 +13,7 @@ import { ShipmentRepository } from '../shipments/shipment.repository';
 import { ShipmentModel } from '../shipments/shipment.model';
 import { ShipmentService } from '../shipments/shipment.service';
 import { deliveryFeeProposalService } from '../delivery-fee-proposals/services/delivery-fee-proposal.service';
+import { changeAgencyFeeService } from '../delivery-fee-proposals/services/change-agency-fee.service';
 import { OrderService } from './order.service';
 import { codLimitsService } from '../cod/services/cod-limits.service';
 import { CodLimitBreach } from '../cod/domain/cod-limits';
@@ -21,6 +22,8 @@ import { ProductRepositoryMongo } from '../catalog/repositories/mongo/product.re
 import { FileRepositoryMongo } from '../catalog/repositories/mongo/file.repository.mongo';
 import { getStorageProvider, IStorageProvider } from '../../core/storage';
 import { resolveFileDetails, resolveFileDetail } from '../catalog/read-models/file-detail.resolver';
+import { deliveryPayerOf } from './domain/delivery-payer';
+import { toVendorShipmentDeliveryFee, VendorShipmentDeliveryFeeDTO } from '../vendor/dto/vendor-order.dto';
 
 /**
  * Vendor Order Service
@@ -126,9 +129,11 @@ export class VendorOrderService {
                 // Totals (immutable snapshot)
                 subtotal: order.price_breakdown.base,
                 tax: order.price_breakdown.tax,
-                shipping: 0,
+                // What the CUSTOMER paid for delivery (ADR-A11) — 0 when the shop delivers free.
+                shipping: order.price_breakdown.delivery ?? 0,
                 total: order.total_amount,
                 currency: order.currency,
+                deliveryPayer: order.order_type === 'physical' ? deliveryPayerOf(order) : null,
 
                 // Status
                 fulfillmentStatus: order.fulfillment_status,
@@ -225,13 +230,18 @@ export class VendorOrderService {
             })),
 
             // Pricing
+            // Pricing (ADR-A11): `shipping` is what the CUSTOMER paid for delivery;
+            // `vendorBorneDelivery` is what comes out of the vendor's net, Σ per shipment.
             priceBreakdown: {
                 base: order.price_breakdown.base,
                 tax: order.price_breakdown.tax,
                 discount: order.price_breakdown.discount,
-                shipping: 0,
+                shipping: order.price_breakdown.delivery ?? 0,
+                vendorBorneDelivery: vendorBorneDeliveryOf(deliveries),
                 total: order.price_breakdown.total
             },
+            deliveryPayer: order.order_type === 'physical' ? deliveryPayerOf(order) : null,
+            deliveryPayerReason: order.order_type === 'physical' ? (order.delivery_payer_reason ?? null) : null,
             totalAmount: order.total_amount,
             currency: order.currency,
 
@@ -369,6 +379,9 @@ export class VendorOrderService {
                 shipmentId,
                 trackingNumber: shipment?.tracking_number ?? null,
                 agent,
+                // The shipment's delivery money (ADR-A11): agency fee, what the customer paid,
+                // and the part deducted from the vendor's net.
+                deliveryFee: shipment ? toVendorShipmentDeliveryFee(order, shipment) : null,
                 // Why the agency declined this delivery (so the vendor knows what
                 // to fix before reassigning). Reason is a fixed code; `note` is the
                 // agency's free-text explanation, required when reason is 'other'.
@@ -379,7 +392,6 @@ export class VendorOrderService {
                         rejectedAt: shipment.rejection.rejectedAt ?? null
                     }
                     : null,
-                freeDelivery: deliveryData.free_delivery ?? false,
                 // COD limits (2026-10-02). `codLimitHold`: why auto-redirect left this
                 // shipment pending — dispatch it with `force: true` or wait for the agency
                 // to remit. `codLimitForce`: a limit was overridden, by whom and when.
@@ -1090,6 +1102,19 @@ export class VendorOrderService {
             }
         }
 
+        // 5c. ADR-A11 D-10 — a WHOLE customer-paid shipment moving (this item is its last) carries
+        //     the customer's paid delivery to the destination, and the new agency's price
+        //     difference goes to the customer afterwards. Priced BEFORE the move: if the vendor
+        //     could not cover a higher price should the customer decline, the move is refused
+        //     (422 DELIVERY_FEE_PROPOSAL_VENDOR_NET_NOT_POSITIVE) with nothing written. A PARTIAL
+        //     move returns null here and stays vendor-paid (below).
+        const wholeMoveFee = await changeAgencyFeeService.prepareWholeMove({
+            orderId,
+            itemId,
+            sourceShipmentId: item.delivery.shipment_id?.toString() ?? null,
+            destinationAgencyId: deliveryAgencyId,
+        });
+
         // 6. Move the item between agency shipments (the dispatch source of truth).
         //    Reuse the destination agency's open shipment for this order if one
         //    exists, otherwise create a fresh one.
@@ -1106,6 +1131,14 @@ export class VendorOrderService {
                 order_id: order._id as any,
                 agency_id: new mongoose.Types.ObjectId(deliveryAgencyId) as any,
                 status: 'pending',
+                // The order's payer carries over (ADR-A11). No snapshot and NO customer fee here:
+                // on a PARTIAL move the customer was charged for the checkout shipments only, so
+                // this run's fee is priced live and VENDOR-borne (D-10). On a WHOLE move,
+                // `changeAgencyFeeService.completeWholeMove` (below) carries the source's customer
+                // money and fee onto this row (a customer fee is never inferred — see
+                // `orders/domain/delivery-payer.ts`).
+                delivery_payer: (order as any).delivery_payer ?? null,
+                customer_delivery_fee: 0,
                 items: [{
                     order_item_id: item._id,
                     product_id: item.product_id,
@@ -1147,6 +1180,10 @@ export class VendorOrderService {
         const previousShipmentId = item.delivery.shipment_id?.toString() || null;
         if (previousShipmentId) {
             await this.shipmentRepo.removeItem(previousShipmentId, itemId);
+        }
+        // ADR-A11 D-10 — the source row is gone; carry its customer money (never throws).
+        if (wholeMoveFee) {
+            await changeAgencyFeeService.completeWholeMove(wholeMoveFee, destShipment._id!.toString());
         }
 
         // 7. Point the order item at its new agency + shipment. The item inherits
@@ -1568,4 +1605,17 @@ export class VendorOrderService {
             message: 'Entitlement restored successfully'
         };
     }
+}
+
+/**
+ * Σ of the delivery fees deducted from the vendor's net across an order's shipments (ADR-A11).
+ * `null` when there is nothing to sum — a digital order, or no shipment with a priced fee yet.
+ */
+function vendorBorneDeliveryOf(
+    deliveries: Array<{ deliveryFee?: VendorShipmentDeliveryFeeDTO | null }> | null,
+): number | null {
+    const priced = (deliveries ?? [])
+        .map((d) => d.deliveryFee?.vendorBorne)
+        .filter((v): v is number => typeof v === 'number');
+    return priced.length === 0 ? null : priced.reduce((sum, v) => sum + v, 0);
 }

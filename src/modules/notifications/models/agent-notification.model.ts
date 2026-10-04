@@ -115,7 +115,16 @@ export type AgentNotificationType =
      * reset to the 500 000 default (that rides the reconcile, trigger ≠ 'override').
      */
     | 'cod.pool.pinned'
-    | 'cod.pool.released';
+    | 'cod.pool.released'
+    /**
+     * Role closure (ADR-A10). `account.closure_requested` — an administrator asked to close
+     * this AGENT account; nothing happens unless the agent confirms while signed in. Gated by
+     * NO preference (a muted closure request would expire unseen). Copy says "close", never
+     * "delete" (ADR-A02 D-2). `agent_contract.ended_by_closure` — the contracted AGENCY closed
+     * its account, so the contract ended; gated by `contractUpdated`.
+     */
+    | 'account.closure_requested'
+    | 'agent_contract.ended_by_closure';
 export type AgentAggregateType =
     | 'deposit'
     | 'offer'
@@ -127,7 +136,9 @@ export type AgentAggregateType =
     /** The agent's own COD pool — `aggregateId` is the agent id. */
     | 'cod_pool'
     /** A bulk offer — `aggregateId` is the batch id, which is NOT an offer id. */
-    | 'offer_batch';
+    | 'offer_batch'
+    /** A role-closure request (ADR-A10) — `aggregateId` is the request id. */
+    | 'account';
 
 /**
  * The aggregate types as a runtime array, for the schema enum to spread.
@@ -146,7 +157,8 @@ export const AGENT_AGGREGATE_TYPES: readonly AgentAggregateType[] = [
     'storage',
     'payout',
     'cod_pool',
-    'offer_batch'
+    'offer_batch',
+    'account'
 ];
 
 /**
@@ -191,7 +203,9 @@ export const AGENT_NOTIFICATION_TYPES: readonly AgentNotificationType[] = [
     'fee_proposals.enabled',
     'fee_proposals.disabled',
     'cod.pool.pinned',
-    'cod.pool.released'
+    'cod.pool.released',
+    'account.closure_requested',
+    'agent_contract.ended_by_closure'
 ] as const;
 
 /**

@@ -4,7 +4,20 @@ import { renderTemplate, RenderContext } from './message-renderer';
 import { Language, DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES } from './notification-i18n';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
-import { ChannelText, SituationMessages, ButtonDef, QuickReplyDef, WhatsAppTemplateDef } from './notification-catalog';
+import {
+    ChannelText,
+    SituationMessages,
+    ButtonDef,
+    QuickReplyDef,
+    WhatsAppTemplateDef,
+    closureRequestedBase,
+    CLOSURE_SUBJECT
+} from './notification-catalog';
+/**
+ * The bot's tap-token grammar. A pure module (`crypto` + the dependency-free onboarding
+ * step list), so importing it closes no cycle with the bot surface.
+ */
+import { accountActionId } from '../../bot-surface/domain/bot-action-id';
 
 /**
  * A customer situation. The same shape as every stack's, except that the WhatsApp TEMPLATE is
@@ -313,6 +326,48 @@ const NOT_SORTED_LABEL: Record<Language, string> = {
 
 const NOT_THERE_LABEL: Record<Language, string> = {
     en: 'I was not there', fr: 'Je n\'étais pas là', pt: 'Não estava lá', es: 'No estaba allí', ar: 'لم أكن هناك'
+};
+
+/** ≤ 20 characters in every language — WhatsApp's reply-button cap. */
+const REVIEW_CLOSURE_LABEL: Record<Language, string> = {
+    en: 'Review the request', fr: 'Voir la demande', pt: 'Ver o pedido', es: 'Ver la solicitud', ar: 'مراجعة الطلب'
+};
+
+/**
+ * Opens the bot's closure preview (ADR-A10). Placeholder-free, so it needs no
+ * `templateFallback`: it always renders, in a chat and on the template alike.
+ *
+ * ⚠ **Written as a literal in the `token: '…'` shape on purpose, and PINNED to its builder.**
+ * Two guards keep catalogue tokens alive and they need different things:
+ *
+ *   - `test:bot-surface` § 20's catalogue scan reads `token: '<literal>'` out of this file and
+ *     runs each through the dispatcher's own `parseBotActionId` + `actionKeyOf`; its
+ *     non-vacuity check requires every LIVE token to appear in that shape, so a
+ *     `token: accountActionId(…)` call is invisible to it and fails the suite.
+ *   - `accountActionId` owns the `acct:` grammar. `assertCustomerCatalogComplete` (boot)
+ *     refuses to start if this literal and `accountActionId('close')` ever disagree, so the
+ *     literal cannot drift from the builder — the hand-written-token failure (10 of 14 once
+ *     went dead) is closed from both sides.
+ */
+const REVIEW_CLOSURE: QuickReplyDef = { token: 'acct:close', label: REVIEW_CLOSURE_LABEL };
+
+const OPEN_MY_ACCOUNT_LABEL: Record<Language, string> = {
+    en: 'Open my account',
+    fr: 'Ouvrir mon compte',
+    pt: 'Abrir a minha conta',
+    es: 'Abrir mi cuenta',
+    ar: 'فتح حسابي'
+};
+
+/**
+ * The storefront's account-closure page. Owner-scoped, so under `shop/account/` (rule 3 of
+ * this file's header). ⚠ Rule 4: this page must EXIST in `frontend/landing` before the
+ * template is approved — record it in `api-doc/notifications/storefront-routes.md`.
+ */
+const CLOSURE_BUTTON: ButtonDef = {
+    type: 'url',
+    label: OPEN_MY_ACCOUNT_LABEL,
+    urlSuffix: 'shop/account/closure'
 };
 
 const ADDRESS_WRONG_LABEL: Record<Language, string> = {
@@ -1417,6 +1472,247 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Cus
         button: ORDER_BUTTON
     },
 
+    // ══ Delivery-fee changes after checkout (ADR-A11, W-E) ═══════════════════
+    //
+    // All seven are MONEY situations: no key in `SITUATION_PREFERENCE`, so no setting silences
+    // them — the customer is the counterparty to somebody else's change to what they pay. The
+    // optional sentences (`{{reasonLine}}`, `{{moneyLine}}`, `{{answerLine}}`) are composed in
+    // `delivery-fee-proposals/services/customer-fee-notifier.ts` in the customer's language.
+    // ⚠ Templates generated, NOT submitted to Meta (owner action) — see whatsapp-templates.md.
+
+    'order.delivery_fee.approval_needed': {
+        base: {
+            en: {
+                subject: 'Delivery fee change to approve — {{orderNumber}}',
+                body: 'The delivery company asks {{currency}} {{proposedFeeFormatted}} instead of {{currency}} {{feeBeforeFormatted}} to deliver your order {{orderNumber}}. {{reasonLine}} Open the order to approve or decline — your parcel waits for your answer.'
+            },
+            fr: {
+                subject: 'Changement des frais de livraison à valider — {{orderNumber}}',
+                body: 'La société de livraison demande {{currency}} {{proposedFeeFormatted}} au lieu de {{currency}} {{feeBeforeFormatted}} pour livrer votre commande {{orderNumber}}. {{reasonLine}} Ouvrez la commande pour accepter ou refuser — votre colis attend votre réponse.'
+            },
+            pt: {
+                subject: 'Alteração da taxa de entrega para aprovar — {{orderNumber}}',
+                body: 'A empresa de entregas pede {{currency}} {{proposedFeeFormatted}} em vez de {{currency}} {{feeBeforeFormatted}} para entregar a sua encomenda {{orderNumber}}. {{reasonLine}} Abra a encomenda para aceitar ou recusar — a encomenda aguarda a sua resposta.'
+            },
+            es: {
+                subject: 'Cambio de tarifa de envío por aprobar — {{orderNumber}}',
+                body: 'La empresa de envíos pide {{currency}} {{proposedFeeFormatted}} en lugar de {{currency}} {{feeBeforeFormatted}} para entregar tu pedido {{orderNumber}}. {{reasonLine}} Abre el pedido para aceptar o rechazar — tu paquete espera tu respuesta.'
+            },
+            ar: {
+                subject: 'تغيير في رسوم التوصيل بانتظار موافقتك — {{orderNumber}}',
+                body: 'تطلب شركة التوصيل {{currency}} {{proposedFeeFormatted}} بدلًا من {{currency}} {{feeBeforeFormatted}} لتوصيل طلبك {{orderNumber}}. {{reasonLine}} افتح الطلب للموافقة أو الرفض — طردك ينتظر ردك.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_order_delivery_fee_approval_needed',
+                bodyParams: ['{{currency}}', '{{proposedFeeFormatted}}', '{{feeBeforeFormatted}}', '{{orderNumber}}']
+            }
+        },
+        button: ORDER_BUTTON
+    },
+
+    'order.delivery_fee.topup_due': {
+        base: {
+            en: {
+                subject: 'Pay {{currency}} {{amountFormatted}} to confirm your delivery — {{orderNumber}}',
+                body: 'You approved a delivery fee of {{currency}} {{proposedFeeFormatted}} for order {{orderNumber}}. Pay the difference of {{currency}} {{amountFormatted}} and your parcel can be collected.'
+            },
+            fr: {
+                subject: 'Payez {{currency}} {{amountFormatted}} pour confirmer votre livraison — {{orderNumber}}',
+                body: 'Vous avez accepté des frais de livraison de {{currency}} {{proposedFeeFormatted}} pour la commande {{orderNumber}}. Payez la différence de {{currency}} {{amountFormatted}} et votre colis pourra être enlevé.'
+            },
+            pt: {
+                subject: 'Pague {{currency}} {{amountFormatted}} para confirmar a entrega — {{orderNumber}}',
+                body: 'Aceitou uma taxa de entrega de {{currency}} {{proposedFeeFormatted}} para a encomenda {{orderNumber}}. Pague a diferença de {{currency}} {{amountFormatted}} e a encomenda poderá ser recolhida.'
+            },
+            es: {
+                subject: 'Paga {{currency}} {{amountFormatted}} para confirmar tu envío — {{orderNumber}}',
+                body: 'Aceptaste una tarifa de envío de {{currency}} {{proposedFeeFormatted}} para el pedido {{orderNumber}}. Paga la diferencia de {{currency}} {{amountFormatted}} y tu paquete podrá recogerse.'
+            },
+            ar: {
+                subject: 'ادفع {{currency}} {{amountFormatted}} لتأكيد التوصيل — {{orderNumber}}',
+                body: 'وافقت على رسوم توصيل قدرها {{currency}} {{proposedFeeFormatted}} للطلب {{orderNumber}}. ادفع الفرق البالغ {{currency}} {{amountFormatted}} ليتم استلام طردك.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_order_delivery_fee_topup_due',
+                bodyParams: ['{{currency}}', '{{proposedFeeFormatted}}', '{{orderNumber}}', '{{amountFormatted}}']
+            }
+        },
+        button: ORDER_BUTTON
+    },
+
+    'order.delivery_fee.lowered': {
+        base: {
+            en: {
+                subject: 'Your delivery fee went down — {{orderNumber}}',
+                body: 'The delivery fee for your order {{orderNumber}} is now {{currency}} {{feeAfterFormatted}} instead of {{currency}} {{feeBeforeFormatted}}. {{moneyLine}}'
+            },
+            fr: {
+                subject: 'Vos frais de livraison ont baissé — {{orderNumber}}',
+                body: 'Les frais de livraison de votre commande {{orderNumber}} sont maintenant de {{currency}} {{feeAfterFormatted}} au lieu de {{currency}} {{feeBeforeFormatted}}. {{moneyLine}}'
+            },
+            pt: {
+                subject: 'A sua taxa de entrega baixou — {{orderNumber}}',
+                body: 'A taxa de entrega da sua encomenda {{orderNumber}} é agora {{currency}} {{feeAfterFormatted}} em vez de {{currency}} {{feeBeforeFormatted}}. {{moneyLine}}'
+            },
+            es: {
+                subject: 'Tu tarifa de envío bajó — {{orderNumber}}',
+                body: 'La tarifa de envío de tu pedido {{orderNumber}} ahora es {{currency}} {{feeAfterFormatted}} en lugar de {{currency}} {{feeBeforeFormatted}}. {{moneyLine}}'
+            },
+            ar: {
+                subject: 'انخفضت رسوم التوصيل — {{orderNumber}}',
+                body: 'أصبحت رسوم توصيل طلبك {{orderNumber}} الآن {{currency}} {{feeAfterFormatted}} بدلًا من {{currency}} {{feeBeforeFormatted}}. {{moneyLine}}'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_order_delivery_fee_lowered',
+                bodyParams: ['{{orderNumber}}', '{{currency}}', '{{feeAfterFormatted}}', '{{feeBeforeFormatted}}']
+            }
+        },
+        button: ORDER_BUTTON
+    },
+
+    'order.delivery_fee.updated': {
+        base: {
+            en: {
+                subject: 'New delivery fee confirmed — {{orderNumber}}',
+                body: 'The delivery fee for your order {{orderNumber}} is now {{currency}} {{feeAfterFormatted}}. {{moneyLine}}'
+            },
+            fr: {
+                subject: 'Nouveaux frais de livraison confirmés — {{orderNumber}}',
+                body: 'Les frais de livraison de votre commande {{orderNumber}} sont maintenant de {{currency}} {{feeAfterFormatted}}. {{moneyLine}}'
+            },
+            pt: {
+                subject: 'Nova taxa de entrega confirmada — {{orderNumber}}',
+                body: 'A taxa de entrega da sua encomenda {{orderNumber}} é agora {{currency}} {{feeAfterFormatted}}. {{moneyLine}}'
+            },
+            es: {
+                subject: 'Nueva tarifa de envío confirmada — {{orderNumber}}',
+                body: 'La tarifa de envío de tu pedido {{orderNumber}} ahora es {{currency}} {{feeAfterFormatted}}. {{moneyLine}}'
+            },
+            ar: {
+                subject: 'تم تأكيد رسوم التوصيل الجديدة — {{orderNumber}}',
+                body: 'أصبحت رسوم توصيل طلبك {{orderNumber}} الآن {{currency}} {{feeAfterFormatted}}. {{moneyLine}}'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_order_delivery_fee_updated',
+                bodyParams: ['{{orderNumber}}', '{{currency}}', '{{feeAfterFormatted}}']
+            }
+        },
+        button: ORDER_BUTTON
+    },
+
+    // Sent when delivery money owed back could NOT be returned automatically. Silence here is
+    // indistinguishable from money kept, so this says a person is on it.
+    'order.delivery_fee.refund_pending': {
+        base: {
+            en: {
+                subject: 'Refund on the way: {{currency}} {{amountFormatted}}',
+                body: 'We owe you {{currency}} {{amountFormatted}} of delivery money on order {{orderNumber}}. It has to be sent by hand, so our team is processing it — you do not need to do anything, and we will confirm when it is done.'
+            },
+            fr: {
+                subject: 'Remboursement en cours : {{currency}} {{amountFormatted}}',
+                body: 'Nous vous devons {{currency}} {{amountFormatted}} de frais de livraison sur la commande {{orderNumber}}. Ce montant doit être envoyé manuellement : notre équipe s’en occupe. Vous n’avez rien à faire, nous confirmerons dès que c’est fait.'
+            },
+            pt: {
+                subject: 'Reembolso a caminho: {{currency}} {{amountFormatted}}',
+                body: 'Devemos-lhe {{currency}} {{amountFormatted}} de taxa de entrega na encomenda {{orderNumber}}. Tem de ser enviado manualmente e a nossa equipa está a tratar disso — não precisa de fazer nada e confirmaremos quando estiver concluído.'
+            },
+            es: {
+                subject: 'Reembolso en camino: {{currency}} {{amountFormatted}}',
+                body: 'Te debemos {{currency}} {{amountFormatted}} de envío en el pedido {{orderNumber}}. Debe enviarse a mano y nuestro equipo lo está gestionando — no tienes que hacer nada y te confirmaremos cuando esté listo.'
+            },
+            ar: {
+                subject: 'الاسترداد في الطريق: {{currency}} {{amountFormatted}}',
+                body: 'ندين لك بمبلغ {{currency}} {{amountFormatted}} من رسوم التوصيل على الطلب {{orderNumber}}. يجب إرساله يدويًا وفريقنا يعمل عليه — لا داعي لفعل أي شيء وسنؤكد لك عند الانتهاء.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_order_delivery_fee_refund_pending',
+                bodyParams: ['{{currency}}', '{{amountFormatted}}', '{{orderNumber}}']
+            }
+        },
+        button: ORDER_BUTTON
+    },
+
+    'order.delivery_fee.topup_failed': {
+        base: {
+            en: {
+                subject: 'Delivery payment did not go through — {{orderNumber}}',
+                body: 'We could not take the {{currency}} {{amountFormatted}} delivery difference for order {{orderNumber}}. Nothing was charged; your parcel waits until it is paid — open the order to try again.'
+            },
+            fr: {
+                subject: 'Paiement de livraison non abouti — {{orderNumber}}',
+                body: 'Nous n’avons pas pu encaisser la différence de livraison de {{currency}} {{amountFormatted}} pour la commande {{orderNumber}}. Rien n’a été débité ; votre colis attend ce paiement — ouvrez la commande pour réessayer.'
+            },
+            pt: {
+                subject: 'O pagamento da entrega não foi concluído — {{orderNumber}}',
+                body: 'Não conseguimos cobrar a diferença de entrega de {{currency}} {{amountFormatted}} da encomenda {{orderNumber}}. Nada foi debitado; a encomenda aguarda esse pagamento — abra a encomenda para tentar de novo.'
+            },
+            es: {
+                subject: 'El pago del envío no se completó — {{orderNumber}}',
+                body: 'No pudimos cobrar la diferencia de envío de {{currency}} {{amountFormatted}} del pedido {{orderNumber}}. No se cobró nada; tu paquete espera ese pago — abre el pedido para intentarlo otra vez.'
+            },
+            ar: {
+                subject: 'لم يتم دفع رسوم التوصيل — {{orderNumber}}',
+                body: 'لم نتمكن من تحصيل فرق التوصيل البالغ {{currency}} {{amountFormatted}} للطلب {{orderNumber}}. لم يُخصم أي مبلغ؛ طردك ينتظر هذا الدفع — افتح الطلب لإعادة المحاولة.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_order_delivery_fee_topup_failed',
+                bodyParams: ['{{currency}}', '{{amountFormatted}}', '{{orderNumber}}']
+            }
+        },
+        button: ORDER_BUTTON
+    },
+
+    'order.combined_delivery.answered': {
+        base: {
+            en: {
+                subject: 'Answer to your combined delivery request — {{orderNumber}}',
+                body: '{{agencyName}} {{answerLine}} Open the order to see your delivery fees.'
+            },
+            fr: {
+                subject: 'Réponse à votre demande de livraison groupée — {{orderNumber}}',
+                body: '{{agencyName}} {{answerLine}} Ouvrez la commande pour voir vos frais de livraison.'
+            },
+            pt: {
+                subject: 'Resposta ao seu pedido de entrega conjunta — {{orderNumber}}',
+                body: '{{agencyName}} {{answerLine}} Abra a encomenda para ver as taxas de entrega.'
+            },
+            es: {
+                subject: 'Respuesta a tu solicitud de envío combinado — {{orderNumber}}',
+                body: '{{agencyName}} {{answerLine}} Abre el pedido para ver tus tarifas de envío.'
+            },
+            ar: {
+                subject: 'رد على طلب التوصيل المجمّع — {{orderNumber}}',
+                body: '{{agencyName}} {{answerLine}} افتح الطلب لعرض رسوم التوصيل.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_order_combined_delivery_answered',
+                bodyParams: ['{{orderNumber}}', '{{agencyName}}', '{{answerLine}}']
+            }
+        },
+        button: ORDER_BUTTON
+    },
+
     // ══ Support requests (GAP-012) ═══════════════════════════════════════════
     //
     // ⚠ **The copy never quotes the reply, and that is a decision rather than an
@@ -1607,6 +1903,30 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Cus
          * returns the basket in the chat, where checkout is one more tap.
          */
         actions: [{ token: 'cart:view', label: SHOW_BASKET_LABEL }]
+    },
+
+    // ══ The account itself (ADR-A10 role closure) ════════════════════════════
+
+    /**
+     * An administrator asked to close this customer account. UNMUTABLE (no
+     * `SITUATION_PREFERENCE` key). Copy shared with the three dashboard stacks
+     * (`closureRequestedBase`) — "close", never "delete" (ADR-A02 D-2).
+     *
+     * The quick reply opens the bot's own closure preview, where the customer confirms or
+     * declines in the chat; the URL button opens the storefront's account-closure page. The
+     * token `acct:close` is pinned to `accountActionId('close')` at boot (see `REVIEW_CLOSURE`).
+     */
+    'account.closure_requested': {
+        base: closureRequestedBase(CLOSURE_SUBJECT.customer),
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_account_closure_requested',
+                bodyParams: ['{{reason}}', '{{expiresAt}}']
+            }
+        },
+        button: CLOSURE_BUTTON,
+        actions: [REVIEW_CLOSURE]
     }
 };
 
@@ -1665,6 +1985,14 @@ export function assertCustomerCatalogComplete(): void {
         }
     }
     assertCustomerQuickRepliesSendable();
+    // The closure quick reply is a literal for the § 20 token scan; the builder owns its grammar.
+    if (REVIEW_CLOSURE.token !== accountActionId('close')) {
+        throw createAppError(
+            ERROR_CODES.CONFIG_NOTIFICATION_CATALOG_INCOMPLETE,
+            500,
+            `account.closure_requested quick reply '${REVIEW_CLOSURE.token}' disagrees with accountActionId('close') = '${accountActionId('close')}'`
+        );
+    }
 }
 
 /**

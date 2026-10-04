@@ -16,7 +16,8 @@ import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repos
 import { getStorageProvider } from '../../../core/storage';
 import { resolveProductImages, ProductImageRef } from '../../catalog/read-models/product-image.resolver';
 import { cashCollectionService } from '../../cod/services/cash-collection.service';
-import { CustomerOrderDto, toCustomerOrderDto } from '../dto/customer-order.dto';
+import { CustomerOrderDto, CustomerOrderShipmentFeeFacts, toCustomerOrderDto } from '../dto/customer-order.dto';
+import { ShipmentModel } from '../../shipments/shipment.model';
 
 export class CustomerOrderViewService {
     constructor(
@@ -66,9 +67,14 @@ export class CustomerOrderViewService {
             ? await cashCollectionService.getCodBlocksForOrders(codOrders.map((o) => String(o._id)), true)
             : new Map<string, unknown[]>();
 
+        // ── Per-parcel delivery fees (ADR-A11), one query for every physical order ──
+        // The money fields only — what the customer paid per parcel and what is owed back.
+        const shipmentsByOrder = await this.resolveShipmentFees(orders);
+
         return orders.map((order) => {
             const vendorId = order.vendor_id.toString();
             return toCustomerOrderDto({
+                shipments: shipmentsByOrder.get(String(order._id)) ?? [],
                 order,
                 storeName: namesByVendor.get(vendorId)?.name ?? null,
                 storeSlug: slugsByVendor.get(vendorId) ?? null,
@@ -80,6 +86,40 @@ export class CustomerOrderViewService {
                         : undefined,
             });
         });
+    }
+
+    /**
+     * Order id → its shipments' delivery-money fields, for `deliveryFees` (ADR-A11).
+     *
+     * ⚠ **A projection of four fields, never the shipment.** A shipment carries the agent, the
+     * agency's fee split inputs and the COD state; this view answers "what did I pay to have
+     * it delivered", and nothing else from that document belongs in a customer payload.
+     */
+    private async resolveShipmentFees(orders: IOrder[]): Promise<Map<string, CustomerOrderShipmentFeeFacts[]>> {
+        const out = new Map<string, CustomerOrderShipmentFeeFacts[]>();
+        const physical = orders.filter((o) => o.order_type === 'physical').map((o) => o._id);
+        if (physical.length === 0) return out;
+
+        const rows = await ShipmentModel.find(
+            { order_id: { $in: physical } },
+            { order_id: 1, delivery_payer: 1, customer_delivery_fee: 1, customer_fee_refundable: 1, created_at: 1 },
+        )
+            .sort({ created_at: 1 })
+            .lean()
+            .exec();
+
+        for (const row of rows as unknown as Array<CustomerOrderShipmentFeeFacts & { order_id: unknown }>) {
+            const key = String(row.order_id);
+            const list = out.get(key) ?? [];
+            list.push({
+                _id: row._id,
+                delivery_payer: row.delivery_payer ?? null,
+                customer_delivery_fee: row.customer_delivery_fee ?? null,
+                customer_fee_refundable: row.customer_fee_refundable ?? null,
+            });
+            out.set(key, list);
+        }
+        return out;
     }
 
     /**

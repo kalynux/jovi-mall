@@ -64,6 +64,11 @@ export const QuoteDeliverySchema = z.object({
      * a chat message — `resolveCoverage` compares case-insensitively for that reason.
      */
     region: z.string().trim().max(120).optional(),
+    /**
+     * The deal's amount from this shop (price × quantity, XAF), when known — decides whether an
+     * `above` shop's free-delivery threshold is met (ADR-A11). Optional: absent reads as not met.
+     */
+    amount: money.optional(),
 });
 
 export const CheckPromotionSchema = z.object({

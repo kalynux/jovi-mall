@@ -52,6 +52,16 @@ const AgencyPoliciesPricingSchema = new Schema(
     storage_based: { type: StorageBasedPricingSchema, required: true },
     pickup_based: { type: PickupBasedPricingSchema, required: true },
     additional_fees: { type: AdditionalFeesSchema, required: true },
+    /**
+     * Ceiling on ONE shipment's delivery fee (minor units), applied last by the fee formula
+     * (`earnings/domain/delivery-pricing.ts`, ADR-A11). null = no ceiling.
+     */
+    max_fee_per_shipment: { type: Number, default: null, min: 1 },
+    /**
+     * Whether this agency lets a customer pay the delivery fee in CASH to the rider on an
+     * otherwise online-paid order (ADR-A11 D-7). Modelled now; read by a later wave.
+     */
+    accepts_cash_delivery_fee: { type: Boolean, default: false },
     notes: { type: String, default: null, maxlength: 700, trim: true },
   },
   { _id: false }
@@ -253,6 +263,10 @@ export interface IAgencyPoliciesPricing {
   storage_based: IStorageBasedPricing;
   pickup_based: IPickupBasedPricing;
   additional_fees: IAdditionalFees;
+  /** Per-shipment fee ceiling (minor units); null/absent = none. ADR-A11. */
+  max_fee_per_shipment?: number | null;
+  /** Customer may pay the delivery fee in cash to the rider (ADR-A11 D-7). Absent = false. */
+  accepts_cash_delivery_fee?: boolean;
   notes?: string | null;
 }
 
@@ -429,6 +443,15 @@ export interface IDeliveryAgency extends Document {
   preferred_language: Language;
   status: 'active' | 'pending_verification' | 'inactive';
   /**
+   * When this ROLE was closed — ADR-A10. Null on every role that has not been.
+   *
+   * A closed role is `status: 'inactive'` (the value every business gate already treats as
+   * "off") PLUS this stamp, which is what tells a closure apart from an administrative
+   * suspension: `requireAuth` refuses a stamped role, and every reinstate verb refuses to
+   * switch it back on. Written by `RoleClosureManifest` only, in the same `$set` as the status.
+   */
+  closed_at: Date | null;
+  /**
    * Onboarding progress. See AgencyOnboardingStep constants.
    * Recalculated from field presence after every write.
    */
@@ -486,6 +509,8 @@ const DeliveryAgencySchema = new Schema<IDeliveryAgency>(
       enum: ['active', 'pending_verification', 'inactive'],
       default: 'pending_verification',
     },
+    // ADR-A10 — see the interface. Never written apart from `status: 'inactive'`.
+    closed_at: { type: Date, default: null },
     onboarding_step: {
       type: Number,
       default: AgencyOnboardingStep.LOGISTICS_SETUP,

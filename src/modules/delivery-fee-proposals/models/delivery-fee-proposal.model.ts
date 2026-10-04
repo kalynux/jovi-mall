@@ -5,9 +5,16 @@ import { MODELS, COLLECTIONS } from '../../../core/database/collections';
  * Who raised a proposal. The agency always may; the agent holding the accepted offer may
  * only while their agency has `assignment_settings.agents_can_propose_delivery_fee` on.
  */
-export type DeliveryFeeProposerRole = 'agency' | 'agent';
-/** Who answered or closed it. `system` is the auto-withdrawal on a decline / detach. */
-export type DeliveryFeeResponderRole = 'vendor' | 'agency' | 'agent' | 'system';
+export type DeliveryFeeProposerRole = 'agency' | 'agent' | 'system';
+/**
+ * Who answered or closed it. `system` is the auto-withdrawal on a decline / detach, and the
+ * direct application of a customer-paid decrease (ADR-A11). `customer` answers a customer-paid
+ * increase; `vendor` also covers a change-agency difference.
+ */
+export type DeliveryFeeResponderRole = 'vendor' | 'agency' | 'agent' | 'system' | 'customer';
+export type { ProposalApprover, ProposalOrigin, FeeDirection } from '../domain/customer-fee-change.rules';
+import type { ProposalApprover, ProposalOrigin, FeeDirection } from '../domain/customer-fee-change.rules';
+import { PROPOSAL_APPROVERS, PROPOSAL_ORIGINS } from '../domain/customer-fee-change.rules';
 
 export type DeliveryFeeProposalStatus = 'pending' | 'approved' | 'rejected' | 'withdrawn';
 
@@ -56,6 +63,37 @@ export interface IDeliveryFeeApplication {
   vendor_allocation_after: number | null;
   /** Whether `delivery_fee_snapshot` was rewritten (prepaid, already split). */
   snapshot_rewritten: boolean;
+  /**
+   * ADR-A11 — a CUSTOMER-paid change. What `shipment.customer_delivery_fee` was and became, what
+   * the customer paid on top (online top-up) or is owed back (online), and whether a pending COD
+   * collection was re-priced. Null/false on a vendor-paid approval.
+   */
+  customer_fee_before?: number | null;
+  customer_fee_after?: number | null;
+  customer_topup_amount?: number | null;
+  customer_refund_due?: number | null;
+  cod_collection_adjusted?: boolean;
+  /** How much the vendor's share of the fee moved (+ = the vendor bears more). */
+  vendor_borne_delta?: number | null;
+}
+
+/** The customer's answer to an increase they must pay for (online), before the money arrives. */
+export interface IDeliveryFeeCustomerApproval {
+  approved_at: Date;
+  /** The version the customer approved — an edit after it is refused. */
+  version: number;
+  user_id: Types.ObjectId | null;
+  /** The top-up the approval needs (online). */
+  topup_amount: number;
+}
+
+/** The online top-up an approved increase is waiting for. */
+export interface IDeliveryFeeTopup {
+  amount: number;
+  /** The payment transaction that settled it (`purpose: 'order_delivery_topup'`). Null until paid. */
+  transaction_id: Types.ObjectId | null;
+  status: 'awaiting_payment' | 'paid';
+  paid_at: Date | null;
 }
 
 /**
@@ -94,6 +132,22 @@ export interface IDeliveryFeeProposal extends Document {
 
   status: DeliveryFeeProposalStatus;
 
+  /**
+   * ADR-A11. Who must answer: `vendor` (vendor-paid, ADR-A09), `customer` (an increase on a
+   * customer-paid shipment), `none` (a customer-paid decrease — applied on creation). Rows
+   * written before ADR-A11 read the default `vendor`.
+   */
+  approver: ProposalApprover;
+  /** Where it came from: an agency/agent proposal, a change-agency difference, a combined request. */
+  origin: ProposalOrigin;
+  direction: FeeDirection | null;
+  /** The order's customer, on a customer-paid proposal (the customer reads are scoped by it). */
+  customer_id: Types.ObjectId | null;
+  /** The combined-price request this proposal answered, if any. */
+  combined_request_id: Types.ObjectId | null;
+  customer_approval: IDeliveryFeeCustomerApproval | null;
+  topup: IDeliveryFeeTopup | null;
+
   responded_by_role: DeliveryFeeResponderRole | null;
   responded_by_user_id: Types.ObjectId | null;
   responded_at: Date | null;
@@ -125,7 +179,7 @@ export interface IDeliveryFeeProposal extends Document {
   updated_at: Date;
 }
 
-const ROLES = ['agency', 'agent', 'vendor', 'system'];
+const ROLES = ['agency', 'agent', 'vendor', 'system', 'customer'];
 
 const HistoryEntrySchema = new Schema<IDeliveryFeeProposalHistoryEntry>(
   {
@@ -145,7 +199,7 @@ const DeliveryFeeProposalSchema = new Schema<IDeliveryFeeProposal>(
     vendor_id: { type: Schema.Types.ObjectId, ref: MODELS.VENDOR, required: true },
     agency_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENCY, required: true },
 
-    proposed_by_role: { type: String, enum: ['agency', 'agent'], required: true },
+    proposed_by_role: { type: String, enum: ['agency', 'agent', 'system'], required: true },
     proposed_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
     proposed_by_agent_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENT, default: null },
 
@@ -163,6 +217,37 @@ const DeliveryFeeProposalSchema = new Schema<IDeliveryFeeProposal>(
       default: 'pending',
     },
 
+    // ADR-A11 — see the interface. The defaults keep every earlier row a vendor-approver proposal.
+    approver: { type: String, enum: [...PROPOSAL_APPROVERS], required: true, default: 'vendor' },
+    origin: { type: String, enum: [...PROPOSAL_ORIGINS], required: true, default: 'agency' },
+    direction: { type: String, enum: ['increase', 'decrease', null], default: null },
+    customer_id: { type: Schema.Types.ObjectId, ref: MODELS.CUSTOMER, default: null },
+    combined_request_id: { type: Schema.Types.ObjectId, default: null },
+    customer_approval: {
+      type: new Schema<IDeliveryFeeCustomerApproval>(
+        {
+          approved_at: { type: Date, required: true },
+          version: { type: Number, required: true, min: 1 },
+          user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
+          topup_amount: { type: Number, required: true, min: 0 },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+    topup: {
+      type: new Schema<IDeliveryFeeTopup>(
+        {
+          amount: { type: Number, required: true, min: 0 },
+          transaction_id: { type: Schema.Types.ObjectId, ref: MODELS.PAYMENT_TRANSACTION, default: null },
+          status: { type: String, enum: ['awaiting_payment', 'paid'], required: true },
+          paid_at: { type: Date, default: null },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+
     responded_by_role: { type: String, enum: [...ROLES, null], default: null },
     responded_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
     responded_at: { type: Date, default: null },
@@ -176,6 +261,12 @@ const DeliveryFeeProposalSchema = new Schema<IDeliveryFeeProposal>(
           vendor_allocation_before: { type: Number, default: null },
           vendor_allocation_after: { type: Number, default: null },
           snapshot_rewritten: { type: Boolean, required: true, default: false },
+          customer_fee_before: { type: Number, default: null },
+          customer_fee_after: { type: Number, default: null },
+          customer_topup_amount: { type: Number, default: null },
+          customer_refund_due: { type: Number, default: null },
+          cod_collection_adjusted: { type: Boolean, default: false },
+          vendor_borne_delta: { type: Number, default: null },
         },
         { _id: false }
       ),
@@ -187,7 +278,7 @@ const DeliveryFeeProposalSchema = new Schema<IDeliveryFeeProposal>(
       type: [
         new Schema<IDeliveryFeeProposalEdit>(
           {
-            edited_by_role: { type: String, enum: ['agency', 'agent'], required: true },
+            edited_by_role: { type: String, enum: ['agency', 'agent', 'system'], required: true },
             edited_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
             edited_by_agent_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENT, default: null },
             fee_before: { type: Number, required: true, min: 0 },
@@ -205,7 +296,7 @@ const DeliveryFeeProposalSchema = new Schema<IDeliveryFeeProposal>(
     last_edited_by: {
       type: new Schema(
         {
-          role: { type: String, enum: ['agency', 'agent'], required: true },
+          role: { type: String, enum: ['agency', 'agent', 'system'], required: true },
           user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
           agent_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENT, default: null },
           at: { type: Date, required: true },

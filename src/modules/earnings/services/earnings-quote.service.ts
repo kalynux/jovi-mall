@@ -9,6 +9,13 @@ import {
 } from '../../agents/repositories/agent-contract.repository';
 import { IContractFeeSplit } from '../../agents/models/agent-agency-membership.model';
 import { EarningsAllocationModel } from '../models/earnings-allocation.model';
+import {
+  computeShipmentFee,
+  isOutOfRegion,
+  PickupMix,
+  resolveItemWeightGrams,
+  shipmentWeightGrams,
+} from '../domain/delivery-pricing';
 import { CashCollectionModel } from '../../cod/models/cash-collection.model';
 
 /**
@@ -76,6 +83,12 @@ export interface ContractSalaryInfo {
 export interface AgentEarningQuoteResult {
   earning: AgentEarningQuote | null;
   earningUnavailable: EarningUnavailableReason | null;
+}
+
+/** The drop-off region of an order-like value, for the formula's live path (unknown ⇒ null). */
+function regionOf(order: unknown): string | null {
+  return (order as { delivery_address?: { components?: { region?: string | null } | null } | null })
+    ?.delivery_address?.components?.region ?? null;
 }
 
 /** Absence helper — keeps the two mutually-exclusive fields consistent. */
@@ -278,57 +291,22 @@ function agencyUnavailable(reason: AgencyEarningUnavailableReason): AgencyEarnin
  * All amounts are integers in minor currency units.
  */
 /**
- * Which fulfilment modes a delivery covers — the only thing the fee formula reads.
- *
- * A delivery may be both: each product configures its own pickup independently, so one
- * shipment can carry a vendor-collected item and a warehoused one.
+ * Which fulfilment modes a delivery covers — declared beside the formula in
+ * `../domain/delivery-pricing.ts` and re-exported here so existing importers keep compiling.
  */
-export interface PickupMix {
-  hasPickupBased: boolean;
-  hasStorageBased: boolean;
-}
+export type { PickupMix } from '../domain/delivery-pricing';
 
 /**
- * The delivery-fee formula itself — pure, and the ONLY definition of it.
+ * The delivery fee for a pickup mix at ONE kilogram, in-region — a thin wrapper over
+ * `computeShipmentFee` (`earnings/domain/delivery-pricing.ts`, ADR-A11), which is the only
+ * definition of the formula (weight, region, the agency's `max_fee_per_shipment` ceiling).
  *
- * Extracted from `computeShipmentDeliveryFee` so that the **cart quote**, which runs before
- * any shipment exists, divides by exactly the same arithmetic the split will later charge.
- * Everything shipment-shaped (looking up order items, classifying their pickup source) stays
- * in the caller; what is left here takes a policy and a mix and returns a number.
- *
- * That split is the same rule the rest of this file follows and says so in its header: one
- * definition, so a quote cannot drift from a charge. Add a fee component **here**, never at
- * a call site.
+ * Kept so callers that do not yet know a shipment's weight or regions price it exactly as
+ * before (base rate / local storage fees), plus the ceiling. Callers that do know them call
+ * `computeShipmentFee` directly. Add a fee component THERE, never here or at a call site.
  */
 export function deliveryFeeForPickupMix(policies: IAgencyPolicies, mix: PickupMix): number {
-  let fee = 0;
-
-  // A delivery mixing both fulfilment modes is charged BOTH components: real distinct
-  // fulfilment work happens for each class.
-  if (mix.hasPickupBased) {
-    fee += policies.pricing.pickup_based.base_rate_first_kg;
-    // TODO(earnings): additional_per_kg — deferred. Needs a weight snapshot that doesn't
-    // exist on IOrderItem; weight only lives on ProductVariant today.
-    // TODO(earnings): out_of_region_surcharge — deferred. No region-matching concept
-    // (customer delivery region vs the vendor pickup address / agency coverage_areas)
-    // exists anywhere yet.
-  }
-  if (mix.hasStorageBased) {
-    fee +=
-      policies.pricing.storage_based.local_delivery_fee +
-      policies.pricing.storage_based.pick_pack_fee_per_order;
-    // TODO(earnings): out_of_region_delivery_fee — deferred, same reason as above.
-    // TODO(earnings): monthly_storage_fee_per_sku — intentionally EXCLUDED from any
-    // per-order split. It is a recurring rent-style charge (per SKU stored, per month),
-    // not tied to any single order.
-  }
-
-  // TODO(earnings): free_delivery — IOrderItem.delivery.free_delivery is a per-item flag;
-  // this shipment-level computation doesn't consult it, so a delivery carrying a
-  // free-delivery item is still charged its flat component(s) in full. Revisit once fee
-  // calc needs item-level granularity below the two flat components above.
-
-  return fee;
+  return computeShipmentFee(policies, { mix, totalWeightGrams: 0, outOfRegion: false }).fee;
 }
 
 /**
@@ -503,10 +481,17 @@ export class EarningsQuoteService {
   ) {}
 
   /**
-   * ONE shipment's delivery fee from its agency's `policies.pricing` — the
-   * MINIMAL formula shared by the prepaid per-order split (summed per agency),
-   * the COD per-collection split, and the agent's offer-time quote.
+   * ONE shipment's delivery fee — shared by the prepaid per-order split (summed per agency),
+   * the COD per-collection split, and the agent's and agency's quotes. ONE definition, in
+   * this precedence (ADR-A11):
    *
+   *   1. the vendor-approved override (`delivery_fee_override`);
+   *   2. the CHECKOUT snapshot (`delivery_fee_snapshot`, written for every physical shipment
+   *      since ADR-A11 — the posted price the payer was quoted);
+   *   3. the live formula, `computeShipmentFee`, with the order items' snapshotted weights and
+   *      the drop-off region against each vendor-address pickup's snapshotted region.
+   *
+
    * ⚠ A VENDOR-APPROVED override wins over the formula (`shipment.delivery_fee_override`,
    * modules/delivery-fee-proposals). It is checked here — the one function every fee
    * consumer already calls — rather than at each call site, so the prepaid split, the COD
@@ -518,10 +503,18 @@ export class EarningsQuoteService {
     shipment: IShipment,
     policies: IAgencyPolicies | null,
     orderItemsById: Map<string, IOrderItem>,
-    orderId: string
+    orderId: string,
+    /** The order's drop-off region (`order.delivery_address.components.region`); unknown ⇒ in-region. */
+    deliveryRegion: string | null = null
   ): number {
     const override = approvedDeliveryFeeOf(shipment);
     if (override !== null) return override;
+
+    // ADR-A11: the posted price was snapshotted AT CHECKOUT for every physical shipment — that
+    // is what the payer (vendor or customer) was quoted and what the agency is owed. Never
+    // re-derive it from a policy the agency may have edited since.
+    const snapshot = shipment.delivery_fee_snapshot;
+    if (typeof snapshot === 'number' && Number.isFinite(snapshot) && snapshot >= 0) return snapshot;
 
     if (!policies) {
       // Defensive fallback, not expected in practice: AgencyOnboardingStep
@@ -541,22 +534,35 @@ export class EarningsQuoteService {
       return EARNINGS_CONFIG.DELIVERY_FLAT_FEE;
     }
 
-    // Classify this shipment's lines, then hand the mix to the shared formula.
-    // The classification is shipment-shaped and stays here; the arithmetic is not
-    // and lives in `deliveryFeeForPickupMix`, so the cart quote divides by the same
-    // definition before any shipment exists.
+    // No snapshot (a legacy shipment, or one created after checkout when an item moved to
+    // another agency): price it live with THE formula. The classification is shipment-shaped
+    // and stays here; the arithmetic is `computeShipmentFee`, the one definition the cart
+    // quote and checkout price with too.
     const mix: PickupMix = { hasPickupBased: false, hasStorageBased: false };
+    const weighed: Array<{ grams: number; quantity: number }> = [];
+    let outOfRegion = false;
     for (const item of shipment.items) {
       const orderItem = orderItemsById.get(item.order_item_id.toString());
-      const source = orderItem?.delivery?.pickup_location?.source;
+      const pickup = orderItem?.delivery?.pickup_location;
+      const source = pickup?.source;
       if (source === 'vendor_address') mix.hasPickupBased = true;
       if (source === 'agency_storage') mix.hasStorageBased = true;
       // else: no matching order item, or a legacy item with
       // pickup_location: null (predates this feature) — can't classify;
       // contributes no fee component.
+      // The weight the checkout snapshotted, else the D-4 fallback for this unit.
+      const snapshotGrams = orderItem?.weight_grams;
+      const grams =
+        typeof snapshotGrams === 'number' && snapshotGrams > 0
+          ? snapshotGrams
+          : resolveItemWeightGrams({}).grams;
+      weighed.push({ grams, quantity: item.quantity });
+      // Only the vendor-address pickup carries a snapshotted region; a depot's is live and is
+      // never guessed here (unknown ⇒ in-region, never against the payer).
+      if (isOutOfRegion(deliveryRegion, pickup?.address_snapshot?.geo?.components?.region ?? null)) outOfRegion = true;
     }
 
-    return deliveryFeeForPickupMix(policies, mix);
+    return computeShipmentFee(policies, { mix, totalWeightGrams: shipmentWeightGrams(weighed), outOfRegion }).fee;
   }
 
   /**
@@ -604,11 +610,12 @@ export class EarningsQuoteService {
     shipment: IShipment,
     policies: IAgencyPolicies | null,
     orderItemsById: Map<string, IOrderItem>,
-    orderId: string
+    orderId: string,
+    deliveryRegion: string | null = null
   ): number {
     return (
       shipment.delivery_fee_snapshot ??
-      this.computeShipmentDeliveryFee(shipment, policies, orderItemsById, orderId)
+      this.computeShipmentDeliveryFee(shipment, policies, orderItemsById, orderId, deliveryRegion)
     );
   }
 
@@ -639,7 +646,7 @@ export class EarningsQuoteService {
     if (!contract) return unavailable('no_contract');
 
     const orderItemsById = new Map(order.items.map((i) => [(i._id as any).toString(), i]));
-    const deliveryFee = this.resolveDeliveryFee(shipment, policies, orderItemsById, String(order._id));
+    const deliveryFee = this.resolveDeliveryFee(shipment, policies, orderItemsById, String(order._id), regionOf(order));
     // The agent's cut comes out of what the run EARNED — the RTO rate on a return, nothing on a
     // returned COD shipment — exactly as the split computes it. It used to be a cut of the full
     // fee, so the agent's figure and the agency's `agentCut` disagreed on the same shipment.
@@ -713,7 +720,7 @@ export class EarningsQuoteService {
       }
 
       const orderItemsById = new Map(order.items.map((i) => [(i._id as any).toString(), i]));
-      const deliveryFee = this.resolveDeliveryFee(shipment, policies, orderItemsById, String(order._id));
+      const deliveryFee = this.resolveDeliveryFee(shipment, policies, orderItemsById, String(order._id), regionOf(order));
 
       // Same arithmetic as computeAgentCut, but against the already-resolved
       // contract — re-fetching per row is what this batch path exists to avoid.
@@ -758,7 +765,7 @@ export class EarningsQuoteService {
     codGross: number
   ): AgencyEarningQuoteResult {
     const orderItemsById = new Map(order.items.map((i) => [(i._id as any).toString(), i]));
-    const deliveryFee = this.resolveDeliveryFee(shipment, policies, orderItemsById, String(order._id));
+    const deliveryFee = this.resolveDeliveryFee(shipment, policies, orderItemsById, String(order._id), regionOf(order));
 
     // A shipment that has already come back earns the RTO rate, not the full
     // fee — mirrors the outcome `ShipmentService` passes to
@@ -796,8 +803,9 @@ export class EarningsQuoteService {
    * `fee_split` to subtract, and quoting the gross fee would show a number that
    * drops the moment somebody accepts the offer.
    *
-   * `codGross` is the cash this shipment collects, needed only for a percentage
-   * `cod_handling_fee`. It is passed IN rather than computed here on purpose:
+   * `codGross` is the GOODS this shipment's cash pays for (ADR-A11 D-5: the COD handling fee
+   * is computed on the product price only, never on a customer-paid delivery fee), needed only
+   * for a percentage `cod_handling_fee`. It is passed IN rather than computed here on purpose:
    * `CashCollectionService.computeExpectedAmount` owns that arithmetic, and the
    * cod module already calls `EarningsSplitService` — importing it back would
    * close a cycle.

@@ -53,7 +53,8 @@ export interface NegotiationProductRow {
     title: string;
     description: string;
     type: ProductType;
-    category: string;
+    /** `product_categories` ids, vendor's order. Named by the service via the category cache. */
+    categoryIds: string[];
     tags: string[];
     vendorId: string;
     /** Gates whether a configured window is live at all — see `isBargainEffective`. */
@@ -85,7 +86,8 @@ export interface NegotiationSubjectQuery {
 export interface NegotiationCandidateQuery {
     /** Free text, matched through the same `$text` index the storefront's search uses. */
     query?: string;
-    category?: string;
+    /** Already-resolved category ids; a candidate matches when it shares ANY of them. */
+    categoryIds?: string[];
     types?: ProductType[];
     /** The budget. Bounds the FLOOR — never the ask. */
     maxPrice?: number;
@@ -154,7 +156,10 @@ export class NegotiationCatalogRepositoryMongo {
     async findCandidates(query: NegotiationCandidateQuery): Promise<NegotiationProductRow[]> {
         const productMatch: Record<string, unknown> = { ...publishableProductFilter() };
 
-        if (query.category) productMatch.category = query.category;
+        const categoryIds = (query.categoryIds ?? []).filter((id) => Types.ObjectId.isValid(id));
+        if (categoryIds.length > 0) {
+            productMatch.categoryIds = { $in: categoryIds.map((id) => new Types.ObjectId(id)) };
+        }
         if (query.types && query.types.length > 0) productMatch.type = { $in: query.types };
         if (query.vendorId && Types.ObjectId.isValid(query.vendorId)) {
             productMatch.vendorId = new Types.ObjectId(query.vendorId);
@@ -337,7 +342,9 @@ export class NegotiationCatalogRepositoryMongo {
                 title: 1,
                 description: { $ifNull: ['$description', ''] },
                 type: 1,
-                category: 1,
+                categoryIds: {
+                    $map: { input: { $ifNull: ['$categoryIds', []] }, as: 'c', in: { $toString: '$$c' } },
+                },
                 tags: { $ifNull: ['$tags', []] },
                 vendorId: { $toString: '$vendorId' },
                 vectorisationEnabled: { $ifNull: ['$vectorisationEnabled', false] },

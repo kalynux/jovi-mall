@@ -76,22 +76,30 @@ class FakeRelatedRepo {
     return this.coOccurrence.slice(0, limit);
   }
 
-  async sameCategoryRecent(_productId: string, category: string, limit: number) {
+  /** Since 2026-10-04 the fallback receives the subject's category IDS (any-of), not one name. */
+  async sameCategoryRecent(_productId: string, categoryIds: string[], limit: number) {
     this.calls.push('sameCategoryRecent');
-    this.lastCategory = category;
+    this.lastCategory = categoryIds.join(',');
     return this.categoryIds.slice(0, limit);
   }
 }
 
 class FakeCatalog {
-  constructor(public publishable: Set<string> = new Set(), public category = 'shoes') {}
+  constructor(public publishable: Set<string> = new Set(), public categories: string[] = ['cat-shoes']) {}
   public calls = 0;
   async listByIds(ids: string[]) {
     this.calls++;
     return new Map(
       ids
         .filter((id) => this.publishable.has(id))
-        .map((id) => [id, { id, title: `Product ${id}`, category: this.category } as never])
+        .map((id) => [
+          id,
+          {
+            id,
+            title: `Product ${id}`,
+            categories: this.categories.map((c) => ({ id: c, name: c, slug: c })),
+          } as never,
+        ])
     );
   }
 }
@@ -168,13 +176,21 @@ assert('⚠ every fallback entry carries orders: null — there is no count to r
   return result.data.length === 2 && result.data.every((r) => r.orders === null);
 });
 
-assert('the fallback uses the SUBJECT\'s own category, read live rather than from the cache', async () => {
+assert('the fallback uses ALL of the SUBJECT\'s own categories, read live rather than from the cache', async () => {
   const h = harness();
-  h.catalog.category = 'kitchen';
+  h.catalog.categories = ['cat-kitchen', 'cat-garden'];
   h.repo.coOccurrence = [];
   h.repo.categoryIds = [pid(2)];
   await h.service.forProduct(SUBJECT);
-  return h.repo.lastCategory === 'kitchen';
+  return h.repo.lastCategory === 'cat-kitchen,cat-garden';
+});
+
+assert('a subject with no category gets no fallback query at all', async () => {
+  const h = harness();
+  h.catalog.categories = [];
+  h.repo.coOccurrence = [];
+  const result = await h.service.forProduct(SUBJECT);
+  return !h.repo.calls.includes('sameCategoryRecent') && result.data.length === 0;
 });
 
 assert('a product with neither signal is an empty 200, never a 404', async () => {

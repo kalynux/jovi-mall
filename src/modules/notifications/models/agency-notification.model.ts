@@ -104,6 +104,8 @@ export type AgencyNotificationType =
     | 'delivery_fee_proposal.rejected'
     | 'delivery_fee_proposal.agent_proposed'
     | 'delivery_fee_proposal.agent_edited'
+    /** ADR-A11 (D-8): a customer asks this agency for a combined price on several parcels. */
+    | 'combined_delivery_request.received'
     /**
      * COD limits (2026-10-02).
      * `shipment.cod_limit.forced` — a vendor dispatched a COD shipment to this agency past a
@@ -119,7 +121,19 @@ export type AgencyNotificationType =
     | 'shipment.assignment.cod_limit_blocked'
     | 'connection.cod_terms_changed'
     | 'cod.limit.pinned'
-    | 'cod.limit.released';
+    | 'cod.limit.released'
+    /**
+     * Role closure (ADR-A10). `account.closure_requested` — an administrator asked to close
+     * this AGENCY account; nothing happens unless the agency confirms while signed in. Gated
+     * by NO preference (a muted closure request would expire unseen). Copy says "close",
+     * never "delete" (ADR-A02 D-2).
+     * `connection.ended_by_closure` — a connected VENDOR closed its account (gated by
+     * `connectionUpdated`); `agent_contract.ended_by_closure` — a contracted AGENT closed
+     * theirs (gated by `contractUpdated`).
+     */
+    | 'account.closure_requested'
+    | 'connection.ended_by_closure'
+    | 'agent_contract.ended_by_closure';
 export type AgencyAggregateType =
     | 'connection'
     /** An agent↔agency contract — NOT a vendor↔agency connection. */
@@ -137,7 +151,9 @@ export type AgencyAggregateType =
      */
     | 'stock_request'
     /** The agency's own COD cash limit — `aggregateId` is the agency id. */
-    | 'cod_limit';
+    | 'cod_limit'
+    /** A role-closure request (ADR-A10) — `aggregateId` is the request id. */
+    | 'account';
 
 /**
  * Deep-link action for a notification, localized in the agency's language.
@@ -224,11 +240,16 @@ const AgencyNotificationSchema = new Schema<IAgencyNotification>(
                 'delivery_fee_proposal.rejected',
                 'delivery_fee_proposal.agent_proposed',
                 'delivery_fee_proposal.agent_edited',
+                'combined_delivery_request.received',
                 'shipment.cod_limit.forced',
                 'shipment.assignment.cod_limit_blocked',
                 'connection.cod_terms_changed',
                 'cod.limit.pinned',
-                'cod.limit.released'
+                'cod.limit.released',
+                // ⚠ Hand-kept: every member of the union above must be here too.
+                'account.closure_requested',
+                'connection.ended_by_closure',
+                'agent_contract.ended_by_closure'
             ],
             required: true
         },
@@ -236,7 +257,8 @@ const AgencyNotificationSchema = new Schema<IAgencyNotification>(
         message: { type: String, required: true, trim: true, maxlength: 1000 },
         aggregateType: {
             type: String,
-            enum: ['connection', 'contract', 'shipment', 'payout', 'deposit', 'plan', 'storage', 'stock_request', 'cod_limit'],
+            // ⚠ Hand-kept: every member of `AgencyAggregateType` must be here too.
+            enum: ['connection', 'contract', 'shipment', 'payout', 'deposit', 'plan', 'storage', 'stock_request', 'cod_limit', 'account'],
             required: true
         },
         aggregateId: { type: Schema.Types.ObjectId, required: true },

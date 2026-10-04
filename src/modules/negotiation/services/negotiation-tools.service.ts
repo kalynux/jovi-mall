@@ -11,8 +11,10 @@
  *
  * That rule is why two of the five are smaller than they sound:
  *
- *   - **`quoteDelivery` reports no date.** The agency policy model has no lead-time field,
- *     so `eta` is `null` beside a stated reason. See `domain/delivery-promise.ts`.
+ *   - **`quoteDelivery` reports no date and no fee.** The agency policy model has no lead-time
+ *     field, so `eta` is `null` beside a stated reason; and whether delivery is FREE is read from
+ *     the shop's delivery terms (ADR-A11) — a fee is never quoted, only "free" or "shown at
+ *     checkout". See `domain/delivery-promise.ts`.
  *   - **`checkPromotion` reports nothing at all.** There is no coupon model — `CartQuote`
  *     pins `discount` to a literal `0` — so the tool exists to be *asked*, and to answer
  *     "none", which is the only answer that stops a model inventing one.
@@ -44,6 +46,10 @@ import { RELATED_PRODUCTS_CONFIG } from '../../catalog/config/related-products.c
 import { VendorRepository } from '../../vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.repository';
 import { MagazinRepository } from '../../magazin/repositories/magazin.repository';
+import { VendorSettingsRepository } from '../../vendors/repositories/vendor-settings.repository';
+import { vendorDeliveryTermsOf } from '../../vendors/domain/delivery-terms';
+import { categoryCatalogCache } from '../../categories/services/category-catalog.cache';
+import { categoryResolutionService } from '../../categories/services/category-resolution.service';
 import {
     buildDeliveryPromise,
     DeliveryAgencyFacts,
@@ -96,7 +102,10 @@ export interface NegotiationProductView {
     title: string;
     description: string;
     type: ProductType;
+    /** The primary category's name (`categories[0]`), `''` if none. Kept for older prompts. */
     category: string;
+    /** Every category name the product is listed under, vendor's order. */
+    categories: string[];
     tags: string[];
     currency: string;
     store: { slug: string; name: string; isOpen: boolean };
@@ -122,7 +131,10 @@ export interface NegotiationSearchHit {
     slug: string;
     title: string;
     type: ProductType;
+    /** The primary category's name, `''` if none. */
     category: string;
+    /** Every category name, vendor's order. */
+    categories: string[];
     currency: string;
     store: { slug: string; name: string; isOpen: boolean };
     image: FileDetail | null;
@@ -157,6 +169,7 @@ export class NegotiationToolsService {
         private readonly vendors = new VendorRepository(),
         private readonly agencies = new DeliveryAgencyRepository(),
         private readonly magazins = new MagazinRepository(),
+        private readonly vendorSettings = new VendorSettingsRepository(),
     ) { }
 
     /**
@@ -215,12 +228,24 @@ export class NegotiationToolsService {
             ? await this.catalog.findSubject(subject)
             : null;
 
+        // An explicit filter wins over one inferred from the subject: a model that says
+        // "same category" has said nothing, while one that names a category has made a
+        // decision, and a customer pivoting from a phone to a phone case is naming it.
+        // A NAMED category is resolved through the shared list (id, slug, or a spelling
+        // variant of a name); one the list does not know answers no hits — the model named
+        // a shelf that does not exist, and widening to the whole catalogue would be a guess.
+        let categoryIds: string[] | undefined;
+        if (input.category) {
+            const named = await categoryResolutionService.resolveFilter(input.category);
+            if (!named) return { basis: 'substitute', subjectId: found?.row.id ?? null, hits: [] };
+            categoryIds = [named.id];
+        } else if (found) {
+            categoryIds = found.row.categoryIds;
+        }
+
         const rows = await this.catalog.findCandidates({
             query: subject.query,
-            // An explicit filter wins over one inferred from the subject: a model that says
-            // "same category" has said nothing, while one that names a category has made a
-            // decision, and a customer pivoting from a phone to a phone case is naming it.
-            category: input.category ?? found?.row.category,
+            categoryIds,
             types: input.type ? [input.type] : found ? [found.row.type] : undefined,
             maxPrice: input.maxPrice,
             inStockOnly: input.inStockOnly,
@@ -314,8 +339,9 @@ export class NegotiationToolsService {
     /**
      * `quote_delivery` — the delivery PROMISE, not a fee.
      *
-     * Re-scoped by D-7: there is no fee to quote, so this answers deliverable / by whom /
-     * when. The "when" is always `null` — see `domain/delivery-promise.ts` for the
+     * Re-scoped by D-7 and amended by ADR-A11: this answers deliverable / by whom / when / is it
+     * FREE on the shop's delivery terms (`always` · `never` · `above` X, decided for `above` by the
+     * optional deal `amount`). It never quotes a fee — only checkout can price one. The "when" is always `null` — see `domain/delivery-promise.ts` for the
      * confirmation that the agency policy model carries no lead time.
      *
      * The agency is resolved exactly as checkout resolves it (`resolveEffectiveAgencyId`'s
@@ -328,6 +354,8 @@ export class NegotiationToolsService {
         sku?: string;
         slug?: string;
         region?: string;
+        /** The deal's amount from this shop (price × quantity) — decides an `above` shop's threshold. */
+        amount?: number;
     }): Promise<{ productId: string; promise: DeliveryPromise }> {
         const subject = requireProductSubject(input, 'quote_delivery');
         const found = await this.catalog.findSubject(subject);
@@ -341,6 +369,10 @@ export class NegotiationToolsService {
 
         const row = found.row;
         const agency = row.type === 'physical' ? await this.resolveAgencyFacts(row) : null;
+        /** The SHOP's terms (ADR-A11 D-1), default applied — what free delivery depends on now. */
+        const terms = row.type === 'physical'
+            ? vendorDeliveryTermsOf(await this.vendorSettings.findDeliveryTerms(row.vendorId))
+            : null;
 
         return {
             productId: row.id,
@@ -349,6 +381,8 @@ export class NegotiationToolsService {
                 currency: NEGOTIATION_TOOL_CURRENCY,
                 agency,
                 region: input.region,
+                terms,
+                amount: input.amount,
             }),
         };
     }
@@ -395,7 +429,8 @@ export class NegotiationToolsService {
             reason: 'no_promotion_system',
             guidance:
                 'This platform runs no promotions, coupons or discount codes of any kind. Say so '
-                + 'plainly and move to what you CAN offer: your price, free delivery, or a bundle.',
+                + 'plainly and move to what you CAN offer: your price, a bundle, or free delivery '
+                + "where quote_delivery says the shop's terms give it (free: true).",
         };
     }
 
@@ -406,6 +441,7 @@ export class NegotiationToolsService {
         const fileIds = [...row.fileIds, ...row.variants.flatMap((v) => v.fileIds)];
         const fileMap = await resolveFileDetails(fileIds, this.files, storage);
         const optionMap = await this.resolveOptionValues(row.variants);
+        const categoryNames = (await categoryCatalogCache.refsFor(row.categoryIds)).map((c) => c.name);
 
         return {
             id: row.id,
@@ -413,7 +449,8 @@ export class NegotiationToolsService {
             title: row.title,
             description: row.description,
             type: row.type,
-            category: row.category,
+            category: categoryNames[0] ?? '',
+            categories: categoryNames,
             tags: row.tags,
             currency: NEGOTIATION_TOOL_CURRENCY,
             store: { slug: row.storeSlug, name: row.storeName, isOpen: row.storeIsOpen },
@@ -454,20 +491,23 @@ export class NegotiationToolsService {
             this.files,
             storage,
         );
+        const categoryRefs = await categoryCatalogCache.refsForMany(rows.map((row) => row.categoryIds));
 
-        return rows.map((row) => {
+        return rows.map((row, index) => {
             // `variants` is sorted cheapest-first by the repository, so the entry variant is
             // the first one — the cheapest floor, which is what a budget-led pitch opens from.
             const entry = row.variants[0];
             const window = windowOf(row.vectorisationEnabled, entry);
             const firstImage = row.fileIds[0] ? fileMap.get(row.fileIds[0]) ?? null : null;
+            const categoryNames = categoryRefs[index].map((c) => c.name);
 
             return {
                 id: row.id,
                 slug: row.slug,
                 title: row.title,
                 type: row.type,
-                category: row.category,
+                category: categoryNames[0] ?? '',
+                categories: categoryNames,
                 currency: NEGOTIATION_TOOL_CURRENCY,
                 store: { slug: row.storeSlug, name: row.storeName, isOpen: row.storeIsOpen },
                 image: firstImage,

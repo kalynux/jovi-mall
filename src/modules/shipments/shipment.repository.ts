@@ -325,6 +325,27 @@ export class ShipmentRepository {
   }
 
   /**
+   * Record the delivery-fee money owed back to the customer (ADR-A11) — `$set`, so a retried
+   * split writes the same number again rather than adding it twice. See
+   * `IShipment.customer_fee_refundable`.
+   */
+  async setCustomerFeeRefundable(
+    amountsByShipmentId: Map<string, number>,
+    session?: ClientSession
+  ): Promise<void> {
+    if (amountsByShipmentId.size === 0) return;
+    await ShipmentModel.bulkWrite(
+      [...amountsByShipmentId.entries()].map(([shipmentId, amount]) => ({
+        updateOne: {
+          filter: { _id: new Types.ObjectId(shipmentId) },
+          update: { $set: { customer_fee_refundable: Math.max(0, amount) } },
+        },
+      })),
+      session ? { session } : {}
+    );
+  }
+
+  /**
    * Shipments whose delivery outcome is settled but whose earnings split may
    * never have landed (the split is best-effort after the status commit). Feeds
    * the release worker's recovery stage; `cutoff` gives an in-flight split time

@@ -28,6 +28,7 @@ import { COLLECTIONS } from '../../src/core/database/collections';
 import { ProductModel } from '../../src/modules/catalog/models';
 import { publicCatalogRepository } from '../../src/modules/catalog/repositories/mongo/public-catalog.repository.mongo';
 import { skuCandidates } from '../../src/modules/catalog/domain/services/sku-resolution';
+import { ProductCategoryModel } from '../../src/modules/categories/models/product-category.model';
 
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/jovi-mall';
 
@@ -69,8 +70,13 @@ async function cleanup(): Promise<void> {
         db.collection(COLLECTIONS.PRODUCT_VARIANT).deleteMany({ sku: { $regex: `^${MARKER}`, $options: 'i' } }),
         db.collection(COLLECTIONS.STORE).deleteMany({ slug: { $regex: `^${MARKER}` } }),
         db.collection(COLLECTIONS.VENDOR).deleteMany({ email: { $regex: `^${MARKER}` } }),
+        db.collection(COLLECTIONS.PRODUCT_CATEGORY).deleteMany({ slug: { $regex: `^${MARKER}` } }),
     ]);
 }
+
+/** The fixture's entry in the shared category list — inserted raw, deleted by `cleanup`. */
+const CATEGORY_ID = new Types.ObjectId();
+const CATEGORY_SLUG = `${MARKER}-home`;
 
 async function main(): Promise<void> {
     await mongoose.connect(MONGO_URI);
@@ -90,8 +96,11 @@ async function main(): Promise<void> {
         await assert('the browse index built { status, deletedAt, createdAt:-1 }', () =>
             byKey.includes(JSON.stringify({ status: 1, deletedAt: 1, createdAt: -1 })));
 
-        await assert('the category index built { status, deletedAt, category }', () =>
-            byKey.includes(JSON.stringify({ status: 1, deletedAt: 1, category: 1 })));
+        await assert('the category index built { status, deletedAt, categoryIds } (multikey)', () =>
+            byKey.includes(JSON.stringify({ status: 1, deletedAt: 1, categoryIds: 1 })));
+
+        await assert('the superseded free-text category index is gone', () =>
+            !byKey.includes(JSON.stringify({ status: 1, deletedAt: 1, category: 1 })));
 
         await assert('the $text index built (the ONE this collection is allowed)', () =>
             indexes.some((i) => Object.prototype.hasOwnProperty.call(i.key, '_fts')));
@@ -116,6 +125,20 @@ async function main(): Promise<void> {
         const vendorId = new Types.ObjectId();
         const productId = new Types.ObjectId();
         const variantId = new Types.ObjectId();
+
+        await db.collection(COLLECTIONS.PRODUCT_CATEGORY).insertOne({
+            _id: CATEGORY_ID,
+            name: 'Verify Storefront Home',
+            slug: CATEGORY_SLUG,
+            match_key: 'verifystorefronthome',
+            alias_keys: [],
+            created_source: 'admin',
+            created_by_vendor_id: null,
+            merged_into: null,
+            deletedAt: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        } as never);
 
         await db.collection(COLLECTIONS.VENDOR).insertOne({
             _id: vendorId,
@@ -151,7 +174,7 @@ async function main(): Promise<void> {
             title: 'Verify Storefront Kettle',
             description: 'A kettle for verification',
             slug: `${MARKER}-kettle`,
-            category: 'Home',
+            categoryIds: [CATEGORY_ID],
             tags: ['kettle'],
             hasVariants: true,
             defaultVariantId: variantId,
@@ -243,7 +266,7 @@ async function main(): Promise<void> {
             title: 'Verify Storefront Haggle Lamp',
             description: 'A lamp for verification',
             slug: `${MARKER}-lamp`,
-            category: 'Home',
+            categoryIds: [CATEGORY_ID],
             tags: ['lamp'],
             hasVariants: true,
             defaultVariantId: haggleVariantId,
@@ -334,10 +357,39 @@ async function main(): Promise<void> {
 
         await assert('every filter combination runs without a pipeline error', async () => {
             await publicCatalogRepository.search({
-                q: 'kettle', category: 'Home', types: ['physical'], storeSlug: `${MARKER}-store`,
+                q: 'kettle', categoryId: CATEGORY_ID.toString(), types: ['physical'], storeSlug: `${MARKER}-store`,
                 minPrice: 1, maxPrice: 999999, inStock: true, sort: 'price_asc', page: 1, limit: 10,
             });
             return true;
+        });
+
+        await assert('the category filter matches a product by ONE of its categoryIds (multikey)', async () => {
+            const { rows } = await publicCatalogRepository.search({
+                categoryId: CATEGORY_ID.toString(), sort: 'newest', page: 1, limit: 50,
+            });
+            return rows.some((r) => r.slug === `${MARKER}-kettle`)
+                && rows.every((r) => r.categoryIds.includes(CATEGORY_ID.toString()));
+        });
+
+        await assert('the category filter by an unrelated id matches none of the fixtures', async () => {
+            const { rows } = await publicCatalogRepository.search({
+                categoryId: new Types.ObjectId().toString(), sort: 'newest', page: 1, limit: 50,
+            });
+            return !rows.some((r) => r.slug.startsWith(MARKER));
+        });
+
+        await assert('⛔ the match_key unique index BINDS — a second live "home" spelling is refused', async () => {
+            await ProductCategoryModel.init();
+            try {
+                await db.collection(COLLECTIONS.PRODUCT_CATEGORY).insertOne({
+                    name: 'VERIFY storefront home', slug: `${MARKER}-home-dup`,
+                    match_key: 'verifystorefronthome', alias_keys: [], created_source: 'admin',
+                    created_by_vendor_id: null, merged_into: null, deletedAt: null,
+                } as never);
+                return false;
+            } catch (e) {
+                return (e as { code?: number }).code === 11000;
+            }
         });
 
         await assert('the nested (storeSlug, productSlug) lookup resolves', async () => {
@@ -357,7 +409,8 @@ async function main(): Promise<void> {
 
         await assert('categories aggregates and counts', async () => {
             const rows = await publicCatalogRepository.listCategories();
-            return rows.some((r) => r.name === 'Home' && r.productCount > 0);
+            // Both fixtures hold the category, so it counts at least 2 — one per product.
+            return rows.some((r) => r.categoryId === CATEGORY_ID.toString() && r.productCount >= 2);
         });
 
         await assert('the store directory runs and includes the fixture', async () => {

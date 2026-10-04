@@ -80,6 +80,7 @@ import { Booking } from '../../src/modules/booking/models/booking.model';
 import { BookingStatus } from '../../src/modules/booking/types/booking.types';
 import { SlotGeneratorService } from '../../src/modules/booking/services/slot-generator.service';
 import { zonedWallClockToInstant, zonedDayOf } from '../../src/modules/booking/utils/availability-timezone.util';
+import { categoryResolutionService } from '../../src/modules/categories/services/category-resolution.service';
 
 dotenv.config();
 
@@ -166,8 +167,9 @@ async function seed(): Promise<void> {
   log(`🏪 Vendor ${vendor.id.toString()} (timezone ${vendor.timezone})`);
 
   // ── The product ────────────────────────────────────────────────────────────
-  // `mode: 'advanced'` because simple mode is physical-only, and `category` because the
-  // schema requires it — a service product created without one fails validation.
+  // `mode: 'advanced'` because simple mode is physical-only, and a category because every
+  // product carries at least one — an entry of the shared list, resolved or created here.
+  const wellness = await categoryResolutionService.resolveUnattended('Wellness', { source: 'admin', vendorId: null });
   await ProductModel.create({
     _id: PRODUCT_ID,
     vendorId: vendor.id,
@@ -179,7 +181,7 @@ async function seed(): Promise<void> {
       `A ${DURATION_MINUTES}-minute morning yoga class for up to ${MAX_BOOKINGS} people. ` +
       'Seeded fixture for group-service booking and rescheduling (KI-1).',
     slug: 'sunrise-yoga-group-class',
-    category: 'wellness',
+    categoryIds: wellness ? [wellness.id] : [],
     tags: ['yoga', 'class', 'group', 'seed'],
     seo: {
       title: 'Sunrise Yoga — group class',

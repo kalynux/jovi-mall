@@ -157,7 +157,6 @@ This is the full shape of a product object returned by all read endpoints.
 {
   "delivery": {
     "agencyId": null,
-    "freeDelivery": false,
     "pickupLocation": {
       "source": "agency_storage",
       "vendorAddressId": null,
@@ -441,7 +440,6 @@ Partial update — only provided fields are changed. Allowed on `draft` and `act
   },
   "delivery": {
     "agencyId": "683abc1234567890abcdef01",
-    "freeDelivery": false,
     "pickupLocation": {
       "source": "vendor_address",
       "vendorAddressId": "683abc1234567890abcdef02"
@@ -471,9 +469,11 @@ Partial update — only provided fields are changed. Allowed on `draft` and `act
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `agencyId` | string \| null | The delivery agency ObjectId this product should use instead of the vendor's default, or `null` to clear the override and fall back to the vendor's default. Either sub-field may be sent independently (merged against the existing value) — at least one of `agencyId`/`freeDelivery`/`pickupLocation` must be present. |
-| `freeDelivery` | boolean | Marketing/order flag, independent of agency resolution. |
+| `agencyId` | string \| null | The delivery agency ObjectId this product should use instead of the vendor's default, or `null` to clear the override and fall back to the vendor's default. Either sub-field may be sent independently (merged against the existing value) — at least one of `agencyId`/`pickupLocation` must be present. |
 | `pickupLocation` | object \| null | Where the resolved delivery agency should collect this product from. `null` clears it. See sub-fields below. |
+
+> [!IMPORTANT]
+> **There is no `freeDelivery` sub-field any more (2026-10-03, ADR-A11).** Free delivery is a **shop** setting — `PUT /api/vendor/profile/delivery-terms` ([profile.md](./profile.md#delivery-terms-2026-10-03-adr-a10)). `delivery` is `.strict()`, so a body still sending `freeDelivery` is a `400`, and product reads no longer return it.
 
 **`delivery.pickupLocation` sub-fields:**
 

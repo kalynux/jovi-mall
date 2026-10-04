@@ -1,12 +1,12 @@
 {
-  "generatedAt": "2026-10-03T01:56:06.026Z",
+  "generatedAt": "2026-10-04T01:09:09.596Z",
   "note": "GENERATED from the notification catalogs by scripts/generate-whatsapp-templates.ts. Do not hand-edit: names, placeholder counts and placeholder ORDER are derived from the same functions the send path uses, and editing them here makes the approved template disagree with what is sent.",
   "languages": [
     "en",
     "fr"
   ],
-  "templateCount": 128,
-  "submissionCount": 256,
+  "templateCount": 145,
+  "submissionCount": 290,
   "needsCopyReview": [
     {
       "name": "customer_booking_created",
@@ -54,6 +54,24 @@
       "name": "customer_order_cancelled",
       "unsuppliedValues": [
         "refundLine"
+      ]
+    },
+    {
+      "name": "customer_order_delivery_fee_approval_needed",
+      "unsuppliedValues": [
+        "reasonLine"
+      ]
+    },
+    {
+      "name": "customer_order_delivery_fee_lowered",
+      "unsuppliedValues": [
+        "moneyLine"
+      ]
+    },
+    {
+      "name": "customer_order_delivery_fee_updated",
+      "unsuppliedValues": [
+        "moneyLine"
       ]
     },
     {
@@ -1899,6 +1917,198 @@
       ]
     },
     {
+      "name": "vendor_delivery_fee_customer_declined",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*You cover a delivery difference*\n\nThe customer declined to pay the higher delivery fee after you changed the delivery company for order #*{{1}}*. The difference of *{{2}}* *{{3}}* is deducted from your earnings on this order.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_delivery_fee_customer_declined",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Vous prenez en charge une différence de livraison*\n\nLe client a refusé de payer les frais de livraison plus élevés après votre changement de société de livraison pour la commande n°*{{1}}*. La différence de *{{2}}* *{{3}}* est déduite de vos gains sur cette commande.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_account_closure_requested",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Confirm closing your shop*\n\nAn administrator has asked to close your shop on Wi-Mall: *{{1}}*. Nothing happens unless you confirm. Open your account settings before *{{2}}* to confirm or decline.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_account_closure_requested",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Confirmez la fermeture de votre boutique*\n\nUn administrateur a demandé la fermeture de votre boutique sur Wi-Mall: *{{1}}*. Rien ne se passe sans votre confirmation. Ouvrez les paramètres de votre compte avant *{{2}}* pour confirmer ou refuser.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_connection_ended_closure",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Connection ended*\n\n*{{1}}* closed their account on Wi-Mall, so your connection with them has ended.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_connection_ended_closure",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Connexion terminée*\n\n*{{1}}* a fermé son compte sur Wi-Mall: votre connexion avec cette agence a donc pris fin.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "customer_booking_created",
       "language": "en",
       "category": "UTILITY",
@@ -3433,6 +3643,474 @@
       ]
     },
     {
+      "name": "customer_order_delivery_fee_approval_needed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Delivery fee change to approve — {{4}}*\n\nThe delivery company asks *{{1}}* *{{2}}* instead of *{{1}}* *{{3}}* to deliver your order *{{4}}*. Open the order to approve or decline — your parcel waits for your answer.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_delivery_fee_approval_needed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Changement des frais de livraison à valider — {{4}}*\n\nLa société de livraison demande *{{1}}* *{{2}}* au lieu de *{{1}}* *{{3}}* pour livrer votre commande *{{4}}*. Ouvrez la commande pour accepter ou refuser — votre colis attend votre réponse.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_delivery_fee_topup_due",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Pay {{1}} {{4}} to confirm your delivery — {{3}}*\n\nYou approved a delivery fee of *{{1}}* *{{2}}* for order *{{3}}*. Pay the difference of *{{1}}* *{{4}}* and your parcel can be collected.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_delivery_fee_topup_due",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Payez {{1}} {{4}} pour confirmer votre livraison — {{3}}*\n\nVous avez accepté des frais de livraison de *{{1}}* *{{2}}* pour la commande *{{3}}*. Payez la différence de *{{1}}* *{{4}}* et votre colis pourra être enlevé.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_delivery_fee_lowered",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Your delivery fee went down — {{1}}*\n\nThe delivery fee for your order *{{1}}* is now *{{2}}* *{{3}}* instead of *{{2}}* *{{4}}*.\n\nTap Open below for the full details.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_delivery_fee_lowered",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Vos frais de livraison ont baissé — {{1}}*\n\nLes frais de livraison de votre commande *{{1}}* sont maintenant de *{{2}}* *{{3}}* au lieu de *{{2}}* *{{4}}*.\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_delivery_fee_updated",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*New delivery fee confirmed — {{1}}*\n\nThe delivery fee for your order *{{1}}* is now *{{2}}* *{{3}}*.\n\nTap Open below for the full details.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_delivery_fee_updated",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Nouveaux frais de livraison confirmés — {{1}}*\n\nLes frais de livraison de votre commande *{{1}}* sont maintenant de *{{2}}* *{{3}}*.\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_delivery_fee_refund_pending",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Refund on the way: {{1}} {{2}}*\n\nWe owe you *{{1}}* *{{2}}* of delivery money on order *{{3}}*. It has to be sent by hand, so our team is processing it — you do not need to do anything, and we will confirm when it is done.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_delivery_fee_refund_pending",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Remboursement en cours: {{1}} {{2}}*\n\nNous vous devons *{{1}}* *{{2}}* de frais de livraison sur la commande *{{3}}*. Ce montant doit être envoyé manuellement: notre équipe s’en occupe. Vous n’avez rien à faire, nous confirmerons dès que c’est fait.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_delivery_fee_topup_failed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Delivery payment did not go through — {{3}}*\n\nWe could not take the *{{1}}* *{{2}}* delivery difference for order *{{3}}*. Nothing was charged; your parcel waits until it is paid — open the order to try again.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_delivery_fee_topup_failed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Paiement de livraison non abouti — {{3}}*\n\nNous n’avons pas pu encaisser la différence de livraison de *{{1}}* *{{2}}* pour la commande *{{3}}*. Rien n’a été débité; votre colis attend ce paiement — ouvrez la commande pour réessayer.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_combined_delivery_answered",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Answer to your combined delivery request — {{1}}*\n\n*{{2}}* *{{3}}* Open the order to see your delivery fees.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_combined_delivery_answered",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Réponse à votre demande de livraison groupée — {{1}}*\n\n*{{2}}* *{{3}}* Ouvrez la commande pour voir vos frais de livraison.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "customer_ticket_replied",
       "language": "en",
       "category": "UTILITY",
@@ -3639,6 +4317,78 @@
             {
               "type": "QUICK_REPLY",
               "text": "Pas résolu"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_account_closure_requested",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Confirm closing your account*\n\nAn administrator has asked to close your account on Wi-Mall: *{{1}}*. Nothing happens unless you confirm. Open your account settings before *{{2}}* to confirm or decline.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Review the request"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_account_closure_requested",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Confirmez la fermeture de votre compte*\n\nUn administrateur a demandé la fermeture de votre compte sur Wi-Mall: *{{1}}*. Rien ne se passe sans votre confirmation. Ouvrez les paramètres de votre compte avant *{{2}}* pour confirmer ou refuser.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Voir la demande"
             }
           ]
         }
@@ -5979,6 +6729,72 @@
       ]
     },
     {
+      "name": "agency_combined_delivery_request_received",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Combined delivery price requested*\n\nA customer asks for a combined price on *{{1}}* parcels you carry from one checkout (currently *{{2}}* *{{3}}* in delivery fees). Lower the fees or decline from your combined requests.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_combined_delivery_request_received",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Prix de livraison groupé demandé*\n\nUn client demande un prix groupé pour *{{1}}* colis que vous transportez d'une même commande (actuellement *{{2}}* *{{3}}* de frais de livraison). Baissez les frais ou refusez depuis vos demandes groupées.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "agency_shipment_cod_limit_forced",
       "language": "en",
       "category": "UTILITY",
@@ -6289,6 +7105,194 @@
               [
                 "example 1",
                 "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_account_closure_requested",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Confirm closing your agency account*\n\nAn administrator has asked to close your agency account on Wi-Mall: *{{1}}*. Nothing happens unless you confirm. Open your account settings before *{{2}}* to confirm or decline.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_account_closure_requested",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Confirmez la fermeture de votre compte d'agence*\n\nUn administrateur a demandé la fermeture de votre compte d'agence sur Wi-Mall: *{{1}}*. Rien ne se passe sans votre confirmation. Ouvrez les paramètres de votre compte avant *{{2}}* pour confirmer ou refuser.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_connection_ended_closure",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Connection ended*\n\n*{{1}}* closed their account on Wi-Mall, so your connection with them has ended.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_connection_ended_closure",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Connexion terminée*\n\n*{{1}}* a fermé son compte sur Wi-Mall: votre connexion avec ce vendeur a donc pris fin.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_agent_contract_ended_closure",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Agent contract ended*\n\n*{{1}}* closed their account on Wi-Mall, so your contract with them has ended.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_agent_contract_ended_closure",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Contrat d'agent terminé*\n\n*{{1}}* a fermé son compte sur Wi-Mall: votre contrat avec cet agent a donc pris fin.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
               ]
             ]
           }
@@ -8233,6 +9237,132 @@
               [
                 "example 1",
                 "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_account_closure_requested",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Confirm closing your agent account*\n\nAn administrator has asked to close your agent account on Wi-Mall: *{{1}}*. Nothing happens unless you confirm. Open your account settings before *{{2}}* to confirm or decline.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_account_closure_requested",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Confirmez la fermeture de votre compte d'agent*\n\nUn administrateur a demandé la fermeture de votre compte d'agent sur Wi-Mall: *{{1}}*. Rien ne se passe sans votre confirmation. Ouvrez les paramètres de votre compte avant *{{2}}* pour confirmer ou refuser.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_contract_ended_closure",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Contract ended*\n\n*{{1}}* closed their account on Wi-Mall, so your contract with them has ended.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_contract_ended_closure",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Contrat terminé*\n\n*{{1}}* a fermé son compte sur Wi-Mall: votre contrat avec cette agence a donc pris fin.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
               ]
             ]
           }

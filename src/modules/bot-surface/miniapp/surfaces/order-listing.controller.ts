@@ -10,6 +10,7 @@ import { CustomerOrderGroup, OrderRepository } from '../../../orders/order.repos
 import { StoreRepository } from '../../../store/repositories/store.repository';
 import { aggregatePaymentStatus } from '../../controllers/bot-order.controller';
 import { formatBotPrice } from '../../domain/product-card';
+import { deliveryIncludedLine } from '../../domain/delivery-lines';
 import {
     botFulfillmentStateLabel,
     botPaymentStateLabel,
@@ -117,7 +118,7 @@ export class OrderListingController {
             { page, limit: PAGE_SIZE },
         );
 
-        const [storeNames, titles] = await Promise.all([
+        const [storeNames, linesByCart] = await Promise.all([
             storeRepository.findNamesByVendorIds(
                 groups.flatMap((group) => group.orders.map((order) => order.vendorId)),
             ),
@@ -136,7 +137,13 @@ export class OrderListingController {
 
         sendSuccess(res, {
             groups: groups.map((group) =>
-                toGroupCard(group, language, storeNames, titles.get(group.cartId) ?? []),
+                toGroupCard(
+                    group,
+                    language,
+                    storeNames,
+                    linesByCart.get(group.cartId)?.titles ?? [],
+                    linesByCart.get(group.cartId)?.delivery ?? 0,
+                ),
             ),
             emptyText: ORDERS_EMPTY[language],
             cursor: nextCursor(page, meta.total),
@@ -227,22 +234,33 @@ interface OrderGroupCard {
     cartId: string;
     dateText: string;
     totalText: string;
+    /**
+     * "Incl. 1 500 XAF delivery" when the customer paid delivery on this checkout (ADR-A11), else
+     * null — free delivery adds no line. Formatted here; the page prints it.
+     */
+    deliveryText: string | null;
     paymentText: string;
     /** The first few things bought, so a customer can recognise the checkout. */
     summaryText: string | null;
     orders: OrderRow[];
 }
 
+/**
+ * @param delivery Σ `price_breakdown.delivery` over the group's orders — what the customer paid
+ *   for delivery, already part of `group.totalAmount`. Defaults to 0 (nothing drawn).
+ */
 function toGroupCard(
     group: CustomerOrderGroup,
     language: BotCopyLanguage,
     storeNames: Map<string, { name: string }>,
     titles: string[],
+    delivery = 0,
 ): OrderGroupCard {
     return {
         cartId: group.cartId,
         dateText: formatDate(group.createdAt, language),
         totalText: formatBotPrice(group.totalAmount, group.currency),
+        deliveryText: deliveryIncludedLine(delivery, group.currency, language),
         paymentText: paymentTextOf(group, language),
         summaryText: summarise(titles),
         orders: group.orders.map((order) => ({
@@ -268,7 +286,7 @@ function summarise(titles: string[]): string | null {
 }
 
 /**
- * Cart id → the titles bought in it.
+ * Cart id → the titles bought in it, and the delivery the customer paid on it (ADR-A11).
  *
  * ⚠ **One indexed query for the whole page**, on `{ customer_id, cart_id }` — the same index
  * `findGroupsByCustomer` is built around. Per group it would be twenty round trips for a screen
@@ -280,29 +298,43 @@ function summarise(titles: string[]): string | null {
  * *implied* by the caller is a scoping clause that disappears the first time somebody reuses
  * the helper.
  *
- * ⚠ **The projection is `items.title` and nothing else.** An order document carries payment
- * intents, price breakdowns and dispute holds; a `find()` without a `select` would pull all of
- * it into a screen's payload builder, where the next person adds a field to the card.
+ * ⚠ **The projection is `items.title` and `price_breakdown.delivery` and nothing else.** An order
+ * document carries payment intents, the rest of the price breakdown and dispute holds; a `find()`
+ * without a `select` would pull all of it into a screen's payload builder, where the next person
+ * adds a field to the card. The delivery figure (ADR-A11) is what the customer paid for delivery,
+ * summed per checkout for the card's "Incl. X delivery" line — never recomputed.
  */
-async function titlesByCart(customerId: string, cartIds: string[]): Promise<Map<string, string[]>> {
-    const out = new Map<string, string[]>();
+async function titlesByCart(
+    customerId: string,
+    cartIds: string[],
+): Promise<Map<string, { titles: string[]; delivery: number }>> {
+    const out = new Map<string, { titles: string[]; delivery: number }>();
     if (cartIds.length === 0) return out;
 
     const rows = await OrderModel.find({
         customer_id: new Types.ObjectId(customerId),
         cart_id: { $in: cartIds },
     })
-        .select('cart_id items.title')
+        .select('cart_id items.title price_breakdown.delivery')
         .lean()
         .exec();
 
-    for (const row of rows as unknown as Array<{ cart_id?: unknown; items?: Array<{ title?: string }> }>) {
+    for (const row of rows as unknown as Array<{
+        cart_id?: unknown;
+        items?: Array<{ title?: string }>;
+        price_breakdown?: { delivery?: number | null };
+    }>) {
         const cartId = row.cart_id ? String(row.cart_id) : null;
         if (!cartId) continue;
         const titles = (row.items ?? [])
             .map((item) => item.title)
             .filter((title): title is string => typeof title === 'string');
-        out.set(cartId, [...(out.get(cartId) ?? []), ...titles]);
+        const delivery = row.price_breakdown?.delivery;
+        const prior = out.get(cartId) ?? { titles: [], delivery: 0 };
+        out.set(cartId, {
+            titles: [...prior.titles, ...titles],
+            delivery: prior.delivery + (typeof delivery === 'number' && delivery > 0 ? delivery : 0),
+        });
     }
 
     return out;

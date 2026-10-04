@@ -1,7 +1,7 @@
 import { PublicProductDetailDto, PublicVariantDto } from '../../../catalog/dto/public-product.dto';
 import { publicCatalogService } from '../../../catalog/services/public-catalog.service';
 import { botChrome } from '../../domain/bot-chrome-copy';
-import { formatBotPrice } from '../../domain/product-card';
+import { deliveryTermsLine, formatBotPrice } from '../../domain/product-card';
 import { PurchaseVerb, resolvePurchaseAffordance } from '../../domain/purchase-affordance';
 import { ImageSource, toImageSource } from './image-source';
 
@@ -69,6 +69,12 @@ export interface ProductDetailView {
     options: Array<{ name: string; values: Array<{ id: string; label: string }> }>;
     variants: DetailVariant[];
     defaultVariantId: string | null;
+    /**
+     * The SHOP's free-delivery terms as one line (ADR-A11): "Free delivery", "Free delivery from
+     * 20 000 XAF", or null (the shop charges delivery — shown at checkout — or nothing ships).
+     * Optional in the TYPE only so older Flow fixtures compile; `readProductDetail` always sets it.
+     */
+    deliveryText?: string | null;
 }
 
 /**
@@ -121,6 +127,9 @@ export async function readProductDetail(
         options: picker.map(({ name, values }) => ({ name, values })),
         variants: product.variants.map((variant) => toDetailVariant(variant, picker, product, language)),
         defaultVariantId: product.defaultVariantId,
+        deliveryText: product.type === 'physical'
+            ? deliveryTermsLine(product.deliveryTerms, product.variants[0]?.currency ?? 'XAF', language)
+            : null,
     };
 }
 

@@ -1018,7 +1018,9 @@
           "store.slug",
           "store.name",
           "store.isOpen",
-          "freeDelivery"
+          "freeDelivery",
+          "deliveryTerms.mode",
+          "deliveryTerms.freeAboveAmount"
         ],
         "result_kind": "product_list"
       },
@@ -1045,7 +1047,7 @@
       "audit": false,
       "requires_customer_role": false,
       "platform_notes": {
-        "whatsapp": "To show more than one result, pass the ids to Show-Products — never list them in your text.",
+        "whatsapp": "To show more than one result, pass the ids to Show-Products — never list them in your text. `freeDelivery` true = the shop ALWAYS delivers free; `deliveryTerms.mode` above = free from `deliveryTerms.freeAboveAmount` of that shop; never = the customer pays a fee shown at checkout. Never quote a delivery fee from a product.",
         "telegram": "Photo cards with inline keyboards, or a numbered text list with a 'More' button."
       },
       "commands": [
@@ -2223,7 +2225,7 @@
       "gap_ref": "GAP-001",
       "service": "jovi-mall",
       "surface": "bot_internal",
-      "description": "What the basket will cost, and — when an address is named — whether that address can actually be delivered to.",
+      "description": "What the basket will cost INCLUDING delivery where the customer pays it, and — when an address is named — whether that address can actually be delivered to.",
       "when_to_use": "As the step of the checkout flow that runs BEFORE anything is created, with the chosen address id. It is the only cheap way to discover an unusable address.",
       "when_not_to_use": "Not for a running total while the customer shops; cart_get carries line prices.",
       "operation": {
@@ -2268,18 +2270,36 @@
           "currency",
           "subtotal",
           "delivery",
-          "absorbedByVendor",
           "tax",
           "discount",
           "total",
+          "regionKnown",
           "perVendor[].vendorId",
           "perVendor[].subtotal",
+          "perVendor[].delivery",
+          "perVendor[].total",
+          "perVendor[].deliveryPayer",
+          "perVendor[].deliveryPayerReason",
+          "perVendor[].freeDelivery.mode",
+          "perVendor[].freeDelivery.freeAboveAmount",
+          "perVendor[].freeDelivery.shortfall",
+          "perVendor[].shipments[].agencyId",
+          "perVendor[].shipments[].fee",
+          "perVendor[].shipments[].weightGrams",
+          "perVendor[].shipments[].outOfRegion",
           "paymentMethod",
           "meetsDeliveryMinimum",
           "perVendor[].deliveryMinimum.met",
-          "perVendor[].deliveryMinimum.shortfall"
+          "perVendor[].deliveryMinimum.shortfall",
+          "cashOnDelivery.available",
+          "cashOnDelivery.reason"
         ],
-        "result_kind": "receipt"
+        "result_kind": "receipt",
+        "never_relay": [
+          "absorbedByVendor",
+          "perVendor[].absorbedByVendor",
+          "perVendor[].shipments[].components"
+        ]
       },
       "errors": [
         {
@@ -2318,7 +2338,7 @@
       "audit": false,
       "requires_customer_role": true,
       "platform_notes": {
-        "whatsapp": "`delivery` is 0 and `total` equals the subtotal, and that is the truth rather than a stub: the agency's fee is charged to the vendor. Quote `absorbedByVendor` as 'delivery included' — never add it to the customer's total."
+        "whatsapp": "`delivery` is what the CUSTOMER pays for delivery (ADR-A11) and `total` already includes it — never add anything to `total`. Per shop: `deliveryPayer` vendor = free delivery, customer = the shop's `perVendor[].delivery` is charged; `freeDelivery.shortfall` = how much more from THAT shop makes delivery free. Never mention `absorbedByVendor` (what the shop pays the agency). `regionKnown` false: the fee was priced without the drop-off region and checkout prices against the chosen address."
       },
       "commands": [
         "checkout",
@@ -2468,7 +2488,7 @@
           "code": "ORDER_BELOW_DELIVERY_MINIMUM",
           "status": 422,
           "category": "business_rule",
-          "when": "One shop’s items are too small to carry their delivery, which the vendor pays (ADR-A07)",
+          "when": "One shop’s items are too small for the shop to sell at all — even with the customer paying delivery the shop would earn nothing (ADR-A07 as amended by ADR-A11)",
           "customer_action": "explain",
           "details_fields": [
             "vendorId",
@@ -2514,9 +2534,9 @@
       "status": "available",
       "service": "jovi-mall",
       "surface": "bot_internal",
-      "description": "Live order summary for the basket: lines, total (formatted), delivery address (a SAVED one — the default unless deliveryAddressId is given) and the masked mobile-money number. Places nothing. Returns a single-use checkoutRef (10 minutes) for checkout_place. ⚠ When ready is true and payment.phoneMasked is set, THIS TOOL SENDS THE CUSTOMER the summary with Place order / Not now buttons (or one button per address when several are deliverable and none was named): answer [sent] — never repeat it or ask again. With no saved address it sends the website link itself. ⚠ blocker below_delivery_minimum: no checkoutRef; the tool sends how much more to add from each shop — do not repeat it.",
+      "description": "Live order summary for the basket: lines, the delivery line per shop (fee, or Free, with an \"add X more and delivery is free\" hint), total (formatted, including delivery), delivery address (a SAVED one — the default unless deliveryAddressId is given) and the masked mobile-money number. Places nothing. Returns a single-use checkoutRef (10 minutes) for checkout_place. ⚠ When ready is true and payment.phoneMasked is set, THIS TOOL SENDS THE CUSTOMER the summary with Place order / Not now buttons (or one button per address when several are deliverable and none was named): answer [sent] — never repeat it or ask again. With no saved address it sends the website link itself. ⚠ blocker below_delivery_minimum: no checkoutRef; the tool sends how much more to add from each shop — do not repeat it.",
       "when_to_use": "The customer wants to check out / buy / pay for their basket. Call it again with deliveryAddressId for a different saved address.",
-      "when_not_to_use": "Never ask for an address or phone number the review shows, and never collect an address in the chat. no_saved_address / address_not_deliverable: offer a deliverable saved address or send addAddressUrl. address_not_found: call addresses_list and ask again. below_delivery_minimum: help them add more from THAT shop (another shop's item is a separate order and does not help), then review again; never mention the delivery fee or the seller's commission.",
+      "when_not_to_use": "Never ask for an address or phone number the review shows, and never collect an address in the chat. no_saved_address / address_not_deliverable: offer a deliverable saved address or send addAddressUrl. address_not_found: call addresses_list and ask again. below_delivery_minimum: help them add more from THAT shop (another shop's item is a separate order and does not help), then review again; never mention the seller's commission. When asked about delivery, quote deliveryLines[] exactly — never compute, estimate or promise a delivery fee yourself, and never say delivery is free unless the line says so.",
       "operation": {
         "method": "POST",
         "path": "/api/internal/bot/checkout/chat/review"
@@ -2549,6 +2569,9 @@
           "lines[].variantLabel",
           "lines[].quantity",
           "lines[].lineTotalText",
+          "deliveryLines[].text",
+          "deliveryLines[].hint",
+          "deliveryCharged",
           "totalText",
           "delivery.kind",
           "delivery.address.id",
@@ -2705,7 +2728,7 @@
           "code": "ORDER_BELOW_DELIVERY_MINIMUM",
           "status": 422,
           "category": "business_rule",
-          "when": "One shop’s items are too small to carry their delivery, which the vendor pays (ADR-A07); refused BEFORE the ref is spent (details.spent false) — add from that shop, then review again",
+          "when": "One shop’s items are too small for the shop to sell at all — even with the customer paying delivery the shop would earn nothing (ADR-A07 as amended by ADR-A11); refused BEFORE the ref is spent (details.spent false) — add from that shop, then review again",
           "customer_action": "explain",
           "details_fields": [
             "vendorId",
@@ -3497,6 +3520,9 @@
           "orders[].orderNumber",
           "orders[].fulfillmentStatus",
           "orders[].paymentMethod",
+          "orders[].priceBreakdown.delivery",
+          "orders[].deliveryPayer",
+          "orders[].deliveryFees[].amount",
           "orders[].items[].title",
           "orders[].items[].variantTitle",
           "orders[].items[].quantity",
@@ -3592,7 +3618,14 @@
           "paymentMethod",
           "paymentStatus",
           "fulfillmentStatus",
+          "priceBreakdown.base",
+          "priceBreakdown.delivery",
           "priceBreakdown.total",
+          "deliveryPayer",
+          "deliveryPayerReason",
+          "deliveryFees[].shipmentId",
+          "deliveryFees[].amount",
+          "deliveryFees[].customerFeeRefundable",
           "deliveryAddress.formatted_address",
           "items[].title",
           "items[].variantTitle",

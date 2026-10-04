@@ -294,26 +294,30 @@ assert('monthly storage rent is NOT folded into a per-order fee', () =>
 
 assert('the split delegates to the shared formula rather than keeping a copy', () => {
     const quoteSrc = readCode('modules/earnings/services/earnings-quote.service.ts');
-    // One definition of the arithmetic: the shipment path classifies, then defers. The
-    // negative half is the load-bearing one — a re-inlined `shipmentFee +=` would be a
-    // second copy, and a quote drifting from a charge is exactly what this guards.
+    // One definition of the arithmetic: the shipment path classifies, then defers to THE
+    // formula (ADR-A11: computeShipmentFee, with weight and region). The negative half is the
+    // load-bearing one — a re-inlined `shipmentFee +=` would be a second copy.
     return (
-        quoteSrc.includes('return deliveryFeeForPickupMix(policies, mix)') &&
+        /return computeShipmentFee\(policies, \{ mix, totalWeightGrams: shipmentWeightGrams\(weighed\), outOfRegion \}\)\.fee/.test(quoteSrc) &&
         !/shipmentFee \+=/.test(quoteSrc)
     );
 });
 
-assert('the cart quote uses that same formula', () => {
+assert('the cart quote prices through the checkout\'s own pricing path', () => {
     const quoteService = readCode('modules/orders/services/cart-quote.service.ts');
-    return quoteService.includes('deliveryFeeForPickupMix');
+    return quoteService.includes('this.pricing.priceMethods(') && quoteService.includes('this.pricing.resolveDeliveryLines(');
 });
 
-assert('the customer total does NOT include delivery — the vendor absorbs it', () => {
+assert('the customer total includes ONLY customer-paid delivery (ADR-A11) — never twice', () => {
     const quoteService = readCode('modules/orders/services/cart-quote.service.ts');
-    // `delivery: 0` and `total: subtotal` are the honest pair while splitOrder computes
-    // vendorNet = gross − commission − deliveryTotal off the items subtotal. Charging the
-    // customer as well would collect the fee twice.
-    return quoteService.includes('delivery: 0') && quoteService.includes('total: subtotal');
+    const pricing = readCode('modules/orders/domain/vendor-order-pricing.ts');
+    const split = readCode('modules/earnings/services/earnings-split.service.ts');
+    // The quote adds the customer-paid delivery to the total; the split deducts only the
+    // VENDOR-BORNE part from the vendor's net. Charging the customer AND deducting the vendor
+    // would collect the fee twice.
+    return quoteService.includes('total: subtotal + delivery')
+        && pricing.includes("const deliveryCharged = payer === 'customer' ? deliveryFeeTotal : 0;")
+        && split.includes('const deliveryTotal = vendorBorneTotal;');
 });
 
 // ─── 7. Checkout refuses an undeliverable physical order ─────────────────────

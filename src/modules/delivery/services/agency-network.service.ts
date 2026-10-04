@@ -1,6 +1,7 @@
 import { VendorRepository } from '../../vendors/vendor.repository';
 import { ProductRepositoryMongo } from '../../catalog/repositories/mongo/product.repository.mongo';
 import { PaginationOptions, Page } from '../../../core/repositories/base.repository';
+import { categoryCatalogCache } from '../../categories/services/category-catalog.cache';
 
 /**
  * Read-only "who's connected to me" views for an agency:
@@ -44,13 +45,17 @@ export class AgencyNetworkService {
         const vendorIds = await this.vendorRepo.findVendorIdsByDefaultAgency(agencyId);
         const page = await this.productRepo.findByEffectiveDeliveryAgency(agencyId, vendorIds, pagination);
 
+        const categoryRefs = await categoryCatalogCache.refsForMany(page.data.map(p => p.categoryIds));
+
         return {
-            data: page.data.map(p => ({
+            data: page.data.map((p, i) => ({
                 id: p.id,
                 vendorId: p.vendorId,
                 title: p.title,
                 status: p.status,
-                category: p.category,
+                categories: categoryRefs[i],
+                // Deprecated single value — the primary category's name.
+                category: categoryRefs[i][0]?.name ?? null,
                 source: p.delivery?.agencyId ? 'own_override' : 'vendor_default',
             })),
             meta: page.meta,

@@ -55,6 +55,7 @@ addresses.**
 | View order | `/shop/account/orders/detail/:orderId` | 5 | ✅ built 2026-09-07 |
 | Track delivery | `/shop/account/orders/detail/:orderId/tracking` | 3 | ✅ built 2026-09-07 |
 | Pay now | `/pay/:token` | 1 | ✅ built 2026-09-07 |
+| Open my account | `/shop/account/closure` | 1 (`account.closure_requested`, ADR-A10, 2026-10-04) | ⏳ **NOT BUILT** — the signed-in customer confirms or declines an administrator's closure request (no id: one open request per role). Must exist before `customer_account_closure_requested` is approved |
 
 The bot's "see the rest of your orders" links use the same tree and are listed in
 `bot-surface.md`; those all point at pages that exist.

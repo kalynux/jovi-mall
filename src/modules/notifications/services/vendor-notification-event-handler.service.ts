@@ -36,6 +36,14 @@ import { renderTemplate } from '../catalog/message-renderer';
 import { VENDOR_COD_HOLD_REASON } from '../catalog/notification-catalog';
 import { MagazinRepository } from '../../magazin/repositories/magazin.repository';
 import { OrderModel } from '../../orders/order.model';
+import {
+    closureReasonParam,
+    closureDeadlineParam,
+    closingPartyName,
+    occurredAtIso,
+    RoleClosureRequestedPayload,
+    RoleClosureRelationshipsEndedPayload
+} from './role-closure-context';
 
 /**
  * `delivery_fee_proposal.edited` payload readers (2026-10-02). The producer was built in a
@@ -956,6 +964,38 @@ export class VendorNotificationEventHandler {
         await this.feeProposalSituation(event, 'delivery_fee_proposal.withdrawn');
     }
 
+    /**
+     * `delivery_fee_proposal.rejected` (ADR-A11, D-10) — only the one case that is the vendor's
+     * news: the CUSTOMER declined to pay a change-agency difference, so the vendor's net carries
+     * it. A vendor who covered it themselves is not told (they did it), and a vendor-paid
+     * proposal's rejection is the vendor's own answer.
+     */
+    async handleDeliveryFeeProposalRejected(event: DomainEvent): Promise<void> {
+        const p = event.payload;
+        if (!p?.coveredByVendor || p.respondedByRole !== 'customer') return;
+        try {
+            if (!p.vendorId || !p.orderId) return;
+            const prefs = await this.preferenceRepo.getByVendor(p.vendorId);
+            if (prefs.preferences.deliveryFeeProposals === false) return;
+            await this.dispatch({
+                situation: 'delivery_fee_proposal.customer_declined',
+                prefs,
+                vendorId: p.vendorId,
+                aggregateType: 'order',
+                aggregateId: p.orderId,
+                idempotencyKey: `delivery_fee_proposal.customer_declined:${p.proposalId}`,
+                context: {
+                    orderId: p.orderId,
+                    orderNumber: (await this.orderNumberOf(p)) ?? '—',
+                    currency: p.currency ?? '',
+                    differenceFormatted: Number(p.vendorBorneDelta ?? 0).toLocaleString()
+                }
+            });
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle delivery_fee_proposal.customer_declined:', error);
+        }
+    }
+
     private async feeProposalSituation(
         event: DomainEvent,
         situation: 'delivery_fee_proposal.received' | 'delivery_fee_proposal.edited' | 'delivery_fee_proposal.withdrawn'
@@ -963,6 +1003,10 @@ export class VendorNotificationEventHandler {
         try {
             const p = event.payload;
             if (!p?.vendorId || !p?.orderId) return;
+            // ADR-A11: a CUSTOMER-paid shipment's fee change is the customer's to answer (or was
+            // applied directly) — telling the vendor "approve or reject" would offer a verb the
+            // API refuses. Rows before ADR-A11 carry no approverRole: vendor.
+            if (p.approverRole && p.approverRole !== 'vendor') return;
             const prefs = await this.preferenceRepo.getByVendor(p.vendorId);
             if (prefs.preferences.deliveryFeeProposals === false) return;
 
@@ -1017,6 +1061,80 @@ export class VendorNotificationEventHandler {
             es: 'Tu agencia de entrega',
             ar: 'وكالة التوصيل الخاصة بك'
         });
+    }
+
+    // ─── Role closure (ADR-A10) ───────────────────────────────────────────────
+
+    /**
+     * `role_closure.requested` with `role: 'vendor'` → ask the vendor to confirm closing the
+     * shop. **Deliberately NOT gated by any preference** — a closure request that a setting
+     * could silence would expire unseen, and the request is about the account itself.
+     */
+    async handleRoleClosureRequested(event: DomainEvent): Promise<void> {
+        try {
+            const p = event.payload as RoleClosureRequestedPayload;
+            if (p?.role !== 'vendor' || !p.roleEntityId || !p.requestId) return;
+
+            const prefs = await this.preferenceRepo.getByVendor(p.roleEntityId);
+            const vendor = await this.vendorRepo.findById(String(p.roleEntityId));
+            const lang = resolveLanguage(vendor);
+
+            await this.dispatch({
+                situation: 'account.closure_requested',
+                prefs,
+                vendorId: p.roleEntityId,
+                aggregateType: 'account',
+                aggregateId: p.requestId,
+                idempotencyKey: `account.closure_requested:${p.requestId}:${occurredAtIso(event.occurredAt)}`,
+                context: {
+                    requestId: p.requestId,
+                    reason: closureReasonParam(p.reason, lang),
+                    expiresAt: closureDeadlineParam(p.expiresAt, vendor?.timezone, lang)
+                }
+            });
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle role_closure.requested:', error);
+        }
+    }
+
+    /**
+     * `role_closure.relationships_ended` with `closingRole: 'agency'` → one notice per ended
+     * vendor↔agency connection, to the vendor. Gated by `connectionUpdated`, like every
+     * other `connection.*` situation on this stack.
+     */
+    async handleRoleClosureRelationshipsEnded(event: DomainEvent): Promise<void> {
+        try {
+            const p = event.payload as RoleClosureRelationshipsEndedPayload;
+            if (p?.closingRole !== 'agency') return;
+            const at = occurredAtIso(event.occurredAt);
+
+            for (const c of p.connections ?? []) {
+                try {
+                    if (!c?.vendorId || !c.connectionId) continue;
+                    const prefs = await this.preferenceRepo.getByVendor(c.vendorId);
+                    if (!prefs.preferences.connectionUpdated) continue;
+                    const lang = resolveLanguage(await this.vendorRepo.findById(String(c.vendorId)));
+
+                    await this.dispatch({
+                        situation: 'connection.ended_by_closure',
+                        prefs,
+                        vendorId: c.vendorId,
+                        aggregateType: 'connection',
+                        aggregateId: c.connectionId,
+                        idempotencyKey: `connection.ended_by_closure:${c.connectionId}:${at}`,
+                        context: {
+                            agencyName: closingPartyName(p.closingName, 'agency', lang),
+                            connectionId: c.connectionId
+                        }
+                    });
+                } catch (error) {
+                    // One recipient's failure must not cost the others their notice.
+                    console.error('[NotificationHandler] Failed to notify connection.ended_by_closure:', error);
+                }
+            }
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle role_closure.relationships_ended:', error);
+        }
     }
 
     // ─── Dispatch + delivery ─────────────────────────────────────────────────

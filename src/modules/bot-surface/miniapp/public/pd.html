@@ -102,6 +102,8 @@
       <div class="lede">
         <div class="lede__price" id="price"></div>
         <div class="card__store" id="store"></div>
+        <!-- ADR-A11: the SHOP's free-delivery terms, worded server-side; hidden when it has none. -->
+        <div class="card__store" id="deliveryTerms" hidden></div>
       </div>
       <div class="opts" id="opts"></div>
       <div class="desc" id="descWrap" hidden>
@@ -174,6 +176,7 @@
   var el = {
     title: document.getElementById("title"),
     sub: document.getElementById("sub"),
+    deliveryTerms: document.getElementById("deliveryTerms"),
     state: document.getElementById("state"),
     stateText: document.getElementById("stateText"),
     detail: document.getElementById("detail"),
@@ -253,6 +256,7 @@
    *       title:       string,
    *       storeName:   string,
    *       storeCity:   string | null,   // ⚠ CITY ONLY — ship-from addresses stay private
+   *       deliveryText: string | null,  // ADR-A11 — "Free delivery" / "Free delivery from 20 000 XAF"; null = none to state
    *       imageUrl:    string | null,
    *       description: string | null,
    *       options: [{ name: string, values: [{ id, label }] }],
@@ -359,6 +363,9 @@
     el.title.textContent = data.title;
     el.sub.textContent = [data.storeName, data.storeCity].filter(Boolean).join(" · ");
     el.store.textContent = data.storeName;
+    /* ADR-A11 — the shop's terms, a server string; the page states no fee of its own. */
+    el.deliveryTerms.textContent = data.deliveryText || "";
+    el.deliveryTerms.hidden = !data.deliveryText;
 
     el.hero.innerHTML = data.imageUrl
       ? '<img alt="" src="' + esc(data.imageUrl) + '">'

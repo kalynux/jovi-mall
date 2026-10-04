@@ -184,6 +184,11 @@ router.use('/vendor/storage-invoices', vendorStorageInvoiceRoutes);
 import vendorProductsRoutes from '../modules/catalog/routes/vendor-products.routes';
 router.use('/vendor/products', vendorProductsRoutes);
 
+// The shared product-category list — autocomplete + the "did you mean" probe. A vendor
+// CREATES a category only by naming it on a product write (modules/categories).
+import vendorCategoryRoutes from '../modules/categories/routes/vendor-category.routes';
+router.use('/vendor/categories', vendorCategoryRoutes);
+
 // Vendor inventory management routes
 import vendorInventoryRoutes from '../modules/catalog/routes/vendor-inventory.routes';
 router.use('/vendor/inventory', vendorInventoryRoutes);

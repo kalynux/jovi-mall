@@ -185,6 +185,8 @@ Only agencies that meet **both** of the following conditions are returned:
 | `storage_based` | `object` | 🆕 2026-10-03. `monthly_storage_fee_per_sku`, `pick_pack_fee_per_order`, `local_delivery_fee`, `out_of_region_delivery_fee` — minor units. Sent even when `storage_based_enabled` is `false`; check the flag before showing them as an offer. |
 | `pickup_based` | `object` | 🆕 2026-10-03. `base_rate_first_kg`, `additional_per_kg`, `out_of_region_surcharge` — minor units. Same caveat. |
 | `additional_fees` | `object` | 🆕 2026-10-03. `cod_handling_fee: { type: "percentage" \| "fixed", value }`, `failed_delivery_fee`, `rto_fee` (return to origin), `peak_season_surcharge` (`0` = none) — minor units except a percentage `value`. |
+| `max_fee_per_shipment` | `number \| null` | 🆕 2026-10-03 (ADR-A11). Ceiling on one shipment's delivery fee, minor units; `null` = no ceiling. The fee formula (weight + region, see `api-doc/agency/onboarding.md` § `policies.pricing`) never exceeds it. |
+| `accepts_cash_delivery_fee` | `boolean` | 🆕 2026-10-03 (ADR-A11 D-7). Whether a customer may pay this agency's delivery fee in cash to the rider on an online-paid order. Informational until checkout supports it. |
 
 #### `pickup_based` / `storage_based` and pickup locations
 

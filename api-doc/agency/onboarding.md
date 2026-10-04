@@ -414,6 +414,8 @@ This is the final required step. It captures the policy pillars that govern how 
         "rto_fee": 700,
         "peak_season_surcharge": 500
       },
+      "max_fee_per_shipment": 6000,
+      "accepts_cash_delivery_fee": false,
       "notes": "Bulk orders above 50kg get 10% discount on base rate."
     },
     "returns": {
@@ -474,6 +476,27 @@ The `pricing` object covers two fulfilment models (`storage_based` and `pickup_b
 | `failed_delivery_fee` | `number` | Yes | ≥ 0 | Fee charged per failed delivery attempt. |
 | `rto_fee` | `number` | Yes | ≥ 0 | Return-to-Origin fee when a package cannot be delivered and must go back to the vendor. |
 | `peak_season_surcharge` | `number` | No | ≥ 0, default `0` | Extra charge during high-demand periods (e.g. holidays). Omit or send `0` if not applicable. |
+
+**`pricing.max_fee_per_shipment` / `pricing.accepts_cash_delivery_fee`** (🆕 2026-10-03, ADR-A11):
+
+| Field | Type | Required? | Validation | Description |
+|-------|------|-----------|------------|-------------|
+| `max_fee_per_shipment` | `integer | null` | No | ≥ 1, or `null`; default `null` | Ceiling on ONE shipment's delivery fee (minor units). Applied last; `null` = no ceiling. `0` is refused (it would make every delivery free). |
+| `accepts_cash_delivery_fee` | `boolean` | No | default `false` | Whether a customer may pay your delivery fee in cash to the rider on an otherwise online-paid order. Stored and echoed now; checkout starts honouring it in a later release. |
+
+⚠ `PUT` replaces the whole `policies` object, so omitting either field resets it to its default — send the current values back when editing other fields.
+
+**How one shipment's fee is computed** (one shipment = one shop × one agency; weights in grams, an item with no weight counts as `DELIVERY_DEFAULT_ITEM_WEIGHT_GRAMS`, default 1 000 g per unit):
+
+```
+kg          = max(1, ceil(total weight in grams / 1000))
+pickupPart  = base_rate_first_kg + additional_per_kg × (kg − 1) + (out of region ? out_of_region_surcharge : 0)
+storagePart = (out of region ? out_of_region_delivery_fee : local_delivery_fee) + pick_pack_fee_per_order
+fee         = (any vendor-collected item ? pickupPart : 0) + (any warehoused item ? storagePart : 0)
+fee         = min(fee, max_fee_per_shipment)     // when set
+```
+
+"Out of region" means the delivery address's region differs from the pickup's region; when either is unknown the shipment is treated as in-region. `peak_season_surcharge` and `monthly_storage_fee_per_sku` are not part of the per-shipment fee. An approved per-shipment fee proposal replaces the formula for that shipment. ⚠ Until the checkout change ships, live fees are still computed at 1 kg in-region (base rate / local storage fees) — **the ceiling already applies**.
 
 **`pricing.notes`**:
 

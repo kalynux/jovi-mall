@@ -14,7 +14,6 @@ import { OrderTimelineRepository } from './order-timeline.repository';
 import { TimelineActorType } from './order-timeline.model';
 import { VendorRepository } from '../vendors/vendor.repository';
 import { VendorSettingsRepository } from '../vendors/repositories/vendor-settings.repository';
-import { IVendor } from '../vendors/vendor.model';
 import { OrderNumberGenerator } from './utils/order-number-generator';
 import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
@@ -31,8 +30,10 @@ import { codEligibilityService } from '../cod/services/cod-eligibility.service';
 import { codLimitsService, CodHandoffVerdict } from '../cod/services/cod-limits.service';
 import { expectedCodAmount } from '../cod/domain/cod-limits';
 import { orderStockService } from './services/order-stock.service';
-import { deliveryCostCapService, DeliveryCapLine } from './services/delivery-cost-cap.service';
-import { PickupMix } from '../earnings/services/earnings-quote.service';
+import { belowMinimumError } from './services/delivery-cost-cap.service';
+import { vendorOrderPricingService, regionOfGeo } from './services/vendor-order-pricing.service';
+import { PricingLine } from './domain/vendor-order-pricing';
+import { customerDeliveryFeeOf, orderItemsGrossOf } from './domain/delivery-payer';
 import { MagazinRepository } from '../magazin/repositories/magazin.repository';
 import {
   AGENT_IDENTITY_VISIBLE_FROM,
@@ -396,9 +397,13 @@ export class OrderService {
       const threshold = await this.vendorSettingsRepo.getAutoRedirectThresholdAmount(
         order.vendor_id.toString()
       );
-      if (threshold !== null && order.total_amount > threshold) {
+      // Measured on the ITEMS (ADR-A11): the cap is the vendor's "how much of my goods may leave
+      // without me looking", and a customer-paid delivery fee is not the vendor's goods. Before
+      // ADR-A11 total_amount WAS the items, so this keeps the setting's meaning unchanged.
+      const itemsValue = orderItemsGrossOf(order);
+      if (threshold !== null && itemsValue > threshold) {
         console.log(
-          `[OrderService] Order ${order._id} total ${order.total_amount} exceeds auto-redirect cap ${threshold}; left pending for manual dispatch.`
+          `[OrderService] Order ${order._id} items ${itemsValue} exceed auto-redirect cap ${threshold}; left pending for manual dispatch.`
         );
         return;
       }
@@ -562,7 +567,8 @@ export class OrderService {
         shipmentId: (s._id as mongoose.Types.ObjectId).toString(),
         agencyId: s.agency_id.toString(),
         vendorId: order.vendor_id.toString(),
-        amount: isCod ? expectedCodAmount(order.items as any[], s.items as any[]) : 0,
+        // The cash the agent will carry: goods + a customer-paid delivery fee (ADR-A11).
+        amount: isCod ? expectedCodAmount(order.items as any[], s.items as any[], customerDeliveryFeeOf(order, s)) : 0,
       })),
       { force }
     );
@@ -1042,13 +1048,12 @@ export class OrderService {
      * stay that way — a quote that disagrees with the charge is worse than no quote.
      * `CartQuoteService` is the other half; read its header before changing any line here.
      *
-     * **No delivery component, deliberately.** The agency's delivery fee is real and is
-     * charged, but to the **vendor**: `splitOrder` computes
-     * `vendorNet = gross − commission − deliveryTotal` off this same `total`. Adding it here
-     * as well would collect it twice. Moving delivery onto the customer is a business-model
-     * change that has to be paired with `splitOrder` no longer deducting it.
-     * Because the vendor pays it, a basket too small to carry it is refused below — the
-     * delivery-cost cap, ADR-A07.
+     * **Delivery (ADR-A11, 2026-10-03).** `base` is the ITEMS. Who pays the agencies' fees is
+     * decided below per vendor order from the shop's delivery terms (and the ADR-A07 cap's
+     * fallback, D-6) by `VendorOrderPricingService` — the SAME path the cart quote prices with.
+     * A customer-paid part adds `price_breakdown.delivery` to the total; a vendor-paid part
+     * adds 0 and `splitOrder` deducts the fee from the vendor's net instead. Never both: the
+     * splits deduct only the vendor-BORNE part (`orders/domain/delivery-payer.ts`).
      *
      * `tax` and `discount` are pinned zeros rather than absent: there is no tax engine and
      * no coupon model (`price_breakdown.discount` is the field a coupon feature would fill).
@@ -1061,8 +1066,6 @@ export class OrderService {
     const base = items.reduce((sum, item) => sum + (unitPriceOf(item) * item.quantity), 0);
     const tax = 0;       // No tax engine — see the note above.
     const discount = 0;  // No coupon model — see the note above.
-    const total = base + tax - discount;
-    const priceBreakdown = { base, tax, discount, total };
 
     // Order items (snapshot from cart)
     const orderItemsPayload: any[] = items.map(cartItem => ({
@@ -1098,94 +1101,37 @@ export class OrderService {
     const shipments: any[] = [];
 
     if (orderType === 'physical') {
+      /**
+       * Resolve every line's delivery facts — the carrying agency (product override → the
+       * vendor's default), the pickup SNAPSHOT, the pickup's region and the per-unit weight —
+       * through the pricing path the cart quote uses too (`VendorOrderPricingService`, strict:
+       * an unresolvable product / vendor / agency throws the checkout's own codes).
+       */
+      const facts = await vendorOrderPricingService.resolveDeliveryLines(
+        items.map((i) => ({ productId: i.productId, variantId: i.variantId, vendorId: i.vendorId, title: i.title })),
+        'strict',
+      );
+
       // GROUP BY DELIVERY AGENCY (within this vendor's items)
       const agencyGroups: Record<string, any[]> = {};
-      const vendorCache: Record<string, IVendor> = {};
+      const pricingLines: PricingLine[] = [];
 
       for (let i = 0; i < items.length; i++) {
-        const cartItem = items[i];
         const orderItem = orderItemsPayload[i];
+        const fact = facts[i]!; // strict mode never yields null
+        const agencyId = fact.agencyId!;
 
-        // Fetch product to get delivery agency
-        const product: any = await this.productRepo.findByIdUnscoped(cartItem.productId);
-
-        if (!product) {
-          throw createAppError(ERROR_CODES.ORDER_PRODUCT_NOT_FOUND, 404, undefined, { productId: cartItem.productId });
-        }
-
-        let agencyId = product.delivery?.agencyId?.toString();
-        const freeDelivery = product.delivery?.freeDelivery ?? false;
-
-        // Vendor is needed either for the default-agency fallback or to resolve
-        // the pickup-location address snapshot below — always fetch/cache it.
-        let vendor = vendorCache[cartItem.vendorId];
-        if (!vendor) {
-          const v = await this.vendorRepo.findById(cartItem.vendorId);
-          if (!v) {
-            throw createAppError(ERROR_CODES.ORDER_VENDOR_NOT_FOUND, 404, undefined, { vendorId: cartItem.vendorId });
-          }
-          vendor = v;
-          vendorCache[cartItem.vendorId] = vendor;
-        }
-
-        // Fallback to vendor default delivery agency
-        if (!agencyId) {
-          agencyId = vendor.default_delivery_agency_id?.toString();
-        }
-
-        if (!agencyId) {
-          throw createAppError(ERROR_CODES.ORDER_NO_DELIVERY_AGENCY, 422, undefined, { product: cartItem.title });
-        }
-
-        // Snapshot the product's configured pickup location so a later edit to
-        // the vendor's business addresses doesn't retroactively change history
-        // (see ProductStatusValidationService for how this was validated/required
-        // at activation time). Left null only for pre-feature products that
-        // somehow reached 'active' without one — order creation isn't the place
-        // to re-run the full activation gate.
-        const pickupLocation = product.delivery?.pickupLocation;
-        let pickupLocationSnapshot: any = null;
-        if (pickupLocation?.source === 'agency_storage') {
-          // Only the CHOICE is snapshotted (which depot), never the address: the
-          // depot's address is the agency's live record and an agent must be sent
-          // where it is now. Null carries through as "the primary depot".
-          pickupLocationSnapshot = {
-            source: 'agency_storage',
-            vendor_address_id: null,
-            agency_address_id: pickupLocation.agencyAddressId
-              ? new mongoose.Types.ObjectId(pickupLocation.agencyAddressId)
-              : null,
-            address_snapshot: null,
-          };
-        } else if (pickupLocation?.source === 'vendor_address' && pickupLocation.vendorAddressId) {
-          const address = vendor.business_addresses?.find(
-            (a: any) => a._id.toString() === pickupLocation.vendorAddressId,
-          );
-          if (address) {
-            pickupLocationSnapshot = {
-              source: 'vendor_address',
-              vendor_address_id: new mongoose.Types.ObjectId(pickupLocation.vendorAddressId),
-              agency_address_id: null,
-              address_snapshot: {
-                label: address.label,
-                address_line1: address.address_line1,
-                address_line2: address.address_line2 ?? null,
-                city: address.city,
-                state: address.state ?? null,
-                // Snapshot the geocoded address too (null on legacy addresses).
-                geo: address.geo ?? null,
-              },
-            };
-          }
-        }
+        // The per-unit weight the delivery fee is priced on (ADR-A11 D-4), snapshotted so the
+        // split and any later re-pricing read what the customer was quoted, not today's catalog.
+        orderItem.weight_grams = fact.weight.grams;
+        orderItem.weight_source = fact.weight.source;
 
         // Add delivery info to order item
         orderItem.delivery = {
           agency_id: new mongoose.Types.ObjectId(agencyId),
           shipment_id: null,
           status: 'pending',
-          free_delivery: freeDelivery,
-          pickup_location: pickupLocationSnapshot
+          pickup_location: fact.pickupLocation,
         };
 
         // Group by agency
@@ -1193,11 +1139,52 @@ export class OrderService {
           agencyGroups[agencyId] = [];
         }
         agencyGroups[agencyId].push({ orderItem, index: i });
+
+        pricingLines.push({
+          unitPrice: orderItem.price,
+          quantity: orderItem.quantity,
+          floorPrice: orderItem.floor_price_snapshot ?? null,
+          agencyId,
+          pickupSource: fact.pickupLocation?.source ?? null,
+          pickupRegion: fact.pickupRegion,
+          unitWeightGrams: fact.weight.grams,
+        });
       }
 
-      // COD eligibility: every agency carrying one of this order's shipments
-      // must support COD (its agent collects that shipment's cash). Validated
-      // inside the checkout transaction so a failure rolls back the whole group.
+      /**
+       * WHO PAYS DELIVERY, AND HOW MUCH (ADR-A11) — `priceVendorOrder`, the function the cart
+       * quote reports. Inside the transaction on purpose: a refusal rolls back the stock holds
+       * and the negotiation-lock consumption above.
+       *
+       *  - One fee per shipment (= agency), from THE formula: weight × qty, out-of-region
+       *    against the drop-off, the agency's ceiling.
+       *  - The shop's terms decide the payer; a VENDOR-paid part runs the ADR-A07 cap (online
+       *    per order, COD per shipment) and FALLS BACK to customer-paid when it fails (D-6) —
+       *    it no longer refuses.
+       *  - The one refusal left is `ORDER_BELOW_DELIVERY_MINIMUM` when even customer-paid
+       *    delivery leaves the vendor ≤ 0 (commission + bargain fee + the COD fee, D-5).
+       */
+      const pricing = await vendorOrderPricingService.price(
+        {
+          vendorId,
+          paymentMethod,
+          deliveryRegion: regionOfGeo(deliveryAddress),
+          lines: pricingLines,
+        },
+        'strict',
+      );
+      if (pricing.deliveryMinimum && !pricing.deliveryMinimum.met) {
+        throw belowMinimumError({ vendorId, ...pricing.deliveryMinimum }, currency);
+      }
+
+      const delivery = pricing.deliveryCharged;
+      const total = base + delivery + tax - discount;
+      const priceBreakdown = { base, delivery, tax, discount, total };
+
+      // COD eligibility: every agency carrying one of this order's shipments must support COD
+      // (its agent collects that shipment's cash) — measured on the order total INCLUDING
+      // customer-paid delivery, which is cash the agent carries too. Validated inside the
+      // checkout transaction so a failure rolls back the whole group.
       if (paymentMethod === 'cash_on_delivery') {
         await codEligibilityService.assertVendorOrderEligible({
           orderType,
@@ -1206,40 +1193,6 @@ export class OrderService {
           vendorId,
         });
       }
-
-      /**
-       * The delivery-cost cap (ADR-A07): the vendor absorbs the delivery fee, so a basket too
-       * small to carry it is refused HERE rather than by `EARNINGS_INVALID_SPLIT` after the
-       * customer has paid or handed over cash.
-       *
-       * Inside the transaction on purpose — a refusal rolls back the stock holds and the
-       * negotiation-lock consumption above. Built from what the split will read: the
-       * negotiated prices and floors (exact AI margin) and each item's pickup SNAPSHOT, which
-       * is what `computeShipmentDeliveryFee` classifies. Online is checked per order, COD per
-       * shipment — `DeliveryCostCapService` says why.
-       */
-      const capLineOf = (orderItem: any): DeliveryCapLine => ({
-        unitPrice: orderItem.price,
-        quantity: orderItem.quantity,
-        floorPrice: orderItem.floor_price_snapshot ?? null,
-      });
-      await deliveryCostCapService.assertVendor(
-        {
-          vendorId,
-          lines: orderItemsPayload.map(capLineOf),
-          groups: Object.entries(agencyGroups).map(([agencyId, groupItems]) => {
-            const mix: PickupMix = { hasPickupBased: false, hasStorageBased: false };
-            for (const { orderItem } of groupItems) {
-              const source = orderItem.delivery?.pickup_location?.source;
-              if (source === 'vendor_address') mix.hasPickupBased = true;
-              if (source === 'agency_storage') mix.hasStorageBased = true;
-            }
-            return { agencyId, mix, lines: groupItems.map(({ orderItem }) => capLineOf(orderItem)) };
-          }),
-        },
-        paymentMethod,
-        currency,
-      );
 
       // CREATE ORDER (Physical)
       const order = await this.orderRepo.create({
@@ -1252,6 +1205,9 @@ export class OrderService {
         currency,
         price_breakdown: priceBreakdown,
         total_amount: total,
+        delivery_payer: pricing.payer,
+        delivery_payer_reason: pricing.payerReason,
+        free_delivery_shortfall: pricing.freeDeliveryShortfall,
         payment_method: paymentMethod,
         payment_status: 'AWAITING_PAYMENT',  // Ready for payment (COD: paid at handoff)
         fulfillment_status: 'pending',
@@ -1260,6 +1216,8 @@ export class OrderService {
           ? { name: customerSnapshot.name ?? null, phone: customerSnapshot.phone ?? null }
           : null,
       }, session);
+
+      const pricedByAgency = new Map(pricing.shipments.map((s) => [s.agencyId, s]));
 
       // CREATE SHIPMENTS & UPDATE ORDER ITEMS
       for (const [agencyId, groupItems] of Object.entries(agencyGroups)) {
@@ -1275,11 +1233,29 @@ export class OrderService {
           };
         });
 
+        // The posted price, snapshotted AT CHECKOUT for every physical shipment (ADR-A11):
+        // what the agency will be paid, and — on a customer-paid order — what the customer was
+        // charged for this run. The splits divide exactly these numbers.
+        const priced = pricedByAgency.get(agencyId)!;
         const shipment = await this.shipmentRepo.create({
           order_id: order._id as any,
           agency_id: agencyId as any,
           status: 'pending',
-          items: shipmentItems
+          items: shipmentItems,
+          delivery_payer: pricing.payer,
+          delivery_fee_snapshot: priced.fee,
+          customer_delivery_fee: pricing.payer === 'customer' ? priced.fee : 0,
+          fee_components: {
+            pickup_base: priced.components?.pickupBase ?? 0,
+            weight_extra: priced.components?.weightExtra ?? 0,
+            region_surcharge: priced.components?.regionSurcharge ?? 0,
+            storage: priced.components?.storage ?? 0,
+            cap_applied: priced.components?.capApplied ?? false,
+            kg: priced.components?.kg ?? 1,
+            weight_grams: priced.weightGrams,
+            out_of_region: priced.outOfRegion,
+            flat_fallback: priced.components === null,
+          },
         }, session);
 
         shipments.push(shipment);
@@ -1299,6 +1275,8 @@ export class OrderService {
     }
 
     // DIGITAL ORDER: No delivery, no shipments (COD rejected upstream)
+    const total = base + tax - discount;
+    const priceBreakdown = { base, delivery: 0, tax, discount, total };
     const order = await this.orderRepo.create({
       order_number: orderNumber,
       order_type: orderType,

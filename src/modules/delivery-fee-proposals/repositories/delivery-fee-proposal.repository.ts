@@ -53,11 +53,55 @@ export class DeliveryFeeProposalRepository {
     return DeliveryFeeProposalModel.find({ order_id: new Types.ObjectId(orderId) }).sort({ created_at: -1 });
   }
 
+  /**
+   * Proposals counting against the two-per-shipment cap. A change-agency difference (ADR-A11
+   * D-10) is not the agency's proposal and does not spend its re-propose.
+   */
   async countCountedForShipment(shipmentId: string): Promise<number> {
     return DeliveryFeeProposalModel.countDocuments({
       shipment_id: new Types.ObjectId(shipmentId),
       status: { $in: [...COUNTED_PROPOSAL_STATUSES] },
+      origin: { $ne: 'change_agency' },
     });
+  }
+
+  /** The customer's view of one order: the proposals on its customer-paid shipments. */
+  async listForCustomerOrder(customerId: string, orderId: string): Promise<IDeliveryFeeProposal[]> {
+    return DeliveryFeeProposalModel.find({
+      order_id: new Types.ObjectId(orderId),
+      customer_id: new Types.ObjectId(customerId),
+    }).sort({ created_at: -1 });
+  }
+
+  /**
+   * The customer approved an increase that needs a top-up (online): record it, freezing the
+   * figure. CAS on pending + the version they saw + not approved yet.
+   */
+  async setCustomerApproval(
+    proposalId: Types.ObjectId,
+    input: { version: number; customerId: string; userId: string | null; topupAmount: number; at: Date }
+  ): Promise<IDeliveryFeeProposal | null> {
+    return DeliveryFeeProposalModel.findOneAndUpdate(
+      {
+        _id: proposalId,
+        status: 'pending',
+        version: input.version,
+        customer_id: new Types.ObjectId(input.customerId),
+        customer_approval: null,
+      },
+      {
+        $set: {
+          customer_approval: {
+            approved_at: input.at,
+            version: input.version,
+            user_id: input.userId && Types.ObjectId.isValid(input.userId) ? new Types.ObjectId(input.userId) : null,
+            topup_amount: input.topupAmount,
+          },
+          topup: { amount: input.topupAmount, transaction_id: null, status: 'awaiting_payment', paid_at: null },
+        },
+      },
+      { new: true }
+    );
   }
 
   async listForVendor(
@@ -93,6 +137,8 @@ export class DeliveryFeeProposalRepository {
       withdrawalReason?: string | null;
       application?: IDeliveryFeeApplication | null;
       note?: string | null;
+      /** Extra fields written with the transition (e.g. the paid top-up). */
+      extraSet?: Record<string, unknown>;
       /** Extra filter predicates (e.g. the vendor scope). */
       scope?: FilterQuery<IDeliveryFeeProposal>;
     },
@@ -118,6 +164,7 @@ export class DeliveryFeeProposalRepository {
           ...(fields.rejectionNote !== undefined ? { rejection_note: fields.rejectionNote } : {}),
           ...(fields.withdrawalReason !== undefined ? { withdrawal_reason: fields.withdrawalReason } : {}),
           ...(fields.application !== undefined ? { application: fields.application } : {}),
+          ...(fields.extraSet ?? {}),
         },
         $push: { status_history: entry },
       },

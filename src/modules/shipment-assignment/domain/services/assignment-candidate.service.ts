@@ -188,6 +188,11 @@ export class AssignmentCandidateService {
     // Computed for EVERY payment method now: the value ceiling is about the
     // goods, not the cash. Fails open to null — see resolveShipmentValue.
     const shipmentValue = this.resolveShipmentValue(order, shipment);
+    // The COD cash (ADR-A11): goods + a customer-paid delivery fee — what the agent carries.
+    let codAmount: number | null = null;
+    if (isCod) {
+      try { codAmount = this.cashCollection.computeExpectedAmount(order, shipment); } catch { codAmount = shipmentValue; }
+    }
 
     // ONE query for every candidate's contract, not one per candidate. The COD
     // gate below used to call `findActive` inside a `Promise.all`, which is a
@@ -236,7 +241,7 @@ export class AssignmentCandidateService {
           this.codVerdict(
             c.agent,
             contractByAgent.get(c.agent._id.toString())?.cod?.threshold ?? 0,
-            shipmentValue ?? 0
+            codAmount ?? 0
           )
         )
       );
@@ -370,7 +375,8 @@ export class AssignmentCandidateService {
    */
   private resolveShipmentValue(order: IOrder, shipment: IShipment): number | null {
     try {
-      return this.cashCollection.computeExpectedAmount(order, shipment);
+      // The GOODS (ADR-A11): the value ceiling is about the package, not the delivery fee.
+      return this.cashCollection.computeItemsAmount(order, shipment);
     } catch (error) {
       console.error(
         `[AssignmentCandidateService] Could not value shipment ${shipment._id.toString()} — ` +

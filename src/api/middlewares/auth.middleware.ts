@@ -282,6 +282,18 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
   }
 
   /**
+   * A CLOSED ROLE is refused — ADR-A10, the role-level twin of `AUTH_ACCOUNT_CLOSED`.
+   *
+   * Closing one role leaves the `users` row active (the person may still hold others), so
+   * neither account check above matches. The stamp is on the entity, which is already loaded:
+   * no query. Before the vendor-suspension check, because a closed vendor is also `inactive`
+   * and "suspended" would read as an appealable decision.
+   */
+  if ((entity as { closed_at?: Date | null }).closed_at) {
+    return next(createAppError(ERROR_CODES.AUTH_ROLE_CLOSED, 403, undefined, { role }));
+  }
+
+  /**
    * A suspended VENDOR is refused here — a separate axis from the account check above.
    *
    * `User.status` answers "may this person sign in at all"; `Vendor.status` answers "may

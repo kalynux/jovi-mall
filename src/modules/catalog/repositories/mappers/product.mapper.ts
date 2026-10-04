@@ -49,7 +49,8 @@ export interface Product {
   descriptionRich: RichDoc | null;
   slug: string;
 
-  category: string;
+  /** 1–5 `product_categories` ids, vendor's order. Resolved to names at the edge. */
+  categoryIds: string[];
   tags: string[];
 
   seo: {
@@ -70,7 +71,6 @@ export interface Product {
   // Physical-specific delivery config. Null agencyId means the vendor's default applies at order time.
   delivery?: {
     agencyId: string | null;
-    freeDelivery: boolean;
     pickupLocation: {
       source: 'vendor_address' | 'agency_storage';
       vendorAddressId: string | null;
@@ -114,7 +114,7 @@ export class ProductMapper implements IMapper<Product, IProduct> {
       // render it call `parseRichDoc` at their own boundary.
       descriptionRich: (doc.descriptionRich as RichDoc | null | undefined) ?? null,
       slug: doc.slug,
-      category: doc.category,
+      categoryIds: (doc.categoryIds ?? []).map((id: any) => id.toString()),
       tags: doc.tags || [],
       seo: doc.seo,
       hasVariants: doc.hasVariants,
@@ -126,7 +126,6 @@ export class ProductMapper implements IMapper<Product, IProduct> {
       delivery: doc.delivery
         ? {
           agencyId: doc.delivery.agency_id?.toString() ?? null,
-          freeDelivery: doc.delivery.free_delivery ?? false,
           pickupLocation: doc.delivery.pickup_location
             ? {
               source: doc.delivery.pickup_location.source,

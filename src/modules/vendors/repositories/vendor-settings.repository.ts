@@ -3,7 +3,9 @@ import {
     VendorSettingsModel,
     IVendorSettings,
     IVendorCustomerFlagSub,
-    IVendorCodTermsSub
+    IVendorCodTermsSub,
+    IVendorDeliveryTermsSub,
+    VendorDeliveryTermsMode
 } from '../models/vendor-settings.model';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
@@ -140,6 +142,60 @@ export class VendorSettingsRepository {
             { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
         ).lean().exec();
         return doc!.cod_terms as IVendorCodTermsSub;
+    }
+
+    // ─── Delivery terms (ADR-A11, 2026-10-03) ────────────────────────────────────
+
+    /**
+     * The shop's raw delivery-terms block, or null when never set. READ-ONLY, for the
+     * same reason as `findCodTerms`: checkout and the public catalogue read it and must
+     * not write a settings document as a side effect. Callers apply the default with
+     * `vendorDeliveryTermsOf()`.
+     */
+    async findDeliveryTerms(vendorId: string): Promise<IVendorDeliveryTermsSub | null> {
+        if (!Types.ObjectId.isValid(vendorId)) return null;
+        const doc = await VendorSettingsModel.findOne(
+            { vendor_id: new Types.ObjectId(vendorId) },
+            { delivery_terms: 1 }
+        ).lean().exec();
+        return (doc?.delivery_terms as IVendorDeliveryTermsSub | null | undefined) ?? null;
+    }
+
+    /** The same, for many vendors at once — keyed by vendor id; absent = never set. */
+    async findDeliveryTermsForVendors(vendorIds: string[]): Promise<Map<string, IVendorDeliveryTermsSub>> {
+        const ids = [...new Set(vendorIds)].filter((id) => Types.ObjectId.isValid(id));
+        const out = new Map<string, IVendorDeliveryTermsSub>();
+        if (ids.length === 0) return out;
+        const docs = await VendorSettingsModel.find(
+            { vendor_id: { $in: ids.map((id) => new Types.ObjectId(id)) } },
+            { vendor_id: 1, delivery_terms: 1 }
+        ).lean().exec();
+        for (const d of docs) {
+            if (d.delivery_terms) out.set(String(d.vendor_id), d.delivery_terms as IVendorDeliveryTermsSub);
+        }
+        return out;
+    }
+
+    /** Replace the shop's delivery terms wholesale. Upserts the settings document. */
+    async setDeliveryTerms(
+        vendorId: string,
+        terms: { mode: VendorDeliveryTermsMode; free_above_amount: number | null }
+    ): Promise<IVendorDeliveryTermsSub> {
+        const doc = await VendorSettingsModel.findOneAndUpdate(
+            { vendor_id: new Types.ObjectId(vendorId) },
+            {
+                $set: {
+                    delivery_terms: {
+                        mode: terms.mode,
+                        free_above_amount: terms.mode === 'above' ? terms.free_above_amount : null,
+                        updated_at: new Date(),
+                    },
+                },
+                $setOnInsert: { vendor_id: new Types.ObjectId(vendorId), customer_flags: [] },
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
+        ).lean().exec();
+        return doc!.delivery_terms as IVendorDeliveryTermsSub;
     }
 
     // ─── Customer flags ────────────────────────────────────────────────────────

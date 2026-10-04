@@ -143,6 +143,15 @@ export interface ICustomer extends Document {
   timezone: string;
   status: 'active' | 'pending_verification' | 'inactive';
   /**
+   * When this ROLE was closed — ADR-A10. Null on every role that has not been.
+   *
+   * A closed role is `status: 'inactive'` (the value every business gate already treats as
+   * "off") PLUS this stamp, which is what tells a closure apart from an administrative
+   * suspension: `requireAuth` refuses a stamped role, and every reinstate verb refuses to
+   * switch it back on. Written by `RoleClosureManifest` only, in the same `$set` as the status.
+   */
+  closed_at: Date | null;
+  /**
    * Always 0 for customers — no onboarding flow.
    * Stored for API consistency with other roles.
    *
@@ -260,6 +269,8 @@ const CustomerSchema = new Schema<ICustomer>(
       enum: ['active', 'pending_verification', 'inactive'],
       default: 'pending_verification',
     },
+    // ADR-A10 — see the interface. Never written apart from `status: 'inactive'`.
+    closed_at: { type: Date, default: null },
     onboarding_step: {
       type: Number,
       default: FixedOnboardingStep.COMPLETED,

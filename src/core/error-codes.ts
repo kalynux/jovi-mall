@@ -170,6 +170,17 @@ export const ERROR_CODES = Object.freeze({
      */
     AUTH_ACCOUNT_CLOSED: 'AUTH_ACCOUNT_CLOSED',
 
+    /**
+     * The token names a ROLE that has been closed (ADR-A10) — the person may still hold others.
+     *
+     * One axis down from `AUTH_ACCOUNT_CLOSED`, which is the whole account. Raised by
+     * `requireAuth` (the role entity carries `closed_at`) and by the refresh rotation (the
+     * role is no longer in `users.roles`), so a session opened as the closed role ends within
+     * one request rather than living out its 30-day refresh cookie. A client should sign the
+     * person out of THAT role and offer the others; re-authenticating as it will not help.
+     */
+    AUTH_ROLE_CLOSED: 'AUTH_ROLE_CLOSED',
+
     // ── PAYMENT ───────────────────────────────────────────────────────────────
     PAYMENT_ORDER_NOT_FOUND: 'PAYMENT_ORDER_NOT_FOUND',
     PAYMENT_ORDER_ALREADY_PAID: 'PAYMENT_ORDER_ALREADY_PAID',
@@ -1413,6 +1424,30 @@ export const ERROR_CODES = Object.freeze({
      */
     ACCOUNT_CLOSURE_ORDERS_IN_FLIGHT: 'ACCOUNT_CLOSURE_ORDERS_IN_FLIGHT',
 
+    // ── ROLE CLOSURE (administrator-requested, user-confirmed — ADR-A10) ─────
+    /** No pending closure request for this user + role (or for the caller's current role). */
+    ROLE_CLOSURE_REQUEST_NOT_FOUND: 'ROLE_CLOSURE_REQUEST_NOT_FOUND',
+    /**
+     * A closure request for this user + role is already waiting on the user. One at a time —
+     * a partial unique index enforces it, this is its readable face. `details.requestId`.
+     */
+    ROLE_CLOSURE_ALREADY_PENDING: 'ROLE_CLOSURE_ALREADY_PENDING',
+    /** The user does not hold the role named (or it is `admin`, which is not closable here). */
+    ROLE_CLOSURE_ROLE_NOT_HELD: 'ROLE_CLOSURE_ROLE_NOT_HELD',
+    /**
+     * Live work or money is attached to the role, so it cannot close yet (owner decision O-2).
+     * `details.blockers` is the itemised list — `[{ code, count, amount? }]` — evaluated at
+     * request time AND again at confirm, because seven days is long enough for a new order.
+     */
+    ROLE_CLOSURE_BLOCKED: 'ROLE_CLOSURE_BLOCKED',
+    /** The request passed its 7-day expiry before the user answered. Ask again. */
+    ROLE_CLOSURE_REQUEST_EXPIRED: 'ROLE_CLOSURE_REQUEST_EXPIRED',
+    /**
+     * The role was closed, and a verb tried to bring it back — reinstate, reactivate, a status
+     * write, or `addRole`. Closure is irreversible: the identifiers are gone, not archived.
+     */
+    ROLE_CLOSED: 'ROLE_CLOSED',
+
     // ── CONTACT CHANGE (self-service, `/api/me/{email,phone}`) ────────────────
     /**
      * The identifier the caller asked to move to is the one already on the account.
@@ -1589,6 +1624,23 @@ export const ERROR_CODES = Object.freeze({
     STOCK_REQUEST_STALE: 'STOCK_REQUEST_STALE',
     STOCK_REQUEST_NO_CHANGE: 'STOCK_REQUEST_NO_CHANGE',
 
+    // ── PRODUCT CATEGORIES (one marketplace list, 1–5 per product) ────────────
+    // Each is raised at exactly ONE status (test:errors' census).
+    // A new name looks like an existing category and `confirmNew` was not sent.
+    // `details.conflicts[] = { name, suggestions[] }`. Nothing was written.        // 422
+    CATEGORY_SIMILAR_EXISTS: 'CATEGORY_SIMILAR_EXISTS',
+    // Empty after clean-up, longer than 60, or no letter/digit. `details.name`.    // 400
+    CATEGORY_NAME_INVALID: 'CATEGORY_NAME_INVALID',
+    // An `{ id }` (or an admin route's `:id`) that is not a live category.         // 404
+    CATEGORY_NOT_FOUND: 'CATEGORY_NOT_FOUND',
+    // An admin rename onto another live category's spelling. `details.existingId` —
+    // the remedy is a MERGE, not a retry.                                          // 409
+    CATEGORY_NAME_TAKEN: 'CATEGORY_NAME_TAKEN',
+    // An admin delete while live products still hold it. `details.productCount`.  // 409
+    CATEGORY_IN_USE: 'CATEGORY_IN_USE',
+    // Merging into itself, or into a category that is not live.                   // 422
+    CATEGORY_MERGE_INVALID: 'CATEGORY_MERGE_INVALID',
+
     // ── DELIVERY-FEE PROPOSALS (agency/agent → vendor, per shipment) ───────────
     // Each is raised at exactly ONE status (test:errors' census).
     DELIVERY_FEE_PROPOSAL_NOT_FOUND: 'DELIVERY_FEE_PROPOSAL_NOT_FOUND',          // 404
@@ -1619,6 +1671,31 @@ export const ERROR_CODES = Object.freeze({
     // The proposal was edited since the caller loaded it (`details.currentVersion`). The
     // vendor must re-read and answer what is current; never apply an unseen figure.  // 409
     DELIVERY_FEE_PROPOSAL_VERSION_MISMATCH: 'DELIVERY_FEE_PROPOSAL_VERSION_MISMATCH',
+    // ── Customer-paid fee changes (ADR-A11, W-E) ──
+    // An edit would turn a customer-approval INCREASE into a decrease. Withdraw it and propose
+    // the lower fee, which then applies directly.                               // 422
+    DELIVERY_FEE_PROPOSAL_DIRECTION_CHANGED: 'DELIVERY_FEE_PROPOSAL_DIRECTION_CHANGED',
+    // The customer already approved this figure and may be paying for it: it can no longer be
+    // edited, and a live top-up payment blocks a withdrawal / rejection.        // 409
+    DELIVERY_FEE_TOPUP_IN_PROGRESS: 'DELIVERY_FEE_TOPUP_IN_PROGRESS',
+    // Paying a top-up that is not owed: not approved yet, already paid, or nothing to pay. // 409
+    DELIVERY_FEE_TOPUP_NOT_DUE: 'DELIVERY_FEE_TOPUP_NOT_DUE',
+    // A customer-paid ONLINE order whose payment is no longer simply `paid` (refunded,
+    // disputed): its delivery money cannot be moved by a fee change. `details.paymentStatus`. // 422
+    DELIVERY_FEE_PROPOSAL_ORDER_NOT_PAID: 'DELIVERY_FEE_PROPOSAL_ORDER_NOT_PAID',
+
+    // ── COMBINED DELIVERY-PRICE REQUESTS (customer → agency, ADR-A11 D-8) ──
+    COMBINED_DELIVERY_REQUEST_NOT_FOUND: 'COMBINED_DELIVERY_REQUEST_NOT_FOUND',      // 404
+    // Fewer than two eligible parcels, or one named that is not eligible
+    // (`details.reason`: agency · cart · status · payer · pending · limit · too_few). // 422
+    COMBINED_DELIVERY_REQUEST_INELIGIBLE: 'COMBINED_DELIVERY_REQUEST_INELIGIBLE',
+    // One open request per (checkout, agency). `details.requestId`.             // 409
+    COMBINED_DELIVERY_REQUEST_ALREADY_OPEN: 'COMBINED_DELIVERY_REQUEST_ALREADY_OPEN',
+    // Answered, declined or cancelled already — a compare-and-set miss.         // 409
+    COMBINED_DELIVERY_REQUEST_NOT_OPEN: 'COMBINED_DELIVERY_REQUEST_NOT_OPEN',
+    // The agency's answer names a parcel not in the request, twice, or a fee that is not
+    // LOWER than the current one. `details.reason` + `shipmentId`.              // 422
+    COMBINED_DELIVERY_RESPONSE_INVALID: 'COMBINED_DELIVERY_RESPONSE_INVALID',
     // Pickup refused: a delivery-fee proposal on this shipment awaits the vendor. // 409
     SHIPMENT_DELIVERY_FEE_PENDING: 'SHIPMENT_DELIVERY_FEE_PENDING',
 

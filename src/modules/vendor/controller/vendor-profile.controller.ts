@@ -17,6 +17,7 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { vendorCodTermsOf } from '../../cod/domain/cod-limits';
 import { codLimitsService } from '../../cod/services/cod-limits.service';
+import { SetDeliveryTermsSchema, vendorDeliveryTermsOf } from '../../vendors/domain/delivery-terms';
 
 // Policy documents (return/cancellation/support policy addenda) are a standalone
 // upload path — deliberately separate from the product/ticket media pipeline in
@@ -66,6 +67,10 @@ const vendorProfileService = new VendorProfileService();
 function toCodTermsDto(stored: { cod_enabled?: boolean | null; max_cash_per_agency?: number | null; updated_at?: Date | null } | null) {
   const terms = vendorCodTermsOf(stored);
   return { ...terms, updatedAt: stored?.updated_at ?? null };
+}
+/** The wire shape of a shop's delivery terms (ADR-A11), the default `always` applied when never set. */
+function toDeliveryTermsDto(stored: { mode?: string | null; free_above_amount?: number | null; updated_at?: Date | null } | null) {
+  return { ...vendorDeliveryTermsOf(stored), updatedAt: stored?.updated_at ?? null };
 }
 const vendorSettingsRepository = new VendorSettingsRepository();
 
@@ -307,6 +312,28 @@ export class VendorProfileController {
     // Connected agencies are told (2026-10-02 notifications) — only on an actual change.
     void codLimitsService.publishVendorTermsChanged(vendorId, before, vendorCodTermsOf(stored));
     res.json({ success: true, data: toCodTermsDto(stored), message: 'COD terms updated' });
+  });
+
+  // ─── Delivery terms (ADR-A11, 2026-10-03) ───────────────────────────────
+  //
+  // Who pays delivery for this shop's orders: always (shop pays — the default), never
+  // (customer pays) or above (free from a shop-subtotal threshold). Like the COD terms,
+  // deliberately NOT part of `policies`, so editing never pauses agency connections.
+
+  static getDeliveryTerms = asyncHandler(async (req: Request, res: Response) => {
+    const vendorId = req.auth!.role_entity._id.toString();
+    const stored = await vendorSettingsRepository.findDeliveryTerms(vendorId);
+    res.json({ success: true, data: toDeliveryTermsDto(stored) });
+  });
+
+  static setDeliveryTerms = asyncHandler(async (req: Request, res: Response) => {
+    const vendorId = req.auth!.role_entity._id.toString();
+    const { mode, freeAboveAmount } = SetDeliveryTermsSchema.parse(req.body);
+    const stored = await vendorSettingsRepository.setDeliveryTerms(vendorId, {
+      mode,
+      free_above_amount: mode === 'above' ? (freeAboveAmount ?? null) : null,
+    });
+    res.json({ success: true, data: toDeliveryTermsDto(stored), message: 'Delivery terms updated' });
   });
 
   // ─── Auto-cancel Unpaid Orders ──────────────────────────────────────────

@@ -753,38 +753,45 @@ function main(): void {
         mutant: 'const { token } = BotDisplayActionSchema.parse(req.body ?? {});',
     });
 
-    console.log('\n── ⛔ A category button can be built for ANY category name ──');
+    console.log('\n── ⛔ A category button carries the category ID ──');
 
     /**
-     * ⚠ **This platform has no category ids** — a category is free text on the product, up to 200
-     * characters. `cat:` plus « Électroménager, électronique et équipements de la maison » is
-     * exactly 64 bytes; one more character and building the token THROWS, while the reply is being
-     * built, so the whole turn fails rather than one button. The builder therefore digests the
-     * name. These prove it holds for a name far past that edge, in two scripts.
+     * Since 2026-10-04 a category is an entry of one shared list with a stable id
+     * (PRODUCT-CATEGORIES-PLAN), so the button carries the id: 28 bytes for any name in any
+     * script, and it survives a rename. Before that it carried a SHA-256 prefix of the NAME,
+     * because a name could not fit in Telegram's 64 bytes — and buttons minted then still sit
+     * in chat histories, so the handler must keep resolving a digest. Both halves are pinned.
      */
+    const CATEGORY_ID = '507f1f77bcf86cd799439011';
     const LONG_CATEGORY =
         'Électroménager, électronique et équipements de la maison, jardin et cuisine '
         + 'ـ'.repeat(40);
 
-    assert('⛔ a category name far past 64 bytes still builds a token that fits', () => {
-        const token = categoryActionId(LONG_CATEGORY);
-        return Buffer.byteLength(LONG_CATEGORY, 'utf8') > 150
-            && Buffer.byteLength(token, 'utf8') <= __CALLBACK_DATA_BYTES
-            && Buffer.byteLength(token, 'utf8') === 20;
+    assert('⛔ a category button is `cat:<24-hex id>` and fits Telegram\'s callback data', () => {
+        const token = categoryActionId(CATEGORY_ID);
+        return token === `cat:${CATEGORY_ID}`
+            && Buffer.byteLength(token, 'utf8') === 28
+            && Buffer.byteLength(token, 'utf8') <= __CALLBACK_DATA_BYTES;
     });
 
-    assert('the tap resolves back to the same category by recomputing the digest', () =>
-        parseBotActionId(categoryActionId(LONG_CATEGORY))?.argument === categoryDigest(LONG_CATEGORY));
+    assert('the tap parses back to exactly the id it was built from', () =>
+        parseBotActionId(categoryActionId(CATEGORY_ID))?.argument === CATEGORY_ID);
 
     /**
-     * ⚠ **Hashed exactly as stored — no case-folding.** The handler matches against the strings
-     * `listCategories()` returns, and those are grouped by exact value, so two spellings are two
-     * categories and must stay two digests.
+     * ⚠ **LEGACY — a pre-2026-10-04 button carries a name digest.** `handleCategoryTap` still
+     * recognises one (an argument that is not a 24-hex id) by recomputing the digest over the
+     * current chip names, hashed exactly as stored.
      */
-    assert('the digest is stable, and distinguishes spellings exactly as the catalogue does', () =>
-        categoryDigest('Mode') === categoryDigest('Mode')
+    assert('a legacy digest is still 16 hex, stable, and exact about spelling', () =>
+        categoryDigest(LONG_CATEGORY) === categoryDigest(LONG_CATEGORY)
         && categoryDigest('Mode') !== categoryDigest('mode')
         && /^[0-9a-f]{16}$/.test(categoryDigest('Mode')));
+
+    assert('the tap handler still resolves a legacy digest after the id lookups miss', () => {
+        const src = fs.readFileSync(path.join(__dirname, '../../src/modules/bot-surface/controllers/bot-discovery.controller.ts'), 'utf-8');
+        return /categories\.find\(\(category\)\s*=>\s*category\.id === action\.argument\)/.test(src)
+            && /categoryDigest\(category\.name\) === action\.argument/.test(src);
+    });
 
     console.log('\n── ⭐ Shared verbs route by (verb, sub-key) — proven, not scanned ──');
 

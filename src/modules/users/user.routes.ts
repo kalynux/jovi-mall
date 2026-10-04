@@ -4,6 +4,7 @@ import { UserController } from './user.controller';
 import { ContactChangeController } from './contact-change.controller';
 import { PhoneVerificationController } from '../phone-verification/phone-verification.controller';
 import connectionRoutes from '../channel-connections/channel-connection.routes';
+import { RoleClosureSelfController } from '../role-closure/role-closure.controller';
 
 const router = Router();
 
@@ -82,6 +83,20 @@ router.post('/phone/verify/confirm', PhoneVerificationController.confirm);
  * promise on the wire exactly the thing the design refuses to do.
  */
 router.post('/close', UserController.closeAccount);
+
+/**
+ * Administrator-requested role closure — ADR-A10. Answered by the account owner, signed in
+ * AS the role being closed (the role comes from the session, never from the path).
+ *
+ * GET  /api/me/closure-request            the pending request for this role, or `data: null`
+ * POST /api/me/closure-request/confirm    body `{ "confirm": "CLOSE MY ACCOUNT" }` — irreversible
+ * POST /api/me/closure-request/decline    body `{ note? }`
+ *
+ * Literal segments only; no `:param` sits under `/closure-request`.
+ */
+router.get('/closure-request', RoleClosureSelfController.get);
+router.post('/closure-request/confirm', RoleClosureSelfController.confirm);
+router.post('/closure-request/decline', RoleClosureSelfController.decline);
 
 /**
  * Messaging connections — /api/me/connections

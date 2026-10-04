@@ -42,6 +42,33 @@ terms notifies nobody, and `paused_reapproval` connections are skipped —
 2026-10-02's notification change. How the cap is applied
 at dispatch: [orders.md](./orders.md#cod-limits-on-dispatch-2026-10-02).
 
+## Delivery terms (2026-10-03, ADR-A11)
+
+`GET /api/vendor/profile/delivery-terms` · `PUT /api/vendor/profile/delivery-terms`
+
+Who pays the delivery fee on **your shop's part** of a customer's basket. This replaced the
+per-product `freeDelivery` flag, which no longer exists (a product write that still sends it is a
+`400`).
+
+```json
+{ "mode": "above", "freeAboveAmount": 20000 }
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `mode` | `"always"` · `"never"` · `"above"` (default `"always"`) | `always` — you pay delivery (free for the customer). `never` — the customer pays it. `above` — free when the customer's items **from your shop** total at least `freeAboveAmount`, customer-paid below it |
+| `freeAboveAmount` | integer 1 – 100 000 000, or `null` | **required** with `above`, must be `null`/absent with the other two modes (`400` otherwise) |
+
+PUT replaces the whole block (`.strict()` — unknown keys are a `400`). The GET answers
+`{ "mode": "always", "freeAboveAmount": null, "updatedAt": null }` when never set — every shop
+starts on `always`, which is the behaviour before this setting existed. Like the COD terms, these
+are **separate from `policies`**: changing them does not bump `policy_version` and does not pause
+agency connections. The threshold is inclusive (a basket exactly at `freeAboveAmount` is free).
+
+The storefront publishes these terms (`deliveryTerms` on the public product and store reads); the
+product's `freeDelivery` there is now derived — `true` only for `always`. How checkout charges the
+fee is documented with the customer-paid delivery changelog.
+
 ## Endpoints
 
 | Method | Path | Documented |
@@ -57,6 +84,8 @@ at dispatch: [orders.md](./orders.md#cod-limits-on-dispatch-2026-10-02).
 | `PUT` | `/api/vendor/profile/auto-cancel-unpaid-days` | [below](#put-apivendorprofileauto-cancel-unpaid-days) |
 | `GET` | `/api/vendor/profile/cod-terms` | [above](#cod-terms-2026-10-02) (2026-10-02) |
 | `PUT` | `/api/vendor/profile/cod-terms` | [above](#cod-terms-2026-10-02) (2026-10-02) |
+| `GET` | `/api/vendor/profile/delivery-terms` | [above](#delivery-terms-2026-10-03-adr-a10) (2026-10-03) |
+| `PUT` | `/api/vendor/profile/delivery-terms` | [above](#delivery-terms-2026-10-03-adr-a10) (2026-10-03) |
 | `GET` | `/api/vendor/profile/completion-status` | Onboarding progress — [onboarding.md](./onboarding.md#option-b--simple-status) |
 | `POST` | `/api/vendor/profile/policy-documents` | [onboarding.md](./onboarding.md) |
 

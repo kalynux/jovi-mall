@@ -112,7 +112,7 @@ export class AgencyStoredProductService {
     }
     // ALWAYS through `mergeDeliveryConfig`. The repository `$set`s the whole
     // `delivery` sub-document, so writing it by hand would silently wipe
-    // `agency_id` and `free_delivery` — and it also normalises `vendor_address_id`
+    // `agency_id` — and it also normalises `vendor_address_id`
     // to null for `agency_storage` rather than trusting the caller.
     const merged = mergeDeliveryConfig(product.delivery, {
       pickupLocation: { source: 'agency_storage', agencyAddressId: locationId },

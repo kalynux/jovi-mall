@@ -162,6 +162,23 @@ router.get('/profile/cod-terms', VendorProfileController.getCodTerms);
  */
 router.put('/profile/cod-terms', VendorProfileController.setCodTerms);
 
+/**
+ * GET /api/vendor/profile/delivery-terms
+ *
+ * Who pays delivery for this shop's orders (ADR-A11). Default when never set:
+ * { mode: 'always', freeAboveAmount: null, updatedAt: null } — the shop pays.
+ */
+router.get('/profile/delivery-terms', VendorProfileController.getDeliveryTerms);
+
+/**
+ * PUT /api/vendor/profile/delivery-terms
+ *
+ * Replace the shop's delivery terms. Body: { mode: 'always' | 'never' | 'above', freeAboveAmount?: number | null }.
+ * freeAboveAmount (integer 1..100 000 000) is required with mode 'above' and must be null/absent
+ * otherwise. Separate from `policies`: does NOT bump policy_version or pause agency connections.
+ */
+router.put('/profile/delivery-terms', VendorProfileController.setDeliveryTerms);
+
 // ─── Onboarding ───────────────────────────────────────────────────────────────
 
 /**
@@ -332,6 +349,8 @@ router.get('/delivery-fee-proposals', VendorDeliveryFeeProposalController.list);
 router.get('/orders/:id/delivery-fee-proposals', VendorDeliveryFeeProposalController.listForOrder);
 router.post('/orders/:id/delivery-fee-proposals/:proposalId/approve', VendorDeliveryFeeProposalController.approve);
 router.post('/orders/:id/delivery-fee-proposals/:proposalId/reject', VendorDeliveryFeeProposalController.reject);
+// ADR-A11 D-10: take a change-agency difference on yourself (customer-paid orders only).
+router.post('/orders/:id/delivery-fee-proposals/:proposalId/cover', VendorDeliveryFeeProposalController.cover);
 
 /**
  * POST /api/vendor/orders/:id/refund

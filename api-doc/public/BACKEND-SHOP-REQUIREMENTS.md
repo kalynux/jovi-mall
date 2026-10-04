@@ -659,6 +659,13 @@ cannot be satisfied.
 
 ### 3.2 The customer is never quoted a delivery fee, tax or discount
 
+> ⛔ **SUPERSEDED 2026-10-04 — [ADR-A11](../../docs/ADR-A11-CUSTOMER-PAID-DELIVERY.md).** The
+> customer now pays delivery wherever the shop's delivery terms say so (`never`, or `above` an
+> amount not reached, or the 30% cap's fallback); `order.total_amount = items + customer-paid
+> delivery`, and the cart quote reports it. The product `freeDelivery` flag is gone — the public
+> `freeDelivery` boolean is derived from the shop's `deliveryTerms`. Kept below as the original
+> request.
+
 ```ts
 // order.service.ts:592-597
 const base = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);

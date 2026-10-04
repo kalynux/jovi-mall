@@ -97,7 +97,8 @@ async function seed(): Promise<void> {
             status: 'draft',
             title: `${TAG}-${title}`,
             slug: `${TAG}-${title.toLowerCase()}`,
-            category: 'test',
+            // No category: these are drafts the quota sweep counts, and a category would mean
+            // creating an entry in the shared list that outlives the fixture.
             createdAt: at(i),
         });
         productIds.push(doc._id as Types.ObjectId);

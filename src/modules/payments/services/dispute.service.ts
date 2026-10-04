@@ -403,8 +403,12 @@ export class PaymentDisputeService {
     // (`cartId` + `orderIds[]`, never `orderId` — the model enforces exactly one source
     // field), so matching on `orderId` alone finds nothing for the entire cart-checkout
     // population and the unwind proceeds with an empty gateway ref.
+    // ⚠ The CHECKOUT charge, never a delivery top-up (ADR-A11): an order may hold both, and a
+    // chargeback is raised against the charge the customer disputes with their bank — the
+    // order's own payment — so a `findOne` that could land on the top-up unwinds the wrong one.
     const tx = await PaymentTransactionModel.findOne({
       $or: [{ orderId }, { orderIds: orderId }],
+      purpose: { $ne: 'order_delivery_topup' },
     });
     return await this.resolveOrderLost(orderId, tx?.gatewayRef ?? '', 'chargeback', null, actor);
   }

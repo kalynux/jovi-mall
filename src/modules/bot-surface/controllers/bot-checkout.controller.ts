@@ -430,7 +430,7 @@ async function reviewChatCheckout(
     const caller = botCallerOf(req);
     const language = botResponseLanguageOf(req);
 
-    const view = await readChatCheckout(caller.customerId, deliveryAddressId);
+    const view = await readChatCheckout(caller.customerId, deliveryAddressId, language);
     /**
      * ⚠ **The address comes first, then the delivery minimum (ADR-A07).** Both refuse the ref; an
      * address problem keeps its own reply (a link), unchanged. A shop too small to carry its
@@ -505,6 +505,14 @@ async function reviewChatCheckout(
             shortfallText: shop.shortfallText,
             payable: shop.payable,
         })),
+        /**
+         * ⭐ ADR-A11 — the delivery line(s), already worded and formatted from the cart quote: one
+         * per shipping shop, "Delivery: 1 500 XAF" or "Delivery: Free", with the non-blocking
+         * "add X more and delivery is free" hint. `totalText` already includes what is charged.
+         * The model reads them too, for a customer who asks what delivery costs.
+         */
+        deliveryLines: view.deliveryLines.map((line) => ({ text: line.text, hint: line.hint })),
+        deliveryCharged: view.deliveryCharged,
     } satisfies ChatReviewForReply;
 
     setBotReply(req, checkoutReviewReply(review, { addressChosen: deliveryAddressId !== null }, language));

@@ -752,12 +752,22 @@ async function main(): Promise<void> {
         const card = __ORDER_LISTING.toGroupCard(
             codGroup(), 'en', new Map([['v1', { name: 'Chez Mado' }]]), ['Shoes'],
         ) as unknown as Record<string, unknown>;
+        // `deliveryText` joined 2026-10-04 (ADR-A11): a worded string or null, never a number.
         return JSON.stringify(Object.keys(card).sort())
-            === JSON.stringify(['cartId', 'dateText', 'orders', 'paymentText', 'summaryText', 'totalText'])
+            === JSON.stringify(['cartId', 'dateText', 'deliveryText', 'orders', 'paymentText', 'summaryText', 'totalText'])
+            && card.deliveryText === null
             && typeof card.totalText === 'string'
             && (card.totalText as string).includes('XAF')
             && JSON.stringify(Object.keys((card.orders as Record<string, unknown>[])[0]).sort())
                 === JSON.stringify(['orderNumber', 'statusText', 'storeName']);
+    });
+
+    assert('ADR-A11 · a checkout where the customer paid delivery says how much of the total it was', () => {
+        const card = __ORDER_LISTING.toGroupCard(codGroup(), 'en', new Map(), ['Shoes'], 1500) as unknown as Record<string, unknown>;
+        const fr = __ORDER_LISTING.toGroupCard(codGroup(), 'fr', new Map(), ['Shoes'], 1500) as unknown as Record<string, unknown>;
+        return card.deliveryText === 'Incl. 1 500 XAF delivery'
+            && fr.deliveryText === 'Dont 1 500 XAF de livraison'
+            && __ORDER_LISTING.toGroupCard(codGroup(), 'en', new Map(), [], 0).deliveryText === null;
     });
 
     console.log('\n══ § 3 · "Show my orders", answered in the chat (chat-surfaces, 2026-09-22) ══');

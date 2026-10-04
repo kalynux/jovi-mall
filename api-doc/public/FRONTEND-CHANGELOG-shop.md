@@ -75,7 +75,9 @@ envelope. No cookies, no auth, no `credentials: 'include'` needed.
 
 The four fields you marked `// MOCK` — `rating`, `reviews`, `sales`, `delivery` — are **not
 provided** and should be deleted from the type, as you planned. `freeDelivery` (boolean) is
-real and is on every row.
+real and is on every row. ⚠ **Since 2026-10-03 (ADR-A11) it is DERIVED from the shop's
+`deliveryTerms`** — `true` only when the shop always delivers free; use `deliveryTerms` to say
+"Free delivery from X".
 
 ---
 
@@ -139,6 +141,17 @@ Either block is `null` when the vendor has not configured one — no defaults ar
 Full shape in [catalog.md](./catalog.md).
 
 ### 3e. §3.2 — the customer is **not** charged for delivery
+
+> ⛔ **SUPERSEDED 2026-10-04 by [ADR-A11](../../docs/ADR-A11-CUSTOMER-PAID-DELIVERY.md) — "render
+> Delivery included" is now WRONG.** The decision this section asked for ("moving delivery onto
+> the customer is a business-model decision") was taken: free delivery is now each **shop's**
+> setting (`always` · `never` · `above` an amount). The cart quote's `delivery` is the real fee
+> where the customer pays, `total` already includes it, and each shop has `deliveryPayer`,
+> `freeDelivery { mode, freeAboveAmount, shortfall }` and `shipments[]`. Render one delivery line
+> per shop (amount or "Free delivery") plus the "add X more for free delivery" hint. Contract:
+> [customer/cart.md](../customer/cart.md#post-apicustomercartquote); hand-off:
+> [FRONTEND-CHANGELOG-customer-paid-delivery.md](./FRONTEND-CHANGELOG-customer-paid-delivery.md).
+> The text below is kept as history.
 
 This is the one that changes a screen, so please read it.
 

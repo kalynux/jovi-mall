@@ -10,7 +10,7 @@
  *
  * Three indexes, declared in `product.model.ts` and built here:
  *   { status, deletedAt, createdAt: -1 }   the browse grid + the sitemap feed
- *   { status, deletedAt, category }        the category chips (§2.3) and filter
+ *   { status, deletedAt, categoryIds }     the category chips (§2.3) and filter (multikey)
  *   text( title, tags, description )       search + relevance
  *
  * ── Why this script has to exist ────────────────────────────────────────────
@@ -61,10 +61,13 @@ const PLANNED: PlannedIndex[] = [
     key: { status: 1, deletedAt: 1, createdAt: -1 },
     why: 'browse grid, store product lists, sitemap feed',
   },
+  // Replaced `product_storefront_category` ({…, category}) on 2026-10-04 — a product holds
+  // 1–5 category ids now, so the index is multikey. The old one is dropped by
+  // `migrate:product-categories` once no product carries the old field.
   {
-    name: 'product_storefront_category',
-    key: { status: 1, deletedAt: 1, category: 1 },
-    why: 'category chips (GET /api/public/categories) and the category filter',
+    name: 'product_storefront_categories',
+    key: { status: 1, deletedAt: 1, categoryIds: 1 },
+    why: 'category chips (GET /api/public/categories), the category filter, related-products fallback',
   },
   {
     name: TEXT_INDEX_NAME,

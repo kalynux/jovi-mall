@@ -39,6 +39,8 @@
  */
 import { IOrder } from '../order.model';
 import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
+import { customerDeliveryFeeOf, deliveryPayerOf } from '../domain/delivery-payer';
+import type { DeliveryPayer, DeliveryPayerReason } from '../../vendors/domain/delivery-terms';
 
 export interface CustomerOrderItemDto {
     id: string;
@@ -50,7 +52,6 @@ export interface CustomerOrderItemDto {
     quantity: number;
     price: number;
     currency: string;
-    freeDelivery: boolean;
     /** Live-resolved thumbnail. `null` when the product has no usable image. */
     image: FileDetail | null;
     /** Per-line delivery state — an order can be split across several parcels. */
@@ -58,6 +59,23 @@ export interface CustomerOrderItemDto {
         status: string | null;
         shipmentId: string | null;
     } | null;
+}
+
+/**
+ * What the customer paid for ONE parcel's delivery (ADR-A11, customer-paid delivery).
+ *
+ * `amount` is `shipment.customer_delivery_fee` read through `customerDeliveryFeeOf` — the
+ * customer-facing figure, never the agency's `delivery_fee_snapshot` (what the agency is paid,
+ * which can differ after an approved fee change). 0 on a parcel whose delivery the shop paid.
+ */
+export interface CustomerOrderDeliveryFeeDto {
+    shipmentId: string;
+    amount: number;
+    /**
+     * Delivery money the platform holds that is owed BACK to the customer (a returned parcel's
+     * unspent fee, or a fee lowered after payment). Present only when non-zero.
+     */
+    customerFeeRefundable?: number;
 }
 
 export interface CustomerOrderStoreDto {
@@ -88,11 +106,31 @@ export interface CustomerOrderDto {
     total: number;
     currency: string;
     priceBreakdown: {
+        /** The items. */
         base: number;
+        /**
+         * What the customer was charged for delivery (ADR-A11): Σ this order's parcel fees when
+         * the shop's delivery terms make the customer pay, 0 when the shop pays (free delivery).
+         * 0 on orders created before customer-paid delivery existed.
+         */
+        delivery: number;
         tax: number;
         discount: number;
+        /** `base + delivery + tax − discount` — what was charged. */
         total: number;
     };
+    /**
+     * Who paid this order's delivery: `vendor` (free delivery for the customer) or `customer`.
+     * `null` on a digital order (nothing ships). Legacy physical orders read `vendor`.
+     */
+    deliveryPayer: DeliveryPayer | null;
+    /**
+     * Why: `shop_always` · `shop_threshold_met` (free) · `shop_never` · `threshold_not_met` ·
+     * `cap_fallback` (the customer paid). `null` on digital and legacy orders.
+     */
+    deliveryPayerReason: DeliveryPayerReason | null;
+    /** One entry per parcel of this order — `[]` for a digital order. */
+    deliveryFees: CustomerOrderDeliveryFeeDto[];
     paymentMethod: string;
     paymentStatus: string;
     fulfillmentStatus: string;
@@ -135,6 +173,34 @@ export interface CustomerOrderDtoInput {
     /** Keyed by `productImageKey(productId, variantId)`. */
     imagesByKey: Map<string, FileDetail[]>;
     codCollections?: unknown[];
+    /**
+     * This order's shipments — the delivery-money fields only — for `deliveryFees`. Absent
+     * yields `[]` (a digital order, or a caller that did not load them).
+     */
+    shipments?: CustomerOrderShipmentFeeFacts[];
+}
+
+/** The four shipment fields `deliveryFees` reads. */
+export interface CustomerOrderShipmentFeeFacts {
+    _id: unknown;
+    delivery_payer?: DeliveryPayer | null;
+    customer_delivery_fee?: number | null;
+    customer_fee_refundable?: number | null;
+}
+
+/** Per-parcel delivery fees as the customer sees them — pure; see `CustomerOrderDeliveryFeeDto`. */
+export function toCustomerDeliveryFees(
+    order: Pick<IOrder, 'delivery_payer'>,
+    shipments: readonly CustomerOrderShipmentFeeFacts[],
+): CustomerOrderDeliveryFeeDto[] {
+    return shipments.map((shipment) => {
+        const refundable = shipment.customer_fee_refundable;
+        return {
+            shipmentId: String(shipment._id),
+            amount: customerDeliveryFeeOf(order, shipment),
+            ...(typeof refundable === 'number' && refundable > 0 ? { customerFeeRefundable: refundable } : {}),
+        };
+    });
 }
 
 export function toCustomerOrderDto(input: CustomerOrderDtoInput): CustomerOrderDto {
@@ -151,10 +217,14 @@ export function toCustomerOrderDto(input: CustomerOrderDtoInput): CustomerOrderD
         currency: order.currency,
         priceBreakdown: {
             base: order.price_breakdown.base,
+            delivery: order.price_breakdown.delivery ?? 0,
             tax: order.price_breakdown.tax,
             discount: order.price_breakdown.discount,
             total: order.price_breakdown.total,
         },
+        deliveryPayer: order.order_type === 'physical' ? deliveryPayerOf(order) : null,
+        deliveryPayerReason: order.order_type === 'physical' ? (order.delivery_payer_reason ?? null) : null,
+        deliveryFees: order.order_type === 'physical' ? toCustomerDeliveryFees(order, input.shipments ?? []) : [],
         paymentMethod: order.payment_method,
         paymentStatus: order.payment_status,
         fulfillmentStatus: order.fulfillment_status,
@@ -177,7 +247,6 @@ export function toCustomerOrderDto(input: CustomerOrderDtoInput): CustomerOrderD
                 quantity: item.quantity,
                 price: item.price,
                 currency: item.currency,
-                freeDelivery: item.delivery?.free_delivery ?? false,
                 // `[0]` is the thumbnail by convention — resolveProductImages returns the
                 // gallery thumbnail-first.
                 image: gallery[0] ?? null,

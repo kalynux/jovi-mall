@@ -105,6 +105,7 @@ import { EarningsLedgerModel } from '../../src/modules/earnings/models/earnings-
 import { TrackingOutboxModel } from '../../src/modules/tracking-integration/models/tracking-outbox.model';
 import { initializeAgentNotificationEventConsumers } from '../../src/modules/notifications/agent-notification-event-consumer';
 import { IGeoAddress, GeoAddressInput } from '../../src/core/types/geo-address.types';
+import { categoryResolutionService } from '../../src/modules/categories/services/category-resolution.service';
 
 dotenv.config();
 
@@ -550,6 +551,11 @@ async function createProduct(opts: {
   pickupAddressId: Types.ObjectId;
   pickupLabel: string;
 }): Promise<ProductFixture> {
+  // An entry of the shared category list (resolve-or-create), never free text any more.
+  const seedCategory = await categoryResolutionService.resolveUnattended('Maison & Électronique', {
+    source: 'admin',
+    vendorId: null,
+  });
   const product = await ProductModel.create({
     vendorId: ID.vendor,
     type: 'physical',
@@ -557,13 +563,12 @@ async function createProduct(opts: {
     title: opts.title,
     description: `${opts.title} — COD shipment seed product.`,
     slug: `${TAG}${opts.slug}`,
-    category: 'Maison & Électronique',
+    categoryIds: seedCategory ? [seedCategory.id] : [],
     tags: ['cod-shipment-seed'],
     seo: { title: opts.title, description: opts.title },
     hasVariants: false,
     delivery: {
       agency_id: ID.agency,
-      free_delivery: false,
       // A real, geocoded vendor address — this is what gets snapshotted onto
       // the order item and becomes the agent's pickup leg.
       pickup_location: { source: 'vendor_address', vendor_address_id: opts.pickupAddressId },
