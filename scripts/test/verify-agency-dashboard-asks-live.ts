@@ -97,9 +97,10 @@ async function seedAll(): Promise<void> {
     originalName: 'logo.png', ...base,
   }]);
   await seed(VendorModel, [
-    { _id: V_ALPHA, display_name: `Jeanne ${tag}`, default_delivery_agency_id: AGENCY,
+    // `user_id` is unique and NOT sparse — two vendors without one collide on null.
+    { _id: V_ALPHA, user_id: id(), display_name: `Jeanne ${tag}`, default_delivery_agency_id: AGENCY,
       kyc_details: { legit_verified: true }, status: 'active', ...base },
-    { _id: V_BETA, display_name: null, default_delivery_agency_id: null,
+    { _id: V_BETA, user_id: id(), display_name: null, default_delivery_agency_id: null,
       kyc_details: { legit_verified: false }, status: 'active', ...base },
   ]);
   await seed(StoreModel, [

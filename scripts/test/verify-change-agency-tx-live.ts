@@ -16,8 +16,9 @@
  * (fee carried once over a 2-item batch, the difference settled), an accepted agent's shipment
  * refused, an agency-declined shipment with a cancelled COD code movable.
  *
- * ⚠ Writes fixtures. Run it ONLY against a disposable database: it REFUSES unless the database
- * name contains "verify" (e.g. MONGO_URI=mongodb://127.0.0.1:27118/change_agency_verify?replicaSet=rsverify).
+ * ⚠ Writes fixtures. It only ever writes to a database whose name contains "verify" — when
+ * MONGO_URI names any other database (CI's shared `jovi_mall_ci`), it switches to the sibling
+ * `<name>_verify_change_agency` on the same replica set and never touches the named one.
  * It drops every collection it touched at the end, pass or fail.
  *
  * Run: MONGO_URI=… npm run verify:change-agency-tx
@@ -229,11 +230,15 @@ function transientOnce(): () => void {
 async function main(): Promise<void> {
   if (!MONGO_URI) throw new Error('MONGO_URI is not set');
   await mongoose.connect(MONGO_URI, { serverSelectionTimeoutMS: 5000 });
-  const dbName = mongoose.connection.name;
+  let dbName = mongoose.connection.name;
   if (!/verify/i.test(dbName)) {
-    console.log(`⛔ Refusing to run against database "${dbName}" — it writes fixtures and drops collections. Use a disposable database whose name contains "verify".`);
+    // Never touch the named database: it drops collections. Move to a disposable SIBLING on the
+    // same replica set instead of refusing, so CI's live loop (one shared `jovi_mall_ci`) can run it.
+    const sibling = `${dbName}_verify_change_agency`;
+    console.log(`database "${dbName}" is not disposable — using sibling "${sibling}" instead`);
     await mongoose.disconnect();
-    process.exit(2);
+    await mongoose.connect(MONGO_URI, { serverSelectionTimeoutMS: 5000, dbName: sibling });
+    dbName = mongoose.connection.name;
   }
   const hello = await db().admin().command({ hello: 1 });
   if (!hello.setName) {
