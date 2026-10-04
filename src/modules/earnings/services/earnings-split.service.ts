@@ -1028,6 +1028,66 @@ export class EarningsSplitService {
   }
 
   /**
+   * The arithmetic of `splitShipmentDelivery`'s ordinary branch (prepaid, fee not paid in cash),
+   * with no write — shared with the administrator's money-split view, which runs it before the
+   * run is over with `outcome: 'delivered'` (the question being asked) or `'returned'`.
+   */
+  async computeShipmentDeliverySplit(
+    order: IOrder,
+    shipment: IShipment,
+    outcome: ShipmentDeliveryOutcome,
+    policies: IAgencyPolicies | null
+  ): Promise<ShipmentDeliverySplitComputation> {
+    const agencyId = shipment.agency_id.toString();
+
+    // The fee the vendor was actually charged. Recomputing would risk dividing a
+    // different number than was charged if the agency edited its pricing since —
+    // see IShipment.delivery_fee_snapshot. A missing snapshot means the shipment
+    // was created after its order was split (a late item routed to a new
+    // shipment), so nothing was ever charged for it; compute live (the caller logs),
+    // since that allocation is not covered by the vendor's net.
+    let reservedFee = shipment.delivery_fee_snapshot ?? null;
+    const reservedFeeComputedLive = reservedFee === null;
+    if (reservedFee === null) {
+      const orderItemsById = new Map(order.items.map((i) => [(i._id as any).toString(), i]));
+      reservedFee = this.computeShipmentDeliveryFee(
+        shipment,
+        policies,
+        orderItemsById,
+        order._id.toString(),
+        order.delivery_address?.components?.region ?? null
+      );
+    }
+
+    const earnedFee = resolveEarnedFee(outcome, reservedFee, policies);
+    // The agent's cut comes OUT of what the run earned, never on top: the vendor
+    // pays the same either way and the agency shares with whoever did the work.
+    // A shipment can end `returned` with no agent ever bound (the agency took it
+    // back before anyone accepted) — then there is no cut and the agency keeps it.
+    const agentId = shipment.agent_id ? shipment.agent_id.toString() : null;
+    const agentCut = agentId ? await this.computeAgentCut(agentId, agencyId, earnedFee) : 0;
+    // The unspent `reserved − earned` goes back to whoever paid it (ADR-A11): the customer
+    // first, up to what their payment covered, then the vendor. Vendor-paid: all to the vendor
+    // (an allocation row, as before). Customer-paid: NO vendor row — the platform holds it, owed
+    // to the customer, recorded on `shipment.customer_fee_refundable` for W-E's refund.
+    const customerFee = customerDeliveryFeeOf(order, shipment);
+    const feeShares = deliveryFeeShares(reservedFee, customerFee);
+    const leftover = rtoLeftoverShares(reservedFee, earnedFee, feeShares.customerCovered);
+
+    return {
+      reservedFee,
+      reservedFeeComputedLive,
+      earnedFee,
+      agentId,
+      agentCut,
+      // No COD handling fee on a prepaid delivery — there was no cash to handle.
+      agencyCut: computeAgencyCut(earnedFee, agentCut),
+      vendorRefund: leftover.toVendor,
+      customerRefundable: leftover.toCustomer + feeShares.customerExcess,
+    };
+  }
+
+  /**
    * The agent's share of one delivery's fee, per the contract they made the
    * delivery under (`fee_split`).
    *
