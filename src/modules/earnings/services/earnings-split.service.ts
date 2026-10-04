@@ -80,6 +80,72 @@ export function bargainLineOf(item: IOrderItem): NegotiatedLineInput {
 }
 
 /**
+ * What `splitOrder` divides a prepaid order's ITEMS into — computed by `computeOrderSplit`
+ * with no write, so the administrator's money-split view can show it BEFORE payment from
+ * the same arithmetic that will run AT payment (see `OrderMoneySplitService`).
+ */
+export interface OrderSplitComputation {
+  /** The items gross (ADR-A11: never a customer-paid delivery fee). */
+  gross: number;
+  /** The bargain fee — the `platform_ai` share. */
+  aiMargin: number;
+  commissionPercent: number;
+  commission: number;
+  /** Σ per shipment of the fee part the customer did NOT pay — deducted from the vendor. */
+  vendorBorneDelivery: number;
+  /** May be negative here; `splitOrder` refuses that with `EARNINGS_INVALID_SPLIT`. */
+  vendorNet: number;
+  byShipment: Map<string, number>;
+  customerExcessByShipment: Map<string, number>;
+}
+
+/** The facts one COD collection split is computed from. `agentId` null ⇒ nobody bound yet. */
+export interface CodCollectionSplitInput {
+  shipment: IShipment;
+  policies: IAgencyPolicies | null;
+  agentId: string | null;
+  agencyId: string;
+  /** The goods the cash pays for. */
+  itemsAmount: number;
+  /** The customer-paid delivery fee inside the same cash. */
+  deliveryFeeAmount: number;
+}
+
+/** What `splitCodCollection` divides one collection into. `vendorNet` may be negative here. */
+export interface CodCollectionSplitComputation {
+  gross: number;
+  aiMargin: number;
+  commissionPercent: number;
+  commission: number;
+  deliveryFee: number;
+  vendorBorneDelivery: number;
+  customerExcess: number;
+  codFee: number;
+  /** 0 when no agent is bound — exactly what the split would pay; the caller annotates. */
+  agentCut: number;
+  /** `deliveryFee − agentCut + codFee`. */
+  agencyCut: number;
+  vendorNet: number;
+}
+
+/** What `splitShipmentDelivery` divides one prepaid run into (the ordinary, non-cash branch). */
+export interface ShipmentDeliverySplitComputation {
+  /** The fee the payer was charged for this run — snapshot first, else live. */
+  reservedFee: number;
+  /** `true` when `reservedFee` came from no snapshot (a late shipment the vendor was never charged for). */
+  reservedFeeComputedLive: boolean;
+  earnedFee: number;
+  agentId: string | null;
+  /** 0 when no agent is bound. */
+  agentCut: number;
+  agencyCut: number;
+  /** The unspent `reserved − earned` the vendor gets back. */
+  vendorRefund: number;
+  /** What the customer is owed back (unspent fee they covered + anything paid above the fee). */
+  customerRefundable: number;
+}
+
+/**
  * EarningsSplitService - splits a paid order/booking into per-beneficiary
  * allocations and holds each share in escrow.
  *
@@ -168,35 +234,18 @@ export class EarningsSplitService {
     if (await this.allocationRepo.existsForSource('order', sourceId)) return; // idempotent
 
     const vendorId = order.vendor_id.toString();
-    // ADR-A11: the vendor is measured on the ITEMS. `total_amount` also carries a customer-paid
-    // delivery fee, which belongs to the agency side (allocated at delivery) and is never
-    // commissioned (D-3). `gross_snapshot` is therefore the items gross on every row, which is
-    // what keeps NET_FORMULA's residual exact (`vendors/analytics/net-revenue.ts`).
-    const gross = orderItemsGrossOf(order);
     const currency = order.currency;
+    const {
+      gross,
+      aiMargin,
+      commissionPercent,
+      commission,
+      vendorBorneDelivery: deliveryTotal,
+      vendorNet,
+      byShipment,
+      customerExcessByShipment,
+    } = await this.computeOrderSplit(order);
 
-    // The bargain fee, summed over the lines that carry one. An order may mix
-    // bargainable and ordinary lines, and the total is the sum of the PER-LINE
-    // fees — never a fee on the summed uplift, which would round differently and
-    // leave the reconciliation a franc short.
-    const aiMargin = computeOrderAiMargin(order.items.map(bargainLineOf));
-    const vendorGross = gross - aiMargin;
-
-    const { commissionPercent } = await this.entitlements.getEntitlements(vendorId);
-    const commission = Math.floor((vendorGross * commissionPercent) / 100);
-
-    // Per-shipment, policy-driven agency delivery fee (physical orders only —
-    // digital orders have no shipments). See computeAgencyDeliveryFees for the
-    // exact MINIMAL formula and every deferred pricing component.
-    const { byShipment, vendorBorneTotal, customerExcessByShipment } =
-      order.order_type === 'physical'
-        ? await this.computeAgencyDeliveryFees(order)
-        : { byShipment: new Map<string, number>(), vendorBorneTotal: 0, customerExcessByShipment: new Map<string, number>() };
-    // Only the VENDOR-BORNE part of the fees reduces the vendor's net: all of it on a vendor-paid
-    // order, nothing on a customer-paid one (the customer paid it inside `total_amount`).
-    const deliveryTotal = vendorBorneTotal;
-
-    const vendorNet = vendorGross - commission - deliveryTotal;
     if (vendorNet < 0) {
       throw createAppError(ERROR_CODES.EARNINGS_INVALID_SPLIT, 422, undefined, {
         gross,
@@ -262,6 +311,55 @@ export class EarningsSplitService {
       deliveryDeferred: deliveryTotal,
       vendorNet,
     });
+  }
+
+  /**
+   * The arithmetic of `splitOrder`, with no write — the single definition both the split and
+   * the administrator's money-split view run, so what an administrator is SHOWN before
+   * payment and what is ALLOCATED at payment cannot be two formulas.
+   *
+   * Reads only (entitlements, shipments, agency policies). The commission rate is the one in
+   * force NOW; `splitOrder` reads it again at payment, which is why a pre-payment projection
+   * is labelled an estimate.
+   */
+  async computeOrderSplit(order: IOrder): Promise<OrderSplitComputation> {
+    const vendorId = order.vendor_id.toString();
+    // ADR-A11: the vendor is measured on the ITEMS. `total_amount` also carries a customer-paid
+    // delivery fee, which belongs to the agency side (allocated at delivery) and is never
+    // commissioned (D-3). `gross_snapshot` is therefore the items gross on every row, which is
+    // what keeps NET_FORMULA's residual exact (`vendors/analytics/net-revenue.ts`).
+    const gross = orderItemsGrossOf(order);
+
+    // The bargain fee, summed over the lines that carry one. An order may mix
+    // bargainable and ordinary lines, and the total is the sum of the PER-LINE
+    // fees — never a fee on the summed uplift, which would round differently and
+    // leave the reconciliation a franc short.
+    const aiMargin = computeOrderAiMargin(order.items.map(bargainLineOf));
+    const vendorGross = gross - aiMargin;
+
+    const { commissionPercent } = await this.entitlements.getEntitlements(vendorId);
+    const commission = Math.floor((vendorGross * commissionPercent) / 100);
+
+    // Per-shipment, policy-driven agency delivery fee (physical orders only —
+    // digital orders have no shipments). See computeAgencyDeliveryFees for the
+    // exact MINIMAL formula and every deferred pricing component.
+    const { byShipment, vendorBorneTotal, customerExcessByShipment } =
+      order.order_type === 'physical'
+        ? await this.computeAgencyDeliveryFees(order)
+        : { byShipment: new Map<string, number>(), vendorBorneTotal: 0, customerExcessByShipment: new Map<string, number>() };
+
+    // Only the VENDOR-BORNE part of the fees reduces the vendor's net: all of it on a vendor-paid
+    // order, nothing on a customer-paid one (the customer paid it inside `total_amount`).
+    return {
+      gross,
+      aiMargin,
+      commissionPercent,
+      commission,
+      vendorBorneDelivery: vendorBorneTotal,
+      vendorNet: vendorGross - commission - vendorBorneTotal,
+      byShipment,
+      customerExcessByShipment,
+    };
   }
 
   /**
@@ -411,7 +509,7 @@ export class EarningsSplitService {
     // ADR-A11: the collection's cash is goods + the delivery fee a customer-paid shipment's
     // customer hands over. The vendor is measured on the GOODS (gross_snapshot, commission, the
     // COD fee's base — D-3, D-5); the delivery cash belongs to the agency side.
-    const { itemsAmount: gross, deliveryFeeAmount: customerDeliveryCash } = collectionBreakdownOf(collection);
+    const { itemsAmount, deliveryFeeAmount: customerDeliveryCash } = collectionBreakdownOf(collection);
     const currency = collection.currency;
     const agencyId = collection.agency_id.toString();
 
@@ -425,26 +523,28 @@ export class EarningsSplitService {
       });
     }
 
-    const orderItemsById = new Map(order.items.map((i) => [(i._id as any).toString(), i]));
-
-    // Per-shipment, for the reason in the docstring above. Computed before the
-    // commission because the commission is a percentage of what is left after it.
-    const aiMargin = this.computeShipmentAiMargin(shipment, orderItemsById);
-    const vendorGross = gross - aiMargin;
-
-    const { commissionPercent } = await this.entitlements.getEntitlements(vendorId);
-    const commission = Math.floor((vendorGross * commissionPercent) / 100);
-
-    const deliveryFee = this.computeShipmentDeliveryFee(
+    const agentId = collection.agent_id.toString();
+    const {
+      gross,
+      aiMargin,
+      commissionPercent,
+      commission,
+      deliveryFee,
+      vendorBorneDelivery,
+      customerExcess,
+      codFee,
+      agentCut,
+      agencyCut,
+      vendorNet,
+    } = await this.computeCodCollectionSplit(order, {
       shipment,
-      agency?.policies ?? null,
-      orderItemsById,
-      order._id.toString(),
-      order.delivery_address?.components?.region ?? null
-    );
-    // What the vendor bears of it: all of it when vendor-paid; nothing when the customer paid it
-    // in cash (only a fee raised above the cash collected would leave a remainder).
-    const shares = deliveryFeeShares(deliveryFee, customerDeliveryCash);
+      policies: agency?.policies ?? null,
+      agentId,
+      agencyId,
+      itemsAmount,
+      deliveryFeeAmount: customerDeliveryCash,
+    });
+
     // Record it for audit. COD computes the fee once, at collection, so it cannot
     // drift the way a prepaid order's can — but nothing else persists what a
     // delivery was charged, and an agency questioning a payout has no other
@@ -453,33 +553,20 @@ export class EarningsSplitService {
       new Map([[(shipment._id as any).toString(), deliveryFee]])
     );
 
-    // D-5: on the GOODS only — never on the delivery fee the agent also collects.
-    const codFee = computeCodHandlingFee(
-      agency?.policies?.pricing?.additional_fees?.cod_handling_fee,
-      gross
-    );
-
-    // The agent's cut comes OUT of the delivery fee, not on top of it: the
-    // vendor pays the same either way, and the agency shares the fee with the
-    // person who actually made the delivery.
-    const agentId = collection.agent_id.toString();
-    const agentCut = await this.computeAgentCut(agentId, agencyId, deliveryFee);
-
-    const vendorNet = vendorGross - commission - shares.vendorBorne - codFee;
     if (vendorNet < 0) {
       throw createAppError(ERROR_CODES.EARNINGS_INVALID_SPLIT, 422, undefined, {
         gross,
         aiMargin,
         commission,
         deliveryFee,
-        vendorBorneDelivery: shares.vendorBorne,
+        vendorBorneDelivery,
         codFee,
       });
     }
     // Delivery cash above the fee is the customer's (only after a fee decrease — W-E).
-    if (shares.customerExcess > 0) {
+    if (customerExcess > 0) {
       await this.shipmentRepo.setCustomerFeeRefundable(
-        new Map([[(shipment._id as any).toString(), shares.customerExcess]])
+        new Map([[(shipment._id as any).toString(), customerExcess]])
       );
     }
 
@@ -517,7 +604,7 @@ export class EarningsSplitService {
         ...codDefaults,
         beneficiary_type: 'agency',
         beneficiary_id: agencyId,
-        amount: computeAgencyCut(deliveryFee, agentCut, codFee),
+        amount: agencyCut,
       },
       // The agent is paid by the PLATFORM, like any other beneficiary — hold →
       // release → available → payout. `requires_cash_settlement` is inherited
@@ -539,12 +626,70 @@ export class EarningsSplitService {
       aiMargin,
       commission,
       deliveryFee,
-      vendorBorneDelivery: shares.vendorBorne,
+      vendorBorneDelivery,
       customerDeliveryCash,
       codFee,
       agentCut,
       vendorNet,
     });
+  }
+
+  /**
+   * The arithmetic of `splitCodCollection`, with no write — shared with the administrator's
+   * money-split view, which runs it BEFORE the cash is collected (and before an agent is bound:
+   * `agentId: null` yields a cut of 0, which is what a split with no agent would pay; the view
+   * labels it as not yet known).
+   *
+   * ⚠ The bargain fee is over THIS SHIPMENT's lines with the shipment's quantities — see
+   * `computeShipmentAiMargin` and the docstring of `splitCodCollection`.
+   */
+  async computeCodCollectionSplit(
+    order: IOrder,
+    input: CodCollectionSplitInput
+  ): Promise<CodCollectionSplitComputation> {
+    const gross = input.itemsAmount;
+    const orderItemsById = new Map(order.items.map((i) => [(i._id as any).toString(), i]));
+
+    // Per-shipment, for the reason in `splitCodCollection`'s docstring. Computed before the
+    // commission because the commission is a percentage of what is left after it.
+    const aiMargin = this.computeShipmentAiMargin(input.shipment, orderItemsById);
+    const vendorGross = gross - aiMargin;
+
+    const { commissionPercent } = await this.entitlements.getEntitlements(order.vendor_id.toString());
+    const commission = Math.floor((vendorGross * commissionPercent) / 100);
+
+    const deliveryFee = this.computeShipmentDeliveryFee(
+      input.shipment,
+      input.policies,
+      orderItemsById,
+      order._id.toString(),
+      order.delivery_address?.components?.region ?? null
+    );
+    // What the vendor bears of it: all of it when vendor-paid; nothing when the customer paid it
+    // in cash (only a fee raised above the cash collected would leave a remainder).
+    const shares = deliveryFeeShares(deliveryFee, input.deliveryFeeAmount);
+
+    // D-5: on the GOODS only — never on the delivery fee the agent also collects.
+    const codFee = computeCodHandlingFee(input.policies?.pricing?.additional_fees?.cod_handling_fee, gross);
+
+    // The agent's cut comes OUT of the delivery fee, not on top of it: the
+    // vendor pays the same either way, and the agency shares the fee with the
+    // person who actually made the delivery.
+    const agentCut = input.agentId ? await this.computeAgentCut(input.agentId, input.agencyId, deliveryFee) : 0;
+
+    return {
+      gross,
+      aiMargin,
+      commissionPercent,
+      commission,
+      deliveryFee,
+      vendorBorneDelivery: shares.vendorBorne,
+      customerExcess: shares.customerExcess,
+      codFee,
+      agentCut,
+      agencyCut: computeAgencyCut(deliveryFee, agentCut, codFee),
+      vendorNet: vendorGross - commission - shares.vendorBorne - codFee,
+    };
   }
 
   /**
@@ -593,23 +738,20 @@ export class EarningsSplitService {
       });
     }
 
-    const orderItemsById = new Map(order.items.map((i) => [(i._id as any).toString(), i]));
-    const deliveryFee = this.computeShipmentDeliveryFee(
-      shipment,
-      agency?.policies ?? null,
-      orderItemsById,
-      order._id.toString(),
-      order.delivery_address?.components?.region ?? null
-    );
-    const shares = deliveryFeeShares(deliveryFee, cash);
-    if (shares.customerExcess > 0) {
+    const agentId = collection.agent_id.toString();
+    const { deliveryFee, vendorBorneDelivery, customerExcess, agentCut, agencyCut } =
+      await this.computeDeliveryFeeCollectionSplit(order, {
+        shipment,
+        policies: agency?.policies ?? null,
+        agentId,
+        agencyId,
+        cash,
+      });
+    if (customerExcess > 0) {
       await this.shipmentRepo.setCustomerFeeRefundable(
-        new Map([[(shipment._id as any).toString(), shares.customerExcess]])
+        new Map([[(shipment._id as any).toString(), customerExcess]])
       );
     }
-
-    const agentId = collection.agent_id.toString();
-    const agentCut = await this.computeAgentCut(agentId, agencyId, deliveryFee);
 
     const orderCompletedAt = order.completion?.confirmed_at ?? null;
     const defaults = {
@@ -628,18 +770,45 @@ export class EarningsSplitService {
     };
 
     await this.persist([
-      // No COD handling fee: the goods were not cash (D-5 — the fee is on the product price).
-      { ...defaults, beneficiary_type: 'agency', beneficiary_id: agencyId, amount: computeAgencyCut(deliveryFee, agentCut) },
+      { ...defaults, beneficiary_type: 'agency', beneficiary_id: agencyId, amount: agencyCut },
       { ...defaults, beneficiary_type: 'agent', beneficiary_id: agentId, amount: agentCut },
     ]);
 
     await this.emitSplit('cod_collection', sourceId, vendorId, {
       deliveryFee,
       customerDeliveryCash: cash,
-      vendorBorneDelivery: shares.vendorBorne,
+      vendorBorneDelivery,
       agentCut,
       agencyNet: deliveryFee - agentCut,
     });
+  }
+
+  /**
+   * The arithmetic of `splitDeliveryFeeCollection`, with no write — shared with the
+   * administrator's money-split view. `agentId: null` ⇒ a cut of 0 (the view labels it).
+   */
+  async computeDeliveryFeeCollectionSplit(
+    order: IOrder,
+    input: { shipment: IShipment; policies: IAgencyPolicies | null; agentId: string | null; agencyId: string; cash: number }
+  ): Promise<{ deliveryFee: number; vendorBorneDelivery: number; customerExcess: number; agentCut: number; agencyCut: number }> {
+    const orderItemsById = new Map(order.items.map((i) => [(i._id as any).toString(), i]));
+    const deliveryFee = this.computeShipmentDeliveryFee(
+      input.shipment,
+      input.policies,
+      orderItemsById,
+      order._id.toString(),
+      order.delivery_address?.components?.region ?? null
+    );
+    const shares = deliveryFeeShares(deliveryFee, input.cash);
+    const agentCut = input.agentId ? await this.computeAgentCut(input.agentId, input.agencyId, deliveryFee) : 0;
+    return {
+      deliveryFee,
+      vendorBorneDelivery: shares.vendorBorne,
+      customerExcess: shares.customerExcess,
+      agentCut,
+      // No COD handling fee: the goods were not cash (D-5 — the fee is on the product price).
+      agencyCut: computeAgencyCut(deliveryFee, agentCut),
+    };
   }
 
   /**
@@ -778,44 +947,14 @@ export class EarningsSplitService {
     const agency = await this.agencyRepo.findById(agencyId);
     const policies = agency?.policies ?? null;
 
-    // The fee the vendor was actually charged. Recomputing would risk dividing a
-    // different number than was charged if the agency edited its pricing since —
-    // see IShipment.delivery_fee_snapshot. A missing snapshot means the shipment
-    // was created after its order was split (a late item routed to a new
-    // shipment), so nothing was ever charged for it; compute live and log, since
-    // that allocation is not covered by the vendor's net.
-    let reservedFee = shipment.delivery_fee_snapshot ?? null;
-    if (reservedFee === null) {
-      const orderItemsById = new Map(order.items.map((i) => [(i._id as any).toString(), i]));
-      reservedFee = this.computeShipmentDeliveryFee(
-        shipment,
-        policies,
-        orderItemsById,
-        orderId,
-        order.delivery_address?.components?.region ?? null
-      );
+    const { reservedFee, reservedFeeComputedLive, earnedFee, agentId, agentCut, agencyCut, vendorRefund, customerRefundable } =
+      await this.computeShipmentDeliverySplit(order, shipment, outcome, policies);
+    if (reservedFeeComputedLive) {
       console.error(
         `[EarningsSplitService] Shipment ${sourceId} (order ${orderId}) has no delivery_fee_snapshot — ` +
           `computing the fee live at ${reservedFee}. The vendor's net was not reduced by it.`
       );
     }
-
-    const earnedFee = resolveEarnedFee(outcome, reservedFee, policies);
-    // The agent's cut comes OUT of what the run earned, never on top: the vendor
-    // pays the same either way and the agency shares with whoever did the work.
-    // A shipment can end `returned` with no agent ever bound (the agency took it
-    // back before anyone accepted) — then there is no cut and the agency keeps it.
-    const agentId = shipment.agent_id ? shipment.agent_id.toString() : null;
-    const agentCut = agentId ? await this.computeAgentCut(agentId, agencyId, earnedFee) : 0;
-    // The unspent `reserved − earned` goes back to whoever paid it (ADR-A11): the customer
-    // first, up to what their payment covered, then the vendor. Vendor-paid: all to the vendor
-    // (an allocation row, as before). Customer-paid: NO vendor row — the platform holds it, owed
-    // to the customer, recorded on `shipment.customer_fee_refundable` for W-E's refund.
-    const customerFee = customerDeliveryFeeOf(order, shipment);
-    const feeShares = deliveryFeeShares(reservedFee, customerFee);
-    const leftover = rtoLeftoverShares(reservedFee, earnedFee, feeShares.customerCovered);
-    const vendorRefund = leftover.toVendor;
-    const customerRefundable = leftover.toCustomer + feeShares.customerExcess;
     if (customerRefundable > 0) {
       await this.shipmentRepo.setCustomerFeeRefundable(new Map([[sourceId, customerRefundable]]));
     }
@@ -850,8 +989,7 @@ export class EarningsSplitService {
         ...shipmentDefaults,
         beneficiary_type: 'agency',
         beneficiary_id: agencyId,
-        // No COD handling fee on a prepaid delivery — there was no cash to handle.
-        amount: computeAgencyCut(earnedFee, agentCut),
+        amount: agencyCut,
       },
       // Paid by the PLATFORM like any other beneficiary — hold → release →
       // available → payout — even though it is the AGENCY that owes it under the

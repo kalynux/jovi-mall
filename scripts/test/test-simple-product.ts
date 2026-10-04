@@ -60,8 +60,6 @@ const OID2 = '507f1f77bcf86cd799439012';
   // client still sending the removed product flag is refused, never silently ignored.
   assert(!CreateSimpleProductSchema.safeParse({ ...valid, freeDelivery: true }).success,
     'create: the removed freeDelivery flag is rejected (strict)');
-  {
-  }
 
   for (const field of ['title', 'description', 'category', 'price'] as const) {
     const body: Record<string, unknown> = { ...valid };
