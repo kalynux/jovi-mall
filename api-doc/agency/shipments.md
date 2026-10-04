@@ -806,6 +806,23 @@ was already answered.
 `deliveryFeeOverride` (`{ amount, proposalId, approvedAt }` | null); the detail adds
 `deliveryFeeProposals` (array, newest first).
 
+**`feeComponents`** 🆕 (detail only, ADR-A11, 2026-10-04) — how your posted fee was built at
+checkout, so the screen can show it line by line; `null` on shipments priced before the formula:
+
+```jsonc
+"feeComponents": {
+  "pickupBase": 1000,        // pricing.pickup_based.base_rate_first_kg (0 if no pickup-based item)
+  "weightExtra": 400,        // additional_per_kg × (kg − 1)
+  "regionSurcharge": 500,    // out_of_region_surcharge, when outOfRegion
+  "storage": 0,              // storage-based part (local or out-of-region fee + pick & pack)
+  "capApplied": false,       // true = your max_fee_per_shipment cut the total
+  "kg": 3, "weightGrams": 2400,
+  "outOfRegion": true,
+  "flatFallback": false      // true = you had no pricing policy; the platform flat fee was used
+}
+```
+The fee actually paid is the approved proposal if any (`deliveryFeeOverride`), else this posted price.
+
 | Error | Status | When |
 |---|---|---|
 | `DELIVERY_FEE_PROPOSAL_WINDOW_CLOSED` | 422 | not `assigned` / `handing_over` |

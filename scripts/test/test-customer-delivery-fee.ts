@@ -544,6 +544,15 @@ async function main() {
     && typeof categoryFor === 'function' && !!ERROR_CATEGORIES
     && !readFileSync(join(__dirname, '../../api-doc/errors/README.md'), 'utf8').includes('`DELIVERY_FEE_PROPOSAL_CUSTOMER_PAID_PENDING`'));
 
+  // 2026-10-04 owner request: the agency sees HOW its posted fee was built.
+  await assert('agency shipment detail exposes feeComponents (agency viewer only, camelCase, every field)', () => {
+    const svc = stripComments(read('modules/shipments/shipment.service.ts'));
+    return svc.includes("viewer.role === 'agency' ? { feeComponents: toFeeComponentsDto(shipment.fee_components) }")
+      && ['pickupBase', 'weightExtra', 'regionSurcharge', 'storage', 'capApplied', 'kg', 'weightGrams', 'outOfRegion', 'flatFallback']
+        .every((k) => svc.includes(`${k}:`))
+      && svc.includes('if (!c) return null;');
+  });
+
   originalConsole.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed\n`);
   if (failed > 0) process.exit(1);
   process.exit(0);

@@ -25,6 +25,10 @@ wording from your pricing screens.
 **Who pays it changes nothing for you:** the shop pays (free delivery) or the customer pays (the shop's
 delivery terms), and you are credited the same fee either way; there is no platform commission on it.
 
+**🆕 `feeComponents` on the shipment detail** (`GET /api/agency/shipments/:id`) — the line-by-line
+build of that posted fee (base · weight extra · region surcharge · storage · ceiling applied · kg ·
+out-of-region). Show it on the shipment screen. Shape: [shipments.md](./shipments.md) § fee proposals.
+
 ## 2 · Two pricing fields (in `policies.pricing`)
 
 | Field | Type | UI |
@@ -43,10 +47,24 @@ delivery fee the customer pays your agent in cash with the goods when the shop's
 customer pay (`0` otherwise). Your COD handling fee is computed on `itemsAmount` only. Show "Cash to
 collect: {expectedAmount} (goods {itemsAmount} + delivery {deliveryFeeAmount})" where space allows.
 
-## 4 · Not in this release
+## 4 · Fee proposals on customer-paid parcels + combined-price requests — SHIPPED 2026-10-04
 
-- Fee proposals on a **customer-paid** shipment (the customer approves) — documented with that change.
-- Cash-for-delivery on online orders (`accepts_cash_delivery_fee`) — later wave.
+Contract: [shipments.md § fee proposals and § Combined delivery-price requests](./shipments.md#combined-delivery-requests).
+
+- Your existing "propose a different fee" form now works on **customer-paid** parcels too. A
+  **decrease** applies immediately (status `approved` by the system — show it as applied). An
+  **increase** is answered by the **customer**, not the vendor: show "Waiting for the customer"; on an
+  online order an accepted increase waits for the customer's top-up (pickup stays blocked until paid,
+  or until you withdraw). If the customer declines you may carry at the old fee, propose once more, or
+  decline the job. Responder names in notifications read "The customer".
+- A proposal may exceed your `max_fee_per_shipment` (the ceiling caps the automatic price only).
+- **New screen — combined-price requests:** a customer may ask you for one lower price on ≥2 of their
+  parcels you carry. `GET /api/agency/combined-delivery-requests?status=open` (notification
+  `combined_delivery_request.received`) and `POST …/:requestId/respond` with
+  `{ fees: [{ shipmentId, proposedFee }] }` (each fee must be lower) or `{ decline: true }`, optional `note`.
+- Parcels moved to you from another company (change of agency) can arrive with a pending difference
+  the customer or the shop must settle before pickup.
+- Cash-for-delivery: § "2026-10-04 (W-F)" below.
 
 ---
 

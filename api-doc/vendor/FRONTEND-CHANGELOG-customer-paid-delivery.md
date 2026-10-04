@@ -54,6 +54,22 @@ delivery" tag from `deliveryPayer`. Remove the per-item "Free delivery" badge th
 `items[].delivery.freeDelivery`. Your commission is always on the items only; the COD handling fee is
 always on the goods only (never on a delivery fee the customer pays the agent).
 
+## 3b · Fee proposals — who answers now (2026-10-04)
+
+Contract: [delivery-fee-proposals.md](./delivery-fee-proposals.md).
+
+- On a **free-delivery** (vendor-paid) parcel nothing changed: you approve/reject the agency's proposal.
+- On a **customer-paid** parcel the **customer** answers; your list shows those rows read-only
+  (no `approve`/`reject` in `availableActions`).
+- **Change of agency** on a customer-paid parcel: if the new company costs more, the customer is asked
+  to pay the difference; if they decline, **you** pay it (notification
+  `delivery_fee_proposal.customer_declined`). You may settle it at once with
+  `POST /api/vendor/orders/:id/delivery-fee-proposals/:proposalId/cover` (no body; shown when
+  `availableActions` contains `cover`). A move you could not afford is refused up front (`422`).
+- **Cash-for-delivery orders** (`deliveryFeePayment: 'cash_to_rider'`): the customer hands the fee to
+  the rider; your order shows `shipping: 0` (the fee was never charged online) — it never touches
+  your net, and `deliveryPayer` is still `customer`.
+
 ## 4 · Analytics and statements
 
 Net revenue already deducts only the delivery fee **you** bore (`NET_FORMULA` unchanged; its

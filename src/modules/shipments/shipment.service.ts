@@ -1,7 +1,7 @@
 import { Types } from 'mongoose';
 import { ShipmentRepository } from './shipment.repository';
 import { AgentShipmentScope } from './shipment.validator';
-import { IShipment, ShipmentStatus, ShipmentRejectionReason, IShipmentHandover, IShipmentHandoverPickup, AgentCancellationReason, IShipmentAgentCancellation, IShipmentDeliveryFailure, ShipmentFailureReason } from './shipment.model';
+import { IShipment, IShipmentFeeComponents, ShipmentStatus, ShipmentRejectionReason, IShipmentHandover, IShipmentHandoverPickup, AgentCancellationReason, IShipmentAgentCancellation, IShipmentDeliveryFailure, ShipmentFailureReason } from './shipment.model';
 import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
 import { PaginationOptions, Page } from '../../core/repositories/base.repository';
@@ -256,6 +256,34 @@ const AGENT_CANCEL_TARGET_STATUS: Partial<Record<ShipmentStatus, ShipmentStatus>
     in_transit: 'handing_over',
     failed: 'handing_over',
 };
+
+/** Agency-facing camelCase view of `IShipment.fee_components` (ADR-A11); null when not snapshotted. */
+export interface ShipmentFeeComponentsDto {
+    pickupBase: number;
+    weightExtra: number;
+    regionSurcharge: number;
+    storage: number;
+    capApplied: boolean;
+    kg: number;
+    weightGrams: number;
+    outOfRegion: boolean;
+    flatFallback: boolean;
+}
+
+export function toFeeComponentsDto(c: IShipmentFeeComponents | null | undefined): ShipmentFeeComponentsDto | null {
+    if (!c) return null;
+    return {
+        pickupBase: c.pickup_base ?? 0,
+        weightExtra: c.weight_extra ?? 0,
+        regionSurcharge: c.region_surcharge ?? 0,
+        storage: c.storage ?? 0,
+        capApplied: c.cap_applied === true,
+        kg: c.kg ?? 0,
+        weightGrams: c.weight_grams ?? 0,
+        outOfRegion: c.out_of_region === true,
+        flatFallback: c.flat_fallback === true,
+    };
+}
 
 /**
  * Shipment Service
@@ -1113,6 +1141,10 @@ export class ShipmentService {
                 [shipment._id.toString()],
                 viewer.role === 'agent' ? { role: 'agent', agentId: viewer.agentId } : { role: 'agency' }
             )).get(shipment._id.toString()) ?? [],
+            // ADR-A11: how the posted fee was built at checkout (base · weight · region · storage ·
+            // ceiling). Agency only — it is the agency's own price list; null on shipments priced
+            // before the formula existed.
+            ...(viewer.role === 'agency' ? { feeComponents: toFeeComponentsDto(shipment.fee_components) } : {}),
             rejection: shipment.rejection ? {
                 reason: shipment.rejection.reason,
                 note: shipment.rejection.note ?? null,
