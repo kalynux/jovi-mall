@@ -104,8 +104,9 @@ async function seedAll(): Promise<void> {
       kyc_details: { legit_verified: false }, status: 'active', ...base },
   ]);
   await seed(StoreModel, [
-    { _id: id(), vendor_id: V_ALPHA, name: `Alpha Textiles ${tag}`, logo_file_id: LOGO, ...base },
-    { _id: id(), vendor_id: V_BETA, name: `Beta Home ${tag}`, logo_file_id: null, ...base },
+    // `slug` is unique and NOT sparse, like `vendors.user_id` above.
+    { _id: id(), vendor_id: V_ALPHA, name: `Alpha Textiles ${tag}`, slug: `alpha-${tag}`, logo_file_id: LOGO, ...base },
+    { _id: id(), vendor_id: V_BETA, name: `Beta Home ${tag}`, slug: `beta-${tag}`, logo_file_id: null, ...base },
   ]);
   await seed(ProductCategoryModel, [{
     _id: CAT, name: `Kitchenware${tag}`, slug: `kitchenware-${tag}`, match_key: `kitchenware${tag}`,
