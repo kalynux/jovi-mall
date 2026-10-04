@@ -163,6 +163,21 @@ export const BOT_ACTION_VERBS = Object.freeze([
      * truncate it in silence.
      */
     'acct',
+    // ── Delivery-fee changes after checkout (ADR-A11 § Fee changes, W-H) ─────
+    /**
+     * `dfee:list` · `dfee:<orderId>` · `dfee:<orderId>:<proposalId>` · `dfee:pay:<proposalId>` —
+     * the customer's side of a delivery-fee change: see what is waiting, and pay an approved
+     * top-up. Approve / Decline ride the shared confirm pair as `yes:dfc:` / `no:dfc:`.
+     *
+     * ⚠ **No token carries an amount.** Every figure is re-read from the proposal on the press,
+     * so a button sitting in a chat history can never commit the customer to a number they were
+     * not shown — the `deal:` rule. The Decline / Accept pair carries the proposal's `version`,
+     * which is what makes "the figure you saw" checkable (409 on an edited figure → the fresh
+     * question is drawn instead).
+     *
+     * Worst case `dfee:<24>:<24>` = 54 bytes. Grammar owned by `parseDeliveryFeeArgument`.
+     */
+    'dfee',
 ] as const);
 export type BotActionVerb = (typeof BOT_ACTION_VERBS)[number];
 
@@ -643,6 +658,94 @@ export function downloadActionId(entitlementId: string): string {
  */
 export function accountActionId(section: string, ...parts: string[]): string {
     return token('acct', [section, ...parts].join(':'));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Delivery-fee changes after checkout (ADR-A11 § Fee changes after checkout, W-H)
+//
+//  One verb, `dfee`, owned by one stream (`bot-delivery-fee.controller.ts`), told apart by its
+//  first argument exactly as `shp:` and `tkt:` are — plus the shared confirm pair under the
+//  context `dfc`. The builders and the parsers sit together so the notification catalogue's
+//  hand-written literal (`dfee:{{orderId}}`) and every drawn button are read by ONE grammar.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The confirm context for Accept / Decline on a delivery-fee change. */
+export const DELIVERY_FEE_CONFIRM_CONTEXT = 'dfc';
+
+/** `dfee:list` — every delivery-fee change waiting for this customer, across their open orders. */
+export function deliveryFeeListActionId(): string {
+    return token('dfee', 'list');
+}
+
+/**
+ * `dfee:<orderId>` — the changes waiting on ONE order: one → its question; several → a choice.
+ *
+ * ⚠ **What the delivery-fee notifications carry** (`order.delivery_fee.approval_needed` ·
+ * `topup_due` · `topup_failed`), as the literal `dfee:{{orderId}}`: the notifier's context holds
+ * the order and not the proposal, and an order-scoped button re-reads the CURRENT figure on the
+ * press — a notification is exactly the button most likely to be pressed after an edit.
+ */
+export function deliveryFeeOrderActionId(orderId: string): string {
+    return token('dfee', orderId);
+}
+
+/** `dfee:<orderId>:<proposalId>` — one change's question. A row in the choice above. 54 bytes. */
+export function deliveryFeeProposalActionId(orderId: string, proposalId: string): string {
+    return token('dfee', `${orderId}:${proposalId}`);
+}
+
+/**
+ * `dfee:pay:<proposalId>` — charge the approved top-up to the wallet on the account. 33 bytes.
+ *
+ * ⚠ **Charges the amount the APPROVAL froze** (`proposal.topup.amount`), never a recomputed one —
+ * `DeliveryFeeProposalService.customerPay` owns that rule. The token carries no amount.
+ */
+export function deliveryFeePayActionId(proposalId: string): string {
+    // The sub-word is a constant, not a `pay:` literal: this is the ARGUMENT of a `dfee` token, and a
+    // literal head would read as a `pay:` token to test:inapp-fulfilment's hand-written-token scan.
+    const payStep = 'pay';
+    return token('dfee', `${payStep}:${proposalId}`);
+}
+
+/** `yes:dfc:<proposalId>:<version>` — Accept. ≤ 45 bytes for any version under 10⁹. */
+export function deliveryFeeAcceptActionId(proposalId: string, version: number): string {
+    return confirmActionId('dfc', `${proposalId}:${version}`);
+}
+
+/** `no:dfc:<proposalId>:<version>` — Decline. */
+export function deliveryFeeDeclineActionId(proposalId: string, version: number): string {
+    return declineActionId('dfc', `${proposalId}:${version}`);
+}
+
+export type DeliveryFeeTap =
+    | { kind: 'list' }
+    | { kind: 'order'; orderId: string }
+    | { kind: 'proposal'; orderId: string; proposalId: string }
+    | { kind: 'pay'; proposalId: string };
+
+/**
+ * The argument of a `dfee:` token, or null when it is not one this service could have drawn.
+ * Lower-case hex only, as every id this service mints is.
+ */
+export function parseDeliveryFeeArgument(argument: string): DeliveryFeeTap | null {
+    if (argument === 'list') return { kind: 'list' };
+    let match = /^pay:([0-9a-f]{24})$/.exec(argument);
+    if (match) return { kind: 'pay', proposalId: match[1] };
+    match = /^([0-9a-f]{24})$/.exec(argument);
+    if (match) return { kind: 'order', orderId: match[1] };
+    match = /^([0-9a-f]{24}):([0-9a-f]{24})$/.exec(argument);
+    if (match) return { kind: 'proposal', orderId: match[1], proposalId: match[2] };
+    return null;
+}
+
+/**
+ * The argument of a `yes:dfc:` / `no:dfc:` token AFTER the context (`<proposalId>:<version>`),
+ * or null. The version is a positive integer the service compares with the proposal's own.
+ */
+export function parseDeliveryFeeConfirmArgument(argument: string): { proposalId: string; version: number } | null {
+    const match = /^([0-9a-f]{24}):([1-9][0-9]{0,8})$/.exec(argument);
+    if (!match) return null;
+    return { proposalId: match[1], version: Number(match[2]) };
 }
 
 /**

@@ -39,8 +39,16 @@
  */
 import { IOrder } from '../order.model';
 import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
-import { customerDeliveryFeeOf, deliveryPayerOf } from '../domain/delivery-payer';
+import {
+    customerDeliveryFeeOf,
+    deliveryCashOf,
+    DeliveryFeePayment,
+    deliveryFeePaymentOf,
+    deliveryPayerOf,
+    paysDeliveryFeeInCash,
+} from '../domain/delivery-payer';
 import type { DeliveryPayer, DeliveryPayerReason } from '../../vendors/domain/delivery-terms';
+import { customerRefundPosition, DeliveryFeeRefundStatus } from '../../delivery-fee-proposals/domain/customer-fee-change.rules';
 
 export interface CustomerOrderItemDto {
     id: string;
@@ -76,6 +84,12 @@ export interface CustomerOrderDeliveryFeeDto {
      * unspent fee, or a fee lowered after payment). Present only when non-zero.
      */
     customerFeeRefundable?: number;
+    /**
+     * Cash for delivery (W-F): present (`true`) only when this parcel's `amount` is handed to the
+     * rider in cash (it was NOT charged online). Absent on every other parcel — like
+     * `customerFeeRefundable`.
+     */
+    paidInCash?: true;
 }
 
 export interface CustomerOrderStoreDto {
@@ -114,11 +128,28 @@ export interface CustomerOrderDto {
          * 0 on orders created before customer-paid delivery existed.
          */
         delivery: number;
+        /**
+         * Cash for delivery (W-F): the customer-paid delivery handed to the RIDERS in cash — NOT in
+         * `delivery` nor `total`. 0 on every other order.
+         */
+        deliveryCash: number;
         tax: number;
         discount: number;
-        /** `base + delivery + tax − discount` — what was charged. */
+        /** `base + delivery + tax − discount` — what was charged (online) / will be collected (COD). */
         total: number;
     };
+    /**
+     * How the customer-paid delivery fee is paid (ADR-A11 § Cash for delivery): `with_order`
+     * (charged with the order — or nothing to pay) or `cash_to_rider` (the goods were paid online,
+     * the fee goes to the rider in cash; see `amountDueToRider` and the fee-only entries of
+     * `codCollections`, which carry the delivery code). `null` on a digital order.
+     */
+    deliveryFeePayment: DeliveryFeePayment | null;
+    /**
+     * Cash still to hand the rider(s) for delivery on a `cash_to_rider` order: Σ the parcels'
+     * fees not yet collected. 0 on every other order (COD cash is in `codCollections`).
+     */
+    amountDueToRider: number;
     /**
      * Who paid this order's delivery: `vendor` (free delivery for the customer) or `customer`.
      * `null` on a digital order (nothing ships). Legacy physical orders read `vendor`.
@@ -131,6 +162,15 @@ export interface CustomerOrderDto {
     deliveryPayerReason: DeliveryPayerReason | null;
     /** One entry per parcel of this order — `[]` for a digital order. */
     deliveryFees: CustomerOrderDeliveryFeeDto[];
+    /**
+     * Delivery money owed BACK to the customer on this order, from the refund ledger (ADR-A11):
+     * `owed` is what has not reached them yet (in flight, or waiting to be paid by hand — it
+     * clears when a refund completes or an administrator records a manual one as paid, W-E2);
+     * `returned` is what came back. `null` when nothing was ever owed. The per-parcel
+     * `deliveryFees[].customerFeeRefundable` is the GROSS amount that became theirs and does not
+     * shrink when it is returned — read this for "still owed".
+     */
+    deliveryFeeRefund: { owed: number; returned: number } | null;
     paymentMethod: string;
     paymentStatus: string;
     fulfillmentStatus: string;
@@ -178,11 +218,15 @@ export interface CustomerOrderDtoInput {
      * yields `[]` (a digital order, or a caller that did not load them).
      */
     shipments?: CustomerOrderShipmentFeeFacts[];
+    /** This order's `delivery_fee_refunds` rows (status + amount only), for `deliveryFeeRefund`. */
+    deliveryFeeRefundLedger?: Array<{ status: DeliveryFeeRefundStatus; amount: number }>;
 }
 
-/** The four shipment fields `deliveryFees` reads. */
+/** The shipment fields `deliveryFees` reads. */
 export interface CustomerOrderShipmentFeeFacts {
     _id: unknown;
+    /** For `amountDueToRider` (a delivered parcel's cash was collected). */
+    status?: string | null;
     delivery_payer?: DeliveryPayer | null;
     customer_delivery_fee?: number | null;
     customer_fee_refundable?: number | null;
@@ -190,7 +234,7 @@ export interface CustomerOrderShipmentFeeFacts {
 
 /** Per-parcel delivery fees as the customer sees them — pure; see `CustomerOrderDeliveryFeeDto`. */
 export function toCustomerDeliveryFees(
-    order: Pick<IOrder, 'delivery_payer'>,
+    order: Pick<IOrder, 'delivery_payer'> & Partial<Pick<IOrder, 'payment_method' | 'delivery_fee_payment'>>,
     shipments: readonly CustomerOrderShipmentFeeFacts[],
 ): CustomerOrderDeliveryFeeDto[] {
     return shipments.map((shipment) => {
@@ -199,8 +243,38 @@ export function toCustomerDeliveryFees(
             shipmentId: String(shipment._id),
             amount: customerDeliveryFeeOf(order, shipment),
             ...(typeof refundable === 'number' && refundable > 0 ? { customerFeeRefundable: refundable } : {}),
+            ...(paysDeliveryFeeInCash(order, shipment) ? { paidInCash: true as const } : {}),
         };
     });
+}
+
+/**
+ * Cash still due to the riders for delivery on a `cash_to_rider` order (W-F) — pure: Σ the
+ * cash parcels' customer fees, minus those already handed over (delivered) or never to be
+ * (returned / cancelled). 0 on every other order.
+ */
+export function amountDueToRiderOf(
+    order: Pick<IOrder, 'delivery_payer'> & Partial<Pick<IOrder, 'payment_method' | 'delivery_fee_payment'>>,
+    shipments: readonly CustomerOrderShipmentFeeFacts[],
+): number {
+    if (deliveryFeePaymentOf(order) !== 'cash_to_rider') return 0;
+    return shipments
+        .filter((s) => !['delivered', 'returned', 'cancelled'].includes(String(s.status ?? '')))
+        .filter((s) => paysDeliveryFeeInCash(order, s))
+        .reduce((sum, s) => sum + customerDeliveryFeeOf(order, s), 0);
+}
+
+/** `deliveryFeeRefund` — pure; null when no delivery money was ever owed back on the order. */
+export function toCustomerDeliveryFeeRefund(
+    shipments: readonly CustomerOrderShipmentFeeFacts[],
+    ledger: ReadonlyArray<{ status: DeliveryFeeRefundStatus; amount: number }>,
+): { owed: number; returned: number } | null {
+    const position = customerRefundPosition({
+        refundables: shipments.map((s) => s.customer_fee_refundable),
+        ledger: [...ledger],
+    });
+    if (position.totalOwed <= 0 && position.returned <= 0) return null;
+    return { owed: position.owed, returned: position.returned };
 }
 
 export function toCustomerOrderDto(input: CustomerOrderDtoInput): CustomerOrderDto {
@@ -218,6 +292,7 @@ export function toCustomerOrderDto(input: CustomerOrderDtoInput): CustomerOrderD
         priceBreakdown: {
             base: order.price_breakdown.base,
             delivery: order.price_breakdown.delivery ?? 0,
+            deliveryCash: deliveryCashOf(order),
             tax: order.price_breakdown.tax,
             discount: order.price_breakdown.discount,
             total: order.price_breakdown.total,
@@ -225,6 +300,11 @@ export function toCustomerOrderDto(input: CustomerOrderDtoInput): CustomerOrderD
         deliveryPayer: order.order_type === 'physical' ? deliveryPayerOf(order) : null,
         deliveryPayerReason: order.order_type === 'physical' ? (order.delivery_payer_reason ?? null) : null,
         deliveryFees: order.order_type === 'physical' ? toCustomerDeliveryFees(order, input.shipments ?? []) : [],
+        deliveryFeePayment: order.order_type === 'physical' ? deliveryFeePaymentOf(order) : null,
+        amountDueToRider: order.order_type === 'physical' ? amountDueToRiderOf(order, input.shipments ?? []) : 0,
+        deliveryFeeRefund: order.order_type === 'physical'
+            ? toCustomerDeliveryFeeRefund(input.shipments ?? [], input.deliveryFeeRefundLedger ?? [])
+            : null,
         paymentMethod: order.payment_method,
         paymentStatus: order.payment_status,
         fulfillmentStatus: order.fulfillment_status,

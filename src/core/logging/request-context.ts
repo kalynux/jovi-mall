@@ -35,7 +35,30 @@ export interface RequestContext {
      */
     actorId?: string;
     actorSource?: 'admin' | 'platform';
+    /**
+     * Who the actor is, in words — so a developer holding a support ticket can read a log line
+     * without a second lookup, and can search by the id on the party's own page.
+     *
+     * `actorProfileId` is the ROLE PROFILE (the vendor, agency, agent or customer document),
+     * which is the id an operator sees on that party's page; `actorId` stays the user id. Both
+     * are stamped because the pages a developer starts from show different ones.
+     *
+     * Taken from documents `requireAuth` has already loaded — no query is added for them.
+     */
+    actorRole?: string;
+    actorName?: string;
+    actorProfileId?: string;
 }
+
+/** Optional detail for `stampContextActor`. */
+export interface ContextActorDetail {
+    role?: string | null;
+    name?: string | null;
+    profileId?: string | null;
+}
+
+/** A name is free text supplied by its owner; bound it so one line cannot grow without limit. */
+const MAX_ACTOR_NAME_LENGTH = 120;
 
 const storage = new AsyncLocalStorage<RequestContext>();
 
@@ -56,9 +79,17 @@ export function currentRequestContext(): RequestContext | undefined {
  * the store there would scope the actor to the middleware's own continuation rather than to the
  * handler that follows it. A no-op outside a request.
  */
-export function stampContextActor(actorId: string, actorSource: 'admin' | 'platform'): void {
+export function stampContextActor(
+    actorId: string,
+    actorSource: 'admin' | 'platform',
+    detail: ContextActorDetail = {},
+): void {
     const context = storage.getStore();
     if (!context) return;
     context.actorId = actorId;
     context.actorSource = actorSource;
+    if (detail.role) context.actorRole = detail.role;
+    const name = detail.name?.trim();
+    if (name) context.actorName = name.slice(0, MAX_ACTOR_NAME_LENGTH);
+    if (detail.profileId) context.actorProfileId = detail.profileId;
 }

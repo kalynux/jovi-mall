@@ -17,6 +17,7 @@ import {
   shipmentWeightGrams,
 } from '../domain/delivery-pricing';
 import { CashCollectionModel } from '../../cod/models/cash-collection.model';
+import { paysDeliveryFeeInCash } from '../../orders/domain/delivery-payer';
 
 /**
  * Why an agent's earning is unavailable, when it is.
@@ -330,16 +331,18 @@ export function approvedDeliveryFeeOf(
  * `expected_amount`: money promised that nobody pays (audit 2026-09-27).
  */
 export function isReturnedCod(
-  order: Pick<IOrder, 'payment_method'>,
-  shipment: Pick<IShipment, 'status'>
+  order: Pick<IOrder, 'payment_method'> & Partial<Pick<IOrder, 'delivery_fee_payment' | 'delivery_payer'>>,
+  shipment: Pick<IShipment, 'status'> & Partial<Pick<IShipment, 'delivery_payer' | 'customer_delivery_fee'>>
 ): boolean {
-  return order.payment_method === 'cash_on_delivery' && shipment.status === 'returned';
+  if (shipment.status !== 'returned') return false;
+  // A cash-for-delivery shipment (W-F) that came back collected no fee either: same answer.
+  return order.payment_method === 'cash_on_delivery' || paysDeliveryFeeInCash(order, shipment);
 }
 
 /** The fee a run earns, as the split will compute it — outcome-aware and COD-return-aware. */
 export function earnedFeeFor(
-  order: Pick<IOrder, 'payment_method'>,
-  shipment: Pick<IShipment, 'status'>,
+  order: Pick<IOrder, 'payment_method'> & Partial<Pick<IOrder, 'delivery_fee_payment' | 'delivery_payer'>>,
+  shipment: Pick<IShipment, 'status'> & Partial<Pick<IShipment, 'delivery_payer' | 'customer_delivery_fee'>>,
   deliveryFee: number,
   policies: IAgencyPolicies | null
 ): number {

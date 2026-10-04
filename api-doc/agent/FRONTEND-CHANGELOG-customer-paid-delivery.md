@@ -39,3 +39,13 @@ whoever paid it. The fee itself now grows with the shipment's weight and an out-
 ---
 
 **If this page and the backend's observed behaviour disagree, stop and report the difference.**
+
+## 2026-10-04 (W-F) — collecting only the delivery fee
+
+- Some ONLINE orders now have the delivery fee paid to you in cash (the agency enabled it). The
+  shipment's COD block says **`kind: "delivery_fee"`**, `itemsAmount: 0`, `expectedAmount` = the
+  fee: collect that amount and submit the customer's delivery code exactly as for cash on delivery
+  (`agent_delivered` → code; `requiresDeliveryCode` is true). The goods are already paid.
+- The cash is added to what you hold and owe your agency, counts in your cash exposure, and is
+  settled through your usual agent deposit. Your cut is paid from that collection once the cash
+  reaches the platform — like a cash-on-delivery delivery.

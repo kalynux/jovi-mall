@@ -101,7 +101,11 @@ export const requireAdminCaller = (req: Request, _res: Response, next: NextFunct
      * administrator who caused it. "Resolve a dangling intent by grepping the other service for
      * the same correlation id" becomes an actual query rather than an aspiration.
      */
-    stampContextActor(actorId, 'admin');
+    stampContextActor(actorId, 'admin', {
+        role: ADMIN_ROLE,
+        // Only what wi-admin actually sent — the 'Administrator' fallback above names nobody.
+        name: headerValue(req, 'x-actor-name'),
+    });
 
     next();
 };

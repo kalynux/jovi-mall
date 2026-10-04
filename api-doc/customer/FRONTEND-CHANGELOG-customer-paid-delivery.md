@@ -95,8 +95,58 @@ The bot's screens are rendered by the backend; nothing to build, listed so you k
 - **Fee changes after checkout** (an agency proposing a different fee on a customer-paid parcel; the
   customer approving an increase or receiving a decrease) — a separate change; its customer endpoints
   are documented with it.
-- **Paying the delivery fee in cash to the rider on an online order** — a later wave
-  (`accepts_cash_delivery_fee` on agencies is stored but not honoured yet).
+- ~~Paying the delivery fee in cash to the rider on an online order~~ — shipped 2026-10-04 (W-F), § 6.
+
+## 5 · 2026-10-04 (W-E2) — delivery money owed back, and when it clears
+
+- **Order reads** (`GET /api/customer/orders/:id`, the group read) gain
+  `deliveryFeeRefund: { owed, returned } | null` — delivery money owed back to the customer on that
+  order (`null` when none ever was). `owed` is what has not reached them yet, including money our team
+  must send by hand; it drops to 0 when the refund completes or the team records the hand payment.
+  ⚠ Use this, not `deliveryFees[].customerFeeRefundable`, for "still owed": the per-parcel figure is
+  the gross amount that became theirs and does not shrink once returned.
+- **`GET /api/customer/orders/:id/delivery-fee-proposals`**: `refunds.owed` now **includes** money
+  waiting to be sent by hand (it read 0 during that wait — the defect this fixes); new
+  `refunds.returned`, `refunds.awaitingManual`, and `entries[].settledByHand`. Contract:
+  [delivery-fee-changes.md](./delivery-fee-changes.md).
+- **New notification** `order.delivery_fee.refund_settled` (cannot be muted): "We have sent you X of
+  delivery money for order N". Follows `order.delivery_fee.refund_pending`.
+
+## 6 · 2026-10-04 (W-F) — pay the items online, the delivery fee in cash to the rider
+
+Where a shop charges delivery (customer-paid) and EVERY delivery company carrying that shop's items
+accepts it, an online checkout may pay the **items now** and hand the **delivery fee to the rider in
+cash**. Additive and optional — nothing changes for a client that does not use it.
+
+- **Quote** (`POST /api/customer/cart/quote`): new `deliveryFeeCash` at the top level —
+  `{ available, reason, amountDueOnline, amountDueToRider, vendorIds[] }` — and per shop
+  `perVendor[].deliveryFeeCash: { available, reason, amountDueOnline, amountDueToRider } | null`
+  (`null` for a digital shop). `reason` when not available: `cash_on_delivery` ·
+  `not_customer_paid` (the shop pays delivery) · `no_delivery_fee` · `agency_declines_cash`.
+  Offer the choice only when the TOP-LEVEL `available` is true; show `amountDueOnline` as what will
+  be charged now and `amountDueToRider` as the cash for the rider. Never compute either.
+- **Checkout** (`POST /api/customer/orders/checkout`): new optional body field
+  `deliveryFeePayment: "with_order" | "cash_to_rider"` (default `with_order`). `cash_to_rider` is
+  only valid with `paymentMethod: "online"` and is refused with
+  `422 DELIVERY_FEE_CASH_NOT_AVAILABLE` (`details.reason` as above, `vendorId`, `agencyIds`) when
+  it cannot be honoured. A shop that pays its own delivery is unaffected (nothing to pay). The 201
+  gains per order `deliveryFeePayment` and `deliveryCashToRider`; `total` is what will be charged
+  online. Pay with `POST /api/payments/initiate` as usual — it charges the items only.
+- **Order reads**: `total` / `priceBreakdown.total` = what was charged online (the items);
+  `priceBreakdown.delivery` = 0 and new `priceBreakdown.deliveryCash` = the delivery fee(s) for the
+  rider; new `deliveryFeePayment` (`with_order` | `cash_to_rider` | `null` on digital) and
+  `amountDueToRider` (cash still to hand over: parcels not yet delivered). `deliveryFees[]` keep the
+  fee per parcel and carry `paidInCash: true` on a parcel paid in cash (absent otherwise).
+- **Delivery code**: each cash parcel has an entry in `codCollections[]` — exactly like cash on
+  delivery, with `kind: "delivery_fee"`, `itemsAmount: 0`, `deliveryFeeAmount` = `expectedAmount` =
+  the fee, and the `deliveryCode` while pending. The customer gives the code to the rider when they
+  hand over the fee; the parcel is then delivered (there is no "confirm delivery" for such a parcel —
+  `POST …/confirm-delivery` answers `422 SHIPMENT_CONFIRMATION_NOT_ALLOWED`).
+- **Fee changes after checkout** on such a parcel work like cash on delivery: a decrease lowers the
+  cash for the rider (no refund), an approved increase raises it (no top-up payment).
+- **Refunds** of the order return what was charged online; the cash fee is not part of them.
+- **Notifications**: the code arrives as for cash on delivery ("amount to pay in cash on delivery" =
+  the fee); "out for delivery" says "your items are paid — have X ready in cash for the delivery fee".
 
 ---
 

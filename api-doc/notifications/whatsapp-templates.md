@@ -1249,6 +1249,9 @@ template is **untouched**. `test:bot-surface` § 20 proves each token reaches a 
 | `customer_ticket_replied` | Reply here |
 | `customer_ticket_awaiting_customer` | Reply here |
 | `customer_ticket_resolved` | Not sorted |
+| `customer_order_delivery_fee_approval_needed` | See the new fee — `dfee:<orderId>`, fallback `dfee:list` (W-H, 2026-10-04) |
+| `customer_order_delivery_fee_topup_due` | Pay now — same token (W-H) |
+| `customer_order_delivery_fee_topup_failed` | Try again — same token (W-H) |
 
 ⚠ **`Leave a review` (`rate:<orderId>`) was withdrawn and is back.** `rate` was unrouted when the
 withdrawal was written. It has been routed since `c39bff7` (2026-09-21, `REVIEW_ACTION_HANDLERS`).
@@ -1493,12 +1496,13 @@ Meta refuses an empty parameter.
 
 | Template name | Audience | Situation | Body params | Button |
 |---|---|---|---|---|
-| `customer_order_delivery_fee_approval_needed` | customer | `order.delivery_fee.approval_needed` | currency, proposed fee, fee before, order number | `shop/account/orders/detail/{{orderId}}` |
-| `customer_order_delivery_fee_topup_due` | customer | `order.delivery_fee.topup_due` | currency, proposed fee, order number, top-up amount | same |
+| `customer_order_delivery_fee_approval_needed` | customer | `order.delivery_fee.approval_needed` | currency, proposed fee, fee before, order number | `shop/account/orders/detail/{{orderId}}` + quick reply **See the new fee** (`dfee:`) |
+| `customer_order_delivery_fee_topup_due` | customer | `order.delivery_fee.topup_due` | currency, proposed fee, order number, top-up amount | same + quick reply **Pay now** (`dfee:`) |
 | `customer_order_delivery_fee_lowered` | customer | `order.delivery_fee.lowered` | order number, currency, new fee, old fee | same |
 | `customer_order_delivery_fee_updated` | customer | `order.delivery_fee.updated` | order number, currency, new fee | same |
 | `customer_order_delivery_fee_refund_pending` | customer | `order.delivery_fee.refund_pending` | currency, amount, order number | same |
-| `customer_order_delivery_fee_topup_failed` | customer | `order.delivery_fee.topup_failed` | currency, amount, order number | same |
+| `customer_order_delivery_fee_refund_settled` | customer | `order.delivery_fee.refund_settled` | currency, amount, order number | same |
+| `customer_order_delivery_fee_topup_failed` | customer | `order.delivery_fee.topup_failed` | currency, amount, order number | same + quick reply **Try again** (`dfee:`) |
 | `customer_order_combined_delivery_answered` | customer | `order.combined_delivery.answered` | order number, agency name, answer sentence | same |
 | `vendor_delivery_fee_customer_declined` | vendor | `delivery_fee_proposal.customer_declined` | order number, currency, difference | `orders/{{orderId}}` |
 | `agency_combined_delivery_request_received` | agency | `combined_delivery_request.received` | parcel count, currency, total fee | `shipments/{{shipmentId}}` (first parcel) |
@@ -1510,6 +1514,7 @@ Approval copy (`en`; the `fr` text is the catalog's and is in the payloads file)
 - `customer_order_delivery_fee_lowered` — *Your delivery fee went down — {{1}}* · The delivery fee for your order {{1}} is now {{2}} {{3}} instead of {{2}} {{4}}. Tap Open below for the full details.
 - `customer_order_delivery_fee_updated` — *New delivery fee confirmed — {{1}}* · The delivery fee for your order {{1}} is now {{2}} {{3}}. Tap Open below for the full details.
 - `customer_order_delivery_fee_refund_pending` — *Refund on the way: {{1}} {{2}}* · We owe you {{1}} {{2}} of delivery money on order {{3}}. It has to be sent by hand, so our team is processing it — you do not need to do anything, and we will confirm when it is done.
+- `customer_order_delivery_fee_refund_settled` — *Refund sent: {{1}} {{2}}* · We have sent you {{1}} {{2}} of delivery money for order {{3}}. If it has not reached you within a few days, reply here or open the order. (W-E2, 2026-10-04 — generated, **not submitted**.)
 - `customer_order_delivery_fee_topup_failed` — *Delivery payment did not go through — {{3}}* · We could not take the {{1}} {{2}} delivery difference for order {{3}}. Nothing was charged; your parcel waits until it is paid — open the order to try again.
 - `customer_order_combined_delivery_answered` — *Answer to your combined delivery request — {{1}}* · {{2}} {{3}} Open the order to see your delivery fees. ⚠ `{{3}}` is a whole sentence ("agreed to a combined price: you save XAF 800 on delivery." / "could not offer a combined price — …"); if Meta refuses a sentence-valued parameter, split it into two situations (answered / declined).
 - `vendor_delivery_fee_customer_declined` — *You cover a delivery difference* · The customer declined to pay the higher delivery fee after you changed the delivery company for order #{{1}}. The difference of {{2}} {{3}} is deducted from your earnings on this order.

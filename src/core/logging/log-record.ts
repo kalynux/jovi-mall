@@ -26,6 +26,16 @@ export interface LogRecord {
     requestId: string | null;
     /** The wi-admin administrator, when the line was produced under an internal-admin call. */
     actorId: string | null;
+    /**
+     * Who `actorId` is, stamped from the same request context. `actorSource` says which
+     * namespace the id lives in — `admin` is a wi-admin administrator, `platform` a user here.
+     * `actorProfileId` is the role profile (vendor / agency / agent / customer document), the id
+     * shown on that party's page; `GET /system/logs?actorId=` matches either id.
+     */
+    actorSource?: 'admin' | 'platform';
+    actorRole?: string;
+    actorName?: string;
+    actorProfileId?: string;
     /** Present on HTTP access lines only. `routeGroup`, never the raw path — see the metrics rule. */
     method?: string;
     routeGroup?: string;
@@ -102,6 +112,10 @@ export function parseLogLine(line: string, maxStackBytes: number): LogRecord | n
     // quietly accept anything pino happened to emit.
     if (typeof raw.requestId === 'string') record.requestId = raw.requestId;
     if (typeof raw.actorId === 'string') record.actorId = raw.actorId;
+    if (raw.actorSource === 'admin' || raw.actorSource === 'platform') record.actorSource = raw.actorSource;
+    if (typeof raw.actorRole === 'string') record.actorRole = raw.actorRole;
+    if (typeof raw.actorName === 'string') record.actorName = raw.actorName;
+    if (typeof raw.actorProfileId === 'string') record.actorProfileId = raw.actorProfileId;
     if (typeof raw.method === 'string') record.method = raw.method;
     if (typeof raw.routeGroup === 'string') record.routeGroup = raw.routeGroup;
     if (typeof raw.status === 'number') record.status = raw.status;
@@ -149,6 +163,7 @@ export function recordBytes(record: LogRecord): number {
         record.msg.length
         + (record.err?.stack?.length ?? 0)
         + (record.err?.message.length ?? 0)
+        + (record.actorName?.length ?? 0)
         // Fixed overhead for the scalar fields and object headers. An estimate on purpose: an
         // exact measure would cost a JSON.stringify per line on the hottest path in the process.
         + 200

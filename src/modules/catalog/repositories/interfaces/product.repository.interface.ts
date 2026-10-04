@@ -221,6 +221,7 @@ export interface IProductRepository {
     vendorIdsUsingAsDefault: string[],
     pagination: PaginationOptions,
     options?: RepositoryOptions,
+    filters?: DeliverableProductFilters,
   ): Promise<Page<Product>>;
 
   /**
@@ -264,6 +265,29 @@ export interface IProductRepository {
     agencyId: string,
     options?: RepositoryOptions,
   ): Promise<AgencyStoredVariant[]>;
+}
+
+/**
+ * Narrowing for `findByEffectiveDeliveryAgency` (`GET /api/agency/products`).
+ *
+ * `search` arrives pre-resolved: the caller has already turned the term into a regex and
+ * looked up which vendors and categories it names, because those live in collections this
+ * repository does not own. The SKU arm is resolved here, scoped to the agency's own
+ * deliverable products, so it never regex-scans the marketplace's variants.
+ */
+export interface DeliverableProductFilters {
+  /** Omitted = both. */
+  source?: 'own_override' | 'vendor_default';
+  status?: ProductStatus;
+  categoryId?: string;
+  vendorId?: string;
+  search?: {
+    regex: RegExp;
+    /** Vendors whose store name or display name matches. */
+    vendorIds: string[];
+    /** Categories whose name matches. */
+    categoryIds: string[];
+  };
 }
 
 /** One (vendor, product, variant) the agency stores, plus the depot the product names. */

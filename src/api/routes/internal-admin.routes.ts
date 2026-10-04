@@ -13,6 +13,7 @@ import { buildAdminShipmentRouter } from '../../modules/shipments/admin-shipment
 import { buildAdminBillingRouter } from '../../modules/billing/routes/admin-billing.routes';
 import { buildAdminEarningsRouter } from '../../modules/earnings/routes/admin-earnings.routes';
 import { buildAdminPayoutRequestsRouter } from '../../modules/earnings/routes/admin-payout-requests.routes';
+import { buildAdminDeliveryFeeRefundRouter } from '../../modules/delivery-fee-proposals/admin-delivery-fee-refund.routes';
 import { buildAdminDevToolsRouter } from '../../modules/dev-tools/admin-dev-tools.routes';
 import { buildAdminSystemRouter } from '../../modules/system/admin-system.routes';
 import { buildAdminTicketRouter } from '../../modules/tickets';
@@ -236,6 +237,15 @@ router.use('/tickets', buildAdminTicketRouter([requireAdminCaller]));
 router.use('/billing', buildAdminBillingRouter([requireAdminCaller]));
 router.use('/earnings', buildAdminEarningsRouter([requireAdminCaller]));
 router.use('/payout-requests', buildAdminPayoutRequestsRouter([requireAdminCaller]));
+
+/**
+ * Manual delivery-fee refunds (ADR-A11 W-E2, owner decision D-12) — no public twin. Delivery
+ * money owed back to a customer that the gateway could not return (COD, mobile money) waits as a
+ * `manual_required` row with a HIGH ticket; an administrator pays it and records it here. The
+ * settle is a compare-and-set paired with post-commit effects (ticket resolved, customer told),
+ * which is why it is delegated. Contract: `api-doc/admin/delivery-fee-refunds.md`.
+ */
+router.use('/delivery-fee-refunds', buildAdminDeliveryFeeRefundRouter([requireAdminCaller]));
 
 /**
  * Files — three routes now, and they answer two different questions.

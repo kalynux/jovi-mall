@@ -142,6 +142,12 @@ export class StoreRepository {
     );
   }
 
+  /** Vendor ids whose store (business) name matches — one arm of a vendor-name search. */
+  async findVendorIdsByNameMatch(regex: RegExp): Promise<Array<string>> {
+    const rows = await StoreModel.find({ name: regex }).select('vendor_id').lean().exec();
+    return rows.map((r) => r.vendor_id.toString());
+  }
+
   /** Convenience single-id name lookup. Returns null when no store exists yet. */
   async findNameByVendorId(vendorId: string): Promise<string | null> {
     const row = await StoreModel.findOne({ vendor_id: vendorId }).select('name').lean().exec();

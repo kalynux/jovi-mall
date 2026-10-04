@@ -1286,3 +1286,77 @@ for exactly this.
 
 One trace remains from the run: a row for the test id in the `vectoriser_debug` data
 table, which logs every embedding job.
+
+---
+
+## 16. Several categories per product — 2026-10-04  ✅ APPLIED AND PUBLISHED, proven live
+
+jovi-mall moved from one free-text `category` per product to **1–5 entries of one shared
+category list** (owner decision C-6, `PRODUCTION-READINESS/PRODUCT-CATEGORIES-PLAN.md`). The
+owner chose to **upgrade this index to a list** rather than keep only the first category, so
+a product is found under any of its categories by `product_search(p_category)`.
+
+### What jovi-mall now sends (already live in its code)
+
+`buildPayload` (`VectorisationService.ts`) carries both fields:
+
+| key | value | why it is there |
+|---|---|---|
+| `category` | the **primary** category's name (`categories[0]`), `''` if none | unchanged key — `product_vectors.category` and every existing row read it |
+| `categories` | **every** category name, vendor's order | new — the list this section indexes |
+
+Eligibility changed too: a product needs at least one category id. While the data conversion
+has not run, the old free-text `category` still counts (`legacyCategoryOf`, which is
+transitional). Nothing else moved.
+
+### What was applied on 2026-10-04
+
+1. **Schema, through `wi-mall-vectoriser-schema` (`i4Zo7LPGZx9Rh7mE`).** Three new nodes,
+   `2k. Categories Column`, `2l. tsv Includes Categories` and `2m. Categories Index`, run
+   between `2j` and `3`. Each is cut verbatim from `migrations/2026-10-04-categories.sql`, and
+   `image-vectoriser/applier-statements.js` now knows them. `4. Create product_search` carries
+   the new filter, `pv.category = p_category OR pv.categories ? p_category`.
+   - Execution **20823**: success.
+   - `5. Verify`: `product_search_overloads: 1`.
+2. **Text flow: `UP-wi-mall-vectoriser` (`YYt00wVi3AoKIOuX`) → `build all texts`.** It builds
+   `categories` from `p.categories`, falling back to `[p.category]` for the CSV path or an old
+   job, de-duplicated. It writes `metadata.categories`. The embedded text reads
+   `Categories: A, B.` for several and `Category: A.` for one.
+   - Tested locally first: a one-category payload produces **byte-identical** text, and
+     metadata identical except for the new key.
+   - The saved draft matched the tested file byte for byte (19 072 chars). No other node or
+     connection changed.
+   - **Published**: active version `677326ee-…`.
+3. **No re-vectorising, on the owner's instruction** (2026-10-04: "as if still in development,
+   no vendor or product"). Rows indexed before this carry no `metadata.categories` and match on
+   their primary `category`, which is exactly what they did before.
+
+### Proven live (2026-10-04)
+
+The real `vectorise` trigger was run on execution **20827**, with throwaway id
+`0e2e00000000000000000c01` and categories `["Zq Outdoor Gear", "Zq Solar Power"]`:
+- **Embedded text:** `Categories: Zq Outdoor Gear, Zq Solar Power.`
+- **Metadata:** both names.
+- **Stored:** yes. jovi-mall's callback answered `ignored`, as designed for an id it does not
+  know.
+
+Then a read-only query against `vector_db` (temporary workflow, archived afterwards):
+
+| check | result |
+|---|---|
+| `product_vectors.categories` (generated column) | `["Zq Outdoor Gear","Zq Solar Power"]` |
+| `product_search(…, p_category => 'Zq Solar Power')`, the SECOND category | **found** |
+| `product_search(…, p_category => 'Zq Outdoor Gear')`, the first | found |
+| `product_search(…, p_category => 'Zq Not A Category')` | not found |
+
+Clean-up went through the real `/delete` path on execution 20831, with `rows_deleted: 1`. One
+trace remains, as with every earlier test: a row for the test id in the `vectoriser_debug`
+data table.
+
+### What the search tool should pass
+
+`Search-Products`' `category` input still goes straight to `p_category`, matched **exactly**
+against a category NAME. That has always been the contract, and it is now a list match rather
+than a single-value one. The model should take names from `catalog_list_categories`, which
+now also returns `slug` and `id`. ⚠ `p_category` does **not** take a slug. Those resolve only
+on jovi-mall's `/api/public/products`, which has the matcher.

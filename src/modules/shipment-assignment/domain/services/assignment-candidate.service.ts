@@ -22,6 +22,7 @@ import { CodExposureService, codExposureService } from '../../../cod/services/co
 import { ASSIGNMENT_CONFIG } from '../../config/assignment.config';
 import { RankingSource } from '../../models/shipment-assignment-session.model';
 import { GeoRoutingClient, geoRoutingClient } from '../../services/geo-routing.client';
+import { riderCollectsCash } from '../../../orders/domain/delivery-payer';
 
 /**
  * The per-factor breakdown behind a candidate's score. Persisted onto the
@@ -184,7 +185,8 @@ export class AssignmentCandidateService {
     const eligibleIds = await this.eligibility.listEligibleAgentIds(agencyId);
     if (eligibleIds.length === 0) return { candidates: [], source: 'haversine' };
 
-    const isCod = order.payment_method === 'cash_on_delivery';
+    // COD, or an online order whose delivery fee the rider collects in cash (W-F).
+    const isCod = riderCollectsCash(order, shipment);
     // Computed for EVERY payment method now: the value ceiling is about the
     // goods, not the cash. Fails open to null — see resolveShipmentValue.
     const shipmentValue = this.resolveShipmentValue(order, shipment);

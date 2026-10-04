@@ -36,7 +36,21 @@ import { DELIVERY_FEE_PROPOSAL_WINDOW } from './delivery-fee-proposal.rules';
  *     vendor stops carrying a difference that no longer exists.
  */
 
-export type PaymentMode = 'online' | 'cod';
+/**
+ * How the customer pays THIS shipment's delivery fee:
+ *  - `online`   — charged online with the goods (top-ups and refunds move money online);
+ *  - `cod`      — a COD order: cash at the door with the goods;
+ *  - `cash_fee` — an ONLINE order whose delivery fee is handed to the rider in cash (W-F, ADR-A11
+ *                 § Cash for delivery). The FEE behaves like COD (no money has moved: the
+ *                 fee-only collection is re-priced, no top-up, no refund), the VENDOR like online
+ *                 (its share was split at payment, so a vendor-borne move adjusts its allocation).
+ */
+export type PaymentMode = 'online' | 'cod' | 'cash_fee';
+
+/** True when the fee is cash the rider has not collected yet (COD, or cash for delivery). */
+export function feeIsCash(mode: PaymentMode): boolean {
+  return mode === 'cod' || mode === 'cash_fee';
+}
 export type FeeDirection = 'increase' | 'decrease';
 /** Who must answer a proposal. `none` = applied on creation (a customer-paid decrease). */
 export type ProposalApprover = 'vendor' | 'customer' | 'none';
@@ -102,9 +116,13 @@ export interface FeeChangePlan {
   topupDue: number;
   /** ONLINE: the value `customer_fee_refundable` takes (the excess at the new fee). */
   refundableAfter: number;
-  /** How much `order.price_breakdown.delivery` / `.total` / `total_amount` move (± ). */
+  /**
+   * How much the order's customer delivery money moves (± ): `price_breakdown.delivery` / `.total`
+   * / `total_amount` (online, COD) — or `price_breakdown.delivery_cash` alone on `cash_fee`, whose
+   * `total_amount` is what was charged online and never holds the fee.
+   */
   orderTotalDelta: number;
-  /** COD: how much the pending cash collection's `delivery_fee_amount` / `expected_amount` move. */
+  /** COD / cash_fee: how much the pending cash collection's `delivery_fee_amount` / `expected_amount` move. */
   collectDelta: number;
   /**
    * By how much the vendor's held `('order', vendor)` allocation must move on an online order
@@ -128,20 +146,23 @@ export function planDecrease(state: FeeState, newFee: number): FeeChangePlan {
   const customerFee = nonNeg(state.customerFee);
   const after = nonNeg(newFee);
   const vendorBorneBefore = vendorBorneOf(fee, customerFee);
-  if (state.mode === 'cod') {
+  if (feeIsCash(state.mode)) {
     const customerFeeAfter = Math.min(customerFee, after);
+    const vendorBorneAfter = vendorBorneOf(after, customerFeeAfter);
     return {
       feeBefore: fee,
       feeAfter: after,
       customerFeeBefore: customerFee,
       customerFeeAfter,
       vendorBorneBefore,
-      vendorBorneAfter: vendorBorneOf(after, customerFeeAfter),
+      vendorBorneAfter,
       topupDue: 0,
       refundableAfter: 0,
       orderTotalDelta: customerFeeAfter - customerFee,
       collectDelta: customerFeeAfter - customerFee,
-      vendorAllocationDelta: 0,
+      // cash_fee: the vendor's share was split at PAYMENT (online), so a vendor-borne remainder
+      // the lower fee removes goes back to it there. COD: the collection split reads it.
+      vendorAllocationDelta: state.mode === 'cash_fee' ? vendorBorneBefore - vendorBorneAfter : 0,
     };
   }
   const vendorBorneAfter = vendorBorneOf(after, customerFee);
@@ -184,7 +205,7 @@ export function planCustomerApprovedIncrease(state: FeeState, newFee: number): F
     topupDue: state.mode === 'online' ? delta : 0,
     refundableAfter: state.mode === 'online' ? customerExcessOf(after, customerFeeAfter) : 0,
     orderTotalDelta: delta,
-    collectDelta: state.mode === 'cod' ? delta : 0,
+    collectDelta: feeIsCash(state.mode) ? delta : 0,
     vendorAllocationDelta: 0,
   };
 }
@@ -211,7 +232,7 @@ export function planVendorCoveredIncrease(state: FeeState, newFee: number): FeeC
     refundableAfter: state.mode === 'online' ? customerExcessOf(after, customerFee) : 0,
     orderTotalDelta: 0,
     collectDelta: 0,
-    vendorAllocationDelta: state.mode === 'online' ? vendorBorneBefore - vendorBorneAfter : 0,
+    vendorAllocationDelta: state.mode === 'cod' ? 0 : vendorBorneBefore - vendorBorneAfter,
   };
 }
 
@@ -268,6 +289,99 @@ export function outstandingCustomerRefund(input: {
     .filter((r) => CLAIMING_REFUND_STATUSES.includes(r.status))
     .reduce((s, r) => s + Math.max(0, r.amount), 0);
   return nonNeg(owed - claimed);
+}
+
+/**
+ * Where ONE ORDER's delivery money owed back to the customer stands, from the CUSTOMER's side —
+ * what `refunds` on the delivery-fee-changes read and `deliveryFeeRefund` on the order view say.
+ *
+ *  - `totalOwed`       Σ `customer_fee_refundable` — everything that ever became theirs;
+ *  - `returned`        Σ `completed` rows — returned by the gateway, paid by hand (W-E2) or
+ *                      covered by a wider refund of the order;
+ *  - `owed`            `totalOwed − returned`: NOT YET in their hands, whatever its state — in
+ *                      flight at the gateway, waiting for a person (`manual_required`), failed and
+ *                      to be retried, or not attempted yet. A manual row claims the money on the
+ *                      ledger (`outstandingCustomerRefund`) but is still owed to the customer:
+ *                      only a settlement clears it.
+ *  - `awaitingManual`  Σ `manual_required` rows — the part a person must pay by hand.
+ *
+ * Distinct from `outstandingCustomerRefund`, which answers "what may the SYSTEM still try to
+ * refund" (a manual row is excluded there so nothing retries it on its own).
+ */
+export function customerRefundPosition(input: {
+  refundables: Array<number | null | undefined>;
+  ledger: Array<{ status: DeliveryFeeRefundStatus; amount: number }>;
+}): { totalOwed: number; returned: number; owed: number; awaitingManual: number } {
+  const totalOwed = input.refundables.reduce<number>((s, v) => s + (typeof v === 'number' && v > 0 ? v : 0), 0);
+  const sumOf = (status: DeliveryFeeRefundStatus) =>
+    input.ledger.filter((r) => r.status === status).reduce((s, r) => s + Math.max(0, r.amount), 0);
+  const returned = sumOf('completed');
+  return {
+    totalOwed: nonNeg(totalOwed),
+    returned: nonNeg(returned),
+    owed: nonNeg(totalOwed - returned),
+    awaitingManual: nonNeg(sumOf('manual_required')),
+  };
+}
+
+// ── Settling a manual refund by hand (W-E2, owner decision D-12) ─────────────
+
+/** How a person returned the money. Every one of these MOVED money to the customer. */
+export const MANUAL_REFUND_PAYMENT_METHODS = ['mobile_money', 'cash', 'bank', 'other'] as const;
+/**
+ * No money moved by hand: a wider refund of the ORDER (a vendor's or administrator's gateway
+ * refund of the whole charge) already returned this delivery money.
+ */
+export const MANUAL_REFUND_COVERED_METHOD = 'covered_by_order_refund' as const;
+export const MANUAL_REFUND_SETTLEMENT_METHODS = [...MANUAL_REFUND_PAYMENT_METHODS, MANUAL_REFUND_COVERED_METHOD] as const;
+export type ManualRefundSettlementMethod = (typeof MANUAL_REFUND_SETTLEMENT_METHODS)[number];
+
+export type ManualSettlementRefusal =
+  | { code: 'not_settleable'; status: DeliveryFeeRefundStatus }
+  | { code: 'already_covered'; amount: number; stillReturnable: number }
+  | { code: 'not_covered'; amount: number; stillReturnable: number | null };
+
+export interface ManualSettlementPlan {
+  /** The amount the settled row keeps (all of it, or the covered part). */
+  settledAmount: number;
+  /** Still owed after a PARTIAL cover — becomes a new `manual_required` row (0 = none). */
+  remainderOwed: number;
+  /** Money moved by hand (true) or covered by an order refund (false). */
+  paidByHand: boolean;
+}
+
+/**
+ * May this manual refund be marked settled with this method, and what does settling write?
+ *
+ * `stillReturnable` is what the ORDER's payments can still give back (online: `total_amount`
+ * − Σ completed gateway refunds − Σ delivery refunds already paid by hand); `null` for COD,
+ * where there was no charge to return and nothing else can have covered it.
+ *
+ *  - only a `manual_required` row settles (a compare-and-set enforces it again at write time);
+ *  - a PAYING method is refused when the order's money no longer covers the row — a wider
+ *    refund of the order already returned (part of) it, and paying again pays it twice. Mark it
+ *    `covered_by_order_refund` first; any remainder stays owed as its own row and is then paid;
+ *  - `covered_by_order_refund` is refused unless that is actually so (COD: never).
+ */
+export function planManualSettlement(input: {
+  status: DeliveryFeeRefundStatus;
+  amount: number;
+  method: ManualRefundSettlementMethod;
+  stillReturnable: number | null;
+}): { ok: true; plan: ManualSettlementPlan } | { ok: false; refusal: ManualSettlementRefusal } {
+  if (input.status !== 'manual_required') return { ok: false, refusal: { code: 'not_settleable', status: input.status } };
+  const amount = nonNeg(input.amount);
+  const returnable = input.stillReturnable === null ? null : nonNeg(input.stillReturnable);
+  if (input.method === MANUAL_REFUND_COVERED_METHOD) {
+    if (returnable === null || returnable >= amount) {
+      return { ok: false, refusal: { code: 'not_covered', amount, stillReturnable: returnable } };
+    }
+    return { ok: true, plan: { settledAmount: amount - returnable, remainderOwed: returnable, paidByHand: false } };
+  }
+  if (returnable !== null && returnable < amount) {
+    return { ok: false, refusal: { code: 'already_covered', amount, stillReturnable: returnable } };
+  }
+  return { ok: true, plan: { settledAmount: amount, remainderOwed: 0, paidByHand: true } };
 }
 
 // ── Refund legs ────────────────────────────────────────────────────────────────

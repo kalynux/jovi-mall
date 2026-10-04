@@ -15,7 +15,11 @@
  *   6. The authority table for the customer and the vendor's cover; the customer DTO leaks nothing.
  *   7. Source scans for the wiring nothing behavioural can see: the top-up branch runs BEFORE the
  *      order's already-paid early return; the refund lookup is purpose-aware; the refund claim is
- *      written before the gateway is called; the change-agency hook brackets the move.
+ *      written before the gateway is called.
+ *   8. W-E2 (owner decision D-12): an administrator settles a MANUAL refund — only a
+ *      `manual_required` row, compare-and-set, never paid twice against a wider order refund,
+ *      the customer's owed amount clears. (The change of agency being ONE transaction is
+ *      `test:change-agency-tx` / `verify:change-agency-tx`.)
  *
  * NOT covered (needs a replica set): the transactions, the partial unique indexes binding.
  *
@@ -32,6 +36,11 @@ import {
   checkCombinedResponse,
   checkCustomerProposalEdit,
   combinedSaving,
+  customerRefundPosition,
+  MANUAL_REFUND_COVERED_METHOD,
+  MANUAL_REFUND_PAYMENT_METHODS,
+  MANUAL_REFUND_SETTLEMENT_METHODS,
+  planManualSettlement,
   customerExcessOf,
   feeDirection,
   outstandingCustomerRefund,
@@ -56,7 +65,10 @@ import {
   RespondCombinedDeliveryRequestSchema,
   PayDeliveryTopupSchema,
   CustomerApproveDeliveryFeeProposalSchema,
+  ListManualDeliveryFeeRefundsQuerySchema,
+  SettleDeliveryFeeRefundSchema,
 } from '../../src/modules/delivery-fee-proposals/validators/delivery-fee-proposal.validator';
+import { toCustomerDeliveryFeeRefund } from '../../src/modules/orders/dto/customer-order.dto';
 import { customerFeeLine } from '../../src/modules/delivery-fee-proposals/services/customer-fee-notifier';
 import { ERROR_CODES } from '../../src/core/error-codes';
 import { DEFAULT_ERROR_MESSAGES } from '../../src/core/errors';
@@ -318,6 +330,9 @@ function main() {
     ['DELIVERY_FEE_PROPOSAL_DIRECTION_CHANGED', 422], ['DELIVERY_FEE_TOPUP_IN_PROGRESS', 409], ['DELIVERY_FEE_TOPUP_NOT_DUE', 409],
     ['DELIVERY_FEE_PROPOSAL_ORDER_NOT_PAID', 422], ['COMBINED_DELIVERY_REQUEST_NOT_FOUND', 404], ['COMBINED_DELIVERY_REQUEST_INELIGIBLE', 422],
     ['COMBINED_DELIVERY_REQUEST_ALREADY_OPEN', 409], ['COMBINED_DELIVERY_REQUEST_NOT_OPEN', 409], ['COMBINED_DELIVERY_RESPONSE_INVALID', 422],
+    // W-E2 — settling a manual refund.
+    ['DELIVERY_FEE_REFUND_NOT_FOUND', 404], ['DELIVERY_FEE_REFUND_NOT_SETTLEABLE', 409],
+    ['DELIVERY_FEE_REFUND_ALREADY_COVERED', 409], ['DELIVERY_FEE_REFUND_NOT_COVERED', 409],
   ];
   const errorsDoc = raw('api-doc/errors/README.md');
   for (const [code, status] of codes) {
@@ -329,6 +344,7 @@ function main() {
   const situations = [
     'order.delivery_fee.approval_needed', 'order.delivery_fee.topup_due', 'order.delivery_fee.lowered', 'order.delivery_fee.updated',
     'order.delivery_fee.refund_pending', 'order.delivery_fee.topup_failed', 'order.combined_delivery.answered',
+    'order.delivery_fee.refund_settled',
   ] as const;
   for (const s of situations) {
     assert(`customer situation ${s}: in the enum, in the catalog with a template`, () =>
@@ -336,7 +352,7 @@ function main() {
   }
   const handler = src('src/modules/notifications/services/customer-notification-event-handler.service.ts');
   const prefBlock = handler.slice(handler.indexOf('const SITUATION_PREFERENCE'), handler.indexOf('};', handler.indexOf('const SITUATION_PREFERENCE')));
-  assert('all seven are MONEY situations — none has a preference key (cannot be muted)', () =>
+  assert('all eight are MONEY situations — none has a preference key (cannot be muted)', () =>
     situations.every((s) => !prefBlock.includes(`'${s}'`)));
   assert('the optional sentences render in each language and substitute the amount', () =>
     customerFeeLine('online_refund', 'fr', { amount: 'XAF 200' }).includes('XAF 200')
@@ -380,15 +396,6 @@ function main() {
   assert('the delivery refund is a system refund, top-up first, capped at what the order can still return', () =>
     refundOutstanding.includes("initiatedByRole: 'system'") && refundOutstanding.includes("prefer: 'topup_first'") && refundOutstanding.includes('refundableCapacity('));
 
-  const vos = src('src/modules/orders/vendor-order.service.ts');
-  const move = vos.slice(vos.indexOf('async updateDeliveryAgency('), vos.indexOf('async reassignItemsFromDefaultAgency('));
-  assert('change-agency: prepare BEFORE the item moves, complete AFTER the source row is removed', () => {
-    const prep = move.indexOf('changeAgencyFeeService.prepareWholeMove(');
-    const add = move.indexOf('findGroupableByOrderAndAgency(');
-    const remove = move.indexOf('this.shipmentRepo.removeItem(');
-    const complete = move.indexOf('changeAgencyFeeService.completeWholeMove(');
-    return prep > 0 && prep < add && remove > 0 && complete > remove;
-  });
 
   const app = src('src/modules/delivery-fee-proposals/services/customer-fee-application.service.ts');
   assert('the money application CAS-guards the pointer, the window and the customer fee', () =>
@@ -409,8 +416,138 @@ function main() {
     ...raw('src/modules/delivery-fee-proposals/models/delivery-fee-refund.model.ts').matchAll(/name: '(delivery_fee_refund_[a-z_]+)'/g),
     ...raw('src/modules/delivery-fee-proposals/models/combined-delivery-request.model.ts').matchAll(/name: '(combined_delivery_request_[a-z_]+)'/g),
   ].map((m) => m[1]);
-  assert(`the new models declare 5 named indexes (found ${declared.length}), all built by the migration`, () =>
-    declared.length === 5 && declared.every((n) => migration.includes(`'${n}'`)));
+  assert(`the new models declare 6 named indexes (found ${declared.length}), all built by the migration`, () =>
+    declared.length === 6 && declared.every((n) => migration.includes(`'${n}'`)));
+
+
+  // ───────────────────────────────────────────────────────────────────────────
+  section('15. W-E2 — an administrator settles a MANUAL refund (D-12)');
+  assert('the settlement methods: four that MOVE money, plus covered_by_order_refund', () =>
+    JSON.stringify([...MANUAL_REFUND_PAYMENT_METHODS]) === '["mobile_money","cash","bank","other"]'
+    && MANUAL_REFUND_COVERED_METHOD === 'covered_by_order_refund'
+    && MANUAL_REFUND_SETTLEMENT_METHODS.length === 5);
+  for (const status of ['processing', 'completed', 'failed'] as const) {
+    assert(`only a manual_required row settles — ${status} is refused (409 NOT_SETTLEABLE)`, () => {
+      const v = planManualSettlement({ status, amount: 300, method: 'mobile_money', stillReturnable: 5000 });
+      return !v.ok && v.refusal.code === 'not_settleable' && (v.refusal as any).status === status;
+    });
+  }
+  const paid = planManualSettlement({ status: 'manual_required', amount: 300, method: 'mobile_money', stillReturnable: 5000 });
+  assert('online, the order still covers it → paid by hand, whole amount, nothing left', () =>
+    paid.ok && paid.plan.settledAmount === 300 && paid.plan.remainderOwed === 0 && paid.plan.paidByHand);
+  const cod = planManualSettlement({ status: 'manual_required', amount: 300, method: 'cash', stillReturnable: null });
+  assert('COD (no charge, no ceiling) → paid by hand', () => cod.ok && cod.plan.paidByHand && cod.plan.settledAmount === 300);
+  const twice = planManualSettlement({ status: 'manual_required', amount: 300, method: 'bank', stillReturnable: 0 });
+  assert('⛔ a wider refund of the ORDER already returned it → paying is refused (ALREADY_COVERED, never paid twice)', () =>
+    !twice.ok && twice.refusal.code === 'already_covered' && (twice.refusal as any).stillReturnable === 0);
+  const partlyPaid = planManualSettlement({ status: 'manual_required', amount: 300, method: 'other', stillReturnable: 100 });
+  assert('…also when the order can return only PART of it', () => !partlyPaid.ok && partlyPaid.refusal.code === 'already_covered');
+  const covered = planManualSettlement({ status: 'manual_required', amount: 300, method: 'covered_by_order_refund', stillReturnable: 0 });
+  assert('covered_by_order_refund when fully covered → settled, NOT paid by hand, no remainder', () =>
+    covered.ok && !covered.plan.paidByHand && covered.plan.settledAmount === 300 && covered.plan.remainderOwed === 0);
+  const split = planManualSettlement({ status: 'manual_required', amount: 300, method: 'covered_by_order_refund', stillReturnable: 100 });
+  assert('a PARTIAL cover splits: 200 recorded covered, 100 stays owed as its own manual row', () =>
+    split.ok && split.plan.settledAmount === 200 && split.plan.remainderOwed === 100 && !split.plan.paidByHand);
+  assert('covered_by_order_refund is refused when the order still covers it, and on COD (NOT_COVERED)', () => {
+    const a = planManualSettlement({ status: 'manual_required', amount: 300, method: 'covered_by_order_refund', stillReturnable: 300 });
+    const b = planManualSettlement({ status: 'manual_required', amount: 300, method: 'covered_by_order_refund', stillReturnable: null });
+    return !a.ok && a.refusal.code === 'not_covered' && !b.ok && b.refusal.code === 'not_covered';
+  });
+
+  // The customer's owed amount, before and after.
+  const before = customerRefundPosition({ refundables: [300], ledger: [{ status: 'manual_required', amount: 300 }] });
+  assert('⛔ a manual row is STILL OWED to the customer (owed 300, awaiting by hand 300) — the ledger claim is the system’s, not theirs', () =>
+    before.owed === 300 && before.awaitingManual === 300 && before.returned === 0
+    && outstandingCustomerRefund({ refundables: [300], ledger: [{ status: 'manual_required', amount: 300 }] }) === 0);
+  const after = customerRefundPosition({ refundables: [300], ledger: [{ status: 'completed', amount: 300 }] });
+  assert('settled → owed clears to 0, returned 300', () => after.owed === 0 && after.returned === 300 && after.awaitingManual === 0);
+  const afterSplit = customerRefundPosition({ refundables: [300], ledger: [{ status: 'completed', amount: 200 }, { status: 'manual_required', amount: 100 }] });
+  assert('after a partial cover: returned 200, owed 100 (the remainder row)', () => afterSplit.owed === 100 && afterSplit.returned === 200 && afterSplit.awaitingManual === 100);
+  assert('a processing or failed attempt is still owed to the customer', () =>
+    customerRefundPosition({ refundables: [500], ledger: [{ status: 'processing', amount: 200 }, { status: 'failed', amount: 300 }] }).owed === 500);
+  assert('the order view: deliveryFeeRefund null when nothing was ever owed; owed clears once settled', () =>
+    toCustomerDeliveryFeeRefund([{ _id: 'a', customer_fee_refundable: 0 }], []) === null
+    && JSON.stringify(toCustomerDeliveryFeeRefund([{ _id: 'a', customer_fee_refundable: 300 }], [{ status: 'manual_required', amount: 300 }])) === '{"owed":300,"returned":0}'
+    && JSON.stringify(toCustomerDeliveryFeeRefund([{ _id: 'a', customer_fee_refundable: 300 }], [{ status: 'completed', amount: 300 }])) === '{"owed":0,"returned":300}');
+
+  assert('settle body: .strict(), method from the closed set — and NO settledBy/actor field (who comes from the headers)', () =>
+    SettleDeliveryFeeRefundSchema.safeParse({ method: 'mobile_money', reference: 'MP123', note: 'sent' }).success
+    && !SettleDeliveryFeeRefundSchema.safeParse({ method: 'paypal' }).success
+    && !SettleDeliveryFeeRefundSchema.safeParse({ method: 'cash', settledBy: '64b000000000000000000001' }).success
+    && !SettleDeliveryFeeRefundSchema.safeParse({}).success);
+  assert('list query: status defaults to manual_required; settled / all accepted; unknown keys refused', () => {
+    const d = ListManualDeliveryFeeRefundsQuerySchema.safeParse({});
+    return d.success && d.data.status === 'manual_required' && d.data.page === 1 && d.data.limit === 20
+      && ListManualDeliveryFeeRefundsQuerySchema.safeParse({ status: 'settled', orderId: '64b000000000000000000001' }).success
+      && !ListManualDeliveryFeeRefundsQuerySchema.safeParse({ status: 'completed' }).success
+      && !ListManualDeliveryFeeRefundsQuerySchema.safeParse({ foo: 1 }).success;
+  });
+
+  const adminSvc = src('src/modules/delivery-fee-proposals/services/delivery-fee-refund-admin.service.ts');
+  const settleFn = adminSvc.slice(adminSvc.indexOf('async settle('), adminSvc.indexOf('private async closeTicketBestEffort('));
+  assert('⛔ the settle write is a compare-and-set on status manual_required AND the amount read', () =>
+    settleFn.includes("{ _id: row._id, status: 'manual_required', amount: row.amount }") && settleFn.includes("status: 'completed'"));
+  assert('the settle runs in runInTransaction (NOT the retrying variant — the admin audit row is inside)', () =>
+    settleFn.includes('transactionManager.runInTransaction(') && !settleFn.includes('runInTransactionWithRetry')
+    && settleFn.indexOf('auditLogger.log(') > settleFn.indexOf('transactionManager.runInTransaction(')
+    && settleFn.indexOf('auditLogger.log(') < settleFn.indexOf('return { settled, remainder };'));
+  assert('a partial cover creates its remainder row IN the transaction, array form (session honoured)', () =>
+    /DeliveryFeeRefundModel\.create\(\s*\[/.test(settleFn) && settleFn.includes('{ session }'));
+  assert('the ticket and the customer are told only AFTER the commit; a cover sends no "refund sent"', () => {
+    const commitEnd = settleFn.indexOf('return { settled, remainder };');
+    return settleFn.indexOf('this.closeTicketBestEffort(') > commitEnd
+      && settleFn.indexOf('customerFeeNotifier.refundSettled(') > commitEnd
+      && settleFn.includes('if (plan.paidByHand)');
+  });
+  assert('the stillReturnable ceiling is the refund service’s (one definition) and COD has none', () =>
+    settleFn.includes('this.refunds.refundableCapacity(order)') && settleFn.includes("order.payment_method === 'cash_on_delivery' ? null"));
+  assert('a partial cover only NOTES the ticket; a full settle resolves it', () => {
+    const t = adminSvc.slice(adminSvc.indexOf('private async closeTicketBestEffort('));
+    return t.includes('if (remainderOwed > 0) return;') && t.includes('TicketStatus.RESOLVED') && t.includes('createSystemNote(');
+  });
+  assert('a ticket already resolved or CLOSED by hand is left where it is (the ticket service allows any transition)', () => {
+    const t = adminSvc.slice(adminSvc.indexOf('private async closeTicketBestEffort('));
+    return t.includes('current.status === TicketStatus.CLOSED')
+      && t.indexOf('current.status === TicketStatus.CLOSED') < t.indexOf('ticketService.updateStatus(');
+  });
+  assert('the actor is stamped from the caller (actorFromRequest), never from the body', () => {
+    const routes = src('src/modules/delivery-fee-proposals/admin-delivery-fee-refund.routes.ts');
+    return routes.includes('actorFromRequest(req)') && !/req\.body\.(settledBy|actor)/.test(routes)
+      && !routes.includes("headers['x-actor-tier']") && !/x-actor-tier/i.test(routes);
+  });
+  assert('mounted ONLY on the internal admin router, behind requireAdminCaller', () =>
+    src('src/api/routes/internal-admin.routes.ts').includes("router.use('/delivery-fee-refunds', buildAdminDeliveryFeeRefundRouter([requireAdminCaller]));")
+    && !src('src/api/index.ts').includes('buildAdminDeliveryFeeRefundRouter'));
+  assert('routes: GET /, GET /:refundId, POST /:refundId/settle', () => {
+    const r = src('src/modules/delivery-fee-proposals/admin-delivery-fee-refund.routes.ts');
+    return r.includes("router.get('/', Controller.list)") && r.includes("router.get('/:refundId', Controller.getById)")
+      && r.includes("router.post('/:refundId/settle', Controller.settle)");
+  });
+  assert('⛔ money paid by hand is subtracted from EVERY order refund ceiling (orchestrator + delivery refund capacity)', () => {
+    const orchSrc = src('src/modules/payments/services/payment-orchestrator.service.ts');
+    const ceiling = orchSrc.slice(orchSrc.indexOf('private async sourceCeiling('), orchSrc.indexOf('private async refundableCeilingFor('));
+    const cap = refundSvc.slice(refundSvc.indexOf('async refundableCapacity('), refundSvc.indexOf('private async claim('));
+    return ceiling.includes('sumDeliveryRefundsPaidByHand(') && cap.includes('sumDeliveryRefundsPaidByHand(');
+  });
+  assert('…and only PAYING settlements count (a cover moved no money)', () => {
+    const model = src('src/modules/delivery-fee-proposals/models/delivery-fee-refund.model.ts');
+    return model.includes("'settlement.method': { $in: [...MANUAL_REFUND_PAYMENT_METHODS] }") && model.includes("status: 'completed'");
+  });
+  assert('the customer read reports the CUSTOMER position (owed / returned / awaitingManual)', () => {
+    const svc = src('src/modules/delivery-fee-proposals/services/delivery-fee-proposal.service.ts');
+    return svc.includes('owed: refundState.position.owed') && svc.includes('awaitingManual: refundState.position.awaitingManual');
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  section('16. W-E2 — the change of agency is ONE transaction (D-12) → its own suite');
+  // The boundary, the session threading, the concurrency guard and the post-commit effects are
+  // pinned by `npm run test:change-agency-tx` (DB-free) and `npm run verify:change-agency-tx`
+  // (replica set: the rollback and the race). Kept apart so two workstreams' suites do not
+  // collide in one file.
+  assert('the change-of-agency suites are registered', () => {
+    const pkg = JSON.parse(raw('package.json'));
+    return typeof pkg.scripts['test:change-agency-tx'] === 'string' && typeof pkg.scripts['verify:change-agency-tx'] === 'string';
+  });
 
   console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed\n`);
   process.exit(failed > 0 ? 1 : 0);

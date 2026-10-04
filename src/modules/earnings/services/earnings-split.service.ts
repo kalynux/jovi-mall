@@ -22,7 +22,7 @@ import {
   AgentContractRepository,
   agentContractRepository,
 } from '../../agents/repositories/agent-contract.repository';
-import { ICashCollection } from '../../cod/models/cash-collection.model';
+import { collectionKindOf, ICashCollection } from '../../cod/models/cash-collection.model';
 import {
   EarningsQuoteService,
   earningsQuoteService,
@@ -41,6 +41,7 @@ import {
   customerDeliveryFeeOf,
   deliveryFeeShares,
   orderItemsGrossOf,
+  paysDeliveryFeeInCash,
   rtoLeftoverShares,
 } from '../../orders/domain/delivery-payer';
 
@@ -398,6 +399,11 @@ export class EarningsSplitService {
    * `vendorNet` negative. `computeShipmentAiMargin` is the join.
    */
   async splitCodCollection(order: IOrder, collection: ICashCollection): Promise<void> {
+    // A fee-only collection (an ONLINE order whose customer paid the delivery fee to the rider,
+    // W-F) carries no goods: it pays the agency side only. Every caller of this method (collect,
+    // auto-collect, the recovery sweep) reaches it through here.
+    if (collectionKindOf(collection) === 'delivery_fee') return this.splitDeliveryFeeCollection(order, collection);
+
     const sourceId = collection._id.toString();
     if (await this.allocationRepo.existsForSource('cod_collection', sourceId)) return; // idempotent
 
@@ -542,6 +548,101 @@ export class EarningsSplitService {
   }
 
   /**
+   * Split ONE fee-only cash collection (ADR-A11 § Cash for delivery, W-F): the customer paid the
+   * goods ONLINE and handed the rider the delivery fee in cash.
+   *
+   * ── The accounting ───────────────────────────────────────────────────────────
+   *
+   * The cash is the AGENCY SIDE's (D-3) and travels the existing cash chain exactly like the
+   * delivery-fee part of a customer-paid COD collection: agent → agency (`AgentDeposit`) →
+   * platform (`AgencyRemittance` FIFO, which stamps `cash_settled_at` on these rows) → the
+   * agency and the agent are paid by the platform, once, from these rows. So:
+   *
+   *  - rows: `agency` = fee − agentCut, `agent` = agentCut — NOTHING for the vendor, the
+   *    platform or `platform_ai` (no commission on delivery, D-3; the goods were split by
+   *    `splitOrder` at payment);
+   *  - `requires_cash_settlement: true` on both — the platform never releases money it has not
+   *    physically received;
+   *  - `splitShipmentDelivery` writes NOTHING for a delivered cash-fee shipment, so the agency is
+   *    paid exactly once (here), never also "from the platform at delivery";
+   *  - `gross_snapshot` = the agency's fee, `commission_percent_snapshot` = 0 (like the
+   *    prepaid shipment rows).
+   *
+   * The fee divided is the agency's fee (override → snapshot), not the cash: normally equal. A
+   * vendor-borne remainder (fee > cash, only after a change-agency difference the vendor covered,
+   * D-10) was already deducted from the vendor's net at `splitOrder` and sits with the platform,
+   * so the rows still sum to the fee. Cash ABOVE the fee (not reachable in the normal flow — a
+   * decrease re-prices the pending collection) is recorded as `customer_fee_refundable`.
+   */
+  async splitDeliveryFeeCollection(order: IOrder, collection: ICashCollection): Promise<void> {
+    const sourceId = collection._id.toString();
+    if (await this.allocationRepo.existsForSource('cod_collection', sourceId)) return; // idempotent
+
+    const vendorId = order.vendor_id.toString();
+    const currency = collection.currency;
+    const agencyId = collection.agency_id.toString();
+    const { deliveryFeeAmount: cash } = collectionBreakdownOf(collection);
+
+    const [shipment, agency] = await Promise.all([
+      this.shipmentRepo.findById(collection.shipment_id.toString()),
+      this.agencyRepo.findById(agencyId),
+    ]);
+    if (!shipment) {
+      throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404, undefined, {
+        shipmentId: collection.shipment_id.toString(),
+      });
+    }
+
+    const orderItemsById = new Map(order.items.map((i) => [(i._id as any).toString(), i]));
+    const deliveryFee = this.computeShipmentDeliveryFee(
+      shipment,
+      agency?.policies ?? null,
+      orderItemsById,
+      order._id.toString(),
+      order.delivery_address?.components?.region ?? null
+    );
+    const shares = deliveryFeeShares(deliveryFee, cash);
+    if (shares.customerExcess > 0) {
+      await this.shipmentRepo.setCustomerFeeRefundable(
+        new Map([[(shipment._id as any).toString(), shares.customerExcess]])
+      );
+    }
+
+    const agentId = collection.agent_id.toString();
+    const agentCut = await this.computeAgentCut(agentId, agencyId, deliveryFee);
+
+    const orderCompletedAt = order.completion?.confirmed_at ?? null;
+    const defaults = {
+      source_type: 'cod_collection' as const,
+      source_id: sourceId,
+      gross_snapshot: deliveryFee,
+      commission_percent_snapshot: 0,
+      currency,
+      requires_cash_settlement: true,
+      ...(orderCompletedAt
+        ? {
+            completed_at: orderCompletedAt,
+            hold_release_at: daysFromNow(EARNINGS_CONFIG.HOLD_DAYS, orderCompletedAt),
+          }
+        : {}),
+    };
+
+    await this.persist([
+      // No COD handling fee: the goods were not cash (D-5 — the fee is on the product price).
+      { ...defaults, beneficiary_type: 'agency', beneficiary_id: agencyId, amount: computeAgencyCut(deliveryFee, agentCut) },
+      { ...defaults, beneficiary_type: 'agent', beneficiary_id: agentId, amount: agentCut },
+    ]);
+
+    await this.emitSplit('cod_collection', sourceId, vendorId, {
+      deliveryFee,
+      customerDeliveryCash: cash,
+      vendorBorneDelivery: shares.vendorBorne,
+      agentCut,
+      agencyNet: deliveryFee - agentCut,
+    });
+  }
+
+  /**
    * The AI margin owed on ONE shipment's slice of an order.
    *
    * Joins each `IShipmentItem` back to its order item — the same join
@@ -609,6 +710,47 @@ export class EarningsSplitService {
 
     const sourceId = (shipment._id as any).toString();
     if (await this.allocationRepo.existsForSource('shipment', sourceId)) return; // idempotent
+
+    // ── The delivery fee was paid to the rider in CASH (W-F) ──────────────────────
+    // Delivered: the agency and agent are paid from the fee-only collection
+    // (`splitDeliveryFeeCollection`) — splitting here too would pay the agency twice.
+    // Returned: no cash was collected (the collection is cancelled) and, like a COD return, the
+    // run earns nothing; the only money the platform holds for it is a vendor-borne remainder
+    // (`splitOrder` deducted it from the vendor's net), which goes back to the vendor.
+    if (paysDeliveryFeeInCash(order, shipment)) {
+      if (outcome !== 'returned') return;
+      const agency = await this.agencyRepo.findById(shipment.agency_id.toString());
+      const orderItemsById = new Map(order.items.map((i) => [(i._id as any).toString(), i]));
+      const reservedFee = shipment.delivery_fee_snapshot ?? this.computeShipmentDeliveryFee(
+        shipment,
+        agency?.policies ?? null,
+        orderItemsById,
+        order._id.toString(),
+        order.delivery_address?.components?.region ?? null
+      );
+      const vendorBorne = deliveryFeeShares(reservedFee, customerDeliveryFeeOf(order, shipment)).vendorBorne;
+      const orderCompletedAtCash = order.completion?.confirmed_at ?? null;
+      await this.persist([
+        {
+          source_type: 'shipment',
+          source_id: sourceId,
+          gross_snapshot: reservedFee,
+          commission_percent_snapshot: 0,
+          currency: order.currency,
+          requires_cash_settlement: false,
+          beneficiary_type: 'vendor',
+          beneficiary_id: order.vendor_id.toString(),
+          amount: vendorBorne,
+          ...(orderCompletedAtCash
+            ? {
+                completed_at: orderCompletedAtCash,
+                hold_release_at: daysFromNow(EARNINGS_CONFIG.HOLD_DAYS, orderCompletedAtCash),
+              }
+            : {}),
+        },
+      ]);
+      return;
+    }
 
     const orderId = order._id.toString();
     const vendorId = order.vendor_id.toString();

@@ -98,6 +98,7 @@ async function dispatch(params: {
     | 'order.delivery_fee.lowered'
     | 'order.delivery_fee.updated'
     | 'order.delivery_fee.refund_pending'
+    | 'order.delivery_fee.refund_settled'
     | 'order.delivery_fee.topup_failed'
     | 'order.combined_delivery.answered';
   order: OrderLike;
@@ -158,7 +159,7 @@ export const customerFeeNotifier = {
   },
 
   /** A decrease applied directly (proposal, change-agency or combined answer). */
-  lowered(order: OrderLike & { payment_method: string }, p: { proposalId: string; feeBefore: number; feeAfter: number; customerSaving: number }): void {
+  lowered(order: OrderLike & { payment_method: string; delivery_fee_payment?: string | null }, p: { proposalId: string; feeBefore: number; feeAfter: number; customerSaving: number }): void {
     void dispatch({
       situation: 'order.delivery_fee.lowered',
       order,
@@ -169,7 +170,11 @@ export const customerFeeNotifier = {
         moneyLine:
           p.customerSaving <= 0
             ? ''
-            : customerFeeLine(order.payment_method === 'cash_on_delivery' ? 'cod_less' : 'online_refund', lang, {
+            : customerFeeLine(
+                // Cash for delivery (W-F) is cash at the door too: less to hand the rider, no refund.
+                order.payment_method === 'cash_on_delivery' || order.delivery_fee_payment === 'cash_to_rider' ? 'cod_less' : 'online_refund',
+                lang,
+                {
                 amount: `${order.currency} ${fmt(p.customerSaving)}`,
               }),
       }),
@@ -196,6 +201,19 @@ export const customerFeeNotifier = {
   refundPending(order: OrderLike, amount: number, refundRowId: string): void {
     void dispatch({
       situation: 'order.delivery_fee.refund_pending',
+      order,
+      key: refundRowId,
+      context: () => ({ amountFormatted: fmt(amount) }),
+    });
+  },
+
+  /**
+   * An administrator recorded that delivery money owed back was paid BY HAND (W-E2) — the
+   * confirmation `refundPending` promised. Keyed on the settled ledger row.
+   */
+  refundSettled(order: OrderLike, amount: number, refundRowId: string): void {
+    void dispatch({
+      situation: 'order.delivery_fee.refund_settled',
       order,
       key: refundRowId,
       context: () => ({ amountFormatted: fmt(amount) }),

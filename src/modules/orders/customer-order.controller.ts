@@ -81,6 +81,10 @@ const CustomerOrderListQuerySchema = z.object({
 const CheckoutSchema = z
   .object({
     paymentMethod: z.enum(['online', 'cash_on_delivery']).optional().default('online'),
+    // Cash for delivery (ADR-A11 § Cash for delivery, W-F): pay the goods online and a
+    // customer-paid delivery fee to the rider in cash. Only with `online`; refused (422
+    // DELIVERY_FEE_CASH_NOT_AVAILABLE) where a carrying agency does not accept it.
+    deliveryFeePayment: z.enum(['with_order', 'cash_to_rider']).optional().default('with_order'),
     // Drop-off address for a physical checkout. Provide EITHER the id of one of
     // the customer's saved addresses OR a selected geocoding result inline. Both
     // optional (back-compat): when neither is given the order falls back to the
@@ -117,12 +121,17 @@ export class CustomerOrderController {
    */
   static checkout = asyncHandler(async (req: Request, res: Response) => {
     const customerId = req.auth!.role_entity._id.toString();
-    const { paymentMethod, deliveryAddressId, deliveryAddress } = CheckoutSchema.parse(req.body ?? {});
+    const { paymentMethod, deliveryAddressId, deliveryAddress, deliveryFeePayment } = CheckoutSchema.parse(req.body ?? {});
 
-    const { cartId, orders } = await orderService.createOrdersFromCart(customerId, paymentMethod, {
-      addressId: deliveryAddressId ?? null,
-      address: deliveryAddress ?? null,
-    });
+    const { cartId, orders } = await orderService.createOrdersFromCart(
+      customerId,
+      paymentMethod,
+      {
+        addressId: deliveryAddressId ?? null,
+        address: deliveryAddress ?? null,
+      },
+      { deliveryFeePayment }
+    );
 
     res.status(201).json({
       success: true,
@@ -137,6 +146,10 @@ export class CustomerOrderController {
           total: order.total_amount,
           currency: order.currency,
           paymentMethod: order.payment_method,
+          // W-F: `cash_to_rider` ⇒ `total` is what is charged online (the items) and
+          // `deliveryCashToRider` is handed to the riders.
+          deliveryFeePayment: order.delivery_fee_payment ?? 'with_order',
+          deliveryCashToRider: order.price_breakdown?.delivery_cash ?? 0,
           paymentStatus: order.payment_status,
           fulfillmentStatus: order.fulfillment_status,
           itemCount: order.items.length,

@@ -1,4 +1,4 @@
-import { Types } from 'mongoose';
+import { ClientSession, Types } from 'mongoose';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { logger } from '../../../core/logging';
@@ -27,7 +27,7 @@ import {
   sumCodExposure,
   vendorCodTermsOf,
 } from '../domain/cod-limits';
-import { customerDeliveryFeeOf } from '../../orders/domain/delivery-payer';
+import { cashCollectionKindOf, customerDeliveryFeeOf } from '../../orders/domain/delivery-payer';
 
 /** Every row behind one agency's exposure — gathered once, summed as often as needed. */
 export interface AgencyExposureRows {
@@ -131,7 +131,7 @@ export class CodLimitsService {
       ).lean().exec(),
       CashCollectionModel.find(
         { agency_id: agencyOid, status: 'collected', $expr: { $lt: ['$settled_amount', '$expected_amount'] } },
-        { vendor_id: 1, expected_amount: 1, settled_amount: 1 }
+        { vendor_id: 1, expected_amount: 1, settled_amount: 1, kind: 1 }
       ).lean().exec(),
     ]);
 
@@ -140,15 +140,22 @@ export class CodLimitsService {
       vendorId: String(c.vendor_id),
       expectedAmount: c.expected_amount ?? 0,
       settledAmount: c.settled_amount ?? 0,
+      // A fee-only collection (W-F) is the agency side's cash: in the agency's exposure, never in
+      // a vendor's COD terms cap.
+      agencyOnly: c.kind === 'delivery_fee',
     }));
 
     if (shipments.length === 0) return { shipments: [], collections };
 
     const orderIds = [...new Set(shipments.map((s: any) => String(s.order_id)))];
     const [orders, shipmentCollections] = await Promise.all([
+      // COD orders, and online orders whose delivery fee the rider collects in cash (W-F).
       OrderModel.find(
-        { _id: { $in: orderIds.map((id) => new Types.ObjectId(id)) }, payment_method: 'cash_on_delivery' },
-        { vendor_id: 1, items: 1, delivery_payer: 1 }
+        {
+          _id: { $in: orderIds.map((id) => new Types.ObjectId(id)) },
+          $or: [{ payment_method: 'cash_on_delivery' }, { delivery_fee_payment: 'cash_to_rider' }],
+        },
+        { vendor_id: 1, items: 1, delivery_payer: 1, payment_method: 1, delivery_fee_payment: 1 }
       ).lean().exec(),
       CashCollectionModel.find(
         { shipment_id: { $in: shipments.map((s: any) => s._id) } },
@@ -162,6 +169,8 @@ export class CodLimitsService {
     for (const s of shipments as any[]) {
       const order = orderById.get(String(s.order_id));
       if (!order) continue; // prepaid — no cash
+      const kind = cashCollectionKindOf(order, s);
+      if (kind === null) continue; // a vendor-paid shipment of a cash-fee order — no cash
       const collection = collectionByShipment.get(String(s._id));
       rows.push({
         shipmentId: String(s._id),
@@ -169,8 +178,11 @@ export class CodLimitsService {
         amount:
           collection && collection.status === 'pending'
             ? collection.expected_amount ?? 0
-            : expectedCodAmount(order.items ?? [], s.items ?? [], customerDeliveryFeeOf(order, s)),
+            : kind === 'order'
+              ? expectedCodAmount(order.items ?? [], s.items ?? [], customerDeliveryFeeOf(order, s))
+              : customerDeliveryFeeOf(order, s),
         collectionStatus: collection?.status ?? null,
+        agencyOnly: kind === 'delivery_fee',
       });
     }
     return { shipments: rows, collections };
@@ -305,7 +317,12 @@ export class CodLimitsService {
   }
 
   /** Record a forced hand-off (and clear any hold). */
-  async markForced(shipmentId: string, breach: CodLimitBreach, actor: { userId: string | null; role: string }): Promise<void> {
+  async markForced(
+    shipmentId: string,
+    breach: CodLimitBreach,
+    actor: { userId: string | null; role: string },
+    session?: ClientSession
+  ): Promise<void> {
     await ShipmentModel.updateOne(
       { _id: new Types.ObjectId(shipmentId) },
       {
@@ -321,7 +338,8 @@ export class CodLimitsService {
             limit: breach.limit,
           },
         },
-      }
+      },
+      { session: session ?? undefined }
     ).exec();
   }
 

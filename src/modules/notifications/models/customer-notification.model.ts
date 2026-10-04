@@ -143,6 +143,7 @@ export type CustomerNotificationType =
     | 'order.delivery_fee.updated'
     /** Delivery money owed back must be returned by hand (mobile money, cash). */
     | 'order.delivery_fee.refund_pending'
+    | 'order.delivery_fee.refund_settled'
     /** The top-up payment did not go through. */
     | 'order.delivery_fee.topup_failed'
     /** The delivery company answered a combined-price request. */
@@ -238,6 +239,7 @@ export const CUSTOMER_NOTIFICATION_TYPES: readonly CustomerNotificationType[] = 
     'order.delivery_fee.lowered',
     'order.delivery_fee.updated',
     'order.delivery_fee.refund_pending',
+    'order.delivery_fee.refund_settled',
     'order.delivery_fee.topup_failed',
     'order.combined_delivery.answered',
     'ticket.replied',

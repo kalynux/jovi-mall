@@ -283,6 +283,34 @@ export const CONNECTION_CODE_POLICY: RateLimitPolicy = Object.freeze({
     }),
 });
 
+/**
+ * Layer C — the AI listing-copy bucket, attached to `POST /api/vendor/ai/listing-copy` alone.
+ *
+ * Unlike every ceiling above, this one is a BUDGET rather than a backstop: each call spends
+ * real model money and up to five of the vendor's credits, and the button makes it easy to
+ * click "Regenerate" in a loop. 20 per 10 minutes (owner decision, 2026-10-04) is ~100
+ * credits at most — it stops a mistake, not a vendor writing a catalogue.
+ *
+ * IDENTITY-scoped, because the question is "how much is this vendor spending", and a shop's
+ * staff behind one office address must not share a counter. The route is vendor-only, so the
+ * other classes never reach it; they carry the same number only because every class needs an
+ * entry. `internal_service` is not exempt — nothing internal writes listing copy.
+ */
+export const AI_COPY_POLICY: RateLimitPolicy = Object.freeze({
+    key: 'ai_copy',
+    windowSeconds: 600,
+    scope: 'identity',
+    limits: Object.freeze({
+        internal_service: envInt('RATE_LIMIT_AI_COPY_PER_10MIN', 20),
+        admin: envInt('RATE_LIMIT_AI_COPY_PER_10MIN', 20),
+        vendor: envInt('RATE_LIMIT_AI_COPY_PER_10MIN', 20),
+        agency: envInt('RATE_LIMIT_AI_COPY_PER_10MIN', 20),
+        agent: envInt('RATE_LIMIT_AI_COPY_PER_10MIN', 20),
+        customer: envInt('RATE_LIMIT_AI_COPY_PER_10MIN', 20),
+        anonymous: envInt('RATE_LIMIT_AI_COPY_PER_10MIN', 20),
+    }),
+});
+
 /** Every policy, for the tests and for the operations surface. */
 export const POLICIES: readonly RateLimitPolicy[] = Object.freeze([
     GLOBAL_POLICY,
@@ -291,6 +319,7 @@ export const POLICIES: readonly RateLimitPolicy[] = Object.freeze([
     AUTH_SESSION_POLICY,
     PUBLIC_POLICY,
     CONNECTION_CODE_POLICY,
+    AI_COPY_POLICY,
 ]);
 
 /**

@@ -110,6 +110,73 @@ export interface VendorOrderPricing {
    * back), the sanity check when the customer pays. `null` = not evaluated (no commission).
    */
   deliveryMinimum: DeliveryCostUnitsVerdict | null;
+  /** Whether this vendor order's delivery fee may be paid to the rider in cash (W-F, D-7). */
+  deliveryFeeCash: DeliveryFeeCashVerdict;
+}
+
+/**
+ * Why a vendor order's delivery fee cannot be paid in cash to the rider (ADR-A11 § Cash for
+ * delivery). Checkout's `422 DELIVERY_FEE_CASH_NOT_AVAILABLE` carries the same values in
+ * `details.reason`.
+ *  - `cash_on_delivery`      — the whole order is already paid in cash at the door;
+ *  - `not_customer_paid`     — the shop pays this delivery (nothing for the customer to pay);
+ *  - `no_delivery_fee`       — the fee is 0;
+ *  - `agency_declines_cash`  — a carrying agency has not enabled `accepts_cash_delivery_fee`.
+ */
+export const DELIVERY_FEE_CASH_UNAVAILABLE_REASONS = [
+  'cash_on_delivery',
+  'not_customer_paid',
+  'no_delivery_fee',
+  'agency_declines_cash',
+] as const;
+export type DeliveryFeeCashUnavailableReason = (typeof DELIVERY_FEE_CASH_UNAVAILABLE_REASONS)[number];
+
+export interface DeliveryFeeCashVerdict {
+  available: boolean;
+  reason: DeliveryFeeCashUnavailableReason | null;
+  /** The agencies that refuse cash (only with `agency_declines_cash`). */
+  decliningAgencyIds: string[];
+  /** If chosen: what is charged online for this vendor order (the items). Else its total. */
+  amountDueOnline: number;
+  /** If chosen: the cash handed to the riders (Σ shipment fees). 0 when not available. */
+  amountDueToRider: number;
+}
+
+/**
+ * May this vendor order's customer-paid delivery fee be paid in cash to the rider? Every
+ * carrying agency must accept it (`policies.pricing.accepts_cash_delivery_fee === true`; an
+ * agency with no pricing policy does not). Pure — the quote and checkout both reach it through
+ * `priceVendorOrder`, so the offer and the refusal cannot disagree.
+ */
+export function deliveryFeeCashVerdict(input: {
+  paymentMethod: 'online' | 'cash_on_delivery';
+  payer: DeliveryPayer;
+  itemsSubtotal: number;
+  deliveryCharged: number;
+  shipments: Array<{ agencyId: string }>;
+  policiesByAgency: Map<string, IAgencyPolicies | null>;
+}): DeliveryFeeCashVerdict {
+  const refuse = (reason: DeliveryFeeCashUnavailableReason, decliningAgencyIds: string[] = []): DeliveryFeeCashVerdict => ({
+    available: false,
+    reason,
+    decliningAgencyIds,
+    amountDueOnline: input.itemsSubtotal + input.deliveryCharged,
+    amountDueToRider: 0,
+  });
+  if (input.paymentMethod === 'cash_on_delivery') return refuse('cash_on_delivery');
+  if (input.payer !== 'customer') return refuse('not_customer_paid');
+  if (input.deliveryCharged <= 0 || input.shipments.length === 0) return refuse('no_delivery_fee');
+  const declining = [...new Set(input.shipments.map((s) => s.agencyId))].filter(
+    (id) => input.policiesByAgency.get(id)?.pricing?.accepts_cash_delivery_fee !== true,
+  );
+  if (declining.length > 0) return refuse('agency_declines_cash', declining);
+  return {
+    available: true,
+    reason: null,
+    decliningAgencyIds: [],
+    amountDueOnline: input.itemsSubtotal,
+    amountDueToRider: input.deliveryCharged,
+  };
 }
 
 /** Group the lines by agency (first-seen order) and price each group. */
@@ -203,5 +270,13 @@ export function priceVendorOrder(lines: PricingLine[], facts: VendorOrderPricing
     total: itemsSubtotal + deliveryCharged,
     capCheck,
     deliveryMinimum,
+    deliveryFeeCash: deliveryFeeCashVerdict({
+      paymentMethod: facts.paymentMethod,
+      payer,
+      itemsSubtotal,
+      deliveryCharged,
+      shipments,
+      policiesByAgency: facts.policiesByAgency,
+    }),
   };
 }

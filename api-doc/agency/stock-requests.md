@@ -1,6 +1,7 @@
 # Agency Stock Requests
 
 **Verified against source on 2026-09-08** — all 6 routes, the server-supplied `availableActions` verdict and the `403 STOCK_REQUEST_NOT_YOURS` authority rule, against `jovi-mall/src/modules/stock-requests/`.
+**Updated 2026-10-04** — every request now names what it changes (`product`, `vendor`, `location`, `stockLevelId`) and the list takes `search`. Additive; see [FRONTEND-CHANGELOG-agency-names-and-search.md](./FRONTEND-CHANGELOG-agency-names-and-search.md).
 
 Changing the recorded stock of a SKU you warehouse. Every change needs both
 signatures — yours and the vendor's.
@@ -126,6 +127,7 @@ will read. Drift is preserved instead of rejected — see `quantityBefore` vs
 | `productId` | ObjectId | — | |
 | `variantId` | ObjectId | — | One SKU's whole negotiation history |
 | `direction` | `awaiting_me` \| `raised_by_me` | — | See below |
+| `search` | string, 1–100, trimmed | — | Case-insensitive **substring** over the product title and the variant SKU. Regex-escaped — `.*` matches those two characters, not everything. Combines (AND) with every other filter. Only your own requests are searched |
 
 Unknown query parameters are rejected (`400 VALIDATION_ERROR`).
 
@@ -162,6 +164,24 @@ One request, with `currentQuantity` resolved live.
   "vendorId": "664b1f77bcf86cd799439021",
   "agencyId": "664a1f77bcf86cd799439051",
 
+  "product": {
+    "title": "Cotton T-Shirt",
+    "variantTitle": "Red / M",
+    "sku": "TSH-RED-M",
+    "image": {
+      "id": "664e1f77bcf86cd799439071",
+      "key": "images/2026/08/tshirt-red.webp",
+      "url": "https://cdn.wi-mall.com/images/2026/08/tshirt-red.webp",
+      "access": "public",
+      "mimeType": "image/webp",
+      "size": 48213,
+      "originalName": "tshirt-red.webp"
+    }
+  },
+  "vendor": { "id": "664b1f77bcf86cd799439021", "businessName": "Alpha Textiles", "verified": true },
+  "location": { "id": "664f1f77bcf86cd799439081", "label": "Main depot", "city": "Douala", "isPrimary": true },
+  "stockLevelId": "66501f77bcf86cd799439091",
+
   "requestedByRole": "vendor",
   "requestedAt": "2026-08-06T09:12:00.000Z",
 
@@ -191,6 +211,28 @@ One request, with `currentQuantity` resolved live.
   "updatedAt": "2026-08-06T09:12:00.000Z"
 }
 ```
+
+### What the request is about (added 2026-10-04)
+
+Every response — list, detail, and the four verbs — carries these, so an inbox can say
+*which* SKU moves before anyone approves it. The id fields above are unchanged.
+
+| Field | Type | Notes |
+|---|---|---|
+| `product.title` | string \| null | The product's **current** title |
+| `product.variantTitle` | string \| null | The variant's name |
+| `product.sku` | string \| null | |
+| `product.image` | `FileDetail` \| null | The variant's first image, else the product's — the same rule as the inventory row's `image`. Render `image.url`; it is `null` when `access` is not `public` |
+| `vendor` | `{ id, businessName, verified }` | `businessName` is the store name, `null` when the vendor has no store. `verified` is the KYC badge, the same field the inventory rows use |
+| `location` | `{ id, label, city, isPrimary }` \| null | The depot the SKU's inventory row sits at. `null` when there is no row, or its depot was deleted |
+| `stockLevelId` | string \| null | Your inventory row for this SKU — deep-link to `GET /api/agency/inventory/:id`. A SKU transferred between depots has one row per depot; this is the row at a known depot, oldest first |
+
+**Resolved live, not snapshotted.** A product renamed after the request was raised shows
+its new name, on open and closed requests alike. A deleted product, variant or vendor
+reads as `null`s — the request itself still renders.
+
+The vendor's mirror (`/api/vendor/stock-requests`) carries the same fields, since both
+sides share one response shape.
 
 ### The three quantities, and why there are three
 

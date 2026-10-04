@@ -1,8 +1,8 @@
 # ADR-A11 — Customer-paid delivery
 
 **Date:** 2026-10-03 (decisions D-1 … D-9) · 2026-10-04 (D-10, surfaces)
-**Status:** Accepted — decided by the product owner; built in waves W-A … W-E (W-F, cash-for-delivery,
-is the last wave and is NOT part of this record yet)
+**Status:** Accepted — decided by the product owner; built in waves W-A … W-F (W-F, cash for delivery,
+2026-10-04 — see § Cash for delivery)
 **Scope:** jovi-mall (+ a wi-admin statements check, W-G). **No geo-tracker contract change**: no outbox
 event shape, webhook body or tracking verdict moved.
 **Supersedes:** BARGAINING-AGENT-PLAN D-7 ("delivery is already free to the customer"). **Amends:**
@@ -55,7 +55,7 @@ vendor's net inside `splitOrder`; `order.total_amount` was the items; the cart q
 | **D-4** | The size component is **weight** (variant / shipping-config grams, snapshotted per order item); an item with no weight counts as `DELIVERY_DEFAULT_ITEM_WEIGHT_GRAMS` (default 1 000 g) per unit. |
 | **D-5** | The **COD handling fee stays vendor-paid** and is computed on the **product price only** — never on a delivery fee the rider also collects. |
 | **D-6** | A vendor-paid (free-delivery) shop part that fails the ADR-A07 30% cap is **not refused**: it **falls back to customer-paid** (`delivery_payer_reason: 'cap_fallback'`), and the quote says "add X more from this shop for free delivery". |
-| **D-7** | Cash-for-delivery (goods online, delivery fee in cash to the rider) is built in this effort, **last wave** (W-F; `accepts_cash_delivery_fee` on agencies is stored now, honoured then). |
+| **D-7** | Cash-for-delivery (goods online, delivery fee in cash to the rider) is built in this effort, **last wave** (W-F, 2026-10-04; `accepts_cash_delivery_fee` on agencies is honoured — see § Cash for delivery). |
 | **D-8** | Fees are **posted prices at checkout**, never negotiated before payment. Changes happen AFTER checkout through the existing fee-proposal flow; on a customer-paid shipment the **customer** approves an increase and a decrease applies directly. A customer may request a combined price from an agency carrying ≥ 2 of their shipments. (W-E — see § Fee changes after checkout.) |
 | **D-9** | Agency `max_fee_per_shipment` caps the POSTED (formula) price only. A per-shipment proposal may exceed it; the payer approves. |
 | **D-10** | Change-agency on a customer-paid order: a WHOLE shipment moving keeps the customer's paid fee; the difference goes through the customer flow (higher → customer approval, reject ⇒ the vendor covers it; lower → refund the difference). A partial move becomes vendor-paid. (W-E.) |
@@ -247,10 +247,42 @@ A WHOLE customer-paid shipment moving (its last item): the destination takes ove
 and the customer's money unchanged (money-neutral; nothing left on the deleted row), then the new
 agency's formula price is compared: lower → a decrease applied directly; higher → a
 `change_agency` proposal the customer answers (approve → pays the delta; decline → **the vendor
-covers it**; the vendor may also `cover` at once). The move is refused up front
-(`DELIVERY_FEE_PROPOSAL_VENDOR_NET_NOT_POSITIVE`) when the vendor could not afford to cover.
+covers it**; the vendor may also `cover` at once). The move is refused
+(`DELIVERY_FEE_PROPOSAL_VENDOR_NET_NOT_POSITIVE`, nothing written) when the vendor could not afford to cover.
 PARTIAL moves stay vendor-paid (W-C). A change-agency row does not spend the agency's two-proposal
 cap; its window includes the destination's `pending`.
+
+**One transaction since W-E2 (owner decision D-12, 2026-10-04).** `VendorOrderService.moveItemsToAgency`
+(the vendor's `updateDeliveryAgency` is a one-item wrapper; the administrator's `move-agency` passes
+every item of the shipment) runs the whole change in ONE `runInTransactionWithRetry`, every read
+that decides a write inside the session, grouped PER SOURCE SHIPMENT: the order and the items
+re-read and pinned to where the pre-check saw them (else `409 SHIPMENT_REASSIGNMENT_CONFLICT`), the
+source's status re-checked, a WHOLE move of a shipment an agent has accepted refused
+(`409 SHIPMENT_ALREADY_HAS_AGENT`, the administrator's rule), the whole-move pre-pricing — **"whole"
+judged over the batch** (every item of the source in it), never item by item, which used to price the
+last item against a destination already holding a vendor-borne fee for the rest and turn an
+increase into an unapproved decrease — (`ORDER_NOT_PAID` for an online order not simply `paid`
+with a difference to settle), the merge/creation of the destination, the source's item removal and
+deletion, on a deleted source its pending proposal (`withdrawn`, `shipment_moved` — any payer), its
+live assignment offers (`cancelled`) and its ranking, the fee carry (A — `fee_components` is not
+carried: it itemises the old agency's formula and is display-only), the pending COD collections
+(`CashCollectionService.followItemMoveInSession`: cancelled with a deleted source, re-priced from
+items + customer fee otherwise, CAS; a `cancelled` one — an agency's decline — is history and does
+not block), the difference proposal (B, `raiseSystemProposalInSession` — pointer claim, and for a
+decrease the money it lands; for an increase the vendor-cover check `VENDOR_NET_NOT_POSITIVE` runs
+here, on the order as the move left it, so no sibling shipment is counted twice), the order items'
+repoint (a compare-and-set on the shipment each is leaving), the timeline rows; plus the forced-COD
+stamp. Side effects run only after the commit, once (a retried attempt's collection is discarded):
+`shipment.cod_limit_forced`, the proposal events and customer notification, a gateway refund of a
+lowered fee. **The ticket fallback is gone**: a failure anywhere rolls everything back and the
+caller sees the error. **Two concurrent moves of one item cannot both succeed**: both write the order
+and the source, MongoDB commits one and aborts the other with a write conflict, and the driver's
+retry re-reads the committed state and refuses (`409`). Pinned by `test:change-agency-tx`
+(DB-free) and `verify:change-agency-tx` (replica set: rollback after the first writes, the race, a
+transient retry with effects run once). The COD-limit gate stays a pre-check, evaluated once over the
+batch: the exposure it sums spans OTHER orders' documents this transaction does not write, so
+re-reading it inside the session would not close the race between two hand-offs to one agency (write
+skew) — the same position dispatch takes.
 
 ### Combined-price requests (D-8)
 
@@ -258,13 +290,176 @@ Customer → one agency, ≥ 2 eligible parcels of one checkout. The agency answ
 (each an ordinary decrease, `origin: 'combined_request'`) or declines. The request is claimed
 before any fee moves; if none lands the claim is released.
 
-### Known gaps (W-E)
+### Settling a manual refund (W-E2, D-12)
 
-- Manual refunds (`manual_required`) have no "mark paid" endpoint — settled from the ticket only.
-- An approved-but-unpaid online increase has no expiry; the agency withdraws or declines.
-- `completeWholeMove` runs after the non-transactional change-agency path; a failure opens a HIGH
-  ticket rather than rolling the move back.
+COD money owed back stays MANUAL (ticket + notice), and an administrator records the hand payment:
+`POST /api/internal/admin/delivery-fee-refunds/:refundId/settle { method, reference?, note? }`
+(list + read beside it; contract `api-doc/admin/delivery-fee-refunds.md`; wi-admin's button is W-G2).
+Only `manual_required` settles, by a CAS on status + amount, inside `runInTransaction` with the
+`admin_action_log` row; the row becomes `completed` with `settlement { method, reference, note,
+settled_by_* , settled_at }`; then the ticket is resolved and the customer gets
+`order.delivery_fee.refund_settled`. Methods `mobile_money | cash | bank | other` moved money;
+`covered_by_order_refund` records that a refund of the whole order already returned it (a paying
+method is refused then — `DELIVERY_FEE_REFUND_ALREADY_COVERED` — and a partial cover splits off the
+part still owed as a new manual row). Money paid by hand is subtracted from both refund ceilings
+(`PaymentOrchestratorService.sourceCeiling`, `DeliveryFeeRefundService.refundableCapacity`) via
+`sumDeliveryRefundsPaidByHand`.
+
+The CUSTOMER's owed amount is `customerRefundPosition` — Σ refundable − Σ `completed` — so a manual
+row stays owed to them until settled (`refunds.owed/returned/awaitingManual` on the fee-changes read;
+`deliveryFeeRefund { owed, returned }` on the order view). `outstandingCustomerRefund` keeps its own
+meaning: what the SYSTEM may still try to refund.
+
+### In the chat (W-H, 2026-10-04)
+
+The bot surface answers all of the above without a website: eight `/api/internal/bot/delivery-fees/*`
+routes (`api-doc/n8n/bot-surface.md` § 3 "Delivery-fee changes after checkout", taps in § 14.9).
+`delivery_fees_list_pending` DRAWS the question server-side — Accept · Decline (`yes:dfc:` /
+`no:dfc:<proposalId>:<version>`), or Pay now · Decline once an online increase is accepted
+(`dfee:pay:<proposalId>`, charging the account's wallet). **Accepting and paying are `flow_only`** —
+reached only by those buttons, never by the model — while declining (`delivery_fees_reject`) and the
+combined-price tools are model tools. What the customer pays more is W-E's own plan
+(`planCustomerApprovedIncrease` over `stateOf`) or the frozen `topup.amount`, never a subtraction in
+the chat. The three money notifications (`approval_needed` · `topup_due` · `topup_failed`) carry an
+order-scoped button `dfee:{{orderId}}` (template fallback `dfee:list`) that re-reads the current
+figure on the press. `combined_delivery_eligible` resolves the eligible groups with W-E's own
+predicate, so the model never names a parcel. Suite: `npm run test:bot-fee-changes`.
+
+### Known gaps
+
+- An approved-but-unpaid online increase has no expiry; the agency withdraws or declines (D-12: by design).
 - Merging into a destination that carries an approved override keeps the interim fee (not re-priced).
+- A deleted source's withdrawn proposal is not announced (`withdrawPendingInSession` emits nothing and
+  no `shipment_moved` copy exists in the agent catalog) — same as W-E.
+- Vendor/admin refund-eligibility READS do not subtract hand-paid delivery refunds; the orchestrator's
+  enforcement does (`REFUND_AMOUNT_EXCEEDS_MAX` rather than an over-refund).
+
+## § Cash for delivery (W-F, 2026-10-04)
+
+Owner decision D-7. Code: `orders/domain/delivery-payer.ts` (`DeliveryFeePayment`,
+`paysDeliveryFeeInCash`, `cashCollectionKindOf`, `cashToCollectOf`, `deliveryCashOf`),
+`orders/domain/vendor-order-pricing.ts` (`deliveryFeeCashVerdict` → `VendorOrderPricing.deliveryFeeCash`),
+`OrderService.createOrdersFromCart` / `buildVendorOrder`, `CartQuoteService` (`deliveryFeeCashTotalOf`),
+`CashCollectionService` (`collectsCash`, `cashAmountsOf`), `EarningsSplitService.splitDeliveryFeeCollection`,
+`customer-fee-change.rules.ts` (`PaymentMode 'cash_fee'`). Suite: `npm run test:cash-delivery-fee`.
+
+### Who may, and how it is chosen
+
+An ONLINE checkout may pass `deliveryFeePayment: 'cash_to_rider'`. It is decided **per vendor order**:
+
+| Vendor order | Result |
+|---|---|
+| customer-paid, fee > 0, EVERY carrying agency has `policies.pricing.accepts_cash_delivery_fee === true` | `delivery_fee_payment: cash_to_rider` |
+| customer-paid, an agency does not accept (or has no pricing policy) | the WHOLE checkout is refused: `422 DELIVERY_FEE_CASH_NOT_AVAILABLE` `{ reason: agency_declines_cash, vendorId, agencyIds }` |
+| vendor-paid, or a 0 fee | stays `with_order` — nothing to hand over |
+| no vendor order took it (every shop pays, or digital) | `422 … { reason: not_customer_paid \| no_delivery_fee }` |
+| `paymentMethod: cash_on_delivery` | `422 … { reason: cash_on_delivery }` (everything is cash already) |
+
+The quote exposes the same verdict (`perVendor[].deliveryFeeCash`, folded into a checkout-wide
+`deliveryFeeCash { available, reason, amountDueOnline, amountDueToRider, vendorIds }`), computed by the
+same pure `deliveryFeeCashVerdict` inside `priceVendorOrder`, so the offer and the refusal cannot disagree.
+A D-6 `cap_fallback` order is customer-paid and may pay in cash.
+
+### `total_amount` keeps one meaning: what is CHARGED ONLINE
+
+| Field | `cash_to_rider` vendor order |
+|---|---|
+| `price_breakdown.base` | items |
+| `price_breakdown.delivery` | **0** (nothing charged online for delivery) |
+| `price_breakdown.delivery_cash` (new) | Σ the shipments' fees — handed to the riders |
+| `price_breakdown.total` = `total_amount` | items |
+| `order.delivery_fee_payment` (new) | `cash_to_rider` (else `with_order`; read via `deliveryFeePaymentOf`) |
+| `shipment.customer_delivery_fee` | the fee (unchanged meaning: what the customer pays for that run — in cash here) |
+
+Chosen so that **no existing reader of `total_amount` changes**: the payment orchestrator charges
+Σ `total_amount` (the items), the refund ceilings (`sourceCeiling`, `refundableCapacity`) can never
+refund a fee that was paid in cash, lifetime spend counts the online money, the vendor's
+`orderItemsGrossOf` is `base`. COD eligibility does not apply (online). W-E's online top-up / refund
+machinery is never reached (see fee changes below).
+
+### The fee-only cash collection
+
+Created at agent ACCEPT exactly like a COD collection (`ensureForShipmentInSession`, pickup safety net
+too), with `kind: 'delivery_fee'`, `items_amount: 0`, `delivery_fee_amount` = `expected_amount` = the
+customer fee, a delivery code sent to the customer (the COD code message, amount = the fee). A shipment
+with no customer fee (a PARTIAL agency move's new shipment is vendor-borne) collects nothing — no
+collection is ever minted for 0.
+
+Every "does the rider collect cash here" gate reads `CashCollectionService.collectsCash(order, shipment)`
+(= `cashCollectionKindOf !== null`), never `payment_method` alone: status transitions (`delivered` only
+through the code; the collection ensured at pickup; cancelled on return; re-opened on redelivery), the
+customer's confirm-delivery (refused — the code IS the confirmation), the auto-confirm sweep (goes
+through `autoCollectWithoutCode`), offers / sessions / accept, the agent COD gate (KYC, trust,
+threshold) in ranking and contract policy, the agency/agent COD blocks (now with `kind`).
+
+### Exposure
+
+The fee is cash an agent carries: the agent's exposure (pending collections + cash held) counts it, the
+agency's limit counts it (`exposureRows` reads cash-fee orders too), a vendor's own COD terms cap does
+NOT (`agencyOnly` rows — the vendor's cap bounds the vendor's goods). The dispatch-time agency-limit
+HOLD (`evaluateCodHandoffs`) stays COD-only: a paid online order is never held on a cash limit.
+
+### The accounting — the agency side is paid exactly once
+
+The cash is the AGENCY SIDE's (D-3): agency + agent per the contract, never the vendor's or the
+platform's. It travels **the cash chain that already exists**, exactly like the delivery-fee part of a
+customer-paid COD collection since W-C:
+
+```
+collect (code / auto)   agent cash account += fee, agency→platform liability += fee,
+                        contract outstanding += fee                (creditCashLiabilitiesInSession)
+agent deposit           agent → agency (settles the agent's liability; unchanged flow)
+agency remittance       agency → platform, FIFO over its collections (fee-only ones included);
+                        a fully settled collection stamps cash_settled_at on its rows
+split (at collect)      splitDeliveryFeeCollection, source 'cod_collection':
+                          agency = fee − agentCut, agent = agentCut, requires_cash_settlement: true,
+                          gross_snapshot = fee, commission 0 — NO vendor / platform / platform_ai row
+release                 hold window after the ORDER completes AND cash settled → paid out once
+```
+
+- `splitShipmentDelivery` writes **nothing** for a delivered cash-fee shipment (it would pay the agency
+  from the platform a second time); for a RETURNED one (no cash collected, the collection cancelled) the
+  run earns nothing, like a COD return, and only a vendor-borne remainder (a change-agency difference the
+  vendor covered, already deducted from the vendor's net) goes back to the vendor.
+- `splitOrder` at payment: the vendor bears nothing (`customer_delivery_fee` covers the fee), so
+  Σ allocations of the order = `total_amount` = the online charge; the fee rows sum to the fee.
+- A refund of the order (`EarningsRefundService.onOrderRefund`) does NOT reverse the fee-only collection's
+  rows: the customer paid that fee in cash and a refund returns only the online charge.
+- The vendor is not sent `payment.received.*` for the riders' delivery cash.
+
+Why the platform round-trip rather than "the agency keeps it": the agent's cut is paid by the platform
+like every other beneficiary ("nobody is paid off-platform"), an earnings row exists for both parties'
+history, and the rolling reserve / remittance / deposit-deadline machinery needs no second model. The fee
+enters the remittance as **agency-side money in transit**, never as platform revenue (no platform row,
+no commission). The alternative — netting the agency's share out of the remittance — is recorded as an
+open owner question in the W-F report.
+
+### Fee changes after checkout (W-E) on a cash-fee shipment
+
+`CustomerFeeApplicationService.modeOf` returns `'cash_fee'`: the FEE behaves like COD, the VENDOR like
+online.
+
+| | collection (pending) | order | vendor allocation | top-up / refund |
+|---|---|---|---|---|
+| decrease | −Δ (cancelled if it reaches 0) | `delivery_cash` −Δ | +(V−V′) if the vendor bore part | none |
+| customer-approved increase | +Δ, applied at approval | `delivery_cash` +Δ | — | none |
+| vendor-covered increase | — | — | −(V′−V) (split at payment) | none |
+
+`total_amount` never moves on a cash-fee change. The bot reads the mode as `cod` ("you will pay X more /
+less in cash at delivery").
+
+### Surfaces
+
+Customer order DTO: `priceBreakdown.deliveryCash`, `deliveryFeePayment`, `amountDueToRider`,
+`deliveryFees[].paidInCash`, fee-only entries in `codCollections[]` (with the delivery code). Agency /
+agent shipment reads: the COD block with `kind: 'delivery_fee'`, `itemsAmount: 0`. Notifications: the
+out-for-delivery cash line "your items are paid — have X ready in cash for the delivery fee" (5
+languages). Bot: `yes:cof:<ref>:<addressId>` "Delivery in cash" beside Pay now on the chat
+confirmation, with the summary line naming both amounts; `checkout_place` / `checkout_create_orders`
+accept `deliveryFeePayment`; the chat door re-checks before spending the ref (`spent: false`); the Mini
+App `co.html` shows a toggle with the server's two strings. Contracts: `api-doc/customer/orders.md`,
+`cart.md`, the customer / agency / agent `FRONTEND-CHANGELOG-customer-paid-delivery.md`,
+`api-doc/n8n/bot-surface.md` (`yes:cof`).
 
 ---
 

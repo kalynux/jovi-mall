@@ -187,7 +187,7 @@ Vendors choose how many days **before** plan expiry they want to be warned (`not
   "created_at": "2026-06-19T11:00:00.000Z"
 }
 ```
-`type` ∈ `allowance | topup | debit | adjustment | refund`. `amount` is **signed** (positive credits, negative debits). `reason_code` ∈ `plan_allowance | topup_purchase | vectorisation | whatsapp_template | admin_adjustment`.
+`type` ∈ `allowance | topup | debit | adjustment | refund`. `amount` is **signed** (positive credits, negative debits). `reason_code` ∈ `plan_allowance | topup_purchase | vectorisation | whatsapp_template | ai_listing_copy | admin_adjustment`.
 
 ### `CreditTopup`
 ```json

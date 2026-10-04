@@ -4,6 +4,7 @@ import type { ChatDestinationBlocker } from '../miniapp/surfaces/checkout-destin
 import { paymentRetryActionId, paymentStatusActionId } from './bot-action-id';
 import {
     checkoutCashOnDeliveryActionId,
+    checkoutDeliveryFeeCashActionId,
     checkoutChooseAddressActionId,
     checkoutConfirmActionId,
     checkoutDeclineActionId,
@@ -70,7 +71,17 @@ export interface ChatReviewForReply {
     /** Default first, as the review sorts them. */
     addresses: readonly BotAddressDto[];
     /** `cashOnDelivery`: every pay-on-delivery rule passes — the confirmation then offers it. */
-    payment: { method: 'mobile_money'; phoneMasked: string | null; cashOnDelivery: boolean };
+    payment: {
+        method: 'mobile_money';
+        phoneMasked: string | null;
+        cashOnDelivery: boolean;
+        /**
+         * Cash for delivery (W-F, ADR-A11 § Cash for delivery): set when the items may be paid now
+         * and the delivery fee in cash to the rider — the confirmation then offers "Delivery in
+         * cash" beside Pay now. Server-formatted amounts. Optional only for older fixtures.
+         */
+        deliveryFeeCash?: { onlineText: string; toRiderText: string } | null;
+    };
     addAddressUrl: string | null;
     /** Shops below their delivery minimum. Non-empty exactly when `blocker` is `below_delivery_minimum`. */
     deliveryShortfalls: readonly ChatReviewShortfall[];
@@ -97,6 +108,8 @@ export interface ChatPlacementForReply {
     amountText: string | null;
     payerMasked: string;
     instructions: unknown;
+    /** W-F: the delivery cash for the riders, formatted — null/absent when paid with the order. */
+    deliveryCashText?: string | null;
 }
 
 /** Basket lines shown before the "+ N more" line. */
@@ -210,6 +223,11 @@ export function checkoutReviewReply(
      * still be offered a way to finish: Pay on delivery · Not now.
      */
     const cod = review.payment.cashOnDelivery && review.delivery?.kind === 'address';
+    /**
+     * ⭐ Cash for delivery (W-F) — the items by mobile money now, the delivery fee in cash to the
+     * rider. Needs a wallet (the items are still charged) and a physical destination.
+     */
+    const feeCash = review.delivery?.kind === 'address' && phone ? (review.payment.deliveryFeeCash ?? null) : null;
     if (!ref || !review.delivery || review.lines.length === 0) return null;
     if (!phone && !cod) return null;
 
@@ -252,8 +270,12 @@ export function checkoutReviewReply(
             ...total,
             `${botChrome('checkoutDeliverToLabel', language)} ${addressText(address)}`,
             ...wallet,
+            // W-F: what the "Delivery in cash" choice would charge now and leave for the rider.
+            ...(feeCash
+                ? [botChromeFill('checkoutDeliveryFeeCashLine', language, { online: feeCash.onlineText, toRider: feeCash.toRiderText })]
+                : []),
             '',
-            botChrome(cod ? 'checkoutHowToPayQuestion' : 'checkoutPlaceQuestion', language),
+            botChrome(cod || feeCash ? 'checkoutHowToPayQuestion' : 'checkoutPlaceQuestion', language),
         ];
         /**
          * ⭐ **Pay now FIRST, Pay on delivery beside it** (owner's choice), then Not now — three,
@@ -266,8 +288,13 @@ export function checkoutReviewReply(
                 ...(phone
                     ? [{
                         id: checkoutConfirmActionId(ref, address.id),
-                        label: botChrome(cod ? 'checkoutPayNowButton' : 'placeOrderButton', language),
+                        label: botChrome(cod || feeCash ? 'checkoutPayNowButton' : 'placeOrderButton', language),
                     }]
+                    : []),
+                // W-F: Pay now's twin — the items now, the delivery fee in cash (`yes:cof`). With
+                // pay on delivery as well that is four options, which the renderer draws as a list.
+                ...(feeCash
+                    ? [{ id: checkoutDeliveryFeeCashActionId(ref, address.id), label: botChrome('checkoutDeliveryFeeCashButton', language) }]
                     : []),
                 ...(cod
                     ? [{ id: checkoutCashOnDeliveryActionId(ref, address.id), label: botChrome('checkoutPayOnDeliveryButton', language) }]
@@ -381,7 +408,7 @@ export function checkoutDeclinedReply(language: string | null): BotReplyIntent {
  * `clientSecret`; a chat message is screenshotted and forwarded, and nothing but what the customer
  * must act on belongs in one.
  */
-function instructionLines(instructions: unknown): string[] {
+export function instructionLines(instructions: unknown): string[] {
     if (typeof instructions === 'string') {
         return instructions.trim() ? [clip(instructions, INSTRUCTION_CLIP)] : [];
     }
@@ -421,7 +448,11 @@ export function checkoutPlacedReply(
     placement: ChatPlacementForReply,
     language: string | null,
 ): BotReplyIntent | null {
-    const placed = `${botChrome('checkoutOrderPlacedLabel', language)} ${placement.orderNumbers.join(', ')}`;
+    const placedLine = `${botChrome('checkoutOrderPlacedLabel', language)} ${placement.orderNumbers.join(', ')}`;
+    // W-F: the delivery fee goes to the rider in cash — said once, under the order numbers.
+    const placed = placement.deliveryCashText
+        ? [placedLine, botChromeFill('checkoutDeliveryFeeCashPlaced', language, { toRider: placement.deliveryCashText })].join('\n')
+        : placedLine;
 
     if (placement.state === 'settled') {
         return { kind: 'text', text: [placed, '', botChrome('checkoutPaymentReceived', language)].join('\n') };

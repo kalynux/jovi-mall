@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { DELIVERY_FEE_PROPOSAL_STATUSES } from '../models/delivery-fee-proposal.model';
+import { MANUAL_REFUND_SETTLEMENT_METHODS } from '../domain/customer-fee-change.rules';
 
 const objectId = (label: string) => z.string().regex(/^[0-9a-fA-F]{24}$/, `Invalid ${label}`);
 
@@ -118,3 +119,37 @@ export const AgencyCombinedQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
+
+// ── Manual delivery-fee refunds, settled by an administrator (W-E2) ──────────
+// Internal admin surface only (`/api/internal/admin/delivery-fee-refunds`, behind
+// `requireAdminCaller`). Who settled comes from the caller's headers (`actorFromRequest`), never
+// from the body.
+
+/**
+ * `GET /delivery-fee-refunds` — the manual refunds only. `status`: `manual_required` (default —
+ * still owed, the queue) · `settled` (paid or covered by an administrator) · `all` (both).
+ */
+export const ListManualDeliveryFeeRefundsQuerySchema = z
+  .object({
+    status: z.enum(['manual_required', 'settled', 'all']).default('manual_required'),
+    orderId: objectId('order ID').optional(),
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+  })
+  .strict();
+export type ListManualDeliveryFeeRefundsQuery = z.infer<typeof ListManualDeliveryFeeRefundsQuerySchema>;
+
+export const DeliveryFeeRefundParamsSchema = z.object({ refundId: objectId('refund ID') });
+
+/**
+ * `POST /delivery-fee-refunds/:refundId/settle`. `.strict()`: this records that money left the
+ * platform, and a misspelt key must be a 400 rather than a silently dropped field.
+ */
+export const SettleDeliveryFeeRefundSchema = z
+  .object({
+    method: z.enum(MANUAL_REFUND_SETTLEMENT_METHODS),
+    reference: z.string().trim().min(1).max(200).nullish(),
+    note: z.string().trim().min(1).max(1000).nullish(),
+  })
+  .strict();
+export type SettleDeliveryFeeRefundDto = z.infer<typeof SettleDeliveryFeeRefundSchema>;

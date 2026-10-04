@@ -48,6 +48,7 @@ import {
   ProposalOrigin,
   checkCustomerProposalEdit,
   feeDirection,
+  feeIsCash,
   planCustomerApprovedIncrease,
   planDecrease,
   planVendorCoveredIncrease,
@@ -85,6 +86,19 @@ export interface SystemProposalInput {
   combinedRequestId?: Types.ObjectId | null;
   /** The agency user answering a combined request — recorded as the proposer. */
   agencyActor?: { agencyId: string; userId: string } | null;
+}
+
+/** What `createCustomerPaidProposal` takes (an agency proposal, or a platform-raised one). */
+interface CustomerPaidProposalArgs {
+  shipment: IShipment;
+  order: IOrder;
+  currentFee: number;
+  proposedFee: number;
+  reason: string;
+  proposer: { role: DeliveryFeeProposerRole; userId: string | null; agentId: string | null };
+  origin: ProposalOrigin;
+  combinedRequestId?: Types.ObjectId | null;
+  claimAgentId: string | null;
 }
 
 /**
@@ -246,7 +260,18 @@ export class DeliveryFeeProposalService {
       customerFee: number;
       pendingProposalId: string | null;
     }>;
-    refunds: { owed: number; entries: Array<{ amount: number; status: string; cause: string; createdAt: Date; settledAt: Date | null }> };
+    /**
+     * `owed` — delivery money owed back and NOT YET in the customer's hands (in flight, waiting
+     * to be paid by hand, or retried); it clears when a refund completes or an administrator
+     * settles a manual one (W-E2). `returned` — already given back. `awaitingManual` — the part
+     * a person must pay by hand.
+     */
+    refunds: {
+      owed: number;
+      returned: number;
+      awaitingManual: number;
+      entries: Array<{ amount: number; status: string; cause: string; createdAt: Date; settledAt: Date | null; settledByHand: boolean }>;
+    };
     currency: string;
   }> {
     const order = await this.loadCustomerOrder(customerId, orderId);
@@ -271,13 +296,18 @@ export class DeliveryFeeProposalService {
         pendingProposalId: s.pending_delivery_fee_proposal_id ? s.pending_delivery_fee_proposal_id.toString() : null,
       })),
       refunds: {
-        owed: refundState.owed,
+        // The CUSTOMER's position (`customerRefundPosition`), not the system's retry budget: a
+        // manual row is still owed to them until an administrator settles it.
+        owed: refundState.position.owed,
+        returned: refundState.position.returned,
+        awaitingManual: refundState.position.awaitingManual,
         entries: refundState.ledger.map((r) => ({
           amount: r.amount,
           status: r.status,
           cause: r.cause,
           createdAt: r.created_at,
           settledAt: r.settled_at ?? null,
+          settledByHand: !!r.settlement && r.settlement.method !== 'covered_by_order_refund',
         })),
       },
       currency: order.currency,
@@ -378,6 +408,22 @@ export class DeliveryFeeProposalService {
    * Same creation rules as an agency proposal, minus the proposer check (no actor proposes it).
    */
   async raiseSystemProposal(input: SystemProposalInput): Promise<IDeliveryFeeProposal> {
+    const raised = await transactionManager.runInTransactionWithRetry((session) => this.raiseSystemProposalInSession(input, session));
+    raised.afterCommit();
+    return raised.proposal;
+  }
+
+  /**
+   * `raiseSystemProposal` inside the CALLER's transaction — the change of agency (ADR-A11 D-12),
+   * which must raise the price difference in the same transaction as the move itself. Every write
+   * joins `session`; nothing is emitted or sent: the caller runs `afterCommit` once its
+   * transaction has committed, and never if it rolled back. `input.shipment` / `input.order` must
+   * be read in `session` (the money plan is computed from them and CAS-written against them).
+   */
+  async raiseSystemProposalInSession(
+    input: SystemProposalInput,
+    session: ClientSession
+  ): Promise<{ proposal: IDeliveryFeeProposal; afterCommit: () => void }> {
     const { shipment, order } = input;
     if (deliveryPayerOf(order, shipment) !== 'customer') {
       // A change the platform raises is always about the customer's money.
@@ -405,19 +451,22 @@ export class DeliveryFeeProposalService {
     } else if (input.proposedFee === currentFee) {
       throw refusalToError({ code: 'no_change', currentFee });
     }
-    return this.createCustomerPaidProposal({
-      shipment,
-      order,
-      currentFee,
-      proposedFee: input.proposedFee,
-      reason: input.reason,
-      proposer: input.agencyActor
-        ? { role: 'agency', userId: input.agencyActor.userId, agentId: null }
-        : { role: 'system', userId: null, agentId: null },
-      origin: input.origin,
-      combinedRequestId: input.combinedRequestId ?? null,
-      claimAgentId: null,
-    });
+    return this.createCustomerPaidProposalInSession(
+      {
+        shipment,
+        order,
+        currentFee,
+        proposedFee: input.proposedFee,
+        reason: input.reason,
+        proposer: input.agencyActor
+          ? { role: 'agency', userId: input.agencyActor.userId, agentId: null }
+          : { role: 'system', userId: null, agentId: null },
+        origin: input.origin,
+        combinedRequestId: input.combinedRequestId ?? null,
+        claimAgentId: null,
+      },
+      session
+    );
   }
 
   // ── Withdraw ───────────────────────────────────────────────────────────────
@@ -964,17 +1013,24 @@ export class DeliveryFeeProposalService {
    * (proposal created, money landed, proposal `approved` by `system`); an increase stays pending
    * for the customer.
    */
-  private async createCustomerPaidProposal(args: {
-    shipment: IShipment;
-    order: IOrder;
-    currentFee: number;
-    proposedFee: number;
-    reason: string;
-    proposer: { role: DeliveryFeeProposerRole; userId: string | null; agentId: string | null };
-    origin: ProposalOrigin;
-    combinedRequestId?: Types.ObjectId | null;
-    claimAgentId: string | null;
-  }): Promise<IDeliveryFeeProposal> {
+  private async createCustomerPaidProposal(args: CustomerPaidProposalArgs): Promise<IDeliveryFeeProposal> {
+    const result = await transactionManager.runInTransactionWithRetry((session) =>
+      this.createCustomerPaidProposalInSession(args, session)
+    );
+    result.afterCommit();
+    return result.proposal;
+  }
+
+  /**
+   * The transactional half of `createCustomerPaidProposal`: every write joins `session`, and the
+   * events, notifications and refund it implies are returned as `afterCommit` for the caller to
+   * run once ITS transaction has committed (never on a rollback). `args.shipment` / `args.order`
+   * must describe the state inside `session` — the plan is CAS-written against them.
+   */
+  private async createCustomerPaidProposalInSession(
+    args: CustomerPaidProposalArgs,
+    session: ClientSession
+  ): Promise<{ proposal: IDeliveryFeeProposal; afterCommit: () => void }> {
     const { shipment, order } = args;
     this.assertOnlinePaid(order);
     const direction = feeDirection(args.currentFee, args.proposedFee);
@@ -990,75 +1046,81 @@ export class DeliveryFeeProposalService {
 
     const proposalId = new Types.ObjectId();
     const now = new Date();
-    const result = await transactionManager.runInTransactionWithRetry(async (session) => {
-      await this.claimOrExplain(
-        { shipmentId, proposalId, agencyId: shipment.agency_id.toString(), agentId: args.claimAgentId, window },
-        shipment,
-        session
-      );
-      const created = await this.proposals.create(
-        {
-          ...this.baseRow({
-            proposalId,
-            shipment,
-            order,
-            role: args.proposer.role,
-            userId: args.proposer.userId,
-            agentId: args.proposer.agentId,
+    await this.claimOrExplain(
+      { shipmentId, proposalId, agencyId: shipment.agency_id.toString(), agentId: args.claimAgentId, window },
+      shipment,
+      session
+    );
+    const created = await this.proposals.create(
+      {
+        ...this.baseRow({
+          proposalId,
+          shipment,
+          order,
+          role: args.proposer.role,
+          userId: args.proposer.userId,
+          agentId: args.proposer.agentId,
+          feeBefore: args.currentFee,
+          proposedFee: args.proposedFee,
+          reason: args.reason,
+          now,
+        }),
+        approver,
+        origin: args.origin,
+        direction,
+        customer_id: order.customer_id as Types.ObjectId,
+        combined_request_id: args.combinedRequestId ?? null,
+      } as Partial<IDeliveryFeeProposal>,
+      session
+    );
+
+    if (!plan) {
+      return {
+        proposal: created,
+        afterCommit: () => {
+          this.emit('delivery_fee_proposal.created', created, { orderNumber: order.order_number ?? null });
+          customerFeeNotifier.approvalNeeded(order, {
+            proposalId: proposalId.toString(),
+            version: 1,
             feeBefore: args.currentFee,
             proposedFee: args.proposedFee,
             reason: args.reason,
-            now,
-          }),
-          approver,
-          origin: args.origin,
-          direction,
-          customer_id: order.customer_id as Types.ObjectId,
-          combined_request_id: args.combinedRequestId ?? null,
-        } as Partial<IDeliveryFeeProposal>,
-        session
-      );
-      if (!plan) return { created, applied: null as IDeliveryFeeProposal | null };
-
-      const application = await this.feeApp.applyInSession(
-        { order, shipmentId: shipment._id as Types.ObjectId, proposalId, expectedPointer: proposalId, window, plan, at: now },
-        session
-      );
-      const applied = await this.proposals.transitionFromPending(
-        proposalId,
-        'approved',
-        { role: 'system', userId: null, application: this.applicationOf(plan, application, args.currentFee), note: 'applied_directly' },
-        session
-      );
-      if (!applied) throw createAppError(ERROR_CODES.DELIVERY_FEE_PROPOSAL_STALE, 409);
-      return { created, applied };
-    });
-
-    this.emit('delivery_fee_proposal.created', result.created, { orderNumber: order.order_number ?? null });
-    if (result.applied && plan) {
-      this.emit('delivery_fee_proposal.approved', result.applied, {
-        orderNumber: order.order_number ?? null,
-        respondedByRole: 'system',
-      });
-      customerFeeNotifier.lowered(order, {
-        proposalId: proposalId.toString(),
-        feeBefore: plan.feeBefore,
-        feeAfter: plan.feeAfter,
-        customerSaving: state.mode === 'cod' ? -plan.collectDelta : Math.max(0, plan.refundableAfter - this.refundableBefore(shipment)),
-      });
-      if (state.mode === 'online' && plan.refundableAfter > 0) {
-        void deliveryFeeRefundService.refundOutstanding(order._id.toString(), { cause: 'fee_decrease', shipmentId });
-      }
-      return result.applied;
+          });
+        },
+      };
     }
-    customerFeeNotifier.approvalNeeded(order, {
-      proposalId: proposalId.toString(),
-      version: 1,
-      feeBefore: args.currentFee,
-      proposedFee: args.proposedFee,
-      reason: args.reason,
-    });
-    return result.created;
+
+    const application = await this.feeApp.applyInSession(
+      { order, shipmentId: shipment._id as Types.ObjectId, proposalId, expectedPointer: proposalId, window, plan, at: now },
+      session
+    );
+    const applied = await this.proposals.transitionFromPending(
+      proposalId,
+      'approved',
+      { role: 'system', userId: null, application: this.applicationOf(plan, application, args.currentFee), note: 'applied_directly' },
+      session
+    );
+    if (!applied) throw createAppError(ERROR_CODES.DELIVERY_FEE_PROPOSAL_STALE, 409);
+
+    return {
+      proposal: applied,
+      afterCommit: () => {
+        this.emit('delivery_fee_proposal.created', created, { orderNumber: order.order_number ?? null });
+        this.emit('delivery_fee_proposal.approved', applied, {
+          orderNumber: order.order_number ?? null,
+          respondedByRole: 'system',
+        });
+        customerFeeNotifier.lowered(order, {
+          proposalId: proposalId.toString(),
+          feeBefore: plan.feeBefore,
+          feeAfter: plan.feeAfter,
+          customerSaving: feeIsCash(state.mode) ? -plan.collectDelta : Math.max(0, plan.refundableAfter - this.refundableBefore(shipment)),
+        });
+        if (state.mode === 'online' && plan.refundableAfter > 0) {
+          void deliveryFeeRefundService.refundOutstanding(order._id.toString(), { cause: 'fee_decrease', shipmentId });
+        }
+      },
+    };
   }
 
   /** The vendor covers a change-agency difference: on the customer's rejection, or by choice. */

@@ -853,7 +853,16 @@ The response is the full updated order details object (same shape as `GET /api/v
 - `404` – `ORDER_DELIVERY_AGENCY_NOT_FOUND` – Destination agency does not exist
 - `400` – `ORDER_WRONG_TYPE` – Order is not a physical order
 - `422` – `ORDER_TERMINAL_STATE` – Order is already delivered or cancelled
-- `422` – `ORDER_ITEM_NOT_REASSIGNABLE` – Item has already been dispatched (picked up / in transit / delivered / returned)
+- `422` – `ORDER_ITEM_NOT_REASSIGNABLE` – Item has already been dispatched (picked up / in transit / delivered / returned), or its parcel's COD cash has already been collected
+- `422` – `COD_AGENCY_LIMIT_EXCEEDED` – COD only; see the COD-limit section above (`"force": true` to override)
+- `422` – `DELIVERY_FEE_PROPOSAL_VENDOR_NET_NOT_POSITIVE` / `DELIVERY_FEE_PROPOSAL_ORDER_NOT_PAID` – customer-paid order, whole parcel moving: see [delivery-fee-proposals.md](./delivery-fee-proposals.md)
+- `409` – `SHIPMENT_REASSIGNMENT_CONFLICT` – the item moved (or its parcel changed) since you loaded the order — **reload and decide again**; nothing was changed by this request
+- `409` – `SHIPMENT_ALREADY_HAS_AGENT` – this is the parcel's **last** item and a delivery agent has already **accepted** that parcel; the agency must reassign or release the agent first (`details: { shipmentId, agentId, hint }`). Moving one item of several off such a parcel is still allowed.
+
+> **All or nothing (since 2026-10-04).** The whole change — the item's move, the old parcel's
+> removal, the new parcel, any delivery-fee carry or price-difference request, a pending COD code's
+> amount — commits together or not at all. Any error above means **nothing** changed; there is no
+> half-moved order to repair. Retrying the same request after a `409` is safe.
 
 ---
 

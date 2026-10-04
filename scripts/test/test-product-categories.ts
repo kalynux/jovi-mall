@@ -536,6 +536,11 @@ assert('the vendor router has no create route — categories are created on a pr
     const src = code('modules/categories/routes/vendor-category.routes.ts');
     return src.includes("router.get('/'") && src.includes("router.post('/check'") && !/router\.(post|put)\('\/'\s*,/.test(src);
 });
+assert('⛔ until the conversion runs, an unconverted product stays vectorisation-ELIGIBLE (else its opt-in is switched off)', () => {
+    const src = code('modules/catalog/domain/services/VectorisationService.ts');
+    return /\(product\.categoryIds\?\.length \?\? 0\) > 0 \|\| legacyCategoryOf\(product\) !== null/.test(src)
+        && /resolvedNames\.length > 0 \? resolvedNames : legacy \? \[legacy\] : \[\]/.test(src);
+});
 assert('the conversion is registered in the migration ledger', () =>
     readFileSync(join(__dirname, '../migrate.ts'), 'utf-8').includes("name: 'migrate:product-categories'"));
 

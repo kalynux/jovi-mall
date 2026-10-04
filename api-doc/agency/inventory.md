@@ -1,6 +1,7 @@
 # Agency Inventory
 
 **Verified against source on 2026-09-08** — all 11 routes and the counted-vs-derived stock distinction that decides what is billed, against `jovi-mall/src/modules/inventory/routes.ts`, `repositories/agency-stock-level.repository.ts` and `services/`.
+**Updated 2026-10-04** — § 1 / § 1b examples corrected to the counted-stock basis (`quantityBasis` was missing and an uncounted row showed a non-zero fee); § 2 gains `countedRows`/`derivedRows` (already on the wire, never documented), `uncountedRows` and `awaitingMyDecisionCount`. See [FRONTEND-CHANGELOG-agency-names-and-search.md](./FRONTEND-CHANGELOG-agency-names-and-search.md).
 
 Which SKUs this agency warehouses, at which depot, **how many are physically on the
 shelf**, what they cost in storage rent, and what the agency can do about them. Backs the
@@ -130,8 +131,9 @@ Unknown query parameters are rejected (`400 VALIDATION_ERROR`).
         "basis": "per_sku_monthly",
         "storageBasedEnabled": true,
         "monthlyRatePerSku": 500,
-        "quantity": 120,
-        "monthlyEstimate": 60000,
+        "quantity": 0,
+        "quantityBasis": "uncounted",
+        "monthlyEstimate": 0,
         "size": {
           "lengthCm": 30, "widthCm": 20, "heightCm": 12,
           "volumeCm3": 7200, "weightG": 850,
@@ -220,28 +222,36 @@ yours to answer. Use it to badge the row and link to
   "basis": "per_sku_monthly",
   "storageBasedEnabled": true,
   "monthlyRatePerSku": 500,
-  "quantity": 120,
-  "monthlyEstimate": 60000,
+  "quantity": 40,
+  "quantityBasis": "counted",
+  "monthlyEstimate": 20000,
   "size": { "lengthCm": 30, "widthCm": 20, "heightCm": 12, "volumeCm3": 7200, "weightG": 850, "source": "variant" }
 }
 ```
 
-> [!WARNING]
-> **The platform does not track storage payment.** It does not invoice this, does not
-> know whether it was paid, and never acts on it. This is *what you should be
-> charging*, computed from your own policy so you do not have to. Collection is
-> out-of-band, and the only platform lever attached to it is your own manual
-> [suspension](#5-suspend--unsuspend).
+> [!IMPORTANT]
+> **This is the same basis the monthly statement bills.** `monthlyEstimate` is
+> `monthlyRatePerSku × quantity`, where `quantity` is the **counted** `quantityOnHand`
+> (clamped at 0), and it is `0` for an uncounted row or when storage is not offered —
+> exactly the arithmetic [storage statements](./storage-invoices.md) use per line. A
+> statement and this row will agree on any day nothing moves on the shelf.
 >
-> Do not label this "due", "overdue", "outstanding" or "invoice".
+> The one difference is **when**: this figure is live, the statement freezes the shelf
+> as it stood when it was issued (the 1st, 02:00 UTC) for the previous month. So a
+> screen may say "billed monthly on this basis" — it should not call this field "due"
+> or "outstanding", because the statement, not this row, is the record.
+>
+> **No money moves on either.** The platform neither collects the rent nor pays it out;
+> see [storage statements](./storage-invoices.md).
 
 | Field | Notes |
 |---|---|
 | `basis` | `"per_sku_monthly"` — the only basis today. Named so a future volumetric basis is additive. |
 | `storageBasedEnabled` | Your `policies.pricing.storage_based.enabled`. When `false`, `monthlyEstimate` is `0` and the screen should say "storage not offered" rather than showing a rate. |
 | `monthlyRatePerSku` | Your `policies.pricing.storage_based.monthly_storage_fee_per_sku`. |
-| `quantity` | The billable count — `catalogStock.quantity`, clamped at 0, and `0` for an unlimited-stock SKU (inventing a quantity for one would be a fabricated charge). |
-| `monthlyEstimate` | `monthlyRatePerSku × quantity`. |
+| `quantity` | The billable count — the row's **counted** `quantityOnHand`, clamped at 0. `0` on an uncounted (`source: "derived"`) row. **Not** `catalogStock.quantity`: that is what the vendor lists for sale, and rent is owed on what is on your shelf. |
+| `quantityBasis` | `"counted"` or `"uncounted"`. Render them differently: an uncounted row's `0` means *nobody has counted*, not *nothing is owed*. |
+| `monthlyEstimate` | `monthlyRatePerSku × quantity`, or `0` when `storageBasedEnabled` is false. |
 | `size` | Dimensions, and the volume derived from them. `null` when neither the variant nor the product carries any. |
 
 **Size is displayed, not priced.** The rate is flat per SKU because that is the only
@@ -296,7 +306,11 @@ The screen header. Takes the **same filters as the list** (`locationId`, `vendor
     "skuCount": 137,
     "unassignedCount": 1,
     "suspendedCount": 3,
-    "totalMonthlyEstimate": 4120000
+    "totalMonthlyEstimate": 412000,
+    "countedRows": 52,
+    "derivedRows": 85,
+    "uncountedRows": 85,
+    "awaitingMyDecisionCount": 2
   }
 }
 ```
@@ -306,7 +320,13 @@ The screen header. Takes the **same filters as the list** (`locationId`, `vendor
 | `skuCount` | Rows matching the filter. |
 | `unassignedCount` | Rows whose depot you have deleted (`location: null`). Your re-homing to-do list. |
 | `suspendedCount` | Distinct **products** you have suspended — a product with three variants is one suspension, not three. |
-| `totalMonthlyEstimate` | Σ of every row's `storageFee.monthlyEstimate`. `0` when `storage_based.enabled` is false. |
+| `totalMonthlyEstimate` | Σ of every row's `storageFee.monthlyEstimate` — counted on-hand × your rate, **the basis the monthly statement bills** (see [§ 1b](#1b-storagefee)). `0` when `storage_based.enabled` is false, and uncounted rows add `0`. |
+| `countedRows` | Rows with `source: "counted"` — somebody has recorded intake. |
+| `derivedRows` | Rows with `source: "derived"` — configured here, never counted. `countedRows + derivedRows = skuCount`. |
+| `uncountedRows` | **Added 2026-10-04.** The same number as `derivedRows`, under the name a "Not counted yet" tile reads. Both stay. |
+| `awaitingMyDecisionCount` | **Added 2026-10-04.** Pending [stock requests](./stock-requests.md) the **vendor** raised on rows in this filtered set — the ones waiting on you. Drive the header and the sidebar badge off this one number. Requests *you* raised are not counted. |
+
+Top-level `countsAreDerived` is `countedRows === 0`.
 
 A separate endpoint rather than a field on the list, deliberately: the totals span the
 entire filtered set, so folding them in would make every page load pay for a

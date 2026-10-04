@@ -799,6 +799,76 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         es: 'Necesito un número de mobile money para este pago. Envíame el número con el que quieres pagar.',
         ar: 'أحتاج إلى رقم محفظة محمولة لإتمام هذا الدفع. أرسل لي الرقم الذي تريد الدفع به.',
     },
+    // ── Delivery-fee changes after checkout (ADR-A11, W-H) — each changes what the customer DOES.
+    /** A top-up prompt is live on their handset: approve or let it lapse, do not decline yet. */
+    [ERROR_CODES.DELIVERY_FEE_TOPUP_IN_PROGRESS]: {
+        en: 'A payment request for this delivery is already waiting on your phone. Approve it, or wait a few minutes for it to lapse before answering again.',
+        fr: 'Une demande de paiement pour cette livraison attend déjà sur votre téléphone. Validez-la, ou attendez quelques minutes qu’elle expire avant de répondre à nouveau.',
+        pt: 'Já há um pedido de pagamento desta entrega à espera no seu telemóvel. Aprove-o, ou aguarde alguns minutos até expirar antes de responder de novo.',
+        es: 'Ya hay una solicitud de pago de este envío esperando en tu teléfono. Apruébala, o espera unos minutos a que caduque antes de responder otra vez.',
+        ar: 'هناك طلب دفع لهذا التوصيل ينتظر بالفعل على هاتفك. وافق عليه، أو انتظر بضع دقائق حتى تنتهي صلاحيته قبل الرد مرة أخرى.',
+    },
+    /** Nothing to pay: never accepted, already paid, or the change was withdrawn. */
+    [ERROR_CODES.DELIVERY_FEE_TOPUP_NOT_DUE]: {
+        en: 'There is nothing to pay for this delivery right now.',
+        fr: 'Il n’y a rien à payer pour cette livraison pour le moment.',
+        pt: 'Não há nada a pagar por esta entrega neste momento.',
+        es: 'No hay nada que pagar por este envío en este momento.',
+        ar: 'لا يوجد ما يجب دفعه مقابل هذا التوصيل حاليًا.',
+    },
+    [ERROR_CODES.COMBINED_DELIVERY_REQUEST_INELIGIBLE]: {
+        en: 'A combined delivery price needs at least two of your parcels from the same order, with the same delivery company, not yet picked up and without another fee change waiting.',
+        fr: 'Un prix de livraison groupé demande au moins deux de vos colis d’une même commande, avec la même société de livraison, pas encore enlevés et sans autre changement de frais en attente.',
+        pt: 'Um preço de entrega conjunto exige pelo menos duas encomendas da mesma compra, com a mesma empresa de entregas, ainda não recolhidas e sem outra alteração de taxa pendente.',
+        es: 'Un precio de envío combinado necesita al menos dos de tus paquetes del mismo pedido, con la misma empresa de envíos, aún sin recoger y sin otro cambio de tarifa pendiente.',
+        ar: 'يتطلب سعر التوصيل المجمّع طردين على الأقل من الطلب نفسه، مع شركة التوصيل نفسها، لم يُستلما بعد ولا ينتظران تغييرًا آخر في الرسوم.',
+    },
+    [ERROR_CODES.COMBINED_DELIVERY_REQUEST_ALREADY_OPEN]: {
+        en: 'You have already asked this delivery company for a combined price on these parcels. You will be told here when they answer.',
+        fr: 'Vous avez déjà demandé un prix groupé à cette société de livraison pour ces colis. Vous serez prévenu ici de leur réponse.',
+        pt: 'Já pediu a esta empresa de entregas um preço conjunto para estas encomendas. Será avisado aqui quando responderem.',
+        es: 'Ya pediste a esta empresa de envíos un precio combinado para estos paquetes. Te avisaremos aquí cuando respondan.',
+        ar: 'لقد طلبت بالفعل من شركة التوصيل هذه سعرًا مجمّعًا لهذه الطرود. سنخبرك هنا عند الرد.',
+    },
+    /**
+     * Accept pressed after the parcel left the proposal window (picked up, or the proposing agent
+     * left it). The category sentence ("let me check and try again") would invite a retry that
+     * can never succeed; the change stays until the delivery company withdraws it.
+     */
+    [ERROR_CODES.DELIVERY_FEE_PROPOSAL_STALE]: {
+        en: 'This delivery fee change can no longer be answered — the parcel has already moved on. The delivery company will withdraw it, and your fee stays as it was.',
+        fr: 'Ce changement de frais de livraison ne peut plus être accepté — le colis a déjà avancé. La société de livraison va le retirer, et vos frais restent inchangés.',
+        pt: 'Esta alteração da taxa de entrega já não pode ser respondida — a encomenda já seguiu. A empresa de entregas vai retirá-la e a sua taxa mantém-se.',
+        es: 'Este cambio de tarifa de envío ya no se puede responder: el paquete ya avanzó. La empresa de envíos lo retirará y tu tarifa se mantiene.',
+        ar: 'لم يعد بالإمكان الرد على تغيير رسوم التوصيل هذا — فقد تحرّك الطرد بالفعل. ستسحبه شركة التوصيل وتبقى رسومك كما هي.',
+    },
+    /** The order's online payment is being refunded or disputed: no fee change can move its money. */
+    [ERROR_CODES.DELIVERY_FEE_PROPOSAL_ORDER_NOT_PAID]: {
+        en: 'The payment for this order is being refunded or reviewed, so its delivery fee cannot change right now. Contact support if you need help.',
+        fr: 'Le paiement de cette commande est en cours de remboursement ou d’examen : ses frais de livraison ne peuvent pas changer pour le moment. Contactez le support si besoin.',
+        pt: 'O pagamento desta encomenda está a ser reembolsado ou analisado, por isso a taxa de entrega não pode mudar agora. Contacte o apoio se precisar de ajuda.',
+        es: 'El pago de este pedido se está reembolsando o revisando, así que su tarifa de envío no puede cambiar ahora. Contacta con soporte si necesitas ayuda.',
+        ar: 'يجري استرداد دفعة هذا الطلب أو مراجعتها، لذا لا يمكن تغيير رسوم التوصيل الآن. تواصل مع الدعم إذا احتجت إلى مساعدة.',
+    },
+    /**
+     * "Delivery in cash" (W-F) can no longer be honoured — a delivery company stopped taking the fee
+     * in cash since the review, or no shop charges delivery. Before the spend: Pay now still works.
+     */
+    [ERROR_CODES.DELIVERY_FEE_CASH_NOT_AVAILABLE]: {
+        en: 'The delivery fee can no longer be paid in cash for this order. You can still pay everything now.',
+        fr: 'Les frais de livraison ne peuvent plus être payés en espèces pour cette commande. Vous pouvez toujours tout payer maintenant.',
+        pt: 'A taxa de entrega já não pode ser paga em dinheiro nesta encomenda. Ainda pode pagar tudo agora.',
+        es: 'La tarifa de envío ya no se puede pagar en efectivo en este pedido. Aún puedes pagarlo todo ahora.',
+        ar: 'لم يعد بالإمكان دفع رسوم التوصيل نقدًا لهذا الطلب. لا يزال بإمكانك دفع كل شيء الآن.',
+    },
+    /** Cancelling a combined-price request the company already answered or that was closed. */
+    [ERROR_CODES.COMBINED_DELIVERY_REQUEST_NOT_OPEN]: {
+        en: 'That combined delivery price request is already closed — the delivery company answered it, or it was cancelled.',
+        fr: 'Cette demande de prix de livraison groupé est déjà close — la société de livraison y a répondu, ou elle a été annulée.',
+        pt: 'Esse pedido de preço de entrega conjunto já está fechado — a empresa de entregas respondeu ou foi cancelado.',
+        es: 'Esa solicitud de precio de envío combinado ya está cerrada: la empresa de envíos respondió o fue cancelada.',
+        ar: 'طلب سعر التوصيل المجمّع هذا مغلق بالفعل — فقد ردّت عليه شركة التوصيل أو أُلغي.',
+    },
     /**
      * Raised seven times across the surface, and the category sentence — "I could not find that." —
      * said neither WHAT was missing nor what to do under a payment button. ⚠ Not-found and

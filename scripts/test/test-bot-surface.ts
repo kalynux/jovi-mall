@@ -3200,6 +3200,9 @@ async function main(): Promise<void> {
             notifications_list: 'bot-notification.controller.ts',
             reviews_list_mine: 'bot-review.controller.ts',
             payment_methods_list: 'bot-payment-method.controller.ts',
+            // W-H (ADR-A11): the waiting delivery-fee changes and the combined-price requests.
+            delivery_fees_list_pending: 'bot-delivery-fee.controller.ts',
+            combined_delivery_list: 'bot-delivery-fee.controller.ts',
         };
 
         /**
@@ -3463,10 +3466,14 @@ async function main(): Promise<void> {
      * not check or retry a payment), − payment_create_pay_link (card-only, off while cards are).
      * 61 → 62 on 2026-09-22: + chat_answer_question (a typed yes/no runs the waiting question's
      * own button token — `test:chat-answer`).
+     * 62 → 68 on 2026-10-04 (W-H, ADR-A11): + delivery_fees_list_pending, delivery_fees_reject,
+     * combined_delivery_eligible, combined_delivery_request, combined_delivery_list,
+     * combined_delivery_cancel. delivery_fees_approve and delivery_fees_pay are flow_only — the
+     * Accept / Pay now buttons the list draws — and are NOT emitted (`test:bot-fee-changes`).
      */
-    assert('the generator emits 62 tools — update this when one lands', () => {
-        if (emitted.length !== 62) console.error(`     ↳ emitted ${emitted.length}`);
-        return emitted.length === 62;
+    assert('the generator emits 68 tools — update this when one lands', () => {
+        if (emitted.length !== 68) console.error(`     ↳ emitted ${emitted.length}`);
+        return emitted.length === 68;
     });
 
     /**

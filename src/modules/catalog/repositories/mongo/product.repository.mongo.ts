@@ -1,7 +1,7 @@
 import { FilterQuery, Types } from 'mongoose';
 import { BaseRepository, Page, PaginationOptions, RepositoryOptions } from '../../../../core/repositories/base.repository';
-import { IProduct, ProductModel } from '../../models';
-import { IProductRepository, AgencyStoredVariant } from '../interfaces/product.repository.interface';
+import { IProduct, ProductModel, ProductVariantModel } from '../../models';
+import { IProductRepository, AgencyStoredVariant, DeliverableProductFilters } from '../interfaces/product.repository.interface';
 import { COLLECTIONS } from '../../../../core/database/collections';
 import { Product, ProductMapper } from '../mappers/product.mapper';
 import { ProductListProjection } from '../../read-models/product-detail.read-model';
@@ -875,23 +875,66 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
     vendorIdsUsingAsDefault: string[],
     pagination: PaginationOptions,
     options?: RepositoryOptions,
+    filters: DeliverableProductFilters = {},
   ): Promise<Page<Product>> {
-    if (!Types.ObjectId.isValid(agencyId)) {
-      return { data: [], meta: { total: 0, page: pagination.page, limit: pagination.limit, pages: 0 } };
-    }
+    const empty = { data: [], meta: { total: 0, page: pagination.page, limit: pagination.limit, pages: 0 } };
+    if (!Types.ObjectId.isValid(agencyId)) return empty;
 
     const vendorObjIds = vendorIdsUsingAsDefault.filter(id => Types.ObjectId.isValid(id));
 
-    const filter: FilterQuery<IProduct> = {
-      type: 'physical',
-      $or: [
-        { 'delivery.agency_id': agencyId as any },
-        ...(vendorObjIds.length > 0
-          ? [{ vendorId: { $in: vendorObjIds as any[] }, 'delivery.agency_id': null }]
-          : []),
-      ],
-    };
+    // The two ways a product reaches this agency. `source` picks one of them; it must
+    // never be expressed as "delivery.agency_id is null" alone, because a vendor that
+    // defaults to us can still override ONE product to another agency, and that
+    // product is not ours to deliver.
+    const ownOverride: FilterQuery<IProduct> = { 'delivery.agency_id': agencyId as any };
+    const vendorDefault: FilterQuery<IProduct> | null = vendorObjIds.length > 0
+      ? { vendorId: { $in: vendorObjIds as any[] }, 'delivery.agency_id': null }
+      : null;
 
+    const sourceArms = filters.source === 'own_override'
+      ? [ownOverride]
+      : filters.source === 'vendor_default'
+        ? (vendorDefault ? [vendorDefault] : [])
+        : [ownOverride, ...(vendorDefault ? [vendorDefault] : [])];
+    if (sourceArms.length === 0) return empty;
+
+    const base: FilterQuery<IProduct> = { type: 'physical', $or: sourceArms };
+    const and: FilterQuery<IProduct>[] = [base];
+
+    if (filters.status) and.push({ status: filters.status });
+    if (filters.categoryId) and.push({ categoryIds: new Types.ObjectId(filters.categoryId) as any });
+    if (filters.vendorId) and.push({ vendorId: new Types.ObjectId(filters.vendorId) as any });
+
+    if (filters.search) {
+      const { regex, vendorIds, categoryIds } = filters.search;
+
+      // SKU lives on the variant. Resolve it against THIS agency's deliverable products
+      // only — an unanchored case-insensitive regex can use no index, so the scan must be
+      // bounded by the agency's own catalogue rather than every variant on the platform.
+      const candidateIds = await ProductModel.find({ ...base, deletedAt: null }, { _id: 1 }).lean().exec();
+      const skuProductIds = candidateIds.length === 0
+        ? []
+        : await ProductVariantModel.distinct('productId', {
+          productId: { $in: candidateIds.map(c => c._id) },
+          sku: regex,
+          deletedAt: null,
+        }).exec();
+
+      and.push({
+        $or: [
+          { title: regex },
+          ...(skuProductIds.length > 0 ? [{ _id: { $in: skuProductIds } }] : []),
+          ...(vendorIds.length > 0
+            ? [{ vendorId: { $in: vendorIds.map(id => new Types.ObjectId(id)) } }]
+            : []),
+          ...(categoryIds.length > 0
+            ? [{ categoryIds: { $in: categoryIds.map(id => new Types.ObjectId(id)) } }]
+            : []),
+        ] as FilterQuery<IProduct>[],
+      });
+    }
+
+    const filter: FilterQuery<IProduct> = and.length === 1 ? base : { $and: and };
     return this.paginate(filter, pagination, options);
   }
 }

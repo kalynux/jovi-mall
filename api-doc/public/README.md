@@ -176,7 +176,8 @@ env-overridable, which is exactly why they must be read rather than copied.
     ],
     "actionCosts": {
       "vectorisation": 5,
-      "whatsappTemplate": 2
+      "whatsappTemplate": 2,
+      "aiCopyField": 1
     }
   }
 }
@@ -191,6 +192,7 @@ Note `data` is an **object**, not an array — unlike the authenticated
 | `packs[].credits` | Credits granted. Larger packs give a better FCFA/credit rate by design. |
 | `actionCosts.vectorisation` | Credits to vectorise one product. `0` means the action is free. |
 | `actionCosts.whatsappTemplate` | Credits per billable WhatsApp template sent to a customer. |
+| `actionCosts.aiCopyField` | Credits per field the AI listing-copy assistant writes (description, tags, SEO title, SEO description, categories). A failed field is refunded. |
 
 ---
 

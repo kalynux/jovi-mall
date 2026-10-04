@@ -31,9 +31,16 @@ import {
 } from '../repositories/stock-adjustment-request.repository';
 import {
   StockRequestDto,
+  StockRequestLiveState,
   StockRequestMapper,
   resolveAvailableActions,
 } from '../dto/stock-adjustment-request.dto';
+import {
+  resolveStockRequestContexts,
+  resolveStockRequestSearch,
+} from '../read-models/stock-request-context.resolver';
+import { buildSearchRegex } from '../../../core/utils/regex.util';
+import { getStorageProvider, IStorageProvider } from '../../../core/storage';
 import { emitStockRequestEvent } from './stock-request.events';
 
 /** Who is acting, and on whose behalf. */
@@ -94,6 +101,7 @@ export class StockRequestService {
     private readonly auditLogs: IStockAuditLogRepository = new StockAuditLogRepositoryMongo(),
     private readonly vendors: VendorRepository = new VendorRepository(),
     private readonly transactions: TransactionManager = transactionManager,
+    private readonly storage: IStorageProvider = getStorageProvider(),
   ) { }
 
   // ─── Commands ──────────────────────────────────────────────────────────────
@@ -200,7 +208,7 @@ export class StockRequestService {
       { productTitle: product.title, sku: variant.sku },
     );
 
-    return StockRequestMapper.toDto(doc, actor.role, {
+    return this.present(doc, actor.role, {
       quantity: variant.stock,
       isInfinite: variant.isInfiniteStock,
     });
@@ -304,7 +312,7 @@ export class StockRequestService {
       await this.describe(doc),
     );
 
-    return StockRequestMapper.toDto(doc, actor.role, {
+    return this.present(doc, actor.role, {
       quantity: doc.requested_quantity,
       isInfinite: doc.requested_infinite,
     });
@@ -350,7 +358,7 @@ export class StockRequestService {
       await this.describe(doc),
     );
 
-    return StockRequestMapper.toDto(doc, actor.role);
+    return this.present(doc, actor.role);
   }
 
   /**
@@ -387,7 +395,7 @@ export class StockRequestService {
       );
     }
 
-    return StockRequestMapper.toDto(doc, actor.role);
+    return this.present(doc, actor.role);
   }
 
   // ─── Queries ───────────────────────────────────────────────────────────────
@@ -397,15 +405,31 @@ export class StockRequestService {
     filters: StockRequestListFilters,
     pagination: PaginationOptions,
   ): Promise<Page<StockRequestDto>> {
-    const page = await this.requests.listForParty(actor.role, actor.ownerId, filters, pagination);
+    // `search` is resolved to the matching product/variant ids among this party's OWN
+    // requests first, then filtered on like any other id — see resolveStockRequestSearch.
+    const { search, ...rest } = filters;
+    const resolved: StockRequestListFilters = search
+      ? { ...rest, searchMatch: await resolveStockRequestSearch(actor.role, actor.ownerId, buildSearchRegex(search)) }
+      : rest;
+
+    const page = await this.requests.listForParty(actor.role, actor.ownerId, resolved, pagination);
 
     // One batched variant read for the whole page, so `currentQuantity` (the drift
-    // an approver needs to see) costs one query rather than one per row.
-    const live = await this.loadLiveState(page.data);
+    // an approver needs to see) costs one query rather than one per row. The names
+    // (product, vendor, depot) are one fixed batch too.
+    const [live, contexts] = await Promise.all([
+      this.loadLiveState(page.data),
+      resolveStockRequestContexts(page.data, this.storage),
+    ]);
 
     return {
       data: page.data.map(doc =>
-        StockRequestMapper.toDto(doc, actor.role, live.get(doc.variant_id.toString()) ?? null),
+        StockRequestMapper.toDto(
+          doc,
+          actor.role,
+          live.get(doc.variant_id.toString()) ?? null,
+          contexts.get(doc._id.toString()) ?? null,
+        ),
       ),
       meta: page.meta,
     };
@@ -414,7 +438,7 @@ export class StockRequestService {
   async getById(actor: StockRequestActor, requestId: string): Promise<StockRequestDto> {
     const request = await this.loadForActor(actor, requestId);
     const variant = await this.variants.findById(request.variant_id.toString());
-    return StockRequestMapper.toDto(
+    return this.present(
       request,
       actor.role,
       variant ? { quantity: variant.stock, isInfinite: variant.isInfiniteStock } : null,
@@ -422,6 +446,16 @@ export class StockRequestService {
   }
 
   // ─── Internals ─────────────────────────────────────────────────────────────
+
+  /** One request, with its names resolved — every single-row response goes through here. */
+  private async present(
+    doc: IStockAdjustmentRequest,
+    viewerRole: StockRequestParty,
+    live?: StockRequestLiveState | null,
+  ): Promise<StockRequestDto> {
+    const contexts = await resolveStockRequestContexts([doc], this.storage);
+    return StockRequestMapper.toDto(doc, viewerRole, live ?? null, contexts.get(doc._id.toString()) ?? null);
+  }
 
   private counterpartyOf(role: StockRequestParty): StockRequestParty {
     return role === 'vendor' ? 'agency' : 'vendor';

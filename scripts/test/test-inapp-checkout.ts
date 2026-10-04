@@ -1570,7 +1570,8 @@ function chatDoorAssertions(): void {
         review.length > 0 && placeInChat.length > 0
         && reviewRoute.includes('await reviewChatCheckout(req, res, deliveryAddressId ?? null)')
         && !reviewRoute.includes('inAppSurfaceStore.') && !reviewRoute.includes('readChatCheckout(')
-        && placeRoute.includes('await placeChatCheckout(req, res, checkoutRef, deliveryAddressId ?? null, phone)')
+        // + `deliveryFeePayment` (W-F, cash for delivery) — the body's one optional choice, passed through.
+        && placeRoute.includes('await placeChatCheckout(req, res, checkoutRef, deliveryAddressId ?? null, phone, deliveryFeePayment)')
         && !placeRoute.includes('placeCheckout(')
         // One placement in the whole chat controller — the route and the tap cannot drift.
         && (chat.match(/\bplaceCheckout\(/g) ?? []).length === 1);
@@ -1632,7 +1633,8 @@ function chatDoorAssertions(): void {
         const place = chat.slice(chat.indexOf('async function placeChatCheckout'));
         const composedAt = place.indexOf('phone = await chatTypedNumber(caller.customerId, phone);');
         return reviewKeys?.join(',') === 'deliveryAddressId'
-            && placeKeys?.join(',') === 'checkoutRef,deliveryAddressId,phone'
+            // `deliveryFeePayment` since W-F (ADR-A11 § Cash for delivery): with_order | cash_to_rider.
+            && placeKeys?.join(',') === 'checkoutRef,deliveryAddressId,deliveryFeePayment,phone'
             && chat.slice(chat.indexOf('const ChatPlaceSchema')).includes('TypedPayerNumberSchema')
             && composedAt > 0 && composedAt < place.indexOf('await placeCheckout(checkoutRef, phone,');
     });

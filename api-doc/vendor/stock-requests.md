@@ -165,6 +165,7 @@ address first.
 | `productId` | ObjectId | — | |
 | `variantId` | ObjectId | — | One SKU's whole history |
 | `direction` | `awaiting_me` \| `raised_by_me` | — | |
+| `search` | string, 1–100, trimmed | — | Case-insensitive substring over the product title and the variant SKU. *Added 2026-10-04* |
 
 Unknown query parameters are rejected (`400 VALIDATION_ERROR`).
 
@@ -190,6 +191,11 @@ full field-by-field breakdown. The three points that matter most:
 - **`availableActions`** is the button list. `['withdraw']` if you raised it,
   `['approve','reject']` if the agency did, `[]` once resolved.
 - **`awaitingMyDecision`** drives your badge count.
+- **What it is about** (*added 2026-10-04*, additive): `product` (`title`, `variantTitle`,
+  `sku`, `image`), `vendor` (yourself — `id`, `businessName`, `verified`), `location` (the
+  agency's depot holding the SKU) and `stockLevelId` (the **agency's** inventory row id —
+  there is no vendor endpoint that opens it; ignore it). Field table and example:
+  [FRONTEND-CHANGELOG-stock-request-names.md](./FRONTEND-CHANGELOG-stock-request-names.md).
 
 ---
 

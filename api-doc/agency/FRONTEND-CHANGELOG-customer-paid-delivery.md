@@ -51,3 +51,21 @@ collect: {expectedAmount} (goods {itemsAmount} + delivery {deliveryFeeAmount})" 
 ---
 
 **If this page and the backend's observed behaviour disagree, stop and report the difference.**
+
+## 2026-10-04 (W-F) — the delivery fee in cash (`accepts_cash_delivery_fee` is now honoured)
+
+- With `policies.pricing.accepts_cash_delivery_fee: true`, a customer may pay the items of an ONLINE
+  order and hand **your agent the delivery fee in cash**. Off by default; nothing changes until you
+  enable it.
+- Such a shipment carries a COD block like a cash-on-delivery one, with **`kind: "delivery_fee"`**,
+  `itemsAmount: 0` and `deliveryFeeAmount` = `expectedAmount` = the fee (list and detail reads,
+  projected before an agent accepts). The agent collects it with the customer's delivery code — the
+  same collect flow; the shipment is delivered only that way.
+- **The money**: the cash is your side's (agency + agent per the contract), never the vendor's or
+  the platform's — no commission, no COD handling fee. It travels the cash chain you already use:
+  agent → agency (agent deposit) → platform (your remittance), and your share and your agent's cut are
+  then paid out ONCE from that collection (`requires_cash_settlement`), never also "at delivery". A
+  returned shipment collected no fee and earns nothing (as cash on delivery).
+- **Limits**: the fee counts in your COD exposure (agency limit) and in your agents' cash exposure
+  and thresholds; it does not count against a vendor's own COD cap.
+- A fee proposal on such a shipment changes the cash the agent collects (like cash on delivery).

@@ -12,7 +12,7 @@ export type { RingStats, RingQuery } from './ring-buffer';
 export type { LogRecord } from './log-record';
 export { parseLogLine, recordBytes } from './log-record';
 export { runWithRequestContext, currentRequestContext, stampContextActor } from './request-context';
-export type { RequestContext } from './request-context';
+export type { RequestContext, ContextActorDetail } from './request-context';
 export {
     installConsoleBridge,
     uninstallConsoleBridge,

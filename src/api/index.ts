@@ -189,6 +189,11 @@ router.use('/vendor/products', vendorProductsRoutes);
 import vendorCategoryRoutes from '../modules/categories/routes/vendor-category.routes';
 router.use('/vendor/categories', vendorCategoryRoutes);
 
+// The writing assistant — "Generate" beside a listing's description. Charges credits,
+// saves nothing; the model runs in the n8n `UP-wi-mall-ai-listing-copy` workflow.
+import vendorAiCopyRoutes from '../modules/ai-copy/routes/vendor-ai-copy.routes';
+router.use('/vendor/ai', vendorAiCopyRoutes);
+
 // Vendor inventory management routes
 import vendorInventoryRoutes from '../modules/catalog/routes/vendor-inventory.routes';
 router.use('/vendor/inventory', vendorInventoryRoutes);

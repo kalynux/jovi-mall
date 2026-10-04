@@ -28,6 +28,17 @@ export const VECTORISATION_COST = parseInt(process.env.CREDIT_COST_VECTORISATION
 export const WHATSAPP_TEMPLATE_COST = parseInt(process.env.CREDIT_COST_WHATSAPP_TEMPLATE || '2', 10);
 
 /**
+ * Cost (in credits) of ONE field the AI listing-copy assistant writes
+ * (`POST /api/vendor/ai/listing-copy`). A call is charged `fields × this` up front
+ * and refunded per field that comes back unusable.
+ *
+ * ⚠ The vendor dashboard shows the price BEFORE the click from its own copy of this
+ * number (`AI_COPY_FIELD_COST` in `src/services/ai-copy.service.ts`). Changing it here
+ * without telling them makes the button quote the wrong price.
+ */
+export const AI_COPY_FIELD_COST = parseInt(process.env.CREDIT_COST_AI_COPY_FIELD || '1', 10);
+
+/**
  * Purchasable credit packs. `code` is the stable identifier the client sends to
  * `POST /vendor/credits/topups`; price is in the wallet owner's currency (XAF).
  */

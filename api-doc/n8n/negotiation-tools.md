@@ -86,7 +86,7 @@ variant wins, so confirm the title with the customer.
     "resolvedBy": "productId",
     "product": {
       "id": "…", "slug": "…", "title": "…", "description": "…",
-      "type": "physical", "category": "…", "tags": ["…"],
+      "type": "physical", "category": "…", "categories": ["…"], "tags": ["…"],
       "currency": "XAF",
       "store": { "slug": "…", "name": "…", "isOpen": true },
       "images": [ { "id": "…", "url": "…", "access": "public", "mimeType": "image/webp", … } ],
@@ -140,7 +140,7 @@ CATALOG_PRODUCT_NOT_FOUND`.
   "productId": "…",      // optional: substitute FOR this. Excluded from its own results
   "query": "something smaller",   // optional: search BY this
   "maxPrice": 40000,     // the customer's BUDGET
-  "category": "…",       // optional; defaults to the subject's
+  "category": "…",       // optional — a category name (any spelling variant), slug or id; defaults to ALL of the subject's categories (any-of). Unknown → `hits: []`
   "type": "physical",    // optional; defaults to the subject's
   "inStockOnly": true,   // optional
   "limit": 5             // optional; default 5, max 10
@@ -168,7 +168,7 @@ It is also what `product_search()` already does — its `p_price_max` compares a
     "subjectId": "…",     // null when searched by query alone
     "hits": [
       {
-        "id": "…", "slug": "…", "title": "…", "type": "physical", "category": "…",
+        "id": "…", "slug": "…", "title": "…", "type": "physical", "category": "…", "categories": ["…"],
         "currency": "XAF",
         "store": { "slug": "…", "name": "…", "isOpen": true },
         "image": { … } ,          // the card image, or null

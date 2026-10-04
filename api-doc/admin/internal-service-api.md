@@ -113,10 +113,12 @@ grep -cE '^(GET|POST|PUT|PATCH|DELETE) /api/internal/admin/' DOC-PROGRAM/evidenc
 | `/billing/*` | 8 | ~~`/api/admin/{plans,entitlements,vendors,agencies,agents}/…`~~ — **no `/billing` segment** | [billing.md](./billing.md) |
 | `/earnings/*` | 4 | ~~`/api/admin/earnings/*`~~ | [earnings.md](./earnings.md) |
 | `/payout-requests/*` | 4 | ~~`/api/admin/payout-requests/*`~~ | [payout-requests.md](./payout-requests.md) |
+| `/delivery-fee-refunds/*` | 3 | **never** — added 2026-10-04 (ADR-A11 W-E2), after the count above was measured | [delivery-fee-refunds.md](./delivery-fee-refunds.md) |
 | `/orders/*` | 6 | **partial** — only `GET /disputes` and `POST /:id/dispute/resolve` ever were | [orders.md](./orders.md) |
 | `/reviews/*` | 4 | **never** — moderation was always service-token only | [reviews.md](./reviews.md) |
 | `/tickets/*` | 19 | ~~`/api/admin/tickets/*`~~ — deleted earlier, at **Phase 17**. 18 rows moved; `POST /:ticketId/claim` is net-new | [tickets.md](./tickets.md) |
 | `/vendors/*` | 8 | **never** | — see below |
+| `/categories/*` | 3 | **never** — added 2026-10-04 with the shared category list | — see below |
 | `/users/*` | 6 | **never** | — see below. ⚠ 5 when the total above was measured; `POST /:userId/bot-memory/reset` landed 2026-09-22 |
 | `/shipments/*` | 2 | **never** | — see below |
 | `/system/*` | 12 | **never, deliberately** | [system.md](./system.md) |
@@ -141,6 +143,28 @@ POST   /vendors/:vendorId/products/:productId/restore
 Suspending a vendor takes their whole catalogue off sale **inside the transaction that moves their
 status**, and the restore re-runs the activation gate on every listing rather than blindly
 republishing it. A second writer would reproduce the status change and miss all of that.
+
+**`/categories/*`** — writes only; wi-admin reads `product_categories` directly (2026-10-04).
+
+```
+PATCH  /categories/:id          { name }      → { category, previousName }
+POST   /categories/:id/merge    { targetId }  → { source, target, productsUpdated }
+DELETE /categories/:id                        → { category }
+```
+
+- **Rename:** re-derives the duplicate key, refuses `409 CATEGORY_NAME_TAKEN` with
+  `{ existingId, existingName }` when another category already has that spelling, and keeps
+  the old spelling as an **alias**.
+- **Merge:** one transaction. Every product holding `:id` gets `targetId` in its place, with
+  order kept and duplicates removed. `:id`'s spellings become the target's aliases, and `:id`
+  is soft-deleted with `merged_into`.
+- **Delete:** refused with `409 CATEGORY_IN_USE` and `{ productCount }` while any live product
+  holds the category.
+- **Admin `category` objects** are `{ id, name, slug, aliasKeys, createdSource,
+  createdByVendorId, createdAt, updatedAt }`.
+
+A second writer would rename the row and miss the product rewrite and the aliases. The aliases
+are what the vendor-side duplicate check reads.
 
 **`/users/*`** — writes only, for the same reason.
 
@@ -257,7 +281,23 @@ POST   /shipments/:shipmentId/move-agency    { agencyId, reason, force? }       
   dispatched to the new agency; a `pending` one stays `pending`. Answers
   `{ shipmentId, previousAgencyId, agencyId, destinationShipmentId, itemsMoved, dispatched, forced }` —
   ⚠ `destinationShipmentId` may differ from `shipmentId` (items join the destination agency's open
-  shipment for the order, and an emptied source is deleted).
+  shipment for the order, and an emptied source is deleted). Since 2026-10-04 (ADR-A11 W-E2, D-12)
+  every item moves in **one transaction**: the shipment moves whole or not at all.
+
+**`/delivery-fee-refunds/*`** — 2026-10-04 (ADR-A11 W-E2). Delivery money owed back to a customer
+that the gateway could not return (COD, mobile money) waits as a `manual_required` row with a HIGH
+ticket; an administrator pays it and records it here. Contract:
+[delivery-fee-refunds.md](./delivery-fee-refunds.md).
+
+```
+GET    /delivery-fee-refunds                     ?status=manual_required|settled|all&orderId=&page=&limit=
+GET    /delivery-fee-refunds/:refundId
+POST   /delivery-fee-refunds/:refundId/settle    { method, reference?, note? }
+```
+
+Delegated because the settle is a compare-and-set paired with post-commit effects — the ticket
+resolved, the customer told (`order.delivery_fee.refund_settled`). Who settled comes from the
+`X-Actor-*` headers; there is no actor field in the body.
 
 **`/orders/*`** — four of its six are internal-only, and their absence from `/api/admin/orders` is
 deliberate: a refund moves money through a payment gateway, and `requireRole(['admin'])` on a

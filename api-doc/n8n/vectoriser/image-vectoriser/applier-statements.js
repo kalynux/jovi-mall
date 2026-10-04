@@ -46,13 +46,23 @@ const APPLIER = [
   ['2h. Create product_image_settle', /^CREATE FUNCTION product_image_settle\b/],
   ['2i. Image Query Cache Table', /^CREATE TABLE IF NOT EXISTS product_image_query_cache\b/],
   ['2j. Image Query Cache Index', /^CREATE INDEX IF NOT EXISTS product_image_query_cache_last_used_idx\b/],
+  // 2026-10-04 · several categories per product. Cut from the MIGRATION file, not the
+  // bootstrap: the deployed table already has `tsv`, and only SET EXPRESSION can change it.
+  ['2k. Categories Column', /^ALTER TABLE product_vectors\s+ADD COLUMN IF NOT EXISTS categories\b/, 'migrations/2026-10-04-categories.sql'],
+  ['2l. tsv Includes Categories', /^ALTER TABLE product_vectors\s+ALTER COLUMN tsv SET EXPRESSION\b/, 'migrations/2026-10-04-categories.sql'],
+  ['2m. Categories Index', /^CREATE INDEX IF NOT EXISTS product_vectors_categories_idx\b/, 'migrations/2026-10-04-categories.sql'],
   ['3. Drop Every product_search Overload', /^DO \$drop_search\$/],
   ['4. Create product_search', /^CREATE OR REPLACE FUNCTION product_search\b/],
 ];
 
 function applierStatements(file = path.join(__dirname, '..', 'product_vectors.sql')) {
-  const stmts = splitSql(fs.readFileSync(file, 'utf8'));
-  return APPLIER.map(([name, re]) => {
+  const cache = new Map();
+  const statementsOf = (f) => {
+    if (!cache.has(f)) cache.set(f, splitSql(fs.readFileSync(f, 'utf8')));
+    return cache.get(f);
+  };
+  return APPLIER.map(([name, re, rel]) => {
+    const stmts = statementsOf(rel ? path.join(__dirname, '..', rel) : file);
     const hits = stmts.filter(s => re.test(s));
     if (hits.length !== 1) throw new Error(`${name}: ${hits.length} statements match ${re} -- expected exactly 1`);
     return { name, sql: hits[0] };

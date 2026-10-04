@@ -128,6 +128,12 @@ export interface ExposureShipmentRow {
   amount: number;
   /** The shipment's collection status, `null` when no collection row exists yet. */
   collectionStatus: 'pending' | 'collected' | 'cancelled' | null;
+  /**
+   * Cash that belongs to the AGENCY side only — a fee-only collection (W-F, the customer pays the
+   * delivery fee to the rider on an online order). Counted in the agency's exposure, skipped by a
+   * vendor-scoped sum (a vendor's COD terms cap that vendor's goods, not an agency's fees).
+   */
+  agencyOnly?: boolean;
 }
 
 /** One COLLECTED collection of the agency. */
@@ -136,6 +142,8 @@ export interface ExposureCollectionRow {
   vendorId: string;
   expectedAmount: number;
   settledAmount: number;
+  /** See `ExposureShipmentRow.agencyOnly`. */
+  agencyOnly?: boolean;
 }
 
 export interface CodExposureTotals {
@@ -164,7 +172,7 @@ export function sumCodExposure(
   let inFlight = 0;
   let inFlightCount = 0;
   for (const s of shipments) {
-    if (vendorId !== null && s.vendorId !== vendorId) continue;
+    if (vendorId !== null && (s.vendorId !== vendorId || s.agencyOnly)) continue;
     if (s.collectionStatus === 'collected') continue;
     const amount = Math.max(0, s.amount);
     if (amount === 0) continue;
@@ -175,7 +183,7 @@ export function sumCodExposure(
   let collectedUnremitted = 0;
   let collectedCount = 0;
   for (const c of collections) {
-    if (vendorId !== null && c.vendorId !== vendorId) continue;
+    if (vendorId !== null && (c.vendorId !== vendorId || c.agencyOnly)) continue;
     const outstanding = Math.max(0, c.expectedAmount - c.settledAmount);
     if (outstanding === 0) continue;
     collectedUnremitted += outstanding;

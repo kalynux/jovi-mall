@@ -1475,6 +1475,10 @@ function tokenContainmentSection(): void {
             // `'yes:co'` / `'no:co'` (2026-09-22). The tokens themselves are composed in
             // `domain/bot-checkout-actions.ts` by builders, and parse-tested in test:inapp-checkout § 13.
             'modules/bot-surface/controllers/bot-checkout.controller.ts': { shape: 'keys-only', reason: 'registry keys' },
+            // `'yes:dfc'` / `'no:dfc'` (2026-10-04, W-H), Accept / Decline a delivery-fee change. The
+            // tokens are built by `deliveryFeeAcceptActionId` / `deliveryFeeDeclineActionId` and
+            // parse-tested in test:bot-fee-changes § 1.
+            'modules/bot-surface/controllers/bot-delivery-fee.controller.ts': { shape: 'keys-only', reason: 'registry keys' },
             'modules/bot-surface/controllers/bot-discovery.controller.ts': { shape: 'keys-only', reason: 'registry keys' },
             // `'yes:tos'` (2026-09-28), the terms Accept tap. The token is built by
             // `acceptTermsActionId()` (`confirmActionId('tos')`) and asserted in test:inapp-account.

@@ -40,6 +40,8 @@ export const StockRequestQuerySchema = z.object({
   productId: objectId.optional(),
   variantId: objectId.optional(),
   direction: z.enum(['raised_by_me', 'awaiting_me']).optional(),
+  /** Case-insensitive substring over the product title and the variant SKU. */
+  search: z.string().trim().min(1).max(100).optional(),
 }).strict();
 
 export type StockRequestQueryInput = z.infer<typeof StockRequestQuerySchema>;

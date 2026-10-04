@@ -223,6 +223,7 @@ export class SystemController {
             until: query.until ? new Date(query.until) : undefined,
             requestId: query.requestId,
             q: query.q,
+            actorId: query.actorId,
             source: query.source ?? 'persisted',
             limit: query.limit ?? 100,
             before: query.before,

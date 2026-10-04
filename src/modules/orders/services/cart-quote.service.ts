@@ -63,7 +63,12 @@ import {
     DeliveryPayerReason,
     VendorDeliveryTermsMode,
 } from '../../vendors/domain/delivery-terms';
-import { PricingLine, VendorOrderPricing } from '../domain/vendor-order-pricing';
+import {
+    DeliveryFeeCashUnavailableReason,
+    DeliveryFeeCashVerdict,
+    PricingLine,
+    VendorOrderPricing,
+} from '../domain/vendor-order-pricing';
 import { belowMinimumError } from './delivery-cost-cap.service';
 import {
     regionOfGeo,
@@ -119,6 +124,59 @@ export interface CartQuoteVendorLine {
      * EVALUATED — a digital-only shop, or a vendor whose plan could not be resolved.
      */
     deliveryMinimum: DeliveryMinimumQuote | null;
+    /**
+     * Cash for delivery (ADR-A11 § Cash for delivery, W-F): may this shop's customer-paid
+     * delivery fee be paid to the rider in cash (checkout `deliveryFeePayment: cash_to_rider`)?
+     * `amountDueOnline` / `amountDueToRider` are this shop's split IF chosen. Priced on the
+     * ONLINE method; `null` for a digital line.
+     */
+    deliveryFeeCash: CartQuoteDeliveryFeeCash | null;
+}
+
+export interface CartQuoteDeliveryFeeCash {
+    available: boolean;
+    reason: DeliveryFeeCashUnavailableReason | null;
+    amountDueOnline: number;
+    amountDueToRider: number;
+}
+
+/**
+ * The whole checkout's answer to "may I pay delivery in cash to the rider?": `available` when at
+ * least one shop has a fee to hand over and NO customer-paid shop refuses it (checkout refuses
+ * the whole `cash_to_rider` checkout otherwise). The amounts are the checkout's split if chosen.
+ */
+export interface CartQuoteDeliveryFeeCashTotal extends CartQuoteDeliveryFeeCash {
+    /** Shops whose delivery would be paid in cash if chosen. */
+    vendorIds: string[];
+}
+
+/** Fold the per-shop verdicts into the checkout's (pure — `test:cash-delivery-fee` pins it). */
+export function deliveryFeeCashTotalOf(
+    lines: Array<{ vendorId: string; total: number; deliveryFeeCash: CartQuoteDeliveryFeeCash | null }>,
+    productType: string | null,
+): CartQuoteDeliveryFeeCashTotal {
+    const grand = lines.reduce((sum, l) => sum + l.total, 0);
+    if (productType !== 'physical') {
+        return { available: false, reason: 'no_delivery_fee', amountDueOnline: grand, amountDueToRider: 0, vendorIds: [] };
+    }
+    const cash = lines.filter((l) => l.deliveryFeeCash?.available);
+    const declining = lines.find((l) => l.deliveryFeeCash?.reason === 'agency_declines_cash');
+    if (declining || cash.length === 0) {
+        const reason = declining
+            ? 'agency_declines_cash'
+            : lines.some((l) => l.deliveryFeeCash?.reason === 'no_delivery_fee') && !lines.some((l) => l.deliveryFeeCash?.reason === 'not_customer_paid')
+                ? 'no_delivery_fee'
+                : 'not_customer_paid';
+        return { available: false, reason, amountDueOnline: grand, amountDueToRider: 0, vendorIds: [] };
+    }
+    const toRider = cash.reduce((sum, l) => sum + (l.deliveryFeeCash?.amountDueToRider ?? 0), 0);
+    return {
+        available: true,
+        reason: null,
+        amountDueOnline: grand - toRider,
+        amountDueToRider: toRider,
+        vendorIds: cash.map((l) => l.vendorId),
+    };
 }
 
 export interface DeliveryMinimumQuote {
@@ -221,6 +279,8 @@ export interface CartQuote {
      * quote asked with `paymentMethod: 'cash_on_delivery'`.
      */
     cashOnDelivery: CashOnDeliveryQuote;
+    /** Cash for delivery for the whole checkout (W-F) — see `CartQuoteDeliveryFeeCashTotal`. */
+    deliveryFeeCash: CartQuoteDeliveryFeeCashTotal;
     perVendor: CartQuoteVendorLine[];
 }
 
@@ -341,6 +401,7 @@ export class CartQuoteService {
             regionKnown: deliveryRegion !== null,
             meetsDeliveryMinimum: perVendor.every((v) => v.deliveryMinimum?.met ?? true),
             cashOnDelivery: cashOnDeliveryVerdictOf(refusals),
+            deliveryFeeCash: deliveryFeeCashTotalOf(perVendor, cart.productType ?? null),
             perVendor,
         };
         return { quote, codRefusal };
@@ -533,8 +594,12 @@ export class CartQuoteService {
                 freeDelivery: null,
                 shipments: [],
                 deliveryMinimum: null,
+                deliveryFeeCash: null,
             };
         }
+        // Cash for delivery is an ONLINE-checkout option: priced on the online method even when the
+        // quote was asked for COD (where it reads unavailable, `cash_on_delivery`).
+        const cashVerdict: DeliveryFeeCashVerdict = (p.byMethod.get('online') ?? pricing).deliveryFeeCash;
         return {
             vendorId: p.input.vendorId,
             subtotal,
@@ -556,6 +621,12 @@ export class CartQuoteService {
                 components: s.components,
             })),
             deliveryMinimum: toMinimumQuote(pricing.deliveryMinimum),
+            deliveryFeeCash: {
+                available: paymentMethod === 'online' && cashVerdict.available,
+                reason: paymentMethod === 'online' ? cashVerdict.reason : 'cash_on_delivery',
+                amountDueOnline: paymentMethod === 'online' ? cashVerdict.amountDueOnline : pricing.total,
+                amountDueToRider: paymentMethod === 'online' ? cashVerdict.amountDueToRider : 0,
+            },
         };
     }
 }

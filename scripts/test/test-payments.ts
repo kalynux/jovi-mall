@@ -1238,7 +1238,8 @@ assert('every idempotency check that falls through releases the dead attempt', (
   // the winner of a race, and counting it would let a path lose its release and stay green.
   const checks = countOf('const existingTx = await PaymentTransactionModel.findOne({ idempotencyKey });');
   const releases = countOf('await this.releaseDeadAttempt(existingTx);');
-  return checks === 4 && releases === checks;
+  // 5 since ADR-A11: initiateOrderDeliveryTopup (the delivery-fee top-up) is a charge path too.
+  return checks === 5 && releases === checks;
 });
 
 assert('the key is retired only from inside the release check', () => {
@@ -1285,7 +1286,7 @@ section('13. Paying twice — every way one impatient customer could');
 // the customer is simply out the money.
 
 assert('every initiate path looks for a live attempt before opening one', () =>
-  countOf('await this.findLiveAttempt(') === 4);
+  countOf('await this.findLiveAttempt(') === 5);
 
 assert('live means INITIATED or PENDING — the two states a charge can complete from', () => {
   const body = ORCHESTRATOR.split('private async findLiveAttempt')[1]?.slice(0, 400) ?? '';
@@ -1447,6 +1448,8 @@ const CHARGE_METHODS = [
   'async initiatePaymentForCart(',
   'async initiateBookingPayment(',
   'async initiateBookingBalancePayment(',
+  // ADR-A11 (W-E): the delivery-fee top-up — a second charge on a paid order.
+  'async initiateOrderDeliveryTopup(',
 ];
 const CHOKE_POINT = 'const charge = this.prepareCharge(selection, channel);';
 
@@ -1472,7 +1475,7 @@ assert('the choke point appears once per charge-starting method; the old gate is
     ORCHESTRATOR_LF.indexOf('private prepareCharge('),
     ORCHESTRATOR_LF.indexOf('\n  }\n', ORCHESTRATOR_LF.indexOf('private prepareCharge(')),
   );
-  return countOf('this.prepareCharge(selection, channel)') === 4
+  return countOf('this.prepareCharge(selection, channel)') === 5
     && countOf('assertGatewayOffered(') === 0
     && !prepare.includes("typeof selection === 'string'")
     && prepare.includes('resolveCollectionRoute(provider)');

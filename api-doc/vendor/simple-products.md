@@ -86,7 +86,8 @@ Creates the product, its single variant and its delivery config in **one transac
 | `title` | string | ✅ | 3–200 chars |
 | `description` | string | ✅ | Non-empty. Required here (unlike the draft endpoint) because an empty description blocks publishing. Plain text — no markup. |
 | `descriptionRich` | object \| null | No | Structured description powering WhatsApp / Telegram formatting. `description` must be its plain-text projection — see [product-description-rich.md](./product-description-rich.md). |
-| `category` | string | ✅ | Non-empty |
+| `categories` | `({ id } \| { name, confirmNew? })[]` | ✅ (or `category`) | 1–5 from the shared list or typed names; a look-alike answers `422 CATEGORY_SIMILAR_EXISTS`. Same on the PATCH (full replacement, optional). See [categories.md](./categories.md). |
+| `category` | string | ⚠ Deprecated | The old single value — accepted when `categories` is absent. Never send both (400). |
 | `price` | number | ✅ | **> 0**. Zero is rejected outright — a zero-priced product can never be activated. |
 | `stock` | integer | | ≥ 0, default `0` |
 | `isInfiniteStock` | boolean | | default `false` |

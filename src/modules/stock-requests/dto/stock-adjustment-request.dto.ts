@@ -3,6 +3,7 @@ import {
   StockRequestParty,
   StockRequestStatus,
 } from '../models/stock-adjustment-request.model';
+import type { StockRequestContext } from '../read-models/stock-request-context.resolver';
 
 /** What a party may do to a request right now. */
 export type StockRequestAction = 'approve' | 'reject' | 'withdraw';
@@ -13,6 +14,12 @@ export interface StockRequestDto {
   variantId: string;
   vendorId: string;
   agencyId: string;
+
+  /** What is being changed, by name (2026-10-04) — see `StockRequestContext`. */
+  product: StockRequestContext['product'];
+  vendor: StockRequestContext['vendor'];
+  location: StockRequestContext['location'];
+  stockLevelId: string | null;
 
   requestedByRole: StockRequestParty;
   requestedAt: string;
@@ -90,6 +97,7 @@ export class StockRequestMapper {
     doc: IStockAdjustmentRequest,
     viewerRole: StockRequestParty,
     live?: StockRequestLiveState | null,
+    context?: StockRequestContext | null,
   ): StockRequestDto {
     const isPending = doc.status === 'pending';
     const mine = doc.requested_by_role === viewerRole;
@@ -100,6 +108,11 @@ export class StockRequestMapper {
       variantId: doc.variant_id.toString(),
       vendorId: doc.vendor_id.toString(),
       agencyId: doc.agency_id.toString(),
+
+      product: context?.product ?? { title: null, variantTitle: null, sku: null, image: null },
+      vendor: context?.vendor ?? { id: doc.vendor_id.toString(), businessName: null, verified: false },
+      location: context?.location ?? null,
+      stockLevelId: context?.stockLevelId ?? null,
 
       requestedByRole: doc.requested_by_role,
       requestedAt: doc.requested_at.toISOString(),

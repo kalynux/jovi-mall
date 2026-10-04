@@ -8,6 +8,7 @@ import {
   CREDIT_TOPUP_PACKS,
   VECTORISATION_COST,
   WHATSAPP_TEMPLATE_COST,
+  AI_COPY_FIELD_COST,
 } from '../config/credit.config';
 
 /**
@@ -75,6 +76,7 @@ export class PublicBillingController {
         actionCosts: {
           vectorisation: VECTORISATION_COST,
           whatsappTemplate: WHATSAPP_TEMPLATE_COST,
+          aiCopyField: AI_COPY_FIELD_COST,
         },
       },
     });

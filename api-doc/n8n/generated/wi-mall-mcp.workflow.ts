@@ -59,7 +59,7 @@ const catalog_search_products = tool({
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/products",
       "sendQuery": true,
       "specifyQuery": "json",
-      "jsonQuery": "={{ JSON.stringify({ q: $fromAI(\"q\", \"Whole-word text search. Searching 'dres' will NOT find 'dress' — pass the customer's words, not a prefix. At most 200 characters.\", \"string\") || undefined, category: $fromAI(\"category\", \"Exact match. Get valid values from catalog_list_categories; do not invent one.\", \"string\") || undefined, type: $fromAI(\"type\", \"One of: physical, digital, service.\", \"string\") || undefined, storeSlug: $fromAI(\"storeSlug\", \"Narrow to one seller, by the slug from a product card's store.slug. Leave empty unless the customer named a shop.\", \"string\") || undefined, minPrice: $fromAI(\"minPrice\", \"Whole units of currency.\", \"number\") || undefined, maxPrice: $fromAI(\"maxPrice\", \"Whole units of currency.\", \"number\") || undefined, inStock: $fromAI(\"inStock\", \"Only 'true' narrows. There is no way to ask for out-of-stock items. One of: true.\", \"string\") || undefined, sort: $fromAI(\"sort\", \"There is no popularity sort and asking for one is a 400, not a silent fallback. One of: newest, price_asc, price_desc, relevance.\", \"string\") || undefined }) }}",
+      "jsonQuery": "={{ JSON.stringify({ q: $fromAI(\"q\", \"Whole-word text search. Searching 'dres' will NOT find 'dress' — pass the customer's words, not a prefix. At most 200 characters.\", \"string\") || undefined, category: $fromAI(\"category\", \"A category slug (preferred — from catalog_list_categories), id, or name. A name may be any spelling variant ('shoe' finds 'Shoes') but never a typo, and an unknown one returns no products rather than an error. A product is found under every one of its categories.\", \"string\") || undefined, type: $fromAI(\"type\", \"One of: physical, digital, service.\", \"string\") || undefined, storeSlug: $fromAI(\"storeSlug\", \"Narrow to one seller, by the slug from a product card's store.slug. Leave empty unless the customer named a shop.\", \"string\") || undefined, minPrice: $fromAI(\"minPrice\", \"Whole units of currency.\", \"number\") || undefined, maxPrice: $fromAI(\"maxPrice\", \"Whole units of currency.\", \"number\") || undefined, inStock: $fromAI(\"inStock\", \"Only 'true' narrows. There is no way to ask for out-of-stock items. One of: true.\", \"string\") || undefined, sort: $fromAI(\"sort\", \"There is no popularity sort and asking for one is a 400, not a silent fallback. One of: newest, price_asc, price_desc, relevance.\", \"string\") || undefined }) }}",
       "options": {
         "response": {
           "response": {
@@ -149,7 +149,7 @@ const catalog_list_categories = tool({
     name: "catalog_list_categories",
     position: [1040,328],
     parameters: {
-      "toolDescription": "The categories that currently have products for sale, with a count each. Data only; it draws nothing. USE IT WHEN: To get exact category names before filtering a search by category — the names must come from this list. NOT THIS TOOL: Not to SHOW categories to the customer — that is catalog_browse_categories. Not instead of a search when they already described what they want.",
+      "toolDescription": "The categories that currently have products for sale — each with an id, a name, a slug and a product count. A product with several categories counts toward each. Data only; it draws nothing. USE IT WHEN: To get a category's slug before filtering a search by category — pass the slug, not a guessed name. NOT THIS TOOL: Not to SHOW categories to the customer — that is catalog_browse_categories. Not instead of a search when they already described what they want.",
       "method": "GET",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/categories",
       "options": {
@@ -451,7 +451,7 @@ const checkout_review = tool({
     name: "checkout_review",
     position: [1240,528],
     parameters: {
-      "toolDescription": "Live order summary for the basket: lines, the delivery line per shop (fee, or Free, with an \"add X more and delivery is free\" hint), total (formatted, including delivery), delivery address (a SAVED one — the default unless deliveryAddressId is given) and the masked mobile-money number. Places nothing. Returns a single-use checkoutRef (10 minutes) for checkout_place. ⚠ When ready is true and payment.phoneMasked is set, THIS TOOL SENDS THE CUSTOMER the summary with Place order / Not now buttons (or one button per address when several are deliverable and none was named): answer [sent] — never repeat it or ask again. With no saved address it sends the website link itself. ⚠ blocker below_delivery_minimum: no checkoutRef; the tool sends how much more to add from each shop — do not repeat it. USE IT WHEN: The customer wants to check out / buy / pay for their basket. Call it again with deliveryAddressId for a different saved address. NOT THIS TOOL: Never ask for an address or phone number the review shows, and never collect an address in the chat. no_saved_address / address_not_deliverable: offer a deliverable saved address or send addAddressUrl. address_not_found: call addresses_list and ask again. below_delivery_minimum: help them add more from THAT shop (another shop's item is a separate order and does not help), then review again; never mention the seller's commission. When asked about delivery, quote deliveryLines[] exactly — never compute, estimate or promise a delivery fee yourself, and never say delivery is free unless the line says so. ⚠ payment.phoneMasked null: nothing was sent — ask for a number, then pass it as `phone` to checkout_place.",
+      "toolDescription": "Live order summary for the basket: lines, the delivery line per shop (fee, or Free, with an \"add X more and delivery is free\" hint), total (formatted, including delivery), delivery address (a SAVED one — the default unless deliveryAddressId is given) and the masked mobile-money number. Places nothing. Returns a single-use checkoutRef (10 minutes) for checkout_place. ⚠ When ready is true and payment.phoneMasked is set, THIS TOOL SENDS THE CUSTOMER the summary with Place order / Not now buttons (or one button per address when several are deliverable and none was named): answer [sent] — never repeat it or ask again. With no saved address it sends the website link itself. ⚠ blocker below_delivery_minimum: no checkoutRef; the tool sends how much more to add from each shop — do not repeat it. When payment.deliveryFeeCash is set, the sent summary also offers \"Delivery in cash\" (items now, delivery fee in cash to the rider) with both amounts. USE IT WHEN: The customer wants to check out / buy / pay for their basket. Call it again with deliveryAddressId for a different saved address. NOT THIS TOOL: Never ask for an address or phone number the review shows, and never collect an address in the chat. no_saved_address / address_not_deliverable: offer a deliverable saved address or send addAddressUrl. address_not_found: call addresses_list and ask again. below_delivery_minimum: help them add more from THAT shop (another shop's item is a separate order and does not help), then review again; never mention the seller's commission. When asked about delivery, quote deliveryLines[] exactly — never compute, estimate or promise a delivery fee yourself, and never say delivery is free unless the line says so. ⚠ payment.phoneMasked null: nothing was sent — ask for a number, then pass it as `phone` to checkout_place.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/checkout/chat/review",
       "authentication": "genericCredentialType",
@@ -518,7 +518,7 @@ const checkout_place = tool({
       },
       "sendBody": true,
       "specifyBody": "json",
-      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, checkoutRef: $fromAI(\"checkoutRef\", \"Exactly as checkout_review returned it. Single use, ten minutes.\", \"string\"), deliveryAddressId: $fromAI(\"deliveryAddressId\", \"The delivery.address.id from the review. Required for physical goods; omit for downloads. A 24-character hexadecimal id.\", \"string\") || undefined, phone: $fromAI(\"phone\", \"Only a mobile-money number the customer typed, exactly as they typed it (the country code is optional: without one, the account's own country is used). Omit to use the account's.\", \"string\") || undefined }) }}",
+      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, checkoutRef: $fromAI(\"checkoutRef\", \"Exactly as checkout_review returned it. Single use, ten minutes.\", \"string\"), deliveryAddressId: $fromAI(\"deliveryAddressId\", \"The delivery.address.id from the review. Required for physical goods; omit for downloads. A 24-character hexadecimal id.\", \"string\") || undefined, phone: $fromAI(\"phone\", \"Only a mobile-money number the customer typed, exactly as they typed it (the country code is optional: without one, the account's own country is used). Omit to use the account's.\", \"string\") || undefined, deliveryFeePayment: $fromAI(\"deliveryFeePayment\", \"Optional, default with_order. cash_to_rider ONLY when the review's payment.deliveryFeeCash was set and the customer chose to pay the delivery fee in cash to the rider: the items are charged now, the delivery fee is paid to the rider with a delivery code. One of: with_order, cash_to_rider.\", \"string\") || undefined }) }}",
       "options": {
         "response": {
           "response": {
@@ -843,12 +843,282 @@ const orders_list_shipments = tool({
   output: [{ success: true }],
 });
 
+const delivery_fees_list_pending = tool({
+  type: "n8n-nodes-base.httpRequestTool",
+  version: 4.5,
+  config: {
+    name: "delivery_fees_list_pending",
+    position: [1440,728],
+    parameters: {
+      "toolDescription": "The delivery-fee changes that wait on the customer, on one order or on all their open orders: a delivery company asking more for a parcel, a parcel moved to a dearer company, or an accepted increase whose top-up is still to pay. The platform DRAWS the question itself (Accept · Decline, or Pay now · Decline) — relay the reply and add nothing. USE IT WHEN: The customer asks about a delivery fee change, an extra delivery charge, \"why do I have to pay more for delivery\", or a notification about one; or wants to answer one. NOT THIS TOOL: Never to accept a fee change or to pay — there is no such tool for you; the customer presses Accept or Pay now on the drawn question. Not for the delivery fee at checkout (checkout_review). Not for a combined price on several parcels (combined_delivery_eligible). ⚠ Quote amounts ONLY as the *Text fields give them; never compute a fee or a difference (customerPays is NOT proposed minus before when the shop paid part). state awaiting_payment = accepted online, the top-up is due. origin change_agency = the shop moved the parcel; declining means the SHOP pays the difference. Keep proposalId and version as data for delivery_fees_reject; never print them.",
+      "method": "POST",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/delivery-fees/pending",
+      "authentication": "genericCredentialType",
+      "genericAuthType": "httpBearerAuth",
+      "sendHeaders": true,
+      "headerParameters": {
+        "parameters": [
+          {
+            "name": "X-Webhook-Secret",
+            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+          }
+        ]
+      },
+      "sendBody": true,
+      "specifyBody": "json",
+      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, orderId: $fromAI(\"orderId\", \"Optional: one order — its id or the order number the customer read out. Omit for every open order. At most 64 characters.\", \"string\") || undefined }) }}",
+      "options": {
+        "response": {
+          "response": {
+            "neverError": true
+          }
+        },
+        "timeout": 20000
+      }
+    },
+    credentials: {
+      "httpBearerAuth": {
+        "id": "lz5ivIop9DF8mPHa",
+        "name": "jovi-mall-Bearer Auth account"
+      }
+    },
+  },
+  output: [{ success: true }],
+});
+
+const delivery_fees_reject = tool({
+  type: "n8n-nodes-base.httpRequestTool",
+  version: 4.5,
+  config: {
+    name: "delivery_fees_reject",
+    position: [40,928],
+    parameters: {
+      "toolDescription": "Decline a delivery-fee increase the customer was shown. A delivery company's increase: the old fee stays and the company keeps it, asks once more, or steps back. A moved parcel's difference: the shop pays it. Costs the customer nothing. The platform words the outcome — relay the reply. USE IT WHEN: The customer clearly says they refuse the new delivery fee shown by delivery_fees_list_pending, in words rather than with the Decline button. NOT THIS TOOL: Never to accept (there is no tool for that — the customer presses Accept). Never on a guess about which change they mean: if several are waiting, call delivery_fees_list_pending and let them pick. ⚠ proposalId and version come from delivery_fees_list_pending, verbatim. If the reply says the fee changed, it shows the new figure with buttons — let the customer answer that one.",
+      "method": "POST",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/delivery-fees/{{ $fromAI(\"proposalId\", \"proposalId from delivery_fees_list_pending changes[] — copied verbatim, never composed. A 24-character hexadecimal id.\", \"string\") }}/reject",
+      "authentication": "genericCredentialType",
+      "genericAuthType": "httpBearerAuth",
+      "sendHeaders": true,
+      "headerParameters": {
+        "parameters": [
+          {
+            "name": "X-Webhook-Secret",
+            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+          },
+          {
+            "name": "Idempotency-Key",
+            "value": "={{ $execution.id }}-{{ $now.toMillis() }}-delivery_fees_reject"
+          }
+        ]
+      },
+      "sendBody": true,
+      "specifyBody": "json",
+      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, version: $fromAI(\"version\", \"The version from the SAME changes[] row, copied verbatim. It proves which figure the customer saw; never change it.\", \"number\"), note: $fromAI(\"note\", \"Optional: the customer's own reason, in their words. Reaches the delivery company. At most 500 characters.\", \"string\") || undefined }) }}",
+      "options": {
+        "response": {
+          "response": {
+            "neverError": true
+          }
+        },
+        "timeout": 20000
+      }
+    },
+    credentials: {
+      "httpBearerAuth": {
+        "id": "lz5ivIop9DF8mPHa",
+        "name": "jovi-mall-Bearer Auth account"
+      }
+    },
+  },
+  output: [{ success: true }],
+});
+
+const combined_delivery_eligible = tool({
+  type: "n8n-nodes-base.httpRequestTool",
+  version: 4.5,
+  config: {
+    name: "combined_delivery_eligible",
+    position: [240,928],
+    parameters: {
+      "toolDescription": "The groups of the customer's parcels a delivery company could deliver at a combined (lower) price: per checkout and per delivery company, at least two customer-paid parcels not yet picked up. Each group carries its own cartId, agencyId and shipment ids. USE IT WHEN: The customer asks whether they can pay less for delivery because one company carries several of their parcels, or asks for a \"group\" / \"combined\" delivery price. NOT THIS TOOL: Not to answer a single parcel's fee change (delivery_fees_list_pending). An empty list means nothing qualifies — say so; never suggest naming parcels yourself. ⚠ Quote fees only as feeText / totalFeeText. openRequestId set = a request to that company is already open; do not create another (combined_delivery_list shows it). Never promise a saving: the company may decline.",
+      "method": "POST",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/delivery-fees/combined/eligible",
+      "authentication": "genericCredentialType",
+      "genericAuthType": "httpBearerAuth",
+      "sendHeaders": true,
+      "headerParameters": {
+        "parameters": [
+          {
+            "name": "X-Webhook-Secret",
+            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+          }
+        ]
+      },
+      "sendBody": true,
+      "specifyBody": "json",
+      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") } }) }}",
+      "options": {
+        "response": {
+          "response": {
+            "neverError": true
+          }
+        },
+        "timeout": 20000
+      }
+    },
+    credentials: {
+      "httpBearerAuth": {
+        "id": "lz5ivIop9DF8mPHa",
+        "name": "jovi-mall-Bearer Auth account"
+      }
+    },
+  },
+  output: [{ success: true }],
+});
+
+const combined_delivery_request = tool({
+  type: "n8n-nodes-base.httpRequestTool",
+  version: 4.5,
+  config: {
+    name: "combined_delivery_request",
+    position: [440,928],
+    parameters: {
+      "toolDescription": "Ask one delivery company for a combined (lower) price on several of the customer's parcels from one checkout. The company answers later, by lowering fees or declining; fees can never go up from this. The platform words the confirmation — relay the reply. USE IT WHEN: After combined_delivery_eligible, once the customer confirmed which group (company) they want to ask. NOT THIS TOOL: Never with ids that did not come from combined_delivery_eligible. Not when that group already has an openRequestId.",
+      "method": "POST",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/delivery-fees/combined",
+      "authentication": "genericCredentialType",
+      "genericAuthType": "httpBearerAuth",
+      "sendHeaders": true,
+      "headerParameters": {
+        "parameters": [
+          {
+            "name": "X-Webhook-Secret",
+            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+          },
+          {
+            "name": "Idempotency-Key",
+            "value": "={{ $execution.id }}-{{ $now.toMillis() }}-combined_delivery_request"
+          }
+        ]
+      },
+      "sendBody": true,
+      "specifyBody": "json",
+      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, cartId: $fromAI(\"cartId\", \"groups[].cartId from combined_delivery_eligible, verbatim. A 24-character hexadecimal id.\", \"string\"), agencyId: $fromAI(\"agencyId\", \"groups[].agencyId from the SAME group, verbatim. A 24-character hexadecimal id.\", \"string\"), shipmentIds: $fromAI(\"shipmentIds\", \"Optional: a subset of that group's shipments[].shipmentId (at least two). Omit for every parcel in the group.\", \"string\") || undefined, note: $fromAI(\"note\", \"Optional: the customer's own words to the company. At most 500 characters.\", \"string\") || undefined }) }}",
+      "options": {
+        "response": {
+          "response": {
+            "neverError": true
+          }
+        },
+        "timeout": 20000
+      }
+    },
+    credentials: {
+      "httpBearerAuth": {
+        "id": "lz5ivIop9DF8mPHa",
+        "name": "jovi-mall-Bearer Auth account"
+      }
+    },
+  },
+  output: [{ success: true }],
+});
+
+const combined_delivery_list = tool({
+  type: "n8n-nodes-base.httpRequestTool",
+  version: 4.5,
+  config: {
+    name: "combined_delivery_list",
+    position: [640,928],
+    parameters: {
+      "toolDescription": "The customer's combined delivery-price requests and their answers: open, answered (with the lowered fees and the saving), declined or cancelled. USE IT WHEN: The customer asks what happened to a combined-price request, or wants to cancel one (to get its id). NOT THIS TOOL: Not to find parcels that could be combined (combined_delivery_eligible). ⚠ Quote the saving and the fees only as the *Text fields give them.",
+      "method": "POST",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/delivery-fees/combined/list",
+      "authentication": "genericCredentialType",
+      "genericAuthType": "httpBearerAuth",
+      "sendHeaders": true,
+      "headerParameters": {
+        "parameters": [
+          {
+            "name": "X-Webhook-Secret",
+            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+          }
+        ]
+      },
+      "sendBody": true,
+      "specifyBody": "json",
+      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, cartId: $fromAI(\"cartId\", \"Optional: one checkout. Omit for the newest across all checkouts (five in the answer; meta says where the rest are). A 24-character hexadecimal id.\", \"string\") || undefined }) }}",
+      "options": {
+        "response": {
+          "response": {
+            "neverError": true
+          }
+        },
+        "timeout": 20000
+      }
+    },
+    credentials: {
+      "httpBearerAuth": {
+        "id": "lz5ivIop9DF8mPHa",
+        "name": "jovi-mall-Bearer Auth account"
+      }
+    },
+  },
+  output: [{ success: true }],
+});
+
+const combined_delivery_cancel = tool({
+  type: "n8n-nodes-base.httpRequestTool",
+  version: 4.5,
+  config: {
+    name: "combined_delivery_cancel",
+    position: [840,928],
+    parameters: {
+      "toolDescription": "Cancel a combined delivery-price request that is still open. Fees stay as they are. The platform words the confirmation — relay the reply. USE IT WHEN: The customer asks to cancel a combined-price request they made. NOT THIS TOOL: Not on an answered or declined request (it answers COMBINED_DELIVERY_REQUEST_NOT_OPEN).",
+      "method": "POST",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/delivery-fees/combined/{{ $fromAI(\"requestId\", \"requests[].id from combined_delivery_list, or openRequestId from combined_delivery_eligible — verbatim. A 24-character hexadecimal id.\", \"string\") }}/cancel",
+      "authentication": "genericCredentialType",
+      "genericAuthType": "httpBearerAuth",
+      "sendHeaders": true,
+      "headerParameters": {
+        "parameters": [
+          {
+            "name": "X-Webhook-Secret",
+            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+          },
+          {
+            "name": "Idempotency-Key",
+            "value": "={{ $execution.id }}-{{ $now.toMillis() }}-combined_delivery_cancel"
+          }
+        ]
+      },
+      "sendBody": true,
+      "specifyBody": "json",
+      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") } }) }}",
+      "options": {
+        "response": {
+          "response": {
+            "neverError": true
+          }
+        },
+        "timeout": 20000
+      }
+    },
+    credentials: {
+      "httpBearerAuth": {
+        "id": "lz5ivIop9DF8mPHa",
+        "name": "jovi-mall-Bearer Auth account"
+      }
+    },
+  },
+  output: [{ success: true }],
+});
+
 const orders_record_cancellation_reason = tool({
   type: "n8n-nodes-base.httpRequestTool",
   version: 4.5,
   config: {
     name: "orders_record_cancellation_reason",
-    position: [1440,728],
+    position: [1040,928],
     parameters: {
       "toolDescription": "Attaches the customer's own words about why they cancelled to that order's history, for the shop and support to read. USE IT WHEN: Right after a cancellation, when the customer tells you why. Send their words, not a summary. NOT THIS TOOL: It cancels nothing. Not for a complaint about a live order (that is a support request). Not twice for one order. ⚠ No `reply` comes back — acknowledge it briefly and kindly in your own words.",
       "method": "POST",
@@ -895,7 +1165,7 @@ const profile_get_summary = tool({
   version: 4.5,
   config: {
     name: "profile_get_summary",
-    position: [40,928],
+    position: [1240,928],
     parameters: {
       "toolDescription": "The customer's profile in brief: name, language, currency, whether contacts are verified, and how many addresses are saved. Contact details come back masked. USE IT WHEN: The customer asks what the platform knows about them, or before a settings change. NOT THIS TOOL: Not for addresses — use addresses_list.",
       "method": "POST",
@@ -938,7 +1208,7 @@ const profile_update = tool({
   version: 4.5,
   config: {
     name: "profile_update",
-    position: [240,928],
+    position: [1440,928],
     parameters: {
       "toolDescription": "Changes the name the customer is called. The only profile field this tool can change. USE IT WHEN: They ask to be called something else, or correct their name. NOT THIS TOOL: Not for language (profile_set_language), phone, email or address. ⚠ The answer is the profile summary with contacts masked — confirm the new name, never read the number aloud.",
       "method": "PATCH",
@@ -985,7 +1255,7 @@ const profile_set_language = tool({
   version: 4.5,
   config: {
     name: "profile_set_language",
-    position: [440,928],
+    position: [40,1128],
     parameters: {
       "toolDescription": "Sets the language the platform writes to this customer in — chat, notifications and email. USE IT WHEN: The customer asks to change language, or keeps writing in another language and confirms the switch. NOT THIS TOOL: Never on a single message in another language — people mix languages, and this also changes their emails. ⚠ Product text is NOT translated — it stays in the seller's language. Say so rather than appearing to translate it.",
       "method": "PATCH",
@@ -1032,7 +1302,7 @@ const addresses_list = tool({
   version: 4.5,
   config: {
     name: "addresses_list",
-    position: [640,928],
+    position: [240,1128],
     parameters: {
       "toolDescription": "The customer's saved addresses, which one is the default, and whether each can actually be delivered to. USE IT WHEN: For checkout's address step, and when the customer asks where their orders go. NOT THIS TOOL: Not to add a new address — new addresses are added on the website. ⚠ An address with deliverable false is refused at checkout — present it as needing to be re-picked, never as a choice.",
       "method": "POST",
@@ -1075,7 +1345,7 @@ const support_resolve_contacts = tool({
   version: 4.5,
   config: {
     name: "support_resolve_contacts",
-    position: [840,928],
+    position: [440,1128],
     parameters: {
       "toolDescription": "For what the customer most recently dealt with, who to contact — the seller, the delivery company or the platform — with each one's published contacts and why. USE IT WHEN: For an 'I need help' that is not clearly about one thing, and as the first step of support: product → seller, parcel → delivery company, money or account → platform. NOT THIS TOOL: Not when you can answer from the catalogue or their orders yourself — a phone number is a worse answer than the actual answer. ⚠ Any contact may be null; offer those that exist, otherwise open a ticket. A delivery company has no contacts until an order has a shipment.",
       "method": "POST",
@@ -1118,7 +1388,7 @@ const tickets_list = tool({
   version: 4.5,
   config: {
     name: "tickets_list",
-    position: [1040,928],
+    position: [640,1128],
     parameters: {
       "toolDescription": "The customer's open support tickets and their status. USE IT WHEN: They ask about a request they already made, or before opening a new one — add to an existing ticket rather than duplicating it. NOT THIS TOOL: Not as the answer to a first question — most are better answered directly. ⚠ assigned_admin is null until a person takes the ticket — say 'waiting to be picked up', never invent a handler.",
       "method": "POST",
@@ -1161,7 +1431,7 @@ const tickets_get = tool({
   version: 4.5,
   config: {
     name: "tickets_get",
-    position: [1240,928],
+    position: [840,1128],
     parameters: {
       "toolDescription": "One support ticket with its public conversation. USE IT WHEN: The customer names a ticket or asks what happened to a request. NOT THIS TOOL: Not for a list — use tickets_list. ⚠ Only public notes are returned — never imply a hidden conversation.",
       "method": "POST",
@@ -1204,7 +1474,7 @@ const tickets_add_note = tool({
   version: 4.5,
   config: {
     name: "tickets_add_note",
-    position: [1440,928],
+    position: [1040,1128],
     parameters: {
       "toolDescription": "Adds the customer's message to an existing ticket, attributed to them. USE IT WHEN: The customer says something more about a ticket that is already open. NOT THIS TOOL: Never your own summary — staff read it as the customer's words.",
       "method": "POST",
@@ -1251,7 +1521,7 @@ const tickets_add_attachment = tool({
   version: 4.5,
   config: {
     name: "tickets_add_attachment",
-    position: [40,1128],
+    position: [1240,1128],
     parameters: {
       "toolDescription": "Puts a photo or PDF the customer just sent onto one of their tickets. The file is already stored; name it by the reference you were given. USE IT WHEN: The customer sent a file in this conversation as evidence for a support request. Open the ticket first if there is none. NOT THIS TOOL: Never invent a reference; without one the customer must send the file again. References expire after 30 minutes. ⚠ One call per file (single use). When attachmentCount equals attachmentLimit, say the next file will be refused. You cannot see the file — call it what the customer called it.",
       "method": "POST",
@@ -1298,7 +1568,7 @@ const chat_answer_question = tool({
   version: 4.5,
   config: {
     name: "chat_answer_question",
-    position: [240,1128],
+    position: [1440,1128],
     parameters: {
       "toolDescription": "Answers the platform's waiting Yes/No question (customer.pendingQuestion) exactly as tapping its Yes or No button would: place the order (co), parcel arrived (cd), cancel the order (cnc), close the support request (tcl), disconnect the other app (unl). ⚠ THIS TOOL SENDS THE CUSTOMER the result, word for word what the tap sends — do not repeat or re-word it. USE IT WHEN: pendingQuestion is not null and the customer's message ANSWERS it in words, in any language: 'yes', 'ok', 'go ahead', 'place it', 'oui', 'sim', 'sí', 'نعم' → 'yes'; 'no', 'not now', 'leave it', 'non', 'não', 'لا' → 'no'. Check pendingQuestion.text to be sure the message is about THAT question. NOT THIS TOOL: Never when pendingQuestion is null, never for closing the account (button-only), never twice for one message or after a tap. A question is not an answer ('how much is delivery?') — answer it instead. If the message could mean either, ask. For a waiting Place order question (co) use THIS, not checkout_place. ⚠ The customer's own words ARE the confirmation — the question already named the total, the address, the order or the app.",
       "method": "POST",
@@ -1345,7 +1615,7 @@ const catalog_browse_categories = tool({
   version: 4.5,
   config: {
     name: "catalog_browse_categories",
-    position: [440,1128],
+    position: [40,1328],
     parameters: {
       "toolDescription": "Shows the customer the shop's categories as tap buttons (the busiest five plus See all); a tap opens that category as a product grid. Sends its own message. USE IT WHEN: The customer wants to BROWSE: 'what do you sell?', 'show me your categories'. NOT THIS TOOL: Not to learn category names for a search filter (catalog_list_categories). Not when they named a category — use inapp_open_listing with category. ⚠ Its message already asks the question — answer [sent], add nothing.",
       "method": "POST",
@@ -1388,7 +1658,7 @@ const catalog_product_reviews_summary = tool({
   version: 4.5,
   config: {
     name: "catalog_product_reviews_summary",
-    position: [640,1128],
+    position: [240,1328],
     parameters: {
       "toolDescription": "Shows a product's star rating, review count and two short recent quotes, with a button to read them all. Sends its own message. USE IT WHEN: The customer asks whether a product is good, or for reviews or opinions. NOT THIS TOOL: Not for your own reasoning (catalog_list_product_reviews). Never restate the rating yourself. ⚠ Answer [sent], add nothing.",
       "method": "POST",
@@ -1431,7 +1701,7 @@ const inapp_open_listing = tool({
   version: 4.5,
   config: {
     name: "inapp_open_listing",
-    position: [840,1128],
+    position: [440,1328],
     parameters: {
       "toolDescription": "Opens a scrollable product grid — a category, a whole shop or their saved items — with picture, price and buy button on every card. Sends its own button. USE IT WHEN: The customer wants to BROWSE a whole shelf, or asks to see everything after a page of cards. NOT THIS TOOL: Not for a specific question with a short answer — five cards via Show-Products are better. Not for one product (inapp_open_product). ⚠ Never describe the button in your own words — the customer would read it twice.",
       "method": "POST",
@@ -1478,7 +1748,7 @@ const inapp_open_stores = tool({
   version: 4.5,
   config: {
     name: "inapp_open_stores",
-    position: [1040,1128],
+    position: [640,1328],
     parameters: {
       "toolDescription": "Opens a browsable directory of the shops on the platform. Sends its own button. USE IT WHEN: The customer asks which shops exist or wants to find a shop rather than a product. NOT THIS TOOL: Not when they named a shop and want its products — use inapp_open_listing with storeSlug. ⚠ Never describe the button in your own words — the customer would read it twice.",
       "method": "POST",
@@ -1525,7 +1795,7 @@ const inapp_open_orders = tool({
   version: 4.5,
   config: {
     name: "inapp_open_orders",
-    position: [1240,1128],
+    position: [840,1328],
     parameters: {
       "toolDescription": "Opens the customer's full order history as a scrollable screen. Sends its own button. USE IT WHEN: Only when they ask for ALL their orders, OLDER ones, or more than the five the chat list showed. NOT THIS TOOL: NEVER the first answer to 'show my orders' — that is orders_list_groups. Not for one order (orders_get_order) or a parcel question (orders_list_shipments). ⚠ Never describe the button in your own words — the customer would read it twice.",
       "method": "POST",
@@ -1572,7 +1842,7 @@ const inapp_open_product = tool({
   version: 4.5,
   config: {
     name: "inapp_open_product",
-    position: [1440,1128],
+    position: [1040,1328],
     parameters: {
       "toolDescription": "Opens one product on its own screen, where the customer can choose size, colour or other option and buy that exact variant. Sends its own button. USE IT WHEN: The customer must CHOOSE an option before buying — a chat card only ever offers the default variant. NOT THIS TOOL: Not for a passing question about a product — just answer it. Not for several products (inapp_open_listing). ⚠ Never describe the button in your own words — the customer would read it twice.",
       "method": "POST",
@@ -1619,7 +1889,7 @@ const wishlist_list = tool({
   version: 4.5,
   config: {
     name: "wishlist_list",
-    position: [40,1328],
+    position: [1240,1328],
     parameters: {
       "toolDescription": "Products the customer saved for later, newest first. USE IT WHEN: They ask what they saved, or want to buy something saved earlier. To show them, pass the ids to Show-Products. NOT THIS TOOL: Not as a way to browse the catalogue. ⚠ product null means it went off sale — say 'no longer available' and offer to remove it; never skip the row or say why.",
       "method": "POST",
@@ -1662,7 +1932,7 @@ const wishlist_add = tool({
   version: 4.5,
   config: {
     name: "wishlist_add",
-    position: [240,1328],
+    position: [1440,1328],
     parameters: {
       "toolDescription": "Adds a product to the customer's saved list. USE IT WHEN: They like something but are not buying it now. NOT THIS TOOL: Not instead of the basket when they said they want to buy it.",
       "method": "POST",
@@ -1709,7 +1979,7 @@ const wishlist_remove = tool({
   version: 4.5,
   config: {
     name: "wishlist_remove",
-    position: [440,1328],
+    position: [40,1528],
     parameters: {
       "toolDescription": "Takes a product off the customer's saved list. USE IT WHEN: They are no longer interested, or clear an unavailable entry. NOT THIS TOOL: Not just because they added it to the basket — they did not ask.",
       "method": "DELETE",
@@ -1756,7 +2026,7 @@ const recently_viewed_list = tool({
   version: 4.5,
   config: {
     name: "recently_viewed_list",
-    position: [640,1328],
+    position: [240,1528],
     parameters: {
       "toolDescription": "Products the customer opened recently, newest first. USE IT WHEN: They refer to something seen earlier — 'the one I saw yesterday' — and you need to know which. NOT THIS TOOL: Not as recommendations, and it says nothing about current stock. ⚠ product null means no longer available — say so, never skip it. There is no history page link; never invent one.",
       "method": "POST",
@@ -1799,7 +2069,7 @@ const digital_list_entitlements = tool({
   version: 4.5,
   config: {
     name: "digital_list_entitlements",
-    position: [840,1328],
+    position: [440,1528],
     parameters: {
       "toolDescription": "Everything the customer bought as a download, and whether each can still be downloaded. Sends its own message with download buttons. USE IT WHEN: The customer asks about a file they bought. Answer [sent], add nothing. NOT THIS TOOL: Not for physical orders. Never offer a download link yourself — you cannot create one. ⚠ maxDownloads null = unlimited, expiresAt null = never expires — say it in words. canDownload alone decides whether it can be downloaded.",
       "method": "POST",
@@ -1842,7 +2112,7 @@ const bookings_get_availability = tool({
   version: 4.5,
   config: {
     name: "bookings_get_availability",
-    position: [1040,1328],
+    position: [640,1528],
     parameters: {
       "toolDescription": "A service product's bookable time slots, soonest first. Reserves nothing. USE IT WHEN: The customer asks when they can have an appointment. NOT THIS TOOL: Not for a physical product, or an appointment they already have (bookings_get). ⚠ slotId is OPAQUE — copy it exactly, never build or edit one. Send from/to only if the customer named a date. spotsRemaining null does NOT mean full; only group services report a number.",
       "method": "POST",
@@ -1885,7 +2155,7 @@ const bookings_list = tool({
   version: 4.5,
   config: {
     name: "bookings_list",
-    position: [1240,1328],
+    position: [840,1528],
     parameters: {
       "toolDescription": "The customer's booked appointments: when, whether confirmed, whether paid. USE IT WHEN: The customer asks about an appointment or service they booked. NOT THIS TOOL: It cannot make a booking — booking happens on the website. ⚠ Read awaitingVendorApproval, NOT status: status pending means the SELLER has not accepted; payment.status pending means a charge is live on their phone. outstandingBalance above zero — see bookings_get_balance. Times are UTC; give them in the customer's timezone.",
       "method": "POST",
@@ -1928,7 +2198,7 @@ const bookings_get = tool({
   version: 4.5,
   config: {
     name: "bookings_get",
-    position: [1440,1328],
+    position: [1040,1528],
     parameters: {
       "toolDescription": "One appointment in full: when, who provides it, what it costs, and its payment state. USE IT WHEN: The customer asks about a specific appointment. NOT THIS TOOL: Not to list (bookings_list). Not for a completed appointment's balance (bookings_get_balance). ⚠ Read awaitingVendorApproval, NEVER status — status pending means the seller has not accepted yet; never say they are booked before that.",
       "method": "POST",
@@ -1971,7 +2241,7 @@ const bookings_get_balance = tool({
   version: 4.5,
   config: {
     name: "bookings_get_balance",
-    position: [40,1528],
+    position: [1240,1528],
     parameters: {
       "toolDescription": "What a finished appointment cost against its quote, and what is still owed. USE IT WHEN: The customer asks why they owe more, or a booking shows outstandingBalance above zero. NOT THIS TOOL: Not before the appointment is settled by the provider — there is no balance yet. ⚠ creditDue means they overpaid: it is recorded and NOT refunded automatically — offer support, never promise money back. settled false means every number is provisional.",
       "method": "POST",
@@ -2014,7 +2284,7 @@ const bookings_payment_status = tool({
   version: 4.5,
   config: {
     name: "bookings_payment_status",
-    position: [240,1528],
+    position: [1440,1528],
     parameters: {
       "toolDescription": "The payment state of one appointment, and the live charge behind it if there is one. USE IT WHEN: The customer asks whether their booking is paid, or whether a mobile-money charge settled. NOT THIS TOOL: It answers only about money — use bookings_get for the rest. ⚠ status pending means a charge is LIVE on their phone right now — never suggest paying again. transaction.transactionId is what payment_get_transaction takes.",
       "method": "POST",
@@ -2057,7 +2327,7 @@ const payment_methods_list = tool({
   version: 4.5,
   config: {
     name: "payment_methods_list",
-    position: [440,1528],
+    position: [40,1728],
     parameters: {
       "toolDescription": "The customer's saved ways to pay — mobile-money wallets and cards added on the website. The default comes first. USE IT WHEN: They ask what they have saved, or you want to name the wallet they usually use. NOT THIS TOOL: Not to fill in a payment — the number is never returned. Not for a booking's payment (bookings_payment_status). ⚠ Read `expired` before suggesting a card — an expired card still appears in the list. Name a wallet by its label.",
       "method": "POST",
@@ -2100,7 +2370,7 @@ const contact_get_state = tool({
   version: 4.5,
   config: {
     name: "contact_get_state",
-    position: [640,1528],
+    position: [240,1728],
     parameters: {
       "toolDescription": "The customer's sign-in email and phone number (masked), plus any change waiting to be confirmed. USE IT WHEN: They ask what email or number is on their account, or about a change they started. NOT THIS TOOL: Not for name, language or addresses (profile_get_summary, addresses_list). ⚠ emailMasked / phoneMasked are masked — never present them as full. A PENDING change shows its target in full. If pendingPhone is set and phoneChangeProved is false, they must first connect the new number on WhatsApp.",
       "method": "POST",
@@ -2143,7 +2413,7 @@ const connections_list = tool({
   version: 4.5,
   config: {
     name: "connections_list",
-    position: [840,1528],
+    position: [440,1728],
     parameters: {
       "toolDescription": "Both messaging apps (WhatsApp, Telegram) and whether each is connected to the account, with a hint of the connected identity. USE IT WHEN: They ask which apps are linked to their account. NOT THIS TOOL: Not for notification preferences (notifications_get_preferences). ⚠ Always exactly two rows. identityHint is the only identity ever returned. isCurrentChannel marks the app this chat is in.",
       "method": "POST",
@@ -2186,7 +2456,7 @@ const account_close_preview = tool({
   version: 4.5,
   config: {
     name: "account_close_preview",
-    position: [1040,1528],
+    position: [640,1728],
     parameters: {
       "toolDescription": "Whether this account can be closed, what would block it, and the exact sentence (in their language) describing what closing does. Changes nothing. USE IT WHEN: Whenever the customer asks about closing or deleting their account. NOT THIS TOOL: There is no suspend, pause or hide — closing is the only option. ⚠ Relay `consequence` VERBATIM. Say CLOSED, and that past orders are kept as business records without their details — never 'deleted' or 'erased'. canClose false: blockingRoles means support must handle it; activeOrderCount above zero means wait until those orders arrive.",
       "method": "POST",
@@ -2229,7 +2499,7 @@ const reviews_check_eligibility = tool({
   version: 4.5,
   config: {
     name: "reviews_check_eligibility",
-    position: [1240,1528],
+    position: [840,1728],
     parameters: {
       "toolDescription": "Whether the customer may review a product or a delivery, and if not, why. USE IT WHEN: Before offering to take a review, so nobody ineligible is asked for one. NOT THIS TOOL: Not after a failed submission — this is the check that avoids one. ⚠ eligible false is a normal answer, not a failure.",
       "method": "POST",
@@ -2272,7 +2542,7 @@ const reviews_list_mine = tool({
   version: 4.5,
   config: {
     name: "reviews_list_mine",
-    position: [1440,1528],
+    position: [1040,1728],
     parameters: {
       "toolDescription": "Reviews the customer wrote, newest first — products and deliveries, in every moderation state. USE IT WHEN: 'What have I reviewed', 'did my review go up', 'why can't I see my review', or to check whether they already rated something. NOT THIS TOOL: Not other people's reviews (catalog_list_product_reviews). ⚠ Whether a review is visible is publiclyVisible, NEVER status — a delivery review shows status published but appears nowhere, it is internal. subjectLabel null: refer to the order instead of reading an id aloud.",
       "method": "POST",
@@ -2315,7 +2585,7 @@ const notifications_get_preferences = tool({
   version: 4.5,
   config: {
     name: "notifications_get_preferences",
-    position: [40,1728],
+    position: [1240,1728],
     parameters: {
       "toolDescription": "Which channel the customer gets notifications on and which kinds of update are switched on. USE IT WHEN: They ask about the messages they receive, or say they get too many or too few. NOT THIS TOOL: Not to explain one notification — answer the underlying question. ⚠ Only one secondary channel can be on at a time. Payment messages and cancellations always send — no setting silences them; say so plainly.",
       "method": "POST",
@@ -2358,7 +2628,7 @@ const notifications_list = tool({
   version: 4.5,
   config: {
     name: "notifications_list",
-    position: [240,1728],
+    position: [1440,1728],
     parameters: {
       "toolDescription": "The customer's notifications — orders, payments, bookings, ticket replies — newest first. Each carries subject.type and subject.id for the matching order or ticket tool. USE IT WHEN: They ask what is new or what they missed, or you need to work out what a vague reference is about. NOT THIS TOOL: Not authoritative for an order's current status — read the order. ⚠ meta.unreadCount is included — no second call needed. Relay actionUrl exactly as written; never build one.",
       "method": "POST",
@@ -2401,7 +2671,7 @@ const notifications_unread_count = tool({
   version: 4.5,
   config: {
     name: "notifications_unread_count",
-    position: [440,1728],
+    position: [40,1928],
     parameters: {
       "toolDescription": "How many notifications the customer has not read. USE IT WHEN: They ask 'anything new?'. NOT THIS TOOL: Not on every message, and not before notifications_list (which already includes the count). ⚠ Zero is a normal answer.",
       "method": "POST",
@@ -2444,7 +2714,7 @@ const notifications_mark_read = tool({
   version: 4.5,
   config: {
     name: "notifications_mark_read",
-    position: [640,1728],
+    position: [240,1928],
     parameters: {
       "toolDescription": "Marks one notification as read. Cannot be undone. USE IT WHEN: Right after you relayed that notification to the customer. NOT THIS TOOL: NEVER on a notification you did not show them.",
       "method": "PATCH",
@@ -2491,7 +2761,7 @@ const messaging_get_window = tool({
   version: 4.5,
   config: {
     name: "messaging_get_window",
-    position: [840,1728],
+    position: [440,1928],
     parameters: {
       "toolDescription": "Whether WhatsApp's 24-hour reply window is still open for this customer and when it closes (Telegram is always open). USE IT WHEN: Before a flow whose result arrives after the customer stops writing, to decide whether it can end in chat or needs messaging_notify_customer. NOT THIS TOOL: Not before an ordinary reply — answering their message is always inside the window.",
       "method": "POST",
@@ -2534,7 +2804,7 @@ const messaging_notify_customer = tool({
   version: 4.5,
   config: {
     name: "messaging_notify_customer",
-    position: [1040,1728],
+    position: [640,1928],
     parameters: {
       "toolDescription": "Hands one named situation to the platform to deliver later in the customer's language, on whatever channel reaches them. Today the only situation is order.payment_link. USE IT WHEN: You cannot send it yourself: the WhatsApp window has closed, or the answer comes after the conversation ends. NOT THIS TOOL: Never as a general send or with your own text — it takes a situation name only. Never for marketing.",
       "method": "POST",
@@ -2593,7 +2863,7 @@ const mcpServerTrigger = trigger({
         "name": "wi-mall MCP door"
       }
     },
-    subnodes: { tools: [auth_send_login_link, catalog_search_products, catalog_get_product, catalog_get_product_by_slug, catalog_resolve_sku, catalog_list_categories, catalog_list_related_products, catalog_get_store, catalog_list_store_products, catalog_list_product_reviews, cart_get, cart_add_item, cart_set_item_quantity, cart_remove_item, checkout_review, checkout_place, checkout_payment_status, checkout_retry_payment, payment_get_transaction, orders_list_groups, orders_get_group, orders_get_order, orders_list_shipments, orders_record_cancellation_reason, profile_get_summary, profile_update, profile_set_language, addresses_list, support_resolve_contacts, tickets_list, tickets_get, tickets_add_note, tickets_add_attachment, chat_answer_question, catalog_browse_categories, catalog_product_reviews_summary, inapp_open_listing, inapp_open_stores, inapp_open_orders, inapp_open_product, wishlist_list, wishlist_add, wishlist_remove, recently_viewed_list, digital_list_entitlements, bookings_get_availability, bookings_list, bookings_get, bookings_get_balance, bookings_payment_status, payment_methods_list, contact_get_state, connections_list, account_close_preview, reviews_check_eligibility, reviews_list_mine, notifications_get_preferences, notifications_list, notifications_unread_count, notifications_mark_read, messaging_get_window, messaging_notify_customer] },
+    subnodes: { tools: [auth_send_login_link, catalog_search_products, catalog_get_product, catalog_get_product_by_slug, catalog_resolve_sku, catalog_list_categories, catalog_list_related_products, catalog_get_store, catalog_list_store_products, catalog_list_product_reviews, cart_get, cart_add_item, cart_set_item_quantity, cart_remove_item, checkout_review, checkout_place, checkout_payment_status, checkout_retry_payment, payment_get_transaction, orders_list_groups, orders_get_group, orders_get_order, orders_list_shipments, delivery_fees_list_pending, delivery_fees_reject, combined_delivery_eligible, combined_delivery_request, combined_delivery_list, combined_delivery_cancel, orders_record_cancellation_reason, profile_get_summary, profile_update, profile_set_language, addresses_list, support_resolve_contacts, tickets_list, tickets_get, tickets_add_note, tickets_add_attachment, chat_answer_question, catalog_browse_categories, catalog_product_reviews_summary, inapp_open_listing, inapp_open_stores, inapp_open_orders, inapp_open_product, wishlist_list, wishlist_add, wishlist_remove, recently_viewed_list, digital_list_entitlements, bookings_get_availability, bookings_list, bookings_get, bookings_get_balance, bookings_payment_status, payment_methods_list, contact_get_state, connections_list, account_close_preview, reviews_check_eligibility, reviews_list_mine, notifications_get_preferences, notifications_list, notifications_unread_count, notifications_mark_read, messaging_get_window, messaging_notify_customer] },
   },
   output: [{}],
 });

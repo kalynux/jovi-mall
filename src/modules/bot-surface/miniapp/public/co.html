@@ -89,6 +89,19 @@
         <div class="row__end money" id="total"></div>
       </div>
 
+      <!--
+        W-F (ADR-A11 § Cash for delivery): pay the items now and the delivery fee in cash to the
+        rider. Shown only when the server sent `deliveryFeeCash`; both amounts are its strings.
+      -->
+      <div class="block" id="feeCashRow" hidden>
+        <!-- A toggle BUTTON, not an <input>: the page's only field stays the mobile-money number. -->
+        <button type="button" class="btn btn--block" id="feeCash" aria-pressed="false"></button>
+      </div>
+      <div class="row" id="feeCashNowRow" hidden>
+        <div class="row__main" id="feeCashNowLabel"></div>
+        <div class="row__end money" id="feeCashNow"></div>
+      </div>
+
       <div class="block">
         <div class="block__label" id="addressLabel"></div>
         <div class="panel"><div class="panel__value" id="address"></div></div>
@@ -145,6 +158,11 @@
     sheet: document.getElementById("sheet"),
     lines: document.getElementById("lines"),
     delivery: document.getElementById("delivery"),
+    feeCashRow: document.getElementById("feeCashRow"),
+    feeCash: document.getElementById("feeCash"),
+    feeCashNowRow: document.getElementById("feeCashNowRow"),
+    feeCashNowLabel: document.getElementById("feeCashNowLabel"),
+    feeCashNow: document.getElementById("feeCashNow"),
     totalLabel: document.getElementById("totalLabel"),
     total: document.getElementById("total"),
     addressLabel: document.getElementById("addressLabel"),
@@ -392,6 +410,31 @@
      */
     el.cod.hidden = !(data.cashOnDelivery === true && !data.address.digital);
 
+    /*
+     * W-F — "pay the delivery fee in cash to the rider". Offered only when the SERVER sent the
+     * two strings; checking it shows what Pay now then charges (`onlineText`). Nothing is added
+     * up here: the label's {{toRider}} is replaced by the server's own formatted amount.
+     */
+    var fc = data.deliveryFeeCash;
+    var fcOk = !!(fc && typeof fc.onlineText === "string" && typeof fc.toRiderText === "string" && !data.address.digital);
+    el.feeCashRow.hidden = !fcOk;
+    el.feeCash.setAttribute("aria-pressed", "false");
+    el.feeCashNowRow.hidden = true;
+    if (fcOk) {
+      var fcLabel = String(copy.checkoutDeliveryCash || "Pay the delivery fee ({{toRider}}) in cash to the rider")
+        .split("{{toRider}}").join(fc.toRiderText);
+      el.feeCash.textContent = fcLabel;
+      el.feeCashNowLabel.textContent = copy.checkoutDeliveryCashNow || "Paid now";
+      el.feeCashNow.textContent = fc.onlineText;
+      el.feeCash.onclick = function () {
+        if (placed) return;
+        var on = el.feeCash.getAttribute("aria-pressed") !== "true";
+        el.feeCash.setAttribute("aria-pressed", on ? "true" : "false");
+        el.feeCash.textContent = (on ? "✓ " : "") + fcLabel;
+        el.feeCashNowRow.hidden = !on;
+      };
+    }
+
     el.state.hidden = true;
     el.sheet.hidden = false;
     el.foot.hidden = false;
@@ -451,7 +494,9 @@
       body: JSON.stringify({
         phone: typed.length > 0 ? typed : null,
         /* Only meaningful with a typed number; the server ignores it otherwise. */
-        dial: el.dial.hidden ? null : el.dial.value || null
+        dial: el.dial.hidden ? null : el.dial.value || null,
+        /* W-F: the items now, the delivery fee in cash to the rider — re-checked by the server. */
+        deliveryFeePayment: !el.feeCashRow.hidden && el.feeCash.getAttribute("aria-pressed") === "true" ? "cash_to_rider" : "with_order"
       })
     }).then(function (res) {
       var refusal = res.body && res.body.error;
@@ -574,7 +619,9 @@
     checkoutPay: "Pay now",
     checkoutWatchChat: "Approve the payment on your phone. I will tell you in the chat as soon as it lands.",
     checkoutPayOnDelivery: "Pay on delivery",
-    checkoutCodPlaced: "Order placed. Pay the delivery agent in cash when it arrives — you will receive a delivery code for each parcel."
+    checkoutCodPlaced: "Order placed. Pay the delivery agent in cash when it arrives — you will receive a delivery code for each parcel.",
+    checkoutDeliveryCash: "Pay the delivery fee ({{toRider}}) in cash to the rider",
+    checkoutDeliveryCashNow: "Paid now"
   };
 
   function boot(d) {

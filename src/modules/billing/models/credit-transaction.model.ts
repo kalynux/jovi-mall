@@ -24,6 +24,7 @@ export type CreditReasonCode =
   | 'topup_reversal'    // claw-back when a top-up is disputed/refunded
   | 'vectorisation'
   | 'whatsapp_template'
+  | 'ai_listing_copy'   // AI listing-copy assistant, per field written (ref = generationId)
   | 'admin_adjustment';
 
 export interface ICreditTransaction extends Document {
@@ -54,7 +55,7 @@ const CreditTransactionSchema = new Schema<ICreditTransaction>(
     balance_after: { type: Number, required: true },
     reason_code: {
       type: String,
-      enum: ['plan_allowance', 'topup_purchase', 'topup_reversal', 'vectorisation', 'whatsapp_template', 'admin_adjustment'],
+      enum: ['plan_allowance', 'topup_purchase', 'topup_reversal', 'vectorisation', 'whatsapp_template', 'ai_listing_copy', 'admin_adjustment'],
       required: true,
     },
     ref: { type: String, default: null },

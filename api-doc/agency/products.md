@@ -1,6 +1,7 @@
 # Agency Products
 
 **Verified against source on 2026-09-08** — `GET /api/agency/products` and the error catalogue, against `jovi-mall/src/modules/delivery/agency.routes.ts` and `src/core/error-codes.ts`.
+**Updated 2026-10-04** — each row carries a `vendor` block; `search`, `source`, `status`, `categoryId`, `vendorId`, `sortBy`, `sortDir`; `meta.totalPages`. Additive; see [FRONTEND-CHANGELOG-agency-names-and-search.md](./FRONTEND-CHANGELOG-agency-names-and-search.md).
 
 ## Base Path
 
@@ -30,9 +31,25 @@ Read-only — an agency cannot change either relationship; both are configured o
 Authorization: Bearer <token>
 ```
 
-**Query Parameters**:
-- `page` (integer, optional, default 1)
-- `limit` (integer, optional, default 20, max 100)
+**Query Parameters** (all optional):
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `page` | integer ≥ 1 | `1` | |
+| `limit` | integer 1–100 | `20` | |
+| `search` | string, 1–100, trimmed | — | Case-insensitive **substring** (not prefix-only) match over the product **title**, any variant **SKU**, the vendor's **store name** or **display name**, and any **category name**. Regex-escaped — `.*` matches those two characters literally. *Added 2026-10-04* |
+| `source` | `own_override` \| `vendor_default` | both | `own_override` = the product's own `delivery.agencyId` is you. `vendor_default` = the vendor defaults to you **and** the product has no override — a product its vendor pointed at another agency never appears, under either value. *Added 2026-10-04* |
+| `status` | `draft` \| `active` \| `archived` \| `pending_review` \| `suspended` | — | *Added 2026-10-04* |
+| `categoryId` | ObjectId | — | Matches a product holding this category among any of its 1–5. *Added 2026-10-04* |
+| `vendorId` | ObjectId | — | *Added 2026-10-04* |
+| `sortBy` | `createdAt` \| `title` | `createdAt` | Ties broken by id, so paging is stable. *Added 2026-10-04* |
+| `sortDir` | `asc` \| `desc` | `desc` | *Added 2026-10-04* |
+
+All filters combine with AND. **Unknown query parameters are rejected** with
+`400 VALIDATION_ERROR` (*since 2026-10-04* — they used to be silently ignored, the one
+agency list that did).
+
+`meta.total` counts the **filtered** set.
 
 **Success Response** (`200 OK`):
 ```json
@@ -42,23 +59,54 @@ Authorization: Bearer <token>
     {
       "id": "507f1f77bcf86cd799439066",
       "vendorId": "507f1f77bcf86cd799439aaa",
+      "vendor": {
+        "id": "507f1f77bcf86cd799439aaa",
+        "businessName": "Alpha Textiles",
+        "displayName": "Jeanne M.",
+        "logo": {
+          "id": "66ff0c1e2a4b5c6d7e8f9b01",
+          "key": "images/2026/09/alpha-logo.png",
+          "url": "https://cdn.wi-mall.com/images/2026/09/alpha-logo.png",
+          "access": "public",
+          "mimeType": "image/png",
+          "size": 18234,
+          "originalName": "alpha-logo.png"
+        },
+        "verified": true
+      },
       "title": "T-Shirt",
       "status": "active",
-      "category": "apparel",
+      "categories": [{ "id": "66ff0c1e2a4b5c6d7e8f9a11", "name": "Apparel", "slug": "apparel" }],
+      "category": "Apparel",            // ⚠ deprecated — categories[0].name (2026-10-04)
       "source": "own_override"
     },
     {
       "id": "507f1f77bcf86cd799439067",
       "vendorId": "507f1f77bcf86cd799439aaa",
+      "vendor": { "id": "507f1f77bcf86cd799439aaa", "businessName": "Alpha Textiles", "displayName": "Jeanne M.", "logo": { "…": "same FileDetail" }, "verified": true },
       "title": "Sneakers",
       "status": "active",
-      "category": "footwear",
+      "categories": [{ "id": "66ff0c1e2a4b5c6d7e8f9a12", "name": "Footwear", "slug": "footwear" }],
+      "category": "Footwear",
       "source": "vendor_default"
     }
   ],
-  "meta": { "total": 2, "page": 1, "limit": 20, "pages": 1 }
+  "meta": { "total": 2, "page": 1, "limit": 20, "pages": 1, "totalPages": 1 }
 }
 ```
+
+**`vendor`** (*added 2026-10-04*; `vendorId` stays):
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | Always equals `vendorId` |
+| `businessName` | string | The vendor's **store** name; `''` when they have no store yet — the same rule as [`GET /agency/vendors`](vendors.md) |
+| `displayName` | string \| null | The vendor's personal display name |
+| `logo` | `FileDetail` \| null | The store logo, as the platform's standard file object. Render `logo.url` — a public CDN URL, never a raw storage key. ⚠ Not a `logoUrl` string: every file on the platform comes back as a `FileDetail` |
+| `verified` | boolean | `kyc_details.legit_verified` — the same badge the inventory rows show |
+
+**`meta.totalPages`** (*added 2026-10-04*) is the same value as `meta.pages`. Every other
+agency list says `totalPages`; read that one. `pages` is kept so nothing breaks.
 
 > See [agency/vendors.md](vendors.md) for the vendor-level "who set me as default" view.
 
@@ -66,6 +114,7 @@ Authorization: Bearer <token>
 
 | Status | Code | Reason |
 |---|---|---|
+| `400` | `VALIDATION_ERROR` | An unknown query parameter, or a known one out of range. `details.fields[]` names it |
 | `401` | `AUTH_MISSING_TOKEN` · `AUTH_TOKEN_EXPIRED` · `AUTH_TOKEN_INVALID` | No token, an expired one, or a malformed one. ⚠ **There is no bare `UNAUTHORIZED` code** |
 | `403` | `AUTH_ROLE_NOT_FOUND` | Authenticated user is not an agency. ⚠ **There is no bare `FORBIDDEN` code** |
 | `500` | `INTERNAL_SERVER_ERROR` | Unexpected server error. ⚠ **Not `INTERNAL_ERROR`** |

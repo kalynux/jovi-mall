@@ -223,6 +223,14 @@ twice, each time because a step added one and nobody re-counted.
 | `orders_cancel` | POST | `/orders/:orderId/cancel` | ✔ |
 | `orders_resend_cod_code` | POST | `/orders/:orderId/shipments/:shipmentId/resend-delivery-code` | ✔ |
 | `orders_confirm_shipment_delivery` | POST | `/orders/:orderId/shipments/:shipmentId/confirm-delivery` | ✔ |
+| `delivery_fees_list_pending` | POST | `/delivery-fees/pending` | |
+| `combined_delivery_eligible` | POST | `/delivery-fees/combined/eligible` | |
+| `combined_delivery_list` | POST | `/delivery-fees/combined/list` | |
+| `combined_delivery_request` | POST | `/delivery-fees/combined` | ✔ |
+| `combined_delivery_cancel` | POST | `/delivery-fees/combined/:requestId/cancel` | ✔ |
+| `delivery_fees_approve` | POST | `/delivery-fees/:proposalId/approve` | ✔ |
+| `delivery_fees_reject` | POST | `/delivery-fees/:proposalId/reject` | ✔ |
+| `delivery_fees_pay` | POST | `/delivery-fees/:proposalId/pay` | ✔ |
 | `profile_get_summary` | POST | `/profile` | |
 | `profile_update` | PATCH | `/profile` | ✔ |
 | `profile_set_language` | PATCH | `/profile/language` | ✔ |
@@ -352,6 +360,51 @@ order total. What changed on this surface:
   `checkoutFreeDeliveryHint`, `checkoutFreeDeliveryHintOneShop`, `cardFreeDelivery`,
   `cardFreeDeliveryFrom`, `orderDeliveryIncluded`.
 
+#### Delivery-fee changes after checkout — eight routes (2026-10-04, W-H)
+
+[ADR-A11](../../docs/ADR-A11-CUSTOMER-PAID-DELIVERY.md) § Fee changes after checkout; the customer
+API is [`customer/delivery-fee-changes.md`](../customer/delivery-fee-changes.md). On a
+**customer-paid** shipment the customer answers a delivery company's increase (or a moved parcel's
+difference); a decrease applies by itself and never appears here. Code:
+`controllers/bot-delivery-fee.controller.ts` (every write is W-E's own service method),
+`services/bot-delivery-fee.service.ts` (the reads the customer API never needed),
+`domain/fee-change-chat-reply.ts` (pure renderer), `domain/bot-fee-change-copy.ts` (five languages).
+
+| Tool | Tier | What it does |
+|---|---|---|
+| `delivery_fees_list_pending` | core | every change waiting on the customer — one order (`orderId`: id or number) or all open ones. **Draws the question itself** (below). `data.changes[]`: `proposalId`, `version`, `orderNumber`, `state` (`awaiting_answer` · `awaiting_payment`), `origin` (`agency` · `change_agency`), `paymentMode`, the amounts AND `feeBeforeText` / `proposedFeeText` / `customerPaysText`, `reason`, `availableActions` |
+| `delivery_fees_reject` | core | decline, with the `version` the customer was shown. A company's increase: the old fee stays. A moved parcel's difference: **the shop pays it** |
+| `delivery_fees_approve` | **flow_only** | accept. COD: applies now, more cash at the door. Online: freezes the figure; the reply is the **Pay now** question |
+| `delivery_fees_pay` | **flow_only** | open the mobile-money charge for the top-up the approval froze — a typed `phone`, else the wallet on the account. No amount parameter exists |
+| `combined_delivery_eligible` | core | per checkout × delivery company, the ≥ 2 customer-paid parcels a combined price may be asked for — with their `cartId` / `agencyId` / shipment ids, resolved server-side by W-E's own predicate so the model never names an id |
+| `combined_delivery_request` | core | ask that company for a combined (lower-only) price. Draws a one-sentence confirmation |
+| `combined_delivery_list` · `combined_delivery_cancel` | extended | the requests and their answers (`savingText`, `answer.fees[]`); cancel an open one |
+
+⛔ **Accepting and paying are NOT model tools, and the reason is the money.** Accepting commits the
+customer to more cash at the door or to a top-up; paying moves money. Both are reached only by the
+buttons `delivery_fees_list_pending` draws (§ 14.9 — `yes:dfc:`, `dfee:pay:`), exactly as the
+chat checkout's Place order is. Declining costs the customer nothing, so a model may do it when the
+customer says no in words. ⚠ `dfc` is **not** an answerable context (§ 14.10): a typed "yes" never
+accepts a fee — the customer taps Accept.
+
+⛔ **No figure is computed in the chat.** `customerPays` is what the backend planned (W-E's
+`planCustomerApprovedIncrease`) or what the approval froze — it is **not** `proposedFee − feeBefore`
+when the shop paid part of the fee. The catalogue tells the model to quote the `*Text` fields only
+and to pass `proposalId` / `version` as data.
+
+⚠ **No Check status after Pay now.** `pay:st:` serves checkout payments only; the top-up's outcome
+arrives in the chat as `order.delivery_fee.updated` (paid) or `order.delivery_fee.topup_failed`
+(with a **Try again** button). With **no mobile-money number on the account** the question offers the
+order page (a link) instead of a Pay now button that would answer "send me a number" to a tool the
+model cannot call.
+
+New error copy (`error.customerMessage`, five languages): `DELIVERY_FEE_TOPUP_IN_PROGRESS`,
+`DELIVERY_FEE_TOPUP_NOT_DUE`, `DELIVERY_FEE_PROPOSAL_STALE` (Accept pressed after the parcel moved
+on — the category sentence would invite a retry that cannot succeed),
+`DELIVERY_FEE_PROPOSAL_ORDER_NOT_PAID`, `COMBINED_DELIVERY_REQUEST_INELIGIBLE`,
+`COMBINED_DELIVERY_REQUEST_ALREADY_OPEN`, `COMBINED_DELIVERY_REQUEST_NOT_OPEN`. An edited figure
+(`..._VERSION_MISMATCH`) or an already-answered change (`..._NOT_PENDING`) never reaches the error
+path: the reply is the fresh question, or one sentence. Suite: `npm run test:bot-fee-changes`.
 
 Argument shapes are in [`tools/catalog.json`](./tools/catalog.json), which is the contract
 the automation layer is generated from. The route table asserts itself against it.
@@ -1801,6 +1854,7 @@ is a new value in this field rather than a new branch in your workflow.
 | ⭐ `/catalog/display` | **product cards** — a Mini App button, a carousel, or one image message per product. The one turn that renders to SEVERAL messages: see § 14.8 |
 | ⭐ `/catalog/action` — **every tap** | whatever that button calls for: product cards for `next:` / `more:`, an order card, a parcel card, a yes/no question, a screen button, or **nothing** where the model should speak. One row per token in § 14.9 |
 | ⭐ `/checkout/chat/review` (`checkout_review`) | **the order confirmation** — the basket lines, the total, where it goes, the masked mobile-money number and the question, over **Place order · Not now** (two buttons, `yes:co:` / `no:co:`). A customer with **several** deliverable addresses who named none gets one row per address instead (a list) — the row IS the answer and places the order there. No address to deliver to: a **link** to the website's address page. No number on the account, or anything else it cannot sound: **none**, and the model asks |
+| ⭐ `/delivery-fees/pending` (`delivery_fees_list_pending`) and the `dfee:` / `dfc` taps | **the delivery-fee question** — the order, "the delivery company asks X instead of Y" (or "your parcel moved to another company…"), the reason, what accepting costs (more cash at the door / the difference to pay), what declining means, over **Accept · Decline**; approved online: **Pay now · Decline** with the masked wallet; several waiting: a choice; none: one sentence. Every amount is the backend's |
 | ⭐ `/checkout/chat/place` (`checkout_place`) | **the placement message** — the order numbers, where the payment prompt went and for how much, the operator's own instruction, and **Check status** (`pay:st:`). A charge refused as it was opened says no money was taken, with **Try again** (`pay:rt:`) |
 
 ⛔ **The two checkout rows are drawn by the server, and your model must not write its own
@@ -2449,6 +2503,7 @@ bytes.
 |---|---|---|---|---|
 | `yes:co:<ref>:<addressId>` · `yes:co:<ref>` | **Place order** (labelled **Pay now** when pay on delivery is offered beside it), under the confirmation — and **each address row** when the customer has several deliverable addresses and pay on delivery is NOT on offer. The short form is a download, which goes nowhere | **places the order**, exactly as `checkout_place` does: to THAT address, charging the number on the account. A stale or unknown `<ref>` places **nothing** — it draws a **fresh confirmation** for the same address, because the basket may have changed since | the placement message (§ 14.3): **Check status**, or **Try again** for a charge refused at open. On a stale ref: the confirmation again | as `checkout_place`: `{ transactionId, state, orderCount, orderNumbers, amountText, payerMasked, instructions }`. On a stale ref: the review's data |
 | `yes:cod:<ref>:<addressId>` | **Pay on delivery**, beside **Pay now** on the confirmation — drawn only when the basket passes every pay-on-delivery rule (physical goods; every carrying agency active, verified and accepting cash; each shop within its cash limit and its per-shipment delivery minimum) | **places the order as pay on delivery**, to THAT address: no charge is opened, the stock is committed and the agencies are dispatched, exactly as a website pay-on-delivery order. The rules are re-checked before the ref is spent; a refusal there leaves the ref alive, so **Pay now** still works. A stale ref draws a fresh confirmation, as `yes:co:` does | the order numbers and "pay the agent in cash; you will receive a delivery code per parcel". No button | `{ paymentMethod: "cash_on_delivery", orderCount, orderNumbers }` |
+| `yes:cof:<ref>:<addressId>` | **Delivery in cash** (ADR-A11 § Cash for delivery, W-F), beside **Pay now** on the confirmation — drawn only when the review's `payment.deliveryFeeCash` is set (a wallet on the account, physical goods, every customer-paid shop's carrying agencies accept the fee in cash). The summary carries the line "Or pay X now and the delivery fee, Y, in cash to the rider" | **places the order like Pay now**, to THAT address, with `deliveryFeePayment: cash_to_rider`: the mobile-money prompt is for the ITEMS only, each customer-paid delivery fee is collected by the rider with a delivery code. Cash for delivery is re-checked before the ref is spent (`422 DELIVERY_FEE_CASH_NOT_AVAILABLE`, `spent: false` — **Pay now** still works). A stale ref draws a fresh confirmation, as `yes:co:` does | the Pay-now placement message plus "the delivery fee, Y, is paid in cash to the rider; you will receive a delivery code per parcel" | the Pay-now placement body (`transactionId`, `state`, `orderNumbers`, `amountText` = the items, …) plus `deliveryCashText` |
 | `yes:coa:<addressId>` | **each address row** of the confirmation, when the customer has several deliverable addresses AND pay on delivery is on offer | **places nothing** — draws the confirmation for THAT address, which then offers Pay now · Pay on delivery · Not now (a list row is one tap and cannot also carry how to pay) | the confirmation | the review's data |
 | `no:co:<ref>` | **Not now**, beside it, and the last row of the address list | **writes nothing**, however old the button | one sentence: nothing was ordered, and the basket is kept | `{ placed: false }` |
 
@@ -2460,6 +2515,27 @@ started since, it draws a fresh confirmation for that one. Neither places anythi
 
 ⚠ **The customer can still answer in words.** "Yes, place it" reaches `checkout_place` through
 the model with the same `checkoutRef`; the two paths run the same placement.
+
+#### Delivery-fee changes
+
+A delivery company asking more for a customer-paid parcel, a parcel moved to a dearer company, or an
+accepted online increase still to pay (ADR-A11, W-H). One verb, `dfee`, plus the confirm pair under
+the context `dfc`. Grammar: `parseDeliveryFeeArgument` / `parseDeliveryFeeConfirmArgument` in
+`bot-action-id.ts`. ⛔ **No token carries an amount** — every figure is re-read on the press.
+
+| token | drawn on | what it does | reply | data |
+|---|---|---|---|---|
+| `dfee:list` | the out-of-window template button of the three delivery-fee notifications | every change waiting on the customer, across their open orders | none waiting → one sentence · one → its question · several → a choice (≤ 5 rows, then the order history row `open:ol`) | `{ changes[], total }` — as `delivery_fees_list_pending` |
+| `dfee:<orderId>` | **See the new fee** under `order.delivery_fee.approval_needed`, **Pay now** under `topup_due`, **Try again** under `topup_failed` | that order's waiting changes | as above, for one order | as above |
+| `dfee:<orderId>:<proposalId>` | **a row** of the "which one?" choice | one change's question | the question: Accept · Decline, or Pay now · Decline. A change no longer waiting: one sentence | `{ change }` |
+| `dfee:pay:<proposalId>` | **Pay now** under an accepted online change · **Try again** under a refused opening | opens the mobile-money charge for the FROZEN top-up, to the wallet on the account. No wallet: the question again with the order-page link instead | where the prompt went, for how much (the transaction's amount), the operator's own instruction, "you'll get a message here". Refused at open: no money taken, **Try again** | `{ transactionId, state, amountText, instructions }` — `transactionId` is never relayed |
+| `yes:dfc:<proposalId>:<version>` | **Accept**, under the question | **accepts** — COD: applies, more cash at the door · online: freezes the figure. An edited figure (another `version`) accepts NOTHING and draws the fresh question with "it changed since" | COD: "Done — … you will pay X more in cash" · online: the **Pay now** question | `{ approved, awaitingPayment, … }` |
+| `no:dfc:<proposalId>:<version>` | **Decline**, beside it (and beside Pay now) | **declines** — the company keeps the old fee, asks once more or steps back; a moved parcel's difference is paid by the shop. Edited figure: the fresh question | the declined sentence for that origin | `{ declined, shopCovers }` |
+
+⚠ **The notification buttons carry the ORDER, never the proposal**: the notifier's context holds the
+order only, and an order-scoped tap re-reads the current figure — a notification is exactly the button
+most likely to be pressed after the company edited its figure. `assertCustomerCatalogComplete` pins
+the literal `dfee:{{orderId}}` / `dfee:list` to the builders.
 
 #### Payments
 
@@ -2506,6 +2582,11 @@ message a tool drew is not in its memory. So the platform remembers the question
 | Cancel this order? | `cnc` | cancel (then asks for the typed reason) | back to the order card |
 | Close this support request? | `tcl` | close it | keep it open |
 | Disconnect the other app? | `unl` | disconnect | keep it |
+
+⚠ **A delivery-fee change (`dfc`) is NOT on the table either** (W-H, 2026-10-04): accepting commits the
+customer to more money, so its question supersedes any waiting one and only the Accept button accepts.
+Declining in words is served by the model tool `delivery_fees_reject`. Adding `dfc` here is a product
+decision.
 
 ⛔ **Account closure is BUTTON-ONLY.** `yes:close` is never recorded, and a stored question is
 re-checked on the way out, so no typed word can close an account. A closure question drawn after

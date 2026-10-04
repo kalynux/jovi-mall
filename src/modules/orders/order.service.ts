@@ -33,7 +33,7 @@ import { orderStockService } from './services/order-stock.service';
 import { belowMinimumError } from './services/delivery-cost-cap.service';
 import { vendorOrderPricingService, regionOfGeo } from './services/vendor-order-pricing.service';
 import { PricingLine } from './domain/vendor-order-pricing';
-import { customerDeliveryFeeOf, orderItemsGrossOf } from './domain/delivery-payer';
+import { customerDeliveryFeeOf, DeliveryFeePayment, orderItemsGrossOf } from './domain/delivery-payer';
 import { MagazinRepository } from '../magazin/repositories/magazin.repository';
 import {
   AGENT_IDENTITY_VISIBLE_FROM,
@@ -690,8 +690,22 @@ export class OrderService {
   async createOrdersFromCart(
     customerId: string,
     paymentMethod: OrderPaymentMethod = 'online',
-    deliveryInput?: { addressId?: string | null; address?: GeoAddressInput | null } | null
+    deliveryInput?: { addressId?: string | null; address?: GeoAddressInput | null } | null,
+    options: { deliveryFeePayment?: DeliveryFeePayment | null } = {}
   ): Promise<{ cartId: string; orders: IOrder[]; shipments: any[] }> {
+    // Cash for delivery (ADR-A11 § Cash for delivery, W-F): the customer may pay the goods online
+    // and a CUSTOMER-PAID delivery fee to the rider in cash. Decided per vendor order below; these
+    // two refusals hold for the whole checkout and are answered before anything is read.
+    const deliveryFeePayment: DeliveryFeePayment = options.deliveryFeePayment === 'cash_to_rider' ? 'cash_to_rider' : 'with_order';
+    if (deliveryFeePayment === 'cash_to_rider' && paymentMethod === 'cash_on_delivery') {
+      throw createAppError(
+        ERROR_CODES.DELIVERY_FEE_CASH_NOT_AVAILABLE,
+        422,
+        'With cash on delivery everything is already paid in cash at the door — choose "pay delivery with the order"',
+        { reason: 'cash_on_delivery' }
+      );
+    }
+
     // 1. VALIDATION PHASE: Fetch and validate cart
     const cart = await this.cartService.getCart(customerId);
 
@@ -831,11 +845,23 @@ export class OrderService {
 
       for (const [vendorId, items] of vendorGroups) {
         const built = await this.buildVendorOrder(
-          { customerId, cartId: cart.cartId!, vendorId, items, orderType, currency, paymentMethod, deliveryAddress },
+          { customerId, cartId: cart.cartId!, vendorId, items, orderType, currency, paymentMethod, deliveryAddress, deliveryFeePayment },
           session
         );
         createdOrders.push(built.order);
         createdShipments.push(...built.shipments);
+      }
+
+      // `cash_to_rider` asked, and NO vendor order has a customer-paid fee to hand over (every
+      // shop pays its own delivery, or the cart is digital): refuse rather than silently ignore
+      // the customer's choice. Inside the transaction, so the stock holds roll back.
+      if (deliveryFeePayment === 'cash_to_rider' && !createdOrders.some((o) => o.delivery_fee_payment === 'cash_to_rider')) {
+        throw createAppError(
+          ERROR_CODES.DELIVERY_FEE_CASH_NOT_AVAILABLE,
+          422,
+          'None of the shops in this order charges you for delivery — there is no delivery fee to pay in cash',
+          { reason: orderType === 'physical' ? 'not_customer_paid' : 'no_delivery_fee' }
+        );
       }
 
       // A cash-on-delivery order fulfils BEFORE payment — the vendor packs it and an agent
@@ -1017,6 +1043,8 @@ export class OrderService {
       currency: string;
       paymentMethod: OrderPaymentMethod;
       deliveryAddress: IGeoAddress | null;
+      /** What the customer asked for (W-F); applied to this vendor order only when customer-paid. */
+      deliveryFeePayment?: DeliveryFeePayment;
     },
     session: ClientSession
   ): Promise<{ order: IOrder; shipments: any[] }> {
@@ -1177,9 +1205,39 @@ export class OrderService {
         throw belowMinimumError({ vendorId, ...pricing.deliveryMinimum }, currency);
       }
 
-      const delivery = pricing.deliveryCharged;
+      /**
+       * CASH FOR DELIVERY (ADR-A11 § Cash for delivery, W-F). Asked for, and this vendor order's
+       * delivery is customer-paid with a fee to pay: every carrying agency must accept the fee in
+       * cash (`deliveryFeeCash`, the verdict the quote shows) or the checkout refuses (422, rolled
+       * back). Vendor-paid (or a 0 fee): nothing to hand over — this order stays `with_order`.
+       *
+       * Chosen ⇒ `total_amount` / `price_breakdown.total` = the ITEMS (what is CHARGED ONLINE —
+       * every reader of `total_amount` keeps that meaning: the payment, refund ceilings, lifetime
+       * spend), `price_breakdown.delivery` = 0 (nothing charged for delivery online) and
+       * `price_breakdown.delivery_cash` = Σ fees (handed to the riders). Each shipment keeps
+       * `customer_delivery_fee` = its fee: the customer still pays it — in cash, collected by the
+       * fee-only `CashCollection` created at agent accept.
+       */
+      const wantsCash = params.deliveryFeePayment === 'cash_to_rider' && paymentMethod === 'online';
+      const cashFee = wantsCash && pricing.payer === 'customer' && pricing.deliveryCharged > 0;
+      if (cashFee && !pricing.deliveryFeeCash.available) {
+        throw createAppError(
+          ERROR_CODES.DELIVERY_FEE_CASH_NOT_AVAILABLE,
+          422,
+          pricing.deliveryFeeCash.reason === 'agency_declines_cash'
+            ? 'A delivery company carrying this shop\'s items does not accept the delivery fee in cash — pay it with the order'
+            : undefined,
+          {
+            reason: pricing.deliveryFeeCash.reason,
+            vendorId,
+            agencyIds: pricing.deliveryFeeCash.decliningAgencyIds,
+          }
+        );
+      }
+      const delivery = cashFee ? 0 : pricing.deliveryCharged;
+      const deliveryCash = cashFee ? pricing.deliveryCharged : 0;
       const total = base + delivery + tax - discount;
-      const priceBreakdown = { base, delivery, tax, discount, total };
+      const priceBreakdown = { base, delivery, delivery_cash: deliveryCash, tax, discount, total };
 
       // COD eligibility: every agency carrying one of this order's shipments must support COD
       // (its agent collects that shipment's cash) — measured on the order total INCLUDING
@@ -1208,6 +1266,7 @@ export class OrderService {
         delivery_payer: pricing.payer,
         delivery_payer_reason: pricing.payerReason,
         free_delivery_shortfall: pricing.freeDeliveryShortfall,
+        delivery_fee_payment: cashFee ? 'cash_to_rider' : 'with_order',
         payment_method: paymentMethod,
         payment_status: 'AWAITING_PAYMENT',  // Ready for payment (COD: paid at handoff)
         fulfillment_status: 'pending',

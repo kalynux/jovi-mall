@@ -1,6 +1,7 @@
 # Storage statements
 
 **Verified against source on 2026-09-08** — all 4 routes, the counted-stock-only billing basis (`source: "counted"`, `quantity_on_hand > 0`), the `0 2 1 * *` schedule and the `409 STORAGE_INVOICE_NOT_OPEN` compare-and-set, against `jovi-mall/src/modules/inventory/`.
+**Updated 2026-10-04** — every agency-side statement carries a `vendor` block (§ 1). Additive; see [FRONTEND-CHANGELOG-agency-names-and-search.md](./FRONTEND-CHANGELOG-agency-names-and-search.md).
 
 The monthly record of what a vendor owes this agency for warehousing their stock. One
 statement per (agency, vendor, month).
@@ -76,6 +77,12 @@ expanded is a payload nobody reads; `skuCount` and `unitCount` are what a list r
       "id": "665f…",
       "agencyId": "665f…",
       "vendorId": "665f…",
+      "vendor": {
+        "id": "665f…",
+        "businessName": "Alpha Textiles",
+        "displayName": "Jeanne M.",
+        "verified": true
+      },
       "periodKey": "2026-08",
       "periodStart": "2026-08-01T00:00:00.000Z",
       "periodEnd": "2026-09-01T00:00:00.000Z",
@@ -98,6 +105,25 @@ expanded is a payload nobody reads; `skuCount` and `unitCount` are what a list r
 | `status` | `open` · `settled` · `void` |
 | `periodKey` | `YYYY-MM` |
 | `vendorId` | one vendor's statements |
+
+### `vendor` (added 2026-10-04)
+
+On the list, the detail, and the `settle` / `void` responses — every agency-side
+statement. It is what tells two statements for the same month apart.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | Always equals `vendorId` |
+| `businessName` | string \| null | The vendor's store name; `null` when they have no store |
+| `displayName` | string \| null | The vendor's personal display name |
+| `verified` | boolean | The KYC badge — the same field the inventory rows use |
+
+⚠ **The vendor block is resolved live, NOT frozen with the statement.** Everything else on
+a statement is fixed at issue (§ 2); the vendor's name is not. A vendor who renames their
+store shows the **new** name on every past statement. The statement's numbers, SKU labels
+and depot names are unaffected.
+
+The vendor's own mount (`/api/vendor/storage-invoices`) does not carry this block.
 
 ---
 

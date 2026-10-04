@@ -68,7 +68,12 @@ import {
 } from '../../src/modules/system/metrics/metrics';
 import { scrubText, truncateMessage, SCRUBBED_FIELD_NAMES } from '../../src/core/logging/scrub';
 import { LogRingBuffer } from '../../src/core/logging/ring-buffer';
-import type { LogRecord } from '../../src/core/logging/log-record';
+import { parseLogLine, type LogRecord } from '../../src/core/logging/log-record';
+import {
+    currentRequestContext,
+    stampContextActor,
+    type RequestContext,
+} from '../../src/core/logging/request-context';
 import { REDACTED_PATHS, logRing, __resetLoggerForTests } from '../../src/core/logging/logger';
 import { __resetLoggingConfigForTests } from '../../src/core/logging/logging.config';
 import {
@@ -773,6 +778,43 @@ assert('requestId filtering is exact — this is the cross-service join', () => 
     ring.push(makeRecord({ requestId: 'req-2', msg: 'b' }));
     const found = ring.query({ requestId: 'req-1', limit: 10 });
     return found.length === 1 && found[0].msg === 'a';
+});
+
+assert('actorId matches the user id OR the role-profile id, and nothing else', () => {
+    const ring = new LogRingBuffer(10, 10 * 1024 * 1024);
+    const userId = 'a'.repeat(24);
+    const vendorId = 'b'.repeat(24);
+    ring.push(makeRecord({ actorId: userId, actorProfileId: vendorId, msg: 'mine' }));
+    ring.push(makeRecord({ actorId: 'c'.repeat(24), msg: 'someone else' }));
+    ring.push(makeRecord({ actorId: null, msg: 'anonymous' }));
+    const byUser = ring.query({ actorId: userId, limit: 10 });
+    const byProfile = ring.query({ actorId: vendorId, limit: 10 });
+    return byUser.length === 1 && byUser[0].msg === 'mine'
+        && byProfile.length === 1 && byProfile[0].msg === 'mine';
+});
+
+assert('parseLogLine keeps the actor detail the mixin stamps', () => {
+    const record = parseLogLine(JSON.stringify({
+        level: 'error', time: '2026-10-04T10:00:00.000Z', msg: 'x',
+        actorId: 'a'.repeat(24), actorSource: 'platform', actorRole: 'vendor',
+        actorName: 'Ama Mensah', actorProfileId: 'b'.repeat(24),
+    }), 4096);
+    return record?.actorSource === 'platform' && record.actorRole === 'vendor'
+        && record.actorName === 'Ama Mensah' && record.actorProfileId === 'b'.repeat(24);
+});
+
+assert('parseLogLine refuses an actorSource outside the two namespaces', () =>
+    parseLogLine(JSON.stringify({ level: 'info', msg: 'x', actorSource: 'robot' }), 4096)?.actorSource === undefined);
+
+assert('stampContextActor bounds the name and skips blanks', () => {
+    const context: RequestContext = { requestId: 'r', method: 'GET', path: '/' };
+    return runWithRequestContext(context, () => {
+        stampContextActor('a'.repeat(24), 'platform', { role: 'customer', name: `  ${'n'.repeat(300)}  ` });
+        const long = currentRequestContext()?.actorName?.length === 120;
+        stampContextActor('a'.repeat(24), 'platform', { role: 'customer', name: '   ' });
+        // A blank does not overwrite — but it does not invent one either.
+        return long && currentRequestContext()?.actorRole === 'customer';
+    });
 });
 
 assert('the text filter is a literal substring, never a caller-supplied regex', () => {

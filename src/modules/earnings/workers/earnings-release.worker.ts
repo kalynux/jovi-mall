@@ -19,6 +19,7 @@ import { IEarningsAllocation, EarningsAllocationModel } from '../models/earnings
 import { isPlatformOwnerType } from '../models/earnings-account.model';
 import { EarningsReserveHoldModel } from '../models/earnings-reserve-hold.model';
 import { CashCollectionModel } from '../../cod/models/cash-collection.model';
+import { paysDeliveryFeeInCash } from '../../orders/domain/delivery-payer';
 import { COD_CONFIG, daysFromNow } from '../../cod/config/cod.config';
 import { codDiscrepancyService } from '../../cod/services/cod-discrepancy.service';
 import { ActorRole } from '../../tickets/types/ticket.types';
@@ -385,6 +386,9 @@ export class EarningsReleaseWorker implements ObservableWorker {
           continue;
         }
         if (order.payment_method === 'cash_on_delivery') continue; // COD is stage 3's business
+        // Cash for delivery (W-F): a delivered run is paid off its fee-only collection (stage 3);
+        // only a RETURNED one has anything here (the vendor-borne remainder).
+        if (paysDeliveryFeeInCash(order, shipment) && shipment.status !== 'returned') continue;
 
         // `delivered` reached its terminal state THROUGH `agent_delivered`, so
         // both mean the run succeeded; only `returned` earns the rto rate.

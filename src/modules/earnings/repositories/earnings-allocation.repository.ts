@@ -71,11 +71,14 @@ export class EarningsAllocationRepository {
   }
 
   /** True when this source has already been split (idempotency guard). */
-  async existsForSource(sourceType: EarningsSourceType, sourceId: string): Promise<boolean> {
-    const count = await EarningsAllocationModel.countDocuments({
+  async existsForSource(sourceType: EarningsSourceType, sourceId: string, session?: ClientSession): Promise<boolean> {
+    const query = EarningsAllocationModel.countDocuments({
       source_type: sourceType,
       source_id: new Types.ObjectId(sourceId),
     }).limit(1);
+    // Optional: read as a caller's transaction sees it (the change of agency's decrease, D-12).
+    if (session) query.session(session);
+    const count = await query;
     return count > 0;
   }
 

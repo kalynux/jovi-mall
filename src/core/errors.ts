@@ -593,7 +593,12 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.DELIVERY_FEE_PROPOSAL_DIRECTION_CHANGED]: 'This change would lower the fee — withdraw the proposal and propose the lower fee, which applies directly',
     [ERROR_CODES.DELIVERY_FEE_TOPUP_IN_PROGRESS]: 'The customer has approved this fee and may be paying for it — it can no longer be changed',
     [ERROR_CODES.DELIVERY_FEE_TOPUP_NOT_DUE]: 'There is no delivery-fee top-up to pay on this proposal',
-    [ERROR_CODES.DELIVERY_FEE_PROPOSAL_ORDER_NOT_PAID]: 'This order\'s payment is refunded or disputed, so its delivery fee can no longer be changed',
+    [ERROR_CODES.DELIVERY_FEE_PROPOSAL_ORDER_NOT_PAID]: 'This order\'s payment is not settled (unpaid, refunded or disputed), so its delivery fee can no longer be changed',
+    [ERROR_CODES.DELIVERY_FEE_CASH_NOT_AVAILABLE]: 'The delivery fee cannot be paid to the rider in cash for this order — pay it with the order',
+    [ERROR_CODES.DELIVERY_FEE_REFUND_NOT_FOUND]: 'Delivery-fee refund not found',
+    [ERROR_CODES.DELIVERY_FEE_REFUND_NOT_SETTLEABLE]: 'Only a delivery-fee refund still waiting to be paid by hand can be marked settled',
+    [ERROR_CODES.DELIVERY_FEE_REFUND_ALREADY_COVERED]: 'A refund of the whole order already returned this delivery money — mark it covered by the order refund instead of paying it again',
+    [ERROR_CODES.DELIVERY_FEE_REFUND_NOT_COVERED]: 'This delivery money was not returned by an order refund — it is still owed and must be paid',
     [ERROR_CODES.COMBINED_DELIVERY_REQUEST_NOT_FOUND]: 'Combined delivery-price request not found',
     [ERROR_CODES.COMBINED_DELIVERY_REQUEST_INELIGIBLE]: 'A combined delivery price needs at least two of your parcels from one checkout, with the same delivery company, not yet picked up',
     [ERROR_CODES.COMBINED_DELIVERY_REQUEST_ALREADY_OPEN]: 'You already asked this delivery company for a combined price on this checkout',
@@ -839,6 +844,15 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.REVIEW_SUBJECT_NOT_REVIEWABLE]: 'This cannot be reviewed yet',
     [ERROR_CODES.REVIEW_NOT_PENDING]: 'This review has already been moderated',
     [ERROR_CODES.REVIEW_ROLE_NOT_ALLOWED]: 'Your account type cannot review this',
+
+    // AI listing copy. The 502/503 pair is `external_service`, so these defaults are
+    // what the vendor reads in EVERY environment — the boundary drops anything more.
+    [ERROR_CODES.AI_COPY_IMAGE_INVALID]:
+      'One of the photos cannot be used. Pick an image from your own media library.',
+    [ERROR_CODES.AI_COPY_UNAVAILABLE]:
+      'The writing assistant is not available right now. You were not charged.',
+    [ERROR_CODES.AI_COPY_FAILED]:
+      'The writing assistant could not write this. You were not charged.',
 
     // Product categories. The first is a QUESTION to the vendor, not a failure — the
     // dashboard renders `details.conflicts` as "Did you mean …?" and re-submits with

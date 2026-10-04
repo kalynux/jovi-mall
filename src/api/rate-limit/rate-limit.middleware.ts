@@ -11,7 +11,7 @@ import { isAuthSessionPathname } from './auth-paths';
 import { resolveCallerClass, rateLimitKey } from './caller-class';
 import { isExemptPath } from './exempt-paths';
 import { FailOpenStore } from './fail-open-store';
-import { AUTH_POLICY, AUTH_SESSION_POLICY, ceilingFor, CONNECTION_CODE_POLICY, GLOBAL_POLICY, IDENTITY_POLICY, POLICIES, PUBLIC_POLICY, RateLimitPolicy } from './policy';
+import { AI_COPY_POLICY, AUTH_POLICY, AUTH_SESSION_POLICY, ceilingFor, CONNECTION_CODE_POLICY, GLOBAL_POLICY, IDENTITY_POLICY, POLICIES, PUBLIC_POLICY, RateLimitPolicy } from './policy';
 
 /**
  * The rate limiters (Phase 16). jovi-mall had none of any kind before this.
@@ -275,3 +275,9 @@ export const publicRateLimiter: RequestHandler = delegate(PUBLIC_POLICY);
  * address is the axis an attacker cannot buy their way around. See `CONNECTION_CODE_POLICY`.
  */
 export const connectionCodeRateLimiter: RequestHandler = delegate(CONNECTION_CODE_POLICY);
+
+/**
+ * The AI listing-copy bucket — attached to `POST /api/vendor/ai/listing-copy` alone. Layer C.
+ * Identity-scoped: it budgets one vendor's model spend. See `AI_COPY_POLICY`.
+ */
+export const aiCopyRateLimiter: RequestHandler = delegate(AI_COPY_POLICY);

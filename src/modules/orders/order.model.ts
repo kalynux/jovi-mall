@@ -3,7 +3,8 @@ import { MODELS, COLLECTIONS } from '../../core/database/collections';
 import { GeoAddressSchema, IGeoAddress } from '../../core/types/geo-address.types';
 import type { DeliveryPayer, DeliveryPayerReason } from '../vendors/domain/delivery-terms';
 import type { ItemWeightSource } from '../earnings/domain/delivery-pricing';
-import { DELIVERY_PAYERS, DELIVERY_PAYER_REASONS } from './domain/delivery-payer';
+import { DELIVERY_FEE_PAYMENTS, DELIVERY_PAYERS, DELIVERY_PAYER_REASONS } from './domain/delivery-payer';
+import type { DeliveryFeePayment } from './domain/delivery-payer';
 
 /**
  * Order Model
@@ -53,6 +54,12 @@ export interface IPriceBreakdown {
    * part is customer-paid, 0 when the vendor pays. Absent (read as 0) on orders before ADR-A11.
    */
   delivery?: number;
+  /**
+   * Customer-paid delivery the customer hands the RIDERS in cash on an online order
+   * (`delivery_fee_payment: cash_to_rider`, ADR-A11 § Cash for delivery). NOT in `total` /
+   * `total_amount`, which stay what is charged online. 0/absent everywhere else.
+   */
+  delivery_cash?: number;
   tax: number;       // Tax amount
   discount: number;  // Discount amount
   total: number;     // Final total
@@ -210,6 +217,14 @@ export interface IOrder extends Document {
    * `above` threshold's gap or the ADR-A07 cap's (`cap_fallback`). `null` when n/a.
    */
   free_delivery_shortfall?: number | null;
+  /**
+   * How a customer-paid delivery fee is paid on an ONLINE order (ADR-A11 § Cash for delivery):
+   * `with_order` (charged online, the default) or `cash_to_rider` (handed to the rider; the
+   * shipments then carry fee-only cash collections and `price_breakdown.delivery_cash` holds the
+   * amount). Always `with_order` on COD, vendor-paid and digital orders. Read through
+   * `deliveryFeePaymentOf`.
+   */
+  delivery_fee_payment?: DeliveryFeePayment;
 
   // Payment tracking
   payment_method: OrderPaymentMethod;
@@ -440,6 +455,7 @@ const OrderSchema = new Schema<IOrder>({
   price_breakdown: {
     base: { type: Number, required: true, min: 0 },
     delivery: { type: Number, min: 0, default: 0 },
+    delivery_cash: { type: Number, min: 0, default: 0 },
     tax: { type: Number, required: true, min: 0, default: 0 },
     discount: { type: Number, required: true, min: 0, default: 0 },
     total: { type: Number, required: true, min: 0 }
@@ -453,6 +469,7 @@ const OrderSchema = new Schema<IOrder>({
   delivery_payer: { type: String, enum: [...DELIVERY_PAYERS, null], default: null },
   delivery_payer_reason: { type: String, enum: [...DELIVERY_PAYER_REASONS, null], default: null },
   free_delivery_shortfall: { type: Number, default: null, min: 0 },
+  delivery_fee_payment: { type: String, enum: [...DELIVERY_FEE_PAYMENTS], default: 'with_order' },
 
   // Payment tracking
   payment_method: {

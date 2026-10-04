@@ -124,6 +124,7 @@ const UNMUTABLE: CustomerNotificationType[] = [
     'order.delivery_fee.lowered',
     'order.delivery_fee.updated',
     'order.delivery_fee.refund_pending',
+    'order.delivery_fee.refund_settled',
     'order.delivery_fee.topup_failed',
     'order.combined_delivery.answered',
     // The card payment page (GAP-008 + GAP-012). Money, so ungated on the same rule as
@@ -190,6 +191,8 @@ const EXPECTED_WA_PARAMS: Record<CustomerNotificationType, number> = {
     'order.delivery_fee.lowered': 4,
     'order.delivery_fee.updated': 3,
     'order.delivery_fee.refund_pending': 3,
+    // W-E2 — the confirmation refund_pending promises (currency + amount + orderNumber).
+    'order.delivery_fee.refund_settled': 3,
     'order.delivery_fee.topup_failed': 3,
     'order.combined_delivery.answered': 3,
     'ticket.replied': 1,
@@ -263,10 +266,11 @@ function main(): void {
     // on one side and not the other, and `catalog.length === model.length` would pass happily
     // while both drifted away from what anybody meant.
     // 34 since 2026-10-04 (W-E): seven delivery-fee-change situations (ADR-A11).
-    assert('catalog and model enum list the same 34 situations', () => {
+    // 35 since 2026-10-04 (W-E2): `order.delivery_fee.refund_settled`, the confirmation refund_pending promised.
+    assert('catalog and model enum list the same 35 situations', () => {
         const catalog = Object.keys(CUSTOMER_NOTIFICATION_CATALOG).sort();
         const model = [...CUSTOMER_NOTIFICATION_TYPES].sort();
-        return catalog.length === 34 && JSON.stringify(catalog) === JSON.stringify(model);
+        return catalog.length === 35 && JSON.stringify(catalog) === JSON.stringify(model);
     });
 
     // The aggregate enum is spread from CUSTOMER_AGGREGATE_TYPES rather than hand-kept —

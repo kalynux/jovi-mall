@@ -19,6 +19,7 @@ const CREDIT_TYPE_BY_REASON: Partial<Record<CreditReasonCode, string>> = {
   plan_allowance: 'credit_allowance',
   vectorisation: 'credit_usage',
   whatsapp_template: 'credit_usage',
+  ai_listing_copy: 'credit_usage',
   admin_adjustment: 'credit_adjustment',
 };
 
@@ -26,6 +27,7 @@ const CREDIT_DESC_BY_REASON: Partial<Record<CreditReasonCode, string>> = {
   plan_allowance: 'Plan credit allowance',
   vectorisation: 'Product vectorisation',
   whatsapp_template: 'WhatsApp template message',
+  ai_listing_copy: 'AI listing copy',
   admin_adjustment: 'Admin credit adjustment',
 };
 

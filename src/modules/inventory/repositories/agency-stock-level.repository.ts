@@ -1,6 +1,7 @@
 import { ClientSession, PipelineStage, Types } from 'mongoose';
 import { AgencyStockLevelModel, IAgencyStockLevel } from '../models/agency-stock-level.model';
 import { COLLECTIONS } from '../../../core/database/collections';
+import { StockAdjustmentRequestModel } from '../../stock-requests/models/stock-adjustment-request.model';
 
 /** One derived (agency, depot, vendor, product, variant) tuple the reconciler wants persisted. */
 export interface DerivedStockRow {
@@ -86,6 +87,16 @@ export interface StockLevelSummary {
   countedRows: number;
   /** Rows that exist because a product is configured here, and were never counted. */
   derivedRows: number;
+  /**
+   * The same number as `derivedRows`, under the name the dashboard's "Not counted yet" tile
+   * reads (2026-10-04). Both stay: `derivedRows` is already on the wire.
+   */
+  uncountedRows: number;
+  /**
+   * Pending stock-adjustment requests the VENDOR raised on rows in this filtered set — the
+   * ones waiting on this agency. The header and the sidebar badge read this one number.
+   */
+  awaitingMyDecisionCount: number;
 }
 
 export interface StockLevelFilters {
@@ -302,12 +313,30 @@ export class AgencyStockLevelRepository {
         },
         countedRows: { $sum: { $cond: [{ $eq: ['$source', 'counted'] }, 1, 0] } },
         derivedRows: { $sum: { $cond: [{ $eq: ['$source', 'counted'] }, 0, 1] } },
+        // The filtered set's SKUs, so the awaiting-decision count below honours the same
+        // depot / vendor / search filters as every other number in this header.
+        variantIds: { $addToSet: '$variant_id' },
       },
     });
 
     const [result] = await AgencyStockLevelModel.aggregate(pipeline).exec();
 
+    const variantIds = (result?.variantIds ?? []) as Types.ObjectId[];
+    const awaitingMyDecisionCount = variantIds.length === 0
+      ? 0
+      : await StockAdjustmentRequestModel.countDocuments({
+        agency_id: new Types.ObjectId(agencyId),
+        variant_id: { $in: variantIds },
+        status: 'pending',
+        // The agency is the viewer: it is their turn exactly when the vendor raised it —
+        // the same predicate as each row's `pendingRequest.awaitingMyDecision`.
+        requested_by_role: 'vendor',
+        deletedAt: null,
+      }).exec();
+
     return {
+      uncountedRows: result?.derivedRows ?? 0,
+      awaitingMyDecisionCount,
       skuCount: result?.skuCount ?? 0,
       unassignedCount: result?.unassignedCount ?? 0,
       suspendedCount: (result?.suspendedProductIds ?? []).length,

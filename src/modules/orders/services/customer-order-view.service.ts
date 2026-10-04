@@ -16,8 +16,11 @@ import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repos
 import { getStorageProvider } from '../../../core/storage';
 import { resolveProductImages, ProductImageRef } from '../../catalog/read-models/product-image.resolver';
 import { cashCollectionService } from '../../cod/services/cash-collection.service';
+import { deliveryFeePaymentOf } from '../domain/delivery-payer';
 import { CustomerOrderDto, CustomerOrderShipmentFeeFacts, toCustomerOrderDto } from '../dto/customer-order.dto';
 import { ShipmentModel } from '../../shipments/shipment.model';
+import { DeliveryFeeRefundModel } from '../../delivery-fee-proposals/models/delivery-fee-refund.model';
+import type { DeliveryFeeRefundStatus } from '../../delivery-fee-proposals/domain/customer-fee-change.rules';
 
 export class CustomerOrderViewService {
     constructor(
@@ -62,7 +65,11 @@ export class CustomerOrderViewService {
         // ── COD blocks, only when some order actually is COD ──────────────────
         // `true` includes the delivery code: this is the customer's own view and the code is
         // their secret — it is what they hand the agent to prove payment.
-        const codOrders = orders.filter((o) => o.payment_method === 'cash_on_delivery');
+        // …and the online orders whose delivery fee is paid to the rider in cash (W-F): their
+        // fee-only collections carry a delivery code too.
+        const codOrders = orders.filter(
+            (o) => o.payment_method === 'cash_on_delivery' || deliveryFeePaymentOf(o) === 'cash_to_rider'
+        );
         const codByOrder = codOrders.length > 0
             ? await cashCollectionService.getCodBlocksForOrders(codOrders.map((o) => String(o._id)), true)
             : new Map<string, unknown[]>();
@@ -70,18 +77,22 @@ export class CustomerOrderViewService {
         // ── Per-parcel delivery fees (ADR-A11), one query for every physical order ──
         // The money fields only — what the customer paid per parcel and what is owed back.
         const shipmentsByOrder = await this.resolveShipmentFees(orders);
+        // …and the refund ledger it is measured against, so "still owed" clears when a refund
+        // completes or an administrator settles a manual one (W-E2). Status + amount only.
+        const refundLedgerByOrder = await this.resolveRefundLedgers(shipmentsByOrder);
 
         return orders.map((order) => {
             const vendorId = order.vendor_id.toString();
             return toCustomerOrderDto({
                 shipments: shipmentsByOrder.get(String(order._id)) ?? [],
+                deliveryFeeRefundLedger: refundLedgerByOrder.get(String(order._id)) ?? [],
                 order,
                 storeName: namesByVendor.get(vendorId)?.name ?? null,
                 storeSlug: slugsByVendor.get(vendorId) ?? null,
                 storeVerified: verifiedVendors.has(vendorId),
                 imagesByKey,
                 codCollections:
-                    order.payment_method === 'cash_on_delivery'
+                    order.payment_method === 'cash_on_delivery' || deliveryFeePaymentOf(order) === 'cash_to_rider'
                         ? (codByOrder.get(String(order._id)) ?? [])
                         : undefined,
             });
@@ -102,7 +113,7 @@ export class CustomerOrderViewService {
 
         const rows = await ShipmentModel.find(
             { order_id: { $in: physical } },
-            { order_id: 1, delivery_payer: 1, customer_delivery_fee: 1, customer_fee_refundable: 1, created_at: 1 },
+            { order_id: 1, status: 1, delivery_payer: 1, customer_delivery_fee: 1, customer_fee_refundable: 1, created_at: 1 },
         )
             .sort({ created_at: 1 })
             .lean()
@@ -113,10 +124,36 @@ export class CustomerOrderViewService {
             const list = out.get(key) ?? [];
             list.push({
                 _id: row._id,
+                status: row.status ?? null,
                 delivery_payer: row.delivery_payer ?? null,
                 customer_delivery_fee: row.customer_delivery_fee ?? null,
                 customer_fee_refundable: row.customer_fee_refundable ?? null,
             });
+            out.set(key, list);
+        }
+        return out;
+    }
+
+    /**
+     * Order id → its `delivery_fee_refunds` rows (status + amount), only for orders where some
+     * parcel ever owed the customer delivery money — one query, usually skipped entirely.
+     */
+    private async resolveRefundLedgers(
+        shipmentsByOrder: Map<string, CustomerOrderShipmentFeeFacts[]>,
+    ): Promise<Map<string, Array<{ status: DeliveryFeeRefundStatus; amount: number }>>> {
+        const out = new Map<string, Array<{ status: DeliveryFeeRefundStatus; amount: number }>>();
+        const orderIds = [...shipmentsByOrder.entries()]
+            .filter(([, list]) => list.some((s) => typeof s.customer_fee_refundable === 'number' && s.customer_fee_refundable > 0))
+            .map(([id]) => id);
+        if (orderIds.length === 0) return out;
+        const rows = await DeliveryFeeRefundModel.find(
+            { order_id: { $in: orderIds } },
+            { order_id: 1, status: 1, amount: 1 },
+        ).lean().exec();
+        for (const row of rows as unknown as Array<{ order_id: unknown; status: DeliveryFeeRefundStatus; amount: number }>) {
+            const key = String(row.order_id);
+            const list = out.get(key) ?? [];
+            list.push({ status: row.status, amount: row.amount });
             out.set(key, list);
         }
         return out;

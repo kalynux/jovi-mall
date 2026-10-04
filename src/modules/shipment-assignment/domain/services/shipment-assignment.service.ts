@@ -51,6 +51,7 @@ import { AssignmentCandidateService, assignmentCandidateService, RankedCandidate
 import { agentAssignmentAuditService } from '../../services/assignment-audit.service';
 import { trackingOutboxEmitter } from '../../../tracking-integration/services/tracking-outbox.emitter';
 import { shipmentFeeProposalSummary } from '../../../delivery-fee-proposals/dto/delivery-fee-proposal.dto';
+import { riderCollectsCash } from '../../../orders/domain/delivery-payer';
 
 /**
  * Who is placing an offer. `system` for auto-assignment, `agency` for a manual pick,
@@ -383,7 +384,7 @@ export class ShipmentAssignmentService {
     // Persisted whenever the agency asked for force on a COD shipment — not only when it
     // was needed right now: exposure can grow between offer and accept, and the agency's
     // decision was "send it anyway". Still waives the amount limit and nothing else.
-    const persistForce = forceRequested && order.payment_method === 'cash_on_delivery';
+    const persistForce = forceRequested && riderCollectsCash(order, shipment);
     return await this.placeManualOffer(shipment, order, agent, creator, pickupLocation, {
       codLimitForced: persistForce,
       // Only when it was needed: a region does not drift between offer and accept the way
@@ -440,7 +441,8 @@ export class ShipmentAssignmentService {
     // A fresh auto-assignment replaces any prior ranking (e.g. an agency reassign).
     await this.sessions.deleteForShipment(shipmentId);
 
-    const isCod = order.payment_method === 'cash_on_delivery';
+    // COD, or an online order whose delivery fee is paid to the rider in cash (W-F).
+    const isCod = riderCollectsCash(order, shipment);
     const session = await this.sessions.create({
       shipment_id: shipment._id as Types.ObjectId,
       order_id: order._id as Types.ObjectId,
@@ -724,7 +726,8 @@ export class ShipmentAssignmentService {
       forceCoverage: !!offer.coverage_forced,
       adminOverride,
     });
-    const isCod = order.payment_method === 'cash_on_delivery';
+    // COD, or an online order whose delivery fee is paid to the rider in cash (W-F).
+    const isCod = riderCollectsCash(order, shipment);
 
     let boundShipment: IShipment | null = null;
     let issuedCode: { collection: ICashCollection; code: string | null } | null = null;
@@ -1222,7 +1225,8 @@ export class ShipmentAssignmentService {
     const { codLimitForced = false, coverageForced = false, adminOverride = null, batchId = null } = forces;
     const shipmentId = (shipment._id as Types.ObjectId).toString();
     const agentId = agent._id.toString();
-    const isCod = order.payment_method === 'cash_on_delivery';
+    // COD, or an online order whose delivery fee is paid to the rider in cash (W-F).
+    const isCod = riderCollectsCash(order, shipment);
     const expectedCod = isCod ? this.cashCollection.computeExpectedAmount(order, shipment) : null;
 
     const offer = await this.offers.create({

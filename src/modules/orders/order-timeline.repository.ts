@@ -1,4 +1,5 @@
 import { OrderTimelineModel, IOrderTimeline, IOrderTimelineData, TimelineEventType, TimelineActorType } from './order-timeline.model';
+import { ClientSession } from 'mongoose';
 import { PaginationOptions, Page } from '../../core/repositories/base.repository';
 
 /**
@@ -27,17 +28,22 @@ export class OrderTimelineRepository {
      * This is the ONLY way to create timeline entries.
      * No updates or deletes allowed.
      */
-    async appendEvent(eventData: TimelineEventData): Promise<IOrderTimeline> {
-        const timelineEntry = await OrderTimelineModel.create({
+    async appendEvent(eventData: TimelineEventData, session?: ClientSession): Promise<IOrderTimeline> {
+        const doc = {
             order_id: eventData.orderId,
             event_type: eventData.eventType,
             description: eventData.description,
             metadata: eventData.metadata || {},
             actor_type: eventData.actorType,
             actor_id: eventData.actorId || null
-        });
-
-        return timelineEntry;
+        };
+        // Inside a transaction (the change of agency, ADR-A11 D-12) — the ARRAY form, or Mongoose
+        // ignores `{ session }` and the entry outlives a rollback of the change it records.
+        if (session) {
+            const [timelineEntry] = await OrderTimelineModel.create([doc], { session });
+            return timelineEntry;
+        }
+        return await OrderTimelineModel.create(doc);
     }
 
     /**

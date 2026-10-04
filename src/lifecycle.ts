@@ -17,6 +17,7 @@ import { assertBotErrorCopyComplete } from './modules/bot-surface/domain/bot-err
 import { assertBotOnboardingCopyComplete } from './modules/bot-surface/domain/bot-onboarding-copy';
 import { assertOnboardingReviewCopyComplete } from './modules/bot-surface/domain/onboarding-review';
 import { assertBotChromeCopyFits } from './modules/bot-surface/domain/bot-chrome-copy';
+import { assertBotFeeChangeCopyFits } from './modules/bot-surface/domain/bot-fee-change-copy';
 import { assertCommandCopyComplete } from './modules/bot-commands/domain/command-copy';
 import { assertMiniAppCopyComplete } from './modules/bot-surface/miniapp/miniapp-copy';
 import { assertInAppCopyComplete } from './modules/bot-surface/miniapp/inapp-copy';
@@ -164,6 +165,8 @@ export async function startServer(): Promise<Server> {
     // characters over WhatsApp's twenty is silent forever and arrives cut in half to
     // exactly the customers who read Portuguese.
     assertBotChromeCopyFits();
+    // The delivery-fee change copy (ADR-A11, W-H) — its own table, the same checks.
+    assertBotFeeChangeCopyFits();
     // And again for the slash-command MENU. Its cap is Telegram's own 256 characters on a
     // command description, and its failure mode is the worst of the four: an over-long or
     // missing string makes `setMyCommands` reject the ENTIRE batch, so the customer keeps

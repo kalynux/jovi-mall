@@ -1802,6 +1802,35 @@ const CHECKOUT_PAY_ON_DELIVERY_BUTTON: Copy = {
     ar: 'الدفع عند الاستلام',
 };
 
+/**
+ * Cash for delivery (ADR-A11 § Cash for delivery, W-F): pay the items now by mobile money and
+ * the delivery fee in cash to the rider. The button is the choice; the summary line names both
+ * amounts (server-formatted — the chat computes nothing).
+ */
+const CHECKOUT_DELIVERY_FEE_CASH_BUTTON: Copy = {
+    en: 'Delivery in cash',
+    fr: 'Livraison en espèces',
+    pt: 'Entrega em dinheiro',
+    es: 'Envío en efectivo',
+    ar: 'التوصيل نقدًا',
+};
+
+const CHECKOUT_DELIVERY_FEE_CASH_LINE: Copy = {
+    en: 'Or pay {online} now and the delivery fee, {toRider}, in cash to the rider.',
+    fr: 'Ou payez {online} maintenant et les frais de livraison, {toRider}, en espèces au livreur.',
+    pt: 'Ou pague {online} agora e a taxa de entrega, {toRider}, em dinheiro ao estafeta.',
+    es: 'O paga {online} ahora y la tarifa de envío, {toRider}, en efectivo al repartidor.',
+    ar: 'أو ادفع {online} الآن ورسوم التوصيل {toRider} نقدًا لمندوب التوصيل.',
+};
+
+const CHECKOUT_DELIVERY_FEE_CASH_PLACED: Copy = {
+    en: 'The delivery fee, {toRider}, is paid in cash to the rider. You will receive a delivery code for each parcel — give it to the rider at the door.',
+    fr: 'Les frais de livraison, {toRider}, se paient en espèces au livreur. Vous recevrez un code de livraison pour chaque colis — donnez-le au livreur à la porte.',
+    pt: 'A taxa de entrega, {toRider}, paga-se em dinheiro ao estafeta. Vai receber um código de entrega para cada encomenda — entregue-o ao estafeta à porta.',
+    es: 'La tarifa de envío, {toRider}, se paga en efectivo al repartidor. Recibirás un código de entrega por cada paquete — dáselo al repartidor en la puerta.',
+    ar: 'تُدفع رسوم التوصيل {toRider} نقدًا لمندوب التوصيل. ستتلقى رمز توصيل لكل طرد — أعطه للمندوب عند الباب.',
+};
+
 const CHECKOUT_HOW_TO_PAY_QUESTION: Copy = {
     en: 'How would you like to pay?',
     fr: 'Comment souhaitez-vous payer ?',
@@ -2258,6 +2287,9 @@ const CHROME = Object.freeze({
     checkoutPayNowButton: { copy: CHECKOUT_PAY_NOW_BUTTON, cap: 20 },
     checkoutPayOnDeliveryButton: { copy: CHECKOUT_PAY_ON_DELIVERY_BUTTON, cap: 20 },
     checkoutHowToPayQuestion: { copy: CHECKOUT_HOW_TO_PAY_QUESTION, cap: null },
+    checkoutDeliveryFeeCashButton: { copy: CHECKOUT_DELIVERY_FEE_CASH_BUTTON, cap: 20 },
+    checkoutDeliveryFeeCashLine: { copy: CHECKOUT_DELIVERY_FEE_CASH_LINE, cap: null },
+    checkoutDeliveryFeeCashPlaced: { copy: CHECKOUT_DELIVERY_FEE_CASH_PLACED, cap: null },
     checkoutCashOnDeliveryPlaced: { copy: CHECKOUT_CASH_ON_DELIVERY_PLACED, cap: null },
     checkoutChooseAddressQuestion: { copy: CHECKOUT_CHOOSE_ADDRESS_QUESTION, cap: null },
     checkoutDeclined: { copy: CHECKOUT_DECLINED, cap: null },
@@ -2305,6 +2337,9 @@ export type BotChromeKey = keyof typeof CHROME;
 const CHROME_TEMPLATES: Readonly<Partial<Record<BotChromeKey, readonly string[]>>> = Object.freeze({
     checkoutMoreLines: Object.freeze(['count']),
     checkoutPaymentRequestSent: Object.freeze(['amount', 'phone']),
+    // Cash for delivery (ADR-A11 § Cash for delivery, W-F).
+    checkoutDeliveryFeeCashLine: Object.freeze(['online', 'toRider']),
+    checkoutDeliveryFeeCashPlaced: Object.freeze(['toRider']),
     checkoutDeliveryMinimumLine: Object.freeze(['shop', 'amount']),
     checkoutDeliveryMinimumUnreachable: Object.freeze(['shop']),
     // Customer-paid delivery (ADR-A11).

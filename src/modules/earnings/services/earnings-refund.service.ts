@@ -42,7 +42,13 @@ export class EarningsRefundService {
 
     const orderObjectId = new Types.ObjectId(orderId);
 
-    const collections = await CashCollectionModel.find({ order_id: orderObjectId }, { _id: 1 });
+    // A FEE-ONLY collection (W-F, ADR-A11 § Cash for delivery) is NOT reversed: the customer
+    // handed that delivery fee to the rider in cash, and a refund of the order returns only what
+    // was charged online (`total_amount` excludes it) — the agency and agent keep what they earned.
+    const collections = await CashCollectionModel.find(
+      { order_id: orderObjectId, kind: { $ne: 'delivery_fee' } },
+      { _id: 1 }
+    );
     for (const collection of collections) {
       await this.onRefund('cod_collection', collection._id.toString());
     }

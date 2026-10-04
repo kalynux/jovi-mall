@@ -108,6 +108,8 @@ function methodFor(provider: PaymentProvider | null, gateway: PaymentGatewayType
   return gateway === 'STRIPE' ? 'CARD' : 'MOBILE';
 }
 import { RefundTransactionModel } from '../models/refund-transaction.model';
+// The model file only (no service): a helper over `delivery_fee_refunds`, whose import graph is light.
+import { sumDeliveryRefundsPaidByHand } from '../../delivery-fee-proposals/models/delivery-fee-refund.model';
 import { createAppError, AppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { eventBus } from '../../../core/events/event-bus';
@@ -941,14 +943,21 @@ export class PaymentOrchestratorService {
     if (!order) {
       throw createAppError(ERROR_CODES.REFUND_ORDER_NOT_FOUND, 404, undefined, { orderId: source.orderId });
     }
-    const [tally] = await RefundTransactionModel.aggregate<{ total: number }>([
-      { $match: { orderId: new Types.ObjectId(source.orderId), status: 'completed' } },
-      { $group: { _id: null, total: { $sum: '$refundAmount' } } }
+    const orderObjectId = new Types.ObjectId(source.orderId);
+    const [[tally], byHand] = await Promise.all([
+      RefundTransactionModel.aggregate<{ total: number }>([
+        { $match: { orderId: orderObjectId, status: 'completed' } },
+        { $group: { _id: null, total: { $sum: '$refundAmount' } } }
+      ]),
+      // Delivery-fee money an administrator already returned BY HAND (ADR-A11 W-E2) left with no
+      // `refund_transactions` row — counted here, or refunding the whole order afterwards would
+      // pay that delivery money a second time.
+      sumDeliveryRefundsPaidByHand([orderObjectId])
     ]);
     const isGrouped = legs.some((l) => !l.tx.orderId && (l.tx.orderIds?.length ?? 0) > 0);
     return {
       sourceTotal: (order as { total_amount: number }).total_amount,
-      alreadyRefunded: tally?.total ?? 0,
+      alreadyRefunded: (tally?.total ?? 0) + (byHand.get(source.orderId) ?? 0),
       isGrouped
     };
   }

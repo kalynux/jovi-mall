@@ -12,8 +12,8 @@ import { EarningsAllocationRepository } from '../../earnings/repositories/earnin
 import { EarningsAccountService, earningsAccountService } from '../../earnings/services/earnings-account.service';
 import { bargainLineOf } from '../../earnings/services/earnings-split.service';
 import { computeOrderAiMargin } from '../../earnings/services/negotiation-margin.service';
-import { customerDeliveryFeeOf, deliveryPayerOf, orderItemsGrossOf } from '../../orders/domain/delivery-payer';
-import { FeeChangePlan, FeeState, PaymentMode, vendorBorneOf } from '../domain/customer-fee-change.rules';
+import { customerDeliveryFeeOf, deliveryFeePaymentOf, deliveryPayerOf, orderItemsGrossOf } from '../../orders/domain/delivery-payer';
+import { FeeChangePlan, FeeState, feeIsCash, PaymentMode, vendorBorneOf } from '../domain/customer-fee-change.rules';
 import { codShipmentVendorNet, prepaidOrderVendorNet } from '../domain/delivery-fee-proposal.rules';
 
 export interface ApplyCustomerFeeInput {
@@ -66,8 +66,14 @@ export class CustomerFeeApplicationService {
     private readonly quotes: EarningsQuoteService = earningsQuoteService
   ) {}
 
-  modeOf(order: Pick<IOrder, 'payment_method'>): PaymentMode {
-    return order.payment_method === 'cash_on_delivery' ? 'cod' : 'online';
+  /**
+   * COD order → `cod`; an online order paying its delivery fee to the rider in cash (W-F) →
+   * `cash_fee`; otherwise `online`. Per ORDER: every customer-paid shipment of a `cash_to_rider`
+   * order pays in cash (a partial move's new shipment is vendor-paid and never reaches here).
+   */
+  modeOf(order: Pick<IOrder, 'payment_method'> & Partial<Pick<IOrder, 'delivery_fee_payment'>>): PaymentMode {
+    if (order.payment_method === 'cash_on_delivery') return 'cod';
+    return deliveryFeePaymentOf(order) === 'cash_to_rider' ? 'cash_fee' : 'online';
   }
 
   /** The fee the agency is paid today: override → snapshot → the live formula. */
@@ -116,8 +122,17 @@ export class CustomerFeeApplicationService {
    *  - online, split: the held allocation moved by the delta (exact — the number `applyInSession`
    *    would write);
    *  - online, not split: the order, with every other shipment's vendor-borne share.
+   *
+   * Pass `session` from inside a transaction (the change of agency, ADR-A11 D-12) so the sibling
+   * shipments and the allocation are read as that transaction sees them.
    */
-  async vendorNetWithBorne(order: IOrder, shipment: IShipment, borneBefore: number, borneAfter: number): Promise<number> {
+  async vendorNetWithBorne(
+    order: IOrder,
+    shipment: IShipment,
+    borneBefore: number,
+    borneAfter: number,
+    session?: ClientSession
+  ): Promise<number> {
     const vendorId = order.vendor_id.toString();
     const { commissionPercent } = await this.entitlements.getEntitlements(vendorId);
     const itemsById = new Map(order.items.map((i) => [(i._id as any).toString(), i]));
@@ -140,10 +155,10 @@ export class CustomerFeeApplicationService {
       });
     }
 
-    const allocation = await this.allocations.findOneBySourceAndBeneficiary('order', order._id.toString(), 'vendor', vendorId);
+    const allocation = await this.allocations.findOneBySourceAndBeneficiary('order', order._id.toString(), 'vendor', vendorId, session);
     if (allocation) return allocation.amount + borneBefore - borneAfter;
 
-    const siblings = await ShipmentModel.find({ order_id: order._id });
+    const siblings = await ShipmentModel.find({ order_id: order._id }, null, { session: session ?? undefined });
     let others = 0;
     for (const s of siblings) {
       if ((s._id as Types.ObjectId).equals(shipment._id as Types.ObjectId)) continue;
@@ -186,20 +201,32 @@ export class CustomerFeeApplicationService {
     );
     if (!updated) throw createAppError(ERROR_CODES.DELIVERY_FEE_PROPOSAL_STALE, 409);
 
-    // 2. COD: the pending cash collection (created at agent accept) follows the customer fee.
-    //    Re-priced only while `pending` — the money has not changed hands. Read-then-CAS rather
-    //    than `$inc`, because a pre-ADR-A11 row carries `delivery_fee_amount: null`.
+    // 2. COD / cash for delivery: the pending cash collection (created at agent accept) follows
+    //    the customer fee. Re-priced only while `pending` — the money has not changed hands.
+    //    Read-then-CAS rather than `$inc`, because a pre-ADR-A11 row carries
+    //    `delivery_fee_amount: null`. A fee-only collection (W-F) has `items_amount: 0`.
     let codCollectionAdjusted = false;
-    if (mode === 'cod' && plan.collectDelta !== 0) {
+    if (feeIsCash(mode) && plan.collectDelta !== 0) {
       const collection = await CashCollectionModel.findOne({ shipment_id: input.shipmentId }, null, { session });
       if (collection) {
         if (collection.status !== 'pending') throw createAppError(ERROR_CODES.DELIVERY_FEE_PROPOSAL_STALE, 409);
         const deliveryBefore = collection.delivery_fee_amount ?? 0;
         const itemsAmount = typeof collection.items_amount === 'number' ? collection.items_amount : collection.expected_amount - deliveryBefore;
         const deliveryAfter = Math.max(0, deliveryBefore + plan.collectDelta);
+        // A fee-only collection (W-F) lowered to nothing has no cash left to collect: it is
+        // cancelled (the shipment then delivers like any online one — `paysDeliveryFeeInCash`
+        // needs a fee > 0), never left pending at 0, which no remittance could ever settle.
+        const cancelFeeOnly = collection.kind === 'delivery_fee' && itemsAmount + deliveryAfter === 0;
         const moved = await CashCollectionModel.updateOne(
           { _id: collection._id, status: 'pending', expected_amount: collection.expected_amount },
-          { $set: { items_amount: itemsAmount, delivery_fee_amount: deliveryAfter, expected_amount: itemsAmount + deliveryAfter } },
+          {
+            $set: {
+              items_amount: itemsAmount,
+              delivery_fee_amount: deliveryAfter,
+              expected_amount: itemsAmount + deliveryAfter,
+              ...(cancelFeeOnly ? { status: 'cancelled' } : {}),
+            },
+          },
           { session }
         );
         if (moved.modifiedCount !== 1) throw createAppError(ERROR_CODES.DELIVERY_FEE_PROPOSAL_STALE, 409);
@@ -207,8 +234,16 @@ export class CustomerFeeApplicationService {
       }
     }
 
-    // 3. The order's totals.
-    if (plan.orderTotalDelta !== 0) {
+    // 3. The order's totals. Cash for delivery (W-F): `total_amount` is what was charged ONLINE
+    //    and never held the fee — only `price_breakdown.delivery_cash` (the riders' cash) moves.
+    if (plan.orderTotalDelta !== 0 && mode === 'cash_fee') {
+      const moved = await OrderModel.updateOne(
+        { _id: order._id, 'price_breakdown.delivery_cash': { $gte: -plan.orderTotalDelta } },
+        { $inc: { 'price_breakdown.delivery_cash': plan.orderTotalDelta }, $set: { updated_at: input.at } },
+        { session }
+      );
+      if (moved.modifiedCount !== 1) throw createAppError(ERROR_CODES.DELIVERY_FEE_PROPOSAL_STALE, 409);
+    } else if (plan.orderTotalDelta !== 0) {
       const moved = await OrderModel.updateOne(
         { _id: order._id, total_amount: { $gte: -plan.orderTotalDelta } },
         {
@@ -224,10 +259,11 @@ export class CustomerFeeApplicationService {
       if (moved.modifiedCount !== 1) throw createAppError(ERROR_CODES.DELIVERY_FEE_PROPOSAL_STALE, 409);
     }
 
-    // 4. The vendor's held allocation — online, already split, and only if its share moved.
+    // 4. The vendor's held allocation — online (cash for delivery included: the goods were split
+    //    at payment), already split, and only if its share moved.
     let vendorAllocationBefore: number | null = null;
     let vendorAllocationAfter: number | null = null;
-    if (mode === 'online' && plan.vendorAllocationDelta !== 0) {
+    if (mode !== 'cod' && plan.vendorAllocationDelta !== 0) {
       const orderId = order._id.toString();
       const vendorId = order.vendor_id.toString();
       const allocation = await this.allocations.findOneBySourceAndBeneficiary('order', orderId, 'vendor', vendorId, session);
@@ -248,7 +284,7 @@ export class CustomerFeeApplicationService {
         await this.accounts.adjustHeldInSession(repriced, plan.vendorAllocationDelta, session);
         vendorAllocationBefore = allocation.amount;
         vendorAllocationAfter = repriced.amount;
-      } else if (await this.allocations.existsForSource('order', orderId)) {
+      } else if (await this.allocations.existsForSource('order', orderId, session)) {
         // Split, but no vendor row (`persist` skips a zero share): there is nothing to move it
         // from, and inventing a row would invent money. Refuse rather than mis-state the net.
         throw createAppError(ERROR_CODES.DELIVERY_FEE_PROPOSAL_VENDOR_NET_NOT_POSITIVE, 422);

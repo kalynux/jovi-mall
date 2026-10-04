@@ -14,6 +14,13 @@ export interface StockRequestListFilters {
   variantId?: string;
   /** `raised_by_me` / `awaiting_me`, resolved against the caller's own role. */
   direction?: 'raised_by_me' | 'awaiting_me';
+  /** The raw term. The service resolves it into `searchMatch`; the repository ignores it. */
+  search?: string;
+  /**
+   * A resolved `search` term: requests on any of these products OR variants. Both empty
+   * means the term matched nothing, and the page is empty — never "no filter".
+   */
+  searchMatch?: { productIds: string[]; variantIds: string[] };
 }
 
 /**
@@ -105,6 +112,13 @@ export class StockAdjustmentRequestRepository {
     } else if (filters.direction === 'awaiting_me') {
       filter.requested_by_role = party === 'vendor' ? 'agency' : 'vendor';
       filter.status = 'pending';
+    }
+
+    if (filters.searchMatch) {
+      filter.$or = [
+        { product_id: { $in: filters.searchMatch.productIds.map(id => new Types.ObjectId(id)) } },
+        { variant_id: { $in: filters.searchMatch.variantIds.map(id => new Types.ObjectId(id)) } },
+      ];
     }
 
     const [total, docs] = await Promise.all([

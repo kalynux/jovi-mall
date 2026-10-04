@@ -159,12 +159,13 @@ export class BotCartController {
      * distinguishes a COD checkout (no payment call needed) from an online one.
      */
     static checkout = asyncHandler(async (req: Request, res: Response) => {
-        const { paymentMethod, deliveryAddressId } = BotCheckoutSchema.parse(req.body ?? {});
+        const { paymentMethod, deliveryAddressId, deliveryFeePayment } = BotCheckoutSchema.parse(req.body ?? {});
 
         const { cartId, orders } = await orderService.createOrdersFromCart(
             botCallerOf(req).customerId,
             paymentMethod,
             { addressId: deliveryAddressId, address: null },
+            { deliveryFeePayment },
         );
 
         sendSuccess(res, {
@@ -178,6 +179,9 @@ export class BotCartController {
                 total: order.total_amount,
                 currency: order.currency,
                 paymentMethod: order.payment_method,
+                // W-F: `cash_to_rider` ⇒ `total` is the online charge; the riders collect the rest.
+                deliveryFeePayment: order.delivery_fee_payment ?? 'with_order',
+                deliveryCashToRider: order.price_breakdown?.delivery_cash ?? 0,
                 paymentStatus: order.payment_status,
                 fulfillmentStatus: order.fulfillment_status,
                 itemCount: order.items.length,

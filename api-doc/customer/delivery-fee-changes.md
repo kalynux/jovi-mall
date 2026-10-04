@@ -55,8 +55,10 @@ checkout group).
     ],
     "refunds": {
       "owed": 0,
+      "returned": 300,
+      "awaitingManual": 0,
       "entries": [ { "amount": 300, "status": "completed", "cause": "fee_decrease",
-                     "createdAt": "…", "settledAt": "…" } ]
+                     "createdAt": "…", "settledAt": "…", "settledByHand": false } ]
     }
   }
 }
@@ -71,9 +73,17 @@ checkout group).
 - `shipments[].fee` — what the delivery company is paid; `customerFee` — online: what you have paid
   for that delivery (checkout + top-ups, never lowered — refunds are listed under `refunds`);
   COD: the delivery cash you will hand over.
-- `refunds.owed` — delivery money owed back to you and not yet claimed by a refund. `entries[].status`:
-  `processing` · `completed` · `manual_required` (our team pays it by hand — you get a
-  notification) · `failed` (retried automatically).
+- `refunds.owed` — delivery money owed back to you that has **not reached you yet**: being refunded,
+  waiting for our team to send it by hand, or to be retried. It drops to 0 once the money is back
+  (a refund completed, or our team recorded the hand payment). ⚠ Changed 2026-10-04 (W-E2): it used
+  to exclude money waiting to be paid by hand, so it read 0 while the customer was still waiting.
+- `refunds.returned` — delivery money already given back. `refunds.awaitingManual` — the part our
+  team must send by hand (show "on its way" rather than "owed").
+- `entries[].status`: `processing` · `completed` · `manual_required` (our team pays it by hand — you
+  get `order.delivery_fee.refund_pending`, then `order.delivery_fee.refund_settled` when it is sent) ·
+  `failed` (retried automatically). `settledByHand: true` on a `completed` entry our team sent by hand.
+- The order itself (`GET /api/customer/orders/:id` and the group read) carries the same two numbers
+  as `deliveryFeeRefund: { owed, returned } | null`.
 
 ## POST /api/customer/orders/:id/delivery-fee-proposals/:proposalId/approve
 
@@ -153,8 +163,9 @@ While `open`. `409 COMBINED_DELIVERY_REQUEST_NOT_OPEN` otherwise.
 | `order.delivery_fee.lowered` | a lower fee applied (says refund or less cash) |
 | `order.delivery_fee.updated` | a higher fee now applies (cash at the door / top-up received / the shop covers it) |
 | `order.delivery_fee.refund_pending` | money owed back must be paid by hand |
+| `order.delivery_fee.refund_settled` | our team sent that money by hand (W-E2, 2026-10-04) |
 | `order.delivery_fee.topup_failed` | the top-up payment did not go through |
 | `order.combined_delivery.answered` | the delivery company answered your combined request |
 | `order.refunded` (existing) | an automatic refund went through |
 
-All link to `shop/account/orders/detail/{orderId}`.
+All link to `shop/account/orders/detail/{orderId}`. In a Telegram / WhatsApp chat, `approval_needed`, `topup_due` and `topup_failed` also carry a button (**See the new fee** · **Pay now** · **Try again**) that draws the Accept · Decline (or Pay now) question in the chat itself — the bot side is `api-doc/n8n/bot-surface.md` § 14.9 "Delivery-fee changes" (W-H).

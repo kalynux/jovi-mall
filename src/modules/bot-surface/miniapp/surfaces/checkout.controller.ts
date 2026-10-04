@@ -14,6 +14,7 @@ import { PaymentStatus } from '../../../payments/models/payment-transaction.mode
 import { publicCatalogService } from '../../../catalog/services/public-catalog.service';
 import { formatBotPrice, toPublicMediaUrl } from '../../domain/product-card';
 import { BotDeliveryLine, deliveryLinesOf } from '../../domain/delivery-lines';
+import { deliveryCashOfOrders } from '../../../orders/domain/delivery-payer';
 import { botStorefrontLink, surfacePath } from '../../domain/bot-list-window';
 import { maskPhone } from '../../dto/bot-projections';
 import { composeTypedNumber, dialOptions } from '../../../../core/validation/dial-codes';
@@ -103,7 +104,18 @@ export {
  * (`composeTypedNumber`): an unknown value composes nothing, and the number is then judged exactly
  * as it was before the picker existed.
  */
-const PlaceBodySchema = z.object({ phone: z.unknown().optional(), dial: z.unknown().optional() }).strict();
+const PlaceBodySchema = z
+    .object({
+        phone: z.unknown().optional(),
+        dial: z.unknown().optional(),
+        /**
+         * Cash for delivery (ADR-A11 § Cash for delivery, W-F): `cash_to_rider` charges the items
+         * now and leaves the delivery fee to be paid to the rider in cash. Offered by the page only
+         * when the data read's `deliveryFeeCash` is non-null.
+         */
+        deliveryFeePayment: z.enum(['with_order', 'cash_to_rider']).optional(),
+    })
+    .strict();
 
 const cartService = new CartService();
 const orderService = new OrderService();
@@ -178,6 +190,30 @@ export interface CheckoutView {
      * `addAddressUrl`; `readCheckoutView` always sets it.
      */
     delivery?: CheckoutDeliveryRow[];
+    /**
+     * ⭐ Cash for delivery (W-F): non-null when the items may be paid now and the delivery fee in
+     * cash to the rider — every customer-paid shop's agencies accept it. Both strings are the
+     * server's (`onlineText` = what Pay now would then charge, `toRiderText` = the cash for the
+     * rider); the page draws a choice and computes nothing. Optional in the TYPE for the WhatsApp
+     * form's fixtures, like `delivery`.
+     */
+    deliveryFeeCash?: CheckoutDeliveryFeeCash | null;
+}
+
+/** The cash-for-delivery choice as a screen or the chat draws it — server-formatted strings. */
+export interface CheckoutDeliveryFeeCash {
+    onlineText: string;
+    toRiderText: string;
+}
+
+/** The quote's checkout-wide cash-for-delivery verdict, formatted — or null when not offered. */
+function deliveryFeeCashOf(quote: CartQuote): CheckoutDeliveryFeeCash | null {
+    const cash = quote.deliveryFeeCash;
+    if (!cash?.available) return null;
+    return {
+        onlineText: formatBotPrice(cash.amountDueOnline, quote.currency),
+        toRiderText: formatBotPrice(cash.amountDueToRider, quote.currency),
+    };
 }
 
 /** One delivery row as a screen draws it — every value already a string. */
@@ -224,6 +260,9 @@ export interface CheckoutPlacement extends CheckoutPlaced {
     payerMasked: string;
     /** The gateway's own instruction (a USSD code, "confirm on your phone"), relayed verbatim. */
     instructions: unknown;
+    /** Cash for delivery (W-F): the delivery cash for the riders — 0 when paid with the order. */
+    deliveryCashToRider: number;
+    currency: string | null;
 }
 
 /**
@@ -242,6 +281,11 @@ export interface PlaceCheckoutOptions {
     callerCustomerId?: string;
     /** One of the customer's own saved addresses. Null → their default, exactly as the screen. */
     addressId?: string | null;
+    /**
+     * Cash for delivery (W-F) — the one option BOTH doors pass: the screen from its body, the chat
+     * from the `yes:cof` tap. The chat door checks `cash_to_rider` against the quote BEFORE the spend; the screen is refused inside order creation.
+     */
+    deliveryFeePayment?: 'with_order' | 'cash_to_rider';
 }
 
 /**
@@ -297,6 +341,8 @@ export async function readCheckoutView(handle: string): Promise<CheckoutView> {
          * default), so the row and the charge describe one drop-off.
          */
         delivery: (await deliveryLinesFor(quote, session.language)).map(({ label, valueText, hint }) => ({ label, valueText, hint })),
+        /** W-F — quoted at the same default address the screen places at. */
+        deliveryFeeCash: address && !address.digital ? deliveryFeeCashOf(quote) : null,
     };
 }
 
@@ -369,6 +415,25 @@ export async function placeCheckout(
         ? await precheckChatDoor(options.callerCustomerId, options.addressId ?? null, typedNumber)
         : null;
 
+    /**
+     * ⭐ Cash for delivery (W-F), checked BEFORE the spend on the chat door: the quote at the address
+     * the orders will go to must still offer it (an agency may have switched it off since the
+     * review). Refused with the handle alive (`spent: false`), so Pay now stays one tap away.
+     * `createOrdersFromCart` re-checks it inside its transaction either way.
+     */
+    const deliveryFeePayment = options.deliveryFeePayment === 'cash_to_rider' ? 'cash_to_rider' : 'with_order';
+    // The CHAT door only: it knows its caller before the spend. The screen learns its customer from
+    // the session it consumes (no pre-spend check, by design) — `createOrdersFromCart` refuses there.
+    if (deliveryFeePayment === 'cash_to_rider' && options.callerCustomerId) {
+        const quote = await cartQuoteService.quoteForCustomer(options.callerCustomerId, addressId ?? undefined);
+        if (!quote.deliveryFeeCash.available) {
+            throw createAppError(ERROR_CODES.DELIVERY_FEE_CASH_NOT_AVAILABLE, 422, undefined, {
+                reason: quote.deliveryFeeCash.reason,
+                spent: false,
+            });
+        }
+    }
+
     const session = await inAppSurfaceStore.consume('co', plausibleHandle(handle));
     if (!session) throw handleGone(false);
     /**
@@ -417,6 +482,7 @@ export async function placeCheckout(
             session.customerId,
             'online',
             { addressId, address: null },
+            { deliveryFeePayment },
         );
 
         /**
@@ -444,6 +510,9 @@ export async function placeCheckout(
             orderNumbers: orders.map((order) => order.order_number),
             payerMasked: maskPhone(payerNumber),
             instructions: payment.instructions ?? null,
+            /** W-F — the cash the riders collect for delivery; 0 unless `cash_to_rider` took. */
+            deliveryCashToRider: deliveryCashOfOrders(orders),
+            currency: orders[0]?.currency ?? null,
         };
     } catch (error) {
         throw markedSpent(error);
@@ -575,6 +644,8 @@ export async function readChatCheckout(
         cashOnDelivery: await cashOnDeliveryOffered(customerId, cart.productType ?? null),
         deliveryLines,
         deliveryCharged: deliveryLines.some((line) => line.charged),
+        /** W-F — quoted at the destination the review names, like the total. */
+        deliveryFeeCash: destination.kind === 'address' ? deliveryFeeCashOf(quote) : null,
     };
 }
 
@@ -701,6 +772,8 @@ export interface ChatCheckoutView {
     deliveryLines: BotDeliveryLine[];
     /** The customer pays delivery on some shop's part — see `ChatReviewForReply.deliveryCharged`. */
     deliveryCharged: boolean;
+    /** Cash for delivery (W-F) is on offer at the reviewed address — see `CheckoutDeliveryFeeCash`. */
+    deliveryFeeCash: CheckoutDeliveryFeeCash | null;
 }
 
 export class CheckoutController {
@@ -719,6 +792,8 @@ export class CheckoutController {
             cashOnDelivery: view.cashOnDelivery,
             /** ADR-A11 — the delivery row(s), every value a string. The page computes nothing. */
             delivery: view.delivery ?? [],
+            /** W-F — the "delivery in cash" choice, or null when it is not offered. */
+            deliveryFeeCash: view.deliveryFeeCash ?? null,
         });
     });
 
@@ -741,8 +816,10 @@ export class CheckoutController {
      * page whatever the placement gains next.
      */
     static place = asyncHandler(async (req: Request, res: Response) => {
-        const { phone, dial } = PlaceBodySchema.parse(req.body ?? {});
-        const placed = await placeCheckout(String(req.params.handle ?? ''), composeTypedNumber(phone, dial));
+        const { phone, dial, deliveryFeePayment } = PlaceBodySchema.parse(req.body ?? {});
+        const placed = await placeCheckout(String(req.params.handle ?? ''), composeTypedNumber(phone, dial), {
+            deliveryFeePayment,
+        });
         const answer: CheckoutPlaced = {
             orderCount: placed.orderCount,
             transactionId: placed.transactionId,

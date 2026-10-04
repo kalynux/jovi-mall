@@ -397,9 +397,11 @@ async function main(): Promise<void> {
   });
 
   const vendorOrderSvc = stripComments(read('modules/orders/vendor-order.service.ts'));
-  await assert('change-agency-per-item runs the same gate', () => {
-    const start = vendorOrderSvc.indexOf('async updateDeliveryAgency');
-    const body = vendorOrderSvc.slice(start, start + 6000);
+  // Since ADR-A11 W-E2 the change of agency lives in `moveItemsToAgency` (one transaction for every
+  // item); `updateDeliveryAgency` is its one-item wrapper. The gate is a pre-check of the batch.
+  await assert('change-agency runs the same gate (moveItemsToAgency, before its transaction)', () => {
+    const start = vendorOrderSvc.indexOf('async moveItemsToAgency(');
+    const body = vendorOrderSvc.slice(start, vendorOrderSvc.indexOf('transactionManager.runInTransactionWithRetry(', start));
     return body.includes('codLimitsService.evaluateHandoffs(') && body.includes('limitExceededError(');
   });
 

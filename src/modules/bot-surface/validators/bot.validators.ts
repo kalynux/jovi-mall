@@ -190,6 +190,8 @@ export const BotCheckoutSchema = z
     .object({
         paymentMethod: z.enum(['online', 'cash_on_delivery']),
         deliveryAddressId: objectId,
+        /** Cash for delivery (W-F, ADR-A11): `cash_to_rider` with `online` only — see the customer API. */
+        deliveryFeePayment: z.enum(['with_order', 'cash_to_rider']).optional(),
     })
     .strict();
 
@@ -1083,3 +1085,63 @@ export const BotConnectionParamSchema = z.object({ channel: z.enum(CONNECTION_CH
 export const BotAccountCloseSchema = z
     .object({ confirm: z.literal(ACCOUNT_CLOSURE_CONFIRMATION) })
     .strict();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Delivery-fee changes after checkout (ADR-A11 § Fee changes after checkout, W-H)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `POST /delivery-fees/pending` — omitted `orderId` means every open order. The id OR the number
+ * the customer read out, as `orders_get_order` accepts.
+ */
+export const BotDeliveryFeePendingSchema = z
+    .object({ orderId: quotedReference.optional() })
+    .strict();
+
+export const BotDeliveryFeeParamSchema = z.object({ proposalId: objectId });
+
+/**
+ * `POST /delivery-fees/:proposalId/approve` — `version` is the figure the customer was SHOWN, as
+ * data from `delivery_fees_list_pending`; an edited proposal answers 409 and the fresh one is drawn.
+ */
+export const BotDeliveryFeeApproveSchema = z
+    .object({ version: z.number().int().min(1) })
+    .strict();
+
+/** `POST /delivery-fees/:proposalId/reject` — the note reaches the delivery company. */
+export const BotDeliveryFeeRejectSchema = z
+    .object({
+        version: z.number().int().min(1),
+        note: z.string().trim().min(1).max(500).optional(),
+    })
+    .strict();
+
+/**
+ * `POST /delivery-fees/:proposalId/pay` — `phone` only when the customer TYPED a number (the same
+ * text `checkout_retry_payment` takes, composed with the account's country when it has no `+`);
+ * omitted, the wallet on the account is charged. The AMOUNT is never a field: it is the one the
+ * approval froze.
+ */
+export const BotDeliveryFeePaySchema = z
+    .object({ phone: z.string().trim().max(32).nullable().optional() })
+    .strict();
+
+/**
+ * `POST /delivery-fees/combined` — every id from `combined_delivery_eligible`, never composed.
+ * `shipmentIds` omitted = every eligible parcel that company carries on that checkout.
+ */
+export const BotCombinedCreateSchema = z
+    .object({
+        cartId: objectId,
+        agencyId: objectId,
+        shipmentIds: z.array(objectId).min(2).max(20).optional(),
+        note: z.string().trim().min(1).max(500).optional(),
+    })
+    .strict();
+
+/** `POST /delivery-fees/combined/list` — one checkout's requests, or the newest across all. */
+export const BotCombinedListSchema = z
+    .object({ cartId: objectId.optional() })
+    .strict();
+
+export const BotCombinedParamSchema = z.object({ requestId: objectId });

@@ -1624,6 +1624,17 @@ export const ERROR_CODES = Object.freeze({
     STOCK_REQUEST_STALE: 'STOCK_REQUEST_STALE',
     STOCK_REQUEST_NO_CHANGE: 'STOCK_REQUEST_NO_CHANGE',
 
+    // ── AI LISTING COPY (`POST /api/vendor/ai/listing-copy`) ──────────────────
+    // A chosen photo is not this vendor's, not an image, deleted, or unreadable.
+    // `details.fileId`. Checked BEFORE the charge, so nothing was debited.          // 422
+    AI_COPY_IMAGE_INVALID: 'AI_COPY_IMAGE_INVALID',
+    // Switched off (`AI_COPY_ENABLED=false`) or the n8n workflow could not be
+    // reached. Everything was refunded.                                            // 503
+    AI_COPY_UNAVAILABLE: 'AI_COPY_UNAVAILABLE',
+    // The model answered and nothing it wrote was usable, or it timed out.
+    // Everything was refunded.                                                     // 502
+    AI_COPY_FAILED: 'AI_COPY_FAILED',
+
     // ── PRODUCT CATEGORIES (one marketplace list, 1–5 per product) ────────────
     // Each is raised at exactly ONE status (test:errors' census).
     // A new name looks like an existing category and `confirmNew` was not sent.
@@ -1683,6 +1694,24 @@ export const ERROR_CODES = Object.freeze({
     // A customer-paid ONLINE order whose payment is no longer simply `paid` (refunded,
     // disputed): its delivery money cannot be moved by a fee change. `details.paymentStatus`. // 422
     DELIVERY_FEE_PROPOSAL_ORDER_NOT_PAID: 'DELIVERY_FEE_PROPOSAL_ORDER_NOT_PAID',
+    // ── Cash for delivery (ADR-A11 § Cash for delivery, W-F) ──
+    // `deliveryFeePayment: cash_to_rider` at checkout that cannot be honoured: the order is COD,
+    // no shop part is customer-paid, or a carrying agency does not accept the fee in cash.
+    // `details.reason` (`cash_on_delivery` | `not_customer_paid` | `no_delivery_fee` |
+    // `agency_declines_cash`) + `vendorId` / `agencyIds`.                       // 422
+    DELIVERY_FEE_CASH_NOT_AVAILABLE: 'DELIVERY_FEE_CASH_NOT_AVAILABLE',
+    // ── Manual delivery-fee refunds settled by an administrator (ADR-A11, W-E2) ──
+    DELIVERY_FEE_REFUND_NOT_FOUND: 'DELIVERY_FEE_REFUND_NOT_FOUND',                  // 404
+    // Only a `manual_required` row settles — already settled, automatic, or claimed by a
+    // concurrent settle (compare-and-set miss). `details.status`.               // 409
+    DELIVERY_FEE_REFUND_NOT_SETTLEABLE: 'DELIVERY_FEE_REFUND_NOT_SETTLEABLE',
+    // A paying method on a refund a wider refund of the ORDER already returned (in part):
+    // paying again pays it twice. Mark it `covered_by_order_refund` first.
+    // `details.amount` + `stillReturnable`.                                     // 409
+    DELIVERY_FEE_REFUND_ALREADY_COVERED: 'DELIVERY_FEE_REFUND_ALREADY_COVERED',
+    // `covered_by_order_refund` on a refund the order's money still covers (or COD): it is
+    // owed and must be paid. `details.amount` + `stillReturnable`.              // 409
+    DELIVERY_FEE_REFUND_NOT_COVERED: 'DELIVERY_FEE_REFUND_NOT_COVERED',
 
     // ── COMBINED DELIVERY-PRICE REQUESTS (customer → agency, ADR-A11 D-8) ──
     COMBINED_DELIVERY_REQUEST_NOT_FOUND: 'COMBINED_DELIVERY_REQUEST_NOT_FOUND',      // 404

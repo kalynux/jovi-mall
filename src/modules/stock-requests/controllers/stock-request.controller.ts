@@ -45,6 +45,7 @@ export function buildStockRequestController(role: StockRequestParty) {
           productId: query.productId,
           variantId: query.variantId,
           direction: query.direction,
+          search: query.search,
         },
         { page: query.page, limit: query.limit },
       );

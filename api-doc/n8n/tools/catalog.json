@@ -930,7 +930,7 @@
           },
           "category": {
             "type": "string",
-            "description": "Exact match. Get valid values from catalog_list_categories; do not invent one."
+            "description": "A category slug (preferred — from catalog_list_categories), id, or name. A name may be any spelling variant ('shoe' finds 'Shoes') but never a typo, and an unknown one returns no products rather than an error. A product is found under every one of its categories."
           },
           "type": {
             "type": "string",
@@ -1099,7 +1099,7 @@
           "title",
           "description",
           "type",
-          "category",
+          "categories[].name",
           "contentLanguage",
           "rating.average",
           "rating.count",
@@ -1325,8 +1325,8 @@
       "status": "available",
       "service": "jovi-mall",
       "surface": "public",
-      "description": "The categories that currently have products for sale, with a count each. Data only; it draws nothing.",
-      "when_to_use": "To get exact category names before filtering a search by category — the names must come from this list.",
+      "description": "The categories that currently have products for sale — each with an id, a name, a slug and a product count. A product with several categories counts toward each. Data only; it draws nothing.",
+      "when_to_use": "To get a category's slug before filtering a search by category — pass the slug, not a guessed name.",
       "when_not_to_use": "Not to SHOW categories to the customer — that is catalog_browse_categories. Not instead of a search when they already described what they want.",
       "operation": {
         "method": "GET",
@@ -1344,7 +1344,9 @@
         "type": "array",
         "paginated": false,
         "important_fields": [
+          "id",
           "name",
+          "slug",
           "productCount"
         ],
         "result_kind": "chip_list"
@@ -2225,7 +2227,7 @@
       "gap_ref": "GAP-001",
       "service": "jovi-mall",
       "surface": "bot_internal",
-      "description": "What the basket will cost INCLUDING delivery where the customer pays it, and — when an address is named — whether that address can actually be delivered to.",
+      "description": "What the basket will cost INCLUDING delivery where the customer pays it, and — when an address is named — whether that address can actually be delivered to. deliveryFeeCash says whether the delivery fee may instead be paid in cash to the rider (items online), with the online amount and the cash amount if chosen.",
       "when_to_use": "As the step of the checkout flow that runs BEFORE anything is created, with the chosen address id. It is the only cheap way to discover an unusable address.",
       "when_not_to_use": "Not for a running total while the customer shops; cart_get carries line prices.",
       "operation": {
@@ -2292,7 +2294,12 @@
           "perVendor[].deliveryMinimum.met",
           "perVendor[].deliveryMinimum.shortfall",
           "cashOnDelivery.available",
-          "cashOnDelivery.reason"
+          "cashOnDelivery.reason",
+          "deliveryFeeCash.available",
+          "deliveryFeeCash.reason",
+          "deliveryFeeCash.amountDueOnline",
+          "deliveryFeeCash.amountDueToRider",
+          "perVendor[].deliveryFeeCash"
         ],
         "result_kind": "receipt",
         "never_relay": [
@@ -2386,13 +2393,22 @@
             "type": "string",
             "pattern": "^[a-f0-9]{24}$",
             "description": "Must be geocoded. Required explicitly here even though the API would fall back to the default, so the confirmation and the order cannot disagree about where it is going."
+          },
+          "deliveryFeePayment": {
+            "type": "string",
+            "enum": [
+              "with_order",
+              "cash_to_rider"
+            ],
+            "description": "Optional, default with_order. cash_to_rider (online only): the items are charged now and each customer-paid delivery fee is paid in cash to the rider — only when cart_quote said deliveryFeeCash.available."
           }
         }
       },
       "request": {
         "body": [
           "paymentMethod",
-          "deliveryAddressId"
+          "deliveryAddressId",
+          "deliveryFeePayment"
         ]
       },
       "response": {
@@ -2406,7 +2422,9 @@
           "orders[].total",
           "orders[].currency",
           "orders[].paymentStatus",
-          "orders[].itemCount"
+          "orders[].itemCount",
+          "orders[].deliveryFeePayment",
+          "orders[].deliveryCashToRider"
         ],
         "result_kind": "receipt"
       },
@@ -2534,7 +2552,7 @@
       "status": "available",
       "service": "jovi-mall",
       "surface": "bot_internal",
-      "description": "Live order summary for the basket: lines, the delivery line per shop (fee, or Free, with an \"add X more and delivery is free\" hint), total (formatted, including delivery), delivery address (a SAVED one — the default unless deliveryAddressId is given) and the masked mobile-money number. Places nothing. Returns a single-use checkoutRef (10 minutes) for checkout_place. ⚠ When ready is true and payment.phoneMasked is set, THIS TOOL SENDS THE CUSTOMER the summary with Place order / Not now buttons (or one button per address when several are deliverable and none was named): answer [sent] — never repeat it or ask again. With no saved address it sends the website link itself. ⚠ blocker below_delivery_minimum: no checkoutRef; the tool sends how much more to add from each shop — do not repeat it.",
+      "description": "Live order summary for the basket: lines, the delivery line per shop (fee, or Free, with an \"add X more and delivery is free\" hint), total (formatted, including delivery), delivery address (a SAVED one — the default unless deliveryAddressId is given) and the masked mobile-money number. Places nothing. Returns a single-use checkoutRef (10 minutes) for checkout_place. ⚠ When ready is true and payment.phoneMasked is set, THIS TOOL SENDS THE CUSTOMER the summary with Place order / Not now buttons (or one button per address when several are deliverable and none was named): answer [sent] — never repeat it or ask again. With no saved address it sends the website link itself. ⚠ blocker below_delivery_minimum: no checkoutRef; the tool sends how much more to add from each shop — do not repeat it. When payment.deliveryFeeCash is set, the sent summary also offers \"Delivery in cash\" (items now, delivery fee in cash to the rider) with both amounts.",
       "when_to_use": "The customer wants to check out / buy / pay for their basket. Call it again with deliveryAddressId for a different saved address.",
       "when_not_to_use": "Never ask for an address or phone number the review shows, and never collect an address in the chat. no_saved_address / address_not_deliverable: offer a deliverable saved address or send addAddressUrl. address_not_found: call addresses_list and ask again. below_delivery_minimum: help them add more from THAT shop (another shop's item is a separate order and does not help), then review again; never mention the seller's commission. When asked about delivery, quote deliveryLines[] exactly — never compute, estimate or promise a delivery fee yourself, and never say delivery is free unless the line says so.",
       "operation": {
@@ -2587,7 +2605,9 @@
           "addAddressUrl",
           "deliveryShortfalls[].shopName",
           "deliveryShortfalls[].shortfallText",
-          "deliveryShortfalls[].payable"
+          "deliveryShortfalls[].payable",
+          "payment.deliveryFeeCash.onlineText",
+          "payment.deliveryFeeCash.toRiderText"
         ],
         "result_kind": "cart_summary",
         "never_relay": [
@@ -2657,6 +2677,14 @@
           "phone": {
             "type": "string",
             "description": "Only a mobile-money number the customer typed, exactly as they typed it (the country code is optional: without one, the account's own country is used). Omit to use the account's."
+          },
+          "deliveryFeePayment": {
+            "type": "string",
+            "enum": [
+              "with_order",
+              "cash_to_rider"
+            ],
+            "description": "Optional, default with_order. cash_to_rider ONLY when the review's payment.deliveryFeeCash was set and the customer chose to pay the delivery fee in cash to the rider: the items are charged now, the delivery fee is paid to the rider with a delivery code."
           }
         }
       },
@@ -2664,7 +2692,8 @@
         "body": [
           "checkoutRef",
           "deliveryAddressId",
-          "phone"
+          "phone",
+          "deliveryFeePayment"
         ]
       },
       "response": {
@@ -2759,6 +2788,13 @@
           "category": "external_service",
           "when": "The gateway could not be reached; orders may exist",
           "customer_action": "retry_with_backoff"
+        },
+        {
+          "code": "DELIVERY_FEE_CASH_NOT_AVAILABLE",
+          "status": 422,
+          "category": "business_rule",
+          "when": "cash_to_rider asked but a delivery company no longer takes the fee in cash (or no shop charges delivery); details.spent false — the ref is alive",
+          "customer_action": "reprompt"
         }
       ],
       "mutating": true,
@@ -4044,6 +4080,730 @@
       "commands": [
         "confirm"
       ]
+    },
+    {
+      "name": "delivery_fees_list_pending",
+      "version": 1,
+      "title": "Delivery-fee changes waiting for the customer",
+      "tier": "core",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "The delivery-fee changes that wait on the customer, on one order or on all their open orders: a delivery company asking more for a parcel, a parcel moved to a dearer company, or an accepted increase whose top-up is still to pay. The platform DRAWS the question itself (Accept · Decline, or Pay now · Decline) — relay the reply and add nothing.",
+      "when_to_use": "The customer asks about a delivery fee change, an extra delivery charge, \"why do I have to pay more for delivery\", or a notification about one; or wants to answer one.",
+      "when_not_to_use": "Never to accept a fee change or to pay — there is no such tool for you; the customer presses Accept or Pay now on the drawn question. Not for the delivery fee at checkout (checkout_review). Not for a combined price on several parcels (combined_delivery_eligible).",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/delivery-fees/pending"
+      },
+      "backing_endpoint": {
+        "method": "GET",
+        "path": "/api/customer/orders/:id/delivery-fee-proposals",
+        "doc": "customer/delivery-fee-changes.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "orderId": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "Optional: one order — its id or the order number the customer read out. Omit for every open order."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "orderId"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "changes[].proposalId",
+          "changes[].version",
+          "changes[].orderNumber",
+          "changes[].state",
+          "changes[].origin",
+          "changes[].paymentMode",
+          "changes[].feeBeforeText",
+          "changes[].proposedFeeText",
+          "changes[].customerPaysText",
+          "changes[].reason",
+          "changes[].availableActions"
+        ],
+        "result_kind": "delivery_fee_changes"
+      },
+      "errors": [
+        {
+          "code": "ORDER_NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "The order named is not this customer's",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": false,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "low",
+      "context_resolution": {
+        "subject": "order",
+        "policy": "focus_or_most_recent",
+        "must_echo": true
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "Quote amounts ONLY as the *Text fields give them; never compute a fee or a difference (customerPays is NOT proposed minus before when the shop paid part). state awaiting_payment = accepted online, the top-up is due. origin change_agency = the shop moved the parcel; declining means the SHOP pays the difference. Keep proposalId and version as data for delivery_fees_reject; never print them."
+      },
+      "commands": [
+        "orders"
+      ]
+    },
+    {
+      "name": "delivery_fees_reject",
+      "version": 1,
+      "title": "Decline a delivery-fee increase",
+      "tier": "core",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Decline a delivery-fee increase the customer was shown. A delivery company's increase: the old fee stays and the company keeps it, asks once more, or steps back. A moved parcel's difference: the shop pays it. Costs the customer nothing. The platform words the outcome — relay the reply.",
+      "when_to_use": "The customer clearly says they refuse the new delivery fee shown by delivery_fees_list_pending, in words rather than with the Decline button.",
+      "when_not_to_use": "Never to accept (there is no tool for that — the customer presses Accept). Never on a guess about which change they mean: if several are waiting, call delivery_fees_list_pending and let them pick.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/delivery-fees/{proposalId}/reject"
+      },
+      "backing_endpoint": {
+        "method": "POST",
+        "path": "/api/customer/orders/:id/delivery-fee-proposals/:proposalId/reject",
+        "doc": "customer/delivery-fee-changes.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "proposalId",
+          "version"
+        ],
+        "properties": {
+          "proposalId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "proposalId from delivery_fees_list_pending changes[] — copied verbatim, never composed."
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The version from the SAME changes[] row, copied verbatim. It proves which figure the customer saw; never change it."
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "Optional: the customer's own reason, in their words. Reaches the delivery company."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "proposalId"
+        ],
+        "body": [
+          "version",
+          "note"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "declined",
+          "answered",
+          "changed",
+          "stillWaiting",
+          "shopCovers",
+          "change.proposedFeeText"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [
+        {
+          "code": "DELIVERY_FEE_PROPOSAL_NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "Not this customer's change",
+          "customer_action": "explain"
+        },
+        {
+          "code": "DELIVERY_FEE_TOPUP_IN_PROGRESS",
+          "status": 409,
+          "category": "conflict",
+          "when": "A top-up payment for it is live on the customer's handset",
+          "customer_action": "explain"
+        },
+        {
+          "code": "DELIVERY_FEE_PROPOSAL_NOT_YOURS",
+          "status": 403,
+          "category": "authorization",
+          "when": "The change is not the customer's to answer",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "idempotency": "A second decline finds nothing pending and answers with the \"no longer waiting\" sentence (200, answered: false). An edited figure (version mismatch) is never declined blind: the fresh question is drawn instead.",
+      "requires_confirmation": false,
+      "risk": "low",
+      "side_effects": [
+        "The delivery company is told; on a moved parcel the shop pays the difference"
+      ],
+      "context_resolution": {
+        "subject": "delivery_fee_change",
+        "policy": "explicit_only",
+        "must_echo": true
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "proposalId and version come from delivery_fees_list_pending, verbatim. If the reply says the fee changed, it shows the new figure with buttons — let the customer answer that one."
+      }
+    },
+    {
+      "name": "delivery_fees_approve",
+      "version": 1,
+      "title": "Accept a delivery-fee increase",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Accept a delivery-fee increase. Cash on delivery: applies at once and the cash due at the door grows. Online: freezes the figure and the reply is the Pay now question for the top-up.",
+      "when_to_use": "Only from the Accept button (yes:dfc:<proposalId>:<version>) on the question delivery_fees_list_pending draws — the same core runs on the tap.",
+      "when_not_to_use": "Never from a model: accepting commits the customer to more money. Never with a version the customer was not shown.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/delivery-fees/{proposalId}/approve"
+      },
+      "backing_endpoint": {
+        "method": "POST",
+        "path": "/api/customer/orders/:id/delivery-fee-proposals/:proposalId/approve",
+        "doc": "customer/delivery-fee-changes.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "proposalId",
+          "version"
+        ],
+        "properties": {
+          "proposalId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "proposalId from delivery_fees_list_pending changes[] — copied verbatim, never composed."
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The version from the SAME changes[] row, copied verbatim. It proves which figure the customer saw; never change it."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "proposalId"
+        ],
+        "body": [
+          "version"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "approved",
+          "awaitingPayment",
+          "proposedFeeText",
+          "change.customerPaysText"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [
+        {
+          "code": "DELIVERY_FEE_PROPOSAL_NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "Not this customer's change",
+          "customer_action": "explain"
+        },
+        {
+          "code": "DELIVERY_FEE_PROPOSAL_ORDER_NOT_PAID",
+          "status": 422,
+          "category": "business_rule",
+          "when": "An online order whose first payment has not settled",
+          "customer_action": "explain"
+        },
+        {
+          "code": "DELIVERY_FEE_PROPOSAL_STALE",
+          "status": 409,
+          "category": "conflict",
+          "when": "The parcel has moved on since",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": true,
+      "idempotency": "Accepting an already-accepted online change returns it (and the Pay now question) again. An edited figure answers with the fresh question, never an approval.",
+      "requires_confirmation": true,
+      "risk": "high",
+      "side_effects": [
+        "COD: the delivery fee and the cash due at the door grow",
+        "Online: the top-up becomes due before pickup"
+      ],
+      "context_resolution": {
+        "subject": "delivery_fee_change",
+        "policy": "explicit_only",
+        "must_echo": true
+      },
+      "audit": true,
+      "requires_customer_role": true
+    },
+    {
+      "name": "delivery_fees_pay",
+      "version": 1,
+      "title": "Pay an accepted delivery-fee top-up",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Open the mobile-money charge for the top-up an accepted online increase froze, to a typed number or the wallet on the account. The amount is never a parameter.",
+      "when_to_use": "Only from the Pay now / Try again button (dfee:pay:<proposalId>), or a deterministic flow step after the customer agreed to the exact amount.",
+      "when_not_to_use": "Never from a model, and never before the increase was accepted (it answers DELIVERY_FEE_TOPUP_NOT_DUE).",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/delivery-fees/{proposalId}/pay"
+      },
+      "backing_endpoint": {
+        "method": "POST",
+        "path": "/api/customer/orders/:id/delivery-fee-proposals/:proposalId/pay",
+        "doc": "customer/delivery-fee-changes.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "proposalId"
+        ],
+        "properties": {
+          "proposalId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "proposalId from delivery_fees_list_pending changes[] — copied verbatim, never composed."
+          },
+          "phone": {
+            "type": "string",
+            "maxLength": 32,
+            "description": "Only a number the customer typed, exactly as typed. Omitted: the wallet on the account."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "proposalId"
+        ],
+        "body": [
+          "phone"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "state",
+          "amountText",
+          "instructions"
+        ],
+        "never_relay": [
+          "transactionId"
+        ],
+        "result_kind": "payment_instruction"
+      },
+      "errors": [
+        {
+          "code": "DELIVERY_FEE_TOPUP_NOT_DUE",
+          "status": 409,
+          "category": "conflict",
+          "when": "Nothing is owed (not accepted, already paid, or withdrawn)",
+          "customer_action": "explain"
+        },
+        {
+          "code": "PAYMENT_PAYER_NUMBER_REQUIRED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "No number typed and none on the account",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "PAYMENT_OPERATOR_UNDETERMINED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The network of the number cannot be identified",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "PAYMENT_PROVIDER_UNAVAILABLE",
+          "status": 422,
+          "category": "business_rule",
+          "when": "Mobile money for that network is switched off",
+          "customer_action": "explain"
+        },
+        {
+          "code": "PAYMENT_ORDER_IS_COD",
+          "status": 422,
+          "category": "business_rule",
+          "when": "A cash-on-delivery order — the difference is paid in cash",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": true,
+      "idempotency": "Keyed on the order + proposal + amount: a second press returns the live charge (or \"already paid\") rather than a second one.",
+      "requires_confirmation": true,
+      "risk": "critical",
+      "side_effects": [
+        "Moves money",
+        "Raises a charge on the customer's handset"
+      ],
+      "context_resolution": {
+        "subject": "delivery_fee_change",
+        "policy": "explicit_only",
+        "must_echo": true
+      },
+      "audit": true,
+      "requires_customer_role": true
+    },
+    {
+      "name": "combined_delivery_eligible",
+      "version": 1,
+      "title": "Parcels that could get a combined delivery price",
+      "tier": "core",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "The groups of the customer's parcels a delivery company could deliver at a combined (lower) price: per checkout and per delivery company, at least two customer-paid parcels not yet picked up. Each group carries its own cartId, agencyId and shipment ids.",
+      "when_to_use": "The customer asks whether they can pay less for delivery because one company carries several of their parcels, or asks for a \"group\" / \"combined\" delivery price.",
+      "when_not_to_use": "Not to answer a single parcel's fee change (delivery_fees_list_pending). An empty list means nothing qualifies — say so; never suggest naming parcels yourself.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/delivery-fees/combined/eligible"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "request": {
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "groups[].cartId",
+          "groups[].agencyId",
+          "groups[].agencyName",
+          "groups[].parcelCount",
+          "groups[].totalFeeText",
+          "groups[].shipments[].shipmentId",
+          "groups[].shipments[].orderNumber",
+          "groups[].shipments[].feeText",
+          "groups[].openRequestId"
+        ],
+        "result_kind": "combined_delivery_groups"
+      },
+      "errors": [],
+      "mutating": false,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "low",
+      "context_resolution": {
+        "subject": "checkout",
+        "policy": "not_applicable"
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "Quote fees only as feeText / totalFeeText. openRequestId set = a request to that company is already open; do not create another (combined_delivery_list shows it). Never promise a saving: the company may decline."
+      }
+    },
+    {
+      "name": "combined_delivery_request",
+      "version": 1,
+      "title": "Ask a delivery company for a combined price",
+      "tier": "core",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Ask one delivery company for a combined (lower) price on several of the customer's parcels from one checkout. The company answers later, by lowering fees or declining; fees can never go up from this. The platform words the confirmation — relay the reply.",
+      "when_to_use": "After combined_delivery_eligible, once the customer confirmed which group (company) they want to ask.",
+      "when_not_to_use": "Never with ids that did not come from combined_delivery_eligible. Not when that group already has an openRequestId.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/delivery-fees/combined"
+      },
+      "backing_endpoint": {
+        "method": "POST",
+        "path": "/api/customer/orders/groups/:cartId/combined-delivery-requests",
+        "doc": "customer/delivery-fee-changes.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cartId",
+          "agencyId"
+        ],
+        "properties": {
+          "cartId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "groups[].cartId from combined_delivery_eligible, verbatim."
+          },
+          "agencyId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "groups[].agencyId from the SAME group, verbatim."
+          },
+          "shipmentIds": {
+            "type": "array",
+            "description": "Optional: a subset of that group's shipments[].shipmentId (at least two). Omit for every parcel in the group."
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "Optional: the customer's own words to the company."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "cartId",
+          "agencyId",
+          "shipmentIds",
+          "note"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "request.id",
+          "request.status",
+          "request.agencyName",
+          "request.parcelCount"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [
+        {
+          "code": "COMBINED_DELIVERY_REQUEST_INELIGIBLE",
+          "status": 422,
+          "category": "business_rule",
+          "when": "Fewer than two eligible parcels, or a parcel moved on (details.reason)",
+          "customer_action": "explain"
+        },
+        {
+          "code": "COMBINED_DELIVERY_REQUEST_ALREADY_OPEN",
+          "status": 409,
+          "category": "conflict",
+          "when": "A request to that company for that checkout is already open (details.requestId)",
+          "customer_action": "explain"
+        },
+        {
+          "code": "ORDER_NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "Not this customer's checkout",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": true,
+      "idempotency": "One open request per checkout and company (a unique index): a repeat answers COMBINED_DELIVERY_REQUEST_ALREADY_OPEN.",
+      "requires_confirmation": true,
+      "risk": "low",
+      "side_effects": [
+        "The delivery company is asked for a lower price"
+      ],
+      "context_resolution": {
+        "subject": "checkout",
+        "policy": "explicit_only",
+        "must_echo": true
+      },
+      "audit": true,
+      "requires_customer_role": true
+    },
+    {
+      "name": "combined_delivery_list",
+      "version": 1,
+      "title": "The customer's combined-price requests",
+      "tier": "extended",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "The customer's combined delivery-price requests and their answers: open, answered (with the lowered fees and the saving), declined or cancelled.",
+      "when_to_use": "The customer asks what happened to a combined-price request, or wants to cancel one (to get its id).",
+      "when_not_to_use": "Not to find parcels that could be combined (combined_delivery_eligible).",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/delivery-fees/combined/list"
+      },
+      "backing_endpoint": {
+        "method": "GET",
+        "path": "/api/customer/orders/groups/:cartId/combined-delivery-requests",
+        "doc": "customer/delivery-fee-changes.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "cartId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "Optional: one checkout. Omit for the newest across all checkouts (five in the answer; meta says where the rest are)."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "cartId"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "requests[].id",
+          "requests[].status",
+          "requests[].agencyName",
+          "requests[].parcelCount",
+          "requests[].answer.savingText",
+          "requests[].answer.fees[].feeAfterText",
+          "requests[].declineNote",
+          "requests[].createdAt"
+        ],
+        "result_kind": "combined_delivery_requests"
+      },
+      "errors": [
+        {
+          "code": "ORDER_NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "Not this customer's checkout",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": false,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "low",
+      "context_resolution": {
+        "subject": "checkout",
+        "policy": "focus_or_most_recent"
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "Quote the saving and the fees only as the *Text fields give them."
+      }
+    },
+    {
+      "name": "combined_delivery_cancel",
+      "version": 1,
+      "title": "Cancel a combined-price request",
+      "tier": "extended",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Cancel a combined delivery-price request that is still open. Fees stay as they are. The platform words the confirmation — relay the reply.",
+      "when_to_use": "The customer asks to cancel a combined-price request they made.",
+      "when_not_to_use": "Not on an answered or declined request (it answers COMBINED_DELIVERY_REQUEST_NOT_OPEN).",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/delivery-fees/combined/{requestId}/cancel"
+      },
+      "backing_endpoint": {
+        "method": "POST",
+        "path": "/api/customer/orders/groups/:cartId/combined-delivery-requests/:requestId/cancel",
+        "doc": "customer/delivery-fee-changes.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "requestId"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "requests[].id from combined_delivery_list, or openRequestId from combined_delivery_eligible — verbatim."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "requestId"
+        ],
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "request.id",
+          "request.status"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [
+        {
+          "code": "COMBINED_DELIVERY_REQUEST_NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "Not this customer's request",
+          "customer_action": "explain"
+        },
+        {
+          "code": "COMBINED_DELIVERY_REQUEST_NOT_OPEN",
+          "status": 409,
+          "category": "conflict",
+          "when": "Already answered, declined or cancelled",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "idempotency": "A second cancel answers COMBINED_DELIVERY_REQUEST_NOT_OPEN.",
+      "requires_confirmation": true,
+      "risk": "low",
+      "context_resolution": {
+        "subject": "combined_delivery_request",
+        "policy": "explicit_only",
+        "must_echo": true
+      },
+      "audit": true,
+      "requires_customer_role": true
     },
     {
       "name": "orders_cancel",

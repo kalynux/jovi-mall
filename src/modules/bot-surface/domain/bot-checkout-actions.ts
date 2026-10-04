@@ -10,6 +10,8 @@ import { __IN_APP_HANDLE_PREFIX, newInAppHandle } from '../services/inapp-surfac
  *     yes:cod:<checkoutRef>:<addressId>  Pay on delivery — physical only, to THAT address   58 B
  *     yes:coa:<addressId>                Deliver here — re-draws the confirmation; places    32 B
  *                                        nothing (several addresses + pay on delivery)
+ *     yes:cof:<checkoutRef>:<addressId>  Pay items now, delivery fee in cash to the rider    58 B
+ *                                        (W-F, ADR-A11 § Cash for delivery) — physical only
  *
  * `<checkoutRef>` is the `co` handle `checkout_review` minted (`ia_` + 22 base64url characters
  * today); `<addressId>` is one of the customer's own saved addresses, 24 hex.
@@ -95,6 +97,23 @@ export function checkoutCashOnDeliveryActionId(checkoutRef: string, addressId: s
 }
 
 /**
+ * `yes:cof:<checkoutRef>:<addressId>` — **pay the items now, the delivery fee in cash to the rider**
+ * (ADR-A11 § Cash for delivery, W-F). Pay now's twin: the same mobile-money charge, for the goods
+ * only, with `deliveryFeePayment: cash_to_rider` on the orders.
+ *
+ * Its own context, like `yes:cod`, so a stale or replayed Pay now can never be read as the other
+ * choice — a different amount is charged — and § 20 of `test-bot-surface` sees it as routed.
+ */
+export function checkoutDeliveryFeeCashActionId(checkoutRef: string, addressId: string): string {
+    assertButtonRef(checkoutRef);
+    if (!OBJECT_ID.test(addressId)) {
+        // eslint-disable-next-line no-restricted-syntax -- programming fault, not a request outcome
+        throw new Error('[BotSurface] a delivery-fee-in-cash button was built with an address id that is not one');
+    }
+    return confirmActionId('cof', `${checkoutRef}:${addressId}`);
+}
+
+/**
  * `yes:coa:<addressId>` — "deliver to THIS address": draw the confirmation for it.
  *
  * ⚠ **It places nothing.** When a customer has several addresses and pay on delivery is possible,
@@ -161,6 +180,11 @@ export function parseCheckoutCashOnDelivery(argument: string): { checkoutRef: st
         : null;
 }
 
+/** Read the argument after `yes:cof:` — `<ref>:<24-hex addressId>`, exactly. */
+export function parseCheckoutDeliveryFeeCash(argument: string): { checkoutRef: string; addressId: string } | null {
+    return parseCheckoutCashOnDelivery(argument);
+}
+
 /** Read the argument after `yes:coa:` — one 24-hex address id. */
 export function parseCheckoutChooseAddress(argument: string): string | null {
     return OBJECT_ID.test(argument) ? argument : null;
@@ -204,6 +228,7 @@ export function checkoutTokenBudgetProblems(input: { handleLength: number }): st
         ['the Place order button for a download', () => checkoutConfirmActionId(ref, null)],
         ['the Not now button', () => checkoutDeclineActionId(ref)],
         ['the Pay on delivery button', () => checkoutCashOnDeliveryActionId(ref, SAMPLE_ADDRESS_ID)],
+        ['the delivery-fee-in-cash button', () => checkoutDeliveryFeeCashActionId(ref, SAMPLE_ADDRESS_ID)],
         ['the choose-this-address row', () => checkoutChooseAddressActionId(SAMPLE_ADDRESS_ID)],
     ];
 

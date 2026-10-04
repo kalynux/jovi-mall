@@ -208,6 +208,34 @@ export class VendorRepository {
   }
 
   /**
+   * Display name + the verified badge for a set of vendors, in one query — the profile half
+   * of `resolveVendorSummaries` (the business name and logo are the Store's).
+   *
+   * Same projection discipline as `findVerifiedVendorIds`: one boolean of the KYC
+   * sub-document and nothing else.
+   */
+  async findDisplayIdentities(
+    vendorIds: Array<string>,
+  ): Promise<Map<string, { displayName: string | null; verified: boolean }>> {
+    const ids = [...new Set(vendorIds)].filter((id) => Types.ObjectId.isValid(id));
+    if (ids.length === 0) return new Map();
+    const docs = await VendorModel.find(
+      { _id: { $in: ids.map((id) => new Types.ObjectId(id)) } },
+      { _id: 1, display_name: 1, 'kyc_details.legit_verified': 1 },
+    ).lean();
+    return new Map(docs.map((d) => [
+      d._id.toString(),
+      { displayName: d.display_name ?? null, verified: d.kyc_details?.legit_verified === true },
+    ]));
+  }
+
+  /** Vendor ids whose personal `display_name` matches — one arm of a vendor-name search. */
+  async findIdsByDisplayNameMatch(regex: RegExp): Promise<string[]> {
+    const docs = await VendorModel.find({ display_name: regex }, { _id: 1 }).lean();
+    return docs.map((d) => d._id.toString());
+  }
+
+  /**
    * Atomic onboarding update with optional optimistic concurrency check.
    * When expectedVersion is provided, the update only proceeds if the document's
    * current version matches — returning null on a version mismatch.

@@ -35,6 +35,8 @@ export interface LogQueryInput {
     until?: Date;
     requestId?: string;
     q?: string;
+    /** Matches `actorId` (the user) OR `actorProfileId` (their role profile). */
+    actorId?: string;
     /**
      * Phase 16 — narrow to lines the global error handler produced.
      *
@@ -98,6 +100,7 @@ export async function queryLogs(input: LogQueryInput): Promise<LogQueryResult> {
                 until: input.until,
                 requestId: input.requestId,
                 q: input.q,
+                actorId: input.actorId,
                 limit: input.limit,
             }),
             // The ring is a fixed window, not a paginated store: a cursor over something that
@@ -123,6 +126,7 @@ export async function queryLogs(input: LogQueryInput): Promise<LogQueryResult> {
                 until: input.until,
                 requestId: input.requestId,
                 q: input.q,
+                actorId: input.actorId,
                 limit: input.limit,
             }),
             nextBefore: null,
@@ -144,6 +148,18 @@ export async function queryLogs(input: LogQueryInput): Promise<LogQueryResult> {
     }
 
     if (input.requestId) filter.requestId = input.requestId;
+
+    /**
+     * Either id, because the two pages a developer starts from show different ones: the user
+     * page shows the user id, a vendor / agency / agent page its profile id.
+     *
+     * ⚠ Unindexed, deliberately — see the "exactly ONE secondary index" note in `mongo-sink.ts`.
+     * The natural scan stops at `limit` matches, so a recently active actor answers quickly; a
+     * quiet one scans further back through the capped collection, which is bounded by its cap.
+     */
+    if (input.actorId) {
+        filter.$or = [{ actorId: input.actorId }, { actorProfileId: input.actorId }];
+    }
 
     if (input.errorsOnly) filter['httpError.code'] = { $exists: true };
     if (input.category) filter['httpError.category'] = input.category;
@@ -214,6 +230,10 @@ function toRecord(row: Record<string, unknown>): LogRecord {
         source: row.source === 'console' ? 'console' : 'logger',
         requestId: typeof row.requestId === 'string' ? row.requestId : null,
         actorId: typeof row.actorId === 'string' ? row.actorId : null,
+        ...(row.actorSource === 'admin' || row.actorSource === 'platform' ? { actorSource: row.actorSource } : {}),
+        ...(typeof row.actorRole === 'string' ? { actorRole: row.actorRole } : {}),
+        ...(typeof row.actorName === 'string' ? { actorName: row.actorName } : {}),
+        ...(typeof row.actorProfileId === 'string' ? { actorProfileId: row.actorProfileId } : {}),
         ...(typeof row.method === 'string' ? { method: row.method } : {}),
         ...(typeof row.routeGroup === 'string' ? { routeGroup: row.routeGroup } : {}),
         ...(typeof row.status === 'number' ? { status: row.status } : {}),

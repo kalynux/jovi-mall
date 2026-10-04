@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { agencyNetworkService } from '../services/agency-network.service';
+import { AgencyProductsQuerySchema } from '../validators/agency-products.validator';
 
 const PaginationQuerySchema = z.object({
     page: z.coerce.number().int().min(1).default(1),
@@ -29,9 +30,9 @@ export class AgencyNetworkController {
     /** GET /api/agency/products */
     static listProducts = asyncHandler(async (req: Request, res: Response) => {
         const agencyId = req.auth!.role_entity._id.toString();
-        const { page, limit } = PaginationQuerySchema.parse(req.query);
+        const query = AgencyProductsQuerySchema.parse(req.query);
 
-        const result = await agencyNetworkService.listDeliverableProducts(agencyId, { page, limit });
+        const result = await agencyNetworkService.listDeliverableProducts(agencyId, query);
 
         res.json({ success: true, data: result.data, meta: result.meta });
     });

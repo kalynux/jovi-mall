@@ -45,6 +45,8 @@ export interface RingQuery {
     requestId?: string;
     /** Applied as a literal, case-insensitive substring. Never a caller-supplied regex. */
     q?: string;
+    /** Matches `actorId` or `actorProfileId`. */
+    actorId?: string;
     limit: number;
 }
 
@@ -133,6 +135,11 @@ export class LogRingBuffer {
             }
 
             if (filter.requestId && record.requestId !== filter.requestId) continue;
+            if (
+                filter.actorId
+                && record.actorId !== filter.actorId
+                && record.actorProfileId !== filter.actorId
+            ) continue;
             if (needle && !record.msg.toLowerCase().includes(needle)) continue;
 
             out.push(record);

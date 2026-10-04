@@ -87,6 +87,15 @@ ALTER TABLE product_vectors
     ADD COLUMN IF NOT EXISTS in_stock     boolean GENERATED ALWAYS AS ((metadata->>'in_stock')::boolean)   STORED,
     ADD COLUMN IF NOT EXISTS bargainable  boolean GENERATED ALWAYS AS ((metadata->>'bargainable')::boolean) STORED;
 
+-- Every category NAME the product is listed under (2026-10-04 — a product holds 1–5 entries of
+-- jovi-mall's shared category list). `category` above stays: it is the PRIMARY one, and rows
+-- written before `build all texts` copied `categories` carry only it. `product_search()` matches
+-- a category against EITHER, so an old row still answers on its primary until re-indexed.
+-- jsonb rather than text[]: a generated column cannot call a set-returning function, and the
+-- `?` operator on a jsonb array is exactly "does the list contain this string", GIN-indexable.
+ALTER TABLE product_vectors
+    ADD COLUMN IF NOT EXISTS categories   jsonb   GENERATED ALWAYS AS (coalesce(metadata->'categories', '[]'::jsonb)) STORED;
+
 -- Weighted keyword vector: a query word that hits the product TITLE must beat
 -- the same word buried in a description. 'simple' rather than 'english' or
 -- 'french' on purpose -- the catalogue is mixed FR/EN and a stemmer guessing
@@ -96,6 +105,7 @@ ALTER TABLE product_vectors
         setweight(to_tsvector('simple', coalesce(metadata->>'title', '')), 'A') ||
         setweight(to_tsvector('simple',
             coalesce(metadata->>'category', '') || ' ' ||
+            coalesce(metadata->>'categories', '') || ' ' ||
             coalesce(metadata->>'vendor_name', '') || ' ' ||
             coalesce(metadata->>'tags', '')), 'B') ||
         setweight(to_tsvector('simple', coalesce(text, '')), 'C')
@@ -128,6 +138,9 @@ CREATE INDEX IF NOT EXISTS product_vectors_title_trgm_idx
 
 CREATE INDEX IF NOT EXISTS product_vectors_filter_idx
     ON product_vectors (status, country, product_type, category);
+
+CREATE INDEX IF NOT EXISTS product_vectors_categories_idx
+    ON product_vectors USING gin (categories);
 
 CREATE INDEX IF NOT EXISTS product_vectors_price_idx
     ON product_vectors (price_min);
@@ -745,7 +758,9 @@ WITH filtered AS (
     WHERE pv.status = 'active'
       AND (p_country      IS NULL   OR pv.country      = p_country)
       AND (p_product_type IS NULL   OR pv.product_type = p_product_type)
-      AND (p_category     IS NULL   OR pv.category     = p_category)
+      -- Any of the product's categories (2026-10-04); `category` alone for a row written
+      -- before `metadata.categories` existed.
+      AND (p_category     IS NULL   OR pv.category     = p_category OR pv.categories ? p_category)
       AND (p_price_max    IS NULL   OR pv.price_min   <= p_price_max)
       AND (p_in_stock_only IS NOT TRUE OR pv.in_stock IS TRUE)
 ),

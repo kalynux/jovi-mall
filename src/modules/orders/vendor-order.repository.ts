@@ -1,5 +1,5 @@
 import { OrderModel, IOrder } from './order.model';
-import { FilterQuery, Types } from 'mongoose';
+import { ClientSession, FilterQuery, Types } from 'mongoose';
 import { PaginationOptions, Page } from '../../core/repositories/base.repository';
 import { buildSearchRegex } from '../../core/utils/regex.util';
 
@@ -174,6 +174,10 @@ export class VendorOrderRepository {
      * - Ownership enforced in query (vendor_id)
      * - Item must belong to the order (matched via items._id)
      * - Returns updated order or null if not found / not owned / item missing
+     * - `expectedShipmentId` (optional — the change of agency, ADR-A11 D-12): a compare-and-set
+     *   on the shipment the item is leaving (`null` = on none). A miss returns null, so a
+     *   concurrent or retried move cannot repoint an item that is no longer where it was seen.
+     *   Omitted, the filter is exactly what it always was.
      */
     async reassignItemDeliveryAgency(
         orderId: string,
@@ -181,14 +185,26 @@ export class VendorOrderRepository {
         itemId: string,
         deliveryAgencyId: string,
         shipmentId: string,
-        deliveryStatus: string
+        deliveryStatus: string,
+        session?: ClientSession,
+        expectedShipmentId?: string | null
     ): Promise<IOrder | null> {
+        const itemMatch = expectedShipmentId === undefined
+            ? { 'items._id': new Types.ObjectId(itemId) }
+            : {
+                items: {
+                    $elemMatch: {
+                        _id: new Types.ObjectId(itemId),
+                        'delivery.shipment_id': expectedShipmentId === null ? null : new Types.ObjectId(expectedShipmentId)
+                    }
+                }
+            };
         return await OrderModel
             .findOneAndUpdate(
                 {
                     _id: orderId,
                     vendor_id: vendorId,        // CRITICAL: Ownership check
-                    'items._id': new Types.ObjectId(itemId)
+                    ...itemMatch
                 },
                 {
                     $set: {
@@ -199,7 +215,7 @@ export class VendorOrderRepository {
                         updated_at: new Date()
                     }
                 },
-                { new: true }
+                { new: true, session: session ?? undefined }
             )
             .lean()
             .exec() as IOrder | null;

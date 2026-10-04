@@ -1,5 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
+import { CASH_COLLECTION_KINDS } from '../../orders/domain/delivery-payer';
+import type { CashCollectionKind } from '../../orders/domain/delivery-payer';
 
 /**
  * CashCollection - the payment record of ONE COD shipment.
@@ -63,6 +65,17 @@ export interface ICashCollection extends Document {
   vendor_id: mongoose.Types.ObjectId;
 
   /**
+   * What this cash is (ADR-A11 § Cash for delivery, W-F):
+   *  - `order`        — a COD order's cash: the goods + a customer-paid fee. Every row before W-F.
+   *  - `delivery_fee` — an ONLINE order whose customer pays the delivery fee to the rider in
+   *                     cash: the fee ALONE (`items_amount: 0`). Split by
+   *                     `EarningsSplitService.splitDeliveryFeeCollection` to the agency and the
+   *                     agent only — never to the vendor or the platform.
+   * Read through `collectionKindOf` (a missing field is `order`).
+   */
+  kind?: CashCollectionKind;
+
+  /**
    * Cash to collect for this shipment (snapshot): `items_amount + delivery_fee_amount`.
    * Before ADR-A11 it was the items alone (and those rows carry no breakdown).
    */
@@ -115,6 +128,8 @@ const CashCollectionSchema = new Schema<ICashCollection>(
     agent_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENT, required: true },
     customer_id: { type: Schema.Types.ObjectId, ref: MODELS.CUSTOMER, required: true },
     vendor_id: { type: Schema.Types.ObjectId, ref: MODELS.VENDOR, required: true },
+
+    kind: { type: String, enum: [...CASH_COLLECTION_KINDS], default: 'order' },
 
     expected_amount: { type: Number, required: true, min: 0 },
     // The breakdown of expected_amount (ADR-A11). Null on rows written before it.
@@ -171,6 +186,11 @@ CashCollectionSchema.index({ agency_id: 1, status: 1, collected_at: 1 });
 CashCollectionSchema.index({ agent_id: 1, status: 1 });
 // Order payment recompute.
 CashCollectionSchema.index({ order_id: 1 });
+
+/** A collection's kind; rows written before W-F carry none and are COD order cash. */
+export function collectionKindOf(collection: { kind?: CashCollectionKind | null }): CashCollectionKind {
+  return collection.kind === 'delivery_fee' ? 'delivery_fee' : 'order';
+}
 
 export const CashCollectionModel = mongoose.model<ICashCollection>(
   MODELS.CASH_COLLECTION,

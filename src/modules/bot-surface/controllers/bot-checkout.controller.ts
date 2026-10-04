@@ -17,6 +17,7 @@ import { BotActionHandlers, ParsedBotAction, unknownBotAction } from '../domain/
 import {
     parseCheckoutCashOnDelivery,
     parseCheckoutChooseAddress,
+    parseCheckoutDeliveryFeeCash,
     parseCheckoutConfirm,
     parseCheckoutDecline,
 } from '../domain/bot-checkout-actions';
@@ -344,8 +345,8 @@ export class BotCheckoutController {
      * ⚠ **The body lives in `placeChatCheckout`**, the one placement the Place order tap runs too.
      */
     static placeInChat = asyncHandler(async (req: Request, res: Response) => {
-        const { checkoutRef, deliveryAddressId, phone } = ChatPlaceSchema.parse(req.body ?? {});
-        await placeChatCheckout(req, res, checkoutRef, deliveryAddressId ?? null, phone);
+        const { checkoutRef, deliveryAddressId, phone, deliveryFeePayment } = ChatPlaceSchema.parse(req.body ?? {});
+        await placeChatCheckout(req, res, checkoutRef, deliveryAddressId ?? null, phone, deliveryFeePayment);
     });
 }
 
@@ -384,6 +385,11 @@ const ChatPlaceSchema = z
         checkoutRef: z.string().trim().min(1).max(128),
         deliveryAddressId: savedAddressId.nullable().optional(),
         phone: TypedPayerNumberSchema,
+        /**
+         * Cash for delivery (W-F): `cash_to_rider` charges the items now and leaves the delivery
+         * fee to be paid to the rider — only when the review's `payment.deliveryFeeCash` is set.
+         */
+        deliveryFeePayment: z.enum(['with_order', 'cash_to_rider']).optional().default('with_order'),
     })
     .strict();
 
@@ -487,6 +493,12 @@ async function reviewChatCheckout(
              * agency that does not take cash, or a shop over its cash limit.
              */
             cashOnDelivery: view.cashOnDelivery,
+            /**
+             * ⭐ Cash for delivery (W-F): the items now by mobile money, the delivery fee in cash to
+             * the rider — offered beside Pay now when every customer-paid shop's agencies accept
+             * it. Server-formatted amounts; null when not offered.
+             */
+            deliveryFeeCash: view.deliveryFeeCash,
         },
         /**
          * The website's address page, only when an address is what would unblock this. Null
@@ -535,6 +547,8 @@ async function placeChatCheckout(
     checkoutRef: string,
     deliveryAddressId: string | null,
     phone: string | null,
+    /** W-F — `cash_to_rider` from the `yes:cof` tap or the model's `checkout_place`. */
+    deliveryFeePayment: 'with_order' | 'cash_to_rider' = 'with_order',
 ): Promise<void> {
     const caller = botCallerOf(req);
     /** Composed only — `placeCheckout` judges it, before the spend, exactly as it judges the screen's. */
@@ -543,6 +557,7 @@ async function placeChatCheckout(
     const placed = await placeCheckout(checkoutRef, phone, {
         callerCustomerId: caller.customerId,
         addressId: deliveryAddressId,
+        deliveryFeePayment,
     });
 
     /**
@@ -564,6 +579,13 @@ async function placeChatCheckout(
         payerMasked: placed.payerMasked,
         /** The operator's own instruction, relayed verbatim — as the retry does. */
         instructions: placed.instructions ?? null,
+        /**
+         * W-F — the delivery cash the riders collect, formatted; null when delivery was paid with
+         * the order. The placed message says it, with the delivery-code promise.
+         */
+        deliveryCashText: placed.deliveryCashToRider > 0 && placed.currency
+            ? formatBotPrice(placed.deliveryCashToRider, placed.currency)
+            : null,
     };
 
     setBotReply(req, drawnAfterTheWrite(() => checkoutPlacedReply(placement, botResponseLanguageOf(req))));
@@ -823,6 +845,26 @@ async function cashOnDeliveryTap(req: Request, res: Response, action: ParsedBotA
  * `yes:coa:<addressId>` — deliver to THIS address: the confirmation for it, which then offers
  * Pay now · Pay on delivery · Not now. Places nothing; the review checks the address is theirs.
  */
+/**
+ * `yes:cof:<checkoutRef>:<addressId>` — **items now, delivery fee in cash to the rider** (W-F).
+ *
+ * Pay now's twin (`confirmCheckoutTap`) with `deliveryFeePayment: cash_to_rider`, the same
+ * stale-button rule: a lapsed, UNSPENT checkout draws a fresh confirmation for the same address.
+ * A refusal before the spend (an agency stopped taking the fee in cash since the review) goes
+ * through with its own sentence, the checkout still alive, so Pay now stays one tap away.
+ */
+async function deliveryFeeCashTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
+    const tap = parseCheckoutDeliveryFeeCash(action.argument);
+    if (!tap) throw unknownBotAction();
+
+    try {
+        await placeChatCheckout(req, res, tap.checkoutRef, tap.addressId, null, 'cash_to_rider');
+    } catch (error) {
+        if (res.headersSent || !isUnspentLapsedCheckout(error)) throw error;
+        await reviewChatCheckout(req, res, tap.addressId);
+    }
+}
+
 async function chooseAddressTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
     const addressId = parseCheckoutChooseAddress(action.argument);
     if (!addressId) throw unknownBotAction();
@@ -890,6 +932,7 @@ export const CHECKOUT_ACTION_HANDLERS: BotActionHandlers = Object.freeze({
     pay: paymentTap,
     'yes:co': confirmCheckoutTap,
     'yes:cod': cashOnDeliveryTap,
+    'yes:cof': deliveryFeeCashTap,
     'yes:coa': chooseAddressTap,
     'no:co': declineCheckoutTap,
 });

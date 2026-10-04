@@ -199,6 +199,20 @@ export const BOT_ROUTES: readonly BotRouteSpec[] = Object.freeze([
     { tool: 'orders_resend_cod_code', method: 'POST', path: '/orders/:orderId/shipments/:shipmentId/resend-delivery-code', mutating: true, requiresCustomerRole: true },
     { tool: 'orders_confirm_shipment_delivery', method: 'POST', path: '/orders/:orderId/shipments/:shipmentId/confirm-delivery', mutating: true, requiresCustomerRole: true },
 
+    // ── Delivery-fee changes after checkout (ADR-A11 § Fee changes, W-H) ─────
+    // Literals before `:proposalId`. `approve` and `pay` are catalogued `flow_only` — the model
+    // reaches them only as the Accept / Pay now buttons the list draws (`yes:dfc:` · `dfee:pay:`).
+    { tool: 'delivery_fees_list_pending', method: 'POST', path: '/delivery-fees/pending', mutating: false, requiresCustomerRole: true },
+    { tool: 'combined_delivery_eligible', method: 'POST', path: '/delivery-fees/combined/eligible', mutating: false, requiresCustomerRole: true },
+    { tool: 'combined_delivery_list', method: 'POST', path: '/delivery-fees/combined/list', mutating: false, requiresCustomerRole: true },
+    // Sends a request to a delivery company; a retry would be answered 409 ALREADY_OPEN, not a second request — still keyed.
+    { tool: 'combined_delivery_request', method: 'POST', path: '/delivery-fees/combined', mutating: true, requiresCustomerRole: true },
+    { tool: 'combined_delivery_cancel', method: 'POST', path: '/delivery-fees/combined/:requestId/cancel', mutating: true, requiresCustomerRole: true },
+    { tool: 'delivery_fees_approve', method: 'POST', path: '/delivery-fees/:proposalId/approve', mutating: true, requiresCustomerRole: true },
+    { tool: 'delivery_fees_reject', method: 'POST', path: '/delivery-fees/:proposalId/reject', mutating: true, requiresCustomerRole: true },
+    // Opens a mobile-money charge — the top-up the approval froze.
+    { tool: 'delivery_fees_pay', method: 'POST', path: '/delivery-fees/:proposalId/pay', mutating: true, requiresCustomerRole: true },
+
     // ── Profile and addresses ────────────────────────────────────────────────
     { tool: 'profile_get_summary', method: 'POST', path: '/profile', mutating: false, requiresCustomerRole: true },
     { tool: 'profile_set_language', method: 'PATCH', path: '/profile/language', mutating: true, requiresCustomerRole: true },

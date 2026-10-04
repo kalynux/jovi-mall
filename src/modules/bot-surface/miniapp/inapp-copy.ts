@@ -361,6 +361,27 @@ const CHECKOUT_COD_PLACED: Copy = {
     ar: 'تم الطلب. ادفع لمندوب التوصيل نقدًا عند الاستلام — ستتلقى رمز توصيل لكل طرد.',
 };
 
+/**
+ * Cash for delivery (W-F, ADR-A11 § Cash for delivery): the checkbox that pays the items now and
+ * the delivery fee in cash to the rider. `{{toRider}}` is filled by the page with the SERVER's
+ * formatted amount (`deliveryFeeCash.toRiderText`) — a string substitution, never arithmetic.
+ */
+const CHECKOUT_DELIVERY_CASH: Copy = {
+    en: 'Pay the delivery fee ({{toRider}}) in cash to the rider',
+    fr: 'Payer les frais de livraison ({{toRider}}) en espèces au livreur',
+    pt: 'Pagar a taxa de entrega ({{toRider}}) em dinheiro ao estafeta',
+    es: 'Pagar la tarifa de envío ({{toRider}}) en efectivo al repartidor',
+    ar: 'ادفع رسوم التوصيل ({{toRider}}) نقدًا لمندوب التوصيل',
+};
+
+const CHECKOUT_DELIVERY_CASH_NOW: Copy = {
+    en: 'Paid now',
+    fr: 'Payé maintenant',
+    pt: 'Pago agora',
+    es: 'Pagado ahora',
+    ar: 'المدفوع الآن',
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Orders and stores — screens are a later milestone, contract frozen here
 // ─────────────────────────────────────────────────────────────────────────────
@@ -495,6 +516,8 @@ const PAGE = Object.freeze({
     checkoutWatchChat: CHECKOUT_WATCH_CHAT,
     checkoutPayOnDelivery: CHECKOUT_PAY_ON_DELIVERY,
     checkoutCodPlaced: CHECKOUT_COD_PLACED,
+    checkoutDeliveryCash: CHECKOUT_DELIVERY_CASH,
+    checkoutDeliveryCashNow: CHECKOUT_DELIVERY_CASH_NOW,
 
     ordersHeading: ORDERS_HEADING,
     storesHeading: STORES_HEADING,

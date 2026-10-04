@@ -254,6 +254,13 @@ npm run test:rich-description                  # structured descriptions (149, n
                                                # source scans proving the field reaches all four write
                                                # endpoints while staying OUT of the $text index, the
                                                # vectoriser payload and every public DTO
+npm run test:product-categories                # the shared category list (91, no DB) — the duplicate
+                                               # guard in BOTH failure directions (variants merge
+                                               # silently; "Cap" never becomes "Cup"), the write path
+                                               # against a fake incl. the unique-index race, the
+                                               # "did you mean" refusal writing NOTHING, the filter
+                                               # never resolving a typo, and source scans that every
+                                               # product write resolves through resolveForWrite
 npm run test:public-catalog                    # the storefront's visibility rules and projections
                                                # (100, no DB). Its core is a set of LEAK assertions:
                                                # DTOs are built from documents carrying vendorId,
@@ -1897,6 +1904,61 @@ that a **draft** is really suspendable, that `previousStatus: '$status'` really 
 rather than the literal, that an upgrade really returns the same files, and §§ 5-6 above). Indexes:
 `npm run migrate:plan-quota-indexes`.
 
+### Product categories (`src/modules/categories/`) — 2026-10-04
+
+**One marketplace-wide list (`product_categories`), and a product holds 1–5 entries by id
+(`Product.categoryIds`, vendor's order, `[0]` = primary).** The free-text `category` is retired:
+`migrate:product-categories` converts it through the same matcher and unsets it. Plan and owner
+decisions C-1…C-6: `../PRODUCTION-READINESS/PRODUCT-CATEGORIES-PLAN.md`. Contract:
+`api-doc/FRONTEND-CHANGELOG-product-categories.md`.
+
+**Vendors create categories by NAMING them on a product write** (`categories: [{id} | {name,
+confirmNew?}]`, all four write schemas). There is no create route. The duplicate guard is pure,
+in `domain/category-match.ts`:
+- `exact` means the same `matchKey`: case, accents, punctuation, `&`/`and`/`et`, a deterministic
+  EN/FR singular rule, and no spaces, so "T-shirt" equals "Tshirt". It also matches an
+  admin-merged **alias**. The existing category is reused silently.
+- `similar` means a typo, using OSA distance: 1 for keys of 4–7 characters, 2 for 8 and over,
+  **0 under 4**, so "Cap" is never pushed to "Cup". It also covers the same words in another
+  order. The whole write is refused with `422 CATEGORY_SIMILAR_EXISTS`, listing every conflict,
+  and **nothing is written**.
+- `new` creates the category.
+
+⚠ **The singular rule only has to be CONSISTENT, not linguistic.** "movie" and "movies" both
+become `movy`. Do not "fix" it into a dictionary.
+
+Six things are load-bearing:
+- **`CategoryResolutionService.resolveForWrite` is the only door that creates a category for a
+  vendor.** The three product services call it, and `test:product-categories` source-scans for
+  that. It judges every entry before creating any.
+- **The partial unique index on `match_key` is the guarantee; the in-memory match is only a
+  pre-check.** An E11000 on create is answered by reusing the winner, never by a duplicate.
+- **Products store ids, never names.** Readers resolve them through `categoryCatalogCache`, an
+  in-process list with a 60 s TTL that local writes invalidate. That is why a rename is one row
+  and a merge is one `updateMany`. Revisit the cache at about 10 k categories.
+- **Every product DTO carries `categories[]` AND the deprecated `category`
+  (`categories[0].name`)**, and every write still accepts the old `category` string. That is a
+  transition, announced in the changelog. Sending both is a 400.
+- **`?category=` (public, bot, negotiation) resolves an id, a slug or an EXACT name variant**
+  through `resolveFilter`. A typo resolves to nothing, because a filter must not show a shelf
+  nobody asked for. A merged-away id follows `merged_into`. Bot category buttons carry
+  `cat:<id>`, and a legacy `cat:<name-digest>` from an old chat still resolves.
+- **Admin rename / merge / delete are internal-only** (`/api/internal/admin/categories`,
+  `CategoryAdminService`). A rename keeps the old key as an alias. A merge rewrites products,
+  keeping order and removing duplicates, and copies the source's keys into the target's
+  `alias_keys`, so after it the vendor-side check treats the merged spelling as the target's.
+  Delete is refused (`CATEGORY_IN_USE`) while a live product holds the category.
+
+The vectoriser payload carries `categories: string[]` beside `category` (the primary). The n8n
+half was applied, published and proven live on 2026-10-04 (`api-doc/n8n/vectoriser/README.md`
+§ 16). Existing index rows were deliberately NOT re-vectorised. ⚠ Until
+`migrate:product-categories` has run, `VectorisationService.legacyCategoryOf` keeps unconverted
+products eligible, because an ineligible product has its AI-search opt-in switched OFF. Delete it
+once the conversion has run everywhere.
+
+Covered by `npm run test:product-categories` (91, no DB) and the multikey and unique-index
+assertions in `verify:storefront`.
+
 ### Bargainable pricing (`catalog/domain/services/bargain-price.rule.ts`)
 
 A variant may carry `bargain: { minPrice, maxPrice }` — the window a buyer may haggle within.
@@ -2800,7 +2862,7 @@ reset token really changes a **vendor's** password and that the old one stops wo
 
 **The door the automation layer acts through**, and the only way anything can act *as a
 customer* without holding a customer session. A closed set of named operations at
-`/api/internal/bot/*` — **84 rows in `BOT_ROUTES` today, 9 of them `DELETE`** — each
+`/api/internal/bot/*` — **106 rows in `BOT_ROUTES` (re-measured 2026-10-04, W-H), 9 of them `DELETE`** — each
 delegating to the same service the customer API calls, with a customer id the backend
 resolved from a **messaging identity**. Contract: `api-doc/n8n/bot-surface.md`; the plan it
 was built from is `api-doc/n8n/BACKEND-GAPS.md` § GAP-001, and the tool-parity work on top of

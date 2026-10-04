@@ -85,6 +85,13 @@ const PLANNED: PlannedIndex[] = [
     key: { order_id: 1, created_at: -1 },
     why: "an order's delivery-fee refund ledger (the outstanding amount, the customer's read)",
   },
+  // W-E2 (2026-10-04): the administrators' queue of manual refunds to settle by hand.
+  {
+    collection: COLLECTIONS.DELIVERY_FEE_REFUND,
+    name: 'delivery_fee_refund_admin_queue',
+    key: { status: 1, created_at: -1 },
+    why: 'the manual delivery-fee refunds still owed (status manual_required), newest first — the settle queue',
+  },
   {
     collection: COLLECTIONS.COMBINED_DELIVERY_REQUEST,
     name: 'combined_delivery_request_one_open_per_cart_agency',

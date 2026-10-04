@@ -383,37 +383,45 @@ export class ShipmentRepository {
    * are groupable — once a courier has picked up, a late item gets its own
    * shipment instead. Returns null when no such shipment exists.
    */
-  async findGroupableByOrderAndAgency(orderId: string, agencyId: string): Promise<IShipment | null> {
-    return await ShipmentModel.findOne({
-      order_id: orderId,
-      agency_id: agencyId,
-      status: { $in: ['pending', 'assigned'] }
-    });
+  async findGroupableByOrderAndAgency(orderId: string, agencyId: string, session?: ClientSession): Promise<IShipment | null> {
+    return await ShipmentModel.findOne(
+      {
+        order_id: orderId,
+        agency_id: agencyId,
+        status: { $in: ['pending', 'assigned'] }
+      },
+      null,
+      { session: session ?? undefined }
+    );
   }
 
-  /** Append a line item to a shipment. Returns the updated shipment. */
-  async addItem(shipmentId: string, item: IShipmentItem): Promise<IShipment | null> {
+  /**
+   * Append a line item to a shipment. Returns the updated shipment. The change of agency passes
+   * its transaction's `session` (ADR-A11 D-12: the whole move is one transaction).
+   */
+  async addItem(shipmentId: string, item: IShipmentItem, session?: ClientSession): Promise<IShipment | null> {
     return await ShipmentModel.findByIdAndUpdate(
       shipmentId,
       { $push: { items: item } },
-      { new: true }
+      { new: true, session: session ?? undefined }
     );
   }
 
   /**
    * Remove a line item from a shipment. If the shipment is left with no items,
    * it is deleted (an empty shipment has nothing to dispatch). Returns the
-   * remaining shipment, or null when it was deleted / not found.
+   * remaining shipment, or null when it was deleted / not found. Both writes join
+   * `session` when one is passed (change of agency, ADR-A11 D-12).
    */
-  async removeItem(shipmentId: string, orderItemId: string): Promise<IShipment | null> {
+  async removeItem(shipmentId: string, orderItemId: string, session?: ClientSession): Promise<IShipment | null> {
     const updated = await ShipmentModel.findByIdAndUpdate(
       shipmentId,
       { $pull: { items: { order_item_id: orderItemId } } },
-      { new: true }
+      { new: true, session: session ?? undefined }
     );
 
     if (updated && updated.items.length === 0) {
-      await ShipmentModel.deleteOne({ _id: shipmentId });
+      await ShipmentModel.deleteOne({ _id: shipmentId }, { session: session ?? undefined });
       return null;
     }
 

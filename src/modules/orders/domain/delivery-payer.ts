@@ -115,6 +115,105 @@ export function orderItemsGrossOf(order: {
   return order.total_amount - (order.price_breakdown?.delivery ?? 0);
 }
 
+// ── Cash for delivery (ADR-A11 § Cash for delivery, D-7, W-F) ─────────────────
+
+/**
+ * How the customer pays a customer-paid delivery fee on an ONLINE order:
+ *  - `with_order`    — charged online with the goods (the ADR-A11 default);
+ *  - `cash_to_rider` — the goods are charged online, the delivery fee is handed to the rider in
+ *                      cash at the door (only where every carrying agency accepts it).
+ * A COD order pays everything in cash already; a vendor-paid order has no fee to pay. Both read
+ * `with_order` (the field is per ORDER = per vendor order, decided at checkout).
+ */
+export type DeliveryFeePayment = 'with_order' | 'cash_to_rider';
+export const DELIVERY_FEE_PAYMENTS: readonly DeliveryFeePayment[] = Object.freeze(['with_order', 'cash_to_rider']) as readonly DeliveryFeePayment[];
+
+interface CashFeeCarrier extends PayerCarrier {
+  payment_method?: string | null;
+  delivery_fee_payment?: DeliveryFeePayment | null;
+}
+
+/** The order's delivery-fee payment, defaulting legacy / COD / vendor-paid rows to `with_order`. */
+export function deliveryFeePaymentOf(order: CashFeeCarrier | null | undefined): DeliveryFeePayment {
+  if (!order || order.payment_method === 'cash_on_delivery') return 'with_order';
+  return order.delivery_fee_payment === 'cash_to_rider' ? 'cash_to_rider' : 'with_order';
+}
+
+/**
+ * True when THIS shipment's delivery fee is handed to the rider in cash on an online order: the
+ * order chose `cash_to_rider`, the shipment is customer-paid AND carries a customer fee. A
+ * shipment created after checkout by a PARTIAL agency move carries no customer fee (its run is
+ * vendor-borne, W-C) and therefore collects no cash — a collection is never minted for 0.
+ */
+export function paysDeliveryFeeInCash(
+  order: CashFeeCarrier | null | undefined,
+  shipment?: (PayerCarrier & { customer_delivery_fee?: number | null }) | null,
+): boolean {
+  if (deliveryFeePaymentOf(order) !== 'cash_to_rider' || !shipment) return false;
+  return customerDeliveryFeeOf(order, shipment) > 0;
+}
+
+/**
+ * The kind of cash collection a shipment carries, or null when the rider collects nothing:
+ *  - `order`        — a COD order: the goods + a customer-paid fee (ADR-A09 / ADR-A11);
+ *  - `delivery_fee` — an online order paying its delivery fee in cash: the fee ALONE.
+ */
+export type CashCollectionKind = 'order' | 'delivery_fee';
+export const CASH_COLLECTION_KINDS: readonly CashCollectionKind[] = Object.freeze(['order', 'delivery_fee']) as readonly CashCollectionKind[];
+
+export function cashCollectionKindOf(
+  order: CashFeeCarrier | null | undefined,
+  shipment?: (PayerCarrier & { customer_delivery_fee?: number | null }) | null,
+): CashCollectionKind | null {
+  if (order?.payment_method === 'cash_on_delivery') return 'order';
+  return paysDeliveryFeeInCash(order, shipment) ? 'delivery_fee' : null;
+}
+
+/**
+ * Does the rider collect cash for this shipment (COD, or a cash-for-delivery fee)? The one gate
+ * every "is there a cash collection" decision reads — `CashCollectionService.collectsCash` is this.
+ */
+export function riderCollectsCash(
+  order: CashFeeCarrier | null | undefined,
+  shipment?: (PayerCarrier & { customer_delivery_fee?: number | null }) | null,
+): boolean {
+  return cashCollectionKindOf(order, shipment) !== null;
+}
+
+/**
+ * The cash a rider collects for a shipment, split as the collection stores it. `itemsAmount` is
+ * the goods for a COD order and 0 for a fee-only collection (the goods were paid online); the
+ * delivery part is `customerDeliveryFeeOf` in both. `null` kind ⇒ nothing to collect.
+ */
+export function cashToCollectOf(
+  kind: CashCollectionKind | null,
+  goodsAmount: number,
+  customerDeliveryFee: number,
+): { itemsAmount: number; deliveryFeeAmount: number; expectedAmount: number } {
+  if (kind === null) return { itemsAmount: 0, deliveryFeeAmount: 0, expectedAmount: 0 };
+  const itemsAmount = kind === 'order' ? Math.max(0, goodsAmount) : 0;
+  const deliveryFeeAmount = Math.max(0, customerDeliveryFee);
+  return { itemsAmount, deliveryFeeAmount, expectedAmount: itemsAmount + deliveryFeeAmount };
+}
+
+/**
+ * The delivery money the customer owes the riders of an order in cash (fee-only collections):
+ * `price_breakdown.delivery_cash`. 0 on every order not paying its fee in cash.
+ */
+export function deliveryCashOf(order: { price_breakdown?: { delivery_cash?: number | null } | null } | null | undefined): number {
+  const v = order?.price_breakdown?.delivery_cash;
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+/** Σ `deliveryCashOf` over a checkout's orders — the delivery cash its riders collect. */
+export function deliveryCashOfOrders(
+  orders: ReadonlyArray<{ price_breakdown?: { delivery_cash?: number | null } | null }>,
+): number {
+  let total = 0;
+  for (const order of orders) total += deliveryCashOf(order);
+  return total;
+}
+
 /**
  * A COD collection's cash, split into goods and customer-paid delivery. Rows written before
  * ADR-A11 carry no breakdown: all of their cash was goods.

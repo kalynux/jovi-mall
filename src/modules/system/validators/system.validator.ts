@@ -90,6 +90,13 @@ export const LogQuerySchema = z.object({
     until: z.string().datetime({ offset: true }).optional(),
     requestId: z.string().trim().min(1).max(200).optional(),
     q: z.string().trim().min(1).max(100).optional(),
+    /**
+     * Every line one actor's requests produced. Matches the user id (`actorId`) OR the role
+     * profile id (`actorProfileId`), so the id copied off a vendor, agency, agent or customer
+     * page works as well as the user id. 24-hex: both namespaces are ObjectIds, and an equality
+     * match on a bounded value needs no escaping.
+     */
+    actorId: z.string().trim().regex(/^[a-f0-9]{24}$/i, 'Must be a 24-character id').optional(),
     source: z.enum(['ring', 'persisted']).optional(),
     limit: z.coerce.number().int().min(1).max(500).optional(),
     /**

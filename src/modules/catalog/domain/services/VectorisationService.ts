@@ -57,6 +57,21 @@ import { VECTORISATION_COST } from '../../../billing/config/credit.config';
 import { toFileDetail } from '../../read-models/file-detail.resolver';
 import { categoryCatalogCache } from '../../../categories/services/category-catalog.cache';
 
+/**
+ * ⚠ TRANSITIONAL — the free-text `category` a product carried before 2026-10-04, still on the
+ * raw document until `migrate:product-categories` converts it.
+ *
+ * Read off the lean document (the schema no longer declares the path). It exists for ONE
+ * hazard: an ineligible product has its AI-search opt-in SWITCHED OFF by
+ * `prepareForVectorisation`, so between the deploy and the conversion every old product a
+ * vendor touched would silently lose vectorisation if "has a category" meant only
+ * `categoryIds`. Delete this (and its two callers) once the conversion has run everywhere.
+ */
+function legacyCategoryOf(product: unknown): string | null {
+  const value = (product as { category?: unknown } | null)?.category;
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 /**
@@ -331,7 +346,7 @@ export class VectorisationService {
       product.vectorisationEnabled === true &&
       !!product.title &&
       !!product.description &&
-      (product.categoryIds?.length ?? 0) > 0
+      ((product.categoryIds?.length ?? 0) > 0 || legacyCategoryOf(product) !== null)
     );
   }
 
@@ -581,7 +596,10 @@ export class VectorisationService {
       source: agencySource,
     };
 
-    const categoryNames = (await categoryCatalogCache.refsFor(product.categoryIds)).map((c) => c.name);
+    const resolvedNames = (await categoryCatalogCache.refsFor(product.categoryIds)).map((c) => c.name);
+    // Not yet converted (see `legacyCategoryOf`): send the old string so the index keeps it.
+    const legacy = legacyCategoryOf(product);
+    const categoryNames = resolvedNames.length > 0 ? resolvedNames : legacy ? [legacy] : [];
 
     return {
       product_id: product._id.toString(),

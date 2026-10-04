@@ -536,9 +536,23 @@ Contracts: [agency/shipments.md](../agency/shipments.md#delivery-fee-proposals),
 | `DELIVERY_FEE_PROPOSAL_DIRECTION_CHANGED` | 422 | ADR-A11: an edit would turn a customer-approval **increase** into a decrease. Withdraw it and propose the lower fee — a customer-paid decrease applies directly | `{ currentFee }` |
 | `DELIVERY_FEE_TOPUP_IN_PROGRESS` | 409 | ADR-A11: the customer already approved this figure (online) — it can no longer be edited; and while a top-up payment is live it cannot be withdrawn, rejected or covered | — |
 | `DELIVERY_FEE_TOPUP_NOT_DUE` | 409 | ADR-A11: `POST …/pay` on a proposal with no top-up owed (not approved yet, already paid, COD) | — |
-| `DELIVERY_FEE_PROPOSAL_ORDER_NOT_PAID` | 422 | ADR-A11: a customer-paid **online** order whose payment is no longer `paid` (refunded, disputed) — its delivery money cannot move | `{ paymentStatus }` |
+| `DELIVERY_FEE_CASH_NOT_AVAILABLE` | 422 | ADR-A11 § Cash for delivery (W-F): checkout asked `deliveryFeePayment: cash_to_rider` and it cannot be honoured — the order is cash on delivery, no shop in the checkout charges delivery, or a carrying agency does not accept the delivery fee in cash. The bot's chat door refuses before spending the checkout (`spent: false`) | `{ reason: cash_on_delivery \| not_customer_paid \| no_delivery_fee \| agency_declines_cash, vendorId?, agencyIds? }` |
+| `DELIVERY_FEE_PROPOSAL_ORDER_NOT_PAID` | 422 | ADR-A11: a customer-paid **online** order whose payment is not `paid` (unpaid, refunded, disputed) — its delivery money cannot move. Since W-E2 it also refuses, up front and with nothing moved, a **change of agency** of a whole customer-paid shipment whose new price differs, on such an order | `{ paymentStatus }` |
 
 `DELIVERY_FEE_PROPOSAL_NOT_YOURS` (403) also answers a **vendor** approve/reject on a customer-paid proposal (the customer answers it), a **customer** answer on a vendor-paid one, and a vendor `cover` on anything but a change-agency difference. `DELIVERY_FEE_PROPOSAL_VENDOR_NET_NOT_POSITIVE` (422) also refuses a **change of agency** (`PATCH /api/vendor/orders/:id/delivery-agency`) whose higher new price the vendor could not cover should the customer decline it (D-10), and a cover/decline that would leave the vendor ≤ 0. The interim customer-paid refusal code (W-C) is retired by W-E (2026-10-04): a customer-paid change now goes to the customer.
+
+Since W-E2 (2026-10-04) a change of agency is **one transaction** (owner decision D-12): any of these refusals — and any failure mid-move — leaves the order exactly as it was. A COD item whose parcel's cash was already collected cannot move (`ORDER_ITEM_NOT_REASSIGNABLE`, 422, `details.collectionStatus`); a concurrent writer is `SHIPMENT_REASSIGNMENT_CONFLICT` (409).
+
+### Manual delivery-fee refunds settled by an administrator (ADR-A11 W-E2)
+
+`POST /api/internal/admin/delivery-fee-refunds/:refundId/settle` — wi-admin only, see [admin/delivery-fee-refunds.md](../admin/delivery-fee-refunds.md).
+
+| Code | Status | Meaning | `details` |
+|---|---|---|---|
+| `DELIVERY_FEE_REFUND_NOT_FOUND` | 404 | Unknown refund id, or an automatic (non-manual) row on the manual surface | — |
+| `DELIVERY_FEE_REFUND_NOT_SETTLEABLE` | 409 | Only a `manual_required` row settles — already settled, or another administrator settled it first (compare-and-set). **Reload, don't retry** | `{ status }` |
+| `DELIVERY_FEE_REFUND_ALREADY_COVERED` | 409 | A paying method on money a refund of the whole order already returned (in part) — paying again pays it twice. Settle it `covered_by_order_refund` first; any part still owed stays as its own row | `{ amount, stillReturnable }` |
+| `DELIVERY_FEE_REFUND_NOT_COVERED` | 409 | `covered_by_order_refund` on money the order still covers (or a COD order) — it is owed and must be paid | `{ amount, stillReturnable }` (`null` on COD) |
 
 ### Combined delivery-price requests (customer → agency, ADR-A11 D-8)
 
@@ -561,6 +575,20 @@ Contracts: [agency/shipments.md](../agency/shipments.md#delivery-fee-proposals),
 
 `CONTRACT_COVERAGE_REGION_NOT_COVERED` (above, under contracts) is now **forceable by the agency**:
 resend the assign/reassign with `force: true`. See `agency/assignment.md`.
+
+## Product categories — 2026-10-04
+
+One marketplace-wide list; a product holds 1–5. Contract:
+[FRONTEND-CHANGELOG-product-categories.md](../FRONTEND-CHANGELOG-product-categories.md).
+
+| Code | Status | When | `details` |
+|---|---|---|---|
+| `CATEGORY_SIMILAR_EXISTS` | 422 | A product write named a category that looks like an existing one and did not send `confirmNew: true`. **A question, not a failure** — nothing was written | `{ conflicts: [{ name, suggestions: [{ id, name, slug }] }] }` — every conflict at once |
+| `CATEGORY_NAME_INVALID` | 400 | A typed name is empty after clean-up, over 60 characters, or has no letter/digit — or `categories` and the deprecated `category` were both sent | `{ name }` when a name is at fault |
+| `CATEGORY_NOT_FOUND` | 404 | An `{ id }` (or an admin route's `:id`) that is not a live category — e.g. merged away | `{ id }` |
+| `CATEGORY_NAME_TAKEN` | 409 | Internal admin: a rename onto another live category's spelling. The remedy is a MERGE | `{ existingId, existingName }` |
+| `CATEGORY_IN_USE` | 409 | Internal admin: a delete while live products still hold it | `{ productCount }` |
+| `CATEGORY_MERGE_INVALID` | 422 | Internal admin: merging into itself, or into a category that is not live | `{ reason, targetId? }` |
 
 ## Blog / editorial
 
@@ -610,3 +638,17 @@ The first three are reachable by a **logged-out visitor**, so their `message` is
    behaviour: is it worth retrying, should the user re-authenticate, is it their input, or is
    it ours.
 4. **Log the `requestId`.** If the error is an unexpected `INTERNAL_SERVER_ERROR`, present the `requestId` in the UI to help the user report it: *"An unexpected error occurred. If you contact support, please provide this ID: req-1234abc"*.
+
+## AI listing copy — 2026-10-04
+
+`POST /api/vendor/ai/listing-copy`. Contract: [vendor/ai-listing-copy.md](../vendor/ai-listing-copy.md).
+The 502/503 pair is `external_service`, so the `message` is always the registry default below — it
+already tells the vendor they were not charged.
+
+| Code | Status | When | `details` |
+|---|---|---|---|
+| `AI_COPY_IMAGE_INVALID` | 422 | A chosen photo is not this vendor's, deleted, not an image, over 15 MB or unreadable. Checked **before** the charge | `{ fileId, reason }` — `reason` ∈ `not_found · deleted · not_an_image · too_large · unreadable` |
+| `AI_COPY_UNAVAILABLE` | 503 | Switched off, or the writing workflow could not be reached. **Everything refunded** | — |
+| `AI_COPY_FAILED` | 502 | The model timed out or wrote nothing usable. **Everything refunded** | — |
+| `BILLING_INSUFFICIENT_CREDITS` | 402 | The wallet cannot cover `fields × cost`. The model was not called | `{ balance, requested }` |
+| `RATE_LIMIT_EXCEEDED` | 429 | More than 20 calls by this vendor in 10 minutes | `{ retryAfterSeconds: 600 }` |

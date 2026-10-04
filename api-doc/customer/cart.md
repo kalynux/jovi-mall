@@ -438,6 +438,27 @@ Never present the rule to the customer in money terms beyond the shortfall: the 
 commission and fee are not the customer's business, and the API deliberately does not return
 them.
 
+### Can the delivery fee be paid in cash to the rider? — `deliveryFeeCash`
+
+**New 2026-10-04 — ADR-A11 § Cash for delivery (W-F).** For an ONLINE checkout, may the customer pay the
+items now and hand the delivery fee to the rider in cash (checkout `deliveryFeePayment: "cash_to_rider"`)?
+
+```jsonc
+"deliveryFeeCash": {                // the whole checkout — offer the choice only when available
+  "available": true,
+  "reason": null,                   // else cash_on_delivery | not_customer_paid | no_delivery_fee | agency_declines_cash
+  "amountDueOnline": 25000,         // charged now if chosen
+  "amountDueToRider": 1500,         // cash for the rider(s) if chosen
+  "vendorIds": ["664v..."]          // the shops whose delivery would be paid in cash
+},
+"perVendor": [{ ..., "deliveryFeeCash": { "available": true, "reason": null, "amountDueOnline": 10000, "amountDueToRider": 1500 } }]
+```
+
+Available when at least one shop's delivery is customer-paid with a fee AND every customer-paid shop's
+carrying agencies accept the fee in cash (`agency_declines_cash` otherwise — checkout would refuse the
+whole `cash_to_rider` request). Priced on the online method even when you quote `cash_on_delivery`
+(per shop it then reads `cash_on_delivery`). Display the two amounts; never compute them.
+
 ### Can this basket be paid on delivery? — `cashOnDelivery`
 
 **New 2026-10-03 — [ADR-A09](../../docs/ADR-A09-COD-LIMITS-AND-DELIVERY-FEES.md) G-10.** Every

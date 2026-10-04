@@ -29,6 +29,7 @@ import { BotContactController } from './controllers/bot-contact.controller';
 import { BotAccountController } from './controllers/bot-account.controller';
 import { BotAuthController } from './controllers/bot-auth.controller';
 import { BotCommandController } from './controllers/bot-command.controller';
+import { BotDeliveryFeeController } from './controllers/bot-delivery-fee.controller';
 
 /**
  * The curated bot surface — mounted at `/api/internal/bot` (GAP-001).
@@ -133,6 +134,16 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
     orders_record_cancellation_reason: BotOrderController.recordCancellationReason,
     orders_resend_cod_code: BotOrderController.resendCodCode,
     orders_confirm_shipment_delivery: BotOrderController.confirmShipmentDelivery,
+
+    // ── Delivery-fee changes after checkout (ADR-A11, W-H) ───────────────────
+    delivery_fees_list_pending: BotDeliveryFeeController.listPending,
+    delivery_fees_approve: BotDeliveryFeeController.approve,
+    delivery_fees_reject: BotDeliveryFeeController.reject,
+    delivery_fees_pay: BotDeliveryFeeController.pay,
+    combined_delivery_eligible: BotDeliveryFeeController.combinedEligible,
+    combined_delivery_list: BotDeliveryFeeController.combinedList,
+    combined_delivery_request: BotDeliveryFeeController.combinedCreate,
+    combined_delivery_cancel: BotDeliveryFeeController.combinedCancel,
 
     // ── Profile and addresses ────────────────────────────────────────────────
     profile_get_summary: BotProfileController.getSummary,

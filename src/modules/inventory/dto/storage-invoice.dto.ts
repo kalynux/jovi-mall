@@ -14,10 +14,24 @@ export interface StorageInvoiceLineDto {
   lineTotal: number;
 }
 
+/**
+ * Who the statement is addressed to, resolved LIVE at read time (2026-10-04) — not frozen
+ * with the rest of the statement. A vendor that renames its store shows the new name on
+ * every past statement; the numbers, SKU labels and depot names stay as issued.
+ */
+export interface StorageInvoiceVendorDto {
+  id: string;
+  businessName: string | null;
+  displayName: string | null;
+  verified: boolean;
+}
+
 export interface StorageInvoiceDto {
   id: string;
   agencyId: string;
   vendorId: string;
+  /** Agency-side responses only — the vendor's own mount does not name the vendor back to it. */
+  vendor?: StorageInvoiceVendorDto;
   periodKey: string;
   periodStart: Date;
   periodEnd: Date;
@@ -48,12 +62,13 @@ export interface StorageInvoiceDto {
  */
 export function toStorageInvoiceDto(
   invoice: IAgencyStorageInvoice,
-  options: { withLines: boolean },
+  options: { withLines: boolean; vendor?: StorageInvoiceVendorDto },
 ): StorageInvoiceDto {
   const dto: StorageInvoiceDto = {
     id: (invoice._id as Types.ObjectId).toString(),
     agencyId: invoice.agency_id.toString(),
     vendorId: invoice.vendor_id.toString(),
+    ...(options.vendor ? { vendor: options.vendor } : {}),
     periodKey: invoice.period_key,
     periodStart: invoice.period_start,
     periodEnd: invoice.period_end,

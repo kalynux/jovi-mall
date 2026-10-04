@@ -1,4 +1,4 @@
-import mongoose, { Types } from 'mongoose';
+import mongoose, { ClientSession, Types } from 'mongoose';
 import { VendorOrderRepository, OrderFilters } from './vendor-order.repository';
 import { OrderTimelineRepository } from './order-timeline.repository';
 import { VendorOrderNoteRepository } from './vendor-order-note.repository';
@@ -10,20 +10,34 @@ import { eventBus } from '../../core/events/event-bus';
 import { CustomerModel } from '../customers/customer.model';
 import { COLLECTIONS } from '../../core/database/collections';
 import { ShipmentRepository } from '../shipments/shipment.repository';
-import { ShipmentModel } from '../shipments/shipment.model';
+import { IShipment, ShipmentModel } from '../shipments/shipment.model';
 import { ShipmentService } from '../shipments/shipment.service';
 import { deliveryFeeProposalService } from '../delivery-fee-proposals/services/delivery-fee-proposal.service';
 import { changeAgencyFeeService } from '../delivery-fee-proposals/services/change-agency-fee.service';
 import { OrderService } from './order.service';
 import { codLimitsService } from '../cod/services/cod-limits.service';
+import { cashCollectionService } from '../cod/services/cash-collection.service';
+import { transactionManager } from '../../core/database/transaction.manager';
 import { CodLimitBreach } from '../cod/domain/cod-limits';
 import { IProductRepository } from '../catalog/repositories/interfaces/product.repository.interface';
 import { ProductRepositoryMongo } from '../catalog/repositories/mongo/product.repository.mongo';
 import { FileRepositoryMongo } from '../catalog/repositories/mongo/file.repository.mongo';
 import { getStorageProvider, IStorageProvider } from '../../core/storage';
 import { resolveFileDetails, resolveFileDetail } from '../catalog/read-models/file-detail.resolver';
-import { deliveryPayerOf } from './domain/delivery-payer';
+import { deliveryPayerOf, paysDeliveryFeeInCash } from './domain/delivery-payer';
 import { toVendorShipmentDeliveryFee, VendorShipmentDeliveryFeeDTO } from '../vendor/dto/vendor-order.dto';
+import {
+    checkItemStillWhereSeen,
+    groupMovesBySource,
+    isWholeShipmentMove,
+    ItemMoveRefusal,
+    MOVABLE_SOURCE_SHIPMENT_STATUSES,
+    REASSIGNABLE_ITEM_STATUSES,
+    SeenItemLocation,
+    wholeMoveBlockedByAgent,
+} from './domain/change-agency-move.rules';
+import { shipmentAssignmentOfferRepository } from '../shipment-assignment/repositories/shipment-assignment-offer.repository';
+import { shipmentAssignmentSessionRepository } from '../shipment-assignment/repositories/shipment-assignment-session.repository';
 
 /**
  * Vendor Order Service
@@ -60,6 +74,62 @@ const FULFILLMENT_STATE_MACHINE: Record<FulfillmentStatus, FulfillmentStatus[]> 
     'cancelled': [],  // Terminal state
     'returned': []    // Terminal state — set only by the dispute-lost handler, not by vendors
 };
+
+/** Options of a change of agency (`moveItemsToAgency` / `updateDeliveryAgency`). */
+export interface MoveItemsToAgencyOptions {
+    force?: boolean;
+    userId?: string | null;
+    /**
+     * Who is moving the items, when it is not the vendor. An ADMINISTRATOR moves items
+     * through here (`POST /api/internal/admin/shipments/:id/move-agency`) with the
+     * order's own `vendorId` resolved from the record — so the ownership scope is a
+     * tautology, and only the attribution differs.
+     */
+    actor?: { type: 'admin'; id: string | null; name?: string | null; reason?: string | null } | null;
+}
+
+/**
+ * The in-transaction re-validation of an item (`checkItemStillWhereSeen`) as an AppError. An item
+ * that moved since the pre-check — a concurrent change of agency committed first, or this one's
+ * own retried attempt — is a 409 conflict: the caller reloads and decides again, it never moves
+ * twice.
+ */
+function moveRefusalError(refusal: ItemMoveRefusal): Error {
+    switch (refusal.code) {
+        case 'item_not_found':
+            return createAppError(ERROR_CODES.ORDER_ITEM_NOT_FOUND, 404, undefined, { itemId: refusal.itemId });
+        case 'not_reassignable':
+            return createAppError(
+                ERROR_CODES.ORDER_ITEM_NOT_REASSIGNABLE,
+                422,
+                'This item has already been dispatched and cannot be reassigned to another agency',
+                { itemId: refusal.itemId, status: refusal.status }
+            );
+        case 'moved_meanwhile':
+            return createAppError(
+                ERROR_CODES.SHIPMENT_REASSIGNMENT_CONFLICT,
+                409,
+                'This item was moved by someone else — reload the order and try again',
+                { itemId: refusal.itemId, expectedShipmentId: refusal.seen.shipmentId, currentShipmentId: refusal.now.shipmentId }
+            );
+    }
+}
+
+/**
+ * An item already picked up / in transit / delivered / returned cannot be handed to
+ * another agency — only items still pending, assigned, or held (agency vanished,
+ * awaiting reassignment) can move.
+ */
+function assertItemReassignable(itemId: string, status: string | undefined): void {
+    if (!REASSIGNABLE_ITEM_STATUSES.includes(status ?? '')) {
+        throw createAppError(
+            ERROR_CODES.ORDER_ITEM_NOT_REASSIGNABLE,
+            422,
+            'This item has already been dispatched and cannot be reassigned to another agency',
+            { itemId, status }
+        );
+    }
+}
 
 export class VendorOrderService {
     private vendorOrderRepo: VendorOrderRepository;
@@ -985,34 +1055,76 @@ export class VendorOrderService {
     }
 
     /**
-     * Update delivery agency for physical order
-     * 
-     * NEW: Phase 1 - Delivery agency assignment
-     * 
-     * RULES:
-     * - Only for physical orders
-     * - Only for orders not yet delivered or cancelled
-     * - Agency must exist (validated)
-     * - Updates all order items
-     * - Logs to timeline
+     * Update delivery agency for ONE item of a physical order — the vendor's
+     * `PATCH /api/vendor/orders/:id/delivery-agency`, and each step of the
+     * default-agency / product-agency reassignment sweeps below.
+     *
+     * A thin wrapper over `moveItemsToAgency` with one item: the whole change
+     * runs in ONE transaction (ADR-A11 D-12) — see that method.
      */
     async updateDeliveryAgency(
         orderId: string,
         vendorId: string,
         itemId: string,
         deliveryAgencyId: string,
-        opts: {
-            force?: boolean;
-            userId?: string | null;
-            /**
-             * Who is moving the item, when it is not the vendor. An ADMINISTRATOR moves items
-             * through here (`POST /api/internal/admin/shipments/:id/move-agency`) with the
-             * order's own `vendorId` resolved from the record — so the ownership scope is a
-             * tautology, and only the attribution differs.
-             */
-            actor?: { type: 'admin'; id: string | null; name?: string | null; reason?: string | null } | null;
-        } = {}
+        opts: MoveItemsToAgencyOptions = {}
     ): Promise<any> {
+        await this.moveItemsToAgency(orderId, vendorId, [itemId], deliveryAgencyId, opts);
+        return this.getOrderDetails(orderId, vendorId);
+    }
+
+    /**
+     * Move items of one physical order to another delivery agency — the change of agency.
+     *
+     * RULES:
+     * - Only for physical orders, not delivered or cancelled
+     * - Each item still `pending` / `assigned` / `pending_agency_reassignment`, on a source
+     *   shipment still `pending` / `assigned` / `rejected` / `pending_agency_reassignment`
+     * - The destination agency exists
+     * - The COD-limit gate (2026-10-02), evaluated once for the whole batch
+     * - A shipment an agent has ACCEPTED is not deleted from under them: moving its LAST
+     *   item(s) is refused (`409 SHIPMENT_ALREADY_HAS_AGENT`) — the administrator's rule
+     * - ADR-A11 D-10: a WHOLE customer-paid shipment moving carries the customer's paid
+     *   delivery and settles the new agency's price difference through the customer flow;
+     *   "whole" is judged over the batch (every item of the source in it), never item by item
+     *
+     * ── ONE transaction (owner decision D-12, 2026-10-04) ───────────────────
+     * Everything the change writes commits together or not at all, per source shipment:
+     * the items onto the destination (merge or create), their removal from the source and
+     * its deletion when emptied, a pending fee proposal / live assignment offers / the
+     * ranking on a deleted source, the D-10 fee carry, the pending COD collections
+     * re-priced (or cancelled with a deleted source), the price-difference proposal with its
+     * pending pointer and — for a decrease — the money it lands, the order items' new
+     * agency (a compare-and-set on the shipment each is leaving) and the timeline entries;
+     * plus the forced-COD stamp. A failure at any step rolls ALL of it back and the caller
+     * gets the error: there is no half-moved order to repair, and therefore no ticket
+     * fallback (W-E opened a HIGH ticket when the carry failed after a committed move; that
+     * path is gone). Several items (the administrator's whole-shipment move) are ONE
+     * transaction too: either every item moved or none did.
+     *
+     * The callback is re-run by the driver on a transient error (a write conflict), so it
+     * holds no state across attempts and only COLLECTS side effects; they run after the
+     * commit, once: `shipment.cod_limit_forced`, the difference proposal's events and
+     * customer notification, and a gateway refund of a lowered fee.
+     *
+     * Concurrency: every item is re-read in the session and must still be where the
+     * pre-check saw it (same shipment, same agency) — otherwise `409
+     * SHIPMENT_REASSIGNMENT_CONFLICT`. Two moves of one item cannot both succeed: each writes
+     * the order and the source shipment, so MongoDB lets only one commit (the other's write
+     * conflicts and its retry re-reads the committed state, which fails that check); the
+     * repoint's compare-and-set is the same guarantee expressed in the write itself.
+     *
+     * The pre-checks that may refuse before the transaction opens: the order/item/agency
+     * validation and the COD-limit gate (unless `force`). Every rule that decides a WRITE is
+     * re-evaluated inside the transaction on what it reads there.
+     */
+    async moveItemsToAgency(
+        orderId: string,
+        vendorId: string,
+        itemIds: string[],
+        deliveryAgencyId: string,
+        opts: MoveItemsToAgencyOptions = {}
+    ): Promise<{ moved: number; destinationShipmentId: string | null }> {
         // 1. Validate order ownership and type
         const order = await this.vendorOrderRepo.findByIdAndVendor(orderId, vendorId);
 
@@ -1034,35 +1146,30 @@ export class VendorOrderService {
             );
         }
 
-        // 3. Locate the target item. Reassignment is item-scoped: only this item
-        //    moves agency, the rest of the order is untouched.
-        const item = order.items.find(i => i._id?.toString() === itemId);
-        if (!item || !item.delivery) {
-            throw createAppError(ERROR_CODES.ORDER_ITEM_NOT_FOUND, 404, undefined, { itemId });
-        }
+        // 3. Locate the target items. Reassignment is item-scoped: only these items
+        //    move agency, the rest of the order is untouched. An item already with
+        //    the requested agency is a no-op.
+        const toMove = [...new Set(itemIds)].flatMap((itemId) => {
+            const item = order.items.find(i => i._id?.toString() === itemId);
+            if (!item || !item.delivery) {
+                throw createAppError(ERROR_CODES.ORDER_ITEM_NOT_FOUND, 404, undefined, { itemId });
+            }
+            if ((item.delivery.agency_id?.toString() || null) === deliveryAgencyId) return [];
+            // 4. An item already picked up / in transit / delivered / returned cannot be
+            //    handed to another agency.
+            assertItemReassignable(itemId, item.delivery.status);
+            return [item];
+        });
+        if (toMove.length === 0) return { moved: 0, destinationShipmentId: null };
 
-        const previousAgencyId = item.delivery.agency_id?.toString() || null;
-
-        // No-op: item already with the requested agency.
-        if (previousAgencyId === deliveryAgencyId) {
-            return this.getOrderDetails(orderId, vendorId);
-        }
-
-        // 4. An item already picked up / in transit / delivered / returned cannot be
-        //    handed to another agency — only items still pending, assigned, or held
-        //    (agency vanished, awaiting reassignment) can move.
-        if (!['pending', 'assigned', 'pending_agency_reassignment'].includes(item.delivery.status)) {
-            throw createAppError(
-                ERROR_CODES.ORDER_ITEM_NOT_REASSIGNABLE,
-                422,
-                'This item has already been dispatched and cannot be reassigned to another agency',
-                { itemId, status: item.delivery.status }
-            );
-        }
+        // Where the pre-check saw each item — the transaction moves an item only from HERE.
+        const seen: SeenItemLocation[] = toMove.map((item) => ({
+            itemId: item._id.toString(),
+            shipmentId: item.delivery!.shipment_id?.toString() || null,
+            agencyId: item.delivery!.agency_id?.toString() || null,
+        }));
 
         // 5. Validate the destination agency exists.
-        const { default: mongoose } = await import('mongoose');
-
         if (!mongoose.connection.db) {
             throw createAppError(ERROR_CODES.DATABASE_CONNECTION_ERROR, 500);
         }
@@ -1082,146 +1189,315 @@ export class VendorOrderService {
         );
         const agencyName = magazinDoc?.name || null;
 
-        // 5b. The COD-limit gate (owner decision 2026-10-02) — the same one dispatch runs.
-        //     Moving a COD item adds its cash to the destination agency's custody (now, if
-        //     the destination shipment is already dispatched; at dispatch otherwise, where it
-        //     is gated again). Refused with 422 COD_AGENCY_LIMIT_EXCEEDED unless `force`.
+        // 5b. The COD-limit gate (owner decision 2026-10-02) — the same one dispatch runs,
+        //     over the whole batch at once (`evaluateHandoffs` accumulates within it).
+        //     Moving a COD item adds its cash to the destination agency's custody. Refused
+        //     with 422 COD_AGENCY_LIMIT_EXCEEDED unless `force`. A pre-check, exactly as at
+        //     dispatch: the exposure it sums spans OTHER orders' documents, which this
+        //     transaction does not write, so re-reading it inside the session would not close
+        //     the race between two hand-offs to one agency (write skew) — see ADR-A11 D-12.
         //     ⚠ NOT checked here, and deliberately left alone: whether the vendor has an
         //     ACTIVE connection with the destination agency (a pre-existing gap).
         let forcedBreach: CodLimitBreach | null = null;
         if (order.payment_method === 'cash_on_delivery') {
-            const [verdict] = await codLimitsService.evaluateHandoffs([{
-                shipmentId: `item:${itemId}`,
+            const verdicts = await codLimitsService.evaluateHandoffs(toMove.map((item) => ({
+                shipmentId: `item:${item._id.toString()}`,
                 agencyId: deliveryAgencyId,
                 vendorId,
                 amount: (item.price ?? 0) * (item.quantity ?? 0),
-            }], { force: opts.force === true });
-            if (verdict.breach) {
+            })), { force: opts.force === true });
+            for (const verdict of verdicts) {
+                if (!verdict.breach) continue;
                 if (opts.force !== true) throw codLimitsService.limitExceededError(verdict);
+                // The last breach carries the running exposure of every item before it.
                 forcedBreach = verdict.breach;
             }
         }
 
-        // 5c. ADR-A11 D-10 — a WHOLE customer-paid shipment moving (this item is its last) carries
-        //     the customer's paid delivery to the destination, and the new agency's price
-        //     difference goes to the customer afterwards. Priced BEFORE the move: if the vendor
-        //     could not cover a higher price should the customer decline, the move is refused
-        //     (422 DELIVERY_FEE_PROPOSAL_VENDOR_NET_NOT_POSITIVE) with nothing written. A PARTIAL
-        //     move returns null here and stays vendor-paid (below).
-        const wholeMoveFee = await changeAgencyFeeService.prepareWholeMove({
-            orderId,
-            itemId,
-            sourceShipmentId: item.delivery.shipment_id?.toString() ?? null,
-            destinationAgencyId: deliveryAgencyId,
+        // 6. The change itself — ONE transaction (D-12). The callback may be re-run on a
+        //    transient conflict, so it holds no state across attempts and side effects are
+        //    only COLLECTED here, then run after the commit.
+        const outcome = await transactionManager.runInTransactionWithRetry(async (session) => {
+            const afterCommit: Array<() => void> = [];
+            let destination: IShipment | null = null;
+            for (const group of groupMovesBySource(seen)) {
+                destination = await this.moveGroupInSession({
+                    orderId,
+                    vendorId,
+                    sourceShipmentId: group.sourceShipmentId,
+                    seen: seen.filter((s) => group.itemIds.includes(s.itemId)),
+                    deliveryAgencyId,
+                    agencyName,
+                    // W-F: may a whole move carry a cash-for-delivery fee to this agency?
+                    destinationAcceptsCashFee: (agencyExists as any)?.policies?.pricing?.accepts_cash_delivery_fee === true,
+                    opts,
+                    afterCommit,
+                }, session);
+            }
+            if (forcedBreach && destination) {
+                await codLimitsService.markForced(destination._id!.toString(), forcedBreach, {
+                    userId: opts.actor ? opts.actor.id : (opts.userId ?? null),
+                    role: opts.actor ? opts.actor.type : 'vendor',
+                }, session);
+            }
+            return { afterCommit, destination };
         });
 
-        // 6. Move the item between agency shipments (the dispatch source of truth).
-        //    Reuse the destination agency's open shipment for this order if one
-        //    exists, otherwise create a fresh one.
-        let destShipment = await this.shipmentRepo.findGroupableByOrderAndAgency(orderId, deliveryAgencyId);
-        if (destShipment) {
-            await this.shipmentRepo.addItem(destShipment._id!.toString(), {
+        // 7. Post-commit side effects — never inside the transaction, never on a rollback,
+        //    once per committed change (a retried attempt's collection was discarded).
+        const destination = outcome.destination;
+        if (forcedBreach && destination && destination.status !== 'pending') {
+            // Tell the destination agency (`shipment.cod_limit.forced`) — but only when the
+            // items landed on a shipment it can already SEE. A `pending` destination is not on
+            // the agency's list yet (GET /agency/shipments excludes it), so a link there would
+            // 404; that shipment is gated — and, if forced, announced — again at dispatch.
+            void eventBus.publish('shipment.cod_limit_forced', {
+                eventType: 'shipment.cod_limit_forced',
+                aggregateId: destination._id!.toString(),
+                occurredAt: new Date(),
+                payload: {
+                    shipmentId: destination._id!.toString(),
+                    agencyId: deliveryAgencyId,
+                    vendorId,
+                    orderId,
+                    orderNumber: order.order_number,
+                    kind: forcedBreach.kind,
+                    amount: forcedBreach.additionalAmount,
+                    currency: order.currency ?? null,
+                },
+            }).catch((err) => console.error('[VendorOrderService] shipment.cod_limit_forced emit failed:', err));
+        }
+        for (const effect of outcome.afterCommit) {
+            try {
+                effect();
+            } catch (err) {
+                console.error('[VendorOrderService] change-of-agency post-commit effect failed:', err);
+            }
+        }
+
+        return { moved: toMove.length, destinationShipmentId: destination ? destination._id!.toString() : null };
+    }
+
+    /**
+     * Move every batch item leaving ONE source shipment, inside the change-of-agency
+     * transaction (`moveItemsToAgency`). Every read and write joins `session`; side effects
+     * are pushed onto `afterCommit`. Returns the destination shipment as it stands after.
+     */
+    private async moveGroupInSession(
+        input: {
+            orderId: string;
+            vendorId: string;
+            sourceShipmentId: string | null;
+            seen: SeenItemLocation[];
+            deliveryAgencyId: string;
+            agencyName: string | null;
+            /** The destination agency accepts a delivery fee in cash (W-F) — read in the pre-check. */
+            destinationAcceptsCashFee: boolean;
+            opts: MoveItemsToAgencyOptions;
+            afterCommit: Array<() => void>;
+        },
+        session: ClientSession
+    ): Promise<IShipment> {
+        const { orderId, vendorId, sourceShipmentId, deliveryAgencyId, opts } = input;
+
+        // The order as this transaction sees it — an item moved earlier in this batch, by a
+        // concurrent writer since the pre-check, or by this callback's previous attempt is
+        // read here, never from the pre-check's snapshot.
+        const order = await OrderModel.findOne({ _id: orderId, vendor_id: vendorId }, null, { session });
+        if (!order) throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404);
+        if (['delivered', 'cancelled'].includes(order.fulfillment_status)) {
+            throw createAppError(ERROR_CODES.ORDER_TERMINAL_STATE, 422, undefined, { status: order.fulfillment_status });
+        }
+        const items = input.seen.map((seen) => {
+            const item = order.items.find(i => i._id?.toString() === seen.itemId);
+            const refusal = checkItemStillWhereSeen(seen, item && item.delivery
+                ? {
+                    shipmentId: item.delivery.shipment_id?.toString() || null,
+                    agencyId: item.delivery.agency_id?.toString() || null,
+                    status: item.delivery.status ?? null,
+                }
+                : null);
+            if (refusal) throw moveRefusalError(refusal);
+            return item!;
+        });
+        const itemIds = items.map((item) => item._id.toString());
+
+        // The source shipment is the authority on dispatch state (the item's status mirrors it).
+        const source = sourceShipmentId ? await ShipmentModel.findById(sourceShipmentId, null, { session }) : null;
+        if (sourceShipmentId) {
+            if (!source) {
+                throw createAppError(ERROR_CODES.SHIPMENT_REASSIGNMENT_CONFLICT, 409, undefined, { shipmentId: sourceShipmentId });
+            }
+            if (!MOVABLE_SOURCE_SHIPMENT_STATUSES.includes(source.status)) {
+                throw createAppError(
+                    ERROR_CODES.ORDER_ITEM_NOT_REASSIGNABLE,
+                    422,
+                    'This parcel has already been dispatched — its items can no longer change agency',
+                    { shipmentId: sourceShipmentId, status: source.status }
+                );
+            }
+            const carried = new Set(source.items.map((si) => si.order_item_id.toString()));
+            const stray = itemIds.find((id) => !carried.has(id));
+            if (stray) {
+                throw createAppError(ERROR_CODES.SHIPMENT_REASSIGNMENT_CONFLICT, 409, undefined, { shipmentId: sourceShipmentId, itemId: stray });
+            }
+        }
+        const whole = !!source && isWholeShipmentMove(source.items.map((si) => si.order_item_id.toString()), itemIds);
+        if (source && wholeMoveBlockedByAgent(source, whole)) {
+            throw createAppError(ERROR_CODES.SHIPMENT_ALREADY_HAS_AGENT, 409, undefined, {
+                shipmentId: sourceShipmentId,
+                agentId: source.agent_id!.toString(),
+                hint: 'An agent has accepted this shipment. Reassign or release the agent before moving it to another agency.',
+            });
+        }
+        // Cash for delivery (W-F): a WHOLE move carries the customer's fee — still payable to the
+        // rider in cash — onto the destination, so the destination agency must accept the fee in
+        // cash too, or its rider would collect cash it never agreed to handle. (A PARTIAL move's new
+        // run is vendor-borne and collects nothing.) Nothing has been written yet.
+        if (
+            whole && source && paysDeliveryFeeInCash(order, source)
+            && !input.destinationAcceptsCashFee
+        ) {
+            throw createAppError(ERROR_CODES.DELIVERY_FEE_CASH_NOT_AVAILABLE, 422,
+                'The customer pays this delivery fee to the rider in cash, and that delivery company does not accept the fee in cash', {
+                reason: 'agency_declines_cash',
+                agencyIds: [deliveryAgencyId],
+                shipmentId: sourceShipmentId,
+            });
+        }
+
+        // ADR-A11 D-10 — a WHOLE customer-paid shipment moving carries the customer's paid
+        // delivery to the destination, and the new agency's price difference goes to the
+        // customer. Priced over the whole group BEFORE any of it moves; may refuse (an online
+        // order no longer simply paid). A PARTIAL move returns null and stays vendor-paid.
+        const wholeMoveFee = await changeAgencyFeeService.prepareWholeMoveInSession({
+            order,
+            source,
+            itemIds,
+            destinationAgencyId: deliveryAgencyId,
+        }, session);
+
+        // Move the items onto the destination agency's open shipment for this order, or a
+        // fresh one (the dispatch source of truth).
+        let destShipment = await this.shipmentRepo.findGroupableByOrderAndAgency(orderId, deliveryAgencyId, session);
+        for (const item of items) {
+            const shipmentItem = {
                 order_item_id: item._id,
                 product_id: item.product_id,
                 variant_id: item.variant_id,
                 quantity: item.quantity
-            });
-        } else {
-            destShipment = await this.shipmentRepo.create({
-                order_id: order._id as any,
-                agency_id: new mongoose.Types.ObjectId(deliveryAgencyId) as any,
-                status: 'pending',
-                // The order's payer carries over (ADR-A11). No snapshot and NO customer fee here:
-                // on a PARTIAL move the customer was charged for the checkout shipments only, so
-                // this run's fee is priced live and VENDOR-borne (D-10). On a WHOLE move,
-                // `changeAgencyFeeService.completeWholeMove` (below) carries the source's customer
-                // money and fee onto this row (a customer fee is never inferred — see
-                // `orders/domain/delivery-payer.ts`).
-                delivery_payer: (order as any).delivery_payer ?? null,
-                customer_delivery_fee: 0,
-                items: [{
-                    order_item_id: item._id,
-                    product_id: item.product_id,
-                    variant_id: item.variant_id,
-                    quantity: item.quantity
-                }]
-            });
+            };
+            if (destShipment) {
+                const merged = await this.shipmentRepo.addItem(destShipment._id!.toString(), shipmentItem, session);
+                if (!merged) {
+                    throw createAppError(ERROR_CODES.SHIPMENT_REASSIGNMENT_CONFLICT, 409, undefined, { shipmentId: destShipment._id!.toString() });
+                }
+                destShipment = merged;
+            } else {
+                destShipment = await this.shipmentRepo.create({
+                    order_id: order._id as any,
+                    agency_id: new mongoose.Types.ObjectId(deliveryAgencyId) as any,
+                    status: 'pending',
+                    // The order's payer carries over (ADR-A11). No snapshot and NO customer fee
+                    // here: on a PARTIAL move the customer was charged for the checkout shipments
+                    // only, so this run's fee is priced live and VENDOR-borne (D-10). On a WHOLE
+                    // move the carry below writes the source's customer money and fee onto this
+                    // row (a customer fee is never inferred — see `orders/domain/delivery-payer.ts`).
+                    delivery_payer: (order as any).delivery_payer ?? null,
+                    customer_delivery_fee: 0,
+                    items: [shipmentItem]
+                }, session);
+            }
         }
+        const destinationId = destShipment!._id!.toString();
+        const destinationStatus = destShipment!.status;
 
-        if (forcedBreach) {
-            await codLimitsService.markForced(destShipment._id!.toString(), forcedBreach, {
-                userId: opts.actor ? opts.actor.id : (opts.userId ?? null),
-                role: opts.actor ? opts.actor.type : 'vendor',
-            });
-            // Tell the destination agency (`shipment.cod_limit.forced`) — but only when the
-            // item landed on a shipment it can already SEE. A `pending` destination is not on
-            // the agency's list yet (GET /agency/shipments excludes it), so a link there would
-            // 404; that shipment is gated — and, if forced, announced — again at dispatch.
-            if (destShipment.status !== 'pending') {
-                void eventBus.publish('shipment.cod_limit_forced', {
-                    eventType: 'shipment.cod_limit_forced',
-                    aggregateId: destShipment._id!.toString(),
-                    occurredAt: new Date(),
-                    payload: {
-                        shipmentId: destShipment._id!.toString(),
-                        agencyId: deliveryAgencyId,
-                        vendorId,
-                        orderId,
-                        orderNumber: order.order_number,
-                        kind: forcedBreach.kind,
-                        amount: forcedBreach.additionalAmount,
-                        currency: order.currency ?? null,
-                    },
-                }).catch((err) => console.error('[VendorOrderService] shipment.cod_limit_forced emit failed:', err));
+        // Detach the items from the source (the repository deletes it once empty).
+        let remainingSource: IShipment | null = null;
+        if (source && sourceShipmentId) {
+            for (const itemId of itemIds) {
+                remainingSource = await this.shipmentRepo.removeItem(sourceShipmentId, itemId, session);
+            }
+            if ((remainingSource === null) !== whole) {
+                // The source changed under the session after it was read — never commit a guess.
+                throw createAppError(ERROR_CODES.SHIPMENT_REASSIGNMENT_CONFLICT, 409, undefined, { shipmentId: sourceShipmentId });
+            }
+            if (!remainingSource) {
+                // The source row is gone with its last item. What pointed at it goes with it, in
+                // this transaction: a pending fee change (vendor- or customer-paid alike), the
+                // live assignment offers (an agent must not accept a shipment that no longer
+                // exists) and the auto-assignment ranking.
+                await deliveryFeeProposalService.withdrawPendingInSession(source, 'shipment_moved', session);
+                await shipmentAssignmentOfferRepository.cancelPendingForShipment(sourceShipmentId, session);
+                await shipmentAssignmentSessionRepository.deleteForShipment(sourceShipmentId, session);
             }
         }
 
-        // Detach the item from its previous shipment (deletes it if now empty).
-        const previousShipmentId = item.delivery.shipment_id?.toString() || null;
-        if (previousShipmentId) {
-            await this.shipmentRepo.removeItem(previousShipmentId, itemId);
-        }
-        // ADR-A11 D-10 — the source row is gone; carry its customer money (never throws).
+        // ADR-A11 D-10 (A) — the destination takes the source's fee and the customer's money.
         if (wholeMoveFee) {
-            await changeAgencyFeeService.completeWholeMove(wholeMoveFee, destShipment._id!.toString());
+            await changeAgencyFeeService.carryInSession(wholeMoveFee, destinationId, session);
         }
 
-        // 7. Point the order item at its new agency + shipment. The item inherits
-        //    the destination shipment's status (pending for a new one).
-        const updatedOrder = await this.vendorOrderRepo.reassignItemDeliveryAgency(
-            orderId,
-            vendorId,
-            itemId,
-            deliveryAgencyId,
-            destShipment._id!.toString(),
-            destShipment.status
-        );
-
-        if (!updatedOrder) {
-            throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404);
+        // The pending COD collections follow what each shipment now carries (a collection
+        // exists from agent accept, so an `assigned` shipment may already hold one). AFTER the
+        // carry, so the destination's cash includes the customer fee it now carries.
+        if (order.payment_method === 'cash_on_delivery') {
+            if (sourceShipmentId) {
+                await cashCollectionService.followItemMoveInSession(order, sourceShipmentId, remainingSource, session);
+            }
+            const destNow = await ShipmentModel.findById(destinationId, null, { session });
+            if (!destNow) throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
+            await cashCollectionService.followItemMoveInSession(order, destinationId, destNow, session);
         }
 
-        // 8. Append timeline entry (scoped to the item that moved).
-        await this.timelineRepo.appendEvent({
-            orderId,
-            eventType: 'delivery.agency_updated',
-            description: `Delivery agency for "${item.title}" changed to ${agencyName || deliveryAgencyId}`,
-            metadata: {
+        // ADR-A11 D-10 (B) — the new agency's price difference, through the customer flow, in
+        // this transaction. Its events, notification and any refund run after the commit.
+        if (wholeMoveFee) {
+            input.afterCommit.push(await changeAgencyFeeService.raiseDifferenceInSession(wholeMoveFee, destinationId, session));
+        }
+
+        // Point each order item at its new agency + shipment — a compare-and-set on the
+        // shipment it is leaving. The item inherits the destination's status (pending for a
+        // new one).
+        for (const item of items) {
+            const itemId = item._id.toString();
+            const updatedOrder = await this.vendorOrderRepo.reassignItemDeliveryAgency(
+                orderId,
+                vendorId,
                 itemId,
-                newAgencyId: deliveryAgencyId,
-                agencyName: agencyName || 'Unknown',
-                previousAgencyId,
-                shipmentId: destShipment._id!.toString(),
-                ...(opts.actor
-                    ? { actorName: opts.actor.name ?? null, reason: opts.actor.reason ?? null, forced: opts.force === true }
-                    : {})
-            },
-            actorType: opts.actor ? opts.actor.type : 'vendor',
-            actorId: opts.actor ? opts.actor.id : vendorId
-        });
+                deliveryAgencyId,
+                destinationId,
+                destinationStatus,
+                session,
+                sourceShipmentId
+            );
+            if (!updatedOrder) {
+                throw createAppError(ERROR_CODES.SHIPMENT_REASSIGNMENT_CONFLICT, 409, undefined, { itemId });
+            }
 
-        // 9. Return updated order
-        return this.getOrderDetails(orderId, vendorId);
+            // Append timeline entry (scoped to the item that moved).
+            await this.timelineRepo.appendEvent({
+                orderId,
+                eventType: 'delivery.agency_updated',
+                description: `Delivery agency for "${item.title}" changed to ${input.agencyName || deliveryAgencyId}`,
+                metadata: {
+                    itemId,
+                    newAgencyId: deliveryAgencyId,
+                    agencyName: input.agencyName || 'Unknown',
+                    previousAgencyId: item.delivery?.agency_id?.toString() || null,
+                    shipmentId: destinationId,
+                    ...(opts.actor
+                        ? { actorName: opts.actor.name ?? null, reason: opts.actor.reason ?? null, forced: opts.force === true }
+                        : {})
+                },
+                actorType: opts.actor ? opts.actor.type : 'vendor',
+                actorId: opts.actor ? opts.actor.id : vendorId
+            }, session);
+        }
+
+        const destination = await ShipmentModel.findById(destinationId, null, { session });
+        if (!destination) throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
+        return destination;
     }
 
     /**
@@ -1235,10 +1511,13 @@ export class VendorOrderService {
      * the default" are considered "assigned to the default agency". Only items
      * still `pending`/`assigned` (not yet dispatched) are reassignable.
      *
-     * Best-effort: runs outside any DB transaction (shipment/order writes in
-     * updateDeliveryAgency aren't session-aware, matching that method's existing
-     * behavior), reuses updateDeliveryAgency per item, and collects failures
-     * rather than aborting the whole batch.
+     * Best-effort ACROSS parcels: the eligible items are moved per (order, source
+     * shipment) in ONE `moveItemsToAgency` call each — one transaction (ADR-A11 D-12),
+     * so a parcel's eligible items move together or not at all — and failures are
+     * collected rather than aborting the sweep. Per parcel, not per item, because a
+     * customer-paid parcel whose items all move is a WHOLE move (its paid fee is carried,
+     * the difference goes to the customer, D-10); moving them one by one made every item
+     * but the last a vendor-paid partial move and priced the last one against them.
      */
     async reassignItemsFromDefaultAgency(
         vendorId: string,
@@ -1252,6 +1531,7 @@ export class VendorOrderService {
 
         for (const order of candidates) {
             const orderId = (order._id as any).toString();
+            const eligible: IOrder['items'] = [];
 
             for (const item of order.items) {
                 if (!item.delivery) continue;
@@ -1266,13 +1546,9 @@ export class VendorOrderService {
                     continue;
                 }
 
-                try {
-                    await this.updateDeliveryAgency(orderId, vendorId, itemId, toAgencyId);
-                    reassignedCount++;
-                } catch (err: any) {
-                    skipped.push({ orderId, itemId, reason: err.message || 'Unknown error' });
-                }
+                eligible.push(item);
             }
+            reassignedCount += await this.moveEligibleBySource(orderId, vendorId, eligible, toAgencyId, skipped);
         }
 
         return { reassignedCount, skipped };
@@ -1300,6 +1576,7 @@ export class VendorOrderService {
 
         for (const order of candidates) {
             const orderId = (order._id as any).toString();
+            const eligible: IOrder['items'] = [];
 
             for (const item of order.items) {
                 if (!item.delivery) continue;
@@ -1307,18 +1584,40 @@ export class VendorOrderService {
                 if (item.delivery.agency_id?.toString() !== fromAgencyId) continue;
                 if (!['pending', 'assigned', 'pending_agency_reassignment'].includes(item.delivery.status)) continue;
 
-                const itemId = item._id.toString();
-
-                try {
-                    await this.updateDeliveryAgency(orderId, vendorId, itemId, toAgencyId);
-                    reassignedCount++;
-                } catch (err: any) {
-                    skipped.push({ orderId, itemId, reason: err.message || 'Unknown error' });
-                }
+                eligible.push(item);
             }
+            reassignedCount += await this.moveEligibleBySource(orderId, vendorId, eligible, toAgencyId, skipped);
         }
 
         return { reassignedCount, skipped };
+    }
+
+    /**
+     * The two sweeps' shared step: move one order's eligible items to `toAgencyId`, one
+     * `moveItemsToAgency` call (one transaction) per source shipment. A refusal skips that
+     * parcel's items with its reason and never stops the sweep. Returns how many moved.
+     */
+    private async moveEligibleBySource(
+        orderId: string,
+        vendorId: string,
+        items: IOrder['items'],
+        toAgencyId: string,
+        skipped: { orderId: string; itemId: string; reason: string }[]
+    ): Promise<number> {
+        const bySource = new Map<string, string[]>();
+        for (const item of items) {
+            const key = item.delivery?.shipment_id?.toString() ?? '';
+            bySource.set(key, [...(bySource.get(key) ?? []), item._id.toString()]);
+        }
+        let moved = 0;
+        for (const itemIds of bySource.values()) {
+            try {
+                moved += (await this.moveItemsToAgency(orderId, vendorId, itemIds, toAgencyId)).moved;
+            } catch (err: any) {
+                for (const itemId of itemIds) skipped.push({ orderId, itemId, reason: err.message || 'Unknown error' });
+            }
+        }
+        return moved;
     }
 
     /**

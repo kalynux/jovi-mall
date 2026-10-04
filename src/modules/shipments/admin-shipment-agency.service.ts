@@ -26,10 +26,11 @@ export interface AdminMoveActor {
  *
  * ── No second implementation ──────────────────────────────────────────────────
  * Moving an item between agencies already exists, as the vendor's
- * `VendorOrderService.updateDeliveryAgency`: it detaches the item from its shipment
+ * `VendorOrderService.moveItemsToAgency`: it detaches each item from its shipment
  * (deleting an emptied one), groups it into the destination agency's open shipment or
- * opens one, repoints the order item, runs the COD-limit gate and writes the timeline.
- * This service calls it once per item with the order's own `vendorId` resolved from the
+ * opens one, repoints the order item, runs the COD-limit gate and writes the timeline —
+ * all items in ONE transaction (ADR-A11 D-12), so a shipment never ends up half-moved.
+ * This service calls it once, with every item and the order's own `vendorId` resolved from the
  * record — the same move `AdminShipmentController` makes for reassignment — and an
  * `admin` actor so the timeline and any forced limit name the right party.
  *
@@ -118,13 +119,12 @@ export class AdminShipmentAgencyService {
     // not be able to accept a shipment that is leaving.
     await shipmentAssignmentService.cancelActiveOffer(previousAgencyId, shipmentId);
 
+    // Every item in ONE transaction (ADR-A11 D-12): the shipment moves whole or not at all.
     const itemIds = shipment.items.map((i) => i.order_item_id.toString());
-    for (const itemId of itemIds) {
-      await this.vendorOrders.updateDeliveryAgency(orderId, vendorId, itemId, input.agencyId, {
-        force,
-        actor: { type: 'admin', id: actor.id, name: actor.name, reason: input.reason },
-      });
-    }
+    await this.vendorOrders.moveItemsToAgency(orderId, vendorId, itemIds, input.agencyId, {
+      force,
+      actor: { type: 'admin', id: actor.id, name: actor.name, reason: input.reason },
+    });
 
     const destination = await this.shipments.findGroupableByOrderAndAgency(orderId, input.agencyId);
     if (!destination) {

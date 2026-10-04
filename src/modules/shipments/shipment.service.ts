@@ -1007,7 +1007,9 @@ export class ShipmentService {
         // Never includes the delivery code — that is customer-only. Projected
         // rather than merely read, so an agency still deciding who to send gets
         // the amount before any agent has accepted (`status: null` says so).
-        const cod = (order as any).payment_method === 'cash_on_delivery'
+        // Also an ONLINE order whose delivery fee is paid to the rider in cash (W-F): the block's
+        // `kind: 'delivery_fee'` and `itemsAmount: 0` say the rider collects the fee alone.
+        const cod = cashCollectionService.collectsCash(order as any, shipment)
             ? await cashCollectionService.getProjectedCodSummaryForShipment(order as any, shipment)
             : null;
 
@@ -1227,7 +1229,9 @@ export class ShipmentService {
         if (!order) {
             throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404);
         }
-        const isCod = order.payment_method === 'cash_on_delivery';
+        // "Does the rider collect cash here" — a COD order, or an online order whose delivery fee
+        // is handed to the rider in cash (W-F). Both deliver ONLY through the code (`collect`).
+        const isCod = cashCollectionService.collectsCash(order, shipment);
 
         // An agent must have ACCEPTED the shipment before it can be picked up.
         // Under the agent-acceptance workflow `agent_id` is written only on
@@ -1262,7 +1266,7 @@ export class ShipmentService {
             // The response tells the agent to submit the code next.
             if (newStatus === 'delivered') {
                 throw createAppError(ERROR_CODES.SHIPMENT_INVALID_STATUS_TRANSITION, 400,
-                    'COD shipments are delivered by the agent submitting the customer delivery code, not by a status change', {
+                    'Shipments the rider collects cash for are delivered by the agent submitting the customer delivery code, not by a status change', {
                     from: shipment.status,
                     to: newStatus,
                 });
@@ -1448,7 +1452,10 @@ export class ShipmentService {
         // Post-commit and best-effort, like the emits above — an earnings failure
         // must never block a delivery. The release worker's recovery stage
         // re-splits anything that never landed.
-        if (!isCod && (newStatus === 'agent_delivered' || newStatus === 'returned')) {
+        // Every ONLINE order goes in, cash-for-delivery included (W-F): the split itself writes
+        // nothing for a delivered cash-fee shipment (its collection pays the agency) and only the
+        // vendor-borne remainder for a returned one.
+        if (order.payment_method !== 'cash_on_delivery' && (newStatus === 'agent_delivered' || newStatus === 'returned')) {
             // `agent_delivered` IS the successful outcome here — it is the point
             // the run ended, and the later customer confirmation only matures
             // what this creates.
@@ -2125,6 +2132,17 @@ export class ShipmentService {
         if (shipment.status !== 'agent_delivered') {
             throw createAppError(ERROR_CODES.SHIPMENT_CONFIRMATION_NOT_ALLOWED, 422, undefined, { status: shipment.status });
         }
+        // Cash for delivery (W-F): this parcel's delivery fee is paid to the rider in cash, so —
+        // exactly like COD — it is confirmed by the delivery code at the handoff, which records
+        // the cash. Confirming here would deliver it with the fee never recorded.
+        if (cashCollectionService.collectsCash(order, shipment)) {
+            throw createAppError(
+                ERROR_CODES.SHIPMENT_CONFIRMATION_NOT_ALLOWED,
+                422,
+                'You pay this delivery fee to the rider in cash — confirm by giving the rider your delivery code',
+                { paymentMethod: order.payment_method, deliveryFeePayment: 'cash_to_rider' }
+            );
+        }
 
         const { order: refreshedOrder } = await this._applyDeliveryConfirmation(shipmentId, orderId, actorUserId, false);
 
@@ -2278,7 +2296,8 @@ export class ShipmentService {
         if (stale.length === 0) return 0;
 
         const orderIds = [...new Set(stale.map((s) => s.order_id.toString()))];
-        const orders = await OrderModel.find({ _id: { $in: orderIds } }).select('payment_method');
+        const orders = await OrderModel.find({ _id: { $in: orderIds } }).select('payment_method delivery_fee_payment delivery_payer');
+        const orderById = new Map(orders.map((o) => [o._id.toString(), o]));
         const paymentMethodByOrder = new Map(
             orders.map((o) => [o._id.toString(), o.payment_method])
         );
@@ -2292,7 +2311,9 @@ export class ShipmentService {
             if (!paymentMethod) continue;
 
             try {
-                const applied = paymentMethod === 'cash_on_delivery'
+                // A COD shipment, or a cash-for-delivery one (W-F): the cash goes through the
+                // collection, never around it — see the docstring.
+                const applied = cashCollectionService.collectsCash(orderById.get(orderId)!, shipment)
                     ? await cashCollectionService.autoCollectWithoutCode(shipment)
                     : (await this._applyDeliveryConfirmation(shipment._id.toString(), orderId, null, true)).applied;
                 if (applied) confirmed++;

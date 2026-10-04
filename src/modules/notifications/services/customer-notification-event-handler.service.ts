@@ -41,6 +41,7 @@ import {
     customerWhatsAppTemplateName,
     deliveryFailureLine,
     codReadyLine,
+    deliveryFeeCashReadyLine,
     ticketReopenLine
 } from '../catalog/customer-notification-catalog';
 import type { ShipmentFailureReason } from '../../shipments/shipment.model';
@@ -958,12 +959,17 @@ export class CustomerNotificationEventHandler {
                             : null;
         if (!situation) return;
 
-        const { customer, orderNumber, isCod, amountDue, currency } = await this.customerFromOrder(
+        const { customer, orderNumber, isCod, amountDue, currency, deliveryFeeCashOrder } = await this.customerFromOrder(
             p.orderId,
             p.customerId ?? undefined
         );
         if (!customer) return;
         const lang = resolveLanguage(customer);
+        // Cash for delivery (W-F): the goods were paid online, THIS parcel's delivery fee is handed
+        // to the rider — the out-for-delivery message says how much, like the COD line does.
+        const feeCash = !isCod && deliveryFeeCashOrder
+            ? await this.deliveryFeeCashOf(deliveryFeeCashOrder, p.shipmentId)
+            : 0;
 
         await this.notify({
             situation,
@@ -980,7 +986,9 @@ export class CustomerNotificationEventHandler {
                 // "Have the cash ready" — the out-for-delivery message exists to get
                 // someone to the door, and for a COD order arriving without the
                 // money is a wasted trip and a `payment_refused` failure.
-                codLine: codReadyLine(isCod ?? false, amountDue ?? 0, currency ?? 'XAF', lang),
+                codLine: feeCash > 0
+                    ? deliveryFeeCashReadyLine(feeCash, currency ?? 'XAF', lang)
+                    : codReadyLine(isCod ?? false, amountDue ?? 0, currency ?? 'XAF', lang),
                 // The agent's operational reason, phrased for the person who was
                 // waiting in. `failureNote` is deliberately NOT surfaced — it is
                 // internal free text written for a dispatcher.
@@ -1186,6 +1194,34 @@ export class CustomerNotificationEventHandler {
         }
     }
 
+    /**
+     * The delivery fee a parcel of a `cash_to_rider` order hands the rider (W-F): its pending
+     * fee-only collection when one exists (it follows any fee change), else the shipment's
+     * customer fee. 0 when the parcel collects no cash. Best-effort: a read failure drops the line.
+     */
+    private async deliveryFeeCashOf(
+        order: { payment_method: string; delivery_fee_payment: 'cash_to_rider'; delivery_payer: any },
+        shipmentId: string
+    ): Promise<number> {
+        try {
+            if (!shipmentId || !mongoose.Types.ObjectId.isValid(shipmentId)) return 0;
+            // Imported lazily for the same require-cycle reason as the order model below.
+            const [{ ShipmentModel }, { CashCollectionModel }, { customerDeliveryFeeOf, paysDeliveryFeeInCash }] = await Promise.all([
+                import('../../shipments/shipment.model'),
+                import('../../cod/models/cash-collection.model'),
+                import('../../orders/domain/delivery-payer'),
+            ]);
+            const shipment = await ShipmentModel.findById(shipmentId).select('delivery_payer customer_delivery_fee').lean();
+            if (!shipment || !paysDeliveryFeeInCash(order as any, shipment as any)) return 0;
+            const collection = await CashCollectionModel.findOne({ shipment_id: shipmentId }).select('status expected_amount').lean();
+            if (collection) return collection.status === 'pending' ? collection.expected_amount : 0;
+            return customerDeliveryFeeOf(order as any, shipment as any);
+        } catch (error) {
+            console.error('[CustomerNotificationEventHandler] delivery-fee cash line skipped:', error);
+            return 0;
+        }
+    }
+
     private async loadCustomer(customerId: string | undefined): Promise<ICustomer | null> {
         if (!customerId || !mongoose.Types.ObjectId.isValid(customerId)) return null;
         return CustomerModel.findById(customerId);
@@ -1207,6 +1243,8 @@ export class CustomerNotificationEventHandler {
         isCod?: boolean;
         amountDue?: number;
         currency?: string;
+        /** Set on an online order paying its delivery fee to the rider in cash (W-F). */
+        deliveryFeeCashOrder?: { payment_method: string; delivery_fee_payment: 'cash_to_rider'; delivery_payer: any } | null;
         /** The SHOP's name (the Store's, never the vendor's personal display name), or null. */
         vendorName?: string | null;
     }> {
@@ -1219,7 +1257,7 @@ export class CustomerNotificationEventHandler {
         // a top-level import here closes a require cycle at boot.
         const { OrderModel } = await import('../../orders/order.model');
         const order = await OrderModel.findById(orderId)
-            .select('customer_id vendor_id order_number payment_method payment_status total_amount currency')
+            .select('customer_id vendor_id order_number payment_method payment_status total_amount currency delivery_fee_payment delivery_payer')
             .lean();
 
         if (!order) return { customer: await this.loadCustomer(customerId) };
@@ -1238,6 +1276,9 @@ export class CustomerNotificationEventHandler {
             // argument with the agent on the doorstep.
             amountDue: isCod && order.payment_status !== 'paid' ? order.total_amount : 0,
             currency: order.currency,
+            deliveryFeeCashOrder: !isCod && order.delivery_fee_payment === 'cash_to_rider'
+                ? { payment_method: order.payment_method, delivery_fee_payment: 'cash_to_rider', delivery_payer: order.delivery_payer ?? null }
+                : null,
             vendorName: await this.shopNameOf(order.vendor_id?.toString())
         };
     }

@@ -1,12 +1,12 @@
 {
-  "generatedAt": "2026-10-04T01:09:09.596Z",
+  "generatedAt": "2026-10-04T04:27:06.754Z",
   "note": "GENERATED from the notification catalogs by scripts/generate-whatsapp-templates.ts. Do not hand-edit: names, placeholder counts and placeholder ORDER are derived from the same functions the send path uses, and editing them here makes the approved template disagree with what is sent.",
   "languages": [
     "en",
     "fr"
   ],
-  "templateCount": 145,
-  "submissionCount": 290,
+  "templateCount": 146,
+  "submissionCount": 292,
   "needsCopyReview": [
     {
       "name": "customer_booking_created",
@@ -3671,6 +3671,10 @@
               "example": [
                 "https://wi-mall.com/en/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "See the new fee"
             }
           ]
         }
@@ -3705,6 +3709,10 @@
               "example": [
                 "https://wi-mall.com/fr/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Voir les frais"
             }
           ]
         }
@@ -3739,6 +3747,10 @@
               "example": [
                 "https://wi-mall.com/en/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Pay now"
             }
           ]
         }
@@ -3773,6 +3785,10 @@
               "example": [
                 "https://wi-mall.com/fr/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Payer maintenant"
             }
           ]
         }
@@ -3979,6 +3995,72 @@
       ]
     },
     {
+      "name": "customer_order_delivery_fee_refund_settled",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Refund sent: {{1}} {{2}}*\n\nWe have sent you *{{1}}* *{{2}}* of delivery money for order *{{3}}*. If it has not reached you within a few days, reply here or open the order.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_delivery_fee_refund_settled",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Remboursement envoyé: {{1}} {{2}}*\n\nNous vous avons envoyé *{{1}}* *{{2}}* de frais de livraison pour la commande *{{3}}*. Si vous ne l’avez pas reçu d’ici quelques jours, répondez ici ou ouvrez la commande.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "customer_order_delivery_fee_topup_failed",
       "language": "en",
       "category": "UTILITY",
@@ -4006,6 +4088,10 @@
               "example": [
                 "https://wi-mall.com/en/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Try again"
             }
           ]
         }
@@ -4039,6 +4125,10 @@
               "example": [
                 "https://wi-mall.com/fr/orders/WM-2026-000123"
               ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Réessayer"
             }
           ]
         }

@@ -5,7 +5,7 @@ import { transactionManager } from '../../../core/database/transaction.manager';
 import { eventBus } from '../../../core/events/event-bus';
 import { COD_CONFIG } from '../config/cod.config';
 import { CashCollectionRepository } from '../repositories/cash-collection.repository';
-import { CashCollectionModel, CashCollectionStatus, ICashCollection } from '../models/cash-collection.model';
+import { CashCollectionModel, CashCollectionStatus, collectionKindOf, ICashCollection } from '../models/cash-collection.model';
 import { DeliveryCodeService, deliveryCodeService } from './delivery-code.service';
 import { CodCashAccountService, codCashAccountService } from './cod-cash-account.service';
 import {
@@ -27,7 +27,13 @@ import { ShipmentRepository } from '../../shipments/shipment.repository';
 import { CustomerModel } from '../../customers/customer.model';
 import { resolveLanguage } from '../../notifications/catalog/notification-i18n';
 import { trackingOutboxEmitter } from '../../tracking-integration/services/tracking-outbox.emitter';
-import { collectionBreakdownOf, customerDeliveryFeeOf } from '../../orders/domain/delivery-payer';
+import {
+  CashCollectionKind,
+  cashCollectionKindOf,
+  cashToCollectOf,
+  collectionBreakdownOf,
+  customerDeliveryFeeOf,
+} from '../../orders/domain/delivery-payer';
 
 export interface CollectInput {
   code: string;
@@ -45,6 +51,11 @@ export interface CollectInput {
  * snapshotted. See `getProjectedCodSummaryForShipment`.
  */
 export interface CodShipmentSummary {
+  /**
+   * `order` = a COD order's cash (goods + any customer-paid fee); `delivery_fee` = an online
+   * order whose customer pays ONLY the delivery fee to the rider in cash (W-F).
+   */
+  kind: CashCollectionKind;
   /** The whole cash to collect: `itemsAmount + deliveryFeeAmount`. */
   expectedAmount: number;
   /** The goods (ADR-A11) — the COD handling fee's base (D-5). */
@@ -130,6 +141,15 @@ export class CashCollectionService {
     if (!shipment.agent_id) {
       throw createAppError(ERROR_CODES.COD_AGENT_NOT_ASSIGNED, 422, 'A COD shipment needs an assigned agent before its delivery code can be issued');
     }
+    // A COD order collects its goods (+ a customer-paid fee); an online order paying its delivery
+    // fee in cash collects the fee ALONE (W-F). Callers gate on `collectsCash`; this refuses the
+    // rest rather than minting a code for a shipment with nothing to collect.
+    const kind = cashCollectionKindOf(order, shipment);
+    if (kind === null) {
+      throw createAppError(ERROR_CODES.COD_COLLECTION_NOT_FOUND, 404, 'This shipment collects no cash', {
+        shipmentId: shipment._id.toString(),
+      });
+    }
     const shipmentId = shipment._id.toString();
     const agentId = shipment.agent_id.toString();
 
@@ -144,10 +164,9 @@ export class CashCollectionService {
 
     // Goods + the delivery fee the customer pays the agent (ADR-A11), each stored so the split
     // can divide the cash without re-deriving it: the goods are its gross and the COD fee's
-    // base (D-5), the delivery fee goes to the agency side.
-    const itemsAmount = this.computeItemsAmount(order, shipment);
-    const deliveryFeeAmount = customerDeliveryFeeOf(order, shipment);
-    const expectedAmount = itemsAmount + deliveryFeeAmount;
+    // base (D-5), the delivery fee goes to the agency side. A fee-only collection (W-F) stores
+    // `items_amount: 0` — the goods were paid online.
+    const { itemsAmount, deliveryFeeAmount, expectedAmount } = this.cashAmountsOf(order, shipment);
     const code = this.codes.generateCode();
 
     const collection = await this.collectionRepo.create(
@@ -158,6 +177,7 @@ export class CashCollectionService {
         agent_id: shipment.agent_id,
         customer_id: order.customer_id,
         vendor_id: order.vendor_id,
+        kind,
         expected_amount: expectedAmount,
         items_amount: itemsAmount,
         delivery_fee_amount: deliveryFeeAmount,
@@ -198,7 +218,7 @@ export class CashCollectionService {
     shipment: IShipment,
     session: ClientSession
   ): Promise<{ collection: ICashCollection; code: string } | { collection: null; code: null }> {
-    if (order.payment_method !== 'cash_on_delivery') return { collection: null, code: null };
+    if (!this.collectsCash(order, shipment)) return { collection: null, code: null };
 
     const shipmentId = (shipment._id as any).toString();
     const existing = await this.collectionRepo.findByShipmentId(shipmentId, session);
@@ -215,7 +235,8 @@ export class CashCollectionService {
     // Clear the terminal payment status the return produced. Only `failed` is
     // touched — `paid`/`refunded` mean the money question is genuinely closed and
     // must never be re-opened by a redelivery.
-    if (order.payment_status === 'failed') {
+    // An online order paying only its delivery fee in cash (W-F) has no COD payment status.
+    if (order.payment_method === 'cash_on_delivery' && order.payment_status === 'failed') {
       await OrderModel.updateOne(
         { _id: order._id, payment_status: 'failed' },
         { $set: { payment_status: 'pending' } },
@@ -778,6 +799,7 @@ export class CashCollectionService {
       const list = byOrder.get(key) ?? [];
       list.push({
         shipmentId: c.shipment_id.toString(),
+        kind: collectionKindOf(c),
         expectedAmount: c.expected_amount,
         // ADR-A11: the cash split into goods + the delivery fee the customer pays the agent.
         ...this.breakdownOf(c),
@@ -796,6 +818,7 @@ export class CashCollectionService {
     const collection = await this.collectionRepo.findByShipmentId(shipmentId);
     if (!collection) return null;
     return {
+      kind: collectionKindOf(collection),
       expectedAmount: collection.expected_amount,
       ...this.breakdownOf(collection),
       currency: collection.currency,
@@ -827,10 +850,10 @@ export class CashCollectionService {
   async getProjectedCodSummaryForShipment(order: IOrder, shipment: IShipment): Promise<CodShipmentSummary> {
     const existing = await this.getCodSummaryForShipment((shipment._id as any).toString());
     if (existing) return existing;
-    const itemsAmount = this.computeItemsAmount(order, shipment);
-    const deliveryFeeAmount = customerDeliveryFeeOf(order, shipment);
+    const { itemsAmount, deliveryFeeAmount, expectedAmount } = this.cashAmountsOf(order, shipment);
     return {
-      expectedAmount: itemsAmount + deliveryFeeAmount,
+      kind: cashCollectionKindOf(order, shipment) ?? 'order',
+      expectedAmount,
       itemsAmount,
       deliveryFeeAmount,
       currency: order.currency,
@@ -866,11 +889,12 @@ export class CashCollectionService {
     for (const shipment of shipments) {
       const shipmentId = (shipment._id as any).toString();
       const order = ordersById.get(shipment.order_id.toString());
-      if (!order || order.payment_method !== 'cash_on_delivery') continue;
+      if (!order || !this.collectsCash(order, shipment)) continue;
 
       const collection = byShipment.get(shipmentId);
       if (collection) {
         summaries.set(shipmentId, {
+          kind: collectionKindOf(collection),
           expectedAmount: collection.expected_amount,
           ...this.breakdownOf(collection),
           currency: collection.currency,
@@ -881,10 +905,10 @@ export class CashCollectionService {
       }
 
       try {
-        const itemsAmount = this.computeItemsAmount(order, shipment);
-        const deliveryFeeAmount = customerDeliveryFeeOf(order, shipment);
+        const { itemsAmount, deliveryFeeAmount, expectedAmount } = this.cashAmountsOf(order, shipment);
         summaries.set(shipmentId, {
-          expectedAmount: itemsAmount + deliveryFeeAmount,
+          kind: cashCollectionKindOf(order, shipment) ?? 'order',
+          expectedAmount,
           itemsAmount,
           deliveryFeeAmount,
           currency: order.currency,
@@ -903,6 +927,70 @@ export class CashCollectionService {
     return summaries;
   }
 
+  // ─── Change of agency (ADR-A11 D-12) ────────────────────────────────────────
+
+  /**
+   * Keep a shipment's PENDING cash collection in step with what the shipment now carries, inside
+   * the change-of-agency transaction (`VendorOrderService.moveItemsToAgency`).
+   *
+   * A collection exists from agent ACCEPT, and a shipment in `assigned` may already have one — so
+   * moving an item on or off it changes the cash the agent must collect:
+   *  - `shipment === null` (its last item left, the row was deleted) → the pending collection is
+   *    cancelled. Its code is dead with the shipment; the items get a fresh code at their next
+   *    agent accept (`ensureForShipmentInSession`).
+   *  - otherwise → `items_amount` re-derived from the items it carries now and
+   *    `delivery_fee_amount` from the customer fee it carries now (a whole customer-paid move
+   *    carries the fee onto the destination first, so call this AFTER that write).
+   *
+   * Only a `pending` collection is touched — the money has not changed hands. A `cancelled` one
+   * is history with nothing to follow (an agency DECLINED the shipment with an agent bound, and
+   * the decline cancelled its code — moving the held items on is exactly what the decline asks
+   * the vendor to do). A `collected` one means the cash changed hands, a state the move window
+   * forbids, so it refuses (422) and the caller's transaction rolls the whole move back. Every
+   * write is a compare-and-set on the amounts it read.
+   */
+  async followItemMoveInSession(
+    order: IOrder,
+    shipmentId: string,
+    shipment: IShipment | null,
+    session: ClientSession
+  ): Promise<'none' | 'repriced' | 'cancelled' | 'unchanged'> {
+    const collection = await this.collectionRepo.findByShipmentId(shipmentId, session);
+    if (!collection || collection.status === 'cancelled') return 'none';
+    if (collection.status !== 'pending') {
+      throw createAppError(ERROR_CODES.ORDER_ITEM_NOT_REASSIGNABLE, 422, 'This parcel\'s cash has already been collected — its items can no longer move', {
+        shipmentId,
+        collectionStatus: collection.status,
+      });
+    }
+    if (!shipment) {
+      const cancelled = await this.collectionRepo.cancelPendingByShipment(shipmentId, session);
+      if (!cancelled) throw createAppError(ERROR_CODES.SHIPMENT_REASSIGNMENT_CONFLICT, 409, undefined, { shipmentId });
+      return 'cancelled';
+    }
+    // Re-priced by the collection's OWN kind: a fee-only collection (W-F) follows the fee alone.
+    const feeOnly = collectionKindOf(collection) === 'delivery_fee';
+    const { itemsAmount, deliveryFeeAmount, expectedAmount } = cashToCollectOf(
+      collectionKindOf(collection),
+      feeOnly ? 0 : this.computeItemsAmount(order, shipment),
+      customerDeliveryFeeOf(order, shipment)
+    );
+    if (
+      collection.expected_amount === expectedAmount &&
+      collection.items_amount === itemsAmount &&
+      (collection.delivery_fee_amount ?? 0) === deliveryFeeAmount
+    ) {
+      return 'unchanged';
+    }
+    const moved = await CashCollectionModel.updateOne(
+      { _id: collection._id, status: 'pending', expected_amount: collection.expected_amount },
+      { $set: { items_amount: itemsAmount, delivery_fee_amount: deliveryFeeAmount, expected_amount: expectedAmount } },
+      { session }
+    );
+    if (moved.modifiedCount !== 1) throw createAppError(ERROR_CODES.SHIPMENT_REASSIGNMENT_CONFLICT, 409, undefined, { shipmentId });
+    return 'repriced';
+  }
+
   // ─── Internals ──────────────────────────────────────────────────────────────
 
   /**
@@ -913,7 +1001,35 @@ export class CashCollectionService {
    * `cod/domain/cod-limits.ts` `expectedCodAmount`; the two must agree.
    */
   computeExpectedAmount(order: IOrder, shipment: IShipment): number {
-    return this.computeItemsAmount(order, shipment) + customerDeliveryFeeOf(order, shipment);
+    return this.cashAmountsOf(order, shipment).expectedAmount;
+  }
+
+  /**
+   * Does the rider collect cash for this shipment? A COD order always; an online order only when
+   * its customer pays the delivery fee to the rider (W-F, `cash_to_rider` on a customer-paid
+   * shipment). Every "is there a cash collection" gate reads THIS, never `payment_method` alone.
+   */
+  collectsCash(
+    order: Pick<IOrder, 'payment_method' | 'delivery_fee_payment' | 'delivery_payer'>,
+    shipment: Pick<IShipment, 'delivery_payer' | 'customer_delivery_fee'>
+  ): boolean {
+    return cashCollectionKindOf(order, shipment) !== null;
+  }
+
+  /**
+   * The collection's three amounts for a shipment as it stands: COD → goods + customer fee;
+   * fee-only (W-F) → the customer fee alone; neither → zeros. The pure rule is
+   * `cashToCollectOf`; `expectedCodAmount` (cod-limits) is the exposure twin.
+   */
+  cashAmountsOf(order: IOrder, shipment: IShipment): { itemsAmount: number; deliveryFeeAmount: number; expectedAmount: number } {
+    // A shipment that collects no cash is priced as a COD collection would be (goods + customer
+    // fee) — the meaning `expectedCodAmount`, its exposure twin, has always had. Every caller that
+    // acts on the figure is gated on `collectsCash` first.
+    const kind = cashCollectionKindOf(order, shipment) ?? 'order';
+    // A fee-only collection never prices the goods (they were paid online), so a shipment item
+    // without a matching order item cannot fail it.
+    const goods = kind === 'order' ? this.computeItemsAmount(order, shipment) : 0;
+    return cashToCollectOf(kind, goods, customerDeliveryFeeOf(order, shipment));
   }
 
   /**
@@ -951,14 +1067,19 @@ export class CashCollectionService {
     agentId: string,
     uncoded = false
   ) {
+    const feeOnly = collectionKindOf(collection) === 'delivery_fee';
     // Timeline (audit trail on the order).
     try {
       await this.timelineRepo.appendEvent({
         orderId: order._id.toString(),
         eventType: 'payment.updated',
-        description: uncoded
-          ? `Cash recorded as collected without a delivery code after the confirmation window elapsed (${collection.expected_amount} ${collection.currency})`
-          : `Cash collected on delivery (${collection.expected_amount} ${collection.currency})`,
+        description: feeOnly
+          ? uncoded
+            ? `Delivery fee recorded as paid in cash without a delivery code after the confirmation window elapsed (${collection.expected_amount} ${collection.currency})`
+            : `Delivery fee paid to the rider in cash (${collection.expected_amount} ${collection.currency})`
+          : uncoded
+            ? `Cash recorded as collected without a delivery code after the confirmation window elapsed (${collection.expected_amount} ${collection.currency})`
+            : `Cash collected on delivery (${collection.expected_amount} ${collection.currency})`,
         metadata: {
           codCollectionId: collection._id.toString(),
           shipmentId: collection.shipment_id.toString(),
@@ -966,6 +1087,7 @@ export class CashCollectionService {
           amount: collection.expected_amount,
           paymentStatus: order.payment_status,
           verificationMethod: uncoded ? 'auto_no_code' : 'code',
+          kind: collectionKindOf(collection),
         },
         actorType: 'system',
         actorId: null,
@@ -975,8 +1097,9 @@ export class CashCollectionService {
     }
 
     // payment.received.* — same contract the gateway path emits, so vendor
-    // notifications work unchanged for COD.
-    try {
+    // notifications work unchanged for COD. NOT for a fee-only collection (W-F): the order was
+    // paid online already, and the delivery cash is the agency's, not the vendor's.
+    if (!feeOnly) try {
       const isFull = order.payment_status === 'paid';
       const eventType = isFull ? 'payment.received.full' : 'payment.received.partial';
       await eventBus.publish(eventType, {
@@ -1012,6 +1135,7 @@ export class CashCollectionService {
           amount: collection.expected_amount,
           currency: collection.currency,
           verificationMethod: uncoded ? 'auto_no_code' : 'code',
+          kind: collectionKindOf(collection),
         },
       });
     } catch (error) {
@@ -1024,6 +1148,7 @@ export class CashCollectionService {
       collectionId: collection._id.toString(),
       shipmentId: collection.shipment_id.toString(),
       orderId: collection.order_id.toString(),
+      kind: collectionKindOf(collection),
       amount: collection.expected_amount,
       currency: collection.currency,
       status: collection.status,

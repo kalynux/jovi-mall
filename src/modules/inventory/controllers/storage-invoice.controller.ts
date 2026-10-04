@@ -7,7 +7,10 @@ import {
   agencyStorageInvoiceRepository,
 } from '../repositories/agency-storage-invoice.repository';
 import { agencyStorageInvoiceService } from '../services/agency-storage-invoice.service';
-import { toStorageInvoiceDto } from '../dto/storage-invoice.dto';
+import { StorageInvoiceDto, toStorageInvoiceDto } from '../dto/storage-invoice.dto';
+import { IAgencyStorageInvoice } from '../models/agency-storage-invoice.model';
+import { getStorageProvider } from '../../../core/storage';
+import { resolveVendorSummaries } from '../../vendors/read-models/vendor-summary.resolver';
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId');
 
@@ -36,6 +39,33 @@ const VoidSchema = z.object({
 const selfId = (req: Request): string => req.auth!.role_entity._id.toString();
 
 /**
+ * Agency-side statements carry the vendor they are addressed to, so two statements for the
+ * same month are told apart by name. One batched resolution per response, never per row.
+ */
+async function presentForAgency(
+  invoices: IAgencyStorageInvoice[],
+  options: { withLines: boolean },
+): Promise<StorageInvoiceDto[]> {
+  const vendors = await resolveVendorSummaries(
+    invoices.map(invoice => invoice.vendor_id.toString()),
+    getStorageProvider(),
+  );
+  return invoices.map(invoice => {
+    const vendorId = invoice.vendor_id.toString();
+    const summary = vendors.get(vendorId);
+    return toStorageInvoiceDto(invoice, {
+      ...options,
+      vendor: {
+        id: vendorId,
+        businessName: summary?.businessName || null,
+        displayName: summary?.displayName ?? null,
+        verified: summary?.verified ?? false,
+      },
+    });
+  });
+}
+
+/**
  * Storage statements, read by both sides of the arrangement (D-7).
  *
  * One controller, two mounts, and the difference between them is the SCOPE not the shape:
@@ -57,7 +87,7 @@ export class StorageInvoiceController {
     );
     res.json({
       success: true,
-      data: data.map(invoice => toStorageInvoiceDto(invoice, { withLines: false })),
+      data: await presentForAgency(data, { withLines: false }),
       meta: {
         total,
         page: query.page,
@@ -74,7 +104,8 @@ export class StorageInvoiceController {
     if (!invoice) {
       throw createAppError(ERROR_CODES.STORAGE_INVOICE_NOT_FOUND, 404, undefined, { invoiceId: id });
     }
-    res.json({ success: true, data: toStorageInvoiceDto(invoice, { withLines: true }) });
+    const [dto] = await presentForAgency([invoice], { withLines: true });
+    res.json({ success: true, data: dto });
   });
 
   /** POST /api/agency/storage-invoices/:id/settle */
@@ -89,7 +120,7 @@ export class StorageInvoiceController {
     );
     res.json({
       success: true,
-      data: toStorageInvoiceDto(invoice, { withLines: false }),
+      data: (await presentForAgency([invoice], { withLines: false }))[0],
       message: 'Statement marked settled.',
     });
   });
@@ -101,7 +132,7 @@ export class StorageInvoiceController {
     const invoice = await agencyStorageInvoiceService.void(selfId(req), id, reason);
     res.json({
       success: true,
-      data: toStorageInvoiceDto(invoice, { withLines: false }),
+      data: (await presentForAgency([invoice], { withLines: false }))[0],
       message: 'Statement voided.',
     });
   });

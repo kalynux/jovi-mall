@@ -23,6 +23,18 @@ const agencyRepo = new DeliveryAgencyRepository();
 const agentRepo = new AgentRepository();
 const authService = new AuthService();
 
+/**
+ * The name a log line shows for this actor, read off the profile already loaded — never a
+ * query. Customers and agents carry `name`; a vendor's and an agency's `display_name` is the
+ * person behind the account (the business name lives on the Store / Magazin and is not loaded
+ * here, deliberately).
+ */
+function logNameOf(role: string, entity: unknown): string | null {
+  const profile = entity as { name?: unknown; display_name?: unknown } | null;
+  const value = role === 'vendor' || role === 'agency' ? profile?.display_name : profile?.name;
+  return typeof value === 'string' ? value : null;
+}
+
 export interface AuthUserPayload {
   userId: string;
   role: string;
@@ -349,7 +361,11 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
    * `'platform'` distinguishes this id's namespace from an administrator's — see
    * `core/types/actor-source.types.ts` for why a cross-database join cannot exist.
    */
-  stampContextActor(String(user._id), 'platform');
+  stampContextActor(String(user._id), 'platform', {
+    role,
+    name: logNameOf(role, entity),
+    profileId: entity?._id ? String(entity._id) : null,
+  });
 
   /**
    * Layer B — the per-role rate limit.

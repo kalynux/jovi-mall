@@ -1,6 +1,7 @@
 import { IDeliveryFeeProposal } from '../models/delivery-fee-proposal.model';
 import { IShipment } from '../../shipments/shipment.model';
 import { ProposalAction, ProposalViewer, resolveAvailableActions } from '../domain/delivery-fee-proposal.rules';
+import type { IDeliveryFeeRefund } from '../models/delivery-fee-refund.model';
 
 export interface DeliveryFeeProposalDto {
   id: string;
@@ -241,5 +242,67 @@ export function toCustomerDeliveryFeeProposalDto(p: IDeliveryFeeProposal): Custo
     ),
     respondedAt: p.responded_at ?? null,
     createdAt: p.created_at,
+  };
+}
+
+/**
+ * A MANUAL delivery-fee refund as an administrator sees it (W-E2,
+ * `/api/internal/admin/delivery-fee-refunds`). The operator-facing `note` (why it is manual) is
+ * included here and nowhere customer-facing. `settledBy.id` is a wi-admin administrator id.
+ */
+export interface AdminDeliveryFeeRefundDto {
+  id: string;
+  orderId: string;
+  orderNumber: string | null;
+  shipmentId: string | null;
+  customerId: string;
+  vendorId: string;
+  amount: number;
+  currency: string;
+  /** `manual_required` (owed — the settle button) · `completed` (settled). */
+  status: string;
+  cause: string;
+  note: string | null;
+  ticketId: string | null;
+  /** True while it may be settled — the one flag the button needs. */
+  settleable: boolean;
+  settlement: {
+    method: string;
+    reference: string | null;
+    note: string | null;
+    settledBy: { id: string; source: string; name: string | null };
+    settledAt: Date;
+  } | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export function toAdminDeliveryFeeRefundDto(r: IDeliveryFeeRefund, orderNumber: string | null): AdminDeliveryFeeRefundDto {
+  const s = r.settlement;
+  return {
+    id: (r._id as any).toString(),
+    orderId: r.order_id.toString(),
+    orderNumber,
+    shipmentId: r.shipment_id ? r.shipment_id.toString() : null,
+    customerId: r.customer_id.toString(),
+    vendorId: r.vendor_id.toString(),
+    amount: r.amount,
+    currency: r.currency,
+    status: r.status,
+    cause: r.cause,
+    note: r.note ?? null,
+    ticketId: r.ticket_id ? r.ticket_id.toString() : null,
+    settleable: r.status === 'manual_required',
+    settlement: s
+      ? {
+          method: s.method,
+          reference: s.reference ?? null,
+          note: s.note ?? null,
+          settledBy: { id: s.settled_by_user_id, source: s.settled_by_source, name: s.settled_by_name ?? null },
+          settledAt: s.settled_at,
+        }
+      : null,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
   };
 }

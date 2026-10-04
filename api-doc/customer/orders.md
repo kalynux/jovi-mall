@@ -43,6 +43,15 @@ creation is **atomic**: if any order fails to create, none are persisted and the
 - `paymentMethod` *(string, optional, default `"online"`)* — `"online"` (prepaid via gateway) or
   `"cash_on_delivery"`. Applies to the **whole checkout group**. See
   [Cash on delivery](#cod) below for eligibility and lifecycle.
+- `deliveryFeePayment` *(string, optional, default `"with_order"`)* — **new 2026-10-04 (W-F, ADR-A11
+  § Cash for delivery).** `"cash_to_rider"` pays the ITEMS online and hands each customer-paid
+  delivery fee to the rider in cash, against a delivery code (a `codCollections[]` entry with
+  `kind: "delivery_fee"`). Only with `paymentMethod: "online"`, and only where the cart quote's
+  `deliveryFeeCash.available` is true (every carrying agency of every customer-paid shop accepts it);
+  a shop that pays its own delivery is unaffected. Each created order then has
+  `deliveryFeePayment: "cash_to_rider"`, `total` = what is charged online (its items) and
+  `deliveryCashToRider` = its delivery fee(s). See
+  [FRONTEND-CHANGELOG-customer-paid-delivery.md](./FRONTEND-CHANGELOG-customer-paid-delivery.md) § 6.
 - `deliveryAddressId` *(string, optional)* — id of one of the customer's saved addresses to deliver to.
 - `deliveryAddress` *(GeoAddress, optional)* — a selected address-search result to deliver to, sent
   inline (see [Geospatial addresses](../geo/README.md)). Provide **either** `deliveryAddressId` **or**
@@ -109,6 +118,7 @@ transaction. Build the provider choice from `GET /api/payments/options`; see
 | 400 | `VALIDATION_ERROR` | Malformed body — including sending **both** `deliveryAddressId` and `deliveryAddress`, which is refused rather than resolved. |
 | 422 | `ORDER_NO_DELIVERY_AGENCY` | A physical product has no resolvable delivery agency. |
 | 422 | `COD_NOT_AVAILABLE_FOR_DIGITAL` | `paymentMethod: "cash_on_delivery"` on a digital cart. |
+| 422 | `DELIVERY_FEE_CASH_NOT_AVAILABLE` | **New 2026-10-04.** `deliveryFeePayment: "cash_to_rider"` that cannot be honoured. `details.reason`: `cash_on_delivery` (not with COD) · `not_customer_paid` / `no_delivery_fee` (no shop in the checkout charges delivery) · `agency_declines_cash` (with `vendorId`, `agencyIds`: a carrying agency does not accept the fee in cash). Nothing was created — offer "pay delivery with the order". |
 | 422 | `COD_VENDOR_NOT_ACCEPTED` | **New 2026-10-02.** A shop on the order switched cash on delivery off in its COD terms. `details: { vendorId }`. Checked **before** the agency rules. Offer online payment for that shop's items — see [FRONTEND-CHANGELOG-cod-limits-and-delivery-fees.md](./FRONTEND-CHANGELOG-cod-limits-and-delivery-fees.md). ⚠ Nothing on the web storefront predicts it before checkout. |
 | 422 | `COD_AGENCY_NOT_SUPPORTED` | A delivery agency on the order doesn't handle COD. `details: { agencyId, agencyName }`. |
 | 422 | `COD_ORDER_AMOUNT_EXCEEDS_LIMIT` | One vendor-order's total exceeds an agency's COD cap. `details: { agencyId, agencyName, maxOrderAmount, orderTotal }`. |

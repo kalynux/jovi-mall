@@ -150,6 +150,10 @@ function buildOptions(): LoggerOptions {
             return {
                 requestId: context.requestId,
                 ...(context.actorId ? { actorId: context.actorId } : {}),
+                ...(context.actorSource ? { actorSource: context.actorSource } : {}),
+                ...(context.actorRole ? { actorRole: context.actorRole } : {}),
+                ...(context.actorName ? { actorName: context.actorName } : {}),
+                ...(context.actorProfileId ? { actorProfileId: context.actorProfileId } : {}),
             };
         },
 

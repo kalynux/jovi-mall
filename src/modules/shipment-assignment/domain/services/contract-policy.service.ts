@@ -11,6 +11,7 @@ import {
   contractAllowsShipmentValue,
 } from '../../../agents';
 import { CashCollectionService, cashCollectionService } from '../../../cod/services/cash-collection.service';
+import { riderCollectsCash } from '../../../orders/domain/delivery-payer';
 import {
   CodExposureService,
   codExposureService,
@@ -180,7 +181,16 @@ export class ContractPolicyService {
     } else {
       gates.push(this.gateCoverage(contract, order));
       gates.push(this.gateValueCeiling(contract, shipmentValue, shipment !== null));
-      const cod = await this.gateCodExposure(agent, contract, codAmount, order, shipment !== null, opts.full);
+      const cod = await this.gateCodExposure(
+        agent,
+        contract,
+        codAmount,
+        order,
+        shipment !== null,
+        opts.full,
+        // COD, or an online order whose delivery fee the rider collects in cash (W-F).
+        shipment && order ? riderCollectsCash(order, shipment) : false
+      );
       codVerdict = cod.verdict;
       gates.push(cod.gate);
     }
@@ -374,9 +384,10 @@ export class ContractPolicyService {
     shipmentValue: number | null,
     order: IOrder | null,
     hasShipment: boolean,
-    full = false
+    full = false,
+    collectsCash = order?.payment_method === 'cash_on_delivery'
   ): Promise<{ gate: ContractPolicyGate; verdict: CodCapacityVerdict | null }> {
-    if (hasShipment && order?.payment_method !== 'cash_on_delivery') {
+    if (hasShipment && !collectsCash) {
       return {
         verdict: null,
         gate: {

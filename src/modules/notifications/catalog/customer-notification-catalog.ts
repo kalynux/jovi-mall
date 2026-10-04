@@ -17,7 +17,7 @@ import {
  * The bot's tap-token grammar. A pure module (`crypto` + the dependency-free onboarding
  * step list), so importing it closes no cycle with the bot surface.
  */
-import { accountActionId } from '../../bot-surface/domain/bot-action-id';
+import { accountActionId, deliveryFeeListActionId, deliveryFeeOrderActionId } from '../../bot-surface/domain/bot-action-id';
 
 /**
  * A customer situation. The same shape as every stack's, except that the WhatsApp TEMPLATE is
@@ -401,6 +401,28 @@ const RETRY_BOOKING_BALANCE: QuickReplyDef = { token: 'bpay:{{payBalanceBookingI
 /** Reuses `PAY_BALANCE_LABEL` — the URL button's own words — rather than a second construction. */
 const PAY_BOOKING_BALANCE: QuickReplyDef = { token: 'bpay:{{bookingId}}:b', label: PAY_BALANCE_LABEL, templateFallback: 'open:bl' };
 
+/** ≤ 20 characters in every language — WhatsApp's reply-button cap. */
+const SEE_DELIVERY_FEE_LABEL: Record<Language, string> = {
+    en: 'See the new fee', fr: 'Voir les frais', pt: 'Ver a taxa', es: 'Ver la tarifa', ar: 'عرض الرسوم'
+};
+
+const PAY_DELIVERY_LABEL: Record<Language, string> = {
+    en: 'Pay now', fr: 'Payer maintenant', pt: 'Pagar agora', es: 'Pagar ahora', ar: 'ادفع الآن'
+};
+
+/**
+ * ⭐ **The delivery-fee change buttons (ADR-A11, W-H) carry the ORDER, never the proposal or a
+ * figure.** The notifier's context holds `orderId` only (`customer-fee-notifier.ts`), and an
+ * order-scoped tap re-reads the CURRENT change on the press — a notification is exactly the
+ * button most likely to be pressed after the delivery company edited its figure. The tap draws
+ * Accept · Decline (or Pay now · Decline); grammar owned by `deliveryFeeOrderActionId` /
+ * `parseDeliveryFeeArgument`, and `assertCustomerCatalogComplete` pins these literals to it.
+ * Out of window the template button falls back to `dfee:list` — every change waiting.
+ */
+const SEE_DELIVERY_FEE: QuickReplyDef = { token: 'dfee:{{orderId}}', label: SEE_DELIVERY_FEE_LABEL, templateFallback: 'dfee:list' };
+const PAY_DELIVERY_TOPUP: QuickReplyDef = { token: 'dfee:{{orderId}}', label: PAY_DELIVERY_LABEL, templateFallback: 'dfee:list' };
+const RETRY_DELIVERY_TOPUP: QuickReplyDef = { token: 'dfee:{{orderId}}', label: TRY_AGAIN_LABEL, templateFallback: 'dfee:list' };
+
 // ─── Composed lines ──────────────────────────────────────────────────────────
 
 /**
@@ -530,6 +552,28 @@ export function codReadyLine(
 ): string {
     if (!isCod || amount <= 0) return '';
     const template = COD_LINE[lang] ?? COD_LINE[DEFAULT_LANGUAGE];
+    return renderTemplate(template, {
+        currency,
+        amountFormatted: new Intl.NumberFormat('en-US').format(Math.round(amount))
+    });
+}
+
+const DELIVERY_FEE_CASH_LINE: Record<Language, string> = {
+    en: 'Your items are paid — please have {{currency}} {{amountFormatted}} ready in cash for the delivery fee.',
+    fr: 'Vos articles sont payés — préparez {{currency}} {{amountFormatted}} en espèces pour les frais de livraison.',
+    pt: 'Os seus artigos estão pagos — tenha {{currency}} {{amountFormatted}} em dinheiro prontos para a taxa de entrega.',
+    es: 'Tus artículos están pagados — ten {{currency}} {{amountFormatted}} en efectivo preparados para la tarifa de envío.',
+    ar: 'تم دفع منتجاتك — يرجى تجهيز {{currency}} {{amountFormatted}} نقدًا لرسوم التوصيل.'
+};
+
+/**
+ * The "have the delivery fee ready in cash" sentence for a parcel of an ONLINE order whose
+ * delivery fee is paid to the rider (ADR-A11 § Cash for delivery, W-F), or empty. Rendered into
+ * the same `codLine` slot as `codReadyLine` — an order is one or the other, never both.
+ */
+export function deliveryFeeCashReadyLine(amount: number, currency: string, lang: Language): string {
+    if (!(amount > 0)) return '';
+    const template = DELIVERY_FEE_CASH_LINE[lang] ?? DELIVERY_FEE_CASH_LINE[DEFAULT_LANGUAGE];
     return renderTemplate(template, {
         currency,
         amountFormatted: new Intl.NumberFormat('en-US').format(Math.round(amount))
@@ -1510,7 +1554,8 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Cus
                 bodyParams: ['{{currency}}', '{{proposedFeeFormatted}}', '{{feeBeforeFormatted}}', '{{orderNumber}}']
             }
         },
-        button: ORDER_BUTTON
+        button: ORDER_BUTTON,
+        actions: [SEE_DELIVERY_FEE]
     },
 
     'order.delivery_fee.topup_due': {
@@ -1543,7 +1588,8 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Cus
                 bodyParams: ['{{currency}}', '{{proposedFeeFormatted}}', '{{orderNumber}}', '{{amountFormatted}}']
             }
         },
-        button: ORDER_BUTTON
+        button: ORDER_BUTTON,
+        actions: [PAY_DELIVERY_TOPUP]
     },
 
     'order.delivery_fee.lowered': {
@@ -1647,6 +1693,42 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Cus
         button: ORDER_BUTTON
     },
 
+    // W-E2 — the confirmation `refund_pending` promises ("we will confirm when it is done"): an
+    // administrator recorded that the delivery money owed back was paid by hand. Not sent when the
+    // money had already come back through a refund of the whole order (`order.refunded` said so).
+    'order.delivery_fee.refund_settled': {
+        base: {
+            en: {
+                subject: 'Refund sent: {{currency}} {{amountFormatted}}',
+                body: 'We have sent you {{currency}} {{amountFormatted}} of delivery money for order {{orderNumber}}. If it has not reached you within a few days, reply here or open the order.'
+            },
+            fr: {
+                subject: 'Remboursement envoyé : {{currency}} {{amountFormatted}}',
+                body: 'Nous vous avons envoyé {{currency}} {{amountFormatted}} de frais de livraison pour la commande {{orderNumber}}. Si vous ne l’avez pas reçu d’ici quelques jours, répondez ici ou ouvrez la commande.'
+            },
+            pt: {
+                subject: 'Reembolso enviado: {{currency}} {{amountFormatted}}',
+                body: 'Enviámos-lhe {{currency}} {{amountFormatted}} de taxa de entrega da encomenda {{orderNumber}}. Se não o receber dentro de alguns dias, responda aqui ou abra a encomenda.'
+            },
+            es: {
+                subject: 'Reembolso enviado: {{currency}} {{amountFormatted}}',
+                body: 'Te hemos enviado {{currency}} {{amountFormatted}} de envío del pedido {{orderNumber}}. Si no te llega en unos días, responde aquí o abre el pedido.'
+            },
+            ar: {
+                subject: 'تم إرسال الاسترداد: {{currency}} {{amountFormatted}}',
+                body: 'أرسلنا إليك {{currency}} {{amountFormatted}} من رسوم التوصيل للطلب {{orderNumber}}. إذا لم يصلك خلال بضعة أيام، فرد هنا أو افتح الطلب.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_order_delivery_fee_refund_settled',
+                bodyParams: ['{{currency}}', '{{amountFormatted}}', '{{orderNumber}}']
+            }
+        },
+        button: ORDER_BUTTON
+    },
+
     'order.delivery_fee.topup_failed': {
         base: {
             en: {
@@ -1677,7 +1759,8 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Cus
                 bodyParams: ['{{currency}}', '{{amountFormatted}}', '{{orderNumber}}']
             }
         },
-        button: ORDER_BUTTON
+        button: ORDER_BUTTON,
+        actions: [RETRY_DELIVERY_TOPUP]
     },
 
     'order.combined_delivery.answered': {
@@ -1992,6 +2075,16 @@ export function assertCustomerCatalogComplete(): void {
             500,
             `account.closure_requested quick reply '${REVIEW_CLOSURE.token}' disagrees with accountActionId('close') = '${accountActionId('close')}'`
         );
+    }
+    // The delivery-fee quick replies (ADR-A11, W-H): literals for the same scan, the builders' grammar.
+    for (const def of [SEE_DELIVERY_FEE, PAY_DELIVERY_TOPUP, RETRY_DELIVERY_TOPUP]) {
+        if (def.token !== deliveryFeeOrderActionId('{{orderId}}') || def.templateFallback !== deliveryFeeListActionId()) {
+            throw createAppError(
+                ERROR_CODES.CONFIG_NOTIFICATION_CATALOG_INCOMPLETE,
+                500,
+                `delivery-fee quick reply '${def.token}' / '${def.templateFallback}' disagrees with deliveryFeeOrderActionId / deliveryFeeListActionId`
+            );
+        }
     }
 }
 

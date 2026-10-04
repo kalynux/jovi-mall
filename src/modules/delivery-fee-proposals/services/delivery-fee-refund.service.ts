@@ -8,8 +8,13 @@ import { RefundTransactionModel } from '../../payments/models/refund-transaction
 import type { PaymentOrchestratorService } from '../../payments/services/payment-orchestrator.service';
 import { ticketService } from '../../tickets/services/ticket.service';
 import { EntityType, TicketImportance, TicketType } from '../../tickets/types/ticket.types';
-import { DeliveryFeeRefundCause, DeliveryFeeRefundModel, IDeliveryFeeRefund } from '../models/delivery-fee-refund.model';
-import { outstandingCustomerRefund } from '../domain/customer-fee-change.rules';
+import {
+  DeliveryFeeRefundCause,
+  DeliveryFeeRefundModel,
+  IDeliveryFeeRefund,
+  sumDeliveryRefundsPaidByHand,
+} from '../models/delivery-fee-refund.model';
+import { customerRefundPosition, outstandingCustomerRefund } from '../domain/customer-fee-change.rules';
 import { customerFeeNotifier } from './customer-fee-notifier';
 
 export type RefundOutcome =
@@ -60,17 +65,23 @@ export class DeliveryFeeRefundService {
     return this.orchestrator;
   }
 
-  /** What is still owed to the customer on this order (before the payments cap). */
-  async outstandingFor(orderId: string): Promise<{ owed: number; ledger: IDeliveryFeeRefund[] }> {
+  /**
+   * What the SYSTEM may still refund on this order (`owed`, before the payments cap), the
+   * customer's view of it (`position` — a manual row is still owed to them until settled), and
+   * the ledger.
+   */
+  async outstandingFor(
+    orderId: string
+  ): Promise<{ owed: number; position: ReturnType<typeof customerRefundPosition>; ledger: IDeliveryFeeRefund[] }> {
     const [shipments, ledger] = await Promise.all([
       ShipmentModel.find({ order_id: new Types.ObjectId(orderId) }).select('customer_fee_refundable').lean().exec(),
       DeliveryFeeRefundModel.find({ order_id: new Types.ObjectId(orderId) }).sort({ created_at: -1 }).exec(),
     ]);
-    const owed = outstandingCustomerRefund({
+    const facts = {
       refundables: shipments.map((s: any) => s.customer_fee_refundable),
       ledger: ledger.map((r) => ({ status: r.status, amount: r.amount })),
-    });
-    return { owed, ledger };
+    };
+    return { owed: outstandingCustomerRefund(facts), position: customerRefundPosition(facts), ledger };
   }
 
   /**
@@ -196,12 +207,21 @@ export class DeliveryFeeRefundService {
 
   // ── Internals ─────────────────────────────────────────────────────────────
 
-  private async refundableCapacity(order: IOrder): Promise<number> {
-    const [tally] = await RefundTransactionModel.aggregate<{ total: number }>([
-      { $match: { orderId: order._id, status: 'completed' } },
-      { $group: { _id: null, total: { $sum: '$refundAmount' } } },
+  /**
+   * What the order's payments can still give back: `total_amount` − Σ completed gateway refunds
+   * − Σ delivery refunds an administrator already paid BY HAND (W-E2 — money that left without a
+   * `refund_transactions` row). Public: the manual-settlement guard reads the same number.
+   */
+  async refundableCapacity(order: Pick<IOrder, '_id' | 'total_amount'>): Promise<number> {
+    const orderId = order._id as Types.ObjectId;
+    const [[tally], byHand] = await Promise.all([
+      RefundTransactionModel.aggregate<{ total: number }>([
+        { $match: { orderId, status: 'completed' } },
+        { $group: { _id: null, total: { $sum: '$refundAmount' } } },
+      ]),
+      sumDeliveryRefundsPaidByHand([orderId]),
     ]);
-    return Math.max(0, order.total_amount - (tally?.total ?? 0));
+    return Math.max(0, order.total_amount - (tally?.total ?? 0) - (byHand.get(orderId.toString()) ?? 0));
   }
 
   /** Insert the `processing` claim; null when another refund on this order is in flight. */
