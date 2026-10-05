@@ -14,22 +14,10 @@ import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { BotInboundFileSchema } from '../validators/bot.validators';
 import { inboundFileStore } from '../services/inbound-file.store';
 import { toBotInboundFileDto } from '../dto/bot-projections';
-import { TicketService } from '../../tickets/services/ticket.service';
-import { ActorRole } from '../../tickets/types/ticket.types';
-import { whichRequestForFileReply } from './bot-ticket.controller';
+import { fileRequestOfferReply, requestsConsultedForFile } from './bot-ticket.controller';
 
 /** No-op observer, as every other upload site uses. */
 class BotUploadObserver implements IUploadObserver {}
-
-const ticketService = new TicketService();
-
-/**
- * How many of the customer's requests are looked at when deciding whether to ask about a file.
- *
- * ⚠ **More than the four rows the picker draws**, because closed requests are read and then dropped —
- * a customer whose two newest requests are closed must still be offered the open one underneath.
- */
-const REQUESTS_CONSULTED = 10;
 
 /**
  * The largest file a chat may hand us, measured on the DECODED bytes.
@@ -186,46 +174,40 @@ export class BotFileController {
             size: file.size,
         });
 
-        await askWhichRequest(req, caller.userId, ref);
+        await offerToFileOnRequest(req, caller.userId, ref);
 
         sendSuccess(res, toBotInboundFileDto(ref, file), { status: 201 });
     });
 }
 
 /**
- * Ask which support request a file belongs to — but only when the customer has one.
+ * Offer to put the file on a support request — but only when the customer has one open.
  *
- * ── ⚠ WHY THE ANSWER IS A REPLY AND NOT A DECISION ──────────────────────────
- * This route still attaches the file to nothing. The picker is the *offer*: each row carries
- * `tkt:<ticketId>:<handle>`, so the attach happens on a tap, through the one door that spends the
- * handle and puts it back if attaching fails. A file the customer sent for some other reason — a
- * photo of a product they are looking for — is simply not tapped, and the handle lapses in thirty
- * minutes exactly as it does today.
+ * ── ⚠ AN OFFER, NOT A QUESTION (owner decision 2026-10-05) ──────────────────
+ * This used to answer every file with the which-request picker whenever any request was open, so a
+ * shopper sending a photo of something to buy was asked which complaint it belonged to (core 22508).
+ * The photo search answers the message now; this adds ONE button — "Add to a request" — under it,
+ * for the photo that was really about a problem. Tapping it draws the picker (`tkt:file:<handle>`);
+ * ignoring it costs nothing.
+ *
+ * ── ⚠ STILL A REPLY AND NOT A DECISION ──────────────────────────────────────
+ * This route attaches the file to nothing. The attach happens on the picker row the customer taps,
+ * through the one door that spends the handle and puts it back if attaching fails. A file nobody files
+ * is simply never tapped, and the handle lapses in thirty minutes exactly as it always has.
  *
  * ⚠ **With no open request there is NO reply**, which leaves the turn to the assistant with the
- * inbound-file note it already receives. That is today's behaviour unchanged, and it is the common
- * case: most photos arrive from customers with nothing open.
+ * inbound-file note it already receives. That is the common case: most photos arrive from customers
+ * with nothing open.
  *
  * ⚠ **Best-effort, and it never fails the upload.** The bytes are stored and the handle is minted by
  * the time this runs; a ticket read that throws must not turn a successful intake into an error the
  * automation layer will retry — the retry would upload the file a second time.
  */
-async function askWhichRequest(req: Request, userId: string, ref: string): Promise<void> {
+async function offerToFileOnRequest(req: Request, userId: string, ref: string): Promise<void> {
     try {
-        const requests = await ticketService.listTicketsForUser(
-            userId,
-            ActorRole.CUSTOMER,
-            {},
-            { page: 1, limit: REQUESTS_CONSULTED },
-        );
-
         setBotReply(
             req,
-            whichRequestForFileReply(
-                requests.data as unknown as Array<Record<string, unknown>>,
-                ref,
-                botResponseLanguageOf(req),
-            ),
+            fileRequestOfferReply(await requestsConsultedForFile(userId), ref, botResponseLanguageOf(req)),
         );
     } catch (error) {
         console.error('[BotSurface] could not offer the support requests for an inbound file', error);

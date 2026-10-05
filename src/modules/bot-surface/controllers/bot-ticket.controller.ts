@@ -32,6 +32,7 @@ import { openInAppScreen } from './bot-inapp.controller';
 import { supportContextService } from '../services/support-context.service';
 import {
     attachToTicketActionId,
+    fileRequestOfferActionId,
     parseTicketTap,
     splitConfirmArgument,
     supportFormActionId,
@@ -567,6 +568,9 @@ export async function ticketTap(req: Request, res: Response, action: ParsedBotAc
         case 'attach':
             await attachInboundFile(req, res, tap.ticketId, tap.attachmentRef, { speak: true });
             return;
+        case 'file':
+            await offerRequestsForFile(req, res, tap.attachmentRef);
+            return;
         case 'new':
             await openSupportForm(req, res, tap);
             return;
@@ -758,11 +762,94 @@ async function openSupportForm(
 }
 
 /**
+ * `tkt:file:<att_…>` — **Add to a request**: the which-request picker for the file the customer sent.
+ *
+ * ⚠ **It attaches nothing and spends nothing.** The handle is spent by the row they pick, through the
+ * one door that puts it back if attaching fails (`attachInboundFile`), exactly as before this button
+ * existed. A handle that has lapsed since is refused there, with the "send it again" copy.
+ *
+ * ⚠ **Every request closed since the offer was drawn → the support form carrying the file opens.**
+ * The picker would be "New request" alone, and a list of one is a tap the customer should not owe.
+ */
+async function offerRequestsForFile(req: Request, res: Response, attachmentRef: string): Promise<void> {
+    const caller = botCallerOf(req);
+    const picker = whichRequestForFileReply(
+        await requestsConsultedForFile(caller.userId),
+        attachmentRef,
+        botResponseLanguageOf(req),
+    );
+
+    if (!picker) {
+        await openSupportForm(req, res, { topic: null, orderId: null, attachmentRef });
+        return;
+    }
+
+    setBotReply(req, picker);
+    sendSuccess(res, { attachmentRef, awaitingChoice: true });
+}
+
+/**
+ * How many of the customer's requests are read when a file arrives, and again when its button is
+ * tapped.
+ *
+ * ⚠ **More than the four rows the picker draws**, because closed requests are read and then dropped —
+ * a customer whose two newest requests are closed must still be offered the open one underneath.
+ * ⚠ **ONE number for both moments**: the offer is shown on what this finds, and the tap must find the
+ * same requests, or a customer is offered a list that then comes back empty.
+ */
+const REQUESTS_CONSULTED_FOR_FILE = 10;
+
+/** The customer's most recent requests, read the same way by the file offer and by its picker. */
+export async function requestsConsultedForFile(userId: string): Promise<Array<Record<string, unknown>>> {
+    const requests = await ticketService.listTicketsForUser(
+        userId,
+        ActorRole.CUSTOMER,
+        {},
+        { page: 1, limit: REQUESTS_CONSULTED_FOR_FILE },
+    );
+    return requests.data as unknown as Array<Record<string, unknown>>;
+}
+
+/**
+ * The one quiet message under a file the customer sent while a request of theirs is open — or null.
+ *
+ * ⚠ **This replaced drawing the picker on every file** (owner decision 2026-10-05). The picker came
+ * with every photo whenever any request was open, so a shopper sending a picture of something to buy
+ * was asked which complaint it belonged to (core 22508). The photo search now answers the message,
+ * and this single button is the way out for the photo that was about a problem: tapping it draws the
+ * picker below (`tkt:file:`). Ignoring it costs nothing — the handle lapses in thirty minutes, as it
+ * always has.
+ *
+ * ⚠ **Null when nothing is open**, the same rule as the picker: with no request to add the file to
+ * there is nothing to offer, and the assistant (which holds the handle) can still open a new request
+ * when the customer's words ask for one.
+ */
+export function fileRequestOfferReply(
+    tickets: ReadonlyArray<Record<string, unknown>>,
+    attachmentRef: string,
+    language: string | null,
+): BotReplyIntent | null {
+    const anyOpen = tickets.some((ticket) => ticketAcceptsWriting(textOf(ticket.status)));
+    if (!anyOpen) return null;
+
+    return {
+        kind: 'text',
+        text: botTicketCopy('fileRequestOffer', language),
+        actions: [
+            {
+                id: fileRequestOfferActionId(attachmentRef),
+                label: botTicketCopy('addToRequestButton', language),
+            },
+        ],
+    };
+}
+
+/**
  * The picker a received file is answered with: the customer's open requests, then a new one.
  *
- * ⚠ **Exported for `bot-file.controller.ts`, and built HERE**, because the rows are request rows and
- * the request vocabulary is this file's. The file controller decides whether to ask; this decides
- * what asking looks like.
+ * ⚠ **Drawn on the `tkt:file:` tap now, no longer on the upload itself** (see
+ * `fileRequestOfferReply` above). Built here because the rows are request rows and the request
+ * vocabulary is this file's.
  *
  * ⚠ **Closed requests are left out** — a note cannot be added to one, so a row for it is a row that
  * refuses. Four rows plus "New request" keeps the list inside WhatsApp's ten.

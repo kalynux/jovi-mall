@@ -388,12 +388,35 @@ const NO_TICKETS: Copy = {
 };
 
 /**
+ * The one quiet message under a file the customer sent while a request of theirs is open (owner
+ * decision 2026-10-05). The photo search has already answered them; this only offers the way out for
+ * the photo that was about a problem, and says plainly that ignoring it is fine.
+ */
+const FILE_REQUEST_OFFER: Copy = {
+    en: 'Did you send this for one of your support requests? If not, you can ignore this message.',
+    fr: "Avez-vous envoyé ceci pour l'une de vos demandes d'assistance ? Sinon, vous pouvez ignorer ce message.",
+    pt: 'Enviou isto para um dos seus pedidos de apoio? Se não, pode ignorar esta mensagem.',
+    es: '¿Enviaste esto para una de tus solicitudes de soporte? Si no, puedes ignorar este mensaje.',
+    ar: 'هل أرسلت هذا لأحد طلبات الدعم الخاصة بك؟ إن لم يكن كذلك، يمكنك تجاهل هذه الرسالة.',
+};
+
+const ADD_TO_REQUEST_BUTTON: Copy = {
+    en: 'Add to a request',
+    fr: 'Lier à une demande',
+    pt: 'Juntar a um pedido',
+    es: 'Añadir a solicitud',
+    ar: 'إضافة إلى طلب',
+};
+
+/**
  * The turn strings, each with the cap it must satisfy. `null` means a message body rather than a
  * control — the convention `bot-chrome-copy.ts` and the order table both use.
  */
 const TICKET_COPY = Object.freeze({
     whichTicket: { copy: WHICH_TICKET, cap: null },
     whichTicketForFile: { copy: WHICH_TICKET_FOR_FILE, cap: null },
+    fileRequestOffer: { copy: FILE_REQUEST_OFFER, cap: null },
+    addToRequestButton: { copy: ADD_TO_REQUEST_BUTTON, cap: 20 },
     // A WhatsApp list row title.
     newRequestRow: { copy: NEW_REQUEST_ROW, cap: 24 },
     // A WhatsApp list row description.

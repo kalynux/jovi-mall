@@ -2389,7 +2389,8 @@ each key is registered in the change that first draws its button.
 | `tkt:<ticketId>` | a request row | that request: where it stands, the latest replies, and up to three buttons | the request card — **Reply · Attach photo · Close** | the request |
 | `tkt:<ticketId>:rp` | **Reply**, on that card, and **Reply here** on a request waiting for the customer | **writes nothing.** It says the next message will be filed against this request | **none** — the model asks, then files the customer's next message with `tickets_add_note` | `{ ticketId, subject, status, awaitingReply: true }` |
 | `tkt:<ticketId>:ph` | **Attach photo** | asks for the picture | the ask | `{ ticketId, awaitingFile: true }` |
-| `tkt:<ticketId>:<att_…>` | the which-request picker, after a photo arrives with no request named | attaches the picture just sent to that request | one sentence | `{ ticketId, attached: true }` |
+| `tkt:file:<att_…>` | **Add to a request**, the one button `/files/inbound` sends under a file while a request of theirs is open (§ 17.2) | **attaches nothing.** Draws the which-request picker for that file; with every request since closed, opens the form carrying it instead | the picker below, or the form | `{ attachmentRef, awaitingChoice: true }` |
+| `tkt:<ticketId>:<att_…>` | a row of the which-request picker, drawn by **Add to a request** | attaches the picture just sent to that request | one sentence | `{ ticketId, attached: true }` |
 | `tkt:<ticketId>:cl` | **Close** | asks the are-you-sure | the question: **Yes** → `yes:tcl:<ticketId>:<ref>`, **No** → `no:tcl:<ticketId>` | `{ ticketId, awaitingConfirmation: true }` |
 | `yes:tcl:<ticketId>:<ref>` · `no:tcl:<ticketId>` | that question | closes the request · keeps it open | one sentence | `{ ticketId, closed }` |
 | `tkt:new` | **Get help**, with no order in hand | opens the support form | a screen button, or the sentence asking what happened | `{ handle, opened: "ticket_form" }` |
@@ -2926,6 +2927,20 @@ customer photographs a damaged item before there is a ticket to put it on at lea
 after. A reference nobody spends costs a stored file and nothing else — no `file_references`
 row is written, so orphan garbage collection reclaims it on its own schedule. That is the
 designed outcome for the photos a conversation never uses, not a leak.
+
+#### The `reply` it may carry — one button, only while a request is open (2026-10-05)
+
+When the customer has an open support request, the response carries a `reply`: one short
+message — *"Did you send this for one of your support requests? If not, you can ignore this
+message."* — with ONE button, **Add to a request** (`tkt:file:<att_…>`). Send it **after** the
+assistant's answer and any product cards: the photo search is the answer to the message, and this
+is only the way out for the photo that was really about a problem. With no open request there is
+no `reply`.
+
+⚠ **It used to be the which-request picker itself**, drawn under every file whenever any request
+was open — so a shopper sending a photo of something to buy was asked which complaint it belonged
+to (core 22508). The picker now comes only from tapping the button (§ 14.9, `tkt:file:`). Owner
+decision; the rule is pinned in `test:inapp-fulfilment` § 6.
 
 #### What it accepts
 

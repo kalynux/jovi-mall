@@ -46,6 +46,7 @@ import { actionKeyOf } from '../../src/modules/bot-surface/domain/bot-action-dis
 import { judgeCancellationReason } from '../../src/modules/bot-surface/domain/bot-cancellation-reason';
 import {
     attachToTicketActionId,
+    fileRequestOfferActionId,
     longestConfirmationRefLength,
     parseTicketTap,
     ticketTokenBudgetProblems,
@@ -150,6 +151,16 @@ const FORM_READ_PATH = path.join(
 );
 
 const FORM_READ = fs.readFileSync(FORM_READ_PATH, 'utf8').replace(/\r\n/g, '\n');
+
+/**
+ * The inbound-file route, scanned as a FOURTH span (2026-10-05): it decides what a customer is shown
+ * under a file they sent, and since the owner's "one button, only when a request is open" decision it
+ * must never draw the which-request picker itself again.
+ */
+const FILE_CONTROLLER = fs.readFileSync(
+    path.join(__dirname, '../../src/modules/bot-surface/controllers/bot-file.controller.ts'),
+    'utf8',
+).replace(/\r\n/g, '\n');
 
 /** The route table, read as text so § 9's pin on the published tool name can prove it bites. */
 const ROUTE_TABLE = fs.readFileSync(
@@ -679,6 +690,7 @@ function supportSection(): void {
             [`${O}:ph`, 'photo'],
             [`${O}:cl`, 'close'],
             [`${O}:${HANDLE}`, 'attach'],
+            [`file:${HANDLE}`, 'file'],
             ['list', 'list'],
             ['new', 'new'],
             [`new:${HANDLE}`, 'new'],
@@ -698,6 +710,24 @@ function supportSection(): void {
         return topic?.kind === 'new' && topic.topic === 'ad' && topic.orderId === O
             && file?.kind === 'attach' && file.ticketId === O && file.attachmentRef === HANDLE
             && carried?.kind === 'new' && carried.attachmentRef === HANDLE && carried.orderId === null;
+    });
+
+    /**
+     * ⚠ **`tkt:file:<att_…>` — the one button under a file (owner decision 2026-10-05).** It carries the
+     * handle and nothing else; a bare `file`, an id where the handle should be, or a trailing segment is
+     * refused rather than guessed at.
+     */
+    assert('`tkt:file:` carries its handle, round-trips through its builder, and refuses anything else', () => {
+        const tap = parseTicketTap(`file:${HANDLE}`);
+        const built = fileRequestOfferActionId(HANDLE);
+        const back = parseTicketTap(built.slice('tkt:'.length));
+        return tap?.kind === 'file' && tap.attachmentRef === HANDLE
+            && built === `tkt:file:${HANDLE}`
+            && back?.kind === 'file' && back.attachmentRef === HANDLE
+            && parseTicketTap('file') === null
+            && parseTicketTap('file:') === null
+            && parseTicketTap(`file:${O}`) === null
+            && parseTicketTap(`file:${HANDLE}:x`) === null;
     });
 
     /**
@@ -984,6 +1014,85 @@ function supportSection(): void {
         (src) => src.replace(
             'const open = tickets.filter((ticket) => ticketAcceptsWriting(textOf(ticket.status))).slice(0, 4);',
             'const open = tickets.slice(0, 4);',
+        ),
+    );
+
+    // ── The file offer (owner decision 2026-10-05) ───────────────────────────
+    //
+    // A photo used to be answered with the which-request picker whenever ANY request was open, so a
+    // shopper was asked which complaint their product photo belonged to (core 22508). Now: the photo
+    // search answers, and one "Add to a request" button sits under it — only while a request is open.
+
+    assertBitesIn(
+        TICKET_CONTROLLER,
+        '⚠ the file offer appears ONLY while a request is open — never under a customer with none',
+        (source) => {
+            const region = regionOf(source, 'fileRequestOfferReply') ?? '';
+            return region.includes('ticketAcceptsWriting') && region.includes('if (!anyOpen) return null;');
+        },
+        (src) => src.replace(
+            'const anyOpen = tickets.some((ticket) => ticketAcceptsWriting(textOf(ticket.status)));',
+            'const anyOpen = true;',
+        ),
+    );
+
+    assertBitesIn(
+        TICKET_CONTROLLER,
+        '⚠ the offer is ONE `tkt:file:` button — it attaches nothing and opens nothing by itself',
+        (source) => {
+            const region = regionOf(source, 'fileRequestOfferReply') ?? '';
+            return region.includes('id: fileRequestOfferActionId(attachmentRef)')
+                && !region.includes('attachToTicketActionId')
+                && !region.includes('supportFormWithFileActionId');
+        },
+        (src) => src.replace(
+            'id: fileRequestOfferActionId(attachmentRef),',
+            'id: supportFormWithFileActionId(attachmentRef),',
+        ),
+    );
+
+    assertBitesIn(
+        TICKET_CONTROLLER,
+        '`tkt:file:` is routed, and draws the picker through the SAME request read the offer used',
+        (source) => {
+            const tap = regionOf(source, 'ticketTap') ?? '';
+            const offer = regionOf(source, 'offerRequestsForFile') ?? '';
+            return tap.includes("case 'file':") && tap.includes('offerRequestsForFile(req, res, tap.attachmentRef)')
+                && offer.includes('requestsConsultedForFile(caller.userId)')
+                && offer.includes('whichRequestForFileReply(');
+        },
+        (src) => src.replace(
+            "        case 'file':\n            await offerRequestsForFile(req, res, tap.attachmentRef);\n            return;\n",
+            '',
+        ),
+    );
+
+    assertBitesIn(
+        TICKET_CONTROLLER,
+        '⚠ a `tkt:file:` tap with every request since closed opens the form carrying the file — never an empty list',
+        (source) => {
+            const offer = regionOf(source, 'offerRequestsForFile') ?? '';
+            return offer.includes('if (!picker) {')
+                && offer.includes('openSupportForm(req, res, { topic: null, orderId: null, attachmentRef })');
+        },
+        (src) => src.replace(
+            '    if (!picker) {\n        await openSupportForm(req, res, { topic: null, orderId: null, attachmentRef });\n        return;\n    }\n',
+            '',
+        ),
+    );
+
+    assertBitesIn(
+        FILE_CONTROLLER,
+        '⛔ the upload offers the ONE button and never draws the which-request picker itself again',
+        (source) => {
+            const region = regionOf(source, 'offerToFileOnRequest') ?? '';
+            return region.includes('fileRequestOfferReply(await requestsConsultedForFile(userId)')
+                && !stripComments(source).includes('whichRequestForFileReply')
+                && !stripComments(source).includes('listTicketsForUser');
+        },
+        (src) => src.replace(
+            'fileRequestOfferReply(await requestsConsultedForFile(userId)',
+            'whichRequestForFileReply(await requestsConsultedForFile(userId)',
         ),
     );
 

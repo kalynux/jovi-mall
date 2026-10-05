@@ -19,6 +19,7 @@ import { INBOUND_FILE_HANDLE_LENGTH } from '../services/inbound-file.store';
  *     tkt:<ticketId>:ph               Attach photo — "send it here"                      31 B
  *     tkt:<ticketId>:cl               Close — the are-you-sure                           31 B
  *     tkt:<ticketId>:<att_…>          put the file just sent on this request             55 B
+ *     tkt:file:<att_…>                "add this file to a request" — draws the picker       35 B
  *     tkt:list                        the customer's requests                            8 B
  *     tkt:new                         the support form, no subject                       7 B
  *     tkt:new:<att_…>                 the support form, carrying the file just sent      34 B
@@ -49,6 +50,8 @@ export type TicketTap =
     | { kind: 'photo'; ticketId: string }
     | { kind: 'close'; ticketId: string }
     | { kind: 'attach'; ticketId: string; attachmentRef: string }
+    /** `tkt:file:<att_…>` — the one button under a file: draw the which-request picker for it. */
+    | { kind: 'file'; attachmentRef: string }
     | { kind: 'list' }
     | {
           kind: 'new';
@@ -84,6 +87,12 @@ export function parseTicketTap(argument: string): TicketTap | null {
     if (extra.length > 0) return null;
 
     if (head === 'list') return parts.length === 1 ? { kind: 'list' } : null;
+
+    if (head === 'file') {
+        return third === undefined && FILE_HANDLE.test(second ?? '')
+            ? { kind: 'file', attachmentRef: second as string }
+            : null;
+    }
 
     if (head === 'new') {
         if (second === undefined) return { kind: 'new', topic: null, orderId: null, attachmentRef: null };
@@ -156,6 +165,20 @@ export function supportFormWithFileActionId(attachmentRef: string): string {
     return ticketActionId(`new:${attachmentRef}`);
 }
 
+/**
+ * `tkt:file:<att_…>` — **Add to a request**, the one button under a file the customer sent while a
+ * request of theirs is open (owner decision 2026-10-05).
+ *
+ * ⚠ **It draws the picker; it attaches nothing.** The photo search answers the message straight away,
+ * and this button is the quiet way out for the photo that was really about a problem. Drawing the
+ * which-request list on EVERY photo, as the upload used to, read as the bot mistaking a shopper for
+ * a complaint.
+ */
+export function fileRequestOfferActionId(attachmentRef: string): string {
+    assertButtonHandle(attachmentRef);
+    return ticketActionId(`file:${attachmentRef}`);
+}
+
 /** `yes:tcl:<ticketId>:<ref>` / `no:tcl:<ticketId>` — the close confirm. The decline carries no ref. */
 export function ticketCloseConfirmActionId(ticketId: string, ref: string): string {
     return confirmActionId('tcl', `${ticketId}:${ref}`);
@@ -222,6 +245,7 @@ export function ticketTokenBudgetProblems(input: {
     const worst: Array<[name: string, token: string]> = [
         ['tkt:<ticketId>:<att_>', `tkt:${SAMPLE_ID}:${handle}`],
         ['tkt:new:<att_>', `tkt:new:${handle}`],
+        ['tkt:file:<att_>', `tkt:file:${handle}`],
         ['yes:tcl:<ticketId>:<ref>', `yes:tcl:${SAMPLE_ID}:${ref}`],
         ['yes:cnc:<orderId>:<ref>', `yes:cnc:${SAMPLE_ID}:${ref}`],
     ];
