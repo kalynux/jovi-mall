@@ -1526,9 +1526,13 @@ Until submitted and APPROVED these reach their audience in-app, by push, email, 
 
 ---
 
-## 2026-10-05 — refund flow (REFUND-FLOW-PLAN § 8): 11 templates GENERATED, NOT SUBMITTED
+## 2026-10-05 — refund flow (REFUND-FLOW-PLAN § 8): 11 templates SUBMITTED, PENDING Meta review
 
-⏳ **Generated into `whatsapp-template-payloads.json`, nothing sent to Meta (owner action).**
+✅ **Submitted to Meta on 2026-10-05 (`en` + `fr`, 22 created, 0 failed); every one is PENDING review.**
+Sent with `--only=` the 11 refund names, so the 18 other unsubmitted payloads (from other work) were
+deliberately NOT sent. This heading read "GENERATED, NOT SUBMITTED" until then.
+
+⏳ (Original note:) **Generated into `whatsapp-template-payloads.json`.**
 146 → **157** names, 292 → **314** submissions (`en` + `fr`). The regeneration was diffed
 against the previous file: the 22 new submissions are the only difference, and **every existing
 submission is byte-identical**. Same production button hosts as the 2026-10-04 run
