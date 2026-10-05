@@ -359,6 +359,7 @@ The projection was widened; all of this already existed on the model and simply 
 | `deliveryPayer` / `deliveryPayerReason` | Who paid delivery (`vendor` = free for the customer · `customer`) and why. `null` on digital orders. 🆕 2026-10-04 |
 | `deliveryFees[]` | `{ shipmentId, amount, customerFeeRefundable? }` per parcel — the customer-facing delivery fee, and delivery money owed back when non-zero. `[]` on digital orders. 🆕 2026-10-04 |
 | `deliveryAddress` | Where it is going. `null` on digital orders |
+| `refund` | 🆕 2026-10-05 · The order's refund — the **latest** refund request, or `null` when none was ever requested. **Always present.** Shape and statuses: [The `refund` block](#the-refund-block) below |
 | `items[].image` | Live-resolved thumbnail (`FileDetail \| null`). Order history with no pictures is unreadable on a phone |
 | `items[].delivery` | `{ status, shipmentId }` — per-line delivery state, and the id the shipment endpoints need |
 | `updatedAt` | "Last updated" on the order card |
@@ -381,6 +382,44 @@ The projection was widened; all of this already existed on the model and simply 
 > enters the customer's delivery code, because the code is the customer's act; `'system'` is the
 > auto-confirm sweep. `auto` is what separates a real confirmation from an elapsed window — use
 > it, not `confirmedBy`, to decide between "you confirmed this" and "confirmed automatically".
+
+### The `refund` block
+
+🆕 2026-10-05 (refund flow — [../payments/README.md § Refunds](../payments/README.md#refunds--payouts-for-mobile-money-the-card-api-for-cards-2026-10-05)).
+Present on every order object (group read, single read, and the bot's order reads), `null` when no
+refund was ever requested:
+
+```jsonc
+"refund": {
+  "status": "sending",              // requested | waiting_for_cash | sending | in_progress | completed | declined
+  "grossAmount": 5000,              // what the refund is worth
+  "feeAmount": 100,                 // the transfer fee kept (2% by default); 0 for a card refund
+  "feePercent": 2,                  // for the copy "minus a 2% transfer fee"; 0 for a card refund
+  "netAmount": 4900,                // ⭐ what the customer RECEIVES — show this as the refund amount
+  "currency": "XAF",
+  "channel": "payout",              // card_refund | payout | external | null (not decided yet)
+  "destinationMasked": "+•••••••••512",   // the number it goes to, masked; null for a card refund
+  "waitingForCash": false,          // COD: approved, waiting for the courier's cash to reach us
+  "completedAt": null               // ISO instant once completed
+}
+```
+
+| `status` | Means | Say |
+|---|---|---|
+| `requested` | A refund was requested and is being reviewed (or approved but not sent yet) | "Refund requested — we will tell you when it is sent" |
+| `waiting_for_cash` | **COD only.** Approved; the cash you paid has not reached us from the delivery company yet. It sends by itself when it does | "Refund approved — waiting for the courier to hand over the cash" |
+| `sending` | The transfer to `destinationMasked` is in flight | "Refund on its way to +•••512" |
+| `in_progress` | The transfer did not go through and the team is retrying or paying it by hand. ⚠ **Never show "failed"** — the customer is still owed the money | "Refund in progress" |
+| `completed` | The money arrived (or was paid outside the platform — `channel: external`) | "Refunded" |
+| `declined` | The request was turned down after review. The administrator's reason is **not** exposed | "Refund declined — contact support if you think this is a mistake" |
+
+**The fee line.** When `feeAmount > 0`, show the net and why it is less:
+*"You receive 4,900 XAF (5,000 minus a 2% transfer fee)."* A card refund (`channel: card_refund`)
+has `feeAmount: 0` — show the full amount and **no fee line**.
+
+`refund` is independent of `deliveryFeeRefund` (the delivery-fee ledger, `{ owed, returned }`),
+which keeps its meaning; and of `paymentStatus`, which becomes `refunded` only when the whole order
+has been refunded. An order can show `paymentStatus: "paid"` with a completed partial `refund`.
 
 ---
 

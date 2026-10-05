@@ -114,6 +114,7 @@ grep -cE '^(GET|POST|PUT|PATCH|DELETE) /api/internal/admin/' DOC-PROGRAM/evidenc
 | `/earnings/*` | 4 | ~~`/api/admin/earnings/*`~~ | [earnings.md](./earnings.md) |
 | `/payout-requests/*` | 4 | ~~`/api/admin/payout-requests/*`~~ | [payout-requests.md](./payout-requests.md) |
 | `/delivery-fee-refunds/*` | 3 | **never** — added 2026-10-04 (ADR-A11 W-E2), after the count above was measured | [delivery-fee-refunds.md](./delivery-fee-refunds.md) |
+| `/refunds/*` | 9 | **never** — added 2026-10-05 (REFUND-FLOW-PLAN R7), after the count above was measured | [refunds.md](./refunds.md) |
 | `/orders/*` | 6 | **partial** — only `GET /disputes` and `POST /:id/dispute/resolve` ever were | [orders.md](./orders.md) |
 | `/reviews/*` | 4 | **never** — moderation was always service-token only | [reviews.md](./reviews.md) |
 | `/tickets/*` | 19 | ~~`/api/admin/tickets/*`~~ — deleted earlier, at **Phase 17**. 18 rows moved; `POST /:ticketId/claim` is net-new | [tickets.md](./tickets.md) |

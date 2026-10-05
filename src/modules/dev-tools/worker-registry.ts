@@ -11,6 +11,7 @@ import { abandonedCartWorker } from '../cart/workers/abandoned-cart.worker';
 import { inboundCalendarSyncWorker } from '../booking/workers/inbound-calendar-sync.worker';
 import { paymentReconciliationWorker } from '../payments/workers/payment-reconciliation.worker';
 import { payoutReconciliationWorker } from '../earnings/workers/payout-reconciliation.worker';
+import { refundCashRecheckWorker } from '../payments/workers/refund-cash-recheck.worker';
 import { codDepositDeadlineWorker } from '../cod/workers/cod-deposit-deadline.worker';
 import { trackingDispatchWorker } from '../tracking-integration/workers/tracking-dispatch.worker';
 import { agentCapacityReconcileWorker } from '../agents/workers/agent-capacity-reconcile.worker';
@@ -204,6 +205,18 @@ export const WORKER_REGISTRY = Object.freeze({
         label: 'Payout reconciliation',
         worker: payoutReconciliationWorker,
         runOnce: () => runCountedSweep(() => payoutReconciliationWorker.runSweep()),
+    },
+    /**
+     * REFUND-FLOW-PLAN § 5.2 (2026-10-05): the nightly backstop for COD refunds waiting on cash,
+     * behind the lossy `cod.collections.settled` event. Triggerable for the moment it matters —
+     * right after a remittance was confirmed while the process restarted. `processed` counts
+     * refunds RELEASED (covered → approved → sent); a refund still uncovered keeps waiting and is
+     * not counted. A second press is a no-op: the release is a compare-and-set on `waiting_for_cash`.
+     */
+    'refund-cash-recheck': {
+        label: 'COD refunds waiting on cash (re-check)',
+        worker: refundCashRecheckWorker,
+        runOnce: () => runCountedSweep(() => refundCashRecheckWorker.runSweep()),
     },
     'booking-reminder': {
         label: 'Booking reminders',

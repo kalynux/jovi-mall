@@ -114,6 +114,24 @@ export class CashCollectionRepository {
     );
   }
 
+  /**
+   * Stamp when the agent marked the parcel delivered (R-6) — the coverage FIFO's order key.
+   * Called by both collect paths in the claiming transaction, right after the shipment write
+   * that delivered it, so it is computed from the `status_history` that write returned.
+   * Guarded on `collected`: it only ever describes a claimed collection.
+   */
+  async stampDeliveredAt(
+    id: Types.ObjectId,
+    deliveredAt: Date,
+    session: ClientSession
+  ): Promise<void> {
+    await CashCollectionModel.updateOne(
+      { _id: id, status: 'collected' },
+      { $set: { delivered_at: deliveredAt } },
+      { session }
+    );
+  }
+
   /** Cancel a pending collection (shipment ended `returned`). Idempotent. */
   async cancelPendingByShipment(
     shipmentId: string,

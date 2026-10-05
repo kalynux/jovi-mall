@@ -51,8 +51,23 @@ export interface PaymentSettings {
   providers: Record<PaymentProvider, ProviderSetting>;
 }
 
+/**
+ * The refund fee (REFUND-FLOW-PLAN R-3, § 11.6): a percentage taken off every refund paid out by
+ * transfer or externally — never off a card refund. Not a routing input, so it lives on the
+ * record rather than on `PaymentSettings` and `validateSettingsChange` never sees it.
+ */
+export const REFUND_FEE_PERCENT_DEFAULT = 2;
+export const REFUND_FEE_PERCENT_MAX = 20;
+
+/** Whether a value may be stored as `refund_fee_percent`: a finite number in [0, 20]. */
+export function isValidRefundFeePercent(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= REFUND_FEE_PERCENT_MAX;
+}
+
 /** The whole stored document, minus `_id`. */
 export interface PaymentSettingsRecord extends PaymentSettings {
+  /** Percent, 0–20, default 2. See `REFUND_FEE_PERCENT_DEFAULT`. */
+  refund_fee_percent: number;
   /** Compare-and-set counter. 0 means "no document yet". */
   version: number;
   updated_at: Date | null;
@@ -75,6 +90,7 @@ export const DEFAULT_PAYMENT_SETTINGS: Readonly<PaymentSettingsRecord> = Object.
     MOOV: Object.freeze({ enabled: false }),
     CARD: Object.freeze({ enabled: false }),
   }),
+  refund_fee_percent: REFUND_FEE_PERCENT_DEFAULT,
   version: 0,
   updated_at: null,
   updated_by_id: null,

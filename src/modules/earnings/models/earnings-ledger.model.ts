@@ -16,6 +16,17 @@ import { EarningsSourceType } from './earnings-allocation.model';
  *  - `reserve_hold`    money moved `pending_balance` → `reserve_balance`
  *                      (COD rolling reserve on agency earnings).
  *  - `reserve_release` money moved `reserve_balance` → `available_balance`.
+ *  - `clawback`        a refund took (part of) a share back (REFUND-FLOW-PLAN § 6): from
+ *                      pending (held share), or reserve → available → debt (released
+ *                      share). `amount` is the whole claw; the part nothing could cover
+ *                      went to `clawback_balance`.
+ *  - `clawback_recovery` an inflow to available (a release, a reserve release) paid
+ *                      `clawback_balance` down instead of reaching available.
+ *  - `clawback_write_off` in the vocabulary for completeness. ⚠ Movements with NO
+ *                      allocation — a write-off, and debt paid down by a payout returned
+ *                      to available — write no ledger row, exactly as payouts never have
+ *                      (`source_*`/`allocation_id` are required here). Their record is the
+ *                      `earnings_adjustments` row.
  * `pending_after`/`available_after` snapshot the balances after the entry.
  */
 
@@ -24,7 +35,10 @@ export type EarningsLedgerEntryType =
   | 'release'
   | 'reversal'
   | 'reserve_hold'
-  | 'reserve_release';
+  | 'reserve_release'
+  | 'clawback'
+  | 'clawback_recovery'
+  | 'clawback_write_off';
 
 export type EarningsLedgerReasonCode =
   | 'order_split'
@@ -36,7 +50,13 @@ export type EarningsLedgerReasonCode =
   | 'cod_rolling_reserve'
   | 'reserve_matured'
   /** A held allocation re-priced by a vendor-approved delivery-fee change (delivery-fee-proposals). */
-  | 'delivery_fee_adjustment';
+  | 'delivery_fee_adjustment'
+  /** A refund recovered (part of) a share — see `earnings_adjustments`. */
+  | 'refund_clawback'
+  /** An inflow to available paid `clawback_balance` down. */
+  | 'clawback_recovery'
+  /** An administrator forgave `clawback_balance` (C-6). */
+  | 'clawback_write_off';
 
 export interface IEarningsLedger extends Document {
   account_id: mongoose.Types.ObjectId;
@@ -60,7 +80,7 @@ const EarningsLedgerSchema = new Schema<IEarningsLedger>(
     owner_id: { type: Schema.Types.ObjectId, default: null },
     entry_type: {
       type: String,
-      enum: ['hold', 'release', 'reversal', 'reserve_hold', 'reserve_release'],
+      enum: ['hold', 'release', 'reversal', 'reserve_hold', 'reserve_release', 'clawback', 'clawback_recovery', 'clawback_write_off'],
       required: true,
     },
     amount: { type: Number, required: true },
@@ -75,7 +95,7 @@ const EarningsLedgerSchema = new Schema<IEarningsLedger>(
     allocation_id: { type: Schema.Types.ObjectId, ref: MODELS.EARNINGS_ALLOCATION, required: true },
     reason_code: {
       type: String,
-      enum: ['order_split', 'cod_split', 'delivery_split', 'hold_release', 'refund_reversal', 'cod_rolling_reserve', 'reserve_matured', 'delivery_fee_adjustment'],
+      enum: ['order_split', 'cod_split', 'delivery_split', 'hold_release', 'refund_reversal', 'cod_rolling_reserve', 'reserve_matured', 'delivery_fee_adjustment', 'refund_clawback', 'clawback_recovery', 'clawback_write_off'],
       required: true,
     },
   },

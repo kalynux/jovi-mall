@@ -63,7 +63,13 @@ export type PurposeUploadFolder =
    * the salary and every other employee fact live in wi-admin's private database. See
    * `modules/staff-identity/`.
    */
-  | 'admin-identity';
+  | 'admin-identity'
+  /**
+   * A refund's proof pictures (REFUND-FLOW-PLAN § 7): the customer's message giving a typed
+   * refund number, and the receipt of a refund paid outside the platform. PRIVATE — see
+   * `core/storage/storage-trees.ts`. Written only by `payments/services/refund-proof.service.ts`.
+   */
+  | 'refund-proofs';
 
 /**
  * Type folders — derived from the file's own (sniffed) media type rather than

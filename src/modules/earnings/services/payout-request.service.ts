@@ -2,7 +2,7 @@ import { transactionManager } from '../../../core/database/transaction.manager';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { eventBus } from '../../../core/events/event-bus';
-import { EarningsOwnerType } from '../models/earnings-account.model';
+import { EarningsAccountModel, EarningsOwnerType } from '../models/earnings-account.model';
 import { IPayoutRequest, PayoutRequestOrigin } from '../models/payout-request.model';
 import {
   PayoutRequestRepository,
@@ -210,7 +210,14 @@ export class PayoutRequestService {
       // Ticket creation failed after funds were already moved — revert and
       // drop the orphaned request so nothing is left half-done.
       await transactionManager.runInTransaction((session) =>
-        this.accounts.revertPayoutToAvailableInSession(ownerType, ownerId, payoutRequest.amount, session)
+        // Nets any refund debt that appeared meanwhile (REFUND-FLOW-PLAN § 6.1 (5)).
+        this.accounts.revertPayoutToAvailableInSession(
+          ownerType,
+          ownerId,
+          payoutRequest.amount,
+          session,
+          `recovery:payout:${payoutRequest.id}:ticket_failed`
+        )
       );
       await this.payoutRepo.hardDeleteById(payoutRequest.id);
       throw error;
@@ -280,11 +287,13 @@ export class PayoutRequestService {
     this.assertResolvable(payoutRequest);
 
     const updated = await transactionManager.runInTransaction(async (session) => {
+      // C-7: a rejected payout's money pays the owner's refund debt down on its way back.
       await this.accounts.revertPayoutToAvailableInSession(
         payoutRequest.owner_type,
         payoutRequest.owner_id.toString(),
         payoutRequest.amount,
-        session
+        session,
+        `recovery:payout:${payoutRequestId}:rejected`
       );
       const marked = await this.payoutRepo.markRejected(payoutRequestId, resolvedBy, reason, session);
       if (!marked) {
@@ -786,29 +795,33 @@ export class PayoutRequestService {
   async getByIdForAdmin(id: string): Promise<AdminPayoutRequestDto | null> {
     const payoutRequest = await this.payoutRepo.findById(id);
     if (!payoutRequest) return null;
-    const [names, verifications] = await Promise.all([
+    const [names, verifications, clawbacks] = await Promise.all([
       this.resolveOwnerNames([payoutRequest]),
       this.resolveOwnerVerifications([payoutRequest]),
+      resolveOwnerClawbacks([payoutRequest]),
     ]);
     return toAdminPayoutRequestDto(
       payoutRequest,
       this.ownerNameOf(names, payoutRequest),
-      this.verificationOfRow(verifications, payoutRequest)
+      this.verificationOfRow(verifications, payoutRequest),
+      clawbacks.get(`${payoutRequest.owner_type}:${payoutRequest.owner_id.toString()}`) ?? 0
     );
   }
 
   async list(filters: ListPayoutRequestsFilters, pagination: PaginationOptions) {
     const { data, total } = await this.payoutRepo.listForAdmin(filters, pagination);
-    const [ownerNamesByType, verifications] = await Promise.all([
+    const [ownerNamesByType, verifications, clawbacks] = await Promise.all([
       this.resolveOwnerNames(data),
       this.resolveOwnerVerifications(data),
+      resolveOwnerClawbacks(data),
     ]);
     return {
       data: data.map((r) =>
         toAdminPayoutRequestDto(
           r,
           this.ownerNameOf(ownerNamesByType, r),
-          this.verificationOfRow(verifications, r)
+          this.verificationOfRow(verifications, r),
+          clawbacks.get(`${r.owner_type}:${r.owner_id.toString()}`) ?? 0
         )
       ),
       meta: {
@@ -1023,6 +1036,26 @@ export class PayoutRequestService {
 }
 
 export const payoutRequestService = new PayoutRequestService();
+
+/**
+ * Each payout owner's outstanding refund debt (`clawback_balance`), keyed `type:id` — read live
+ * for the admin payout views (REFUND-FLOW-PLAN C-7). One query per page.
+ */
+async function resolveOwnerClawbacks(requests: IPayoutRequest[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (requests.length === 0) return out;
+  const accounts = await EarningsAccountModel.find(
+    {
+      clawback_balance: { $gt: 0 },
+      $or: requests.map((r) => ({ owner_type: r.owner_type, owner_id: r.owner_id })),
+    },
+    { owner_type: 1, owner_id: 1, clawback_balance: 1 }
+  ).lean();
+  for (const a of accounts as any[]) {
+    if (a.owner_id) out.set(`${a.owner_type}:${a.owner_id.toString()}`, a.clawback_balance ?? 0);
+  }
+  return out;
+}
 
 /**
  * The owner-facing earnings view: balances, plus the retired `payoutAllowance` key.

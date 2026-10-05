@@ -78,6 +78,16 @@ function main(): void {
 
     assert('the request lives seven days (owner decision O-3)', () => ROLE_CLOSURE_REQUEST_TTL_DAYS === 7);
 
+    assert('a refund clawback debt is a blocker (REFUND-FLOW-PLAN C-5), beside the balance', () =>
+        (ROLE_CLOSURE_BLOCKER_CODES as readonly string[]).includes('earnings_clawback_outstanding'));
+    assert('the money check pushes it from clawback_balance, NOT folded into earnings_balance', () => {
+        const money = span(read('modules/role-closure/services/role-closure-blockers.service.ts'),
+            'private async money(', '\n  }\n');
+        const balanceSum = span(money, 'const total =', ';');
+        return /push\('earnings_clawback_outstanding'/.test(money) && /clawback_balance/.test(money)
+            && !/clawback_balance/.test(balanceSum);
+    });
+
     console.log('\n2. Request shapes');
 
     assert('a request needs a reason — the user is shown it', () =>

@@ -30,11 +30,13 @@ const DispatchOrderSchema = z.object({
 }).default({});
 
 const RefundOrderSchema = z.object({
-  /** Absent means the full remaining refundable balance — see AdminRefundService. */
-  amount: z.number().positive().optional(),
+  /** Absent means the full remaining refundable balance — see AdminRefundService. Whole units. */
+  amount: z.number().int().positive().optional(),
   reason: z.string().trim().min(3).max(500),
   /** Acknowledges going beyond the vendor's commercial policy. Never a money override. */
   overridePolicy: z.boolean().optional(),
+  /** C-1: under "customer pays, reimbursed if defective", also return the delivery money. */
+  itemDefective: z.boolean().optional(),
 });
 
 /**
@@ -199,10 +201,16 @@ export class AdminOrderController {
       name: actor?.name ?? null,
     });
 
+    // The answer is a REFUND REQUEST since REFUND-FLOW-PLAN § 4: only a card refund is
+    // `completed` in the call; a transfer is `sending`, and COD / no paying number waits in the
+    // refund queue (`awaiting_approval`) for a typed number and a second administrator.
+    const what =
+      result.status === 'completed' ? 'Refund completed'
+        : result.status === 'awaiting_approval' ? 'Refund request opened — it waits in the refund queue for a destination number'
+          : result.status === 'failed' ? 'Refund request opened, but the transfer failed — retry or settle it from the refund queue'
+            : 'Refund approved and being sent';
     sendSuccess(res, result, {
-      message: result.withinVendorPolicy
-        ? 'Refund completed'
-        : 'Refund completed — the vendor’s return policy was overridden',
+      message: result.withinVendorPolicy ? what : `${what} — the vendor’s return policy was overridden`,
     });
   });
 

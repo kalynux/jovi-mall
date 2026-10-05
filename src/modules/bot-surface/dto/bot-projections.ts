@@ -23,6 +23,7 @@ import {
 } from '../domain/bot-pending-question';
 import { BotRecentlySentEntry, recentlySentView } from '../domain/bot-recently-sent';
 import type { PaymentMethodDto } from '../../payment-methods/dto/payment-method.dto';
+import type { CustomerRefundBlock } from '../../payments/dto/customer-refund.dto';
 
 /**
  * The places the bot surface's output DIFFERS from the customer API's.
@@ -807,6 +808,17 @@ export interface BotBookingDto {
     cancelledAt: string | null;
     /** Whatever the canceller typed. May be the vendor's words, not the customer's. */
     cancelledReason: string | null;
+    /**
+     * The booking's refund, if one was ever requested — the SAME block the storefront reads
+     * (`payments/dto/customer-refund.dto.ts`): `status` is `requested` · `sending` · `in_progress`
+     * · `completed` · `declined` (`waiting_for_cash` never applies to a booking), with gross, fee,
+     * net and the masked number. `null` when there is none.
+     *
+     * ⚠ **Quote `netAmount` as what the customer receives**, and `grossAmount − netAmount` as the
+     * transfer fee. A chat that quotes the gross for a mobile-money refund promises money that
+     * will not arrive. A card refund has `feeAmount: 0`.
+     */
+    refund: CustomerRefundBlock | null;
 }
 
 /**
@@ -850,7 +862,7 @@ export function toBotBookingDto(booking: {
     cancelledAt?: Date | string | null;
     cancelledReason?: string | null;
     settlement?: { balanceDue?: number; balancePaid?: number } | null;
-}): BotBookingDto {
+}, refund: CustomerRefundBlock | null = null): BotBookingDto {
     const settlement = booking.settlement ?? null;
     const outstanding = Math.max(0, (settlement?.balanceDue ?? 0) - (settlement?.balancePaid ?? 0));
 
@@ -872,6 +884,7 @@ export function toBotBookingDto(booking: {
         outstandingBalance: outstanding,
         cancelledAt: booking.cancelledAt ? new Date(booking.cancelledAt).toISOString() : null,
         cancelledReason: booking.cancelledReason ?? null,
+        refund,
     };
 }
 

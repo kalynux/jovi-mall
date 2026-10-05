@@ -613,6 +613,64 @@ export function ticketReopenLine(isClosed: boolean, lang: Language): string {
     return variants[lang] ?? variants[DEFAULT_LANGUAGE];
 }
 
+// ─── Refund lines (REFUND-FLOW-PLAN § 8, R-3) ─────────────────────────────────
+
+/** What the customer receives when a transfer fee was taken — the R-3 fee line. */
+const REFUND_AMOUNT_WITH_FEE_LINE: Record<Language, string> = {
+    en: 'You receive {{net}} {{currency}} ({{gross}} minus a {{percent}}% transfer fee).',
+    fr: 'Vous recevez {{net}} {{currency}} ({{gross}} moins des frais de transfert de {{percent}} %).',
+    pt: 'Recebe {{net}} {{currency}} ({{gross}} menos uma taxa de transferência de {{percent}}%).',
+    es: 'Recibes {{net}} {{currency}} ({{gross}} menos una comisión de transferencia del {{percent}} %).',
+    ar: 'ستستلم {{net}} {{currency}} ({{gross}} مطروحًا منها رسوم تحويل بنسبة {{percent}}٪).'
+};
+
+/** …and when none was (a card refund, or a fee rate set to 0). */
+const REFUND_AMOUNT_NO_FEE_LINE: Record<Language, string> = {
+    en: 'You receive {{net}} {{currency}}.',
+    fr: 'Vous recevez {{net}} {{currency}}.',
+    pt: 'Recebe {{net}} {{currency}}.',
+    es: 'Recibes {{net}} {{currency}}.',
+    ar: 'ستستلم {{net}} {{currency}}.'
+};
+
+/**
+ * "You receive 4,900 XAF (5,000 minus a 2% transfer fee)." — what reaches the customer, and why
+ * it is less than the refund (R-3: 2% off every refund paid by transfer; D-1: paid externally too).
+ *
+ * ⚠ **Returns a whole sentence, never an empty string**, like `ticketReopenLine`: it is a WhatsApp
+ * template parameter, and Meta refuses an empty one. With no fee it says only what is received —
+ * a card refund never mentions a fee, because there is none (Stripe returns the full amount).
+ */
+export function refundAmountLine(
+    input: { netAmount: number; grossAmount: number; feeAmount: number; feePercent: number; currency: string },
+    lang: Language
+): string {
+    const fmt = (n: number) => new Intl.NumberFormat('en-US').format(Math.round(n));
+    const variants = input.feeAmount > 0 ? REFUND_AMOUNT_WITH_FEE_LINE : REFUND_AMOUNT_NO_FEE_LINE;
+    return renderTemplate(variants[lang] ?? variants[DEFAULT_LANGUAGE], {
+        net: fmt(input.netAmount),
+        gross: fmt(input.grossAmount),
+        percent: String(input.feePercent),
+        currency: input.currency
+    });
+}
+
+/** Where a transfer goes when the number is unknown to the copy — never an empty parameter. */
+const REFUND_DESTINATION_FALLBACK: Record<Language, string> = {
+    en: 'your mobile money number',
+    fr: 'votre numéro mobile money',
+    pt: 'o seu número de dinheiro móvel',
+    es: 'tu número de dinero móvil',
+    ar: 'رقم محفظتك المالية'
+};
+
+/** The masked number a refund goes to (`+•••••••••512`), or a localized fallback. */
+export function refundDestinationLabel(masked: string | null | undefined, lang: Language): string {
+    return masked && masked.trim() !== ''
+        ? masked
+        : REFUND_DESTINATION_FALLBACK[lang] ?? REFUND_DESTINATION_FALLBACK[DEFAULT_LANGUAGE];
+}
+
 // ─── The catalog ─────────────────────────────────────────────────────────────
 
 export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, CustomerSituationMessages> = {
@@ -1064,29 +1122,31 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Cus
         button: BOOKING_BUTTON
     },
 
-    // Sent when the money could NOT be returned automatically. Silence here is
-    // indistinguishable from a stolen payment, so this says a person is on it.
+    // LEGACY name (its WhatsApp template is already submitted to Meta — keep it). Since
+    // 2026-10-05 `refund_pending` means "a refund request is open" (REFUND-FLOW-PLAN § 4), so the
+    // copy no longer promises a person paying it by hand. Unreachable today: refund news comes
+    // from the request's own situations (`booking.refund.requested` and the rest, below).
     'booking.refund.pending': {
         base: {
             en: {
                 subject: 'Refund on the way: {{currency}} {{amountFormatted}}',
-                body: 'We owe you {{currency}} {{amountFormatted}} for your cancelled {{serviceName}} booking. This one needs to be sent by hand, so our team is processing it — you do not need to do anything, and we will confirm when it is done.'
+                body: 'We owe you {{currency}} {{amountFormatted}} for your cancelled {{serviceName}} booking. A refund request is open — you do not need to do anything, and we will tell you when the money is sent.'
             },
             fr: {
                 subject: 'Remboursement en cours : {{currency}} {{amountFormatted}}',
-                body: 'Nous vous devons {{currency}} {{amountFormatted}} pour votre réservation {{serviceName}} annulée. Ce remboursement doit être envoyé manuellement : notre équipe s\'en occupe. Vous n\'avez rien à faire, nous confirmerons dès que c\'est fait.'
+                body: 'Nous vous devons {{currency}} {{amountFormatted}} pour votre réservation {{serviceName}} annulée. Une demande de remboursement est ouverte : vous n\'avez rien à faire, nous vous préviendrons dès que l\'argent sera envoyé.'
             },
             pt: {
                 subject: 'Reembolso a caminho: {{currency}} {{amountFormatted}}',
-                body: 'Devemos-lhe {{currency}} {{amountFormatted}} pela sua reserva cancelada de {{serviceName}}. Este reembolso tem de ser enviado manualmente e a nossa equipa está a tratar disso — não precisa de fazer nada e confirmaremos quando estiver concluído.'
+                body: 'Devemos-lhe {{currency}} {{amountFormatted}} pela sua reserva cancelada de {{serviceName}}. Há um pedido de reembolso aberto — não precisa de fazer nada e avisamos quando o dinheiro for enviado.'
             },
             es: {
                 subject: 'Reembolso en camino: {{currency}} {{amountFormatted}}',
-                body: 'Te debemos {{currency}} {{amountFormatted}} por tu reserva cancelada de {{serviceName}}. Este reembolso debe enviarse a mano y nuestro equipo lo está gestionando — no tienes que hacer nada y te confirmaremos cuando esté listo.'
+                body: 'Te debemos {{currency}} {{amountFormatted}} por tu reserva cancelada de {{serviceName}}. Hay una solicitud de reembolso abierta — no tienes que hacer nada y te avisaremos cuando se envíe el dinero.'
             },
             ar: {
                 subject: 'الاسترداد في الطريق: {{currency}} {{amountFormatted}}',
-                body: 'ندين لك بمبلغ {{currency}} {{amountFormatted}} مقابل حجزك الملغى لـ {{serviceName}}. يجب إرسال هذا المبلغ يدويًا وفريقنا يعمل عليه — لا داعي لفعل أي شيء وسنؤكد لك عند الانتهاء.'
+                body: 'ندين لك بمبلغ {{currency}} {{amountFormatted}} مقابل حجزك الملغى لـ {{serviceName}}. يوجد طلب استرداد مفتوح — لا داعي لفعل أي شيء وسنخبرك عند إرسال المبلغ.'
             }
         },
         whatsapp: {
@@ -1094,6 +1154,179 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Cus
             template: {
                 name: 'customer_booking_refund_pending',
                 bodyParams: ['{{currency}}', '{{amountFormatted}}', '{{serviceName}}']
+            }
+        },
+        button: BOOKING_BUTTON
+    },
+
+    // ── The refund request lifecycle (REFUND-FLOW-PLAN § 8, R9) ─────────────────
+    // Raised from `refund.status_changed` (requested · sending · declined) and `payment.refunded`
+    // (completed · paid externally). A card refund that completes keeps `booking.refunded` above —
+    // full amount, no fee. `{{amountLine}}` is `refundAmountLine`: the NET and, when a transfer fee
+    // was taken, the 2% line. A booking is never cash on delivery, so it has no "waiting for cash".
+
+    'booking.refund.requested': {
+        base: {
+            en: {
+                subject: 'Refund requested: {{currency}} {{amountFormatted}}',
+                body: 'A refund of {{currency}} {{amountFormatted}} has been requested for your {{serviceName}} booking. Our team is reviewing it — you do not need to do anything, and we will tell you when it is sent.'
+            },
+            fr: {
+                subject: 'Remboursement demandé : {{currency}} {{amountFormatted}}',
+                body: 'Un remboursement de {{currency}} {{amountFormatted}} a été demandé pour votre réservation {{serviceName}}. Notre équipe l’examine — vous n’avez rien à faire, nous vous préviendrons dès qu’il sera envoyé.'
+            },
+            pt: {
+                subject: 'Reembolso pedido: {{currency}} {{amountFormatted}}',
+                body: 'Foi pedido um reembolso de {{currency}} {{amountFormatted}} pela sua reserva de {{serviceName}}. A nossa equipa está a analisá-lo — não precisa de fazer nada e avisamos quando for enviado.'
+            },
+            es: {
+                subject: 'Reembolso solicitado: {{currency}} {{amountFormatted}}',
+                body: 'Se ha solicitado un reembolso de {{currency}} {{amountFormatted}} por tu reserva de {{serviceName}}. Nuestro equipo lo está revisando — no tienes que hacer nada y te avisaremos cuando se envíe.'
+            },
+            ar: {
+                subject: 'تم طلب الاسترداد: {{currency}} {{amountFormatted}}',
+                body: 'تم طلب استرداد {{currency}} {{amountFormatted}} لحجزك لـ {{serviceName}}. يقوم فريقنا بمراجعته — لا داعي لفعل أي شيء وسنخبرك عند إرساله.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_booking_refund_requested',
+                bodyParams: ['{{currency}}', '{{amountFormatted}}', '{{serviceName}}']
+            }
+        },
+        button: BOOKING_BUTTON
+    },
+
+    'booking.refund.sending': {
+        base: {
+            en: {
+                subject: 'Refund on its way — {{serviceName}}',
+                body: 'We are sending the refund for your {{serviceName}} booking to {{destination}}. {{amountLine}} It usually arrives within minutes.'
+            },
+            fr: {
+                subject: 'Remboursement en route — {{serviceName}}',
+                body: 'Nous envoyons le remboursement de votre réservation {{serviceName}} au {{destination}}. {{amountLine}} Il arrive généralement en quelques minutes.'
+            },
+            pt: {
+                subject: 'Reembolso a caminho — {{serviceName}}',
+                body: 'Estamos a enviar o reembolso da sua reserva de {{serviceName}} para {{destination}}. {{amountLine}} Costuma chegar em poucos minutos.'
+            },
+            es: {
+                subject: 'Reembolso en camino — {{serviceName}}',
+                body: 'Estamos enviando el reembolso de tu reserva de {{serviceName}} a {{destination}}. {{amountLine}} Suele llegar en pocos minutos.'
+            },
+            ar: {
+                subject: 'الاسترداد في الطريق — {{serviceName}}',
+                body: 'نقوم بإرسال استرداد حجزك لـ {{serviceName}} إلى {{destination}}. {{amountLine}} يصل عادةً خلال دقائق.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_booking_refund_sending',
+                bodyParams: ['{{serviceName}}', '{{destination}}', '{{amountLine}}']
+            }
+        },
+        button: BOOKING_BUTTON
+    },
+
+    'booking.refund.completed': {
+        base: {
+            en: {
+                subject: 'Refund sent — {{serviceName}}',
+                body: 'The refund for your {{serviceName}} booking has been sent to {{destination}}. {{amountLine}} If it has not reached you within a day, reply here or open the booking.'
+            },
+            fr: {
+                subject: 'Remboursement envoyé — {{serviceName}}',
+                body: 'Le remboursement de votre réservation {{serviceName}} a été envoyé au {{destination}}. {{amountLine}} S’il ne vous est pas parvenu d’ici un jour, répondez ici ou ouvrez la réservation.'
+            },
+            pt: {
+                subject: 'Reembolso enviado — {{serviceName}}',
+                body: 'O reembolso da sua reserva de {{serviceName}} foi enviado para {{destination}}. {{amountLine}} Se não o receber dentro de um dia, responda aqui ou abra a reserva.'
+            },
+            es: {
+                subject: 'Reembolso enviado — {{serviceName}}',
+                body: 'El reembolso de tu reserva de {{serviceName}} se ha enviado a {{destination}}. {{amountLine}} Si no te llega en un día, responde aquí o abre la reserva.'
+            },
+            ar: {
+                subject: 'تم إرسال الاسترداد — {{serviceName}}',
+                body: 'تم إرسال استرداد حجزك لـ {{serviceName}} إلى {{destination}}. {{amountLine}} إذا لم يصلك خلال يوم، فرد هنا أو افتح الحجز.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_booking_refund_completed',
+                bodyParams: ['{{serviceName}}', '{{destination}}', '{{amountLine}}']
+            }
+        },
+        button: BOOKING_BUTTON
+    },
+
+    'booking.refund.paid_externally': {
+        base: {
+            en: {
+                subject: 'Refund paid — {{serviceName}}',
+                body: 'Our team has paid the refund for your {{serviceName}} booking directly, outside the app. {{amountLine}} If it has not reached you, reply here or open the booking.'
+            },
+            fr: {
+                subject: 'Remboursement payé — {{serviceName}}',
+                body: 'Notre équipe vous a payé directement le remboursement de votre réservation {{serviceName}}, en dehors de l’application. {{amountLine}} Si vous ne l’avez pas reçu, répondez ici ou ouvrez la réservation.'
+            },
+            pt: {
+                subject: 'Reembolso pago — {{serviceName}}',
+                body: 'A nossa equipa pagou-lhe diretamente o reembolso da sua reserva de {{serviceName}}, fora da aplicação. {{amountLine}} Se não o recebeu, responda aqui ou abra a reserva.'
+            },
+            es: {
+                subject: 'Reembolso pagado — {{serviceName}}',
+                body: 'Nuestro equipo te ha pagado directamente el reembolso de tu reserva de {{serviceName}}, fuera de la aplicación. {{amountLine}} Si no lo has recibido, responde aquí o abre la reserva.'
+            },
+            ar: {
+                subject: 'تم دفع الاسترداد — {{serviceName}}',
+                body: 'دفع لك فريقنا استرداد حجزك لـ {{serviceName}} مباشرةً خارج التطبيق. {{amountLine}} إذا لم يصلك، فرد هنا أو افتح الحجز.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_booking_refund_paid_externally',
+                bodyParams: ['{{serviceName}}', '{{amountLine}}']
+            }
+        },
+        button: BOOKING_BUTTON
+    },
+
+    // The reason an administrator typed is NOT quoted: it is internal free text written for the
+    // team, the same rule `order.delivery_failed` applies to an agent's `failureNote`.
+    'booking.refund.declined': {
+        base: {
+            en: {
+                subject: 'Refund declined — {{serviceName}}',
+                body: 'The refund requested for your {{serviceName}} booking was declined after review. If you think this is a mistake, reply here or open a support request from the booking.'
+            },
+            fr: {
+                subject: 'Remboursement refusé — {{serviceName}}',
+                body: 'Le remboursement demandé pour votre réservation {{serviceName}} a été refusé après examen. Si vous pensez qu’il s’agit d’une erreur, répondez ici ou ouvrez une demande d’assistance depuis la réservation.'
+            },
+            pt: {
+                subject: 'Reembolso recusado — {{serviceName}}',
+                body: 'O reembolso pedido para a sua reserva de {{serviceName}} foi recusado após análise. Se acha que é um erro, responda aqui ou abra um pedido de apoio a partir da reserva.'
+            },
+            es: {
+                subject: 'Reembolso rechazado — {{serviceName}}',
+                body: 'El reembolso solicitado para tu reserva de {{serviceName}} se rechazó tras revisarlo. Si crees que es un error, responde aquí o abre una solicitud de soporte desde la reserva.'
+            },
+            ar: {
+                subject: 'تم رفض الاسترداد — {{serviceName}}',
+                body: 'تم رفض الاسترداد المطلوب لحجزك لـ {{serviceName}} بعد المراجعة. إذا كنت تعتقد أن هذا خطأ، فرد هنا أو افتح طلب دعم من الحجز.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_booking_refund_declined',
+                bodyParams: ['{{serviceName}}']
             }
         },
         button: BOOKING_BUTTON
@@ -1511,6 +1744,213 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Cus
             template: {
                 name: 'customer_order_refunded',
                 bodyParams: ['{{currency}}', '{{amountFormatted}}', '{{orderNumber}}']
+            }
+        },
+        button: ORDER_BUTTON
+    },
+
+    // ── The refund request lifecycle (REFUND-FLOW-PLAN § 8, R9) ─────────────────
+    // Raised from `refund.status_changed` (requested · waiting for cash · sending · declined) and
+    // `payment.refunded` (completed · paid externally). A CARD refund keeps `order.refunded` above:
+    // the full amount goes back to the card and no fee is mentioned, because none is taken.
+    // `{{amountLine}}` is `refundAmountLine` — the NET, and the 2% line when a fee was taken.
+
+    'order.refund.requested': {
+        base: {
+            en: {
+                subject: 'Refund requested: {{currency}} {{amountFormatted}}',
+                body: 'A refund of {{currency}} {{amountFormatted}} has been requested for your order {{orderNumber}}. Our team is reviewing it — you do not need to do anything, and we will tell you when it is sent.'
+            },
+            fr: {
+                subject: 'Remboursement demandé : {{currency}} {{amountFormatted}}',
+                body: 'Un remboursement de {{currency}} {{amountFormatted}} a été demandé pour votre commande {{orderNumber}}. Notre équipe l’examine — vous n’avez rien à faire, nous vous préviendrons dès qu’il sera envoyé.'
+            },
+            pt: {
+                subject: 'Reembolso pedido: {{currency}} {{amountFormatted}}',
+                body: 'Foi pedido um reembolso de {{currency}} {{amountFormatted}} pela sua encomenda {{orderNumber}}. A nossa equipa está a analisá-lo — não precisa de fazer nada e avisamos quando for enviado.'
+            },
+            es: {
+                subject: 'Reembolso solicitado: {{currency}} {{amountFormatted}}',
+                body: 'Se ha solicitado un reembolso de {{currency}} {{amountFormatted}} por tu pedido {{orderNumber}}. Nuestro equipo lo está revisando — no tienes que hacer nada y te avisaremos cuando se envíe.'
+            },
+            ar: {
+                subject: 'تم طلب الاسترداد: {{currency}} {{amountFormatted}}',
+                body: 'تم طلب استرداد {{currency}} {{amountFormatted}} لطلبك {{orderNumber}}. يقوم فريقنا بمراجعته — لا داعي لفعل أي شيء وسنخبرك عند إرساله.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_order_refund_requested',
+                bodyParams: ['{{currency}}', '{{amountFormatted}}', '{{orderNumber}}']
+            }
+        },
+        button: ORDER_BUTTON
+    },
+
+    // R-4 / R-5: a cash-on-delivery refund waits until the cash the customer paid has reached the
+    // platform. Said plainly, so a customer does not read the wait as the platform stalling.
+    'order.refund.waiting_for_cash': {
+        base: {
+            en: {
+                subject: 'Refund approved: {{currency}} {{amountFormatted}}',
+                body: 'Your refund of {{currency}} {{amountFormatted}} for order {{orderNumber}} is approved. You paid in cash, and the delivery company has not yet handed that cash over to us — we will send your refund as soon as it does. You do not need to do anything.'
+            },
+            fr: {
+                subject: 'Remboursement approuvé : {{currency}} {{amountFormatted}}',
+                body: 'Votre remboursement de {{currency}} {{amountFormatted}} pour la commande {{orderNumber}} est approuvé. Vous avez payé en espèces et la société de livraison ne nous a pas encore remis cet argent — nous enverrons votre remboursement dès que ce sera fait. Vous n’avez rien à faire.'
+            },
+            pt: {
+                subject: 'Reembolso aprovado: {{currency}} {{amountFormatted}}',
+                body: 'O seu reembolso de {{currency}} {{amountFormatted}} pela encomenda {{orderNumber}} foi aprovado. Pagou em dinheiro e a empresa de entregas ainda não nos entregou esse dinheiro — enviaremos o reembolso assim que o fizer. Não precisa de fazer nada.'
+            },
+            es: {
+                subject: 'Reembolso aprobado: {{currency}} {{amountFormatted}}',
+                body: 'Tu reembolso de {{currency}} {{amountFormatted}} del pedido {{orderNumber}} está aprobado. Pagaste en efectivo y la empresa de reparto aún no nos ha entregado ese dinero — enviaremos tu reembolso en cuanto lo haga. No tienes que hacer nada.'
+            },
+            ar: {
+                subject: 'تمت الموافقة على الاسترداد: {{currency}} {{amountFormatted}}',
+                body: 'تمت الموافقة على استرداد {{currency}} {{amountFormatted}} للطلب {{orderNumber}}. لقد دفعت نقدًا ولم تسلّمنا شركة التوصيل هذا المبلغ بعد — سنرسل الاسترداد فور حدوث ذلك. لا داعي لفعل أي شيء.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_order_refund_waiting_for_cash',
+                bodyParams: ['{{currency}}', '{{amountFormatted}}', '{{orderNumber}}']
+            }
+        },
+        button: ORDER_BUTTON
+    },
+
+    'order.refund.sending': {
+        base: {
+            en: {
+                subject: 'Refund on its way — {{orderNumber}}',
+                body: 'We are sending the refund for your order {{orderNumber}} to {{destination}}. {{amountLine}} It usually arrives within minutes.'
+            },
+            fr: {
+                subject: 'Remboursement en route — {{orderNumber}}',
+                body: 'Nous envoyons le remboursement de votre commande {{orderNumber}} au {{destination}}. {{amountLine}} Il arrive généralement en quelques minutes.'
+            },
+            pt: {
+                subject: 'Reembolso a caminho — {{orderNumber}}',
+                body: 'Estamos a enviar o reembolso da sua encomenda {{orderNumber}} para {{destination}}. {{amountLine}} Costuma chegar em poucos minutos.'
+            },
+            es: {
+                subject: 'Reembolso en camino — {{orderNumber}}',
+                body: 'Estamos enviando el reembolso de tu pedido {{orderNumber}} a {{destination}}. {{amountLine}} Suele llegar en pocos minutos.'
+            },
+            ar: {
+                subject: 'الاسترداد في الطريق — {{orderNumber}}',
+                body: 'نقوم بإرسال استرداد طلبك {{orderNumber}} إلى {{destination}}. {{amountLine}} يصل عادةً خلال دقائق.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_order_refund_sending',
+                bodyParams: ['{{orderNumber}}', '{{destination}}', '{{amountLine}}']
+            }
+        },
+        button: ORDER_BUTTON
+    },
+
+    'order.refund.completed': {
+        base: {
+            en: {
+                subject: 'Refund sent — {{orderNumber}}',
+                body: 'The refund for your order {{orderNumber}} has been sent to {{destination}}. {{amountLine}} If it has not reached you within a day, reply here or open the order.'
+            },
+            fr: {
+                subject: 'Remboursement envoyé — {{orderNumber}}',
+                body: 'Le remboursement de votre commande {{orderNumber}} a été envoyé au {{destination}}. {{amountLine}} S’il ne vous est pas parvenu d’ici un jour, répondez ici ou ouvrez la commande.'
+            },
+            pt: {
+                subject: 'Reembolso enviado — {{orderNumber}}',
+                body: 'O reembolso da sua encomenda {{orderNumber}} foi enviado para {{destination}}. {{amountLine}} Se não o receber dentro de um dia, responda aqui ou abra a encomenda.'
+            },
+            es: {
+                subject: 'Reembolso enviado — {{orderNumber}}',
+                body: 'El reembolso de tu pedido {{orderNumber}} se ha enviado a {{destination}}. {{amountLine}} Si no te llega en un día, responde aquí o abre el pedido.'
+            },
+            ar: {
+                subject: 'تم إرسال الاسترداد — {{orderNumber}}',
+                body: 'تم إرسال استرداد طلبك {{orderNumber}} إلى {{destination}}. {{amountLine}} إذا لم يصلك خلال يوم، فرد هنا أو افتح الطلب.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_order_refund_completed',
+                bodyParams: ['{{orderNumber}}', '{{destination}}', '{{amountLine}}']
+            }
+        },
+        button: ORDER_BUTTON
+    },
+
+    'order.refund.paid_externally': {
+        base: {
+            en: {
+                subject: 'Refund paid — {{orderNumber}}',
+                body: 'Our team has paid the refund for your order {{orderNumber}} directly, outside the app. {{amountLine}} If it has not reached you, reply here or open the order.'
+            },
+            fr: {
+                subject: 'Remboursement payé — {{orderNumber}}',
+                body: 'Notre équipe vous a payé directement le remboursement de votre commande {{orderNumber}}, en dehors de l’application. {{amountLine}} Si vous ne l’avez pas reçu, répondez ici ou ouvrez la commande.'
+            },
+            pt: {
+                subject: 'Reembolso pago — {{orderNumber}}',
+                body: 'A nossa equipa pagou-lhe diretamente o reembolso da sua encomenda {{orderNumber}}, fora da aplicação. {{amountLine}} Se não o recebeu, responda aqui ou abra a encomenda.'
+            },
+            es: {
+                subject: 'Reembolso pagado — {{orderNumber}}',
+                body: 'Nuestro equipo te ha pagado directamente el reembolso de tu pedido {{orderNumber}}, fuera de la aplicación. {{amountLine}} Si no lo has recibido, responde aquí o abre el pedido.'
+            },
+            ar: {
+                subject: 'تم دفع الاسترداد — {{orderNumber}}',
+                body: 'دفع لك فريقنا استرداد طلبك {{orderNumber}} مباشرةً خارج التطبيق. {{amountLine}} إذا لم يصلك، فرد هنا أو افتح الطلب.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_order_refund_paid_externally',
+                bodyParams: ['{{orderNumber}}', '{{amountLine}}']
+            }
+        },
+        button: ORDER_BUTTON
+    },
+
+    // The administrator's reason is NOT quoted — internal free text, as with `failureNote`.
+    'order.refund.declined': {
+        base: {
+            en: {
+                subject: 'Refund declined — {{orderNumber}}',
+                body: 'The refund requested for your order {{orderNumber}} was declined after review. If you think this is a mistake, reply here or open a support request from the order.'
+            },
+            fr: {
+                subject: 'Remboursement refusé — {{orderNumber}}',
+                body: 'Le remboursement demandé pour votre commande {{orderNumber}} a été refusé après examen. Si vous pensez qu’il s’agit d’une erreur, répondez ici ou ouvrez une demande d’assistance depuis la commande.'
+            },
+            pt: {
+                subject: 'Reembolso recusado — {{orderNumber}}',
+                body: 'O reembolso pedido para a sua encomenda {{orderNumber}} foi recusado após análise. Se acha que é um erro, responda aqui ou abra um pedido de apoio a partir da encomenda.'
+            },
+            es: {
+                subject: 'Reembolso rechazado — {{orderNumber}}',
+                body: 'El reembolso solicitado para tu pedido {{orderNumber}} se rechazó tras revisarlo. Si crees que es un error, responde aquí o abre una solicitud de soporte desde el pedido.'
+            },
+            ar: {
+                subject: 'تم رفض الاسترداد — {{orderNumber}}',
+                body: 'تم رفض الاسترداد المطلوب لطلبك {{orderNumber}} بعد المراجعة. إذا كنت تعتقد أن هذا خطأ، فرد هنا أو افتح طلب دعم من الطلب.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_order_refund_declined',
+                bodyParams: ['{{orderNumber}}']
             }
         },
         button: ORDER_BUTTON

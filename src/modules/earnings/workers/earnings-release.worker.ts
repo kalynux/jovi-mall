@@ -18,6 +18,7 @@ import { EARNINGS_CONFIG, daysAgo } from '../config/earnings.config';
 import { IEarningsAllocation, EarningsAllocationModel } from '../models/earnings-allocation.model';
 import { isPlatformOwnerType } from '../models/earnings-account.model';
 import { EarningsReserveHoldModel } from '../models/earnings-reserve-hold.model';
+import { releasableAmount } from '../domain/clawback-netting';
 import { CashCollectionModel } from '../../cod/models/cash-collection.model';
 import { paysDeliveryFeeInCash } from '../../orders/domain/delivery-payer';
 import { COD_CONFIG, daysFromNow } from '../../cod/config/cod.config';
@@ -235,6 +236,10 @@ export class EarningsReleaseWorker implements ObservableWorker {
           const claimed = await this.allocationRepo.markReleased(allocation._id, new Date(), session);
           if (!claimed) return;
 
+          // Both release paths move `amount − clawed_amount` (releasableAmount), never `amount`:
+          // a refund that clawed part of this share while it was held already took that part
+          // out of pending. And both NET the owner's refund debt before crediting available.
+          //
           // COD rolling reserve: a slice of each COD-sourced AGENCY release
           // parks in reserve_balance for RESERVE_DAYS as security against
           // cash discrepancies (the agency is the cash-accountable party).
@@ -270,11 +275,15 @@ export class EarningsReleaseWorker implements ObservableWorker {
     }
   }
 
-  /** Reserve slice for a released allocation: COD agency shares only. */
+  /**
+   * Reserve slice for a released allocation: COD agency shares only, computed on the REMAINDER
+   * (`amount − clawed_amount`, REFUND-FLOW-PLAN § 6.1 (6)) — the part a refund took back while
+   * the share was held is no longer there to reserve.
+   */
   private reserveAmountFor(allocation: IEarningsAllocation): number {
     if (!allocation.requires_cash_settlement) return 0;
     if (allocation.beneficiary_type !== 'agency' || !allocation.beneficiary_id) return 0;
-    return Math.floor((allocation.amount * COD_CONFIG.RESERVE_PERCENT) / 100);
+    return Math.floor((releasableAmount(allocation) * COD_CONFIG.RESERVE_PERCENT) / 100);
   }
 
   /**

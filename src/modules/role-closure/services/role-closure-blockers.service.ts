@@ -255,6 +255,10 @@ export class RoleClosureBlockersService {
         + (account.reserve_balance ?? 0)
         + (account.requested_balance ?? 0);
       if (total !== 0) push('earnings_balance', 1, { amount: total, currency: account.currency });
+      // Beside the balance, never inside it: the balance is what we owe the role, this is what
+      // the role owes us (C-5). Closing over it would anonymise the party a debt is owed by.
+      const owed = account.clawback_balance ?? 0;
+      if (owed > 0) push('earnings_clawback_outstanding', 1, { amount: owed, currency: account.currency });
     }
   }
 }

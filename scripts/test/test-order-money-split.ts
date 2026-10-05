@@ -272,6 +272,39 @@ const reversed = summarise(
 assert('reversed lines are excluded from every total and counted apart', () =>
   reversed.totals.vendor === 0 && reversed.totals.platform.total === 0 && reversed.totals.reversed === 58500);
 assert('a reversed line makes the reconciliation incomplete', () => !reversed.reconciliation.complete);
+// REFUND-FLOW-PLAN § 6: a PARTIAL clawback leaves the line `released`/`held` with `clawedAmount`.
+const partlyClawed = summarise(
+  [
+    section({
+      lines: [
+        { ...line('vendor_net', 'vendor', 52450), status: 'released', clawedAmount: 10000 },
+        { ...line('commission', 'platform', 6050), status: 'released', clawedAmount: 1000 },
+      ],
+    }),
+  ],
+  65000,
+  [
+    {
+      kind: 'refund_clawback',
+      refundKey: 'rr1',
+      allocationId: null,
+      beneficiary: { type: 'vendor', id: 'vendor1' },
+      amount: 500,
+      goodsAmount: 0,
+      deliveryAmount: 500,
+      takenFrom: { pending: 0, reserve: 0, available: 0, debt: 500 },
+      createdAt: null,
+    },
+  ]
+);
+assert('a clawed line counts only what its beneficiary KEEPS; the clawed part goes to `reversed`', () =>
+  partlyClawed.totals.platform.commission === 5050 && partlyClawed.totals.reversed === 11500);
+assert('money charged to the vendor BEYOND their shares leaves the vendor total too', () =>
+  partlyClawed.totals.vendor === 52450 - 10000 - 500);
+assert('a clawback makes the reconciliation incomplete', () => !partlyClawed.reconciliation.complete);
+assert('an allocation line carries clawed_amount through as clawedAmount (legacy rows: 0)', () =>
+  lineFromAllocation(row({ amount: 900, clawed_amount: 300 }), NOW).clawedAmount === 300 &&
+  lineFromAllocation(row({ amount: 900 }), NOW).clawedAmount === 0);
 assert('a `none` section makes it incomplete too', () =>
   !summarise([section({ state: 'none', noneReason: 'order_void' })], 0).reconciliation.complete);
 assert('an unknown agent share counts as 0 in the sum (it is inside the agency line)', () => {

@@ -459,7 +459,9 @@ async function main() {
   await assert('a returned cash-fee shipment is quoted to the agency as earning 0 (like COD)', () =>
     earnedFeeFor(order(), shipment({ status: 'returned' }), 1_000, policies(true)) === 0
     && earnedFeeFor(order({ delivery_fee_payment: 'with_order' }), shipment({ status: 'returned' }), 1_000, policies(true)) === 600);
-  const refundSvc = read('modules/earnings/services/earnings-refund.service.ts');
+  // Since REFUND-FLOW-PLAN § 6 the order-refund scope lives in the clawback service, which
+  // `EarningsRefundService` now wraps.
+  const refundSvc = read('modules/earnings/services/earnings-clawback.service.ts');
   await assert('an order refund does NOT reverse a fee-only collection (the customer paid that fee in cash)', () =>
     /kind: \{ \$ne: 'delivery_fee' \}/.test(refundSvc));
   const settle = read('modules/cod/services/cod-settlement.service.ts');

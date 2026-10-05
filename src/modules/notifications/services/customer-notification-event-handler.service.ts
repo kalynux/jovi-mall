@@ -42,7 +42,9 @@ import {
     deliveryFailureLine,
     codReadyLine,
     deliveryFeeCashReadyLine,
-    ticketReopenLine
+    ticketReopenLine,
+    refundAmountLine,
+    refundDestinationLabel
 } from '../catalog/customer-notification-catalog';
 import type { ShipmentFailureReason } from '../../shipments/shipment.model';
 import { ChannelText } from '../catalog/notification-catalog';
@@ -127,6 +129,103 @@ export function customerTicketSituationFor(
     // be reopened by replying, and `reopenLine` carries the difference.
     if (newStatus === 'resolved' || newStatus === 'closed') return 'ticket.resolved';
     return null;
+}
+
+/** `payment.refunded` — the fields the refund messages read (REFUND-FLOW-PLAN § 3.4). */
+interface RefundedPayload {
+    orderId?: string;
+    bookingId?: string;
+    sourceKind?: string;
+    refundId?: string | null;
+    refundRequestId?: string;
+    /** What the CUSTOMER receives (the net). */
+    amount: number;
+    grossAmount?: number;
+    feeAmount?: number;
+    feeRate?: number;
+    netAmount?: number;
+    currency: string;
+    /** `card_refund` · `payout` · `external`; absent on a legacy (orchestrator) event. */
+    channel?: string | null;
+    destinationMasked?: string | null;
+}
+
+/** `refund.status_changed` — published by `RefundRequestService` after every lifecycle write. */
+export interface RefundStatusChangedPayload {
+    refundRequestId?: string;
+    sourceKind?: string;
+    orderId?: string;
+    bookingId?: string;
+    orderNumber?: string | null;
+    status?: string;
+    requestedByRole?: string | null;
+    paymentChannel?: string;
+    channel?: string | null;
+    grossAmount?: number;
+    feeAmount?: number;
+    feeRate?: number;
+    netAmount?: number;
+    currency?: string;
+    destinationMasked?: string | null;
+}
+
+/** Who may start a refund the customer is TOLD about at the request stage (R9). */
+const CUSTOMER_VISIBLE_REQUESTERS: readonly string[] = ['vendor', 'system', 'admin'];
+
+/**
+ * Which situation a refund request's CURRENT status is, for its customer (REFUND-FLOW-PLAN § 8).
+ * Pure and exported so `test:refund-customer-surface` drives the whole table without a database.
+ *
+ *  - `awaiting_approval` / `approved` → `*.refund.requested`, but ONLY when a vendor, the system or
+ *    an administrator started it. A Support request is an internal step on the customer's own
+ *    ticket — they asked; telling them "requested" back adds nothing, and the ticket reply does.
+ *  - `waiting_for_cash` → `order.refund.waiting_for_cash` (COD orders only; a booking is never COD).
+ *  - `sending` → `*.refund.sending`, ONLY for a payout: a card refund that is "sending" is a Stripe
+ *    answer we could not read, which is not news for the customer.
+ *  - `rejected` → `*.refund.declined`.
+ *  - `completed` → null here: `payment.refunded` carries it, with the ledger ids.
+ *  - `failed` → null, always: a customer never sees a failed transfer — the team retries it or pays
+ *    it by hand, and the customer is still owed the money.
+ */
+export function customerRefundSituationFor(p: Pick<RefundStatusChangedPayload, 'sourceKind' | 'status' | 'requestedByRole' | 'channel'>): CustomerNotificationType | null {
+    const order = p.sourceKind === 'order';
+    if (!order && p.sourceKind !== 'booking') return null;
+    switch (p.status) {
+        case 'awaiting_approval':
+        case 'approved':
+            if (!CUSTOMER_VISIBLE_REQUESTERS.includes(String(p.requestedByRole))) return null;
+            return order ? 'order.refund.requested' : 'booking.refund.requested';
+        case 'waiting_for_cash':
+            return order ? 'order.refund.waiting_for_cash' : null;
+        case 'sending':
+            if (p.channel !== 'payout') return null;
+            return order ? 'order.refund.sending' : 'booking.refund.sending';
+        case 'rejected':
+            return order ? 'order.refund.declined' : 'booking.refund.declined';
+        default:
+            return null;
+    }
+}
+
+/**
+ * Which situation a COMPLETED refund is (`payment.refunded`): a card refund — or a legacy event
+ * with no channel — keeps the existing full-amount message; a payout and an external settlement
+ * carry the net and the R-3 fee line. Pure; exported for the suite.
+ */
+export function customerRefundCompletedSituationFor(
+    sourceKind: 'order' | 'booking',
+    channel: string | null | undefined
+): CustomerNotificationType {
+    if (sourceKind === 'order') {
+        return channel === 'payout' ? 'order.refund.completed' : channel === 'external' ? 'order.refund.paid_externally' : 'order.refunded';
+    }
+    return channel === 'payout' ? 'booking.refund.completed' : channel === 'external' ? 'booking.refund.paid_externally' : 'booking.refunded';
+}
+
+/** The fee rate, recovered from the amounts when an event does not carry it (one decimal at most). */
+function feePercentOf(gross: number, fee: number): number {
+    if (!(gross > 0) || !(fee > 0)) return 0;
+    return Math.round((fee / gross) * 1000) / 10;
 }
 
 interface DispatchParams {
@@ -444,14 +543,14 @@ export class CustomerNotificationEventHandler {
 
         // Only the transitions a customer benefits from hearing about. `pending`
         // is the state during their own checkout — telling them is noise.
+        //
+        // ⚠ `refunded` and `refund_pending` are NOT taken here any more (REFUND-FLOW-PLAN § 8).
+        // Refund news comes from the refund REQUEST — `refund.status_changed` (requested · sending
+        // · declined) and `payment.refunded` (completed) — keyed per request, with the net and the
+        // fee. Mapping the payment status as well would tell the customer twice, in two different
+        // sentences. (Nothing published these two statuses on this event anyway.)
         const situation: CustomerNotificationType | null =
-            p.paymentStatus === 'paid'
-                ? 'booking.payment.received'
-                : p.paymentStatus === 'refunded'
-                    ? 'booking.refunded'
-                    : p.paymentStatus === 'refund_pending'
-                        ? 'booking.refund.pending'
-                        : null;
+            p.paymentStatus === 'paid' ? 'booking.payment.received' : null;
         if (!situation) return;
 
         const customer = await this.resolveCustomerByUserId(undefined, p.userId);
@@ -891,42 +990,168 @@ export class CustomerNotificationEventHandler {
      * per order would deliver the first partial refund and silently swallow every later one —
      * the customer would be told about 2,000 of a 5,000 return and never about the rest.
      *
-     * ⚠ **Bookings are dropped here on purpose.** The same event fires for a booking refund,
-     * and that customer is already told through `booking.payment.updated`
-     * (`handleBookingPaymentUpdated`). Taking it here too would send the refund twice.
+     * ⚠ **Bookings are dropped here on purpose** — `handleBookingRefunded` takes them, from the
+     * same event. (This used to say `booking.payment.updated` told that customer; nothing ever
+     * published it with `refunded`, so a booking refund was announced to nobody.)
+     *
+     * ⭐ **Routed on `channel` since the refund flow (REFUND-FLOW-PLAN § 8).** A CARD refund (or a
+     * legacy event with no channel) is `order.refunded`: full amount, back to the card, no fee. A
+     * PAYOUT is `order.refund.completed` and an EXTERNAL settlement `order.refund.paid_externally`,
+     * both with the net and the 2% fee line. `amount` is the NET — what the customer receives.
      *
      * Ungated by preference, as money is everywhere on this table (`SITUATION_PREFERENCE`).
      */
     async handleOrderRefunded(event: DomainEvent): Promise<void> {
-        const p = event.payload as {
-            orderId?: string;
-            bookingId?: string;
-            sourceKind?: string;
-            refundId?: string;
-            amount: number;
-            currency: string;
-        };
+        const p = event.payload as RefundedPayload;
 
         if (!p.orderId || p.bookingId || (p.sourceKind && p.sourceKind !== 'order')) return;
 
         const { customer, orderNumber, currency } = await this.customerFromOrder(p.orderId);
         if (!customer) return;
+        const lang = resolveLanguage(customer);
+        const situation = customerRefundCompletedSituationFor('order', p.channel)!;
+        const refundKey = p.refundRequestId ?? p.refundId ?? event.occurredAt?.valueOf?.() ?? Date.now();
 
         await this.notify({
-            situation: 'order.refunded',
+            situation,
             customerId: customer._id.toString(),
             aggregateType: 'order',
             aggregateId: p.orderId,
             // No refundId would mean an event published by something other than the
             // orchestrator; fall back to the stamp so it still cannot collide with a real one.
-            idempotencyKey: `customer.order.refunded:${p.orderId}:${p.refundId ?? event.occurredAt?.valueOf?.() ?? Date.now()}`,
+            idempotencyKey: situation === 'order.refunded'
+                ? `customer.order.refunded:${p.orderId}:${p.refundId ?? event.occurredAt?.valueOf?.() ?? Date.now()}`
+                : `customer.${situation}:${refundKey}`,
             context: {
                 orderId: p.orderId,
                 orderNumber: orderNumber ?? p.orderId,
                 currency: p.currency ?? currency,
-                amountFormatted: this.formatAmount(p.amount)
+                amountFormatted: this.formatAmount(p.amount),
+                ...this.refundMoneyContext(p, p.currency ?? currency ?? 'XAF', lang)
             }
         });
+    }
+
+    /**
+     * ⭐ A BOOKING refund arrived — the booking half of `payment.refunded`, which nothing
+     * announced until the refund flow (REFUND-FLOW-PLAN § 8). Same routing as the order half:
+     * card → `booking.refunded`, payout → `booking.refund.completed`, external →
+     * `booking.refund.paid_externally`. Keyed per refund request.
+     */
+    async handleBookingRefunded(event: DomainEvent): Promise<void> {
+        const p = event.payload as RefundedPayload;
+        if (!p.bookingId || (p.sourceKind && p.sourceKind !== 'booking')) return;
+
+        const { customer, context } = await this.refundBookingContext(p.bookingId);
+        if (!customer || !context) return;
+        const lang = resolveLanguage(customer);
+        const situation = customerRefundCompletedSituationFor('booking', p.channel)!;
+        const refundKey = p.refundRequestId ?? p.refundId ?? event.occurredAt?.valueOf?.() ?? Date.now();
+        const currency = p.currency ?? context.currency ?? 'XAF';
+
+        await this.notify({
+            situation,
+            customerId: customer._id.toString(),
+            aggregateType: 'booking',
+            aggregateId: p.bookingId,
+            idempotencyKey: `customer.${situation}:${p.bookingId}:${refundKey}`,
+            context: {
+                bookingId: p.bookingId,
+                serviceName: context.serviceName ?? this.genericService(lang),
+                currency,
+                amountFormatted: this.formatAmount(p.amount),
+                ...this.refundMoneyContext(p, currency, lang)
+            }
+        });
+    }
+
+    /**
+     * A refund request moved (`refund.status_changed`, REFUND-FLOW-PLAN § 8) — requested, waiting
+     * for the courier's cash (COD), being sent, or declined. The policy is
+     * `customerRefundSituationFor` (pure, exported for the suite); this does the I/O.
+     *
+     * Keyed per (request, situation): a request can announce the same status twice (a retry goes
+     * back to `sending`), and the customer must hear it once.
+     */
+    async handleRefundStatusChanged(event: DomainEvent): Promise<void> {
+        const p = event.payload as RefundStatusChangedPayload;
+        const situation = customerRefundSituationFor(p);
+        if (!situation || !p.refundRequestId) return;
+
+        if (p.sourceKind === 'order' && p.orderId) {
+            const { customer, orderNumber, currency } = await this.customerFromOrder(p.orderId);
+            if (!customer) return;
+            const lang = resolveLanguage(customer);
+            const cur = p.currency ?? currency ?? 'XAF';
+            await this.notify({
+                situation,
+                customerId: customer._id.toString(),
+                aggregateType: 'order',
+                aggregateId: p.orderId,
+                idempotencyKey: `customer.${situation}:${p.refundRequestId}`,
+                context: {
+                    orderId: p.orderId,
+                    orderNumber: p.orderNumber ?? orderNumber ?? p.orderId,
+                    currency: cur,
+                    amountFormatted: this.formatAmount(p.grossAmount ?? 0),
+                    ...this.refundMoneyContext({ ...p, amount: p.netAmount ?? 0 }, cur, lang)
+                }
+            });
+            return;
+        }
+
+        if (p.sourceKind === 'booking' && p.bookingId) {
+            const { customer, context } = await this.refundBookingContext(p.bookingId);
+            if (!customer || !context) return;
+            const lang = resolveLanguage(customer);
+            const cur = p.currency ?? context.currency ?? 'XAF';
+            await this.notify({
+                situation,
+                customerId: customer._id.toString(),
+                aggregateType: 'booking',
+                aggregateId: p.bookingId,
+                idempotencyKey: `customer.${situation}:${p.refundRequestId}`,
+                context: {
+                    bookingId: p.bookingId,
+                    serviceName: context.serviceName ?? this.genericService(lang),
+                    currency: cur,
+                    amountFormatted: this.formatAmount(p.grossAmount ?? 0),
+                    ...this.refundMoneyContext({ ...p, amount: p.netAmount ?? 0 }, cur, lang)
+                }
+            });
+        }
+    }
+
+    /** The money half of every refund message: net, destination and the R-3 fee line. */
+    private refundMoneyContext(
+        p: { amount?: number; netAmount?: number; grossAmount?: number; feeAmount?: number; feeRate?: number; destinationMasked?: string | null },
+        currency: string,
+        lang: Language
+    ): RenderContext {
+        const net = p.netAmount ?? p.amount ?? 0;
+        const fee = p.feeAmount ?? 0;
+        const gross = p.grossAmount ?? net + fee;
+        return {
+            netFormatted: this.formatAmount(net),
+            destination: refundDestinationLabel(p.destinationMasked ?? null, lang),
+            amountLine: refundAmountLine(
+                { netAmount: net, grossAmount: gross, feeAmount: fee, feePercent: p.feeRate ?? feePercentOf(gross, fee), currency },
+                lang
+            )
+        };
+    }
+
+    /** The customer and the service name behind a booking refund. `Booking.userId` is a USERS id. */
+    private async refundBookingContext(
+        bookingId: string
+    ): Promise<{ customer: ICustomer | null; context: { serviceName: string | null; currency: string } | null }> {
+        if (!mongoose.Types.ObjectId.isValid(bookingId)) return { customer: null, context: null };
+        const booking = await Booking.findById(bookingId).select('userId').lean<{ userId?: unknown } | null>();
+        if (!booking?.userId) return { customer: null, context: null };
+        const customer = await this.resolveCustomerByUserId(undefined, String(booking.userId));
+        if (!customer) return { customer: null, context: null };
+        const ctx = await this.bookingContext(bookingId, customer, resolveLanguage(customer));
+        return { customer, context: ctx ? { serviceName: ctx.serviceName, currency: ctx.currency } : null };
     }
 
     /**
@@ -1389,13 +1614,16 @@ export class CustomerNotificationEventHandler {
                 ar: 'تم رد دفعتك وعادة ما تظهر خلال أيام عمل قليلة.'
             });
         }
+        // Since 2026-10-05 (REFUND-FLOW-PLAN § 4) `refund_pending` means "a refund request is
+        // open": usually already sending to the number that paid, sometimes waiting for an
+        // administrator. It no longer means a person is paying it by hand, so the copy says neither.
         if (paymentStatus === 'refund_pending') {
             return this.line(lang, {
-                en: 'We owe you a refund and our team is sending it by hand — we will confirm when it is done.',
-                fr: 'Nous vous devons un remboursement et notre équipe l\'envoie manuellement — nous confirmerons une fois effectué.',
-                pt: 'Devemos-lhe um reembolso e a nossa equipa está a enviá-lo manualmente — confirmaremos quando estiver feito.',
-                es: 'Te debemos un reembolso y nuestro equipo lo está enviando a mano — te confirmaremos cuando esté hecho.',
-                ar: 'ندين لك باسترداد وفريقنا يرسله يدويًا — سنؤكد لك عند الانتهاء.'
+                en: 'A refund of your payment has been requested — we will tell you when the money is sent.',
+                fr: 'Le remboursement de votre paiement a été demandé — nous vous préviendrons dès que l\'argent sera envoyé.',
+                pt: 'Foi pedido o reembolso do seu pagamento — avisamos quando o dinheiro for enviado.',
+                es: 'Se ha solicitado el reembolso de tu pago — te avisaremos cuando se envíe el dinero.',
+                ar: 'تم طلب استرداد دفعتك — سنخبرك عند إرسال المبلغ.'
             });
         }
         if (paymentStatus === 'paid') {

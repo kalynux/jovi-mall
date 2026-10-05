@@ -6,8 +6,6 @@ import {
   PaymentInitResult,
   PaymentVerifyPayload,
   PaymentVerifyResult,
-  RefundPayload,
-  RefundResult,
   PayoutPayload,
   PayoutResult,
   PayoutBalance,
@@ -42,7 +40,7 @@ import { recordIntegrationCall } from '../../system/domain/integration-observati
  * ── AUTHENTICATION USES TWO OF THREE KEYS ────────────────────────────────────
  * `Authorization` carries the PUBLIC key (`pk_…`) on every call. `X-Grant`
  * carries the PRIVATE key (`sk_…`) and is required only on sensitive endpoints
- * — for us, refunds. The third key, the Hash Key (`hsk_…`), signs webhooks and
+ * — for us, transfers. The third key, the Hash Key (`hsk_…`), signs webhooks and
  * is never sent anywhere; it only verifies. Putting the wrong one in
  * `Authorization` fails with a 401 that reads like a revoked account.
  *
@@ -215,75 +213,17 @@ export class NotchPayGateway implements PaymentGateway {
     }
   }
 
-  /**
-   * The integration exists; the account may not be allowed to use it. See
-   * `NOTCHPAY_CONFIG.REFUNDS_ENABLED` — verified 403 on this account today, so
-   * the up-front verdict reports "no" rather than offering a button that fails.
+  /*
+   * ⛔ NO `refundPayment` and NO `refundAvailable` — REMOVED 2026-10-05 (REFUND-FLOW-PLAN R-1).
+   *
+   * NotchPay ships a `/refunds` API that this merchant account may not use (`POST /refunds`
+   * answered 403 for every body shape, verified 2026-08-18), and the owner decided every
+   * mobile-money refund becomes a PAYOUT on the active payout gateway instead
+   * (`RefundRequestService`, `jm_rf_` reference). With the method absent, `gatewaySupportsRefund`
+   * answers false here by construction — card refunds through Stripe are the only gateway
+   * refunds left. Do not re-add it: a second way of returning mobile money would bypass the
+   * refund request lifecycle, its 2% fee and its earnings recovery.
    */
-  refundAvailable(): boolean {
-    return NOTCHPAY_CONFIG.REFUNDS_ENABLED;
-  }
-
-  async refundPayment(payload: RefundPayload): Promise<RefundResult> {
-    try {
-      const response = await this.call(
-        '/refunds',
-        'POST',
-        {
-          payment: payload.gatewayRef,
-          // Omitted entirely for a full refund — NotchPay treats an absent
-          // amount as "all of it", and sending the full figure explicitly is
-          // rejected by some accounts.
-          ...(payload.amount > 0 ? { amount: payload.amount } : {}),
-          reason: payload.reason || 'Refund issued by the merchant',
-        },
-        { grant: true }
-      );
-
-      const refundRef: string | undefined = response?.refund?.id ?? response?.refund?.reference;
-      const refundStatus: string = String(response?.refund?.status ?? response?.status ?? '');
-      const settled = ['complete', 'completed', 'success', 'pending', 'processing'].includes(
-        refundStatus.toLowerCase()
-      );
-
-      return {
-        success: Boolean(refundRef) && settled,
-        refundRef,
-        error: settled ? undefined : response?.message || 'NotchPay refused the refund',
-        rawResponse: response,
-      };
-    } catch (error: any) {
-      // ⚠ 403 is an ANSWER, not a fault. Verified against the live sandbox on
-      // 2026-08-18: `GET /refunds` returns 200 with the same credentials, and
-      // `POST /refunds` returns a bare `{"code":"403","status":"Forbidden"}`
-      // for every body shape tried — `payment`, `transaction`, `reference`,
-      // with and without `amount`. So the endpoint exists, the keys are right,
-      // and refund CREATION is disabled on the account.
-      //
-      // Reporting that as a failure would send an operator hunting an outage
-      // and would surface a 502 to a vendor through `VendorRefundService`,
-      // which has no fallback. Reporting it as unsupported routes the money
-      // through the manual-payout ticket that already exists for My-CoolPay.
-      //
-      // If NotchPay enables refunds on this merchant account, this branch stops
-      // firing on its own and the real refund path takes over — no code change.
-      if (error instanceof AppError && this.isRefundForbidden(error)) {
-        console.warn('[NotchPayGateway] refunds are not enabled on this account (403)');
-        return {
-          success: false,
-          unsupported: true,
-          error: 'NotchPay refunds are not enabled on this merchant account',
-          rawResponse: error.details ?? null,
-        };
-      }
-      console.error('[NotchPayGateway] refundPayment error:', error?.message ?? error);
-      return {
-        success: false,
-        error: error?.message || 'Refund failed',
-        rawResponse: null,
-      };
-    }
-  }
 
   /**
    * What to tell the customer, derived from the charge response's `action`.
@@ -306,13 +246,6 @@ export class NotchPayGateway implements PaymentGateway {
       default:
         return 'Follow the prompt on your phone to complete this payment.';
     }
-  }
-
-  private isRefundForbidden(error: AppError): boolean {
-    return (
-      error.code === ERROR_CODES.NOTCHPAY_REQUEST_FAILED &&
-      (error.details as { status?: number } | undefined)?.status === 403
-    );
   }
 
   // ── Webhook ───────────────────────────────────────────────────────────────
@@ -616,7 +549,7 @@ const direction = directionOfEventType(type);
   /**
    * Is this failure a knowable "cannot send" rather than a fault?
    *
-   * Mirrors `isRefundForbidden` and differs in one respect that matters: a 403 on
+   * Mirrors the (removed) refund-403 check and differs in one respect that matters: a 403 on
    * `/transfers` has two plausible causes — transfers disabled on the account, or an egress
    * IP that is not on the allowlist — and from here they are indistinguishable. Both are
    * configuration, neither is transient, and an operator told only "forbidden" will check
@@ -731,7 +664,7 @@ const direction = directionOfEventType(type);
       throw createAppError(
         ERROR_CODES.PAYMENT_GATEWAY_NOT_IMPLEMENTED,
         503,
-        'NotchPay refunds need NOTCHPAY_PRIVATE_KEY (the X-Grant credential).'
+        'NotchPay transfers need NOTCHPAY_PRIVATE_KEY (the X-Grant credential).'
       );
     }
 

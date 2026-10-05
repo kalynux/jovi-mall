@@ -24,7 +24,7 @@ import {
 } from '../domain/webhook-verification';
 import { FAPSHI_CONFIG } from '../config/payments.config';
 import { isZeroDecimalCurrency } from '../domain/money';
-import { merchantRefKind } from '../domain/merchant-reference';
+import { merchantRefKind, isMoneyOutRef } from '../domain/merchant-reference';
 import {
   CameroonMobileOperator,
   resolveCameroonOperator,
@@ -521,7 +521,8 @@ export function fapshiEventFrom(record: Record<string, unknown>, raw: unknown): 
 
   const merchantRef = fapshiMerchantRef(record);
   const transType = String(record.transType ?? '').trim().toLowerCase();
-  const payout = transType ? transType === 'payout' : merchantRefKind(merchantRef) === 'po';
+  // With no transType, `po` (a payout) AND `rf` (a refund sent as a transfer) are money out.
+  const payout = transType ? transType === 'payout' : isMoneyOutRef(merchantRef);
   const word = String(record.status ?? '').trim().toUpperCase();
   return {
     eventId: deriveEventId(['fapshi', gatewayRef, word]),

@@ -229,16 +229,19 @@ assert('every gateway reports its own name, and it matches its registry key', ()
  * Reporting that as supported puts a button in front of an administrator that
  * fails the instant it is pressed.
  */
-assert('Stripe and NotchPay IMPLEMENT refunds; My-CoolPay has no refund API at all', () =>
+// REFUND-FLOW-PLAN R-1 (2026-10-05): only Stripe refunds through its API. NotchPay's
+// `refundPayment` was REMOVED with its account switch; every mobile-money refund is a payout
+// through `RefundRequestService` (`test:refund-flow` pins the rest).
+assert('Stripe IMPLEMENTS refunds; NotchPay and My-CoolPay have no refund method at all', () =>
   gatewayImplementsRefund('STRIPE') &&
-  gatewayImplementsRefund('NOTCHPAY') &&
+  !gatewayImplementsRefund('NOTCHPAY') &&
   !gatewayImplementsRefund('MYCOOLPAY'));
 
 assert('refund AVAILABILITY additionally consults the account-level gate', () =>
   gatewaySupportsRefund('STRIPE') && !gatewaySupportsRefund('MYCOOLPAY'));
 
-assert('NotchPay refund availability follows NOTCHPAY_REFUNDS_ENABLED, default off', () =>
-  gatewaySupportsRefund('NOTCHPAY') === (process.env.NOTCHPAY_REFUNDS_ENABLED === 'true'));
+assert('NotchPay refunds are unavailable — no switch can turn them back on', () =>
+  !gatewaySupportsRefund('NOTCHPAY') && typeof (PAYMENT_GATEWAYS.get('NOTCHPAY') as any).refundAvailable === 'undefined');
 
 assert('My-CoolPay does not merely stub refundPayment — the method is ABSENT', () =>
   typeof PAYMENT_GATEWAYS.get('MYCOOLPAY')!.refundPayment === 'undefined');

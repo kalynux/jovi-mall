@@ -621,9 +621,11 @@ async function main(): Promise<void> {
      * commit (`admin/src/infra/storage/storage-trees.ts`); its own `test:files` re-reads this
      * repository's file from disk and fails on any difference, in both directions.
      */
-    assert('the private trees are exactly admin-identity, cod-proofs, digital, kyc, shipments, ticket-attachments', () =>
+    // `refund-proofs` joined on 2026-10-05 (REFUND-FLOW-PLAN § 7): the customer's message giving
+    // a typed refund number, and the receipt of a refund paid outside the platform.
+    assert('the private trees are exactly admin-identity, cod-proofs, digital, kyc, refund-proofs, shipments, ticket-attachments', () =>
         [...PRIVATE_STORAGE_TREES].sort().join(',')
-            === 'admin-identity,cod-proofs,digital,kyc,shipments,ticket-attachments');
+            === 'admin-identity,cod-proofs,digital,kyc,refund-proofs,shipments,ticket-attachments');
     assert('an unknown tree is PRIVATE — a tree added next year is not public by default', () =>
         isPrivateStorageKey('some-new-tree/2027/01/x.pdf'));
     assert('…and so is a key with no tree at all', () =>

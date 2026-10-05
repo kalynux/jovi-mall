@@ -57,6 +57,7 @@ import {
     botFulfillmentStateLabel,
     botOrderCopy,
     botPaymentStateLabel,
+    botRefundLine,
     botShipmentStateLabel,
     toBotOrderPaymentState,
 } from '../domain/bot-order-status-copy';
@@ -1229,8 +1230,8 @@ function isCancellableFromChat(order: CustomerOrderDto): boolean {
 /**
  * The card itself.
  *
- * Three lines, in the order a customer reads them: which order, how it is going, what it cost.
- * The store is named because a checkout group splits across sellers and "your order" is
+ * Three lines, in the order a customer reads them: which order, how it is going, what it cost —
+ * and a fourth, the refund, only when one was requested. The store is named because a checkout group splits across sellers and "your order" is
  * ambiguous the moment there are two.
  */
 function orderCardText(order: CustomerOrderDto, language: string | null): string {
@@ -1243,8 +1244,11 @@ function orderCardText(order: CustomerOrderDto, language: string | null): string
         cashOnDelivery: order.paymentMethod === 'cash_on_delivery',
     });
     const money = formatBotPrice(order.total, order.currency);
+    // The fourth line, only when a refund was requested (REFUND-FLOW-PLAN § 8) — NET figure,
+    // fee note only when there is a fee. Wording is the shared table's, never this file's.
+    const refund = order.refund ? botRefundLine(order.refund, language, formatBotPrice) : null;
 
-    return `${heading}\n${state} · ${payment}\n${money}`;
+    return `${heading}\n${state} · ${payment}\n${money}${refund ? `\n${refund}` : ''}`;
 }
 
 /**

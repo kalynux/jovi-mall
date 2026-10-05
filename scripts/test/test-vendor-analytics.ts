@@ -115,6 +115,14 @@ section('4. Nothing reads the old snapshot');
     assert('the service reads earnings allocations', /EarningsAllocationModel\.find/.test(code));
     assert('no `$lte` on a period bound (the dropped-last-day bug)', !/\$lte/.test(code));
     assert('no multiplication by a commission or margin rate', !/commission_percent|AI_MARGIN|\*\s*0\.3\b/.test(code));
+    // REFUND-FLOW-PLAN § 6: refunds now claw shares PARTIALLY and from released money, recorded
+    // one `earnings_adjustments` row per share. Those rows are the reversals; an allocation is
+    // counted from `reversed_at` only when the pre-clawback path reversed it (clawed_amount 0),
+    // so a fully clawed row is never counted twice.
+    assert('reversals read refund clawbacks from earnings_adjustments (partial ones included)',
+        /EarningsAdjustmentModel\.find\(\{[\s\S]{0,80}kind:\s*'refund_clawback'/.test(code));
+    assert('a reversed allocation counts only when NO clawback recorded it (no double count)',
+        /reversed_at:\s*window,\s*clawed_amount:\s*\{\s*\$in:\s*\[0,\s*null\]\s*\}/.test(code));
 }
 
 section('4b. Stored nightly days give the same answer as a live read');

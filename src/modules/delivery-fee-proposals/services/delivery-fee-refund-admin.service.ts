@@ -63,6 +63,14 @@ const MANUAL_FILTER: FilterQuery<IDeliveryFeeRefund> = {
  *  - money paid by hand is subtracted from every later "what can this order still return"
  *    ceiling (`sumDeliveryRefundsPaidByHand`), so the order cannot be refunded past its charge.
  *
+ * ── Folded into the refund queue (REFUND-FLOW-PLAN § 7, 2026-10-05) ──────────
+ * Delivery money owed back is now a REFUND REQUEST (`DeliveryFeeRefundService`), worked in the
+ * refund queue (`/api/internal/admin/refunds`): approve sends it, settle-external records a hand
+ * payment WITH its picture proof. This screen keeps answering — wi-admin's money module still
+ * calls it — for the rows that never had a request (written before the change, or where none
+ * could be opened) and for rows whose request was REJECTED. A row linked to an open request is
+ * refused here (`409 DELIVERY_FEE_REFUND_NOT_SETTLEABLE` + `refundRequestId`).
+ *
  * Authorization is wi-admin's (the service token is full-privilege; `X-Actor-Tier` is advisory and
  * never read here). This side stamps WHO from the caller headers (`actorFromRequest`) and writes
  * an `admin_action_log` row inside the settling transaction.
@@ -117,6 +125,34 @@ export class DeliveryFeeRefundAdminService {
     const row = await DeliveryFeeRefundModel.findById(refundId).exec();
     if (!row) throw createAppError(ERROR_CODES.DELIVERY_FEE_REFUND_NOT_FOUND, 404);
     if (row.status !== 'manual_required') throw refusalToError({ code: 'not_settleable', status: row.status });
+    // ⚠ A row moved onto a refund REQUEST (REFUND-FLOW-PLAN § 7, 2026-10-05) is settled in the
+    // refund queue, with its picture proof (R-7b) — never here, where paying it by hand while the
+    // request can still send would pay the customer twice. Only once that request was REJECTED
+    // does the row come back to this screen.
+    const { refundRequestService } = await import('../../payments/services/refund-request.service');
+    // Review finding 5: ANY refund request open on the ORDER can still send money out of the same
+    // ceiling — paying delivery money by hand meanwhile could return more than was charged. The
+    // request is worked (or rejected) first; its own claim re-checks the ceiling too.
+    const openOrderRefund = await refundRequestService.findOpenForSource('order', row.order_id.toString());
+    if (openOrderRefund) {
+      throw createAppError(
+        ERROR_CODES.DELIVERY_FEE_REFUND_NOT_SETTLEABLE,
+        409,
+        'A refund of this order is open in the refund queue — finish or reject it before paying delivery money by hand',
+        { status: row.status, refundRequestId: openOrderRefund.id, refundRequestStatus: openOrderRefund.status }
+      );
+    }
+    if (row.refund_request_id) {
+      const request = await refundRequestService.getById(row.refund_request_id.toString());
+      if (request && request.status !== 'rejected') {
+        throw createAppError(
+          ERROR_CODES.DELIVERY_FEE_REFUND_NOT_SETTLEABLE,
+          409,
+          'This delivery-fee refund is in the refund queue — approve, settle or reject it there',
+          { status: row.status, refundRequestId: request.id, refundRequestStatus: request.status }
+        );
+      }
+    }
     const order = await OrderModel.findById(row.order_id).select('_id order_number currency customer_id total_amount payment_method').exec();
     if (!order) throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404);
 

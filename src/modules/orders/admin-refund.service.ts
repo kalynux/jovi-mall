@@ -2,79 +2,73 @@ import { Types } from 'mongoose';
 import { IOrder, OrderModel } from './order.model';
 import { IVendorReturnPolicy } from '../vendors/vendor.model';
 import { VendorRepository } from '../vendors/vendor.repository';
-import { VendorCustomerSyncService } from '../vendors/services/vendor-customer-sync.service';
 import {
     RefundEligibilityDto,
     computeVendorRefundEligibility,
-    findSuccessfulPaymentForOrder,
+    findRefundableMoneyForOrder,
+    reasonKindOf,
 } from '../vendor/service/vendor-refund.service';
-import { PaymentOrchestratorService } from '../payments/services/payment-orchestrator.service';
-import { gatewaySupportsRefund } from '../payments/gateways/registry';
+import { refundRequestService, RefundRequestService } from '../payments/services/refund-request.service';
+import { sumCompletedRefundsForOrder } from '../payments/services/refund-ledger';
+import { IRefundRequest } from '../payments/models/refund-request.model';
+import { maxAttributable, ReturnShippingPayer } from '../payments/domain/refund-attribution';
 import { PaymentGatewayType } from '../payments/models/payment-transaction.model';
-import { createAppError } from '../../core/errors';
+import { AppError, createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
 
 /**
- * AdminRefundService — the platform's refund path, and the THIRD policy layer over one
- * money pipeline.
+ * The amount at and above which this LEGACY route refuses and points at the refund queue.
  *
- * ── Why a third layer rather than a flag ──────────────────────────────────────
- * There are two existing entry points and neither fits.
+ * The same number as wi-admin's `LARGE_REFUND` / `LARGE_PAYOUT` four-eyes line: this route creates
+ * AND approves in one call, so it has no second administrator — and the queue
+ * (`/api/internal/admin/refunds`) is where wi-admin enforces one. Below the line the legacy
+ * route keeps working for the screens that still call it.
+ */
+export const LEGACY_ADMIN_REFUND_CEILING = 2_000_000;
+
+/**
+ * AdminRefundService — the platform's LEGACY refund door (`POST /api/internal/admin/orders/:orderId/refund`).
  *
- * `VendorRefundService` is hard-scoped (`loadOwnedOrder(vendorId, orderId)`) and enforces
- * the vendor's four commercial gates: `return_eligible`, `refund_type !== 'none'`, the
- * return window, and `refund_percentage`. Those are the VENDOR's promises to their
- * CUSTOMER. An administrator refunding — settling a chargeback, closing a fraud case,
- * answering a regulator — IS the act of overriding them, so entering there means telling
- * an operator "the vendor's 14-day window expired" about an order the platform has already
- * decided to refund. Adding an `overridePolicy` flag to that service would be worse: a
- * policy layer that can be told to skip itself is not a policy layer, and it would leave
- * the vendor's own endpoint one boolean away from ignoring the vendor's policy.
+ * ── What changed (REFUND-FLOW-PLAN § 4, 2026-10-05) ──────────────────────────────
+ * It used to call the gateway's refund API synchronously, so it refused mobile money (no API)
+ * and COD (no charge). It now OPENS A REFUND REQUEST through `RefundRequestService`, created and
+ * approved in one call — the administrator IS the approver — so:
+ *   - card       → refunded through Stripe in the call (`completed`);
+ *   - mobile money → a transfer to the number that paid (`sending`), fee taken (R-3);
+ *   - COD, or no paying number on record → `awaiting_approval` in the refund queue, where a
+ *     number is typed with its proof and a SECOND administrator approves (R-7). This route has
+ *     no destination field, deliberately: a typed number is the queue's job.
+ * ⛔ A refund of 2,000,000 or more is REFUSED here (`422 REFUND_USE_REFUND_QUEUE`): the
+ * four-eyes approval at that line lives on the queue, and this route would bypass it.
  *
- * The bare orchestrator is the other extreme. It requires a `vendorId` only the order
- * knows, computes no ceiling of its own, and — the real one — never runs
- * `recordFullRefund`, so an admin path that called it directly would silently drift every
- * refunded customer's denormalised lifetime spend away from the vendor path's.
- *
- * ── What this file may and may not override ───────────────────────────────────
- *
+ * ── What it may and may not override (unchanged) ───────────────────────────────
  *   MAY (the vendor's commercial terms)      MUST NOT (the money invariants)
- *   ─────────────────────────────────────    ────────────────────────────────────────────
  *   return_eligible === false                more than the remaining refundable balance
- *   refund_type === 'none'                   an order with no SUCCEEDED payment
- *   the return window                        a gateway with no refund API
- *   refund_percentage                        an already fully-refunded payment
- *                                            the pipeline shape (pending row → gateway →
- *                                            atomic finalize → escrow reversal)
+ *   refund_type === 'none'                   more than the attribution rule allows (C-1, D-5)
+ *   the return window                        an order with nothing paid
+ *   refund_percentage                        a second open refund on the order
  *
- * Every entry in the right column already lives inside `refundPayment`, and NONE of them
- * is reimplemented here. `overridePolicy` never reaches the orchestrator: an amount above
- * the remaining balance is `REFUND_AMOUNT_EXCEEDS_MAX` whatever the flag says. **The flag
- * overrides a commercial policy, never a money invariant.**
- *
- * The one guard this file adds is COD, which the orchestrator cannot express because it
- * does not know the source is COD.
+ * The money invariants are `RefundRequestService.create`'s and are not reimplemented here.
+ * `overridePolicy` overrides a commercial policy, never a money invariant.
  */
 
 export interface AdminRefundEligibilityDto {
-    /** The MONEY verdict — is there a gateway payment with a balance to refund? */
+    /** The MONEY verdict — is there money with a balance to refund? */
     eligible: boolean;
-    /** The full remaining balance. Deliberately NOT the vendor's policy fraction. */
+    /**
+     * The most a refund may return: the remaining balance capped by the attribution rule (after
+     * delivery the customer's delivery money comes back only per the vendor's return-shipping
+     * setting, C-1). Deliberately NOT the vendor's policy fraction.
+     */
     maxRefundable: number;
     remaining: number;
     currency: string | null;
     reasonCode?: string;
     gateway: PaymentGatewayType | null;
     /**
-     * Whether that gateway can actually refund. Stripe and NotchPay can; My-CoolPay's
-     * API has no refund endpoint at all, so it raises `REFUND_GATEWAY_NOT_SUPPORTED`
-     * and the money goes back through the manual-payout ticket instead.
-     *
-     * **Derived from the gateway registry**, never from a list kept beside it — see the
-     * note above `AdminRefundService`.
-     *
-     * Reported UP FRONT on purpose. Discovering it after the button is pressed leaves a
-     * `pending` RefundTransaction behind and an operator who thinks money moved.
+     * Whether the money goes back on its own once approved: a card (Stripe's refund API) or a
+     * mobile-money payment whose paying number is on record (a payout). False for COD and for a
+     * payment with no number — those wait in the refund queue for a typed number.
      */
     gatewayRefundSupported: boolean;
     isCod: boolean;
@@ -82,6 +76,10 @@ export interface AdminRefundEligibilityDto {
     vendorPolicy: RefundEligibilityDto;
     /** Which vendor gates a refund would bypass. Empty ⇒ no override in play. */
     overrides: VendorPolicyOverride[];
+    /** A refund request already open on the order — a second one is refused until it closes. */
+    openRefundRequest: { id: string; status: IRefundRequest['status'] } | null;
+    /** At or above this, this route refuses: use the refund queue (four-eyes). */
+    legacyRouteCeiling: number;
 }
 
 export type VendorPolicyOverride =
@@ -95,32 +93,32 @@ export type VendorPolicyOverride =
     | 'above_policy_maximum';
 
 export interface AdminRefundResultDto {
+    /** @deprecated alias of `refundRequestId` (it used to be a `refund_transactions` id). */
     refundId: string;
-    status: 'completed';
+    refundRequestId: string;
+    /** The REQUEST's status — `completed` (card), `sending`, `awaiting_approval`, `failed`, … */
+    status: IRefundRequest['status'];
+    /** GROSS — what the order loses. */
     amount: number;
+    grossAmount: number;
+    feeAmount: number;
+    netAmount: number;
     currency: string;
+    paymentChannel: IRefundRequest['payment_channel'];
+    channel: IRefundRequest['channel'];
+    transferFailureReason: string | null;
     totalRefunded: number;
+    /** True only once the refund COMPLETED and squared the order. */
     fullyRefunded: boolean;
     /** False when the refund went beyond what the vendor's policy would have allowed. */
     withinVendorPolicy: boolean;
     overrides: VendorPolicyOverride[];
 }
 
-// The hardcoded `NON_REFUNDABLE_GATEWAYS = ['NOTCHPAY','MYCOOLPAY']` that used to
-// live here is gone. It answered the same question as the guard in
-// `PaymentOrchestratorService.refundPayment` from a different file, and the two
-// disagreed: both mobile gateways DEFINED a `refundPayment` that always failed, so
-// that guard never fired and the code actually raised was `REFUND_GATEWAY_FAILED`
-// while this list — and the api-doc — promised `REFUND_GATEWAY_NOT_SUPPORTED`.
-//
-// `gatewaySupportsRefund` derives the answer from the registry, so the up-front
-// verdict and the enforcement cannot drift. NotchPay now has a real refund API;
-// My-CoolPay has no refund endpoint at all and deliberately omits the method.
-
 export class AdminRefundService {
     private vendorRepo = new VendorRepository();
-    private orchestrator = new PaymentOrchestratorService();
-    private vendorCustomerSync = new VendorCustomerSyncService();
+
+    constructor(private readonly refunds: RefundRequestService = refundRequestService) {}
 
     /**
      * What an administrator may refund, and what it would cost the vendor's policy.
@@ -129,24 +127,23 @@ export class AdminRefundService {
      * `getEligibility`, because a dashboard renders this before offering a button.
      */
     async getEligibility(orderId: string): Promise<AdminRefundEligibilityDto> {
-        const { order, returnPolicy, paymentTx } = await this.load(orderId);
-        return this.evaluate(order, returnPolicy, paymentTx, null);
+        const { order, returnPolicy } = await this.load(orderId);
+        return this.evaluate(order, returnPolicy, null, null);
     }
 
     /**
-     * Refund an order on the platform's authority.
+     * Refund an order on the platform's authority: open a refund request, approved in the same
+     * call when there is somewhere to send the money.
      *
      * `reason` is REQUIRED where the vendor's is optional: an administrator overriding a
-     * vendor's commercial policy has to say why, the vendor will ask, and
-     * `RefundTransaction.reason` is the only place jovi-mall can store it — wi-admin's
-     * audit trail lives in a database this service cannot read.
+     * vendor's commercial policy has to say why, the vendor will ask.
      */
     async refund(
         orderId: string,
-        input: { amount?: number; reason: string; overridePolicy?: boolean },
+        input: { amount?: number; reason: string; overridePolicy?: boolean; itemDefective?: boolean },
         actor: { id: string; name?: string | null }
     ): Promise<AdminRefundResultDto> {
-        const { order, returnPolicy, paymentTx } = await this.load(orderId);
+        const { order, returnPolicy } = await this.load(orderId);
 
         // A frozen order is not refundable from here — the dispute path owns that money,
         // and resolving the dispute `lost` is the verb for it. Consistent with every other
@@ -158,17 +155,15 @@ export class AdminRefundService {
             });
         }
 
-        // COD money never went through a gateway, so there is nothing to reverse. Its own
-        // code rather than falling through to REFUND_PAYMENT_NOT_FOUND, which reads as
-        // "the record is missing" when the truth is "this was cash".
-        if (order.payment_method === 'cash_on_delivery') {
-            throw createAppError(ERROR_CODES.REFUND_ORDER_IS_COD, 422, undefined, { orderId });
+        const verdict = await this.evaluate(order, returnPolicy, input.amount ?? null, input.itemDefective ?? null);
+
+        if (verdict.openRefundRequest) {
+            throw createAppError(ERROR_CODES.REFUND_ALREADY_OPEN, 409, undefined, {
+                refundRequestId: verdict.openRefundRequest.id,
+                status: verdict.openRefundRequest.status,
+            });
         }
-
-        const verdict = this.evaluate(order, returnPolicy, paymentTx, input.amount ?? null);
-
-        // The MONEY verdict is not overridable. `maxRefundable` here is the full remaining
-        // balance, so a failure means there is genuinely nothing to refund.
+        // The MONEY verdict is not overridable.
         if (!verdict.eligible) {
             throw createAppError(
                 (verdict.reasonCode as never) ?? ERROR_CODES.REFUND_NOT_ELIGIBLE,
@@ -177,16 +172,28 @@ export class AdminRefundService {
                 { orderId }
             );
         }
-        if (!verdict.gatewayRefundSupported) {
-            throw createAppError(ERROR_CODES.REFUND_GATEWAY_NOT_SUPPORTED, 400, undefined, {
-                gateway: verdict.gateway,
-            });
-        }
 
-        // Absent means the full remaining balance — NOT the vendor's policy cap. An
-        // administrator asking to "refund this order" means the order, not the fraction
-        // the vendor would have offered.
+        // Absent means the most the money allows — NOT the vendor's policy cap.
         const amount = input.amount ?? verdict.maxRefundable;
+
+        // ⛔ The four-eyes line lives on the refund queue; this route has no second administrator.
+        // CUMULATIVE per order (review finding 8): what this order already returned plus this
+        // amount, so 1,999,999 followed by 1,999,999 cannot slip past the line in pieces. An open
+        // request on the order was refused above, so completed refunds are the whole history.
+        const alreadyRefunded = await sumCompletedRefundsForOrder(orderId);
+        if (alreadyRefunded + amount >= LEGACY_ADMIN_REFUND_CEILING) {
+            throw createAppError(
+                ERROR_CODES.REFUND_USE_REFUND_QUEUE,
+                422,
+                'Refunds of 2,000,000 or more on one order need a second administrator — raise it from the refund queue instead',
+                {
+                    requested: amount,
+                    alreadyRefunded,
+                    ceiling: LEGACY_ADMIN_REFUND_CEILING,
+                    queue: '/api/internal/admin/refunds',
+                }
+            );
+        }
 
         // The COMMERCIAL verdict is overridable, and has to be deliberate.
         if (verdict.overrides.length > 0 && !input.overridePolicy) {
@@ -204,42 +211,38 @@ export class AdminRefundService {
             );
         }
 
-        const result = await this.orchestrator.refundPayment({
-            source: { kind: 'order', orderId },
-            // Supplied FROM THE RECORD, not from the caller's session — an administrator
-            // has no vendor of their own. The same move the shipment paths make with
-            // `agency_id`: the platform does not bypass the scope, it resolves it.
-            vendorId: order.vendor_id.toString(),
-            initiatedBy: actor.id,
-            // Provenance, not authorization. The field and its Mongoose enum have always
-            // accepted 'admin'; this is its first caller.
-            initiatedByRole: 'admin',
+        const request = await this.refunds.create({
+            source: { kind: 'order', id: orderId },
             amount,
+            reasonKind: reasonKindOf(order),
             reason: input.reason,
+            itemDefective: input.itemDefective ?? null,
+            overridePolicy: verdict.overrides.length > 0,
+            requestedBy: { id: actor.id || null, role: 'admin', name: actor.name ?? null },
+            // The administrator IS the approver — when there is somewhere to send the money. COD
+            // and a payment with no paying number wait in the queue for a typed number + proof +
+            // a second administrator (R-7); asking `create` to approve those would be refused.
+            approveNow: verdict.gatewayRefundSupported,
         });
 
-        // On a full refund the order leaves the 'paid' set, so roll back the customer's
-        // denormalized lifetime spend — the same best-effort block the vendor path runs.
-        // Omitting it here is how the two paths would drift on a number neither recomputes.
-        if (result.fullyRefunded) {
-            try {
-                await this.vendorCustomerSync.recordFullRefund(
-                    order.vendor_id.toString(),
-                    order.customer_id,
-                    order.total_amount
-                );
-            } catch (error) {
-                console.error('[AdminRefundService] Failed to sync vendor customer on refund:', error);
-            }
-        }
-
+        const [totalRefunded, fresh] = await Promise.all([
+            sumCompletedRefundsForOrder(orderId),
+            OrderModel.findById(orderId).select('payment_status').lean<{ payment_status?: string } | null>().exec(),
+        ]);
         return {
-            refundId: result.refundId,
-            status: 'completed',
-            amount: result.amount,
-            currency: result.currency,
-            totalRefunded: result.totalRefunded,
-            fullyRefunded: result.fullyRefunded,
+            refundId: request.id,
+            refundRequestId: request.id,
+            status: request.status,
+            amount: request.gross_amount,
+            grossAmount: request.gross_amount,
+            feeAmount: request.fee_amount,
+            netAmount: request.net_amount,
+            currency: request.currency,
+            paymentChannel: request.payment_channel,
+            channel: request.channel ?? null,
+            transferFailureReason: request.transfer_failure_reason ?? null,
+            totalRefunded,
+            fullyRefunded: request.status === 'completed' && fresh?.payment_status === 'refunded',
             withinVendorPolicy: verdict.overrides.length === 0,
             overrides: verdict.overrides,
         };
@@ -248,11 +251,7 @@ export class AdminRefundService {
     // ─── Helpers ─────────────────────────────────────────────────────────────
 
     /** Load unscoped — an administrator is above the vendor scope, not inside it. */
-    private async load(orderId: string): Promise<{
-        order: IOrder;
-        returnPolicy: IVendorReturnPolicy | null;
-        paymentTx: Awaited<ReturnType<typeof findSuccessfulPaymentForOrder>>;
-    }> {
+    private async load(orderId: string): Promise<{ order: IOrder; returnPolicy: IVendorReturnPolicy | null }> {
         if (!Types.ObjectId.isValid(orderId)) {
             throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404, undefined, { orderId });
         }
@@ -261,35 +260,66 @@ export class AdminRefundService {
             throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404, undefined, { orderId });
         }
         const vendor = await this.vendorRepo.findById(order.vendor_id.toString());
-        const paymentTx = await findSuccessfulPaymentForOrder(orderId);
-
-        return { order, returnPolicy: vendor?.policies?.return_policy ?? null, paymentTx };
+        return { order, returnPolicy: vendor?.policies?.return_policy ?? null };
     }
 
     /**
-     * Split the verdict into its two halves: what the MONEY allows (binding) and what the
-     * VENDOR's policy allows (reported).
+     * Split the verdict into its two halves: what the MONEY allows (binding — the same ceiling
+     * `RefundRequestService.create` enforces) and what the VENDOR's policy allows (reported).
      */
-    private evaluate(
+    private async evaluate(
         order: IOrder,
         returnPolicy: IVendorReturnPolicy | null,
-        paymentTx: Awaited<ReturnType<typeof findSuccessfulPaymentForOrder>>,
-        requestedAmount: number | null
-    ): AdminRefundEligibilityDto {
-        const vendorPolicy = computeVendorRefundEligibility(order, returnPolicy, paymentTx);
-
-        const currency = paymentTx?.currencySnapshot ?? order.currency ?? null;
-        const remaining = paymentTx ? paymentTx.amountSnapshot - paymentTx.totalRefunded : 0;
-        const gateway = paymentTx?.gateway ?? null;
+        requestedAmount: number | null,
+        itemDefective: boolean | null
+    ): Promise<AdminRefundEligibilityDto> {
+        const orderId = (order._id as Types.ObjectId).toString();
+        const money = await findRefundableMoneyForOrder(order);
+        let vendorPolicy = computeVendorRefundEligibility(order, returnPolicy, money);
         const isCod = order.payment_method === 'cash_on_delivery';
+        const currency = money?.currencySnapshot ?? order.currency ?? null;
+        const gateway = !isCod && money ? (((money as { gateway?: PaymentGatewayType }).gateway) ?? null) : null;
 
-        const moneyReason =
-            isCod ? ERROR_CODES.REFUND_ORDER_IS_COD
-                : !paymentTx ? ERROR_CODES.REFUND_PAYMENT_NOT_FOUND
-                    : remaining <= 0 ? ERROR_CODES.REFUND_ALREADY_FULLY_REFUNDED
-                        : undefined;
+        const open = await this.refunds.findOpenForSource('order', orderId);
 
-        const amount = requestedAmount ?? remaining;
+        let remaining = 0;
+        let maxRefundable = 0;
+        let moneyReason: string | undefined;
+        let autoSend = false;
+        try {
+            const facts = await this.refunds.describeSource('order', orderId);
+            remaining = facts.remaining;
+            // Review finding 10: measure the vendor's policy (a partial percentage especially) on
+            // THIS order's refundable money, not on a cart-wide payment's balance.
+            vendorPolicy = computeVendorRefundEligibility(order, returnPolicy, {
+                amountSnapshot: facts.remaining,
+                totalRefunded: 0,
+                currencySnapshot: facts.currency,
+            });
+            maxRefundable = Math.min(
+                facts.remaining,
+                maxAttributable({
+                    reasonKind: reasonKindOf(order),
+                    returnShippingPayer: (facts.returnShippingPayer ?? null) as ReturnShippingPayer | null,
+                    itemDefective,
+                    goodsAmount: facts.goodsAmount,
+                    deliveryAmountPaid: facts.deliveryAmountPaid,
+                    delivered: facts.delivered,
+                })
+            );
+            if (remaining <= 0) moneyReason = ERROR_CODES.REFUND_ALREADY_FULLY_REFUNDED;
+            else if (maxRefundable <= 0) moneyReason = ERROR_CODES.REFUND_NOT_ELIGIBLE;
+            autoSend =
+                facts.paymentChannel === 'card'
+                || (facts.paymentChannel === 'mobile_money'
+                    && facts.legs.length > 0
+                    && facts.legs.every((l) => Boolean(l.payerPhone)));
+        } catch (error) {
+            if (!(error instanceof AppError) || error.statusCode >= 500) throw error;
+            moneyReason = error.code;
+        }
+
+        const amount = requestedAmount ?? maxRefundable;
         const overrides: VendorPolicyOverride[] = [];
         if (vendorPolicy.reasonCode === ERROR_CODES.REFUND_WINDOW_EXPIRED) {
             overrides.push('return_window_expired');
@@ -308,16 +338,19 @@ export class AdminRefundService {
         }
 
         return {
-            eligible: moneyReason === undefined,
-            maxRefundable: remaining,
+            eligible: moneyReason === undefined && !open,
+            maxRefundable: Math.max(0, maxRefundable),
             remaining,
             currency,
-            reasonCode: moneyReason,
+            reasonCode: open ? ERROR_CODES.REFUND_ALREADY_OPEN : moneyReason,
             gateway,
-            gatewayRefundSupported: gateway !== null && gatewaySupportsRefund(gateway),
+            // Kept under its old name for the screens that read it: "will this go back on its own?"
+            gatewayRefundSupported: autoSend,
             isCod,
             vendorPolicy,
             overrides,
+            openRefundRequest: open ? { id: open.id, status: open.status } : null,
+            legacyRouteCeiling: LEGACY_ADMIN_REFUND_CEILING,
         };
     }
 }

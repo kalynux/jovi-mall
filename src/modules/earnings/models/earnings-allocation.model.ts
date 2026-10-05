@@ -44,8 +44,17 @@ export interface IEarningsAllocation extends Document {
   gross_snapshot: number;
   /** Commission rate applied at split time (audit snapshot). */
   commission_percent_snapshot: number;
-  /** This beneficiary's share (minor units). */
+  /** This beneficiary's share (minor units). NEVER edited by a refund — see `clawed_amount`. */
   amount: number;
+  /**
+   * How much of `amount` refunds have taken back, cumulatively (0 ≤ x ≤ amount).
+   * REFUND-FLOW-PLAN § 6.1: `amount` stays the split's own figure so NET_FORMULA keeps reading
+   * it; what is left to release is `amount − clawed_amount`. When nothing is left the row
+   * becomes `reversed` — from `held` OR from `released` — through a compare-and-set on this
+   * field (`EarningsAllocationRepository.addClawed`). One `earnings_adjustments` row per claw.
+   * Rows written before the field existed read as 0 (`migrate:earnings-clawback-fields`).
+   */
+  clawed_amount: number;
   currency: string;
 
   status: EarningsAllocationStatus;
@@ -98,6 +107,7 @@ const EarningsAllocationSchema = new Schema<IEarningsAllocation>(
     gross_snapshot: { type: Number, required: true, min: 0 },
     commission_percent_snapshot: { type: Number, required: true, min: 0, max: 100 },
     amount: { type: Number, required: true, min: 0 },
+    clawed_amount: { type: Number, required: true, default: 0, min: 0 },
     currency: { type: String, required: true, uppercase: true, trim: true },
 
     status: { type: String, enum: ['held', 'released', 'reversed'], required: true, default: 'held' },

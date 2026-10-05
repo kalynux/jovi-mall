@@ -52,6 +52,18 @@ export interface IDeliveryFeeRefund extends Document {
   cause: DeliveryFeeRefundCause;
   /** The `refund_transactions` rows the gateway refund produced (one per payment leg). */
   refund_transaction_ids: Types.ObjectId[];
+  /**
+   * The `refund_requests` row that returns this money (REFUND-FLOW-PLAN § 4, 2026-10-05), or null
+   * on a row written before refunds became requests. While the request is open the row stays
+   * `processing` (it CLAIMS the money, and the one-processing-per-order index keeps a second
+   * delivery refund from starting); it follows the request: `completed` → `completed`,
+   * `rejected` → `manual_required` (a person decided — nothing retries it on its own), and the
+   * link MOVES to `rejected_refund_request_id`, so the row is back on the legacy settle screen.
+   * Looked up by `{ order_id, refund_request_id }`, so the order index serves it.
+   */
+  refund_request_id: Types.ObjectId | null;
+  /** The request that was REJECTED for this money (history; the row is manual again). */
+  rejected_refund_request_id: Types.ObjectId | null;
   /** Why it is manual / failed — operator-facing, never shown to the customer. */
   note: string | null;
   ticket_id: Types.ObjectId | null;
@@ -101,6 +113,8 @@ const DeliveryFeeRefundSchema = new Schema<IDeliveryFeeRefund>(
     status: { type: String, enum: [...DELIVERY_FEE_REFUND_STATUSES], required: true, default: 'processing' },
     cause: { type: String, enum: [...DELIVERY_FEE_REFUND_CAUSES], required: true },
     refund_transaction_ids: { type: [Schema.Types.ObjectId], default: [] },
+    refund_request_id: { type: Schema.Types.ObjectId, default: null },
+    rejected_refund_request_id: { type: Schema.Types.ObjectId, default: null },
     note: { type: String, default: null, maxlength: 1000 },
     ticket_id: { type: Schema.Types.ObjectId, default: null },
     settled_at: { type: Date, default: null },

@@ -11,7 +11,7 @@ import {
   AgentDepositStatus,
 } from '../models/agent-deposit.model';
 import { CodCashAccountService, codCashAccountService } from './cod-cash-account.service';
-import { CodSettlementService, codSettlementService } from './cod-settlement.service';
+import { CodSettlementService, FifoSettlementResult, codSettlementService } from './cod-settlement.service';
 import { CodCashProofFileInput, CodCashProofService, codCashProofService } from './cod-cash-proof.service';
 import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
 import { AgentRepository, AgentMembershipRepository } from '../../agents';
@@ -198,6 +198,7 @@ export class AgentDepositService {
       recipient: deposit.recipient,
     });
 
+    let settlement: FifoSettlementResult | null = null;
     await transactionManager.runInTransaction(async (session) => {
       // Atomic claim: only a still-'declared' deposit can be confirmed, so two
       // agency admins clicking together produce one confirmation, not two
@@ -222,8 +223,11 @@ export class AgentDepositService {
       if (!claimed) {
         throw createAppError(ERROR_CODES.COD_DEPOSIT_ALREADY_RESOLVED, 409);
       }
-      await this.applyInSession(claimed, membership._id.toString(), session);
+      settlement = await this.applyInSession(claimed, membership._id.toString(), session);
     });
+
+    // A platform-recipient deposit covered collections: tell the refund side, post-commit.
+    this.settlement.publishCollectionsSettled(settlement, depositId);
 
     const confirmed = (await AgentDepositModel.findById(depositId))!;
     await this.emit('cod.deposit.recorded', confirmed);
@@ -359,6 +363,7 @@ export class AgentDepositService {
     });
 
     let deposit: IAgentDeposit | null = null;
+    let settlement: FifoSettlementResult | null = null;
     await transactionManager.runInTransaction(async (session) => {
       const [created] = await AgentDepositModel.create(
         [
@@ -384,8 +389,11 @@ export class AgentDepositService {
         { session }
       );
       deposit = created;
-      await this.applyInSession(created, membership._id.toString(), session);
+      settlement = await this.applyInSession(created, membership._id.toString(), session);
     });
+
+    // An admin-recorded platform payment covered collections: tell the refund side, post-commit.
+    this.settlement.publishCollectionsSettled(settlement, (deposit as unknown as IAgentDeposit)._id.toString());
 
     await this.emit('cod.deposit.recorded', deposit!);
     return deposit!;
@@ -401,12 +409,16 @@ export class AgentDepositService {
    * owed the platform this cash, and the platform now has it. Skipping it would
    * leave the agency liable for money the platform is holding, and the
    * collections it backs unsettled forever: nobody's earnings would release.
+   *
+   * Returns the FIFO result for a platform-recipient deposit (the caller publishes
+   * `cod.collections.settled` from it after commit), null for an agency-recipient one —
+   * that cash is still with the agency and covers nothing (R-6).
    */
   private async applyInSession(
     deposit: IAgentDeposit,
     membershipId: string,
     session: ClientSession
-  ): Promise<void> {
+  ): Promise<FifoSettlementResult | null> {
     const depositId = deposit._id.toString();
 
     await this.cashAccounts.debitInSession(
@@ -430,7 +442,7 @@ export class AgentDepositService {
       });
     }
 
-    if (deposit.recipient !== 'platform') return;
+    if (deposit.recipient !== 'platform') return null;
 
     // Entry type 'remittance' against ref 'agent_deposit': in substance this IS
     // a remittance — the agency's liability falling because the cash reached the
@@ -445,7 +457,7 @@ export class AgentDepositService {
       depositId,
       session
     );
-    await this.settlement.applyFifoInSession(
+    return await this.settlement.applyFifoInSession(
       deposit.agency_id.toString(),
       deposit.amount,
       session

@@ -8,8 +8,33 @@ import { InitiateBookingPaymentRequestSchema } from '../../payments/validators/p
 import { deriveProviderOrThrow } from '../../payments/services/payment-routing.service';
 import { recordDeprecatedGatewayField } from '../../system/metrics/metrics';
 
+import { customerRefundViewService } from '../../payments/services/customer-refund-view.service';
+import type { CustomerRefundBlock } from '../../payments/dto/customer-refund.dto';
+
 const bookingService = new BookingService();
 const paymentOrchestrator = new PaymentOrchestratorService();
+
+/**
+ * Attach the customer refund block (REFUND-FLOW-PLAN § 8) to booking documents, one query for
+ * the whole page. The booking is serialised exactly as before (`toJSON`, what `res.json` would
+ * have produced) with ONE key added: `refund` — the latest refund request in the customer's
+ * vocabulary, or `null` when none was ever opened. `paymentStatus` keeps its own meaning
+ * (`refund_pending` / `refunded`); `refund` is the detail behind it.
+ */
+async function withRefunds<T extends { _id: unknown }>(
+    bookings: T[],
+): Promise<Array<Record<string, unknown> & { refund: CustomerRefundBlock | null }>> {
+    const byBooking = await customerRefundViewService.latestBySources(
+        'booking',
+        bookings.map((b) => String(b._id)),
+    );
+    return bookings.map((b) => {
+        const plain = typeof (b as { toJSON?: () => unknown }).toJSON === 'function'
+            ? ((b as unknown as { toJSON: () => Record<string, unknown> }).toJSON())
+            : ({ ...(b as unknown as Record<string, unknown>) });
+        return { ...plain, refund: byBooking.get(String(b._id)) ?? null };
+    });
+}
 
 // ─── Validation Schemas ────────────────────────────────────────────────────────
 
@@ -88,7 +113,7 @@ export class CustomerBookingController {
 
         res.json({
             success: true,
-            data,
+            data: await withRefunds(data),
             meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
         });
     });
@@ -100,8 +125,9 @@ export class CustomerBookingController {
     static getBooking = asyncHandler(async (req: Request, res: Response): Promise<void> => {
         const userId = req.auth!.user._id.toString();
         const booking = await bookingService.getUserBooking(req.params.id, userId);
+        const [data] = await withRefunds([booking]);
 
-        res.json({ success: true, data: booking });
+        res.json({ success: true, data });
     });
 
     /**
@@ -117,10 +143,13 @@ export class CustomerBookingController {
         const { reason } = CancelBookingSchema.parse(req.body);
 
         const booking = await bookingService.cancelBooking(req.params.id, userId, reason);
+        // The cancellation may have just opened a refund request — return it, so the screen can
+        // say "refund requested / being sent" without a second read.
+        const [data] = await withRefunds([booking]);
 
         res.json({
             success: true,
-            data: booking,
+            data,
             message: 'Booking cancelled',
         });
     });

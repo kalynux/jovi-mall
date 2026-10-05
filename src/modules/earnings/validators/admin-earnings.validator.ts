@@ -58,6 +58,25 @@ export const ListPausesQuerySchema = z.object({
 
 export type ListPausesQuery = z.infer<typeof ListPausesQuerySchema>;
 
+/** `GET /clawbacks` — owners who owe money back (REFUND-FLOW-PLAN § 6.4). */
+export const ListClawbacksQuerySchema = z.object({
+  ownerType: z.enum(PAYOUT_OWNER_TYPES).optional(),
+  ...paginationFields,
+});
+
+/**
+ * `POST /clawbacks/:ownerType/:ownerId/write-off` — forgive (part of) an owner's refund debt
+ * (C-6). A whole, positive amount, at most what they owe (checked against the live balance,
+ * 409 `EARNINGS_CLAWBACK_WRITE_OFF_EXCEEDS_DEBT`). The reason is required: it is the record.
+ * Four-eyes at ≥ 2,000,000 is wi-admin's (`money.earnings.clawback.write_off`).
+ */
+export const WriteOffClawbackBodySchema = z
+  .object({
+    amount: z.number().int().positive(),
+    reason: z.string().trim().min(3).max(500),
+  })
+  .strict();
+
 export const OrderIdParamsSchema = z.object({
   orderId: z.string().trim().regex(/^[a-f\d]{24}$/i, 'Not a valid id'),
 });

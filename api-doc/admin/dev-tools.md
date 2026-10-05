@@ -261,7 +261,7 @@ route-level summary.
 
 ```jsonc
 {
-  "settings": { "collectionAggregator": "NOTCHPAY", "payoutAggregator": "NOTCHPAY", "stripeEnabled": false,
+  "settings": { "collectionAggregator": "NOTCHPAY", "payoutAggregator": "NOTCHPAY", "stripeEnabled": false, "refundFeePercent": 2,
                 "providers": { "MTN": { "enabled": true }, "ORANGE": { "enabled": true }, "MOOV": { "enabled": false }, "CARD": { "enabled": false } },
                 "version": 0, "updatedAt": null, "updatedBy": null, "reason": null },
   "aggregators": [
@@ -304,10 +304,16 @@ Body, `.strict()`:
 { "collectionAggregator": "MYCOOLPAY",              // optional
   "payoutAggregator": "NOTCHPAY",                   // optional
   "stripeEnabled": false,                           // optional
+  "refundFeePercent": 2,                            // optional, 0..20 — the refund transfer fee (2026-10-05, R-3)
   "providers": { "ORANGE": { "enabled": true } },   // optional, partial, merged per provider
   "expectedVersion": 3,                             // required; 0 when no document exists
   "reason": "NotchPay outage" }                     // required, 1..500 after trim
 ```
+
+`refundFeePercent` (🆕 2026-10-05, REFUND-FLOW-PLAN R-3) is the fee taken off every refund paid
+by **transfer** or outside the platform — never off a card refund — in percent, 0 to 20, default
+**2**. `fee = round(gross × rate / 100)`; the customer receives the rest. It changes **new** refund
+requests only: a request fixes its `fee_rate` when it is created.
 
 Aggregator and provider names are plain strings here. The settings validator owns the lists and
 refuses an unknown one with a named issue code, which tells an operator more than an enum error

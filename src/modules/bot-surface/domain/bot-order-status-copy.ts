@@ -1,6 +1,7 @@
 import { BOT_COPY_LANGUAGES, BotCopyLanguage, toBotCopyLanguage } from './bot-error-copy';
 import type { CustomerShipmentStatus } from '../../orders/dto/customer-shipment.dto';
 import type { FulfillmentStatus } from '../../orders/order.model';
+import type { CustomerRefundStatus } from '../../payments/dto/customer-refund.dto';
 
 /**
  * ⭐ **THE ONE TABLE for how an order's state is worded to a customer — read by the chat AND by
@@ -352,6 +353,112 @@ export function botPaymentStateLabel(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  The refund (REFUND-FLOW-PLAN § 8)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * How a refund's state is worded — the CUSTOMER statuses of `payments/dto/customer-refund.dto.ts`,
+ * which already collapsed the seven internal ones (a `failed` transfer reads `in_progress`: the
+ * platform retries or pays by hand, and the customer is still owed the money).
+ *
+ * Each label says "refund" itself, because it lands on its own line of the order card, under the
+ * payment word — "Refunded" beside "Paid" would read as two payment states.
+ */
+export const ORDER_REFUND_COPY: Readonly<Record<CustomerRefundStatus, Copy>> = Object.freeze({
+    requested: {
+        en: 'Refund requested',
+        fr: 'Remboursement demandé',
+        pt: 'Reembolso pedido',
+        es: 'Reembolso solicitado',
+        ar: 'تم طلب الاسترداد',
+    },
+    waiting_for_cash: {
+        en: 'Refund waiting for the courier\'s cash',
+        fr: 'Remboursement en attente de l\'argent du livreur',
+        pt: 'Reembolso à espera do dinheiro do estafeta',
+        es: 'Reembolso a la espera del efectivo del repartidor',
+        ar: 'الاسترداد بانتظار نقود المندوب',
+    },
+    sending: {
+        en: 'Refund being sent',
+        fr: 'Remboursement en cours d\'envoi',
+        pt: 'Reembolso a ser enviado',
+        es: 'Reembolso en envío',
+        ar: 'جارٍ إرسال الاسترداد',
+    },
+    in_progress: {
+        en: 'Refund in progress',
+        fr: 'Remboursement en cours',
+        pt: 'Reembolso em curso',
+        es: 'Reembolso en curso',
+        ar: 'الاسترداد قيد المعالجة',
+    },
+    completed: {
+        en: 'Refunded',
+        fr: 'Remboursé',
+        pt: 'Reembolsado',
+        es: 'Reembolsado',
+        ar: 'تم الاسترداد',
+    },
+    declined: {
+        en: 'Refund declined',
+        fr: 'Remboursement refusé',
+        pt: 'Reembolso recusado',
+        es: 'Reembolso rechazado',
+        ar: 'تم رفض الاسترداد',
+    },
+});
+
+export function botRefundStateLabel(status: CustomerRefundStatus | string, language: string | null | undefined): string {
+    const copy = ORDER_REFUND_COPY[status as CustomerRefundStatus];
+    return copy ? pick(copy, language) : botOrderStatusUnavailable(language);
+}
+
+/**
+ * The fee half of a refund line: what the customer receives, and why it is less than the refund.
+ * `({{gross}} minus a {{percent}}% transfer fee)` — empty when there is no fee (a card refund), so
+ * a card refund never mentions one. Amounts arrive already formatted by the caller.
+ */
+const REFUND_FEE_NOTE: Readonly<Copy> = Object.freeze({
+    en: '({{gross}} minus a {{percent}}% transfer fee)',
+    fr: '({{gross}} moins des frais de transfert de {{percent}} %)',
+    pt: '({{gross}} menos uma taxa de transferência de {{percent}}%)',
+    es: '({{gross}} menos una comisión de transferencia del {{percent}} %)',
+    ar: '({{gross}} مطروحًا منها رسوم تحويل بنسبة {{percent}}٪)',
+});
+
+export function botRefundFeeNote(
+    input: { feeAmount: number; feePercent: number; grossFormatted: string },
+    language: string | null | undefined,
+): string {
+    if (!(input.feeAmount > 0)) return '';
+    return pick(REFUND_FEE_NOTE, language)
+        .replace('{{gross}}', input.grossFormatted)
+        .replace('{{percent}}', String(input.feePercent));
+}
+
+/**
+ * One refund, as one line: `Refund being sent · 4,900 XAF (5,000 XAF minus a 2% transfer fee)`.
+ *
+ * The figure is the NET — what reaches the customer. A card refund (fee 0) carries no fee note,
+ * and a declined refund carries no figure at all (nothing is coming). The price formatter is
+ * passed in so this module keeps its no-runtime-imports rule.
+ */
+export function botRefundLine(
+    refund: { status: CustomerRefundStatus | string; grossAmount: number; feeAmount: number; feePercent: number; netAmount: number; currency: string },
+    language: string | null | undefined,
+    formatPrice: (amount: number, currency: string) => string,
+): string {
+    const label = botRefundStateLabel(refund.status, language);
+    if (refund.status === 'declined') return label;
+    const note = botRefundFeeNote(
+        { feeAmount: refund.feeAmount, feePercent: refund.feePercent, grossFormatted: formatPrice(refund.grossAmount, refund.currency) },
+        language,
+    );
+    return `${label} · ${formatPrice(refund.netAmount, refund.currency)}${note ? ` ${note}` : ''}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  Parcels — the five a customer is shown, and nothing behind them
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -594,6 +701,7 @@ export const __ORDER_STATUS_TABLES = Object.freeze({
     progressOf: ORDER_PROGRESS_OF,
     progress: ORDER_PROGRESS_COPY,
     payment: ORDER_PAYMENT_COPY,
+    refund: ORDER_REFUND_COPY,
     cashOnDelivery: ORDER_CASH_ON_DELIVERY_COPY,
     unavailable: ORDER_STATUS_UNAVAILABLE_COPY,
     shipment: SHIPMENT_STATE,

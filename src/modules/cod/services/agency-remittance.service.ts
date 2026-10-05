@@ -6,7 +6,7 @@ import { eventBus } from '../../../core/events/event-bus';
 import { ActorRef, actorStamp } from '../../../core/types/actor-source.types';
 import { AgencyRemittanceModel, IAgencyRemittance, AgencyRemittanceStatus } from '../models/agency-remittance.model';
 import { CodCashAccountService, codCashAccountService } from './cod-cash-account.service';
-import { CodSettlementService, codSettlementService } from './cod-settlement.service';
+import { CodSettlementService, FifoSettlementResult, codSettlementService } from './cod-settlement.service';
 import { CodCashProofFileInput, CodCashProofService, codCashProofService } from './cod-cash-proof.service';
 import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
 
@@ -129,6 +129,7 @@ export class AgencyRemittanceService {
     }
 
     let settledCollectionIds: string[] = [];
+    let settlement: FifoSettlementResult | null = null;
     await transactionManager.runInTransaction(async (session) => {
       // Atomic claim: only a still-'declared' remittance can be confirmed.
       const claimed = await AgencyRemittanceModel.findOneAndUpdate(
@@ -164,7 +165,12 @@ export class AgencyRemittanceService {
         session
       );
       settledCollectionIds = result.settledCollectionIds;
+      settlement = result;
     });
+
+    // Committed: the platform holds this cash. Tell the refund side which collections it
+    // covered (§ 11.4) — after the commit, never inside it.
+    this.settlement.publishCollectionsSettled(settlement, remittanceId);
 
     try {
       await eventBus.publish('cod.remittance.confirmed', {

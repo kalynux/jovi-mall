@@ -40,6 +40,8 @@ Everything after the purchase lives under `/api/customer/bookings` (beside `/api
 | `GET` | `/api/customer/bookings/:id/balance` | What is still owed after completion (and what was overpaid). |
 | `POST` | `/api/customer/bookings/:id/pay-balance` | Pay that balance. Body: `{ provider, channel }` — same shape as step 4. |
 
+🆕 **2026-10-05 — every booking returned by the list, the single read and the cancel now carries a `refund` key**: the latest refund request for that booking in the customer vocabulary (`requested · sending · in_progress · completed · declined` — `waiting_for_cash` never applies to a booking), with `grossAmount`, `feeAmount`, `feePercent`, `netAmount`, `currency`, `channel`, `destinationMasked`, `waitingForCash`, `completedAt`; `null` when no refund was ever requested. The shape, the status table and the fee line are documented once, in [orders.md § The `refund` block](./orders.md#the-refund-block). The booking document is otherwise unchanged.
+
 ---
 
 ## Rescheduling a capacity service
@@ -104,8 +106,10 @@ GET /api/customer/bookings/:id/balance
 
 **Cancelling and your money.** If the booking was paid, cancelling refunds it:
 
-- Where the payment gateway supports refunds, the money is returned automatically and `paymentStatus` becomes `refunded`.
-- Otherwise — **cash bookings, and My-CoolPay, whose API has no refund endpoint** — `paymentStatus` becomes `refund_pending` and a support ticket is raised for manual payout. The cancellation still succeeds either way; a refund problem never keeps the appointment on the books.
+- **A card payment** is refunded in full through the card, automatically.
+- **A mobile-money payment** is sent back by transfer to the number that paid, automatically, **minus a 2% transfer fee** (5,000 → you receive 4,900). The `refund` block on the cancel response already says `sending` (or `completed`).
+- **No paying number on record** — the refund waits for the team (`refund.status: "requested"`, `paymentStatus: refund_pending`) and is sent once an administrator confirms where to send it.
+- The cancellation still succeeds either way; a refund problem never keeps the appointment on the books. Read the `refund` block for where the money is — see [orders.md § The `refund` block](./orders.md#the-refund-block). *(Rewritten 2026-10-05: this used to say My-CoolPay bookings could not be refunded automatically. Every mobile-money gateway now refunds by transfer.)*
 
 **Cancellation can be refused.** The vendor sets the policy, and `422 CANCELLATION_NOT_ALLOWED` means their window has passed (its `details` carry `cancellable` and `deadline`). A `completed` or `no-show` booking returns `409 BOOKING_NOT_CANCELLABLE`.
 
@@ -493,7 +497,7 @@ Bookings created through this flow start `unpaid`, and `confirmed` (calendar and
 **`status`:** `pending` · `confirmed` · `completed` · `no-show` · `cancelled`
 **`paymentStatus`:** `unpaid` · `pending` · `paid` · `disputed` · `failed` · `refund_pending` · `refunded`
 
-`refund_pending` means money is owed back but the gateway could not return it automatically — a human completes the payout from a support ticket. It is **not** `refunded`: the customer does not have their money yet.
+`refund_pending` means money is owed back and has not reached the customer yet — a refund request is waiting for the team. It is **not** `refunded`: the customer does not have their money yet. Read the booking's `refund` block for the detail (status, net amount, fee). 🆕 2026-10-05
 
 See [vendor/bookings.md](../vendor/bookings.md#booking-status-state-machine) for the status state machine and the vendor-side transitions (confirm, complete, no-show, cancel, reschedule).
 

@@ -89,6 +89,16 @@ export type CustomerNotificationType =
      * customer is not left wondering where their money went.
      */
     | 'booking.refund.pending'
+    // ── The refund request lifecycle (REFUND-FLOW-PLAN § 8) — money, none mutable ──
+    /** A refund was requested and waits for review (vendor-, system- or admin-raised). */
+    | 'booking.refund.requested'
+    /** The transfer to the paying number is in flight. */
+    | 'booking.refund.sending'
+    /** The transfer arrived — net amount and the 2% fee line. (A card refund stays `booking.refunded`.) */
+    | 'booking.refund.completed'
+    /** The team paid it outside the platform (picture proof on file). */
+    | 'booking.refund.paid_externally'
+    | 'booking.refund.declined'
 
     // ── Orders (physical/digital goods) ─────────────────────────────────────
     | 'order.created'
@@ -132,6 +142,15 @@ export type CustomerNotificationType =
     | 'order.delivery_failed'
     | 'order.cancelled'
     | 'order.refunded'
+    // ── The refund request lifecycle (REFUND-FLOW-PLAN § 8) — money, none mutable ──
+    | 'order.refund.requested'
+    /** COD: approved, waiting until the cash the customer paid reaches the platform (R-4). */
+    | 'order.refund.waiting_for_cash'
+    | 'order.refund.sending'
+    /** The transfer arrived — net amount and the 2% fee line. (A card refund stays `order.refunded`.) */
+    | 'order.refund.completed'
+    | 'order.refund.paid_externally'
+    | 'order.refund.declined'
     // ── Delivery-fee changes after checkout (ADR-A11, W-E) — all MONEY, none mutable ──
     /** The delivery company asks a higher fee on a customer-paid parcel; the customer answers. */
     | 'order.delivery_fee.approval_needed'
@@ -224,6 +243,11 @@ export const CUSTOMER_NOTIFICATION_TYPES: readonly CustomerNotificationType[] = 
     'booking.balance.due',
     'booking.refunded',
     'booking.refund.pending',
+    'booking.refund.requested',
+    'booking.refund.sending',
+    'booking.refund.completed',
+    'booking.refund.paid_externally',
+    'booking.refund.declined',
     'order.created',
     'order.payment.received',
     'order.payment_link',
@@ -234,6 +258,12 @@ export const CUSTOMER_NOTIFICATION_TYPES: readonly CustomerNotificationType[] = 
     'order.delivery_failed',
     'order.cancelled',
     'order.refunded',
+    'order.refund.requested',
+    'order.refund.waiting_for_cash',
+    'order.refund.sending',
+    'order.refund.completed',
+    'order.refund.paid_externally',
+    'order.refund.declined',
     'order.delivery_fee.approval_needed',
     'order.delivery_fee.topup_due',
     'order.delivery_fee.lowered',

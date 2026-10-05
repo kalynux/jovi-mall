@@ -35,21 +35,9 @@ export const NOTCHPAY_CONFIG = Object.freeze({
   BASE_URL: process.env.NOTCHPAY_BASE_URL || 'https://api.notchpay.co',
   REQUEST_TIMEOUT_MS: parseInt(process.env.NOTCHPAY_REQUEST_TIMEOUT_MS || '15000'),
 
-  /**
-   * Whether refunds are enabled **on the merchant account**.
-   *
-   * Defaults to FALSE because that is what the account actually does today:
-   * verified 2026-08-18 against the live sandbox, `POST /refunds` answers a
-   * bare 403 for every body shape while `GET /refunds` answers 200 with the
-   * same credentials. The integration is built and correct; the account is not
-   * permitted to use it.
-   *
-   * Defaulting to true would put a refund button in front of an administrator
-   * that fails the moment it is pressed — precisely what
-   * `AdminRefundService`'s up-front verdict exists to prevent. Flip this to
-   * `true` once NotchPay enables refunds; no code changes with it.
-   */
-  REFUNDS_ENABLED: (process.env.NOTCHPAY_REFUNDS_ENABLED || 'false') === 'true',
+  // ⛔ The NotchPay refund switch (`REFUNDS_ENABLED`) is GONE (2026-10-05, REFUND-FLOW-PLAN R-1):
+  // NotchPay no longer refunds through its API at all — every mobile-money refund is a payout
+  // (`RefundRequestService`). Do not reintroduce the variable.
   /**
    * Whether TRANSFERS (money out) are enabled for this deployment.
    *

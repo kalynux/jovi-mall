@@ -22,7 +22,7 @@ import {
 } from '../domain/webhook-verification';
 import { CINETPAY_CONFIG } from '../config/payments.config';
 import { isZeroDecimalCurrency } from '../domain/money';
-import { MerchantRefKind, merchantRefKind } from '../domain/merchant-reference';
+import { MerchantRefKind, isMoneyOutRef } from '../domain/merchant-reference';
 import {
   CameroonMobileOperator,
   resolveCameroonOperator,
@@ -235,7 +235,7 @@ export class CinetPayGateway implements PaymentGateway {
    * Replace a notification's claims with CinetPay's own record (ADR-A08 P2.0).
    *
    * Collections are read at `GET /v1/payment/{id}`, payouts at `GET /v1/transfer/{id}` — the
-   * direction comes from OUR reference's kind (`po` = payout), so a forged notification cannot
+   * direction comes from OUR reference's kind (`po` = payout, `rf` = a refund sent as a transfer), so a forged notification cannot
    * steer a payout lookup at a collection record. The record must name the same CinetPay id AND
    * the same merchant id, or it is not this money and the answer is null.
    *
@@ -680,7 +680,8 @@ function cinetpayEvent(
   record: Record<string, unknown>,
   raw: unknown
 ): NormalizedWebhookEvent {
-  const payout = merchantRefKind(merchantRef) === 'po';
+  // `po` (a payout) AND `rf` (a refund sent as a transfer) are money out — never `=== 'po'`.
+  const payout = isMoneyOutRef(merchantRef);
   // A notification carries no status at all; it reads as PENDING and is never acted on as such.
   const word = cinetpayStatusOf(record) ?? 'NOTIFIED';
   const amount = record.amount;
@@ -709,8 +710,8 @@ export function parseCinetpayNotification(rawBody: Buffer): Record<string, unkno
   return Object.keys(form).length > 0 ? form : null;
 }
 
-const MERCHANT_ID_PATTERN = /^jm(pt|pp|ct|po)([0-9a-z]{25})$/;
-const MERCHANT_REF_PATTERN = /^jm_(pt|pp|ct|po)_([0-9a-f]{32})$/;
+const MERCHANT_ID_PATTERN = /^jm(pt|pp|ct|po|rf)([0-9a-z]{25})$/;
+const MERCHANT_REF_PATTERN = /^jm_(pt|pp|ct|po|rf)_([0-9a-f]{32})$/;
 
 /**
  * `jm_pt_<32 hex>` (38 chars) → `jmpt<25 base-36>` (29 chars), under CinetPay's 30-character

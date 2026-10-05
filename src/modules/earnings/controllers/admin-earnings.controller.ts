@@ -3,7 +3,11 @@ import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { sendSuccess, sendPaginated } from '../../../core/responses';
 import { earningsAccountService } from '../services/earnings-account.service';
 import { orderMoneySplitService } from '../services/order-money-split.service';
+import { earningsClawbackService } from '../services/earnings-clawback.service';
+import { adminCallerActor } from '../../../api/middlewares/admin-caller.middleware';
 import {
+  ListClawbacksQuerySchema,
+  WriteOffClawbackBodySchema,
   ListEarningsAccountsQuerySchema,
   LedgerQuerySchema,
   ListPausesQuerySchema,
@@ -53,7 +57,9 @@ export class AdminEarningsController {
       earningsAccountService.getBalances('platform', null),
       earningsAccountService.getBalances('platform_ai', null),
     ]);
-    const held = (b: typeof commission): number => b.pending + b.available + b.reserve + b.requested;
+    // A platform account is never paid out, so what it holds is what it made — less anything a
+    // refund recovered beyond its balances (`clawback`, normally 0 for the platform).
+    const held = (b: typeof commission): number => b.pending + b.available + b.reserve + b.requested - b.clawback;
     const total =
       commission.currency === bargainFee.currency
         ? {
@@ -173,6 +179,10 @@ export class AdminEarningsController {
   /**
    * POST /earnings/pauses/:kind/:id/resume — lift ANY pause, whoever raised it. The hold
    * continues where it stopped (the paused time does not count). 409 when not paused.
+   * 409 `EARNINGS_PAUSE_HELD_BY_REFUND` while a refund request of the source is open, or a
+   * completed one has not recovered its earnings yet (C-4): resuming then would release money
+   * the refund is about to claw back. A stale `refund_in_progress` pause with no such request
+   * (its resume failed after a rejection) stays liftable here — refusing it would strand it.
    */
   static resume = asyncHandler(async (req: Request, res: Response) => {
     const target = PauseTargetParamsSchema.parse(req.params);
@@ -180,9 +190,53 @@ export class AdminEarningsController {
     if (!(await earningsPauseService.targetExists(target))) {
       throw createAppError(ERROR_CODES.EARNINGS_PAUSE_TARGET_NOT_FOUND, 404);
     }
+    // Lazy: `payments` imports `earnings`, so a static import back would close a require cycle.
+    const { refundRequestService } = await import('../../payments/services/refund-request.service');
+    const holding = await refundRequestService.findHoldingEarningsPause(target.kind, target.id);
+    if (holding) {
+      throw createAppError(ERROR_CODES.EARNINGS_PAUSE_HELD_BY_REFUND, 409, undefined, {
+        refundRequestId: holding.id,
+        refundRequestStatus: holding.status,
+      });
+    }
     const outcome = await earningsPauseService.resume(target, pauseActorOf(req), note ?? null);
     if (!outcome.changed) throw createAppError(ERROR_CODES.EARNINGS_NOT_PAUSED, 409);
     sendSuccess(res, { ...target, pause: outcome.pause }, { message: 'Earnings resumed' });
+  });
+
+  // ── Refund clawback debt (REFUND-FLOW-PLAN § 6.4, C-5, C-6) ──────────────────────────
+  // A refund that recovered more than an owner's balances held leaves them OWING the platform
+  // (`clawback_balance`); every later inflow pays it down first. These two are the queue of
+  // such owners and the administrator's way to forgive it.
+
+  /**
+   * GET /earnings/clawbacks — owners with a debt, largest first. Each row carries the balances
+   * beside it (available is 0 while a debt stands — netting is eager) and `heldPayout`, a payout
+   * that was already waiting when the debt appeared (never cut, C-7).
+   */
+  static listClawbacks = asyncHandler(async (req: Request, res: Response) => {
+    const { ownerType, page, limit } = ListClawbacksQuerySchema.parse(req.query);
+    const { items, total } = await earningsClawbackService.listDebtors(ownerType ?? null, page, limit);
+    sendPaginated(res, items, { total, page, limit, pages: Math.ceil(total / limit) });
+  });
+
+  /**
+   * POST /earnings/clawbacks/:ownerType/:ownerId/write-off — forgive `amount` of the owner's
+   * debt; the platform absorbs it. 409 `EARNINGS_CLAWBACK_NOTHING_OWED` /
+   * `EARNINGS_CLAWBACK_WRITE_OFF_EXCEEDS_DEBT`. The actor is the `x-actor-*` administrator.
+   */
+  static writeOffClawback = asyncHandler(async (req: Request, res: Response) => {
+    const { ownerType, ownerId } = OwnerParamsSchema.parse(req.params);
+    const { amount, reason } = WriteOffClawbackBodySchema.parse(req.body ?? {});
+    const actor = adminCallerActor(req);
+    const outcome = await earningsClawbackService.writeOff({
+      ownerType,
+      ownerId,
+      amount,
+      reason,
+      actor: { id: actor?.id ?? null, name: actor?.name ?? null },
+    });
+    sendSuccess(res, outcome, { message: 'Clawback debt written off' });
   });
 }
 

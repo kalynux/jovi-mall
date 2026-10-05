@@ -83,6 +83,12 @@ export interface AdminPayoutRequestDto {
      */
     transferGatewayRef: string | null;
     /**
+     * What this owner OWES the platform back right now (refund clawback, REFUND-FLOW-PLAN § 6),
+     * read live. ⚠ C-7: a payout already waiting when a debt appeared is NEVER cut — this tells
+     * the reviewer; if they reject the payout, the returned money pays the debt first.
+     */
+    ownerClawback: number;
+    /**
      * Which aggregator carried the transfer (ADR-A08). Informational: never branch on it. Null
      * until a transfer has been attempted; a row sent before the field existed reads `NOTCHPAY`.
      */
@@ -110,7 +116,8 @@ function toIso(value: Date | null | undefined): string | null {
 export function toAdminPayoutRequestDto(
     row: IPayoutRequest,
     ownerName: string | null,
-    verification: OwnerVerification = UNKNOWN_VERIFICATION
+    verification: OwnerVerification = UNKNOWN_VERIFICATION,
+    ownerClawback = 0
 ): AdminPayoutRequestDto {
     return {
         id: row.id,
@@ -138,6 +145,7 @@ export function toAdminPayoutRequestDto(
               }
             : null,
         transferGatewayRef: row.transfer_gateway_ref ?? null,
+        ownerClawback,
         transferGateway: payoutGatewayFor(row, null),
         transferFailureReason: row.transfer_failure_reason ?? null,
         ticketId: row.ticket_id ? row.ticket_id.toString() : null,

@@ -19,6 +19,16 @@ import {
 const vendorOrderService = new VendorOrderService();
 const vendorRefundService = new VendorRefundService();
 
+/** The envelope `message` per refund-request status (REFUND-FLOW-PLAN § 4). */
+const REFUND_STATUS_MESSAGE: Partial<Record<string, string>> = {
+    completed: 'Refund completed',
+    sending: 'Refund is being sent to the customer',
+    approved: 'Refund approved and queued to send',
+    awaiting_approval: 'Refund requested — waiting for an administrator to approve it',
+    waiting_for_cash: 'Refund approved — waiting for the cash to reach the platform',
+    failed: 'Refund could not be sent — an administrator will retry or settle it',
+};
+
 /**
  * Vendor Order Controller
  *
@@ -416,8 +426,11 @@ export class VendorOrderController {
     /**
      * POST /api/vendor/orders/:id/refund
      *
-     * Action a refund on a paid, refundable order. Amount defaults to the
-     * policy-computed maximum and may be overridden downward within that max.
+     * Open a refund REQUEST on a paid, refundable order (REFUND-FLOW-PLAN § 4). Amount defaults
+     * to the policy-computed maximum and may be overridden downward within that max. ⚠ The
+     * answer is the request: `status` is `completed` (card), `sending` (a transfer to the number
+     * that paid), `awaiting_approval` (an administrator decides — COD, no paying number) or
+     * `failed`. See `api-doc/vendor/FRONTEND-CHANGELOG-refund-flow.md`.
      */
     static refundOrder = asyncHandler(async (req: Request, res: Response): Promise<void> => {
         const vendorId = req.auth!.role_entity._id.toString();
@@ -431,9 +444,7 @@ export class VendorOrderController {
         res.json({
             success: true,
             data: result,
-            message: result.fullyRefunded
-                ? 'Order fully refunded'
-                : 'Partial refund processed'
+            message: REFUND_STATUS_MESSAGE[result.status] ?? 'Refund request recorded'
         });
     });
 }

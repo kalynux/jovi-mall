@@ -642,6 +642,66 @@ export function getCodCashProofUploadConfig(): UploadPolicyConfig {
 }
 
 /**
+ * Refund proofs (REFUND-FLOW-PLAN § 7, R-7, R-7b) — ONE picture or PDF per request, uploaded by
+ * an administrator through `POST /api/internal/admin/refunds/proofs` into the PRIVATE
+ * `refund-proofs/` tree: the customer's message giving the number a typed refund goes to, or the
+ * receipt of a refund paid outside the platform.
+ *
+ * The staff-identity policy's shape, for the same reasons: images AND PDF (a bank receipt arrives
+ * as a PDF), PDF untransformed, PNG not re-encoded (this is evidence a dispute may need), quotas
+ * OFF (the owner is an administrator, who holds no plan here — and a full media cap must never be
+ * the reason a customer's refund cannot be recorded), duplicates never collapsed (two refunds may
+ * legitimately carry the same screenshot, and deleting one must not delete the other's).
+ */
+export function getRefundProofUploadConfig(): UploadPolicyConfig {
+  const MB = 1024 * 1024;
+
+  const image = (): MimeTypePolicy => ({
+    allowed: true,
+    maxSizeBytes: 10 * MB,
+    transforms: { resize: { maxWidth: 3000, maxHeight: 3000 }, compress: true },
+  });
+
+  return {
+    maxFilesPerRequest: 1,
+    maxTotalSizeBytes: 10 * MB,
+
+    perMimeType: {
+      'image/jpeg': image(),
+      'image/png': image(),
+      'image/webp': image(),
+      'application/pdf': {
+        allowed: true,
+        maxSizeBytes: 10 * MB,
+      },
+    },
+
+    virusScan: resolveVirusScanConfig(),
+
+    userQuotas: {
+      enabled: false,
+      maxFilesTotal: 0,
+      maxStorageBytes: 0,
+    },
+
+    fingerprinting: {
+      algorithm: 'sha256',
+      enabled: true,
+    },
+
+    duplicateDetection: {
+      enabled: false,
+      blockDuplicates: false,
+    },
+
+    observability: {
+      enabled: true,
+      logLevel: 'info',
+    },
+  };
+}
+
+/**
  * Policy documents — the vendor's and the agency's `policies.documents` addenda.
  *
  * ── Why this config exists at all (plan step 4.A.4c / 25.2) ───────────────────

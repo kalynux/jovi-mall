@@ -291,8 +291,58 @@ export class EarningsAllocationRepository {
     session?: ClientSession
   ): Promise<IEarningsAllocation | null> {
     return EarningsAllocationModel.findOneAndUpdate(
-      { _id: allocationId, status: 'held', amount: expectedAmount },
+      // ⚠ Never below what refunds already took back (REFUND-FLOW-PLAN § 6.3): `amount −
+      // clawed_amount` is what is left to release, and it must not go negative. `$not $gt`
+      // also matches a legacy row with no `clawed_amount` (nothing clawed).
+      { _id: allocationId, status: 'held', amount: expectedAmount, clawed_amount: { $not: { $gt: newAmount } } },
       { $set: { amount: newAmount } },
+      { new: true, session: session ?? null }
+    );
+  }
+
+  /**
+   * Every row of these sources, whatever its status — the clawback's scope (REFUND-FLOW-PLAN
+   * § 6.2). Session-aware: the clawback re-reads inside its transaction.
+   */
+  async findBySources(sources: SourceRef[], session?: ClientSession): Promise<IEarningsAllocation[]> {
+    if (sources.length === 0) return [];
+    return EarningsAllocationModel.find({ $or: sourceFilters(sources) }, null, { session: session ?? undefined });
+  }
+
+  /**
+   * Record a claw of `delta` on one row — the ONLY write of `clawed_amount`.
+   *
+   * Compare-and-set on BOTH the status the caller planned against and the `clawed_amount` it
+   * read: a release landing in between (held → released) changes where the money must be
+   * taken from, and a concurrent claw changes how much is left, so either makes this miss and
+   * the caller's transaction retries on fresh state. When nothing remains the row becomes
+   * `reversed` — from `held` or from `released` — in the same write. `amount` is never written.
+   * `null` on a miss.
+   */
+  async addClawed(
+    allocationId: Types.ObjectId,
+    expectedStatus: 'held' | 'released',
+    expectedClawed: number,
+    delta: number,
+    amount: number,
+    now: Date,
+    session?: ClientSession
+  ): Promise<IEarningsAllocation | null> {
+    const next = expectedClawed + delta;
+    if (delta <= 0 || next > amount) return null;
+    const set: Record<string, unknown> = { clawed_amount: next };
+    if (next === amount) {
+      set.status = 'reversed';
+      set.reversed_at = now;
+    }
+    return EarningsAllocationModel.findOneAndUpdate(
+      {
+        _id: allocationId,
+        status: expectedStatus,
+        // `null` matches a legacy row that never had the field (nothing clawed).
+        clawed_amount: expectedClawed === 0 ? { $in: [0, null] } : expectedClawed,
+      },
+      { $set: set },
       { new: true, session: session ?? null }
     );
   }

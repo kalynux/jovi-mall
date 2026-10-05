@@ -246,6 +246,22 @@ export class PlanPurchaseService {
   async reverseByGatewayRef(gatewayRef: string): Promise<IPlanPurchase | null> {
     const purchase = await this.repo.findByGatewayRef(gatewayRef);
     if (!purchase) return null;
+    return this.reverseLoaded(purchase, gatewayRef);
+  }
+
+  /**
+   * Reverse a paid plan purchase by its id — the refund queue's completion of a `plan_purchase`
+   * refund (REFUND-FLOW-PLAN R-9, review finding 2). Same unwind and the same idempotency as
+   * `reverseByGatewayRef`: the plan is unwound BEFORE the status flips, so a crash in between
+   * leaves the purchase `paid` and a retry (the nightly refund sweep) finishes the job.
+   */
+  async reverseById(purchaseId: string): Promise<IPlanPurchase | null> {
+    const purchase = await this.repo.findById(purchaseId);
+    if (!purchase) return null;
+    return this.reverseLoaded(purchase, `refund of purchase ${purchaseId}`);
+  }
+
+  private async reverseLoaded(purchase: IPlanPurchase, gatewayRef: string): Promise<IPlanPurchase> {
     if (purchase.status !== 'paid') return purchase; // idempotent: only a paid purchase reverses
 
     // Unwind the granted plan, if any.

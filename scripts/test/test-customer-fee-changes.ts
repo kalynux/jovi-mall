@@ -372,10 +372,10 @@ function main() {
   assert('a failed top-up is NOT announced as an order payment failure', () =>
     failure.indexOf("transaction.purpose === 'order_delivery_topup'") > 0
     && failure.indexOf("transaction.purpose === 'order_delivery_topup'") < failure.indexOf("eventBus.publish('payment.failed'"));
-  const legsFn = orch.slice(orch.indexOf('private async resolveRefundLegs('), orch.indexOf('private async sourceCeiling('));
+  const legsFn = orch.slice(orch.indexOf('async resolveRefundLegs('), orch.indexOf('async sourceCeiling('));
   assert('⛔ the refund lookup is PURPOSE-AWARE: every succeeded leg, the top-ups included', () =>
     legsFn.includes("'order_delivery_topup'") && legsFn.includes('PaymentTransactionModel.find(') && !legsFn.includes('PaymentTransactionModel.findOne({\n      $or'));
-  const refundFn = orch.slice(orch.indexOf('async refundPayment('), orch.indexOf('private async resolveRefundLegs('));
+  const refundFn = orch.slice(orch.indexOf('async refundPayment('), orch.indexOf('async resolveRefundLegs('));
   assert('refundPayment spreads over legs and validates every leg’s gateway before any money moves', () =>
     refundFn.includes('planRefundLegs(') && refundFn.indexOf('REFUND_GATEWAY_NOT_SUPPORTED') < refundFn.indexOf('RefundTransactionModel.create('));
   const topupInit = orch.slice(orch.indexOf('async initiateOrderDeliveryTopup('), orch.indexOf('async verifyPayment('));
@@ -391,10 +391,15 @@ function main() {
 
   const refundSvc = src('src/modules/delivery-fee-proposals/services/delivery-fee-refund.service.ts');
   const refundOutstanding = refundSvc.slice(refundSvc.indexOf('async refundOutstanding('), refundSvc.indexOf('async sweepOutstanding('));
-  assert('⛔ the refund CLAIM (processing row) is written BEFORE the gateway is called', () =>
-    refundOutstanding.indexOf('this.claim(') > 0 && refundOutstanding.indexOf('this.claim(') < refundOutstanding.indexOf('orchestrator.refundPayment('));
+  // REFUND-FLOW-PLAN § 4 (2026-10-05): the delivery refund is a REFUND REQUEST now, not a direct
+  // gateway call — the claim still comes first, and the money still never touches earnings.
+  assert('⛔ the refund CLAIM (processing row) is written BEFORE the refund request is opened', () =>
+    refundOutstanding.indexOf('this.claim(') > 0 && refundOutstanding.indexOf('this.claim(') < refundOutstanding.indexOf('refunds.create('));
   assert('the delivery refund is a system refund, top-up first, capped at what the order can still return', () =>
-    refundOutstanding.includes("initiatedByRole: 'system'") && refundOutstanding.includes("prefer: 'topup_first'") && refundOutstanding.includes('refundableCapacity('));
+    refundOutstanding.includes("role: 'system'") && refundOutstanding.includes("prefer: 'topup_first'") && refundOutstanding.includes('refundableCapacity('));
+  assert('…sent at once where it can be (approveNow), and it touches NO earnings (earningsImpact: none)', () =>
+    refundOutstanding.includes('approveNow: true') && refundOutstanding.includes("earningsImpact: 'none'")
+    && !refundOutstanding.includes('orchestrator.refundPayment('));
 
 
   const app = src('src/modules/delivery-fee-proposals/services/customer-fee-application.service.ts');
@@ -525,7 +530,7 @@ function main() {
   });
   assert('⛔ money paid by hand is subtracted from EVERY order refund ceiling (orchestrator + delivery refund capacity)', () => {
     const orchSrc = src('src/modules/payments/services/payment-orchestrator.service.ts');
-    const ceiling = orchSrc.slice(orchSrc.indexOf('private async sourceCeiling('), orchSrc.indexOf('private async refundableCeilingFor('));
+    const ceiling = orchSrc.slice(orchSrc.indexOf('async sourceCeiling('), orchSrc.indexOf('private async refundableCeilingFor('));
     const cap = refundSvc.slice(refundSvc.indexOf('async refundableCapacity('), refundSvc.indexOf('private async claim('));
     return ceiling.includes('sumDeliveryRefundsPaidByHand(') && cap.includes('sumDeliveryRefundsPaidByHand(');
   });

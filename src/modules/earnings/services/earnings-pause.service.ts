@@ -10,6 +10,7 @@ import { IEarningsAllocation } from '../models/earnings-allocation.model';
 import { IEarningsPause } from '../models/earnings-pause.schema';
 import {
   EarningsPauseReason,
+  REFUND_CLOSABLE_PAUSE_REASONS,
   resumedHoldReleaseAt,
 } from '../domain/earnings-hold';
 import { earningsCompletionService, EarningsCompletionService } from './earnings-completion.service';
@@ -168,6 +169,70 @@ export class EarningsPauseService {
   }
 
   /**
+   * A refund was PAID: close the pause that existed only because it was owed
+   * (REFUND-FLOW-PLAN § 6.5). Closes `refund_in_progress`, `seller_cancelled_paid_order` and
+   * `booking_cancelled_unrefunded` — nothing else: a card dispute waits for its verdict and an
+   * administrator's pause for an administrator.
+   *
+   * Called AFTER the clawback, so what is left held is the part the refund did not take back.
+   * ⚠ Unlike `resume`, it does NOT move hold dates: the refund settled the matter, and the rest
+   * of the money matures on the dates it already had (owner contract § 11.3). This also ends
+   * today's gap where a fully refunded seller-cancel stayed in the admin queue forever.
+   */
+  async closeOnRefund(
+    target: PauseTarget,
+    note: string | null = null,
+    actor: PauseActor = SYSTEM_PAUSE_ACTOR,
+    now: Date = new Date()
+  ): Promise<PauseOutcome> {
+    const current = await this.currentPause(target);
+    if (!current?.active || !current.paused_at) return { changed: false, pause: current };
+    if (!current.reason || !REFUND_CLOSABLE_PAUSE_REASONS.includes(current.reason)) {
+      return { changed: false, pause: current };
+    }
+
+    const field = target.kind === 'order' ? 'earnings_pause' : 'earningsPause';
+    const model: any = target.kind === 'order' ? OrderModel : Booking;
+    const res = await model.updateOne(
+      {
+        _id: new Types.ObjectId(target.id),
+        [`${field}.active`]: true,
+        [`${field}.paused_at`]: current.paused_at,
+        [`${field}.reason`]: current.reason,
+      },
+      {
+        $set: {
+          [`${field}.active`]: false,
+          [`${field}.resumed_at`]: now,
+          [`${field}.resumed_by_user_id`]: actor.userId,
+          [`${field}.resumed_by_source`]: actor.source,
+          [`${field}.resumed_by_name`]: actor.name,
+          [`${field}.resume_note`]: note,
+        },
+      }
+    );
+    if ((res.modifiedCount ?? 0) === 0) {
+      return { changed: false, pause: await this.currentPause(target) };
+    }
+
+    // Lift the index copy only; the release date each row already has stands.
+    const rows = await this.allocationRepo.findHeldBySources(await this.sourcesOf(target));
+    for (const row of rows) {
+      await this.allocationRepo.markResumed(row._id as Types.ObjectId, row.hold_release_at);
+    }
+    if (target.kind === 'order') {
+      await this.appendTimeline(
+        target.id,
+        'earnings.resumed',
+        'Earnings pause closed: refund completed',
+        { note, pausedReason: current.reason, closedBy: 'refund' },
+        actor
+      );
+    }
+    return { changed: true, pause: await this.currentPause(target) };
+  }
+
+  /**
    * Every order and booking whose earnings are paused right now, newest pause first — the
    * queue an administrator works through. Orders and bookings live in two collections, so a
    * page of the combined list is assembled from the newest `page × limit` of each; the
@@ -265,8 +330,14 @@ export class EarningsPauseService {
     switch (allocation.source_type) {
       case 'order':
         return { kind: 'order', id };
-      case 'booking':
-        return { kind: 'booking', id };
+      case 'booking': {
+        // A booking's BALANCE payment is split under its own source id (the balance
+        // PaymentTransaction's, see `splitBookingBalance`) — map it back to its booking, or a
+        // paused booking's balance share would be released straight through the pause.
+        if (await Booking.exists({ _id: allocation.source_id })) return { kind: 'booking', id };
+        const owner = await Booking.findOne({ 'settlement.balanceTransactionId': allocation.source_id }, { _id: 1 }).lean();
+        return owner ? { kind: 'booking', id: (owner as any)._id.toString() } : { kind: 'booking', id };
+      }
       case 'shipment': {
         const s = await ShipmentModel.findById(id, { order_id: 1 }).lean();
         return s?.order_id ? { kind: 'order', id: s.order_id.toString() } : null;
@@ -281,9 +352,7 @@ export class EarningsPauseService {
   }
 
   private async sourcesOf(target: PauseTarget): Promise<SourceRef[]> {
-    return target.kind === 'order'
-      ? this.completion.sourcesOfOrder(target.id)
-      : [{ sourceType: 'booking', sourceId: target.id }];
+    return target.kind === 'order' ? this.completion.sourcesOfOrder(target.id) : bookingSourcesOf(target.id);
   }
 
   private async appendTimeline(
@@ -307,6 +376,22 @@ export class EarningsPauseService {
       console.error('[EarningsPauseService] timeline append failed:', error);
     }
   }
+}
+
+/**
+ * Every source a booking's money hangs off: the booking itself and, once a balance was paid
+ * at settlement, that balance payment (`splitBookingBalance` keys its rows by the balance
+ * PaymentTransaction id so they cannot collide with the booking's). Used by the pause and by
+ * the clawback (REFUND-FLOW-PLAN § 6.2: "the booking rows AND the balance-payment rows").
+ */
+export async function bookingSourcesOf(bookingId: string): Promise<SourceRef[]> {
+  const sources: SourceRef[] = [{ sourceType: 'booking', sourceId: bookingId }];
+  const booking = await Booking.findById(bookingId, { 'settlement.balanceTransactionId': 1 }).lean();
+  const balanceId = (booking as any)?.settlement?.balanceTransactionId;
+  if (balanceId && balanceId.toString() !== bookingId) {
+    sources.push({ sourceType: 'booking', sourceId: balanceId.toString() });
+  }
+  return sources;
 }
 
 export const earningsPauseService = new EarningsPauseService();

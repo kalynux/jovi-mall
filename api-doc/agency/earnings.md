@@ -146,11 +146,14 @@ balance.
     "available": 42000,
     "reserve": 3500,
     "requested": 0,
+    "clawback": 0,
     "currency": "XAF",
     "payoutAllowance": null
   }
 }
 ```
+
+> **`clawback` (new 2026-10-05):** money owed back after a refund. Delivery shares are never taken back on a refund, so for an agency or agent this stays `0`; it is listed only because the balance shape is shared with vendors. See the vendor doc for the mechanism.
 
 | Field | Type | Description |
 |---|---|---|

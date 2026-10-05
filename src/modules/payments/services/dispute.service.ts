@@ -42,6 +42,17 @@ const SYSTEM_ACTOR: DisputeActor = { type: 'system', id: null };
  */
 export type DisputeResolution = 'resolved' | 'noop';
 
+/**
+ * The earnings-recovery key of a lost (or gateway-refunded) charge (REFUND-FLOW-PLAN § 6.1:
+ * "for a dispute it is `dispute:<id>`"): the Stripe dispute id when there is one, else the
+ * PaymentIntent, else the source itself. `earnings_adjustments` is unique on
+ * `(refund_key, allocation_id, kind)`, so a webhook redelivered — or the same loss resolved by
+ * hand afterwards — recovers nothing a second time. Exported for `test:refund-entry-points`.
+ */
+export function disputeRefundKey(disputeId: string | null, paymentIntentId: string | null, sourceId: string): string {
+  return `dispute:${disputeId || paymentIntentId || sourceId}`;
+}
+
 /** Map a billing owner type to the ticket EntityType for chargeback tickets. */
 function ownerEntityType(ownerType: BillingOwnerType): EntityType {
   switch (ownerType) {
@@ -296,7 +307,11 @@ export class PaymentDisputeService {
       { $set: { status: 'REFUNDED' } }
     );
     try {
-      await earningsRefundService.onOrderRefund(orderId);
+      // Everything still unclawed comes back — released shares included, as debt if need be
+      // (REFUND-FLOW-PLAN § 4, § 6.2 "dispute lost: everything"). Keyed on the dispute so a
+      // redelivered webhook, or an administrator resolving it by hand afterwards, recovers
+      // nothing a second time.
+      await earningsRefundService.onOrderRefund(orderId, disputeRefundKey(disputeId, paymentIntentId, orderId));
     } catch (error) {
       console.error('[PaymentDispute] Failed to reverse earnings on dispute loss:', error);
     }
@@ -384,7 +399,8 @@ export class PaymentDisputeService {
       { $set: { status: 'REFUNDED' } }
     );
     try {
-      await earningsRefundService.onRefund('booking', bookingId);
+      // The booking rows AND its balance-payment rows; same dispute key rule as the order path.
+      await earningsRefundService.onRefund('booking', bookingId, disputeRefundKey(disputeId, paymentIntentId, bookingId));
     } catch (error) {
       console.error('[PaymentDispute] Failed to reverse earnings on booking dispute loss:', error);
     }
@@ -432,7 +448,16 @@ export class PaymentDisputeService {
       $or: [{ orderId }, { orderIds: orderId }],
       purpose: { $ne: 'order_delivery_topup' },
     });
-    return await this.resolveOrderLost(orderId, tx?.gatewayRef ?? '', 'chargeback', null, actor);
+    // The frozen order remembers which dispute froze it: resolving it by hand keys the earnings
+    // recovery on the SAME `dispute:<id>` the webhook would have used.
+    const held = await OrderModel.findById(orderId).select('dispute_hold.gateway_dispute_id').lean<any>();
+    return await this.resolveOrderLost(
+      orderId,
+      tx?.gatewayRef ?? '',
+      'chargeback',
+      held?.dispute_hold?.gateway_dispute_id ?? null,
+      actor
+    );
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────────────

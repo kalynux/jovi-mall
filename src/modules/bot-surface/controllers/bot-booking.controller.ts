@@ -39,8 +39,15 @@ import {
     BotNoArgsSchema,
 } from '../validators/bot.validators';
 
+import { customerRefundViewService } from '../../payments/services/customer-refund-view.service';
+
 const bookingService = new BookingService();
 const paymentOrchestrator = new PaymentOrchestratorService();
+
+/** The refund block for one booking (REFUND-FLOW-PLAN § 8) — the same block the storefront reads. */
+function refundOf(booking: { _id: unknown }) {
+    return customerRefundViewService.latestForSource('booking', String(booking._id));
+}
 
 /**
  * How far ahead `bookings_get_availability` looks when the caller names no range.
@@ -104,7 +111,11 @@ export class BotBookingController {
             language: botResponseLanguageOf(req),
         });
 
-        sendSuccess(res, chat.items.map(toBotBookingDto), {
+        const refunds = await customerRefundViewService.latestBySources(
+            'booking',
+            chat.items.map((b) => String(b._id)),
+        );
+        sendSuccess(res, chat.items.map((b) => toBotBookingDto(b, refunds.get(String(b._id)) ?? null)), {
             meta: {
                 page, limit, totalPages: Math.ceil(total / limit),
                 // `total` comes from the window, which reconciles it against what was
@@ -124,7 +135,7 @@ export class BotBookingController {
         const { bookingId } = BotBookingParamSchema.parse(req.params);
         BotNoArgsSchema.parse(req.body ?? {});
         const booking = await bookingService.getUserBooking(bookingId, botCallerOf(req).userId);
-        sendSuccess(res, toBotBookingDto(booking));
+        sendSuccess(res, toBotBookingDto(booking, await refundOf(booking)));
     });
 
     /**
@@ -306,7 +317,7 @@ export class BotBookingController {
                 role: 'customer',
                 id: caller.userId,
             });
-            sendSuccess(res, toBotBookingDto(booking));
+            sendSuccess(res, toBotBookingDto(booking, await refundOf(booking)));
         } catch (error) {
             try {
                 await productBookingService.unlockSlot(productId, slotId, caller.userId);
@@ -464,15 +475,18 @@ export class BotBookingController {
     /**
      * `POST /bookings/:bookingId/cancel` — cancel, subject to the vendor's policy.
      *
-     * ⚠ **This moves money, and the outcome depends on the gateway.** A paid booking is
-     * refunded automatically where the gateway supports it; on My-CoolPay — which has no
-     * refund API at all — and on NotchPay, whose refunds this merchant account may not use,
-     * the payment status becomes `refund_pending` and a HIGH support ticket is raised for a
-     * manual payout. The service decides all of that; nothing here may second-guess it, and
-     * a bot must not tell the customer their money is on its way when it is a ticket.
+     * ⚠ **This moves money, and the outcome depends on how it was paid.** Since the refund
+     * flow (REFUND-FLOW-PLAN § 4, 2026-10-05) a paid booking opens a REFUND REQUEST: a card is
+     * refunded in full, mobile money is sent back by transfer to the number that paid minus a
+     * 2% fee, and with no paying number on record it waits for the team. The service decides
+     * all of that; nothing here may second-guess it. The answer carries the request as
+     * `refund` — a bot quotes ITS status and `netAmount`, never "your money is on its way"
+     * for a refund that is only `requested`.
      *
-     * A refund failure never blocks the cancellation: releasing the slot matters more, and
-     * money owed is recoverable from the ticket.
+     * A refund failure never blocks the cancellation: releasing the slot matters more. Money
+     * owed stays visible: an open request sits in the administrators' refund queue (a failed
+     * transfer is retried or settled there), and only where no request can be opened at all
+     * (paid in cash, no payment found) does a HIGH ticket remain the record.
      */
     static cancel = asyncHandler(async (req: Request, res: Response) => {
         const { bookingId } = BotBookingParamSchema.parse(req.params);
@@ -482,7 +496,9 @@ export class BotBookingController {
             botCallerOf(req).userId,
             reason,
         );
-        sendSuccess(res, toBotBookingDto(booking));
+        // The cancellation may have just opened a refund request: return it, so the chat
+        // quotes the request's own status rather than inferring one from `payment.status`.
+        sendSuccess(res, toBotBookingDto(booking, await refundOf(booking)));
     });
 }
 

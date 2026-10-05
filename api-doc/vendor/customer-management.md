@@ -357,8 +357,15 @@ A vendor can refund a paid order if the vendor's return policy and the order's
 state allow it. Always check eligibility first to drive the UI (show/hide the
 refund button, prefill the amount).
 
-> **Error shape note:** the two refund endpoints live on the orders controller and
-> return the shorter error shape `{ success:false, error:{ code, message } }`.
+> ⚠ **BREAKING since 2026-10-05 (refund flow).** `POST …/refund` no longer refunds through the
+> payment gateway in the call. It opens a **refund request** and answers with it: a card refund
+> still completes in the call, a mobile-money refund is a **transfer to the number that paid**
+> (its outcome arrives later), and a COD refund — or one with no paying number on record —
+> **waits for an administrator**. `status` is no longer always `"completed"`. What changed and
+> what to do: [FRONTEND-CHANGELOG-refund-flow.md](./FRONTEND-CHANGELOG-refund-flow.md).
+
+> **Error shape:** both endpoints use the single standard envelope
+> `{ success:false, requestId, error:{ code, message, statusCode, category, details? } }`.
 
 ### GET `/api/vendor/orders/:id/refund-eligibility`
 
@@ -371,57 +378,83 @@ Read-only. Never errors on ineligibility — it returns `eligible: false` plus a
   "success": true,
   "data": {
     "eligible": true,
-    "maxRefundable": 145000,   // most you may refund right now (policy + balance)
-    "remaining": 145000,       // un-refunded balance of the payment
-    "currency": "XAF",         // or null if no payment found
+    "maxRefundable": 145000,   // most you may refund right now (policy + balance + delivery rule), a whole amount
+    "remaining": 145000,       // un-refunded money on the order (online payments, or COD cash collected)
+    "currency": "XAF",         // or null if nothing was paid
     "refundProcessingDays": 7, // policy: expected settle window (null if no policy)
     "returnShippingPayer": "customer", // policy: who pays return shipping (null if no policy)
+    "paymentChannel": "mobile_money",  // NEW: "card" | "mobile_money" | "cod" | null
+    "autoSend": true,                  // NEW: true → the refund is sent at once; false → an administrator approves it
+    "openRefundRequest": null,         // NEW: { id, status } when a refund is already in progress
     "reasonCode": "REFUND_WINDOW_EXPIRED"  // present only when eligible === false
   }
 }
 ```
 
 > `refundProcessingDays` and `returnShippingPayer` are echoed from the vendor's return
-> policy for display only — they carry no money movement. `returnShippingPayer` is one of
-> `vendor` | `customer` | `customer_reimbursed_if_defect`, or `null` when no policy is set.
+> policy for display only. `returnShippingPayer` is one of `vendor` | `customer` |
+> `customer_reimbursed_if_defect`, or `null` when no policy is set.
+>
+> **After delivery, `maxRefundable` follows your return-shipping setting** (owner rule C-1):
+> `vendor` → the customer's delivery money can come back too (charged to you); `customer` → it
+> cannot; `customer_reimbursed_if_defect` → only when you tick `itemDefective` on the refund.
+> Before delivery (a cancellation) everything the customer paid can come back.
 
 **`reasonCode` values (when `eligible: false`)**
 | Code | Meaning |
 |---|---|
 | `REFUND_POLICY_DISABLED` | Vendor has no return policy, returns are disabled, or `refund_type = none`. |
-| `REFUND_ORDER_NOT_PAID` | Order `payment_status` is not `paid`. |
-| `REFUND_PAYMENT_NOT_FOUND` | No successful payment transaction is linked to the order. |
-| `REFUND_ALREADY_FULLY_REFUNDED` | The payment is already fully refunded. |
-| `REFUND_WINDOW_EXPIRED` | Past `created_at + return_window_days`. |
+| `REFUND_ORDER_NOT_PAID` | Order `payment_status` is not `paid` (for COD: no cash collected yet). |
+| `REFUND_PAYMENT_NOT_FOUND` | No successful payment is linked to the order. |
+| `REFUND_ALREADY_FULLY_REFUNDED` | Everything paid has already been refunded. |
+| `REFUND_WINDOW_EXPIRED` | Past **delivery** + `return_window_days` (the window starts when the parcel is delivered, not when the order was placed). |
 | `REFUND_NOT_ELIGIBLE` | Policy resolves the allowed amount to 0 (e.g. partial policy with 0%). |
+| `REFUND_ALREADY_OPEN` | NEW — a refund of this order is already in progress (`openRefundRequest` says which). |
 
 **Errors:** `404 ORDER_NOT_FOUND` if the order isn't found or isn't this vendor's.
 
 ### POST `/api/vendor/orders/:id/refund`
 
-Action a refund. Calls the payment gateway live (Stripe is fully supported today).
+Open a refund request for the order.
 
 **Body**
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `amount` | number > 0 | no | Defaults to `maxRefundable`. If provided, must be ≤ `maxRefundable` (you can only refund the policy max or less). |
-| `reason` | string | no | ≤ 500 chars. Stored on the refund + passed to the gateway. |
+| `amount` | **whole** number > 0 | no | Defaults to `maxRefundable`. If provided, must be ≤ `maxRefundable`. A decimal is now a `400`. |
+| `reason` | string | no | ≤ 500 chars. Stored on the refund request. |
+| `itemDefective` | boolean | no | NEW. Only read under `returnShippingPayer: customer_reimbursed_if_defect`: `true` lets the customer's delivery money come back as well. |
+
+**What happens to the money**
+| Payment | Result | `status` |
+|---|---|---|
+| Card (Stripe) | Refunded to the card in the call, no fee | `completed` |
+| Mobile money, paying number on record | A transfer to that number, **minus the 2% refund fee** (5000 → the customer receives 4900) | `sending` (then `completed` when the gateway confirms), or `failed` |
+| Cash on delivery | An administrator approves it and types the customer's number; it is sent once the agency's cash reached the platform | `awaiting_approval` |
+| No paying number on record, or payouts switched off on this deployment | An administrator decides | `awaiting_approval` (or `approved` with `transferFailureReason`) |
 
 **Response 200**
 ```jsonc
 {
   "success": true,
   "data": {
-    "refundId": "666...aa",
-    "status": "completed",
-    "amount": 145000,
+    "refundRequestId": "671...aa",
+    "refundId": "671...aa",          // DEPRECATED alias of refundRequestId (was a refund_transactions id)
+    "status": "sending",             // completed | sending | awaiting_approval | approved | failed
+    "amount": 5000,                  // GROSS — what the order loses (kept under its old name)
+    "grossAmount": 5000,
+    "feeAmount": 100,                // 0 for a card refund
+    "netAmount": 4900,               // what the customer receives
     "currency": "XAF",
-    "totalRefunded": 145000,   // cumulative across all refunds on this payment
-    "fullyRefunded": true,      // when true, order.payment_status becomes "refunded"
-    "refundProcessingDays": 7,  // policy: expected settle window (null if no policy)
-    "returnShippingPayer": "customer" // policy: who pays return shipping (null if no policy)
+    "paymentChannel": "mobile_money",// card | mobile_money | cod
+    "channel": "payout",             // card_refund | payout | external | null (not decided yet)
+    "destinationMasked": "+•••••••••001", // the number it goes to, masked; null for a card
+    "transferFailureReason": null,   // e.g. "payout_unavailable", "insufficient_gateway_balance"
+    "totalRefunded": 0,              // Σ COMPLETED refunds on the order (this one counts once it completes)
+    "fullyRefunded": false,          // true only once COMPLETED and the order is square
+    "refundProcessingDays": 7,
+    "returnShippingPayer": "customer"
   },
-  "message": "Order fully refunded"   // or "Partial refund processed"
+  "message": "Refund is being sent to the customer"
 }
 ```
 
@@ -431,18 +464,25 @@ Action a refund. Calls the payment gateway live (Stripe is fully supported today
 | 404 | `ORDER_NOT_FOUND` | Order not found / not this vendor's. |
 | 422 | `REFUND_POLICY_DISABLED` / `REFUND_WINDOW_EXPIRED` / `REFUND_NOT_ELIGIBLE` | Eligibility failed. |
 | 409 | `REFUND_ORDER_NOT_PAID` / `REFUND_ALREADY_FULLY_REFUNDED` | Bad order/payment state. |
+| 409 | `REFUND_ALREADY_OPEN` | A refund of this order is already in progress (`details.refundRequestId`, `details.status`). |
 | 404 | `REFUND_PAYMENT_NOT_FOUND` | No successful payment to refund. |
 | 400 | `REFUND_AMOUNT_EXCEEDS_MAX` | `amount` exceeds the allowed maximum. |
-| 400 | `REFUND_GATEWAY_NOT_SUPPORTED` | Gateway has no refund support (NotchPay/MyCoolPay today). |
-| 502 | `REFUND_GATEWAY_FAILED` | Gateway rejected the refund. |
+| 400 | `VALIDATION_ERROR` | `amount` not a whole number, unknown field types. |
+
+`REFUND_GATEWAY_NOT_SUPPORTED` and `REFUND_GATEWAY_FAILED` are **no longer returned** by this
+endpoint: a mobile-money refund is a transfer, and a send problem is recorded on the request
+(`status`, `transferFailureReason`) rather than thrown.
 
 **Recommended UI flow**
 1. On order detail, call `GET …/refund-eligibility`.
 2. If `eligible`, enable the refund control and prefill the amount with
-   `maxRefundable` (allow the vendor to lower it, not raise it).
-3. `POST …/refund` with `{ amount?, reason? }`.
-4. On success, refresh the order (status may now be `refunded`) and re-fetch
-   eligibility (subsequent partial refunds shrink `remaining`).
+   `maxRefundable` (allow the vendor to lower it, not raise it). Use `autoSend` to say
+   "the customer will receive it now" vs. "the platform team will approve it".
+3. `POST …/refund` with `{ amount?, reason?, itemDefective? }`.
+4. Render by `status`: `completed` → refunded; `sending` → on its way (refresh later);
+   `awaiting_approval` → waiting for the platform team. Show `netAmount` as what the customer
+   receives and `feeAmount` as the refund fee.
+5. Re-fetch eligibility: while the request is open it answers `REFUND_ALREADY_OPEN`.
 
 ---
 
@@ -461,4 +501,4 @@ Action a refund. Calls the payment gateway live (Stripe is fully supported today
 | GET | `/api/vendor/orders?customerId=:id` | A customer's orders |
 | GET | `/api/vendor/orders/:id` | Order detail (existing) |
 | GET | `/api/vendor/orders/:id/refund-eligibility` | Check refundability |
-| POST | `/api/vendor/orders/:id/refund` | Action a refund |
+| POST | `/api/vendor/orders/:id/refund` | Open a refund request (⚠ breaking 2026-10-05) |

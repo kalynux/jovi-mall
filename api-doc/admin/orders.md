@@ -1,6 +1,6 @@
 # Order administration
 
-**Verified against source on 2026-09-08** — the six `/api/internal/admin/orders` routes and the absence of any `/api/admin/*` mount, the four request schemas (`outcome`, `page`/`limit`, cancel `reason` 3-500, refund `{amount?, reason, overridePolicy?}`), the refund-eligibility verdict fields and the `REFUND_POLICY_OVERRIDE_REQUIRED` details, against `jovi-mall/src/modules/orders/{admin-order.routes.ts,admin-order.controller.ts,admin-refund.service.ts}`; every error code named here is raised in `src/`.
+**Verified against source on 2026-09-08** — the six `/api/internal/admin/orders` routes and the absence of any `/api/admin/*` mount, the four request schemas (`outcome`, `page`/`limit`, cancel `reason` 3-500, refund `{amount?, reason, overridePolicy?, itemDefective?}` (re-verified for the refund-request rewiring 2026-10-05)), the refund-eligibility verdict fields and the `REFUND_POLICY_OVERRIDE_REQUIRED` details, against `jovi-mall/src/modules/orders/{admin-order.routes.ts,admin-order.controller.ts,admin-refund.service.ts}`; every error code named here is raised in `src/`.
 
 > **ONE mount. There were two, and the legacy one was deleted at the Phase 5 cutover.**
 >
@@ -141,50 +141,73 @@ exact fact a delivery dispute asks about.
 
 ---
 
+> ⚠ **Rewired 2026-10-05 (REFUND-FLOW-PLAN § 4).** These two routes are now the **legacy** door:
+> the refund **queue** is `/api/internal/admin/refunds` ([refunds.md](./refunds.md)), which owns
+> the four-eyes approval, typed numbers with proof, external settlement and retries. The legacy
+> `POST` no longer calls a gateway's refund API: it **opens a refund request and approves it in
+> the same call** (the administrator is the approver) when the money can be sent on its own, and
+> otherwise leaves it **awaiting approval in the queue**. It **refuses 2,000,000 and above**
+> (`422 REFUND_USE_REFUND_QUEUE`), because the queue is where a second administrator approves.
+
 ## `GET /:orderId/refund-eligibility` — internal only
 
-Read-only. **Never throws on ineligibility** — it answers with a verdict.
+Read-only. **Never throws on ineligibility** — it answers with a verdict. The money half is the
+SAME ceiling `RefundRequestService.create` enforces.
 
 ```jsonc
 {
-  "eligible": true,                  // the MONEY verdict: is there a balance to refund?
-  "maxRefundable": 45000,            // the FULL remaining balance, not the vendor's fraction
-  "remaining": 45000,
+  "eligible": true,                  // the MONEY verdict: is there a balance to refund (and none in progress)?
+  "maxRefundable": 45000,            // remaining balance capped by the delivery rule (C-1) — NOT the vendor's fraction
+  "remaining": 45000,                // un-refunded money on the order (online payments, or COD cash collected)
   "currency": "XAF",
-  "gateway": "STRIPE",
-  "gatewayRefundSupported": true,    // Stripe and NotchPay do; My-CoolPay has no refund API
+  "gateway": "NOTCHPAY",             // the checkout payment's gateway; null for COD
+  "gatewayRefundSupported": true,    // MEANING CHANGED: "will the money go back on its own once approved?"
+                                     // card → true; mobile money with the payer's number → true (a payout);
+                                     // COD / no number on record → false (the queue asks for a typed number)
   "isCod": false,
   "vendorPolicy": { /* what the VENDOR's own policy would allow — reported, not enforced */ },
-  "overrides": ["return_window_expired"]   // which vendor gates a refund would cross
+  "overrides": ["return_window_expired"],  // which vendor gates a refund would cross
+  "openRefundRequest": null,         // NEW: { id, status } when a refund of this order is in progress
+  "legacyRouteCeiling": 2000000      // NEW: at or above this the POST refuses — use the refund queue
 }
 ```
 
-`gatewayRefundSupported` is reported **up front** on purpose: My-CoolPay has no refund endpoint
-at all, and discovering that after the button is pressed leaves a `pending` `RefundTransaction`
-behind and an operator who believes money moved. It is **derived from the gateway registry**
-(does the adapter implement `refundPayment`?) rather than from a list kept beside it, so this
-verdict and the guard that enforces it cannot drift apart.
+`reasonCode` (when `eligible: false`) may now also be **`REFUND_ALREADY_OPEN`**. A COD order is
+no longer ineligible (`REFUND_ORDER_IS_COD` is not reported any more): it is refundable once its
+cash was collected, through the queue.
+
+**After delivery** the customer's delivery money is refundable only per the vendor's
+return-shipping setting (`vendor` → yes, charged to the vendor; `customer` → no;
+`customer_reimbursed_if_defect` → only with `itemDefective: true` on the POST). Before delivery
+everything paid is refundable.
 
 ---
 
-## `POST /:orderId/refund` — internal only
+## `POST /:orderId/refund` — internal only (legacy)
 
-Body: `{ "amount"?: number, "reason": string, "overridePolicy"?: boolean }`.
+Body: `{ "amount"?: integer, "reason": string, "overridePolicy"?: boolean, "itemDefective"?: boolean }`.
 
-`amount` absent means **the full remaining refundable balance** — not the vendor's policy
-cap. `reason` is required where the vendor's own endpoint makes it optional: an
-administrator overriding a vendor's terms has to say why, the vendor will ask, and
-`RefundTransaction.reason` is the only place this service can store it (wi-admin's audit
-trail is in a database jovi-mall cannot read).
+`amount` absent means **the most the money allows** (`maxRefundable`) — not the vendor's policy
+cap. It must be a **whole number** now (XAF has no minor unit). `reason` is required where the
+vendor's own endpoint makes it optional: an administrator overriding a vendor's terms has to say
+why, and the request's `reason` is the only place this service stores it.
+
+### What happens
+
+| Payment | Result | `status` |
+|---|---|---|
+| Card | Stripe refunds it in the call, no fee | `completed` |
+| Mobile money, payer's number on record | Approved by this administrator and sent: a payout to that number, minus the 2% refund fee | `sending` (or `failed` / `approved` + `transferFailureReason`) |
+| COD, or no payer number on record | Opened **awaiting approval** in the refund queue: a number is typed there with its proof, and a **second** administrator approves (R-7). COD then waits for the agency's cash (`waiting_for_cash`) | `awaiting_approval` |
 
 ### What `overridePolicy` waives, and what it does not
 
 | MAY be overridden — the vendor's commercial terms | NEVER overridden — the money invariants |
 |---|---|
 | `return_eligible === false` | more than the remaining refundable balance |
-| `refund_type === 'none'` | an order with no `SUCCEEDED` payment |
-| the return window | a gateway with no refund API |
-| `refund_percentage` | an already fully-refunded payment |
+| `refund_type === 'none'` | more than the delivery rule allows (C-1, D-5) |
+| the return window | an order with nothing paid |
+| `refund_percentage` | a second open refund on the order |
 
 Without the flag, a refund beyond the vendor's terms is refused so the operator confirms a
 *specific* override rather than a general one:
@@ -198,19 +221,39 @@ Without the flag, a refund beyond the vendor's terms is refused so the operator 
 
 | Refusal | Code | Status |
 |---|---|---|
-| COD order — the cash never went through a gateway | `REFUND_ORDER_IS_COD` | 422 |
+| **2,000,000 or more** — the four-eyes approval lives on the refund queue | **`REFUND_USE_REFUND_QUEUE`** (NEW; `details: { requested, ceiling, queue }`) | 422 |
+| a refund of this order is already in progress | `REFUND_ALREADY_OPEN` (`details.refundRequestId`, `details.status`) | 409 |
 | frozen by a dispute — resolve it `lost` instead | `ORDER_DISPUTE_HOLD` | 423 |
 | beyond the vendor's terms, no flag | `REFUND_POLICY_OVERRIDE_REQUIRED` | 422 |
-| above the remaining balance | `REFUND_AMOUNT_EXCEEDS_MAX` | 400 |
+| above the allowed maximum | `REFUND_AMOUNT_EXCEEDS_MAX` | 400 |
 | nothing left to refund | `REFUND_ALREADY_FULLY_REFUNDED` | 409 |
-| NotchPay / MyCoolPay | `REFUND_GATEWAY_NOT_SUPPORTED` | 400 |
+| no money ever paid / collected | `REFUND_PAYMENT_NOT_FOUND` (404) / `REFUND_ORDER_NOT_PAID` (409) | |
 
-The last is an **expected outcome**, not a bug — callers must handle it.
+**No longer returned:** `REFUND_ORDER_IS_COD` and `REFUND_GATEWAY_NOT_SUPPORTED` — COD and mobile
+money are refundable now.
 
-Response carries `withinVendorPolicy` and `overrides[]`, which wi-admin lands in the audit
-row's `after`. That row is the only place the platform will ever record *which* of a
-vendor's gates was crossed, because the policy it was evaluated against is one the vendor
-may edit tomorrow.
+### Response
+
+```jsonc
+{
+  "refundId": "671...aa",          // DEPRECATED alias of refundRequestId (was a refund_transactions id)
+  "refundRequestId": "671...aa",
+  "status": "sending",             // the REQUEST's status
+  "amount": 45000,                 // GROSS — what the order loses
+  "grossAmount": 45000, "feeAmount": 900, "netAmount": 44100,
+  "currency": "XAF",
+  "paymentChannel": "mobile_money", "channel": "payout",
+  "transferFailureReason": null,
+  "totalRefunded": 0,              // Σ COMPLETED refunds on the order
+  "fullyRefunded": false,          // true only once COMPLETED and the order is square
+  "withinVendorPolicy": false,
+  "overrides": ["return_window_expired"]
+}
+```
+
+`withinVendorPolicy` and `overrides[]` still land in wi-admin's audit row's `after`. ⚠ wi-admin's
+`PlatformRefundResult` types `status` as `'completed'`; it reads `refundId` as a string, which is
+still true (now the request id).
 
 ---
 

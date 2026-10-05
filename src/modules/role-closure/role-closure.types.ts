@@ -41,6 +41,12 @@ export const ROLE_CLOSURE_BLOCKER_CODES = [
   'cod_collections_pending',
   'payout_request_held',
   'earnings_balance',
+  /**
+   * The role OWES the platform money back: a refund recovered more than its balances held
+   * (REFUND-FLOW-PLAN C-5, § 6.6). Refused until cleared — by later earnings, or a write-off.
+   * Any role with an earnings account can carry it, not only a vendor.
+   */
+  'earnings_clawback_outstanding',
   'earnings_allocations_held',
   'agency_stock_held',
   'storage_invoices_open',

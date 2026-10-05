@@ -117,6 +117,7 @@ an admin marks it paid, or returns to `available` if the admin rejects it.
     "available": 118500,
     "reserve": 0,
     "requested": 0,
+    "clawback": 0,
     "currency": "XAF",
     "payoutAllowance": null
   }
@@ -125,10 +126,27 @@ an admin marks it paid, or returns to `available` if the admin rejects it.
 
 | Field | Type | Description |
 |---|---|---|
+| `clawback` | `number` | **New 2026-10-05.** Money you owe back after a refund, not yet recovered (see below). `0` almost always. Minor currency units. |
 | `pending` | `number` | Sum of net shares from paid/collected-but-not-yet-released sources (still within the completion/hold window, or COD cash not yet settled). Minor currency units. |
 | `available` | `number` | Sum of net shares whose hold window has elapsed (and, for COD, whose cash was settled). Withdrawable via a payout request (see below). Minor currency units. |
 | `reserve` | `number` | Always `0` for vendors (see above). Minor currency units. |
 | `payoutAllowance` | `null` | **Always `null`** since 2026-09-27 — deprecated, no limit applies. See below. |
+
+### `clawback` — money you owe back after a refund
+
+**New 2026-10-05.** When a sale is refunded, your share of it is taken back:
+- still **held** → taken out of `pending`;
+- already **released** → taken out of `available`;
+- `available` too small (you already withdrew it) → the rest becomes `clawback`, a debt.
+
+A debt is paid down **automatically** by your next earnings before anything becomes `available` again, so while `clawback > 0`, `available` stays `0`. Each step appears in [`GET /api/vendor/transactions`](./transactions.md) as `earning_clawback` (out) and `earning_clawback_recovery` (internal). The platform can cancel a debt (`earning_clawback_write_off`).
+
+What a refund takes back:
+- **Your share** of the refunded amount, proportionally with the platform commission.
+- **The delivery money** the customer gets back, when your return policy says you pay return shipping (or the item was defective under *"reimbursed if defective"*).
+- **On a free-delivery (vendor-paid) order refunded after delivery**, the delivery cost already paid to the courier — couriers always keep their fee.
+
+Show it as *"Owed from refunds"* next to the balances when it is above `0`.
 
 ### `payoutAllowance` — retired, always `null`
 

@@ -1523,3 +1523,73 @@ Approval copy (`en`; the `fr` text is the catalog's and is in the payloads file)
 Until submitted and APPROVED these reach their audience in-app, by push, email, Telegram and
 **in-window** WhatsApp only. Submit with the working form recorded in the 2026-10-02 section
 (`--submit` is idempotent and sends only the difference).
+
+---
+
+## 2026-10-05 — refund flow (REFUND-FLOW-PLAN § 8): 11 templates GENERATED, NOT SUBMITTED
+
+⏳ **Generated into `whatsapp-template-payloads.json`, nothing sent to Meta (owner action).**
+146 → **157** names, 292 → **314** submissions (`en` + `fr`). The regeneration was diffed
+against the previous file: the 22 new submissions are the only difference, and **every existing
+submission is byte-identical**. Same production button hosts as the 2026-10-04 run
+(`--base-customer=https://wi-mall.com`, …). All UTILITY, all customer, all MONEY situations (no
+preference key — they cannot be muted). Every button is the existing order / booking page
+(`shop/account/orders/detail/{{orderId}}` · `shop/account/bookings/{{bookingId}}`).
+
+**Why new templates and not `customer_order_refunded`.** A refund sent by mobile-money TRANSFER
+loses a 2% fee (R-3: 5,000 → the customer receives 4,900); a CARD refund returns the full amount.
+`customer_order_refunded` / `customer_booking_refunded` keep the card case unchanged ("goes back
+to the way you paid"). The transfer and external cases carry `{{amountLine}}` — ONE whole-sentence
+parameter, always non-empty: *"You receive 4,900 XAF (5,000 minus a 2% transfer fee)."* or, with
+no fee, *"You receive 5,000 XAF."* (`refundAmountLine` in the customer catalog). A sentence rather
+than three numbers because whether a fee clause exists depends on the channel, and a static
+template cannot carry an optional clause.
+
+| Template name | Situation | Body params | Raised by |
+|---|---|---|---|
+| `customer_order_refund_requested` | `order.refund.requested` | currency, gross, order number | `refund.status_changed` → `awaiting_approval`/`approved`, requested by vendor / system / admin |
+| `customer_order_refund_waiting_for_cash` | `order.refund.waiting_for_cash` | currency, gross, order number | `refund.status_changed` → `waiting_for_cash` (COD, R-4) |
+| `customer_order_refund_sending` | `order.refund.sending` | order number, masked number, amount line | `refund.status_changed` → `sending` (payout only) |
+| `customer_order_refund_completed` | `order.refund.completed` | order number, masked number, amount line | `payment.refunded`, `channel: payout` |
+| `customer_order_refund_paid_externally` | `order.refund.paid_externally` | order number, amount line | `payment.refunded`, `channel: external` |
+| `customer_order_refund_declined` | `order.refund.declined` | order number | `refund.status_changed` → `rejected` |
+| `customer_booking_refund_requested` | `booking.refund.requested` | currency, gross, service name | as the order row |
+| `customer_booking_refund_sending` | `booking.refund.sending` | service name, masked number, amount line | as the order row |
+| `customer_booking_refund_completed` | `booking.refund.completed` | service name, masked number, amount line | as the order row |
+| `customer_booking_refund_paid_externally` | `booking.refund.paid_externally` | service name, amount line | as the order row |
+| `customer_booking_refund_declined` | `booking.refund.declined` | service name | as the order row |
+
+Approval copy (`en`; the `fr` text is the catalog's and is in the payloads file):
+
+- `customer_order_refund_requested` — *Refund requested: {{1}} {{2}}* · A refund of {{1}} {{2}} has been requested for your order {{3}}. Our team is reviewing it — you do not need to do anything, and we will tell you when it is sent.
+- `customer_order_refund_waiting_for_cash` — *Refund approved: {{1}} {{2}}* · Your refund of {{1}} {{2}} for order {{3}} is approved. You paid in cash, and the delivery company has not yet handed that cash over to us — we will send your refund as soon as it does. You do not need to do anything.
+- `customer_order_refund_sending` — *Refund on its way — {{1}}* · We are sending the refund for your order {{1}} to {{2}}. {{3}} It usually arrives within minutes.
+- `customer_order_refund_completed` — *Refund sent — {{1}}* · The refund for your order {{1}} has been sent to {{2}}. {{3}} If it has not reached you within a day, reply here or open the order.
+- `customer_order_refund_paid_externally` — *Refund paid — {{1}}* · Our team has paid the refund for your order {{1}} directly, outside the app. {{2}} If it has not reached you, reply here or open the order.
+- `customer_order_refund_declined` — *Refund declined — {{1}}* · The refund requested for your order {{1}} was declined after review. If you think this is a mistake, reply here or open a support request from the order.
+- `customer_booking_refund_requested` — *Refund requested: {{1}} {{2}}* · A refund of {{1}} {{2}} has been requested for your {{3}} booking. Our team is reviewing it — you do not need to do anything, and we will tell you when it is sent.
+- `customer_booking_refund_sending` — *Refund on its way — {{1}}* · We are sending the refund for your {{1}} booking to {{2}}. {{3}} It usually arrives within minutes.
+- `customer_booking_refund_completed` — *Refund sent — {{1}}* · The refund for your {{1}} booking has been sent to {{2}}. {{3}} If it has not reached you within a day, reply here or open the booking.
+- `customer_booking_refund_paid_externally` — *Refund paid — {{1}}* · Our team has paid the refund for your {{1}} booking directly, outside the app. {{2}} If it has not reached you, reply here or open the booking.
+- `customer_booking_refund_declined` — *Refund declined — {{1}}* · The refund requested for your {{1}} booking was declined after review. If you think this is a mistake, reply here or open a support request from the booking.
+
+Example values for the reviewer: `{{2}}` masked number `+•••••••••512`; amount line *"You receive
+4,900 XAF (5,000 minus a 2% transfer fee)."*. Every parameter is always non-empty: the masked
+number falls back to "your mobile money number" (`refundDestinationLabel`).
+
+⚠ **Deliberately silent:** a `failed` transfer (the team retries or pays by hand — a customer never
+reads "failed"), a CARD refund in `sending` (a Stripe answer we could not read), and a request
+raised by **Support** at the request stage (it answers the customer's own ticket, which already
+tells them). The administrator's rejection reason is never quoted — internal free text.
+
+⚠ **`booking.refund.pending` / `customer_booking_refund_pending` is now unreachable** —
+`handleBookingPaymentUpdated` no longer maps `refund_pending`/`refunded` (nothing ever published
+them on that event; refund news now comes from the refund request, keyed per request). The
+template stays in the payloads because it is already submitted and the catalog still names it;
+retiring it is a separate, owner-visible change.
+
+Until submitted and APPROVED these reach the customer in-app, by push, email, Telegram and
+**in-window** WhatsApp only; an out-of-window WhatsApp send fails, the same as every new
+situation on its first day. Submit with the working form recorded in the 2026-10-02 section
+(`--submit` is idempotent and sends only the difference), e.g.
+`npm run whatsapp:templates:submit -- --only=customer_order_refund_requested,… --submit`.

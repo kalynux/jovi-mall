@@ -24,6 +24,7 @@ import { buildAdminKycRouter } from '../../modules/identity-verification/routes/
 import { buildAdminStaffIdentityRouter } from '../../modules/staff-identity/routes/admin-staff-identity.routes';
 import { buildAdminGeoRouter } from '../../modules/geo/admin-geo.routes';
 import { buildAdminStatementMailRouter } from '../../modules/mail/admin-statement-mail.routes';
+import { buildAdminRefundRequestRouter } from '../../modules/payments/routes/admin-refund-request.routes';
 
 /**
  * `/api/internal/admin/*` — the service-to-service surface the **wi-admin** backend calls.
@@ -354,5 +355,15 @@ router.use('/geo', buildAdminGeoRouter([requireAdminCaller]));
  * caller. Its wider body parser is mounted in `app.ts` (`STATEMENT_MAIL_BODY_LIMIT`).
  */
 router.use('/mail', buildAdminStatementMailRouter([requireAdminCaller]));
+
+/**
+ * The refund queue (REFUND-FLOW-PLAN § 7, § 11.7) — no public twin. wi-admin reads
+ * `refund_requests` directly and delegates every write: create, approve, reject, retry, settle
+ * externally, resolve a stuck transfer, plus the eligibility preview and the proof pictures
+ * (private `refund-proofs/` tree). Each write is a transition paired with post-commit effects —
+ * an earnings pause or clawback, a gateway transfer, the customer's notification — which a second
+ * writer would reproduce and miss. Contract: `api-doc/admin/refunds.md`.
+ */
+router.use('/refunds', buildAdminRefundRequestRouter([requireAdminCaller]));
 
 export default router;

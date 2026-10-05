@@ -11,6 +11,29 @@ Pinned by `npm run test:customer-fee-changes` § 15.
 > <INTERNAL_ADMIN_SERVICE_TOKEN>` + `X-Actor-Id` / `X-Actor-Name`). `X-Actor-Tier` is advisory and
 > never read here. See [internal-service-api.md](./internal-service-api.md).
 
+> ⚠ **Folded into the refund queue on 2026-10-05 (REFUND-FLOW-PLAN § 4, § 7).** Delivery money
+> owed back is now a **refund request** (`/api/internal/admin/refunds`, [refunds.md](./refunds.md)),
+> raised by the system with **no earnings impact** (`earningsImpact: 'none'` — it was never
+> allocated to anybody): a card refund completes at once, mobile money is sent to the number that
+> paid (minus the 2% refund fee), and COD — no number on record — waits **awaiting approval** in
+> the queue, where an administrator types the number with its proof and a second one approves.
+> The `delivery_fee_refunds` row is still written (it is the ledger the customer's owed amount is
+> measured against) and now carries **`refund_request_id`**; it stays `processing` while its
+> request is open and becomes `completed` when the request completes.
+>
+> **This surface keeps answering** — wi-admin's money module calls it — for:
+> - rows written **before** the change, until `migrate:legacy-refunds-to-requests` moves them onto
+>   a request (they keep `manual_required`, gain `refund_request_id`, and leave this screen);
+> - rows for which **no request could be opened** (the floor: a HIGH ticket, as before);
+> - rows whose request was **rejected** (`refund_request_id` moves to `rejected_refund_request_id`
+>   and the row is `manual_required` again — record a cover or a hand payment here).
+>
+> A row linked to an **open** request is refused by `settle` with
+> `409 DELIVERY_FEE_REFUND_NOT_SETTLEABLE` + `details.refundRequestId` / `details.refundRequestStatus`
+> (paying it here while the request can still send would pay the customer twice), and reads
+> `settleable: false`. The same `409` (same details) answers while **any** refund request of the
+> ORDER is open — its money comes out of the same ceiling (review finding 5, 2026-10-05). Each row now also carries `refundRequestId` (null on a legacy row).
+
 ---
 
 ## What a manual refund is
@@ -75,7 +98,7 @@ Unknown query keys are a `400`.
 ```
 
 - `status` — `manual_required` (owed) · `completed` (settled).
-- `settleable` — the one flag a settle button needs (`status === 'manual_required'`).
+- `settleable` — the one flag a settle button needs (`status === 'manual_required'` and NOT linked to an open refund request — `refundRequestId` null).
 - `cause` — `fee_decrease` · `rto_leftover` · `sweep`.
 - `note` — why it is manual. **Operator-facing**; never show it to the customer.
 - `settlement` once settled: `{ method, reference, note, settledBy: { id, source, name }, settledAt }`.

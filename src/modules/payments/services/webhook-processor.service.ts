@@ -9,6 +9,7 @@ import { planPurchaseService } from '../../billing/services/plan-purchase.servic
 import { creditTopupService } from '../../billing/services/credit-topup.service';
 import { payoutRequestService } from '../../earnings/services/payout-request.service';
 import { storedPayoutGateway } from '../../earnings/domain/payout-gateway';
+import { refundRequestService } from './refund-request.service';
 
 /**
  * What happens to a callback after its signature passes.
@@ -176,15 +177,25 @@ export class PaymentWebhookProcessor {
      * looking for an order with the same reference.
      */
     if (event.direction === 'payout') {
+      // The PREFIX decides which money-out record owns it (REFUND-FLOW-PLAN § 3.3) — `rf` is a
+      // refund sent as a transfer, everything else stays on the payout path exactly as before.
+      // No fall-through between the two: an `rf` reference that matches no refund is unknown.
+      if (kind === 'rf') return this.settleRefund(event, gateway);
       return this.settlePayout(event, gateway);
     }
 
     /**
-     * Money IN, and a `po` reference on this path is a contradiction: our own payout
+     * Money IN, and a `po` / `rf` reference on this path is a contradiction: our own money-out
      * reference echoed back by an event that does not describe a transfer. Most likely a
      * provider quirk or a replayed body; possibly someone probing. Either way the safe read
      * is that we do not know what it is, and nothing below should try to guess.
      */
+    if (kind === 'rf') {
+      return {
+        kind: 'ignored',
+        detail: 'a refund reference arrived on a collection event — refusing to route it',
+      };
+    }
     if (kind === 'po') {
       return {
         kind: 'ignored',
@@ -275,6 +286,47 @@ export class PaymentWebhookProcessor {
     }
 
     return { kind: 'processed', detail: `payout ${applied.id} ${applied.status}` };
+  }
+
+  /**
+   * Apply a transfer verdict to the REFUND whose leg our `jm_rf_` reference names (R3).
+   *
+   * The same three rules as `settlePayout`: resolved by OUR reference only; `PENDING` is not a
+   * verdict; and the callback must arrive on the route of the gateway the refund was SENT
+   * through (`transfer_gateway`, fixed at the claim) — after an administrator switches the
+   * payout aggregator two gateways can be live at once, and one may not speak for the other's
+   * transfer. A refund always has its gateway stamped (unlike legacy payouts), so a missing
+   * one is refused rather than defaulted.
+   */
+  private async settleRefund(
+    event: NormalizedWebhookEvent,
+    routeGateway: PaymentGatewayType
+  ): Promise<WebhookOutcome> {
+    if (!event.merchantRef) return { kind: 'unknown_transaction' };
+
+    const refund = await refundRequestService.getByTransferReference(event.merchantRef);
+    if (!refund) return { kind: 'unknown_transaction' };
+
+    if (refund.transfer_gateway !== routeGateway) {
+      return {
+        kind: 'ignored',
+        detail: `refund ${refund.id} was not sent through ${routeGateway}; refusing its callback`,
+      };
+    }
+
+    if (event.status === 'PENDING') {
+      return { kind: 'ignored', detail: `refund ${refund.id} transfer still ${event.eventType}` };
+    }
+
+    const applied = await refundRequestService.applyTransferOutcome(event.merchantRef, {
+      settled: event.status === 'SUCCEEDED',
+      gatewayRef: event.gatewayRef || null,
+      reason: event.status === 'SUCCEEDED' ? null : `gateway reported ${event.eventType}`,
+    });
+    if (!applied) {
+      return { kind: 'ignored', detail: `refund ${refund.id} transfer was already resolved` };
+    }
+    return { kind: 'processed', detail: `refund ${applied.id} ${applied.status}` };
   }
 
   private async settlePlanPurchase(event: NormalizedWebhookEvent): Promise<WebhookOutcome | null> {

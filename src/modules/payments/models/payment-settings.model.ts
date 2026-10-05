@@ -29,6 +29,8 @@ export interface IPaymentSettings extends Document<string> {
   payout_aggregator: PaymentGatewayName;
   stripe_enabled: boolean;
   providers: Record<PaymentProvider, { enabled: boolean }>;
+  /** REFUND-FLOW-PLAN § 11.6: percent taken off a transfer/external refund. Absent on older documents = 2. */
+  refund_fee_percent?: number;
   version: number;
   updated_at: Date | null;
   /** A wi-admin administrator id: resolves to nothing here, so the name is snapshotted beside it. */
@@ -48,6 +50,7 @@ const PaymentSettingsSchema = new Schema<IPaymentSettings>(
     payout_aggregator: { type: String, enum: [...PAYMENT_GATEWAY_NAMES], required: true },
     stripe_enabled: { type: Boolean, default: false },
     providers: providerFields,
+    refund_fee_percent: { type: Number, min: 0, max: 20, default: 2 },
     version: { type: Number, required: true, min: 1 },
     updated_at: { type: Date, default: null },
     updated_by_id: { type: String, default: null },

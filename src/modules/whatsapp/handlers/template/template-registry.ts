@@ -216,6 +216,25 @@ export class TemplateRegistry {
             ['customer_order_cancelled', 1, true, 'Customer: order cancelled'],
             ['customer_order_refunded', 3, true, 'Customer: order refunded'],
 
+            // ── Customer refund requests (REFUND-FLOW-PLAN § 8) ─────────────
+            // ⚠ NOT YET SUBMITTED to Meta when written (2026-10-05). Until each is APPROVED an
+            // out-of-window WhatsApp send fails and the customer still gets the in-app record,
+            // push, and email/Telegram per their preference — the same degradation every new
+            // template has had. `*_sending`, `*_completed` and `*_paid_externally` carry the
+            // `amountLine` sentence ("You receive 4,900 XAF (5,000 minus a 2% transfer fee).")
+            // as ONE parameter: whether a fee line exists depends on the channel.
+            ['customer_order_refund_requested', 3, true, 'Customer: order refund requested, under review'],
+            ['customer_order_refund_waiting_for_cash', 3, true, 'Customer: COD refund approved, waiting for the courier\'s cash'],
+            ['customer_order_refund_sending', 3, true, 'Customer: order refund transfer in flight'],
+            ['customer_order_refund_completed', 3, true, 'Customer: order refund transfer arrived (net + fee line)'],
+            ['customer_order_refund_paid_externally', 2, true, 'Customer: order refund paid outside the platform'],
+            ['customer_order_refund_declined', 1, true, 'Customer: order refund declined'],
+            ['customer_booking_refund_requested', 3, true, 'Customer: booking refund requested, under review'],
+            ['customer_booking_refund_sending', 3, true, 'Customer: booking refund transfer in flight'],
+            ['customer_booking_refund_completed', 3, true, 'Customer: booking refund transfer arrived (net + fee line)'],
+            ['customer_booking_refund_paid_externally', 2, true, 'Customer: booking refund paid outside the platform'],
+            ['customer_booking_refund_declined', 1, true, 'Customer: booking refund declined'],
+
             // ── Customer support requests (GAP-012) ─────────────────────────
             // The three proactive templates GAP-012 asked for by name: "a ticket
             // gets an answer next week" is outside Meta's 24-hour service window

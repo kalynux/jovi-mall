@@ -44,7 +44,7 @@ Authorization: Bearer <access_token>
 | Revoke digital entitlement | `POST` | `/api/vendor/entitlements/:id/revoke` | ❌ | ✅ |
 | Restore digital entitlement | `POST` | `/api/vendor/entitlements/:id/restore` | ❌ | ✅ |
 | Check refundability | `GET` | `/api/vendor/orders/:id/refund-eligibility` | ✅ | ✅ |
-| Action a refund | `POST` | `/api/vendor/orders/:id/refund` | ✅ | ✅ |
+| Open a refund request (⚠ breaking 2026-10-05, [changelog](./FRONTEND-CHANGELOG-refund-flow.md)) | `POST` | `/api/vendor/orders/:id/refund` | ✅ | ✅ |
 
 > Notes are also embedded inside `GET /orders/:id` response — the dedicated notes endpoint is useful when polling for note updates without re-fetching the full order.
 
@@ -332,6 +332,9 @@ Body:
 > `cancelled` still succeeds and still does **not** refund the customer automatically. It now also
 > **pauses the vendor's earnings** for that order and opens a **high-priority refund ticket** for the
 > platform team, who refund the customer (the earnings are then reversed) or resume the earnings.
+> Since the refund flow (D-4) it also opens a **refund request awaiting approval** for the full
+> amount, linked to that ticket — so while it is open, `refund-eligibility` answers
+> `REFUND_ALREADY_OPEN` and a vendor refund of the same order is refused (409).
 > Show a confirmation before sending it. The bulk endpoint below does the same per order. See
 > [FRONTEND-CHANGELOG-earnings-hold-and-pauses.md](./FRONTEND-CHANGELOG-earnings-hold-and-pauses.md).
 
@@ -1158,9 +1161,13 @@ the customer's delivery code. What changes for the vendor dashboard:
   escrow. Release requires the usual hold window **plus** the physical cash reaching the platform
   through the agency's remittance — COD earnings can therefore stay `pending` longer than online
   ones. See [transactions.md](./transactions.md).
-- **Refunds:** there is no gateway to refund against. Post-collection COD refunds are handled
-  off-platform in this phase — the refund endpoints report COD orders as ineligible
-  (`REFUND_PAYMENT_NOT_FOUND`: no gateway payment transaction exists for them).
+- **Refunds (since 2026-10-05):** there is no gateway to refund against, so a COD refund is a
+  **refund request awaiting an administrator's approval**: the administrator types the customer's
+  number (with a picture of the customer's message giving it), a second administrator approves,
+  and the transfer is sent only once the agency's cash for that parcel has reached the platform.
+  `POST /api/vendor/orders/:id/refund` answers `status: "awaiting_approval"` for a COD order — it
+  no longer reports COD as `REFUND_PAYMENT_NOT_FOUND`. See
+  [FRONTEND-CHANGELOG-refund-flow.md](./FRONTEND-CHANGELOG-refund-flow.md).
 
 ### State Transition Rules
 

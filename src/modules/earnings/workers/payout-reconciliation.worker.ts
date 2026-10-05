@@ -8,6 +8,8 @@ import { payoutRequestService } from '../services/payout-request.service';
 import { findPaymentGateway } from '../../payments/gateways/registry';
 import { PaymentGatewayName } from '../../payments/gateways/gateway.interface';
 import { reconcileStuckPayouts, StuckPayout, PayoutReconcileTally } from '../domain/payout-reconciliation';
+import { refundRequestRepository } from '../../payments/repositories/refund-request.repository';
+import { refundRequestService } from '../../payments/services/refund-request.service';
 
 /**
  * PayoutReconciliationWorker — the sweep that closes a payout whose transfer callback never
@@ -107,12 +109,59 @@ export class PayoutReconciliationWorker implements ObservableWorker {
             transfer_gateway_ref: row.transfer_gateway_ref as string,
         }));
 
-        return reconcileStuckPayouts(stuck, {
+        const payouts = await reconcileStuckPayouts(stuck, {
             gatewayFor: (name) => findPaymentGateway(name),
             applyTransferOutcome: (id, outcome) => payoutRequestService.applyTransferOutcome(id, outcome),
             log: (line) => console.warn(`[PayoutReconciliationWorker] ${line}`),
         });
+
+        const refunds = await this.reconcileRefunds(now);
+        return mergeTallies(payouts, refunds);
     }
+
+    /**
+     * REFUND transfers (REFUND-FLOW-PLAN § 3.3, R3): the same sweep over `refund_requests` in
+     * `sending`, one row PER TRANSFER LEG still `sending` with a gateway id. The pure domain is
+     * reused unchanged — a leg is addressed by its own `jm_rf_` reference, which is what
+     * `RefundRequestService.applyTransferOutcome` takes, so the callback and the sweep share one
+     * compare-and-set and settle a leg exactly once.
+     */
+    private async reconcileRefunds(now: Date): Promise<PayoutReconcileTally> {
+        const rows = await refundRequestRepository.findStuckSending(
+            new Date(now.getTime() - EARNINGS_CONFIG.PAYOUT_RECONCILE_MIN_AGE_MINUTES * 60_000),
+            new Date(now.getTime() - EARNINGS_CONFIG.PAYOUT_RECONCILE_MAX_AGE_HOURS * 3_600_000),
+            EARNINGS_CONFIG.PAYOUT_RECONCILE_BATCH_SIZE
+        );
+        const legs: StuckPayout[] = [];
+        for (const row of rows) {
+            for (const leg of row.transfer_legs) {
+                if (leg.status !== 'sending' || !leg.gateway_ref) continue;
+                legs.push({
+                    id: leg.reference,
+                    transfer_gateway: (row.transfer_gateway ?? null) as PaymentGatewayName | null,
+                    transfer_reference: leg.reference,
+                    transfer_gateway_ref: leg.gateway_ref,
+                });
+            }
+        }
+        return reconcileStuckPayouts(legs, {
+            gatewayFor: (name) => findPaymentGateway(name),
+            applyTransferOutcome: (reference, outcome) => refundRequestService.applyTransferOutcome(reference, outcome),
+            log: (line) => console.warn(`[PayoutReconciliationWorker] refund ${line}`),
+        });
+    }
+}
+
+function mergeTallies(a: PayoutReconcileTally, b: PayoutReconcileTally): PayoutReconcileTally {
+    return {
+        checked: a.checked + b.checked,
+        settled: a.settled + b.settled,
+        failed: a.failed + b.failed,
+        pending: a.pending + b.pending,
+        alreadyResolved: a.alreadyResolved + b.alreadyResolved,
+        unsupported: a.unsupported + b.unsupported,
+        errors: a.errors + b.errors,
+    };
 }
 
 function describeTally(t: PayoutReconcileTally): string {

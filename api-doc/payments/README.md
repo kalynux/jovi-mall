@@ -48,9 +48,10 @@ payment, a whole multi-vendor cart in one charge, or a service booking.
 >   time (`flow: "OTP"`, `mayRequireOtp: true`), but **the `initiate` response is the truth**:
 >   always honour `instructions.requiresOtp`, whatever `/options` said. An administrator may have
 >   switched aggregators between the two calls.
-> - **Refunds depend on the aggregator that took the money** (see
->   [Refunds](#refunds-differ-by-gateway)). That is a server-side and admin concern; a customer
->   client does nothing different.
+> - **Refunds are a refund request** (see
+>   [Refunds](#refunds--payouts-for-mobile-money-the-card-api-for-cards-2026-10-05)): a card is
+>   refunded through Stripe in full; mobile money is sent back by transfer to the number that paid,
+>   minus a 2% fee. A customer client only reads the `refund` block on the order or booking.
 
 > **⚠️ Breaking change (2026-07-29): `GET /api/payments/:transactionId` now requires
 > authentication and returns only the caller's own transaction.** It previously accepted no
@@ -726,28 +727,122 @@ instead of "approve the payment on your phone".
 The result of an approved or declined prompt still arrives in the chat as today —
 `order.payment.received` / `order.payment_failed`, with **Check status** and **Try again**.
 
-## Refunds differ by gateway
+## Refunds — payouts for mobile money, the card API for cards (2026-10-05)
 
-Refunds are not initiated from this surface (see the admin and vendor order docs), but which
-aggregator took the money decides what happens. That is the `gateway` **stored on the
-transaction**, never the currently active aggregator: a payment taken on My-CoolPay is refunded
-(or not) as a My-CoolPay payment after an administrator has switched to NotchPay.
+> **Rewritten for the refund flow** (`../PRODUCTION-READINESS/REFUND-FLOW-PLAN.md`). This section
+> used to say "refunds differ by gateway": Stripe refunded through its API and every mobile-money
+> gateway answered `REFUND_GATEWAY_NOT_SUPPORTED`, so a mobile-money or cash-on-delivery order
+> **could not be refunded at all**. That is over. Refunds are not initiated from this surface — the
+> vendor, the platform and the administrators start them (see *Where refunds start* below) — but
+> every customer surface now shows them, so the model is documented here once.
 
-| Gateway | Refund |
+### The refund request
+
+Every refund is a **refund request** (`refund_requests`, one per refund) with its own lifecycle,
+the money-out twin of a vendor payout request. `refund_transactions` stays the **ledger** of money
+returned, written once, when the money has arrived.
+
+```
+awaiting_approval ──approve──▶ approved ──(COD, cash not at the platform yet)──▶ waiting_for_cash ──covered──▶ approved
+      │                           │
+      └──reject──▶ rejected       └─claim──▶ sending ──callback / sweep──▶ completed
+                                                 │
+                                                 └──▶ failed ──retry──▶ sending
+                                                          └──settle externally──▶ completed
+```
+
+- **One open request per order or booking** (`awaiting_approval · approved · waiting_for_cash ·
+  sending · failed`). A second one is refused with `409 REFUND_ALREADY_OPEN`.
+- `sending → rejected` is refused: the transfer may already be in flight.
+- Only `awaiting_approval` and `failed` can be rejected; a refund can be **settled externally**
+  (paid outside the platform, picture proof required) from anything but `sending`.
+
+### How the money leaves
+
+| Payment | `channel` | Where the money goes | Fee |
+|---|---|---|---|
+| Card (Stripe) | `card_refund` | back to the card, through **Stripe's refund API** (kept for cards only) | **none** — the full amount |
+| Mobile money, any gateway | `payout` | a **transfer** (`createPayout`) on the **active payout gateway** (`payment_settings.payout_aggregator`), not the gateway that collected — to the **number that paid** (`payer.phone`) | **2%** |
+| Cash on delivery | `payout` | a transfer to a number an administrator types (with proof), **only once the cash reached the platform** | 2% |
+| Plan purchase / credit top-up | `payout` or `external` | a typed number (with proof), or paid outside the platform | 2% |
+| Any | `external` | paid outside the platform by the team — **picture proof required** | 2% (D-1) |
+
+**⛔ The NotchPay refund API path is removed** — `NotchPayGateway.refundPayment`,
+`refundAvailable` and `NOTCHPAY_REFUNDS_ENABLED` are gone. The account refused it (403, verified
+2026-08-18), and a transfer back to the payer replaces it on every mobile gateway alike.
+`gatewaySupportsRefund()` is now true for Stripe only.
+
+**Several payments on one order** (a delivery top-up is a second payment): a transfer is one
+number, so if both were paid from the same number there is one transfer for the total, otherwise
+one per number.
+
+### The 2% refund fee (R-3)
+
+**2% is taken off every refund paid out by transfer**, applied to what the platform recorded as
+paid (the gateway's own collection fee is ignored). `fee = round(gross × rate / 100)`, half up, in
+whole XAF; the customer receives `net = gross − fee`.
+
+> **5,000 XAF refund → the customer receives 4,900 XAF** (5,000 minus a 2% transfer fee).
+> **Card refunds return the full amount** — Stripe charges nothing to refund.
+
+- The fee also applies to a refund **paid outside the platform** (D-1), so the two channels never
+  disagree about what the customer is owed.
+- It is **platform income** recorded on the refund (`fee_amount`), not an earnings allocation.
+- **Refunds only.** Vendor, agency and agent payouts are unchanged.
+- The rate is configurable: `payment_settings.refund_fee_percent` (0–20, default **2**), edited as
+  **`refundFeePercent`** on `PUT /api/internal/admin/dev-tools/payments` and reported on its GET
+  (see [../admin/dev-tools.md](../admin/dev-tools.md)).
+- Analytics deduct the **gross** — what the order loses — never the net.
+
+### Cash on delivery waits for the cash (R-4 · R-5 · R-6)
+
+A COD refund is approved by an administrator and then **waits in `waiting_for_cash`** until every
+collection behind it is **fully covered** — i.e. the cash reached the platform through an
+admin-confirmed agency remittance or a platform-recipient agent deposit. Cash collected from the
+customer but still with the agent or agency does not count. It sends by itself the moment a deposit
+covers it (event `cod.collections.settled`, plus a nightly sweep). The customer is told the refund
+is approved and waiting for the courier's cash.
+
+### The `rf` merchant reference
+
+A refund transfer carries **`jm_rf_<32 hex>`** — the second merchant-reference kind meaning money
+**out** (after `po`, payouts). It is minted at the first claim and **reused on retry**, so a gateway
+deduplicates a resend. The webhook processor routes a callback by its prefix (`rf` → refund
+requests, `po` → payout requests); CinetPay and Fapshi recognise both as outgoing, so a refund
+callback is never misread as an incoming payment. A refund whose callback never arrives is
+verified by the 15-minute payout reconciliation sweep, and an administrator can resolve one stuck
+in `sending` after the minimum age.
+
+### Where refunds start
+
+| Start | What it creates |
 |---|---|
-| `STRIPE` | Real API refund |
-| `NOTCHPAY` | Implemented, but **disabled on the merchant account** — `POST /refunds` answers 403 while `GET /refunds` answers 200 with the same credentials (verified against the live sandbox, 2026-08-18). Behaves as `MYCOOLPAY` below until NotchPay enables it and `NOTCHPAY_REFUNDS_ENABLED=true` is set. |
-| `MYCOOLPAY` | **`REFUND_GATEWAY_NOT_SUPPORTED`** — the provider has no refund endpoint at all. |
-| `CAMPAY` | **`REFUND_GATEWAY_NOT_SUPPORTED`** — Campay has no refund endpoint either; the manual path takes over, as for My-CoolPay. |
+| **Vendor** `POST /api/vendor/orders/:id/refund` | a request — **sent at once** when within policy, to the paying number, and not COD; otherwise `awaiting_approval`. ⚠ **Breaking:** the response `status` is the request's (`completed` for a card, `sending`, `awaiting_approval`, `failed`), no longer always `completed`. See the vendor docs. |
+| **Administrator** (wi-admin refund queue → `/api/internal/admin/refunds`) | a request created **and** approved; a typed number needs a picture of the customer's message and a **second** administrator. See [../admin/refunds.md](../admin/refunds.md). |
+| **Support** (wi-admin) | `awaiting_approval` only — Support never sends money. |
+| **Booking cancelled** | a system request, sent at once to the paying number; `awaiting_approval` when none is stored. |
+| **Delivery fee lowered / unspent return fee** | a system request, sent at once; COD (no number) goes to approval. |
+| **Seller cancels a paid order** | a linked request `awaiting_approval` (D-4). |
+| **Customer** | cannot start one; they open a support ticket and Support raises the request. |
 
-In the unsupported cases the booking or order goes to `refund_pending`, earnings are reversed,
-and a HIGH support ticket is raised for a manual payout. **The cancellation or refund request
-itself still succeeds** — a refund problem never keeps an appointment on the books.
+### What the customer sees
 
-`GET /api/internal/admin/orders/:id/refund-eligibility` reports `gatewayRefundSupported` **up
-front** so the button is never offered for a refund that cannot happen. It answers two questions
-at once — does this provider have a refund API, and may *our account* use it — because both
-produce the same outcome for the operator and only one of them is fixable by an email.
+- **Order and booking reads carry a `refund` block** — the latest request, in the customer's
+  vocabulary (`requested · waiting_for_cash · sending · in_progress · completed · declined`), with
+  gross, fee, net and the masked number. `failed` is never shown (it reads `in_progress`: the team
+  retries or pays by hand). See [../customer/orders.md](../customer/orders.md) and
+  [../customer/bookings.md](../customer/bookings.md), and
+  [../customer/FRONTEND-CHANGELOG-refund-flow.md](../customer/FRONTEND-CHANGELOG-refund-flow.md).
+- **Notifications** at each step: requested · waiting for the courier's cash (COD) · being sent ·
+  sent (net + fee line) · paid outside the platform · declined. A card refund keeps the existing
+  "Refunded" message with the full amount and no fee.
+
+### Events
+
+| Event | When | Payload (beyond ids) |
+|---|---|---|
+| `refund.status_changed` | after every lifecycle write (create, approve, reject, retry, COD release) | `refundRequestId`, `sourceKind`, `orderId`/`bookingId`, `status` (internal), `requestedByRole`, `paymentChannel`, `channel`, `grossAmount`, `feeAmount`, `feeRate`, `netAmount`, `currency`, `destinationMasked` |
+| `payment.refunded` | on `completed` | `amount` (**= the NET**), `grossAmount`, `feeAmount`, `feeRate`, `netAmount`, `channel`, `destinationMasked`, `refundRequestId`, `refundId`, `fullyRefunded` |
 
 ---
 

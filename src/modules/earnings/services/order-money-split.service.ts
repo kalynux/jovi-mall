@@ -21,6 +21,7 @@ import {
   paysDeliveryFeeInCash,
 } from '../../orders/domain/delivery-payer';
 import { EarningsAllocationModel } from '../models/earnings-allocation.model';
+import { EarningsAdjustmentModel } from '../models/earnings-adjustment.model';
 import { EARNINGS_CONFIG } from '../config/earnings.config';
 import { EarningsSplitService, earningsSplitService } from './earnings-split.service';
 import { isReturnedCod } from './earnings-quote.service';
@@ -34,6 +35,7 @@ import {
   feeSourceOf,
   goodsBasisOf,
   lineFromAllocation,
+  MoneyAdjustmentLine,
   MoneyLine,
   MoneySplitNote,
   MoneySplitSection,
@@ -132,7 +134,34 @@ export class OrderMoneySplitService {
       deliveryInCash,
       total: order.total_amount + deliveryInCash,
     };
-    const { totals, reconciliation, estimated } = summarise(sections, charged.total);
+    // Refund clawbacks / recoveries / write-offs on this order's shares (REFUND-FLOW-PLAN § 6),
+    // plus the vendor-beyond rows filed against the order itself (`allocation_id: null`).
+    const adjustments: MoneyAdjustmentLine[] = (
+      await EarningsAdjustmentModel.find({
+        $or: [
+          ...(rows.length ? [{ allocation_id: { $in: rows.map((r) => r._id) } }] : []),
+          { allocation_id: null, source_type: 'order', source_id: orderObjectId },
+        ],
+      })
+        .sort({ created_at: 1 })
+        .lean<any[]>()
+    ).map((a) => ({
+      kind: a.kind,
+      refundKey: a.refund_key,
+      allocationId: a.allocation_id ? String(a.allocation_id) : null,
+      beneficiary: { type: a.beneficiary_type, id: a.beneficiary_id ? String(a.beneficiary_id) : null },
+      amount: a.amount,
+      goodsAmount: a.goods_amount ?? 0,
+      deliveryAmount: a.delivery_amount ?? 0,
+      takenFrom: {
+        pending: a.taken_from?.pending ?? 0,
+        reserve: a.taken_from?.reserve ?? 0,
+        available: a.taken_from?.available ?? 0,
+        debt: a.taken_from?.debt ?? 0,
+      },
+      createdAt: a.created_at ?? null,
+    }));
+    const { totals, reconciliation, estimated } = summarise(sections, charged.total, adjustments);
 
     return {
       order: {
@@ -151,6 +180,7 @@ export class OrderMoneySplitService {
       },
       charged,
       sections,
+      adjustments,
       totals,
       reconciliation,
       estimated,

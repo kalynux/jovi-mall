@@ -10,7 +10,12 @@
  * spread over the legs here.
  */
 
-export type RefundLegPurpose = 'primary' | 'order_delivery_topup';
+/**
+ * `booking_balance` is a BOOKING's second payment (the balance settled after completion). It
+ * ranks with the top-up — after the primary under `primary_first` — so an ordinary booking
+ * refund returns the original charge first.
+ */
+export type RefundLegPurpose = 'primary' | 'order_delivery_topup' | 'booking_balance';
 
 export interface RefundLeg {
   id: string;

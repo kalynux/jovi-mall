@@ -50,6 +50,16 @@ vendor / agency / agent").
 | `GET` | `/internal/admin/earnings/accounts` | Every owner's balances, ranked by what is withdrawable |
 | `GET` | `/internal/admin/earnings/balances/:ownerType/:ownerId` | One owner's four balances |
 | `GET` | `/internal/admin/earnings/orders/:orderId/split` | Who gets what from one order, on what basis — allocated or projected (2026-10-04) |
+| `GET` | `/internal/admin/earnings/clawbacks` | Owners who owe money back after a refund clawback (2026-10-05) |
+| `POST` | `/internal/admin/earnings/clawbacks/:ownerType/:ownerId/write-off` | Forgive (part of) that debt (2026-10-05) |
+
+> **Every balance read now carries `clawback`** (2026-10-05, REFUND-FLOW-PLAN § 6): what the
+> owner OWES BACK after a refund recovered more than their balances held. `/accounts` rows and
+> `meta.totals`, `/balances/:ownerType/:ownerId`, and the owner-facing earnings views all report
+> it. ⚠ It runs the **opposite direction** from `pending · available · reserve · requested` —
+> never add it to them. While it is above 0, `available` is 0 and every future release pays it
+> down first. The admin payout DTO reports the owner's live debt as `ownerClawback`; a payout
+> already waiting when a debt appears is never cut (C-7).
 
 > **These four routes used to be mounted publicly at `/api/admin/earnings/*` as well**, behind
 > `requireAuth + requireRole(['admin'])`. That mount was deleted at the Phase 5 cutover — one
@@ -282,6 +292,29 @@ The pause record lives on the **Order** (`earnings_pause`) or **Booking** (`earn
 | `booking_cancelled_unrefunded` | a paid booking cancelled from the seller's **status menu** (also opens a HIGH-priority ticket) | an administrator |
 | `card_dispute` | a card payment disputed with the bank | **itself** when the dispute is won or lost; or an administrator |
 | `admin` | an administrator | an administrator |
+| `refund_in_progress` | a refund request opened on it (REFUND-FLOW-PLAN C-4) | **itself** when the refund completes (`closeOnRefund`) or is rejected/abandoned; or an administrator |
+
+A **completed refund** closes `refund_in_progress`, `seller_cancelled_paid_order` and
+`booking_cancelled_unrefunded` — never `card_dispute` or `admin` — and, unlike a resume, does
+**not** move hold dates. A booking's pause covers its balance-payment shares too.
+
+## Refund clawback debt — `/internal/admin/earnings/clawbacks` (2026-10-05)
+
+A refund that lands after the money was released takes it back: from the share's pending money
+if still held, else its own COD reserve slice, else `available`, and the rest becomes debt
+(`clawback_balance`) that every later inflow pays first (REFUND-FLOW-PLAN § 6). Each movement is
+an `earnings_adjustments` row (read directly by wi-admin).
+
+### GET `/internal/admin/earnings/clawbacks`
+Owners with a debt, largest first. Query: `ownerType?` (`vendor`|`agency`|`agent`), `page`, `limit` (≤ 100).
+Paginated rows: `{ ownerType, ownerId, clawback, available, pending, reserve, requested, currency,
+heldPayout: { id, amount, status, ticketId } | null, updatedAt }`.
+
+### POST `/internal/admin/earnings/clawbacks/:ownerType/:ownerId/write-off`
+Body `{ "amount": integer > 0, "reason": string (3–500) }`, `.strict()`. Actor from `X-Actor-*`.
+The platform absorbs the amount. Four-eyes at ≥ 2,000,000 is enforced by wi-admin.
+`200` data: `{ writeOffKey, ownerType, ownerId, amount, currency, clawbackBefore, clawbackAfter, adjustmentId }`.
+`409 EARNINGS_CLAWBACK_NOTHING_OWED` (no debt) · `409 EARNINGS_CLAWBACK_WRITE_OFF_EXCEEDS_DEBT` (more than owed).
 
 ### GET `/internal/admin/earnings/pauses`
 Every order and booking paused now, newest pause first. Query: `kind?` (`order`|`booking`), `page`, `limit` (≤ 100).
@@ -296,7 +329,10 @@ Body `{ "note": string (3–500, required) }`, `.strict()`. Reason recorded as `
 
 ### POST `/internal/admin/earnings/pauses/:kind/:id/resume`
 Body `{ "note"?: string (1–500) }`, `.strict()`. Lifts **any** pause, whoever raised it.
-`409 EARNINGS_NOT_PAUSED` if it is not paused.
+`409 EARNINGS_NOT_PAUSED` if it is not paused. `409 EARNINGS_PAUSE_HELD_BY_REFUND`
+(`details.refundRequestId`, `details.refundRequestStatus`) while a refund request of this order or
+booking is open, or a completed one has not recovered its earnings yet (C-4) — the refund resumes
+or closes the pause itself.
 
 The `pause` object: `{ active, reason, note, paused_at, paused_by_user_id, paused_by_source, paused_by_name,
 resumed_at, resumed_by_user_id, resumed_by_source, resumed_by_name, resume_note }`. A system pause has

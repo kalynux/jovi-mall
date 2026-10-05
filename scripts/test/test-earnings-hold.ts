@@ -17,6 +17,7 @@ import { join } from 'path';
 import {
   COURIER_FINISHED_STATUSES,
   EARNINGS_PAUSE_REASONS,
+  REFUND_CLOSABLE_PAUSE_REASONS,
   SELF_RESUMING_PAUSE_REASONS,
   deliveredAtOf,
   holdReleaseFrom,
@@ -138,12 +139,27 @@ assert('EARNINGS_HOLD_DAYS defaults to 3 (owner, 2026-10-05)', () =>
 // ─── 3. Pause reasons ────────────────────────────────────────────────────────
 console.log('\n3. Pause reasons');
 
-assert('the four reasons, closed', () =>
+assert('the five reasons, closed (refund_in_progress added by the refund flow, C-4)', () =>
   JSON.stringify([...EARNINGS_PAUSE_REASONS].sort()) ===
-  JSON.stringify(['admin', 'booking_cancelled_unrefunded', 'card_dispute', 'seller_cancelled_paid_order']));
+  JSON.stringify(['admin', 'booking_cancelled_unrefunded', 'card_dispute', 'refund_in_progress', 'seller_cancelled_paid_order']));
 
-assert('only a card dispute may lift itself; everything else waits for an administrator', () =>
-  SELF_RESUMING_PAUSE_REASONS.length === 1 && SELF_RESUMING_PAUSE_REASONS[0] === 'card_dispute');
+assert('only a card dispute and an open refund may lift themselves; everything else waits for an administrator', () =>
+  JSON.stringify([...SELF_RESUMING_PAUSE_REASONS].sort()) === JSON.stringify(['card_dispute', 'refund_in_progress']));
+
+assert('a completed refund closes exactly the three refund-owed reasons (never a dispute or an admin pause)', () =>
+  JSON.stringify([...REFUND_CLOSABLE_PAUSE_REASONS].sort()) ===
+  JSON.stringify(['booking_cancelled_unrefunded', 'refund_in_progress', 'seller_cancelled_paid_order']));
+
+const pauseSvc = code('modules/earnings/services/earnings-pause.service.ts');
+const closeOnRefund = methodBody(pauseSvc, 'async closeOnRefund(');
+assert('closeOnRefund closes only a REFUND_CLOSABLE reason, by compare-and-set on it', () =>
+  closeOnRefund.includes('REFUND_CLOSABLE_PAUSE_REASONS.includes(current.reason)') &&
+  /\.reason`\]:\s*current\.reason/.test(closeOnRefund));
+assert("closeOnRefund does NOT move hold dates (it keeps each row's hold_release_at)", () =>
+  !closeOnRefund.includes('resumedHoldReleaseAt') && /markResumed\([^)]*row\.hold_release_at\)/.test(closeOnRefund));
+assert('a booking pause covers its BALANCE-payment rows too (their own source id)', () =>
+  methodBody(pauseSvc, 'private async sourcesOf(').includes('bookingSourcesOf(target.id)') &&
+  pauseSvc.includes('settlement.balanceTransactionId'));
 
 // ─── 4. Paused money is never released (source scans) ───────────────────────
 console.log('\n4. Release honours the pause');

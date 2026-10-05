@@ -170,7 +170,7 @@ export class StripeGateway implements PaymentGateway {
           reason: this.normalizeRefundReason(payload.reason),
           metadata: payload.metadata as Stripe.MetadataParam | undefined,
         },
-        { idempotencyKey: `re_${payload.gatewayRef}_${amount}` }
+        { idempotencyKey: payload.idempotencyKey ?? `re_${payload.gatewayRef}_${amount}` }
       );
 
       return {

@@ -21,6 +21,7 @@ import { CustomerOrderDto, CustomerOrderShipmentFeeFacts, toCustomerOrderDto } f
 import { ShipmentModel } from '../../shipments/shipment.model';
 import { DeliveryFeeRefundModel } from '../../delivery-fee-proposals/models/delivery-fee-refund.model';
 import type { DeliveryFeeRefundStatus } from '../../delivery-fee-proposals/domain/customer-fee-change.rules';
+import { customerRefundViewService } from '../../payments/services/customer-refund-view.service';
 
 export class CustomerOrderViewService {
     constructor(
@@ -80,12 +81,18 @@ export class CustomerOrderViewService {
         // …and the refund ledger it is measured against, so "still owed" clears when a refund
         // completes or an administrator settles a manual one (W-E2). Status + amount only.
         const refundLedgerByOrder = await this.resolveRefundLedgers(shipmentsByOrder);
+        // ── The refund block (REFUND-FLOW-PLAN § 8), one query for every order in the set ──
+        const refundByOrder = await customerRefundViewService.latestBySources(
+            'order',
+            orders.map((o) => String(o._id)),
+        );
 
         return orders.map((order) => {
             const vendorId = order.vendor_id.toString();
             return toCustomerOrderDto({
                 shipments: shipmentsByOrder.get(String(order._id)) ?? [],
                 deliveryFeeRefundLedger: refundLedgerByOrder.get(String(order._id)) ?? [],
+                refund: refundByOrder.get(String(order._id)) ?? null,
                 order,
                 storeName: namesByVendor.get(vendorId)?.name ?? null,
                 storeSlug: slugsByVendor.get(vendorId) ?? null,

@@ -7,6 +7,7 @@ import { COD_CONFIG } from '../config/cod.config';
 import { CashCollectionRepository } from '../repositories/cash-collection.repository';
 import { CashCollectionModel, CashCollectionStatus, collectionKindOf, ICashCollection } from '../models/cash-collection.model';
 import { DeliveryCodeService, deliveryCodeService } from './delivery-code.service';
+import { deliveredAtOf } from '../domain/cod-fifo';
 import { CodCashAccountService, codCashAccountService } from './cod-cash-account.service';
 import {
   AgentContractRepository,
@@ -356,12 +357,13 @@ export class CashCollectionService {
       }
 
       // Deliver the shipment: the verified code IS the customer confirmation.
-      await this.shipmentRepo.applyStatusChange(
+      const deliveredShipment = await this.shipmentRepo.applyStatusChange(
         shipmentId,
         'delivered',
         { userId: agentUserId, role: 'agent' },
         session
       );
+      await this.stampDeliveredAtInSession(claimed, deliveredShipment, session);
       await this.orderRepo.setItemDeliveryStatusByShipment(shipmentId, 'delivered', session);
       await this.aggregationService.recomputeFulfillmentStatus(orderId, session);
       await this.recomputeCodPaymentStatusInSession(orderId, session);
@@ -518,6 +520,7 @@ export class CashCollectionService {
           { shipmentId }
         );
       }
+      await this.stampDeliveredAtInSession(claim, delivered, session);
 
       await this.orderRepo.setItemDeliveryStatusByShipment(shipmentId, 'delivered', session);
       await this.aggregationService.recomputeFulfillmentStatus(orderId, session);
@@ -564,6 +567,24 @@ export class CashCollectionService {
       .catch((err) => console.error('[CashCollectionService] capacity release failed:', err));
 
     return true;
+  }
+
+  /**
+   * Stamp `delivered_at` (R-6) on a just-claimed collection — BOTH collect paths call this, in
+   * the claiming transaction, right after the shipment write that delivered it. The moment is
+   * read from the `status_history` that write returned (`deliveredAtOf`): the `agent_delivered`
+   * mark immediately before the delivery, else the claim's `collected_at` (a code submitted
+   * from `picked_up`/`in_transit` is itself the delivery). It orders the coverage FIFO, so an
+   * auto-collected delivery queues by when the parcel arrived, not by when the window closed.
+   */
+  private async stampDeliveredAtInSession(
+    claim: ICashCollection,
+    deliveredShipment: IShipment | null,
+    session: ClientSession
+  ): Promise<void> {
+    const deliveredAt =
+      deliveredAtOf(deliveredShipment?.status_history, claim.collected_at) ?? claim.collected_at ?? new Date();
+    await this.collectionRepo.stampDeliveredAt(claim._id as Types.ObjectId, deliveredAt, session);
   }
 
   /**

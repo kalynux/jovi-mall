@@ -67,10 +67,17 @@ export function initializeCustomerNotificationEventConsumers(): void {
      * minutes later by the cron is the one who has been in the dark longest.
      */
     eventBus.subscribe('payment.failed', handler.handleOrderPaymentFailed.bind(handler));
-    // Published by the orchestrator after every completed refund and subscribed by NOTHING
-    // until this line — so `order.refunded`, fully built, was never sent. Orders only; a
-    // booking refund is told through `booking.payment.updated` above.
+    // Published after every completed refund and subscribed by NOTHING until this line — so
+    // `order.refunded`, fully built, was never sent. Routed on `channel` since the refund flow:
+    // card → `order.refunded`, payout → `order.refund.completed`, external →
+    // `order.refund.paid_externally`.
     eventBus.subscribe('payment.refunded', handler.handleOrderRefunded.bind(handler));
+    // …and its BOOKING half, which nothing announced at all: the comment here used to say
+    // `booking.payment.updated` told that customer, and nothing ever published it with `refunded`.
+    eventBus.subscribe('payment.refunded', handler.handleBookingRefunded.bind(handler));
+    // The refund REQUEST's lifecycle (REFUND-FLOW-PLAN § 8): requested · waiting for the courier's
+    // cash (COD) · being sent · declined. `failed` is never announced; `completed` arrives above.
+    eventBus.subscribe('refund.status_changed', handler.handleRefundStatusChanged.bind(handler));
 
     /**
      * ⭐ The BOOKING half of the same two events — one event per payment, each handler filtering

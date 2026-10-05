@@ -1487,7 +1487,16 @@ section('Worker inventory — the thirteenth worker was invisible to every surfa
 // 21 -> 22 (2026-09-30): PayoutReconciliationWorker — re-reads a transfer stuck in
 // `processing` from the gateway that sent it. Payouts had no sweep at all; a lost transfer
 // callback left the payout processing forever, and My-CoolPay sends each callback once.
-assert('the inventory now holds 22 workers', () => WORKER_INVENTORY.length === 22);
+// 22 -> 23 (2026-10-05): RefundCashRecheckWorker — the nightly backstop for COD refunds waiting
+// on cash, behind the lossy `cod.collections.settled` event (REFUND-FLOW-PLAN § 5.2).
+assert('the inventory now holds 23 workers', () => WORKER_INVENTORY.length === 23);
+
+assert('refund-cash-recheck is registered AND triggerable, on a hardcoded nightly cron', () => {
+    const entry = WORKER_INVENTORY.find((e) => e.key === 'refund-cash-recheck');
+    const schedule = entry?.worker.schedules[0];
+    return WORKER_KEYS.includes('refund-cash-recheck' as never) && entry?.triggerable === true
+        && schedule?.kind === 'cron' && schedule.source === 'hardcoded';
+});
 
 assert('payout-reconciliation is registered AND triggerable', () =>
     WORKER_KEYS.includes('payout-reconciliation' as never)
@@ -1569,8 +1578,9 @@ const WORKER_SOURCES = [
 ];
 
 // 20 -> 21 module workers (2026-09-30): earnings/workers/payout-reconciliation.worker.ts.
-assert('the scan sees every worker file — 21 module workers plus the scheduler', () =>
-    WORKER_SOURCES.length === 22);
+// 21 -> 22 module workers (2026-10-05): payments/workers/refund-cash-recheck.worker.ts.
+assert('the scan sees every worker file — 22 module workers plus the scheduler', () =>
+    WORKER_SOURCES.length === 23);
 
 assert('EVERY worker routes its pass through withWorkerLock', () => {
     const missing = WORKER_SOURCES.filter(({ code }) => !code.includes('withWorkerLock('));
@@ -1981,8 +1991,20 @@ assert('MIGRATIONS covers every migrate:*/backfill:* binding, and every row has 
 // `pending` reviews published, `rejected` ones renamed `unpublished` — that also swaps the
 // one-review-per-author index for one partial on `deletedAt: null`. Among the data rows, same
 // shape and same reason as the row above.
-assert('all twenty-nine are registered — the count is the count on disk', () =>
-    MIGRATIONS.length === 29);
+// ⚠ 29 -> 30 with `migrate:cod-collection-delivered-at` (2026-10-05, REFUND-FLOW-PLAN R-6): a
+// DATA migration — collected COD rows get `delivered_at` from the shipment's status_history —
+// that also swaps the coverage FIFO index from `collected_at` to `delivered_at`. Among the data
+// rows, same shape as the row above.
+// ⚠ 30 -> 31 with `migrate:earnings-clawback-fields` (2026-10-05, REFUND-FLOW-PLAN § 6): a
+// DATA migration — `clawback_balance` / `clawed_amount` backfilled to 0 — among the data rows;
+// its `earnings_adjustments` unique index is the catch-all's to build.
+// ⚠ 31 -> 33 with the refund flow's entry points (2026-10-05, REFUND-FLOW-PLAN § 10):
+// `migrate:legacy-refunds-to-requests` — a DATA migration (the manual delivery-fee rows and the
+// `refund_pending` bookings become refund requests awaiting approval), among the data rows — and
+// `migrate:refund-requests-indexes`, a named index build above the catch-all, because one of its
+// indexes is the only race guard between two refunds of one order.
+assert('all thirty-three are registered — the count is the count on disk', () =>
+    MIGRATIONS.length === 33);
 
 // The catch-all is LAST, and unlike the general index-after-data rule below this is a
 // dependency on the OTHER INDEX MIGRATIONS: it builds only what the declared-vs-live diff

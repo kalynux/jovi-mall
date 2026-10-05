@@ -1,5 +1,6 @@
 import { Types } from 'mongoose';
 import { EarningsAllocationModel } from '../../earnings/models/earnings-allocation.model';
+import { EarningsAdjustmentModel } from '../../earnings/models/earnings-adjustment.model';
 import { CashCollectionModel } from '../../cod/models/cash-collection.model';
 import { ShipmentModel } from '../../shipments/shipment.model';
 import { customerDeliveryFeeOf, deliveryFeeShares } from '../../orders/domain/delivery-payer';
@@ -155,14 +156,38 @@ export class VendorAnalyticsService {
         const vendor = new Types.ObjectId(vendorId);
         const window = { $gte: period.start, $lt: period.end };
 
-        const [created, reversed] = await Promise.all([
+        // ── What refunds took back (REFUND-FLOW-PLAN § 6) ───────────────────────────────
+        // Since the clawback, a refund writes one `earnings_adjustments` row per share it takes
+        // from — partial ones included, and money charged beyond the vendor's shares too — dated
+        // when it was taken. Those are the reversals. An allocation whose `reversed_at` is set
+        // AND whose `clawed_amount` is 0 was reversed by the PRE-clawback path, which wrote no
+        // adjustment; it is counted from the allocation, once. A row the clawback reversed has
+        // `clawed_amount === amount`, so it is never counted from both sides.
+        const [created, legacyReversed, clawbacks] = await Promise.all([
             EarningsAllocationModel.find({ beneficiary_type: 'vendor', beneficiary_id: vendor, created_at: window })
                 .select('source_type source_id beneficiary_type gross_snapshot amount currency created_at')
                 .lean<AllocationLean[]>(),
-            EarningsAllocationModel.find({ beneficiary_type: 'vendor', beneficiary_id: vendor, reversed_at: window })
+            EarningsAllocationModel.find({
+                beneficiary_type: 'vendor',
+                beneficiary_id: vendor,
+                reversed_at: window,
+                clawed_amount: { $in: [0, null] },
+            })
                 .select('amount reversed_at')
                 .lean<AllocationLean[]>(),
+            EarningsAdjustmentModel.find({
+                kind: 'refund_clawback',
+                beneficiary_type: 'vendor',
+                beneficiary_id: vendor,
+                created_at: window,
+            })
+                .select('amount created_at')
+                .lean<{ amount: number; created_at: Date }[]>(),
         ]);
+        const reversals = [
+            ...legacyReversed.filter((a) => a.reversed_at).map((a) => ({ at: a.reversed_at as Date, amount: a.amount })),
+            ...clawbacks.map((c) => ({ at: c.created_at, amount: c.amount })),
+        ];
 
         const saleRows = created.filter((a) => a.source_type === 'order' || a.source_type === 'cod_collection');
         const bookingRows = created.filter((a) => a.source_type === 'booking');
@@ -240,7 +265,7 @@ export class VendorAnalyticsService {
                 net: a.amount,
             })),
             deliveryCredits: created.filter((a) => a.source_type === 'shipment').map((a) => ({ at: a.created_at, amount: a.amount })),
-            reversals: reversed.filter((a) => a.reversed_at).map((a) => ({ at: a.reversed_at as Date, amount: a.amount })),
+            reversals,
             currency: created[0]?.currency ?? null,
         };
     }

@@ -7,7 +7,7 @@ import {
   PaymentGatewayType,
   PaymentPurpose
 } from '../models/payment-transaction.model';
-import { planRefundLegs, primaryLegRemaining, RefundLeg } from '../domain/refund-legs';
+import { planRefundLegs, primaryLegRemaining, RefundLeg, RefundLegPurpose } from '../domain/refund-legs';
 import { ZodError } from 'zod';
 import { CollectField, PaymentChannelInfo } from '../gateways/gateway.interface';
 import { getPaymentGateway } from '../gateways/registry';
@@ -115,7 +115,7 @@ import { ERROR_CODES } from '../../../core/error-codes';
 import { eventBus } from '../../../core/events/event-bus';
 import { transactionManager } from '../../../core/database/transaction.manager';
 import { earningsSplitService } from '../../earnings/services/earnings-split.service';
-import { earningsRefundService } from '../../earnings/services/earnings-refund.service';
+import { applyRefundToPaymentInSession, markSourceRefundedInSession } from './refund-ledger';
 
 /**
  * The payer as they identified themselves at initiate (2026-09-27). A payment link can be paid
@@ -782,62 +782,43 @@ export class PaymentOrchestratorService {
       // one order fully must unwind that order and its earnings while leaving the payment
       // `SUCCEEDED` with a balance for the other. Using one boolean for both meant a
       // refunded order kept `payment_status: 'paid'` and its vendor kept the money.
-      const newTotalRefunded = paymentTx.totalRefunded + legAmount;
-      const paymentFullyRefunded = newTotalRefunded >= paymentTx.amountSnapshot;
       refundedSoFar += legAmount;
       const sourceFullyRefundedNow = ceiling.alreadyRefunded + refundedSoFar >= ceiling.sourceTotal;
 
-      await transactionManager.runInTransaction(async (session) => {
+      // The ledger writes are SHARED with `RefundRequestService.complete` (`refund-ledger.ts`),
+      // so the two money-returning paths cannot drift on the payment totals or the source status.
+      const applied = await transactionManager.runInTransaction(async (session) => {
         refund.status = 'completed';
         refund.completedAt = new Date();
         refund.gatewayRefundRef = gatewayResult.refundRef;
+        refund.channel = 'card_refund';
+        refund.feeAmount = 0;
+        refund.netAmount = legAmount;
         await refund.save({ session });
 
-        paymentTx.totalRefunded = newTotalRefunded;
-        paymentTx.hasPartialRefund = !paymentFullyRefunded && newTotalRefunded > 0;
-        if (paymentFullyRefunded) {
-          paymentTx.status = 'REFUNDED';
-        }
-        await paymentTx.save({ session });
+        const totals = await applyRefundToPaymentInSession(paymentTx._id, legAmount, session);
 
         // The source's payment status only flips to 'refunded' on a FULL refund —
         // a partial refund leaves it paid, with the balance tracked on the payment.
         if (sourceFullyRefundedNow) {
-          if (isBooking) {
-            await Booking.updateOne(
-              { _id: new Types.ObjectId(sourceId) },
-              { $set: { paymentStatus: 'refunded' } },
-              { session }
-            );
-          } else {
-            await OrderModel.updateOne(
-              { _id: new Types.ObjectId(sourceId) },
-              { $set: { payment_status: 'refunded', updated_at: new Date() } },
-              { session }
-            );
-          }
+          await markSourceRefundedInSession({ kind: source.kind, id: sourceId }, session);
         }
+        return totals;
       });
 
       refundIds.push(refund._id.toString());
-      lastTotalRefunded = newTotalRefunded;
+      lastTotalRefunded = applied?.totalRefunded ?? paymentTx.totalRefunded + legAmount;
     }
 
     const sourceFullyRefunded = ceiling.alreadyRefunded + amount >= ceiling.sourceTotal;
 
-    // On a full refund of THIS source, reverse its still-held earnings out of escrow.
-    // Best-effort: a failure must not fail the (already-completed) refund.
-    if (sourceFullyRefunded) {
-      try {
-        if (isBooking) {
-          await earningsRefundService.onRefund('booking', sourceId);
-        } else {
-          await earningsRefundService.onOrderRefund(sourceId);
-        }
-      } catch (error) {
-        console.error('[PaymentOrchestrator] Failed to reverse earnings on refund:', error);
-      }
-    }
+    // ⛔ NO earnings reversal here any more (REFUND-FLOW-PLAN § 6.3, 2026-10-05). It used to call
+    // `earningsRefundService.onOrderRefund` whenever the ORDER's total was fully refunded, which a
+    // delivery-fee refund completing the order's total tripped — reversing the vendor's goods
+    // earnings for a refund of delivery money. Earnings recovery is now the completion step of a
+    // REFUND REQUEST (`RefundEarningsPort.onRefundCompleted`, by attribution). The callers of this
+    // legacy path are rewired onto `RefundRequestService` in wave 2; until then they recover
+    // nothing — see the refund-core report.
 
     // 7. Emit a domain event (fire-and-forget) — ONE per call, for the whole amount.
     eventBus.publish('payment.refunded', {
@@ -877,17 +858,33 @@ export class PaymentOrchestratorService {
    *             total minus the top-ups it was later paid, less what this charge already
    *             returned for this order.
    */
-  private async resolveRefundLegs(
+  async resolveRefundLegs(
     source: RefundSource
-  ): Promise<Array<{ tx: IPaymentTransaction; purpose: 'primary' | 'order_delivery_topup'; remaining: number }>> {
+  ): Promise<Array<{ tx: IPaymentTransaction; purpose: RefundLegPurpose; remaining: number }>> {
     if (source.kind === 'booking') {
-      const tx = await PaymentTransactionModel.findOne({
+      // ⚠ PURPOSE-FILTERED (REFUND-FLOW-PLAN § 6.3). A booking can hold TWO succeeded payments —
+      // the primary charge and a `booking_balance` settled after completion — and a bare
+      // `findOne` could pick the balance, so the ceiling (which is the primary's snapshot) and
+      // the gateway refund both described the wrong charge. `null` covers rows written before
+      // `purpose` existed (the schema default is `primary`).
+      //
+      // ⚠ And the BALANCE payment is a leg too (REFUND-FLOW-PLAN § 6.2, refund-core decision 9,
+      // fixed by the entry-points workstream): a booking settled above its quote holds money in
+      // the primary charge AND a `booking_balance` payment, and a cancellation refund owes both.
+      // Primary first, so an ordinary refund returns the original charge before the balance.
+      const txs = await PaymentTransactionModel.find({
         bookingId: new Types.ObjectId(source.bookingId),
-        status: 'SUCCEEDED'
+        status: 'SUCCEEDED',
+        purpose: { $in: ['primary', 'booking_balance', null] }
       });
-      if (!tx) return [];
-      const c = await this.refundableCeilingFor(tx, source.bookingId, true);
-      return [{ tx, purpose: 'primary', remaining: c.remaining }];
+      return txs
+        .map((tx) => ({
+          tx,
+          purpose: (tx.purpose === 'booking_balance' ? 'booking_balance' : 'primary') as RefundLegPurpose,
+          // A booking payment is never grouped: what it can return is its own balance.
+          remaining: Math.max(0, tx.amountSnapshot - tx.totalRefunded)
+        }))
+        .sort((a, b) => (a.purpose === 'primary' ? 0 : 1) - (b.purpose === 'primary' ? 0 : 1));
     }
 
     const orderObjectId = new Types.ObjectId(source.orderId);
@@ -906,7 +903,7 @@ export class PaymentOrchestratorService {
     }
     const topupsPaid = topups.reduce((s, t) => s + t.amountSnapshot, 0);
 
-    const legs: Array<{ tx: IPaymentTransaction; purpose: 'primary' | 'order_delivery_topup'; remaining: number }> = [];
+    const legs: Array<{ tx: IPaymentTransaction; purpose: RefundLegPurpose; remaining: number }> = [];
     if (primary) {
       const [onLeg] = await RefundTransactionModel.aggregate<{ total: number }>([
         { $match: { orderId: orderObjectId, paymentTransactionId: primary._id, status: 'completed' } },
@@ -930,14 +927,87 @@ export class PaymentOrchestratorService {
     return legs;
   }
 
+  /**
+   * Everything a refund of this source may take, without moving any money: the succeeded
+   * payment legs (each with what it can still return FOR THIS SOURCE), the source's total, what
+   * was already refunded, and the remaining ceiling — the same arithmetic `refundPayment`
+   * enforces, exposed so `RefundRequestService` validates a request against it rather than
+   * re-deriving it. `legs` is empty when nothing was paid through a gateway (COD, unpaid).
+   */
+  async refundableFor(source: RefundSource): Promise<{
+    legs: Array<{ tx: IPaymentTransaction; purpose: RefundLegPurpose; remaining: number }>;
+    sourceTotal: number;
+    alreadyRefunded: number;
+    remaining: number;
+    isGrouped: boolean;
+  }> {
+    const legs = await this.resolveRefundLegs(source);
+    if (legs.length === 0) {
+      return { legs, sourceTotal: 0, alreadyRefunded: 0, remaining: 0, isGrouped: false };
+    }
+    const ceiling = await this.sourceCeiling(source, legs);
+    const remaining = Math.max(
+      0,
+      Math.min(ceiling.sourceTotal - ceiling.alreadyRefunded, legs.reduce((s, l) => s + l.remaining, 0))
+    );
+    return { legs, ...ceiling, remaining };
+  }
+
+  /**
+   * ONE card refund through Stripe — the `card_refund` leg `RefundRequestService` uses
+   * (REFUND-FLOW-PLAN R-1). Writes NOTHING: the request's completion owns the ledger.
+   *
+   * Refuses (`REFUND_GATEWAY_NOT_SUPPORTED`) any gateway without a refund API — since R-1 that
+   * is every gateway but Stripe; a mobile-money refund is a payout, never this.
+   * `idempotencyKey` is the request's reference + leg index, so a retry of an attempt whose
+   * answer was lost is deduplicated by Stripe instead of refunding twice.
+   */
+  async refundCardLeg(input: {
+    paymentTransactionId: string;
+    amount: number;
+    reason?: string;
+    idempotencyKey: string;
+    metadata?: Record<string, string>;
+  }): Promise<{ success: boolean; refundRef: string | null; error: string | null }> {
+    const paymentTx = await PaymentTransactionModel.findById(input.paymentTransactionId);
+    if (!paymentTx) {
+      throw createAppError(ERROR_CODES.REFUND_PAYMENT_NOT_FOUND, 404, 'The payment this refund returns could not be found');
+    }
+    const gatewayInstance = getPaymentGateway(paymentTx.gateway);
+    if (typeof gatewayInstance.refundPayment !== 'function') {
+      throw createAppError(ERROR_CODES.REFUND_GATEWAY_NOT_SUPPORTED, 400, 'This payment cannot be refunded through its gateway', {
+        gateway: paymentTx.gateway
+      });
+    }
+    const result = await gatewayInstance.refundPayment({
+      gatewayRef: paymentTx.gatewayRef,
+      amount: input.amount,
+      currency: paymentTx.currencySnapshot,
+      reason: input.reason,
+      metadata: input.metadata,
+      idempotencyKey: input.idempotencyKey
+    });
+    return {
+      success: result.success,
+      refundRef: result.refundRef ?? null,
+      error: result.success ? null : result.error ?? 'The gateway refused the refund'
+    };
+  }
+
   /** The source's total and what has already been refunded against it, for the two verdicts. */
-  private async sourceCeiling(
+  async sourceCeiling(
     source: RefundSource,
     legs: Array<{ tx: IPaymentTransaction }>
   ): Promise<{ sourceTotal: number; alreadyRefunded: number; isGrouped: boolean }> {
     if (source.kind === 'booking') {
-      const c = await this.refundableCeilingFor(legs[0].tx, source.bookingId, true);
-      return { sourceTotal: c.sourceTotal, alreadyRefunded: c.alreadyRefunded, isGrouped: false };
+      // Every leg (the primary charge and, once settled, the balance payment) is the booking's
+      // own and never grouped, so the booking's total is their sum and what was returned is
+      // theirs too — exactly the old single-payment arithmetic when there is no balance.
+      return {
+        sourceTotal: legs.reduce((s, l) => s + l.tx.amountSnapshot, 0),
+        alreadyRefunded: legs.reduce((s, l) => s + (l.tx.totalRefunded ?? 0), 0),
+        isGrouped: false
+      };
     }
     const order = await OrderModel.findById(source.orderId).select('total_amount').lean().exec();
     if (!order) {

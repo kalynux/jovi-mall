@@ -108,6 +108,20 @@ export interface ICashCollection extends Document {
 
   // ── Collection outcome ───────────────────────────────────────────────────
   collected_at: Date | null;
+  /**
+   * When the agent marked the parcel delivered — the shipment's `agent_delivered` transition
+   * (REFUND-FLOW-PLAN R-6). A coded handoff made straight from `picked_up`/`in_transit` has no
+   * such transition, and the code submission IS the delivery, so it equals `collected_at` there.
+   * Stamped in the transaction that claims the collection, on BOTH collect paths (coded and
+   * `autoCollectWithoutCode`); null while `pending`/`cancelled`, and on collected rows written
+   * before 2026-10-05 until `migrate:cod-collection-delivered-at` backfills them.
+   *
+   * ⚠ THIS, not `collected_at`, orders the coverage FIFO. An auto-collected delivery is claimed a
+   * whole dispute window after the parcel left the agent's hands; ordering on the claim put it
+   * behind every coded delivery made since, so cash that arrived first covered younger shipments
+   * and the old one waited. See `cod/domain/cod-fifo.ts`.
+   */
+  delivered_at: Date | null;
   verification: ICollectionVerification | null;
 
   // ── Settlement (remittance FIFO application — see cod-settlement.service) ─
@@ -151,6 +165,7 @@ const CashCollectionSchema = new Schema<ICashCollection>(
     code_locked: { type: Boolean, required: true, default: false },
 
     collected_at: { type: Date, default: null },
+    delivered_at: { type: Date, default: null },
     verification: {
       type: new Schema(
         {
@@ -180,8 +195,11 @@ const CashCollectionSchema = new Schema<ICashCollection>(
 
 // One collection per shipment — the double-collect guard.
 CashCollectionSchema.index({ shipment_id: 1 }, { unique: true });
-// FIFO settlement sweep per agency (oldest collected first).
-CashCollectionSchema.index({ agency_id: 1, status: 1, collected_at: 1 });
+// FIFO settlement sweep per agency — oldest DELIVERY first, `_id` breaking ties (R-6;
+// `FIFO_SORT` in cod/domain/cod-fifo.ts). Replaced `{agency_id, status, collected_at}` on
+// 2026-10-05: `migrate:cod-collection-delivered-at` builds this one and drops that. Its
+// `{agency_id, status}` prefix still serves cod-limits' and cod-summary's unsettled reads.
+CashCollectionSchema.index({ agency_id: 1, status: 1, delivered_at: 1 });
 // Agent exposure/deposit queries.
 CashCollectionSchema.index({ agent_id: 1, status: 1 });
 // Order payment recompute.

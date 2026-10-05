@@ -208,6 +208,11 @@ export function findPaymentGateway(name: string): PaymentGateway | null {
  *
  * Now NotchPay has a real refund API and My-CoolPay has none, and this one
  * predicate is what both the up-front verdict and the enforcement read.
+ *
+ * ⚠ **Since 2026-10-05 this is true for STRIPE ONLY** (REFUND-FLOW-PLAN R-1): NotchPay's
+ * `refundPayment` was removed, and no mobile adapter defines one. A mobile-money refund is a
+ * PAYOUT through `RefundRequestService`, never a gateway refund — so "false" here means "send
+ * it as a transfer", not "it cannot be refunded". `test:refund-flow` pins the Stripe-only set.
  */
 export function gatewaySupportsRefund(name: string): boolean {
   const gateway = findPaymentGateway(name);

@@ -52,6 +52,10 @@ import { inboundCalendarSyncWorker } from './modules/booking/workers/inbound-cal
 import { codDepositDeadlineWorker } from './modules/cod/workers/cod-deposit-deadline.worker';
 import { paymentReconciliationWorker } from './modules/payments/workers/payment-reconciliation.worker';
 import { payoutReconciliationWorker } from './modules/earnings/workers/payout-reconciliation.worker';
+import { refundCashRecheckWorker } from './modules/payments/workers/refund-cash-recheck.worker';
+// By PATH, like the negotiation bootstrap below and for the same reason: it joins `payments` to
+// `earnings` and `cod` through ports precisely so neither imports the other.
+import { initializeRefundDomain } from './modules/payments/refund.bootstrap';
 import { trackingDispatchWorker } from './modules/tracking-integration/workers/tracking-dispatch.worker';
 import { initializeAgentDomain } from './modules/agents';
 // Imported by PATH rather than through a module barrel, deliberately. The port this
@@ -280,6 +284,13 @@ export async function startServer(): Promise<Server> {
     // checkouts, not a window of degraded ones.
     initializeNegotiationDomain();
 
+    // Refunds (REFUND-FLOW-PLAN § 11.2): registers the earnings + COD-coverage ports behind
+    // `RefundRequestService` and subscribes the COD release to `cod.collections.settled`. Before
+    // the listener opens — until it runs, every refund request REFUSES with
+    // `REFUND_PORT_NOT_REGISTERED` rather than paying a customer without pausing or recovering
+    // the vendor's earnings.
+    initializeRefundDomain();
+
     startBackgroundWork();
 
     const server = await new Promise<Server>((resolve, reject) => {
@@ -477,6 +488,10 @@ function startBackgroundWork(): void {
     // settled only through the transfer callback or an administrator, so a lost callback left
     // the payout processing forever — and My-CoolPay sends each callback exactly once.
     payoutReconciliationWorker.start();
+
+    // Refunds: nightly re-check of COD refunds waiting for their cash to reach the platform —
+    // the backstop behind the lossy `cod.collections.settled` event (REFUND-FLOW-PLAN § 5.2).
+    refundCashRecheckWorker.start();
 
     // Live tracking: stream the outbox to the geo-tracker service so it can revoke tracking on
     // completion. There is no subscriber to register any more — the outbox row is written by

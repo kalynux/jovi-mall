@@ -182,6 +182,8 @@ const SOURCE_LABEL: Record<string, string> = {
  *  - `reversal` → **out**: held money taken back (a full refund).
  *  - `reserve_hold` / `reserve_release` → **internal**: available ↔ the agency's COD reserve.
  *    They were labelled "Earning reversed (refund)" and marked `in`.
+ *  - `clawback` → **out**; `clawback_recovery` / `clawback_write_off` → **internal** (2026-10-05,
+ *    the refund flow's earnings recovery — see the comments on each entry).
  */
 export function mapEarning(e: IEarningsLedger, currency: string, ownerType: string): VendorTransaction {
   const from = SOURCE_LABEL[e.source_type] ?? e.source_type;
@@ -192,6 +194,17 @@ export function mapEarning(e: IEarningsLedger, currency: string, ownerType: stri
     reversal: { direction: 'out', description: `Earning reversed — ${from} was refunded` },
     reserve_hold: { direction: 'internal', description: 'Moved to your COD reserve (security against cash shortfalls)' },
     reserve_release: { direction: 'internal', description: 'Returned from your COD reserve to your available balance' },
+    // REFUND-FLOW-PLAN § 6 (2026-10-05). `clawback` is the WHOLE share a refund took back —
+    // from pending, the reserve, available, or (what nothing covered) owed as a debt — so it is
+    // the one OUT row for that money.
+    clawback: { direction: 'out', description: `Recovered for a refund on ${from}` },
+    // An inflow that paid a refund debt down instead of reaching your available balance. The
+    // money already went OUT on the `clawback` row that created the debt (and came IN on its own
+    // `hold`), so counting this as out again would subtract it twice: internal.
+    clawback_recovery: { direction: 'internal', description: 'Applied to money you owe from an earlier refund' },
+    // A debt the platform forgave (C-6). Written as an adjustment, not a ledger row, today —
+    // mapped so a row of this type can never render as an anonymous movement.
+    clawback_write_off: { direction: 'internal', description: 'Refund debt written off by the platform' },
   };
   const mapped = byType[e.entry_type] ?? { direction: 'internal' as const, description: 'Earnings movement' };
 

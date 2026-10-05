@@ -2570,6 +2570,53 @@ reason an unknown gateway status maps to `PENDING` rather than `FAILED` — only
 swept again, so calling a live payment dead strands the money. `npm run audit:stuck-payments`
 measures the pre-existing backlog and deliberately fixes nothing.
 
+### Refunds (`payments/services/refund-request.service.ts`) — 2026-10-05
+
+⚠ **This supersedes the refund paragraphs in § Payments above** (the gateway-refund pipeline,
+`refundAvailable()`, `NOTCHPAY_REFUNDS_ENABLED`, the manual-payout ticket). Plan and owner
+decisions: `../PRODUCTION-READINESS/REFUND-FLOW-PLAN.md` (R-1…R-9, C-1…C-7, D-1…D-6).
+
+- **A mobile-money refund is a PAYOUT, not a gateway refund.** It is sent by `createPayout` on the
+  ACTIVE payout gateway (`payment_settings.payout_aggregator`) to the number that paid
+  (`PaymentTransaction.payer.phone`, normalised to E.164), or to a typed number that needs a
+  picture proof and a **second** administrator. **Stripe is the one exception** — cards keep
+  Stripe's refund API (`refundCardLeg`) and return the full amount.
+- **Every entry point opens a `refund_requests` row** (vendor, legacy admin route, the wi-admin
+  queue, booking cancel, delivery-fee refunds, seller-cancel D-4). Statuses: `awaiting_approval →
+  approved → [waiting_for_cash →] sending → completed`, plus `failed` (retry reuses the
+  `jm_rf_` reference) and `rejected` (never from `sending`). A **partial unique index**
+  (`refund_one_open_per_source`) allows one open request per source — it is the only thing
+  stopping two refunds paying one order twice. Completion writes the `refund_transactions` ledger
+  (`refundAmount` = GROSS), payment totals and the source status in ONE transaction.
+- **2% fee** (`payment_settings.refund_fee_percent`, default 2, 0–20) off every transfer or
+  external refund, on the amount recorded as paid: 5000 → 4900. Cards: 0. Platform income on the
+  request (`fee_amount`), never an earnings allocation.
+- **COD waits for coverage** (`waiting_for_cash`): it sends only once deposits FULLY cover the
+  shipment's cash, and coverage is FIFO by **delivery date** (`cash_collections.delivered_at`,
+  tie-break `_id`). `cod.collections.settled` releases it; `RefundCashRecheckWorker` is the
+  nightly backstop.
+- **Earnings: paused while open, clawed back on arrival — never on acceptance.** Released money
+  is recovered from future earnings: `EarningsAccount.clawback_balance` (debt, netted on every
+  inflow), `EarningsAllocation.clawed_amount` (`amount` is never edited, so `NET_FORMULA` holds),
+  append-only `earnings_adjustments` unique per (refund, allocation). Agency/agent delivery shares
+  are never touched (C-1). Write-off (C-6) and the role-closure blocker
+  `earnings_clawback_outstanding` (C-5) exist.
+- **Proof pictures live in the PRIVATE `refund-proofs/` tree**, uploaded and read only through
+  `/api/internal/admin/refunds/proofs` — never `/files/upload` (every `by-type` tree is public).
+- **Wiring:** `initializeRefundDomain()` (`payments/refund.bootstrap.ts`, from `lifecycle.ts`)
+  registers the earnings and COD-coverage ports; without it every request refuses
+  `REFUND_PORT_NOT_REGISTERED`. Callbacks route by the `rf` merchant-reference kind (CinetPay and
+  Fapshi had to learn it, or a refund callback reads as an incoming payment).
+
+Contracts: `api-doc/admin/refunds.md` (the wi-admin queue), `api-doc/admin/orders.md` (the legacy
+route), `api-doc/vendor/orders.md` (breaking response), `api-doc/payments/README.md`,
+`api-doc/admin/earnings.md` (clawbacks). Suites: `test:refund-flow`, `test:refund-entry-points`,
+`test:refund-admin-api`, `test:refund-customer-surface`, `test:earnings-clawback` (offline);
+`verify:refund-flow-live`, `verify:earnings-clawback-live` (need a REPLICA SET). Migrations, in
+this order: `migrate:earnings-clawback-fields`, `migrate:cod-collection-delivered-at`,
+`migrate:legacy-refunds-to-requests`, `migrate:refund-requests-indexes`, then
+`migrate:declared-indexes`.
+
 ### Bookings (`src/modules/booking/`) — service products
 
 Services never enter the cart; they are booked. Availability → 15-min Redis hold → booking → payment.
@@ -2621,7 +2668,9 @@ any kind.
 
 **The pure window arithmetic lives in `booking/utils/availability-windows.util.ts`**, extracted off `AvailabilityService` so it can be tested without Mongo *and* Google. Every availability defect found in review lived there — notably `clipWindow`, which now trims a window to the query range instead of discarding any window not wholly inside it (a mid-day query used to lose the whole day, indistinguishable from fully booked). Covered DB-free by `npm run test:booking-availability` (54).
 
-**Cancelling a paid booking refunds it** (`BookingRefundService`), from **both** the customer and vendor paths — neither refunded anything before. Auto where the gateway supports it; otherwise `paymentStatus: 'refund_pending'` + a HIGH ticket for manual payout, with earnings reversed either way. A refund failure never blocks the cancellation: releasing the slot matters more, and money owed is recoverable from the ticket.
+**Cancelling a paid booking refunds it** (`BookingRefundService`), from **both** the customer and vendor paths — neither refunded anything before. ⚠ Since 2026-10-05 (REFUND-FLOW-PLAN § 4) it opens a SYSTEM **refund request** for everything refundable — the primary charge **and a settled balance payment** — sent at once: card → refunded in the call; mobile money → a payout to the number that paid. With no number on record it waits `awaiting_approval` in the refund queue. `paymentStatus: 'refund_pending'` now means **"a refund request is open"** (set by a CAS from `paid`; the request's completion sets `refunded`). Earnings are **paused, never reversed**, until the money arrives — only where no request can be opened at all (cash, no payment found) does the old HIGH ticket remain, with a `booking_cancelled_unrefunded` pause. A refund failure never blocks the cancellation: releasing the slot matters more.
+
+**Every refund entry point is a refund request now** (vendor, legacy admin, booking, delivery-fee, seller-cancel D-4); the ports behind `RefundRequestService` are registered by `initializeRefundDomain()` (`payments/refund.bootstrap.ts`, called from `lifecycle.ts` before the listener — until then every request refuses with `REFUND_PORT_NOT_REGISTERED`), and `RefundCashRecheckWorker` re-checks COD refunds waiting on cash nightly. Pinned by `npm run test:refund-entry-points`.
 
 **The customer surface is `/api/customer/bookings`** (list · detail · cancel · reschedule), beside `/customer/orders`. Before it, a customer could pay and then do nothing — `cancelBooking` was fully written, complete with `assertCancellationAllowed`, and simply had no route, so the vendor's cancellation policy was enforced *nowhere*. `UnpaidBookingCancelWorker` sweeps confirmed-but-unpaid bookings (never `pending` ones, which await the vendor).
 

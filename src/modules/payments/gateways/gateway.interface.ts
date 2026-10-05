@@ -118,6 +118,13 @@ export interface RefundPayload {
   currency: string;
   reason?: string;
   metadata?: Record<string, any>;
+  /**
+   * The provider-side idempotency key for THIS refund leg (a refund request passes
+   * `<jm_rf_ reference>:<leg>`). Optional: absent, Stripe falls back to its historical
+   * `re_<intent>_<amount>` key — which wrongly deduplicates two genuine partial refunds of the
+   * same amount within Stripe's 24-hour key window, the reason this field exists.
+   */
+  idempotencyKey?: string;
 }
 
 /** Payload for the mobile-money OTP step (My-CoolPay `payin/authorize`). */

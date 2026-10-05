@@ -149,6 +149,8 @@ export const MODELS = Object.freeze({
   // Payments
   PAYMENT_TRANSACTION: 'PaymentTransaction',
   REFUND_TRANSACTION: 'RefundTransaction',
+  /** The money-out lifecycle of a refund (REFUND-FLOW-PLAN § 3.1); wi-admin reads it directly. */
+  REFUND_REQUEST: 'RefundRequest',
   USER_PAYMENT_METHOD: 'UserPaymentMethod',
 
   /**
@@ -233,6 +235,7 @@ export const MODELS = Object.freeze({
   EARNINGS_ALLOCATION: 'EarningsAllocation',
   EARNINGS_LEDGER: 'EarningsLedger',
   EARNINGS_RESERVE_HOLD: 'EarningsReserveHold',
+  EARNINGS_ADJUSTMENT: 'EarningsAdjustment',
   PAYOUT_REQUEST: 'PayoutRequest',
 
   // Blog / editorial (the marketing site's article pages)
@@ -375,6 +378,7 @@ export const COLLECTIONS = Object.freeze({
   // Payments
   PAYMENT_TRANSACTION: 'payment_transactions',
   REFUND_TRANSACTION: 'refund_transactions',
+  REFUND_REQUEST: 'refund_requests',
   USER_PAYMENT_METHOD: 'user_payment_methods',
   /** See the MODELS entry above — absent from this registry until 2026-09-13, and invisible
    *  to the index-drift report for as long as it was. The VALUE is unchanged: it is the same
@@ -436,6 +440,7 @@ export const COLLECTIONS = Object.freeze({
   EARNINGS_ALLOCATION: 'earnings_allocations',
   EARNINGS_LEDGER: 'earnings_ledgers',
   EARNINGS_RESERVE_HOLD: 'earnings_reserve_holds',
+  EARNINGS_ADJUSTMENT: 'earnings_adjustments',
   PAYOUT_REQUEST: 'payout_requests',
 
   // Blog / editorial (the marketing site's article pages)

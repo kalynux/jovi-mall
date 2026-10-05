@@ -104,6 +104,11 @@ export interface MoneyLine {
   requiresCashSettlement: boolean;
   cashSettledAt: Date | null;
   waitingOn: MoneyLineWait[];
+  /**
+   * How much of `amount` refunds took back (REFUND-FLOW-PLAN § 6). `amount` stays the split's
+   * figure; what the beneficiary keeps is `amount − clawedAmount`. 0 on projected lines.
+   */
+  clawedAmount: number;
 }
 
 export interface BargainFeeLineBasis {
@@ -239,13 +244,23 @@ export interface OrderMoneySplitDto {
     total: number;
   };
   sections: MoneySplitSection[];
+  /**
+   * Every refund clawback, recovery and write-off recorded against this order's shares
+   * (`earnings_adjustments`, REFUND-FLOW-PLAN § 6), oldest first. A line's own `clawedAmount`
+   * already reflects the clawbacks on it; a row here with `allocationId: null` is money charged
+   * to the vendor BEYOND their shares (delivery refunded on their return-shipping setting, C-1).
+   */
+  adjustments: MoneyAdjustmentLine[];
   totals: {
     platform: { commission: number; bargainFee: number; total: number };
     vendor: number;
     agencies: number;
     agents: number;
     customerRefunds: number;
-    /** Σ reversed lines — money taken back by a refund. Excluded from everything above. */
+    /**
+     * Money taken back by refunds — Σ reversed lines, the clawed part of every other line, and
+     * what was charged to the vendor beyond their shares. Excluded from everything above.
+     */
     reversed: number;
   };
   reconciliation: {
@@ -262,6 +277,21 @@ export interface OrderMoneySplitDto {
   holdDays: number;
   /** The bargain-fee rate in force. */
   bargainFeePercent: number;
+}
+
+/** One `earnings_adjustments` row, as the money-split view shows it. */
+export interface MoneyAdjustmentLine {
+  kind: 'refund_clawback' | 'clawback_recovery' | 'write_off';
+  refundKey: string;
+  /** `null` for money charged to the vendor beyond their shares. */
+  allocationId: string | null;
+  beneficiary: { type: MoneyBeneficiaryType; id: string | null };
+  amount: number;
+  goodsAmount: number;
+  deliveryAmount: number;
+  /** Where it came from: pending, the share's reserve slice, available, or owed (debt). */
+  takenFrom: { pending: number; reserve: number; available: number; debt: number };
+  createdAt: Date | null;
 }
 
 // ── Pure builders ────────────────────────────────────────────────────────────────────────
@@ -284,6 +314,8 @@ export interface AllocationFacts {
   cash_settled_at: Date | null;
   /** The pause copy on the row (see earnings-pause.service.ts). Optional: older callers omit it. */
   paused_at?: Date | null;
+  /** Refund clawback taken from this row (REFUND-FLOW-PLAN § 6). Optional: legacy rows lack it. */
+  clawed_amount?: number | null;
 }
 
 /** The role a row plays, from the moment it was written at and whose it is. */
@@ -323,6 +355,7 @@ export function lineFromAllocation(row: AllocationFacts, now: Date): MoneyLine {
     requiresCashSettlement: row.requires_cash_settlement === true,
     cashSettledAt: row.cash_settled_at ?? null,
     waitingOn: waitingOnOf(row, now),
+    clawedAmount: row.clawed_amount ?? 0,
   };
 }
 
@@ -345,6 +378,7 @@ export function projectedLine(
     requiresCashSettlement,
     cashSettledAt: null,
     waitingOn: [],
+    clawedAmount: 0,
   };
 }
 
@@ -362,6 +396,7 @@ export function customerRefundLine(customerId: string, amount: number, projected
     requiresCashSettlement: false,
     cashSettledAt: null,
     waitingOn: [],
+    clawedAmount: 0,
   };
 }
 
@@ -484,7 +519,8 @@ export function agentSplitBasisOf(
 /** Totals and the reconciliation over a finished set of sections. */
 export function summarise(
   sections: MoneySplitSection[],
-  charged: number
+  charged: number,
+  adjustments: MoneyAdjustmentLine[] = []
 ): { totals: OrderMoneySplitDto['totals']; reconciliation: OrderMoneySplitDto['reconciliation']; estimated: boolean } {
   const totals: OrderMoneySplitDto['totals'] = {
     platform: { commission: 0, bargainFee: 0, total: 0 },
@@ -498,12 +534,19 @@ export function summarise(
 
   for (const section of sections) {
     for (const line of section.lines) {
-      const amount = line.amount ?? 0;
+      const gross = line.amount ?? 0;
       if (line.status === 'reversed') {
         anyReversed = true;
-        totals.reversed += amount;
+        totals.reversed += gross;
         continue;
       }
+      // A partial clawback (REFUND-FLOW-PLAN § 6): the beneficiary keeps the rest.
+      const clawed = Math.min(Math.max(0, line.clawedAmount ?? 0), gross);
+      if (clawed > 0) {
+        anyReversed = true;
+        totals.reversed += clawed;
+      }
+      const amount = gross - clawed;
       switch (line.role) {
         case 'bargain_fee':
           totals.platform.bargainFee += amount;
@@ -526,6 +569,13 @@ export function summarise(
           break;
       }
     }
+  }
+  // Money charged to the vendor BEYOND their shares (C-1) leaves the vendor's total too.
+  for (const adj of adjustments) {
+    if (adj.kind !== 'refund_clawback' || adj.allocationId !== null || adj.beneficiary.type !== 'vendor') continue;
+    anyReversed = true;
+    totals.vendor -= adj.amount;
+    totals.reversed += adj.amount;
   }
   totals.platform.total = totals.platform.commission + totals.platform.bargainFee;
 

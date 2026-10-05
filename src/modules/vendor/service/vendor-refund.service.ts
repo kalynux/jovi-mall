@@ -2,11 +2,15 @@ import { Types } from 'mongoose';
 import { VendorOrderRepository } from '../../orders/vendor-order.repository';
 import { VendorRepository } from '../../vendors/vendor.repository';
 import { IVendorReturnPolicy } from '../../vendors/vendor.model';
-import { IOrder } from '../../orders/order.model';
+import { IOrder, OrderModel } from '../../orders/order.model';
 import { PaymentTransactionModel } from '../../payments/models/payment-transaction.model';
-import { PaymentOrchestratorService } from '../../payments/services/payment-orchestrator.service';
-import { VendorCustomerSyncService } from '../../vendors/services/vendor-customer-sync.service';
-import { createAppError } from '../../../core/errors';
+import { IRefundRequest } from '../../payments/models/refund-request.model';
+import { refundRequestService, RefundRequestService } from '../../payments/services/refund-request.service';
+import { sumCompletedRefundsForOrder } from '../../payments/services/refund-ledger';
+import { maxAttributable, RefundReasonKind, ReturnShippingPayer } from '../../payments/domain/refund-attribution';
+import { maskRefundPhone } from '../../payments/domain/refund-destination';
+import { codCoverageService } from '../../cod/services/cod-coverage.service';
+import { AppError, createAppError } from '../../../core/errors';
 import { ERROR_CODES, ErrorCode } from '../../../core/error-codes';
 import { deliveredAtOf } from '../../earnings/domain/earnings-hold';
 
@@ -14,21 +18,59 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 export interface RefundEligibilityDto {
     eligible: boolean;
-    maxRefundable: number;       // Most the vendor may refund right now (per policy + balance)
+    maxRefundable: number;       // Most the vendor may refund right now (per policy + balance + attribution)
     remaining: number;           // Remaining un-refunded balance of the payment
     currency: string | null;
     reasonCode?: string;         // Why it's not eligible (when eligible === false)
     // Policy info surfaced for the UI/notification (no money movement here).
     refundProcessingDays: number | null;                  // Expected settle window per policy
     returnShippingPayer: IVendorReturnPolicy['return_shipping_payer'] | null; // Who pays return shipping
+    /**
+     * VENDOR surface only (REFUND-FLOW-PLAN § 4, 2026-10-05). How the money would leave —
+     * `card` (back to the card), `mobile_money` (a transfer to the number that paid), `cod`
+     * (cash on delivery: always needs an administrator's approval and a typed number). Null when
+     * nothing was paid. Absent on the administrator's copy of the vendor verdict.
+     */
+    paymentChannel?: 'card' | 'mobile_money' | 'cod' | null;
+    /** Whether a refund would be sent at once (`true`) or wait for an administrator (`false`). */
+    autoSend?: boolean;
+    /** A refund request already open on this order — a second one is refused until it closes. */
+    openRefundRequest?: { id: string; status: IRefundRequest['status'] } | null;
 }
 
+/**
+ * What `POST /api/vendor/orders/:id/refund` answers since 2026-10-05 (REFUND-FLOW-PLAN § 4) —
+ * a REFUND REQUEST, not a finished refund. ⚠ BREAKING: `status` used to be the literal
+ * `'completed'`; a mobile-money refund is now a transfer whose outcome arrives later.
+ *
+ *   `completed`          card refunds (Stripe answers in the call)
+ *   `sending`            a transfer to the number that paid is in flight
+ *   `awaiting_approval`  an administrator decides: COD, no paying number on record, or a send
+ *                        the platform could not start (payouts switched off on this deployment)
+ *   `failed`             the gateway refused the transfer — an administrator retries or settles it
+ */
 export interface RefundResultDto {
+    refundRequestId: string;
+    /** @deprecated alias of `refundRequestId` (it used to be a `refund_transactions` id). */
     refundId: string;
-    status: 'completed';
+    status: IRefundRequest['status'];
+    /** What the order loses — the GROSS (kept under its old name). */
     amount: number;
+    grossAmount: number;
+    /** The refund fee (2% by default) on a transfer; 0 on a card refund (R-3). */
+    feeAmount: number;
+    /** What the customer receives: gross − fee. */
+    netAmount: number;
     currency: string;
+    paymentChannel: IRefundRequest['payment_channel'];
+    channel: IRefundRequest['channel'];
+    /** The number the transfer goes to, MASKED (`+•••••••••512`). Null for card / not decided. */
+    destinationMasked: string | null;
+    /** Why it did not send (when it did not): e.g. `payout_unavailable`, `insufficient_gateway_balance`. */
+    transferFailureReason: string | null;
+    /** Σ completed refunds on this order, this one included once it completed. */
     totalRefunded: number;
+    /** True only once the refund COMPLETED and squared the order. */
     fullyRefunded: boolean;
     // Echoed from the vendor return policy so the client can inform the customer.
     refundProcessingDays: number | null;
@@ -36,29 +78,38 @@ export interface RefundResultDto {
 }
 
 /**
- * VendorRefundService
+ * VendorRefundService — the VENDOR's door into the refund flow.
  *
- * Decides whether an order is refundable under the vendor's return policy and the
- * order's state, computes the policy-allowed amount, and delegates the actual
- * gateway refund + persistence to the PaymentOrchestratorService.
+ * Decides whether an order is refundable under the vendor's return policy (`computeVendorRefundEligibility`,
+ * shared with the administrator's path), computes the policy-allowed amount, and then OPENS A
+ * REFUND REQUEST through `RefundRequestService` (REFUND-FLOW-PLAN § 4). It moves no money itself
+ * and writes no ledger row: the request's lifecycle owns the transfer, the ledger, the earnings
+ * recovery and the customer's notification.
+ *
+ * ── Auto-send or wait (R-2) ───────────────────────────────────────────────────
+ * The request is created with `approveNow`, and `mayApproveAtCreation` honours it for a vendor
+ * only when the refund is within policy (always true here — this path never overrides) and NOT
+ * COD; the request then sends at once when there is somewhere to send it (the card, or the
+ * number that paid). Otherwise it is created `awaiting_approval` and an administrator decides.
  *
  * Eligibility rules (per vendor return_policy):
  * - Policy must exist, be return_eligible, and not be refund_type 'none'.
  * - Order payment_status must be 'paid'.
- * - now must be within created_at + return_window_days.
- * - maxRefundable: full → remaining balance; partial → remaining * refund_percentage%.
+ * - now must be within DELIVERY + return_window_days (not started before delivery).
+ * - maxRefundable: full → remaining balance; partial → floor(remaining × refund_percentage%),
+ *   then capped by the attribution rule (C-1: after delivery, delivery money comes back only per
+ *   the vendor's own return-shipping setting).
+ * - No refund request may already be open on the order.
  */
 export class VendorRefundService {
     private vendorOrderRepo: VendorOrderRepository;
     private vendorRepo: VendorRepository;
-    private orchestrator: PaymentOrchestratorService;
-    private vendorCustomerSync: VendorCustomerSyncService;
+    private refunds: RefundRequestService;
 
-    constructor() {
+    constructor(refunds: RefundRequestService = refundRequestService) {
         this.vendorOrderRepo = new VendorOrderRepository();
         this.vendorRepo = new VendorRepository();
-        this.orchestrator = new PaymentOrchestratorService();
-        this.vendorCustomerSync = new VendorCustomerSyncService();
+        this.refunds = refunds;
     }
 
     /**
@@ -69,28 +120,32 @@ export class VendorRefundService {
         const order = await this.loadOwnedOrder(vendorId, orderId);
         const vendor = await this.vendorRepo.findById(vendorId);
         const returnPolicy = vendor?.policies?.return_policy ?? null;
-        const paymentTx = await this.findSuccessfulPayment(orderId);
-
-        return this.computeEligibility(order, returnPolicy, paymentTx);
+        return this.evaluate(order, returnPolicy, null);
     }
 
     /**
-     * Action a refund. Throws an AppError when the order is not refundable or the
-     * requested amount exceeds the policy-allowed maximum.
+     * Open a refund request for the order. Throws an AppError when the order is not refundable
+     * or the requested amount exceeds the policy-allowed maximum; otherwise returns the request,
+     * whatever its send did (the request records it).
      */
     async refund(
         vendorId: string,
         orderId: string,
-        input: { amount?: number; reason?: string },
+        input: { amount?: number; reason?: string; itemDefective?: boolean },
         initiatedBy: string
     ): Promise<RefundResultDto> {
         const order = await this.loadOwnedOrder(vendorId, orderId);
         const vendor = await this.vendorRepo.findById(vendorId);
         const returnPolicy = vendor?.policies?.return_policy ?? null;
-        const paymentTx = await this.findSuccessfulPayment(orderId);
 
-        const eligibility = this.computeEligibility(order, returnPolicy, paymentTx);
+        const eligibility = await this.evaluate(order, returnPolicy, input.itemDefective ?? null);
         if (!eligibility.eligible) {
+            if (eligibility.reasonCode === ERROR_CODES.REFUND_ALREADY_OPEN) {
+                throw createAppError(ERROR_CODES.REFUND_ALREADY_OPEN, 409, undefined, {
+                    refundRequestId: eligibility.openRefundRequest?.id ?? null,
+                    status: eligibility.openRefundRequest?.status ?? null,
+                });
+            }
             throw createAppError(
                 (eligibility.reasonCode as ErrorCode) ?? ERROR_CODES.REFUND_NOT_ELIGIBLE,
                 this.statusForReason(eligibility.reasonCode)
@@ -99,49 +154,134 @@ export class VendorRefundService {
 
         // Default to the policy-computed amount; allow an explicit override downward.
         const requested = input.amount ?? eligibility.maxRefundable;
-        if (requested <= 0 || requested > eligibility.maxRefundable) {
+        if (!Number.isInteger(requested) || requested <= 0 || requested > eligibility.maxRefundable) {
             throw createAppError(ERROR_CODES.REFUND_AMOUNT_EXCEEDS_MAX, 400, undefined, {
                 requested,
                 maxRefundable: eligibility.maxRefundable
             });
         }
 
-        const result = await this.orchestrator.refundPayment({
-            source: { kind: 'order', orderId },
-            vendorId,
-            initiatedBy,
-            initiatedByRole: 'vendor',
+        const request = await this.refunds.create({
+            source: { kind: 'order', id: orderId },
             amount: requested,
-            reason: input.reason
+            reasonKind: reasonKindOf(order),
+            reason: input.reason ?? null,
+            itemDefective: input.itemDefective ?? null,
+            overridePolicy: false,
+            requestedBy: { id: initiatedBy, role: 'vendor', name: null },
+            // Honoured only within policy, to the paying number or the card, and never for COD (R-2).
+            approveNow: true,
         });
 
-        // On a full refund the order leaves the 'paid' set, so roll back the
-        // customer's denormalized lifetime spend. Secondary side-effect only.
-        if (result.fullyRefunded) {
-            try {
-                await this.vendorCustomerSync.recordFullRefund(
-                    vendorId,
-                    order.customer_id,
-                    order.total_amount
-                );
-            } catch (error) {
-                console.error('[VendorRefundService] Failed to sync vendor customer on refund:', error);
-            }
-        }
-
-        return {
-            refundId: result.refundId,
-            status: 'completed',
-            amount: result.amount,
-            currency: result.currency,
-            totalRefunded: result.totalRefunded,
-            fullyRefunded: result.fullyRefunded,
-            refundProcessingDays: returnPolicy?.refund_processing_days ?? null,
-            returnShippingPayer: returnPolicy?.return_shipping_payer ?? null
-        };
+        return this.toResult(request, orderId, returnPolicy);
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
+
+    /**
+     * The vendor verdict: the pure policy gates, then the open-request guard and the money +
+     * attribution ceiling `RefundRequestService` will enforce — so the amount offered to the
+     * vendor is one `create` accepts.
+     */
+    private async evaluate(
+        order: IOrder,
+        returnPolicy: IVendorReturnPolicy | null,
+        itemDefective: boolean | null
+    ): Promise<RefundEligibilityDto> {
+        const orderId = (order._id as Types.ObjectId).toString();
+        const paid = await findRefundableMoneyForOrder(order);
+        const pure = computeVendorRefundEligibility(order, returnPolicy, paid);
+        const isCod = order.payment_method === 'cash_on_delivery';
+        const base: RefundEligibilityDto = {
+            ...pure,
+            paymentChannel: paid ? (isCod ? 'cod' : null) : null,
+            autoSend: false,
+            openRefundRequest: null,
+        };
+
+        const open = await this.refunds.findOpenForSource('order', orderId);
+        if (open) {
+            return {
+                ...base,
+                eligible: false,
+                maxRefundable: 0,
+                reasonCode: ERROR_CODES.REFUND_ALREADY_OPEN,
+                openRefundRequest: { id: open.id, status: open.status },
+            };
+        }
+        if (!pure.eligible) return base;
+
+        // The ceiling `create` enforces: the money still refundable AND the attribution rule.
+        try {
+            const facts = await this.refunds.describeSource('order', orderId);
+            const attributionCeiling = maxAttributable({
+                reasonKind: reasonKindOf(order),
+                returnShippingPayer: (facts.returnShippingPayer ?? null) as ReturnShippingPayer | null,
+                itemDefective,
+                goodsAmount: facts.goodsAmount,
+                deliveryAmountPaid: facts.deliveryAmountPaid,
+                delivered: facts.delivered,
+            });
+            // Review finding 10: a cart checkout is ONE payment for N orders, so `pure` measured
+            // the policy percentage on the whole cart's balance. Re-run the same rule on THIS
+            // order's refundable money (the ceiling `create` enforces).
+            const scoped = computeVendorRefundEligibility(order, returnPolicy, {
+                amountSnapshot: facts.remaining,
+                totalRefunded: 0,
+                currencySnapshot: facts.currency,
+            });
+            if (!scoped.eligible) {
+                return { ...base, eligible: false, maxRefundable: 0, remaining: facts.remaining, reasonCode: scoped.reasonCode };
+            }
+            const maxRefundable = Math.min(scoped.maxRefundable, attributionCeiling, facts.remaining);
+            const channel = facts.paymentChannel === 'billing' ? null : facts.paymentChannel;
+            const payerKnown = facts.legs.length > 0 && facts.legs.every((l) => Boolean(l.payerPhone));
+            return {
+                ...base,
+                remaining: facts.remaining,
+                eligible: maxRefundable > 0,
+                maxRefundable: Math.max(0, maxRefundable),
+                reasonCode: maxRefundable > 0 ? undefined : ERROR_CODES.REFUND_NOT_ELIGIBLE,
+                paymentChannel: channel,
+                autoSend: channel === 'card' || (channel === 'mobile_money' && payerKnown),
+            };
+        } catch (error) {
+            // Never throws on ineligibility: a refusal from the money side becomes the reason.
+            if (error instanceof AppError && error.statusCode < 500) {
+                return { ...base, eligible: false, maxRefundable: 0, reasonCode: error.code };
+            }
+            throw error;
+        }
+    }
+
+    private async toResult(
+        request: IRefundRequest,
+        orderId: string,
+        returnPolicy: IVendorReturnPolicy | null
+    ): Promise<RefundResultDto> {
+        const [totalRefunded, order] = await Promise.all([
+            sumCompletedRefundsForOrder(orderId),
+            OrderModel.findById(orderId).select('payment_status').lean<{ payment_status?: string } | null>().exec(),
+        ]);
+        return {
+            refundRequestId: request.id,
+            refundId: request.id,
+            status: request.status,
+            amount: request.gross_amount,
+            grossAmount: request.gross_amount,
+            feeAmount: request.fee_amount,
+            netAmount: request.net_amount,
+            currency: request.currency,
+            paymentChannel: request.payment_channel,
+            channel: request.channel ?? null,
+            destinationMasked: maskRefundPhone(request.destination?.phone ?? null),
+            transferFailureReason: request.transfer_failure_reason ?? null,
+            totalRefunded,
+            fullyRefunded: request.status === 'completed' && order?.payment_status === 'refunded',
+            refundProcessingDays: returnPolicy?.refund_processing_days ?? null,
+            returnShippingPayer: returnPolicy?.return_shipping_payer ?? null,
+        };
+    }
 
     private async loadOwnedOrder(vendorId: string, orderId: string): Promise<IOrder> {
         if (!Types.ObjectId.isValid(orderId)) {
@@ -154,21 +294,40 @@ export class VendorRefundService {
         return order;
     }
 
-    private async findSuccessfulPayment(orderId: string) {
-        return findSuccessfulPaymentForOrder(orderId);
-    }
-
-    private computeEligibility(
-        order: IOrder,
-        returnPolicy: IVendorReturnPolicy | null,
-        paymentTx: { amountSnapshot: number; totalRefunded: number; currencySnapshot: string } | null
-    ): RefundEligibilityDto {
-        return computeVendorRefundEligibility(order, returnPolicy, paymentTx);
-    }
-
     private statusForReason(reasonCode?: string): number {
         return refundStatusForReason(reasonCode);
     }
+}
+
+/**
+ * Before delivery a refund is a CANCELLATION (D-5: everything paid comes back, delivery
+ * included); after it, a RETURN (C-1: delivery money only per the return-shipping setting).
+ */
+export function reasonKindOf(order: Parameters<typeof deliveredAtOf>[0]): RefundReasonKind {
+    return deliveredAtOf(order) ? 'return' : 'cancellation';
+}
+
+/**
+ * The money an order holds, shaped like a payment (`amountSnapshot` / `totalRefunded` /
+ * `currencySnapshot`) so `computeVendorRefundEligibility` reads it unchanged:
+ *  - online: every succeeded payment of the order (`findSuccessfulPaymentForOrder`);
+ *  - COD: the cash COLLECTED from the customer (Σ `expected` of collected collections) and the
+ *    completed refunds already recorded against the order. Null when no cash was collected.
+ * Shared with the administrator's refund path.
+ */
+export async function findRefundableMoneyForOrder(
+    order: Pick<IOrder, '_id' | 'payment_method' | 'currency'>
+): Promise<{ amountSnapshot: number; totalRefunded: number; currencySnapshot: string; gateway?: unknown } | null> {
+    const orderId = (order._id as Types.ObjectId).toString();
+    if (order.payment_method !== 'cash_on_delivery') return findSuccessfulPaymentForOrder(orderId);
+    const coverage = await codCoverageService.coverageForOrder(orderId);
+    const collected = coverage.filter((c) => c.status === 'collected');
+    if (collected.length === 0) return null;
+    return {
+        amountSnapshot: collected.reduce((s, c) => s + c.expected, 0),
+        totalRefunded: await sumCompletedRefundsForOrder(orderId),
+        currencySnapshot: order.currency,
+    };
 }
 
 /**
@@ -272,7 +431,9 @@ export function computeVendorRefundEligibility(
         let maxRefundable = remaining;
         if (returnPolicy.refund_type === 'partial') {
             const pct = returnPolicy.refund_percentage ?? 0;
-            maxRefundable = Math.round(remaining * (pct / 100) * 100) / 100;
+            // Whole units (2026-10-05): a refund request is an integer amount — XAF has no
+            // minor unit — and rounding DOWN never offers more than the policy allows.
+            maxRefundable = Math.floor(remaining * (pct / 100));
         }
 
         if (maxRefundable <= 0) {

@@ -145,8 +145,13 @@ PATCH /api/customer/notifications/read-all
 | `booking.reminder` | ~24h before `startAt`, from the reminder sweep. | `bookingReminders` |
 | `booking.payment.received` | Payment succeeded. | **No** |
 | `booking.balance.due` | The service cost more than quoted and a balance is payable. | **No** |
-| `booking.refunded` | Money returned after a cancellation. | **No** |
-| `booking.refund.pending` | A refund is owed but is being sent by hand. | **No** |
+| `booking.refunded` | A **card** refund completed — the full amount, back to the card, no fee. Raised from `payment.refunded` (🆕 2026-10-05: nothing raised it before). | **No** |
+| `booking.refund.pending` | Legacy — no longer raised (2026-10-05). A booking awaiting a refund now gets `booking.refund.requested`. Kept for existing inbox rows. | **No** |
+| `booking.refund.requested` | 🆕 A refund was requested and is under review (started by the vendor, the platform or an administrator — not by Support answering the customer's own ticket). | **No** |
+| `booking.refund.sending` | 🆕 A mobile-money transfer is on its way to the masked number, with the fee line (*"You receive 4,900 XAF (5,000 minus a 2% transfer fee)."*). | **No** |
+| `booking.refund.completed` | 🆕 The transfer arrived — net amount + fee line. | **No** |
+| `booking.refund.paid_externally` | 🆕 The team paid it outside the app (proof on file) — net amount + fee line. | **No** |
+| `booking.refund.declined` | 🆕 The request was declined after review. The administrator's reason is never quoted. | **No** |
 
 ### Orders
 
@@ -159,7 +164,15 @@ PATCH /api/customer/notifications/read-all
 | `order.delivered` | Delivered. | `orderUpdates` |
 | `order.delivery_failed` | An attempt failed. | `orderUpdates` |
 | `order.cancelled` | Cancelled. | **No** |
-| `order.refunded` | Refunded — once per completed refund, so two partial refunds are two messages, each naming its own amount. Raised from the orchestrator's `payment.refunded` (it had no trigger before 2026-09-27). | **No** |
+| `order.refunded` | A **card** refund completed (or a legacy event with no channel) — once per completed refund, so two partial refunds are two messages, each naming its own amount; full amount, **no fee**. Raised from `payment.refunded` (it had no trigger before 2026-09-27). | **No** |
+| `order.refund.requested` | 🆕 2026-10-05 · A refund was requested and is under review (vendor-, platform- or admin-started; not Support answering the customer's own ticket). | **No** |
+| `order.refund.waiting_for_cash` | 🆕 **COD** · Approved; the cash the customer paid has not reached the platform from the delivery company yet — it sends by itself when it does. | **No** |
+| `order.refund.sending` | 🆕 A mobile-money transfer is on its way to the masked number, with the fee line (*"You receive 4,900 XAF (5,000 minus a 2% transfer fee)."*). | **No** |
+| `order.refund.completed` | 🆕 The transfer arrived — net amount + fee line. | **No** |
+| `order.refund.paid_externally` | 🆕 The team paid it outside the app (proof on file) — net amount + fee line. | **No** |
+| `order.refund.declined` | 🆕 The request was declined after review. The administrator's reason is never quoted. | **No** |
+
+> **Refund messages (2026-10-05).** One message per refund request per step, keyed on the request, so a retried transfer does not tell the customer twice. A transfer that **fails** is never announced — the team retries it or pays it by hand, and the customer is still owed the money. The new WhatsApp templates (`customer_order_refund_*`, `customer_booking_refund_*`) are generated but **not yet approved by Meta**: until they are, an out-of-window WhatsApp send fails and the customer still gets the in-app row, push, and email/Telegram. All deep links are the existing order / booking pages.
 
 ### The basket
 

@@ -264,6 +264,8 @@ export interface AdminDeliveryFeeRefundDto {
   cause: string;
   note: string | null;
   ticketId: string | null;
+  /** The refund REQUEST that returns this money (REFUND-FLOW-PLAN § 7), or null on a legacy row. */
+  refundRequestId: string | null;
   /** True while it may be settled — the one flag the button needs. */
   settleable: boolean;
   settlement: {
@@ -292,7 +294,9 @@ export function toAdminDeliveryFeeRefundDto(r: IDeliveryFeeRefund, orderNumber: 
     cause: r.cause,
     note: r.note ?? null,
     ticketId: r.ticket_id ? r.ticket_id.toString() : null,
-    settleable: r.status === 'manual_required',
+    refundRequestId: r.refund_request_id ? r.refund_request_id.toString() : null,
+    // A row whose money sits in an OPEN refund request is settled in the refund queue, not here.
+    settleable: r.status === 'manual_required' && !r.refund_request_id,
     settlement: s
       ? {
           method: s.method,

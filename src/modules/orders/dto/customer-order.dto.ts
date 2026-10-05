@@ -49,6 +49,7 @@ import {
 } from '../domain/delivery-payer';
 import type { DeliveryPayer, DeliveryPayerReason } from '../../vendors/domain/delivery-terms';
 import { customerRefundPosition, DeliveryFeeRefundStatus } from '../../delivery-fee-proposals/domain/customer-fee-change.rules';
+import type { CustomerRefundBlock } from '../../payments/dto/customer-refund.dto';
 
 export interface CustomerOrderItemDto {
     id: string;
@@ -171,6 +172,14 @@ export interface CustomerOrderDto {
      * shrink when it is returned — read this for "still owed".
      */
     deliveryFeeRefund: { owed: number; returned: number } | null;
+    /**
+     * The order's refund (REFUND-FLOW-PLAN § 8): the LATEST refund request for this order, in the
+     * customer's vocabulary — `requested` · `waiting_for_cash` · `sending` · `in_progress` ·
+     * `completed` · `declined` — with gross, fee, net and the masked destination. `null` when no
+     * refund was ever requested. Always present (never an absent key). Independent of
+     * `deliveryFeeRefund`, which is the delivery-fee ledger and keeps its own meaning.
+     */
+    refund: CustomerRefundBlock | null;
     paymentMethod: string;
     paymentStatus: string;
     fulfillmentStatus: string;
@@ -220,6 +229,8 @@ export interface CustomerOrderDtoInput {
     shipments?: CustomerOrderShipmentFeeFacts[];
     /** This order's `delivery_fee_refunds` rows (status + amount only), for `deliveryFeeRefund`. */
     deliveryFeeRefundLedger?: Array<{ status: DeliveryFeeRefundStatus; amount: number }>;
+    /** The latest refund request for this order, already projected (`toCustomerRefundBlock`). Absent → `null`. */
+    refund?: CustomerRefundBlock | null;
 }
 
 /** The shipment fields `deliveryFees` reads. */
@@ -305,6 +316,7 @@ export function toCustomerOrderDto(input: CustomerOrderDtoInput): CustomerOrderD
         deliveryFeeRefund: order.order_type === 'physical'
             ? toCustomerDeliveryFeeRefund(input.shipments ?? [], input.deliveryFeeRefundLedger ?? [])
             : null,
+        refund: input.refund ?? null,
         paymentMethod: order.payment_method,
         paymentStatus: order.payment_status,
         fulfillmentStatus: order.fulfillment_status,

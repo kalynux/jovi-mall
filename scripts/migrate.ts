@@ -193,6 +193,36 @@ export const MIGRATIONS: Migration[] = [
         dryRun: true,
         note: 'eleven actor stamps are present on new rows and absent on old ones, so wi-admin reads undefined where mongoose would show "platform" (J6)',
     },
+    // REFUND-FLOW-PLAN § 6 (2026-10-05). Data only; the `earnings_adjustments` unique index is
+    // built by the catch-all `migrate:declared-indexes` at the end.
+    {
+        name: 'migrate:earnings-clawback-fields',
+        file: 'scripts/migrate-earnings-clawback-fields.ts',
+        dryRun: true,
+        note: 'legacy earnings accounts and allocations carry no clawback_balance / clawed_amount — the code reads them as 0, but wi-admin reads the collections directly and sees undefined',
+    },
+    // REFUND-FLOW-PLAN R-6 (2026-10-05). A data migration that also swaps an index (builds the
+    // delivered_at FIFO index, then drops the collected_at one), so it sits with the data
+    // migrations — the same shape as `migrate:reviews-publish-all` — and well before
+    // `migrate:declared-indexes`, which then finds the new key present and builds nothing for it.
+    // Non-unique, so the index-builds-last rule's reason does not reach it.
+    {
+        name: 'migrate:cod-collection-delivered-at',
+        file: 'scripts/migrate-cod-collection-delivered-at.ts',
+        dryRun: true,
+        note: 'COD COVERAGE QUEUES BY CLAIM, NOT DELIVERY, FOR OLD ROWS — collected rows without delivered_at sort FIRST in the coverage FIFO (Mongo sorts null lowest), and the FIFO index the schema declares is missing while the superseded collected_at one stays',
+    },
+    // REFUND-FLOW-PLAN § 10 (2026-10-05). A DATA migration: the two legacy refund queues
+    // (`delivery_fee_refunds` manual rows, bookings in `refund_pending`) become refund requests
+    // AWAITING APPROVAL, through the live `RefundRequestService.create`. After the two refund
+    // data migrations above (it reads `clawed_amount` / `delivered_at` through the services) and
+    // before `migrate:refund-requests-indexes`, whose unique build must see the rows it writes.
+    {
+        name: 'migrate:legacy-refunds-to-requests',
+        file: 'scripts/migrate-legacy-refunds-to-requests.ts',
+        dryRun: true,
+        note: 'REFUNDS OWED BEFORE THE REFUND QUEUE ARE INVISIBLE TO IT — delivery-fee money waiting on the manual screen and paid bookings cancelled into refund_pending stay on tickets the new queue never reads, so nobody approves them and the customer is never paid',
+    },
     // The only DESTRUCTIVE row. Last among the data migrations because it depends on none of
     // them and nothing depends on it — the collection is orphaned, so its position is free and
     // the safest free position is "after everything that reads data".
@@ -298,6 +328,14 @@ export const MIGRATIONS: Migration[] = [
         file: 'scripts/migrate-vendor-email-index.ts',
         dryRun: true,
         note: 'ONLY ONE EMAIL-LESS ACCOUNT CAN EVER BECOME A VENDOR — the legacy unique email_1 counts a missing email as null, so the second agent, agency or customer without an email to add the vendor role (or register as one) is refused with 409 DATABASE_UNIQUE_CONSTRAINT_VIOLATION',
+    },
+    // REFUND-FLOW-PLAN § 3.1 (2026-10-05). Named, above the catch-all, because one of its
+    // indexes is the ONLY race guard between two refunds of one order.
+    {
+        name: 'migrate:refund-requests-indexes',
+        file: 'scripts/migrate-refund-requests-indexes.ts',
+        dryRun: true,
+        note: 'TWO REFUNDS OF ONE ORDER CAN BOTH SEND MONEY — the partial unique refund_one_open_per_source is the only guard (any pre-check is a race), and the callback, reconciliation and COD-release lookups scan the collection',
     },
     // ── The catch-all, and it must stay LAST of all ──────────────────────────
     // Every row above builds a named handful somebody reasoned about. This one builds

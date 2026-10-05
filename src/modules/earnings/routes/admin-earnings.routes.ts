@@ -77,6 +77,15 @@ function attachRoutes(router: Router): Router {
     router.post('/pauses/:kind/:id/pause', AdminEarningsController.pause);
     router.post('/pauses/:kind/:id/resume', AdminEarningsController.resume);
 
+    /**
+     * Refund clawback debt (REFUND-FLOW-PLAN § 6.4, C-6). Owners who owe money back because a
+     * refund recovered more than their balances held, largest first; and the write-off that
+     * forgives it (the platform absorbs the loss). Query: ownerType?, page?, limit?
+     * Write-off body: { amount, reason }. Actor from the x-actor-* headers.
+     */
+    router.get('/clawbacks', AdminEarningsController.listClawbacks);
+    router.post('/clawbacks/:ownerType/:ownerId/write-off', AdminEarningsController.writeOffClawback);
+
     return router;
 }
 

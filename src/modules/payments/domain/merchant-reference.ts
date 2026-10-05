@@ -49,10 +49,34 @@ export type MerchantRefKind =
    * processor refuses to settle a collection from a `po` reference or a payout from any of
    * the three above. See `direction` on `NormalizedWebhookEvent`.
    */
-  | 'po';
+  | 'po'
+  /**
+   * `refund_requests` — a refund the platform SENDS as a transfer (REFUND-FLOW-PLAN § 3.3).
+   *
+   * The SECOND money-out kind. Every mobile-money refund is a payout on the active payout
+   * gateway, so its callback is a transfer callback exactly like a `po` one; the prefix is what
+   * decides whether `payout_requests` or `refund_requests` owns it — never a fall-through
+   * guess. A gateway that infers a callback's direction from our reference (CinetPay, Fapshi)
+   * must treat `rf` exactly like `po`, or a refund callback is misread as an incoming payment:
+   * use `isMoneyOutRef`, never `=== 'po'`.
+   */
+  | 'rf';
 
 const PREFIX = 'jm';
-const KINDS: readonly MerchantRefKind[] = ['pt', 'pp', 'ct', 'po'];
+const KINDS: readonly MerchantRefKind[] = ['pt', 'pp', 'ct', 'po', 'rf'];
+
+/** The kinds naming money that LEAVES the platform. */
+export const MONEY_OUT_KINDS: readonly MerchantRefKind[] = Object.freeze(['po', 'rf'] as MerchantRefKind[]);
+
+/** Whether a reference of this kind describes money the platform sends (a payout or a refund). */
+export function isMoneyOutKind(kind: MerchantRefKind | null | undefined): boolean {
+  return kind != null && MONEY_OUT_KINDS.includes(kind);
+}
+
+/** Whether this reference is one of OUR money-out references (`jm_po_…` or `jm_rf_…`). */
+export function isMoneyOutRef(reference: string | null | undefined): boolean {
+  return isMoneyOutKind(merchantRefKind(reference));
+}
 
 /**
  * Mint a fresh reference: `jm_<kind>_<32 hex characters>`.

@@ -12,7 +12,12 @@ import { MODELS, COLLECTIONS } from '../../../core/database/collections';
  * discrepancies (that's the whole point of the reserve).
  */
 
-export type EarningsReserveHoldStatus = 'held' | 'released';
+/**
+ * `clawed` — a refund took the WHOLE slice back before it matured (REFUND-FLOW-PLAN § 6.1: a
+ * released allocation gives back its own reserve slice first). A partial claw lowers `amount`
+ * and leaves the row `held`.
+ */
+export type EarningsReserveHoldStatus = 'held' | 'released' | 'clawed';
 
 export interface IEarningsReserveHold extends Document {
   account_id: mongoose.Types.ObjectId;
@@ -38,7 +43,7 @@ const EarningsReserveHoldSchema = new Schema<IEarningsReserveHold>(
     amount: { type: Number, required: true, min: 1 },
     currency: { type: String, required: true, uppercase: true, trim: true },
     source_allocation_id: { type: Schema.Types.ObjectId, ref: MODELS.EARNINGS_ALLOCATION, required: true },
-    status: { type: String, enum: ['held', 'released'], required: true, default: 'held' },
+    status: { type: String, enum: ['held', 'released', 'clawed'], required: true, default: 'held' },
     held_at: { type: Date, required: true },
     release_at: { type: Date, required: true },
     released_at: { type: Date, default: null },

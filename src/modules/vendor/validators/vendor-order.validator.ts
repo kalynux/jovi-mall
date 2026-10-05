@@ -121,9 +121,13 @@ export type CreateNoteDto = z.infer<typeof CreateNoteSchema>;
 
 // Refund an order (Customer Management → order detail)
 export const RefundRequestSchema = z.object({
-    // Optional: defaults to the policy-computed maximum when omitted.
-    amount: z.number().positive('Amount must be greater than zero').optional(),
-    reason: z.string().max(500, 'Reason cannot exceed 500 characters').optional()
+    // Optional: defaults to the policy-computed maximum when omitted. A WHOLE amount since
+    // 2026-10-05 — a refund request is an integer (XAF has no minor unit).
+    amount: z.number().int('Amount must be a whole number').positive('Amount must be greater than zero').optional(),
+    reason: z.string().max(500, 'Reason cannot exceed 500 characters').optional(),
+    // Only read when the vendor's return shipping is "customer, reimbursed if defective" (C-1):
+    // ticking it returns the customer's delivery money too, charged to the vendor.
+    itemDefective: z.boolean().optional()
 });
 
 export type RefundRequestDto = z.infer<typeof RefundRequestSchema>;

@@ -110,6 +110,14 @@ export const STORAGE_TREE_VISIBILITY: Readonly<Record<string, TreeVisibility>> =
     // number, the salary and every other employee fact live in wi-admin's PRIVATE database.
     // That split is the point — see `modules/staff-identity/`.
     'admin-identity': 'private',
+    // A refund's PROOF pictures (REFUND-FLOW-PLAN § 7, R-7, R-7b): the screenshot of the
+    // customer's message giving the number a typed refund is sent to, and the receipt of a
+    // refund paid outside the platform. Both carry a phone number and a personal conversation.
+    // Uploaded ONLY through `POST /api/internal/admin/refunds/proofs` and read back ONLY
+    // through `GET /api/internal/admin/refunds/proofs/:fileId` (which refuses any other tree),
+    // both behind `requireAdminCaller` — never `/files/upload`, whose `by-type` trees are public.
+    // ⚠ wi-admin's verbatim copy of this map must gain the same row (its `test:files`).
+    'refund-proofs': 'private',
     // ⚠ **Legacy, and the ADR's map is wrong about it.** ADR-A01 lists
     // `storage/ticket-attachments` as one of the three private trees. NOTHING in `src/`
     // writes it — a census of every `folder:` literal finds no such value — and it holds one

@@ -115,9 +115,21 @@ const UNMUTABLE: CustomerNotificationType[] = [
     'booking.balance.due',
     'booking.refunded',
     'booking.refund.pending',
+    // REFUND-FLOW-PLAN § 8: the refund request's lifecycle — money, never mutable.
+    'booking.refund.requested',
+    'booking.refund.sending',
+    'booking.refund.completed',
+    'booking.refund.paid_externally',
+    'booking.refund.declined',
     'order.cancelled',
     'order.payment.received',
     'order.refunded',
+    'order.refund.requested',
+    'order.refund.waiting_for_cash',
+    'order.refund.sending',
+    'order.refund.completed',
+    'order.refund.paid_externally',
+    'order.refund.declined',
     // ADR-A11 (W-E): a change to what the customer pays for delivery — money, never mutable.
     'order.delivery_fee.approval_needed',
     'order.delivery_fee.topup_due',
@@ -173,6 +185,14 @@ const EXPECTED_WA_PARAMS: Record<CustomerNotificationType, number> = {
     'booking.balance.due': 5,
     'booking.refunded': 3,
     'booking.refund.pending': 3,
+    // REFUND-FLOW-PLAN § 8. `amountLine` is ONE parameter: the net, plus the fee line when a fee
+    // was taken — a whole sentence, like `ticket.resolved`'s second, so no template carries an
+    // optional clause.
+    'booking.refund.requested': 3,
+    'booking.refund.sending': 3,
+    'booking.refund.completed': 3,
+    'booking.refund.paid_externally': 2,
+    'booking.refund.declined': 1,
     'order.created': 5,
     'order.payment.received': 4,
     'order.shipped': 3,
@@ -181,6 +201,12 @@ const EXPECTED_WA_PARAMS: Record<CustomerNotificationType, number> = {
     'order.delivery_failed': 1,
     'order.cancelled': 1,
     'order.refunded': 3,
+    'order.refund.requested': 3,
+    'order.refund.waiting_for_cash': 3,
+    'order.refund.sending': 3,
+    'order.refund.completed': 3,
+    'order.refund.paid_externally': 2,
+    'order.refund.declined': 1,
     'order.payment_link': 4,
     // currency + amount + orderNumber. The amount is carried so a customer with two orders
     // in flight can tell which one failed.
@@ -267,10 +293,11 @@ function main(): void {
     // while both drifted away from what anybody meant.
     // 34 since 2026-10-04 (W-E): seven delivery-fee-change situations (ADR-A11).
     // 35 since 2026-10-04 (W-E2): `order.delivery_fee.refund_settled`, the confirmation refund_pending promised.
-    assert('catalog and model enum list the same 35 situations', () => {
+    // 46 since 2026-10-05 (refund flow, REFUND-FLOW-PLAN § 8): six `order.refund.*` + five `booking.refund.*`.
+    assert('catalog and model enum list the same 46 situations', () => {
         const catalog = Object.keys(CUSTOMER_NOTIFICATION_CATALOG).sort();
         const model = [...CUSTOMER_NOTIFICATION_TYPES].sort();
-        return catalog.length === 35 && JSON.stringify(catalog) === JSON.stringify(model);
+        return catalog.length === 46 && JSON.stringify(catalog) === JSON.stringify(model);
     });
 
     // The aggregate enum is spread from CUSTOMER_AGGREGATE_TYPES rather than hand-kept —
@@ -1622,7 +1649,7 @@ function main(): void {
         && ORDER_REFUNDED.order[0].situation === 'order.refunded'
         && ORDER_REFUNDED.order[0].amountFormatted === '2,000'
         && ORDER_REFUNDED.order[0].currency === 'XAF');
-    assert('⛔ a BOOKING refund is dropped — booking.payment.updated already tells that customer', () =>
+    assert('⛔ a BOOKING refund is dropped by the ORDER handler — handleBookingRefunded takes it (refund flow)', () =>
         ORDER_REFUNDED.booking.length === 0);
     assert('⛔ two partial refunds of one order are two messages — the key is per REFUND, not per order', () =>
         ORDER_REFUNDED.twoPartials.length === 2

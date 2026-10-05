@@ -41,6 +41,11 @@ export const SetPaymentSettingsSchema = z.object({
     payoutAggregator: z.string().trim().min(1).max(32).optional(),
     stripeEnabled: z.boolean().optional(),
     providers: z.record(z.string().trim().min(1).max(32), z.object({ enabled: z.boolean() }).strict()).optional(),
+    /**
+     * REFUND-FLOW-PLAN § 11.6: the percentage taken off every refund paid by transfer or
+     * externally (never off a card refund). Reported on the GET as `settings.refundFeePercent`.
+     */
+    refundFeePercent: z.number().min(0).max(20).optional(),
     /** 0 when no document exists yet. A mismatch is 409 `PAYMENT_SETTINGS_VERSION_CONFLICT`. */
     expectedVersion: z.number().int().min(0),
     reason: z.string().trim().min(1).max(500),

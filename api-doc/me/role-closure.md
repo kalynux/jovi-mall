@@ -129,6 +129,7 @@ administrator sees the answer.
 | `cod_collections_pending` | vendor · agency · agent | the parcels being delivered or returned |
 | `payout_request_held` | vendor · agency · agent | the payout being paid or rejected |
 | `earnings_balance` | vendor · agency · agent | withdrawing the balance (`amount`, `currency`) |
+| `earnings_clawback_outstanding` | vendor · agency · agent | the refund debt being repaid from later earnings, or written off by an administrator (`amount`, `currency`) |
 | `earnings_allocations_held` | vendor · agency · agent | the hold period ending |
 | `agency_stock_held` | vendor · agency | the stock being collected or counted to zero |
 | `storage_invoices_open` | vendor · agency | settling the storage statements |

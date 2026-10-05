@@ -73,6 +73,20 @@ export interface IEarningsAccount extends Document {
    * to `available_balance` if the admin rejects it. See PayoutRequest.
    */
   requested_balance: number;
+  /**
+   * Money this owner OWES BACK (refund clawback, REFUND-FLOW-PLAN § 6). Always ≥ 0.
+   *
+   * A refund recovers a share first from what is still held for it, then from
+   * `available_balance`, and only the part neither can cover lands here. Netting is EAGER, so
+   * the invariant is: `clawback_balance > 0` ⇒ `available_balance === 0`. Every inflow to
+   * available (a release, a reserve release, a payout returned on reject or on a failed
+   * ticket) pays this down first, in the same atomic update — see the `*Netting` methods of
+   * EarningsAccountRepository. A payout already in flight is never cut (C-7).
+   *
+   * ⚠ Never add it to the other four: they are what the platform owes the owner; this is
+   * what the owner owes the platform.
+   */
+  clawback_balance: number;
   version: number;
   created_at: Date;
   updated_at: Date;
@@ -87,6 +101,7 @@ const EarningsAccountSchema = new Schema<IEarningsAccount>(
     available_balance: { type: Number, required: true, default: 0, min: 0 },
     reserve_balance: { type: Number, required: true, default: 0, min: 0 },
     requested_balance: { type: Number, required: true, default: 0, min: 0 },
+    clawback_balance: { type: Number, required: true, default: 0, min: 0 },
     version: { type: Number, default: 0 },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }

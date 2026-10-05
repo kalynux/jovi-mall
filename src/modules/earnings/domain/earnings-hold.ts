@@ -27,11 +27,29 @@ export const EARNINGS_PAUSE_REASONS = [
   'card_dispute',
   /** An administrator paused it by hand. */
   'admin',
+  /**
+   * A refund request is open on it (REFUND-FLOW-PLAN C-4, § 6.5): raised when the request is
+   * created, in any status before `completed`, even for a small partial refund. Closed by
+   * `closeOnRefund` once the money arrived (and was clawed back), or resumed when the request
+   * is rejected or abandoned.
+   */
+  'refund_in_progress',
 ] as const;
 export type EarningsPauseReason = (typeof EARNINGS_PAUSE_REASONS)[number];
 
 /** Reasons a system event may lift by itself. Every other pause waits for an administrator. */
-export const SELF_RESUMING_PAUSE_REASONS: readonly EarningsPauseReason[] = ['card_dispute'];
+export const SELF_RESUMING_PAUSE_REASONS: readonly EarningsPauseReason[] = ['card_dispute', 'refund_in_progress'];
+
+/**
+ * The pauses a COMPLETED refund closes (`EarningsPauseService.closeOnRefund`, § 6.5). Each one
+ * exists only because a refund was owed; once it is paid there is nothing left to guard. A card
+ * dispute or an administrator's pause is NOT here — those wait for their own resolution.
+ */
+export const REFUND_CLOSABLE_PAUSE_REASONS: readonly EarningsPauseReason[] = [
+  'refund_in_progress',
+  'seller_cancelled_paid_order',
+  'booking_cancelled_unrefunded',
+];
 
 /** The pause record kept on an order or a booking. `active: false` once resumed. */
 export interface EarningsPauseRecord {
