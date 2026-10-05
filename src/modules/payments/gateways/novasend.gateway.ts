@@ -594,7 +594,9 @@ export function novasendMsisdn(phone: string | null | undefined): string | null 
 
 /** Fits the SDK's reference rule: 1–128 characters, no control characters. */
 export function novasendReferenceSafe(value: unknown): value is string {
-  return typeof value === 'string' && value.trim() !== '' && value.length <= 128 && !/[\u0000-\u001f\u007f]/.test(value);
+  // `\p{Cc}` is every control character (C0, DEL and C1), without a literal control range in the
+  // pattern, which `no-control-regex` refuses.
+  return typeof value === 'string' && value.trim() !== '' && value.length <= 128 && !/\p{Cc}/u.test(value);
 }
 
 /** The merchant reference a NovaSend record echoes, when it echoes one. */

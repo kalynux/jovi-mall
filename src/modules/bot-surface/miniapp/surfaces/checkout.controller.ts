@@ -574,7 +574,7 @@ async function precheckPreChargeFacts(
         : await storedPayer(await loadCustomer(session.customerId));
     if (!payer) return;
 
-    let amount: number | null = null;
+    let amount: number | null;
     try {
         const quote = await cartQuoteService.quoteForCustomer(session.customerId, addressId ?? undefined);
         amount = deliveryFeePayment === 'cash_to_rider' && quote.deliveryFeeCash?.available
