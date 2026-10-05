@@ -14,6 +14,7 @@ import {
 } from '../../agents/repositories/agent-contract.repository';
 import { agentCapacityService } from '../../agents/domain/services/agent-capacity.service';
 import { earningsSplitService } from '../../earnings/services/earnings-split.service';
+import { earningsCompletionService } from '../../earnings/services/earnings-completion.service';
 import { IOrder, OrderModel, PaymentStatus } from '../../orders/order.model';
 import { OrderRepository } from '../../orders/order.repository';
 import { OrderTimelineRepository } from '../../orders/order-timeline.repository';
@@ -576,6 +577,14 @@ export class CashCollectionService {
       await earningsSplitService.splitCodCollection(order, collection);
     } catch (error) {
       console.error('[CashCollectionService] Failed to split COD earnings (sweep will retry):', error);
+    }
+    // The collection IS the delivery for COD, so this is where the order's earnings hold
+    // starts once its last parcel is collected (since 2026-10-05: from delivery, not from
+    // completion). After the split, so the rows it just wrote start with the rest.
+    try {
+      await earningsCompletionService.syncOrderHold(order._id.toString());
+    } catch (error) {
+      console.error('[CashCollectionService] Failed to sync the earnings hold:', error);
     }
   }
 

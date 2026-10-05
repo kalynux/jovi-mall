@@ -1770,9 +1770,10 @@ async function main(): Promise<void> {
         ...over,
     }) as Parameters<typeof toBotReviewDto>[0];
 
-    assert('the review list takes every status, and nothing outside the three', () =>
+    assert('the review list takes every status, and nothing outside the two', () =>
         BotReviewListSchema.safeParse({}).success === true
-        && BotReviewListSchema.safeParse({ status: 'pending' }).success === true
+        && BotReviewListSchema.safeParse({ status: 'unpublished' }).success === true
+        && BotReviewListSchema.safeParse({ status: 'pending' }).success === false
         && BotReviewListSchema.safeParse({ status: 'held' }).success === false);
 
     assert('⚠ there is no subjectType filter to pair with status', () =>
@@ -1780,8 +1781,8 @@ async function main(): Promise<void> {
 
     /**
      * ⚠ **THE assertion this tool exists for, and the one a reader should not skip.**
-     * `status: 'published'` does NOT mean "anybody can see it". A bare-star DELIVERY review
-     * is written straight to `published` by `initialStatusOf` — it moves the agent's
+     * `status: 'published'` does NOT mean "anybody can see it". Every DELIVERY review is
+     * written straight to `published` at submission — it moves the agent's
      * aggregate and feeds their trust score — and it appears on no page anywhere, because
      * `listPublicForProduct` is the only public review read there is. Relaying `status`
      * alone hands a model the sentence "your review is live" about something the customer
@@ -1794,26 +1795,25 @@ async function main(): Promise<void> {
         toBotReviewDto(aReview({ subjectType: 'delivery', subjectId: 'SHIPMENTID' }), new Map(), 'ORDERID')
             .publiclyVisible === false);
 
-    assert('a published PRODUCT review is publiclyVisible; a pending one is not', () =>
+    assert('a published PRODUCT review is publiclyVisible; an unpublished one is not', () =>
         toBotReviewDto(aReview(), new Map(), null).publiclyVisible === true
-        && toBotReviewDto(aReview({ status: 'pending' }), new Map(), null).publiclyVisible === false
-        && toBotReviewDto(aReview({ status: 'rejected' }), new Map(), null).publiclyVisible === false);
+        && toBotReviewDto(aReview({ status: 'unpublished' }), new Map(), null).publiclyVisible === false);
 
-    assert('`status` is still relayed beside it — an author must see their held row', () =>
-        toBotReviewDto(aReview({ status: 'pending' }), new Map(), null).status === 'pending');
+    assert('`status` is still relayed beside it — an author must see a review an admin hid', () =>
+        toBotReviewDto(aReview({ status: 'unpublished' }), new Map(), null).status === 'unpublished');
 
     /**
-     * ⚠ **The leak assertion for this step.** A rejection reason is a moderator's private
-     * note written for the next moderator (`RejectReviewSchema` requires one *because* its
-     * only reader is another moderator), and it is the one field on this document that
-     * would be actively harmful read aloud to the person it is about. `authorUserId` goes
+     * ⚠ **The leak assertion for this step.** An unpublish reason is an administrator's
+     * private note written for the next administrator (`ReviewModerationReasonSchema`
+     * requires one *because* its only reader is another administrator), and the owner
+     * decided an author sees that their review is hidden, never why. `authorUserId` goes
      * for the same reason `customerId` does one projection up.
      */
     assert('⚠ the review projection drops moderation and authorUserId', () => {
         const dto = toBotReviewDto(
             aReview({
-                status: 'rejected',
-                moderation: { by_user_id: 'admin1', by_source: 'admin', at: new Date(), reason: 'Abusive language' },
+                status: 'unpublished',
+                moderation: { action: 'unpublished', by_user_id: 'admin1', by_source: 'admin', at: new Date(), reason: 'Abusive language' },
                 authorUserId: '68f00000000000000000dead',
                 author_user_id: '68f00000000000000000dead',
             }),

@@ -416,9 +416,9 @@ interesting part. Three things surfaced while building:
 1. ⭐ **`status: "published"` does not mean "anyone can see it", and relaying it alone
    would make the bot lie.** A **delivery** review is an internal quality signal about the
    carrier: it moves the agent's aggregate and feeds their trust score, and it publishes to
-   no page anywhere — `listPublicForProduct` is the only public review read there is. But a
-   bare-star review carries no prose for a moderator, so `initialStatusOf` writes it
-   straight to `published`. A model handed `status` says *"your review is live"* about
+   no page anywhere — `listPublicForProduct` is the only public review read there is. But
+   every review is written straight to `published` at submission (since 2026-10-05; it was
+   bare stars only, via the retired `initialStatusOf`). A model handed `status` says *"your review is live"* about
    something the customer will never find, and then offers a link to look for it.
 
    So the projection computes **`publiclyVisible`** (`product` **and** `published`) beside

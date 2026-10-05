@@ -2,6 +2,7 @@ import { Schema, model, Types } from 'mongoose';
 import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../core/base.schema';
 import { BookingStatus } from '../types/booking.types';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
+import { EarningsPauseSchema, IEarningsPause } from '../../earnings/models/earnings-pause.schema';
 
 export type BookingPaymentStatus =
   | 'unpaid'
@@ -94,6 +95,12 @@ export interface IBooking extends IBaseDocument {
      */
     creditDue: number;
   };
+
+  /**
+   * An earnings pause on this booking (a paid booking cancelled from the status menu, a card
+   * dispute, or an administrator). See earnings/models/earnings-pause.schema.ts.
+   */
+  earningsPause?: IEarningsPause | null;
 }
 
 const BookingSchema = new Schema<IBooking>(
@@ -208,6 +215,7 @@ const BookingSchema = new Schema<IBooking>(
       ),
       default: undefined,
     },
+    earningsPause: { type: EarningsPauseSchema, default: null },
     ...BaseSchemaFields,
   },
   BaseSchemaOptions

@@ -2937,7 +2937,7 @@
     "type": "updateNodeParameters",
     "nodeName": "reviews_list_mine",
     "parameters": {
-      "toolDescription": "Reviews the customer wrote, newest first — products and deliveries, in every moderation state. USE IT WHEN: 'What have I reviewed', 'did my review go up', 'why can't I see my review', or to check whether they already rated something. NOT THIS TOOL: Not other people's reviews (catalog_list_product_reviews). ⚠ Whether a review is visible is publiclyVisible, NEVER status — a delivery review shows status published but appears nowhere, it is internal. subjectLabel null: refer to the order instead of reading an id aloud.",
+      "toolDescription": "Reviews the customer wrote, newest first — products and deliveries, including any an administrator hid. USE IT WHEN: 'What have I reviewed', 'did my review go up', 'why can't I see my review', or to check whether they already rated something. NOT THIS TOOL: Not other people's reviews (catalog_list_product_reviews). ⚠ Whether a review is visible is publiclyVisible, NEVER status — a delivery review shows status published but appears nowhere, it is internal. subjectLabel null: refer to the order instead of reading an id aloud.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/reviews/list",
       "authentication": "genericCredentialType",
@@ -2953,7 +2953,7 @@
       },
       "sendBody": true,
       "specifyBody": "json",
-      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, status: $fromAI(\"status\", \"Narrow to one moderation state. Leave empty unless the customer asked for one — the default returns all three, which is usually what they mean. One of: pending, published, rejected.\", \"string\") || undefined }) }}",
+      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, status: $fromAI(\"status\", \"Narrow to one state: published, or unpublished (an administrator hid it). Leave empty unless the customer asked for one — the default returns both, which is usually what they mean. One of: published, unpublished.\", \"string\") || undefined }) }}",
       "options": {
         "response": {
           "response": {

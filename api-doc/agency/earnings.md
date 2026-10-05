@@ -56,8 +56,10 @@ agency's share of that order is computed from its own pricing policy (`policies.
 ### When it lands, and why not sooner
 
 The fee is **earned at delivery, not at payment**. When the shipment reaches `agent_delivered` the
-fee is divided and held (`pending`); it moves to **available** (withdrawable) once the whole
-**order** is completed and the hold window elapses.
+fee is divided and held (`pending`); it moves to **available** (withdrawable) **3 days after the
+last parcel of the order is delivered** (`EARNINGS_HOLD_DAYS`; until 2026-10-05 it was 7 days after
+the order's completion). Paused earnings (a seller cancelled a paid order, a card dispute, or our
+team) are not released until resumed, and the paused time does not count.
 
 It cannot be credited at payment time, because the fee is shared: the agent who makes the delivery
 takes their contracted cut of it (`fee_split` on their contract with this agency — see
@@ -117,8 +119,8 @@ field is `0`.
 COD earnings differ from prepaid earnings in two ways:
 
 1. **The trigger is the cash handoff**, not `agent_delivered` — the verified delivery code is what
-   creates the entry. The hold window itself is the same: it starts when the **order** completes,
-   not at collection, so every actor on an order matures together.
+   creates the entry. The hold window itself is the same: it starts when the order's **last** parcel
+   is delivered or collected, so every actor on an order matures together.
 2. **Release is additionally gated on cash settlement**: a COD entry only moves to `available`
    once the physical cash covering it has been remitted to the platform and confirmed
    (remittances settle collections oldest-first). Held-up remittances = held-up earnings.

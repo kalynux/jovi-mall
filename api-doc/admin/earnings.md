@@ -268,6 +268,41 @@ bargain fee.
 
 ---
 
+## Earnings pauses — `/internal/admin/earnings/pauses` (2026-10-05)
+
+Paused money is **never released**: the release worker skips it, in its query and again in its
+release claim. Resuming moves each held row's release date later by the paused time that fell
+inside its hold, so a pause never shortens or restarts a hold (`earnings/domain/earnings-hold.ts`).
+
+The pause record lives on the **Order** (`earnings_pause`) or **Booking** (`earningsPause`).
+
+| Reason | Raised by | Lifted by |
+|---|---|---|
+| `seller_cancelled_paid_order` | the seller cancelling an order the customer had paid (also opens a HIGH-priority `ORDER_REFUND` ticket) | an administrator |
+| `booking_cancelled_unrefunded` | a paid booking cancelled from the seller's **status menu** (also opens a HIGH-priority ticket) | an administrator |
+| `card_dispute` | a card payment disputed with the bank | **itself** when the dispute is won or lost; or an administrator |
+| `admin` | an administrator | an administrator |
+
+### GET `/internal/admin/earnings/pauses`
+Every order and booking paused now, newest pause first. Query: `kind?` (`order`|`booking`), `page`, `limit` (≤ 100).
+Rows: `{ kind, id, reference, vendorId, amount, currency, pause }` — `reference` is the order or booking number, `amount` what the customer paid.
+
+### GET `/internal/admin/earnings/pauses/:kind/:id`
+`{ kind, id, pause }`; `pause` is `null` if it was never paused. `404 EARNINGS_PAUSE_TARGET_NOT_FOUND` for an unknown id.
+
+### POST `/internal/admin/earnings/pauses/:kind/:id/pause`
+Body `{ "note": string (3–500, required) }`, `.strict()`. Reason recorded as `admin`, actor stamped from `X-Actor-*`.
+`409 EARNINGS_ALREADY_PAUSED` if already paused (a second pause would overwrite who paused it and why).
+
+### POST `/internal/admin/earnings/pauses/:kind/:id/resume`
+Body `{ "note"?: string (1–500) }`, `.strict()`. Lifts **any** pause, whoever raised it.
+`409 EARNINGS_NOT_PAUSED` if it is not paused.
+
+The `pause` object: `{ active, reason, note, paused_at, paused_by_user_id, paused_by_source, paused_by_name,
+resumed_at, resumed_by_user_id, resumed_by_source, resumed_by_name, resume_note }`. A system pause has
+`paused_by_user_id: null` and `paused_by_name: "system"`. Orders also get `earnings.paused` /
+`earnings.resumed` timeline entries.
+
 ## Business rules & notes
 
 - Balances and the ledger can never diverge — each mutation writes both inside one transaction.

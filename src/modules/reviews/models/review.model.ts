@@ -37,25 +37,54 @@ export type ReviewAuthorRole = 'customer' | 'vendor' | 'agency';
 export const REVIEW_AUTHOR_ROLES: ReviewAuthorRole[] = ['customer', 'vendor', 'agency'];
 
 /**
- * `pending` → an administrator must look at it. `published` → it counts.
- * `rejected` → it counts for **nothing**, including its star.
+ * `published` → it counts, and (for a product) the storefront shows it.
+ * `unpublished` → an administrator took it down; it counts for **nothing**, star included.
  *
- * A rejected review is excluded from the aggregate entirely rather than having its
- * prose hidden and its rating kept. The two are one act of authorship: a review
- * rejected for being abusive is not evidence of anything, and keeping the number
- * would let the abuse land anyway.
+ * ── Every review publishes on submission (owner decision, 2026-10-05) ─────────
+ * There used to be a third value, `pending`: a review carrying prose was held for a
+ * moderator while a bare star published. Nobody could work that queue — wi-admin never
+ * gained the surface — so every written review sat invisible, and its star with it. The
+ * owner's call: everything goes public at once, and an administrator can take any review
+ * down afterwards, put it back, or delete it. Moderation is now AFTER the fact, never a
+ * gate. `migrate:reviews-publish-all` moved the old `pending` rows to `published` and the
+ * old `rejected` rows to `unpublished`.
+ *
+ * An unpublished review is excluded from the aggregate entirely rather than having its
+ * prose hidden and its rating kept. The two are one act of authorship: a review taken
+ * down for being abusive is not evidence of anything, and keeping the number would let
+ * the abuse land anyway.
+ *
+ * **Delete is not a status** — it is `deletedAt`, and it differs from unpublish in what
+ * the AUTHOR may do next. An unpublished review still occupies the author's one slot on
+ * that subject, so they cannot write another; a deleted one does not (the unique index is
+ * partial on `deletedAt: null`), so they can. That difference is why both verbs exist.
  */
-export type ReviewStatus = 'pending' | 'published' | 'rejected';
+export type ReviewStatus = 'published' | 'unpublished';
 
-export const REVIEW_STATUSES: ReviewStatus[] = ['pending', 'published', 'rejected'];
+export const REVIEW_STATUSES: ReviewStatus[] = ['published', 'unpublished'];
 
-/** Who moderated it, when, and why. Null until somebody does. */
+/** What an administrator last did to a review. The full trail is wi-admin's audit log. */
+export type ReviewModerationAction = 'unpublished' | 'republished' | 'deleted';
+
+export const REVIEW_MODERATION_ACTIONS: ReviewModerationAction[] = ['unpublished', 'republished', 'deleted'];
+
+/**
+ * The LAST moderation action — who, when, what, why. Null until somebody acts.
+ *
+ * Each action overwrites the previous one here. The complete history (unpublished, then
+ * republished, then deleted…) is wi-admin's audit log, which commits a row for every
+ * action before it is performed.
+ */
 export interface IReviewModeration {
+  action: ReviewModerationAction;
   by_user_id: Types.ObjectId | null;
   /** Which identity space `by_user_id` belongs to. `admin` ids resolve nowhere here. */
   by_source: 'platform' | 'admin';
   at: Date;
-  /** Required on a rejection, null on a publish. Never shown to the public. */
+  /**
+   * Required to unpublish or delete, optional to republish. Never shown to the public
+   * or to the author — it is the administrator's note for the next administrator.
+   */
   reason: string | null;
 }
 
@@ -81,7 +110,7 @@ export interface IReview extends IBaseDocument {
   body: string | null;
 
   status: ReviewStatus;
-  /** Set when the row first reaches `published`; never cleared by a later rejection. */
+  /** When it first became visible — at submission. Never cleared by a later unpublish. */
   published_at: Date | null;
   moderation: IReviewModeration | null;
 
@@ -113,6 +142,7 @@ export interface IReview extends IBaseDocument {
 
 const ModerationSchema = new Schema<IReviewModeration>(
   {
+    action: { type: String, enum: REVIEW_MODERATION_ACTIONS, required: true },
     by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
     by_source: { type: String, enum: ['platform', 'admin'], required: true },
     at: { type: Date, required: true, default: Date.now },
@@ -133,7 +163,7 @@ const ReviewSchema = new Schema<IReview>(
     title: { type: String, default: null, trim: true, maxlength: 120 },
     body: { type: String, default: null, trim: true, maxlength: 2000 },
 
-    status: { type: String, enum: REVIEW_STATUSES, required: true, default: 'pending' },
+    status: { type: String, enum: REVIEW_STATUSES, required: true, default: 'published' },
     published_at: { type: Date, default: null },
     moderation: { type: ModerationSchema, default: null },
 
@@ -151,26 +181,35 @@ const ReviewSchema = new Schema<IReview>(
 );
 
 /**
- * One review per author per subject.
+ * One LIVE review per author per subject.
  *
  * ⚠ **This is the only thing that makes "one review each" true**, and it must be
  * built for real — `autoIndex` is off in production, so `migrate:review-indexes`
- * is what creates it. The service pre-checks as well, but a pre-check is a race:
- * two submissions in the same millisecond both read "none" and both insert.
+ * (a fresh database) or `migrate:reviews-publish-all` (an existing one) creates it.
+ * The service pre-checks as well, but a pre-check is a race: two submissions in the
+ * same millisecond both read "none" and both insert.
+ *
+ * **Partial on `deletedAt: null`** (2026-10-05): a review an administrator DELETED no
+ * longer occupies the author's slot, so they may write a new one. An UNPUBLISHED review
+ * still does — that is the difference between the two verbs. The previous index,
+ * `review_one_per_author_per_subject`, covered deleted rows too; it is dropped by
+ * `migrate:reviews-publish-all`.
  */
 ReviewSchema.index(
   { subject_type: 1, subject_id: 1, author_user_id: 1 },
-  { unique: true, name: 'review_one_per_author_per_subject' },
+  { unique: true, name: 'review_one_live_per_author_per_subject', partialFilterExpression: { deletedAt: null } },
 );
 
 /** The public list on a product page: published rows for one subject, newest first. */
 ReviewSchema.index({ subject_type: 1, subject_id: 1, status: 1, createdAt: -1 }, { name: 'review_by_subject' });
 
 /**
- * The moderation queue: everything `pending`, OLDEST first.
+ * The administrators' list, filtered by status.
  *
- * Ascending on purpose — a queue is worked front to back, and the row that has been
- * waiting longest is the one that matters. Every other list here is newest-first.
+ * Named for the queue it was built for (oldest `pending` first). That queue is gone —
+ * nothing is held any more — and the list is newest-first, which this index serves by
+ * walking it backwards. Kept rather than renamed: a rename is a drop and a rebuild in
+ * production for no change in what the index can answer.
  */
 ReviewSchema.index({ status: 1, createdAt: 1 }, { name: 'review_moderation_queue' });
 

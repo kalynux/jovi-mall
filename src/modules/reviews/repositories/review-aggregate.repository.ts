@@ -48,10 +48,10 @@ export class ReviewAggregateRepository {
    *
    * A full recompute rather than an increment — see the model header for why. It is
    * idempotent, so a double call after a moderation race is harmless, and it makes
-   * "a rejected review counts for nothing" a property of the query rather than of a
+   * "an unpublished review counts for nothing" a property of the query rather than of a
    * subtraction somebody has to remember.
    *
-   * A target whose last published review is rejected recomputes to a row of zeros
+   * A target whose last published review is unpublished recomputes to a row of zeros
    * rather than being deleted. Zero-with-a-row and no-row-at-all read identically
    * through `toView`, and keeping the row means `computed_at` still says when the
    * platform last looked — which is the difference between "nobody has rated them"

@@ -79,12 +79,18 @@ export type MoneyLineStatus = 'projected' | 'held' | 'released' | 'reversed' | '
 
 /** Why a `held` line has not been released yet. Several may apply at once. */
 export type MoneyLineWait =
-  /** Escrow starts only when the ORDER completes (customer confirmation or the auto-confirm sweep). */
+  /**
+   * The hold has not STARTED. The name predates 2026-10-05, when the start moved from the
+   * order's completion to its DELIVERY (the courier finishing the last parcel); it is kept
+   * because it is a wire value the admin dashboard reads. Read it as "not delivered yet".
+   */
   | 'order_not_completed'
-  /** The order completed; `HOLD_DAYS` have not elapsed (`holdReleaseAt`). */
+  /** The hold started; `HOLD_DAYS` have not elapsed (`holdReleaseAt`). */
   | 'hold_window'
   /** COD cash has not physically reached the platform yet (agent → agency → platform). */
-  | 'cash_not_settled';
+  | 'cash_not_settled'
+  /** The order's or booking's earnings are PAUSED (2026-10-05); nothing releases until resumed. */
+  | 'paused';
 
 export interface MoneyLine {
   role: MoneyLineRole;
@@ -276,6 +282,8 @@ export interface AllocationFacts {
   released_at: Date | null;
   requires_cash_settlement: boolean;
   cash_settled_at: Date | null;
+  /** The pause copy on the row (see earnings-pause.service.ts). Optional: older callers omit it. */
+  paused_at?: Date | null;
 }
 
 /** The role a row plays, from the moment it was written at and whose it is. */
@@ -296,6 +304,7 @@ export function waitingOnOf(row: AllocationFacts, now: Date): MoneyLineWait[] {
   if (!row.completed_at) waits.push('order_not_completed');
   else if (!row.hold_release_at || row.hold_release_at.getTime() > now.getTime()) waits.push('hold_window');
   if (row.requires_cash_settlement && !row.cash_settled_at) waits.push('cash_not_settled');
+  if (row.paused_at) waits.push('paused');
   return waits;
 }
 

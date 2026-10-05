@@ -109,6 +109,9 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.EARNINGS_INVALID_SPLIT]: 'Order fees exceed the paid amount; cannot split earnings',
     [ERROR_CODES.EARNINGS_ALLOCATION_NOT_FOUND]: 'Earnings allocation not found',
     [ERROR_CODES.EARNINGS_ALREADY_COMPLETED]: 'This order has already been confirmed',
+    [ERROR_CODES.EARNINGS_ALREADY_PAUSED]: 'The earnings for this order or booking are already paused',
+    [ERROR_CODES.EARNINGS_NOT_PAUSED]: 'The earnings for this order or booking are not paused',
+    [ERROR_CODES.EARNINGS_PAUSE_TARGET_NOT_FOUND]: 'No order or booking with this id',
     [ERROR_CODES.EARNINGS_ORDER_NOT_CONFIRMABLE]: 'This order cannot be confirmed yet',
     [ERROR_CODES.EARNINGS_FORBIDDEN]: 'You are not allowed to access these earnings',
     [ERROR_CODES.EARNINGS_PAYOUT_ALREADY_PENDING]: 'A payout request is already pending',
@@ -497,6 +500,8 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.GOOGLE_NO_ACCESS_TOKEN]: 'No access token received from Google',
     [ERROR_CODES.GOOGLE_NO_REFRESH_TOKEN]: 'No refresh token received. Please reconnect Google.',
     [ERROR_CODES.GOOGLE_CALENDAR_NOT_CONNECTED]: 'Google Calendar is not connected',
+    [ERROR_CODES.GOOGLE_CALENDAR_SCOPE_NOT_GRANTED]:
+        'Calendar access was not granted. Reconnect and leave the calendar permissions ticked.',
     [ERROR_CODES.GOOGLE_EVENT_MISSING_ID]: 'Google event is missing an ID',
     [ERROR_CODES.GOOGLE_EVENT_MISSING_DATETIME]: 'Google event is missing start/end dateTime',
     [ERROR_CODES.GOOGLE_TOKEN_ENCRYPTION_KEY_MISSING]: 'GOOGLE_TOKEN_ENCRYPTION_KEY is not defined',
@@ -842,7 +847,7 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
       'Only a completed purchase or a completed delivery can be reviewed, and only by the person it belonged to',
     [ERROR_CODES.REVIEW_SUBJECT_NOT_FOUND]: 'There is nothing to review at this reference',
     [ERROR_CODES.REVIEW_SUBJECT_NOT_REVIEWABLE]: 'This cannot be reviewed yet',
-    [ERROR_CODES.REVIEW_NOT_PENDING]: 'This review has already been moderated',
+    [ERROR_CODES.REVIEW_STATUS_CONFLICT]: 'This review is not in a state that allows this action',
     [ERROR_CODES.REVIEW_ROLE_NOT_ALLOWED]: 'Your account type cannot review this',
 
     // AI listing copy. The 502/503 pair is `external_service`, so these defaults are

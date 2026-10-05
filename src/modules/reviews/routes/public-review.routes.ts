@@ -5,8 +5,8 @@ import { PublicReviewController } from '../controllers/public-review.controller'
  * Public reviews — mounted at `/api/public`, so `/public/products/:productId/reviews`.
  *
  * ⚠️ There is **no `requireAuth`** on this router, the same as the other four on that
- * prefix. Everything here is a read of something a moderator has deliberately
- * published, and nothing here reads `req.auth`.
+ * prefix. Everything here is a read of a published review no administrator has
+ * taken down, and nothing here reads `req.auth`.
  *
  * This is the **fourth** router on `/public`, after billing, blog and catalog. The
  * paths do not collide: catalog declares `/products` and `/products/:productId` and

@@ -18,6 +18,7 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { earningsCompletionService } from '../../earnings/services/earnings-completion.service';
 import { earningsSplitService } from '../../earnings/services/earnings-split.service';
+import { raiseRefundOwed } from '../../earnings/services/refund-owed.service';
 import { bookingRefundService } from './booking-refund.service';
 import { VendorRepository } from '../../vendors/vendor.repository';
 import { StoreRepository } from '../../store/repositories/store.repository';
@@ -965,6 +966,21 @@ export class BookingService {
     }
     if (newStatus === BookingStatus.CANCELLED) {
       await this.emitBookingCancelledEvent(booking, 'vendor');
+
+      // Cancelled from the STATUS MENU after the customer paid. Unlike the seller's cancel
+      // action (`vendorCancelBooking` → BookingRefundService), this path refunds nothing, so
+      // the money is paused and a high-priority refund ticket is opened (owner, 2026-10-05).
+      if (booking.paymentStatus === 'paid') {
+        await raiseRefundOwed({
+          target: { kind: 'booking', id: booking._id.toString() },
+          reason: 'booking_cancelled_unrefunded',
+          reference: booking.bookingNumber ?? booking._id.toString(),
+          amount: booking.priceSnapshot,
+          currency: booking.currency,
+          paymentMethod: booking.paymentMethod ?? null,
+          cancelledBy: 'the seller (status menu)',
+        });
+      }
     }
 
     return booking;

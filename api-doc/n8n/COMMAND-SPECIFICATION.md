@@ -892,9 +892,9 @@ the alias list omitted `/booking`.
 | **Identity** | ✅ · **Tools** `reviews_check_eligibility` → `reviews_create` |
 | **Flow** | `review` · **Confirmation** ✅ · **Status** **GAP-001** |
 
-**Behaviour.** Check eligibility → collect stars → offer words → **say which will happen** → submit.
+**Behaviour.** Check eligibility → collect stars → offer words → submit.
 
-⚠ **A bare star rating publishes immediately. A review with words waits for a moderator.** Tell the customer which before submitting — a number cannot be abusive, prose can, and the wait is not a failure.
+⚠ **Every review publishes immediately, words included** (since 2026-10-05 — nothing waits for a moderator; an administrator may hide or delete it afterwards). A product review with words goes on the product page at once, so send only words the customer actually wrote.
 
 ⚠ **Never write the customer's words for them**, and never infer a rating from their tone. A review is attributed to them.
 

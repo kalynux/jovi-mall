@@ -29,6 +29,16 @@ export interface CreateAllocationInput {
   hold_release_at?: Date;
 }
 
+/** One source an allocation hangs off. An order's money spans `order`, `shipment` and `cod_collection`. */
+export interface SourceRef {
+  sourceType: EarningsSourceType;
+  sourceId: string;
+}
+
+function sourceFilters(sources: SourceRef[]): Array<Record<string, unknown>> {
+  return sources.map((s) => ({ source_type: s.sourceType, source_id: new Types.ObjectId(s.sourceId) }));
+}
+
 /**
  * Persistence for earnings allocations (the per-beneficiary split rows that are
  * the source of truth for escrow).
@@ -116,8 +126,78 @@ export class EarningsAllocationRepository {
     return EarningsAllocationModel.find({
       status: 'held',
       hold_release_at: { $ne: null, $lte: now },
+      // Paused money never matures. In the QUERY, not only in the worker: a batch-limited
+      // sweep that fetched paused rows and skipped them would re-fetch the same rows every
+      // night and could crowd out money that is genuinely due.
+      paused_at: null,
       $or: [{ requires_cash_settlement: false }, { cash_settled_at: { $ne: null } }],
     }).limit(limit);
+  }
+
+  /** Still-`held` rows of any of these sources (one order spans several source types). */
+  async findHeldBySources(sources: SourceRef[]): Promise<IEarningsAllocation[]> {
+    if (sources.length === 0) return [];
+    return EarningsAllocationModel.find({ status: 'held', $or: sourceFilters(sources) });
+  }
+
+  /** Copy a pause onto every still-`held` row of these sources. Returns the count touched. */
+  async markPausedBySources(sources: SourceRef[], pausedAt: Date): Promise<number> {
+    if (sources.length === 0) return 0;
+    const res = await EarningsAllocationModel.updateMany(
+      { status: 'held', paused_at: null, $or: sourceFilters(sources) },
+      { $set: { paused_at: pausedAt } }
+    );
+    return res.modifiedCount ?? 0;
+  }
+
+  /** Stamp the pause on one row the worker found unmarked under a paused source. */
+  async markPaused(allocationId: Types.ObjectId, pausedAt: Date): Promise<void> {
+    await EarningsAllocationModel.updateOne(
+      { _id: allocationId, status: 'held', paused_at: null },
+      { $set: { paused_at: pausedAt } }
+    );
+  }
+
+  /**
+   * Lift the pause on one held row and move its release date (computed by the caller with
+   * `resumedHoldReleaseAt`). Compare-and-set on `status: 'held'`: a row released or reversed
+   * meanwhile is left exactly as it is.
+   */
+  async markResumed(allocationId: Types.ObjectId, holdReleaseAt: Date | null): Promise<void> {
+    await EarningsAllocationModel.updateOne(
+      { _id: allocationId, status: 'held' },
+      { $set: { paused_at: null, hold_release_at: holdReleaseAt } }
+    );
+  }
+
+  /**
+   * Start the hold on every still-`held`, not-yet-started row of these sources — the
+   * multi-source sibling of `markCompletedBySource`, with the same idempotence rule.
+   */
+  async markCompletedBySources(
+    sources: SourceRef[],
+    completedAt: Date,
+    holdReleaseAt: Date
+  ): Promise<number> {
+    if (sources.length === 0) return 0;
+    const res = await EarningsAllocationModel.updateMany(
+      { status: 'held', completed_at: null, $or: sourceFilters(sources) },
+      { $set: { completed_at: completedAt, hold_release_at: holdReleaseAt } }
+    );
+    return res.modifiedCount ?? 0;
+  }
+
+  /**
+   * Un-start the hold on still-`held` rows: a parcel the courier delivered went back to
+   * `failed`, so the order is not delivered after all. Released money is never touched.
+   */
+  async clearHoldBySources(sources: SourceRef[]): Promise<number> {
+    if (sources.length === 0) return 0;
+    const res = await EarningsAllocationModel.updateMany(
+      { status: 'held', completed_at: { $ne: null }, $or: sourceFilters(sources) },
+      { $set: { completed_at: null, hold_release_at: null } }
+    );
+    return res.modifiedCount ?? 0;
   }
 
   /**
@@ -166,7 +246,9 @@ export class EarningsAllocationRepository {
     session?: ClientSession
   ): Promise<IEarningsAllocation | null> {
     return EarningsAllocationModel.findOneAndUpdate(
-      { _id: allocationId, status: 'held' },
+      // `paused_at: null` in the claim too: a pause landing between the sweep's query and
+      // this write must win, or a paused order could be paid out by a sweep already running.
+      { _id: allocationId, status: 'held', paused_at: null },
       { $set: { status: 'released', released_at: releasedAt } },
       { new: true, session: session ?? null }
     );

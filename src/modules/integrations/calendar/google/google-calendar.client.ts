@@ -166,15 +166,21 @@ export class GoogleCalendarClient implements ICalendarClient {
    * Creates an authenticated OAuth2 client, handling token refresh automatically.
    */
   private async getAuthenticatedClient(): Promise<Auth.OAuth2Client> {
-    const clientId = process.env.GOOGLE_CLIENT_ID || "822716717666-5i8g21sbvl9pk02cu703vjgoln7i67hv.apps.googleusercontent.com";
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET || "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";
-    const redirectUri = process.env.GOOGLE_REDIRECT_URI || "http://localhost:8022/api/integrations/google/callback";
+    // No fallbacks. A literal credential here used to stand in for an unset
+    // variable, which meant refreshing tokens against an OAuth client whose
+    // secret was public. Unset now fails loudly, as google.provider.ts does.
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
 
-    if (!clientId || !clientSecret || !redirectUri) {
-      throw createAppError(ERROR_CODES.GOOGLE_MISSING_CLIENT_ID, 500, 'Google Calendar credentials not configured');
+    if (!clientId) {
+      throw createAppError(ERROR_CODES.GOOGLE_MISSING_CLIENT_ID, 500, 'GOOGLE_CLIENT_ID not configured');
+    }
+    if (!clientSecret) {
+      throw createAppError(ERROR_CODES.GOOGLE_MISSING_CLIENT_SECRET, 500, 'GOOGLE_CLIENT_SECRET not configured');
     }
 
-    const client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+    // The redirect URI plays no part in a token refresh, so it is not required here.
+    const client = new google.auth.OAuth2(clientId, clientSecret, process.env.GOOGLE_REDIRECT_URI);
 
     const accessToken = this.vault.decrypt(this.account.accessToken);
     const refreshToken = this.vault.decrypt(this.account.refreshToken);

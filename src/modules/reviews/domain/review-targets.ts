@@ -6,8 +6,14 @@ import { ReviewTargetType } from '../models/review-aggregate.model';
  *
  * Everything here decides *what a review means* rather than *what is stored*, which
  * is the half a test can pin. The same split `agent-trust.service.ts` follows, and
- * for the same reason: these three functions decide which aggregates move, whether a
- * review is visible, and — after Step 11 — an agent's COD cash limit.
+ * for the same reason: these functions decide which aggregates move, who may review
+ * what, and — after Step 11 — an agent's COD cash limit.
+ *
+ * ⚠ `initialStatusOf` lived here and is GONE (2026-10-05). It held a review carrying
+ * prose for a moderator and published a bare star. The owner reversed that: every
+ * review publishes on submission, and an administrator can unpublish, republish or
+ * delete it afterwards (`ReviewService`). There is no status decision left to make
+ * at submission, so there is no function to make it.
  */
 
 /** One aggregate row a review contributes to. */
@@ -83,34 +89,6 @@ export function targetsOf(input: ReviewTargetInput): ReviewTarget[] {
 export function roleMayReview(subjectType: ReviewSubjectType, authorRole: ReviewAuthorRole): boolean {
   if (subjectType === 'product') return authorRole === 'customer';
   return true;
-}
-
-/**
- * Where a newly submitted review lands: `pending` or straight to `published`.
- *
- * **A review carrying free text is held for moderation; a bare star rating is not.**
- * That is the rule, and it is deliberate on both sides:
- *
- * - A number cannot be abusive, defamatory, or a link to somewhere else. There is
- *   nothing for a moderator to read and nothing they could decide that the
- *   eligibility gate has not already decided — the author bought the item, or
- *   received the parcel. Holding it buys nothing and costs the thing that matters:
- *   delivery ratings are overwhelmingly bare stars, and queueing them behind a human
- *   would leave the trust composite's customer factor seeded in practice while
- *   looking implemented.
- * - Prose is where the risk actually is, and it gets a human.
- *
- * The alternative — everything starts `pending` — is the reflexive design and it
- * makes the moderation queue the single point of failure for a signal that moves
- * real cash exposure. The alternative in the other direction — everything publishes,
- * moderate on report — has no queue at all, which the plan asks for explicitly.
- *
- * Note what this is NOT: it is not a trust decision about the author, and it does not
- * vary by role. A rejected review still counts for nothing, star included.
- */
-export function initialStatusOf(input: { title?: string | null; body?: string | null }): 'pending' | 'published' {
-  const hasText = Boolean(input.title?.trim()) || Boolean(input.body?.trim());
-  return hasText ? 'pending' : 'published';
 }
 
 /**

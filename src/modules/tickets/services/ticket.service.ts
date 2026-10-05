@@ -13,6 +13,7 @@ import { Booking } from '../../booking/models/booking.model';
 import { ProductModel } from '../../catalog/models/product.model';
 import { VendorRepository } from '../../vendors/vendor.repository';
 import mongoose from 'mongoose';
+import { SYSTEM_ACTOR_ID, SYSTEM_ADMIN_SNAPSHOT, isSystemActor } from '../../../core/types/system-actor';
 
 /**
  * TicketService
@@ -77,12 +78,23 @@ export class TicketService {
         createdByEntityId: string;
         /** Set only when an administrator opened it — see `Ticket.created_by_admin`. */
         createdByAdmin?: IAdminSnapshot | null;
+        /**
+         * Defaults to NORMAL, as it always has. Set only by the system for tickets that must
+         * not wait in the ordinary queue — a refund owed after a seller cancelled a paid
+         * order, for one (owner, 2026-10-05).
+         */
+        priority?: TicketPriority;
     }): Promise<ITicket> {
         // Polymorphic entity validation → also resolves the vendor behind the entity.
         const vendorId = await this.validateEntityReference(input.entityType, input.entityId);
 
-        // Enforce the vendor's support policy required_info (customer-facing support).
-        await this.enforceSupportRequiredInfo(vendorId, input);
+        // Enforce the vendor's support policy required_info — CUSTOMER-facing support only.
+        // A ticket the platform or an administrator opens is not a customer asking for help,
+        // and refusing it for lacking a tracking number or a photo meant a system refund
+        // ticket on such a vendor's order failed outright and the refund was never queued.
+        if (input.createdByRole !== ActorRole.ADMIN) {
+            await this.enforceSupportRequiredInfo(vendorId, input);
+        }
 
         // Create ticket
         const ticket = await this.ticketRepo.create({
@@ -90,7 +102,7 @@ export class TicketService {
             description: input.description,
             type: input.type as any, // String enum validated by Zod
             status: TicketStatus.OPEN,
-            priority: TicketPriority.NORMAL,
+            priority: input.priority ?? TicketPriority.NORMAL,
             importance: input.importance,
             priority_locked: false,
             entity_type: input.entityType,
@@ -98,7 +110,10 @@ export class TicketService {
             tracking_number: input.trackingNumber ?? null,
             created_by_role: input.createdByRole,
             created_by_user_id: new mongoose.Types.ObjectId(input.createdByUserId),
-            created_by_admin: input.createdByAdmin ?? null,
+            // A ticket the platform opens on its own (an automatic payout request, too) is
+            // signed "Wi-Mall (automatic)" even when its caller did not pass the profile.
+            created_by_admin:
+                input.createdByAdmin ?? (isSystemActor(input.createdByUserId) ? SYSTEM_ADMIN_SNAPSHOT : null),
             updated_by: [new mongoose.Types.ObjectId(input.createdByUserId)]
         });
 
@@ -722,10 +737,14 @@ export class TicketService {
     }
 
     /**
-     * Open a ticket on behalf of the platform (no human creator), e.g. from a
-     * Stripe dispute webhook. Uses the configured `SUPPORT_ADMIN_USER_ID` as the
-     * admin actor. Best-effort: if that env is unset/invalid this returns null
-     * (callers must treat ticket creation as non-fatal) rather than throwing.
+     * Open a ticket on behalf of the platform (no human creator) — a dispute webhook, a refund
+     * owed after a seller cancelled a paid order, a booking needing a manual refund.
+     *
+     * Signed by the built-in system identity (`core/types/system-actor.ts`), shown everywhere
+     * as "Wi-Mall (automatic)". It used to need `SUPPORT_ADMIN_USER_ID`, documented as an admin
+     * `users._id` that no longer exists anywhere, and returned null when it was unset — so in
+     * practice no system ticket was ever opened (owner decision 2026-10-05). Callers still treat
+     * a THROW as non-fatal; there is no longer a configuration that skips the ticket.
      */
     async createSystemTicket(input: {
         type: string;
@@ -734,22 +753,20 @@ export class TicketService {
         subject: string;
         description: string;
         importance?: TicketImportance;
-    }): Promise<ITicket | null> {
-        const actorId = process.env.SUPPORT_ADMIN_USER_ID;
-        if (!actorId || !mongoose.Types.ObjectId.isValid(actorId)) {
-            console.warn('[TicketService] SUPPORT_ADMIN_USER_ID not configured — skipping system ticket creation');
-            return null;
-        }
+        priority?: TicketPriority;
+    }): Promise<ITicket> {
         return this.createTicket({
             subject: input.subject,
             description: input.description,
             type: input.type,
+            priority: input.priority,
             importance: input.importance ?? TicketImportance.HIGH,
             entityType: input.entityType,
             entityId: input.entityId,
-            createdByUserId: actorId,
+            createdByUserId: SYSTEM_ACTOR_ID,
             createdByRole: ActorRole.ADMIN,
-            createdByEntityId: actorId,
+            createdByEntityId: SYSTEM_ACTOR_ID,
+            createdByAdmin: SYSTEM_ADMIN_SNAPSHOT,
         });
     }
 }

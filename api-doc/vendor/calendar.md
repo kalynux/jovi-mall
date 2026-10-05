@@ -53,11 +53,21 @@ When the vendor connects, Google asks them to approve these scopes:
 
 | Scope | What it allows |
 |-------|----------------|
-| `https://www.googleapis.com/auth/calendar` | Read, create, and delete events on the vendor's Google Calendar (read busy times; write booking events) |
+| `https://www.googleapis.com/auth/calendar.events` | Read, create, change, and delete events on the vendor's Google Calendar (booking events; inbound sync) |
+| `https://www.googleapis.com/auth/calendar.freebusy` | Read the vendor's busy times, to block them from bookings |
 | `https://www.googleapis.com/auth/userinfo.email` | View the Google account email address |
 | `https://www.googleapis.com/auth/userinfo.profile` | View basic Google profile info |
 
 Offline access is requested (`access_type=offline`, `prompt=consent`) so the backend receives a refresh token and can keep the connection alive.
+
+> **Changed 2026-10-05.** The full `https://www.googleapis.com/auth/calendar` scope used to be
+> requested. It also grants calendar settings, sharing and the calendar list, none of which the
+> platform uses, and Google's app verification pushes back on it. Connections made before the
+> change keep their broader grant until the vendor reconnects; `permissions` still describes it.
+>
+> **The two calendar scopes are required.** Google's consent screen lets the vendor untick them
+> individually. A connection without them is refused, not stored, and the callback reports
+> `reason=permissions_missing` (below).
 
 ---
 
@@ -94,7 +104,13 @@ When that env var is set (e.g. `http://localhost:5173/dashboard/services`), the 
 | Missing `state` | `…?calendar=error&reason=missing_state` |
 | Invalid/expired `state` | `…?calendar=error&reason=invalid_state` |
 | **Vendor pressed Cancel on Google's consent screen** | `…?calendar=error&reason=access_denied` |
+| **Vendor approved but unticked the calendar permissions** | `…?calendar=error&reason=permissions_missing` |
 | Token exchange failed, or any other Google error | `…?calendar=error&reason=connection_failed` |
+
+> **`permissions_missing` (2026-10-05)** means nothing broke: the vendor approved without the
+> calendar access. Nothing is stored and the partial grant is revoked. Tell them to connect again
+> and leave both calendar boxes ticked. Clients that don't know this value yet should show it
+> the way they show `connection_failed`.
 
 > ⚠ **Two corrections here, 2026-09-06.** `state_mismatch` was listed and **is unreachable** —
 > the callback carries no session to disagree with, and the source says so at
@@ -132,7 +148,8 @@ Returns whether the vendor has a connected calendar, the connected email, and th
     "email": "vendor@gmail.com",
     "calendarId": "primary",
     "permissions": [
-      { "scope": "https://www.googleapis.com/auth/calendar", "description": "Read, create, and delete events on your Google Calendar" },
+      { "scope": "https://www.googleapis.com/auth/calendar.events", "description": "Read, create, change, and delete events on your Google Calendar" },
+      { "scope": "https://www.googleapis.com/auth/calendar.freebusy", "description": "See when you are busy, to block those times from bookings" },
       { "scope": "https://www.googleapis.com/auth/userinfo.email", "description": "View your Google account email address" },
       { "scope": "https://www.googleapis.com/auth/userinfo.profile", "description": "View your basic Google profile info" }
     ],

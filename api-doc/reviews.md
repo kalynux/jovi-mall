@@ -4,6 +4,13 @@
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.
 
+> ⚠ **CHANGED 2026-10-05 — every review now publishes on submission, prose included** (owner
+> decision). There is no held state any more: `pending` and `rejected` are gone, statuses are
+> `published` · `unpublished`, and an administrator can **unpublish**, **republish** or
+> **delete** any review afterwards. § 3 below is the current rule. The 2026-09-08 note that
+> follows describes the old one and is kept as history. Cross-dashboard summary:
+> [FRONTEND-CHANGELOG-reviews-publish-directly.md](./FRONTEND-CHANGELOG-reviews-publish-directly.md).
+
 **Verified against source on 2026-09-08** (a re-check of the 2026-09-07 pass above) — the ten-route census (three authoring routes each
 on `/customer`, `/vendor`, `/agency`, the one public read, four moderation routes), the
 prose-holds-it moderation rule (`domain/review-targets.ts` `initialStatusOf`, called at
@@ -25,7 +32,7 @@ eligibility table. Each role's endpoints are listed under [Endpoints](#4--endpoi
 ## 1 · What a review is
 
 A **rating (1–5)**, optionally some **prose**, by one identified person, about one
-identified thing, moderated once.
+identified thing. Public the moment it is written; an administrator may take it down later.
 
 There are two kinds of thing, told apart by `subjectType`:
 
@@ -126,27 +133,31 @@ so one copy table serves both. Present on `/customer`, `/vendor` and `/agency`.
 
 ## 3 · Moderation, and where a review lands
 
-`pending` → `published` → (or) `rejected`.
+**Every review publishes the moment it is written — stars and prose alike** (owner decision,
+2026-10-05). `POST` always answers `status: "published"`, and the review's star counts at once.
 
-**A review carrying free text is held for a moderator. A bare star rating publishes
-immediately.**
+Moderation happens **afterwards**, in wi-admin. Two statuses, plus delete:
 
-That is the rule, and both halves are deliberate. A number cannot be abusive, defamatory or
-a link to somewhere else, and the eligibility gate has already established that the author
-bought the item or received the parcel — so there is nothing for a human to decide. Prose is
-where the risk is, and it gets one. Holding everything would put the moderation queue in
-front of a signal that moves an agent's cash limit.
+| What an administrator did | `status` the author sees | Public? | Star counts? | Author may write another? |
+|---|---|---|---|---|
+| nothing | `published` | product reviews: yes · delivery reviews: never | yes | no (one per subject) |
+| **unpublished** it | `unpublished` | no | no | **no** |
+| **republished** it | `published` | as above | yes | no |
+| **deleted** it | — (gone from their list) | no | no | **yes** |
 
-The response to `POST` says which happened, in `status`. Clients should render "published"
-and "submitted for review" differently.
+**An unpublished or deleted review counts for nothing — its star included.** Aggregates are
+recomputed over published, live rows only. The administrator's reason is **never** shown to
+the author or the public: an author sees only that their review is `unpublished`, with no
+message (owner decision).
 
-**A rejected review counts for nothing — its star included.** Aggregates are recomputed over
-published rows only, so exclusion is a property of the query rather than of a subtraction
-somebody has to remember. The rejection reason is the moderator's record and is **never**
-shown to the author or the public.
+There is no edit verb for authors. One live review per author per subject, enforced by a
+unique index partial on `deletedAt: null`; a second attempt is `409 REVIEW_ALREADY_EXISTS`.
+A deleted review no longer counts toward that limit, which is why its author may write again.
 
-There is no edit verb and no delete verb. One review per author per subject, enforced by a
-unique index; a second attempt is `409 REVIEW_ALREADY_EXISTS`.
+⚠ **Before 2026-10-05** a review carrying a title or body was written `pending` and waited for a
+moderator who never came (no admin screen existed); `rejected` meant a moderator refused it.
+Both statuses are gone. `migrate:reviews-publish-all` published every held review and renamed
+`rejected` to `unpublished`.
 
 ---
 
@@ -161,7 +172,7 @@ never from the body — there is no `authorRole` field to send.
 |---|---|
 | `POST /` | submit. `201`. |
 | `GET /eligibility?subjectType=&subjectId=` | may I write one? |
-| `GET /?page=&limit=&status=` | my own reviews, **every status** — you can see your held row |
+| `GET /?page=&limit=&status=` | my own reviews, **both statuses** — you can see one an administrator hid. `status` filter: `published` \| `unpublished` |
 
 `POST` body:
 
@@ -170,7 +181,7 @@ never from the body — there is no `authorRole` field to send.
   "subjectType": "delivery",
   "subjectId": "507f1f77bcf86cd799439077",
   "rating": 5,
-  "title": "Right on time",          // optional, ≤120 — presence holds it for moderation
+  "title": "Right on time",          // optional, ≤120 — published at once, like everything else
   "body": "Called ahead, very careful with the box."  // optional, ≤2000
 }
 ```
@@ -193,8 +204,8 @@ Author response shape:
     "rating": 5,
     "title": "Right on time",
     "body": "Called ahead…",
-    "status": "pending",
-    "publishedAt": null,
+    "status": "published",
+    "publishedAt": "2026-08-21T09:00:00.000Z",
     "createdAt": "2026-08-21T09:00:00.000Z"
   }
 }
@@ -245,7 +256,7 @@ wi-admin only, behind the service token. See [admin/reviews.md](./admin/reviews.
 | `REVIEW_SUBJECT_NOT_REVIEWABLE` | 422 | a delivered shipment with no agent bound to it |
 | `REVIEW_ROLE_NOT_ALLOWED` | 400 | e.g. a vendor posting a product review |
 | `REVIEW_NOT_FOUND` | 404 | moderation only |
-| `REVIEW_NOT_PENDING` | 409 | moderation only — another moderator decided first |
+| `REVIEW_STATUS_CONFLICT` | 409 | moderation only — already hidden / already visible (replaced `REVIEW_NOT_PENDING`, 2026-10-05) |
 
 The 404-vs-422 split is load-bearing: 404 hides whether an id exists, 422 is only ever
 returned to somebody who already knows it does.

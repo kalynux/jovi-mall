@@ -1146,16 +1146,15 @@ async function main(): Promise<void> {
     });
 
     /**
-     * ⭐ **STARS ONLY, AND THIS IS THE ASSERTION THAT PROTECTS THE CUSTOMER'S RATING.** A bare star
-     * PUBLISHES IMMEDIATELY; prose is held for a moderator (`initialStatusOf`). So a title or a body
-     * invented from a tap would take the customer's rating out of the published average and leave it
-     * invisible until a human read it — the opposite of what they asked for by tapping.
+     * ⭐ **STARS ONLY, AND THIS IS THE ASSERTION THAT PROTECTS THE CUSTOMER'S WORDS.** Every review
+     * PUBLISHES IMMEDIATELY, prose included (since 2026-10-05). So a title or a body invented from a
+     * tap would put words on the public product page that the customer never wrote.
      */
     await assert('⛔ a tapped review sends NO title and NO body', () => {
         const submit = reviewSrc.slice(reviewSrc.indexOf('async function submitStars'));
         const call = submit.slice(submit.indexOf('reviewService.submit('), submit.indexOf('setBotReply'));
         if (!/title:\s*null/.test(call) || !/body:\s*null/.test(call)) {
-            throw new Error('prose is being sent with a tapped rating — it would be held for moderation');
+            throw new Error('prose is being sent with a tapped rating — it would publish words the customer never wrote');
         }
     });
 

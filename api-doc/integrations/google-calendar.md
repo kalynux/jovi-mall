@@ -24,7 +24,7 @@ availability) can sync. Any authenticated user can connect; it is most relevant 
 | `GET` | `/integrations/google/callback` | **none** — the signed `state` is the credential | OAuth callback → stores tokens → redirects back to the caller |
 | `GET` | `/integrations/google/status` | required | Is a Google Calendar connected? |
 | `POST` | `/integrations/google/disconnect` | required | Disconnect the account |
-| `GET` | `/integrations/google/test` | required | Test the connection (lists calendars) |
+| `GET` | `/integrations/google/test` | required | Test the connection (reads one event) |
 
 ### Connect flow — web (unchanged)
 
@@ -132,6 +132,7 @@ stranding a phone on the web dashboard. `reason` values:
 | `invalid_state` | `state` invalid/expired | `AUTH_OAUTH_STATE_EXPIRED` (403) |
 | `access_denied` | The user refused consent (Google sends `?error=access_denied`) | `VALIDATION_ERROR` (400) |
 | `missing_code` | No `code` query param and no `error` either | `VALIDATION_ERROR` (400) |
+| `permissions_missing` | The user approved but unticked a required calendar scope (`calendar.events`, `calendar.freebusy`). Nothing is stored; the partial grant is revoked. *(2026-10-05)* | `GOOGLE_CALENDAR_SCOPE_NOT_GRANTED` (422, `details.missingScopes`) |
 | `connection_failed` | Token exchange / storage failed, or an unrecognised Google `error` | (rethrown; 5xx envelope) |
 | ~~`state_mismatch`~~ | **No longer emitted** — there is no second identity to disagree with | — |
 
@@ -173,7 +174,9 @@ stranding a phone on the web dashboard. `reason` values:
 
 ## GET `/integrations/google/test`
 
-**Purpose**: Verify the stored connection works by attempting to list the user's calendars.
+**Purpose**: Verify the stored connection works by reading one event from the connected calendar.
+(It listed calendars until 2026-10-05; that needs a calendar-list scope the integration no longer
+requests.)
 
 **Auth**: Required
 
@@ -183,8 +186,8 @@ stranding a phone on the web dashboard. `reason` values:
 { "success": true, "data": { "ok": true } }
 ```
 
-> ⚠ **`ok` is never `false` — do not branch on it.** `testConnection` lists one calendar and
-> returns the literal `true`; any failure **throws** (`google.provider.ts:143-150`). So a `200`
+> ⚠ **`ok` is never `false` — do not branch on it.** `testConnection` reads one event and
+> returns the literal `true`; any failure **throws** (`GoogleCalendarProvider.testConnection`). So a `200`
 > always carries `ok: true`, and a client's `if (!data.ok)` branch is dead code. **The status is
 > the answer**, not the boolean.
 

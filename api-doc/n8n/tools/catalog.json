@@ -10303,7 +10303,7 @@
       "status": "available",
       "service": "jovi-mall",
       "surface": "bot_internal",
-      "description": "Reviews the customer wrote, newest first — products and deliveries, in every moderation state.",
+      "description": "Reviews the customer wrote, newest first — products and deliveries, including any an administrator hid.",
       "when_to_use": "'What have I reviewed', 'did my review go up', 'why can't I see my review', or to check whether they already rated something.",
       "when_not_to_use": "Not other people's reviews (catalog_list_product_reviews).",
       "operation": {
@@ -10323,11 +10323,10 @@
           "status": {
             "type": "string",
             "enum": [
-              "pending",
               "published",
-              "rejected"
+              "unpublished"
             ],
-            "description": "Narrow to one moderation state. Leave empty unless the customer asked for one — the default returns all three, which is usually what they mean."
+            "description": "Narrow to one state: published, or unpublished (an administrator hid it). Leave empty unless the customer asked for one — the default returns both, which is usually what they mean."
           },
           "page": {
             "type": "integer",
@@ -10492,8 +10491,8 @@
       "requires_confirmation": true,
       "risk": "medium",
       "side_effects": [
-        "A bare star rating PUBLISHES IMMEDIATELY and moves the product's public rating",
-        "A review carrying prose is held for a human moderator",
+        "Every review PUBLISHES IMMEDIATELY, prose included, and moves the product's public rating",
+        "An administrator may unpublish or delete it afterwards",
         "A delivery review is internal, is attributed to the carrying agent server-side, and feeds their trust score"
       ],
       "context_resolution": {
@@ -10503,7 +10502,7 @@
       "audit": true,
       "requires_customer_role": true,
       "platform_notes": {
-        "whatsapp": "Tell the customer which of the two happens: a rating alone goes live at once, prose waits for a moderator. A delivery review is never published anywhere."
+        "whatsapp": "A product review goes live on the product page at once, written words included — send only the customer's own words. A delivery review is never published anywhere."
       },
       "commands": [
         "review"

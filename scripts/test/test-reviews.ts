@@ -1,6 +1,7 @@
 /**
- * Test: reviews & ratings — the two subjects, the moderation pipeline, and the one
- * path a delivery rating reaches an agent's trust score by.
+ * Test: reviews & ratings — the two subjects, after-the-fact moderation (every review
+ * publishes on submission since 2026-10-05; an administrator may unpublish, republish
+ * or delete it), and the one path a delivery rating reaches an agent's trust score by.
  *
  * Follows the scripts/test convention (plain ts-node, hand-rolled asserts, no
  * framework). DB-free: the domain half of this module is pure by construction, and
@@ -8,14 +9,14 @@
  *
  * Four groups, and the last two are the ones that matter most:
  *
- *   1. The pure domain — the target matrix, the publish-vs-hold rule, the average.
+ *   1. The pure domain — the target matrix, who may review what, the average.
  *   2. The projections — a review's DTO carries no author identity; a zero-count
  *      aggregate projects to `null` and never to `{ average: 0, count: 0 }`, which
  *      is what keeps `aggregateRating` out of the storefront's JSON-LD.
  *   3. SOURCE SCANS proving the WIRING, because these are structural invariants no
  *      behavioural test can see: exactly one writer of `review_aggregates`, exactly
- *      one reader of it in the trust collector, a compare-and-set on the moderation
- *      verdict, no public route to a delivery review, and a unique index that is
+ *      one reader of it in the trust collector, a compare-and-set on every moderation
+ *      action, no public route to a delivery review, and a unique index that is
  *      registered as a real migration rather than left to `autoIndex`.
  *   4. The cross-module contract with the trust composite — that `collectSignals`
  *      reports `null` rather than `0` for an unrated agent, which is the difference
@@ -25,12 +26,7 @@
  */
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import {
-  averageOf,
-  initialStatusOf,
-  roleMayReview,
-  targetsOf,
-} from '../../src/modules/reviews/domain/review-targets';
+import { averageOf, roleMayReview, targetsOf } from '../../src/modules/reviews/domain/review-targets';
 import {
   toAdminReviewDto,
   toAuthorReviewDto,
@@ -40,10 +36,17 @@ import {
 } from '../../src/modules/reviews/dto/review.dto';
 import {
   REVIEW_AUTHOR_ROLES,
+  REVIEW_MODERATION_ACTIONS,
   REVIEW_STATUSES,
   REVIEW_SUBJECT_TYPES,
   IReview,
 } from '../../src/modules/reviews/models/review.model';
+import {
+  AdminReviewQuerySchema,
+  MyReviewsQuerySchema,
+  RepublishReviewSchema,
+  ReviewModerationReasonSchema,
+} from '../../src/modules/reviews/validators/review.validator';
 import { ratingFactor } from '../../src/modules/agents/domain/services/agent-trust.service';
 import { AGENT_CONFIG } from '../../src/modules/agents/config/agent.config';
 import { MIGRATIONS } from '../migrate';
@@ -134,8 +137,12 @@ function main(): void {
 
   assert('three author roles', () => REVIEW_AUTHOR_ROLES.join(',') === 'customer,vendor,agency');
 
-  assert('three statuses — pending, published, rejected', () =>
-    REVIEW_STATUSES.join(',') === 'pending,published,rejected');
+  // Owner decision 2026-10-05: nothing is held. `pending` and `rejected` are gone.
+  assert('two statuses — published, unpublished — and no held state', () =>
+    REVIEW_STATUSES.join(',') === 'published,unpublished');
+
+  assert('three moderation actions — unpublished, republished, deleted', () =>
+    REVIEW_MODERATION_ACTIONS.join(',') === 'unpublished,republished,deleted');
 
   console.log('\n── Eligibility by role: only a buyer reviews a product ─────────────────\n');
 
@@ -198,17 +205,48 @@ function main(): void {
     return t.every((x) => x.type !== 'agent');
   });
 
-  console.log('\n── Publish or hold: the rule, and why it is not "everything pends" ─────\n');
+  console.log('\n── Every review publishes on submission (owner decision, 2026-10-05) ───\n');
 
-  assert('a bare star rating publishes immediately', () => initialStatusOf({}) === 'published');
+  const reviewRepoRaw = stripComments(read('modules/reviews/repositories/review.repository.ts'));
+  const reviewServiceRaw = stripComments(read('modules/reviews/services/review.service.ts'));
 
-  assert('a review with a body is held for moderation', () =>
-    initialStatusOf({ body: 'The parcel arrived soaked.' }) === 'pending');
+  assert('the repository writes every new review as published, with published_at stamped', () => {
+    const start = reviewRepoRaw.indexOf('async create(');
+    const body = reviewRepoRaw.slice(start, reviewRepoRaw.indexOf('async findById('));
+    return body.includes("status: 'published'") && body.includes('published_at: new Date()');
+  });
 
-  assert('a review with only a title is held too', () => initialStatusOf({ title: 'Terrible' }) === 'pending');
+  assert('the create input no longer carries a status — nothing decides one at submission', () =>
+    !/interface CreateReviewInput[^}]*status:/.test(reviewRepoRaw));
 
-  assert('whitespace is not text — it publishes', () =>
-    initialStatusOf({ title: '   ', body: '\n\t' }) === 'published');
+  assert('submit refreshes the aggregates unconditionally — prose moves a rating too', () => {
+    const start = reviewServiceRaw.indexOf('async submit(');
+    const body = reviewServiceRaw.slice(start, reviewServiceRaw.indexOf('async listMine('));
+    return body.includes('await this.refreshTargets(review)') && !body.includes("review.status === 'published'");
+  });
+
+  assert('the held-for-moderation rule is gone from the domain', () =>
+    !read('modules/reviews/domain/review-targets.ts').includes('export function initialStatusOf'));
+
+  console.log('\n── The moderation request shapes ──────────────────────────────────────\n');
+
+  assert('unpublish and delete REQUIRE a reason', () =>
+    !ReviewModerationReasonSchema.safeParse({}).success &&
+    !ReviewModerationReasonSchema.safeParse({ reason: '  ' }).success &&
+    ReviewModerationReasonSchema.safeParse({ reason: 'Abusive language' }).success);
+
+  assert('republish takes an optional reason', () =>
+    RepublishReviewSchema.safeParse({}).success && RepublishReviewSchema.safeParse({ reason: 'Appeal upheld' }).success);
+
+  assert('all three bodies are strict', () =>
+    !ReviewModerationReasonSchema.safeParse({ reason: 'Abusive', notify: true }).success &&
+    !RepublishReviewSchema.safeParse({ force: true }).success);
+
+  assert('the old statuses are refused by both list filters', () =>
+    !AdminReviewQuerySchema.safeParse({ status: 'pending' }).success &&
+    !AdminReviewQuerySchema.safeParse({ status: 'rejected' }).success &&
+    !MyReviewsQuerySchema.safeParse({ status: 'pending' }).success &&
+    AdminReviewQuerySchema.safeParse({ status: 'unpublished' }).success);
 
   console.log('\n── The average ────────────────────────────────────────────────────────\n');
 
@@ -261,7 +299,13 @@ function main(): void {
       toPublicReviewDto(
         review({
           status: 'published',
-          moderation: { by_user_id: asId(USER_ID), by_source: 'admin', at: new Date(), reason: 'spam suspicion' },
+          moderation: {
+            action: 'republished',
+            by_user_id: asId(USER_ID),
+            by_source: 'admin',
+            at: new Date(),
+            reason: 'spam suspicion',
+          },
         }),
       ),
     );
@@ -273,8 +317,21 @@ function main(): void {
     return !serialised.includes(ORDER_ID) && !serialised.includes(SHIPMENT_ID);
   });
 
-  assert('the AUTHOR DTO adds status, so a held review is visible to the person who wrote it', () =>
-    toAuthorReviewDto(review({ status: 'pending' })).status === 'pending');
+  assert('the AUTHOR DTO adds status, so a hidden review shows as hidden to the person who wrote it', () =>
+    toAuthorReviewDto(review({ status: 'unpublished' })).status === 'unpublished');
+
+  // Owner decision: the author sees that it is hidden, never why.
+  assert('the AUTHOR DTO carries NO moderation record and no reason', () => {
+    const serialised = JSON.stringify(
+      toAuthorReviewDto(
+        review({
+          status: 'unpublished',
+          moderation: { action: 'unpublished', by_user_id: null, by_source: 'admin', at: new Date(), reason: 'abusive' },
+        }),
+      ),
+    );
+    return !serialised.includes('moderation') && !serialised.includes('abusive');
+  });
 
   assert('the ADMIN DTO carries the evidence eligibility resolved', () => {
     const dto = toAdminReviewDto(
@@ -283,13 +340,16 @@ function main(): void {
     return dto.evidence.shipmentId === SHIPMENT_ID && dto.targets.agentId === AGENT_ID;
   });
 
-  assert('the ADMIN DTO reports the moderator\'s identity SPACE, not just their id', () => {
+  assert('the ADMIN DTO reports the moderator\'s identity SPACE and the action taken', () => {
     const dto = toAdminReviewDto(
-      review({ moderation: { by_user_id: asId(USER_ID), by_source: 'admin', at: new Date(), reason: 'off-topic' } }),
+      review({
+        status: 'unpublished',
+        moderation: { action: 'unpublished', by_user_id: asId(USER_ID), by_source: 'admin', at: new Date(), reason: 'off-topic' },
+      }),
     );
     // `admin` ids resolve nowhere in this database — the source field is what makes
     // the dangling reference legible rather than mysterious (ADR-004 D-1).
-    return dto.moderation?.bySource === 'admin';
+    return dto.moderation?.bySource === 'admin' && dto.moderation.action === 'unpublished' && dto.moderation.reason === 'off-topic';
   });
 
   console.log('\n── SOURCE SCANS: one writer per field ──────────────────────────────────\n');
@@ -320,11 +380,11 @@ function main(): void {
     return aggregateRepo.includes('$group') && !aggregateRepo.includes('$inc');
   });
 
-  assert('the recompute counts published rows only — a rejected review counts for nothing', () => {
+  assert('the recompute counts published LIVE rows only — unpublished and deleted count for nothing', () => {
     const start = aggregateRepo.indexOf('async recompute');
     const end = aggregateRepo.indexOf('async find(');
     const body = aggregateRepo.slice(start, end);
-    return start > -1 && end > start && body.includes("status: 'published'");
+    return start > -1 && end > start && body.includes("status: 'published'") && body.includes('deletedAt: null');
   });
 
   assert('exactly ONE function refreshes an aggregate after a review changes', () => {
@@ -332,20 +392,54 @@ function main(): void {
     return calls.length === 1 && reviewService.includes('private async refreshTargets');
   });
 
-  assert('both moderation verdicts refresh — the rejection branch is the load-bearing one', () => {
-    const start = reviewService.indexOf('private async moderate(');
+  assert('both status changes refresh — the unpublish branch is the load-bearing one', () => {
+    const start = reviewService.indexOf('private async changeStatus(');
     const end = reviewService.indexOf('private async refreshTargets');
     const body = reviewService.slice(start, end);
     return start > -1 && end > start && body.includes('this.refreshTargets(updated)');
   });
 
+  assert('delete refreshes too — a deleted published review leaves the aggregate', () => {
+    const start = reviewService.indexOf('async remove(');
+    const body = reviewService.slice(start, reviewService.indexOf('private async changeStatus('));
+    return start > -1 && body.includes('this.refreshTargets(deleted)');
+  });
+
+  assert('unpublish starts from published and republish from unpublished', () =>
+    reviewService.includes("this.changeStatus(id, 'published', 'unpublished', 'unpublished'") &&
+    reviewService.includes("this.changeStatus(id, 'unpublished', 'published', 'republished'"));
+
   console.log('\n── SOURCE SCANS: concurrency and the trust nudge ───────────────────────\n');
 
-  assert('the moderation verdict is a compare-and-set on `pending`', () =>
-    reviewRepo.includes("status: 'pending'") && reviewRepo.includes('findOneAndUpdate'));
+  assert('a status change is a compare-and-set on the FROM status', () => {
+    const start = reviewRepo.indexOf('async setStatusIf(');
+    const body = reviewRepo.slice(start, reviewRepo.indexOf('async softDeleteIfLive('));
+    return body.includes('status: from') && body.includes('deletedAt: null') && body.includes('findOneAndUpdate');
+  });
+
+  // The update is a PIPELINE (for `$ifNull` on published_at), and in a pipeline a string
+  // starting with `$` is a field path — the admin-typed reason must go through `$literal`.
+  assert('the moderation record goes through $literal, and republish keeps the first published_at', () => {
+    const start = reviewRepo.indexOf('async setStatusIf(');
+    const body = reviewRepo.slice(start, reviewRepo.indexOf('async softDeleteIfLive('));
+    return body.includes('moderation: { $literal:') && body.includes("$ifNull: ['$published_at', '$$NOW']");
+  });
+
+  assert('delete is a SOFT delete, compare-and-set on deletedAt: null — never a hard remove', () => {
+    const start = reviewRepo.indexOf('async softDeleteIfLive(');
+    const body = reviewRepo.slice(start, reviewRepo.indexOf('private moderationOf('));
+    return body.includes('deletedAt: null') && body.includes('deletedAt: new Date()') &&
+      !/deleteOne|deleteMany|findOneAndDelete/.test(reviewRepo);
+  });
 
   assert('a compare-and-set miss is a CONFLICT, not a not-found', () =>
-    reviewService.includes('REVIEW_NOT_PENDING'));
+    reviewService.includes('REVIEW_STATUS_CONFLICT') && !reviewService.includes('REVIEW_NOT_PENDING'));
+
+  assert('the admin list is newest-first and lists every status by default', () => {
+    const start = reviewRepo.indexOf('async listForAdmin(');
+    const body = reviewRepo.slice(start, reviewRepo.indexOf('async setStatusIf('));
+    return body.includes('createdAt: -1') && !body.includes("?? 'pending'") && body.includes('deletedAt: null');
+  });
 
   assert('a duplicate-key race is translated to the same 409 as the pre-check', () =>
     reviewService.includes('=== 11000') && reviewService.includes('REVIEW_ALREADY_EXISTS'));
@@ -430,6 +524,14 @@ function main(): void {
     adminRoutes.includes('export function buildAdminReviewRouter') &&
     !adminRoutes.includes("requireRole(['admin'])"));
 
+  // wi-admin's `test:reviews` scans for these three paths from the other side.
+  assert('it serves unpublish, republish and delete — and no longer publish or reject', () =>
+    adminRoutes.includes("router.post('/:id/unpublish'") &&
+    adminRoutes.includes("router.post('/:id/republish'") &&
+    adminRoutes.includes("router.delete('/:id'") &&
+    !adminRoutes.includes("'/:id/publish'") &&
+    !adminRoutes.includes("'/:id/reject'"));
+
   console.log('\n── The unique index is a REGISTERED migration, not an autoIndex hope ────\n');
 
   // `autoIndex` is off in production, and this index is the ONLY thing making "one
@@ -455,8 +557,41 @@ function main(): void {
     MIGRATIONS.find((m) => m.name === 'migrate:review-indexes')?.dryRun === true);
 
   const migrationScript = stripComments(readFileSync(join(ROOT, 'scripts', 'migrate-review-indexes.ts'), 'utf8'));
-  assert('the migration builds the one-per-author unique index', () =>
-    migrationScript.includes('review_one_per_author_per_subject') && migrationScript.includes('unique: true'));
+  assert('the migration builds the one-LIVE-review-per-author unique index, partial on deletedAt', () =>
+    migrationScript.includes('review_one_live_per_author_per_subject') &&
+    migrationScript.includes('unique: true') &&
+    migrationScript.includes('partialFilterExpression: { deletedAt: null }'));
+
+  const modelSource = stripComments(read('modules/reviews/models/review.model.ts'));
+  assert('the model declares the SAME partial unique index — a deleted review frees its author', () =>
+    modelSource.includes("name: 'review_one_live_per_author_per_subject'") &&
+    modelSource.includes('partialFilterExpression: { deletedAt: null }') &&
+    !modelSource.includes("'review_one_per_author_per_subject'"));
+
+  // The existing-database half: pending → published, rejected → unpublished, and the
+  // index swap. Created BEFORE the old one is dropped, so uniqueness never lapses. It
+  // moves DATA, so it runs among the data migrations — before every index build
+  // (`test:system` enforces that rule for the whole registry).
+  assert('migrate:reviews-publish-all is registered, with --dry-run, before migrate:review-indexes', () => {
+    const names = MIGRATIONS.map((m) => m.name);
+    const at = names.indexOf('migrate:reviews-publish-all');
+    return at > -1 && at < names.indexOf('migrate:review-indexes') && MIGRATIONS[at].dryRun === true;
+  });
+
+  const publishAll = stripComments(readFileSync(join(ROOT, 'scripts', 'migrate-reviews-publish-all.ts'), 'utf8'));
+  assert('it builds the new unique index BEFORE dropping the old one', () => {
+    const create = publishAll.indexOf('createIndex(');
+    const drop = publishAll.indexOf('dropIndex(');
+    return create > -1 && drop > create;
+  });
+
+  assert('it publishes every pending review and recomputes what that moved', () =>
+    publishAll.includes("status: 'pending'") &&
+    publishAll.includes("status: 'published'") &&
+    publishAll.includes('reviewAggregateRepository.recompute('));
+
+  assert('it maps every rejected review to unpublished', () =>
+    publishAll.includes("status: 'rejected'") && publishAll.includes("status: 'unpublished'"));
 
   assert('the migration builds the aggregate identity index too', () =>
     migrationScript.includes('review_aggregate_identity'));

@@ -50,10 +50,22 @@ export interface IEarningsAllocation extends Document {
 
   status: EarningsAllocationStatus;
 
-  /** When the source order/booking was completed (customer confirmed / auto). */
+  /**
+   * When this row's hold STARTED. Despite the name (kept to avoid a migration): for an order
+   * it is `Order.delivered_at`, the courier finishing the last parcel, since 2026-10-05; for a
+   * booking it is the booking's completion. Completion is only the fallback for a row nobody
+   * started. See earnings/domain/earnings-hold.ts.
+   */
   completed_at: Date | null;
   /** completed_at + HOLD_DAYS; the release worker acts at/after this instant. */
   hold_release_at: Date | null;
+  /**
+   * Copied from the source's earnings pause so the release worker's QUERY can skip it. The
+   * pause record on the Order/Booking is the truth; this is an index. A row created while its
+   * source is already paused may lack it, which is why the worker re-checks the source before
+   * releasing (and stamps this when it finds one).
+   */
+  paused_at: Date | null;
   released_at: Date | null;
   reversed_at: Date | null;
 
@@ -92,6 +104,7 @@ const EarningsAllocationSchema = new Schema<IEarningsAllocation>(
 
     completed_at: { type: Date, default: null },
     hold_release_at: { type: Date, default: null },
+    paused_at: { type: Date, default: null },
     released_at: { type: Date, default: null },
     reversed_at: { type: Date, default: null },
 

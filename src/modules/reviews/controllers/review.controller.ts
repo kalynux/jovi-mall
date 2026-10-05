@@ -35,7 +35,7 @@ export function buildReviewController(role: ReviewAuthorRole) {
   const author = authorOf(role);
 
   return {
-    /** POST / — submit. 201, and the body says whether it published or is held. */
+    /** POST / — submit. 201; every review publishes on submission (`status: 'published'`). */
     create: asyncHandler(async (req: Request, res: Response) => {
       const input = SubmitReviewSchema.parse(req.body);
       const review = await reviewService.submit(author(req), input);

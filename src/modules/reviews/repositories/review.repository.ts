@@ -3,9 +3,24 @@ import {
   IReview,
   ReviewAuthorRole,
   ReviewModel,
+  ReviewModerationAction,
   ReviewStatus,
   ReviewSubjectType,
 } from '../models/review.model';
+
+/** Who performed a moderation action, and why. Stamped onto `moderation`. */
+export interface ModerationStamp {
+  userId: string | null;
+  source: 'platform' | 'admin';
+  reason: string | null;
+}
+
+/** The administrators' list filters. Every one optional; none means "every live review". */
+export interface AdminReviewFilters {
+  status?: ReviewStatus;
+  subjectType?: ReviewSubjectType;
+  authorRole?: ReviewAuthorRole;
+}
 
 export interface ReviewPage {
   data: IReview[];
@@ -20,7 +35,6 @@ export interface CreateReviewInput {
   rating: number;
   title: string | null;
   body: string | null;
-  status: 'pending' | 'published';
   orderId: string | null;
   shipmentId: string | null;
   targetProductId: string | null;
@@ -41,10 +55,11 @@ export class ReviewRepository {
       rating: input.rating,
       title: input.title,
       body: input.body,
-      status: input.status,
-      // Stamped here rather than in a hook: a review that lands `published` is
-      // published AT its creation, and a later moderation never rewrites this.
-      published_at: input.status === 'published' ? new Date() : null,
+      // Every review publishes on submission (2026-10-05) — there is no held state.
+      // `published_at` is stamped here rather than in a hook, and a later unpublish or
+      // republish never rewrites it: it says when this text first became visible.
+      status: 'published' as ReviewStatus,
+      published_at: new Date(),
       moderation: null,
       order_id: oid(input.orderId),
       shipment_id: oid(input.shipmentId),
@@ -89,7 +104,11 @@ export class ReviewRepository {
     return await this.paginate(filter, page, limit, { createdAt: -1 });
   }
 
-  /** "My reviews", for any author role. Every status — the author sees their own pending row. */
+  /**
+   * "My reviews", for any author role. Every status — an author sees their own review
+   * marked `unpublished` when an administrator took it down (owner decision: shown as
+   * hidden, with no reason given). A DELETED review is gone from this list too.
+   */
   async listByAuthor(authorUserId: string, page: number, limit: number, status?: ReviewStatus): Promise<ReviewPage> {
     const filter: Record<string, unknown> = {
       author_user_id: new Types.ObjectId(authorUserId),
@@ -100,59 +119,91 @@ export class ReviewRepository {
   }
 
   /**
-   * The moderation queue.
+   * Every live review, for administrators — **newest first**, every status unless a
+   * filter narrows it.
    *
-   * Defaults to `pending` and **oldest first** — a queue is worked front to back, and
-   * the row that has been waiting longest is the one a reviewer owes an answer to.
-   * Every other listing here is newest-first; this one is the exception on purpose.
+   * This was the moderation queue (`pending`, oldest first) until 2026-10-05. Nothing
+   * is held any more, so there is no queue to work front to back; what an administrator
+   * needs is "what was written lately", which is newest-first like every other list.
+   * Deleted reviews are never listed — delete is the one verb that removes a review
+   * from every surface, this one included.
    */
-  async listForModeration(
-    page: number,
-    limit: number,
-    filters: { status?: ReviewStatus; subjectType?: ReviewSubjectType; authorRole?: ReviewAuthorRole },
-  ): Promise<ReviewPage> {
+  async listForAdmin(page: number, limit: number, filters: AdminReviewFilters): Promise<ReviewPage> {
     const filter: Record<string, unknown> = {
       deletedAt: null,
-      status: filters.status ?? 'pending',
+      ...(filters.status ? { status: filters.status } : {}),
       ...(filters.subjectType ? { subject_type: filters.subjectType } : {}),
       ...(filters.authorRole ? { author_role: filters.authorRole } : {}),
     };
-    return await this.paginate(filter, page, limit, { createdAt: 1 });
+    return await this.paginate(filter, page, limit, { createdAt: -1 });
   }
 
   /**
-   * Move a review out of `pending`, as a compare-and-set.
+   * Move a live review from one status to the other, as a compare-and-set on `from`.
    *
-   * `null` back is a **conflict, never a not-found**: the row exists, another
-   * administrator simply decided first. Same shape and same reasoning as
-   * `StockAdjustmentRequestRepository`'s resolve — without the filter on `pending`,
-   * two moderators can publish and reject the same review and the loser's aggregate
-   * recompute still runs, against a status nobody chose.
+   * `null` back is a **conflict, never a not-found**: the row exists and is no longer
+   * in `from` — another administrator acted first, or it was already in the target
+   * state. Same shape as `StockAdjustmentRequestRepository`'s resolve: without the
+   * filter on `from`, two administrators can unpublish and republish the same review
+   * and the loser's aggregate recompute still runs, against a status nobody chose.
+   *
+   * `published_at` says when the text first became visible, so a later unpublish leaves
+   * it alone and a republish keeps it — EXCEPT on a row that was never visible. A review
+   * rejected under the old held-for-moderation rule was migrated to `unpublished` with
+   * `published_at: null`; republishing it stamps now, or the storefront would show a
+   * public review with no "reviewed on" date. Hence a pipeline update with `$ifNull`.
+   *
+   * ⚠ `moderation` goes through `$literal` in that pipeline. In an aggregation `$set` a
+   * string beginning with `$` is a FIELD PATH, and `reason` is free text an administrator
+   * typed — `"$body"` would copy the review's prose into the moderation record.
    */
-  async moderateIfPending(
+  async setStatusIf(
     id: string,
-    next: 'published' | 'rejected',
-    moderator: { userId: string | null; source: 'platform' | 'admin'; reason: string | null },
+    from: ReviewStatus,
+    to: ReviewStatus,
+    action: Exclude<ReviewModerationAction, 'deleted'>,
+    stamp: ModerationStamp,
   ): Promise<IReview | null> {
-    const now = new Date();
-    const set: Record<string, unknown> = {
-      status: next,
-      moderation: {
-        by_user_id: moderator.userId ? new Types.ObjectId(moderator.userId) : null,
-        by_source: moderator.source,
-        at: now,
-        reason: moderator.reason,
-      },
-    };
-    // `published_at` is stamped once and never cleared — it says when this text was
-    // first visible, which stays true after a later rejection takes it down.
-    if (next === 'published') set.published_at = now;
-
     return await ReviewModel.findOneAndUpdate(
-      { _id: id, status: 'pending', deletedAt: null },
-      { $set: set },
+      { _id: id, status: from, deletedAt: null },
+      [
+        {
+          $set: {
+            status: to,
+            moderation: { $literal: this.moderationOf(action, stamp) },
+            ...(to === 'published' ? { published_at: { $ifNull: ['$published_at', '$$NOW'] } } : {}),
+          },
+        },
+      ],
       { new: true },
     );
+  }
+
+  /**
+   * Soft-delete a live review, as a compare-and-set on `deletedAt: null`.
+   *
+   * Soft, so the row survives for the record — but it leaves every surface (public,
+   * author, admin list, every aggregate) AND frees the author's slot, because the
+   * one-review-per-author index is partial on `deletedAt: null`. That last effect is
+   * the owner's decision and the reason delete exists beside unpublish: a deleted
+   * review's author may write again; an unpublished review's author may not.
+   */
+  async softDeleteIfLive(id: string, stamp: ModerationStamp): Promise<IReview | null> {
+    return await ReviewModel.findOneAndUpdate(
+      { _id: id, deletedAt: null },
+      { $set: { deletedAt: new Date(), moderation: this.moderationOf('deleted', stamp) } },
+      { new: true },
+    );
+  }
+
+  private moderationOf(action: ReviewModerationAction, stamp: ModerationStamp): Record<string, unknown> {
+    return {
+      action,
+      by_user_id: stamp.userId ? new Types.ObjectId(stamp.userId) : null,
+      by_source: stamp.source,
+      at: new Date(),
+      reason: stamp.reason,
+    };
   }
 
   private async paginate(

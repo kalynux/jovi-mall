@@ -222,6 +222,43 @@ export class AgencyStockLevelRepository {
   }
 
   /**
+   * The bare stock facts this agency holds for a page of products — one query, no catalogue
+   * joins. Behind the "in your storage" chips on `GET /api/agency/products`, which needs only
+   * where each product sits and how much was counted there.
+   *
+   * Both `derived` and `counted` rows come back: the caller must be able to say "configured
+   * here, never counted" rather than collapse it into "we hold none".
+   */
+  async findStockFactsForAgencyProducts(
+    agencyId: string,
+    productIds: string[],
+  ): Promise<Array<{
+    productId: string;
+    locationId: string | null;
+    source: 'derived' | 'counted';
+    quantityOnHand: number;
+  }>> {
+    const valid = [...new Set(productIds)].filter(id => Types.ObjectId.isValid(id));
+    if (valid.length === 0 || !Types.ObjectId.isValid(agencyId)) return [];
+
+    const rows = await AgencyStockLevelModel.find({
+      agency_id: new Types.ObjectId(agencyId),
+      product_id: { $in: valid.map(id => new Types.ObjectId(id)) },
+      deletedAt: null,
+    })
+      .select('product_id location_id source quantity_on_hand')
+      .lean()
+      .exec();
+
+    return rows.map(r => ({
+      productId: String(r.product_id),
+      locationId: r.location_id ? String(r.location_id) : null,
+      source: r.source === 'counted' ? 'counted' : 'derived',
+      quantityOnHand: r.quantity_on_hand ?? 0,
+    }));
+  }
+
+  /**
    * Every COUNTED row this agency holds, joined to the catalogue — the storage invoice's
    * input.
    *

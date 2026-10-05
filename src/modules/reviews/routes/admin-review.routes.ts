@@ -15,37 +15,40 @@ import { AdminReviewController } from '../controllers/admin-review.controller';
  * compile and work — and would reopen the second authorization model Phase 5 closed.
  *
  * ── Why moderation is delegated rather than done in wi-admin ─────────────────
- * The ordinary reason (ADR-004 D-2), and here it is concrete: a moderation verdict
+ * The ordinary reason (ADR-004 D-2), and here it is concrete: every moderation action
  * recomputes the affected aggregates and, for a delivery review, nudges that agent's
  * trust recompute — which after Step 11 moves their COD cash limit. A second writer
  * would flip `status` in the database and leave every one of those effects unfired,
- * silently. wi-admin reads `reviews` directly if it wants a report; it calls in to
- * decide one.
+ * silently. wi-admin reads `reviews` directly for its list; it calls in to act on one.
+ *
+ * ── Moderation is AFTER the fact (owner decision, 2026-10-05) ─────────────────
+ * Every review publishes on submission. These verbs act on a review that is already
+ * public. `publish` and `reject` — the old verdicts on a held review — are gone with
+ * the held state. Unpublish and republish are deliberately a two-way toggle now: the
+ * owner asked for it, and the audit trail stays unambiguous because wi-admin records
+ * every action, before it is performed, with its actor.
  */
 function attachRoutes(router: Router): Router {
   /**
-   * GET / — the queue. Defaults to `pending`, **oldest first**.
+   * GET / — every live review, **newest first**, every status unless filtered.
    * Filters: `status`, `subjectType`, `authorRole`, plus `page`/`limit`.
    */
   router.get('/', AdminReviewController.list);
 
-  /** GET /:id — one review, with the eligibility evidence attached. */
+  /** GET /:id — one live review, with the eligibility evidence attached. */
   router.get('/:id', AdminReviewController.getById);
 
-  /**
-   * POST /:id/publish — a compare-and-set on `pending`; 409 on a miss.
-   * Publishing recomputes every aggregate the review contributes to.
-   */
-  router.post('/:id/publish', AdminReviewController.publish);
+  /** POST /:id/unpublish — body `{ reason }`, required. CAS on `published`; 409 on a miss. */
+  router.post('/:id/unpublish', AdminReviewController.unpublish);
+
+  /** POST /:id/republish — body `{ reason? }`. CAS on `unpublished`; 409 on a miss. */
+  router.post('/:id/republish', AdminReviewController.republish);
 
   /**
-   * POST /:id/reject — body `{ reason }`, required.
-   *
-   * The rejected review counts for nothing afterwards, star included. There is
-   * deliberately no un-reject: re-review is not a thing a moderation verdict offers,
-   * and a two-way toggle makes the audit trail ambiguous about what was ever live.
+   * DELETE /:id — body `{ reason }`, required. Any status; 404 if already deleted.
+   * The author may write a new review of the same subject afterwards.
    */
-  router.post('/:id/reject', AdminReviewController.reject);
+  router.delete('/:id', AdminReviewController.remove);
 
   return router;
 }

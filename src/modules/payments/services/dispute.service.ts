@@ -12,6 +12,12 @@ import { ticketService } from '../../tickets/services/ticket.service';
 import { TicketType, EntityType, TicketImportance } from '../../tickets/types/ticket.types';
 import { eventBus } from '../../../core/events/event-bus';
 import { BillingOwnerType } from '../../billing/billing.types';
+import {
+  earningsPauseService,
+  PauseTarget,
+  SYSTEM_PAUSE_ACTOR,
+} from '../../earnings/services/earnings-pause.service';
+import type { EarningsPauseReason } from '../../earnings/domain/earnings-hold';
 
 /**
  * Who resolved a dispute, for the order timeline.
@@ -189,6 +195,12 @@ export class PaymentDisputeService {
       paymentIntentId,
       disputeId,
     });
+
+    // Freeze the MONEY as well as the order (owner, 2026-10-05). The fulfilment freeze above
+    // never reached the earnings: `findMaturedHeld` ignored `dispute_hold`, so a vendor could
+    // be paid out while the customer's bank was still deciding. Lifted by itself if the
+    // dispute is won; reversed with the earnings if it is lost.
+    await this.pauseEarnings({ kind: 'order', id: orderId }, `Card dispute ${disputeId ?? 'n/a'}`);
     await this.publishDisputeEvent(orderId, 'order', 'frozen', { paymentIntentId, disputeId });
 
     await this.openTicket(
@@ -230,6 +242,9 @@ export class PaymentDisputeService {
       actor
     );
     await this.publishDisputeEvent(orderId, 'order', 'won', { disputeId });
+    // Won: the money resumes its hold where it stopped. Only a pause the DISPUTE raised —
+    // one an administrator placed meanwhile stays until an administrator lifts it.
+    await this.resumeEarnings({ kind: 'order', id: orderId }, 'Dispute won', ['card_dispute']);
     return 'resolved';
   }
 
@@ -285,6 +300,10 @@ export class PaymentDisputeService {
     } catch (error) {
       console.error('[PaymentDispute] Failed to reverse earnings on dispute loss:', error);
     }
+    // Lost: the earnings are reversed above, so the dispute's pause has nothing left to guard.
+    // Lifting it lets anything the refund does not reverse carry on as it would have without
+    // the dispute, rather than staying frozen behind a closed case.
+    await this.resumeEarnings({ kind: 'order', id: orderId }, 'Dispute closed (lost)', ['card_dispute']);
 
     await this.appendTimeline(
       orderId,
@@ -320,6 +339,7 @@ export class PaymentDisputeService {
     booking.paymentStatus = 'disputed';
     await booking.save();
     await this.calendarSync.syncBookingPaymentStatus(booking);
+    await this.pauseEarnings({ kind: 'booking', id: bookingId }, `Card dispute ${disputeId ?? 'n/a'}`);
 
     await this.openTicket(
       TicketType.CHARGEBACK,
@@ -339,6 +359,7 @@ export class PaymentDisputeService {
     booking.paymentStatus = 'paid';
     await booking.save();
     await this.calendarSync.syncBookingPaymentStatus(booking);
+    await this.resumeEarnings({ kind: 'booking', id: bookingId }, 'Dispute won', ['card_dispute']);
     console.log(`[PaymentDispute] Booking ${bookingId} dispute won (${disputeId ?? 'n/a'}) — restored to paid`);
   }
 
@@ -367,6 +388,7 @@ export class PaymentDisputeService {
     } catch (error) {
       console.error('[PaymentDispute] Failed to reverse earnings on booking dispute loss:', error);
     }
+    await this.resumeEarnings({ kind: 'booking', id: bookingId }, 'Dispute closed (lost)', ['card_dispute']);
     await this.calendarSync.syncBookingPaymentStatus(booking);
 
     await this.openTicket(
@@ -414,6 +436,31 @@ export class PaymentDisputeService {
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
+
+  /**
+   * Pause / resume the earnings behind a disputed charge. Never throws: the dispute webhook
+   * must still be acknowledged, and a pause that fails is logged loudly for an administrator
+   * to place by hand rather than turning the webhook into a 5xx the gateway retries forever.
+   */
+  private async pauseEarnings(target: PauseTarget, note: string): Promise<void> {
+    try {
+      await earningsPauseService.pause(target, 'card_dispute', SYSTEM_PAUSE_ACTOR, note);
+    } catch (error) {
+      console.error(`[PaymentDispute] FAILED to pause earnings for ${target.kind} ${target.id}:`, error);
+    }
+  }
+
+  private async resumeEarnings(
+    target: PauseTarget,
+    note: string,
+    onlyIfReason: readonly EarningsPauseReason[]
+  ): Promise<void> {
+    try {
+      await earningsPauseService.resume(target, SYSTEM_PAUSE_ACTOR, note, onlyIfReason);
+    } catch (error) {
+      console.error(`[PaymentDispute] FAILED to resume earnings for ${target.kind} ${target.id}:`, error);
+    }
+  }
 
   private async findOrderIdByPaymentIntent(paymentIntentId: string): Promise<string | null> {
     const tx = await PaymentTransactionModel.findOne({ gatewayRef: paymentIntentId });

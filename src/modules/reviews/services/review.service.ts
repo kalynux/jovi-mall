@@ -2,14 +2,19 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { agentTrustRecomputeWorker } from '../../agents/workers/agent-trust-recompute.worker';
 import { IReview, ReviewAuthorRole, ReviewStatus, ReviewSubjectType } from '../models/review.model';
-import { initialStatusOf, targetsOf } from '../domain/review-targets';
+import { targetsOf } from '../domain/review-targets';
 import {
   ReviewAuthor,
   ReviewEligibility,
   ReviewEligibilityService,
   reviewEligibilityService,
 } from '../domain/services/review-eligibility.service';
-import { ReviewPage, ReviewRepository, reviewRepository } from '../repositories/review.repository';
+import {
+  AdminReviewFilters,
+  ReviewPage,
+  ReviewRepository,
+  reviewRepository,
+} from '../repositories/review.repository';
 import {
   ReviewAggregateRepository,
   reviewAggregateRepository,
@@ -29,8 +34,12 @@ export interface ModerationActor {
 }
 
 /**
- * ReviewService — submission, moderation, and the aggregate refresh that follows
- * either of them.
+ * ReviewService — submission, after-the-fact moderation, and the aggregate refresh
+ * that follows either of them.
+ *
+ * Every review publishes on submission (owner decision, 2026-10-05). Moderation is
+ * three administrator verbs on an already-public review — unpublish, republish,
+ * delete — reached only from wi-admin over `/api/internal/admin/reviews`.
  *
  * ── The one rule the rest of this file is arranged around ─────────────────────
  * **An aggregate is refreshed by exactly one function, and a trust score is refreshed
@@ -118,7 +127,6 @@ export class ReviewService {
         rating: input.rating,
         title,
         body,
-        status: initialStatusOf({ title, body }),
         orderId: resolved.orderId,
         shipmentId: resolved.shipmentId,
         targetProductId: resolved.productId,
@@ -133,14 +141,13 @@ export class ReviewService {
       throw error;
     }
 
-    // Only a row that actually published changes an aggregate. A `pending` one moves
-    // nothing until a moderator says so, which is what makes the queue meaningful.
-    if (review.status === 'published') await this.refreshTargets(review);
+    // Every review lands `published`, so every submission moves its aggregates.
+    await this.refreshTargets(review);
 
     return review;
   }
 
-  /** This author's own reviews, every status — they can see their pending row. */
+  /** This author's own reviews, every status — they can see one an administrator hid. */
   async listMine(author: ReviewAuthor, page: number, limit: number, status?: ReviewStatus): Promise<ReviewPage> {
     return await this.reviews.listByAuthor(author.userId, page, limit, status);
   }
@@ -161,14 +168,10 @@ export class ReviewService {
     return await this.reviews.listPublishedForSubject('product', productId, page, limit);
   }
 
-  // ─── Moderation ───────────────────────────────────────────────────────────
+  // ─── Moderation (after the fact) ──────────────────────────────────────────
 
-  async listForModeration(
-    page: number,
-    limit: number,
-    filters: { status?: ReviewStatus; subjectType?: ReviewSubjectType; authorRole?: ReviewAuthorRole },
-  ): Promise<ReviewPage> {
-    return await this.reviews.listForModeration(page, limit, filters);
+  async listForAdmin(page: number, limit: number, filters: AdminReviewFilters): Promise<ReviewPage> {
+    return await this.reviews.listForAdmin(page, limit, filters);
   }
 
   async getById(id: string): Promise<IReview> {
@@ -177,42 +180,62 @@ export class ReviewService {
     return review;
   }
 
-  /** Publish a held review. Compare-and-set on `pending`; a miss is a 409. */
-  async publish(id: string, actor: ModerationActor): Promise<IReview> {
-    return await this.moderate(id, 'published', actor, null);
+  /**
+   * Take a published review down. The reason is required and is **never shown to the
+   * public or to the author** — it is the administrator's record of why, for the next
+   * person looking at the same account. The author sees only that it is hidden.
+   */
+  async unpublish(id: string, actor: ModerationActor, reason: string): Promise<IReview> {
+    return await this.changeStatus(id, 'published', 'unpublished', 'unpublished', actor, reason);
+  }
+
+  /** Put an unpublished review back. A reason is optional here — undoing needs none. */
+  async republish(id: string, actor: ModerationActor, reason: string | null): Promise<IReview> {
+    return await this.changeStatus(id, 'unpublished', 'published', 'republished', actor, reason);
   }
 
   /**
-   * Reject a held review. The reason is required and is **never shown to the public
-   * or to the author** — it is the moderator's record of why, for the next person
-   * looking at the same account.
+   * Delete a review, whatever its status. Reason required, as for unpublish.
+   *
+   * Different from unpublish in exactly one way that matters to a person: the author
+   * may write a NEW review of the same product or delivery afterwards (the unique index
+   * is partial on `deletedAt: null`). Irreversible from the API — there is no undelete.
    */
-  async reject(id: string, actor: ModerationActor, reason: string): Promise<IReview> {
-    return await this.moderate(id, 'rejected', actor, reason);
+  async remove(id: string, actor: ModerationActor, reason: string): Promise<IReview> {
+    const deleted = await this.reviews.softDeleteIfLive(id, { userId: actor.userId, source: actor.source, reason });
+    if (!deleted) throw createAppError(ERROR_CODES.REVIEW_NOT_FOUND, 404);
+
+    // A deleted PUBLISHED review leaves the aggregate; a deleted unpublished one was
+    // already out of it, and the recompute is then a harmless no-op.
+    await this.refreshTargets(deleted);
+    return deleted;
   }
 
-  private async moderate(
+  private async changeStatus(
     id: string,
-    next: 'published' | 'rejected',
+    from: ReviewStatus,
+    to: ReviewStatus,
+    action: 'unpublished' | 'republished',
     actor: ModerationActor,
     reason: string | null,
   ): Promise<IReview> {
-    const updated = await this.reviews.moderateIfPending(id, next, {
+    const updated = await this.reviews.setStatusIf(id, from, to, action, {
       userId: actor.userId,
       source: actor.source,
       reason,
     });
 
     if (!updated) {
-      // Distinguish "no such review" from "somebody moderated it first". Both are
-      // dead ends for this request, but only one of them means reload and look again.
+      // Distinguish "no such review" from "it is not in the state this verb starts
+      // from". Both are dead ends for this request, but only one means reload and look
+      // again — the review is already hidden, or already visible.
       const exists = await this.reviews.findById(id);
       if (!exists) throw createAppError(ERROR_CODES.REVIEW_NOT_FOUND, 404);
-      throw createAppError(ERROR_CODES.REVIEW_NOT_PENDING, 409, undefined, { status: exists.status });
+      throw createAppError(ERROR_CODES.REVIEW_STATUS_CONFLICT, 409, undefined, { status: exists.status });
     }
 
-    // Both verdicts refresh, and the rejection branch is the load-bearing one: a
-    // recompute over `status: 'published'` is what makes "a rejected review counts
+    // Both directions refresh, and the unpublish branch is the load-bearing one: a
+    // recompute over `status: 'published'` is what makes "an unpublished review counts
     // for nothing, star included" true without anybody subtracting anything.
     await this.refreshTargets(updated);
     return updated;

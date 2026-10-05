@@ -623,8 +623,8 @@ export interface BotReviewDto {
     rating: number;
     title: string | null;
     body: string | null;
-    /** `pending` · `published` · `rejected`. ⚠ Read `publiclyVisible`, not this. */
-    status: 'pending' | 'published' | 'rejected';
+    /** `published` · `unpublished` (an administrator hid it). ⚠ Read `publiclyVisible`, not this. */
+    status: 'published' | 'unpublished';
     createdAt: string;
     /**
      * What was reviewed, in the shape the next tool call wants.
@@ -651,9 +651,10 @@ export interface BotReviewDto {
      *
      * A delivery review is an internal quality signal that publishes to no page anywhere —
      * it moves an agent's aggregate and feeds their trust score, and `listPublicForProduct`
-     * is the only public review read there is. But a bare-star delivery review is written
-     * straight to `published` by `initialStatusOf`, so relaying `status` alone hands a model
-     * the sentence *"your review is live"* about something the customer will never find.
+     * is the only public review read there is. But every review — a delivery one included
+     * — is written straight to `published` at submission, so relaying `status` alone hands
+     * a model the sentence *"your review is live"* about something the customer will never
+     * find.
      *
      * The storefront makes the same determination in its own `StatusBadge` — a delivery row
      * shows "Delivery feedback" rather than a status — so the choice is not whether it gets
@@ -667,15 +668,15 @@ export interface BotReviewDto {
  * One of the author's own reviews, as a chat may see it.
  *
  * ── WHAT IS DELIBERATELY ABSENT ─────────────────────────────────────────────
- *   - `moderation` — who rejected it, when, and **why**. `AuthorReviewDto` already omits
- *     it and this must never reacquire it: the reason is a moderator's private note
- *     written for the next moderator (`RejectReviewSchema`), and it is the one field on
- *     this document that would be actively harmful read aloud to the person it is about.
+ *   - `moderation` — who hid or deleted it, when, and **why**. `AuthorReviewDto` already
+ *     omits it and this must never reacquire it: the reason is an administrator's private
+ *     note written for the next administrator (`ReviewModerationReasonSchema`), and the
+ *     owner decided an author sees only that their review is hidden, never the reason.
  *   - `authorUserId` — the caller's own id. Same argument that keeps `customerId` off
  *     `toBotNotificationDto` and `externalId` off the identity DTO: echoing an internal
  *     identifier back invites a model to quote it.
- *   - `publishedAt` — chat noise. "Is it up?" is answered by `publiclyVisible`; the date
- *     a moderator happened to clear the queue is not a thing anybody asks.
+ *   - `publishedAt` — chat noise. "Is it up?" is answered by `publiclyVisible`, and it is
+ *     the submission date anyway, which `createdAt` already carries.
  */
 export function toBotReviewDto(
     review: {
@@ -683,7 +684,7 @@ export function toBotReviewDto(
         rating: number;
         title: string | null;
         body: string | null;
-        status: 'pending' | 'published' | 'rejected';
+        status: 'published' | 'unpublished';
         createdAt: string;
         subjectType: 'product' | 'delivery';
         subjectId: string;

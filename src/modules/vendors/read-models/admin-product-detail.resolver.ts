@@ -10,6 +10,17 @@ import {
 } from '../../catalog/models';
 import { ShippingConfigModel } from '../../catalog/models/shipping-config.model';
 import { StockReservationModel } from '../../catalog/models/stock-reservation.model';
+import { ProductOptionModel } from '../../catalog/models/product-option.model';
+import { ProductOptionValueModel } from '../../catalog/models/product-option-value.model';
+import { DigitalAssetModel } from '../../digital-delivery/models/digital-asset.model';
+import { isBargainEffective } from '../../catalog/domain/services/bargain-price.rule';
+import { ProductMapper } from '../../catalog/repositories/mappers/product.mapper';
+import { resolveFileDetails } from '../../catalog/read-models/file-detail.resolver';
+import {
+    PickupLocationDetail,
+    PickupLocationDetailResolver,
+    pickupLocationDetailResolver,
+} from '../../catalog/read-models/pickup-location-detail.resolver';
 import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
 import { productImageKey, resolveProductImages } from '../../catalog/read-models/product-image.resolver';
 import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
@@ -63,6 +74,9 @@ import { categoryCatalogCache, CategoryRef } from '../../categories/services/cat
  */
 const DEFAULT_CURRENCY = 'XAF';
 
+/** Stateless — the pickup resolver takes the domain `Product`, and this holds the document. */
+const productMapper = new ProductMapper();
+
 /** One variant, as an administrator needs to see it. */
 export interface AdminProductVariantDto {
     id: string;
@@ -71,9 +85,77 @@ export interface AdminProductVariantDto {
     status: 'active' | 'archived';
     amount: number;
     compareAtAmount: number | null;
+    /**
+     * Which option values make this variant (`Size: M`, `Colour: Red`), in the
+     * product's option order. `[]` on a variant with no options — a simple-mode
+     * product, a digital format, a service.
+     */
+    optionValues: AdminProductVariantOptionValueDto[];
+    /**
+     * The haggling window the vendor configured, or `null` when none is. `minPrice`
+     * IS `amount` (`bargain-price.rule.ts`); `maxPrice` is the ceiling. Returned
+     * even when `bargainable` is false — the vectorisation flag makes a window
+     * inert, it never deletes it.
+     */
+    bargain: { minPrice: number; maxPrice: number } | null;
+    /** `product.vectorisationEnabled && bargain != null` — whether the window is live. */
+    bargainable: boolean;
+    /**
+     * The variant's OWN measurements, each independently `null`. The whole object is
+     * `null` when the vendor set none of the four, in which case the product's
+     * `shipping` defaults apply.
+     */
+    dimensions: AdminProductDimensionsDto | null;
+    /**
+     * Every file attached to this variant itself, in the vendor's order — **unfiltered**:
+     * any type, and quota-blocked ones too (`access` says which). `[]` when the variant
+     * carries no media of its own, which is the normal case; the customer then sees the
+     * product's gallery. Not the fallback gallery — that is `media.images`.
+     */
+    files: FileDetail[];
+    /** Digital products only; `null` otherwise. */
+    digital: {
+        /** `null` until the vendor uploads the file. No URL — downloads are entitlement-gated. */
+        asset: { id: string; originalName: string; mimeType: string; size: number } | null;
+        /** `null` = unlimited. */
+        maxDownloads: number | null;
+        /** `null` = never expires. */
+        expiresAfterDays: number | null;
+    } | null;
+    /** Service products only; `null` otherwise. `amount` is the price per `durationMinutes`. */
+    service: {
+        durationMinutes: number;
+        bufferBeforeMinutes: number;
+        bufferAfterMinutes: number;
+        bookingMode: string;
+        maxBookings: number | null;
+        peakHours: {
+            daysOfWeek: number[];
+            startTime: string;
+            endTime: string;
+            priceType: string;
+            value: number;
+        } | null;
+    } | null;
     inventory: AdminProductInventoryDto;
     /** Null when this product is not warehoused by an agency — see `storage` below. */
     storage: AdminProductStorageDto | null;
+}
+
+export interface AdminProductVariantOptionValueDto {
+    optionId: string;
+    /** `null` when the option row was deleted under the value — never invented. */
+    optionName: string | null;
+    valueId: string;
+    value: string;
+}
+
+/** Grams and centimetres, as the vendor entered them. Each is independently `null`. */
+export interface AdminProductDimensionsDto {
+    weightG: number | null;
+    lengthCm: number | null;
+    widthCm: number | null;
+    heightCm: number | null;
 }
 
 export interface AdminProductInventoryDto {
@@ -122,6 +204,49 @@ export interface AdminProductDetailDto {
     vendorId: string;
     title: string;
     slug: string;
+    /**
+     * The plain-text description — the one the storefront renders. `null` when the
+     * vendor wrote none (stored as `''`). The formatted copy used for sharing is not
+     * carried; it is the same words.
+     */
+    description: string | null;
+    /** The search-engine overrides. Each `null` when unset — the storefront then uses the title / description. */
+    seo: { title: string | null; description: string | null };
+    /**
+     * The vendor's AI-search opt-in. Bargaining is only live when `enabled` is true,
+     * so this is what explains a variant with a window and `bargainable: false`.
+     */
+    vectorisation: { enabled: boolean; status: string };
+    /** The product's options in position order, each with its values. `[]` when it has none. */
+    options: {
+        id: string;
+        name: string;
+        position: number;
+        values: { id: string; value: string }[];
+    }[];
+    /**
+     * The product-level shipping defaults (`ShippingConfig`) — the size and weight a
+     * variant falls back to when it states none of its own. `null` when the vendor never
+     * saved any, which is normal for a digital or service product.
+     */
+    shipping: {
+        weightG: number | null;
+        lengthCm: number | null;
+        widthCm: number | null;
+        heightCm: number | null;
+        originZipCode: string | null;
+        handlingDays: number | null;
+        shippingEnabled: boolean;
+    } | null;
+    /**
+     * Where the delivery agency collects this product — the vendor's own address, or the
+     * agency's depot (`agency_storage`, i.e. the agency HOSTS the stock). The address is
+     * resolved; `null` on a digital/service product or a physical one not configured yet.
+     * Under `agency_storage` the depot belongs to `deliveryAgency`.
+     */
+    pickup: PickupLocationDetail | null;
+    /** Digital products only: the product-wide download switch. `null` otherwise. */
+    digital: { isActive: boolean } | null;
     /** The product's categories, resolved, in the vendor's order. */
     categories: CategoryRef[];
     /** ⚠ DEPRECATED — `categories[0].name`, or null. */
@@ -139,9 +264,19 @@ export interface AdminProductDetailDto {
         note: string | null;
     } | null;
     media: {
-        /** Thumbnail first, `image/*` only. Empty when the listing carries no picture. */
+        /**
+         * The gallery a customer sees for the DEFAULT variant: thumbnail first, `image/*`
+         * only, variant media first and the product's as the fallback. Empty when the
+         * listing carries no picture. Other variants' pictures are on `variants[].files`.
+         */
         images: FileDetail[];
         primaryImage: FileDetail | null;
+        /**
+         * Every file attached to the product itself, in the vendor's order —
+         * **unfiltered** (any type, quota-blocked included). Together with
+         * `variants[].files` this is all the media the listing holds.
+         */
+        files: FileDetail[];
     };
     /**
      * The default variant's price, and the spread when variants disagree. `null` on a
@@ -184,6 +319,9 @@ export class AdminProductDetailResolver {
     constructor(
         private readonly magazins: MagazinRepository = new MagazinRepository(),
         private readonly files: FileRepositoryMongo = new FileRepositoryMongo(),
+        // The vendor editor's own resolver, so the admin sees the address the vendor
+        // picked exactly as the vendor sees it — including the primary-depot fallback.
+        private readonly pickups: PickupLocationDetailResolver = pickupLocationDetailResolver,
     ) { }
 
     /**
@@ -214,16 +352,37 @@ export class AdminProductDetailResolver {
             .sort({ createdAt: 1 })
             .exec();
 
-        const [images, reservedByVariant, shipping, agency, warehousedByVariant] = await Promise.all([
-            this.resolveImages(product, variants),
-            reservedUnitsByVariant(variants.map((v) => String(v._id))),
-            ShippingConfigModel.findOne({ productId: product._id }).lean().exec(),
-            this.resolveAgency(product),
-            // Step 14: the storage quote bills the agency's COUNTED shelf, so the depot rows
-            // have to be read here. Batched by variant so a product with twenty variants is
-            // one query rather than twenty.
-            new AgencyStockLevelRepository().warehousedByVariant(variants.map((v) => String(v._id))),
-        ]);
+        const [images, reservedByVariant, shipping, agency, warehousedByVariant, options, filesById, assetsById, pickup] =
+            await Promise.all([
+                this.resolveImages(product, variants),
+                reservedUnitsByVariant(variants.map((v) => String(v._id))),
+                ShippingConfigModel.findOne({ productId: product._id, deletedAt: null }).lean().exec(),
+                this.resolveAgency(product),
+                // Step 14: the storage quote bills the agency's COUNTED shelf, so the depot rows
+                // have to be read here. Batched by variant so a product with twenty variants is
+                // one query rather than twenty.
+                new AgencyStockLevelRepository().warehousedByVariant(variants.map((v) => String(v._id))),
+                resolveOptions(product._id),
+                // Every file on the product and on every variant, in ONE lookup — the raw
+                // attachments, unfiltered, beside the customer-facing gallery above.
+                resolveFileDetails(
+                    [
+                        ...(product.fileIds ?? []).map(String),
+                        ...variants.flatMap((v) => (v.fileIds ?? []).map(String)),
+                    ],
+                    this.files,
+                    getStorageProvider(),
+                ),
+                digitalAssetsById(variants),
+                // Never throws — an unresolvable depot is `address: null`, not a failed read.
+                this.pickups.resolve(productMapper.toDomain(product)),
+            ]);
+
+        const valueById = new Map(
+            options.flatMap((option) =>
+                option.values.map((value) => [value.id, { option, value }] as const),
+            ),
+        );
 
         const variantDtos = variants.map((variant) =>
             this.toVariantDto(
@@ -232,16 +391,49 @@ export class AdminProductDetailResolver {
             shipping,
             agency,
             warehousedByVariant,
+            {
+                vectorisationEnabled: product.vectorisationEnabled === true,
+                valueById,
+                filesById,
+                assetsById,
+            },
         ),
         );
 
         const categories = await categoryCatalogCache.refsFor(product.categoryIds);
+        const filesOf = (ids: Types.ObjectId[] | undefined): FileDetail[] =>
+            (ids ?? []).map((id) => filesById.get(String(id))).filter((f): f is FileDetail => !!f);
 
         return {
             id: String(product._id),
             vendorId: product.vendorId.toString(),
             title: product.title,
             slug: product.slug,
+            description: blankToNull(product.description),
+            seo: {
+                title: blankToNull(product.seo?.title),
+                description: blankToNull(product.seo?.description),
+            },
+            vectorisation: {
+                enabled: product.vectorisationEnabled === true,
+                status: product.vectorisationStatus ?? 'not_started',
+            },
+            options: options.map(({ id, name, position, values }) => ({ id, name, position, values })),
+            shipping: shipping
+                ? {
+                    weightG: shipping.weight ?? null,
+                    lengthCm: shipping.length ?? null,
+                    widthCm: shipping.width ?? null,
+                    heightCm: shipping.height ?? null,
+                    originZipCode: blankToNull(shipping.originZipCode),
+                    handlingDays: shipping.handlingDays ?? null,
+                    shippingEnabled: shipping.shippingEnabled ?? true,
+                }
+                : null,
+            pickup,
+            digital: product.type === 'digital'
+                ? { isActive: product.digitalConfig?.isActive ?? true }
+                : null,
             categories,
             category: categories[0]?.name ?? null,
             tags: product.tags ?? [],
@@ -263,6 +455,7 @@ export class AdminProductDetailResolver {
             media: {
                 images,
                 primaryImage: images[0] ?? null,
+                files: filesOf(product.fileIds),
             },
             pricing: productPricing(product, variants),
             inventory: rollUpInventory(variantDtos),
@@ -352,8 +545,14 @@ export class AdminProductDetailResolver {
         shipping: { weight?: number; length?: number; width?: number; height?: number } | null,
         agency: ResolvedAgency | null,
         warehousedByVariant: Map<string, number>,
+        lookups: VariantLookups,
     ): AdminProductVariantDto {
         const tracked = !variant.isInfiniteStock;
+        const bargain = variant.bargain
+            ? { minPrice: variant.bargain.minPrice, maxPrice: variant.bargain.maxPrice }
+            : null;
+        const service = variant.serviceConfig;
+        const digital = variant.digitalConfig;
 
         return {
             id: String(variant._id),
@@ -362,6 +561,57 @@ export class AdminProductDetailResolver {
             status: variant.status,
             amount: variant.price,
             compareAtAmount: variant.compareAtPrice ?? null,
+            // Ordered by the OPTION's position, not by the array's — the array is
+            // whatever order the last write happened to send.
+            optionValues: (variant.optionValueIds ?? [])
+                .map((id) => lookups.valueById.get(String(id)))
+                .filter((hit): hit is NonNullable<typeof hit> => !!hit)
+                .sort((a, b) => a.option.position - b.option.position)
+                .map(({ option, value }) => ({
+                    optionId: option.id,
+                    optionName: option.name,
+                    valueId: value.id,
+                    value: value.value,
+                })),
+            bargain,
+            bargainable: isBargainEffective(lookups.vectorisationEnabled, bargain),
+            dimensions:
+                variant.weight != null || variant.length != null || variant.width != null || variant.height != null
+                    ? {
+                        weightG: variant.weight ?? null,
+                        lengthCm: variant.length ?? null,
+                        widthCm: variant.width ?? null,
+                        heightCm: variant.height ?? null,
+                    }
+                    : null,
+            files: (variant.fileIds ?? [])
+                .map((id) => lookups.filesById.get(String(id)))
+                .filter((f): f is FileDetail => !!f),
+            digital: digital
+                ? {
+                    asset: digital.assetId ? lookups.assetsById.get(String(digital.assetId)) ?? null : null,
+                    maxDownloads: digital.maxDownloads ?? null,
+                    expiresAfterDays: digital.expiresAfterDays ?? null,
+                }
+                : null,
+            service: service
+                ? {
+                    durationMinutes: service.durationMinutes,
+                    bufferBeforeMinutes: service.bufferBeforeMinutes ?? 0,
+                    bufferAfterMinutes: service.bufferAfterMinutes ?? 0,
+                    bookingMode: service.bookingMode,
+                    maxBookings: service.maxBookings ?? null,
+                    peakHours: service.peakHours
+                        ? {
+                            daysOfWeek: [...(service.peakHours.daysOfWeek ?? [])],
+                            startTime: service.peakHours.startTime,
+                            endTime: service.peakHours.endTime,
+                            priceType: service.peakHours.priceType,
+                            value: service.peakHours.value,
+                        }
+                        : null,
+                }
+                : null,
             inventory: {
                 tracked,
                 available: tracked ? variant.stock : null,
@@ -389,6 +639,68 @@ export class AdminProductDetailResolver {
                     : null,
         };
     }
+}
+
+/** What `toVariantDto` reads beyond the variant itself — each built once per product. */
+interface VariantLookups {
+    vectorisationEnabled: boolean;
+    valueById: Map<string, { option: ResolvedOption; value: { id: string; value: string } }>;
+    filesById: Map<string, FileDetail>;
+    assetsById: Map<string, NonNullable<AdminProductVariantDto['digital']>['asset']>;
+}
+
+interface ResolvedOption {
+    id: string;
+    name: string;
+    position: number;
+    values: { id: string; value: string }[];
+}
+
+/** `''` and whitespace are "not written" — the wire says `null` for absent data, never `""`. */
+function blankToNull(value: string | null | undefined): string | null {
+    return value != null && value.trim() !== '' ? value : null;
+}
+
+/** The product's options with their values — two queries whatever the option count. */
+async function resolveOptions(productId: Types.ObjectId): Promise<ResolvedOption[]> {
+    const options = await ProductOptionModel.find({ productId, deletedAt: null })
+        .sort({ position: 1 })
+        .lean()
+        .exec();
+    if (options.length === 0) return [];
+
+    const values = await ProductOptionValueModel.find({
+        optionId: { $in: options.map((o) => o._id) },
+        deletedAt: null,
+    })
+        .sort({ createdAt: 1 })
+        .lean()
+        .exec();
+
+    return options.map((option) => ({
+        id: String(option._id),
+        name: option.name,
+        position: option.position,
+        values: values
+            .filter((v) => String(v.optionId) === String(option._id))
+            .map((v) => ({ id: String(v._id), value: v.value })),
+    }));
+}
+
+/** The uploaded file behind each digital variant, in one query. No URL, ever. */
+async function digitalAssetsById(variants: IProductVariant[]): Promise<VariantLookups['assetsById']> {
+    const ids = variants
+        .map((v) => v.digitalConfig?.assetId)
+        .filter((id): id is Types.ObjectId => !!id);
+    if (ids.length === 0) return new Map();
+
+    const docs = await DigitalAssetModel.find({ _id: { $in: ids }, deletedAt: null }).lean().exec();
+    return new Map(
+        docs.map((doc) => [
+            String(doc._id),
+            { id: String(doc._id), originalName: doc.originalName, mimeType: doc.mimeType, size: doc.size },
+        ]),
+    );
 }
 
 interface ResolvedAgency {

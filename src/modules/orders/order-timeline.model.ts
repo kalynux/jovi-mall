@@ -28,6 +28,8 @@ export type TimelineEventType =
     | 'note.added'
     | 'entitlement.revoked'          // NEW: Phase 2 - Digital entitlement revoked
     | 'entitlement.restored'         // NEW: Phase 2 - Digital entitlement restored
+    | 'earnings.paused'              // The order's money was paused (EarningsPauseService)
+    | 'earnings.resumed'             // ... and resumed; its hold continues where it stopped
     | 'system.action';
 
 export type TimelineActorType = 'vendor' | 'customer' | 'system' | 'admin';
@@ -74,6 +76,8 @@ const OrderTimelineSchema = new Schema<IOrderTimeline>({
             'note.added',
             'entitlement.revoked',
             'entitlement.restored',
+            'earnings.paused',
+            'earnings.resumed',
             'system.action'
         ],
         required: true

@@ -794,10 +794,11 @@ export function validateEnv(source: NodeJS.ProcessEnv = process.env): EnvProblem
             err('GOOGLE_TOKEN_ENCRYPTION_KEY', 'is not set while Google Calendar is configured. google-token.vault.ts falls back to a literal key committed to this repository, so the OAuth token vault would be encrypted with a publicly known key.');
         }
 
-        // Same shape: the client id and secret have real-looking hardcoded fallbacks in
-        // `google-calendar.client.ts`, so an unset variable silently uses someone's account.
+        // The client id and secret are one credential. Half of it configured means the consent
+        // screen works and every token exchange and refresh fails afterwards. (They used to have
+        // hardcoded fallbacks in `google-calendar.client.ts`; those are gone.)
         if (has('GOOGLE_CLIENT_ID') !== has('GOOGLE_CLIENT_SECRET')) {
-            err('GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET', 'must be set together. google-calendar.client.ts substitutes a hardcoded credential for whichever is missing.');
+            err('GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET', 'must be set together. With only one set, vendors can reach Google\'s consent screen but every connection fails afterwards.');
         }
 
         if (has('JWT_REFRESH_SECRET') && get('JWT_REFRESH_SECRET') === get('JWT_SECRET')) {

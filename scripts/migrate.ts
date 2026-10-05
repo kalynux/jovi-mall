@@ -176,6 +176,17 @@ export const MIGRATIONS: Migration[] = [
         dryRun: true,
         note: 'EVERY EXISTING PRODUCT SHOWS NO CATEGORY — the free-text `category` is no longer read, so until this runs they vanish from category browsing on the storefront, the bot and AI search',
     },
+    // Owner decision 2026-10-05 (every review publishes; admins unpublish / republish /
+    // delete afterwards). The same shape as the row above: a data migration that also swaps
+    // an index (builds the partial one-review-per-author index, then drops the old one), so
+    // it runs here, before the index builds. `migrate:review-indexes` below then finds the
+    // new name present and builds nothing for it.
+    {
+        name: 'migrate:reviews-publish-all',
+        file: 'scripts/migrate-reviews-publish-all.ts',
+        dryRun: true,
+        note: 'EVERY WRITTEN REVIEW STAYS INVISIBLE — held `pending` rows never publish, their stars never count, and a deleted review still blocks its author from writing again',
+    },
     {
         name: 'backfill:actor-source',
         file: 'scripts/backfill-actor-source.ts',

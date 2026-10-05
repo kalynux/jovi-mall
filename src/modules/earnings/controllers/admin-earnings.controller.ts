@@ -6,9 +6,17 @@ import { orderMoneySplitService } from '../services/order-money-split.service';
 import {
   ListEarningsAccountsQuerySchema,
   LedgerQuerySchema,
+  ListPausesQuerySchema,
   OrderIdParamsSchema,
   OwnerParamsSchema,
+  PauseEarningsBodySchema,
+  PauseTargetParamsSchema,
+  ResumeEarningsBodySchema,
 } from '../validators/admin-earnings.validator';
+import { earningsPauseService, PauseActor } from '../services/earnings-pause.service';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
+import { actorFromRequest } from '../../../core/types/actor-source.types';
 
 /**
  * Admin-facing view of the earnings ledger.
@@ -126,4 +134,60 @@ export class AdminEarningsController {
     const balances = await earningsAccountService.getBalances(ownerType, ownerId);
     sendSuccess(res, { ownerType, ownerId, ...balances });
   });
+
+  // ── Earnings pauses (owner, 2026-10-05) ──────────────────────────────────────
+  // Paused money is never released. Some pauses are raised by the system (a seller cancelled
+  // a paid order, a card dispute); an administrator lifts them, or places one by hand.
+
+  /** GET /earnings/pauses — every order and booking whose money is paused now. */
+  static listPauses = asyncHandler(async (req: Request, res: Response) => {
+    const { kind, page, limit } = ListPausesQuerySchema.parse(req.query);
+    const { items, total } = await earningsPauseService.listActive(kind, page, limit);
+    sendPaginated(res, items, { total, page, limit, pages: Math.ceil(total / limit) });
+  });
+
+  /** GET /earnings/pauses/:kind/:id — the pause record of one order or booking (null if never paused). */
+  static getPause = asyncHandler(async (req: Request, res: Response) => {
+    const target = PauseTargetParamsSchema.parse(req.params);
+    if (!(await earningsPauseService.targetExists(target))) {
+      throw createAppError(ERROR_CODES.EARNINGS_PAUSE_TARGET_NOT_FOUND, 404);
+    }
+    sendSuccess(res, { ...target, pause: await earningsPauseService.currentPause(target) });
+  });
+
+  /**
+   * POST /earnings/pauses/:kind/:id/pause — pause by hand, with a required note.
+   * 409 when already paused: a second pause would overwrite who paused it and why.
+   */
+  static pause = asyncHandler(async (req: Request, res: Response) => {
+    const target = PauseTargetParamsSchema.parse(req.params);
+    const { note } = PauseEarningsBodySchema.parse(req.body ?? {});
+    if (!(await earningsPauseService.targetExists(target))) {
+      throw createAppError(ERROR_CODES.EARNINGS_PAUSE_TARGET_NOT_FOUND, 404);
+    }
+    const outcome = await earningsPauseService.pause(target, 'admin', pauseActorOf(req), note);
+    if (!outcome.changed) throw createAppError(ERROR_CODES.EARNINGS_ALREADY_PAUSED, 409);
+    sendSuccess(res, { ...target, pause: outcome.pause }, { message: 'Earnings paused' });
+  });
+
+  /**
+   * POST /earnings/pauses/:kind/:id/resume — lift ANY pause, whoever raised it. The hold
+   * continues where it stopped (the paused time does not count). 409 when not paused.
+   */
+  static resume = asyncHandler(async (req: Request, res: Response) => {
+    const target = PauseTargetParamsSchema.parse(req.params);
+    const { note } = ResumeEarningsBodySchema.parse(req.body ?? {});
+    if (!(await earningsPauseService.targetExists(target))) {
+      throw createAppError(ERROR_CODES.EARNINGS_PAUSE_TARGET_NOT_FOUND, 404);
+    }
+    const outcome = await earningsPauseService.resume(target, pauseActorOf(req), note ?? null);
+    if (!outcome.changed) throw createAppError(ERROR_CODES.EARNINGS_NOT_PAUSED, 409);
+    sendSuccess(res, { ...target, pause: outcome.pause }, { message: 'Earnings resumed' });
+  });
+}
+
+/** The administrator behind a wi-admin call, in the shape a pause records. */
+function pauseActorOf(req: Request): PauseActor {
+  const actor = actorFromRequest(req as any);
+  return { userId: actor.userId || null, source: actor.source, name: actor.name ?? null };
 }

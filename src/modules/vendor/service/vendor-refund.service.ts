@@ -8,6 +8,7 @@ import { PaymentOrchestratorService } from '../../payments/services/payment-orch
 import { VendorCustomerSyncService } from '../../vendors/services/vendor-customer-sync.service';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES, ErrorCode } from '../../../core/error-codes';
+import { deliveredAtOf } from '../../earnings/domain/earnings-hold';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -254,10 +255,17 @@ export function computeVendorRefundEligibility(
             return { ...base, reasonCode: ERROR_CODES.REFUND_ALREADY_FULLY_REFUNDED };
         }
 
-        // Return window (measured from order creation)
-        const windowEnd = new Date(order.created_at).getTime() + returnPolicy.return_window_days * MS_PER_DAY;
-        if (Date.now() > windowEnd) {
-            return { ...base, reasonCode: ERROR_CODES.REFUND_WINDOW_EXPIRED };
+        // Return window, measured from DELIVERY (owner, 2026-10-05, and what the published
+        // Returns policy promises: "within N days of receiving it"). It used to run from order
+        // CREATION, so a parcel that took a week to arrive had already used half a 14-day window
+        // before the customer held it. Not delivered yet → the window has not started, so a
+        // refund before delivery (a cancelled paid order) is never "too late".
+        const windowStart = deliveredAtOf(order);
+        if (windowStart) {
+            const windowEnd = windowStart.getTime() + returnPolicy.return_window_days * MS_PER_DAY;
+            if (Date.now() > windowEnd) {
+                return { ...base, reasonCode: ERROR_CODES.REFUND_WINDOW_EXPIRED };
+            }
         }
 
         // Policy-allowed maximum

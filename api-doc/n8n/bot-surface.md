@@ -668,17 +668,19 @@ external channels for these three roles) and is not yet taken.
 is up.**
 
 A **delivery** review is an internal quality signal about the carrier — it moves the agent's
-aggregate and feeds their trust score, and it publishes to no page anywhere. But a bare-star
-review carries no prose for a moderator to read, so `initialStatusOf` writes it straight to
-`status: "published"`. Relay that word and the bot tells a customer their review is live,
-about something they will never find.
+aggregate and feeds their trust score, and it publishes to no page anywhere. But every
+review — a delivery one included — is written straight to `status: "published"` at
+submission (since 2026-10-05 nothing is held for a moderator). Relay that word and the bot
+tells a customer their review is live, about something they will never find.
 
 | | `status` | `publiclyVisible` |
 |---|---|---|
-| product, bare star | `published` | **true** — it is on the product page and it moved the average |
-| product, with prose | `pending` → `published` | false → **true** when a moderator clears it |
-| product, refused | `rejected` | false. Its star counts for nothing either |
-| **delivery, any** | `published` or `pending` | **always false** |
+| product, as submitted (stars or words) | `published` | **true** — it is on the product page and it moved the average |
+| product, hidden by an administrator | `unpublished` | false. Its star counts for nothing either |
+| **delivery, any** | `published` or `unpublished` | **always false** |
+
+A review an administrator **deleted** is not in the list at all, and its author may write a
+new one. `pending` and `rejected` no longer exist.
 
 The storefront's own page makes the same determination — a delivery row shows "Delivery
 feedback" instead of a status badge — so the choice was never whether to make it, only

@@ -815,9 +815,9 @@ export const BotReviewEligibilitySchema = z
  * customer's sentence into two, which is exactly the kind of paraphrase the catalogue
  * tells it not to perform on a review.
  *
- * ⚠ Sending `body` is what holds the review for a moderator; a bare star publishes
- * immediately and moves a public rating. That is a domain rule (`initialStatusOf`) and
- * deliberately not expressed here — a schema cannot say "this field changes the workflow".
+ * ⚠ Every review publishes immediately, `body` included (since 2026-10-05), and moves a
+ * public rating. A `body` sent here appears on the product page at once — so it must be
+ * the customer's own words, never a model's summary of them.
  */
 export const BotReviewCreateSchema = z
     .object({
@@ -832,9 +832,9 @@ export const BotReviewCreateSchema = z
  * `POST /reviews/list` — the customer's own reviews, every status by default.
  *
  * ⚠ **Every status is the point of this list, not a permissive default.** A customer who
- * wrote a review and cannot find it on the product page has no other way to learn it is
- * simply waiting for a moderator — which is the reason the storefront's own page exists
- * too. Narrowing to `published` by default would hide exactly the row somebody asks about.
+ * wrote a review and cannot find it on the product page has no other way to learn that an
+ * administrator hid it — which is the reason the storefront's own page exists too.
+ * Narrowing to `published` by default would hide exactly the row somebody asks about.
  *
  * `status` is nonetheless offered, because "did mine go up?" is a real question and
  * answering it by listing everything for the model to filter is four rows to discard.
@@ -846,7 +846,7 @@ export const BotReviewCreateSchema = z
  */
 export const BotReviewListSchema = z
     .object({
-        status: z.enum(['pending', 'published', 'rejected']).optional(),
+        status: z.enum(['published', 'unpublished']).optional(),
         ...chatPage,
     })
     .strict();

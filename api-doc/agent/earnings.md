@@ -88,9 +88,14 @@ other.
 
 Money is **held** (`pending`) when the split happens, and becomes **available** only after:
 
-1. the **whole order** completes — every shipment on it confirmed or returned, not just yours
-   (a customer who never confirms is auto-confirmed 7 days after delivery), **and**
-2. a further **7-day hold window** elapses. A daily sweep moves matured holds to `available`.
+1. the **whole order** is delivered — every parcel on it delivered (for cash on delivery: its
+   code entered) or returned, not just yours, **and**
+2. a **3-day hold window** from that delivery elapses (`EARNINGS_HOLD_DAYS`). A daily sweep moves
+   matured holds to `available`. Until 2026-10-05 this waited for the customer's confirmation
+   (or 7 days) and then held 7 more days.
+
+Paused earnings — a seller cancelled a paid order, a card dispute, or our team — are not
+released until resumed, and the paused time does not count.
 
 Every actor on an order — vendor, platform, agency and you — matures on the same date. Your cut is
 never released early and never held longer than theirs.

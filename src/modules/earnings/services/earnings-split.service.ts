@@ -35,6 +35,7 @@ import {
 // arithmetic has to be testable without a Mongo connection. See its header for
 // why `vendorGross` is `P×qty − aiMargin` and never `floor×qty + 0.7·U`.
 import { computeOrderAiMargin, NegotiatedLineInput } from './negotiation-margin.service';
+import { deliveredAtOf } from '../domain/earnings-hold';
 // Who pays delivery, and how much (ADR-A11) — the pure readers every money path shares.
 import {
   collectionBreakdownOf,
@@ -576,7 +577,7 @@ export class EarningsSplitService {
     // forever: the collect path completes the order (the delivery code is the
     // customer's confirmation) BEFORE splitting, and the daily sweep re-splits
     // collections whose split never landed, long after the fact.
-    const orderCompletedAt = order.completion?.confirmed_at ?? null;
+    const orderCompletedAt = deliveredAtOf(order); // the order's hold start (delivery since 2026-10-05; completion as fallback)
     const codDefaults = {
       source_type: 'cod_collection' as const,
       source_id: sourceId,
@@ -753,7 +754,7 @@ export class EarningsSplitService {
       );
     }
 
-    const orderCompletedAt = order.completion?.confirmed_at ?? null;
+    const orderCompletedAt = deliveredAtOf(order); // the order's hold start (delivery since 2026-10-05; completion as fallback)
     const defaults = {
       source_type: 'cod_collection' as const,
       source_id: sourceId,
@@ -898,7 +899,7 @@ export class EarningsSplitService {
         order.delivery_address?.components?.region ?? null
       );
       const vendorBorne = deliveryFeeShares(reservedFee, customerDeliveryFeeOf(order, shipment)).vendorBorne;
-      const orderCompletedAtCash = order.completion?.confirmed_at ?? null;
+      const orderCompletedAtCash = deliveredAtOf(order); // the order's hold start (delivery since 2026-10-05; completion as fallback)
       await this.persist([
         {
           source_type: 'shipment',
@@ -963,7 +964,7 @@ export class EarningsSplitService {
     // COD split does. A `returned` shipment can settle the last outstanding item
     // and the recovery sweep re-splits long after the fact; without this the rows
     // sit held forever, since findMaturedHeld skips a null hold_release_at.
-    const orderCompletedAt = order.completion?.confirmed_at ?? null;
+    const orderCompletedAt = deliveredAtOf(order); // the order's hold start (delivery since 2026-10-05; completion as fallback)
     const shipmentDefaults = {
       source_type: 'shipment' as const,
       source_id: sourceId,

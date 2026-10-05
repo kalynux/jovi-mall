@@ -22,6 +22,8 @@ import { CashCollectionModel } from '../../cod/models/cash-collection.model';
 import { paysDeliveryFeeInCash } from '../../orders/domain/delivery-payer';
 import { COD_CONFIG, daysFromNow } from '../../cod/config/cod.config';
 import { codDiscrepancyService } from '../../cod/services/cod-discrepancy.service';
+import { earningsPauseService } from '../services/earnings-pause.service';
+import { SYSTEM_ACTOR_ID } from '../../../core/types/system-actor';
 import { ActorRole } from '../../tickets/types/ticket.types';
 
 /**
@@ -213,9 +215,20 @@ export class EarningsReleaseWorker implements ObservableWorker {
   /** Stage 2 — release matured held allocations into available balances. */
   private async releaseMaturedHolds(now: Date): Promise<void> {
     const matured = await this.allocationRepo.findMaturedHeld(now, EARNINGS_CONFIG.BATCH_SIZE);
+    const pauseCache = new Map<string, Date | null>();
 
     for (const allocation of matured) {
       try {
+        // The query already skips rows marked paused. This catches the row created AFTER its
+        // order or booking was paused (a shipment split landing during a dispute), which has
+        // no mark yet: it is marked now and left held, and the next sweep's query skips it.
+        const pausedAt = await earningsPauseService.pausedAtOfSource(allocation, pauseCache);
+        if (pausedAt) {
+          await this.allocationRepo.markPaused(allocation._id as any, pausedAt);
+          continue;
+        }
+
+
         await transactionManager.runInTransaction(async (session) => {
           // Atomically claim the allocation; null means another sweep already
           // released/reversed it — skip to stay idempotent.
@@ -412,18 +425,12 @@ export class EarningsReleaseWorker implements ObservableWorker {
    * exactly as if they'd called `POST .../earnings/payout` themselves (same
    * ticket + notification flow). Skips accounts that already have a pending
    * request (the "one at a time" rule already enforced for manual requests)
-   * and requires `SUPPORT_ADMIN_USER_ID` to be configured as the acting admin
-   * (same convention as `TicketService.createSystemTicket`) — logs and skips
-   * entirely if it isn't, rather than failing the whole sweep.
+   * and is acted by the platform's built-in system identity (`core/types/system-actor.ts`),
+   * the same one that signs system tickets. It used to need `SUPPORT_ADMIN_USER_ID` and
+   * skipped the whole stage while that was unset, which was always (2026-10-05).
    */
   private async autoTriggerPayoutsOverThreshold(): Promise<void> {
-    const systemActorUserId = process.env.SUPPORT_ADMIN_USER_ID;
-    if (!systemActorUserId) {
-      console.warn(
-        '[EarningsReleaseWorker] SUPPORT_ADMIN_USER_ID not configured — skipping auto-payout threshold sweep'
-      );
-      return;
-    }
+    const systemActorUserId = SYSTEM_ACTOR_ID;
 
     const accounts = await this.accountRepo.findOverThreshold(EARNINGS_CONFIG.AUTO_PAYOUT_THRESHOLD);
 

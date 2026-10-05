@@ -227,6 +227,12 @@ Update booking status with automatic calendar synchronization.
 >
 > Calendar sync errors are logged but never block the status update.
 
+> ⚠ **`cancelled` on a PAID booking refunds nothing (2026-10-05).** It now **pauses the vendor's
+> earnings** for the booking and opens a **high-priority refund ticket** for the platform team. To
+> cancel a paid booking and refund the customer automatically, use
+> `POST /api/vendor/bookings/:id/cancel` instead. See
+> [FRONTEND-CHANGELOG-earnings-hold-and-pauses.md](./FRONTEND-CHANGELOG-earnings-hold-and-pauses.md).
+
 **Error Responses:**
 
 - `400 VALIDATION_ERROR`: Invalid `status` value

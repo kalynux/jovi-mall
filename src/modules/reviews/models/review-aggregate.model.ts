@@ -65,12 +65,12 @@ const DistributionSchema = new Schema<IReviewRatingDistribution>(
  *
  * ── Why every write RECOMPUTES rather than increments ────────────────────────
  * An `$inc` is cheaper and is wrong here. A review's contribution has to be added on
- * publish and removed on rejection, and a moderator can flip a row either way; an
- * increment path has to get every one of those transitions right, forever, and a
+ * submission and removed on unpublish or delete, and an administrator can flip a row
+ * either way; an increment path has to get every one of those transitions right, forever, and a
  * single missed one leaves a permanently drifted average nobody can detect without
  * recomputing anyway. A recompute is idempotent by construction, and the volumes
  * involved (one product's reviews, one agent's deliveries) make the aggregation
- * cheap. It also makes "a rejected review counts for nothing" true because the
+ * cheap. It also makes "an unpublished review counts for nothing" true because the
  * query says `status: 'published'`, not because a subtraction was remembered.
  *
  * There is no `deletedAt` here and no `BaseSchemaFields`: a derived row is rebuilt,

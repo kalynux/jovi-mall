@@ -1,10 +1,44 @@
 import { google, Auth } from 'googleapis';
 import mongoose from 'mongoose';
 import { ICalendarIntegrationProvider } from '../interfaces/calendar.integration.interface';
-import { ConnectedCalendarAccount } from './connected-account.model';
+import { ConnectedCalendarAccount, IConnectedCalendarAccount } from './connected-account.model';
 import { GoogleTokenVault } from './google-token.vault';
+import { ExternalCalendarBlock } from '../../../booking/models/external-calendar-block.model';
 import { createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
+
+/**
+ * The calendar permissions the integration needs, and nothing broader.
+ *
+ * Everything the platform does is covered by these two: `calendar.events` for
+ * events.list/get/insert/update/delete, `calendar.freebusy` for freebusy.query.
+ * It used to request the full `auth/calendar` scope, which also covers calendar
+ * settings, sharing (ACLs) and the calendar list. None of those are used, and
+ * Google's verification review pushes back on a scope wider than the app uses.
+ */
+export const GOOGLE_CALENDAR_REQUIRED_SCOPES = [
+  'https://www.googleapis.com/auth/calendar.events',
+  'https://www.googleapis.com/auth/calendar.freebusy',
+] as const;
+
+/** Identity scopes. Non-sensitive; they give the stable account id and the email shown to the vendor. */
+const GOOGLE_IDENTITY_SCOPES = [
+  'https://www.googleapis.com/auth/userinfo.profile',
+  'https://www.googleapis.com/auth/userinfo.email',
+] as const;
+
+/**
+ * Which required calendar scopes a grant is missing.
+ *
+ * Google's consent screen lets the user untick individual sensitive scopes, so
+ * a successful exchange does not mean calendar access was granted. A grant
+ * carrying the legacy full `auth/calendar` scope covers both.
+ */
+export function missingCalendarScopes(granted: string | null | undefined): string[] {
+  const scopes = new Set((granted ?? '').split(/\s+/).filter(Boolean));
+  if (scopes.has('https://www.googleapis.com/auth/calendar')) return [];
+  return GOOGLE_CALENDAR_REQUIRED_SCOPES.filter((s) => !scopes.has(s));
+}
 
 export class GoogleCalendarProvider implements ICalendarIntegrationProvider {
   private vault: GoogleTokenVault;
@@ -43,11 +77,7 @@ export class GoogleCalendarProvider implements ICalendarIntegrationProvider {
     const client = this.createAuthClient();
     return client.generateAuthUrl({
       access_type: 'offline', // Critical for receiving refresh token
-      scope: [
-        'https://www.googleapis.com/auth/calendar',
-        'https://www.googleapis.com/auth/userinfo.profile',
-        'https://www.googleapis.com/auth/userinfo.email',
-      ],
+      scope: [...GOOGLE_CALENDAR_REQUIRED_SCOPES, ...GOOGLE_IDENTITY_SCOPES],
       prompt: 'consent', // Force consent to ensure refresh token is returned
       state: state, // OAuth CSRF protection
     });
@@ -56,6 +86,24 @@ export class GoogleCalendarProvider implements ICalendarIntegrationProvider {
   async handleCallback(code: string, userId: string, vendorId?: string): Promise<void> {
     const client = this.createAuthClient();
     const { tokens } = await client.getToken(code);
+
+    // Refused before anything is stored. A connection saved without calendar
+    // access would show "connected" and then fail every sync and every booking
+    // write. The token is revoked so the partial grant does not linger on the
+    // vendor's Google account either.
+    const missing = missingCalendarScopes(tokens.scope);
+    if (missing.length > 0) {
+      if (tokens.access_token) {
+        await client.revokeToken(tokens.access_token).catch(() => undefined);
+      }
+      throw createAppError(
+        ERROR_CODES.GOOGLE_CALENDAR_SCOPE_NOT_GRANTED,
+        422,
+        'Calendar access was not granted on the Google consent screen',
+        { missingScopes: missing },
+      );
+    }
+
     client.setCredentials(tokens);
 
     // Fetch user profile to get stable ID
@@ -138,14 +186,24 @@ export class GoogleCalendarProvider implements ICalendarIntegrationProvider {
     }
 
     await ConnectedCalendarAccount.deleteOne({ _id: account._id });
+
+    // The busy times copied from this calendar go with the connection. Without
+    // this they outlived the disconnect forever, which contradicts what the
+    // privacy policy (and Google's user-data policy) promise on revocation.
+    // A model import, not a booking-service import: the model reaches only core/.
+    if (account.vendorId) {
+      await ExternalCalendarBlock.deleteMany({ vendorId: account.vendorId, provider: 'google' });
+    }
   }
 
   async testConnection(userId: string): Promise<boolean> {
-    const client = await this.getAuthenticatedClient(userId);
+    const { client, account } = await this.getAuthenticatedClient(userId);
     const calendar = google.calendar({ version: 'v3', auth: client });
 
-    // Perform a lightweight call
-    await calendar.calendarList.list({ maxResults: 1 });
+    // A lightweight call on the connected calendar. Deliberately not
+    // calendarList.list: that needs a calendar-list scope the integration no
+    // longer requests.
+    await calendar.events.list({ calendarId: account.calendarId, maxResults: 1 });
     return true;
   }
 
@@ -153,7 +211,9 @@ export class GoogleCalendarProvider implements ICalendarIntegrationProvider {
    * Helper to get an authenticated client for a user.
    * Handles token decryption and sets up automatic token refresh persistence.
    */
-  private async getAuthenticatedClient(userId: string): Promise<Auth.OAuth2Client> {
+  private async getAuthenticatedClient(
+    userId: string,
+  ): Promise<{ client: Auth.OAuth2Client; account: IConnectedCalendarAccount }> {
     const account = await ConnectedCalendarAccount.findOne({ userId, provider: 'google' });
     if (!account) {
       throw createAppError(ERROR_CODES.GOOGLE_CALENDAR_NOT_CONNECTED, 400, 'Google Calendar is not connected');
@@ -201,6 +261,6 @@ export class GoogleCalendarProvider implements ICalendarIntegrationProvider {
       }
     });
 
-    return client;
+    return { client, account };
   }
 }

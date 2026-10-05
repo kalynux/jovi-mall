@@ -43,6 +43,7 @@ import {
     AgencyEarningQuoteResult,
 } from '../earnings/services/earnings-quote.service';
 import { earningsSplitService } from '../earnings/services/earnings-split.service';
+import { earningsCompletionService } from '../earnings/services/earnings-completion.service';
 import { orderStockService } from '../orders/services/order-stock.service';
 import { cashCollectionService, CodShipmentSummary } from '../cod/services/cash-collection.service';
 import { eventBus } from '../../core/events/event-bus';
@@ -1487,14 +1488,26 @@ export class ShipmentService {
         // Every ONLINE order goes in, cash-for-delivery included (W-F): the split itself writes
         // nothing for a delivered cash-fee shipment (its collection pays the agency) and only the
         // vendor-borne remainder for a returned one.
+        let split: Promise<void> = Promise.resolve();
         if (order.payment_method !== 'cash_on_delivery' && (newStatus === 'agent_delivered' || newStatus === 'returned')) {
             // `agent_delivered` IS the successful outcome here — it is the point
             // the run ended, and the later customer confirmation only matures
             // what this creates.
             const outcome = newStatus === 'returned' ? 'returned' : 'delivered';
-            void earningsSplitService
+            split = earningsSplitService
                 .splitShipmentDelivery(order, updated!, outcome)
                 .catch((err) => console.error('[ShipmentService] delivery earnings split failed:', err));
+        }
+
+        // Start (or un-start) the order's earnings hold: since 2026-10-05 it runs from the
+        // courier finishing the LAST parcel, not from the customer's confirmation. Chained
+        // AFTER the split so the rows this delivery just created start with the others.
+        // `failed` is here because a parcel can go `agent_delivered → failed`, which makes the
+        // order undelivered again. Best-effort; order completion is the backstop.
+        if (['agent_delivered', 'delivered', 'returned', 'failed'].includes(newStatus)) {
+            void split
+                .then(() => earningsCompletionService.syncOrderHold(order._id.toString()))
+                .catch((err) => console.error('[ShipmentService] earnings hold sync failed:', err));
         }
 
         // A COD agent who has just announced arrival is not finished: the parcel
@@ -2272,6 +2285,13 @@ export class ShipmentService {
         // rather than `fulfillment_status === 'delivered'`: an order whose other
         // shipment was returned is finished, and must still complete or its
         // escrow never releases.
+        // The hold normally started when the agent marked this parcel delivered; this re-sync is
+        // the backstop for a sync that failed then. Idempotent. Awaited, before completion, so a
+        // missed start is recorded at delivery-ish time rather than at completion.
+        await earningsCompletionService
+            .syncOrderHold(orderId)
+            .catch((err) => console.error('[ShipmentService] earnings hold sync failed:', err));
+
         const refreshedOrder = await OrderModel.findById(orderId);
         if (refreshedOrder && !refreshedOrder.completion?.confirmed_at && this.completionService.isSettled(refreshedOrder)) {
             await this.completionService.complete(

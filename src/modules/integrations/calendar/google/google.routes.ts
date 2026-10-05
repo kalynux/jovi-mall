@@ -241,7 +241,13 @@ router.get(
     try {
       await provider.handleCallback(code, userId, vendorId);
     } catch (error) {
-      if (redirectOAuthResult(res, { calendar: 'error', reason: 'connection_failed' }, returnTo)) return;
+      // Its own reason, because the remedy differs: nothing failed, the vendor
+      // unticked the calendar permissions, and reconnecting with them ticked fixes it.
+      const reason =
+        (error as { code?: string })?.code === ERROR_CODES.GOOGLE_CALENDAR_SCOPE_NOT_GRANTED
+          ? 'permissions_missing'
+          : 'connection_failed';
+      if (redirectOAuthResult(res, { calendar: 'error', reason }, returnTo)) return;
       throw error;
     }
 

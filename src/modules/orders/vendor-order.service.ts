@@ -38,6 +38,7 @@ import {
 } from './domain/change-agency-move.rules';
 import { shipmentAssignmentOfferRepository } from '../shipment-assignment/repositories/shipment-assignment-offer.repository';
 import { shipmentAssignmentSessionRepository } from '../shipment-assignment/repositories/shipment-assignment-session.repository';
+import { raiseRefundOwed } from '../earnings/services/refund-owed.service';
 
 /**
  * Vendor Order Service
@@ -738,6 +739,22 @@ export class VendorOrderService {
                 occurredAt: new Date()
             });
             console.log(`[VendorOrderService] Emitted order.cancelled event for order ${orderId}`);
+
+            // 7c. Cancelled AFTER the customer paid. This path refunds nothing, so the money
+            // must not reach the seller and a person must refund the customer: pause the
+            // earnings and open a high-priority refund ticket (owner, 2026-10-05). Read from
+            // the order as it was BEFORE this write — that is what the customer paid.
+            if (order.payment_status === 'paid') {
+                await raiseRefundOwed({
+                    target: { kind: 'order', id: orderId },
+                    reason: 'seller_cancelled_paid_order',
+                    reference: updatedOrder.order_number ?? orderId,
+                    amount: order.total_amount,
+                    currency: order.currency,
+                    paymentMethod: order.payment_method ?? null,
+                    cancelledBy: 'the seller',
+                });
+            }
         }
 
         // 8. Return updated order DTO

@@ -229,6 +229,23 @@ export class VendorRepository {
     ]));
   }
 
+  /**
+   * Each vendor's `business_addresses[]`, in one query — what a list of products needs to
+   * label a `vendor_address` pickup without a vendor fetch per row. Projects the addresses
+   * and nothing else.
+   */
+  async findBusinessAddressesByIds(
+    vendorIds: Array<string>,
+  ): Promise<Map<string, IVendor['business_addresses']>> {
+    const ids = [...new Set(vendorIds)].filter((id) => Types.ObjectId.isValid(id));
+    if (ids.length === 0) return new Map();
+    const docs = await VendorModel.find(
+      { _id: { $in: ids.map((id) => new Types.ObjectId(id)) } },
+      { _id: 1, business_addresses: 1 },
+    ).lean();
+    return new Map(docs.map((d) => [d._id.toString(), (d.business_addresses ?? []) as IVendor['business_addresses']]));
+  }
+
   /** Vendor ids whose personal `display_name` matches — one arm of a vendor-name search. */
   async findIdsByDisplayNameMatch(regex: RegExp): Promise<string[]> {
     const docs = await VendorModel.find({ display_name: regex }, { _id: 1 }).lean();

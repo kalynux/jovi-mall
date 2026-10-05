@@ -8,7 +8,7 @@ import { ProductIdParamSchema, PublicReviewQuerySchema } from '../validators/rev
 /**
  * The storefront's review reader — unauthenticated, like every other `/api/public`
  * route, and subject to the same rule: only data a vendor has deliberately put on
- * sale, or that a moderator has deliberately published.
+ * sale, and that no administrator has taken down.
  *
  * ⚠ **Product reviews only.** There is no public route to a delivery review and there
  * must not be one: a delivery review names an agent (server-side) and is written by

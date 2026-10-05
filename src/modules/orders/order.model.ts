@@ -5,6 +5,7 @@ import type { DeliveryPayer, DeliveryPayerReason } from '../vendors/domain/deliv
 import type { ItemWeightSource } from '../earnings/domain/delivery-pricing';
 import { DELIVERY_FEE_PAYMENTS, DELIVERY_PAYERS, DELIVERY_PAYER_REASONS } from './domain/delivery-payer';
 import type { DeliveryFeePayment } from './domain/delivery-payer';
+import { EarningsPauseSchema, IEarningsPause } from '../earnings/models/earnings-pause.schema';
 
 /**
  * Order Model
@@ -243,6 +244,17 @@ export interface IOrder extends Document {
     gateway_dispute_id?: string | null;
     reason?: string | null;
   };
+
+  /**
+   * When the courier finished the LAST parcel of this order (for a digital order: when it was
+   * paid). Starts the earnings hold for every actor on the order, and the customer's return
+   * window. Null until then, and cleared again if a delivered parcel goes back to `failed`.
+   * Written only by `EarningsCompletionService.syncOrderHold`. See earnings/domain/earnings-hold.ts.
+   */
+  delivered_at?: Date | null;
+
+  /** An earnings pause on this order — see earnings/models/earnings-pause.schema.ts. */
+  earnings_pause?: IEarningsPause | null;
 
   // Completion (customer confirmation of delivery/satisfaction).
   // Orthogonal to fulfillment_status: it gates the escrow release, NOT the
@@ -504,6 +516,12 @@ const OrderSchema = new Schema<IOrder>({
     gateway_dispute_id: { type: String, default: null },
     reason: { type: String, default: null }
   },
+
+  // When the courier finished the last parcel (digital: when paid). Starts the earnings hold.
+  delivered_at: { type: Date, default: null },
+
+  // An earnings pause (seller cancelled after payment, card dispute, or an administrator).
+  earnings_pause: { type: EarningsPauseSchema, default: null },
 
   // Completion (customer confirmation; gates escrow release).
   completion: {

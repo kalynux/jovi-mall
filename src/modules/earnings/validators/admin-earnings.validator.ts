@@ -33,6 +33,31 @@ export const OwnerParamsSchema = z.object({
 
 export type OwnerParams = z.infer<typeof OwnerParamsSchema>;
 
+/** `/pauses/:kind/:id` — the order or booking whose earnings are paused or resumed. */
+export const PauseTargetParamsSchema = z.object({
+  kind: z.enum(['order', 'booking']),
+  id: z.string().trim().regex(/^[a-f\d]{24}$/i, 'Not a valid id'),
+});
+
+/**
+ * Pausing by hand. A reason is REQUIRED: it is what the next administrator reads when they
+ * decide whether to resume, and a pause nobody can explain is a pause nobody dares lift.
+ */
+export const PauseEarningsBodySchema = z
+  .object({ note: z.string().trim().min(3).max(500) })
+  .strict();
+
+export const ResumeEarningsBodySchema = z
+  .object({ note: z.string().trim().min(1).max(500).optional() })
+  .strict();
+
+export const ListPausesQuerySchema = z.object({
+  kind: z.enum(['order', 'booking']).optional(),
+  ...paginationFields,
+});
+
+export type ListPausesQuery = z.infer<typeof ListPausesQuerySchema>;
+
 export const OrderIdParamsSchema = z.object({
   orderId: z.string().trim().regex(/^[a-f\d]{24}$/i, 'Not a valid id'),
 });

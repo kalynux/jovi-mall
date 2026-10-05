@@ -65,6 +65,18 @@ function attachRoutes(router: Router): Router {
      */
     router.get('/orders/:orderId/split', AdminEarningsController.getOrderMoneySplit);
 
+    /**
+     * Earnings pauses (owner, 2026-10-05). Paused money is never released; the hold resumes
+     * where it stopped. Query: kind? (order|booking), page?, limit?
+     *
+     * `/pauses` and `/pauses/:kind/:id` differ in depth, and the two verbs are one level
+     * deeper again, so no route here shadows another.
+     */
+    router.get('/pauses', AdminEarningsController.listPauses);
+    router.get('/pauses/:kind/:id', AdminEarningsController.getPause);
+    router.post('/pauses/:kind/:id/pause', AdminEarningsController.pause);
+    router.post('/pauses/:kind/:id/resume', AdminEarningsController.resume);
+
     return router;
 }
 

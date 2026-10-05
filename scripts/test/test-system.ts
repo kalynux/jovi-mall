@@ -1976,8 +1976,13 @@ assert('MIGRATIONS covers every migrate:*/backfill:* binding, and every row has 
 // migration — every free-text `category` converted into the shared list through the same
 // matcher the editor uses — that also drops the two superseded indexes on the field it removes.
 // Among the data rows, so it runs before the index builds that replace them.
-assert('all twenty-eight are registered — the count is the count on disk', () =>
-    MIGRATIONS.length === 28);
+// ⚠ 28 -> 29 with `migrate:reviews-publish-all` (2026-10-05, owner decision: every review
+// publishes; admins unpublish / republish / delete afterwards): a DATA migration — held
+// `pending` reviews published, `rejected` ones renamed `unpublished` — that also swaps the
+// one-review-per-author index for one partial on `deletedAt: null`. Among the data rows, same
+// shape and same reason as the row above.
+assert('all twenty-nine are registered — the count is the count on disk', () =>
+    MIGRATIONS.length === 29);
 
 // The catch-all is LAST, and unlike the general index-after-data rule below this is a
 // dependency on the OTHER INDEX MIGRATIONS: it builds only what the declared-vs-live diff

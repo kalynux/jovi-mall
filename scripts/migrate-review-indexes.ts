@@ -61,9 +61,13 @@ interface PlannedIndex {
 const PLANNED: PlannedIndex[] = [
   {
     collection: COLLECTIONS.REVIEW,
-    name: 'review_one_per_author_per_subject',
+    // Was `review_one_per_author_per_subject`, non-partial, until 2026-10-05. Partial now so
+    // a review an administrator DELETED frees its author to write again. On a database that
+    // already holds the old one, the key matches and this script skips it —
+    // `migrate:reviews-publish-all` is what swaps it there.
+    name: 'review_one_live_per_author_per_subject',
     key: { subject_type: 1, subject_id: 1, author_user_id: 1 },
-    options: { unique: true },
+    options: { unique: true, partialFilterExpression: { deletedAt: null } },
     why: 'THE one-review-per-author rule. Without it the service pre-check is a race and duplicates persist',
   },
   {

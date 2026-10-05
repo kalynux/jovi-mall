@@ -27,8 +27,8 @@ router.use(requireRole(['customer']));
  * POST /api/customer/reviews
  *
  * Body: `{ subjectType: 'product' | 'delivery', subjectId, rating, title?, body? }`.
- * A bare rating publishes immediately; one carrying text is held for moderation —
- * see `initialStatusOf`. The response says which happened, in `status`.
+ * Every review publishes immediately, prose included (since 2026-10-05); an
+ * administrator may unpublish or delete it afterwards.
  */
 router.post('/', controller.create);
 

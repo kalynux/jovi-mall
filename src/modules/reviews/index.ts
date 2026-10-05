@@ -9,15 +9,22 @@
 export {
   ReviewModel,
   REVIEW_AUTHOR_ROLES,
+  REVIEW_MODERATION_ACTIONS,
   REVIEW_STATUSES,
   REVIEW_SUBJECT_TYPES,
 } from './models/review.model';
-export type { IReview, ReviewAuthorRole, ReviewStatus, ReviewSubjectType } from './models/review.model';
+export type {
+  IReview,
+  ReviewAuthorRole,
+  ReviewModerationAction,
+  ReviewStatus,
+  ReviewSubjectType,
+} from './models/review.model';
 
 export { ReviewAggregateModel, REVIEW_TARGET_TYPES } from './models/review-aggregate.model';
 export type { IReviewAggregate, IReviewRatingDistribution, ReviewTargetType } from './models/review-aggregate.model';
 
-export { averageOf, initialStatusOf, roleMayReview, targetsOf } from './domain/review-targets';
+export { averageOf, roleMayReview, targetsOf } from './domain/review-targets';
 export type { ReviewTarget, ReviewTargetInput } from './domain/review-targets';
 
 export {

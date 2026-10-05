@@ -269,10 +269,11 @@ npm run test:public-catalog                    # the storefront's visibility rul
                                                # asserted to contain none of it. /api/public/* has no
                                                # auth guard, so those projections ARE the access
                                                # control.
-npm run test:reviews                           # reviews & ratings (62, no DB) — the target matrix
+npm run test:reviews                           # reviews & ratings (79, no DB) — the target matrix
                                                # (which aggregates one review moves, and why an
                                                # agency's review never moves its OWN score), the
-                                               # publish-vs-hold rule, LEAK assertions that a public
+                                               # everything-publishes rule and the three admin
+                                               # verbs, LEAK assertions that a public
                                                # review carries no author identity, and SOURCE SCANS
                                                # for the invariants no behavioural test can see:
                                                # exactly one writer of `review_aggregates`, the trust
@@ -532,13 +533,14 @@ npm run verify:storefront                      # the storefront against real Mon
                                                # that a draft product's SKU 404s exactly as its URL
                                                # does. Writes then deletes its own
                                                # `verify-storefront-*` fixtures, pass or fail. NEEDS Mongo
-npm run verify:reviews                         # the review pipeline against real Mongo (16) — NEEDS
+npm run verify:reviews                         # the review pipeline against real Mongo (28) — NEEDS
                                                # Mongo. Its first group is the point: it plants a
                                                # DUPLICATE and asserts the E11000, because
-                                               # `review_one_per_author_per_subject` is the only thing
-                                               # making "one review per author" true (the service
-                                               # pre-check is a race) and autoIndex fails silently.
-                                               # Also proves a REJECTED review's star really leaves
+                                               # `review_one_live_per_author_per_subject` is the only
+                                               # thing making "one review per author" true (the service
+                                               # pre-check is a race) and autoIndex fails silently —
+                                               # and that a DELETED review's author may write again.
+                                               # Also proves an UNPUBLISHED review's star really leaves
                                                # the average, and that collectSignals reads the
                                                # aggregate back — the cross-module hop the whole
                                                # module exists for. Fresh ObjectIds, so it touches no
@@ -1047,12 +1049,31 @@ Four rules that are load-bearing:
   derives from the agency's *mutable* `policies.pricing`; splitting at delivery would otherwise
   divide a different number than the payer was charged. Checkout writes it (since ADR-A11;
   `splitOrder` keeps it, override-first), the delivery split divides exactly it.
-- **`EarningsCompletionService.onOrderCompleted` must sweep EVERY source type an order produced** —
-  `order`, `cod_collection` *and* `shipment`. `markCompletedBySource` is keyed by source, and
+- **`EarningsCompletionService.sourcesOfOrder` must list EVERY source type an order produced** —
+  `order`, `cod_collection` *and* `shipment`. The hold is started per source, and
   `findMaturedHeld` skips a null `hold_release_at`, so a source it forgets is money held forever.
   This has already been caught once (COD) and is the first thing to check when adding a source type.
-  It is also what makes the hold uniform: **every actor on an order matures on the same date**,
-  `HOLD_DAYS` (7) after the order completes — never at delivery, never per shipment.
+  It is also what makes the hold uniform: **every actor on an order matures on the same date**.
+- ⚠ **Since 2026-10-05 the hold starts at DELIVERY, not at completion** (owner decision). That date
+  is `Order.delivered_at`: the courier finishing the order's LAST parcel (prepaid: `agent_delivered`;
+  COD: the code entered → `delivered`; `returned` counts), or payment for a digital order. Only
+  `EarningsCompletionService.syncOrderHold` writes it, called after every shipment transition (chained
+  AFTER the fire-and-forget delivery split, so the rows it just wrote start too), after each COD
+  collection's split, and on a digital order's payment. A parcel going `agent_delivered → failed`
+  un-delivers the order and clears the hold on still-held rows. `HOLD_DAYS` defaults to **3**.
+  Completion no longer delays money; `onOrderCompleted` survives only as the backstop for an
+  unstarted row. Splits that land late inherit `deliveredAtOf(order)`, never the completion date.
+  The customer's return window starts from the same date. Pure rules: `earnings/domain/earnings-hold.ts`.
+- ⚠ **Money can be PAUSED, and paused money is never released** (`EarningsPauseService`). The record
+  is `Order.earnings_pause` / `Booking.earningsPause`; each held allocation carries a `paused_at` COPY
+  so `findMaturedHeld`'s QUERY skips it (a batch that fetched and skipped paused rows would clog the
+  sweep), `markReleased`'s claim requires `paused_at: null` too, and the worker re-checks the SOURCE
+  for rows created after the pause. Raised by: a seller cancelling a PAID order and a paid booking
+  cancelled from the status menu (both via `raiseRefundOwed`, which also opens a HIGH-priority refund
+  ticket — neither path refunds), and a card dispute (self-resuming when won or lost). Resuming moves
+  each row's release date by the paused time inside its hold (`resumedHoldReleaseAt`): a pause never
+  shortens or restarts a hold. Admin surface: `/api/internal/admin/earnings/pauses`; wi-admin
+  `money.earnings.pause`. Pinned by `npm run test:earnings-hold`.
 - **A `returned` shipment still splits**, at the agency's `additional_fees.rto_fee` (clamped),
   with the unspent remainder credited back to whoever paid the fee (the vendor, or — customer-paid —
   owed to the customer on `customer_fee_refundable`). `failed` does not: it is not terminal
@@ -2393,15 +2414,19 @@ Five rules, each because the obvious version is wrong:
   pure.
 - **An agency's review moves the AGENT's aggregate and never its own.** An agency's directory
   rating comes from its *customers'*, so a business's public score can never be self-reported.
-- **A bare star publishes; prose is held for a moderator** (`initialStatusOf`). Everything-pends is
-  the reflexive design and it makes the moderation queue a single point of failure for a signal
-  that moves real cash exposure — and delivery ratings are overwhelmingly bare stars. A number
-  cannot be abusive, and eligibility has already proved the author bought the item or received the
-  parcel.
-- **The aggregate is RECOMPUTED, never incremented.** An `$inc` path must get publish and reject
-  right forever; one missed transition is a permanently drifted average nobody can detect without
-  recomputing anyway. Recompute makes "a rejected review counts for nothing, star included" a
-  property of the query rather than of a subtraction somebody remembered.
+- **Every review publishes on submission, prose included; moderation is AFTER the fact** (owner
+  decision, 2026-10-05). Statuses are `published` · `unpublished`, and wi-admin can unpublish,
+  republish or delete any review (`/api/internal/admin/reviews`). ⚠ It used to be "a bare star
+  publishes, prose is held" (`initialStatusOf`, deleted) — but no admin screen ever worked the
+  queue, so every written review stayed invisible with its star. `migrate:reviews-publish-all`
+  published the held rows and renamed `rejected` → `unpublished`. **Delete differs from unpublish
+  in one way that matters:** it frees the author to write again (the unique index is partial on
+  `deletedAt: null`); an unpublished review still holds the author's slot.
+- **The aggregate is RECOMPUTED, never incremented.** An `$inc` path must get submit, unpublish,
+  republish and delete right forever; one missed transition is a permanently drifted average
+  nobody can detect without recomputing anyway. Recompute makes "an unpublished or deleted review
+  counts for nothing, star included" a property of the query rather than of a subtraction
+  somebody remembered.
 - **`rating` is `null`, never `{average: 0, count: 0}`** — on the product row, the product detail
   and the agency card. That is what closes `aggregateRating`: the frontend rule is *emit it iff
   `rating` is non-null*, and a client cannot get it wrong because the server never sends a
@@ -2414,14 +2439,17 @@ Five rules, each because the obvious version is wrong:
 `trust_signals`. **Nothing in `modules/reviews` touches `delivery_agents`**, and the trust collector
 never reads `reviews`. `test:reviews` asserts all of it by source scan.
 
-⚠ **`review_one_per_author_per_subject` is the ONLY thing enforcing one review per author.** The
-service pre-checks, and a pre-check is a race — two submissions in the same millisecond both read
-"none". `autoIndex` is off in production, so `migrate:review-indexes` is what creates it, and
-`verify:reviews` is the only place it is proven to **bind** rather than merely exist.
+⚠ **`review_one_live_per_author_per_subject` is the ONLY thing enforcing one review per author.**
+The service pre-checks, and a pre-check is a race — two submissions in the same millisecond both
+read "none". It is partial on `deletedAt: null` (it replaced the non-partial
+`review_one_per_author_per_subject` on 2026-10-05). `autoIndex` is off in production, so
+`migrate:review-indexes` (fresh database) or `migrate:reviews-publish-all` (existing one) is what
+creates it, and `verify:reviews` is the only place it is proven to **bind** — and to admit a
+deleted review's author — rather than merely exist.
 
 Contracts: [api-doc/reviews.md](./api-doc/reviews.md) (cross-role) and
 [api-doc/admin/reviews.md](./api-doc/admin/reviews.md) (moderation). Covered by
-`npm run test:reviews` (62, no DB) and `npm run verify:reviews` (16, NEEDS Mongo).
+`npm run test:reviews` (79, no DB) and `npm run verify:reviews` (28, NEEDS Mongo).
 
 ### Stock reservation (`catalog/domain/services/pricing-inventory/` + `orders/services/order-stock.service.ts`)
 

@@ -88,8 +88,8 @@ export const PAYOUT_OWNER_TYPES = ['vendor', 'agency', 'agent'] as const;
  * `auto_threshold` - EarningsReleaseWorker opened it automatically because
  * available_balance reached EARNINGS_CONFIG.AUTO_PAYOUT_THRESHOLD, so the
  * platform never owes an unbounded amount to one account. `requested_by_user_id`
- * is still populated (the configured support/system admin actor, same
- * convention as TicketService.createSystemTicket) even for auto_threshold.
+ * is still populated for auto_threshold: the platform's built-in system identity
+ * (`core/types/system-actor.ts`), the same one TicketService.createSystemTicket signs with.
  */
 export type PayoutRequestOrigin = 'manual' | 'auto_threshold';
 

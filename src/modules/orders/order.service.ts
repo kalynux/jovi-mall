@@ -26,6 +26,7 @@ import { ProductVariantModel } from '../catalog/models/product-variant.model';
 import { VendorCustomerSyncService } from '../vendors/services/vendor-customer-sync.service';
 import { eventBus } from '../../core/events/event-bus';
 import { earningsSplitService } from '../earnings/services/earnings-split.service';
+import { earningsCompletionService } from '../earnings/services/earnings-completion.service';
 import { codEligibilityService } from '../cod/services/cod-eligibility.service';
 import { codLimitsService, CodHandoffVerdict } from '../cod/services/cod-limits.service';
 import { expectedCodAmount } from '../cod/domain/cod-limits';
@@ -1470,6 +1471,17 @@ export class OrderService {
       await earningsSplitService.splitOrder(order);
     } catch (error) {
       console.error('[OrderService] Failed to split earnings on payment success:', error);
+    }
+
+    // A DIGITAL order is delivered the moment it is paid (the download is available), so its
+    // earnings hold starts here. For a physical order this is a no-op: nothing is delivered
+    // yet, and the courier's last delivery starts it (see EarningsCompletionService).
+    if (order.order_type !== 'physical') {
+      try {
+        await earningsCompletionService.syncOrderHold(order._id.toString());
+      } catch (error) {
+        console.error('[OrderService] Failed to start the earnings hold on a digital order:', error);
+      }
     }
 
     // Add the paid total to the customer's denormalized lifetime spend.

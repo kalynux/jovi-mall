@@ -12,7 +12,10 @@ const googleProvider = new GoogleCalendarProvider();
  * frontend can show the vendor exactly what access they approved.
  */
 const SCOPE_DESCRIPTIONS: Record<string, string> = {
-    'https://www.googleapis.com/auth/calendar': 'Read, create, and delete events on your Google Calendar',
+    'https://www.googleapis.com/auth/calendar.events': 'Read, create, change, and delete events on your Google Calendar',
+    'https://www.googleapis.com/auth/calendar.freebusy': 'See when you are busy, to block those times from bookings',
+    // Legacy: requested until 2026-10-05. Kept so connections made before then still describe it.
+    'https://www.googleapis.com/auth/calendar': 'Full access to your Google Calendar (granted before the 2026-10 narrowing; reconnect to reduce it)',
     'https://www.googleapis.com/auth/userinfo.email': 'View your Google account email address',
     'https://www.googleapis.com/auth/userinfo.profile': 'View your basic Google profile info',
 };

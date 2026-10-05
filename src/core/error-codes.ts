@@ -706,6 +706,7 @@ export const ERROR_CODES = Object.freeze({
     GOOGLE_NO_ACCESS_TOKEN: 'GOOGLE_NO_ACCESS_TOKEN',
     GOOGLE_NO_REFRESH_TOKEN: 'GOOGLE_NO_REFRESH_TOKEN',
     GOOGLE_CALENDAR_NOT_CONNECTED: 'GOOGLE_CALENDAR_NOT_CONNECTED',
+    GOOGLE_CALENDAR_SCOPE_NOT_GRANTED: 'GOOGLE_CALENDAR_SCOPE_NOT_GRANTED',
     GOOGLE_EVENT_MISSING_ID: 'GOOGLE_EVENT_MISSING_ID',
     GOOGLE_EVENT_MISSING_DATETIME: 'GOOGLE_EVENT_MISSING_DATETIME',
     GOOGLE_TOKEN_ENCRYPTION_KEY_MISSING: 'GOOGLE_TOKEN_ENCRYPTION_KEY_MISSING',
@@ -1760,11 +1761,13 @@ export const ERROR_CODES = Object.freeze({
      */
     REVIEW_SUBJECT_NOT_REVIEWABLE: 'REVIEW_SUBJECT_NOT_REVIEWABLE',
     /**
-     * 409. A moderation compare-and-set miss — the review left `pending` while the
-     * administrator was looking at it. Same shape and same reasoning as
-     * `STOCK_REQUEST_NOT_PENDING`: the row exists, somebody else decided first.
+     * 409. A moderation compare-and-set miss — unpublishing a review that is not
+     * published, or republishing one that is not unpublished. Usually another
+     * administrator acted first; `details.status` says where it is now. Same shape as
+     * `STOCK_REQUEST_NOT_PENDING`. Replaced `REVIEW_NOT_PENDING` (2026-10-05), which
+     * went with the held-for-moderation state.
      */
-    REVIEW_NOT_PENDING: 'REVIEW_NOT_PENDING',
+    REVIEW_STATUS_CONFLICT: 'REVIEW_STATUS_CONFLICT',
     /** 400. This author role may not review this subject type at all. */
     REVIEW_ROLE_NOT_ALLOWED: 'REVIEW_ROLE_NOT_ALLOWED',
 
@@ -1925,6 +1928,9 @@ export const ERROR_CODES = Object.freeze({
     EARNINGS_INVALID_SPLIT: 'EARNINGS_INVALID_SPLIT',
     EARNINGS_ALLOCATION_NOT_FOUND: 'EARNINGS_ALLOCATION_NOT_FOUND',
     EARNINGS_ALREADY_COMPLETED: 'EARNINGS_ALREADY_COMPLETED',
+    EARNINGS_ALREADY_PAUSED: 'EARNINGS_ALREADY_PAUSED',
+    EARNINGS_NOT_PAUSED: 'EARNINGS_NOT_PAUSED',
+    EARNINGS_PAUSE_TARGET_NOT_FOUND: 'EARNINGS_PAUSE_TARGET_NOT_FOUND',
     EARNINGS_ORDER_NOT_CONFIRMABLE: 'EARNINGS_ORDER_NOT_CONFIRMABLE',
     EARNINGS_FORBIDDEN: 'EARNINGS_FORBIDDEN',
     EARNINGS_PAYOUT_ALREADY_PENDING: 'EARNINGS_PAYOUT_ALREADY_PENDING',

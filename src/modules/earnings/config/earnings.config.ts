@@ -21,14 +21,18 @@ export const EARNINGS_CONFIG = {
   DEFAULT_CURRENCY: (process.env.EARNINGS_CURRENCY || 'XAF').toUpperCase(),
 
   /**
-   * Days held AFTER an order/booking is completed before funds move from
-   * `pending_balance` to `available_balance`. Per spec: 7 days.
+   * Days money is held before it moves from `pending_balance` to `available_balance`,
+   * counted from DELIVERY: the courier finishing the order's last parcel (a digital order:
+   * its payment; a booking: the service being marked completed). Owner decision 2026-10-05:
+   * 3 days from delivery. It was 7 days from the order's COMPLETION, which itself came up to
+   * AUTO_CONFIRM_DAYS after delivery. Paused time does not count (earnings/domain/earnings-hold.ts).
    */
-  HOLD_DAYS: intEnv('EARNINGS_HOLD_DAYS', 7),
+  HOLD_DAYS: intEnv('EARNINGS_HOLD_DAYS', 3),
 
   /**
    * Days a `delivered`/`fulfilled` order may sit without a customer confirmation
-   * before the system auto-confirms it (which then starts the HOLD_DAYS window).
+   * before the system auto-confirms it. Since 2026-10-05 this moves the ORDER to completed
+   * only; it no longer delays anybody's money (the hold runs from delivery).
    */
   AUTO_CONFIRM_DAYS: intEnv('EARNINGS_AUTO_CONFIRM_DAYS', 7),
 

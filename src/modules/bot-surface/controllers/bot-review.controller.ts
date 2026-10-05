@@ -55,14 +55,14 @@ export class BotReviewController {
      * `POST /reviews/list` — what the customer has already said, and whether it landed.
      *
      * ── THE AUTHOR DTO, NOT THE PUBLIC ONE ──────────────────────────────────
-     * `listMine` is keyed on `author_user_id` and returns **every status**, `pending` and
-     * `rejected` included. That is the whole reason a "my reviews" read exists: somebody
-     * who wrote a review and cannot find it on the product page has no other way to learn
-     * it is simply waiting for a moderator. The public projection strips exactly that.
+     * `listMine` is keyed on `author_user_id` and returns **every status**, `unpublished`
+     * included. That is the whole reason a "my reviews" read exists: somebody who wrote a
+     * review and cannot find it on the product page has no other way to learn that an
+     * administrator hid it. The public projection strips exactly that.
      *
      * ⚠ **`status` is relayed and `publiclyVisible` is computed, because the two disagree
-     * on a delivery review.** A bare-star delivery review is written straight to
-     * `published` by `initialStatusOf`, and it still appears on no page anywhere — the
+     * on a delivery review.** Every review — a delivery one included — is written straight
+     * to `published` at submission, and a delivery review appears on no page anywhere — the
      * only public review read is `listPublicForProduct`. Handing a model `status` alone
      * produces "your review is live" about something the customer will never find. See
      * `toBotReviewDto`.
@@ -160,12 +160,10 @@ export class BotReviewController {
     /**
      * `POST /reviews` — submit.
      *
-     * ⚠ **A bare star PUBLISHES IMMEDIATELY and moves a public rating; prose is held for a
-     * human moderator.** That is `initialStatusOf`, and it is the single most
-     * consequence-bearing thing on this route: sending `body` is the difference between a
-     * review that appears now and one that appears when somebody reads it. A model
-     * "helpfully" summarising the customer's spoken praise into prose would silently take
-     * their rating out of the published average.
+     * ⚠ **Every review PUBLISHES IMMEDIATELY and moves a public rating — prose included**
+     * (owner decision, 2026-10-05; an administrator can take it down afterwards). So a
+     * `body` the model wrote goes on the product page under the customer's purchase at
+     * once. Relay the customer's own words or send none; never compose a review for them.
      *
      * A delivery review is internal, is attributed to the carrying agent SERVER-SIDE, and
      * feeds that agent's trust score — 50 of the composite's 100 weight is rating factors.
@@ -210,11 +208,12 @@ export class BotReviewController {
  * rather than assumed.
  *
  * ── ⚠ STARS ONLY, AND THE REASON IS NOT SIMPLICITY ──────────────────────────
- * The owner's decision. A bare star **publishes immediately**; prose is held for a moderator
- * (`initialStatusOf`). So a star given in chat moves the public rating at once, while a written
- * review would sit invisible until somebody reads it — and words cannot arrive by tap anyway, on a
- * surface that deliberately holds no conversation state between turns. Written reviews from chat
- * would be a form, and that is a separate decision with a real cost.
+ * The owner's decision. A star given in chat **publishes immediately** and moves the public
+ * rating at once. Words cannot arrive by tap, on a surface that deliberately holds no
+ * conversation state between turns, so written reviews from chat would be a form — a separate
+ * decision with a real cost. (Prose used to be held for a moderator, which was a second reason
+ * for stars only; since 2026-10-05 every review publishes, so that reason is gone and this one
+ * stands alone.)
  *
  * ── ⚠ BUILT BESIDE A RESTRICTION, NOT AROUND IT ─────────────────────────────
  * `reviews_create` remains `flow_only` in the tool catalogue: the model is never handed the ability
@@ -325,9 +324,9 @@ async function submitStars(
             subjectId: productId,
             rating: stars,
             /**
-             * ⚠ **Both null, deliberately.** A bare star publishes immediately and moves the public
-             * rating; prose is held for a moderator. Inventing a title or a body from a tap would
-             * take the customer's rating out of the published average without their asking.
+             * ⚠ **Both null, deliberately.** A tap carries a star and nothing else. Every review
+             * publishes immediately, so an invented title or body would put words on the public
+             * product page that the customer never wrote.
              */
             title: null,
             body: null,

@@ -1,4 +1,10 @@
-import { IReview, ReviewAuthorRole, ReviewStatus, ReviewSubjectType } from '../models/review.model';
+import {
+  IReview,
+  ReviewAuthorRole,
+  ReviewModerationAction,
+  ReviewStatus,
+  ReviewSubjectType,
+} from '../models/review.model';
 import { IReviewRatingDistribution } from '../models/review-aggregate.model';
 import { ReviewAggregateView } from '../repositories/review-aggregate.repository';
 
@@ -7,8 +13,8 @@ import { ReviewAggregateView } from '../repositories/review-aggregate.repository
  * access control — the same argument `public-product.dto.ts` makes about itself.
  *
  *   PublicReviewDto   the storefront. No author identity, no moderation record.
- *   AuthorReviewDto   "my reviews". Adds status, so the author can see it is held.
- *   AdminReviewDto    the moderation queue. Adds who wrote it and what was decided.
+ *   AuthorReviewDto   "my reviews". Adds status, so the author can see one was hidden.
+ *   AdminReviewDto    the administrators' list. Adds who wrote it and what was last done to it.
  *
  * Every one is a hand-written projection rather than a spread, for the reason that
  * file states at length: a spread publishes whatever the model gains next, silently.
@@ -79,9 +85,11 @@ export interface AdminReviewDto extends AuthorReviewDto {
     agencyId: string | null;
     vendorId: string | null;
   };
-  /** The evidence eligibility resolved, so a moderator can check the claim. */
+  /** The evidence eligibility resolved, so an administrator can check the claim. */
   evidence: { orderId: string | null; shipmentId: string | null };
+  /** The LAST moderation action, or null if nobody has acted. wi-admin's audit holds the history. */
   moderation: {
+    action: ReviewModerationAction;
     byUserId: string | null;
     bySource: 'platform' | 'admin';
     at: string;
@@ -137,6 +145,7 @@ export function toAdminReviewDto(review: IReview): AdminReviewDto {
     },
     moderation: review.moderation
       ? {
+          action: review.moderation.action,
           byUserId: review.moderation.by_user_id?.toString() ?? null,
           bySource: review.moderation.by_source,
           at: review.moderation.at.toISOString(),

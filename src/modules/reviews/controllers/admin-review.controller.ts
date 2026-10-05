@@ -3,13 +3,18 @@ import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { reviewService } from '../services/review.service';
 import { toAdminReviewDto } from '../dto/review.dto';
 import {
-  ModerationQueueQuerySchema,
-  RejectReviewSchema,
+  AdminReviewQuerySchema,
+  RepublishReviewSchema,
   ReviewIdParamSchema,
+  ReviewModerationReasonSchema,
 } from '../validators/review.validator';
 
 /**
- * The moderation queue, served to **wi-admin** over `/api/internal/admin/reviews`.
+ * After-the-fact review moderation, served to **wi-admin** over
+ * `/api/internal/admin/reviews`.
+ *
+ * Every review publishes on submission (owner decision, 2026-10-05); this surface is
+ * how an administrator takes one down, puts it back, or deletes it.
  *
  * ⚠ `req.auth` on this path is SYNTHESISED from headers by `requireAdminCaller` — the
  * administrator holds no `users` row in this database, so the id stamped into
@@ -23,16 +28,10 @@ const moderator = (req: Request) => ({
 });
 
 export class AdminReviewController {
-  /**
-   * GET / — the queue. `pending`, oldest first, unless a filter says otherwise.
-   *
-   * Oldest-first is the one listing in this module that is not newest-first, and it
-   * is deliberate: a queue is worked front to back, and the review that has been
-   * waiting longest is the one somebody is owed an answer about.
-   */
+  /** GET / — every live review, newest first, every status unless a filter narrows it. */
   static list = asyncHandler(async (req: Request, res: Response) => {
-    const query = ModerationQueueQuerySchema.parse(req.query);
-    const page = await reviewService.listForModeration(query.page, query.limit, {
+    const query = AdminReviewQuerySchema.parse(req.query);
+    const page = await reviewService.listForAdmin(query.page, query.limit, {
       status: query.status,
       subjectType: query.subjectType,
       authorRole: query.authorRole,
@@ -49,7 +48,7 @@ export class AdminReviewController {
     });
   });
 
-  /** GET /:id — one review, with the evidence eligibility resolved against it. */
+  /** GET /:id — one live review, with the eligibility evidence attached. */
   static getById = asyncHandler(async (req: Request, res: Response) => {
     const { id } = ReviewIdParamSchema.parse(req.params);
     const review = await reviewService.getById(id);
@@ -57,34 +56,37 @@ export class AdminReviewController {
   });
 
   /**
-   * POST /:id/publish — let it through.
+   * POST /:id/unpublish — body `{ reason }`, required. Takes a published review down.
    *
-   * A compare-and-set on `pending`: a losing moderator gets `409 REVIEW_NOT_PENDING`
-   * rather than overwriting the winner, exactly as the agency KYC verdict and the
-   * stock-request resolve do. Without it, two moderators can publish and reject the
-   * same row and the loser's aggregate recompute still runs.
+   * A compare-and-set on `published`: a second administrator gets
+   * `409 REVIEW_STATUS_CONFLICT` rather than overwriting the first. The review counts
+   * for nothing afterwards, star included.
    */
-  static publish = asyncHandler(async (req: Request, res: Response) => {
+  static unpublish = asyncHandler(async (req: Request, res: Response) => {
     const { id } = ReviewIdParamSchema.parse(req.params);
-    const review = await reviewService.publish(id, moderator(req));
+    const { reason } = ReviewModerationReasonSchema.parse(req.body ?? {});
+    const review = await reviewService.unpublish(id, moderator(req), reason);
+    res.json({ success: true, data: toAdminReviewDto(review) });
+  });
+
+  /** POST /:id/republish — body `{ reason? }`. Puts an unpublished review back. CAS on `unpublished`. */
+  static republish = asyncHandler(async (req: Request, res: Response) => {
+    const { id } = ReviewIdParamSchema.parse(req.params);
+    const { reason } = RepublishReviewSchema.parse(req.body ?? {});
+    const review = await reviewService.republish(id, moderator(req), reason ?? null);
     res.json({ success: true, data: toAdminReviewDto(review) });
   });
 
   /**
-   * POST /:id/reject — body `{ reason }`, required.
+   * DELETE /:id — body `{ reason }`, required. Any status.
    *
-   * The rejected review counts for **nothing** afterwards, its star included: the
-   * aggregate is recomputed over published rows only, so exclusion is a property of
-   * the query rather than of a subtraction somebody has to remember.
-   *
-   * There is deliberately no un-reject and no re-open. The same position agency KYC
-   * takes on its rejection: re-review is the other verb, and a two-way toggle on a
-   * moderation verdict makes the audit trail ambiguous about what was ever live.
+   * The review leaves every surface and every aggregate, and its author may write a new
+   * one. There is no undelete; a 404 afterwards is the expected answer.
    */
-  static reject = asyncHandler(async (req: Request, res: Response) => {
+  static remove = asyncHandler(async (req: Request, res: Response) => {
     const { id } = ReviewIdParamSchema.parse(req.params);
-    const { reason } = RejectReviewSchema.parse(req.body ?? {});
-    const review = await reviewService.reject(id, moderator(req), reason);
+    const { reason } = ReviewModerationReasonSchema.parse(req.body ?? {});
+    const review = await reviewService.remove(id, moderator(req), reason);
     res.json({ success: true, data: toAdminReviewDto(review) });
   });
 }

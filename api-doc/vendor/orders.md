@@ -328,6 +328,13 @@ Body:
 > `pending → processing → cancelled`, which omits the third row**: a `fulfilled` order — a
 > completed service or a delivered digital product — *can* still be cancelled by its vendor.
 
+> ⚠ **Cancelling a PAID order (2026-10-05).** Moving an order whose `paymentStatus` is `paid` to
+> `cancelled` still succeeds and still does **not** refund the customer automatically. It now also
+> **pauses the vendor's earnings** for that order and opens a **high-priority refund ticket** for the
+> platform team, who refund the customer (the earnings are then reversed) or resume the earnings.
+> Show a confirmation before sending it. The bulk endpoint below does the same per order. See
+> [FRONTEND-CHANGELOG-earnings-hold-and-pauses.md](./FRONTEND-CHANGELOG-earnings-hold-and-pauses.md).
+
 **Authorization**: Vendor access required.
 
 **Request Headers**:
