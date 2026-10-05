@@ -766,7 +766,7 @@ Search Request  (query, limit?, category?, maxPrice?, inStockOnly?, country?, ma
        hit  ─────────────────────────────────────────┐
        miss → Embed Query    Voyage, input_type=QUERY │  (not `document` — asymmetric embeddings)
             → Shape Vector ──┬────────────────────────┤
-                             └→ Cache Embedding       │  parallel sink, never in the data path
+                             └→ Cache Embedding       │  parallel sink — must sit ABOVE on the canvas (§ 15.7)
   → Run Hybrid Search        product_search(), 3-arm weighted RRF
   → Found Anything?
        yes → Collect Ids → Hydrate Live Prices → Shape Result   (source: "hybrid")
@@ -1120,6 +1120,20 @@ Search Request  (+ photoBase64, photoMimeType, usePhoto)
                                                                           no  → Keyword Fallback
 ```
 
+- ⛔ **Canvas position IS behaviour in this workflow** (found 2026-10-05). The sub-workflow's
+  answer is the output of the LAST node executed, and under `executionOrder: v1` sibling
+  branches run top to bottom. Both cache writes are side-effect siblings of the branch that
+  carries the answer, so both must sit ABOVE it on the canvas. `Cache Image Embedding`
+  always did; `Cache Embedding` sat BELOW `Text Vector Ready` and so ran last on every
+  query-cache **miss**: the agent received `[{"query_key":"…"}]`, said "nothing found" for
+  every first-time phrase, and a phrase only worked once it was cached. The search itself
+  had ranked the right product first (exec 22304, "water bottle", rank 1 on all four arms).
+  Moved to `[-336, -160]` and proven on a never-searched phrase (exec 22366,
+  `lastNodeExecuted: Return Hybrid Result`). A sticky note on the canvas says the same.
+  **Verify a search change through what `wi-mall-core`'s agent RECEIVED (its tool
+  observation), never through the sub-workflow's node outputs** — every node here was
+  correct while the bot was told nothing.
+
 - **The image arm is best-effort.** `Embed Image Query` has a real retry (no
   `neverError`, § 11's rule for a call a customer waits on) and `continueRegularOutput`.
   `Shape Image Vector` never throws. When the multimodal call fails, the search runs
@@ -1360,3 +1374,64 @@ against a category NAME. That has always been the contract, and it is now a list
 than a single-value one. The model should take names from `catalog_list_categories`, which
 now also returns `slug` and `id`. ⚠ `p_category` does **not** take a slug. Those resolve only
 on jovi-mall's `/api/public/products`, which has the matcher.
+
+## 17. Budgets, categories, alternatives — 2026-10-05  ✅ PUBLISHED, proven on the draft
+
+**The defect.** "products under 10k" (execution 22343, `maxPrice: 10000`) answered "nothing".
+Three faults, each enough on its own: the semantic arm correctly refuses a query with no product
+meaning in it; the keyword fallback searched the literal words "products under 10k"; and that
+fallback **dropped the budget** — its query-parameter list sent `q` and `limit` only. A fourth
+fault sat beside them: `product_search()` filters on the **indexed** price (a snapshot, and on a
+bargainable product the vendor's floor), so "under 7 000" could return a bottle the storefront
+shows at 7 500.
+
+**What was built** (source: `image-vectoriser/search/`, `test.js` **71/71**, the new guards proven
+to bite):
+
+```
+Normalise Query → Browse Only?
+     yes → Browse Catalogue (GET /api/public/products?<filters>&sort=…) → Shape Browse Result   (source "browse")
+     no  → Cache Lookup → … (unchanged) … → Shape Result → Any Live? → Return Hybrid Result
+                                                          no ↓
+                     Keyword Fallback (now carries the filters) → Shape Fallback Result → Offer Alternatives?
+                              yes → Browse Catalogue → Shape Browse Result   (count 0, alternatives[])
+                              no  → Return Fallback Result
+```
+
+- **Browse** = a budget or a category with nothing to search for. "Nothing" is an empty query
+  (what the tool description now asks the model for) **or** one made only of a closed list of
+  generic words (`products`, `under`, `10k`, `moins de`, `FCFA` …) — the backstop for when the
+  model passes the words anyway. A word the list does not know keeps the turn a search, the
+  safe direction, and the list is consulted only when a filter exists. Within a budget the
+  listing is **dearest first** (the best the money buys); a category alone is newest first.
+- ⚠ **Only the filters that are present are sent.** jovi-mall coerces an empty `maxPrice=` to
+  **0** (a 0 XAF ceiling, which empties every page) and refuses an empty `category=` with a 400.
+  That is why both URLs are one built string (`keyword_qs` / `browse_qs` from `Normalise
+  Query`) and not a query-parameter list, which cannot omit an empty value.
+- **The budget is checked against the LIVE price** in `Shape Result` — `p.price`, the price the
+  card shows, which is exactly the field jovi-mall's own `?maxPrice=` filters on. A match over
+  the budget is **not dropped**: it moves to `aboveBudget`, which every later answer carries, so
+  "water bottle under 7000" says one exists at 7 500 instead of saying there is none.
+- **Alternatives (owner decision: offered, and always CLEARLY labelled).** A worded search that
+  matched nothing *and* carries a budget or a category gets other products within those limits —
+  in `alternatives`, **never** in `products`, with `count` left at 0. `count` means "matched what
+  was asked for"; a model reading 5 there presents a kettle as the red shoes. The note tells it to
+  say plainly that nothing matched, then offer them. No filter → no alternatives (five random
+  products are not a suggestion), and a photo-only search never gets a listing.
+
+**The answer shape** is now `{ query, source, searchedPhoto, count, products[], alternatives[],
+aboveBudget[], note }`; `source` gained `browse`. `wi-mall-core`'s `Search-Products` description
+and its `query` input were updated in the same change (`d578b0a3`); `check-core-tool.js` confirmed
+it was the only node that changed.
+
+**Proven on the draft before publishing** (executions on `UP-wi-mall-product-search`):
+
+| Execution | Input | Answer |
+|---|---|---|
+| 22387 | `""` + maxPrice 10000 | browse, 3 live products ≤ 10 000, dearest first |
+| 22389 | `"products under 10k"` + 10000 | browse (the backstop), same 3 |
+| 22390 | `"red shoes"` + 10000 | count 0, 3 `alternatives`, "NOTHING matched …" |
+| 22396 | `"water bottle"` + 7000 | count 0, bottle in `aboveBudget` at 7 500, biscuits as `alternatives` |
+| 22398 | `"water bottle"`, no budget | hybrid, count 1 — unchanged |
+
+Published: search `c49f46a1`, core `d578b0a3`. Rollback: search `1157a7e5`, core `8e724e6e`.

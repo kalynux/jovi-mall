@@ -32,6 +32,13 @@ function snippetOf(t) {
   return s.length > 160 ? s.slice(0, 157) + "…" : s;
 }
 
+// ⚠ THE BUDGET IS CHECKED AGAINST THE LIVE PRICE (2026-10-05). product_search()
+// filters on the INDEXED price -- a snapshot, and on a bargainable product the
+// vendor's floor rather than the price the customer is quoted -- so "under 7 000"
+// could return a bottle the storefront shows at 7 500. `p.price` is the price
+// the card displays, which is exactly what jovi-mall's own ?maxPrice= filters on
+// (public-catalog.repository.mongo.ts), so both paths apply one rule.
+const aboveBudget = [];
 const products = [];
 rows.forEach(function (r) {
   const p = byId[r.product_id];
@@ -39,7 +46,11 @@ rows.forEach(function (r) {
   // or deleted since it was indexed. Dropping it here is the freshness gate.
   if (!p) { return; }
   const path = "/shop/stores/" + p.store.slug + "/products/" + p.slug;
-  products.push({
+  // A real match priced over the budget is NOT dropped silently: it goes to
+  // aboveBudget, which every later answer carries, so the bot can say "we have one
+  // at 7 500, just above your budget" rather than "we have no water bottle".
+  const overBudget = n.maxPrice != null && typeof p.price === "number" && p.price > n.maxPrice;
+  (overBudget ? aboveBudget : products).push({
     id: p.id,
     title: p.title,
     price: p.price,
@@ -57,7 +68,7 @@ rows.forEach(function (r) {
   });
 });
 
-const dropped = rows.length - products.length;
+const dropped = rows.length - products.length - aboveBudget.length;
 
 // ── What the photo did (README § 15) ────────────────────────────────────────
 // A photo match finds THE SAME item in another picture, not look-alikes
@@ -67,8 +78,9 @@ const imageFailed = n.has_photo && $("Shape Image Vector").isExecuted
   && !$("Shape Image Vector").first().json.image_embedding;
 const notes = [];
 if (dropped > 0) notes.push(String(dropped) + " match(es) were withdrawn from sale and omitted.");
+if (aboveBudget.length > 0) notes.push(String(aboveBudget.length) + " match(es) cost more than the customer's budget of " + n.maxPrice + " XAF: they are under aboveBudget. You may mention them WITH their price, never as within budget.");
 if (n.has_photo && imageFailed) notes.push("The customer's photo could not be searched just now; these matched their words only.");
-else if (n.has_photo && products.length > 0) notes.push("Found using the customer's photo. A photo match finds the same item in another picture, not look-alikes -- confirm with the customer that this is the item they mean.");
+else if (n.has_photo && products.length > 0) notes.push("Found using the customer's photo. A photo match finds the same item in another picture, not look-alikes -- confirm with the customer that this is the item they mean. Show it to them with Show-Products first, so they can compare it with their picture.");
 
 return [{ json: {
   query: n.query,
@@ -76,5 +88,7 @@ return [{ json: {
   searchedPhoto: n.has_photo,
   count: products.length,
   products: products,
+  alternatives: [],
+  aboveBudget: aboveBudget,
   note: products.length === 0 ? "No products matched." : (notes.length ? notes.join(" ") : null),
 } }];

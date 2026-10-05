@@ -102,14 +102,84 @@ const IMAGE_ARM_FOR_TEXT = true;
 
 const hasText = raw !== "";
 
+const category = blankToNull(inp.category);
+const maxPrice = positiveOrNull(inp.maxPrice);
+const inStockOnly = inp.inStockOnly === true || inp.inStockOnly === "true";
+
+// ── BROWSE: a budget or a category, and nothing to search FOR (2026-10-05) ───
+//
+// "products under 10k" is a FILTER, not a search. There is no product meaning in
+// it for the semantic arm to match (it correctly refuses: without its floor, five
+// random products come back as "matches"), and the keyword arm looks for the
+// literal words "products under 10k". Every arm returned nothing -- and the
+// keyword fallback did not even pass the budget on. So a filter with nothing to
+// search for skips the index and lists jovi-mall's LIVE catalogue instead, whose
+// prices are the ones a customer is quoted.
+//
+// "Nothing to search for" is an empty query OR one made only of generic words
+// (products, under, 10k, moins de ...). The tool description tells the model to
+// leave the query empty here; the word list is the backstop for when it does not.
+// It is CLOSED and deliberately small: a word it does not know keeps the turn a
+// real search ("cheap phones" -> phones), which is the safe direction. Only
+// consulted when a filter exists, so it can never turn a search into a listing
+// on its own.
+const GENERIC_WORDS = new Set([
+  // en
+  "product", "products", "item", "items", "thing", "things", "stuff", "anything",
+  "something", "everything", "all", "any", "some", "show", "me", "what", "do", "you",
+  "have", "got", "sell", "under", "below", "less", "than", "cheaper", "within",
+  "budget", "max", "maximum", "up", "to", "for", "price", "priced", "prices", "cost",
+  "costing", "the", "a", "an", "of", "your", "in", "stock", "available", "is", "are",
+  "there", "please",
+  // fr
+  "produit", "produits", "article", "articles", "chose", "choses", "tout", "tous",
+  "toutes", "quelque", "quoi", "montre", "montrez", "moi", "avez", "vous", "as", "tu",
+  "vendez", "sous", "moins", "de", "que", "budget", "prix", "à", "le", "la", "les",
+  "des", "du", "un", "une", "vos", "tes", "en", "disponible", "disponibles", "jusqu",
+  "pour", "qui", "coûte", "coutent", "coûtent", "svp", "il", "y", "a", "t",
+  // money
+  "xaf", "fcfa", "cfa", "franc", "francs", "f", "k",
+]);
+function isGenericOnly(text) {
+  const words = text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(function (w) { return w !== ""; });
+  return words.every(function (w) {
+    // 10k, 10000, 10.000 (split above), 5mille -- amounts carry no product meaning.
+    return GENERIC_WORDS.has(w) || /^\d+(k|mille)?$/.test(w);
+  });
+}
+
+const hasFilter = maxPrice !== null || category !== null;
+const browse = !hasPhoto && hasFilter && (!hasText || isGenericOnly(raw));
+
+// The filters as jovi-mall's /api/public/products query string. ⚠ ONLY the filters
+// that are present: an empty `maxPrice=` is coerced to 0 there (a 0 XAF ceiling,
+// which empties every page) and an empty `category=` is a 400. Money is a whole
+// number in XAF, so the ceiling is floored, never rounded up past the budget.
+const filterParams = [];
+if (maxPrice !== null) filterParams.push("maxPrice=" + Math.floor(maxPrice));
+if (category !== null) filterParams.push("category=" + encodeURIComponent(String(category)));
+if (inStockOnly) filterParams.push("inStock=true");
+const filterQs = filterParams.join("&");
+
+// Browse order: within a budget, the dearest first -- the best the customer can
+// get for their money, rather than the 150 XAF items a cheapest-first page opens on.
+// Category only: newest first.
+const browseSort = maxPrice !== null ? "price_desc" : "newest";
+
 return [{ json: {
   query: raw,
   query_key: key,
   limit: limit,
   country: blankToNull(inp.country),
-  category: blankToNull(inp.category),
-  maxPrice: positiveOrNull(inp.maxPrice),
-  inStockOnly: inp.inStockOnly === true || inp.inStockOnly === "true",
+  category: category,
+  maxPrice: maxPrice,
+  inStockOnly: inStockOnly,
+  has_filter: hasFilter,
+  browse: browse,
+  // ?q=… only when there are words: jovi-mall refuses an empty q with a 400.
+  keyword_qs: (hasText ? "q=" + encodeURIComponent(raw) + "&" : "") + "limit=" + limit + (filterQs ? "&" + filterQs : ""),
+  browse_qs: (filterQs ? filterQs + "&" : "") + "sort=" + browseSort + "&limit=" + limit,
+  browse_sort: browseSort,
   maxDistance: askedDistance === null ? DEFAULT_MAX_DISTANCE : askedDistance,
   has_text: hasText,
   has_photo: hasPhoto,

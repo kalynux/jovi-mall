@@ -1,0 +1,1 @@
+={{ JSON.stringify({ messageId: String($('Inbound').first().json.messageId), expiresAt: $now.plus({ minutes: 10 }).toISO(), sent: [{ id: String(($json.messages && $json.messages[0] && $json.messages[0].id) || ($json.result && $json.result.message_id) || ''), body: $('decide send').first().json.reply.body }].filter(function (s) { return s.id !== ''; }) }) }}

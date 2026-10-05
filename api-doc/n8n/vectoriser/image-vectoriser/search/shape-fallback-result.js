@@ -11,6 +11,10 @@
 // healthy one.
 const n = $("Normalise Query").first().json;
 
+// Real matches the hybrid search found ABOVE the budget (Shape Result). Carried
+// through every later answer: a match over budget is information, not noise.
+const aboveBudget = $("Shape Result").isExecuted ? ($("Shape Result").first().json.aboveBudget || []) : [];
+
 // ⚠ NO WORDS, NO KEYWORD SEARCH. A photo sent without a caption reaches here when
 // the image arm found nothing (or could not run). jovi-mall answers an EMPTY
 // query with a plain listing, and relaying it would present five unrelated
@@ -25,6 +29,8 @@ if (!n.has_text) {
     searchedPhoto: n.has_photo,
     count: 0,
     products: [],
+    alternatives: [],
+    aboveBudget: aboveBudget,
     note: !n.has_photo
       ? "Nothing to search for: no words and no photo."
       : (imageFailed
@@ -67,6 +73,10 @@ return [{ json: {
   searchedPhoto: n.has_photo,
   count: products.length,
   products: products,
+  // Filled downstream by Shape Browse Result when nothing matched and there is a
+  // budget or a category to suggest alternatives within.
+  alternatives: [],
+  aboveBudget: aboveBudget,
   note: products.length === 0
     ? "No products matched."
     : (n.has_photo ? "These matched the customer's words only; the photo did not find a match." : null),

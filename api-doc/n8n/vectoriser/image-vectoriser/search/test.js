@@ -133,4 +133,95 @@ const floorAlone = X.RUN_HYBRID_SEARCH_REPLACEMENT.replace('image ? n.imageMaxDi
 check('G · guards bite', 'without the pairing rule, a floor is sent with no image vector',
   evalExpr(floorAlone, { nodes: nodesFor({ ...real, image_arm: false }, { 'Text Vector Ready': [j({ embedding: textVec })] }) })[9] === 0.72);
 
+// ── H · browse: a budget or a category with nothing to search for (2026-10-05) ─
+// The live failure: execution 22343, "products under 10k" with maxPrice 10000 →
+// every arm empty, the keyword fallback ignored the budget, the bot said "nothing".
+const SHAPE_BROWSE = code('shape-browse-result.js');
+const budgetOnly = norm({ query: '', limit: 0, category: '', maxPrice: 10000, inStockOnly: false, maxDistance: 0 });
+check('H · browse', 'empty query + a budget → browse, dearest-first within the budget',
+  budgetOnly.browse === true && budgetOnly.browse_qs === 'maxPrice=10000&sort=price_desc&limit=5');
+check('H · browse', 'the live phrasing "products under 10k" + a budget → browse (the generic-words backstop)',
+  norm({ query: 'products under 10k', maxPrice: 10000 }).browse === true);
+check('H · browse', 'French: "produits à moins de 10 000 FCFA" → browse',
+  norm({ query: 'produits à moins de 10 000 FCFA', maxPrice: 10000 }).browse === true);
+const worded = norm({ query: 'water bottle under 5000', maxPrice: 5000 });
+check('H · browse', 'real product words + a budget → a SEARCH, and its keyword fallback carries the budget',
+  worded.browse === false && worded.keyword_qs === 'q=water%20bottle%20under%205000&limit=5&maxPrice=5000');
+check('H · browse', 'generic words with NO filter → never a listing (the backstop needs a filter)',
+  norm({ query: 'products', maxPrice: 0 }).browse === false);
+const catOnly = norm({ query: '', category: 'Water Bottles' });
+check('H · browse', 'a category alone → browse, newest first, category encoded',
+  catOnly.browse === true && catOnly.browse_qs === 'category=Water%20Bottles&sort=newest&limit=5');
+check('H · browse', 'a photo with a budget is a PHOTO search, not a listing',
+  norm({ query: '', maxPrice: 10000, usePhoto: true, photoBase64: '/9j/', photoMimeType: 'image/jpeg' }).browse === false);
+check('H · browse', 'a fractional budget is floored (never rounded up past it)', norm({ query: '', maxPrice: 9999.7 }).browse_qs.startsWith('maxPrice=9999&'));
+check('H · browse', 'no filters → the keyword query string carries NO empty maxPrice= / category=',
+  real.keyword_qs === 'q=chaussures&limit=5' && norm({ query: '' }).keyword_qs === 'limit=5');
+check('H · browse', 'inStockOnly → inStock=true', norm({ query: '', maxPrice: 5000, inStockOnly: true }).browse_qs === 'maxPrice=5000&inStock=true&sort=price_desc&limit=5');
+check('H · browse', 'Browse Only? routes on the flag',
+  evalExpr(X.BROWSE_CONDITION, { nodes: nodesFor(budgetOnly) }) === true && evalExpr(X.BROWSE_CONDITION, { nodes: nodesFor(worded) }) === false);
+check('H · browse', 'Browse Catalogue URL: default base, and the env override wins',
+  evalExpr(X.BROWSE_URL, { nodes: nodesFor(budgetOnly) }) === 'http://jovi-mall:8022/api/public/products?maxPrice=10000&sort=price_desc&limit=5'
+  && evalExpr(X.BROWSE_URL, { nodes: nodesFor(budgetOnly), env: { JOVI_MALL_BASE_URL: 'http://x:1' } }).startsWith('http://x:1/api/public/products?'));
+check('H · browse', 'Keyword Fallback URL carries words AND budget',
+  evalExpr(X.KEYWORD_FALLBACK_URL, { nodes: nodesFor(worded) }) === 'http://jovi-mall:8022/api/public/products?q=water%20bottle%20under%205000&limit=5&maxPrice=5000');
+const offer = (count, n) => evalExpr(X.OFFER_ALTERNATIVES_CONDITION, { json: { count }, nodes: nodesFor(n) });
+check('H · browse', 'Offer Alternatives?: only a worded search, with a filter, that matched nothing',
+  offer(0, worded) === true && offer(1, worded) === false && offer(0, real) === false
+  && offer(0, { ...photoOnly, has_filter: true }) === false);
+
+// ── I · Shape Result checks the budget against the LIVE price ───────────────
+const twoRows = { rows: [{ product_id: 'cheap', product_text: 'a' }, { product_id: 'dear', product_text: 'b' }] };
+const twoLive = { data: { products: [
+  { id: 'cheap', title: 'Cheap', price: 8000, currency: 'XAF', inStock: true, category: 'c', store: { slug: 's', name: 'S' }, slug: 'cheap' },
+  { id: 'dear', title: 'Dear', price: 12000, currency: 'XAF', inStock: true, category: 'c', store: { slug: 's', name: 'S' }, slug: 'dear' }] } };
+const shapeBudget = (maxPrice) => runCode(SHAPE_RESULT, { nodes: { 'Collect Ids': [j(twoRows)], 'Normalise Query': [j({ ...real, maxPrice })] }, input: [j(twoLive)] })[0].json;
+const sBudget = shapeBudget(10000);
+check('I · Shape Result budget', 'a match now priced over the budget leaves products for aboveBudget, and is NOT reported as withdrawn',
+  sBudget.count === 1 && sBudget.products[0].id === 'cheap' && sBudget.aboveBudget.length === 1 && sBudget.aboveBudget[0].id === 'dear' && sBudget.aboveBudget[0].price === 12000
+  && /more than the customer's budget of 10000 XAF/.test(sBudget.note) && !/withdrawn/.test(sBudget.note));
+check('I · Shape Result budget', 'no budget → nothing dropped, and every answer carries alternatives: []',
+  shapeBudget(null).count === 2 && Array.isArray(shapeBudget(null).alternatives) && shapeBudget(null).alternatives.length === 0);
+check('I · Shape Result budget', 'every match over budget → count 0 (so Any Live? falls to the keyword search)', shapeBudget(5000).count === 0);
+
+// ── J · Shape Browse Result ─────────────────────────────────────────────────
+const live = [
+  { id: 'b1', title: 'Flask', price: 9000, currency: 'XAF', inStock: true, category: 'c', store: { slug: 's', name: 'S' }, slug: 'flask', bargain: { minPrice: 1 } },
+  { id: 'b2', title: 'Too dear', price: 12000, currency: 'XAF', inStock: true, category: 'c', store: { slug: 's', name: 'S' }, slug: 'dear' }];
+const browseOut = (n, list, extra = {}) => runCode(SHAPE_BROWSE, { nodes: { 'Normalise Query': [j(n)], ...extra }, input: [j({ data: list })] })[0].json;
+const bList = browseOut(budgetOnly, live);
+check('J · Shape Browse Result', 'browse: the listing IS the answer (products, count), source browse, over-budget re-dropped',
+  bList.source === 'browse' && bList.count === 1 && bList.products[0].id === 'b1' && bList.alternatives.length === 0 && /priced at most 10000 XAF/.test(bList.note));
+check('J · Shape Browse Result', 'browse with nothing under the budget says so', browseOut(budgetOnly, []).count === 0 && /No products are priced at most 10000 XAF/.test(browseOut(budgetOnly, []).note));
+const altLive = [{ ...live[0], id: 'a1', price: 4500 }, live[1]];
+const alt = browseOut(worded, altLive, { 'Shape Fallback Result': [j({ count: 0, source: 'keyword' })] });
+check('J · Shape Browse Result', 'alternatives: count 0, products EMPTY, the listing only under alternatives',
+  alt.count === 0 && alt.products.length === 0 && alt.alternatives.length === 1 && alt.source === 'keyword');
+check('J · Shape Browse Result', 'alternatives are LABELLED: nothing matched, these are not what was asked for',
+  /NOTHING matched "water bottle under 5000" priced at most 5000 XAF./.test(alt.note) && /NOT what the customer asked for/.test(alt.note) && /Never present an alternative as a match/.test(alt.note) && /you found no water bottle under 5000 priced at most 5000 XAF/.test(alt.note));
+check('J · Shape Browse Result', 'no alternatives either → says so',
+  /no other products priced at most 5000 XAF/.test(browseOut(worded, [], { 'Shape Fallback Result': [j({ count: 0, source: 'keyword' })] }).note));
+check('J · Shape Browse Result', 'the allowlist never carries bargain data', !JSON.stringify(bList).match(/bargain|minPrice/));
+
+// aboveBudget is carried to the FINAL answer, whichever node gives it (live case: exec 22391,
+// 'water bottle' under 7000 -- the bottle exists at 7500 and the bot was about to say there is none).
+const hybridAbove = { 'Shape Result': [j({ count: 0, aboveBudget: [{ id: 'wb', title: 'Water Bottle', price: 7500 }] })] };
+const altAbove = browseOut(worded, altLive, { ...hybridAbove, 'Shape Fallback Result': [j({ count: 0, source: 'keyword' })] });
+check('J · Shape Browse Result', 'alternatives carry the over-budget real match, and the note says to mention it first, with its price',
+  altAbove.aboveBudget.length === 1 && altAbove.aboveBudget[0].id === 'wb' && /DO exist above the budget/.test(altAbove.note) && /NOTHING matched/.test(altAbove.note));
+check('J · Shape Browse Result', 'no hybrid run → aboveBudget is [] and the note says nothing about it', alt.aboveBudget.length === 0 && !/above the budget/.test(alt.note));
+const fbAbove = runCode(SHAPE_FALLBACK, { nodes: { 'Normalise Query': [j(worded)], ...hybridAbove }, input: [j({ data: [] })] })[0].json;
+check('F · Shape Fallback Result', 'the keyword answer carries the hybrid search\'s aboveBudget through', fbAbove.aboveBudget.length === 1 && fallback(real, listing).aboveBudget.length === 0);
+
+// ── K · the new guards BITE ─────────────────────────────────────────────────
+const noBackstop = mutate(NORMALISE, '(!hasText || isGenericOnly(raw))', '(!hasText)');
+check('K · guards bite', 'without the generic-words backstop, "products under 10k" is searched again (the live failure)',
+  runCode(noBackstop, { input: [j({ query: 'products under 10k', maxPrice: 10000 })] })[0].json.browse === false);
+const noLiveBudget = mutate(SHAPE_RESULT, 'p.price > n.maxPrice;', 'false;');
+check('K · guards bite', 'without the live-price check, a match over the budget is shown',
+  runCode(noLiveBudget, { nodes: { 'Collect Ids': [j(twoRows)], 'Normalise Query': [j({ ...real, maxPrice: 10000 })] }, input: [j(twoLive)] })[0].json.count === 2);
+const mixedUp = mutate(SHAPE_BROWSE, 'count: 0,\n    products: [],\n    alternatives: items,', 'count: items.length,\n    products: items,\n    alternatives: items,');
+check('K · guards bite', 'if alternatives were put in products, J\'s "products EMPTY" assertion would catch it',
+  runCode(mixedUp, { nodes: { 'Normalise Query': [j(worded)], 'Shape Fallback Result': [j({ count: 0, source: 'keyword' })] }, input: [j({ data: altLive })] })[0].json.products.length === 1);
+
 process.exit(report());

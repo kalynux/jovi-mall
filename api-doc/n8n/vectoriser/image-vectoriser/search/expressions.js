@@ -58,9 +58,31 @@ const HAS_TEXT_CONDITION = `={{ $('Normalise Query').first().json.has_text === t
 const IMAGE_ARM_CONDITION = `={{ $('Normalise Query').first().json.image_arm === true }}`;
 const IMAGE_CACHED_CONDITION = `={{ $json.image_embedding != null && $json.image_embedding !== "" }}`;
 
+// ── Browse + alternatives (2026-10-05) ──────────────────────────────────────
+// Browse Only? — right after Normalise Query. True skips the index entirely.
+const BROWSE_CONDITION = `={{ $('Normalise Query').first().json.browse === true }}`;
+
+// Browse Catalogue → url. Reached from Browse Only? AND from Offer Alternatives?,
+// so it reads Normalise Query by name, never $json. The whole query string is
+// built in Normalise Query, which sends only the filters that are present.
+const BROWSE_URL = `={{ ($env.JOVI_MALL_BASE_URL || 'http://jovi-mall:8022') + '/api/public/products?' + $('Normalise Query').first().json.browse_qs }}`;
+
+// Keyword Fallback → url. ⚠ Replaces the node's old `q` + `limit` query parameters,
+// which dropped the budget entirely: "shoes under 10k" fell back to every pair of
+// shoes. A query-parameter list cannot omit an empty value, and an empty
+// `maxPrice=` is a 0 XAF ceiling on jovi-mall's side -- hence one built string.
+const KEYWORD_FALLBACK_URL = `={{ ($env.JOVI_MALL_BASE_URL || 'http://jovi-mall:8022') + '/api/public/products?' + $('Normalise Query').first().json.keyword_qs }}`;
+
+// Offer Alternatives? — after Shape Fallback Result. Only for a WORDED search that
+// matched nothing and carries a budget or a category to look within. A photo-only
+// search never gets a listing (Shape Fallback Result's own rule), and neither does
+// a bare "red shoes": with no filter, "alternatives" would be five random products.
+const OFFER_ALTERNATIVES_CONDITION = `={{ $json.count === 0 && $('Normalise Query').first().json.has_text === true && $('Normalise Query').first().json.has_filter === true }}`;
+
 module.exports = {
   RUN_HYBRID_SEARCH_REPLACEMENT, RUN_HYBRID_SEARCH_QUERY, EMBED_IMAGE_QUERY_BODY,
   IMAGE_CACHE_LOOKUP_QUERY, IMAGE_CACHE_LOOKUP_REPLACEMENT,
   CACHE_IMAGE_EMBEDDING_QUERY, CACHE_IMAGE_EMBEDDING_REPLACEMENT,
   HAS_TEXT_CONDITION, IMAGE_ARM_CONDITION, IMAGE_CACHED_CONDITION,
+  BROWSE_CONDITION, BROWSE_URL, KEYWORD_FALLBACK_URL, OFFER_ALTERNATIVES_CONDITION,
 };

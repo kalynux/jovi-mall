@@ -1,0 +1,1 @@
+={{ JSON.stringify({ messageId: String($('Inbound').first().json.messageId), expiresAt: $now.plus({ minutes: 10 }).toISO() }) }}
