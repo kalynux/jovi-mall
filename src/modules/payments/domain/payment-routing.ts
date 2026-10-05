@@ -237,6 +237,22 @@ export function checkChargeRequest(
   return { ok: true, detected: phone.detected };
 }
 
+export type AmountLimitCheck = { ok: true } | { ok: false; min: number; max: number };
+
+/**
+ * Is the amount inside what the route's aggregator accepts for this provider?
+ *
+ * Needs the ROUTE (an aggregator's limit, not a provider's), so it runs where the route is known,
+ * still before any write. A capability with no `limits` accepts anything, which keeps every
+ * aggregator that declares none exactly as it was.
+ */
+export function checkAmountLimits(capability: ProviderCollectCapability, amount: number): AmountLimitCheck {
+  const limits = capability.limits;
+  if (!limits) return { ok: true };
+  if (Number.isFinite(amount) && amount >= limits.min && amount <= limits.max) return { ok: true };
+  return { ok: false, min: limits.min, max: limits.max };
+}
+
 // ── Legacy bodies ────────────────────────────────────────────────────────────
 
 export interface ProviderDerivationInput {

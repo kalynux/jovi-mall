@@ -5,6 +5,8 @@ import { StripeGateway } from './stripe.gateway';
 import { CampayGateway } from './campay.gateway';
 import { CinetPayGateway } from './cinetpay.gateway';
 import { FapshiGateway } from './fapshi.gateway';
+import { NovaSendGateway } from './novasend.gateway';
+import { PawaPayGateway } from './pawapay.gateway';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import {
@@ -13,6 +15,8 @@ import {
   fapshiEnabled,
   myCoolPayEnabled,
   notchPayEnabled,
+  novasendEnabled,
+  pawapayEnabled,
   stripeEnabled,
 } from '../config/payments.config';
 import { getPaymentSettingsSync } from '../services/payment-settings.service';
@@ -54,6 +58,8 @@ const gateways: ReadonlyMap<PaymentGatewayName, PaymentGateway> = new Map<
   ['CAMPAY', new CampayGateway()],
   ['CINETPAY', new CinetPayGateway()],
   ['FAPSHI', new FapshiGateway()],
+  ['NOVASEND', new NovaSendGateway()],
+  ['PAWAPAY', new PawaPayGateway()],
 ]);
 
 export const PAYMENT_GATEWAYS = gateways;
@@ -112,6 +118,8 @@ const CONFIGURED: Readonly<Record<PaymentGatewayName, () => boolean>> = Object.f
   CAMPAY: campayEnabled,
   CINETPAY: cinetpayEnabled,
   FAPSHI: fapshiEnabled,
+  NOVASEND: novasendEnabled,
+  PAWAPAY: pawapayEnabled,
 });
 
 /**

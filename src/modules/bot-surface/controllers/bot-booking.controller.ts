@@ -713,10 +713,14 @@ function channelOf(input: {
     phoneNumber?: string;
     phoneOperator?: 'MTN' | 'ORANGE' | 'MOOV';
     customerEmail?: string;
+    paymentCode?: string;
 }) {
     return {
         ...(input.phoneNumber ? { phoneNumber: input.phoneNumber } : {}),
         ...(input.phoneOperator ? { phoneOperator: input.phoneOperator } : {}),
         ...(input.customerEmail ? { customerEmail: input.customerEmail } : {}),
+        // `CODE_FIRST` (NovaSend Orange Money). Missing where the route needs it →
+        // `422 PAYMENT_CODE_REQUIRED` from the charge's own check, before anything is written.
+        ...(input.paymentCode ? { paymentCode: input.paymentCode } : {}),
     };
 }

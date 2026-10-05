@@ -275,6 +275,109 @@ export const FAPSHI_CONFIG = Object.freeze({
   PAYOUTS_ENABLED: (process.env.FAPSHI_PAYOUTS_ENABLED || 'false') === 'true',
 });
 
+/** NovaSend's two hosts. Named once for the default and the production boot warning. */
+export const NOVASEND_SANDBOX_BASE_URL = 'https://sandbox.novasend.app';
+export const NOVASEND_LIVE_BASE_URL = 'https://business.novasend.app';
+
+/**
+ * NovaSend — https://business.novasend.app (live) · https://sandbox.novasend.app (sandbox, the default)
+ *
+ * Source: docs.novasend.app/fr/docs (read 2026-10-05) and the official `novasend-sdk` 1.0.1
+ * (npm, published 2026-09-14). The two disagree in places; `NovaSendGateway`'s header lists where.
+ *
+ * API_KEY / API_SECRET → HTTP Basic `base64(API_KEY:API_SECRET)` on every call (Business portal →
+ *               Paramètres → Token). One pair serves collections AND payouts.
+ * WEBHOOK_SECRET → the per-webhook secret set in the portal; NovaSend signs each notification
+ *               `X-Signature-Value: hex(HMAC-SHA256(body, secret))`. Different from the API secret.
+ * RETURN_URL   → `action.successUrl` / `action.failureUrl`, required by NovaSend on every pay-in
+ *               even though a direct (handset) payment never redirects.
+ * ORANGE_CODE_USSD → what an Orange Money customer dials to get the payment code NovaSend
+ *               requires WITH the charge (`flow: 'CODE_FIRST'`). The docs show `#144*82#`, which
+ *               is Orange Côte d'Ivoire's; Cameroon's must be confirmed with NovaSend support.
+ * SANDBOX_SCENARIO → `completed` | `failed` | `pending`, sent as `sandboxScenario` ONLY while
+ *               BASE_URL is the sandbox host. Unset = NovaSend's sandbox default.
+ *
+ * ⚠ BASE_URL defaults to the SANDBOX host, deliberately, like Campay and Fapshi: going live is an
+ * explicit act, and `config/env.ts` warns in production while it points at the sandbox.
+ */
+export const NOVASEND_CONFIG = Object.freeze({
+  API_KEY: (process.env.NOVASEND_API_KEY || '').trim(),
+  API_SECRET: (process.env.NOVASEND_API_SECRET || '').trim(),
+  WEBHOOK_SECRET: (process.env.NOVASEND_WEBHOOK_SECRET || '').trim(),
+  BASE_URL: (process.env.NOVASEND_BASE_URL || NOVASEND_SANDBOX_BASE_URL).trim().replace(/\/+$/, ''),
+  REQUEST_TIMEOUT_MS: parseInt(process.env.NOVASEND_REQUEST_TIMEOUT_MS || '30000'),
+  RETURN_URL: (
+    process.env.NOVASEND_RETURN_URL ||
+    process.env.STOREFRONT_URL ||
+    process.env.API_PUBLIC_URL ||
+    ''
+  ).trim(),
+  ORANGE_CODE_USSD: (process.env.NOVASEND_ORANGE_CODE_USSD || '#144*82#').trim(),
+  SANDBOX_SCENARIO: (process.env.NOVASEND_SANDBOX_SCENARIO || '').trim(),
+  /**
+   * Whether PAYOUTS are enabled for this deployment. ⚠ Default FALSE: turn it on only after a
+   * sandbox payout has been seen to settle (`npm run verify:novasend`).
+   */
+  PAYOUTS_ENABLED: (process.env.NOVASEND_PAYOUTS_ENABLED || 'false') === 'true',
+});
+
+/** PawaPay's two hosts. Named once for the default and the production boot warning. */
+export const PAWAPAY_SANDBOX_BASE_URL = 'https://api.sandbox.pawapay.io';
+export const PAWAPAY_LIVE_BASE_URL = 'https://api.pawapay.io';
+
+/** `API_PUBLIC_URL`, parsed, or null when unset or not a URL. */
+function apiPublicUrl(): URL | null {
+  try {
+    return process.env.API_PUBLIC_URL ? new URL(process.env.API_PUBLIC_URL) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * PawaPay — https://api.pawapay.io (live) · https://api.sandbox.pawapay.io (sandbox, the default)
+ *
+ * Source: PawaPay's OpenAPI v2 and the v2 guides (docs.pawapay.io/v2, read 2026-10-05).
+ *
+ * API_TOKEN → `Authorization: Bearer …` on every call, generated in the PawaPay dashboard
+ *               (one per environment). One token serves collections AND payouts.
+ * CALLBACK_PUBLIC_KEY → optional PEM pinning the key PawaPay signs callbacks with. Unset (the
+ *               normal case), the keys are fetched from `GET /v2/public-key/http` and cached.
+ * CALLBACK_AUTHORITY → optional host PawaPay calls back on, when neither the request's own
+ *               `Host` nor `API_PUBLIC_URL` is it. Part of what the callback signature covers.
+ *
+ * ⛔ Callbacks must be SIGNED (owner decision 2026-10-05): enable signed callbacks in the PawaPay
+ * dashboard, or every callback is refused and payments settle on the reconciliation sweep alone.
+ * The callback URL is configured in the dashboard, not per request: `/api/webhooks/pawapay` for
+ * deposits AND payouts.
+ *
+ * ⚠ BASE_URL defaults to the SANDBOX host, deliberately, like Campay, Fapshi and NovaSend: going
+ * live is an explicit act, and `config/env.ts` warns in production while it points at the sandbox.
+ */
+export const PAWAPAY_CONFIG = Object.freeze({
+  API_TOKEN: (process.env.PAWAPAY_API_TOKEN || '').trim(),
+  BASE_URL: (process.env.PAWAPAY_BASE_URL || PAWAPAY_SANDBOX_BASE_URL).trim().replace(/\/+$/, ''),
+  REQUEST_TIMEOUT_MS: parseInt(process.env.PAWAPAY_REQUEST_TIMEOUT_MS || '30000'),
+  /** A PEM; `\n` escapes (one-line env files) are turned back into newlines. */
+  CALLBACK_PUBLIC_KEY: (process.env.PAWAPAY_CALLBACK_PUBLIC_KEY || '').trim().replace(/\\n/g, '\n'),
+  /** Hosts besides the request's own that a callback signature's `@authority` may name. */
+  CALLBACK_AUTHORITIES: Object.freeze(
+    [(process.env.PAWAPAY_CALLBACK_AUTHORITY || '').trim(), apiPublicUrl()?.host ?? ''].filter(Boolean)
+  ),
+  /** The `@path` a callback signature may name: ours, and ours under `API_PUBLIC_URL`'s path prefix. */
+  CALLBACK_PATHS: Object.freeze(
+    [...new Set([
+      gatewayWebhookPath('PAWAPAY'),
+      `${(apiPublicUrl()?.pathname ?? '').replace(/\/+$/, '')}${gatewayWebhookPath('PAWAPAY')}`,
+    ])]
+  ),
+  /**
+   * Whether PAYOUTS are enabled for this deployment. ⚠ Default FALSE: turn it on only after a
+   * sandbox payout has been seen to settle (`npm run verify:pawapay`) and the wallet is funded.
+   */
+  PAYOUTS_ENABLED: (process.env.PAWAPAY_PAYOUTS_ENABLED || 'false') === 'true',
+});
+
 /**
  * Cross-gateway payment policy.
  *
@@ -346,6 +449,23 @@ export function cinetpayEnabled(): boolean {
  */
 export function fapshiEnabled(): boolean {
   return FAPSHI_CONFIG.API_USER !== '' && FAPSHI_CONFIG.API_KEY !== '' && FAPSHI_CONFIG.WEBHOOK_SECRET !== '';
+}
+
+/**
+ * True when NovaSend has its credential pair AND the webhook secret. Without the secret every
+ * notification is refused `missing_secret` and settlement rests on the reconciliation sweep alone,
+ * so that is not "configured".
+ */
+export function novasendEnabled(): boolean {
+  return NOVASEND_CONFIG.API_KEY !== '' && NOVASEND_CONFIG.API_SECRET !== '' && NOVASEND_CONFIG.WEBHOOK_SECRET !== '';
+}
+
+/**
+ * True when PawaPay has its token. There is no webhook secret to require: callbacks are verified
+ * against PawaPay's PUBLIC key, which the token fetches (`PawaPayGateway.refreshPublicKeys`).
+ */
+export function pawapayEnabled(): boolean {
+  return PAWAPAY_CONFIG.API_TOKEN !== '';
 }
 
 /**

@@ -20,13 +20,20 @@ import {
     CINETPAY_SANDBOX_BASE_URL,
     FAPSHI_CONFIG,
     FAPSHI_SANDBOX_BASE_URL,
+    NOVASEND_CONFIG,
+    NOVASEND_SANDBOX_BASE_URL,
+    novasendEnabled,
+    PAWAPAY_CONFIG,
+    PAWAPAY_SANDBOX_BASE_URL,
+    pawapayEnabled,
     notchPayEnabled,
     myCoolPayEnabled,
     campayEnabled,
     cinetpayEnabled,
     fapshiEnabled,
 } from '../../payments/config/payments.config';
-import { gatewaySupportsRefund } from '../../payments/gateways/registry';
+import { gatewaySupportsRefund, getPaymentGateway } from '../../payments/gateways/registry';
+import type { PawaPayGateway } from '../../payments/gateways/pawapay.gateway';
 import { getPaymentSettingsSync } from '../../payments/services/payment-settings.service';
 import { ConnectedCalendarAccount } from '../../integrations/calendar/google/connected-account.model';
 import { SYSTEM_CONFIG } from '../config/system.config';
@@ -420,6 +427,48 @@ function configurationOf(key: IntegrationKey): {
                     payoutsEnabled: FAPSHI_CONFIG.PAYOUTS_ENABLED,
                     activeForCollections: getPaymentSettingsSync().collection_aggregator === 'FAPSHI',
                     activeForPayouts: getPaymentSettingsSync().payout_aggregator === 'FAPSHI',
+                },
+            };
+
+        case 'novasend':
+            return {
+                configured: novasendEnabled(),
+                detail: {
+                    implemented: true,
+                    credentialsSet: Boolean(NOVASEND_CONFIG.API_KEY && NOVASEND_CONFIG.API_SECRET),
+                    webhookSecretSet: Boolean(NOVASEND_CONFIG.WEBHOOK_SECRET),
+                    // The sandbox moves no real money.
+                    sandbox: NOVASEND_CONFIG.BASE_URL === NOVASEND_SANDBOX_BASE_URL,
+                    baseUrl: NOVASEND_CONFIG.BASE_URL,
+                    returnUrlSet: NOVASEND_CONFIG.RETURN_URL !== '',
+                    // What an Orange Money customer is told to dial for the payment code.
+                    orangeCodeUssd: NOVASEND_CONFIG.ORANGE_CODE_USSD,
+                    // Refunds are sent as payouts (REFUND-FLOW-PLAN R-1).
+                    refundSupported: gatewaySupportsRefund('NOVASEND'),
+                    payoutsEnabled: NOVASEND_CONFIG.PAYOUTS_ENABLED,
+                    activeForCollections: getPaymentSettingsSync().collection_aggregator === 'NOVASEND',
+                    activeForPayouts: getPaymentSettingsSync().payout_aggregator === 'NOVASEND',
+                },
+            };
+
+        case 'pawapay':
+            return {
+                configured: pawapayEnabled(),
+                detail: {
+                    implemented: true,
+                    tokenSet: PAWAPAY_CONFIG.API_TOKEN !== '',
+                    // The sandbox moves no real money.
+                    sandbox: PAWAPAY_CONFIG.BASE_URL === PAWAPAY_SANDBOX_BASE_URL,
+                    baseUrl: PAWAPAY_CONFIG.BASE_URL,
+                    callbackPublicKeyPinned: PAWAPAY_CONFIG.CALLBACK_PUBLIC_KEY !== '',
+                    // 0 until the first outgoing PawaPay call fetches them; a callback arriving
+                    // to 0 keys is refused and triggers the fetch (PawaPay retries for 15 min).
+                    callbackKeysLoaded: (getPaymentGateway('PAWAPAY') as PawaPayGateway).callbackKeysLoaded(),
+                    // Refunds are sent as payouts (REFUND-FLOW-PLAN R-1).
+                    refundSupported: gatewaySupportsRefund('PAWAPAY'),
+                    payoutsEnabled: PAWAPAY_CONFIG.PAYOUTS_ENABLED,
+                    activeForCollections: getPaymentSettingsSync().collection_aggregator === 'PAWAPAY',
+                    activeForPayouts: getPaymentSettingsSync().payout_aggregator === 'PAWAPAY',
                 },
             };
 

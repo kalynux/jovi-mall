@@ -195,6 +195,13 @@ const CODE_ACTIONS: Readonly<
      * to be sent somewhere else. "Ask me again" stays the honest remedy.
      */
     [ERROR_CODES.BOT_SCREEN_SESSION_EXPIRED]: () => [],
+    /**
+     * ⛔ No button: the remedy is the customer DIALLING a code and typing it back (NovaSend Orange
+     * Money). `business_rule` would offer Get help, which is the wrong door for a step the
+     * sentence already explains and the customer completes in one message.
+     */
+    [ERROR_CODES.PAYMENT_CODE_REQUIRED]: () => [],
+    [ERROR_CODES.PAYMENT_CODE_REJECTED]: () => [],
 });
 
 /**

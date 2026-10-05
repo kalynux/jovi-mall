@@ -41,6 +41,13 @@ export interface PaymentOptionEntry {
   mayRequireOtp: boolean;
   /** Only on a `CARD_ELEMENT` entry. Never an `sk_`/`rk_` key (see `stripePublishableKey`). */
   publishableKey?: string;
+  /**
+   * Only on a `CODE_FIRST` entry: what the customer dials to get the payment code that must be
+   * sent as `channel.paymentCode` WITH the charge (NovaSend Orange Money).
+   */
+  codeUssd?: string;
+  /** Only when the route declares one: the amounts it accepts, in XAF. Outside → `422 PAYMENT_AMOUNT_OUT_OF_RANGE`. */
+  limits?: { min: number; max: number };
 }
 
 export interface PaymentOptions {
@@ -75,6 +82,11 @@ export function buildPaymentOptions(
     if (flow === 'CARD_ELEMENT') {
       if (!publishableKey) continue;
       entry.publishableKey = publishableKey;
+    }
+    // Projected field by field (see the header): a capability field is never spread onto the wire.
+    if (flow === 'CODE_FIRST' && route.capability.codeUssd) entry.codeUssd = route.capability.codeUssd;
+    if (route.capability.limits) {
+      entry.limits = { min: route.capability.limits.min, max: route.capability.limits.max };
     }
 
     providers.push(entry);

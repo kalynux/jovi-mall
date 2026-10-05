@@ -18,6 +18,7 @@ import { deliveryCashOfOrders } from '../../../orders/domain/delivery-payer';
 import { botStorefrontLink, surfacePath } from '../../domain/bot-list-window';
 import { maskPhone } from '../../dto/bot-projections';
 import { composeTypedNumber, dialOptions } from '../../../../core/validation/dial-codes';
+import { PaymentCodeSchema } from '../../../payments/validators/payment.validators';
 import { InAppSurfaceSession, inAppSurfaceStore } from '../../services/inapp-surface.store';
 import { accountIdentifier, maskAddress } from './checkout-masking';
 import { ChatDestination, resolveChatDestination } from './checkout-destination';
@@ -25,6 +26,8 @@ import {
     assertMobileMoneyOffered,
     maskedPayerNumber,
     mobileMoneyRoute,
+    paymentCodeAsk,
+    routeNeedsPreChargeFacts,
     storedPayer,
     storedPayerNumber,
     validatedPayerNumber,
@@ -114,6 +117,11 @@ const PlaceBodySchema = z
          * when the data read's `deliveryFeeCash` is non-null.
          */
         deliveryFeePayment: z.enum(['with_order', 'cash_to_rider']).optional(),
+        /**
+         * The `CODE_FIRST` payment code (NovaSend Orange Money). The page asks for it only after a
+         * `422 PAYMENT_CODE_REQUIRED` (`spent: false`), then submits again with it.
+         */
+        paymentCode: PaymentCodeSchema.optional(),
     })
     .strict();
 
@@ -159,6 +167,13 @@ export interface CheckoutView {
      * ISO code the country picker starts on: the account number's own country, else Cameroon.
      */
     payment: { phoneMasked: string | null; dialCountry: string };
+    /**
+     * ⭐ Non-null when the active aggregator needs a payment code BEFORE the charge for some mobile
+     * provider (NovaSend Orange Money, `CODE_FIRST`): the page and the form then draw an optional
+     * code field whose hint says what to dial (`ussd`). Null — the field is not drawn — for every
+     * other aggregator. Optional in the TYPE only for the form's older fixtures.
+     */
+    paymentCode?: { ussd: string | null } | null;
     language: string | null;
     /**
      * The website's address page, in the customer's language — **only in the no-address state**,
@@ -286,6 +301,11 @@ export interface PlaceCheckoutOptions {
      * from the `yes:cof` tap. The chat door checks `cash_to_rider` against the quote BEFORE the spend; the screen is refused inside order creation.
      */
     deliveryFeePayment?: 'with_order' | 'cash_to_rider';
+    /**
+     * The `CODE_FIRST` payment code (NovaSend Orange Money), from any door that collected one.
+     * Already validated by the door's schema. Forwarded to the charge and nowhere else.
+     */
+    paymentCode?: string | null;
 }
 
 /**
@@ -331,6 +351,7 @@ export async function readCheckoutView(handle: string): Promise<CheckoutView> {
         totalText: formatBotPrice(quote.total, quote.currency),
         address,
         payment: await payerPresentation(customer),
+        paymentCode: paymentCodeAsk(),
         language: session.language,
         addAddressUrl: address ? null : botStorefrontLink(surfacePath('addresses'), session.language),
         /** The page draws Pay on delivery only when this is true (owner decision, 2026-09-27). */
@@ -434,6 +455,19 @@ export async function placeCheckout(
         }
     }
 
+    const paymentCode = options.paymentCode?.trim() || null;
+    /**
+     * ⭐ The payment code and the amount limit, BEFORE the spend (NovaSend, 2026-10-05). Both depend
+     * on the payer's number and the total, which the screen otherwise learns only from the session
+     * it consumes — so the session is READ here (`read` never spends). Without this, an Orange
+     * customer on the account's own number would lose the handle to "enter your code", and an
+     * order over the limit would be placed and left unpaid. Skipped entirely while the active
+     * aggregator needs neither, so no other aggregator's door does any extra work.
+     */
+    if (routeNeedsPreChargeFacts()) {
+        await precheckPreChargeFacts(handle, typedNumber, addressId, deliveryFeePayment, paymentCode);
+    }
+
     const session = await inAppSurfaceStore.consume('co', plausibleHandle(handle));
     if (!session) throw handleGone(false);
     /**
@@ -470,7 +504,7 @@ export async function placeCheckout(
          * the chat" and "go back to the chat, and there is now an unpaid order and a thirty-minute
          * stock hold behind you that you never asked for".
          */
-        const route = mobileMoneyRoute(payerNumber, true, payer.savedProvider);
+        const route = mobileMoneyRoute(payerNumber, true, payer.savedProvider, { paymentCode });
 
         /**
          * ⚠ **`'online'` — this function is Pay NOW.** Pay on delivery is its sibling,
@@ -501,6 +535,7 @@ export async function placeCheckout(
         const payment = await paymentOrchestrator.initiatePaymentForCart(cartId, route, {
             phoneNumber: payerNumber,
             customerName: customer.name,
+            ...(paymentCode ? { paymentCode } : {}),
         }, { originChat: session.channel });
 
         return {
@@ -517,6 +552,38 @@ export async function placeCheckout(
     } catch (error) {
         throw markedSpent(error);
     }
+}
+
+/**
+ * The pre-spend half of the payment-code and amount checks (see `placeCheckout`). Every refusal
+ * is `spent: false`. A handle that cannot be read, a customer with no wallet or a basket that
+ * cannot be quoted is NOT refused here: the ordinary path after the spend already answers each of
+ * those, in its own words, and this check must never invent a second wording for them.
+ */
+async function precheckPreChargeFacts(
+    handle: string,
+    typedNumber: string | null,
+    addressId: string | null,
+    deliveryFeePayment: 'with_order' | 'cash_to_rider',
+    paymentCode: string | null,
+): Promise<void> {
+    const session = await inAppSurfaceStore.read('co', plausibleHandle(handle));
+    if (!session) return;
+    const payer = typedNumber
+        ? { number: typedNumber, savedProvider: null }
+        : await storedPayer(await loadCustomer(session.customerId));
+    if (!payer) return;
+
+    let amount: number | null = null;
+    try {
+        const quote = await cartQuoteService.quoteForCustomer(session.customerId, addressId ?? undefined);
+        amount = deliveryFeePayment === 'cash_to_rider' && quote.deliveryFeeCash?.available
+            ? quote.deliveryFeeCash.amountDueOnline
+            : quote.total;
+    } catch {
+        amount = null; // the address or basket problem is reported after the spend, as before
+    }
+    mobileMoneyRoute(payer.number, false, payer.savedProvider, { paymentCode, amount });
 }
 
 /** What a pay-on-delivery placement knows: orders, and no charge — the cash is taken at the door. */
@@ -794,6 +861,8 @@ export class CheckoutController {
             delivery: view.delivery ?? [],
             /** W-F — the "delivery in cash" choice, or null when it is not offered. */
             deliveryFeeCash: view.deliveryFeeCash ?? null,
+            /** NovaSend `CODE_FIRST`: `{ ussd }` → draw the optional payment-code field; null → do not. */
+            paymentCode: view.paymentCode ?? null,
         });
     });
 
@@ -816,9 +885,10 @@ export class CheckoutController {
      * page whatever the placement gains next.
      */
     static place = asyncHandler(async (req: Request, res: Response) => {
-        const { phone, dial, deliveryFeePayment } = PlaceBodySchema.parse(req.body ?? {});
+        const { phone, dial, deliveryFeePayment, paymentCode } = PlaceBodySchema.parse(req.body ?? {});
         const placed = await placeCheckout(String(req.params.handle ?? ''), composeTypedNumber(phone, dial), {
             deliveryFeePayment,
+            paymentCode: paymentCode ?? null,
         });
         const answer: CheckoutPlaced = {
             orderCount: placed.orderCount,

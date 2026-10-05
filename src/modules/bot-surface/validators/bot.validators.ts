@@ -5,6 +5,7 @@ import { BOT_ONBOARDING_STEP_VALUES } from '../domain/bot-onboarding';
 import { BOT_CHAT_LIST_MAX } from '../domain/bot-list-window';
 import { PhoneNumberSchema } from '../../../core/validation/phone';
 import { EmailAddressSchema } from '../../../core/validation/email';
+import { PaymentCodeSchema } from '../../payments/validators/payment.validators';
 import { ACCOUNT_CLOSURE_CONFIRMATION } from '../../users/user.validator';
 import {
     CUSTOMER_AGGREGATE_TYPES,
@@ -796,6 +797,8 @@ export const BotBookingPaySchema = z
         phoneNumber: z.string().trim().min(1).max(20).optional(),
         phoneOperator: z.enum(['MTN', 'ORANGE', 'MOOV']).optional(),
         customerEmail: z.string().trim().email().max(254).optional(),
+        /** The `CODE_FIRST` payment code (NovaSend Orange Money), after `422 PAYMENT_CODE_REQUIRED`. */
+        paymentCode: PaymentCodeSchema.optional(),
     })
     .strict();
 
@@ -1123,7 +1126,11 @@ export const BotDeliveryFeeRejectSchema = z
  * approval froze.
  */
 export const BotDeliveryFeePaySchema = z
-    .object({ phone: z.string().trim().max(32).nullable().optional() })
+    .object({
+        phone: z.string().trim().max(32).nullable().optional(),
+        /** The `CODE_FIRST` payment code (NovaSend Orange Money), after `422 PAYMENT_CODE_REQUIRED`. */
+        paymentCode: PaymentCodeSchema.optional(),
+    })
     .strict();
 
 /**

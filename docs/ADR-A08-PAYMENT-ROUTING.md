@@ -218,6 +218,7 @@ when the gateway's signature covers them:
 | **Campay** (P2.1) | a JWT signing only timestamps | ❌ | **required** (re-reads `GET /transaction/{ref}/`) |
 | **CinetPay** (v1, 2026-10-02) | nothing: a per-transaction `notify_token` and the ids, no status, no amount | ❌ | **required** (re-reads `GET /v1/payment/{id}` or `/v1/transfer/{id}`) |
 | **Fapshi** (2026-10-02) | a static shared secret echoed in `x-wh-secret` | ❌ | **required** (re-reads `GET /payment-status/{transId}`) |
+| **PawaPay** (2026-10-05) | RFC 9421 signature with PawaPay's private key, over method, host, path, `Content-Digest` (the whole body) and headers; unsigned callbacks refused | ✅ | **implemented anyway**, by owner decision (re-reads `GET /v2/deposits/{id}` or `/v2/payouts/{id}`) |
 | Flutterwave v3 (not planned) | a static `verif-hash` shared secret | ❌ | would be required; v4's HMAC is chosen instead |
 
 **The gap, and why it was real on My-CoolPay.** A captured, genuinely signed callback for a
@@ -296,6 +297,83 @@ bank account.
   no answer throws (outcome unknown).
 - **Live mode is gated twice by Fapshi**: direct pay and payouts are each disabled on a live
   service until Fapshi support enables them. Our full reference fits `externalId` unchanged.
+
+### NovaSend (added 2026-10-05)
+
+The seventh aggregator, `NovaSendGateway`, written from docs.novasend.app (FR, read 2026-10-05)
+and the official `novasend-sdk` 1.0.1 (npm, first published 2026-09-14). The two disagree in
+places; the adapter header lists each disagreement and `verify:novasend` settles them against
+the sandbox. `test:novasend` is the offline suite. Cameroon: MTN + Orange, collections and
+payouts, payouts behind `NOVASEND_PAYOUTS_ENABLED` (default off). Owner decisions 2026-10-05.
+
+- **One Basic-auth pair** (`base64(KEY:SECRET)`) serves both directions. Sandbox and production
+  are fully separate (keys, webhooks, transactions).
+- **Lookups are by OUR reference** (`GET /v1/payin/{reference}`, `GET /v1/direct/payout/{reference}`),
+  so the `jm_…` reference is also the stored `gatewayRef`. Every write carries the documented
+  REQUIRED `X-Idempotency-Key`, which must be a UUID: ours is a version-5 UUID of
+  `<purpose>:<reference>`, so a resend presents the same key.
+- **The notification is HMAC-SHA256 over the body** (`X-Signature-Value`). Raw bytes (SDK) and the
+  re-serialised body (docs) are both accepted; both need the secret. `confirmWebhookEvent` re-reads
+  the record anyway, because the status words differ between the documentation's own pages.
+- **D-12 · `CODE_FIRST`, a new collect flow.** NovaSend's Direct API requires `payin.otp` for Orange
+  Money: a code the customer obtains by dialling a USSD code BEFORE paying, sent WITH the charge.
+  That is the reverse of `OTP` (charge, then SMS code to `/authorize`), so it is its own flow with
+  its own channel field (`paymentCode`) and its own refusal (`422 PAYMENT_CODE_REQUIRED`, raised
+  before anything is written). Owner decision: build the step in every app now, rather than offer
+  MTN alone through NovaSend. The capability is a literal like every other: should NovaSend confirm
+  that Orange **Cameroon** needs no code, ORANGE becomes `PUSH` in one line and every client falls
+  back to the push screen. The code is never stored, logged or echoed.
+- **D-13 · Per-route amount limits, refused before any write, no failover.** A capability may
+  declare `limits: { min, max }` (NovaSend Cameroon: 200–500,000 XAF). Routing checks the amount
+  once the route and the amount are both known (`prepareCharge().route(amount)`, billing's
+  `resolveBillingCharge`, the bot's pre-spend check) and refuses `422 PAYMENT_AMOUNT_OUT_OF_RANGE`.
+  Owner decision: a clear refusal, NOT an automatic switch to another aggregator, which D-9 rules
+  out. A capability with no `limits` behaves exactly as before.
+- **No refund API used, no balance.** NovaSend's refund takes no amount (no partial refunds), and
+  refunds are payouts here anyway (REFUND-FLOW-PLAN R-1). No balance endpoint is documented.
+
+### PawaPay (added 2026-10-05)
+
+The eighth aggregator, `PawaPayGateway`, written from PawaPay's OpenAPI v2 and the v2 guides
+(docs.pawapay.io/v2). Where the two disagree the spec wins (a payouts-guide example sends `payer`;
+the spec says `recipient`). `test:pawapay` is the offline suite and `verify:pawapay` the live one.
+Cameroon only (`MTN_MOMO_CMR`, `ORANGE_CMR`, XAF, both a PIN prompt, no decimals); collections and
+payouts, payouts behind `PAWAPAY_PAYOUTS_ENABLED` (default off). Owner decisions 2026-10-05.
+
+- **One bearer token** serves both directions. Going live changes the base URL and the token only.
+- **The merchant mints the id, and it must be a UUIDv4.** Ours is a v4-shaped SHA-256 of our
+  `jm_…` reference (`pawapayPaymentId`), so a resend presents the same id and PawaPay answers
+  `DUPLICATE_IGNORED`. The id is the stored `gatewayRef`; our reference travels as
+  `clientReferenceId` and as `metadata.jmRef`, because a callback carries metadata and not
+  `clientReferenceId`.
+- **A FAILED payout keeps its id forever**, so a retry would be `DUPLICATE_IGNORED` for good.
+  `createPayout` therefore reads a duplicate back and moves to the next derived id (`attempt` 1, 2,
+  … up to 10) **only** when the previous one is FAILED, which is final. `verifyPayout` without a
+  stored id walks the same sequence and reports the last id PawaPay knows.
+- **Unknown outcomes follow PawaPay's own rule** ("only NOT_FOUND is safe to fail"): a deposit
+  whose initiation got a 5xx or no answer is read back once; NOT_FOUND fails it, FOUND uses the
+  record, and a failed read leaves it PENDING for the sweep. A payout in the same state throws.
+- **Callbacks must be signed (owner decision).** Signed callbacks are switched on in the PawaPay
+  dashboard; an unsigned one is refused `missing_signature`. The key comes from
+  `GET /v2/public-key/http`. Because `verifyWebhook` is synchronous, the keys are cached: fetched
+  in the background by the first outgoing call, then hourly, and again (at most once a minute)
+  when a callback names an unknown key id. That callback is refused, and PawaPay's 15-minute retry
+  finds the refreshed key. `@authority` is matched against the request's `Host` /
+  `X-Forwarded-Host`, `API_PUBLIC_URL`'s host and `PAWAPAY_CALLBACK_AUTHORITY`.
+- **And re-read anyway.** The signature covers the whole body, so by the rule above
+  `confirmWebhookEvent` is not required. It is implemented because the owner asked for both, and
+  it costs one read per callback.
+- **No refund API.** Refunds are payouts (REFUND-FLOW-PLAN R-1); a refund callback is ignored.
+- **Limits are account-specific** (`GET /v2/active-conf`). Measured on our sandbox account
+  2026-10-06 (`verify:pawapay` R1): MTN 1–1,000,000 XAF, Orange 1–500,000 XAF, deposit and payout
+  alike. Declared on the capability, so routing refuses an out-of-range charge before any write;
+  `AMOUNT_OUT_OF_BOUNDS` still maps to `422 PAYMENT_AMOUNT_OUT_OF_RANGE` as the backstop. ⚠ Re-run
+  R1 against the LIVE account at go-live.
+- **Sandbox-verified 2026-10-06** (`verify:pawapay`): the derived UUIDs are accepted; a resend is
+  `DUPLICATE_IGNORED`; our reference comes back in `clientReferenceId` and `metadata.jmRef`;
+  deposits COMPLETED / FAILED `PAYMENT_NOT_APPROVED` / PROCESSING on the test numbers; payouts
+  COMPLETED, and a FAILED `RECIPIENT_NOT_FOUND` payout resent went out under the next derived id.
+  Both providers report `pinPrompt: AUTOMATIC`, revivable with `*126#` / `#150*50#`.
 
 ---
 

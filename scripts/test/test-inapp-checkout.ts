@@ -324,8 +324,12 @@ function main(): void {
     assert('⛔ the screen has no address input of any kind', () => {
         const html = page().replace(/<!--[\s\S]*?-->/g, '');
         const inputs = [...html.matchAll(/<input[^>]*>/g)].map((m) => m[0]);
-        // Exactly one field, and it is the mobile-money number.
-        return inputs.length === 1 && inputs[0].includes('type="tel"');
+        // The mobile-money number, and (NovaSend `CODE_FIRST`, 2026-10-05) the numeric payment code —
+        // nothing that could hold an address.
+        const code = inputs.filter((i) => i.includes('id="code"'));
+        const rest = inputs.filter((i) => !i.includes('id="code"'));
+        return rest.length === 1 && rest[0].includes('type="tel"')
+            && code.length === 1 && code[0].includes('inputmode="numeric"') && code[0].includes('maxlength="8"');
     });
 
     /**
@@ -936,7 +940,8 @@ function main(): void {
             && retry.includes('initiatePaymentForCart(')
             && !retry.includes('createOrdersFromCart(')
             // Both the route and the tap reach it — one implementation, two doors.
-            && /static retryPayment[\s\S]*?retryCharge\(req, res, null, phone\)/.test(src)
+            // `paymentCode` (NovaSend `CODE_FIRST`) rides along on the route; a tap has none.
+            && /static retryPayment[\s\S]*?retryCharge\(req, res, null, phone, paymentCode \?\? null\)/.test(src)
             && src.includes('retryCharge(req, res, transactionId, null)');
     });
 
@@ -1097,7 +1102,8 @@ function main(): void {
         const place = start < 0 ? '' : src.slice(start, src.indexOf('\n}\n', start));
         const spend = place.indexOf("inAppSurfaceStore.consume('co'");
         const typed = place.indexOf('mobileMoneyRoute(typedNumber, false)');
-        const account = place.indexOf('const route = mobileMoneyRoute(payerNumber, true, payer.savedProvider)');
+        // `, { paymentCode }` since NovaSend: the account's route is also asked for the payment code.
+        const account = place.indexOf('const route = mobileMoneyRoute(payerNumber, true, payer.savedProvider, { paymentCode })');
         const orders = place.indexOf('createOrdersFromCart(');
         const charge = place.indexOf('initiatePaymentForCart(cartId, route,');
         const checkAt = src.indexOf('export function mobileMoneyRoute(');
@@ -1571,7 +1577,8 @@ function chatDoorAssertions(): void {
         && reviewRoute.includes('await reviewChatCheckout(req, res, deliveryAddressId ?? null)')
         && !reviewRoute.includes('inAppSurfaceStore.') && !reviewRoute.includes('readChatCheckout(')
         // + `deliveryFeePayment` (W-F, cash for delivery) — the body's one optional choice, passed through.
-        && placeRoute.includes('await placeChatCheckout(req, res, checkoutRef, deliveryAddressId ?? null, phone, deliveryFeePayment)')
+        // + `paymentCode` (NovaSend `CODE_FIRST`, 2026-10-05), the same way.
+        && placeRoute.includes('await placeChatCheckout(req, res, checkoutRef, deliveryAddressId ?? null, phone, deliveryFeePayment, paymentCode ?? null)')
         && !placeRoute.includes('placeCheckout(')
         // One placement in the whole chat controller — the route and the tap cannot drift.
         && (chat.match(/\bplaceCheckout\(/g) ?? []).length === 1);
@@ -1634,7 +1641,8 @@ function chatDoorAssertions(): void {
         const composedAt = place.indexOf('phone = await chatTypedNumber(caller.customerId, phone);');
         return reviewKeys?.join(',') === 'deliveryAddressId'
             // `deliveryFeePayment` since W-F (ADR-A11 § Cash for delivery): with_order | cash_to_rider.
-            && placeKeys?.join(',') === 'checkoutRef,deliveryAddressId,deliveryFeePayment,phone'
+            // `paymentCode` since NovaSend (2026-10-05): the CODE_FIRST code, validated by PaymentCodeSchema.
+            && placeKeys?.join(',') === 'checkoutRef,deliveryAddressId,deliveryFeePayment,paymentCode,phone'
             && chat.slice(chat.indexOf('const ChatPlaceSchema')).includes('TypedPayerNumberSchema')
             && composedAt > 0 && composedAt < place.indexOf('await placeCheckout(checkoutRef, phone,');
     });

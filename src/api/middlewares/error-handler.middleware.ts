@@ -243,7 +243,14 @@ function respond(req: Request, res: Response, requestId: string, outcome: Outcom
      * so a failure whose cause is an unreachable database can still be worded correctly.
      */
     const customerMessage = req.bot
-        ? customerMessageFor(outcome.code, outcome.category, botResponseLanguageOf(req))
+        ? customerMessageFor(
+            outcome.code,
+            outcome.category,
+            botResponseLanguageOf(req),
+            // The CLIENT-safe details only — what the caller sees anyway. Fills `{ussd}` on the
+            // payment-code refusals (NovaSend `CODE_FIRST`).
+            clientDetails as Record<string, unknown> | undefined,
+        )
         : undefined;
 
     res.status(outcome.statusCode).json({

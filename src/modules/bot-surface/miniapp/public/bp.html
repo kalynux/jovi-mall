@@ -68,6 +68,12 @@
         <div class="field__hint" id="phoneHint"></div>
       </div>
 
+      <!-- NovaSend Orange Money (`CODE_FIRST`): drawn only when the server asks. Optional for MTN. -->
+      <div class="field" id="codeField" hidden>
+        <input type="text" id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="8">
+        <div class="field__hint" id="codeHint"></div>
+      </div>
+
       <button type="button" class="btn btn--primary pay" id="pay"></button>
     </div>
   </main>
@@ -93,6 +99,9 @@
     for: document.getElementById("for"),
     phone: document.getElementById("phone"),
     phoneHint: document.getElementById("phoneHint"),
+    codeField: document.getElementById("codeField"),
+    code: document.getElementById("code"),
+    codeHint: document.getElementById("codeHint"),
     pay: document.getElementById("pay")
   };
 
@@ -151,6 +160,19 @@
     return (res.status === 400 || res.status === 422) && details && details.spent === false;
   }
 
+  function showCode(label, hint) {
+    if (label) el.code.setAttribute("placeholder", label);
+    else el.code.setAttribute("placeholder", "Payment code");
+    el.codeHint.textContent = hint || "";
+    el.codeField.hidden = false;
+  }
+
+  function codeValue() {
+    if (el.codeField.hidden) return null;
+    var digits = el.code.value.replace(/s+/g, "");
+    return /^d{4,8}$/.test(digits) ? digits : null;
+  }
+
   function draw(data) {
     el.title.textContent = data.purpose === "balance" ? copy.payBalanceTitle : copy.payTitle;
     el.amount.textContent = data.amountText;
@@ -160,6 +182,8 @@
       : copy.payNumberHint;
     el.pay.textContent = copy.payButton;
     el.pay.disabled = false;
+    /* The server words the field (`paymentCode.label` / `.hint`, USSD substituted); null → no field. */
+    if (data.paymentCode) showCode(data.paymentCode.label, data.paymentCode.hint);
     el.state.hidden = true;
     el.sheet.hidden = false;
   }
@@ -187,11 +211,15 @@
     json(base + "/pay", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ phone: el.phone.value })
+      body: JSON.stringify({ phone: el.phone.value, paymentCode: codeValue() })
     }).then(function (res) {
       if (!res.ok || !res.body || res.body.success === false) {
         state(explain(res), true);
-        /* The one case a customer can fix and try again: a number this screen never spent on. */
+        /* The cases a customer can fix and try again: a number, or a missing payment code, never spent on. */
+        var refusal = res.body && res.body.error;
+        if (refusal && refusal.code === "PAYMENT_CODE_REQUIRED" && el.codeField.hidden) {
+          showCode(null, refusal.message);
+        }
         if (handleSurvived(res)) {
           latched = false;
           el.pay.disabled = false;

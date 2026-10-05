@@ -46,6 +46,8 @@ export type IntegrationKey =
     | 'campay'
     | 'cinetpay'
     | 'fapshi'
+    | 'novasend'
+    | 'pawapay'
     | 'google_calendar'
     | 'wi_admin';
 
@@ -216,6 +218,27 @@ export const INTEGRATION_CATALOG: readonly IntegrationSpec[] = Object.freeze([
             'Same as NotchPay. `configured` requires the WEBHOOK secret as well as the collection '
             + 'pair: without it every callback is refused, and Fapshi sends each callback once, so '
             + 'settlement rests on the reconciliation sweep alone.',
+    },
+    {
+        key: 'novasend',
+        label: 'NovaSend (mobile money)',
+        impact: 'Mobile-money collection through NovaSend stops, and so do NovaSend payouts when it is the payout aggregator. Refunds are unaffected: they are sent as payouts either way',
+        reachability: 'passive',
+        reachabilityNote:
+            'Same as NotchPay. `configured` requires the WEBHOOK secret as well as the key pair: '
+            + 'without it every notification is refused and settlement rests on the '
+            + 'reconciliation sweep alone.',
+    },
+    {
+        key: 'pawapay',
+        label: 'PawaPay (mobile money)',
+        impact: 'Mobile-money collection through PawaPay stops, and so do PawaPay payouts when it is the payout aggregator. Refunds are unaffected: they are sent as payouts either way',
+        reachability: 'passive',
+        reachabilityNote:
+            'Same as NotchPay. `configured` needs only the token: callbacks are verified against '
+            + "PawaPay's PUBLIC key, which the token fetches. ⚠ Signed callbacks must be enabled in "
+            + 'the PawaPay dashboard, or every callback is refused and settlement rests on the '
+            + 'reconciliation sweep alone — `callbackKeysLoaded` below shows whether a key is held.',
     },
     {
         key: 'google_calendar',

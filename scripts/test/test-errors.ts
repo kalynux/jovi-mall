@@ -785,6 +785,11 @@ function census(): Map<string, CensusRow> {
         [ERROR_CODES.PAYMENT_PROVIDER_REQUIRED, 400, ERROR_CATEGORIES.VALIDATION],
         [ERROR_CODES.PAYMENT_SETTINGS_INVALID, 422, ERROR_CATEGORIES.BUSINESS_RULE],
         [ERROR_CODES.PAYMENT_SETTINGS_VERSION_CONFLICT, 409, ERROR_CATEGORIES.CONFLICT],
+        // NovaSend (2026-10-05): the pre-charge code and the per-route amount limits. A client
+        // reads `details.ussd` / `details.max` off them, so a 5xx would strip exactly that.
+        [ERROR_CODES.PAYMENT_CODE_REQUIRED, 422, ERROR_CATEGORIES.BUSINESS_RULE],
+        [ERROR_CODES.PAYMENT_CODE_REJECTED, 422, ERROR_CATEGORIES.BUSINESS_RULE],
+        [ERROR_CODES.PAYMENT_AMOUNT_OUT_OF_RANGE, 422, ERROR_CATEGORIES.BUSINESS_RULE],
     ];
     for (const [code, status, expected] of routingCodes) {
         assert(`${code} at ${status} → ${expected}, client-safe, with a default message`, () =>
@@ -805,6 +810,13 @@ function census(): Map<string, CensusRow> {
             provider: 'ORANGE', detected: 'MTN', spent: false,
         });
         return out?.provider === 'ORANGE' && out?.detected === 'MTN' && out?.spent === false;
+    });
+
+    assert('PAYMENT_CODE_REQUIRED / PAYMENT_AMOUNT_OUT_OF_RANGE keep {provider, ussd | min, max, amount, spent}', () => {
+        const code = projectDetails(ERROR_CATEGORIES.BUSINESS_RULE, { provider: 'ORANGE', ussd: '#144*82#', spent: false });
+        const range = projectDetails(ERROR_CATEGORIES.BUSINESS_RULE, { provider: 'MTN', amount: 600000, min: 200, max: 500000, spent: false });
+        return code?.ussd === '#144*82#' && code?.spent === false
+            && range?.max === 500000 && range?.min === 200 && range?.amount === 600000 && range?.spent === false;
     });
 
     assert('PAYMENT_PROVIDER_UNAVAILABLE keeps details.offered', () => {

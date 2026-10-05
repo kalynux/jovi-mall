@@ -41,12 +41,15 @@ import { ProductModel } from '../../../catalog/models';
 import { VendorModel } from '../../../vendors/vendor.model';
 import { BOOKING_CONFIG } from '../../../booking/config/booking.config';
 import { inAppSurfaceStore } from '../../services/inapp-surface.store';
+import { inAppCopy } from '../inapp-copy';
 import { CustomerModel, ICustomer } from '../../../customers/customer.model';
 import { PaymentOrchestratorService } from '../../../payments/services/payment-orchestrator.service';
 import {
     assertMobileMoneyOffered,
     maskedPayerNumber,
     mobileMoneyRoute,
+    paymentCodeAsk,
+    routeNeedsPreChargeFacts,
     storedPayer,
     validatedPayerNumber,
 } from './checkout-payer';
@@ -460,6 +463,11 @@ export async function readBookingPayment(handle: string): Promise<{
     amount: number;
     amountText: string;
     maskedPayer: string | null;
+    /**
+     * NovaSend `CODE_FIRST`: non-null → draw the optional payment-code field, already worded in the
+     * customer's language (`hint` has the USSD substituted). Null → no field.
+     */
+    paymentCode: { ussd: string | null; label: string; hint: string } | null;
 }> {
     const session = await inAppSurfaceStore.read('bp', handle);
     if (!session) {
@@ -488,6 +496,19 @@ export async function readBookingPayment(handle: string): Promise<{
         amount,
         amountText: `${booking.currency} ${new Intl.NumberFormat('en-US').format(Math.round(amount))}`,
         maskedPayer: await maskedPayerNumber(customer),
+        paymentCode: paymentCodeField(session.language),
+    };
+}
+
+/** The payment-code field's words for the pay screen, or null when no route needs a code. */
+function paymentCodeField(language: string | null): { ussd: string | null; label: string; hint: string } | null {
+    const ask = paymentCodeAsk();
+    if (!ask) return null;
+    const words = inAppCopy(language);
+    return {
+        ussd: ask.ussd,
+        label: words.paymentCodeLabel,
+        hint: words.paymentCodeHint.replace('{ussd}', ask.ussd ?? ''),
     };
 }
 
@@ -509,15 +530,29 @@ export async function readBookingPayment(handle: string): Promise<{
  */
 export async function payBooking(
     handle: string,
-    input: { phone?: unknown },
+    input: { phone?: unknown; paymentCode?: string | null },
 ): Promise<{ transactionId: string; status: string; instructions?: unknown }> {
     const typed = validatedPayerNumber(input.phone);
+    const paymentCode = input.paymentCode?.trim() || null;
     /**
      * Before the spend (ADR-A08): mobile money must be on offer, and a typed number must resolve
      * to a provider that can be routed — neither may cost the handle.
      */
     assertMobileMoneyOffered();
     if (typed) mobileMoneyRoute(typed, false);
+
+    /**
+     * ⭐ The payment code, BEFORE the spend (NovaSend `CODE_FIRST`, 2026-10-05): the account's own
+     * number is only known from the session, so it is READ here (`read` never spends). Without it
+     * an Orange customer would lose the screen to "enter your code". Skipped while the active
+     * aggregator needs no pre-charge facts, so no other aggregator's door does any extra work.
+     */
+    if (routeNeedsPreChargeFacts()) {
+        const peek = await inAppSurfaceStore.read('bp', handle);
+        const owner = peek ? await payableBooking(peek.bookingId, peek.owner).catch(() => null) : null;
+        const peekPayer = typed ? { number: typed, savedProvider: null } : owner ? await storedPayer(owner.customer) : null;
+        if (peekPayer) mobileMoneyRoute(peekPayer.number, false, peekPayer.savedProvider, { paymentCode });
+    }
 
     const session = await inAppSurfaceStore.consume('bp', handle);
     if (!session) {
@@ -536,9 +571,9 @@ export async function payBooking(
             );
         }
         /** After the spend, because the account's number needs the session to find the customer. */
-        const route = mobileMoneyRoute(payer.number, true, payer.savedProvider);
+        const route = mobileMoneyRoute(payer.number, true, payer.savedProvider, { paymentCode });
 
-        const channel = { phoneNumber: payer.number };
+        const channel = { phoneNumber: payer.number, ...(paymentCode ? { paymentCode } : {}) };
         /**
          * ⭐ **The outcome goes to the chat this screen was opened from.** `session.channel` is the
          * conversation the tap came from, stamped by `openInAppScreen` and never by the page — so

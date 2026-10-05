@@ -12,7 +12,7 @@ import { PaymentChannelInfo } from '../../payments/gateways/gateway.interface';
 import { getPaymentGateway } from '../../payments/gateways/registry';
 import { mintMerchantRef } from '../../payments/domain/merchant-reference';
 import { submitGatewayOtp, GatewayOtpResult } from '../domain/gateway-otp';
-import { BillingChargeSelection, resolveBillingCharge } from '../domain/billing-charge';
+import { BillingChargeSelection, chargeOrMarkFailed, resolveBillingCharge } from '../domain/billing-charge';
 import { PaymentProvider } from '../../payments/domain/payment-provider';
 
 /**
@@ -64,7 +64,7 @@ export class PlanPurchaseService {
       );
     }
 
-    const charge = resolveBillingCharge(selection, channel);
+    const charge = resolveBillingCharge(selection, channel, plan.price);
     const gateway = charge.aggregator;
     const adapter = getPaymentGateway(gateway);
 
@@ -99,7 +99,7 @@ export class PlanPurchaseService {
       merchant_ref: merchantRef,
     });
 
-    const result = await adapter.initiatePayment({
+    const result = await chargeOrMarkFailed(() => adapter.initiatePayment({
       orderId: purchase._id.toString(), // adapters use this only as a reference label
       userId: ownerId,
       amount: plan.price,
@@ -115,7 +115,7 @@ export class PlanPurchaseService {
         // its callback reports a merchant reference at all.
         merchantRef,
       },
-    });
+    }), () => this.repo.setStatus(purchase._id, 'failed'));
 
     if (!result.success) {
       await this.repo.setStatus(purchase._id, 'failed');

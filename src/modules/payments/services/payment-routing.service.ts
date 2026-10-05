@@ -1,4 +1,4 @@
-import { createAppError } from '../../../core/errors';
+import { AppError, createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { ZodError } from 'zod';
 import { CollectField, PaymentGatewayName, ProviderCollectCapability } from '../gateways/gateway.interface';
@@ -8,6 +8,7 @@ import {
   ChargeRequestChannel,
   ChargeRequestCheck,
   ProviderDerivationInput,
+  checkAmountLimits,
   checkChargeRequest,
   deriveProvider,
   effectiveProviders,
@@ -129,11 +130,79 @@ export function missingFieldValidationError(missing: CollectField[]): ZodError {
   );
 }
 
-/** `checkChargeRequest` followed by `enforceChargeRequestCheck`. */
+/**
+ * `checkChargeRequest` followed by `enforceChargeRequestCheck`.
+ *
+ * ⚠ **A missing `paymentCode` is RAISED, not returned** — `422 PAYMENT_CODE_REQUIRED`
+ * `{ provider, ussd, spent: false }` — because no door has an error of its own for it, and a
+ * generic "field required" would leave the customer without the one thing they need: what to
+ * dial. Only once the number is present: a missing number keeps each door's own error, and the
+ * code is asked for on the next try.
+ */
 export function checkChargeRequestOrThrow(
   provider: PaymentProvider,
   channel: ChargeRequestChannel | null | undefined,
   capability?: ProviderCollectCapability,
 ): ChargeRequestOutcome {
-  return enforceChargeRequestCheck(checkChargeRequest(provider, channel, capability));
+  const outcome = enforceChargeRequestCheck(checkChargeRequest(provider, channel, capability));
+  if (outcome.ok || !outcome.missing.includes('paymentCode')) return outcome;
+  if (!outcome.missing.includes('phoneNumber')) throw paymentCodeRequiredError(provider, capability);
+  return { ...outcome, missing: outcome.missing.filter((field) => field !== 'paymentCode') };
+}
+
+/** `422 PAYMENT_CODE_REQUIRED` for a `CODE_FIRST` route charged without its code. */
+export function paymentCodeRequiredError(provider: PaymentProvider, capability?: ProviderCollectCapability) {
+  const ussd = capability?.codeUssd ?? null;
+  return createAppError(
+    ERROR_CODES.PAYMENT_CODE_REQUIRED,
+    422,
+    ussd
+      ? `To pay with ${providerLabel(provider)}, dial ${ussd} to get a payment code, then enter it and pay again.`
+      : `To pay with ${providerLabel(provider)}, get a payment code from your mobile money menu, then enter it and pay again.`,
+    { provider, ussd, spent: false },
+  );
+}
+
+/**
+ * Refuse an amount the route's aggregator does not accept: `422 PAYMENT_AMOUNT_OUT_OF_RANGE`
+ * `{ provider, amount, min, max, spent: false }`. Call where the route AND the amount are known,
+ * before anything is written (owner decision 2026-10-05: a clear refusal, no automatic failover).
+ */
+export function assertAmountWithinRoute(route: CollectionRouteResult, amount: number): void {
+  const check = checkAmountLimits(route.capability, amount);
+  if (check.ok) return;
+  throw createAppError(
+    ERROR_CODES.PAYMENT_AMOUNT_OUT_OF_RANGE,
+    422,
+    amount > check.max
+      ? `${providerLabel(route.provider)} payments are limited to ${formatXaf(check.max)} right now, and this one is ${formatXaf(amount)}. Please contact support to pay this amount.`
+      : `${providerLabel(route.provider)} payments must be at least ${formatXaf(check.min)}.`,
+    { provider: route.provider, amount, min: check.min, max: check.max, spent: false },
+  );
+}
+
+/**
+ * The charge refusals a client must see AS THEMSELVES, never folded into a generic
+ * `PAYMENT_INITIATION_FAILED`: each tells the customer exactly what to do next (enter a code, get
+ * a new one, pay a different amount, use the other network).
+ *
+ * `PAYMENT_PROVIDER_UNAVAILABLE` from an ADAPTER means the aggregator says that one network is
+ * temporarily down (PawaPay `PROVIDER_TEMPORARILY_UNAVAILABLE`, `details.temporary`): nothing was
+ * charged, and "try the other network or later" is the useful answer. Owner decision 2026-10-06.
+ */
+export function isCustomerChargeRefusal(error: unknown): error is AppError {
+  return error instanceof AppError && (
+    error.code === ERROR_CODES.PAYMENT_CODE_REQUIRED ||
+    error.code === ERROR_CODES.PAYMENT_CODE_REJECTED ||
+    error.code === ERROR_CODES.PAYMENT_AMOUNT_OUT_OF_RANGE ||
+    error.code === ERROR_CODES.PAYMENT_PROVIDER_UNAVAILABLE
+  );
+}
+
+function providerLabel(provider: PaymentProvider): string {
+  return provider === 'MTN' ? 'MTN Mobile Money' : provider === 'ORANGE' ? 'Orange Money' : provider;
+}
+
+function formatXaf(amount: number): string {
+  return `${Math.trunc(amount).toLocaleString('en-US')} FCFA`;
 }

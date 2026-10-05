@@ -1249,6 +1249,7 @@ async function main(): Promise<void> {
         flowOpenProduct: 'View product', flowBackToChat: 'Back to chat',
         flowPhoneLabel: 'Mobile money number', flowPhoneHint: 'Leave empty for your account number.',
         checkoutCountry: 'Country',
+        paymentCodeLabel: 'Payment code', paymentCodeHint: 'Orange Money only: dial {ussd} to get your payment code.',
         bookingOpen: 'Open', bookingSeeTimes: 'See times',
     };
 

@@ -310,7 +310,8 @@ async function main(): Promise<void> {
         const offeredAt = pay.indexOf('assertMobileMoneyOffered()');
         const typedAt = pay.indexOf('mobileMoneyRoute(typed, false)');
         const spendAt = pay.indexOf("inAppSurfaceStore.consume('bp'");
-        const accountAt = pay.indexOf('const route = mobileMoneyRoute(payer.number, true, payer.savedProvider)');
+        // `, { paymentCode }` since NovaSend (2026-10-05): the account's route is also asked for the code.
+        const accountAt = pay.indexOf('const route = mobileMoneyRoute(payer.number, true, payer.savedProvider, { paymentCode })');
         return offeredAt > 0 && typedAt > offeredAt && spendAt > typedAt && accountAt > spendAt;
     });
 

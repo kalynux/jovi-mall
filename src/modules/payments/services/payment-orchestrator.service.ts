@@ -13,7 +13,9 @@ import { CollectField, PaymentChannelInfo } from '../gateways/gateway.interface'
 import { getPaymentGateway } from '../gateways/registry';
 import { PaymentProvider, PROVIDER_KIND, isMobileMoneyProvider } from '../domain/payment-provider';
 import {
+  assertAmountWithinRoute,
   checkChargeRequestOrThrow,
+  isCustomerChargeRefusal,
   missingFieldValidationError,
   resolveCollectionRoute,
 } from './payment-routing.service';
@@ -99,7 +101,11 @@ interface PreparedCharge {
   provider: PaymentProvider;
   /** What the adapter receives. On a mobile provider, `phoneOperator` is the provider. */
   channel: PaymentChannelInfo;
-  route(): PaymentGatewayType;
+  /**
+   * Choose the aggregator for a NEW attempt over `amount`, or refuse — before any write. The
+   * amount is checked against the route's limits (`422 PAYMENT_AMOUNT_OUT_OF_RANGE`).
+   */
+  route(amount: number): PaymentGatewayType;
 }
 
 /** The row's `method`, from the provider when there is one (legacy rows: from the gateway). */
@@ -290,7 +296,7 @@ export class PaymentOrchestratorService {
     if (liveElsewhere) return respondWithExisting(liveElsewhere);
 
     // 4. ROUTE — only now is a NEW attempt certain to be needed. Throws before any write.
-    const gateway = charge.route();
+    const gateway = charge.route(order.total_amount);
 
     // Failed/cancelled → this is a NEW attempt, and it needs the key the dead one holds.
     // Only once we KNOW it is dead, though: `FAILED` is written for a refusal AND for a
@@ -383,6 +389,10 @@ export class PaymentOrchestratorService {
     } catch (error: any) {
       // Update transaction to failed
       await this.recordFailedAttempt(transaction, error);
+
+      // A refusal that tells the customer what to do next (enter or renew a payment code, a
+      // different amount) reaches them as itself, not as a generic provider failure.
+      if (isCustomerChargeRefusal(error)) throw error;
 
       throw createAppError(ERROR_CODES.PAYMENT_INITIATION_FAILED, 502, undefined, { cause: error.message });
     }
@@ -506,7 +516,7 @@ export class PaymentOrchestratorService {
     if (liveElsewhere) return respondWithExisting(liveElsewhere);
 
     // 4. ROUTE — see the same step in `initiatePayment`. Throws before any write.
-    const gateway = charge.route();
+    const gateway = charge.route(groupTotal);
 
     // Failed/cancelled → see the same step in `initiatePayment`.
     if (existingTx) {
@@ -574,6 +584,10 @@ export class PaymentOrchestratorService {
       };
     } catch (error: any) {
       await this.recordFailedAttempt(transaction, error);
+
+      // A refusal that tells the customer what to do next (enter or renew a payment code, a
+      // different amount) reaches them as itself, not as a generic provider failure.
+      if (isCustomerChargeRefusal(error)) throw error;
 
       throw createAppError(ERROR_CODES.PAYMENT_INITIATION_FAILED, 502, undefined, { cause: error.message });
     }
@@ -1220,7 +1234,7 @@ export class PaymentOrchestratorService {
     if (liveElsewhere) return respondWithExisting(liveElsewhere);
 
     // ROUTE — see the same step in `initiatePayment`. Throws before any write.
-    const gateway = charge.route();
+    const gateway = charge.route(booking.priceSnapshot);
 
     // Failed/cancelled → see the same step in `initiatePayment`.
     if (existingTx) {
@@ -1307,6 +1321,10 @@ export class PaymentOrchestratorService {
       // Update booking payment status
       booking.paymentStatus = 'failed';
       await booking.save();
+
+      // A refusal that tells the customer what to do next (enter or renew a payment code, a
+      // different amount) reaches them as itself, not as a generic provider failure.
+      if (isCustomerChargeRefusal(error)) throw error;
 
       throw createAppError(ERROR_CODES.PAYMENT_INITIATION_FAILED, 502, undefined, { cause: error.message });
     }
@@ -1426,7 +1444,7 @@ export class PaymentOrchestratorService {
     if (liveElsewhere) return respondWithExisting(liveElsewhere);
 
     // ROUTE — see the same step in `initiatePayment`. Throws before any write.
-    const gateway = charge.route();
+    const gateway = charge.route(outstanding);
 
     // Failed/cancelled → see the same step in `initiatePayment`.
     if (existingTx) {
@@ -1497,6 +1515,10 @@ export class PaymentOrchestratorService {
       };
     } catch (error: any) {
       await this.recordFailedAttempt(transaction, error);
+
+      // A refusal that tells the customer what to do next (enter or renew a payment code, a
+      // different amount) reaches them as itself, not as a generic provider failure.
+      if (isCustomerChargeRefusal(error)) throw error;
 
       throw createAppError(ERROR_CODES.PAYMENT_INITIATION_FAILED, 502, undefined, {
         cause: error.message
@@ -1601,7 +1623,7 @@ export class PaymentOrchestratorService {
     if (liveElsewhere) return respondWithExisting(liveElsewhere);
 
     // ROUTE — see the same step in `initiatePayment`. Throws before any write.
-    const gateway = charge.route();
+    const gateway = charge.route(topup.amount);
 
     if (existingTx) {
       const settledAttempt = await this.releaseDeadAttempt(existingTx);
@@ -1674,6 +1696,10 @@ export class PaymentOrchestratorService {
       };
     } catch (error: any) {
       await this.recordFailedAttempt(transaction, error);
+
+      // A refusal that tells the customer what to do next (enter or renew a payment code, a
+      // different amount) reaches them as itself, not as a generic provider failure.
+      if (isCustomerChargeRefusal(error)) throw error;
 
       throw createAppError(ERROR_CODES.PAYMENT_INITIATION_FAILED, 502, undefined, {
         cause: error.message
@@ -2373,11 +2399,12 @@ export class PaymentOrchestratorService {
       // The declared provider is what the adapter charges: NotchPay otherwise re-derives the
       // operator and lets a stale `phoneOperator` from the client outrank the customer's choice.
       channel: isMobileMoneyProvider(provider) ? { ...channel, phoneOperator: provider } : channel,
-      route: () => {
+      route: (amount: number) => {
         const route = resolveCollectionRoute(provider);
-        // The route's capability may ask for more than the baseline did.
+        // The route's capability may ask for more than the baseline did (a `CODE_FIRST` code).
         const full = checkChargeRequestOrThrow(provider, channel, route.capability);
         if (!full.ok) throw onMissing(full.missing);
+        assertAmountWithinRoute(route, amount);
         return route.aggregator;
       },
     };

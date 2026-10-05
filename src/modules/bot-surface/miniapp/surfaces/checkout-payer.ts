@@ -9,7 +9,15 @@ import {
     MobileMoneyProvider,
     providerForSavedWallet,
 } from '../../../payments/domain/payment-provider';
-import { offeredProviders, resolveCollectionRoute } from '../../../payments/services/payment-routing.service';
+import {
+    assertAmountWithinRoute,
+    buildRoutingFacts,
+    offeredProviders,
+    paymentCodeRequiredError,
+    resolveCollectionRoute,
+} from '../../../payments/services/payment-routing.service';
+import { effectiveProviders } from '../../../payments/domain/payment-routing';
+import { getPaymentSettingsSync } from '../../../payments/services/payment-settings.service';
 import { UserPaymentMethodRepository } from '../../../payment-methods/repositories/user-payment-method.repository';
 import { walletNumberOf } from '../../../payment-methods/dto/payment-method.dto';
 import { maskPhone } from '../../dto/bot-projections';
@@ -211,14 +219,19 @@ export function assertMobileMoneyOffered(): void {
  * THIS side of the spend when it can be. The orchestrator routes again when it opens the charge;
  * that second answer is the one that counts.
  *
- * Refusals, both 422 and both carrying `spent` as the caller states it:
+ * Refusals, all 422 and all carrying `spent` as the caller states it:
  *   - `PAYMENT_OPERATOR_UNDETERMINED` `{ spent, field: 'phone' }` — no provider can be worked out;
- *   - `PAYMENT_PROVIDER_UNAVAILABLE` `{ provider, offered, spent }`.
+ *   - `PAYMENT_PROVIDER_UNAVAILABLE` `{ provider, offered, spent }`;
+ *   - `PAYMENT_CODE_REQUIRED` `{ provider, ussd, spent }` — only when `facts.paymentCode` is
+ *     passed: the route is `CODE_FIRST` (NovaSend Orange Money) and the code is empty;
+ *   - `PAYMENT_AMOUNT_OUT_OF_RANGE` `{ provider, amount, min, max, spent }` — only when
+ *     `facts.amount` is given.
  */
 export function mobileMoneyRoute(
     payerNumber: string,
     spent: boolean,
     savedProvider: string | null = null,
+    facts: PreChargeFacts = {},
 ): { provider: MobileMoneyProvider } {
     const provider: MobileMoneyProvider | null =
         resolveCameroonOperator(payerNumber) ?? providerForSavedWallet(savedProvider);
@@ -231,13 +244,72 @@ export function mobileMoneyRoute(
         );
     }
 
+    let route: ReturnType<typeof resolveCollectionRoute>;
     try {
-        resolveCollectionRoute(provider);
+        route = resolveCollectionRoute(provider);
     } catch (error) {
         if (error instanceof AppError && error.code === ERROR_CODES.PAYMENT_PROVIDER_UNAVAILABLE) {
-            throw createAppError(error.code, 422, error.message, { ...(error.details ?? {}), spent });
+            throw withSpent(error, spent);
         }
         throw error;
     }
+
+    // Opt-in: only a caller that passes `paymentCode` (null = "none was sent") is asking. A
+    // provider-only pre-check passes nothing and must not refuse a code it was never given.
+    if (facts.paymentCode !== undefined
+        && route.capability.requires.includes('paymentCode')
+        && !(facts.paymentCode ?? '').trim()) {
+        throw withSpent(paymentCodeRequiredError(provider, route.capability), spent);
+    }
+    if (typeof facts.amount === 'number') {
+        try {
+            assertAmountWithinRoute(route, facts.amount);
+        } catch (error) {
+            if (error instanceof AppError) throw withSpent(error, spent);
+            throw error;
+        }
+    }
     return { provider };
+}
+
+/** What `mobileMoneyRoute` may also be asked to check, when the caller knows it. */
+export interface PreChargeFacts {
+    /**
+     * The `CODE_FIRST` payment code the customer sent; `null` when none was. Leave it OUT to skip
+     * the code check (a provider-only pre-check); pass it to ask.
+     */
+    paymentCode?: string | null;
+    /** What will be charged. Omitted where the total is not known yet (the orchestrator checks it again). */
+    amount?: number | null;
+}
+
+/**
+ * Does any mobile provider on offer RIGHT NOW need a pre-charge fact — a payment code, or an
+ * amount inside limits?
+ *
+ * Lets a door skip the extra reads a pre-spend check costs while the active aggregator needs
+ * neither (every one before NovaSend), so turning NovaSend on is the only thing that changes
+ * behaviour.
+ */
+export function routeNeedsPreChargeFacts(): boolean {
+    return effectiveProviders(getPaymentSettingsSync(), buildRoutingFacts()).some(
+        (route) => isMobileMoneyProvider(route.provider)
+            && (route.capability.requires.includes('paymentCode') || route.capability.limits !== undefined),
+    );
+}
+
+/**
+ * Whether a screen should offer a payment-code field, and what its hint says to dial: non-null
+ * when some mobile provider on offer routes through a `CODE_FIRST` capability. The field is
+ * optional on the screen; the charge's own check is what refuses a missing code.
+ */
+export function paymentCodeAsk(): { ussd: string | null } | null {
+    const route = effectiveProviders(getPaymentSettingsSync(), buildRoutingFacts()).find(
+        (r) => isMobileMoneyProvider(r.provider) && r.capability.requires.includes('paymentCode'),
+    );
+    return route ? { ussd: route.capability.codeUssd ?? null } : null;
+}
+
+function withSpent(error: AppError, spent: boolean): AppError {
+    return createAppError(error.code, 422, error.message, { ...(error.details ?? {}), spent });
 }

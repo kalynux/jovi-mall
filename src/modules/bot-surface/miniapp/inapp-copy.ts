@@ -472,6 +472,31 @@ const CHECKOUT_COUNTRY: Copy = {
 };
 
 /**
+ * The payment-code field (NovaSend Orange Money, `CODE_FIRST`), on the page AND the form.
+ * ⚠ A Flow text-input label caps at 20; the longest here is 19 (pt).
+ */
+const PAYMENT_CODE_LABEL: Copy = {
+    en: 'Payment code',
+    fr: 'Code de paiement',
+    pt: 'Código de pagamento',
+    es: 'Código de pago',
+    ar: 'رمز الدفع',
+};
+
+/**
+ * The caption under it. `{ussd}` is replaced with what the active aggregator says to dial
+ * (`codeUssd` on `/payments/options`, `details.ussd` on the refusal). Says what an EMPTY field
+ * means, as the phone hint does.
+ */
+const PAYMENT_CODE_HINT: Copy = {
+    en: 'Orange Money only: dial {ussd} to get your payment code, then type it here. Leave it empty for MTN.',
+    fr: 'Orange Money uniquement : composez {ussd} pour obtenir votre code de paiement, puis saisissez-le ici. Laissez vide pour MTN.',
+    pt: 'Só Orange Money: marque {ussd} para obter o seu código de pagamento e escreva-o aqui. Deixe em branco para MTN.',
+    es: 'Solo Orange Money: marca {ussd} para obtener tu código de pago y escríbelo aquí. Déjalo vacío para MTN.',
+    ar: 'لـ Orange Money فقط: اطلب {ussd} للحصول على رمز الدفع ثم اكتبه هنا. اتركه فارغًا لـ MTN.',
+};
+
+/**
  * Every page string.
  *
  * ⚠ **No caps — except the keys that ALSO land in a WhatsApp form control.** A screen is a web page
@@ -527,6 +552,8 @@ const PAGE = Object.freeze({
     flowPhoneLabel: FLOW_PHONE_LABEL,
     flowPhoneHint: FLOW_PHONE_HINT,
     checkoutCountry: CHECKOUT_COUNTRY,
+    paymentCodeLabel: PAYMENT_CODE_LABEL,
+    paymentCodeHint: PAYMENT_CODE_HINT,
 });
 
 export type InAppCopyKey = keyof typeof PAGE;
@@ -573,6 +600,9 @@ const FLOW_CAPS: Partial<Record<InAppCopyKey, number>> = Object.freeze({
     flowPhoneLabel: 20,
     flowPhoneHint: 409,
     checkoutCountry: 20,
+    paymentCodeLabel: 20,
+    // 409 less room for the longest `{ussd}` we would ever substitute.
+    paymentCodeHint: 380,
 });
 
 export function assertInAppCopyComplete(): void {

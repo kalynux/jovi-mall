@@ -176,7 +176,8 @@ const INTEGER_VARS: readonly string[] = Object.freeze([
     'UNPAID_ORDER_CANCEL_BATCH_SIZE',
     // Payments
     'NOTCHPAY_REQUEST_TIMEOUT_MS', 'MYCOOLPAY_REQUEST_TIMEOUT_MS', 'CAMPAY_REQUEST_TIMEOUT_MS',
-    'CINETPAY_REQUEST_TIMEOUT_MS', 'FAPSHI_REQUEST_TIMEOUT_MS',
+    'CINETPAY_REQUEST_TIMEOUT_MS', 'FAPSHI_REQUEST_TIMEOUT_MS', 'NOVASEND_REQUEST_TIMEOUT_MS',
+    'PAWAPAY_REQUEST_TIMEOUT_MS',
     'PAYMENT_RECONCILE_MIN_AGE_MINUTES', 'PAYMENT_RECONCILE_MAX_AGE_HOURS',
     'PAYMENT_RECONCILE_BATCH_SIZE', 'PAYMENT_OTP_MAX_ATTEMPTS', 'PAYMENT_SETTINGS_CACHE_TTL_MS',
     // Lifecycle
@@ -220,7 +221,7 @@ const BOOLEAN_VARS: readonly string[] = Object.freeze([
     'LOG_CONSOLE_BRIDGE', 'LOG_STDOUT', 'LOG_HTTP_ACCESS', 'LOG_PERSIST_ENABLED',
     'MYCOOLPAY_VERIFY_CALLBACK_IP', 'CAMPAY_PAYOUTS_ENABLED',
     'CINETPAY_PAYOUTS_ENABLED', 'CINETPAY_DIRECT_PAY', 'FAPSHI_PAYOUTS_ENABLED',
-    'MYCOOLPAY_PAYOUTS_ENABLED',
+    'MYCOOLPAY_PAYOUTS_ENABLED', 'NOVASEND_PAYOUTS_ENABLED', 'PAWAPAY_PAYOUTS_ENABLED',
     'AI_COPY_ENABLED',
 ]);
 
@@ -741,6 +742,49 @@ export function validateEnv(source: NodeJS.ProcessEnv = process.env): EnvProblem
         const fapshiBase = (get('FAPSHI_BASE_URL') || 'https://sandbox.fapshi.com').toLowerCase();
         if (fapshiBase.includes('sandbox.fapshi.com')) {
             warn('FAPSHI_BASE_URL', 'points at the Fapshi SANDBOX (sandbox.fapshi.com) in production. Sandbox transactions move no real money. Set FAPSHI_BASE_URL=https://live.fapshi.com and the LIVE credentials to go live.');
+        }
+    }
+    // NovaSend. One Basic-auth pair serves collections and payouts; the webhook secret is a
+    // separate, per-webhook value that signs every notification (HMAC-SHA256 over the body).
+    if (has('NOVASEND_API_KEY') !== has('NOVASEND_API_SECRET')) {
+        err(has('NOVASEND_API_KEY') ? 'NOVASEND_API_SECRET' : 'NOVASEND_API_KEY', 'must be set together with its pair. NovaSend authenticates every call with Basic base64(API_KEY:API_SECRET).');
+    }
+    const novasendCanCall = has('NOVASEND_API_KEY') && has('NOVASEND_API_SECRET');
+    // An error in production only, as for Fapshi: a local box cannot receive NovaSend's
+    // notifications anyway. Without it `novasendEnabled()` is false, so NovaSend cannot be chosen
+    // for new charges: nothing is silently accepted unauthenticated.
+    if (novasendCanCall && !has('NOVASEND_WEBHOOK_SECRET')) {
+        (isProduction ? err : warn)('NOVASEND_WEBHOOK_SECRET', 'is not set while NovaSend credentials are. It verifies the X-Signature-Value on every notification; without it every notification is refused and NovaSend cannot be selected for new charges.');
+    }
+    if (novasendCanCall && !(get('NOVASEND_RETURN_URL') || get('STOREFRONT_URL') || get('API_PUBLIC_URL'))) {
+        warn('NOVASEND_RETURN_URL', 'cannot be derived: set it, or STOREFRONT_URL. NovaSend requires action.successUrl / failureUrl on every pay-in.');
+    }
+    if (get('NOVASEND_PAYOUTS_ENABLED') === 'true' && !novasendCanCall) {
+        err('NOVASEND_PAYOUTS_ENABLED', 'is true but NOVASEND_API_KEY / NOVASEND_API_SECRET are not set, so no payout can be sent.');
+    }
+    const novasendScenario = get('NOVASEND_SANDBOX_SCENARIO') || '';
+    if (novasendScenario && !['completed', 'failed', 'pending'].includes(novasendScenario)) {
+        err('NOVASEND_SANDBOX_SCENARIO', 'must be completed, failed or pending (or unset).');
+    }
+    if (isProduction && novasendCanCall) {
+        const novasendBase = (get('NOVASEND_BASE_URL') || 'https://sandbox.novasend.app').toLowerCase();
+        if (novasendBase.includes('sandbox.novasend.app')) {
+            warn('NOVASEND_BASE_URL', 'points at the NovaSend SANDBOX (sandbox.novasend.app) in production. Sandbox transactions move no real money. Set NOVASEND_BASE_URL=https://business.novasend.app and the PRODUCTION key pair to go live.');
+        }
+    }
+    // PawaPay. One bearer token serves collections and payouts. There is no webhook secret:
+    // callbacks are RFC 9421-signed with PawaPay's private key and verified with its public key,
+    // which the token fetches (or `PAWAPAY_CALLBACK_PUBLIC_KEY` pins).
+    if (get('PAWAPAY_PAYOUTS_ENABLED') === 'true' && !has('PAWAPAY_API_TOKEN')) {
+        err('PAWAPAY_PAYOUTS_ENABLED', 'is true but PAWAPAY_API_TOKEN is not set, so no payout can be sent.');
+    }
+    if (has('PAWAPAY_CALLBACK_PUBLIC_KEY') && !/-----BEGIN PUBLIC KEY-----/.test(get('PAWAPAY_CALLBACK_PUBLIC_KEY') || '')) {
+        err('PAWAPAY_CALLBACK_PUBLIC_KEY', 'must be a PEM public key (-----BEGIN PUBLIC KEY----- …), as GET /v2/public-key/http returns it. Leave it unset to fetch the keys automatically.');
+    }
+    if (isProduction && has('PAWAPAY_API_TOKEN')) {
+        const pawapayBase = (get('PAWAPAY_BASE_URL') || 'https://api.sandbox.pawapay.io').toLowerCase();
+        if (pawapayBase.includes('sandbox.pawapay.io')) {
+            warn('PAWAPAY_BASE_URL', 'points at the PawaPay SANDBOX (api.sandbox.pawapay.io) in production. Sandbox payments move no real money. Set PAWAPAY_BASE_URL=https://api.pawapay.io and a token from the PRODUCTION dashboard to go live.');
         }
     }
 

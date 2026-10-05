@@ -193,9 +193,9 @@ originalConsole.log('\n═══ test:payments ═══════════
 
 section('1. The registry — a gateway cannot ship without a webhook verifier');
 
-assert('the registry holds exactly the six known gateways', () =>
-  PAYMENT_GATEWAY_NAMES.length === 6 &&
-  ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE', 'CAMPAY', 'CINETPAY', 'FAPSHI'].every((n) => PAYMENT_GATEWAY_NAMES.includes(n as never)));
+assert('the registry holds exactly the eight known gateways', () =>
+  PAYMENT_GATEWAY_NAMES.length === 8 &&
+  ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE', 'CAMPAY', 'CINETPAY', 'FAPSHI', 'NOVASEND', 'PAWAPAY'].every((n) => PAYMENT_GATEWAY_NAMES.includes(n as never)));
 
 /**
  * THE assertion this suite exists for.
@@ -1497,7 +1497,8 @@ assert('⛔ each method: idempotency → findLiveAttempt → route → releaseDe
     const steps = [
       at('PaymentTransactionModel.findOne({ idempotencyKey })'),
       at('await this.findLiveAttempt('),
-      at('charge.route()'),
+      // `route(amount)` since NovaSend: the amount is checked against the route's limits there.
+      at('charge.route('),
       at('await this.releaseDeadAttempt(existingTx)'),
       at('await this.openAttempt('),
     ];
@@ -1573,12 +1574,12 @@ assert('both passes filter on the capability-derived list, from the registry', (
     && /PAYMENT_GATEWAYS\.entries\(\)/.test(RECONCILE_WORKER)
     && /capabilities\.settlesAsync/.test(RECONCILE_WORKER));
 
-assert('the async-settling set is Campay, CinetPay, Fapshi, My-CoolPay and NotchPay — Stripe is not swept', () => {
+assert('the async-settling set is Campay, CinetPay, Fapshi, My-CoolPay, NotchPay, NovaSend and PawaPay — Stripe is not swept', () => {
   const swept = [...PAYMENT_GATEWAYS.entries()]
     .filter(([, g]) => g.capabilities.settlesAsync)
     .map(([name]) => name)
     .sort();
-  return JSON.stringify(swept) === JSON.stringify(['CAMPAY', 'CINETPAY', 'FAPSHI', 'MYCOOLPAY', 'NOTCHPAY']);
+  return JSON.stringify(swept) === JSON.stringify(['CAMPAY', 'CINETPAY', 'FAPSHI', 'MYCOOLPAY', 'NOTCHPAY', 'NOVASEND', 'PAWAPAY']);
 });
 
 section('16. The provider-based request body — `provider` in, `gateway` ignored (ADR-A08 W2a)');
@@ -2070,7 +2071,9 @@ async function runScenario(
    * new gateway must be added to exactly one of these two lists, or this assertion fails.
    */
   const SIGNATURE_COVERS_BODY = ['NOTCHPAY', 'STRIPE'];
-  const MUST_CONFIRM = ['MYCOOLPAY', 'CAMPAY', 'CINETPAY', 'FAPSHI'];
+  // NOVASEND and PAWAPAY sign the whole body and confirm ANYWAY: NovaSend because its status words
+  // differ between pages, PawaPay by owner decision (2026-10-05: signed callbacks AND a re-read).
+  const MUST_CONFIRM = ['MYCOOLPAY', 'CAMPAY', 'CINETPAY', 'FAPSHI', 'NOVASEND', 'PAWAPAY'];
   assert('⛔ every registered gateway is classified, and every one whose signature misses the status confirms', () =>
     PAYMENT_GATEWAY_NAMES.every((name) => SIGNATURE_COVERS_BODY.includes(name) || MUST_CONFIRM.includes(name))
       && MUST_CONFIRM.every((name) => typeof PAYMENT_GATEWAYS.get(name as PaymentGatewayName)?.confirmWebhookEvent === 'function'));

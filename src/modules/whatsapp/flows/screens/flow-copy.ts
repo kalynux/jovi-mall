@@ -32,6 +32,10 @@ export interface FlowCopy {
     flowPhoneHint: string;
     /** The country picker's label. Dropdown label, ≤ 20. */
     checkoutCountry: string;
+    /** The payment-code field's label (`CODE_FIRST`). TextInput label, ≤ 20. */
+    paymentCodeLabel: string;
+    /** Under the payment-code field; `{ussd}` is substituted. */
+    paymentCodeHint: string;
     /**
      * ── THE TWO BOOKING STRINGS A FORM NEEDS AND A PAGE DOES NOT ────────────
      * Every other word on the booking screens comes from `readBookingPicker`'s own `copy`, which

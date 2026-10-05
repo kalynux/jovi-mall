@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { z } from 'zod';
 import { asyncHandler } from '../../../../api/middlewares/async-handler';
 import { sendSuccess } from '../../../../core/responses';
 import { TelegramBotService } from '../../../telegram/services/telegram-bot.service';
@@ -20,8 +21,19 @@ import {
     readBookingPicker,
     readCustomerBookings,
 } from './booking.core';
+import { PaymentCodeSchema } from '../../../payments/validators/payment.validators';
 
 const telegramBotService = new TelegramBotService();
+
+/**
+ * The pay screen's body. `phone` stays `unknown` and is judged inside `payBooking`, as before;
+ * unknown keys are dropped (not refused) so a page from before this schema keeps working.
+ * `paymentCode`: the `CODE_FIRST` code (NovaSend Orange Money), sent after `422 PAYMENT_CODE_REQUIRED`.
+ */
+const PayBodySchema = z.object({
+    phone: z.unknown().optional(),
+    paymentCode: PaymentCodeSchema.optional(),
+});
 
 /**
  * `bl` · `bk` — the booking screens, as pages inside Telegram.
@@ -130,8 +142,11 @@ export class BookingScreensController {
      * guessing at an outcome that has not happened yet.
      */
     static pay = asyncHandler(async (req: Request, res: Response) => {
-        const body = (req.body ?? {}) as { phone?: unknown };
-        sendSuccess(res, await payBooking(String(req.params.handle ?? ''), { phone: body.phone }));
+        const body = PayBodySchema.parse(req.body ?? {});
+        sendSuccess(res, await payBooking(String(req.params.handle ?? ''), {
+            phone: body.phone,
+            paymentCode: body.paymentCode ?? null,
+        }));
     });
 }
 

@@ -10,6 +10,7 @@ import { CartService } from '../../cart/services/cart.service';
 import { CustomerModel, ICustomer } from '../../customers/customer.model';
 import { PaymentTransactionModel, IPaymentTransaction } from '../../payments/models/payment-transaction.model';
 import { PaymentOrchestratorService } from '../../payments';
+import { PaymentCodeSchema } from '../../payments/validators/payment.validators';
 import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
 import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { botChrome } from '../domain/bot-chrome-copy';
@@ -272,8 +273,8 @@ export class BotCheckoutController {
      * the screen cannot disagree about which wallet is charged.
      */
     static retryPayment = asyncHandler(async (req: Request, res: Response) => {
-        const { phone } = RetrySchema.parse(req.body ?? {});
-        await retryCharge(req, res, null, phone);
+        const { phone, paymentCode } = RetrySchema.parse(req.body ?? {});
+        await retryCharge(req, res, null, phone, paymentCode ?? null);
     });
 
     /**
@@ -345,8 +346,8 @@ export class BotCheckoutController {
      * ⚠ **The body lives in `placeChatCheckout`**, the one placement the Place order tap runs too.
      */
     static placeInChat = asyncHandler(async (req: Request, res: Response) => {
-        const { checkoutRef, deliveryAddressId, phone, deliveryFeePayment } = ChatPlaceSchema.parse(req.body ?? {});
-        await placeChatCheckout(req, res, checkoutRef, deliveryAddressId ?? null, phone, deliveryFeePayment);
+        const { checkoutRef, deliveryAddressId, phone, deliveryFeePayment, paymentCode } = ChatPlaceSchema.parse(req.body ?? {});
+        await placeChatCheckout(req, res, checkoutRef, deliveryAddressId ?? null, phone, deliveryFeePayment, paymentCode ?? null);
     });
 }
 
@@ -390,6 +391,11 @@ const ChatPlaceSchema = z
          * fee to be paid to the rider — only when the review's `payment.deliveryFeeCash` is set.
          */
         deliveryFeePayment: z.enum(['with_order', 'cash_to_rider']).optional().default('with_order'),
+        /**
+         * The `CODE_FIRST` payment code (NovaSend Orange Money): send it only after the customer
+         * was told to dial for one (`422 PAYMENT_CODE_REQUIRED`, `details.ussd`) and typed it back.
+         */
+        paymentCode: PaymentCodeSchema.optional(),
     })
     .strict();
 
@@ -407,7 +413,11 @@ const CHAT_REVIEW_ADDRESS_MAX = 10;
  * schema lets through is composed and then judged by `validatedPayerNumber` in `retryCharge`.
  */
 const RetrySchema = z
-    .object({ phone: TypedPayerNumberSchema })
+    .object({
+        phone: TypedPayerNumberSchema,
+        /** The `CODE_FIRST` payment code, as on `ChatPlaceSchema`. */
+        paymentCode: PaymentCodeSchema.optional(),
+    })
     .strict();
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -549,6 +559,8 @@ async function placeChatCheckout(
     phone: string | null,
     /** W-F — `cash_to_rider` from the `yes:cof` tap or the model's `checkout_place`. */
     deliveryFeePayment: 'with_order' | 'cash_to_rider' = 'with_order',
+    /** The `CODE_FIRST` payment code the model relayed. A tap never carries one (null). */
+    paymentCode: string | null = null,
 ): Promise<void> {
     const caller = botCallerOf(req);
     /** Composed only — `placeCheckout` judges it, before the spend, exactly as it judges the screen's. */
@@ -557,6 +569,7 @@ async function placeChatCheckout(
     const placed = await placeCheckout(checkoutRef, phone, {
         callerCustomerId: caller.customerId,
         addressId: deliveryAddressId,
+        paymentCode,
         deliveryFeePayment,
     });
 
@@ -645,6 +658,8 @@ async function retryCharge(
     res: Response,
     transactionId: string | null,
     phone: string | null,
+    /** The `CODE_FIRST` payment code the model relayed. A tap never carries one (null). */
+    paymentCode: string | null = null,
 ): Promise<void> {
     const caller = botCallerOf(req);
     const transaction = await resolveCheckoutPayment(caller.customerId, transactionId);
@@ -675,14 +690,14 @@ async function retryCharge(
     }
     const payerNumber = payer.number;
     // The provider comes from the number (ADR-A08); the settings choose who collects.
-    const route = mobileMoneyRoute(payerNumber, false, payer.savedProvider);
+    const route = mobileMoneyRoute(payerNumber, false, payer.savedProvider, { paymentCode });
 
     let payment: Awaited<ReturnType<PaymentOrchestratorService['initiatePaymentForCart']>>;
     try {
         payment = await paymentOrchestrator.initiatePaymentForCart(
             cartId,
             route,
-            { phoneNumber: payerNumber, customerName: customer.name },
+            { phoneNumber: payerNumber, customerName: customer.name, ...(paymentCode ? { paymentCode } : {}) },
             // The retry is asked for in THIS chat, so its result is told here — see `placeCheckout`.
             { originChat: req.bot!.envelope.channel },
         );

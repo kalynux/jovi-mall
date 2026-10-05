@@ -118,6 +118,17 @@
           <input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel-national">
         </div>
       </div>
+
+      <!--
+        The payment code (NovaSend Orange Money, `CODE_FIRST`): drawn only when the server says the
+        active route needs one (`data.paymentCode`), or after it refused `PAYMENT_CODE_REQUIRED`.
+        Optional: an MTN payer leaves it empty. ⚠ Sent to the server and kept nowhere on the page.
+      -->
+      <div class="block field" id="codeBlock" hidden>
+        <label class="block__label" for="code" id="codeLabel"></label>
+        <input id="code" name="paymentCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8">
+        <div class="note" id="codeHint"></div>
+      </div>
     </div>
   </main>
 
@@ -170,6 +181,10 @@
     phoneLabel: document.getElementById("phoneLabel"),
     phone: document.getElementById("phone"),
     dial: document.getElementById("dial"),
+    codeBlock: document.getElementById("codeBlock"),
+    codeLabel: document.getElementById("codeLabel"),
+    code: document.getElementById("code"),
+    codeHint: document.getElementById("codeHint"),
     foot: document.getElementById("foot"),
     pay: document.getElementById("pay"),
     cod: document.getElementById("cod"),
@@ -389,6 +404,9 @@
     var start = data.payment && data.payment.dialCountry;
     if (start) el.dial.value = start;
 
+    /* The payment code — only when the server asks for the field (see `showCode`). */
+    if (data.paymentCode) showCode(data.paymentCode.ussd, false);
+
     /*
      * ⚠ **With no number on the account there is nothing to fall back to, so the button waits
      * for one.** This is the only preventable way the submit can fail, and preventing it is
@@ -495,6 +513,8 @@
         phone: typed.length > 0 ? typed : null,
         /* Only meaningful with a typed number; the server ignores it otherwise. */
         dial: el.dial.hidden ? null : el.dial.value || null,
+        /* NovaSend Orange Money: the code dialled for BEFORE paying. Digits only; empty → not sent. */
+        paymentCode: codeValue(),
         /* W-F: the items now, the delivery fee in cash to the rider — re-checked by the server. */
         deliveryFeePayment: !el.feeCashRow.hidden && el.feeCash.getAttribute("aria-pressed") === "true" ? "cash_to_rider" : "with_order"
       })
@@ -522,11 +542,24 @@
        * spend, both fixed by typing a different number. A 404 also spends nothing but has no handle
        * left to retry against, and a 503 means no gateway is configured, which no tap can change.
        */
+      /* An amount the active provider cannot take: nothing to correct on this screen, so it stays latched. */
+      if (res.status === 422 && refusal && refusal.code === "PAYMENT_AMOUNT_OUT_OF_RANGE") {
+        say(refusal.customerMessage || refusal.message || copy.failed, true);
+        return;
+      }
       if ((res.status === 400 || res.status === 422)
           && refusal && refusal.details && refusal.details.spent === false) {
         placed = false;
         el.pay.disabled = false;
         el.cod.disabled = false;
+        /*
+         * ⭐ A payment code is needed (NovaSend Orange Money) and none was sent — the same pre-spend
+         * refusal, but about the CODE: draw that field with what to dial instead of blaming the number.
+         */
+        if (refusal.code === "PAYMENT_CODE_REQUIRED") {
+          showCode(refusal.details.ussd || null, true);
+          return;
+        }
         el.phone.setAttribute("aria-invalid", "true");
         el.phone.addEventListener("input", function () {
           el.phone.removeAttribute("aria-invalid");
@@ -616,6 +649,8 @@
     checkoutDigitalDelivery: "Sent to your account",
     checkoutPhone: "Mobile money number",
     checkoutCountry: "Country",
+    paymentCodeLabel: "Payment code",
+    paymentCodeHint: "Orange Money only: dial {ussd} to get your payment code, then type it here. Leave it empty for MTN.",
     checkoutPay: "Pay now",
     checkoutWatchChat: "Approve the payment on your phone. I will tell you in the chat as soon as it lands.",
     checkoutPayOnDelivery: "Pay on delivery",
@@ -623,6 +658,29 @@
     checkoutDeliveryCash: "Pay the delivery fee ({{toRider}}) in cash to the rider",
     checkoutDeliveryCashNow: "Paid now"
   };
+
+  /* ── The payment code (NovaSend `CODE_FIRST`) ─────────────────────────── */
+  function showCode(ussd, focus) {
+    el.codeLabel.textContent = copy.paymentCodeLabel || FALLBACK.paymentCodeLabel;
+    var hint = String(copy.paymentCodeHint || FALLBACK.paymentCodeHint).replace("{ussd}", ussd || "");
+    el.codeHint.textContent = hint;
+    el.codeBlock.hidden = false;
+    if (focus) {
+      el.code.setAttribute("aria-invalid", "true");
+      el.code.addEventListener("input", function () {
+        el.code.removeAttribute("aria-invalid");
+        say("", false);
+      }, { once: true });
+      el.code.focus();
+      say(hint, true);
+    }
+  }
+
+  function codeValue() {
+    if (el.codeBlock.hidden) return null;
+    var digits = el.code.value.replace(/s+/g, "");
+    return /^d{4,8}$/.test(digits) ? digits : null;
+  }
 
   function boot(d) {
     copy = (d && d.copy) || FALLBACK;

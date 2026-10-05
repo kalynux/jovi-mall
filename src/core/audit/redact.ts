@@ -46,6 +46,9 @@ export const SENSITIVE_FIELD_NAMES: ReadonlySet<string> = new Set([
     'totpsecret',
     'totp',
     'otp',
+    // A NovaSend `CODE_FIRST` payment code: a one-payment credential (gateway.interface.ts).
+    // A superset of wi-admin's list, which the drift test allows.
+    'paymentcode',
     // wi-admin derives its set from the logger's pino paths, so several of its entries
     // arrive as bracketed path fragments (`headers["x-service-token`). The drift test
     // compares names, so both forms are listed — the bracketed ones can never match a real

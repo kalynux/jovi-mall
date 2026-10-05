@@ -223,7 +223,15 @@ async function typedNumber(customer: ICustomer, phone: string | null | undefined
  * the order page (where the website takes the payment) rather than the "send me a number" refusal,
  * which would hand the turn to a tool the model cannot call.
  */
-async function pay(req: Request, res: Response, proposalId: string, phone: string | null, fromTap: boolean): Promise<void> {
+async function pay(
+    req: Request,
+    res: Response,
+    proposalId: string,
+    phone: string | null,
+    fromTap: boolean,
+    /** The `CODE_FIRST` payment code the model relayed. A tap never carries one (null). */
+    paymentCode: string | null = null,
+): Promise<void> {
     const caller = botCallerOf(req);
     const language = botResponseLanguageOf(req);
     const { proposal, view } = await botDeliveryFeeService.viewOf(caller.customerId, proposalId);
@@ -248,14 +256,14 @@ async function pay(req: Request, res: Response, proposalId: string, phone: strin
         throw createAppError(ERROR_CODES.PAYMENT_PAYER_NUMBER_REQUIRED, 422, 'A mobile money number is needed to take this payment');
     }
     // The provider comes from the number (ADR-A08); the settings choose who collects.
-    const route = mobileMoneyRoute(payer.number, false, payer.savedProvider);
+    const route = mobileMoneyRoute(payer.number, false, payer.savedProvider, { paymentCode });
 
     const result = await deliveryFeeProposalService.customerPay(
         caller.customerId,
         proposal.order_id.toString(),
         proposalId,
         { provider: route.provider },
-        { phoneNumber: payer.number, customerName: customer.name },
+        { phoneNumber: payer.number, customerName: customer.name, ...(paymentCode ? { paymentCode } : {}) },
         // Asked for in THIS chat, so its outcome is told here.
         { originChat: req.bot!.envelope.channel },
     );
@@ -307,8 +315,8 @@ export class BotDeliveryFeeController {
     /** `POST /delivery-fees/:proposalId/pay` — `delivery_fees_pay` (flow_only). */
     static pay = asyncHandler(async (req: Request, res: Response) => {
         const { proposalId } = BotDeliveryFeeParamSchema.parse(req.params);
-        const { phone } = BotDeliveryFeePaySchema.parse(req.body ?? {});
-        await pay(req, res, proposalId, phone ?? null, false);
+        const { phone, paymentCode } = BotDeliveryFeePaySchema.parse(req.body ?? {});
+        await pay(req, res, proposalId, phone ?? null, false, paymentCode ?? null);
     });
 
     /** `POST /delivery-fees/combined/eligible` — `combined_delivery_eligible`. Data for the model. */

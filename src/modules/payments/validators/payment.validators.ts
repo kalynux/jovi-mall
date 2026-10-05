@@ -21,6 +21,15 @@ import { PAYMENT_PROVIDERS } from '../domain/payment-provider';
  * billing defaults it to `{}`, the two payment routes require it, exactly as
  * each did before.
  */
+/**
+ * A pre-charge payment code (`CODE_FIRST`): 4–8 digits, spaces tolerated and removed. Shared by
+ * every door that can carry one (the HTTP channel, the bot, the in-app pages).
+ */
+export const PaymentCodeSchema = z
+  .string()
+  .transform((value) => value.replace(/\s+/g, ''))
+  .pipe(z.string().regex(/^\d{4,8}$/, 'paymentCode must be 4 to 8 digits'));
+
 export const PaymentChannelSchema = z.object({
   // Mobile money (NotchPay, MyCoolPay) — the account being debited.
   phoneNumber: OptionalPhoneNumberSchema,
@@ -31,6 +40,9 @@ export const PaymentChannelSchema = z.object({
   // nobody receives.
   customerEmail: OptionalEmailAddressSchema,
   customerName: z.string().trim().optional(),
+  // `CODE_FIRST` (NovaSend Orange Money): the code the customer obtained BEFORE paying. Required
+  // only by that route, and refused there as `422 PAYMENT_CODE_REQUIRED` when absent.
+  paymentCode: PaymentCodeSchema.optional(),
 });
 
 export type PaymentChannelInput = z.infer<typeof PaymentChannelSchema>;

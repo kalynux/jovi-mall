@@ -1,7 +1,9 @@
 import { PaymentChannelInfo, PaymentGatewayName } from '../../payments/gateways/gateway.interface';
 import { PaymentProvider, isMobileMoneyProvider } from '../../payments/domain/payment-provider';
 import {
+  assertAmountWithinRoute,
   checkChargeRequestOrThrow,
+  isCustomerChargeRefusal,
   missingFieldValidationError,
   resolveCollectionRoute,
 } from '../../payments/services/payment-routing.service';
@@ -47,6 +49,8 @@ export interface BillingChargeRoute {
 export function resolveBillingCharge(
   selection: BillingChargeSelection,
   channel: PaymentChannelInfo,
+  /** What will be charged: checked against the route's limits (`422 PAYMENT_AMOUNT_OUT_OF_RANGE`). */
+  amount: number,
 ): BillingChargeRoute {
   const { provider } = selection;
 
@@ -57,6 +61,7 @@ export function resolveBillingCharge(
 
   const full = checkChargeRequestOrThrow(provider, channel, route.capability);
   if (!full.ok) throw missingFieldValidationError(full.missing);
+  assertAmountWithinRoute(route, amount);
 
   return {
     aggregator: route.aggregator,
@@ -65,4 +70,22 @@ export function resolveBillingCharge(
     // operator, and a stale `phoneOperator` from the client would outrank the customer's choice.
     channel: isMobileMoneyProvider(provider) ? { ...channel, phoneOperator: provider } : channel,
   };
+}
+
+/**
+ * Run the adapter call; when the provider refuses in a way the customer must act on (a payment
+ * code refused, an amount out of range — `isCustomerChargeRefusal`), mark the pending row failed
+ * before the refusal reaches them, so it is not left `pending` with nothing at the gateway.
+ * Every other throw keeps its historical behaviour (the row stays as it was).
+ */
+export async function chargeOrMarkFailed<T>(
+  charge: () => Promise<T>,
+  markFailed: () => Promise<unknown>,
+): Promise<T> {
+  try {
+    return await charge();
+  } catch (error) {
+    if (isCustomerChargeRefusal(error)) await markFailed().catch(() => undefined);
+    throw error;
+  }
 }

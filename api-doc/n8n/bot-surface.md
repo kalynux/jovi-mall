@@ -809,6 +809,39 @@ row, because setting a default clears the flag on every sibling.
 it stays: the response reports `hasDefault` so a chat can say so, rather than the customer
 finding out at checkout.
 
+### 6f · The Orange Money payment code (NovaSend, `CODE_FIRST`, 2026-10-05)
+
+While **NovaSend** is the active collection aggregator, an **Orange Money** charge needs a code the
+customer gets by dialling a USSD code *before* paying, and the code travels *with* the charge.
+On every other aggregator nothing here changes. Contract: `api-doc/payments/routing.md`
+§ "The payment code".
+
+**The model never asks for it up front.** It places, retries or pays exactly as before. The door
+refuses **`422 PAYMENT_CODE_REQUIRED`** (`details: { provider, ussd, spent: false }`) **before
+anything is written**: no handle spent, no order created, no charge opened. Its `customerMessage`
+already says what to dial (`{ussd}` is filled from the details, in all five languages) and no
+button is drawn. The customer dials, types the code back, and the model sends **the same tool
+again with `paymentCode`** (4–8 digits). Doors that take it: `checkout_place`,
+`checkout_retry_payment`, `delivery_fees_pay`, `bookings_pay`, `bookings_pay_balance` (top-level
+`paymentCode`) and `payment_initiate` (`channel.paymentCode`).
+
+- **A tap carries no code.** `yes:co`, `pay:rt:` and `dfee:pay:` reach the same refusal and the
+  same sentence. The next step is the typed code through the tool.
+- **`422 PAYMENT_CODE_REJECTED`**: Orange refused the code. Nothing was charged; ask for a fresh
+  one. ⚠ On `checkout_place` this can only happen after the orders exist (the code is judged by
+  the operator, at the charge), so the follow-up is `checkout_retry_payment` with the new code,
+  never a second `checkout_place`.
+- **`422 PAYMENT_AMOUNT_OUT_OF_RANGE`** (`details: { amount, min, max, spent: false }`): mobile
+  money cannot take this amount right now (NovaSend: 200–500,000 XAF). Explain and point to
+  support. There is no automatic switch to another payment company (owner decision).
+- ⛔ **The code is a one-payment credential.** Never repeat it back, never store it in memory or
+  notes, never put it in a message. The server keeps it nowhere either.
+
+The mini-app pages draw an optional code field when `data.paymentCode` is non-null (`co`) or
+`paymentCode` is non-null (`bp`), and reveal it after a `PAYMENT_CODE_REQUIRED` refusal. The
+WhatsApp checkout form accepts `payment_code` in its exchange, but the published form has no such
+field yet (it is on hold; adding the field is a republish).
+
 ---
 
 ## 7 · Deviations from the catalogue, and one documentation defect

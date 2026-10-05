@@ -341,6 +341,12 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.PAYMENT_SETTINGS_INVALID]: 'These payment settings cannot be applied',
     [ERROR_CODES.PAYMENT_SETTINGS_VERSION_CONFLICT]:
         'The payment settings changed while you were editing them — reload and retry',
+    [ERROR_CODES.PAYMENT_CODE_REQUIRED]:
+        'This payment needs a payment code. Dial the code shown to get one, then enter it and pay again.',
+    [ERROR_CODES.PAYMENT_CODE_REJECTED]:
+        'That payment code was not accepted. Dial again for a new code, then pay again. Nothing was charged.',
+    [ERROR_CODES.PAYMENT_AMOUNT_OUT_OF_RANGE]:
+        'This amount cannot be paid by mobile money right now. Please contact support.',
     [ERROR_CODES.PAYMENT_CURRENCY_NOT_SUPPORTED]: 'This currency cannot be charged by mobile money',
     [ERROR_CODES.PAYMENT_WEBHOOK_AMOUNT_MISMATCH]:
         'The confirmed amount does not match the amount recorded for this payment',
@@ -357,7 +363,7 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.PAYMENT_LINK_NOT_PAYABLE]:
         'This payment is already finished, so no new payment page can be opened for it',
 
-    // The ten below are `external_service`, so THESE strings are what the client
+    // The twelve below are `external_service`, so THESE strings are what the client
     // receives — the thrown message and `details` are dropped at the boundary.
     [ERROR_CODES.NOTCHPAY_REQUEST_FAILED]: 'The mobile money provider rejected this request',
     [ERROR_CODES.NOTCHPAY_UNREACHABLE]: 'The mobile money provider could not be reached',
@@ -369,6 +375,10 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.CINETPAY_UNREACHABLE]: 'The mobile money provider could not be reached',
     [ERROR_CODES.FAPSHI_REQUEST_FAILED]: 'The mobile money provider rejected this request',
     [ERROR_CODES.FAPSHI_UNREACHABLE]: 'The mobile money provider could not be reached',
+    [ERROR_CODES.NOVASEND_REQUEST_FAILED]: 'The mobile money provider rejected this request',
+    [ERROR_CODES.NOVASEND_UNREACHABLE]: 'The mobile money provider could not be reached',
+    [ERROR_CODES.PAWAPAY_REQUEST_FAILED]: 'The mobile money provider rejected this request',
+    [ERROR_CODES.PAWAPAY_UNREACHABLE]: 'The mobile money provider could not be reached',
 
     [ERROR_CODES.BOOKING_NOT_FOUND]: 'Booking not found',
     [ERROR_CODES.BOOKING_INVALID_STATUS_TRANSITION]: 'Invalid status transition',

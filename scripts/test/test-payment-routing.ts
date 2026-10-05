@@ -160,8 +160,8 @@ function enumOf(model: { schema: { eachPath(fn: (path: string, type: any) => voi
   // ── 1. One list ────────────────────────────────────────────────────────────
   section('1. One gateway list');
 
-  assert('PAYMENT_GATEWAY_NAMES is NOTCHPAY, MYCOOLPAY, STRIPE, CAMPAY, CINETPAY, FAPSHI, in that order', () =>
-    same(PAYMENT_GATEWAY_NAMES, ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE', 'CAMPAY', 'CINETPAY', 'FAPSHI']));
+  assert('PAYMENT_GATEWAY_NAMES is NOTCHPAY, MYCOOLPAY, STRIPE, CAMPAY, CINETPAY, FAPSHI, NOVASEND, PAWAPAY, in that order', () =>
+    same(PAYMENT_GATEWAY_NAMES, ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE', 'CAMPAY', 'CINETPAY', 'FAPSHI', 'NOVASEND', 'PAWAPAY']));
   assert('the registry re-exports the SAME tuple (not a second copy)', () => REGISTRY_NAMES === PAYMENT_GATEWAY_NAMES);
   assert('the registry Map registers exactly these names, in order', () =>
     same([...GATEWAY_MAP.keys()], PAYMENT_GATEWAY_NAMES));
@@ -241,15 +241,19 @@ function enumOf(model: { schema: { eachPath(fn: (path: string, type: any) => voi
     assert(`${g}: ${PAYMENT_PROVIDERS.map((p) => `${p}=${row[p]}`).join(' ')}, settlesAsync=${async}`, () =>
       PAYMENT_PROVIDERS.every((p) => flowOf(g, p) === row[p]) && cap(g).settlesAsync === async);
   }
-  assert('every mobile-money capability requires phoneNumber', () =>
+  assert('every mobile-money capability requires phoneNumber (and a CODE_FIRST one the paymentCode too, nothing else)', () =>
     PAYMENT_GATEWAY_NAMES.every((g) =>
       (['MTN', 'ORANGE', 'MOOV'] as const).every((p) => {
         const c = cap(g).collect[p];
-        return !c || same(c.requires, ['phoneNumber']);
+        if (!c) return true;
+        // NovaSend Orange Money (2026-10-05): the code dialled for BEFORE the charge.
+        return c.flow === 'CODE_FIRST'
+          ? same(c.requires, ['phoneNumber', 'paymentCode']) && typeof c.codeUssd === 'string'
+          : same(c.requires, ['phoneNumber']);
       })));
   assert('Stripe CARD requires nothing up front', () => same(cap('STRIPE').collect.CARD!.requires, []));
-  assert('NOTCHPAY, MYCOOLPAY, CAMPAY, CINETPAY and FAPSHI can send payouts (Stripe cannot)', () =>
-    PAYMENT_GATEWAY_NAMES.filter((g) => typeof GATEWAY_MAP.get(g)!.createPayout === 'function').join() === 'NOTCHPAY,MYCOOLPAY,CAMPAY,CINETPAY,FAPSHI');
+  assert('NOTCHPAY, MYCOOLPAY, CAMPAY, CINETPAY, FAPSHI, NOVASEND and PAWAPAY can send payouts (Stripe cannot)', () =>
+    PAYMENT_GATEWAY_NAMES.filter((g) => typeof GATEWAY_MAP.get(g)!.createPayout === 'function').join() === 'NOTCHPAY,MYCOOLPAY,CAMPAY,CINETPAY,FAPSHI,NOVASEND,PAWAPAY');
 
   // ── 3. Catalogue ───────────────────────────────────────────────────────────
   section('3. Provider catalogue, saved wallets, defaults');

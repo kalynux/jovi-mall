@@ -12,7 +12,7 @@ import { PaymentChannelInfo } from '../../payments/gateways/gateway.interface';
 import { getPaymentGateway } from '../../payments/gateways/registry';
 import { mintMerchantRef } from '../../payments/domain/merchant-reference';
 import { submitGatewayOtp, GatewayOtpResult } from '../domain/gateway-otp';
-import { BillingChargeSelection, resolveBillingCharge } from '../domain/billing-charge';
+import { BillingChargeSelection, chargeOrMarkFailed, resolveBillingCharge } from '../domain/billing-charge';
 import { PaymentProvider } from '../../payments/domain/payment-provider';
 
 /**
@@ -49,7 +49,7 @@ export class CreditTopupService {
       throw createAppError(ERROR_CODES.BILLING_TOPUP_PACK_NOT_FOUND, 404, `Unknown credit pack '${packCode}'`);
     }
 
-    const charge = resolveBillingCharge(selection, channel);
+    const charge = resolveBillingCharge(selection, channel, pack.price);
     const gateway = charge.aggregator;
     const adapter = getPaymentGateway(gateway);
 
@@ -71,7 +71,7 @@ export class CreditTopupService {
       merchant_ref: merchantRef,
     });
 
-    const result = await adapter.initiatePayment({
+    const result = await chargeOrMarkFailed(() => adapter.initiatePayment({
       orderId: topup._id.toString(), // used by adapters only as a reference label
       userId: ownerId,
       amount: pack.price,
@@ -86,7 +86,7 @@ export class CreditTopupService {
         // its callback reports a merchant reference at all.
         merchantRef,
       },
-    });
+    }), () => this.repo.setStatus(topup._id, 'failed'));
 
     if (!result.success) {
       await this.repo.setStatus(topup._id, 'failed');

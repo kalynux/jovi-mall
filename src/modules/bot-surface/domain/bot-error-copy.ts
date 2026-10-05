@@ -934,6 +934,38 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         es: 'Ese medio de pago no está disponible ahora mismo. Prueba con otro o vuelve a intentarlo un poco más tarde.',
         ar: 'طريقة الدفع هذه غير متاحة حاليًا. جرّب طريقة أخرى أو أعد المحاولة بعد قليل.',
     },
+    /**
+     * NovaSend Orange Money (`CODE_FIRST`): a code must be dialled for BEFORE paying. Refused before
+     * anything is written, so the sentence asks for the code and the model sends the same request
+     * again with `paymentCode`. `{ussd}` is filled from `details.ussd` (see `customerMessageFor`).
+     */
+    [ERROR_CODES.PAYMENT_CODE_REQUIRED]: {
+        en: 'To pay with Orange Money, I first need a payment code. Dial {ussd} on your phone to get it, then send me the code.',
+        fr: "Pour payer avec Orange Money, il me faut d'abord un code de paiement. Composez {ussd} sur votre téléphone pour l'obtenir, puis envoyez-moi le code.",
+        pt: 'Para pagar com Orange Money, preciso primeiro de um código de pagamento. Marque {ussd} no seu telefone para o obter e envie-me o código.',
+        es: 'Para pagar con Orange Money, primero necesito un código de pago. Marca {ussd} en tu teléfono para obtenerlo y envíame el código.',
+        ar: 'للدفع عبر Orange Money أحتاج أولًا إلى رمز دفع. اطلب {ussd} على هاتفك للحصول عليه ثم أرسل لي الرمز.',
+    },
+    /** The operator refused the code. Nothing was charged; a fresh code is the whole remedy. */
+    [ERROR_CODES.PAYMENT_CODE_REJECTED]: {
+        en: 'Orange Money did not accept that payment code, and nothing was charged. Dial {ussd} for a new code and send it to me.',
+        fr: "Orange Money n'a pas accepté ce code de paiement et rien n'a été débité. Composez {ussd} pour obtenir un nouveau code et envoyez-le-moi.",
+        pt: 'A Orange Money não aceitou esse código de pagamento e nada foi cobrado. Marque {ussd} para obter um novo código e envie-mo.',
+        es: 'Orange Money no aceptó ese código de pago y no se cobró nada. Marca {ussd} para obtener un código nuevo y envíamelo.',
+        ar: 'لم تقبل Orange Money رمز الدفع هذا ولم يتم خصم أي مبلغ. اطلب {ussd} للحصول على رمز جديد وأرسله لي.',
+    },
+    /**
+     * The active aggregator cannot take this amount (NovaSend: 200–500,000 XAF). No failover by
+     * design (owner decision 2026-10-05), so the remedy is a person. Neutral about which side of
+     * the limit, and about whether anything was placed.
+     */
+    [ERROR_CODES.PAYMENT_AMOUNT_OUT_OF_RANGE]: {
+        en: 'Mobile money cannot take this amount right now. Contact support and we will help you complete this payment.',
+        fr: "Le mobile money ne peut pas accepter ce montant pour le moment. Contactez le support et nous vous aiderons à finaliser ce paiement.",
+        pt: 'O mobile money não pode aceitar este valor de momento. Contacte o apoio e ajudamos a concluir este pagamento.',
+        es: 'El mobile money no puede aceptar este importe ahora mismo. Contacta con soporte y te ayudaremos a completar este pago.',
+        ar: 'لا يمكن للمحفظة المحمولة قبول هذا المبلغ حاليًا. تواصل مع الدعم وسنساعدك على إتمام هذا الدفع.',
+    },
     /** Nothing said which network the customer pays with, and the number did not tell either. */
     [ERROR_CODES.PAYMENT_PROVIDER_REQUIRED]: {
         en: 'Tell me how you want to pay: MTN Mobile Money or Orange Money.',
@@ -974,14 +1006,38 @@ export function customerMessageFor(
     code: string,
     category: ErrorCategory,
     language: string | null | undefined,
+    /**
+     * The refusal's client-safe `details`, for the one placeholder an entry may carry: `{ussd}`
+     * (the payment-code entries). Optional, so every existing caller is unchanged.
+     */
+    details?: Record<string, unknown>,
 ): string {
     const lang = toBotCopyLanguage(language);
     const specific = CODE_COPY[code as ErrorCode];
 
-    if (specific) return specific[lang] ?? specific[DEFAULT_LANGUAGE];
+    if (specific) return fillUssd(specific[lang] ?? specific[DEFAULT_LANGUAGE], lang, details);
 
     const fallback = CATEGORY_COPY[category] ?? CATEGORY_COPY[ERROR_CATEGORIES.INTERNAL];
     return fallback[lang] ?? fallback[DEFAULT_LANGUAGE];
+}
+
+/** What `{ussd}` reads as when a refusal names no code to dial (never a blank in a sentence). */
+const USSD_FALLBACK: Copy = {
+    en: 'the Orange Money payment code',
+    fr: 'le code de paiement Orange Money',
+    pt: 'o código de pagamento Orange Money',
+    es: 'el código de pago de Orange Money',
+    ar: 'رمز الدفع الخاص بـ Orange Money',
+};
+
+/**
+ * Fill `{ussd}`. Only a value that looks like a USSD string (`*`, `#` and digits) is used: the
+ * details are ours, but a sentence relayed verbatim to a customer is no place to trust a shape.
+ */
+function fillUssd(text: string, lang: BotCopyLanguage, details?: Record<string, unknown>): string {
+    if (!text.includes('{ussd}')) return text;
+    const ussd = typeof details?.ussd === 'string' && /^[*#0-9]{2,24}$/.test(details.ussd) ? details.ussd : null;
+    return text.split('{ussd}').join(ussd ?? USSD_FALLBACK[lang] ?? USSD_FALLBACK[DEFAULT_LANGUAGE]);
 }
 
 /**

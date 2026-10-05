@@ -50,6 +50,7 @@ import type { FlowCopy } from './screens/flow-copy';
 import { FLOW_LISTING_PAGE_SIZE, noticeResponse, toListingScreen } from './screens/listing.adapter';
 import { FLOW_CAPS } from './screens/flow-text';
 import { composeTypedNumber } from '../../../core/validation/dial-codes';
+import { PaymentCodeSchema } from '../../payments/validators/payment.validators';
 
 /**
  * Serving a screen: from a decrypted request to the answer that goes back encrypted.
@@ -130,7 +131,12 @@ export interface FlowScreenPorts {
     /** `loadFlowImage` — refuses anything not `public` BEFORE reading a byte. */
     loadImage(image: ImageSource | null): Promise<string | null>;
     readCheckoutView(handle: string): Promise<CheckoutView>;
-    placeCheckout(handle: string, phone: unknown): Promise<CheckoutPlaced>;
+    /**
+     * `options.paymentCode`: the `CODE_FIRST` code (NovaSend Orange Money), when the form carried
+     * one. ⚠ The published checkout form has no such field yet (it is on hold); the port takes it
+     * so the field can be added at the next publish without touching this side.
+     */
+    placeCheckout(handle: string, phone: unknown, options?: { paymentCode?: string | null }): Promise<CheckoutPlaced>;
     executePurchase(ctx: PurchaseContext): Promise<PurchaseResult>;
     /**
      * `readBookingPicker` — one read for both booking screens. It resolves the `bk` session
@@ -676,6 +682,22 @@ async function submitCheckout(
     const phone = composeTypedNumber(data.phone, data.dial);
 
     /**
+     * The `CODE_FIRST` payment code, when a form carries a `payment_code` field. Empty → none was
+     * sent (`placeCheckout` refuses `PAYMENT_CODE_REQUIRED` before the spend when the route needs
+     * one); malformed → the same review again with the field's own instruction, handle still live.
+     */
+    const rawCode = typeof data.payment_code === 'string' ? data.payment_code.trim() : '';
+    const parsedCode = rawCode ? PaymentCodeSchema.safeParse(rawCode) : null;
+    if (parsedCode && !parsedCode.success) {
+        await release();
+        return {
+            status: 200,
+            body: reviewWithCorrection(view, copy, copy.paymentCodeHint.replace('{ussd}', view.paymentCode?.ussd ?? '')),
+        };
+    }
+    const paymentCode = parsedCode?.success ? parsedCode.data : null;
+
+    /**
      * ⚠ **No number on file and the field left empty: refused HERE, before the spend.** Meta
      * documents no dynamic `required`, so the form cannot disable Pay the way the page does, and
      * `placeCheckout` can only discover this AFTER consuming the handle.
@@ -699,7 +721,7 @@ async function submitCheckout(
     let verdict: FlowScreenVerdict;
     let spent: boolean;
     try {
-        const placed = await ports.placeCheckout(handle, phone);
+        const placed = await ports.placeCheckout(handle, phone, { paymentCode });
         verdict = { status: 200, body: placedResponse(placed, copy) };
         spent = true;
     } catch (error) {

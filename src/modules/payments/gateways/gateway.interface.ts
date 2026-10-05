@@ -41,9 +41,19 @@ export interface PaymentChannelInfo {
   phoneNumber?: string;
   phoneOperator?: 'MTN' | 'ORANGE' | 'MOOV';
   
+  /**
+   * A one-time code the customer obtained BEFORE the charge, sent WITH it (`flow: 'CODE_FIRST'`).
+   *
+   * NovaSend's Orange Money: the customer dials a USSD code, the operator answers with a payment
+   * code, and the charge carries it. The opposite order from `requiresOtp` (charge first, then the
+   * SMS code to `/authorize`). ⛔ A credential for one payment: never stored, never logged
+   * (`audit/redact.ts` redacts `paymentCode`), never echoed in an error.
+   */
+  paymentCode?: string;
+
   // For card (Stripe)
   cardToken?: string;
-  
+
   // Common
   customerEmail?: string;
   customerName?: string;
@@ -453,7 +463,7 @@ export interface WebhookVerifyInput {
  * Campay or Flutterwave is one entry here plus its adapter. `registry.ts`
  * re-exports it under the same name for the importers that already read it there.
  */
-export const PAYMENT_GATEWAY_NAMES = ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE', 'CAMPAY', 'CINETPAY', 'FAPSHI'] as const;
+export const PAYMENT_GATEWAY_NAMES = ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE', 'CAMPAY', 'CINETPAY', 'FAPSHI', 'NOVASEND', 'PAWAPAY'] as const;
 
 export type PaymentGatewayName = (typeof PAYMENT_GATEWAY_NAMES)[number];
 
@@ -475,16 +485,37 @@ export function gatewayWebhookPath(name: PaymentGatewayName): string {
   return `/api/webhooks${gatewayWebhookSegment(name)}`;
 }
 
-/** How a customer completes a collection, which decides the client's screen. */
-export type CollectFlow = 'PUSH' | 'OTP' | 'CARD_ELEMENT' | 'REDIRECT';
+/**
+ * How a customer completes a collection, which decides the client's screen.
+ *
+ * `CODE_FIRST` (NovaSend Orange Money): the customer dials `codeUssd` BEFORE paying, receives a
+ * payment code, and the charge request carries it as `channel.paymentCode`. Then the handset
+ * prompt follows exactly as for `PUSH`. A charge without it is refused `422 PAYMENT_CODE_REQUIRED`
+ * before anything is written.
+ */
+export type CollectFlow = 'PUSH' | 'OTP' | 'CARD_ELEMENT' | 'REDIRECT' | 'CODE_FIRST';
 
 /** The `PaymentChannelInfo` fields a capability can require. */
-export type CollectField = 'phoneNumber' | 'customerEmail' | 'customerName';
+export type CollectField = 'phoneNumber' | 'customerEmail' | 'customerName' | 'paymentCode';
+
+/** The amount range an aggregator accepts for one provider, in the charge currency (XAF). */
+export interface CollectAmountLimits {
+  readonly min: number;
+  readonly max: number;
+}
 
 export interface ProviderCollectCapability {
   readonly flow: CollectFlow;
   /** Channel fields that must be present before the charge is opened. */
   readonly requires: readonly CollectField[];
+  /**
+   * The amounts this aggregator accepts for this provider. Absent = no limit we know of.
+   * Checked before anything is written (`422 PAYMENT_AMOUNT_OUT_OF_RANGE`), so a customer is told
+   * plainly rather than meeting a provider refusal after an order or attempt exists.
+   */
+  readonly limits?: CollectAmountLimits;
+  /** `CODE_FIRST` only: what the customer dials to obtain the payment code. */
+  readonly codeUssd?: string;
 }
 
 export interface GatewayCapabilities {

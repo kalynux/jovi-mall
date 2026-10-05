@@ -2685,6 +2685,11 @@
               "cash_to_rider"
             ],
             "description": "Optional, default with_order. cash_to_rider ONLY when the review's payment.deliveryFeeCash was set and the customer chose to pay the delivery fee in cash to the rider: the items are charged now, the delivery fee is paid to the rider with a delivery code."
+          },
+          "paymentCode": {
+            "type": "string",
+            "pattern": "^d{4,8}$",
+            "description": "Orange Money only, and only after a PAYMENT_CODE_REQUIRED refusal: the payment code the customer got by dialling details.ussd and typed back to you. Digits only. Never ask for it up front, never invent it, never repeat it back."
           }
         }
       },
@@ -2693,7 +2698,8 @@
           "checkoutRef",
           "deliveryAddressId",
           "phone",
-          "deliveryFeePayment"
+          "deliveryFeePayment",
+          "paymentCode"
         ]
       },
       "response": {
@@ -2795,6 +2801,43 @@
           "category": "business_rule",
           "when": "cash_to_rider asked but a delivery company no longer takes the fee in cash (or no shop charges delivery); details.spent false — the ref is alive",
           "customer_action": "reprompt"
+        },
+        {
+          "code": "PAYMENT_CODE_REQUIRED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The active payment company needs an Orange Money payment code BEFORE the charge, and none was sent. details.ussd is what the customer dials; nothing was charged or placed (details.spent is false)",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "provider",
+            "ussd",
+            "spent"
+          ]
+        },
+        {
+          "code": "PAYMENT_CODE_REJECTED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "Orange Money refused the payment code (wrong, expired or used). Nothing was charged; ask for a fresh code (details.ussd)",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "provider",
+            "ussd"
+          ]
+        },
+        {
+          "code": "PAYMENT_AMOUNT_OUT_OF_RANGE",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The amount is outside what mobile money accepts right now (details.min / details.max). Nothing was charged; the customer should contact support",
+          "customer_action": "explain",
+          "details_fields": [
+            "provider",
+            "amount",
+            "min",
+            "max",
+            "spent"
+          ]
         }
       ],
       "mutating": true,
@@ -2913,12 +2956,18 @@
           "phone": {
             "type": "string",
             "description": "Only a number the customer typed, exactly as they typed it (the country code is optional: without one, the account's own country is used)."
+          },
+          "paymentCode": {
+            "type": "string",
+            "pattern": "^d{4,8}$",
+            "description": "Orange Money only, and only after a PAYMENT_CODE_REQUIRED refusal: the payment code the customer got by dialling details.ussd and typed back to you. Digits only. Never ask for it up front, never invent it, never repeat it back."
           }
         }
       },
       "request": {
         "body": [
-          "phone"
+          "phone",
+          "paymentCode"
         ]
       },
       "response": {
@@ -2969,6 +3018,43 @@
           "category": "external_service",
           "when": "Gateway unreachable",
           "customer_action": "retry_with_backoff"
+        },
+        {
+          "code": "PAYMENT_CODE_REQUIRED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The active payment company needs an Orange Money payment code BEFORE the charge, and none was sent. details.ussd is what the customer dials; nothing was charged or placed (details.spent is false)",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "provider",
+            "ussd",
+            "spent"
+          ]
+        },
+        {
+          "code": "PAYMENT_CODE_REJECTED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "Orange Money refused the payment code (wrong, expired or used). Nothing was charged; ask for a fresh code (details.ussd)",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "provider",
+            "ussd"
+          ]
+        },
+        {
+          "code": "PAYMENT_AMOUNT_OUT_OF_RANGE",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The amount is outside what mobile money accepts right now (details.min / details.max). Nothing was charged; the customer should contact support",
+          "customer_action": "explain",
+          "details_fields": [
+            "provider",
+            "amount",
+            "min",
+            "max",
+            "spent"
+          ]
         }
       ],
       "mutating": true,
@@ -3035,6 +3121,11 @@
               },
               "customerName": {
                 "type": "string"
+              },
+              "paymentCode": {
+                "type": "string",
+                "pattern": "^d{4,8}$",
+                "description": "Orange Money only, and only after a PAYMENT_CODE_REQUIRED refusal: the payment code the customer got by dialling details.ussd and typed back to you. Digits only. Never ask for it up front, never invent it, never repeat it back."
               }
             }
           }
@@ -3126,6 +3217,43 @@
           "category": "external_service",
           "when": "The provider was unreachable",
           "customer_action": "retry_with_backoff"
+        },
+        {
+          "code": "PAYMENT_CODE_REQUIRED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The active payment company needs an Orange Money payment code BEFORE the charge, and none was sent. details.ussd is what the customer dials; nothing was charged or placed (details.spent is false)",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "provider",
+            "ussd",
+            "spent"
+          ]
+        },
+        {
+          "code": "PAYMENT_CODE_REJECTED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "Orange Money refused the payment code (wrong, expired or used). Nothing was charged; ask for a fresh code (details.ussd)",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "provider",
+            "ussd"
+          ]
+        },
+        {
+          "code": "PAYMENT_AMOUNT_OUT_OF_RANGE",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The amount is outside what mobile money accepts right now (details.min / details.max). Nothing was charged; the customer should contact support",
+          "customer_action": "explain",
+          "details_fields": [
+            "provider",
+            "amount",
+            "min",
+            "max",
+            "spent"
+          ]
         }
       ],
       "mutating": true,
@@ -4410,6 +4538,11 @@
             "type": "string",
             "maxLength": 32,
             "description": "Only a number the customer typed, exactly as typed. Omitted: the wallet on the account."
+          },
+          "paymentCode": {
+            "type": "string",
+            "pattern": "^d{4,8}$",
+            "description": "Orange Money only, and only after a PAYMENT_CODE_REQUIRED refusal: the payment code the customer got by dialling details.ussd and typed back to you. Digits only. Never ask for it up front, never invent it, never repeat it back."
           }
         }
       },
@@ -4418,7 +4551,8 @@
           "proposalId"
         ],
         "body": [
-          "phone"
+          "phone",
+          "paymentCode"
         ]
       },
       "response": {
@@ -4469,6 +4603,43 @@
           "category": "business_rule",
           "when": "A cash-on-delivery order — the difference is paid in cash",
           "customer_action": "explain"
+        },
+        {
+          "code": "PAYMENT_CODE_REQUIRED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The active payment company needs an Orange Money payment code BEFORE the charge, and none was sent. details.ussd is what the customer dials; nothing was charged or placed (details.spent is false)",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "provider",
+            "ussd",
+            "spent"
+          ]
+        },
+        {
+          "code": "PAYMENT_CODE_REJECTED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "Orange Money refused the payment code (wrong, expired or used). Nothing was charged; ask for a fresh code (details.ussd)",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "provider",
+            "ussd"
+          ]
+        },
+        {
+          "code": "PAYMENT_AMOUNT_OUT_OF_RANGE",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The amount is outside what mobile money accepts right now (details.min / details.max). Nothing was charged; the customer should contact support",
+          "customer_action": "explain",
+          "details_fields": [
+            "provider",
+            "amount",
+            "min",
+            "max",
+            "spent"
+          ]
         }
       ],
       "mutating": true,
@@ -8583,6 +8754,11 @@
             "format": "email",
             "maxLength": 254,
             "description": "Where the processor sends its receipt. Optional."
+          },
+          "paymentCode": {
+            "type": "string",
+            "pattern": "^d{4,8}$",
+            "description": "Orange Money only, and only after a PAYMENT_CODE_REQUIRED refusal: the payment code the customer got by dialling details.ussd and typed back to you. Digits only. Never ask for it up front, never invent it, never repeat it back."
           }
         }
       },
@@ -8593,7 +8769,8 @@
         "body": [
           "provider",
           "phoneNumber",
-          "customerEmail"
+          "customerEmail",
+          "paymentCode"
         ]
       },
       "response": {
@@ -8660,6 +8837,43 @@
           "customer_action": "reprompt",
           "details_fields": [
             "fields"
+          ]
+        },
+        {
+          "code": "PAYMENT_CODE_REQUIRED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The active payment company needs an Orange Money payment code BEFORE the charge, and none was sent. details.ussd is what the customer dials; nothing was charged or placed (details.spent is false)",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "provider",
+            "ussd",
+            "spent"
+          ]
+        },
+        {
+          "code": "PAYMENT_CODE_REJECTED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "Orange Money refused the payment code (wrong, expired or used). Nothing was charged; ask for a fresh code (details.ussd)",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "provider",
+            "ussd"
+          ]
+        },
+        {
+          "code": "PAYMENT_AMOUNT_OUT_OF_RANGE",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The amount is outside what mobile money accepts right now (details.min / details.max). Nothing was charged; the customer should contact support",
+          "customer_action": "explain",
+          "details_fields": [
+            "provider",
+            "amount",
+            "min",
+            "max",
+            "spent"
           ]
         }
       ],
@@ -8738,6 +8952,11 @@
             "format": "email",
             "maxLength": 254,
             "description": "Where the processor sends its receipt. Optional."
+          },
+          "paymentCode": {
+            "type": "string",
+            "pattern": "^d{4,8}$",
+            "description": "Orange Money only, and only after a PAYMENT_CODE_REQUIRED refusal: the payment code the customer got by dialling details.ussd and typed back to you. Digits only. Never ask for it up front, never invent it, never repeat it back."
           }
         }
       },
@@ -8748,7 +8967,8 @@
         "body": [
           "provider",
           "phoneNumber",
-          "customerEmail"
+          "customerEmail",
+          "paymentCode"
         ]
       },
       "response": {
@@ -8822,6 +9042,43 @@
           "customer_action": "reprompt",
           "details_fields": [
             "fields"
+          ]
+        },
+        {
+          "code": "PAYMENT_CODE_REQUIRED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The active payment company needs an Orange Money payment code BEFORE the charge, and none was sent. details.ussd is what the customer dials; nothing was charged or placed (details.spent is false)",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "provider",
+            "ussd",
+            "spent"
+          ]
+        },
+        {
+          "code": "PAYMENT_CODE_REJECTED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "Orange Money refused the payment code (wrong, expired or used). Nothing was charged; ask for a fresh code (details.ussd)",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "provider",
+            "ussd"
+          ]
+        },
+        {
+          "code": "PAYMENT_AMOUNT_OUT_OF_RANGE",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The amount is outside what mobile money accepts right now (details.min / details.max). Nothing was charged; the customer should contact support",
+          "customer_action": "explain",
+          "details_fields": [
+            "provider",
+            "amount",
+            "min",
+            "max",
+            "spent"
           ]
         }
       ],
