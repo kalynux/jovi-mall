@@ -180,7 +180,6 @@ const AMOUNT = Number(arg('amount') ?? '200');
   out.log('\n✅ done — compare each answer with the open questions at the top of novasend.gateway.ts.\n');
   process.exit(0);
 })().catch((error) => {
-  // eslint-disable-next-line no-console
   console.error('❌ verify:novasend runner —', error);
   process.exit(1);
 });
