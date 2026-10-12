@@ -62,6 +62,9 @@ import {
     toBotOrderPaymentState,
 } from '../domain/bot-order-status-copy';
 import { botStorefrontLink, windowForChat } from '../domain/bot-list-window';
+import { conversationUrl } from '../domain/conversation-url';
+import { inAppSurfaceStore } from '../services/inapp-surface.store';
+import { pushCardIntoConversation } from '../services/conversation-push';
 import {
     BotCartIdParamSchema,
     BotCodCodeSchema,
@@ -419,7 +422,69 @@ export class BotOrderController {
         const { reason } = BotOrderCancelSchema.parse(req.body ?? {});
         await cancelOwnedOrder(req, res, orderId, reason);
     });
+
+    /**
+     * `POST /api/bot/miniapp/s/ol/:handle/open` — a row on the order screen was tapped.
+     *
+     * ── WHAT A TAP ON THE SCREEN IS ─────────────────────────────────────────
+     * The same thing as a tap on a row of the chat's own order list: *this one*. So it answers
+     * with the same thing — the order card, with Shipments, Cancel and Get help under it — sent
+     * into the conversation the screen was opened from. The screen went on listing ninety orders
+     * a customer could look at and do nothing with (owner, 2026-10-11); this is the way back.
+     *
+     * ⚠ **The screen still DOES nothing to an order.** It picks one; every action stays a button
+     * in the chat, with the confirmations and the gating it already has. That is why the card is
+     * built by `orderCardIntent` — the builder the chat uses — rather than drawn on the page: a
+     * second set of buttons in a WebView would be a second opinion on what an order can do.
+     *
+     * ⚠ **`read`, not `consume`.** Nothing here is spent: a customer may come back to the list
+     * and pick another order. The handle is the only credential, the session supplies the
+     * customer, and `resolveOwnedOrder` puts that customer in the query — so a page cannot ask
+     * for an order its session does not own, and one that tries reads as not found.
+     *
+     * ⚠ **There is no `req.bot` here**, for `BotPurchaseController.screenAct`'s reason: this
+     * mount carries neither bot-surface credential, so there is no bot caller and no `reply`.
+     *
+     * ⚠ **`sent` is the page's instruction, and it is not always true.** A refused send (a
+     * closed WhatsApp window, a blocked bot) answers 200 with `sent: false` and a sentence that
+     * says so — the page then stays open instead of sending the customer to look for nothing.
+     */
+    static screenOpen = asyncHandler(async (req: Request, res: Response) => {
+        const { handle } = ScreenHandleSchema.parse(req.params);
+        const { orderId } = ScreenOpenSchema.parse(req.body ?? {});
+
+        const session = await inAppSurfaceStore.read('ol', handle);
+        if (!session) {
+            throw createAppError(ERROR_CODES.BOT_SCREEN_SESSION_EXPIRED, 410, undefined, { kind: 'ol' });
+        }
+
+        const order = await resolveOwnedOrder(session.customerId, orderId);
+        /**
+         * ⚠ **The view carries the delivery code and none of it leaves this function.** Only
+         * the card's text and tokens are read from it, and the page is answered with a
+         * sentence — the same position `showOrderCard` takes before it strips the body.
+         */
+        const [dto] = await customerOrderViewService.toDtos([order]);
+
+        const sent = await pushCardIntoConversation(
+            { channel: session.channel, externalId: session.externalId },
+            orderCardIntent(dto, session.language),
+        );
+
+        sendSuccess(res, {
+            sent,
+            message: botOrderCopy(sent ? 'orderSentToChat' : 'orderNotSentToChat', session.language),
+            /** Where "Back to chat" goes on a page that cannot close itself (WhatsApp). */
+            chatUrl: conversationUrl(session.channel),
+        });
+    });
 }
+
+/** The page sends an order id and nothing else — the customer comes from the session. */
+const ScreenHandleSchema = z.object({ handle: z.string().trim().min(3).max(64) });
+const ScreenOpenSchema = z
+    .object({ orderId: z.string().trim().regex(/^[0-9a-fA-F]{24}$/, 'orderId must be an id') })
+    .strict();
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  The work a route and a tap share
@@ -1173,7 +1238,20 @@ function parcelRow(
  * so the renderer's backstop stays a backstop rather than becoming the mechanism.
  */
 function setOrderCardReply(req: Request, order: CustomerOrderDto): void {
-    const language = botResponseLanguageOf(req);
+    setBotReply(req, orderCardIntent(order, botResponseLanguageOf(req)));
+}
+
+/**
+ * The card as an intent, for the two doors that draw it: a chat turn (`setOrderCardReply`) and a
+ * row tapped on the order screen (`BotOrderController.screenOpen`).
+ *
+ * ⚠ **One builder, so the screen cannot offer a button the chat would not.** Every gate in the
+ * header above lives here and nowhere else.
+ */
+function orderCardIntent(
+    order: CustomerOrderDto,
+    language: string | null,
+): { kind: 'text'; text: string; actions: BotReplyOption[] } {
     const actions: BotReplyOption[] = [];
 
     if (order.orderType === 'physical' && order.fulfillmentStatus !== 'cancelled') {
@@ -1195,7 +1273,7 @@ function setOrderCardReply(req: Request, order: CustomerOrderDto): void {
         label: botChrome('getHelpButton', language),
     });
 
-    setBotReply(req, { kind: 'text', text: orderCardText(order, language), actions });
+    return { kind: 'text', text: orderCardText(order, language), actions };
 }
 
 /**

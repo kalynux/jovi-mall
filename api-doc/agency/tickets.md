@@ -244,6 +244,11 @@ from a product catalogue the agency owns.
 **Description**: List all tickets visible to this agency (created by it, or where it's a
 follower/assignee), with filters, search, sorting, and pagination.
 
+Since 2026-10-09 that includes every ticket about an order the agency carries — it follows them
+automatically, from the moment the ticket opens or the shipment moves to it, and keeps following
+if the shipment later moves away. See
+[vendor/tickets.md § Order tickets reach every party automatically](../vendor/tickets.md#order-tickets-reach-every-party-automatically-2026-10-09).
+
 **Request Headers**:
 - `Authorization: Bearer <token>`
 

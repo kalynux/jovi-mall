@@ -319,7 +319,7 @@ export interface IShipmentFeeComponents {
  * literal rather than imported so the shipment model does not depend on the cod module;
  * `test:cod-limits` asserts the two lists are equal.
  */
-export const COD_LIMIT_KINDS = ['agency_limit', 'vendor_terms'] as const;
+export const COD_LIMIT_KINDS = ['agency_limit', 'vendor_terms', 'agency_restricted'] as const;
 export type ShipmentCodLimitKind = (typeof COD_LIMIT_KINDS)[number];
 
 export interface IShipmentCodLimitHold {
@@ -502,6 +502,10 @@ export interface IShipment extends Document {
    * its own cash limit (`agency_limit`) or over the vendor's `maxCashPerAgency`
    * (`vendor_terms`); the shipment stays `pending` for the vendor to dispatch (with
    * `force`) once cash comes back. Cleared by any successful dispatch. `null` otherwise.
+   *
+   * Since 2026-10-10 also `agency_restricted`: an administrator switched cash on delivery
+   * off for the agency. `force` does NOT lift that one — the vendor moves the items to
+   * another agency, or waits for the restriction to be lifted.
    */
   cod_limit_hold?: IShipmentCodLimitHold | null;
   /**

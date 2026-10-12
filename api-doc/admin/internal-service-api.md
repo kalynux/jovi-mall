@@ -179,6 +179,8 @@ POST   /users/:userId/bot-memory/reset         ← below
 POST   /users/:userId/roles/:role/closure      ← below (ADR-A10)
 DELETE /users/:userId/roles/:role/closure      ← below (ADR-A10)
 GET    /users/:userId/closure-requests         ← below (ADR-A10) — the one READ here
+GET    /users/:userId/cod-restriction          ← below (2026-10-10)
+PUT    /users/:userId/cod-restriction          ← below (2026-10-10)
 ```
 
 A suspension is only real by virtue of the checks in `requireAuth`, `login` and the refresh
@@ -213,6 +215,72 @@ requestedAt, expiresAt, warnings[], resolvedAt, resolvedBy, declineNote, outcome
 
 The `GET` exists for symmetry with this service's request DTO. wi-admin itself reads
 `role_closure_requests` directly, per its read-direct rule.
+
+#### The COD restriction — `/users/:userId/cod-restriction` and `/agencies/:id/cod-restriction`
+
+Added 2026-10-10 (not counted in the totals above). An administrator switches cash on delivery
+**off** for one customer or one delivery agency, and back on. With nothing recorded, COD behaves
+as it always did. The rule is `src/modules/cod/domain/cod-restriction.ts`; the only writer is
+`CodRestrictionService`.
+
+```jsonc
+// → restrict (or lift with restricted: false). `.strict()`; reason 3–500, REQUIRED both ways.
+PUT /api/internal/admin/users/68d000000000000000000a01/cod-restriction
+{ "restricted": true, "reason": "Refused three parcels without a valid reason" }
+
+// ← 200 — the same shape GET returns, and the same shape for an agency (subject: "agency")
+{
+  "success": true,
+  "data": {
+    "subject": "customer",
+    "subjectId": "68d000000000000000000c07",   // customers._id (delivery_agencies._id for an agency)
+    "userId": "68d000000000000000000a01",
+    "restricted": true,
+    "restriction": {
+      "reason": "Refused three parcels without a valid reason",
+      "restrictedAt": "2026-10-10T09:00:00.000Z",
+      "restrictedByUserId": "adm_…",          // a wi-admin id; resolves in no collection here
+      "restrictedBySource": "admin",
+      "restrictedByName": "Ada Admin"
+    }
+  },
+  "message": "Cash on delivery restricted for this customer"
+}
+```
+
+When not restricted, `restricted` is `false` and `restriction` is `null`.
+
+| Status | Code | When |
+|---|---|---|
+| 404 | `USER_NOT_FOUND` / `DELIVERY_AGENCY_NOT_FOUND` | no such account |
+| 404 | `AUTH_PROFILE_NOT_FOUND` | the user has no customer profile (it cannot order at all) |
+| 409 | `COD_RESTRICTION_UNCHANGED` | already in the requested state. The write is a compare-and-set; `details: { subject, restricted }` |
+| 400 | `VALIDATION_ERROR` | bad body, or an id in the body (the subject is the path) |
+
+**What a restriction does.**
+
+| Subject | Where it bites | Answer |
+|---|---|---|
+| customer | checkout with `cash_on_delivery`, asked once up front | `422 COD_CUSTOMER_RESTRICTED`, no `details` |
+| customer | the cart quote (and the bot's pay-on-delivery review, which reads it) | `cashOnDelivery.reason: "customer_restricted"`, `vendorIds: []` |
+| agency | checkout and the quote, for a basket it would carry | the existing `422 COD_AGENCY_NOT_SUPPORTED` / `agency_not_supported` |
+| agency | vendor auto-redirect of a COD shipment | the shipment stays `pending` with `cod_limit_hold.kind: "agency_restricted"` |
+| agency | vendor manual dispatch, bulk dispatch, change-agency | `422 COD_AGENCY_RESTRICTED`. `force: true` does **not** waive it |
+
+**What it does not do.** Orders already placed and shipments the agency already holds are
+untouched. So are the cash chain (collections, deposits, remittances), prepaid orders, the
+delivery fee paid in cash on a prepaid order, the agency's `policies.cod` and its cash limit pin.
+An **administrator's** own dispatch is not gated (as with the cash limit). Nothing sets a
+restriction automatically, and **no notification is sent** to the restricted party.
+
+**Lifting clears the field**, so afterwards this database holds neither the restriction nor its
+reason. wi-admin's audit rows (`users.cod.restrict` / `.unrestrict`, `agencies.cod.restrict` /
+`.unrestrict`) are the record.
+
+`GET /agencies/:id/cod-limit` (and the agency's own `GET /api/agency/cod/limit`) gained
+`codRestricted` and `codRestrictedAt`. Neither carries the reason.
+
+Covered by `npm run test:cod-restrictions` (74, no DB).
 
 #### `POST /users/:userId/bot-memory/reset` — wipe the bot's conversation memory for one customer
 

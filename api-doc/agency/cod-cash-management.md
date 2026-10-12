@@ -143,10 +143,19 @@ unless an administrator set another amount for you.
     "defaultLimit": 1000000,
     "exposure": { "inFlight": 420000, "inFlightCount": 6, "collectedUnremitted": 310000, "collectedCount": 4, "total": 730000 },
     "headroom": 270000,
-    "overLimit": false
+    "overLimit": false,
+    "codRestricted": false,
+    "codRestrictedAt": null
   }
 }
 ```
+
+- **`codRestricted` / `codRestrictedAt` (2026-10-10)** — `true` (with the date) while an
+  administrator has switched cash on delivery off for your agency. You then receive **no new
+  cash-on-delivery shipment**, whatever `headroom` says, and customers are not offered cash on
+  delivery for baskets you would carry. Shipments you already hold, deposits, remittances and
+  prepaid work are unaffected. The reason is not shown here. See
+  [FRONTEND-CHANGELOG-cod-restrictions.md](./FRONTEND-CHANGELOG-cod-restrictions.md).
 
 - `exposure.inFlight` — COD shipments you hold (assigned → agent_delivered) whose cash is not
   collected yet. `exposure.collectedUnremitted` — cash your agents or you collected that has not

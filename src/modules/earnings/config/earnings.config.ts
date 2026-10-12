@@ -32,9 +32,10 @@ export const EARNINGS_CONFIG = {
   /**
    * Days a `delivered`/`fulfilled` order may sit without a customer confirmation
    * before the system auto-confirms it. Since 2026-10-05 this moves the ORDER to completed
-   * only; it no longer delays anybody's money (the hold runs from delivery).
+   * only; it no longer delays anybody's money (the hold runs from delivery). Owner decision
+   * 2026-10-09: 3 days (was 7), the same as SHIPMENT_AUTO_CONFIRM_DAYS.
    */
-  AUTO_CONFIRM_DAYS: intEnv('EARNINGS_AUTO_CONFIRM_DAYS', 7),
+  AUTO_CONFIRM_DAYS: intEnv('EARNINGS_AUTO_CONFIRM_DAYS', 3),
 
   /**
    * The customer's dispute window on ONE shipment: days an `agent_delivered`
@@ -53,8 +54,11 @@ export const EARNINGS_CONFIG = {
    * records the cash and delivers in one transaction. See
    * `ShipmentService.autoConfirmStaleDeliveries` for why skipping the collection
    * would leave an order nobody is ever paid for.
+   *
+   * Owner decision 2026-10-09: 3 days (was 7). The published Returns & Refunds Policy states
+   * this number to customers, so changing it means republishing that document too.
    */
-  SHIPMENT_AUTO_CONFIRM_DAYS: intEnv('EARNINGS_SHIPMENT_AUTO_CONFIRM_DAYS', 7),
+  SHIPMENT_AUTO_CONFIRM_DAYS: intEnv('EARNINGS_SHIPMENT_AUTO_CONFIRM_DAYS', 3),
 
   /**
    * Defensive fallback fee (minor units) used ONLY when a shipment's agency

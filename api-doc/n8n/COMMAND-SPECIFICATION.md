@@ -610,7 +610,7 @@ The group payment status is an aggregate: `paid` · `awaiting_payment` · `parti
 
 **Resend** is rate-limited server-side to one per 60 seconds (`COD_CODE_RESEND_TOO_SOON` carries `retryInSeconds`) and invalidates the previous code.
 
-⚠ If the code never arrives, the platform records the cash as collected after 7 days at `agent_delivered`. Do not describe that as a penalty — it exists because a customer can pay and still not produce a code.
+⚠ If the code never arrives, the platform records the cash as collected after 3 days at `agent_delivered`. Do not describe that as a penalty — it exists because a customer can pay and still not produce a code.
 
 ---
 
@@ -624,7 +624,7 @@ The group payment status is an aggregate: `paid` · `awaiting_payment` · `parti
 | **Identity** | ✅ · **Tools** `orders_list_shipments` → `orders_confirm_shipment_delivery` |
 | **Flow** | `confirm_delivery` · **Confirmation** ✅ · **Status** **GAP-001** |
 
-**Behaviour.** Records that a parcel arrived. Once every parcel on the order is confirmed, the order completes and the seller's 7-day escrow hold begins.
+**Behaviour.** Records that a parcel arrived. Once every parcel on the order is confirmed, the order completes. (The seller's 3-day escrow hold already began at delivery.)
 
 ⚠ **Refused on cash orders.** Those are confirmed by handing the agent the code, which records the payment and the delivery in one step. **Do not offer the action for a cash parcel** — offer the code.
 

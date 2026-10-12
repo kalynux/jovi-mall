@@ -58,7 +58,9 @@ agency's share of that order is computed from its own pricing policy (`policies.
 The fee is **earned at delivery, not at payment**. When the shipment reaches `agent_delivered` the
 fee is divided and held (`pending`); it moves to **available** (withdrawable) **3 days after the
 last parcel of the order is delivered** (`EARNINGS_HOLD_DAYS`; until 2026-10-05 it was 7 days after
-the order's completion). Paused earnings (a seller cancelled a paid order, a card dispute, or our
+the order's completion). Paused earnings (a seller cancelled a paid order, a card dispute, a problem the customer
+reported before the money was released — 2026-10-10, see
+[FRONTEND-CHANGELOG-wi-mall-protection.md](./FRONTEND-CHANGELOG-wi-mall-protection.md) — or our
 team) are not released until resumed, and the paused time does not count.
 
 It cannot be credited at payment time, because the fee is shared: the agent who makes the delivery

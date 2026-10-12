@@ -4,6 +4,8 @@ import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.reposit
 import { MagazinRepository } from '../../magazin/repositories/magazin.repository';
 import { VendorSettingsRepository } from '../../vendors/repositories/vendor-settings.repository';
 import { vendorCodTermsOf } from '../domain/cod-limits';
+import { isCodRestricted } from '../domain/cod-restriction';
+import { CodRestrictionService, codRestrictionService } from './cod-restriction.service';
 
 /**
  * CodEligibilityService - decides whether an order may be placed as
@@ -13,13 +15,35 @@ import { vendorCodTermsOf } from '../domain/cod-limits';
  * per-order amount cap (`policies.cod.max_order_amount`): EVERY agency that
  * would carry one of the order's shipments must support it, since each of its
  * agents physically collects the cash for their shipment.
+ *
+ * Above both sits the ADMINISTRATOR's restriction (2026-10-10,
+ * `cod/domain/cod-restriction.ts`): a restricted customer may place no COD order
+ * (`assertCustomerAllowed`), and a restricted agency is treated exactly like one that
+ * never opted in (`COD_AGENCY_NOT_SUPPORTED`).
  */
 export class CodEligibilityService {
   constructor(
     private readonly agencyRepo: DeliveryAgencyRepository = new DeliveryAgencyRepository(),
     private readonly magazinRepo: MagazinRepository = new MagazinRepository(),
     private readonly vendorSettings: VendorSettingsRepository = new VendorSettingsRepository(),
+    private readonly restrictions: Pick<CodRestrictionService, 'isCustomerRestricted'> = codRestrictionService,
   ) {}
+
+  /**
+   * Refuse a customer an administrator restricted from cash on delivery —
+   * `422 COD_CUSTOMER_RESTRICTED`. Asked ONCE per basket, before any shop or agency rule:
+   * by checkout (`OrderService.createOrdersFromCart`, up front) and by the cart quote
+   * (`CartQuoteService.codRefusalsOf`), so the pay screen and the order agree.
+   * `customerId` is the `customers._id` checkout carries.
+   *
+   * The refusal carries NO detail: the reason is the administrator's, and the customer's
+   * copy is the code's own message. Orders already placed are not looked at.
+   */
+  async assertCustomerAllowed(customerId: string): Promise<void> {
+    if (await this.restrictions.isCustomerRestricted(customerId)) {
+      throw createAppError(ERROR_CODES.COD_CUSTOMER_RESTRICTED, 422);
+    }
+  }
 
   /**
    * Validate one (single-vendor) order of a COD checkout. Called from
@@ -91,12 +115,19 @@ export class CodEligibilityService {
        * ⚠ Do not "simplify" this back to the status check. `test:cod` § COD verification pins
        * it, and the failure it prevents is silent: the order is accepted, the cash is
        * collected, and the platform finds out when the remittance does not arrive.
+       *
+       * `cod_restriction` (2026-10-10) is the administrator's switch, and it answers with
+       * the SAME code on purpose: to a customer a restricted agency and one that never
+       * opted in are the same fact ("this shop's delivery cannot take cash"), and a
+       * distinct code would tell every shopper that the platform has sanctioned that
+       * business. Absent on older documents ⇒ not restricted.
        */
       if (
         !agency
         || agency.status !== 'active'
         || !agency.kyc_details?.legit_verified
         || !agency.policies?.cod?.enabled
+        || isCodRestricted(agency.cod_restriction)
       ) {
         throw createAppError(ERROR_CODES.COD_AGENCY_NOT_SUPPORTED, 422, undefined, {
           agencyId,

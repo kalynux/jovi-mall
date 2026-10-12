@@ -77,6 +77,70 @@ export class TicketRepository {
     }
 
     /**
+     * The non-terminal tickets about one order: ORDER tickets on it, and SHIPMENT tickets on any
+     * of its shipments. What the order-party sync adds followers to. Served by the
+     * `{ entity_type, entity_id }` index.
+     */
+    async findOpenAboutOrder(orderId: string, shipmentIds: string[]): Promise<ITicket[]> {
+        const about: Array<Record<string, unknown>> = [{ entity_type: EntityType.ORDER, entity_id: orderId }];
+        if (shipmentIds.length > 0) {
+            about.push({ entity_type: EntityType.SHIPMENT, entity_id: { $in: shipmentIds } });
+        }
+        return await TicketModel.find({
+            $or: about,
+            status: { $nin: [TicketStatus.RESOLVED, TicketStatus.CLOSED] },
+            deletedAt: null
+        });
+    }
+
+    /** Set or clear `holds_earnings` on one ticket — see the field on the model. */
+    async setHoldsEarnings(ticketId: string, value: boolean): Promise<void> {
+        await TicketModel.updateOne({ _id: ticketId }, { $set: { holds_earnings: value } });
+    }
+
+    /**
+     * How many tickets still hold the earnings of this order (its own tickets and its
+     * shipments') or of this booking. Status is deliberately NOT part of the question.
+     */
+    async countHoldingEarnings(about: Array<{ entityType: EntityType; entityIds: string[] }>): Promise<number> {
+        const or = about
+            .filter((a) => a.entityIds.length > 0)
+            .map((a) => ({ entity_type: a.entityType, entity_id: { $in: a.entityIds } }));
+        if (or.length === 0) return 0;
+        return await TicketModel.countDocuments({ $or: or, holds_earnings: true, deletedAt: null });
+    }
+
+    /** Clear `holds_earnings` on every ticket about these entities. Returns the ids cleared. */
+    async releaseHoldingEarnings(about: Array<{ entityType: EntityType; entityIds: string[] }>): Promise<string[]> {
+        const or = about
+            .filter((a) => a.entityIds.length > 0)
+            .map((a) => ({ entity_type: a.entityType, entity_id: { $in: a.entityIds } }));
+        if (or.length === 0) return [];
+        const held = await TicketModel.find({ $or: or, holds_earnings: true, deletedAt: null }, { _id: 1 }).lean();
+        const ids = held.map((t) => String(t._id));
+        if (ids.length > 0) {
+            await TicketModel.updateMany({ _id: { $in: ids } }, { $set: { holds_earnings: false } });
+        }
+        return ids;
+    }
+
+    /** Record that an administrator removed this follower — see `removed_follower_user_ids`. */
+    async markFollowerRemoved(ticketId: string, userId: string): Promise<void> {
+        await TicketModel.updateOne(
+            { _id: ticketId },
+            { $addToSet: { removed_follower_user_ids: new mongoose.Types.ObjectId(userId) } }
+        );
+    }
+
+    /** An administrator added this user back: lift the removal. */
+    async clearFollowerRemoved(ticketId: string, userId: string): Promise<void> {
+        await TicketModel.updateOne(
+            { _id: ticketId },
+            { $pull: { removed_follower_user_ids: new mongoose.Types.ObjectId(userId) } }
+        );
+    }
+
+    /**
      * Find tickets by assignee
      */
     async findByAssignee(role: ActorRole, userId?: string): Promise<ITicket[]> {

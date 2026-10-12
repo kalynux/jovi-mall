@@ -320,11 +320,16 @@ import {
  * for exactly this import.
  */
 import {
+    AGENT_NODE_NAME,
+    batchOperations,
     buildNodes,
     composeToolDescription,
+    FLOW_IDENTITY,
+    HTTP_TOOL_TYPE,
     isModelFacing,
     NEVER_MODEL_FACING_PARAMS,
     readCatalog,
+    renderOperations,
     selectMcpTools,
 } from '../gen-mcp-workflow';
 
@@ -3406,14 +3411,15 @@ async function main(): Promise<void> {
         tokenRefusal(mintLegacyV1({ c: 'telegram', e: '99', x: nowSeconds + 600, l: 'en' })) === 'BOT_IDENTITY_TOKEN_INVALID');
 
     // ═════════════════════════════════════════════════════════════════════════
-    section('15 · The MCP generator — what it emits, and what it must never emit');
+    section('15 · The agent-tool generator — what it emits, and what it must never emit');
     // ═════════════════════════════════════════════════════════════════════════
 
     /**
-     * `scripts/gen-mcp-workflow.ts` builds the `wi-mall-mcp` server from the catalogue. The
-     * server is not in this repository and nothing here can look at it, so **this group is the
-     * only place its contents are constrained at all** — the same position § 1 holds for the
-     * automation layer's route table.
+     * `scripts/gen-mcp-workflow.ts` builds the customer agent's tool nodes from the catalogue —
+     * into `wi-mall-core` since 2026-10-12, into a separate MCP server before that (the file
+     * keeps its name). The workflow is not in this repository and nothing here can look at it,
+     * so **this group is the only place those nodes are constrained at all** — the same
+     * position § 1 holds for the automation layer's route table.
      */
     const mcpCatalog = readCatalog();
     const emitted = selectMcpTools(mcpCatalog);
@@ -3561,17 +3567,103 @@ async function main(): Promise<void> {
     });
 
     /**
-     * ⚠ Identity is never a parameter (§ 1's rule) — on the MCP transport it is the SEALED
-     * token, and every `bot_internal` node must carry one. A node that forgot it reaches a
-     * surface whose `router.use` refuses it, and the model is told the customer has no account.
+     * ⛔ **Identity is never a parameter (§ 1's rule), and that now includes the model's.**
+     *
+     * Until 2026-10-12 every one of these nodes took a sealed `botToken` from `$fromAI`,
+     * because the MCP transport offered no other channel. The token could not be forged, but
+     * nothing tied it to the conversation presenting it: a valid one that reached another
+     * customer's chat worked there for hours, behind two sentences in a prompt. The nodes now
+     * live in `wi-mall-core`, where the envelope is an expression over the flow's own trigger.
+     *
+     * Two assertions, because each fails differently. A node with NO identity reaches a surface
+     * whose `router.use` refuses it, and the model is told the customer has no account. A node
+     * whose identity the model can write is the defect itself — and it works perfectly.
      */
-    assert('⚠ every emitted `bot_internal` tool carries the sealed botToken', () => {
+    assert('⛔ every emitted `bot_internal` tool reads its identity from the flow', () => {
         const nodes = buildNodes(emitted).filter((n) => n.tool.surface === 'bot_internal');
         const missing = nodes
-            .filter((n) => !JSON.stringify(n.parameters).includes('$fromAI(\\"botToken\\"'))
+            .filter((n) => !String(n.parameters.jsonBody).includes(`identity: ${FLOW_IDENTITY}`))
             .map((n) => n.name);
         if (missing.length) console.error('     ↳', missing.join(', '));
         return nodes.length > 0 && missing.length === 0;
+    });
+
+    assert('⛔ the identity expression holds nothing the model supplies', () =>
+        !FLOW_IDENTITY.includes('$fromAI')
+        && FLOW_IDENTITY.includes("$('Inbound')")
+        // The two fields the backend resolves a customer from, both off the trigger.
+        && /channel: \$\('Inbound'\)\.first\(\)\.json\.channel/.test(FLOW_IDENTITY)
+        && /externalId: \$\('Inbound'\)\.first\(\)\.json\.externalId/.test(FLOW_IDENTITY));
+
+    assert('⛔ no emitted tool asks the model for a token, an account id or a phone number', () => {
+        const forbidden = ['botToken', 'token', 'identity', 'externalId', 'customerId', 'userId', 'channel'];
+        const leaked: string[] = [];
+        for (const node of buildNodes(emitted)) {
+            const rendered = JSON.stringify(node.parameters);
+            for (const name of forbidden) {
+                if (rendered.includes(`$fromAI(\\"${name}\\"`)) leaked.push(`${node.name}.${name}`);
+            }
+        }
+        if (leaked.length) console.error('     ↳ model-supplied identity:', leaked.join(', '));
+        return leaked.length === 0;
+    });
+
+    /**
+     * The other half of "it owns the generated nodes and nothing else": `wi-mall-core` is
+     * hand-built around these nodes, and two of its own tools are HTTP Request Tool nodes too.
+     * A rendering that removed or rewrote one would take a working tool off a live agent.
+     */
+    assert('⚠ the operations never touch a node the generator does not own', () => {
+        const nodes = buildNodes(emitted);
+        const catalogueNames = new Set(mcpCatalog.tools.map((t) => t.name));
+        const handBuilt = [
+            { name: 'AI Agent', type: '@n8n/n8n-nodes-langchain.agent', parameters: {} },
+            { name: 'Read-Website-Guide', type: HTTP_TOOL_TYPE, parameters: { url: 'x' } },
+            { name: 'sync identity', type: 'n8n-nodes-base.httpRequest', parameters: {} },
+        ];
+        // A tool the catalogue has since moved to `flow_only` IS ours, and must go.
+        const retired = mcpCatalog.tools.find((t) => t.tier === 'flow_only')!;
+        const ops = renderOperations(
+            nodes,
+            [...handBuilt, { name: retired.name, type: HTTP_TOOL_TYPE, parameters: {} }],
+            catalogueNames,
+        );
+        const touched = new Set(ops.map((o) => String(o.nodeName ?? (o.node as { name?: string } | undefined)?.name ?? o.source ?? '')));
+        const removed = ops.filter((o) => o.type === 'removeNode').map((o) => o.nodeName);
+        return handBuilt.every((n) => !touched.has(n.name))
+            && removed.length === 1 && removed[0] === retired.name
+            && ops.every((o) => o.type !== 'setWorkflowMetadata');
+    });
+
+    assert('⚠ every new tool is attached to the agent, and an unchanged one emits nothing', () => {
+        const nodes = buildNodes(emitted);
+        const catalogueNames = new Set(mcpCatalog.tools.map((t) => t.name));
+        const fresh = renderOperations(nodes, [], catalogueNames);
+        const attached = fresh.filter((o) => o.type === 'addConnection'
+            && o.target === AGENT_NODE_NAME && o.connectionType === 'ai_tool').length;
+        const settled = renderOperations(
+            nodes,
+            nodes.map((n) => ({ name: n.name, type: HTTP_TOOL_TYPE, parameters: n.parameters })),
+            catalogueNames,
+        );
+        return fresh.filter((o) => o.type === 'addNode').length === nodes.length
+            && attached === nodes.length
+            && settled.length === 0
+            && batchOperations(fresh).every((b) => b.length <= 100 && b.length % 2 === 0);
+    });
+
+    assert('a catalogue name already taken by a hand-built node is REFUSED, not overwritten', () => {
+        const nodes = buildNodes(emitted);
+        try {
+            renderOperations(
+                nodes,
+                [{ name: nodes[0].name, type: '@n8n/n8n-nodes-langchain.toolWorkflow', parameters: {} }],
+                new Set(mcpCatalog.tools.map((t) => t.name)),
+            );
+            return false;
+        } catch {
+            return true;
+        }
     });
 
     /**
@@ -3584,7 +3676,8 @@ async function main(): Promise<void> {
         const leaked = nodes
             .filter((n) => {
                 const rendered = JSON.stringify(n.parameters);
-                return rendered.includes('botToken') || rendered.includes('BOT_WEBHOOK_SECRET');
+                return rendered.includes('identity') || rendered.includes('Inbound')
+                    || rendered.includes('BOT_WEBHOOK_SECRET');
             })
             .map((n) => n.name);
         if (leaked.length) console.error('     ↳', leaked.join(', '));
@@ -3602,6 +3695,83 @@ async function main(): Promise<void> {
             .map((n) => n.name);
         if (bad.length) console.error('     ↳', bad.join(', '));
         return bad.length === 0;
+    });
+
+    /**
+     * ⛔ **A path argument is ONE SEGMENT, whatever the model writes in it.**
+     *
+     * The tier filter above decides which nodes exist. It says nothing about where a node's
+     * request LANDS once the model supplies part of its path — and until 2026-10-12 that part
+     * was interpolated raw, so `orders_record_cancellation_reason` with an "order id" of
+     * `<order>/cancel?x=` was `POST /orders/<order>/cancel`: a `flow_only` route, reached from
+     * a model-facing tool, with no confirmation tap. `cart_remove_item` with `..` was
+     * `DELETE /cart`. `../../negotiation/context` left the bot surface altogether.
+     *
+     * ⚠ The emitted expression is EVALUATED here and the result parsed as a URL. A scan for
+     * the word `encodeURIComponent` passes on a wrapper that is present and wrong — encoding
+     * alone leaves `..` intact, which is the second hostile value below.
+     */
+    const renderToolUrl = (template: string, value: string): string =>
+        template.replace(/^=/, '').replace(/\{\{([\s\S]*?)\}\}/g, (_m, expr: string) =>
+            // eslint-disable-next-line @typescript-eslint/no-implied-eval, no-new-func
+            String(new Function('$env', '$fromAI', `return (${expr});`)(
+                { JOVI_MALL_BASE_URL: 'http://jovi-mall:8022' },
+                () => value,
+            )));
+    const pathToolNodes = buildNodes(emitted).filter((n) => /\{[A-Za-z0-9_]+\}/.test(n.tool.operation.path));
+    const shapeOf = (templatePath: string): RegExp =>
+        new RegExp(`^${templatePath.replace(/[.*+?^$()|[\]\\]/g, '\\$&').replace(/\{[A-Za-z0-9_]+\}/g, '[^/]+')}$`);
+
+    assert('⛔ no path argument reaches a URL unwrapped', () => {
+        const raw = pathToolNodes
+            .filter((n) => /\{\{\s*\$fromAI\(/.test(String(n.parameters.url)))
+            .map((n) => n.name);
+        if (raw.length) console.error('     ↳ interpolated raw:', raw.join(', '));
+        return pathToolNodes.length > 0 && raw.length === 0;
+    });
+
+    assert('⛔ a hostile path argument cannot change which route a tool calls', () => {
+        const hostile = [
+            '652f0c0c0c0c0c0c0c0c0c0c/cancel?x=', // a longer path, and the tail cut off
+            '..', // collapses a segment: DELETE /cart/items/.. is DELETE /cart
+            '.',
+            '', // drops the segment: POST /tickets/ is tickets_create
+            '  ..  ',
+            '../../negotiation/context', // out of the bot surface, with the service token
+            '..\\cart', // a URL parser reads a backslash as a slash
+            '%2e%2e', // already-encoded dots are still a dot segment
+            'a/../b',
+            'x#y',
+            'x?confirm=1',
+        ];
+        const escaped: string[] = [];
+        for (const node of pathToolNodes) {
+            const shape = shapeOf(node.tool.operation.path);
+            for (const value of hostile) {
+                const url = new URL(renderToolUrl(String(node.parameters.url), value));
+                if (!shape.test(url.pathname) || url.search !== '' || url.hash !== '') {
+                    escaped.push(`${node.name} ← ${JSON.stringify(value)} → ${url.pathname}${url.search}${url.hash}`);
+                }
+            }
+        }
+        if (escaped.length) console.error('     ↳', escaped.slice(0, 8).join('\n       '));
+        return pathToolNodes.length > 0 && escaped.length === 0;
+    });
+
+    /**
+     * The other half: the wrapper must cost an honest call nothing. Express decodes the
+     * segment into the route parameter, so what the backend reads is what the model sent.
+     */
+    assert('an ordinary id, order number, slug or SKU still arrives unchanged', () => {
+        const ordinary = ['652f0c0c0c0c0c0c0c0c0c0c', 'ORD-2026-000123', 'ma-boutique', 'SKU 12/A', 'v1.2'];
+        const node = pathToolNodes.find((n) => n.name === 'orders_get_order');
+        if (!node) return false;
+        return ordinary.every((value) => {
+            const url = new URL(renderToolUrl(String(node.parameters.url), value));
+            const segments = url.pathname.split('/');
+            return shapeOf(node.tool.operation.path).test(url.pathname)
+                && decodeURIComponent(segments[segments.length - 1]) === value;
+        });
     });
 
     /**

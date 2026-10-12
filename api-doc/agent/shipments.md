@@ -47,7 +47,7 @@ The transition table was re-derived from `TRIGGERABLE_TRANSITIONS` (not copied).
 >
 > The one status that is **not** yours to set is `delivered`, and it is nobody's: it is never a
 > status change. On a cash-on-delivery shipment it happens only when you submit the customer's
-> delivery code; on a prepaid one only when the customer confirms (or the 7-day window lapses).
+> delivery code; on a prepaid one only when the customer confirms (or the 3-day window lapses).
 
 ---
 

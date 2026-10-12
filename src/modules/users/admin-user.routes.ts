@@ -65,6 +65,17 @@ function attachRoutes(router: Router): Router {
     router.post('/:userId/bot-memory/reset', AdminUserController.resetBotMemory);
 
     /**
+     * GET /:userId/cod-restriction · PUT /:userId/cod-restriction — the administrator's
+     * cash-on-delivery switch for one CUSTOMER (2026-10-10).
+     * PUT body `{ restricted: boolean, reason }`. Restricted ⇒ checkout refuses COD for this
+     * customer (422 `COD_CUSTOMER_RESTRICTED`); existing orders are untouched. 404
+     * `AUTH_PROFILE_NOT_FOUND` when the account has no customer profile; 409
+     * `COD_RESTRICTION_UNCHANGED` when it is already in that state.
+     */
+    router.get('/:userId/cod-restriction', AdminUserController.getCodRestriction);
+    router.put('/:userId/cod-restriction', AdminUserController.setCodRestriction);
+
+    /**
      * Role closure — ADR-A10. An administrator ASKS; only the user can confirm.
      *
      * POST   /:userId/roles/:role/closure   body `{ reason }` → 201. Refuses up front

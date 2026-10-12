@@ -641,8 +641,34 @@ const CANCEL_REASON_RECORDED: Copy = {
     ar: 'شكرًا — أضفت ذلك إلى الطلب حتى يعرف المتجر السبب.',
 };
 
+/**
+ * What the order SCREEN says after a customer taps one of its rows.
+ *
+ * The tap sends that order's card into the conversation, where its buttons are; the page says so
+ * and goes back to the chat. ⚠ **Two sentences, because the send can be refused** (a WhatsApp
+ * window that has closed, a bot the customer has blocked) and a page that says "it is in the chat"
+ * over a refused send points somebody at nothing. The second names the way out that always works.
+ */
+const ORDER_SENT_TO_CHAT: Copy = {
+    en: 'I have sent this order to the chat. Choose what to do there.',
+    fr: "J'ai envoyé cette commande dans la discussion. Choisissez-y quoi faire.",
+    pt: 'Enviei esta encomenda para a conversa. Escolha lá o que fazer.',
+    es: 'He enviado este pedido al chat. Elige allí qué hacer.',
+    ar: 'أرسلتُ هذا الطلب إلى المحادثة. اختر هناك ما تريد فعله.',
+};
+
+const ORDER_NOT_SENT_TO_CHAT: Copy = {
+    en: 'I could not send this order to the chat. Go back to the chat and ask me about it.',
+    fr: "Je n'ai pas pu envoyer cette commande dans la discussion. Retournez-y et demandez-la-moi.",
+    pt: 'Não consegui enviar esta encomenda para a conversa. Volte à conversa e pergunte-me por ela.',
+    es: 'No he podido enviar este pedido al chat. Vuelve al chat y pregúntame por él.',
+    ar: 'تعذّر إرسال هذا الطلب إلى المحادثة. عُد إلى المحادثة واسألني عنه.',
+};
+
 const ORDER_COPY = Object.freeze({
     whichOrder: { copy: WHICH_ORDER, cap: null },
+    orderSentToChat: { copy: ORDER_SENT_TO_CHAT, cap: null },
+    orderNotSentToChat: { copy: ORDER_NOT_SENT_TO_CHAT, cap: null },
     cancelReasonRecorded: { copy: CANCEL_REASON_RECORDED, cap: null },
     whichParcel: { copy: WHICH_PARCEL, cap: null },
     // Half of a WhatsApp list row title (24) once a number is appended: `Paquete 2`.

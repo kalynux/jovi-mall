@@ -201,10 +201,20 @@ export function sumCodExposure(
 
 // ─── The decision ───────────────────────────────────────────────────────────
 
-export const COD_LIMIT_HOLD_KINDS = ['agency_limit', 'vendor_terms'] as const;
+/**
+ * `agency_restricted` (2026-10-10) is the odd one: not an amount at all. An administrator
+ * switched cash on delivery off for the agency (`cod/domain/cod-restriction.ts`), so NO COD
+ * shipment may be handed to it whatever it holds. It rides this list because it is refused,
+ * held and shown at exactly the same three places as the two caps — but it is the one kind
+ * `force` does not waive (`isForceableCodBreach`).
+ */
+export const COD_LIMIT_HOLD_KINDS = ['agency_limit', 'vendor_terms', 'agency_restricted'] as const;
 export type CodLimitHoldKind = (typeof COD_LIMIT_HOLD_KINDS)[number];
 
-/** Why a shipment may not be handed to an agency without `force`. Mirrors the 422's `details`. */
+/**
+ * Why a shipment may not be handed to an agency. Mirrors the 422's `details`. For
+ * `agency_restricted`, `limit` is 0 — the agency may take none.
+ */
 export interface CodLimitBreach {
   kind: CodLimitHoldKind;
   currentExposure: number;
@@ -212,10 +222,21 @@ export interface CodLimitBreach {
   limit: number;
 }
 
+/**
+ * May `force: true` push a shipment past this breach? Force waives AMOUNT limits — the
+ * vendor accepting more cash risk with an agency than a cap allows. It never waives the
+ * administrator's restriction: that is the platform saying this agency takes no new cash,
+ * and a vendor is not the party who may overrule it.
+ */
+export function isForceableCodBreach(breach: Pick<CodLimitBreach, 'kind'>): boolean {
+  return breach.kind !== 'agency_restricted';
+}
+
 export interface CodLimitInputs {
   /** The COD amount this hand-off would ADD to the agency's custody. */
   additionalAmount: number;
-  agency: { exposure: number; limit: number };
+  /** `restricted`: an administrator switched COD off for this agency. Absent ⇒ not restricted. */
+  agency: { exposure: number; limit: number; restricted?: boolean };
   /** `null` when the vendor sets no cap — or when the caller has nothing vendor-scoped to test. */
   vendor: { exposure: number; cap: number | null } | null;
 }
@@ -229,10 +250,24 @@ export interface CodLimitInputs {
  * shipment) is never refused — it adds no cash, so it cannot push anybody over.
  *
  * "Over" means strictly greater: holding exactly the limit is allowed.
+ *
+ * The administrator's RESTRICTION is tested before either cap: it is not a question of how
+ * much, so reporting an amount breach first would send a vendor to wait for a remittance
+ * that changes nothing. A zero-value hand-off still passes — a prepaid shipment carries no
+ * cash, and the restriction is about cash on delivery only.
  */
 export function evaluateCodLimits(input: CodLimitInputs): CodLimitBreach | null {
   const additional = Math.max(0, input.additionalAmount);
   if (additional === 0) return null;
+
+  if (input.agency.restricted === true) {
+    return {
+      kind: 'agency_restricted',
+      currentExposure: input.agency.exposure,
+      additionalAmount: additional,
+      limit: 0,
+    };
+  }
 
   if (input.agency.exposure + additional > input.agency.limit) {
     return {

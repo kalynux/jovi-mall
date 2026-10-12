@@ -10,6 +10,8 @@ import { recordDeprecatedGatewayField } from '../../system/metrics/metrics';
 
 import { customerRefundViewService } from '../../payments/services/customer-refund-view.service';
 import type { CustomerRefundBlock } from '../../payments/dto/customer-refund.dto';
+import { toCustomerProtection, CustomerProtectionBlock } from '../../earnings/domain/earnings-hold';
+import { EARNINGS_CONFIG } from '../../earnings/config/earnings.config';
 
 const bookingService = new BookingService();
 const paymentOrchestrator = new PaymentOrchestratorService();
@@ -20,19 +22,41 @@ const paymentOrchestrator = new PaymentOrchestratorService();
  * have produced) with ONE key added: `refund` — the latest refund request in the customer's
  * vocabulary, or `null` when none was ever opened. `paymentStatus` keeps its own meaning
  * (`refund_pending` / `refunded`); `refund` is the detail behind it.
+ *
+ * Since 2026-10-10 it also carries `protection` — the window in which the platform can still
+ * settle a problem out of this booking's money, the same block an order carries
+ * (`protectionWindowOf`). A booking's window opens when the service is marked completed.
+ *
+ * ⚠ And `earningsPause` is REMOVED from what the customer receives. It is the internal pause
+ * record: who paused the money (an administrator's name) and their note. `toJSON` copies the
+ * document wholesale, so it had been travelling to the customer since the field was added.
+ * `protection.onHold` / `problemReported` are the customer's version of it.
  */
 async function withRefunds<T extends { _id: unknown }>(
     bookings: T[],
-): Promise<Array<Record<string, unknown> & { refund: CustomerRefundBlock | null }>> {
+): Promise<Array<Record<string, unknown> & { refund: CustomerRefundBlock | null; protection: CustomerProtectionBlock }>> {
     const byBooking = await customerRefundViewService.latestBySources(
         'booking',
         bookings.map((b) => String(b._id)),
     );
+    const now = new Date();
     return bookings.map((b) => {
         const plain = typeof (b as { toJSON?: () => unknown }).toJSON === 'function'
             ? ((b as unknown as { toJSON: () => Record<string, unknown> }).toJSON())
             : ({ ...(b as unknown as Record<string, unknown>) });
-        return { ...plain, refund: byBooking.get(String(b._id)) ?? null };
+        const raw = b as unknown as {
+            completedAt?: Date | null;
+            settlement?: { settledAt?: Date | null } | null;
+            earningsPause?: Parameters<typeof toCustomerProtection>[0]['earnings_pause'];
+        };
+        const protection = toCustomerProtection(
+            { delivered_at: raw.completedAt ?? raw.settlement?.settledAt ?? null, earnings_pause: raw.earningsPause ?? null },
+            EARNINGS_CONFIG.HOLD_DAYS,
+            now,
+        );
+        const { earningsPause: _internal, ...visible } = plain;
+        void _internal;
+        return { ...visible, refund: byBooking.get(String(b._id)) ?? null, protection };
     });
 }
 
@@ -172,9 +196,11 @@ export class CustomerBookingController {
             { role: 'customer', id: userId }
         );
 
+        // Through the same projection as every other customer read of a booking.
+        const [data] = await withRefunds([booking]);
         res.json({
             success: true,
-            data: booking,
+            data,
             message: 'Booking rescheduled',
         });
     });

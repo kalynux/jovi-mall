@@ -1,6 +1,7 @@
 import type { RefundEarningsPort } from '../../payments/domain/refund-ports';
 import { earningsClawbackService, EarningsClawbackService } from './earnings-clawback.service';
 import { earningsPauseService, EarningsPauseService, PauseTarget, SYSTEM_PAUSE_ACTOR } from './earnings-pause.service';
+import { ticketEarningsHoldService } from '../../tickets/services/ticket-earnings-hold.service';
 
 /**
  * The earnings half of a refund request (REFUND-FLOW-PLAN § 6.5, § 11.2) — the implementation
@@ -25,7 +26,9 @@ import { earningsPauseService, EarningsPauseService, PauseTarget, SYSTEM_PAUSE_A
 export class RefundEarningsAdapter implements RefundEarningsPort {
   constructor(
     private readonly pauses: EarningsPauseService = earningsPauseService,
-    private readonly clawback: EarningsClawbackService = earningsClawbackService
+    private readonly clawback: EarningsClawbackService = earningsClawbackService,
+    /** The customer problem reports standing behind a pause — see `onRequestClosedWithoutRefund`. */
+    private readonly problemReports: { reconcile(target: PauseTarget): Promise<void> } = ticketEarningsHoldService
   ) {}
 
   /** True when THIS call raised the pause — `create` lifts only a pause it raised itself. */
@@ -46,6 +49,15 @@ export class RefundEarningsAdapter implements RefundEarningsPort {
       `Refund request ${refundRequestId} closed without a refund`,
       ['refund_in_progress']
     );
+    // The refund's pause may have been standing in front of a customer's problem report that
+    // is still open (its own pause was a no-op over ours). With ours gone, that report takes
+    // over rather than letting the money go; and a problem pause whose report ended while the
+    // refund was open is lifted. Never fails the refund's own transition.
+    try {
+      await this.problemReports.reconcile(target);
+    } catch (error) {
+      console.error(`[RefundEarningsAdapter] problem-report reconcile failed for ${target.kind} ${target.id}:`, error);
+    }
   }
 
   async onRefundCompleted(input: {

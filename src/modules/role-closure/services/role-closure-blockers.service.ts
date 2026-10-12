@@ -1,4 +1,5 @@
-import { OrderModel, FulfillmentStatus } from '../../orders/order.model';
+import { OrderModel } from '../../orders/order.model';
+import { ORDER_IN_FLIGHT_FILTER } from '../../orders/domain/order-in-flight.rule';
 import { Booking } from '../../booking/models/booking.model';
 import { CashCollectionModel } from '../../cod/models/cash-collection.model';
 import { CodCashAccountModel } from '../../cod/models/cod-cash-account.model';
@@ -37,9 +38,10 @@ import {
  * because seven days is long enough for a new order to arrive.
  *
  * ── Exclusion lists, where the source has one ────────────────────────────────────
- * "In flight" for orders is derived by exclusion from the settled fulfilment statuses, as
- * `AccountClosureRepository` does: a status added later counts as live until somebody says
- * otherwise, which is the safe direction when the wrong answer is an undeliverable parcel.
+ * "In flight" for orders is `ORDER_IN_FLIGHT_FILTER`, the rule `AccountClosureRepository` uses
+ * too: derived by exclusion from the settled fulfilment statuses (a status added later counts as
+ * live until somebody says otherwise), with a COMPLETED order settled whatever its status — a
+ * physical order never moves past `delivered`, so the status alone would block forever.
  *
  * ── Reads only, and outside any transaction ───────────────────────────────────────
  * These are counts deciding whether to start. The confirm's transaction re-runs nothing here;
@@ -47,7 +49,6 @@ import {
  * window between this read and that transaction is the same one ADR-A02 self-closure accepts.
  */
 
-const SETTLED_FULFILMENT: readonly FulfillmentStatus[] = ['fulfilled', 'cancelled', 'returned'];
 const OPEN_BOOKING_STATUSES = ['pending', 'confirmed'];
 const OPEN_BOOKING_PAYMENT_STATUSES = ['pending', 'disputed', 'refund_pending'];
 /** `failed` is not terminal for an agency (`failed → in_transit | returned`). */
@@ -117,7 +118,7 @@ export class RoleClosureBlockersService {
     const [orders, bookings] = await Promise.all([
       OrderModel.countDocuments({
         customer_id: customerId,
-        $or: [{ fulfillment_status: { $nin: SETTLED_FULFILMENT } }, { 'dispute_hold.active': true }],
+        ...ORDER_IN_FLIGHT_FILTER,
       }).exec(),
       // Bookings key the customer by `userId` (the account), not by the customer profile.
       Booking.countDocuments({
@@ -136,7 +137,7 @@ export class RoleClosureBlockersService {
     const [orders, bookings, cod, stock, invoices, negotiations, stockRequests] = await Promise.all([
       OrderModel.countDocuments({
         vendor_id: vendorId,
-        $or: [{ fulfillment_status: { $nin: SETTLED_FULFILMENT } }, { 'dispute_hold.active': true }],
+        ...ORDER_IN_FLIGHT_FILTER,
       }).exec(),
       Booking.countDocuments({
         vendorId,

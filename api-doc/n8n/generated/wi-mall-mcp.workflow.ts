@@ -82,7 +82,7 @@ const catalog_get_product = tool({
     parameters: {
       "toolDescription": "Everything about one product: description, images, options, every variant with its own price and stock, the store, and its return and cancellation policies. USE IT WHEN: Before answering a question about a specific product, and always before adding one to the basket — the variant id comes from here. NOT THIS TOOL: Not for browsing; search results are enough to choose from. ⚠ A service variant's price is a UNIT RATE per durationMinutes — quote priceFrom with priceUnit, or the customer is misquoted.",
       "method": "GET",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/products/{{ $fromAI(\"productId\", \"The 24-character product id. Never a SKU and never a slug.\", \"string\") }}",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/products/{{ encodeURIComponent(String($fromAI(\"productId\", \"The 24-character product id. Never a SKU and never a slug.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}",
       "options": {
         "response": {
           "response": {
@@ -105,7 +105,7 @@ const catalog_get_product_by_slug = tool({
     parameters: {
       "toolDescription": "The same product detail as catalog_get_product, looked up from a shared storefront link (store slug + product slug). USE IT WHEN: The customer pastes a storefront product link. Both slugs are required. NOT THIS TOOL: When you already have the product id — use catalog_get_product.",
       "method": "GET",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/stores/{{ $fromAI(\"storeSlug\", \"The seller's slug — the first slug in a storefront product URL, or a product card's store.slug.\", \"string\") }}/products/{{ $fromAI(\"productSlug\", \"The product's slug — the second slug in a storefront product URL, or a product card's slug. Never the 24-character id.\", \"string\") }}",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/stores/{{ encodeURIComponent(String($fromAI(\"storeSlug\", \"The seller's slug — the first slug in a storefront product URL, or a product card's store.slug.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}/products/{{ encodeURIComponent(String($fromAI(\"productSlug\", \"The product's slug — the second slug in a storefront product URL, or a product card's slug. Never the 24-character id.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}",
       "options": {
         "response": {
           "response": {
@@ -128,7 +128,7 @@ const catalog_resolve_sku = tool({
     parameters: {
       "toolDescription": "Turns a product code printed on a package, label or advert into the product and variant it identifies. USE IT WHEN: The customer types something that looks like a product code rather than words. NOT THIS TOOL: Not for words — use Search-Products.",
       "method": "GET",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/variants/by-sku/{{ $fromAI(\"sku\", \"The code as the customer typed it. Case is forgiven both ways (as-typed, upper and lower are all tried, and the as-typed spelling wins), EXCEPT for a SKU stored in mixed case, which resolves only when typed exactly. Send it unchanged — do not upper-case it first, or the as-typed rule works against you. At most 64 characters.\", \"string\") }}",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/variants/by-sku/{{ encodeURIComponent(String($fromAI(\"sku\", \"The code as the customer typed it. Case is forgiven both ways (as-typed, upper and lower are all tried, and the as-typed spelling wins), EXCEPT for a SKU stored in mixed case, which resolves only when typed exactly. Send it unchanged — do not upper-case it first, or the as-typed rule works against you. At most 64 characters.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}",
       "options": {
         "response": {
           "response": {
@@ -174,7 +174,7 @@ const catalog_list_related_products = tool({
     parameters: {
       "toolDescription": "Up to eight products related to one product, and which kind of relation it is (meta.source). USE IT WHEN: After showing a product, when the customer asks for alternatives or similar items. To show them, pass their ids to Show-Products. NOT THIS TOOL: Never say 'customers also bought' unless meta.source is co_purchase; same_category means 'more in this category'. ⚠ An empty list is a successful answer.",
       "method": "GET",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/products/{{ $fromAI(\"productId\", \"The 24-character id of the product to find alternatives for.\", \"string\") }}/related",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/products/{{ encodeURIComponent(String($fromAI(\"productId\", \"The 24-character id of the product to find alternatives for.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}/related",
       "options": {
         "response": {
           "response": {
@@ -197,7 +197,7 @@ const catalog_get_store = tool({
     parameters: {
       "toolDescription": "A seller's public page: name, description, city, verified, currently open, and the support contacts they published. USE IT WHEN: The customer asks who sells something or how to contact a seller. NOT THIS TOOL: Not for the delivery company's contacts — those come from orders_list_shipments. ⚠ Any contact field may be null. A closed store (isOpen false) still sells — say 'the seller is on holiday', never 'unavailable'.",
       "method": "GET",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/stores/{{ $fromAI(\"slug\", \"The seller's slug, from a product card's store.slug.\", \"string\") }}",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/stores/{{ encodeURIComponent(String($fromAI(\"slug\", \"The seller's slug, from a product card's store.slug.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}",
       "options": {
         "response": {
           "response": {
@@ -220,7 +220,7 @@ const catalog_list_store_products = tool({
     parameters: {
       "toolDescription": "What one seller currently has for sale. USE IT WHEN: The customer wants to see more from a seller they have already seen. NOT THIS TOOL: To also filter or sort within that shop, use catalog_search_products with storeSlug instead.",
       "method": "GET",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/stores/{{ $fromAI(\"slug\", \"The seller's slug, from a product card's store.slug.\", \"string\") }}/products",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/stores/{{ encodeURIComponent(String($fromAI(\"slug\", \"The seller's slug, from a product card's store.slug.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}/products",
       "sendQuery": true,
       "specifyQuery": "json",
       "jsonQuery": "={{ JSON.stringify({ q: $fromAI(\"q\", \"Whole-word text search inside this seller's products. Searching 'dres' will NOT find 'dress' — pass the customer's words, not a prefix. At most 200 characters.\", \"string\") || undefined, sort: $fromAI(\"sort\", \"One of: newest, price_asc, price_desc, relevance.\", \"string\") || undefined }) }}",
@@ -246,7 +246,7 @@ const catalog_list_product_reviews = tool({
     parameters: {
       "toolDescription": "Raw review rows and the star breakdown for one product, for your own reasoning. USE IT WHEN: You need to read what buyers actually wrote to answer a specific question. NOT THIS TOOL: To SHOW reviews to the customer use catalog_product_reviews_summary. Not for delivery reviews — they are internal. ⚠ rating null means nobody has reviewed it — never say zero stars.",
       "method": "GET",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/products/{{ $fromAI(\"productId\", \"The 24-character id of the product whose reviews to read.\", \"string\") }}/reviews",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/public/products/{{ encodeURIComponent(String($fromAI(\"productId\", \"The 24-character id of the product whose reviews to read.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}/reviews",
       "options": {
         "response": {
           "response": {
@@ -359,7 +359,7 @@ const cart_set_item_quantity = tool({
     parameters: {
       "toolDescription": "Sets a basket line to exactly this quantity. USE IT WHEN: The customer names the number they want — 'make it three'. NOT THIS TOOL: Not to remove a line (zero is refused) — use cart_remove_item.",
       "method": "PATCH",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/cart/items/{{ $fromAI(\"variantId\", \"The variant id of the basket line to change, from cart_get items[].variantId. A 24-character hexadecimal id.\", \"string\") }}",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/cart/items/{{ encodeURIComponent(String($fromAI(\"variantId\", \"The variant id of the basket line to change, from cart_get items[].variantId. A 24-character hexadecimal id.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}",
       "authentication": "genericCredentialType",
       "genericAuthType": "httpBearerAuth",
       "sendHeaders": true,
@@ -406,7 +406,7 @@ const cart_remove_item = tool({
     parameters: {
       "toolDescription": "Takes one variant out of the basket. USE IT WHEN: The customer asks to remove a specific item. NOT THIS TOOL: Not to empty the whole basket — you cannot do that; remove items one by one only if they ask.",
       "method": "DELETE",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/cart/items/{{ $fromAI(\"variantId\", \"The variant id of the basket line to remove, from cart_get items[].variantId. A 24-character hexadecimal id.\", \"string\") }}",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/cart/items/{{ encodeURIComponent(String($fromAI(\"variantId\", \"The variant id of the basket line to remove, from cart_get items[].variantId. A 24-character hexadecimal id.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}",
       "authentication": "genericCredentialType",
       "genericAuthType": "httpBearerAuth",
       "sendHeaders": true,
@@ -637,7 +637,7 @@ const payment_get_transaction = tool({
     parameters: {
       "toolDescription": "The stored record of one of the customer's own payments, by transactionId. USE IT WHEN: The customer asks what happened to a specific payment and you hold its transactionId. NOT THIS TOOL: Not for the latest checkout payment — checkout_payment_status asks the gateway live.",
       "method": "POST",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/payments/{{ $fromAI(\"transactionId\", \"The payment's transaction id, from bookings_payment_status transaction.transactionId or from the payment that was just initiated. Must be one of this customer's own.\", \"string\") }}",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/payments/{{ encodeURIComponent(String($fromAI(\"transactionId\", \"The payment's transaction id, from bookings_payment_status transaction.transactionId or from the payment that was just initiated. Must be one of this customer's own.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}",
       "authentication": "genericCredentialType",
       "genericAuthType": "httpBearerAuth",
       "sendHeaders": true,
@@ -723,7 +723,7 @@ const orders_get_group = tool({
     parameters: {
       "toolDescription": "Everything bought in one checkout, across every seller, with line items — and for cash orders, what each shipment is waiting to collect. USE IT WHEN: The customer wants the detail of one purchase that spanned several sellers. NOT THIS TOOL: Not for a single seller's order when you hold its id — use orders_get_order. ⚠ Never reveal a deliveryCode from this result — it is the customer's proof of payment and is never given out here.",
       "method": "POST",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/orders/groups/{{ $fromAI(\"cartId\", \"The order-group id, from orders_list_groups cartId. One checkout, not one seller’s order.\", \"string\") }}",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/orders/groups/{{ encodeURIComponent(String($fromAI(\"cartId\", \"The order-group id, from orders_list_groups cartId. One checkout, not one seller’s order.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}",
       "authentication": "genericCredentialType",
       "genericAuthType": "httpBearerAuth",
       "sendHeaders": true,
@@ -766,7 +766,7 @@ const orders_get_order = tool({
     parameters: {
       "toolDescription": "One seller's order in full: what was bought, what it cost, where it is going, and how each line is delivered. USE IT WHEN: The customer names an order number or follows up on one order from a list. NOT THIS TOOL: For a delivery question, pair it with orders_list_shipments.",
       "method": "POST",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/orders/{{ $fromAI(\"orderId\", \"The order id, or the order number the customer quoted — the bot surface accepts either.\", \"string\") }}",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/orders/{{ encodeURIComponent(String($fromAI(\"orderId\", \"The order id, or the order number the customer quoted — the bot surface accepts either.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}",
       "authentication": "genericCredentialType",
       "genericAuthType": "httpBearerAuth",
       "sendHeaders": true,
@@ -809,7 +809,7 @@ const orders_list_shipments = tool({
     parameters: {
       "toolDescription": "Each parcel on an order: its stage, its history, the delivery company and its support contacts, and — while it is moving — the carrier's first name. USE IT WHEN: The answer to 'where is my order': every tracking, delivery-timing or delivery-problem question, and the delivery company's contacts. NOT THIS TOOL: There is no live map in chat — describe the stage, never a position. ⚠ Stages: preparing, shipped, out_for_delivery, delivered, delivery_failed. `agent` is often null — that is normal. Never give an agent's phone or full name; questions go to the delivery company. estimatedDelivery is always null — never invent a date.",
       "method": "POST",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/orders/{{ $fromAI(\"orderId\", \"One seller's order id, from orders_list_groups orders[].id. NOT the group's cartId.\", \"string\") }}/shipments",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/orders/{{ encodeURIComponent(String($fromAI(\"orderId\", \"One seller's order id, from orders_list_groups orders[].id. NOT the group's cartId.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}/shipments",
       "authentication": "genericCredentialType",
       "genericAuthType": "httpBearerAuth",
       "sendHeaders": true,
@@ -895,7 +895,7 @@ const delivery_fees_reject = tool({
     parameters: {
       "toolDescription": "Decline a delivery-fee increase the customer was shown. A delivery company's increase: the old fee stays and the company keeps it, asks once more, or steps back. A moved parcel's difference: the shop pays it. Costs the customer nothing. The platform words the outcome — relay the reply. USE IT WHEN: The customer clearly says they refuse the new delivery fee shown by delivery_fees_list_pending, in words rather than with the Decline button. NOT THIS TOOL: Never to accept (there is no tool for that — the customer presses Accept). Never on a guess about which change they mean: if several are waiting, call delivery_fees_list_pending and let them pick. ⚠ proposalId and version come from delivery_fees_list_pending, verbatim. If the reply says the fee changed, it shows the new figure with buttons — let the customer answer that one.",
       "method": "POST",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/delivery-fees/{{ $fromAI(\"proposalId\", \"proposalId from delivery_fees_list_pending changes[] — copied verbatim, never composed. A 24-character hexadecimal id.\", \"string\") }}/reject",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/delivery-fees/{{ encodeURIComponent(String($fromAI(\"proposalId\", \"proposalId from delivery_fees_list_pending changes[] — copied verbatim, never composed. A 24-character hexadecimal id.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}/reject",
       "authentication": "genericCredentialType",
       "genericAuthType": "httpBearerAuth",
       "sendHeaders": true,
@@ -1075,7 +1075,7 @@ const combined_delivery_cancel = tool({
     parameters: {
       "toolDescription": "Cancel a combined delivery-price request that is still open. Fees stay as they are. The platform words the confirmation — relay the reply. USE IT WHEN: The customer asks to cancel a combined-price request they made. NOT THIS TOOL: Not on an answered or declined request (it answers COMBINED_DELIVERY_REQUEST_NOT_OPEN).",
       "method": "POST",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/delivery-fees/combined/{{ $fromAI(\"requestId\", \"requests[].id from combined_delivery_list, or openRequestId from combined_delivery_eligible — verbatim. A 24-character hexadecimal id.\", \"string\") }}/cancel",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/delivery-fees/combined/{{ encodeURIComponent(String($fromAI(\"requestId\", \"requests[].id from combined_delivery_list, or openRequestId from combined_delivery_eligible — verbatim. A 24-character hexadecimal id.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}/cancel",
       "authentication": "genericCredentialType",
       "genericAuthType": "httpBearerAuth",
       "sendHeaders": true,
@@ -1122,7 +1122,7 @@ const orders_record_cancellation_reason = tool({
     parameters: {
       "toolDescription": "Attaches the customer's own words about why they cancelled to that order's history, for the shop and support to read. USE IT WHEN: Right after a cancellation, when the customer tells you why. Send their words, not a summary. NOT THIS TOOL: It cancels nothing. Not for a complaint about a live order (that is a support request). Not twice for one order. ⚠ No `reply` comes back — acknowledge it briefly and kindly in your own words.",
       "method": "POST",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/orders/{{ $fromAI(\"orderId\", \"The order they cancelled, as the catalogue returned it. At most 64 characters.\", \"string\") }}/cancellation-reason",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/orders/{{ encodeURIComponent(String($fromAI(\"orderId\", \"The order they cancelled, as the catalogue returned it. At most 64 characters.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}/cancellation-reason",
       "authentication": "genericCredentialType",
       "genericAuthType": "httpBearerAuth",
       "sendHeaders": true,
@@ -1435,7 +1435,7 @@ const tickets_get = tool({
     parameters: {
       "toolDescription": "One support ticket with its public conversation. USE IT WHEN: The customer names a ticket or asks what happened to a request. NOT THIS TOOL: Not for a list — use tickets_list. ⚠ Only public notes are returned — never imply a hidden conversation.",
       "method": "POST",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/tickets/{{ $fromAI(\"ticketId\", \"The ticket id or the TKT- number the customer quoted.\", \"string\") }}",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/tickets/{{ encodeURIComponent(String($fromAI(\"ticketId\", \"The ticket id or the TKT- number the customer quoted.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}",
       "authentication": "genericCredentialType",
       "genericAuthType": "httpBearerAuth",
       "sendHeaders": true,
@@ -1478,7 +1478,7 @@ const tickets_add_note = tool({
     parameters: {
       "toolDescription": "Adds the customer's message to an existing ticket, attributed to them. USE IT WHEN: The customer says something more about a ticket that is already open. NOT THIS TOOL: Never your own summary — staff read it as the customer's words.",
       "method": "POST",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/tickets/{{ $fromAI(\"ticketId\", \"The ticket id, from tickets_list.\", \"string\") }}/notes",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/tickets/{{ encodeURIComponent(String($fromAI(\"ticketId\", \"The ticket id, from tickets_list.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}/notes",
       "authentication": "genericCredentialType",
       "genericAuthType": "httpBearerAuth",
       "sendHeaders": true,
@@ -1525,7 +1525,7 @@ const tickets_add_attachment = tool({
     parameters: {
       "toolDescription": "Puts a photo or PDF the customer just sent onto one of their tickets. The file is already stored; name it by the reference you were given. USE IT WHEN: The customer sent a file in this conversation as evidence for a support request. Open the ticket first if there is none. NOT THIS TOOL: Never invent a reference; without one the customer must send the file again. References expire after 30 minutes. ⚠ One call per file (single use). When attachmentCount equals attachmentLimit, say the next file will be refused. You cannot see the file — call it what the customer called it.",
       "method": "POST",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/tickets/{{ $fromAI(\"ticketId\", \"The ticket id or the TKT- number the customer quoted.\", \"string\") }}/attachments",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/tickets/{{ encodeURIComponent(String($fromAI(\"ticketId\", \"The ticket id or the TKT- number the customer quoted.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}/attachments",
       "authentication": "genericCredentialType",
       "genericAuthType": "httpBearerAuth",
       "sendHeaders": true,
@@ -1662,7 +1662,7 @@ const catalog_product_reviews_summary = tool({
     parameters: {
       "toolDescription": "Shows a product's star rating, review count and two short recent quotes, with a button to read them all. Sends its own message. USE IT WHEN: The customer asks whether a product is good, or for reviews or opinions. NOT THIS TOOL: Not for your own reasoning (catalog_list_product_reviews). Never restate the rating yourself. ⚠ Answer [sent], add nothing.",
       "method": "POST",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/catalog/products/{{ $fromAI(\"productId\", \"The product the customer is asking about, as the catalogue returned it. At most 64 characters.\", \"string\") }}/reviews",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/catalog/products/{{ encodeURIComponent(String($fromAI(\"productId\", \"The product the customer is asking about, as the catalogue returned it. At most 64 characters.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}/reviews",
       "authentication": "genericCredentialType",
       "genericAuthType": "httpBearerAuth",
       "sendHeaders": true,
@@ -1846,7 +1846,7 @@ const inapp_open_product = tool({
     parameters: {
       "toolDescription": "Opens one product on its own screen, where the customer can choose size, colour or other option and buy that exact variant. Sends its own button. USE IT WHEN: The customer must CHOOSE an option before buying — a chat card only ever offers the default variant. NOT THIS TOOL: Not for a passing question about a product — just answer it. Not for several products (inapp_open_listing). ⚠ Never describe the button in your own words — the customer would read it twice.",
       "method": "POST",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/inapp/products/{{ $fromAI(\"productId\", \"The product id, as the catalogue returned it. At most 64 characters.\", \"string\") }}",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/inapp/products/{{ encodeURIComponent(String($fromAI(\"productId\", \"The product id, as the catalogue returned it. At most 64 characters.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}",
       "authentication": "genericCredentialType",
       "genericAuthType": "httpBearerAuth",
       "sendHeaders": true,
@@ -1983,7 +1983,7 @@ const wishlist_remove = tool({
     parameters: {
       "toolDescription": "Takes a product off the customer's saved list. USE IT WHEN: They are no longer interested, or clear an unavailable entry. NOT THIS TOOL: Not just because they added it to the basket — they did not ask.",
       "method": "DELETE",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/wishlist/{{ $fromAI(\"productId\", \"The 24-character product id to drop, from wishlist_list productId.\", \"string\") }}",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/wishlist/{{ encodeURIComponent(String($fromAI(\"productId\", \"The 24-character product id to drop, from wishlist_list productId.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}",
       "authentication": "genericCredentialType",
       "genericAuthType": "httpBearerAuth",
       "sendHeaders": true,
@@ -2202,7 +2202,7 @@ const bookings_get = tool({
     parameters: {
       "toolDescription": "One appointment in full: when, who provides it, what it costs, and its payment state. USE IT WHEN: The customer asks about a specific appointment. NOT THIS TOOL: Not to list (bookings_list). Not for a completed appointment's balance (bookings_get_balance). ⚠ Read awaitingVendorApproval, NEVER status — status pending means the seller has not accepted yet; never say they are booked before that.",
       "method": "POST",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/bookings/{{ $fromAI(\"bookingId\", \"The appointment id, from bookings_list.\", \"string\") }}",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/bookings/{{ encodeURIComponent(String($fromAI(\"bookingId\", \"The appointment id, from bookings_list.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}",
       "authentication": "genericCredentialType",
       "genericAuthType": "httpBearerAuth",
       "sendHeaders": true,
@@ -2245,7 +2245,7 @@ const bookings_get_balance = tool({
     parameters: {
       "toolDescription": "What a finished appointment cost against its quote, and what is still owed. USE IT WHEN: The customer asks why they owe more, or a booking shows outstandingBalance above zero. NOT THIS TOOL: Not before the appointment is settled by the provider — there is no balance yet. ⚠ creditDue means they overpaid: it is recorded and NOT refunded automatically — offer support, never promise money back. settled false means every number is provisional.",
       "method": "POST",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/bookings/{{ $fromAI(\"bookingId\", \"The appointment id, from bookings_list. A 24-character hexadecimal id.\", \"string\") }}/balance",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/bookings/{{ encodeURIComponent(String($fromAI(\"bookingId\", \"The appointment id, from bookings_list. A 24-character hexadecimal id.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}/balance",
       "authentication": "genericCredentialType",
       "genericAuthType": "httpBearerAuth",
       "sendHeaders": true,
@@ -2288,7 +2288,7 @@ const bookings_payment_status = tool({
     parameters: {
       "toolDescription": "The payment state of one appointment, and the live charge behind it if there is one. USE IT WHEN: The customer asks whether their booking is paid, or whether a mobile-money charge settled. NOT THIS TOOL: It answers only about money — use bookings_get for the rest. ⚠ status pending means a charge is LIVE on their phone right now — never suggest paying again. transaction.transactionId is what payment_get_transaction takes.",
       "method": "POST",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/bookings/{{ $fromAI(\"bookingId\", \"The appointment id, from bookings_list. A 24-character hexadecimal id.\", \"string\") }}/payment-status",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/bookings/{{ encodeURIComponent(String($fromAI(\"bookingId\", \"The appointment id, from bookings_list. A 24-character hexadecimal id.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}/payment-status",
       "authentication": "genericCredentialType",
       "genericAuthType": "httpBearerAuth",
       "sendHeaders": true,
@@ -2718,7 +2718,7 @@ const notifications_mark_read = tool({
     parameters: {
       "toolDescription": "Marks one notification as read. Cannot be undone. USE IT WHEN: Right after you relayed that notification to the customer. NOT THIS TOOL: NEVER on a notification you did not show them.",
       "method": "PATCH",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/notifications/{{ $fromAI(\"notificationId\", \"The id of the notification you just showed the customer, from notifications_list. A 24-character hexadecimal id.\", \"string\") }}/read",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/notifications/{{ encodeURIComponent(String($fromAI(\"notificationId\", \"The id of the notification you just showed the customer, from notifications_list. A 24-character hexadecimal id.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}/read",
       "authentication": "genericCredentialType",
       "genericAuthType": "httpBearerAuth",
       "sendHeaders": true,

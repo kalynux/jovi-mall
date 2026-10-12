@@ -40,6 +40,8 @@ Everything after the purchase lives under `/api/customer/bookings` (beside `/api
 | `GET` | `/api/customer/bookings/:id/balance` | What is still owed after completion (and what was overpaid). |
 | `POST` | `/api/customer/bookings/:id/pay-balance` | Pay that balance. Body: `{ provider, channel }` — same shape as step 4. |
 
+🆕 **2026-10-10 — every booking returned by the list, the single read, the cancel and the reschedule now carries a `protection` key**: `{ days, startsAt, endsAt, status, onHold, problemReported }`, the same block an order carries ([orders.md](./orders.md), [FRONTEND-CHANGELOG-wi-mall-protection.md](./FRONTEND-CHANGELOG-wi-mall-protection.md)). A booking's window opens when the seller marks the service completed. ⚠ The raw `earningsPause` object these reads used to carry (never documented, an internal record) is **no longer sent**.
+
 🆕 **2026-10-05 — every booking returned by the list, the single read and the cancel now carries a `refund` key**: the latest refund request for that booking in the customer vocabulary (`requested · sending · in_progress · completed · declined` — `waiting_for_cash` never applies to a booking), with `grossAmount`, `feeAmount`, `feePercent`, `netAmount`, `currency`, `channel`, `destinationMasked`, `waitingForCash`, `completedAt`; `null` when no refund was ever requested. The shape, the status table and the fee line are documented once, in [orders.md § The `refund` block](./orders.md#the-refund-block). The booking document is otherwise unchanged.
 
 ---

@@ -369,6 +369,11 @@ assert(
 assert('…and it uses $setOnInsert, so a re-save cannot rewrite the original timestamp', () =>
   /\$setOnInsert:\s*\{\s*created_at/.test(repoSrc));
 
+assert(
+  '⚠ …but NEVER updated_at there — `timestamps` already $sets it, and one path in two operators fails every save (Mongo code 40)',
+  () => !/\$setOnInsert:\s*\{[^}]*updated_at/.test(repoSrc),
+);
+
 assert('every repository query is scoped by customer_id — ownership is the query, not a check', () => {
   const queries = repoSrc.match(/WishlistItemModel\.\w+\([\s\S]{0,140}/g) ?? [];
   if (queries.length < 4) return false;

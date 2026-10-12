@@ -319,7 +319,8 @@ Two shops, one free and one customer-paid:
     "cashOnDelivery": {             // would a COD checkout be accepted? — see below
       "available": true,
       "reason": null,               // when false: vendor_not_accepted | agency_not_supported |
-                                    //   order_amount_exceeds_limit | digital_items | null
+                                    //   order_amount_exceeds_limit | digital_items |
+                                    //   customer_restricted | null
       "vendorIds": []               // the shops that refuse (ids as in perVendor[].vendorId)
     },
     "perVendor": [
@@ -476,13 +477,14 @@ with. The Telegram Mini App's `cashOnDelivery` boolean reads the same verdict.
 | `agency_not_supported` | `422 COD_AGENCY_NOT_SUPPORTED` | a delivery company does not take cash (or is not verified), or the shop has no delivery company |
 | `order_amount_exceeds_limit` | `422 COD_ORDER_AMOUNT_EXCEEDS_LIMIT` | a shop's part of the basket is above what its delivery company accepts in cash per order |
 | `digital_items` | `422 COD_NOT_AVAILABLE_FOR_DIGITAL` | a digital basket — nothing is handed over |
+| `customer_restricted` | `422 COD_CUSTOMER_RESTRICTED` | an administrator switched cash on delivery off for **this account** (2026-10-10). Reported first, `vendorIds` empty, and no change to the basket helps: offer online payment and point at support. See [the changelog](./FRONTEND-CHANGELOG-cod-restrictions.md) |
 | `null` with `available: false` | — | the rules could not be checked right now; checkout decides. Show a generic line, or keep the option and handle the 422 |
 
 - `reason` is the **first** refusal (shops in cart order); `vendorIds` lists **every** shop that
   refuses, so you can name them from your cart lines or suggest removing their items. Empty for
-  `digital_items`.
+  `digital_items` and `customer_restricted`.
 - **Hide or disable the cash-on-delivery option while `available` is `false`.** Still handle the
-  four `422`s at checkout: a vendor or agency may change its terms between the quote and the POST.
+  five `422`s at checkout: a vendor or agency may change its terms between the quote and the POST.
 - **Not included, deliberately:** the delivery minimum (that is `meetsDeliveryMinimum` on a quote
   sent with `paymentMethod: "cash_on_delivery"` — COD is checked per shipment) and the agencies' /
   vendors' COD **cash limits** — those never refuse a customer; the order is placed and the parcel

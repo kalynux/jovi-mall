@@ -38,6 +38,8 @@
  * of the same document is how a field ends up present in one and absent in the other.
  */
 import { IOrder } from '../order.model';
+import { toCustomerProtection } from '../../earnings/domain/earnings-hold';
+import { EARNINGS_CONFIG } from '../../earnings/config/earnings.config';
 import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
 import {
     customerDeliveryFeeOf,
@@ -209,6 +211,21 @@ export interface CustomerOrderDto {
         confirmedBy: 'customer' | 'system' | null;
         auto: boolean;
     };
+    /**
+     * The window in which the platform can still settle a problem out of this order's money
+     * (owner decision 2026-10-10) — `protectionWindowOf`, projected. It opens at delivery and
+     * lasts `days` (`EARNINGS_HOLD_DAYS`); a problem the customer reports inside it puts the
+     * money on hold (`onHold`, `problemReported`) and keeps it open, so `endsAt` is null then.
+     * Clients render the deadline from here and never hardcode the number of days.
+     */
+    protection: {
+        days: number;
+        startsAt: string | null;
+        endsAt: string | null;
+        status: 'not_started' | 'active' | 'ended';
+        onHold: boolean;
+        problemReported: boolean;
+    };
     createdAt: string;
     updatedAt: string;
 }
@@ -290,6 +307,7 @@ export function toCustomerDeliveryFeeRefund(
 
 export function toCustomerOrderDto(input: CustomerOrderDtoInput): CustomerOrderDto {
     const { order } = input;
+    const protection = toCustomerProtection(order, EARNINGS_CONFIG.HOLD_DAYS, new Date());
 
     return {
         id: String(order._id),
@@ -365,6 +383,7 @@ export function toCustomerOrderDto(input: CustomerOrderDtoInput): CustomerOrderD
             confirmedBy: order.completion?.confirmed_by ?? null,
             auto: order.completion?.auto ?? false,
         },
+        protection,
         createdAt: new Date(order.created_at).toISOString(),
         updatedAt: new Date(order.updated_at).toISOString(),
     };

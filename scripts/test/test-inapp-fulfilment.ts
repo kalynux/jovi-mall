@@ -465,7 +465,9 @@ function main(): void {
         '⛔ the delivery code has NO resend button — nothing on a card reaches the resend route',
         (source) => {
             const code = stripComments(source);
-            const rendering = ['setShipmentCardReply', 'setOrderCardReply', 'failedDeliveryActions', 'codCodeTap']
+            // `orderCardIntent` builds the order card for both of its doors since 2026-10-11 (a chat
+            // turn, and a row tapped on the order screen); `setOrderCardReply` only relays it.
+            const rendering = ['setShipmentCardReply', 'setOrderCardReply', 'orderCardIntent', 'failedDeliveryActions', 'codCodeTap']
                 .map((name) => regionOf(source, name) ?? '');
             return rendering.every((r) => r.length > 0 && !/resend/i.test(r))
                 && !/resendDeliveryCode|resendCod.*ActionId/.test(code);
@@ -479,7 +481,9 @@ function main(): void {
     assertBites(
         'Cancel is offered only when it can succeed, by the SAME states `assertCancellable` uses',
         (source) => {
-            const card = regionOf(source, 'setOrderCardReply') ?? '';
+            // The card's BUILDER, which is where the gate is — `setOrderCardReply` and the order
+            // screen's tap both draw what it returns, so one gate covers both doors.
+            const card = regionOf(source, 'orderCardIntent') ?? '';
             const gate = regionOf(source, 'isCancellableFromChat') ?? '';
             const guarded = /if \(isCancellableFromChat\(order\)\) \{[^}]*orderCancelActionId/.test(card);
             return guarded

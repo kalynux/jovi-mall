@@ -792,6 +792,20 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         es: 'Los artículos de una tienda aún no alcanzan el importe mínimo para la entrega. Añade un poco más de la misma tienda y vuelve a finalizar la compra.',
         ar: 'منتجات أحد المتاجر لم تبلغ بعد الحد الأدنى للتوصيل. أضف المزيد قليلًا من نفس المتجر، ثم أكمل الطلب مرة أخرى.',
     },
+    /**
+     * The administrator's COD restriction on this customer (2026-10-10). Normally unseen — the
+     * review simply does not draw a Pay-on-delivery button for them — so this is the copy for
+     * the one case where the restriction landed between the review and the tap. It says what to
+     * DO (pay another way) and where to ask. ⚠ It never says WHY: the reason is an internal
+     * note, and a chat is not where a customer should first read an accusation.
+     */
+    [ERROR_CODES.COD_CUSTOMER_RESTRICTED]: {
+        en: 'Pay on delivery is not available on your account right now. You can pay online instead, or contact our support team if you have a question about it.',
+        fr: "Le paiement à la livraison n'est pas disponible sur votre compte pour le moment. Vous pouvez payer en ligne, ou contacter notre équipe d'assistance pour toute question.",
+        pt: 'O pagamento na entrega não está disponível na sua conta neste momento. Pode pagar online, ou contactar a nossa equipa de apoio se tiver alguma questão.',
+        es: 'El pago contra reembolso no está disponible en tu cuenta por ahora. Puedes pagar en línea, o contactar con nuestro equipo de soporte si tienes alguna duda.',
+        ar: 'الدفع عند الاستلام غير متاح على حسابك حاليًا. يمكنك الدفع عبر الإنترنت، أو التواصل مع فريق الدعم إذا كان لديك استفسار.',
+    },
     [ERROR_CODES.PAYMENT_PAYER_NUMBER_REQUIRED]: {
         en: 'I need a mobile money number to take this payment. Send me the number you want to pay with.',
         fr: "J'ai besoin d'un numéro mobile money pour ce paiement. Envoyez-moi le numéro avec lequel vous souhaitez payer.",

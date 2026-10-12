@@ -200,15 +200,22 @@ export const CASH_ON_DELIVERY_UNAVAILABLE_REASONS = [
     'agency_not_supported',
     'order_amount_exceeds_limit',
     'digital_items',
+    /**
+     * An administrator restricted cash on delivery on THIS customer's account (2026-10-10).
+     * Basket-independent — no change of items makes it go away — and `vendorIds` is empty.
+     * (A restricted AGENCY is not a reason of its own: it reads `agency_not_supported`.)
+     */
+    'customer_restricted',
 ] as const;
 export type CashOnDeliveryUnavailableReason = (typeof CASH_ON_DELIVERY_UNAVAILABLE_REASONS)[number];
 
-/** The checkout refusal code → the quote's reason. Exhaustive over the four COD refusals. */
+/** The checkout refusal code → the quote's reason. Exhaustive over the five COD refusals. */
 export const COD_REASON_BY_CODE: Readonly<Record<string, CashOnDeliveryUnavailableReason>> = {
     [ERROR_CODES.COD_VENDOR_NOT_ACCEPTED]: 'vendor_not_accepted',
     [ERROR_CODES.COD_AGENCY_NOT_SUPPORTED]: 'agency_not_supported',
     [ERROR_CODES.COD_ORDER_AMOUNT_EXCEEDS_LIMIT]: 'order_amount_exceeds_limit',
     [ERROR_CODES.COD_NOT_AVAILABLE_FOR_DIGITAL]: 'digital_items',
+    [ERROR_CODES.COD_CUSTOMER_RESTRICTED]: 'customer_restricted',
 };
 
 export interface CashOnDeliveryQuote {
@@ -220,11 +227,17 @@ export interface CashOnDeliveryQuote {
      * the authority then, and a client shows a generic line.
      */
     reason: CashOnDeliveryUnavailableReason | null;
-    /** Every shop that refuses (already public on `perVendor[].vendorId`). Empty for `digital_items`. */
+    /**
+     * Every shop that refuses (already public on `perVendor[].vendorId`). Empty for the two
+     * basket-wide reasons, `digital_items` and `customer_restricted`.
+     */
     vendorIds: string[];
 }
 
-/** One refusal, as the pure verdict reads it. `vendorId` is null for the basket-wide digital rule. */
+/**
+ * One refusal, as the pure verdict reads it. `vendorId` is null for the two basket-wide rules
+ * (digital goods; a customer restricted from cash on delivery).
+ */
 export interface CodRefusal {
     vendorId: string | null;
     error: AppError;
@@ -369,6 +382,7 @@ export class CartQuoteService {
         let refusals: CodRefusal[] | null;
         try {
             refusals = await this.codRefusalsOf(
+                customerId,
                 cart.productType ?? null,
                 priced.map((p) => p.input),
                 priced.map((p) => ({
@@ -417,8 +431,14 @@ export class CartQuoteService {
      * shop with NO resolvable agency is refused as `COD_AGENCY_NOT_SUPPORTED` — checkout refuses
      * it either way (`ORDER_NO_DELIVERY_AGENCY`). Non-`AppError` failures propagate; the caller
      * turns them into "not evaluated".
+     *
+     * The administrator's restriction on the CUSTOMER (2026-10-10) is asked once, after the
+     * digital rule and before any shop — the order checkout refuses in — and is basket-wide
+     * (`vendorId: null`). It is the FIRST refusal when present, so `cashOnDelivery.reason` reads
+     * `customer_restricted` and a client does not tell the shopper to change their basket.
      */
     private async codRefusalsOf(
+        customerId: string,
         productType: string | null,
         inputs: Array<Pick<QuoteInput, 'vendorId' | 'physical' | 'groups'> & { lines: Array<{ unitPrice: number; quantity: number }> }>,
         perVendor: Array<{ vendorId: string; subtotal: number }>,
@@ -431,6 +451,12 @@ export class CartQuoteService {
         }
 
         const refusals: CodRefusal[] = [];
+        try {
+            await this.codEligibility.assertCustomerAllowed(customerId);
+        } catch (error) {
+            if (!(error instanceof AppError)) throw error;
+            refusals.push({ vendorId: null, error });
+        }
         for (const input of inputs) {
             if (!input.physical) continue;
             const agencyIds = input.groups.map((g) => g.agencyId);

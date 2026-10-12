@@ -3,6 +3,7 @@ import { GeoPointSchema, IGeoPoint } from '../../core/types/geo.types';
 import { GeoAddressSchema, IGeoAddress } from '../../core/types/geo-address.types';
 import { FixedOnboardingStep } from '../../core/constants/onboarding-steps';
 import { MODELS, COLLECTIONS } from '../../core/database/collections';
+import { CodRestrictionSchema, ICodRestriction } from '../../core/types/cod-restriction.types';
 import {
   BOT_ONBOARDING_STATES,
   BOT_ONBOARDING_STEP_VALUES,
@@ -188,6 +189,14 @@ export interface ICustomer extends Document {
   bot_memory_epoch: number;
   /** When an administrator last reset the bot's memory for this customer. Null: never. */
   bot_memory_reset_at: Date | null;
+  /**
+   * An administrator's cash-on-delivery restriction (2026-10-10). `null` — and absent, on
+   * every document written before the field — means this customer may pay on delivery
+   * exactly as before. While set, checkout refuses `cash_on_delivery` with
+   * `422 COD_CUSTOMER_RESTRICTED` and the cart quote answers `customer_restricted`.
+   * Orders already placed are untouched. Written ONLY by `CodRestrictionService`.
+   */
+  cod_restriction: ICodRestriction | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -291,6 +300,9 @@ const CustomerSchema = new Schema<ICustomer>(
      */
     bot_memory_epoch: { type: Number, default: 0, min: 0 },
     bot_memory_reset_at: { type: Date, default: null },
+    // The administrator's COD restriction — see ICustomer.cod_restriction. No index: read
+    // with the customer, never queried on. No migration: absent reads as unrestricted.
+    cod_restriction: { type: CodRestrictionSchema, default: null },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );

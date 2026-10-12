@@ -332,6 +332,18 @@ export const VENDOR_COD_HOLD_REASON = {
         pt: 'excederia o seu próprio limite de {{currency}} {{capFormatted}} por agência (ela já detém {{currency}} {{heldFormatted}} do seu dinheiro)',
         es: 'superaría tu propio límite de {{currency}} {{capFormatted}} por agencia (ya tiene {{currency}} {{heldFormatted}} de tu dinero)',
         ar: 'ذلك سيتجاوز حدّك البالغ {{currency}} {{capFormatted}} لكل وكالة (لديها بالفعل {{currency}} {{heldFormatted}} من أموالك)'
+    },
+    /**
+     * The agency is under an administrator's COD restriction (2026-10-10). It says what to
+     * DO, because "dispatch anyway" does not work for this one — `force` never waives it.
+     * ⚠ It does not say WHY: the reason is the platform's judgement about another business.
+     */
+    agency_restricted: {
+        en: 'the agency cannot take cash-on-delivery orders at the moment — choose another agency for it',
+        fr: 'l\'agence ne peut pas prendre de commandes en paiement à la livraison pour le moment — choisissez une autre agence',
+        pt: 'a agência não pode aceitar encomendas com pagamento na entrega neste momento — escolha outra agência',
+        es: 'la agencia no puede aceptar pedidos contra reembolso por ahora — elige otra agencia',
+        ar: 'الوكالة لا تستطيع استلام طلبات الدفع عند الاستلام حاليًا — اختر وكالة أخرى'
     }
 } as const;
 

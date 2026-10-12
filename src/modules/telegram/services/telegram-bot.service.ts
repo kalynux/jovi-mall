@@ -84,6 +84,15 @@ export interface SendMessageOptions {
      */
     buttons?: InlineButton[];
     /**
+     * `'column'` gives each of `buttons` its own row; `'row'` (the default) keeps them
+     * side by side, which is what every earlier caller gets.
+     *
+     * Three labels in one row arrive as slivers on a phone the moment one is longer than
+     * a word — the reason the chat renderer stacks its action buttons. A caller sending
+     * the same card from outside that renderer asks for `'column'` so the two look alike.
+     */
+    buttonLayout?: 'row' | 'column';
+    /**
      * Defaults to `'none'`, and that default is the point: an unformatted
      * message always arrives, while a malformed formatted one arrives not at
      * all. A caller that wants marks opts in — and by opting in takes on
@@ -141,15 +150,16 @@ export class TelegramBotService {
                             ? [options.button]
                             : [];
                     if (row.length === 0) return {};
+                    const cells = row.map(b =>
+                        isUrlButton(b)
+                            ? { text: b.text, url: b.url }
+                            : { text: b.text, callback_data: b.callbackData }
+                    );
                     return {
                         reply_markup: {
-                            inline_keyboard: [
-                                row.map(b =>
-                                    isUrlButton(b)
-                                        ? { text: b.text, url: b.url }
-                                        : { text: b.text, callback_data: b.callbackData }
-                                ),
-                            ],
+                            inline_keyboard: options.buttonLayout === 'column'
+                                ? cells.map(cell => [cell])
+                                : [cells],
                         },
                     };
                 })(),

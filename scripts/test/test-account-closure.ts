@@ -61,6 +61,8 @@ const stripComments = (s: string): string =>
 const model = read('modules/users/user.model.ts');
 const repoRaw = read('modules/users/account-closure.repository.ts');
 const repo = stripComments(repoRaw);
+const inFlightRule = stripComments(read('modules/orders/domain/order-in-flight.rule.ts'));
+const blockers = stripComments(read('modules/role-closure/services/role-closure-blockers.service.ts'));
 const serviceRaw = read('modules/users/account-closure.service.ts');
 const service = stripComments(serviceRaw);
 const controller = stripComments(read('modules/users/user.controller.ts'));
@@ -255,11 +257,21 @@ function main(): void {
     // Derived by exclusion, so a fulfilment status added later is "in flight" until somebody
     // deliberately says otherwise. The cost of the wrong answer is an undeliverable parcel.
     assert('"settled" is a closed list and everything else counts as in flight', () =>
-        repo.includes("SETTLED_FULFILMENT: readonly FulfillmentStatus[] = ['fulfilled', 'cancelled', 'returned']")
-        && repo.includes('$nin: SETTLED_FULFILMENT'));
+        inFlightRule.includes("SETTLED_FULFILMENT: readonly FulfillmentStatus[] = ['fulfilled', 'cancelled', 'returned']")
+        && inFlightRule.includes('$nin: [...SETTLED_FULFILMENT]'));
+
+    // A physical order never moves past `delivered`; confirmation stamps `completion` instead.
+    // Reading the status alone refused every customer whose orders were delivered and confirmed.
+    assert('a COMPLETED order is settled whatever its fulfilment status', () =>
+        inFlightRule.includes("'completion.confirmed_at': null"));
 
     assert('an order under a dispute hold blocks closure too', () =>
-        repo.includes("'dispute_hold.active': true"));
+        inFlightRule.includes("'dispute_hold.active': true"));
+
+    assert('account closure and role closure share the one rule', () =>
+        repo.includes('...ORDER_IN_FLIGHT_FILTER')
+        && (blockers.match(/\.\.\.ORDER_IN_FLIGHT_FILTER/g) ?? []).length === 2
+        && !repo.includes('SETTLED_FULFILMENT') && !blockers.includes('SETTLED_FULFILMENT'));
 
     console.log('\n── One transaction, and the ordering that survives a failure ───────────\n');
 

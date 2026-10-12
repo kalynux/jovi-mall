@@ -637,7 +637,8 @@ Body:
 
 ### POST /api/internal/admin/tickets/:id/followers
 
-**Description**: Add a follower to a ticket. Respects 5 non-admin user limit.
+**Description**: Add a platform actor as a follower of any ticket. A follower sees the ticket in
+their own list and reads its **public** notes and attachments.
 
 **Authorization**: Admin access required.
 
@@ -650,42 +651,66 @@ Body:
 
 **Query Parameters**: None
 
-**Request Body**:
+**Request Body** (strict — an unknown key is a `400`):
 ```json
 {
-  "userId": "string (required) - User ID to add as follower",
-  "role": "string (required) - User's role. Enum: admin, agent, vendor, customer, agency"
+  "userId": "string (required) - 24-hex platform `users` id",
+  "role": "string (required) - Enum: vendor, customer, agency, agent"
 }
 ```
+
+`admin` is not accepted: an administrator's relationship to a ticket is the assignment, and
+private-note visibility is computed from the follower rows.
 
 **Success Response**:
 
 Status: `200 OK`
 
-Body:
+Body — the enriched ticket, `followers` included (the same shape as `GET /:id`):
 ```json
 {
   "success": true,
-  "message": "Follower added successfully"
+  "message": "Follower added successfully",
+  "data": { "_id": "…", "subject": "…", "followers": [ { "user_id": "…", "role": "agency", "name": "…", "avatar": null } ] }
 }
 ```
 
-> [!IMPORTANT]
-> **There is no `data` on this response.** `TicketController.addFollower` awaits
-> `followerService.addFollower(…)`, which returns `void`, and sends `{ success, message }` only.
-> Re-read the follower list with `GET /api/internal/admin/tickets/:id` (the detail read is the
-> only one that includes `followers`).
+> [!NOTE]
+> **Changed 2026-10-09.** Until then this answered `{ success, message }` with no `data`, took the
+> body unvalidated, and wrote a row for a ticket id or user id that matched nothing.
 
 **Error Responses**:
-- `422` – `TICKET_FOLLOWER_LIMIT_EXCEEDED` – A sixth **distinct non-admin** user was added. Admins are exempt and do not count toward the five.
+- `400` – `VALIDATION_ERROR` – Body is not `{ userId, role }` as above
+- `404` – `TICKET_NOT_FOUND` – No ticket has this id
+- `404` – `USER_NOT_FOUND` – No platform user has this id
+- `422` – `TICKET_FOLLOWER_ROLE_MISMATCH` – The user does not hold `role` (`details.roles` lists the roles they do hold)
 
-> [!NOTE]
-> **Adding a user who already follows the ticket is idempotent and answers `200`** —
-> `TicketFollowerService.addFollower` returns early on `isFollower`. There is no conflict error.
->
-> **A non-existent ticket id is not rejected either.** Neither the route nor the service checks
-> that the ticket exists before inserting the follower row, so this endpoint answers `200` for an
-> id that matches nothing. Do not depend on it as an existence check.
+**Rules**:
+- **Not capped.** A follower an administrator adds does not count toward the 5-non-admin-user
+  limit, and is accepted even when that limit is already reached (owner decision 2026-10-09).
+  `TICKET_FOLLOWER_LIMIT_EXCEEDED` is still raised by user-driven assignment, never here.
+- **Idempotent.** Adding a user who already follows answers `200` and writes nothing.
+- **Lifts a removal.** If an administrator earlier removed this user (see `DELETE` below), the
+  removal is cleared, and the automatic order-party sync may keep them in step again.
+- Writes a public system note: `User added as follower (Role: <role>)`.
+
+#### Order parties follow automatically
+
+A ticket **about an order** — entity type `ORDER`, or `SHIPMENT` (resolved to its order) — is
+followed automatically by the order's **vendor** and by every **agency** and **agent** on its
+shipments, whoever opened it (customer, vendor, agency, agent, an administrator or the platform).
+The customer is **not** added automatically when someone else opens the ticket.
+
+| When | What |
+|---|---|
+| The ticket is created | the order's current vendor, agencies and agents are added silently |
+| An agent accepts one of the order's shipments | that agent joins every **open** ticket about the order |
+| Items move to another agency (vendor or administrator move) | the destination agency joins every open ticket |
+| An administrator reopens the ticket | it catches up on anyone assigned while it was closed |
+
+These rows are `source: 'order_party'` and **do not count** toward the 5-user limit. A replaced
+agency or agent **keeps following**. Resolved and closed tickets are not touched. Each later
+addition leaves a public `User added as follower` system note.
 
 ---
 
@@ -721,6 +746,12 @@ Body:
 **Error Responses**:
 - `404` – `TICKET_NOT_FOUND` – Ticket not found, or that user does not follow it
 - `403` – `TICKET_ACCESS_DENIED` – The caller is not an admin, or the target is the ticket creator, the current assignee, or another admin — all four raise this one code
+
+> [!NOTE]
+> **A removal is remembered** (2026-10-09). The ticket records the user in
+> `removed_follower_user_ids`, and the automatic order-party sync never re-adds them — otherwise
+> removing an order's agency would be undone the next time an agent accepted a shipment on that
+> order. Adding the user back through `POST /:id/followers` clears the entry.
 
 ---
 

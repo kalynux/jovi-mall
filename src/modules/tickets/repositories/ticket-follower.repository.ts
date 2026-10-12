@@ -1,12 +1,17 @@
-import { TicketFollowerModel, ITicketFollower } from '../models/ticket-follower.model';
+import {
+    TicketFollowerModel,
+    ITicketFollower,
+    TicketFollowerSource,
+    CAP_EXEMPT_FOLLOWER_SOURCES,
+} from '../models/ticket-follower.model';
 import { ActorRole } from '../types/ticket.types';
 import mongoose from 'mongoose';
 
 /**
  * TicketFollowerRepository
- * 
+ *
  * Data access for ticket followers (many-to-many junction table).
- * 
+ *
  * BUSINESS RULES ENFORCED HERE:
  * - Unique constraint: ticket_id + user_id (enforced by DB index)
  * - 5-user limit logic queries (count non-admin followers)
@@ -14,24 +19,37 @@ import mongoose from 'mongoose';
 
 export class TicketFollowerRepository {
     /**
-     * Add a follower to a ticket
+     * Add a follower to a ticket.
+     *
+     * Returns false when the row already existed. The service checks `isFollower` first, but
+     * two writers can pass that check together — a ticket created while an agent accepts a
+     * shipment on the same order, for one — and the unique index then refuses the second.
+     * That is "already following", not a failure.
      */
     async addFollower(
         ticketId: string,
         userId: string,
         role: ActorRole,
         isAdmin: boolean,
-        addedBy: string
-    ): Promise<ITicketFollower> {
+        addedBy: string,
+        source: TicketFollowerSource
+    ): Promise<boolean> {
         const follower = new TicketFollowerModel({
             ticket_id: ticketId,
             user_id: userId,
             role,
             is_admin: isAdmin,
+            source,
             added_by_user_id: addedBy
         });
 
-        return await follower.save();
+        try {
+            await follower.save();
+            return true;
+        } catch (err) {
+            if ((err as { code?: number }).code === 11000) return false;
+            throw err;
+        }
     }
 
     /**
@@ -75,14 +93,17 @@ export class TicketFollowerRepository {
     }
 
     /**
-     * Get distinct non-admin user IDs who have ever followed this ticket
-     * 
-     * Used to enforce 5-user lifetime limit
+     * Distinct non-admin user IDs that COUNT toward the 5-user limit.
+     *
+     * Order parties and administrator-added followers are excluded (`CAP_EXEMPT_FOLLOWER_SOURCES`).
+     * A row with no `source` predates the distinction and counts, as it always did — `$nin`
+     * matches a missing field, which is exactly that.
      */
-    async getDistinctNonAdminUserIds(ticketId: string): Promise<string[]> {
+    async getCapCountedUserIds(ticketId: string): Promise<string[]> {
         const result = await TicketFollowerModel.distinct('user_id', {
             ticket_id: ticketId,
-            is_admin: false
+            is_admin: false,
+            source: { $nin: [...CAP_EXEMPT_FOLLOWER_SOURCES] }
         });
         return result.map(id => id.toString());
     }

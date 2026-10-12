@@ -95,7 +95,10 @@ function main(): void {
     // The list surfaces, then every page the website guide sends a customer to.
     const surfaces = [
         ...BOT_LIST_SURFACES.map((surface) => ({ name: String(surface), routePath: surfacePath(surface) })),
-        ...WEBSITE_GUIDE.map((topic) => ({ name: `guide:${topic.key}`, routePath: topic.path })),
+        // Storefront topics only — the dashboards' paths are `verify:dashboard-routes`' job.
+        ...WEBSITE_GUIDE.flatMap((topic) => topic.app === 'shop' && topic.path !== null
+            ? [{ name: `guide:${topic.key}`, routePath: topic.path }]
+            : []),
     ];
     if (surfaces.length === 0) {
         console.error('⛔ the surface list is empty — this check is reading the wrong thing');

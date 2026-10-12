@@ -1,9 +1,29 @@
 import { storefrontUrl } from '../../../core/utils/storefront-link.util';
+import { GuideApp, GuideLanguage, GuideTopic, T as topic } from './website-guide-types';
+import { VENDOR_GUIDE } from './website-guide-vendor';
+import { AGENCY_GUIDE } from './website-guide-agency';
+import { AGENT_GUIDE } from './website-guide-agent';
+
+export type { GuideApp, GuideLanguage, GuideTopic } from './website-guide-types';
 
 /**
  * The website guide — every customer action on wi-mall.com, written for the chat assistant
  * (owner, 2026-10-03: "have the AI agent redirect the user to the platform for actions he can't
  * perform in the chat … a book that contains all actions that can be performed on the website").
+ *
+ * ── AND, SINCE 2026-10-09, THE THREE BUSINESS APPS ───────────────────────────
+ * Owner: "to be able to efficiently guide the user on any of the dashboards, you need to know
+ * where the different buttons are placed, how to get to a specific page". The vendor dashboard,
+ * the agency dashboard and the Wi-Mall Agent app each have their own file
+ * (`website-guide-{vendor,agency,agent}.ts`), read from those repositories the same way. A
+ * topic's `app` decides its link and what signing in means. The admin dashboard is left out on
+ * purpose — see `GuideApp`.
+ *
+ * ── HOW THE MODEL FINDS A TOPIC ──────────────────────────────────────────────
+ * ⚠ The n8n tool truncates what it reads at 6000 characters, so the whole catalogue can no
+ * longer be one list. No key (or an unknown one) answers the storefront topics plus the four
+ * APP keys — `shop`, `vendor`, `agency`, `agent` — and each app key answers that app's list.
+ * Every app has a `…menu` topic: the map of its navigation, for "where is the X button?".
  *
  * ── WHO READS IT ─────────────────────────────────────────────────────────────
  * The MODEL, through the `Read-Website-Guide` tool in `wi-mall-core`, never the customer
@@ -30,31 +50,13 @@ import { storefrontUrl } from '../../../core/utils/storefront-link.util';
  * copy of that rule, and the second copy is the one that 404'd every notification button.
  */
 
-export type GuideLanguage = 'en' | 'fr';
+const T = topic;
 
-interface GuideCopy {
-    title: string;
-    /** One line, for the topic list the tool shows when it is asked for something unknown. */
-    summary: string;
-    steps: readonly string[];
-    /** What the website will refuse, or what the customer should know first. */
-    notes: readonly string[];
-}
-
-export interface GuideTopic {
-    key: string;
-    /** Storefront path WITHOUT a locale prefix. Checked by `verify:landing-routes`. */
-    path: string;
-    /** Does the page need a signed-in customer? (`/shop/account/**`, `/shop/checkout/**`). */
-    signIn: boolean;
-    copy: Readonly<Record<GuideLanguage, GuideCopy>>;
-}
-
-const T = (topic: GuideTopic): GuideTopic => Object.freeze(topic);
-
-export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
+/** The storefront's topics (`app: 'shop'`). Customer sign-in pages are `/shop/account/**` and `/shop/checkout/**`. */
+export const SHOP_GUIDE: readonly GuideTopic[] = Object.freeze([
     T({
         key: 'signin',
+        app: 'shop',
         path: '/login',
         signIn: false,
         copy: {
@@ -64,7 +66,7 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
                 steps: [
                     'Customers have no password. In this chat, send /login (or ask me to send a sign-in link).',
                     'Tap the link that arrives: it signs you in by itself.',
-                    'Or open the sign-in page, choose Phone or Email, enter the number you use with this chat and the 8-character "Sign-in code", then tap "Sign in".',
+                    'Or open the sign-in page and tap the "Customer" card ("I want to shop"), choose "Phone" or "Email", enter the number you use with this chat and the 8-character "Sign-in code" ("Get code" shows how to ask the bot for one), then tap "Sign in".',
                 ],
                 notes: [
                     'The link and the code last 10 minutes and work once; using one cancels the other.',
@@ -77,7 +79,7 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
                 steps: [
                     'Les clients n’ont pas de mot de passe. Dans ce chat, envoyez /login (ou demandez-moi un lien de connexion).',
                     'Ouvrez le lien reçu : il vous connecte automatiquement.',
-                    'Ou ouvrez la page de connexion, choisissez Téléphone ou E-mail, saisissez le numéro utilisé avec ce chat et le « Code de connexion » à 8 caractères, puis appuyez sur « Se connecter ».',
+                    'Ou ouvrez la page de connexion et touchez la carte « Client » (« Je veux faire mes achats »), choisissez « Téléphone » ou « E-mail », saisissez le numéro utilisé avec ce chat et le « Code de connexion » à 8 caractères (« Obtenir » explique comment le demander au bot), puis appuyez sur « Se connecter ».',
                 ],
                 notes: [
                     'Le lien et le code durent 10 minutes et ne servent qu’une fois ; utiliser l’un annule l’autre.',
@@ -88,6 +90,7 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
     }),
     T({
         key: 'addresses',
+        app: 'shop',
         path: '/shop/account/addresses',
         signIn: true,
         copy: {
@@ -125,6 +128,7 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
     }),
     T({
         key: 'paymentmethods',
+        app: 'shop',
         path: '/shop/account/payment-methods',
         signIn: true,
         copy: {
@@ -158,6 +162,7 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
     }),
     T({
         key: 'orders',
+        app: 'shop',
         path: '/shop/account/orders',
         signIn: true,
         copy: {
@@ -195,6 +200,7 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
     }),
     T({
         key: 'tracking',
+        app: 'shop',
         path: '/shop/account/orders',
         signIn: true,
         copy: {
@@ -204,7 +210,7 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
                 steps: [
                     'Open Account → "My orders" → tap the order.',
                     'Each parcel on its way shows a live map with the arrival time; "Open in maps" opens it in your maps app.',
-                    'The delivery company\'s Call / WhatsApp buttons are on the parcel.',
+                    'The delivery company\'s Call / WhatsApp / Email buttons are on the parcel.',
                 ],
                 notes: ['Nothing shows until the parcel has left: "Nothing on the road yet". Downloads have nothing to track.'],
             },
@@ -214,7 +220,7 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
                 steps: [
                     'Ouvrez Compte → « Mes commandes » → appuyez sur la commande.',
                     'Chaque colis en route affiche une carte en direct avec l’heure d’arrivée ; « Ouvrir dans Maps » l’ouvre dans votre application de cartes.',
-                    'Les boutons Appeler / WhatsApp de la société de livraison sont sur le colis.',
+                    'Les boutons Appeler / WhatsApp / e-mail de la société de livraison sont sur le colis.',
                 ],
                 notes: ['Rien ne s’affiche tant que le colis n’est pas parti. Les téléchargements n’ont rien à suivre.'],
             },
@@ -222,6 +228,7 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
     }),
     T({
         key: 'paylink',
+        app: 'shop',
         path: '/shop/account/orders',
         signIn: true,
         copy: {
@@ -249,6 +256,7 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
     }),
     T({
         key: 'bookings',
+        app: 'shop',
         path: '/shop/account/bookings',
         signIn: true,
         copy: {
@@ -288,6 +296,7 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
     }),
     T({
         key: 'downloads',
+        app: 'shop',
         path: '/shop/account/downloads',
         signIn: true,
         copy: {
@@ -313,6 +322,7 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
     }),
     T({
         key: 'reviews',
+        app: 'shop',
         path: '/shop/account/orders',
         signIn: true,
         copy: {
@@ -325,7 +335,7 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
                     'Choose 1 to 5 stars, optionally add a title and a few words, then tap "Submit".',
                     'Your reviews are listed under Account → "My reviews".',
                 ],
-                notes: ['Only once the order is complete, one review per item, and a review cannot be edited later. Reviews with text are checked before they appear.'],
+                notes: ['Only once the order is complete, one review per item, and a review cannot be edited later. A review appears as soon as it is sent (the website may still say text is checked first — it no longer is); Wi-Mall can hide one afterwards.'],
             },
             fr: {
                 title: 'Noter un produit ou une livraison',
@@ -336,12 +346,13 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
                     'Choisissez de 1 à 5 étoiles, ajoutez si vous voulez un titre et un texte, puis « Valider ».',
                     'Vos avis sont listés dans Compte → « Mes avis ».',
                 ],
-                notes: ['Seulement une fois la commande terminée, un avis par article, et un avis ne peut pas être modifié. Les avis avec texte sont vérifiés avant publication.'],
+                notes: ['Seulement une fois la commande terminée, un avis par article, et un avis ne peut pas être modifié. Un avis apparaît dès son envoi (le site peut encore dire que le texte est vérifié avant — ce n’est plus le cas) ; Wi-Mall peut le masquer ensuite.'],
             },
         },
     }),
     T({
         key: 'saved',
+        app: 'shop',
         path: '/shop/saved',
         signIn: false,
         copy: {
@@ -367,41 +378,47 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
     }),
     T({
         key: 'notifications',
+        app: 'shop',
         path: '/shop/account/notifications/settings',
         signIn: true,
         copy: {
             en: {
-                title: 'Notification settings and connecting WhatsApp / Telegram',
+                title: 'Notification settings and connecting WhatsApp / Telegram (customers)',
                 summary: 'Choose which messages arrive and where; connect WhatsApp or Telegram',
                 steps: [
-                    'Tap the bell at the top of the shop, then the gear icon.',
-                    'Under "Delivery channel" pick ONE extra channel (Email, Telegram or WhatsApp); turning one on turns the others off.',
-                    'Under "What you hear about" switch Order updates, Booking updates, Booking reminders or Offers & news on or off.',
-                    'To connect a chat app: under "Chat channels" tap "Connect", send /connect to that app\'s Wi-Mall chat, type the 6-character code, then tap "Connect".',
+                    'Tap the bell at the top of the shop, then the gear icon. (There is no Notifications row on the Account page.)',
+                    'Under "What you hear about" switch "Order updates", "Booking updates", "Booking reminders" or "Offers & news" on or off.',
+                    'Under "Delivery channel" switch on ONE extra channel ("Email", "Telegram" or "WhatsApp"); turning one on turns the others off. A greyed-out one is not connected yet.',
+                    'To connect a chat app: under "Chat channels" tap "Connect", send /connect to that app\'s Wi-Mall chat (or tap "Open WhatsApp" / "Open Telegram"), type the 6-character code, then tap "Connect". "Disconnect" removes it.',
+                    'Email is usable once the account has a confirmed email: Account → "Sign-in details" → type the "New email address" → "Change" → open the link in the mailbox.',
                 ],
                 notes: [
-                    'Payments & refunds and cancellations are always sent.',
-                    'A channel must be connected or verified before it can be chosen. The /connect code lasts 10 minutes.',
+                    'Every switch saves at once ("Preferences saved") — there is no Save button.',
+                    '"Payments & refunds" and "Cancellations" are always sent, and so are in-app and push messages.',
+                    '"Offers & news" sends nothing yet. The /connect code lasts 10 minutes and works once, even a failed try.',
                 ],
             },
             fr: {
                 title: 'Réglages des notifications et connexion WhatsApp / Telegram',
                 summary: 'Choisir quels messages arrivent et où ; connecter WhatsApp ou Telegram',
                 steps: [
-                    'Appuyez sur la cloche en haut de la boutique, puis sur l’engrenage.',
-                    'Sous « Canal de réception », choisissez UN canal en plus (E-mail, Telegram ou WhatsApp) ; en activer un désactive les autres.',
-                    'Sous les sujets, activez ou désactivez les mises à jour de commandes, de réservations, les rappels et les offres.',
-                    'Pour connecter une messagerie : sous « Messageries », appuyez sur « Connecter », envoyez /connect au chat Wi-Mall de cette application, saisissez le code à 6 caractères, puis « Connecter ».',
+                    'Appuyez sur la cloche en haut de la boutique, puis sur l’engrenage. (Il n’y a pas de ligne Notifications sur la page Compte.)',
+                    'Sous « Ce dont vous êtes informé », activez ou coupez « Mises à jour des commandes », « Mises à jour des réservations », « Rappels de réservation » ou « Offres et actualités ».',
+                    'Sous « Canal de réception », activez UN canal en plus (« E-mail », « Telegram » ou « WhatsApp ») ; en activer un désactive les autres. Un canal grisé n’est pas encore connecté.',
+                    'Pour connecter une messagerie : sous « Messageries », appuyez sur « Connecter », envoyez /connect au chat Wi-Mall de cette application (ou « Ouvrir WhatsApp » / « Ouvrir Telegram »), saisissez le code à 6 caractères, puis « Connecter ». « Déconnecter » la retire.',
+                    'L’e-mail devient utilisable quand le compte a un e-mail confirmé : Compte → « Identifiants de connexion » → saisissez la nouvelle adresse → « Modifier » → ouvrez le lien reçu.',
                 ],
                 notes: [
-                    'Les paiements, remboursements et annulations sont toujours envoyés.',
-                    'Un canal doit être connecté ou vérifié avant de pouvoir être choisi. Le code /connect dure 10 minutes.',
+                    'Chaque interrupteur s’enregistre tout de suite (« Préférences enregistrées ») — il n’y a pas de bouton Enregistrer.',
+                    '« Paiements et remboursements » et « Annulations » sont toujours envoyés, ainsi que les messages dans l’application et en push.',
+                    '« Offres et actualités » n’envoie encore rien. Le code /connect dure 10 minutes et ne sert qu’une fois, même en cas d’échec.',
                 ],
             },
         },
     }),
     T({
         key: 'emailphone',
+        app: 'shop',
         path: '/shop/account/security',
         signIn: true,
         copy: {
@@ -414,7 +431,7 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
                     'Phone: type the new number (+237…), tap "Change", then type the 6-digit code that arrives on WhatsApp and tap "Confirm".',
                 ],
                 notes: [
-                    'The old email or number keeps working until the change is confirmed; "Cancel this change" abandons it.',
+                    'The old email or number keeps working until the change is confirmed. "Cancel this change" abandons an email change, "Cancel" a phone change; "Send a new code" resends the phone code.',
                     'If the phone code never arrives, contact support from that page.',
                 ],
             },
@@ -427,7 +444,7 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
                     'Téléphone : saisissez le nouveau numéro (+237…), appuyez sur « Modifier », puis saisissez le code à 6 chiffres reçu sur WhatsApp et « Confirmer ».',
                 ],
                 notes: [
-                    'L’ancien e-mail ou numéro reste valable jusqu’à la confirmation ; « Annuler ce changement » l’abandonne.',
+                    'L’ancien e-mail ou numéro reste valable jusqu’à la confirmation. « Annuler ce changement » abandonne un changement d’e-mail, « Annuler » un changement de téléphone ; « Envoyer un nouveau code » renvoie le code.',
                     'Si le code n’arrive jamais, contactez l’assistance depuis cette page.',
                 ],
             },
@@ -435,6 +452,7 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
     }),
     T({
         key: 'support',
+        app: 'shop',
         path: '/shop/account/support/new',
         signIn: true,
         copy: {
@@ -451,6 +469,7 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
                 notes: [
                     'Urgency cannot be changed later. Some sellers require a photo, video or tracking number.',
                     'A closed ticket cannot be replied to — open a new one.',
+                    'A request about a problem with the customer’s own order or booking, opened within 3 days of delivery, puts the seller’s payment on hold until the request is closed. Closing it releases the payment.',
                 ],
             },
             fr: {
@@ -466,12 +485,14 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
                 notes: [
                     'L’urgence ne peut pas être modifiée ensuite. Certains vendeurs exigent une photo, une vidéo ou un numéro de suivi.',
                     'Un ticket fermé ne peut plus recevoir de réponse — ouvrez-en un nouveau.',
+                    'Une demande concernant un problème sur la propre commande ou réservation du client, ouverte dans les 3 jours suivant la livraison, suspend le paiement du vendeur jusqu’à la clôture de la demande. La clôturer libère le paiement.',
                 ],
             },
         },
     }),
     T({
         key: 'checkout',
+        app: 'shop',
         path: '/shop/cart',
         signIn: false,
         copy: {
@@ -509,6 +530,7 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
     }),
     T({
         key: 'closeaccount',
+        app: 'shop',
         path: '/shop/account/close',
         signIn: true,
         copy: {
@@ -540,6 +562,7 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
     }),
     T({
         key: 'browse',
+        app: 'shop',
         path: '/shop',
         signIn: false,
         copy: {
@@ -566,7 +589,284 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
         },
     }),
     T({
+        key: 'account',
+        app: 'shop',
+        path: '/shop/account',
+        signIn: true,
+        copy: {
+            en: {
+                title: 'The customer Account page: what is where, language, dark mode, signing out',
+                summary: 'Map of the Account page; change language or dark mode; sign out; what cannot be changed',
+                steps: [
+                    'Tap "Account" (bottom bar on a phone, icon at the top on a computer). The list: "My orders", "Addresses", "Payment methods", "My downloads", "My reviews", "Sign-in details", "My bookings", "Support", "Help & FAQ", "Language", "Dark mode".',
+                    'Language: tap "Language" and pick one. Dark mode: the "Dark mode" switch.',
+                    'Notifications are NOT in this list: they are behind the bell at the top (topic notifications).',
+                    'Sign out or close the account: the ⋮ "Account options" menu at the top of the Account page → "Sign out" (or "Close account").',
+                ],
+                notes: [
+                    'There is no way to edit the name or photo on the website, and no invoice or receipt download. For those, open a support request (types "Profile update" or "Invoice request").',
+                    'The bottom bar on a phone is "Shop", "Saved", "Cart", "Account".',
+                ],
+            },
+            fr: {
+                title: 'La page Compte du client : où est quoi, langue, mode sombre, déconnexion',
+                summary: 'Plan de la page Compte ; changer la langue ou le mode sombre ; se déconnecter ; ce qui ne se change pas',
+                steps: [
+                    'Touchez « Compte » (barre du bas sur téléphone, icône en haut sur ordinateur). La liste : « Mes commandes », « Adresses », « Moyens de paiement », « Mes téléchargements », « Mes avis », « Identifiants de connexion », « Mes réservations », « Assistance », « Aide & FAQ », « Langue », « Mode sombre ».',
+                    'Langue : touchez « Langue » et choisissez. Mode sombre : l’interrupteur « Mode sombre ».',
+                    'Les notifications ne sont PAS dans cette liste : elles sont derrière la cloche en haut (sujet notifications).',
+                    'Se déconnecter ou fermer le compte : le menu ⋮ « Options du compte » en haut de la page Compte → « Se déconnecter » (ou « Fermer le compte »).',
+                ],
+                notes: [
+                    'Impossible de modifier le nom ou la photo sur le site, et pas de facture ou de reçu à télécharger. Pour cela, ouvrez une demande d’assistance (types « Mise à jour du profil » ou « Demande de facture »).',
+                    'La barre du bas sur téléphone : « Boutique », « Favoris », « Panier », « Compte ».',
+                ],
+            },
+        },
+    }),
+    T({
+        key: 'cart',
+        app: 'shop',
+        path: '/shop/cart',
+        signIn: false,
+        copy: {
+            en: {
+                title: 'The cart on the website',
+                summary: 'Change quantities, remove items, why Checkout is blocked, digital items, agreed prices',
+                steps: [
+                    'Tap "Cart". Use the − / + stepper to change a quantity; the bin removes an item ("Remove").',
+                    'The summary shows "Subtotal", delivery per seller, "Total". Tap "Checkout" (or "Sign in to check out") — topic checkout.',
+                    'If a seller shows "Add {amount} more from {name} to order", add more from that seller or remove their items.',
+                ],
+                notes: [
+                    'Items from different sellers become separate orders, paid once. A cart holds physical items OR one digital product; services are booked, not carted.',
+                    'A price agreed in the chat shows as "your agreed price"; changing the quantity drops it back to the normal price.',
+                    'The cart moves into the account when they sign in.',
+                ],
+            },
+            fr: {
+                title: 'Le panier sur le site',
+                summary: 'Changer les quantités, retirer, pourquoi « Commander » est bloqué, numérique, prix convenus',
+                steps: [
+                    'Touchez « Panier ». Le − / + change une quantité ; la corbeille retire un article (« Retirer »).',
+                    'Le récapitulatif montre le sous-total, la livraison par vendeur, le total. Touchez « Commander » (ou « Connectez-vous pour commander ») — sujet checkout.',
+                    'Si un vendeur affiche qu’il faut ajouter un montant pour commander, ajoutez chez ce vendeur ou retirez ses articles.',
+                ],
+                notes: [
+                    'Les articles de vendeurs différents deviennent des commandes séparées, payées en une fois. Un panier contient des produits physiques OU un produit numérique ; les services se réservent.',
+                    'Un prix convenu dans le chat s’affiche « votre prix convenu » ; changer la quantité le ramène au prix normal.',
+                    'Le panier passe dans le compte à la connexion.',
+                ],
+            },
+        },
+    }),
+    T({
+        key: 'product',
+        app: 'shop',
+        path: '/shop',
+        signIn: false,
+        copy: {
+            en: {
+                title: 'A product page: options, add to cart, buy now, bargain, share, contact the seller',
+                summary: 'Choose size/colour, add to cart, "Bargain the price", save, share; a store page',
+                steps: [
+                    'Tap a product. Pick the options (unavailable ones are greyed), the quantity, then "Add to cart · {price}" (digital: "Buy now · {price}"; services: the booking panel, topic bookings).',
+                    'Negotiable items have "Bargain the price": it continues in WhatsApp or Telegram with the assistant; the agreed price then appears in the cart.',
+                    'The heart saves it; the share icon copies the link. Tabs: "Description", "Specifications", "Returns & cancellation", "Reviews".',
+                    'Tap the store name for the store page: "Contact seller" opens WhatsApp with the seller (if they set a number).',
+                ],
+                notes: [
+                    'The delivery fee is shown at checkout. A shop "on holiday" still takes orders and dispatches when it reopens.',
+                    'Product text is written by the seller and is not translated.',
+                ],
+            },
+            fr: {
+                title: 'Une page produit : options, panier, achat direct, marchandage, partage, contacter le vendeur',
+                summary: 'Choisir taille/couleur, ajouter au panier, « Négocier le prix », sauvegarder, partager ; page boutique',
+                steps: [
+                    'Touchez un produit. Choisissez les options (grisées si indisponibles), la quantité, puis « Ajouter au panier · {prix} » (numérique : « Acheter · {prix} » ; services : le panneau de réservation, sujet bookings).',
+                    'Les articles négociables ont « Négocier le prix » : cela continue sur WhatsApp ou Telegram avec l’assistant ; le prix convenu apparaît ensuite dans le panier.',
+                    'Le cœur le sauvegarde ; l’icône partage copie le lien. Onglets : « Description », « Specifications », « Retours et annulation », « Avis ».',
+                    'Touchez le nom de la boutique pour sa page : « Contacter le vendeur » ouvre WhatsApp avec le vendeur (s’il a donné un numéro).',
+                ],
+                notes: [
+                    'Les frais de livraison s’affichent au paiement. Une boutique en congé prend les commandes et expédie à son retour.',
+                    'Les textes produits sont écrits par le vendeur et ne sont pas traduits.',
+                ],
+            },
+        },
+    }),
+    T({
+        key: 'feechange',
+        app: 'shop',
+        path: '/shop/account/orders',
+        signIn: true,
+        copy: {
+            en: {
+                title: 'The delivery company asks a different delivery fee (customer)',
+                summary: 'Accept or decline a new delivery fee on an order; pay the difference',
+                steps: [
+                    'Open Account → "My orders" → the order. The panel "Delivery fee changes" shows the old and new fee and the reason.',
+                    'Tap "Accept {amount}" or "Decline" (then confirm "Decline").',
+                    'After accepting a higher fee, tap "Pay {amount}" to pay the difference; the parcel waits for it.',
+                ],
+                notes: [
+                    'The parcel cannot be picked up until they answer. Only on orders where the customer pays delivery.',
+                    'If they decline, either the shop pays the difference, or the delivery company keeps the old fee, asks once more, or turns the job down — the panel says which.',
+                ],
+            },
+            fr: {
+                title: 'La société de livraison demande d’autres frais (client)',
+                summary: 'Accepter ou refuser de nouveaux frais de livraison ; payer la différence',
+                steps: [
+                    'Ouvrez Compte → « Mes commandes » → la commande. Le panneau « Changements des frais de livraison » montre l’ancien et le nouveau prix et la raison.',
+                    'Touchez « Accepter {montant} » ou « Refuser » (puis confirmez).',
+                    'Après avoir accepté une hausse, touchez « Payer {montant} » pour la différence ; le colis l’attend.',
+                ],
+                notes: [
+                    'Le colis ne peut pas être enlevé tant qu’ils n’ont pas répondu. Seulement quand le client paie la livraison.',
+                    'S’ils refusent, soit la boutique paie la différence, soit la société garde l’ancien prix, redemande une fois ou refuse la course — le panneau le dit.',
+                ],
+            },
+        },
+    }),
+    T({
+        key: 'combined',
+        app: 'shop',
+        path: '/shop/account/orders',
+        signIn: true,
+        copy: {
+            en: {
+                title: 'Asking one lower delivery price for several parcels (combined delivery)',
+                summary: 'Ask the delivery company for a combined price on parcels travelling together',
+                steps: [
+                    'Open Account → "My orders" → the order (the whole checkout). Find "Combined delivery price".',
+                    'Tap "Ask {company} for a combined price", optionally add a note, then "Send request".',
+                    'The answer applies by itself ("New price applied — you save …"). "Cancel request" withdraws it.',
+                ],
+                notes: [
+                    'Only when the customer pays delivery and parcels are still being prepared with the same company. It can only lower the fees.',
+                ],
+            },
+            fr: {
+                title: 'Demander un prix de livraison réduit pour plusieurs colis (livraison groupée)',
+                summary: 'Demander à la société de livraison un prix groupé pour des colis qui voyagent ensemble',
+                steps: [
+                    'Ouvrez Compte → « Mes commandes » → la commande (tout l’achat). Trouvez « Prix de livraison groupé ».',
+                    'Touchez « Demander un prix groupé à {société} », ajoutez une note si besoin, puis « Envoyer la demande ».',
+                    'La réponse s’applique toute seule. « Annuler la demande » la retire.',
+                ],
+                notes: [
+                    'Seulement quand le client paie la livraison et que des colis sont encore en préparation chez la même société. Cela ne peut que baisser les frais.',
+                ],
+            },
+        },
+    }),
+    T({
+        key: 'refunds',
+        app: 'shop',
+        path: '/shop/account/orders',
+        signIn: true,
+        copy: {
+            en: {
+                title: 'Refunds: asking for one and following it',
+                summary: 'How a customer asks for a refund and where to see its progress',
+                steps: [
+                    'There is no "request a refund" button. To ask: Account → "Support" → "New" → Type "Refund" (topic support). An unpaid order can simply be cancelled (topic orders).',
+                    'When a refund exists, the order (or booking) shows a "Refund" line with its status, e.g. "Refund on its way to …" or "Refunded on …".',
+                    'If declined: "Contact support". "How refunds work" opens the policy.',
+                ],
+                notes: [
+                    'Mobile-money refunds go to the number that paid, minus a transfer fee shown on the line; card refunds go back to the card.',
+                    'Wi-Mall can only refund while it still holds the seller’s payment: the problem must be reported within 3 days of delivery (the order page shows the exact date). After that the seller has been paid and it is between the customer and the seller. Never promise a refund.',
+                ],
+            },
+            fr: {
+                title: 'Remboursements : en demander un et le suivre',
+                summary: 'Comment un client demande un remboursement et où voir l’avancement',
+                steps: [
+                    'Il n’y a pas de bouton de remboursement. Pour demander : Compte → « Assistance » → « Nouveau » → type « Remboursement » (sujet support). Une commande impayée peut simplement être annulée (sujet orders).',
+                    'Quand un remboursement existe, la commande (ou la réservation) affiche une ligne « Remboursement » avec son statut.',
+                    'S’il est refusé : « Contacter l’assistance ». « Comment fonctionnent les remboursements » ouvre la politique.',
+                ],
+                notes: [
+                    'Un remboursement mobile money va au numéro qui a payé, moins des frais de transfert affichés ; une carte est remboursée sur la carte.',
+                    'Wi-Mall ne peut rembourser que tant qu’il conserve le paiement du vendeur : le problème doit être signalé dans les 3 jours suivant la livraison (la page de la commande affiche la date exacte). Ensuite le vendeur a été payé et cela se règle entre le client et le vendeur. Ne promettez jamais un remboursement.',
+                ],
+            },
+        },
+    }),
+    T({
+        key: 'register',
+        app: 'shop',
+        path: '/register',
+        signIn: false,
+        copy: {
+            en: {
+                title: 'Creating a vendor, agency or agent account; adding a role',
+                summary: 'Sign up as a seller, delivery agency or agent; add a role to an existing account',
+                steps: [
+                    'Open the link for the role: vendor https://wi-mall.com/register?role=vendor · agency …/register?role=agency · agent …/register?role=agent.',
+                    'Fill "Your Name" (agent: "Full Name"), "Phone Number", optional email, "Business Name" (vendor) or "Agency Name" (agency), "Password", tick the agreement, then "Create account". The dashboard set-up opens next (vendors: topic vendoronboarding; agencies: agencyonboarding; agents install the app: agentinstall).',
+                    'Already have a Wi-Mall account (phone or email "already linked")? Tap "Sign in to add the {role} role", sign in, then "Add {role} role".',
+                ],
+                notes: [
+                    'Customers do not register on the website: their account is created in this chat.',
+                    'One Wi-Mall account can hold several roles; "Switch Role" in the website menu moves between them.',
+                ],
+            },
+            fr: {
+                title: 'Créer un compte vendeur, agence ou livreur ; ajouter un rôle',
+                summary: 'S’inscrire comme vendeur, agence de livraison ou livreur ; ajouter un rôle à un compte existant',
+                steps: [
+                    'Ouvrez le lien du rôle : vendeur https://wi-mall.com/fr/register?role=vendor · agence …/register?role=agency · livreur …/register?role=agent.',
+                    'Remplissez « Votre nom » (livreur : « Nom complet »), « Numéro de téléphone », e-mail facultatif, « Nom de l’entreprise » (vendeur) ou « Nom de l’agence » (agence), « Mot de passe », cochez le contrat, puis « Créer un compte ». La configuration du tableau de bord suit (vendeurs : sujet vendoronboarding ; agences : agencyonboarding ; les livreurs installent l’app : agentinstall).',
+                    'Déjà un compte Wi-Mall (téléphone ou e-mail « déjà lié ») ? Touchez « Se connecter pour ajouter le rôle {rôle} », connectez-vous, puis « Ajouter le rôle {rôle} ».',
+                ],
+                notes: [
+                    'Les clients ne s’inscrivent pas sur le site : leur compte est créé dans ce chat.',
+                    'Un compte Wi-Mall peut avoir plusieurs rôles ; « Changer de rôle » dans le menu du site passe de l’un à l’autre.',
+                ],
+            },
+        },
+    }),
+    T({
+        key: 'password',
+        app: 'shop',
+        path: '/forgot-password',
+        signIn: false,
+        copy: {
+            en: {
+                title: 'Forgotten password (vendors, agencies, agents)',
+                summary: 'Reset a business password on the website, through the bot or by email',
+                steps: [
+                    'Open the "Forgot password?" page (also on the sign-in page after choosing a role). Type the phone number and tap "Continue".',
+                    'Send /password to the Wi-Mall bot FROM THAT NUMBER (the "Open WhatsApp" button helps). The bot replies with a link: open it, type the new password twice, "Set new password".',
+                    'By email instead: "Reset with your email instead?" → email → "Send reset link", then open the link.',
+                ],
+                notes: [
+                    'Customers have no password to reset: they sign in with /login (topic signin).',
+                    'The new password needs 8+ characters with upper case, lower case, a number and a symbol. Setting it signs out every other device.',
+                ],
+            },
+            fr: {
+                title: 'Mot de passe oublié (vendeurs, agences, livreurs)',
+                summary: 'Réinitialiser un mot de passe professionnel sur le site, via le bot ou par e-mail',
+                steps: [
+                    'Ouvrez la page « Mot de passe oublié ? » (aussi sur la page de connexion après le choix du rôle). Saisissez le numéro et touchez « Continuer ».',
+                    'Envoyez /password au bot Wi-Mall DEPUIS CE NUMÉRO (le bouton « Ouvrir WhatsApp » aide). Le bot répond avec un lien : ouvrez-le, saisissez deux fois le nouveau mot de passe, « Définir le mot de passe ».',
+                    'Par e-mail : « Réinitialiser plutôt avec votre e-mail ? » → e-mail → « Envoyer le lien », puis ouvrez le lien.',
+                ],
+                notes: [
+                    'Les clients n’ont pas de mot de passe : ils se connectent avec /login (sujet signin).',
+                    'Le nouveau mot de passe demande 8+ caractères avec majuscule, minuscule, chiffre et symbole. Le définir déconnecte tous les autres appareils.',
+                ],
+            },
+        },
+    }),
+    T({
         key: 'help',
+        app: 'shop',
         path: '/faq',
         signIn: false,
         copy: {
@@ -594,65 +894,219 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
     }),
 ]);
 
+/**
+ * Every topic, every app. Keys are unique ACROSS apps — the tool passes a bare key, so a vendor
+ * topic and a storefront topic can never share one. (`test:website-guide` pins it.)
+ */
+export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
+    ...SHOP_GUIDE,
+    ...VENDOR_GUIDE,
+    ...AGENCY_GUIDE,
+    ...AGENT_GUIDE,
+]);
+
 export const WEBSITE_GUIDE_KEYS: readonly string[] = Object.freeze(WEBSITE_GUIDE.map((t) => t.key));
+
+/** The app keys. Asking for one answers that app's topic list. */
+export const GUIDE_APPS: readonly GuideApp[] = Object.freeze(['shop', 'vendor', 'agency', 'agent'] as const);
 
 function guideLanguage(language: string | null | undefined): GuideLanguage {
     return String(language ?? '').slice(0, 2).toLowerCase() === 'fr' ? 'fr' : 'en';
 }
 
-const LABELS: Readonly<Record<GuideLanguage, { link: string; steps: string; notes: string; signIn: string; noSignIn: string; topics: string; unknown: string }>> = Object.freeze({
+interface AppLabels {
+    name: string;
+    /** One line in the index: who uses it and what for. */
+    blurb: string;
+    signIn: string;
+    noSignIn: string;
+}
+
+const APP_LABELS: Readonly<Record<GuideLanguage, Readonly<Record<GuideApp, AppLabels>>>> = Object.freeze({
+    en: {
+        shop: {
+            name: 'WI-MALL WEBSITE (customers, wi-mall.com)',
+            blurb: 'shopping, orders, deliveries, bookings, a customer\'s own account and notification settings',
+            signIn: 'SIGN-IN: needed. If they are not signed in on the website, offer to send them a sign-in link (auth_send_login_link) first.',
+            noSignIn: 'SIGN-IN: not needed.',
+        },
+        vendor: {
+            name: 'VENDOR DASHBOARD (sellers: vendor.wi-mall.com, or the Wi-Mall Vendor app)',
+            blurb: 'a seller running their store: products, stock, orders, delivery partners, money, plan, notification settings',
+            signIn: 'SIGN-IN: needed, on the vendor dashboard with the seller\'s own account (topic vendorsignin). This chat cannot sign them in there and cannot see their dashboard.',
+            noSignIn: 'SIGN-IN: not needed.',
+        },
+        agency: {
+            name: 'AGENCY DASHBOARD (delivery agencies: agency.wi-mall.com, or the Wi-Mall Agency app)',
+            blurb: 'a delivery agency: shipments, agents, partner vendors, cash on delivery, money, notification settings',
+            signIn: 'SIGN-IN: needed, on the agency dashboard with the agency\'s own account (topic agencysignin). This chat cannot sign them in there and cannot see their dashboard.',
+            noSignIn: 'SIGN-IN: not needed.',
+        },
+        agent: {
+            name: 'WI-MALL AGENT APP (delivery agents, Android phone app)',
+            blurb: 'a delivery agent: delivery offers, deliveries, cash collected, agencies, earnings, notification settings',
+            signIn: 'SIGN-IN: needed, inside the Wi-Mall Agent app. This chat cannot see the app.',
+            noSignIn: 'SIGN-IN: not needed.',
+        },
+    },
+    fr: {
+        shop: {
+            name: 'SITE WI-MALL (clients, wi-mall.com)',
+            blurb: 'achats, commandes, livraisons, réservations, le compte client et ses réglages de notifications',
+            signIn: 'CONNEXION : nécessaire. S’ils ne sont pas connectés sur le site, proposez d’abord de leur envoyer un lien de connexion (auth_send_login_link).',
+            noSignIn: 'CONNEXION : pas nécessaire.',
+        },
+        vendor: {
+            name: 'TABLEAU DE BORD VENDEUR (vendeurs : vendor.wi-mall.com, ou l’app Wi-Mall Vendeur)',
+            blurb: 'un vendeur qui gère sa boutique : produits, stock, commandes, partenaires de livraison, argent, forfait, notifications',
+            signIn: 'CONNEXION : nécessaire, sur le tableau de bord vendeur avec le compte du vendeur (sujet vendorsignin). Ce chat ne peut pas l’y connecter ni voir son tableau de bord.',
+            noSignIn: 'CONNEXION : pas nécessaire.',
+        },
+        agency: {
+            name: 'TABLEAU DE BORD AGENCE (agences de livraison : agency.wi-mall.com, ou l’app Wi-Mall Agence)',
+            blurb: 'une agence de livraison : expéditions, agents, vendeurs partenaires, paiement à la livraison, argent, notifications',
+            signIn: 'CONNEXION : nécessaire, sur le tableau de bord agence avec le compte de l’agence (sujet agencysignin). Ce chat ne peut pas l’y connecter ni voir son tableau de bord.',
+            noSignIn: 'CONNEXION : pas nécessaire.',
+        },
+        agent: {
+            name: 'APP WI-MALL AGENT (livreurs, application Android)',
+            blurb: 'un agent livreur : offres de livraison, livraisons, espèces encaissées, agences, gains, notifications',
+            signIn: 'CONNEXION : nécessaire, dans l’app Wi-Mall Agent. Ce chat ne voit pas l’application.',
+            noSignIn: 'CONNEXION : pas nécessaire.',
+        },
+    },
+});
+
+const LABELS: Readonly<Record<GuideLanguage, {
+    link: string; steps: string; notes: string; topics: string; unknown: string;
+    apps: string; appTopics: string; noLink: string; noBase: string;
+}>> = Object.freeze({
     en: {
         link: 'LINK',
         steps: 'STEPS',
         notes: 'GOOD TO KNOW',
-        signIn: 'SIGN-IN: needed. If they are not signed in on the website, offer to send them a sign-in link (auth_send_login_link) first.',
-        noSignIn: 'SIGN-IN: not needed.',
         topics: 'WEBSITE GUIDE — topics (call again with one of these keys):',
         unknown: 'No topic by that name.',
+        apps: 'OTHER WI-MALL APPS — call again with the app key to list its topics:',
+        appTopics: 'topics (call again with one of these keys):',
+        noLink: 'none — this happens inside the Wi-Mall Agent phone app. If they do not have it yet: topic agentinstall.',
+        noBase: '(the address is not configured — describe the steps only)',
     },
     fr: {
         link: 'LIEN',
         steps: 'ÉTAPES',
         notes: 'BON À SAVOIR',
-        signIn: 'CONNEXION : nécessaire. S’ils ne sont pas connectés sur le site, proposez d’abord de leur envoyer un lien de connexion (auth_send_login_link).',
-        noSignIn: 'CONNEXION : pas nécessaire.',
         topics: 'GUIDE DU SITE — sujets (rappelez avec une de ces clés) :',
         unknown: 'Aucun sujet de ce nom.',
+        apps: 'AUTRES APPLICATIONS WI-MALL — rappelez avec la clé de l’application pour lister ses sujets :',
+        appTopics: 'sujets (rappelez avec une de ces clés) :',
+        noLink: 'aucun — cela se fait dans l’application téléphone Wi-Mall Agent. S’ils ne l’ont pas encore : sujet agentinstall.',
+        noBase: '(l’adresse n’est pas configurée — décrivez seulement les étapes)',
     },
 });
 
 /**
- * One topic, as the text the tool returns — or the topic list, for a key it does not know.
+ * Where each app lives. Each defaults to the variable the notification buttons already use for
+ * that app, so a link in a chat and a link in a notification can never point at two hosts.
+ * A test passes its own.
+ */
+export interface GuideBases {
+    shop?: string | null;
+    vendor?: string | null;
+    agency?: string | null;
+}
+
+function envBases(): Required<GuideBases> {
+    return {
+        shop: process.env.STOREFRONT_URL ?? null,
+        vendor: process.env.VENDOR_APP_URL ?? null,
+        agency: process.env.AGENCY_APP_URL ?? null,
+    };
+}
+
+/**
+ * The dashboards are single-page apps with NO locale in the URL — they keep the language as a
+ * setting — so their link is the base and the path, joined once, with nothing in between.
+ */
+function dashboardUrl(path: string, base: string | null | undefined): string | null {
+    if (!base) return null;
+    return `${base.replace(/\/+$/, '')}${path}`;
+}
+
+function topicLink(t: GuideTopic, language: string | null | undefined, lang: GuideLanguage, bases: Required<GuideBases>): string {
+    const labels = LABELS[lang];
+    if (t.app === 'agent' || t.path === null) return labels.noLink;
+    const url = t.app === 'shop'
+        // The customer's OWN language for the link, even where the text falls back to English.
+        ? storefrontUrl(t.path, language ?? lang, bases.shop)
+        : dashboardUrl(t.path, t.app === 'vendor' ? bases.vendor : bases.agency);
+    return url ?? labels.noBase;
+}
+
+function topicList(app: GuideApp, lang: GuideLanguage): string[] {
+    return WEBSITE_GUIDE.filter((t) => t.app === app).map((t) => `- ${t.key}: ${t.copy[lang].summary}`);
+}
+
+/**
+ * One topic, as the text the tool returns — or a topic list, for an app key or a key it does
+ * not know.
  *
  * ⚠ **An unknown key answers the LIST, never an error.** The caller is a model choosing from a
  * description; a refusal would leave it guessing again, while the list lets it pick correctly on
  * the next call. Same reasoning as a stale button answering with the current state.
+ *
+ * ⚠ **The default list is the STOREFRONT's, plus the three other app keys** — not every topic.
+ * The tool truncates at 6000 characters, and a list cut off halfway is a list whose missing half
+ * the model cannot know exists. `test:website-guide` holds every list under that cap.
+ *
+ * `baseUrl`: a string (or null) overrides the storefront alone, as it always has; an object
+ * overrides any of the three hosts. Omitted, all three come from the environment.
  */
 export function renderWebsiteGuide(
     key: string | null | undefined,
     language: string | null | undefined,
-    baseUrl?: string | null,
+    baseUrl?: string | null | GuideBases,
 ): string {
     const lang = guideLanguage(language);
     const labels = LABELS[lang];
-    const topic = WEBSITE_GUIDE.find((t) => t.key === String(key ?? '').toLowerCase());
+    const env = envBases();
+    const bases: Required<GuideBases> = baseUrl === undefined
+        ? env
+        : typeof baseUrl === 'string' || baseUrl === null
+            ? { ...env, shop: baseUrl }
+            : { shop: baseUrl.shop ?? null, vendor: baseUrl.vendor ?? null, agency: baseUrl.agency ?? null };
 
-    if (!topic) {
+    const wanted = String(key ?? '').toLowerCase();
+    const app = (GUIDE_APPS as readonly string[]).includes(wanted) ? (wanted as GuideApp) : null;
+
+    if (app) {
+        return [`${APP_LABELS[lang][app].name} — ${labels.appTopics}`, ...topicList(app, lang)].join('\n');
+    }
+
+    const found = WEBSITE_GUIDE.find((t) => t.key === wanted);
+
+    if (!found) {
         return [
             ...(key ? [labels.unknown, ''] : []),
             labels.topics,
-            ...WEBSITE_GUIDE.map((t) => `- ${t.key}: ${t.copy[lang].summary}`),
+            ...topicList('shop', lang),
+            '',
+            labels.apps,
+            ...GUIDE_APPS.filter((a) => a !== 'shop')
+                .map((a) => `- ${a}: ${APP_LABELS[lang][a].name} — ${APP_LABELS[lang][a].blurb}`),
         ].join('\n');
     }
 
-    const copy = topic.copy[lang];
-    // The customer's OWN language for the link, even where the text falls back to English.
-    const link = storefrontUrl(topic.path, language ?? lang, baseUrl === undefined ? process.env.STOREFRONT_URL : baseUrl);
+    const copy = found.copy[lang];
+    const appLabels = APP_LABELS[lang][found.app];
 
     return [
         copy.title.toUpperCase(),
-        `${labels.link}: ${link ?? '(the website address is not configured — describe the steps only)'}`,
-        topic.signIn ? labels.signIn : labels.noSignIn,
+        // A storefront topic reads exactly as it always has; the other apps say which app first,
+        // because "open Settings" means a different screen in each.
+        ...(found.app === 'shop' ? [] : [appLabels.name]),
+        `${labels.link}: ${topicLink(found, language, lang, bases)}`,
+        found.signIn ? appLabels.signIn : appLabels.noSignIn,
         '',
         `${labels.steps}:`,
         ...copy.steps.map((s, i) => `${i + 1}. ${s}`),

@@ -96,9 +96,15 @@ function stubbedLimits(world: {
   limits: Record<string, number>;
   rows: Record<string, { shipments: ExposureShipmentRow[]; collections: ExposureCollectionRow[] }>;
   caps: Record<string, number | null>;
+  /** Agencies under an administrator's COD restriction (2026-10-10). Absent ⇒ none. */
+  restricted?: string[];
 }): CodLimitsService {
   const svc = new CodLimitsService({} as never);
-  (svc as any).limitFor = async (agencyId: string) => ({ limit: { amount: world.limits[agencyId], source: 'default' }, override: null });
+  (svc as any).limitFor = async (agencyId: string) => ({
+    limit: { amount: world.limits[agencyId], source: 'default' },
+    override: null,
+    restriction: { restricted: (world.restricted ?? []).includes(agencyId), restrictedAt: null },
+  });
   (svc as any).exposureRows = async (agencyId: string) => world.rows[agencyId] ?? { shipments: [], collections: [] };
   (svc as any).vendorTerms = async (vendorId: string) => ({ codEnabled: true, maxCashPerAgency: world.caps[vendorId] ?? null });
   return svc;
@@ -454,6 +460,7 @@ async function main(): Promise<void> {
     const reasons = Object.values(COD_REASON_BY_CODE).sort();
     return JSON.stringify(codes) === JSON.stringify([
       ERROR_CODES.COD_AGENCY_NOT_SUPPORTED,
+      ERROR_CODES.COD_CUSTOMER_RESTRICTED,
       ERROR_CODES.COD_NOT_AVAILABLE_FOR_DIGITAL,
       ERROR_CODES.COD_ORDER_AMOUNT_EXCEEDS_LIMIT,
       ERROR_CODES.COD_VENDOR_NOT_ACCEPTED,
@@ -463,7 +470,8 @@ async function main(): Promise<void> {
       && COD_REASON_BY_CODE.COD_VENDOR_NOT_ACCEPTED === 'vendor_not_accepted'
       && COD_REASON_BY_CODE.COD_AGENCY_NOT_SUPPORTED === 'agency_not_supported'
       && COD_REASON_BY_CODE.COD_ORDER_AMOUNT_EXCEEDS_LIMIT === 'order_amount_exceeds_limit'
-      && COD_REASON_BY_CODE.COD_NOT_AVAILABLE_FOR_DIGITAL === 'digital_items';
+      && COD_REASON_BY_CODE.COD_NOT_AVAILABLE_FOR_DIGITAL === 'digital_items'
+      && COD_REASON_BY_CODE.COD_CUSTOMER_RESTRICTED === 'customer_restricted';
   });
 
   const refusal = (code: string, vendorId: string | null) => ({ vendorId, error: createAppError(code as never, 422) });
@@ -501,6 +509,9 @@ async function main(): Promise<void> {
     } as never,
     { findNamesByAgencyIds: async () => new Map() } as never,
     { findCodTerms: async (vendorId: string) => world.vendors[vendorId] ?? null } as never,
+    // The administrator's customer restriction (2026-10-10) is `test:cod-restrictions`'
+    // subject; nobody is restricted in this world.
+    { isCustomerRestricted: async () => false },
   );
   const quoteOver = (elig: CodEligibilityService) =>
     new CartQuoteService({} as never, {} as never, elig);
@@ -516,7 +527,7 @@ async function main(): Promise<void> {
     const svc = quoteOver(elig);
     const perVendor = (inputs as Array<{ vendorId: string; lines: Array<{ unitPrice: number; quantity: number }> }>)
       .map((i) => ({ vendorId: i.vendorId, subtotal: i.lines.reduce((s, l) => s + l.unitPrice * l.quantity, 0) }));
-    return cashOnDeliveryVerdictOf(await (svc as any).codRefusalsOf(productType, inputs, perVendor));
+    return cashOnDeliveryVerdictOf(await (svc as any).codRefusalsOf('c00000000000000000000001', productType, inputs, perVendor));
   };
 
   const happy = eligibilityOver({ vendors: { v1: { cod_enabled: true } }, agencies: { [AG1]: { cod: true } } });
@@ -552,6 +563,7 @@ async function main(): Promise<void> {
       { findByIds: async () => { throw new TypeError('db down'); } } as never,
       { findNamesByAgencyIds: async () => new Map() } as never,
       { findCodTerms: async () => null } as never,
+      { isCustomerRestricted: async () => false },
     );
     try {
       await verdictFor(broken, 'physical', [input('v1', [AG1])]);

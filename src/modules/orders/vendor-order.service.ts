@@ -18,7 +18,7 @@ import { OrderService } from './order.service';
 import { codLimitsService } from '../cod/services/cod-limits.service';
 import { cashCollectionService } from '../cod/services/cash-collection.service';
 import { transactionManager } from '../../core/database/transaction.manager';
-import { CodLimitBreach } from '../cod/domain/cod-limits';
+import { CodLimitBreach, isForceableCodBreach } from '../cod/domain/cod-limits';
 import { IProductRepository } from '../catalog/repositories/interfaces/product.repository.interface';
 import { ProductRepositoryMongo } from '../catalog/repositories/mongo/product.repository.mongo';
 import { FileRepositoryMongo } from '../catalog/repositories/mongo/file.repository.mongo';
@@ -39,6 +39,7 @@ import {
 import { shipmentAssignmentOfferRepository } from '../shipment-assignment/repositories/shipment-assignment-offer.repository';
 import { shipmentAssignmentSessionRepository } from '../shipment-assignment/repositories/shipment-assignment-session.repository';
 import { raiseRefundOwed } from '../earnings/services/refund-owed.service';
+import { syncTicketFollowersForOrder } from '../tickets/services/ticket-order-parties.service';
 
 /**
  * Vendor Order Service
@@ -833,7 +834,11 @@ export class VendorOrderService {
                     reason: err.message || 'Unknown error',
                     // Additive (2026-10-02): a COD-limit refusal carries its numbers, so a
                     // dashboard can offer "dispatch anyway" without re-asking per order.
-                    ...(err.code === ERROR_CODES.COD_AGENCY_LIMIT_EXCEEDED && err.details ? { details: err.details } : {}),
+                    // The administrator's COD restriction (2026-10-10) carries its `kind` and
+                    // agency too, so the row can offer "change agency" and NOT "dispatch anyway".
+                    ...((err.code === ERROR_CODES.COD_AGENCY_LIMIT_EXCEEDED || err.code === ERROR_CODES.COD_AGENCY_RESTRICTED) && err.details
+                        ? { details: err.details }
+                        : {}),
                 });
             }
         }
@@ -1225,7 +1230,12 @@ export class VendorOrderService {
             })), { force: opts.force === true });
             for (const verdict of verdicts) {
                 if (!verdict.breach) continue;
-                if (opts.force !== true) throw codLimitsService.limitExceededError(verdict);
+                // `force` waives an AMOUNT limit only. The administrator's COD restriction
+                // on the destination agency (2026-10-10) is refused whatever was sent —
+                // 422 COD_AGENCY_RESTRICTED.
+                if (opts.force !== true || !isForceableCodBreach(verdict.breach)) {
+                    throw codLimitsService.limitExceededError(verdict);
+                }
                 // The last breach carries the running exposure of every item before it.
                 forcedBreach = verdict.breach;
             }
@@ -1291,6 +1301,11 @@ export class VendorOrderService {
                 console.error('[VendorOrderService] change-of-agency post-commit effect failed:', err);
             }
         }
+
+        // The destination agency is now a party to the order: it follows the order's open
+        // tickets (owner, 2026-10-09). The agency it left keeps following — it was party to
+        // the case. Every agency change, the administrator's included, comes through here.
+        syncTicketFollowersForOrder(orderId, 'vendor-order.move-items-to-agency');
 
         return { moved: toMove.length, destinationShipmentId: destination ? destination._id!.toString() : null };
     }

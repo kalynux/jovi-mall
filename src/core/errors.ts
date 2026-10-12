@@ -159,6 +159,12 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.COD_VENDOR_NOT_ACCEPTED]: 'This seller does not accept cash on delivery',
     [ERROR_CODES.COD_AGENCY_LIMIT_EXCEEDED]:
         'Handing this shipment over would put the agency above its cash-on-delivery limit — dispatch it with force to proceed anyway',
+    [ERROR_CODES.COD_CUSTOMER_RESTRICTED]:
+        'Cash on delivery is not available on this account — choose another payment method',
+    [ERROR_CODES.COD_AGENCY_RESTRICTED]:
+        'This delivery agency cannot take cash-on-delivery shipments at the moment — choose another agency',
+    [ERROR_CODES.COD_RESTRICTION_UNCHANGED]:
+        'Cash on delivery is already in that state for this account',
     [ERROR_CODES.COD_COLLECTION_NOT_FOUND]: 'Cash collection not found',
     [ERROR_CODES.COD_COLLECTION_ALREADY_COLLECTED]: 'This cash has already been collected',
     [ERROR_CODES.COD_COLLECTION_NOT_COLLECTIBLE]: 'This collection cannot be collected in its current state',
@@ -392,6 +398,7 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.TICKET_GENERAL_UPDATE_FAILED]: 'Failed to update ticket',
     [ERROR_CODES.TICKET_ACCESS_DENIED]: 'Access to this ticket is denied',
     [ERROR_CODES.TICKET_FOLLOWER_LIMIT_EXCEEDED]: 'Maximum of 5 non-admin followers per ticket exceeded',
+    [ERROR_CODES.TICKET_FOLLOWER_ROLE_MISMATCH]: 'This user does not hold the role given for the follower',
     [ERROR_CODES.TICKET_ATTACHMENT_LIMIT_EXCEEDED]: 'Maximum of 5 attachments per ticket exceeded',
     [ERROR_CODES.TICKET_ATTACHMENT_MISSING]: 'Attachment file is required',
     [ERROR_CODES.TICKET_PRIORITY_LOCKED]: 'Priority is locked and cannot be modified',

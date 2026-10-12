@@ -119,6 +119,7 @@ transaction. Build the provider choice from `GET /api/payments/options`; see
 | 422 | `ORDER_NO_DELIVERY_AGENCY` | A physical product has no resolvable delivery agency. |
 | 422 | `COD_NOT_AVAILABLE_FOR_DIGITAL` | `paymentMethod: "cash_on_delivery"` on a digital cart. |
 | 422 | `DELIVERY_FEE_CASH_NOT_AVAILABLE` | **New 2026-10-04.** `deliveryFeePayment: "cash_to_rider"` that cannot be honoured. `details.reason`: `cash_on_delivery` (not with COD) · `not_customer_paid` / `no_delivery_fee` (no shop in the checkout charges delivery) · `agency_declines_cash` (with `vendorId`, `agencyIds`: a carrying agency does not accept the fee in cash). Nothing was created — offer "pay delivery with the order". |
+| 422 | `COD_CUSTOMER_RESTRICTED` | **New 2026-10-10.** Cash on delivery is switched off for this customer's account by an administrator. No `details`. Checked first, before any shop or agency rule; nothing was created. Offer online payment and point at support — no change to the basket helps. The cart quote predicts it (`cashOnDelivery.reason: "customer_restricted"`). See [FRONTEND-CHANGELOG-cod-restrictions.md](./FRONTEND-CHANGELOG-cod-restrictions.md). |
 | 422 | `COD_VENDOR_NOT_ACCEPTED` | **New 2026-10-02.** A shop on the order switched cash on delivery off in its COD terms. `details: { vendorId }`. Checked **before** the agency rules. Offer online payment for that shop's items — see [FRONTEND-CHANGELOG-cod-limits-and-delivery-fees.md](./FRONTEND-CHANGELOG-cod-limits-and-delivery-fees.md). ⚠ Nothing on the web storefront predicts it before checkout. |
 | 422 | `COD_AGENCY_NOT_SUPPORTED` | A delivery agency on the order doesn't handle COD. `details: { agencyId, agencyName }`. |
 | 422 | `COD_ORDER_AMOUNT_EXCEEDS_LIMIT` | One vendor-order's total exceeds an agency's COD cap. `details: { agencyId, agencyName, maxOrderAmount, orderTotal }`. |
@@ -682,11 +683,12 @@ and every delivery agency involved must support COD (some also cap the per-order
    code. The verified code atomically records the payment and marks the shipment **delivered** —
    there is no separate confirm-delivery step for COD shipments, and
    [`POST …/confirm-delivery`](#confirm-shipment) rejects them.
-4. **If the code never arrives:** the agent marks arrival (`agent_delivered`) and, after 7 days at
+4. **If the code never arrives:** the agent marks arrival (`agent_delivered`) and, after 3 days at
    that status, the system records the cash as collected anyway and the shipment becomes
    `delivered`. This exists because a customer can pay and still not produce the code (phone not to
    hand, or unwilling), while an agent who was *not* paid is required to mark the shipment failed →
-   returned instead — so a shipment left at `agent_delivered` for a week is treated as paid. The
+   returned instead — so a shipment left at `agent_delivered` for the whole window is treated as paid.
+   (The window is `EARNINGS_SHIPMENT_AUTO_CONFIRM_DAYS`, 3 days by default; it was 7 until 2026-10-09.) The
    collection is flagged internally as having no code behind it.
 5. `paymentStatus` progresses `AWAITING_PAYMENT` → `partially_paid` (some shipments collected) →
    `paid` (all collected). If a shipment fails and is returned, no cash is due for it; an order
@@ -726,7 +728,16 @@ already collected), `429 COD_CODE_RESEND_TOO_SOON` (`details.retryInSeconds`).
 
 Confirm receipt/satisfaction. Confirmable once fulfilment is `delivered` (physical) or
 `fulfilled` (digital) and the order has not already been completed. Completing the order
-starts the 7-day escrow hold before vendor funds become withdrawable.
+no longer starts the escrow hold: since 2026-10-05 that runs from delivery (3 days by default,
+`EARNINGS_HOLD_DAYS`). A parcel the customer does not confirm is confirmed for them 3 days after the
+agent marked it delivered (`EARNINGS_SHIPMENT_AUTO_CONFIRM_DAYS`; 7 until 2026-10-09).
+
+**`protection` (2026-10-10).** Every order read carries
+`protection: { days, startsAt, endsAt, status, onHold, problemReported }`: the window in which
+Wi-Mall can still settle a problem out of the order's money. It opens at delivery, lasts `days`,
+and a problem the customer reports inside it puts the money on hold (`endsAt` is then `null`).
+Render the deadline from it and never hardcode the number of days. See
+[FRONTEND-CHANGELOG-wi-mall-protection.md](../FRONTEND-CHANGELOG-wi-mall-protection.md).
 
 > **Already completed?** Read `completion.confirmedAt` on the order — it is non-null exactly
 > when this endpoint would answer `409 EARNINGS_ALREADY_COMPLETED`. Fulfilment does not move on

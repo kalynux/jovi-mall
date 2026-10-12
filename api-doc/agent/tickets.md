@@ -22,6 +22,11 @@ scoped to the caller.
 > [ticket_types.txt](../ticket_types.txt).
 > This page lists the exact **agent** route set and the agent-specific differences.
 
+> **Order tickets reach the agent automatically (2026-10-09).** An agent who accepts a shipment
+> follows every open ticket about its order — opened by the customer, the vendor, the agency or
+> the platform — and keeps following after being replaced. See
+> [vendor/tickets.md § Order tickets reach every party automatically](../vendor/tickets.md#order-tickets-reach-every-party-automatically-2026-10-09).
+
 > **The administrator on a ticket.** `assigned_admin` is **not** an actor summary — it is
 > `{ name, job_title, department, avatar_url }`, and it is **`null` until a wi-admin
 > administrator takes the ticket**, which is the state almost every ticket is in.

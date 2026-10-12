@@ -2,7 +2,10 @@ import { TicketRepository, TicketFilters, PaginationOptions } from '../repositor
 import { TicketFollowerService } from './ticket-follower.service';
 import { TicketNoteService } from './ticket-note.service';
 import { TicketAttachmentService } from './ticket-attachment.service';
-import { TicketStatus, TicketPriority, ActorRole, EntityType, TicketImportance, isWaitingStatus, WAITING_STATUS_TARGET_ROLE } from '../types/ticket.types';
+import { ticketOrderPartiesService } from './ticket-order-parties.service';
+import { ticketEarningsHoldService } from './ticket-earnings-hold.service';
+import { logger } from '../../../core/logging';
+import { TicketStatus, TicketPriority, ActorRole, EntityType, TicketImportance, isTerminalStatus, isWaitingStatus, WAITING_STATUS_TARGET_ROLE } from '../types/ticket.types';
 import { ITicket } from '../models/ticket.model';
 import { IAdminSnapshot } from '../../../core/types/admin-snapshot.types';
 import { AppError, createAppError } from '../../../core/errors';
@@ -31,6 +34,8 @@ import { SYSTEM_ACTOR_ID, SYSTEM_ADMIN_SNAPSHOT, isSystemActor } from '../../../
  * DOMAIN RULES:
  * - Creator auto-added as follower
  * - Assignee auto-added as follower
+ * - On a ticket about an order, the order's vendor, agencies and agents auto-added as
+ *   followers — at creation and on reopen here (`TicketOrderPartiesService`)
  * - Status changes generate system notes
  * - Priority locks forever after admin updates it
  * - Only creator or admin can close ticket
@@ -123,8 +128,32 @@ export class TicketService {
             input.createdByUserId,
             input.createdByRole,
             input.createdByUserId,
-            true // silent
+            { source: 'creator', silent: true }
         );
+
+        // A ticket about an order is followed by the order's vendor, agencies and agents.
+        // Best-effort: the ticket exists and must be returned — a refund ticket opened by the
+        // platform is the record that money is owed, and losing it to a follower lookup would
+        // be the worse failure. A miss is repaired by the next sync on the order, or a reopen.
+        try {
+            await ticketOrderPartiesService.addToTicket(ticket);
+        } catch (err) {
+            logger().error({ err, ticketId: ticket.id }, 'tickets: adding order parties at creation failed');
+        }
+
+        // A customer reporting a problem with their own purchase keeps its earnings paused
+        // while the request is open (owner decision 2026-10-10). Best-effort like the rest of
+        // this tail: the request exists either way, and a miss is logged loudly because the
+        // money it should have held will be released on its normal date.
+        try {
+            const holds = await ticketEarningsHoldService.onTicketCreated(ticket, {
+                userId: input.createdByUserId,
+                entityId: input.createdByEntityId,
+            });
+            if (holds) ticket.holds_earnings = true;
+        } catch (err) {
+            logger().error({ err, ticketId: ticket.id }, 'tickets: FAILED to pause earnings for a problem report');
+        }
 
         // Persist any files supplied at creation time. This is the SAME path the
         // edit flow uses (attachFile), so it creates both the TicketAttachment row
@@ -205,6 +234,10 @@ export class TicketService {
             ticketId,
             `Status changed from "${oldStatus}" to "${newStatus}"`
         );
+
+        if (isTerminalStatus(newStatus)) {
+            await this.releaseEarningsHold(ticket, userId, role);
+        }
 
         // Emit event
         await eventBus.publish('ticket.status_changed', {
@@ -290,7 +323,7 @@ export class TicketService {
                 targetUserId,
                 targetRole,
                 assignerUserId,
-                true // silent
+                { source: 'assignee', silent: true }
             );
         }
 
@@ -517,7 +550,23 @@ export class TicketService {
 
         await this.noteService.createSystemNote(ticketId, 'Ticket closed');
 
+        await this.releaseEarningsHold(ticket, userId, role);
+
         return updatedTicket;
+    }
+
+    /**
+     * The ticket was resolved or closed: free the earnings it held, IF the person ending it
+     * may (an administrator or the customer who opened it — never the seller, who follows the
+     * ticket and can set its status). Takes the ticket as it was BEFORE the status write,
+     * because that is the copy carrying `holds_earnings`. Best-effort: the status stands.
+     */
+    private async releaseEarningsHold(ticket: ITicket, userId: string, role: ActorRole): Promise<void> {
+        try {
+            await ticketEarningsHoldService.onTicketEnded(ticket, { userId, role });
+        } catch (err) {
+            logger().error({ err, ticketId: ticket.id }, 'tickets: FAILED to release the earnings hold of an ended ticket');
+        }
     }
 
     /**
@@ -549,6 +598,15 @@ export class TicketService {
 
         // Create system note
         await this.noteService.createSystemNote(ticketId, 'Ticket reopened by admin');
+
+        // While it was closed the order may have gained an agency or an agent, and the sync
+        // skips terminal tickets — so catch it up now. Best-effort, like the creation path.
+        try {
+            const orderId = await ticketOrderPartiesService.orderIdOf(updatedTicket.entity_type, updatedTicket.entity_id);
+            if (orderId) await ticketOrderPartiesService.syncOrder(orderId);
+        } catch (err) {
+            logger().error({ err, ticketId }, 'tickets: order-party sync on reopen failed');
+        }
 
         return updatedTicket;
     }

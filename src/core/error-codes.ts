@@ -412,6 +412,7 @@ export const ERROR_CODES = Object.freeze({
     TICKET_GENERAL_UPDATE_FAILED: 'TICKET_GENERAL_UPDATE_FAILED',
     TICKET_ACCESS_DENIED: 'TICKET_ACCESS_DENIED',
     TICKET_FOLLOWER_LIMIT_EXCEEDED: 'TICKET_FOLLOWER_LIMIT_EXCEEDED',
+    TICKET_FOLLOWER_ROLE_MISMATCH: 'TICKET_FOLLOWER_ROLE_MISMATCH',
     TICKET_ATTACHMENT_LIMIT_EXCEEDED: 'TICKET_ATTACHMENT_LIMIT_EXCEEDED',
     TICKET_ATTACHMENT_MISSING: 'TICKET_ATTACHMENT_MISSING',
     TICKET_PRIORITY_LOCKED: 'TICKET_PRIORITY_LOCKED',
@@ -2040,6 +2041,16 @@ export const ERROR_CODES = Object.freeze({
      * its own cash limit or the vendor's `maxCashPerAgency`. Retry with `force: true`.
      */
     COD_AGENCY_LIMIT_EXCEEDED: 'COD_AGENCY_LIMIT_EXCEEDED',
+    /**
+     * The administrator's COD restriction (2026-10-10, `cod/domain/cod-restriction.ts`).
+     * `CUSTOMER_RESTRICTED`: checkout — this customer may not place cash-on-delivery orders.
+     * `AGENCY_RESTRICTED`: dispatch / change-agency — the agency may receive no new COD
+     * shipment; `force` does NOT waive it (force waives amounts, this is not one).
+     * `RESTRICTION_UNCHANGED`: the admin write asked for the state the account is already in.
+     */
+    COD_CUSTOMER_RESTRICTED: 'COD_CUSTOMER_RESTRICTED',
+    COD_AGENCY_RESTRICTED: 'COD_AGENCY_RESTRICTED',
+    COD_RESTRICTION_UNCHANGED: 'COD_RESTRICTION_UNCHANGED',
     COD_COLLECTION_NOT_FOUND: 'COD_COLLECTION_NOT_FOUND',
     COD_COLLECTION_ALREADY_COLLECTED: 'COD_COLLECTION_ALREADY_COLLECTED',
     COD_COLLECTION_NOT_COLLECTIBLE: 'COD_COLLECTION_NOT_COLLECTIBLE',

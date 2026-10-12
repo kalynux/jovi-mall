@@ -23,10 +23,12 @@ import {
   VendorCodTerms,
   evaluateCodLimits,
   expectedCodAmount,
+  isForceableCodBreach,
   resolveAgencyCodLimit,
   sumCodExposure,
   vendorCodTermsOf,
 } from '../domain/cod-limits';
+import { CodRestrictionPublicView, codRestrictionPublicViewOf } from '../domain/cod-restriction';
 import { cashCollectionKindOf, customerDeliveryFeeOf } from '../../orders/domain/delivery-payer';
 
 /** Every row behind one agency's exposure — gathered once, summed as often as needed. */
@@ -46,6 +48,14 @@ export interface AgencyCodLimitReport {
   headroom: number;
   /** `exposure.total > limit` — reachable through a forced dispatch or a lowered pin. */
   overLimit: boolean;
+  /**
+   * An administrator switched cash on delivery OFF for this agency (2026-10-10): it
+   * receives no new COD shipment whatever its `headroom` says. `restrictedAt` is when.
+   * The reason and the author are NOT here — the agency reads this report too; the
+   * administrator's read is `GET /api/internal/admin/agencies/:id/cod-restriction`.
+   */
+  codRestricted: boolean;
+  codRestrictedAt: Date | null;
 }
 
 /** The admin read adds the pin itself (reason and author) — never shown to the agency. */
@@ -101,12 +111,25 @@ export class CodLimitsService {
 
   // ─── Reads ──────────────────────────────────────────────────────────────
 
-  /** The agency's limit — the pin when one is set, else the platform default. */
-  async limitFor(agencyId: string): Promise<{ limit: AgencyCodLimit; override: IAgencyCodLimitOverride | null }> {
-    const agency = await DeliveryAgencyModel.findById(agencyId, { cod_limit_override: 1 }).lean().exec();
+  /**
+   * The agency's limit — the pin when one is set, else the platform default — and whether
+   * an administrator restricted cash on delivery for it (`cod_restriction`, 2026-10-10).
+   * The two are read together because every hand-off needs both, and they are independent:
+   * a restriction rewrites neither the pin nor the default.
+   */
+  async limitFor(agencyId: string): Promise<{
+    limit: AgencyCodLimit;
+    override: IAgencyCodLimitOverride | null;
+    restriction: CodRestrictionPublicView;
+  }> {
+    const agency = await DeliveryAgencyModel.findById(agencyId, { cod_limit_override: 1, cod_restriction: 1 }).lean().exec();
     if (!agency) throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404, undefined, { agencyId });
     const override = (agency.cod_limit_override as IAgencyCodLimitOverride | null | undefined) ?? null;
-    return { limit: resolveAgencyCodLimit(override), override };
+    return {
+      limit: resolveAgencyCodLimit(override),
+      override,
+      restriction: codRestrictionPublicViewOf(agency.cod_restriction),
+    };
   }
 
   /** The vendor's COD terms with defaults applied. Never writes. */
@@ -190,7 +213,7 @@ export class CodLimitsService {
 
   /** The agency's limit and what it holds right now — the agency's and wi-admin's read. */
   async report(agencyId: string): Promise<AdminAgencyCodLimitReport> {
-    const [{ limit, override }, rows] = await Promise.all([this.limitFor(agencyId), this.exposureRows(agencyId)]);
+    const [{ limit, override, restriction }, rows] = await Promise.all([this.limitFor(agencyId), this.exposureRows(agencyId)]);
     const exposure = sumCodExposure(rows.shipments, rows.collections);
     return {
       agencyId,
@@ -200,6 +223,8 @@ export class CodLimitsService {
       exposure,
       headroom: Math.max(0, limit.amount - exposure.total),
       overLimit: exposure.total > limit.amount,
+      codRestricted: restriction.restricted,
+      codRestrictedAt: restriction.restrictedAt,
       override: override
         ? {
             amount: override.amount,
@@ -237,7 +262,7 @@ export class CodLimitsService {
     const agencyIds = [...new Set(cod.map((c) => c.agencyId))];
     const vendorIds = [...new Set(cod.map((c) => c.vendorId))];
     const [limits, rowsByAgency, terms] = await Promise.all([
-      Promise.all(agencyIds.map(async (id) => [id, (await this.limitFor(id)).limit] as const)),
+      Promise.all(agencyIds.map(async (id) => [id, await this.limitFor(id)] as const)),
       Promise.all(agencyIds.map(async (id) => [id, await this.exposureRows(id)] as const)),
       Promise.all(vendorIds.map(async (id) => [id, await this.vendorTerms(id)] as const)),
     ]);
@@ -264,14 +289,21 @@ export class CodLimitsService {
       const vendorExposure =
         sumCodExposure(others, agencyRows.collections, c.vendorId).total + (addedVendor.get(vendorKey) ?? 0);
 
+      const agencyLimit = limitByAgency.get(c.agencyId)!;
       const breach = evaluateCodLimits({
         additionalAmount: c.amount,
-        agency: { exposure: agencyExposure, limit: limitByAgency.get(c.agencyId)!.amount },
+        agency: {
+          exposure: agencyExposure,
+          limit: agencyLimit.limit.amount,
+          restricted: agencyLimit.restriction.restricted,
+        },
         vendor: { exposure: vendorExposure, cap: termsByVendor.get(c.vendorId)!.maxCashPerAgency },
       });
 
       out.push({ ...c, breach });
-      if (!breach || opts.force) {
+      // Counted when it is GOING to the agency: it passed, or it was forced past an amount
+      // limit. A breach `force` cannot waive (the administrator's restriction) never goes.
+      if (!breach || (opts.force && isForceableCodBreach(breach))) {
         addedAgency.set(c.agencyId, (addedAgency.get(c.agencyId) ?? 0) + c.amount);
         addedVendor.set(vendorKey, (addedVendor.get(vendorKey) ?? 0) + c.amount);
       }
@@ -279,9 +311,21 @@ export class CodLimitsService {
     return out;
   }
 
-  /** The 422 for the first breach of a batch. */
+  /**
+   * The 422 for the first breach of a batch. An amount breach is
+   * `COD_AGENCY_LIMIT_EXCEEDED` (retry with `force`); the administrator's restriction is
+   * `COD_AGENCY_RESTRICTED`, which no `force` waives — its hint names the only two exits.
+   */
   limitExceededError(verdict: CodHandoffVerdict): Error {
     const b = verdict.breach!;
+    if (!isForceableCodBreach(b)) {
+      return createAppError(ERROR_CODES.COD_AGENCY_RESTRICTED, 422, undefined, {
+        kind: b.kind,
+        agencyId: verdict.agencyId,
+        shipmentId: verdict.shipmentId,
+        hint: 'This delivery agency cannot take cash-on-delivery shipments at the moment. Choose another agency for these items; force does not apply.',
+      });
+    }
     return createAppError(ERROR_CODES.COD_AGENCY_LIMIT_EXCEEDED, 422, undefined, {
       kind: b.kind,
       currentExposure: b.currentExposure,

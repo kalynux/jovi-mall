@@ -10,6 +10,7 @@ import { CheckoutController } from './surfaces/checkout.controller';
 import { OrderListingController } from './surfaces/order-listing.controller';
 import { StoreListingController } from './surfaces/store-listing.controller';
 import { BotPurchaseController } from '../controllers/bot-purchase.controller';
+import { BotOrderController } from '../controllers/bot-order.controller';
 
 /**
  * `/api/bot/miniapp` — the Telegram Mini App's own mount.
@@ -88,6 +89,7 @@ router.post('/api/:handle/cart', MiniAppController.addToCart);
 //    POST /s/pd/:handle/act                                   — the purchase write   (Stream C)
 //    GET  /s/co/:handle/data   ·  POST /s/co/:handle/place    — checkout             (Stream D)
 //    GET  /s/ol/:handle/data                                  — order history        (Stream E)
+//    POST /s/ol/:handle/open                                  — pick one order       (Stream G)
 //    GET  /s/sl/:handle/data   ·  POST /s/sl/:handle/open     — shop directory       (Stream E)
 //
 //  ⚠ **`/s/pd/:handle/act` is Stream C's, not Stream B's, and the split is the point**: the
@@ -256,6 +258,18 @@ router.post('/s/co/:handle/place-cod', CheckoutController.placeCashOnDelivery);
 
 /** Order history — the full list, beyond the five the chat shows. */
 router.get('/s/ol/:handle/data', OrderListingController.data);
+
+/**
+ * A row on that list was tapped: send the order's card into the chat.
+ *
+ * ⚠ **The orders stream's handler on the listing's screen**, the split `/s/pd/:handle/act` has
+ * and for its reason — the screen SHOWS the order and the stream that owns the order card
+ * decides what can be done to it, so the chat and the screen offer the same buttons.
+ *
+ * ⚠ **It spends nothing and changes nothing.** `read`, not `consume`: the customer may come back
+ * and pick another row. Everything an order can have done to it stays a button in the chat.
+ */
+router.post('/s/ol/:handle/open', BotOrderController.screenOpen);
 
 /**
  * The shop directory, and one tap into a shop.

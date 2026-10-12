@@ -29,6 +29,14 @@ import { InAppSurfaceSession, inAppSurfaceStore } from '../../services/inapp-sur
  * pays. Every action a customer can take on an order stays in chat, where it can be confirmed
  * in one tap and where the model can explain what happened.
  *
+ * ── A ROW CAN BE PICKED, AND PICKING IT IS NOT THIS FILE'S ──────────────────
+ * Since 2026-10-11 (owner) a row is tappable: the tap sends that order's card — Shipments,
+ * Cancel, Get help — into the conversation, which is where every one of those still happens.
+ * This file's part is `orderId` on the row and the one sentence telling the customer a row can
+ * be tapped. The tap itself is `BotOrderController.screenOpen`, on `POST /s/ol/:handle/open`:
+ * it needs the customer's order VIEW to gate the card's buttons, and the view is exactly what
+ * the next section keeps out of this file.
+ *
  * ── ⚠ THE COD DELIVERY CODE CANNOT REACH THIS SCREEN, BY CONSTRUCTION ───────
  * `stripDeliveryCodes` exists because `customerOrderViewService.toDtos` resolves COD blocks
  * **with** the code in them — it is the customer's own secret, and the chat surface strips it
@@ -146,6 +154,7 @@ export class OrderListingController {
                 ),
             ),
             emptyText: ORDERS_EMPTY[language],
+            selectHint: ORDERS_SELECT_HINT[language],
             cursor: nextCursor(page, meta.total),
         });
     });
@@ -210,6 +219,12 @@ function nextCursor(page: number, total: number): string | null {
 
 /** One per-vendor order inside a checkout. */
 interface OrderRow {
+    /**
+     * What the page posts back when this row is tapped. An id, not a credential: the tap is
+     * answered against the SESSION's customer, so an id from somebody else's history reads as
+     * not found.
+     */
+    orderId: string;
     orderNumber: string;
     /** The shop's business name, from the Store — never the vendor's display name. */
     storeName: string | null;
@@ -264,6 +279,7 @@ function toGroupCard(
         paymentText: paymentTextOf(group, language),
         summaryText: summarise(titles),
         orders: group.orders.map((order) => ({
+            orderId: order.id,
             orderNumber: order.orderNumber,
             storeName: storeNames.get(order.vendorId)?.name ?? null,
             statusText: botFulfillmentStateLabel(order.fulfillmentStatus, language),
@@ -433,6 +449,23 @@ const ORDERS_EMPTY: Copy = Object.freeze({
 });
 
 /**
+ * The line under the heading: a row can be tapped, and what that is for.
+ *
+ * ⚠ **It names the two things EVERY order's card offers and stops there.** Cancel is on the card
+ * only while an order can still be cancelled, which is a minority of them; promising it here
+ * would promise most customers a button they will not find.
+ *
+ * With the data rather than through `/copy`, for `ORDERS_EMPTY`'s reason.
+ */
+const ORDERS_SELECT_HINT: Copy = Object.freeze({
+    en: 'Tap an order to see its parcels or get help.',
+    fr: "Touchez une commande pour voir ses colis ou obtenir de l'aide.",
+    pt: 'Toque numa encomenda para ver os envios ou obter ajuda.',
+    es: 'Toca un pedido para ver sus envíos o pedir ayuda.',
+    ar: 'اضغط على طلب لرؤية شحناته أو لطلب المساعدة.',
+});
+
+/**
  * ⚠ Exported for `test:inapp-orders` § 2. No status table is exported, because there is none
  * here any more — the suite imports the shared one directly and checks this screen is wired to it.
  */
@@ -440,6 +473,7 @@ export const __ORDER_LISTING = Object.freeze({
     PAGE_SIZE,
     MAX_PAGE,
     ORDERS_EMPTY,
+    ORDERS_SELECT_HINT,
     paymentTextOf,
     summarise,
     toGroupCard,

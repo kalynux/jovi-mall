@@ -311,7 +311,8 @@ little more from the same shop"). `details.shortfall` is the amount, in `details
 - Since 2026-10-03 every quote also carries **`cashOnDelivery: { available, reason, vendorIds }`**
   — whether checkout would accept the basket as cash on delivery at all (vendor terms, agency COD
   support and per-order maximum, digital basket), whatever `paymentMethod` was sent. `reason` is
-  `vendor_not_accepted | agency_not_supported | order_amount_exceeds_limit | digital_items`, 1:1
+  `vendor_not_accepted | agency_not_supported | order_amount_exceeds_limit | digital_items |
+  customer_restricted` (the last since 2026-10-10: an administrator restricted this customer), 1:1
   with checkout's `COD_*` codes. Do not offer pay-on-delivery while `available` is `false`.
   Contract: `api-doc/customer/cart.md` § `cashOnDelivery`.
 - The chat checkout (`checkout_place`) refuses it **before** spending its handle
@@ -3226,6 +3227,36 @@ on that day.
 checks the scheme and the host, and falls back to the storefront rather than sending a message
 Telegram will drop. A Tailscale or loopback origin opens for nobody but the developer who set
 it, and nothing on the backend's side reports that.
+
+### 19.8 · An order picked on the order screen arrives in the chat as its card (2026-10-11)
+
+Every row of the order screen is tappable. A tap sends **that order's card** — the one
+`ord:<orderId>` draws: order, shop, state, total, with **Shipments**, **Cancel** (only while it
+can still be cancelled) and **Get help** under it — into the conversation the screen was opened
+from. The screen then closes (Telegram) or offers *Back to chat* (WhatsApp).
+
+**Your flow does nothing for this, and that is the whole contract:**
+
+- **The platform sends the card itself**, with its own channel credentials. A page cannot write
+  to a chat, so there is no turn for you to relay and no `reply` to post.
+- **Its buttons carry tokens you already route** — `shp:<orderId>`, `ord:<orderId>:cancel`,
+  `tkt:new:hp:<orderId>` (§ 14.9). A press comes back through the ordinary tap door.
+- **The screen changes nothing on an order.** It picks one; every action stays a button in the
+  chat, with the confirmations it already has.
+
+⚠ **The card is sent outside your send loop, so it is not in the reply journal.** A customer
+who *replies to* that card (WhatsApp's quote-reply) resolves as "no longer available", exactly
+as a reply to a booking receipt or to the Bargain question does today — all three are messages
+this service posts on its own. A tap on its buttons is unaffected.
+
+⚠ **Inside the 24-hour window only.** The customer opened the screen from a chat they wrote in
+minutes ago, so the window is open in practice; when it is not, the send is refused, nothing is
+retried as a template, and the screen says so instead of closing.
+
+Screen-side contract (browser traffic, authorised by the screen handle and nothing else):
+`POST /api/bot/miniapp/s/ol/:handle/open` with `{ "orderId": "<id>" }` →
+`{ sent, message, chatUrl }`. An order that is not the session's own customer's is
+`404 ORDER_NOT_FOUND`; a lapsed screen is `410 BOT_SCREEN_SESSION_EXPIRED`.
 
 ---
 

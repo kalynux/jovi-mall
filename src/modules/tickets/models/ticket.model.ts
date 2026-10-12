@@ -72,6 +72,15 @@ export interface ITicket extends Document {
     // Null when the related order is not yet dispatched / no number was given.
     tracking_number?: string | null;
 
+    /**
+     * True while this request keeps its order's or booking's earnings paused: the customer
+     * reported a problem before the money was released (`TicketEarningsHoldService`).
+     * Cleared ONLY when an administrator or the customer who opened it resolves or closes it,
+     * or when an administrator resumes the earnings by hand. A seller is a follower and can
+     * set any status, so the ticket's STATUS must never be what frees their own money.
+     */
+    holds_earnings?: boolean;
+
     // Creator Information
     created_by_role: ActorRole;
     created_by_user_id: mongoose.Types.ObjectId;
@@ -124,6 +133,16 @@ export interface ITicket extends Document {
 
     // Audit Trail
     updated_by: mongoose.Types.ObjectId[]; // All users who modified ticket
+
+    /**
+     * Users an administrator REMOVED from this ticket's followers (2026-10-09).
+     *
+     * The order-party sync re-runs whenever an agent accepts, the items change agency or the
+     * ticket is reopened, and it adds every current vendor/agency/agent of the order. Without
+     * this list, an administrator removing one of them would be undone by the next unrelated
+     * event on the order. An administrator adding the user again clears their entry.
+     */
+    removed_follower_user_ids?: mongoose.Types.ObjectId[];
 
     /**
      * When the ticket entered a terminal status (resolved/closed). Set on the
@@ -206,6 +225,10 @@ const TicketSchema = new Schema<ITicket>({
         default: null,
         trim: true
     },
+    holds_earnings: {
+        type: Boolean,
+        default: false
+    },
     created_by_role: {
         type: String,
         enum: ACTOR_ROLE_VALUES,
@@ -241,6 +264,10 @@ const TicketSchema = new Schema<ITicket>({
         type: Schema.Types.ObjectId,
         ref: MODELS.USER
     }],
+    removed_follower_user_ids: {
+        type: [{ type: Schema.Types.ObjectId, ref: MODELS.USER }],
+        default: undefined, // absent until the first removal — most tickets never have one
+    },
     terminalAt: {
         type: Date,
         default: null

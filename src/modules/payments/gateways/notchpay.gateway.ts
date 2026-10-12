@@ -361,23 +361,13 @@ const direction = directionOfEventType(type);
    * fund a transfer, so only the first is returned — a caller adding them would approve a
    * payout against money that has not cleared.
    *
-   * Returns null rather than throwing when the currency is absent from the response: an
-   * account that has never held XAF reports no XAF key, and that is not an error, it is a
-   * zero the caller should treat as unknown rather than as a refusal.
+   * Returns null rather than throwing when the response does not state a balance in this
+   * currency: that is unknown, which the caller must not treat as a refusal. The shapes are
+   * read by `notchPayAvailableBalance`.
    */
   async payoutBalance(currency: string): Promise<PayoutBalance | null> {
     const response = await this.call('/balance', 'GET', undefined, { grant: true });
-    const available = (response?.balance?.available ?? response?.data?.balance?.available) as
-      | Record<string, unknown>
-      | undefined;
-    if (!available) return null;
-
-    const key = Object.keys(available).find((k) => k.toUpperCase() === currency.toUpperCase());
-    if (!key) return null;
-
-    const amount = Number(available[key]);
-    if (!Number.isFinite(amount)) return null;
-    return { available: amount, currency: currency.toUpperCase() };
+    return notchPayAvailableBalance(response, currency);
   }
 
   /**
@@ -724,6 +714,42 @@ const direction = directionOfEventType(type);
       clearTimeout(timer);
     }
   }
+}
+
+/**
+ * A `GET /balance` response, reduced to the available float in one currency. Pure; exported for
+ * `test:payout-reconciliation`.
+ *
+ * ⚠ The LIVE account answers one balance with its currency beside it (read 2026-10-12):
+ *
+ *     { balance: { available: 6920, pending: 0, reserved: 0, total: 6920, currency: 'XAF' } }
+ *
+ * The earlier reading — `available` as a map keyed by currency — matched nothing there, so the
+ * float came back unknown and the pre-send balance check was skipped. Both shapes are read. A
+ * number with no currency beside it, or with another one, is null: unknown, never a guess.
+ */
+export function notchPayAvailableBalance(response: unknown, currency: string): PayoutBalance | null {
+  const body = (response ?? {}) as Record<string, any>;
+  const balance = (body.balance ?? body.data?.balance ?? null) as Record<string, any> | null;
+  if (!balance || typeof balance !== 'object') return null;
+
+  const wanted = currency.toUpperCase();
+  const available = balance.available as unknown;
+  if (available === null || available === undefined || available === '') return null;
+
+  let raw: unknown;
+  if (typeof available === 'object') {
+    const key = Object.keys(available as object).find((k) => k.toUpperCase() === wanted);
+    if (!key) return null;
+    raw = (available as Record<string, unknown>)[key];
+  } else {
+    if (String(balance.currency ?? '').toUpperCase() !== wanted) return null;
+    raw = available;
+  }
+
+  if (raw === null || raw === undefined || raw === '') return null;
+  const amount = Number(raw);
+  return Number.isFinite(amount) ? { available: amount, currency: wanted } : null;
 }
 
 /**

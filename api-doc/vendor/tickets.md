@@ -257,6 +257,24 @@ all products; customer/agency/agent → products appearing in the orders they ca
 
 > ⚠ **This page said "created by the vendor", and that is narrower than what the endpoint returns.** A vendor added as a follower to an agency's or a customer's ticket sees it here.
 
+#### Order tickets reach every party automatically (2026-10-09)
+
+A ticket **about an order** — entity type `ORDER`, or `SHIPMENT` resolved to its order — is
+followed automatically by the order's **vendor** and by every **agency** and **agent** on its
+shipments, whoever opened it: the customer, another party, an administrator or the platform
+(a refund owed, a payment dispute). So this list, and the agency's and agent's, include order
+tickets they did not open. The customer is **not** added when someone else opens the ticket.
+
+- **When:** at creation; when an agent accepts one of the order's shipments; when the items move
+  to another agency; and when an administrator reopens the ticket. An agency or agent assigned
+  *after* the ticket was opened joins it then, with a public `User added as follower` system note.
+- **What they see:** the ticket and its **public** notes and attachments — exactly what any
+  follower sees. Private staff notes stay private.
+- **Who stays:** a replaced agency or agent keeps following. Only an administrator removes a
+  follower, and a removed party is not re-added automatically.
+- These followers do not count toward the 5-user limit, and neither do followers an
+  administrator adds (see [admin/tickets.md](../admin/tickets.md)).
+
 **Authorization**: Vendor access required.
 
 **Request Headers**:

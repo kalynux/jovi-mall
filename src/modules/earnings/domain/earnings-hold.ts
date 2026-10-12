@@ -34,11 +34,22 @@ export const EARNINGS_PAUSE_REASONS = [
    * is rejected or abandoned.
    */
   'refund_in_progress',
+  /**
+   * The customer reported a problem with their own order or booking while its money was not
+   * yet released (owner decision, 2026-10-10): a support request of a problem type, opened by
+   * the customer it belongs to. Raised and lifted by `TicketEarningsHoldService`. It lifts
+   * when an administrator or that customer ends the request, never when the seller does.
+   */
+  'customer_problem_reported',
 ] as const;
 export type EarningsPauseReason = (typeof EARNINGS_PAUSE_REASONS)[number];
 
 /** Reasons a system event may lift by itself. Every other pause waits for an administrator. */
-export const SELF_RESUMING_PAUSE_REASONS: readonly EarningsPauseReason[] = ['card_dispute', 'refund_in_progress'];
+export const SELF_RESUMING_PAUSE_REASONS: readonly EarningsPauseReason[] = [
+  'card_dispute',
+  'refund_in_progress',
+  'customer_problem_reported',
+];
 
 /**
  * The pauses a COMPLETED refund closes (`EarningsPauseService.closeOnRefund`, § 6.5). Each one
@@ -49,7 +60,21 @@ export const REFUND_CLOSABLE_PAUSE_REASONS: readonly EarningsPauseReason[] = [
   'refund_in_progress',
   'seller_cancelled_paid_order',
   'booking_cancelled_unrefunded',
+  // The refund IS the answer to the customer's report: what it did not take back matures.
+  'customer_problem_reported',
 ];
+
+/**
+ * Did an administrator lift a customer-problem pause by hand? Then they have looked at the
+ * case and decided the money may go: a further request on the same order or booking must not
+ * pause it again by itself (they can still pause it by hand). This is what stops a customer
+ * holding a seller's money indefinitely by opening one request after another.
+ */
+export function adminLiftedProblemPause(
+  pause: { active: boolean; reason: EarningsPauseReason | null; resumed_by_source?: string | null } | null | undefined
+): boolean {
+  return !!pause && !pause.active && pause.reason === 'customer_problem_reported' && pause.resumed_by_source === 'admin';
+}
 
 /** The pause record kept on an order or a booking. `active: false` once resumed. */
 export interface EarningsPauseRecord {
@@ -86,6 +111,103 @@ export function resumedHoldReleaseAt(row: HoldWindow, pausedAt: Date, now: Date)
   const clockStoppedAt = Math.max(pausedAt.getTime(), row.completed_at.getTime());
   const lostMs = Math.max(0, now.getTime() - clockStoppedAt);
   return new Date(row.hold_release_at.getTime() + lostMs);
+}
+
+/**
+ * The customer's protection window on one order, for display (owner decision, 2026-10-10).
+ *
+ * It IS the earnings hold seen from the buyer's side: the platform can settle a problem out
+ * of the order's money only while it still holds that money, so the window opens at delivery
+ * and lasts `holdDays`. A problem reported inside it pauses the money, and a pause keeps the
+ * window open: `endsAt` moves later by the paused time, the same arithmetic as
+ * `resumedHoldReleaseAt`, and while a pause is active there is no end date to show.
+ *
+ * A display hint, not a gate. What decides whether a report pauses anything is whether a
+ * share is still `held` (`TicketEarningsHoldService`); this reads only the order, so the two
+ * can differ by the daily release sweep's delay — in the customer's favour.
+ */
+export interface ProtectionWindow {
+  /** `EARNINGS_HOLD_DAYS` at the time of the read. */
+  days: number;
+  /** Delivery. Null: not delivered yet, the window has not opened. */
+  startsAt: Date | null;
+  /** When it closes. Null before delivery, and while the earnings are paused. */
+  endsAt: Date | null;
+  status: 'not_started' | 'active' | 'ended';
+  /** The order's earnings are paused right now, whatever the reason. */
+  onHold: boolean;
+  /** …and the reason is this customer's own problem report. */
+  problemReported: boolean;
+}
+
+export function protectionWindowOf(
+  order: {
+    delivered_at?: Date | null;
+    completion?: { confirmed_at?: Date | null } | null;
+    earnings_pause?: {
+      active?: boolean;
+      reason?: EarningsPauseReason | null;
+      paused_at?: Date | null;
+      resumed_at?: Date | null;
+    } | null;
+  },
+  holdDays: number,
+  now: Date
+): ProtectionWindow {
+  const pause = order.earnings_pause ?? null;
+  const onHold = pause?.active === true;
+  const problemReported = onHold && pause?.reason === 'customer_problem_reported';
+  const startsAt = deliveredAtOf(order);
+  if (!startsAt) {
+    return { days: holdDays, startsAt: null, endsAt: null, status: 'not_started', onHold, problemReported };
+  }
+  if (onHold) {
+    return { days: holdDays, startsAt, endsAt: null, status: 'active', onHold, problemReported };
+  }
+  let endsAt = holdReleaseFrom(startsAt, holdDays);
+  if (pause?.paused_at && pause.resumed_at) {
+    const clockStoppedAt = Math.max(pause.paused_at.getTime(), startsAt.getTime());
+    endsAt = new Date(endsAt.getTime() + Math.max(0, pause.resumed_at.getTime() - clockStoppedAt));
+  }
+  return {
+    days: holdDays,
+    startsAt,
+    endsAt,
+    status: now.getTime() < endsAt.getTime() ? 'active' : 'ended',
+    onHold,
+    problemReported,
+  };
+}
+
+/** `ProtectionWindow` as a customer read carries it: dates as ISO strings. */
+export interface CustomerProtectionBlock {
+  days: number;
+  startsAt: string | null;
+  endsAt: string | null;
+  status: ProtectionWindow['status'];
+  onHold: boolean;
+  problemReported: boolean;
+}
+
+/**
+ * The `protection` block of a customer's order AND booking read — one projection, so the two
+ * cannot drift. For a booking, pass the date the service was marked completed as
+ * `delivered_at`: that is a booking's delivery.
+ */
+export function toCustomerProtection(
+  source: Parameters<typeof protectionWindowOf>[0],
+  holdDays: number,
+  now: Date
+): CustomerProtectionBlock {
+  const w = protectionWindowOf(source, holdDays, now);
+  return {
+    days: w.days,
+    startsAt: w.startsAt ? w.startsAt.toISOString() : null,
+    endsAt: w.endsAt ? w.endsAt.toISOString() : null,
+    status: w.status,
+    onHold: w.onHold,
+    problemReported: w.problemReported,
+  };
 }
 
 /** `start + days`, the release date of a hold that starts at `start`. */

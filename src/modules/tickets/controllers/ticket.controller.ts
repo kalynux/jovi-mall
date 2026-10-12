@@ -10,7 +10,8 @@ import {
     AssignToAdministratorSchema,
     RefreshAdminSnapshotSchema,
     UpdatePrioritySchema,
-    ListTicketsQuerySchema
+    ListTicketsQuerySchema,
+    AddFollowerSchema
 } from '../validators/ticket.validator';
 import { ActorRole, EntityType, TicketImportance, TicketPriority, TicketStatus } from '../types/ticket.types';
 import { IAdminSnapshot } from '../../../core/types/admin-snapshot.types';
@@ -225,14 +226,21 @@ export class TicketController {
         res.status(200).json({ success: true, data: updatedTicket });
     });
 
+    /**
+     * Mounted on the internal admin API only. Answers with the enriched ticket, followers
+     * included — it answered `{ success, message }` alone until 2026-10-09, so wi-admin's
+     * gateway (which returns `data`) handed its caller nothing.
+     */
     static addFollower = asyncHandler(async (req: Request, res: Response) => {
         const ticketId = req.params.id;
-        const { userId: targetUserId, role: targetRole } = req.body;
+        const { userId: targetUserId, role: targetRole } = AddFollowerSchema.parse(req.body);
         const addedBy = req.auth!.user.id;
 
-        await followerService.addFollower(ticketId, targetUserId, targetRole, addedBy, false);
+        await followerService.addFollowerByAdmin(ticketId, targetUserId, targetRole as ActorRole, addedBy);
 
-        res.status(200).json({ success: true, message: 'Follower added successfully' });
+        const ticket = await ticketService.getTicketById(ticketId);
+        const enriched = ticket ? await enrichmentService.enrichTicket(ticket) : null;
+        res.status(200).json({ success: true, message: 'Follower added successfully', data: enriched });
     });
 
     static removeFollower = asyncHandler(async (req: Request, res: Response) => {

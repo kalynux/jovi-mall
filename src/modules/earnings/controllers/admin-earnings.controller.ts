@@ -18,6 +18,7 @@ import {
   ResumeEarningsBodySchema,
 } from '../validators/admin-earnings.validator';
 import { earningsPauseService, PauseActor } from '../services/earnings-pause.service';
+import { ticketEarningsHoldService } from '../../tickets/services/ticket-earnings-hold.service';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { actorFromRequest } from '../../../core/types/actor-source.types';
@@ -201,6 +202,13 @@ export class AdminEarningsController {
     }
     const outcome = await earningsPauseService.resume(target, pauseActorOf(req), note ?? null);
     if (!outcome.changed) throw createAppError(ERROR_CODES.EARNINGS_NOT_PAUSED, 409);
+    // An administrator's resume is a decision about the whole case: no customer request holds
+    // this money any more, and a later one will not pause it again by itself.
+    try {
+      await ticketEarningsHoldService.releaseAll(target);
+    } catch (error) {
+      console.error(`[AdminEarnings] could not release the problem-report holds of ${target.kind} ${target.id}:`, error);
+    }
     sendSuccess(res, { ...target, pause: outcome.pause }, { message: 'Earnings resumed' });
   });
 

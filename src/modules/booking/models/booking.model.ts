@@ -49,6 +49,13 @@ export interface IBooking extends IBaseDocument {
   metadata?: Record<string, any>;
   cancelledAt?: Date;
   cancelledReason?: string;
+  /**
+   * When the service was marked completed — a booking's "delivery". Stamped by
+   * `BookingService.updateBookingStatus` with the SAME date its earnings hold starts from, so
+   * the customer's protection window and the money agree (owner decision 2026-10-10). Absent
+   * on bookings completed before the field existed; readers fall back to `settlement.settledAt`.
+   */
+  completedAt?: Date | null;
 
   // Payment tracking
   paymentStatus: BookingPaymentStatus;
@@ -153,6 +160,10 @@ const BookingSchema = new Schema<IBooking>(
     },
     cancelledAt: {
       type: Date,
+    },
+    completedAt: {
+      type: Date,
+      default: null,
     },
     cancelledReason: {
       type: String,

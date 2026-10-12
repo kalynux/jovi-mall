@@ -133,6 +133,20 @@ export const RefreshAdminSnapshotSchema = z.object({
 
 export type RefreshAdminSnapshotDto = z.infer<typeof RefreshAdminSnapshotSchema>;
 
+/**
+ * An administrator adds a follower (internal admin API only).
+ *
+ * The route took `req.body` unvalidated until 2026-10-09. `admin` is not expressible, matching
+ * wi-admin's own pinned enum: an administrator's relationship to a ticket is the assignment,
+ * and private-note visibility is computed from the follower rows.
+ */
+export const AddFollowerSchema = z.object({
+    userId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'userId must be a 24-hex id'),
+    role: z.enum(['vendor', 'customer', 'agency', 'agent'])
+}).strict();
+
+export type AddFollowerDto = z.infer<typeof AddFollowerSchema>;
+
 // Update priority
 export const UpdatePrioritySchema = z.object({
     priority: z.enum(TICKET_PRIORITY_VALUES as [string, ...string[]], {

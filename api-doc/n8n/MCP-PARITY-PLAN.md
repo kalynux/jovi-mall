@@ -1505,3 +1505,136 @@ is refused by the new one. So `tools/list` was **not** confirmed against the liv
 evidence and not the same evidence. **Whoever refreshes those two values should re-run the § 11
 check**, which is the only thing that proves the closed door still answers and that the three
 new tools are actually advertised.
+
+---
+
+## 13 · Path arguments are one URL segment ✅ **PUBLISHED 2026-10-12**
+
+**What was wrong.** `urlFor` interpolated a model-supplied path argument RAW, so the tier filter
+decided which nodes exist and nothing decided where a node's request landed. An "order id" of
+`<order>/cancel?x=` turned `orders_record_cancellation_reason` into `POST /orders/<order>/cancel`
+— a `flow_only` route, with a body it accepts and no confirmation tap. `..` on
+`cart_remove_item` was `DELETE /cart`. `../../negotiation/context` left `/api/internal/bot`
+altogether, carrying the service token. Read from the code; never observed in an execution.
+
+**What changed.** `pathArgument()` in `scripts/gen-mcp-workflow.ts` wraps every path argument:
+`encodeURIComponent`, then an empty or dots-only value becomes `_`. The second step is not
+redundant — encoding leaves `.` alone and a URL parser collapses `..` regardless.
+`test:bot-surface` § 15 evaluates the emitted expression against hostile values and parses the
+result as a URL.
+
+**The apply.** 26 `setNodeParameter /url` operations, one call, then a separate publish:
+`ba374ce7` → `61a343b6`. The draft was diffed against the pre-apply snapshot first — 26 URLs
+changed, nothing else.
+
+⚠ **The generator's own operations were NOT applied as rendered.** They also carried six
+`updateNodeParameters` this change has nothing to do with — `catalog_search_products`,
+`catalog_list_categories`, `checkout_place`, `checkout_retry_payment`, `chat_answer_question`,
+`reviews_list_mine` — catalogue edits from other work (categories, the Orange Money payment
+code, reviews publishing directly) that the live server does not hold yet. They are still
+pending and are theirs to apply, each after its backend half is deployed. **Diff every rendered
+operation against the live node before applying; a rendering is the whole working tree's
+opinion, not one change's.**
+
+⚠ **Not yet seen in a real execution.** No tool call reached the server between the publish and
+this note, and the door credentials in `.env` are still dead (§ 12), so the wrapped expression
+has been proven by the suite and by reading the published nodes, not by a live call.
+
+---
+
+## 14 · The tools moved into `wi-mall-core` ✅ **LIVE 2026-10-12 — `wi-mall-mcp` UNPUBLISHED, kept**
+
+**Why.** On the MCP transport the customer's identity had to pass through the model, as the
+sealed `botToken` argument — n8n's MCP Server Trigger gives a tool node no per-request context
+(§ 5, measured again against the node definitions after the 2026-10-12 n8n upgrade: still none).
+The token could not be forged, but nothing tied it to the conversation presenting it: a valid
+one that reached another customer's chat worked there for its whole 2–3 hour life, behind two
+sentences in a prompt. Owner decision, 2026-10-12: attach the tools to the agent directly.
+
+**What changed.**
+- `scripts/gen-mcp-workflow.ts` now emits the tool nodes INTO `wi-mall-core`, attached to
+  `AI Agent`. Identity is `FLOW_IDENTITY` — the five envelope fields read off the `Inbound`
+  trigger, exactly as `sync identity` and `product action` send them. No tool takes a
+  `botToken`. The file keeps its name; `renderSdk`, the trigger constants and the sticky-note
+  rewrite are gone. `renderOperations` owns an HTTP Request Tool node whose name is a catalogue
+  tool, and nothing else in that workflow.
+- The system prompt lost its token paragraph and its `botToken:` line, and nothing else:
+  `api-doc/n8n/agent-tools-direct/live/system-message.txt` → `…/system-message.txt`.
+- No backend change. The raw envelope is the form every flow node already sends.
+
+**What the draft holds** (`91f3832b`; live is still `5b9c34a2`): 161 nodes — the 93 it had plus
+68 tools. Verified against the intent byte for byte: 68 of 68 nodes, each attached to the agent
+once; the only pre-existing changes are the agent's `systemMessage` and the `wi-mall MCP`
+client, which is detached and disabled but **kept on the canvas**.
+
+⚠ **The six pending catalogue edits were carried across as the LIVE server held them**, not as
+the working tree renders them (§ 13's list). They are still pending, now against `wi-mall-core`.
+
+**Three things measured on the way, each of which corrects something written above.**
+1. **The MCP server's `instructions` never reached the model.** A real execution's model input
+   holds the system prompt and none of that text. So nothing was folded into the prompt, and
+   the LISTS / RULES block was never in force.
+2. **The model saw every tool as `wi_mall_MCP_<name>`.** The prompt names them bare
+   (`checkout_review`), so the two disagreed until now; in `wi-mall-core` they match.
+   ⚠ Chat memory (2 h) replays earlier calls under the OLD names and with a `botToken`
+   argument. Publish when no conversation is in flight.
+3. **An MCP client hands the agent every tool on the server as its own tool.** The move does not
+   change how many tools the model chooses among.
+
+**To go live** (owner's word needed — nothing here publishes):
+1. `publish_workflow` on `wi-mall-core` (`vvbouV2136P5weCs`). A draft cannot be exercised from a
+   handset: the adapters call the PUBLISHED version.
+2. Handset pass on WhatsApp and Telegram: an order lookup, a basket add, a checkout review.
+3. Then UNPUBLISH `wi-mall-mcp` (`3X8oYCQZkCi7Wg4r`). **Do not delete it** (owner, 2026-10-12).
+   Rolling back before that is one call: republish `5b9c34a2`.
+
+**Afterwards, as its own change:** restructure the system prompt. Kept separate so a shift in
+behaviour can be traced to one change or the other.
+
+**Published 2026-10-12** on the owner’s word: `wi-mall-core` live is `91f3832b` (was `5b9c34a2`), the
+exact version verified above. The last execution before it was the previous evening, so no
+conversation was in flight and no chat memory was live. Steps 2 and 3 above are still owed:
+the handset pass, then unpublishing (never deleting) `wi-mall-mcp`, which is still published
+and now has no caller.
+
+**Confirmed and closed 2026-10-12.** The owner’s handset pass was good, and the executions agree
+with it: in `wi-mall-core` run 33015 `orders_get_order`, `support_resolve_contacts` and
+`tickets_list` each answered `success: true`, no tool call carried a `botToken`, and the MCP
+client did not run. That is also the first LIVE proof of § 13’s path wrapper (an order number
+through the encoded URL). `wi-mall-mcp` had no execution after the cutover and is now
+**unpublished** (`active: false`), not deleted and not archived.
+
+---
+
+## 15 · The system prompt restructured ▶ **PUBLISHED 2026-10-12 — handset pass owed**
+
+Done as its own change, after § 14 was confirmed live, so a shift in behaviour can be traced to
+one or the other. `wi-mall-core` live is `b0fd5058` (was `91f3832b`). Only the agent's
+`systemMessage` changed; the draft was compared with the reviewed file byte for byte first.
+
+**Sections MOVED, not rewritten.** New order: who you are → how the chat works (tool messages,
+the waiting question, what the platform already sent, typing versus tapping, files) → shopping
+in the order a customer shops (find, show, haggle, checkout, payment, orders) → what this chat
+cannot do → RULES → THIS CONVERSATION. The last two stay last, where they were: what a model
+reads last is what it weighs most.
+
+**One section added — `YOUR TOOLS AT A GLANCE`.** A map of the agent's 73 tools grouped by job.
+It is an index only and says so; each tool's own description still decides when to use it.
+
+**One word changed.** In CHECKOUT, "the waiting question below" became "above", because that
+section moved.
+
+**How it was built, and proved.** A script cut the live prompt at its `## ` headings and
+re-joined the pieces, so no rule was retyped. It then checked that every other line of the live
+prompt is in the new one unchanged, that the map names each of the agent's 73 tools exactly
+once and nothing that is not a tool, and that every "above"/"below" still points the right way.
+Old and new: `api-doc/n8n/prompt-restructure/live/system-message.txt` → `…/system-message.txt`.
+
+⚠ **Not done, on purpose:** no repeated rule was merged or shortened ("never list products" is
+still there twice). Those repeats were likely added after real failures; removing them is a
+separate, riskier change. The prompt grew from 24,619 to 27,378 characters.
+
+⚠ **Adding or removing an agent tool now means editing the map too.** Nothing in the repository
+pins it — the prompt lives in n8n.
+
+Rolling back is one call: republish `91f3832b`.

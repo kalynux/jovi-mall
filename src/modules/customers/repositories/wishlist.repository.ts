@@ -22,12 +22,16 @@ export class WishlistRepository {
    * the list. A wishlist is ordered by when it was saved, and a second tap is not a new
    * save — that is the opposite of the recently-viewed list's rule, and the two are
    * deliberately different.
+   *
+   * ⚠ **`updated_at` must NOT appear in `$setOnInsert`.** The schema's `timestamps` option
+   * already adds `$set: { updated_at }` to every update, and MongoDB refuses one path in two
+   * operators (`ConflictingUpdateOperators`, code 40) — which failed every save with a 500.
    */
   async add(customerId: string, productId: string): Promise<IWishlistItem> {
     const now = new Date();
     return (await WishlistItemModel.findOneAndUpdate(
       { customer_id: toId(customerId), product_id: toId(productId) },
-      { $setOnInsert: { created_at: now, updated_at: now } },
+      { $setOnInsert: { created_at: now } },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     ).exec()) as IWishlistItem;
   }

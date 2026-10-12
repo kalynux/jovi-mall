@@ -85,6 +85,17 @@ function attachRoutes(router: Router): Router {
      */
     router.put('/:id/cod-limit', AdminAgencyController.setCodLimit);
 
+    /**
+     * GET /:id/cod-restriction · PUT /:id/cod-restriction — the administrator's COD switch
+     * for one agency (2026-10-10). PUT body `{ restricted: boolean, reason }`; 409
+     * `COD_RESTRICTION_UNCHANGED` when the agency is already in that state. wi-admin exposes
+     * the write as two routes and two audit actions (`agencies.cod.restrict` /
+     * `agencies.cod.unrestrict`), like the limit pin above — and unlike the pin this is not
+     * an amount: a restricted agency receives no new COD shipment at all, `force` included.
+     */
+    router.get('/:id/cod-restriction', AdminAgencyController.getCodRestriction);
+    router.put('/:id/cod-restriction', AdminAgencyController.setCodRestriction);
+
     return router;
 }
 

@@ -109,7 +109,7 @@ const CancelOrderSchema = z.object({
  *
  * Currently exposes delivery confirmation: the customer confirms they received
  * the order (or are satisfied with a digital/service purchase), which completes
- * the order and starts the 7-day escrow hold before funds become withdrawable.
+ * the order. It no longer starts the escrow hold: that runs from delivery (EARNINGS_HOLD_DAYS).
  */
 export class CustomerOrderController {
   /**

@@ -4197,7 +4197,7 @@
       "requires_confirmation": true,
       "risk": "high",
       "side_effects": [
-        "Confirming the last parcel completes the order and starts the seller's 7-day escrow hold"
+        "Confirming the last parcel completes the order (the seller's 3-day escrow hold already began at delivery)"
       ],
       "context_resolution": {
         "subject": "shipment",

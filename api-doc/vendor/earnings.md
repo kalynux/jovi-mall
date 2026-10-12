@@ -74,7 +74,9 @@ automatically clawed back** — that reversal is a manual/admin operation.
 Money can be **paused**: it stays in `pending` and is never released while paused. This happens
 when you cancel an order the customer had already paid, when you cancel a paid booking from the
 status menu (both also open a refund ticket for our team), when the customer disputes a card
-payment, or when our team pauses it. When the pause is lifted, the hold **continues where it
+payment, when the customer reports a problem with the order or booking before its money is
+released (2026-10-10 — see [FRONTEND-CHANGELOG-wi-mall-protection.md](./FRONTEND-CHANGELOG-wi-mall-protection.md)),
+or when our team pauses it. When the pause is lifted, the hold **continues where it
 stopped** — the paused time does not count. If the customer is refunded instead, the earnings for
 that order are reversed.
 

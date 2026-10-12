@@ -5,6 +5,8 @@ import { actorFromRequest } from '../../core/types/actor-source.types';
 import { adminCallerActor } from '../../api/middlewares/admin-caller.middleware';
 import { adminCredentialDeliveryService } from '../messaging-login/services/admin-credential-delivery.service';
 import { botMemoryService } from '../bot-surface';
+import { codRestrictionService } from '../cod/services/cod-restriction.service';
+import { AdminSetCodRestrictionSchema } from '../cod/validators/cod-restriction.validator';
 import { AdminUserService, toAdminUserDto } from './admin-user.service';
 import {
   AdminSendCredentialSchema,
@@ -127,5 +129,52 @@ export class AdminUserController {
     const result = await botMemoryService.reset(req.params.userId);
 
     sendSuccess(res, result);
+  });
+
+  /**
+   * GET /users/:userId/cod-restriction — whether an administrator switched cash on delivery
+   * off for this account's CUSTOMER profile (owner decision 2026-10-10), with the reason and
+   * who did it. `restriction: null` = not restricted.
+   *
+   * Refusals: `404 USER_NOT_FOUND` (unknown or malformed id), `404 AUTH_PROFILE_NOT_FOUND`
+   * for an account with no customer profile — it cannot place an order at all.
+   */
+  static getCodRestriction = asyncHandler(async (req: Request, res: Response) => {
+    await adminUserService.getById(req.params.userId);
+    const report = await codRestrictionService.reportForCustomerUser(req.params.userId);
+
+    sendSuccess(res, report);
+  });
+
+  /**
+   * PUT /users/:userId/cod-restriction — body `{ restricted, reason }`.
+   *
+   * `restricted: true` stops this customer PLACING cash-on-delivery orders: checkout answers
+   * `422 COD_CUSTOMER_RESTRICTED` and the cart quote reports `customer_restricted`, so the
+   * shop and the bot stop offering it. `false` lifts it. Orders already placed are untouched,
+   * and so is every other payment method.
+   *
+   * This is the lever the Returns policy § 3.4 promises ("refusing the parcel without a
+   * valid reason may lead us to restrict cash on delivery on your account"). It is a
+   * person's decision, never automatic — nothing in this service sets it on its own.
+   *
+   * A compare-and-set: asking for the state the account is already in is
+   * `409 COD_RESTRICTION_UNCHANGED`.
+   */
+  static setCodRestriction = asyncHandler(async (req: Request, res: Response) => {
+    const { restricted, reason } = AdminSetCodRestrictionSchema.parse(req.body);
+    await adminUserService.getById(req.params.userId);
+    const report = await codRestrictionService.setForCustomerUser({
+      userId: req.params.userId,
+      restricted,
+      reason,
+      actor: actorFromRequest(req),
+    });
+
+    sendSuccess(res, report, {
+      message: restricted
+        ? 'Cash on delivery restricted for this customer'
+        : 'Cash on delivery restriction lifted for this customer',
+    });
   });
 }

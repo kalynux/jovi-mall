@@ -39,6 +39,8 @@ import { __STORE_LISTING } from '../../src/modules/bot-surface/miniapp/surfaces/
 import { CustomerOrderGroup, OrderRepository } from '../../src/modules/orders/order.repository';
 import { BotOrderController } from '../../src/modules/bot-surface/controllers/bot-order.controller';
 import { BotReplyIntent, renderBotReplies } from '../../src/modules/bot-surface/domain/channel-reply';
+import { pushCardIntoConversation } from '../../src/modules/bot-surface/services/conversation-push';
+import { TelegramBotService } from '../../src/modules/telegram/services/telegram-bot.service';
 import type { Request, Response } from 'express';
 import {
     ORDER_CASH_ON_DELIVERY_COPY,
@@ -456,6 +458,12 @@ async function main(): Promise<void> {
      *
      * The store screen's one POST is the exception and is pinned separately below: it mints a
      * session and touches nothing else.
+     *
+     * ⚠ **Still true after 2026-10-11, when a row became tappable — and it is why that tap is NOT
+     * in this file.** Picking an order needs the customer's order view to gate the card's buttons,
+     * which is the one thing the COD assertion above keeps out of here. So the tap is the orders
+     * stream's handler (`BotOrderController.screenOpen`), pinned in "A row can be picked" below;
+     * this controller stays a read. It writes nothing either — it posts a card into the chat.
      */
     assert('⛔ the order screen exposes only a read', () =>
         /static\s+data\s*=/.test(ORDER_SRC)
@@ -758,8 +766,9 @@ async function main(): Promise<void> {
             && card.deliveryText === null
             && typeof card.totalText === 'string'
             && (card.totalText as string).includes('XAF')
+            // `orderId` joined 2026-10-11: what a tapped row posts back. An id, never a credential.
             && JSON.stringify(Object.keys((card.orders as Record<string, unknown>[])[0]).sort())
-                === JSON.stringify(['orderNumber', 'statusText', 'storeName']);
+                === JSON.stringify(['orderId', 'orderNumber', 'statusText', 'storeName']);
     });
 
     assert('ADR-A11 · a checkout where the customer paid delivery says how much of the total it was', () => {
@@ -769,6 +778,152 @@ async function main(): Promise<void> {
             && fr.deliveryText === 'Dont 1 500 XAF de livraison'
             && __ORDER_LISTING.toGroupCard(codGroup(), 'en', new Map(), [], 0).deliveryText === null;
     });
+
+    console.log('\n── A row can be picked — and picking it changes nothing (owner, 2026-10-11) ──');
+
+    /**
+     * ⭐ **The screen listed ninety orders a customer could look at and do nothing with.** A row
+     * is now a button: the tap posts its order id, the server sends that order's card — Shipments,
+     * Cancel, Get help — into the conversation, and the page goes back to the chat onto it.
+     *
+     * Everything below pins the SHAPE of that door rather than its happy path, because every way
+     * of getting it wrong still "works": a door that drew its own buttons, one that trusted an id
+     * from the page, one that answered with the order, one that closed a WhatsApp page that
+     * cannot close. None of those fails a request.
+     */
+    const ORDER_CONTROLLER = codeOf(path.join(SURFACES, '../../controllers/bot-order.controller.ts'));
+    const ROUTES = codeOf(path.join(SURFACES, '../miniapp.routes.ts'));
+
+    /**
+     * ⚠ **The door's OWN body, sliced — never the whole file.** `bot-order.controller.ts` says
+     * `resolveOwnedOrder(caller.customerId` a dozen times for a dozen other handlers, so a scan of
+     * the file would stay green on a door that had stopped scoping at all. The guard and its claim
+     * must be about the same span.
+     */
+    const DOOR = (function sliceDoor(): string {
+        const from = ORDER_CONTROLLER.indexOf('static screenOpen = ');
+        if (from < 0) return '';
+        const to = ORDER_CONTROLLER.indexOf('\n    });', from);
+        return to < 0 ? '' : ORDER_CONTROLLER.slice(from, to);
+    }());
+
+    assert('⛔ the door exists and its body was found — the scans below are not vacuous', () =>
+        DOOR.length > 200 && DOOR.includes('pushCardIntoConversation('));
+
+    assert('⛔ it is mounted on the order screen\'s own kind, as a POST', () =>
+        ROUTES.includes("router.post('/s/ol/:handle/open', BotOrderController.screenOpen)"));
+
+    assert('⛔ the customer comes from the SESSION, and the order is looked up as theirs', () =>
+        DOOR.includes("inAppSurfaceStore.read('ol', handle)")
+        && DOOR.includes('resolveOwnedOrder(session.customerId, orderId)')
+        && !/customerId\s*[:=]\s*(req|body)/.test(DOOR));
+
+    assert('⛔ the page may send an order id and nothing else', () =>
+        // Bounded and lazy rather than `[^}]*`: the id pattern inside it contains a `}` of its own.
+        /ScreenOpenSchema\s*=\s*z\s*\.object\(\{\s*orderId:[\s\S]{0,120}?\}\)\s*\.strict\(\)/.test(ORDER_CONTROLLER));
+
+    /** A listing handle is read as often as the customer likes; spending it would end the list. */
+    assert('⛔ it spends nothing and mints nothing', () =>
+        !DOOR.includes('.consume(') && !DOOR.includes('.mint(') && !DOOR.includes('openInAppScreen('));
+
+    /**
+     * ⚠ **ONE builder for the card, shared with the chat.** The buttons on an order card are gated
+     * (Cancel only while cancellable, Shipments only on a physical order); a second builder for
+     * the screen would be a second opinion about what an order can do.
+     */
+    assert('⛔ the card is the chat\'s own card — one builder, two doors', () =>
+        DOOR.includes('orderCardIntent(dto, session.language)')
+        && /function setOrderCardReply[\s\S]{0,200}orderCardIntent\(order,/.test(ORDER_CONTROLLER)
+        && (ORDER_CONTROLLER.match(/function orderCardIntent\(/g) ?? []).length === 1);
+
+    /**
+     * ⚠ **The order view carries the delivery code, so the page is answered with a SENTENCE.**
+     * `toDtos` resolves COD blocks with the code in them; the door reads the card's text and
+     * tokens off the view and hands the page three fields, none of which is the order.
+     */
+    assert('⛔ the page is told what happened, never handed the order', () =>
+        /sendSuccess\(res,\s*\{\s*sent,\s*message:/.test(DOOR)
+        && !/sendSuccess\(res,\s*(dto|order)\b/.test(DOOR)
+        && !/deliveryCode|codCollections/.test(DOOR));
+
+    /** A refused send must not be reported as a card waiting in the chat. */
+    assert('⛔ the sentence follows the send — a refused one is not announced as sent', () =>
+        DOOR.includes("sent ? 'orderSentToChat' : 'orderNotSentToChat'")
+        && BOT_COPY_LANGUAGES.every((lang) =>
+            botOrderCopy('orderSentToChat', lang).trim().length > 0
+            && botOrderCopy('orderNotSentToChat', lang).trim().length > 0
+            && botOrderCopy('orderSentToChat', lang) !== botOrderCopy('orderNotSentToChat', lang)));
+
+    assert('the tap hint is present in all five languages, and promises no Cancel', () =>
+        BOT_COPY_LANGUAGES.every((lang) => __ORDER_LISTING.ORDERS_SELECT_HINT[lang].trim().length > 0)
+        && !/cancel/i.test(__ORDER_LISTING.ORDERS_SELECT_HINT.en));
+
+    assert('⛔ the page posts the row\'s id to `/open` and draws no order button of its own', () => {
+        const page = pageOf('ol');
+        return page.includes('"/open"')
+            && page.includes('data-order=')
+            && page.includes('order.orderId')
+            // No tap token and no action label is composed in the WebView.
+            && !/["'](ord|shp|tkt|track|code):/.test(page);
+    });
+
+    /**
+     * ⚠ **`telegram-web-app.js` defines `Telegram.WebApp` in every browser**, so the object alone
+     * does not mean the page can close. Closing on it sent a WhatsApp customer nowhere, on a
+     * handset, on the detail screen (2026-10-02); only a real launch carries `initData`.
+     */
+    assert('⛔ the page closes only inside a real Telegram launch, and only on a card that was sent', () => {
+        const page = pageOf('ol');
+        return /inTelegram\s*=\s*Boolean\(tg\s*&&\s*tg\.initData\)/.test(page)
+            && /if\s*\(out\.sent\s*&&\s*inTelegram\s*&&\s*tg\.close\)/.test(page)
+            && page.includes('flowBackToChat');
+    });
+
+    /**
+     * ⭐ **Behavioural: what actually goes to Telegram.** The sender is replaced on the prototype,
+     * so nothing leaves the machine; what is asserted is the body this service would have posted.
+     */
+    const pushed = await (async () => {
+        const calls: Array<{ chatId: string; text: string; options: Record<string, unknown> }> = [];
+        const original = TelegramBotService.prototype.sendMessage;
+        let verdict = true;
+        TelegramBotService.prototype.sendMessage = async function fake(chatId, text, options = {}) {
+            calls.push({ chatId, text, options: options as unknown as Record<string, unknown> });
+            return verdict;
+        };
+        try {
+            const card = {
+                text: 'ORD-2026-000123 · Chez Mado',
+                actions: [
+                    { id: 'shp:66f1a2b3c4d5e6f708192a60', label: 'Colis' },
+                    { id: 'tkt:new:hp:66f1a2b3c4d5e6f708192a60', label: 'Aide' },
+                ],
+            };
+            const sent = await pushCardIntoConversation({ channel: 'telegram', externalId: '4242' }, card);
+            verdict = false;
+            const refused = await pushCardIntoConversation({ channel: 'telegram', externalId: '4242' }, card);
+            return { calls, sent, refused };
+        } finally {
+            TelegramBotService.prototype.sendMessage = original;
+        }
+    })();
+
+    assert('a pushed card goes to the session\'s own chat, with its tap tokens intact', () => {
+        const [first] = pushed.calls;
+        const buttons = (first?.options.buttons ?? []) as Array<{ text: string; callbackData: string }>;
+        return first?.chatId === '4242'
+            && first.text === 'ORD-2026-000123 · Chez Mado'
+            && buttons.length === 2
+            && buttons[0].callbackData === 'shp:66f1a2b3c4d5e6f708192a60'
+            && buttons[1].callbackData === 'tkt:new:hp:66f1a2b3c4d5e6f708192a60';
+    });
+
+    /** Three labels in one Telegram row arrive as slivers; the chat renderer stacks them too. */
+    assert('its buttons are stacked one per row, as the chat draws the same card', () =>
+        pushed.calls[0]?.options.buttonLayout === 'column');
+
+    assert('⛔ the push reports the send\'s own verdict — true when sent, false when refused', () =>
+        pushed.sent === true && pushed.refused === false);
 
     console.log('\n══ § 3 · "Show my orders", answered in the chat (chat-surfaces, 2026-09-22) ══');
 

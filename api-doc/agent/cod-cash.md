@@ -2,7 +2,7 @@
 
 **Verified against source on 2026-09-08** — collectible statuses, the 6-digit code format, attempt
 and resend limits, the balance/allocation/ledger/deposit shapes, the trust tiers and penalties, and
-the 7-day auto-collection, against `src/modules/cod/{services/cash-collection.service.ts,
+the auto-collection, against `src/modules/cod/{services/cash-collection.service.ts,
 services/delivery-code.service.ts, validators, controllers/agent-cod.controller.ts,
 config/cod.config.ts, models/cash-collection.model.ts, workers/cod-deposit-deadline.worker.ts}`,
 `src/modules/earnings/config/earnings.config.ts` and
@@ -60,7 +60,7 @@ confirmation.** So for COD:
 
 > ### ⚠️ Leaving a shipment at `agent_delivered` means "I was paid"
 >
-> After **7 days** at `agent_delivered`, the platform records the cash as collected anyway — without
+> After **3 days** (7 until 2026-10-09) at `agent_delivered`, the platform records the cash as collected anyway — without
 > a code — and the shipment becomes `delivered`. **The amount lands on your cash balance and you owe
 > it**, exactly as if you had submitted a code.
 >
@@ -564,5 +564,5 @@ so the balance outstanding maps to your newest ones, and the oldest in that set 
 is measured from.
 - **Open cash-shortfall discrepancy** — blocks new COD assignments until an admin resolves it.
 - **GPS/device evidence** — captured at code submission; used in fraud investigations. An
-  auto-collected shipment (7 days at `agent_delivered`, no code) carries none — it is recorded with
+  auto-collected shipment (3 days at `agent_delivered`, no code) carries none — it is recorded with
   `verification.method: "auto_no_code"`, and a dispute turns on exactly that difference.

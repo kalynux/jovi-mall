@@ -136,19 +136,24 @@ assert('deliveredAtOf prefers delivered_at, falls back to completion, else null'
 assert('EARNINGS_HOLD_DAYS defaults to 3 (owner, 2026-10-05)', () =>
   /HOLD_DAYS:\s*intEnv\('EARNINGS_HOLD_DAYS',\s*3\)/.test(code('modules/earnings/config/earnings.config.ts')));
 
+assert('both auto-confirm windows default to 3 days (owner, 2026-10-09)', () =>
+  /AUTO_CONFIRM_DAYS:\s*intEnv\('EARNINGS_AUTO_CONFIRM_DAYS',\s*3\)/.test(code('modules/earnings/config/earnings.config.ts')) &&
+  /SHIPMENT_AUTO_CONFIRM_DAYS:\s*intEnv\('EARNINGS_SHIPMENT_AUTO_CONFIRM_DAYS',\s*3\)/.test(code('modules/earnings/config/earnings.config.ts')));
+
 // ─── 3. Pause reasons ────────────────────────────────────────────────────────
 console.log('\n3. Pause reasons');
 
-assert('the five reasons, closed (refund_in_progress added by the refund flow, C-4)', () =>
+assert('the six reasons, closed (refund_in_progress: refund flow C-4; customer_problem_reported: owner 2026-10-10)', () =>
   JSON.stringify([...EARNINGS_PAUSE_REASONS].sort()) ===
-  JSON.stringify(['admin', 'booking_cancelled_unrefunded', 'card_dispute', 'refund_in_progress', 'seller_cancelled_paid_order']));
+  JSON.stringify(['admin', 'booking_cancelled_unrefunded', 'card_dispute', 'customer_problem_reported', 'refund_in_progress', 'seller_cancelled_paid_order']));
 
-assert('only a card dispute and an open refund may lift themselves; everything else waits for an administrator', () =>
-  JSON.stringify([...SELF_RESUMING_PAUSE_REASONS].sort()) === JSON.stringify(['card_dispute', 'refund_in_progress']));
+assert('only a card dispute, an open refund and a customer problem report may lift themselves; everything else waits for an administrator', () =>
+  JSON.stringify([...SELF_RESUMING_PAUSE_REASONS].sort()) ===
+  JSON.stringify(['card_dispute', 'customer_problem_reported', 'refund_in_progress']));
 
-assert('a completed refund closes exactly the three refund-owed reasons (never a dispute or an admin pause)', () =>
+assert('a completed refund closes the three refund-owed reasons and a customer problem report (never a dispute or an admin pause)', () =>
   JSON.stringify([...REFUND_CLOSABLE_PAUSE_REASONS].sort()) ===
-  JSON.stringify(['booking_cancelled_unrefunded', 'refund_in_progress', 'seller_cancelled_paid_order']));
+  JSON.stringify(['booking_cancelled_unrefunded', 'customer_problem_reported', 'refund_in_progress', 'seller_cancelled_paid_order']));
 
 const pauseSvc = code('modules/earnings/services/earnings-pause.service.ts');
 const closeOnRefund = methodBody(pauseSvc, 'async closeOnRefund(');

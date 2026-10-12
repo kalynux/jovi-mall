@@ -52,6 +52,7 @@ import { agentAssignmentAuditService } from '../../services/assignment-audit.ser
 import { trackingOutboxEmitter } from '../../../tracking-integration/services/tracking-outbox.emitter';
 import { shipmentFeeProposalSummary } from '../../../delivery-fee-proposals/dto/delivery-fee-proposal.dto';
 import { riderCollectsCash } from '../../../orders/domain/delivery-payer';
+import { syncTicketFollowersForOrder } from '../../../tickets/services/ticket-order-parties.service';
 
 /**
  * Who is placing an offer. `system` for auto-assignment, `agency` for a manual pick,
@@ -789,6 +790,8 @@ export class ShipmentAssignmentService {
       await this.cashCollection.notifyCodeIssued(order, issued.collection, issued.code);
     }
     this.emitTrackingStatusChanged(boundShipment!, order.customer_id?.toString() ?? null);
+    // The agent is now a party to the order: they follow its open tickets (owner, 2026-10-09).
+    syncTicketFollowersForOrder(offer.order_id.toString(), 'shipment-assignment.accept');
     void this.availability
       .recomputeWorkingState(agentId)
       .catch((err) => console.error('[ShipmentAssignmentService] working state recompute failed:', err));

@@ -94,7 +94,9 @@ Money is **held** (`pending`) when the split happens, and becomes **available** 
    matured holds to `available`. Until 2026-10-05 this waited for the customer's confirmation
    (or 7 days) and then held 7 more days.
 
-Paused earnings — a seller cancelled a paid order, a card dispute, or our team — are not
+Paused earnings — a seller cancelled a paid order, a card dispute, a problem the customer
+reported before the money was released (2026-10-10, see
+[FRONTEND-CHANGELOG-wi-mall-protection.md](./FRONTEND-CHANGELOG-wi-mall-protection.md)), or our team — are not
 released until resumed, and the paused time does not count.
 
 Every actor on an order — vendor, platform, agency and you — matures on the same date. Your cut is

@@ -29,7 +29,7 @@ import { earningsSplitService } from '../earnings/services/earnings-split.servic
 import { earningsCompletionService } from '../earnings/services/earnings-completion.service';
 import { codEligibilityService } from '../cod/services/cod-eligibility.service';
 import { codLimitsService, CodHandoffVerdict } from '../cod/services/cod-limits.service';
-import { expectedCodAmount } from '../cod/domain/cod-limits';
+import { expectedCodAmount, isForceableCodBreach } from '../cod/domain/cod-limits';
 import { orderStockService } from './services/order-stock.service';
 import { belowMinimumError } from './services/delivery-cost-cap.service';
 import { vendorOrderPricingService, regionOfGeo } from './services/vendor-order-pricing.service';
@@ -435,7 +435,9 @@ export class OrderService {
         await this.timelineRepo.appendEvent({
           orderId: order._id.toString(),
           eventType: 'delivery.agency_updated',
-          description: 'Auto-dispatch held back: the delivery agency is at its cash-on-delivery limit',
+          description: held.every((v) => v.breach!.kind === 'agency_restricted')
+            ? 'Auto-dispatch held back: the delivery agency cannot take cash-on-delivery shipments at the moment'
+            : 'Auto-dispatch held back: the delivery agency is at its cash-on-delivery limit',
           metadata: {
             auto: true,
             codLimitHeld: held.map((v) => ({ shipmentId: v.shipmentId, agencyId: v.agencyId, ...v.breach })),
@@ -522,6 +524,14 @@ export class OrderService {
     const verdicts: Array<{ shipmentId: string; breach: CodHandoffVerdict['breach'] }> = actor.type === 'admin'
       ? pending.map((s) => ({ shipmentId: (s._id as mongoose.Types.ObjectId).toString(), breach: null }))
       : await this.evaluateCodHandoffs(order, pending, opts.force === true);
+    // The administrator's COD restriction on an agency (2026-10-10) is the one breach
+    // `force` does not waive — 422 COD_AGENCY_RESTRICTED, and nothing is dispatched. The
+    // vendor moves those items to another agency. (An administrator's own dispatch is not
+    // gated, as above: lifting the restriction is theirs to do.)
+    const blocked = verdicts.find((v) => v.breach && !isForceableCodBreach(v.breach));
+    if (blocked) {
+      throw codLimitsService.limitExceededError(blocked as CodHandoffVerdict);
+    }
     const refused = verdicts.find((v) => v.breach);
     if (refused && opts.force !== true) {
       throw codLimitsService.limitExceededError(refused as CodHandoffVerdict);
@@ -761,6 +771,14 @@ export class OrderService {
         422,
         'Cash on delivery is only available for physical orders'
       );
+    }
+
+    // The administrator's COD restriction on this CUSTOMER (2026-10-10): refused up front,
+    // once for the whole checkout, before anything is reserved or priced — 422
+    // COD_CUSTOMER_RESTRICTED. The cart quote publishes the same verdict
+    // (`cashOnDelivery.reason: 'customer_restricted'`), so a client can hide the option.
+    if (paymentMethod === 'cash_on_delivery') {
+      await codEligibilityService.assertCustomerAllowed(customerId);
     }
 
     // Resolve the drop-off (delivery) address for a PHYSICAL checkout and snapshot

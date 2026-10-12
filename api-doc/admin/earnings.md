@@ -293,9 +293,10 @@ The pause record lives on the **Order** (`earnings_pause`) or **Booking** (`earn
 | `card_dispute` | a card payment disputed with the bank | **itself** when the dispute is won or lost; or an administrator |
 | `admin` | an administrator | an administrator |
 | `refund_in_progress` | a refund request opened on it (REFUND-FLOW-PLAN C-4) | **itself** when the refund completes (`closeOnRefund`) or is rejected/abandoned; or an administrator |
+| `customer_problem_reported` | the customer opening a problem request about their own order/shipment/booking while its money is still held (2026-10-10) | **itself** when the customer or an administrator resolves/closes the request (never the seller); or an administrator. See [the changelog](../FRONTEND-CHANGELOG-wi-mall-protection.md) |
 
-A **completed refund** closes `refund_in_progress`, `seller_cancelled_paid_order` and
-`booking_cancelled_unrefunded` — never `card_dispute` or `admin` — and, unlike a resume, does
+A **completed refund** closes `refund_in_progress`, `seller_cancelled_paid_order`,
+`booking_cancelled_unrefunded` and `customer_problem_reported` — never `card_dispute` or `admin` — and, unlike a resume, does
 **not** move hold dates. A booking's pause covers its balance-payment shares too.
 
 ## Refund clawback debt — `/internal/admin/earnings/clawbacks` (2026-10-05)

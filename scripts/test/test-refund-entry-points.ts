@@ -146,16 +146,18 @@ async function main(): Promise<void> {
         return {};
       },
     };
-    const adapter = new RefundEarningsAdapter(pauses, clawback);
+    const problemReports = { reconcile: async () => { calls.push('reconcile'); } };
+    const adapter = new RefundEarningsAdapter(pauses, clawback, problemReports);
     const target = { kind: 'order' as const, id: new Types.ObjectId().toString() };
 
     await adapter.onRequestOpened(target, 'rq1');
     assert('opened → pause with reason refund_in_progress', () => calls[0] === 'pause:refund_in_progress');
     await adapter.onRequestClosedWithoutRefund(target, 'rq1');
     assert('closed without a refund → resume ONLY a refund_in_progress pause', () => calls[1] === 'resume:refund_in_progress');
+    assert('…then hand over to a customer problem report still open on it (owner 2026-10-10)', () => calls[2] === 'reconcile');
     await adapter.onRefundCompleted({ refundKey: 'rq1', target, attribution: { goods: 4000, delivery: 500 }, codCollectionIds: [] });
     assert('completed → claw back by attribution FIRST, then close the pause', () =>
-      calls[2] === 'claw:rq1:4000+500:none' && calls[3] === 'close');
+      calls[3] === 'claw:rq1:4000+500:none' && calls[4] === 'close');
     calls.length = 0;
     await adapter.onRefundCompleted({ refundKey: 'rq2', target, attribution: { goods: 1, delivery: 0 }, codCollectionIds: ['c1', 'c2'] });
     assert('COD collection ids are passed through to the clawback', () => calls[0] === 'claw:rq2:1+0:2');

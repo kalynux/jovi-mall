@@ -1009,6 +1009,34 @@ refund obligation.
 
 **COD delivery is closed to every other path, and that is deliberate.** For COD, `delivered` ⟺ cash collected — `recomputeCodPaymentStatus` derives the order's payment status from that equivalence, and `splitCodCollection` only ever runs off a collection, so a COD shipment that reaches `delivered` without one leaves an order that is delivered, completed, and that **nobody is ever paid for** (not even the vendor), with a payment status that is a lie. Consequently: the customer's `confirm-delivery` endpoint **rejects COD** (their code is their confirmation), and the shipment auto-confirm sweep does **not** confirm COD — it routes through `CashCollectionService.autoCollectWithoutCode`, which records the cash and delivers in one transaction. Any new route to `delivered` must go through a collection too.
 
+### COD restrictions (`cod/domain/cod-restriction.ts`) — 2026-10-10
+
+An administrator can switch cash on delivery OFF for one **customer** or one delivery **agency**,
+and back on (owner decision; it is the lever Returns policy § 3.4 promises). The record is one
+sub-document, `customers.cod_restriction` / `delivery_agencies.cod_restriction`
+(`core/types/cod-restriction.types.ts`); **`null` and absent both mean unrestricted**, so there is
+no migration and every existing account behaves as before. Five things are load-bearing:
+
+- **`CodRestrictionService` is the only writer**, through one conditional update (the state check
+  is in the filter). Asking for the state the account is already in is `409
+  COD_RESTRICTION_UNCHANGED`. Lifting **clears the field**: wi-admin's audit rows are the record.
+- **Customer:** `CodEligibilityService.assertCustomerAllowed` is asked once per basket, by checkout
+  (`createOrdersFromCart`, up front) and by the cart quote. `422 COD_CUSTOMER_RESTRICTED`, no
+  `details`; the quote reads `customer_restricted` FIRST, with no shop named.
+- **Agency at checkout** answers the existing `COD_AGENCY_NOT_SUPPORTED` on purpose. A distinct
+  code would tell every shopper the platform sanctioned that business.
+- **Agency at hand-off** rides the COD-limit gate as a third breach kind, `agency_restricted`
+  (`evaluateCodLimits`, tested before either cap). ⚠ **`force` never waives it**
+  (`isForceableCodBreach`): manual dispatch and change-agency answer `422 COD_AGENCY_RESTRICTED`,
+  auto-redirect holds. An administrator's own dispatch is not gated, as with the limit.
+- **It rewrites nothing else.** Held parcels, the cash chain, prepaid work, the cash-to-rider
+  delivery fee, `policies.cod` and the limit pin are untouched. The restricted party is never shown
+  the reason (`codRestrictionPublicViewOf`), and **no notification is sent** (open owner decision).
+
+Admin routes: `GET`/`PUT /api/internal/admin/{users/:userId,agencies/:id}/cod-restriction`.
+Pinned by `npm run test:cod-restrictions` (74, no DB). Changelogs:
+`api-doc/{customer,vendor,agency}/FRONTEND-CHANGELOG-cod-restrictions.md`.
+
 ### The earnings split (`src/modules/earnings/`)
 
 One order's gross is divided across **two moments**, and that is the whole design. At **payment**

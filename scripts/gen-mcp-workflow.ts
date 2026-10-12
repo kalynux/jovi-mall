@@ -1,29 +1,43 @@
 /*
- * gen-mcp-workflow.ts — build the `wi-mall-mcp` MCP server from `api-doc/n8n/tools/catalog.json`.
+ * gen-mcp-workflow.ts — build the customer agent's tool nodes from `api-doc/n8n/tools/catalog.json`.
  *
- * MCP parity plan, Step 8. Fifteen tool nodes were ever hand-added to that workflow while the
- * backend grew to 46 model-facing ones, so the agent could not open an order, empty a cart or
- * reach the product catalogue at all. Hand-adding the rest makes the next 40 invisible the same
- * way; this reads the catalogue and emits every one of them.
+ * ── ⚠ THE NAME IS HISTORICAL. THIS NO LONGER BUILDS AN MCP SERVER ────────────
+ * Until 2026-10-12 this file emitted the `wi-mall-mcp` workflow — an MCP server in n8n that
+ * `wi-mall-core`'s agent reached through an MCP Client Tool. It now emits the same tool nodes
+ * INTO `wi-mall-core`, attached to the `AI Agent` node directly. The file, the npm binding and
+ * `selectMcpTools` keep their names because four suites and several records import or cite them.
+ *
+ * ── WHY THE TOOLS MOVED ──────────────────────────────────────────────────────
+ * n8n's MCP Server Trigger gives a connected tool node no per-request context, so on that
+ * transport the customer's identity had to travel THROUGH THE MODEL, as a sealed `botToken`
+ * argument. The token could not be forged — but nothing tied it to the conversation presenting
+ * it. A valid token that reached another customer's chat worked there for its whole 2–3 hour
+ * life, and the only barriers were two sentences in a prompt.
+ *
+ * A tool node inside `wi-mall-core` can read the flow's own data, so the identity is now an
+ * EXPRESSION the model cannot reach (`FLOW_IDENTITY` below) — the rule every other node in that
+ * workflow already followed. There is no `botToken` argument on any tool, and nothing for a
+ * prompt to protect. `test:bot-surface` § 15 asserts no emitted node asks the model for one.
+ *
+ * ⚠ What the move does NOT change: the model sees exactly the tools it saw before. An MCP
+ * client hands the agent every tool on the server as its own tool, so the count the model
+ * chooses among is the same on both transports.
  *
  * ── THE PROPERTY THIS FILE EXISTS FOR ────────────────────────────────────────
  * ⛔ **A `flow_only` tool is NEVER emitted.** That tier holds every money movement, every
  * destructive action, both slot-holding booking writes and all seven payment-method and address
  * writes. The tier is the only thing keeping that boundary real: a generator that ignored it
- * would hand a language model `checkout_create_orders` and `payment_initiate`. `SELECTION` below
- * is the whole rule, exported so `test:bot-surface` § 15 asserts it rather than trusting it.
+ * would hand a language model `checkout_create_orders` and `payment_initiate`. `isModelFacing`
+ * below is the whole rule, exported so `test:bot-surface` § 15 asserts it rather than trusting it.
  *
- * ── TWO RENDERINGS, ONE MODEL ────────────────────────────────────────────────
- *   --sdk (default)  n8n Workflow SDK source, for review and for building the server from code
- *   --ops            `update_workflow` operations, for rebuilding the LIVE workflow in place
+ * ── WHAT IT WRITES ───────────────────────────────────────────────────────────
+ *   wi-mall-core-tools.nodes.json   every node as it should be, for review
+ *   wi-mall-core-tools.ops.json     `update_workflow` operations against the LIVE `wi-mall-core`
  *
- * The second exists because no tool can apply SDK code to an existing workflow, and
- * `wi-mall-mcp` must keep its id: `wi-mall-core`'s MCP Client Tool points at the endpoint path
- * `wi-mall-customer`, and a second workflow claiming that path collides with it. Both renderings
- * walk the SAME node model, so they cannot disagree about what the server holds.
+ * Operations rather than a workflow file, because `wi-mall-core` is hand-built around these
+ * nodes: only the tool nodes are generated, and nothing else in that workflow may be touched.
  *
- * Run:  npm run gen:mcp-workflow            # writes both files
- *       npm run gen:mcp-workflow -- --stdout
+ * Run:  npm run gen:mcp-workflow -- --existing <get_workflow_details of wi-mall-core>.json
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -68,7 +82,7 @@ export function readCatalog(file: string = CATALOG_PATH): Catalog {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 1 · Selection — which catalogue rows become MCP tools
+// 1 · Selection — which catalogue rows become agent tools
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -115,13 +129,39 @@ export const NEVER_MODEL_FACING_PARAMS: ReadonlySet<string> = new Set(['page', '
 
 /** The proven shape, copied from a live node rather than invented. */
 const BEARER_CREDENTIAL = { id: 'lz5ivIop9DF8mPHa', name: 'jovi-mall-Bearer Auth account' };
-const MCP_DOOR_CREDENTIAL = { id: 'bvt8A3ugMaycaW8i', name: 'wi-mall MCP door' };
-const HTTP_TOOL_TYPE = 'n8n-nodes-base.httpRequestTool';
+export const HTTP_TOOL_TYPE = 'n8n-nodes-base.httpRequestTool';
 const HTTP_TOOL_VERSION = 4.5;
 const REQUEST_TIMEOUT_MS = 20000;
 
-const BOT_TOKEN_ARGUMENT =
-    '$fromAI("botToken", "The sealed identity token, copied verbatim from the botToken line in your system prompt", "string")';
+/**
+ * ⛔ **WHO THE CUSTOMER IS — read from the flow, never asked of the model.**
+ *
+ * `Inbound` is `wi-mall-core`'s trigger node: the envelope a channel adapter built from the
+ * WhatsApp or Telegram webhook itself. It is the same five fields, from the same node, that
+ * `sync identity`, `product action` and every other deterministic call in that workflow send —
+ * so a tool call and the turn it belongs to cannot disagree about who is talking.
+ *
+ * `.first()`, not `.item`: a tool node is a sub-node of the agent and has no paired item of its
+ * own. `Show-Products` and `open_negotiation` read `Inbound` the same way.
+ *
+ * ⚠ **There must be no `$fromAI` anywhere in this expression.** One would put the identity back
+ * in the model's hands, which is the whole defect this replaced. `test:bot-surface` § 15 scans
+ * every emitted body for it.
+ */
+export const FLOW_IDENTITY =
+    "{ channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, "
+    + "displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, "
+    + "language: $('Inbound').first().json.language }";
+
+/**
+ * Where the generated nodes sit on `wi-mall-core`'s canvas: one block, below everything
+ * hand-built (the workflow's own nodes end at y = 2496, measured 2026-10-12). Positions are
+ * emitted only when a node is ADDED — an operator who drags the block somewhere tidier must not
+ * have it snap back on the next run.
+ */
+const GRID_ORIGIN: readonly [number, number] = [1600, 2760];
+const GRID_COLUMNS = 12;
+const GRID_STEP: readonly [number, number] = [220, 200];
 
 export interface EmittedNode {
     name: string;
@@ -204,10 +244,40 @@ function schemaFor(tool: CatalogTool, param: string): CatalogParameter {
     return schema;
 }
 
-/** `{name}` in the path template becomes an inline `$fromAI` expression. */
+/**
+ * A model-supplied value on its way into a URL PATH — one segment, and never more than one.
+ *
+ * ⛔ **A path argument used to be interpolated RAW, and that quietly undid the `flow_only`
+ * boundary this file exists to keep** (found 2026-10-12). The value is whatever the model
+ * writes, so an "order id" of `<order>/cancel?x=` turned `orders_record_cancellation_reason`
+ * into `POST /orders/<order>/cancel` — a `flow_only` route, with a body that route accepts and
+ * no confirmation tap — and `../../negotiation/context` walked out of `/api/internal/bot`
+ * altogether, carrying the service token. The tier filter decides which NODES exist; it says
+ * nothing about where a node's request lands once the model chooses part of its path.
+ *
+ * Two steps, and the second is not redundant:
+ *
+ *   1. `encodeURIComponent` — `/`, `?`, `#`, `\` and `%` stop being URL syntax. Express decodes
+ *      the segment back into the one route parameter, so a real id, an order number, a slug or
+ *      a SKU containing a space arrives exactly as before.
+ *   2. A value that is EMPTY or ONLY DOTS becomes `_`. `encodeURIComponent` leaves `.` alone,
+ *      and a URL parser collapses a `..` segment whether or not anything else is encoded:
+ *      `cart_remove_item` with a variant id of `..` was `DELETE /cart`, which is `cart_clear`.
+ *      An empty one drops the segment the same way (`POST /tickets/` is `tickets_create`).
+ *      `_` matches no id on this platform, so the call answers the ordinary not-found.
+ *
+ * ⚠ `test:bot-surface` § 15 EVALUATES the emitted expression against hostile values and parses
+ * the result as a URL, rather than scanning for the word `encodeURIComponent` — a wrapper that
+ * is present and wrong passes a scan.
+ */
+export function pathArgument(call: string): string {
+    return `encodeURIComponent(String(${call}).trim()).replace(/^\\.*$/, "_")`;
+}
+
+/** `{name}` in the path template becomes an inline, path-safe `$fromAI` expression. */
 function urlFor(tool: CatalogTool): string {
     const filled = tool.operation.path.replace(/\{([A-Za-z0-9_]+)\}/g, (_m, param: string) =>
-        `{{ ${fromAi(param, schemaFor(tool, param))} }}`);
+        `{{ ${pathArgument(fromAi(param, schemaFor(tool, param)))} }}`);
     return `={{ $env.JOVI_MALL_BASE_URL }}${filled}`;
 }
 
@@ -222,7 +292,7 @@ function urlFor(tool: CatalogTool): string {
  */
 function jsonExpression(tool: CatalogTool, params: string[], includeIdentity: boolean): string {
     const required = new Set(tool.parameters.required ?? []);
-    const fields = includeIdentity ? [`identity: { token: ${BOT_TOKEN_ARGUMENT} }`] : [];
+    const fields = includeIdentity ? [`identity: ${FLOW_IDENTITY}`] : [];
     for (const param of params) {
         if (NEVER_MODEL_FACING_PARAMS.has(param)) continue;
         const call = fromAi(param, schemaFor(tool, param));
@@ -251,13 +321,13 @@ export function buildNodes(tools: readonly CatalogTool[]): EmittedNode[] {
             /**
              * ⚠ The surface REFUSES a mutating call without one.
              *
-             * ⛔ **`$execution.id` ALONE IS NOT UNIQUE PER TOOL CALL HERE, and the failure is
-             * silent.** It is unique per turn inside `wi-mall-core`, which is where that
-             * pattern came from — but on the MCP server the tool node runs as a sub-node of
-             * the MCP Server Trigger, and the value demonstrably repeats across separate
-             * calls. Measured on 2026-09-08: `auth_send_login_link` was called four times and
-             * jovi-mall minted **one** session; the other calls hit the idempotency store and
-             * were answered with the FIRST call's stored body.
+             * ⛔ **`$execution.id` ALONE IS NOT UNIQUE PER TOOL CALL, and the failure is
+             * silent.** Inside `wi-mall-core` it is one value for the whole turn, so a model
+             * that calls one tool twice in a turn would send the same key twice. (On the old
+             * MCP server it was worse — the value repeated across separate turns. Measured on
+             * 2026-09-08: `auth_send_login_link` was called four times and jovi-mall minted
+             * **one** session; the other calls hit the idempotency store and were answered
+             * with the FIRST call's stored body.)
              *
              * That is invisible to the model, and specifically so: `replay()` announces itself
              * with an `Idempotency-Replayed: true` **response header**, and the n8n HTTP node
@@ -302,7 +372,10 @@ export function buildNodes(tools: readonly CatalogTool[]): EmittedNode[] {
             tool,
             parameters,
             credentials: tool.surface === 'bot_internal' ? { httpBearerAuth: BEARER_CREDENTIAL } : undefined,
-            position: [40 + (index % 8) * 200, 328 + Math.floor(index / 8) * 200],
+            position: [
+                GRID_ORIGIN[0] + (index % GRID_COLUMNS) * GRID_STEP[0],
+                GRID_ORIGIN[1] + Math.floor(index / GRID_COLUMNS) * GRID_STEP[1],
+            ],
         });
         index++;
     }
@@ -311,157 +384,19 @@ export function buildNodes(tools: readonly CatalogTool[]): EmittedNode[] {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 3 · The trigger
+// 3 · Rendering — `update_workflow` operations against the live `wi-mall-core`
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const MCP_TRIGGER_NAME = 'MCP Server Trigger';
-export const MCP_PATH = 'wi-mall-customer';
-
-/**
- * The server instructions every MCP client prepends to its system prompt.
- *
- * ⚠ These describe the **sealed botToken** transport. The workflow's own description and its
- * sticky note both described an abandoned query-string design until this generator replaced
- * them; nothing on the server has ever read identity off the endpoint URL.
- */
-export const MCP_INSTRUCTIONS = [
-    'These tools act on ONE customer: the person currently chatting.',
-    '',
-    'THE IDENTITY RULE',
-    '- Every customer-scoped tool takes a `botToken` argument. Copy it VERBATIM from the `botToken:` line in your system prompt.',
-    '- Never invent, edit, shorten or guess a botToken. Never use one from an earlier conversation. Never show it to the customer or mention that it exists.',
-    '- If a tool answers BOT_IDENTITY_TOKEN_EXPIRED or BOT_IDENTITY_TOKEN_INVALID, do NOT retry with a different value. Tell the customer to send their message again.',
-    '- Never ask the customer for a phone number or account id in order to use a tool.',
-    '- The catalogue tools (catalog_*) take no botToken: they read the public shop and are the same for everybody.',
-    '',
-    'LISTS',
-    '- A list answer carries at most 5 rows. That is a hard limit: asking for more is refused, so do not try, and do not page through a list to gather more.',
-    '- Every list reports `meta.total`, `meta.hasMore` and `meta.moreUrl`. When `hasMore` is true, show the rows you were given, say how many there are in total, and give the customer `meta.moreUrl` exactly as written.',
-    '- NEVER invent a link. If `meta.moreUrl` is null there is no page to send them to.',
-    '',
-    'RULES',
-    '- Never invent product data, prices, stock, order status or delivery dates. If a tool did not return it, say you do not have it.',
-    '- A tool response is JSON with success, data and sometimes error.customerMessage. On failure, relay error.customerMessage in the customer\'s language rather than inventing an explanation.',
-    '- Do not call a mutating tool (anything that adds, changes, cancels or sends) unless the customer has just asked for that exact action in their own words.',
-].join('\n');
-
-/** ⚠ n8n caps a workflow description at 255 characters and REFUSES the write over it. */
-export const MCP_DESCRIPTION =
-    'GENERATED from api-doc/n8n/tools/catalog.json by jovi-mall/scripts/gen-mcp-workflow.ts — ' +
-    'edit the catalogue, not the nodes. Identity is a sealed botToken tool argument, never a ' +
-    'URL. flow_only rows (money, destructive) are never emitted.';
-
-/** The canvas note. Named so the generator can find and replace it on every run. */
-export const STICKY_NAME = 'Generated — do not edit nodes by hand';
-
-export const STICKY_CONTENT = [
-    '## wi-mall MCP server — GENERATED',
-    '',
-    'Every tool node below is emitted by `jovi-mall/scripts/gen-mcp-workflow.ts` from',
-    '`api-doc/n8n/tools/catalog.json`. **Edit the catalogue and re-run `npm run gen:mcp-workflow`;',
-    'a node edited by hand is overwritten on the next run.**',
-    '',
-    '**Identity is a tool ARGUMENT, not a URL.** Every `/api/internal/bot/*` tool takes',
-    '`botToken` as a tool argument — a sealed, signed token `wi-mall-core` puts in the system prompt.',
-    'The model can echo it and cannot author one for somebody else. Nothing here has ever read',
-    'identity off the endpoint query string.',
-    '',
-    '⛔ **`flow_only` catalogue rows are never emitted** — money movements, destructive actions,',
-    'the slot-holding booking writes and every payment-method and address write. That tier is the',
-    'boundary; `wi-mall-core` calls those with deterministic nodes.',
-    '',
-    '`neverError` is ON: a 4xx body carries `error.customerMessage` and reaches the agent instead',
-    'of throwing.',
-].join('\n');
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 4 · Rendering — the n8n Workflow SDK
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * A JS literal for the SDK file.
- *
- * ⚠ `JSON.stringify` rather than a hand-rolled single-quoted literal, and that is not a
- * shortcut: every `$fromAI` argument is DOUBLE-quoted inside the expression, and the catalogue's
- * prose is full of apostrophes. Escaping by hand at two levels is where this would go wrong.
- */
-function literal(value: unknown, indent: number): string {
-    const pad = ' '.repeat(indent);
-    if (value === undefined) return 'undefined';
-    if (value === null || typeof value !== 'object') return JSON.stringify(value);
-    if (Array.isArray(value)) {
-        if (!value.length) return '[]';
-        const rows = value.map((v) => `${pad}  ${literal(v, indent + 2)}`);
-        return `[\n${rows.join(',\n')}\n${pad}]`;
-    }
-    const entries = Object.entries(value as Record<string, unknown>).filter(([, v]) => v !== undefined);
-    if (!entries.length) return '{}';
-    const rows = entries.map(([k, v]) => `${pad}  ${JSON.stringify(k)}: ${literal(v, indent + 2)}`);
-    return `{\n${rows.join(',\n')}\n${pad}}`;
-}
-
-export function renderSdk(nodes: readonly EmittedNode[]): string {
-    const out: string[] = [];
-    out.push("import { workflow, trigger, tool, sticky } from '@n8n/workflow-sdk';");
-    out.push('');
-
-    for (const node of nodes) {
-        out.push(`const ${node.name} = tool({`);
-        out.push(`  type: ${JSON.stringify(HTTP_TOOL_TYPE)},`);
-        out.push(`  version: ${HTTP_TOOL_VERSION},`);
-        out.push('  config: {');
-        out.push(`    name: ${JSON.stringify(node.name)},`);
-        out.push(`    position: ${JSON.stringify(node.position)},`);
-        out.push(`    parameters: ${literal(node.parameters, 4)},`);
-        if (node.credentials) out.push(`    credentials: ${literal(node.credentials, 4)},`);
-        out.push('  },');
-        out.push('  output: [{ success: true }],');
-        out.push('});');
-        out.push('');
-    }
-
-    out.push(`const mcpServerTrigger = trigger({`);
-    out.push(`  type: ${JSON.stringify('@n8n/n8n-nodes-langchain.mcpTrigger')},`);
-    out.push('  version: 2.1,');
-    out.push('  config: {');
-    out.push(`    name: ${JSON.stringify(MCP_TRIGGER_NAME)},`);
-    out.push('    position: [1720, 96],');
-    out.push(`    parameters: ${literal({ authentication: 'headerAuth', path: MCP_PATH, instructions: MCP_INSTRUCTIONS }, 4)},`);
-    out.push(`    credentials: ${literal({ httpHeaderAuth: MCP_DOOR_CREDENTIAL }, 4)},`);
-    out.push(`    subnodes: { tools: [${nodes.map((n) => n.name).join(', ')}] },`);
-    out.push('  },');
-    out.push('  output: [{}],');
-    out.push('});');
-    out.push('');
-    out.push(`const generatedNote = sticky(${JSON.stringify(STICKY_CONTENT)}, [], { color: 4, height: 460, width: 460 });`);
-    out.push('');
-    // The SDK id stays `wi-mall-mcp`; only the DISPLAY NAME carries the `UP-` prefix the
-    // instance adopted on 2026-09-07. Kept in step deliberately — this file is the review
-    // artefact, and a rendering that disagrees with the live workflow's name is the kind of
-    // drift nobody notices until they diff the two.
-    out.push(`export default workflow('wi-mall-mcp', 'UP-wi-mall-mcp').add(mcpServerTrigger).add(generatedNote);`);
-    out.push('');
-
-    return out.join('\n');
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 5 · Rendering — `update_workflow` operations, for the live workflow
-// ─────────────────────────────────────────────────────────────────────────────
+/** The node every generated tool hangs off, in `wi-mall-core`. */
+export const AGENT_NODE_NAME = 'AI Agent';
 
 export interface UpdateOperation { type: string; [key: string]: unknown }
 
-/**
- * One tool node as the LIVE workflow currently holds it. Supplied by `--existing`.
- *
- * `parameters` and `position` are optional so a caller that knows only the names still gets
- * correct add-vs-update decisions — it simply gets a full re-push of every node instead of a
- * minimal diff.
- */
-export interface ExistingToolNode {
+/** One node of the LIVE workflow, as `--existing` supplies it. */
+export interface ExistingNode {
     name: string;
+    type?: string;
     parameters?: Record<string, unknown>;
-    position?: [number, number];
 }
 
 /**
@@ -479,146 +414,118 @@ function stable(value: unknown): string {
 }
 
 /**
- * Rebuild the tool nodes of the EXISTING workflow: drop whatever tools it holds and should not,
- * add the ones it lacks, correct the ones that have changed, and correct the trigger itself.
+ * Bring `wi-mall-core`'s generated tool nodes in line with the catalogue: add the ones it
+ * lacks, correct the ones that changed, remove the ones that should no longer be there.
  *
- * `existing` is passed in rather than fetched — this script has no n8n credentials, and a
- * generator that reached out to a live service would not be runnable offline like every other
- * script here.
+ * ── ⛔ IT OWNS THE GENERATED NODES AND NOTHING ELSE ──────────────────────────
+ * `wi-mall-core` is hand-built — ninety-odd nodes of identity sync, onboarding, commands, taps
+ * and the send loop — and several of its own nodes are agent tools too (`Search-Products`,
+ * `Show-Products`, `open_negotiation`, the two website readers). So "which nodes are mine" is
+ * the question this function must never get wrong, and the answer is narrow on purpose:
  *
- * ── ⛔ IT MUST DESCRIBE THE SERVER AS IT IS NOW, NOT AS IT ONCE WAS ──────────
- * This argument decides `addNode` versus `updateNodeParameters`, and both wrong answers fail
- * the whole atomic call: adding a node that exists collides on the name, updating one that does
- * not exist targets nothing.
+ *     an HTTP Request Tool node whose NAME is a tool in catalog.json
  *
- * ⚠ **That is not hypothetical — it is what this file shipped with.** `main()` passed the
- * hardcoded `HAND_WRITTEN_NODES`, the fifteen names the workflow held *before* Step 8. It was
- * true on the day it was written and false the moment Step 8's own output was applied, so the
- * next run emitted `addNode` for thirty-one nodes that already existed. The same
- * "a guard that names its subjects in a hardcoded list WILL drift" that this plan has now hit
- * three times. Pass `--existing`; see the CLI below for how to produce it.
+ * Both halves are needed. The type alone would claim the two website readers; the name alone
+ * would claim a hand-built node that happens to share a catalogue name. Anything else is left
+ * exactly as it is — this emits no workflow metadata, no sticky note, and nothing for the agent
+ * node itself.
  *
- * ── MINIMAL DIFF, AND THE REASON IS THE 100-OP CAP ──────────────────────────
- * When `parameters`/`position` are supplied, a node whose pushed value is byte-identical to the
- * live one emits **no operation at all**. Without that, a 49-tool workflow needs ~103
- * operations and `update_workflow` accepts **100 per call** — so a full re-push has to be split
- * across calls, and a split loses the atomicity that makes this safe to run against a live
- * server. Re-running the generator with nothing changed now emits an empty tool diff, which is
- * also the property that makes it cheap to run often.
+ * ⚠ **A name that is already taken by a node of ANOTHER type is refused, not overwritten.**
+ * `addNode` would collide on it and fail the whole atomic call; the catalogue row is what is
+ * wrong, and it should say so here rather than at the n8n API.
+ *
+ * ── `existing` MUST DESCRIBE THE WORKFLOW AS IT IS NOW ───────────────────────
+ * It decides `addNode` versus `updateNodeParameters`, and both wrong answers fail the call:
+ * adding a node that exists collides on the name, updating one that does not targets nothing.
+ * It is passed in rather than fetched — this script holds no n8n credentials, and a generator
+ * that reached out to a live service would not be runnable offline like every other one here.
+ * A node whose pushed parameters are byte-identical to the live ones emits no operation at all,
+ * so re-running with nothing changed emits an empty list.
  */
 export function renderOperations(
     nodes: readonly EmittedNode[],
-    existing: readonly (string | ExistingToolNode)[],
-    existingStickyNodes: readonly string[] = [],
+    existing: readonly ExistingNode[],
+    catalogueToolNames: ReadonlySet<string>,
 ): UpdateOperation[] {
-    const existingNodes: ExistingToolNode[] = existing.map((e) => (typeof e === 'string' ? { name: e } : e));
-    const existingToolNodes = existingNodes.map((e) => e.name);
-    const liveByName = new Map(existingNodes.map((e) => [e.name, e]));
-    const ops: UpdateOperation[] = [];
+    const liveByName = new Map(existing.map((e) => [e.name, e]));
     const keep = new Set(nodes.map((n) => n.name));
+    const ops: UpdateOperation[] = [];
 
-    // ⚠ The workflow's description and its canvas note both described an abandoned
-    // query-string identity design, on a server where every node has always used $fromAI.
-    for (const sticky of existingStickyNodes) ops.push({ type: 'removeNode', nodeName: sticky });
-    ops.push({
-        type: 'addNode',
-        node: {
-            name: STICKY_NAME,
-            type: 'n8n-nodes-base.stickyNote',
-            typeVersion: 1,
-            position: [2020, -420],
-            parameters: { content: STICKY_CONTENT, color: 4, height: 460, width: 460 },
-        },
-    });
-    ops.push({ type: 'setWorkflowMetadata', description: MCP_DESCRIPTION });
-
-    for (const name of existingToolNodes) {
-        if (!keep.has(name)) ops.push({ type: 'removeNode', nodeName: name });
+    for (const live of existing) {
+        const mine = live.type === HTTP_TOOL_TYPE && catalogueToolNames.has(live.name);
+        if (mine && !keep.has(live.name)) ops.push({ type: 'removeNode', nodeName: live.name });
     }
 
     for (const node of nodes) {
         const live = liveByName.get(node.name);
+
+        if (live && live.type !== HTTP_TOOL_TYPE) {
+            throw new Error(
+                `wi-mall-core already holds a node named \`${node.name}\` of type ${live.type ?? 'unknown'}. `
+                + 'A generated tool cannot take that name — rename the catalogue row or the node.',
+            );
+        }
+
         if (live) {
-            /**
-             * ⚠ **Only when it actually differs.** `parameters === undefined` means the caller
-             * gave names alone and cannot know — push in that case, because a missed update is
-             * a tool silently running last week's description, while a redundant one costs an
-             * operation out of the budget.
-             */
             if (live.parameters === undefined || stable(live.parameters) !== stable(node.parameters)) {
                 ops.push({ type: 'updateNodeParameters', nodeName: node.name, parameters: node.parameters, replace: true });
             }
-            if (live.position === undefined || stable(live.position) !== stable(node.position)) {
-                ops.push({ type: 'setNodePosition', nodeName: node.name, position: node.position });
-            }
-        } else {
-            ops.push({
-                type: 'addNode',
-                node: {
-                    name: node.name,
-                    type: HTTP_TOOL_TYPE,
-                    typeVersion: HTTP_TOOL_VERSION,
-                    position: node.position,
-                    parameters: node.parameters,
-                    credentials: node.credentials,
-                },
-            });
-            ops.push({
-                type: 'addConnection',
-                source: node.name,
-                target: MCP_TRIGGER_NAME,
-                connectionType: 'ai_tool',
-            });
+            continue;
         }
-    }
 
-    ops.push({
-        type: 'setNodeParameter',
-        nodeName: MCP_TRIGGER_NAME,
-        path: '/instructions',
-        value: MCP_INSTRUCTIONS,
-    });
+        ops.push({
+            type: 'addNode',
+            node: {
+                name: node.name,
+                type: HTTP_TOOL_TYPE,
+                typeVersion: HTTP_TOOL_VERSION,
+                position: node.position,
+                parameters: node.parameters,
+                credentials: node.credentials,
+            },
+        });
+        ops.push({
+            type: 'addConnection',
+            source: node.name,
+            target: AGENT_NODE_NAME,
+            connectionType: 'ai_tool',
+        });
+    }
 
     return ops;
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 6 · CLI
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const OUTPUT_DIR = path.join(__dirname, '..', 'api-doc', 'n8n', 'generated');
-
-/**
- * ⛔ **A HISTORICAL RECORD, NOT A DEFAULT ANY MORE.** These are the fifteen tool nodes
- * `wi-mall-mcp` held before Step 8 — hand-added over Steps 0–5.
- *
- * It was `main()`'s `existing` argument, and it was wrong from the instant Step 8's own output
- * was applied: the workflow then held 46, so the next run emitted `addNode` for 31 nodes that
- * already existed and the whole atomic call would have been rejected. Kept only so the first
- * apply remains reproducible from the repository, and so the next person can see what the
- * drift looked like. **Pass `--existing` instead.**
- */
-export const HAND_WRITTEN_NODES: readonly string[] = [
-    'cart_get', 'orders_list_groups', 'cart_add_item', 'profile_update', 'recently_viewed_list',
-    'notifications_list', 'notifications_unread_count', 'notifications_mark_read',
-    'reviews_list_mine', 'bookings_list', 'bookings_get_availability', 'bookings_get',
-    'bookings_get_balance', 'bookings_payment_status', 'payment_methods_list',
-];
-
-/** The sticky notes the workflow held. Removed and replaced on every run. */
-export const HAND_WRITTEN_STICKIES: readonly string[] = ['Sticky Note 9750b69c', STICKY_NAME];
 
 /** n8n's own ceiling on one `update_workflow` call. A larger batch is rejected outright. */
 export const MAX_OPERATIONS_PER_CALL = 100;
 
 /**
- * The live tool nodes, as `--existing <file>` supplies them.
+ * Split the operations into calls n8n will accept.
  *
- * The file is whatever `get_workflow_details` returned, or just its `nodes` array, or a bare
- * array of names — all three are accepted, because the useful thing is that somebody looked at
- * the server, and making them reshape the payload first is one more step to get wrong.
+ * ⚠ **Several calls are safe here ONLY because `update_workflow` writes the DRAFT.** Each call
+ * is atomic; the set of them is not — and that does not matter, because the agent runs the
+ * PUBLISHED version until `publish_workflow` is called, once, after every batch has landed and
+ * the draft has been checked. Never publish between batches.
+ *
+ * An even batch size, so a node and the connection that attaches it are never in two calls.
  */
-function readExisting(file: string): { tools: ExistingToolNode[]; stickies: string[] } {
+export function batchOperations(ops: readonly UpdateOperation[]): UpdateOperation[][] {
+    const size = MAX_OPERATIONS_PER_CALL - (MAX_OPERATIONS_PER_CALL % 2);
+    const batches: UpdateOperation[][] = [];
+    for (let i = 0; i < ops.length; i += size) batches.push(ops.slice(i, i + size));
+    return batches;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4 · CLI
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const OUTPUT_DIR = path.join(__dirname, '..', 'api-doc', 'n8n', 'generated');
+
+/**
+ * The live workflow's nodes, as `--existing <file>` supplies them: whatever
+ * `get_workflow_details` returned for `wi-mall-core`, or just its `nodes` array.
+ */
+function readExisting(file: string): ExistingNode[] {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
     const nodes = Array.isArray(raw)
         ? raw
@@ -626,38 +533,13 @@ function readExisting(file: string): { tools: ExistingToolNode[]; stickies: stri
             ?? (raw as { nodes?: unknown[] }).nodes
             ?? []);
 
-    const named = (nodes as Array<string | Record<string, unknown>>)
-        .map((n) => (typeof n === 'string' ? { name: n } : n))
-        .filter((n) => typeof (n as { name?: unknown }).name === 'string') as Array<Record<string, unknown>>;
-
-    return {
-        /**
-         * Tool nodes only. The trigger is deliberately excluded — treating it as a tool would
-         * emit a `removeNode` for the very node every tool hangs off.
-         *
-         * A bare array of NAMES carries no `type`, so an untyped entry is taken as a tool: that
-         * is the shape a caller supplies when they know only the names, and it is the reading
-         * that makes the add-vs-update decision come out right.
-         */
-        tools: named
-            .filter((n) => n.type === undefined || n.type === HTTP_TOOL_TYPE)
-            .map((n) => ({
-                name: String(n.name),
-                parameters: n.parameters as Record<string, unknown> | undefined,
-                position: n.position as [number, number] | undefined,
-            })),
-        /**
-         * ⚠ **Derived, not hardcoded — the same drift that made `HAND_WRITTEN_NODES` wrong.**
-         * `HAND_WRITTEN_STICKIES` names a note Step 8 already deleted, so a second run emits a
-         * `removeNode` for something that is not there. `update_workflow` is atomic, so if the
-         * server treats that as an error rather than a no-op it takes the whole batch with it —
-         * and the batch is the only thing standing between a live agent and a half-applied
-         * tool set. Reading the server's own list means never asking that question.
-         */
-        stickies: named
-            .filter((n) => n.type === 'n8n-nodes-base.stickyNote')
-            .map((n) => String(n.name)),
-    };
+    return (nodes as Array<Record<string, unknown>>)
+        .filter((n) => typeof n?.name === 'string')
+        .map((n) => ({
+            name: String(n.name),
+            type: typeof n.type === 'string' ? n.type : undefined,
+            parameters: n.parameters as Record<string, unknown> | undefined,
+        }));
 }
 
 function main(): void {
@@ -667,23 +549,23 @@ function main(): void {
 
     const existingFlag = process.argv.indexOf('--existing');
     const existingPath = existingFlag >= 0 ? process.argv[existingFlag + 1] : undefined;
-    const existing = existingPath
-        ? readExisting(existingPath)
-        : { tools: [...HAND_WRITTEN_NODES], stickies: [...HAND_WRITTEN_STICKIES] };
+    const existing = existingPath ? readExisting(existingPath) : [];
 
-    const sdk = renderSdk(nodes);
-    const ops = renderOperations(nodes, existing.tools, existing.stickies);
-
-    if (process.argv.includes('--stdout')) {
-        console.log(sdk);
-        return;
-    }
+    const ops = renderOperations(nodes, existing, new Set(catalog.tools.map((t) => t.name)));
+    const batches = batchOperations(ops);
 
     fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-    const sdkPath = path.join(OUTPUT_DIR, 'wi-mall-mcp.workflow.ts');
-    const opsPath = path.join(OUTPUT_DIR, 'wi-mall-mcp.ops.json');
-    fs.writeFileSync(sdkPath, sdk);
-    fs.writeFileSync(opsPath, `${JSON.stringify(ops, null, 2)}\n`);
+    const nodesPath = path.join(OUTPUT_DIR, 'wi-mall-core-tools.nodes.json');
+    const opsPath = path.join(OUTPUT_DIR, 'wi-mall-core-tools.ops.json');
+    const review = nodes.map((n) => ({
+        name: n.name,
+        type: HTTP_TOOL_TYPE,
+        typeVersion: HTTP_TOOL_VERSION,
+        parameters: n.parameters,
+        credentials: n.credentials,
+    }));
+    fs.writeFileSync(nodesPath, `${JSON.stringify(review, null, 2)}\n`);
+    fs.writeFileSync(opsPath, `${JSON.stringify(batches, null, 2)}\n`);
 
     const byTier = tools.reduce<Record<string, number>>((acc, t) => {
         acc[t.tier] = (acc[t.tier] ?? 0) + 1;
@@ -693,25 +575,23 @@ function main(): void {
 
     console.log(`${nodes.length} tools emitted (${byTier.core ?? 0} core, ${byTier.extended ?? 0} extended)`);
     console.log(`${excluded} catalogue rows excluded — ${catalog.tools.filter((t) => t.tier === 'flow_only').length} of them flow_only`);
-    console.log(`  ${path.relative(process.cwd(), sdkPath)}`);
-    console.log(`  ${path.relative(process.cwd(), opsPath)}  (${ops.length} operations)`);
+    console.log(`  ${path.relative(process.cwd(), nodesPath)}`);
+    console.log(`  ${path.relative(process.cwd(), opsPath)}  (${ops.length} operations, ${batches.length} call${batches.length === 1 ? '' : 's'})`);
 
     if (!existingPath) {
         console.warn(
-            '\n⛔ --existing was not given, so the operations were rendered against '
-            + `HAND_WRITTEN_NODES (${HAND_WRITTEN_NODES.length} names from before Step 8).\n`
-            + '   That list is a HISTORICAL RECORD and is almost certainly not what the server holds.\n'
-            + '   Applying these operations will fail on the first node that already exists.\n\n'
-            + '   Fetch the live workflow, save the JSON, and re-run:\n'
+            '\n⛔ --existing was not given, so every tool was rendered as a NEW node.\n'
+            + '   Applying that to a workflow that already holds them fails on the first name.\n\n'
+            + '   Fetch the live wi-mall-core (get_workflow_details), save the JSON, and re-run:\n'
             + '     npm run gen:mcp-workflow -- --existing <that-file.json>',
         );
     }
 
-    if (ops.length > MAX_OPERATIONS_PER_CALL) {
+    if (batches.length > 1) {
         console.warn(
-            `\n⚠ ${ops.length} operations, and update_workflow accepts ${MAX_OPERATIONS_PER_CALL} per call.\n`
-            + '   Splitting them across calls loses atomicity — the thing that makes this safe to run\n'
-            + '   against a live server. Pass --existing so unchanged nodes emit nothing.',
+            `\n⚠ ${ops.length} operations need ${batches.length} update_workflow calls.\n`
+            + '   That is safe ONLY because each call writes the draft: apply every batch, check the\n'
+            + '   draft, then publish ONCE. Never publish between batches.',
         );
     }
 }

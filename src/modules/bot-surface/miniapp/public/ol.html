@@ -19,14 +19,28 @@
   things go wrong.  **Stream E owns this file**; nobody else edits it, because two sessions
   writing one file in this tree is a lost write, not a merge conflict.
 
-  Served by:  `GET /api/bot/miniapp/s/ol/:handle/data`
+  Served by:  `GET  /api/bot/miniapp/s/ol/:handle/data`
               → `miniapp/surfaces/order-listing.controller.ts`
+              `POST /api/bot/miniapp/s/ol/:handle/open`
+              → `BotOrderController.screenOpen` (`controllers/bot-order.controller.ts`)
 
-  ⚠ **THERE IS NO WRITE ON THIS SCREEN, AND THAT IS THE DESIGN.**  Chat decides, the app
-  displays.  Cancelling an order, fetching a cash-on-delivery code, tracking a parcel and
-  asking for help all stay in the chat, where they can be confirmed in one tap and where the
-  model can explain what happened.  This screen exists because a chat window can carry five
-  orders and a customer may have ninety.
+  ⚠ **THIS SCREEN CHANGES NOTHING, AND THAT IS THE DESIGN.**  Chat decides, the app displays.
+  Cancelling an order, fetching a cash-on-delivery code, tracking a parcel and asking for help
+  all stay in the chat, where they can be confirmed in one tap and where the model can explain
+  what happened.  This screen exists because a chat window can carry five orders and a customer
+  may have ninety.
+
+  ── A ROW CAN BE PICKED (owner, 2026-10-11) ─────────────────────────────────
+  A list of ninety orders nobody could do anything with was half a screen.  Tapping a row posts
+  its order id to `/open`; the server sends that order's card — Shipments · Cancel · Get help,
+  the same card a row of the chat's own list gives — into the conversation, and this page goes
+  back to the chat onto it.  **The buttons are drawn in the chat and never here**: a second set
+  in a WebView would be a second opinion on what an order can do.
+
+  A page cannot write to a chat (`sendData` does not exist for an app opened from an inline
+  button, and a WhatsApp screen is a page in WhatsApp's browser), so the SERVER posts the card.
+  Inside Telegram the page then closes; anywhere else it cannot, so it offers "Back to chat"
+  pointed at the `chatUrl` the server returned — `pd.html`'s arrangement, for its reason.
 
   ── THE THREE RULES THIS PAGE IS BUILT ON ───────────────────────────────────
     1. **It must work with no Telegram runtime at all.**  The same URL opens in an ordinary
@@ -98,12 +112,45 @@
   /* The order number: recognisable, and never competing with the thing that was bought. */
   .row__ref { font-variant-numeric: tabular-nums; }
 
+  /*
+   * A row that can be tapped is a real <button>, so a thumb, a keyboard and a screen reader all
+   * meet the same control.  Everything a button brings by default is undone here; what is left
+   * is `.row` plus a chevron that says "this goes somewhere".
+   *
+   * ⚠ `border-inline: 0` and `border-block-start: 0`, never the `border` shorthand — the
+   * shorthand would also erase the line `.row` draws under each row.
+   */
+  button.row--pick {
+    appearance: none;
+    -webkit-appearance: none;
+    inline-size: 100%;
+    background: none;
+    border-inline: 0;
+    border-block-start: 0;
+    border-radius: 0;
+    padding-inline: 0;
+    color: inherit;
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button.row--pick:active { opacity: .6; }
+  button.row--pick[disabled] { cursor: default; }
+  /* The row whose card is being sent; the others dim so the screen reads as busy, not stuck. */
+  .groups--busy button.row--pick:not(.row--sent) { opacity: .45; }
+
+  /* Mirrored with the text direction: it points the way the reader is reading. */
+  .row__go { flex: 0 0 auto; color: var(--muted); font-size: 18px; line-height: 1; }
+  [dir="rtl"] .row__go { transform: scaleX(-1); }
+
   .more { margin-block-start: 18px; }
 </style>
 </head>
 <body>
   <header class="screen__head">
     <h1 class="screen__title" id="title"></h1>
+    <div class="screen__sub" id="hint" hidden></div>
   </header>
 
   <main class="screen__body" id="body">
@@ -113,6 +160,12 @@
       <button class="btn btn--block" id="more"></button>
     </div>
   </main>
+
+  <!-- What a tap on a row came to. Hidden until there is something to say. -->
+  <footer class="screen__foot" id="foot" hidden>
+    <button class="btn btn--primary btn--block" id="back" hidden></button>
+    <div class="note" id="note" role="status"></div>
+  </footer>
 
 <script>
 (function () {
@@ -136,6 +189,14 @@
   }
 
   /*
+   * ⚠ **`telegram-web-app.js` defines `Telegram.WebApp` in EVERY browser**, so the object alone
+   * does not mean this page can close itself — in WhatsApp's browser `close()` exists and does
+   * nothing.  Only a real launch carries `initData`.  The theming above is harmless either way;
+   * closing is not, and `pd.html` learned that on a handset (2026-10-02).
+   */
+  var inTelegram = Boolean(tg && tg.initData);
+
+  /*
    * Everything is derived from the URL, so this file stays a static asset the build copies
    * verbatim.  Nothing is rendered per request, so nothing here can leak between two of them.
    */
@@ -144,16 +205,22 @@
 
   var el = {
     title: document.getElementById("title"),
+    hint: document.getElementById("hint"),
     state: document.getElementById("state"),
     stateText: document.getElementById("stateText"),
     groups: document.getElementById("groups"),
     moreWrap: document.getElementById("moreWrap"),
-    more: document.getElementById("more")
+    more: document.getElementById("more"),
+    foot: document.getElementById("foot"),
+    back: document.getElementById("back"),
+    note: document.getElementById("note")
   };
 
   var copy = null;
   var cursor = null;
   var busy = false;
+  var opening = false;                /* one row at a time: a second tap while one is sending does nothing */
+  var backTo = null;                  /* where "Back to chat" goes on a page that cannot close itself */
 
   function esc(s) {
     return String(s == null ? "" : s)
@@ -165,6 +232,8 @@
   function state(text, retry) {
     el.groups.hidden = true;
     el.moreWrap.hidden = true;
+    el.hint.hidden = true;
+    el.foot.hidden = true;
     el.state.hidden = false;
     el.stateText.textContent = text;
 
@@ -209,14 +278,20 @@
    *         paymentText: string,        // already a word in the customer's language
    *         summaryText: string | null, // "Blue sneakers · Leather belt +2"
    *         orders: [{
+   *           orderId:     string,         // what a tap on the row posts back to `/open`
    *           orderNumber: string,
    *           storeName:   string | null,
    *           statusText:  string          // the SAME word the chat uses for this order
    *         }]
    *       }],
-   *       emptyText: string,            // this screen's own empty sentence, localised
-   *       cursor:    string | null      // null = no further page
+   *       emptyText:  string,           // this screen's own empty sentence, localised
+   *       selectHint: string,           // "Tap an order to…", localised
+   *       cursor:     string | null     // null = no further page
    *   }}
+   *
+   * ⚠ **A row is a button only when it carries an `orderId`.**  A server from before the tap
+   * existed sends none, and a row that looks tappable and posts nothing is worse than a row
+   * that is plainly a line of text — so mid-deploy this page simply draws what it always drew.
    *
    * ⚠ **`emptyText` arrives with the DATA rather than through `/copy`.**  `/copy` is the shared
    * table every screen reads and it belongs to another stream; a key added to it mid-flight
@@ -267,14 +342,18 @@
            * reads as a rendering fault rather than as a missing name.
            */
           var named = Boolean(order.storeName);
+          var pick = Boolean(order.orderId);
           html +=
-            '<div class="row">'
+            (pick
+              ? '<button type="button" class="row row--pick" data-order="' + esc(order.orderId) + '">'
+              : '<div class="row">')
             + '<div class="row__main">'
             + '<div class="row__title">' + esc(named ? order.storeName : order.orderNumber) + "</div>"
             + (named ? '<div class="row__sub row__ref">' + esc(order.orderNumber) + "</div>" : "")
             + "</div>"
             + '<div class="row__end row__sub">' + esc(order.statusText || "") + "</div>"
-            + "</div>";
+            + (pick ? '<span class="row__go" aria-hidden="true">›</span>' : "")
+            + (pick ? "</button>" : "</div>");
         });
         html += "</div>";
       }
@@ -315,6 +394,7 @@
       draw(groups, Boolean(after));
       cursor = data.cursor || null;
       el.moreWrap.hidden = !cursor;
+      if (data.selectHint) { el.hint.textContent = data.selectHint; el.hint.hidden = false; }
     }).catch(function () {
       busy = false;
       state(copy ? copy.failed : "Could not load. Please try again.", true);
@@ -322,6 +402,100 @@
   }
 
   el.more.addEventListener("click", function () { if (cursor) load(cursor); });
+
+  /* ── Picking a row ────────────────────────────────────────────────────── */
+
+  /** What the tap came to, under the list. `bad` is a send that did not happen. */
+  function say(text, bad) {
+    el.note.textContent = text || "";
+    el.note.className = bad ? "note note--bad" : "note";
+    el.foot.hidden = false;
+  }
+
+  /** Let the rows be tapped again — after a failure, or a send the customer may want to repeat. */
+  function release(row) {
+    opening = false;
+    el.groups.classList.remove("groups--busy");
+    if (row) row.classList.remove("row--sent");
+  }
+
+  /*
+   * ── The contract `BotOrderController.screenOpen` satisfies ────────────────
+   *
+   *   POST <base>/open   { orderId }
+   *   → { success: true, data: {
+   *         sent:    boolean,        // false = the card could NOT be put in the chat
+   *         message: string,         // what to tell the customer, either way, localised
+   *         chatUrl: string | null   // where "Back to chat" goes when this page cannot close
+   *     }}
+   *
+   * ⚠ **`sent: false` is a 200, and the page must not treat it as success.**  The card is the
+   * whole outcome of this tap; closing onto a chat with nothing new in it would send the
+   * customer to look for a message that is not there.  The page stays, says so, and still
+   * offers the way back — the sentence it shows tells them to ask in the chat.
+   *
+   * ⚠ **One delegated listener on the list, not one per row**, so rows added by "Load more"
+   * are tappable without being wired again.
+   */
+  el.groups.addEventListener("click", function (event) {
+    var row = event.target && event.target.closest ? event.target.closest("[data-order]") : null;
+    if (!row || opening) return;
+
+    opening = true;
+    row.classList.add("row--sent");
+    el.groups.classList.add("groups--busy");
+    el.back.hidden = true;
+    say(copy.loading, false);
+
+    json(base + "/open", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ orderId: row.getAttribute("data-order") })
+    }).then(function (res) {
+      /* The screen's session has gone: every row is dead, so say so once, in place of the list. */
+      if (res.status === 410) { opening = false; state(copy.expired, false); return; }
+
+      if (!res.ok || !res.body || res.body.success === false || !res.body.data) {
+        release(row);
+        say(copy.failed, true);
+        return;
+      }
+
+      var out = res.body.data;
+      say(out.message || "", !out.sent);
+
+      /*
+       * Closing IS the confirmation: the customer lands back in the thread, on the card that
+       * has just been posted there.  Only for a card that was really sent, and only where the
+       * page can really close.
+       */
+      if (out.sent && inTelegram && tg.close) {
+        if (tg.HapticFeedback) { try { tg.HapticFeedback.notificationOccurred("success"); } catch (e) {} }
+        window.setTimeout(function () { try { tg.close(); } catch (e) {} }, 900);
+        /* A client that ignores `close()` must not leave the list dimmed for good. */
+        window.setTimeout(function () { release(row); }, 2500);
+        return;
+      }
+
+      /* Still here — a WhatsApp page, or a send that was refused. The list stays usable. */
+      release(row);
+
+      if (inTelegram) return;
+      if (out.chatUrl) {
+        backTo = out.chatUrl;
+        el.back.textContent = copy.flowBackToChat || FALLBACK.flowBackToChat;
+        el.back.hidden = false;
+        /* The nearest thing to closing that a page outside Telegram has. The button stays, in
+           case the browser refuses the navigation. */
+        if (out.sent) window.setTimeout(function () { window.location.assign(out.chatUrl); }, 900);
+      }
+    }).catch(function () {
+      release(row);
+      say(copy.failed, true);
+    });
+  });
+
+  el.back.addEventListener("click", function () { if (backTo) window.location.assign(backTo); });
 
   /*
    * ⚠ **`copy` is never null once boot has run, and that is a correctness property, not a
@@ -340,7 +514,8 @@
     retry: "Try again",
     ordersHeading: "Your orders",
     ordersEmpty: "You have no orders yet.",
-    loadMore: "Load more"
+    loadMore: "Load more",
+    flowBackToChat: "Back to chat"
   };
 
   function boot(d) {

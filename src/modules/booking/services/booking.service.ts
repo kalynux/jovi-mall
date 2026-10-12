@@ -902,8 +902,11 @@ export class BookingService {
       throw createAppError(ERROR_CODES.BOOKING_INVALID_STATUS_TRANSITION, 400, `Cannot transition from ${currentStatus} to ${newStatus}. Allowed transitions: ${VALID_TRANSITIONS[currentStatus]?.join(', ') || 'none (terminal state)'}`);
     }
 
-    // Update status
+    // Update status. A completion is dated here, once, and the earnings hold below starts
+    // from this same date — it is what the customer's protection window is counted from.
+    const completedAt = newStatus === BookingStatus.COMPLETED ? new Date() : null;
     booking.status = newStatus;
+    if (completedAt) booking.completedAt = completedAt;
     await booking.save();
 
     // Handle calendar sync (non-blocking - log errors but don't throw)
@@ -949,7 +952,7 @@ export class BookingService {
     // Idempotent and best-effort: a no-op when the booking had no paid earnings.
     if (newStatus === BookingStatus.COMPLETED) {
       try {
-        await earningsCompletionService.onSourceCompleted('booking', booking._id.toString());
+        await earningsCompletionService.onSourceCompleted('booking', booking._id.toString(), completedAt ?? new Date());
       } catch (earningsError) {
         console.error('[BookingService] Failed to mature booking earnings on completion:', earningsError);
       }

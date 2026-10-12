@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document, Types } from 'mongoose';
 import { PayoutMethodSchema, IPayoutMethod } from '../../core/types/payout.types';
 import { ActorSource, actorStampFields } from '../../core/types/actor-source.types';
+import { CodRestrictionSchema, ICodRestriction } from '../../core/types/cod-restriction.types';
 import { AgencyOnboardingStep } from '../../core/constants/onboarding-steps';
 import { SUPPORTED_LANGUAGES, Language } from '../../core/constants/languages';
 import { MODELS, COLLECTIONS } from '../../core/database/collections';
@@ -436,6 +437,21 @@ export interface IDeliveryAgency extends Document {
    * `policy_version` and pause every vendor connection.
    */
   cod_limit_override: IAgencyCodLimitOverride | null;
+  /**
+   * An administrator's cash-on-delivery restriction (2026-10-10). `null` — and absent, on
+   * every document written before the field — means COD works for this agency exactly as
+   * its own `policies.cod` and its cash limit say.
+   *
+   * While set the agency receives NO NEW cash-on-delivery work: `CodEligibilityService`
+   * refuses COD at checkout for a basket it would carry, and `CodLimitsService` never
+   * hands it a COD shipment (not waivable with `force`). Shipments it already holds and
+   * the cash chain are untouched. It sits ABOVE `policies.cod.enabled` and rewrites
+   * nothing, so lifting it returns the agency to what it had configured. Deliberately NOT
+   * under `policies`, for the reason `cod_limit_override` is not: writing it must not bump
+   * `policy_version` and pause every vendor connection. Written ONLY by
+   * `CodRestrictionService`.
+   */
+  cod_restriction: ICodRestriction | null;
   /** @deprecated Use kyc_details.legit_verified. Kept for backward compat. */
   legit_verified: boolean;
   timezone: string;
@@ -500,6 +516,8 @@ const DeliveryAgencySchema = new Schema<IDeliveryAgency>(
     policy_version: { type: Number, default: 0 },
     // The administrator's pinned cash limit — see IDeliveryAgency.cod_limit_override.
     cod_limit_override: { type: AgencyCodLimitOverrideSchema, default: null },
+    // The administrator's COD restriction — see IDeliveryAgency.cod_restriction.
+    cod_restriction: { type: CodRestrictionSchema, default: null },
     /** @deprecated */
     legit_verified: { type: Boolean, default: false },
     timezone: { type: String, default: 'Africa/Douala', required: true },

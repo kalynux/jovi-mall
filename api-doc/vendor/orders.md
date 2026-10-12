@@ -560,6 +560,12 @@ holds un-remitted (in-flight COD + collected-not-remitted):
 2. **Your COD terms' `maxCashPerAgency`** — measured on *your* orders' cash at that agency
    (`kind: "vendor_terms"`). See `GET/PUT /api/vendor/profile/cod-terms` in [profile.md](./profile.md).
 
+Since 2026-10-10 there is a third `kind`, **`agency_restricted`**, which is not a cap: an
+administrator switched cash on delivery off for that agency. Auto-redirect holds the shipment the
+same way, but manual dispatch and change-agency answer **`422 COD_AGENCY_RESTRICTED`** and
+`force: true` does **not** get past it. The only exit is another agency. See
+[FRONTEND-CHANGELOG-cod-restrictions.md](./FRONTEND-CHANGELOG-cod-restrictions.md).
+
 | Path | When a cap would be exceeded |
 |---|---|
 | **Auto-redirect** (your setting) | The order still goes through; that shipment is **not dispatched**, stays `pending`, and gets a `codLimitHold`. The rest of the order dispatches. A timeline entry says so. |

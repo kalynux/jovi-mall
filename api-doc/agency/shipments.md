@@ -172,7 +172,7 @@ the whole cash chain), three rules change:
    **dead end**, and reaching it is what raises the customer's delivery-code prompt
    (`shipment.service.ts:1421`). From there only the code moves it on: the agent submits it via
    `POST /api/agent/shipments/:id/cod/collect`, which atomically records the cash and marks the
-   shipment `delivered`. (A 7-day sweep past the dispute window is the only other exit, and it is
+   shipment `delivered`. (A 3-day sweep past the dispute window is the only other exit, and it is
    keyed on a COD shipment *sitting at* `agent_delivered`.) There is no customer app confirmation
    step for COD.
 
@@ -543,15 +543,15 @@ one transaction.
 
 | Paid | `agent_delivered` → `delivered` when | Auto-confirm? |
 |---|---|---|
-| Online | the **customer** confirms that shipment ([customer orders](../customer/orders.md)) | Yes — after a **7-day** dispute window |
-| COD | the **agent submits the customer's delivery code** ([`collect`](../agent/cod-cash.md#collect)) | Yes — after **7 days** the cash is recorded as collected *without* a code |
+| Online | the **customer** confirms that shipment ([customer orders](../customer/orders.md)) | Yes — after a **3-day** dispute window (`EARNINGS_SHIPMENT_AUTO_CONFIRM_DAYS`; 7 until 2026-10-09) |
+| COD | the **agent submits the customer's delivery code** ([`collect`](../agent/cod-cash.md#collect)) | Yes — after **3 days** the cash is recorded as collected *without* a code |
 
 > **COD:** `delivered` is rejected as a status change — a recorded cash collection is the only way
 > there, so `delivered` and "cash collected" are always the same event. The normal route is the agent
 > submitting the customer's code: the response to `agent_delivered` carries `requiresDeliveryCode:
 > true`, the agent app's cue to ask for it.
 >
-> If the shipment sits at `agent_delivered` for **7 days** with no code, the auto-confirm sweep records
+> If the shipment sits at `agent_delivered` for **3 days** with no code, the auto-confirm sweep records
 > the cash as **collected without a code** (`verification.method: "auto_no_code"`), marks the shipment
 > `delivered`, and makes the **agent** liable for that cash — leaving a shipment at `agent_delivered`
 > for the whole window is treated as an implicit assertion that the cash was taken. So an agent who was

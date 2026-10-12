@@ -6,7 +6,8 @@ import { UserPaymentMethodModel } from '../payment-methods/models/user-payment-m
 import { CustomerNotificationModel } from '../notifications/models/customer-notification.model';
 import { DeviceTokenModel } from '../notifications/models/device-token.model';
 import { VendorCustomerModel } from '../vendors/models/vendor-customer.model';
-import { OrderModel, FulfillmentStatus } from '../orders/order.model';
+import { OrderModel } from '../orders/order.model';
+import { ORDER_IN_FLIGHT_FILTER } from '../orders/domain/order-in-flight.rule';
 
 /**
  * Account closure — the write half. ONE FILE, on purpose.
@@ -47,15 +48,6 @@ import { OrderModel, FulfillmentStatus } from '../orders/order.model';
 /** Replaces `Customer.name`, which the schema requires and so cannot be unset. */
 export const ANONYMISED_CUSTOMER_NAME = 'Closed account';
 
-/**
- * Orders that are still moving. A customer with one of these cannot close yet.
- *
- * Derived by exclusion from `FulfillmentStatus` rather than listed positively, so a status
- * added later is treated as "in flight" until somebody deliberately says otherwise — the
- * safe direction, since the cost of the wrong answer here is an undeliverable parcel.
- */
-const SETTLED_FULFILMENT: readonly FulfillmentStatus[] = ['fulfilled', 'cancelled', 'returned'];
-
 export interface ClosureCounts {
   channelConnections: number;
   deviceTokens: number;
@@ -66,20 +58,17 @@ export interface ClosureCounts {
 
 export class AccountClosureRepository {
   /**
-   * How many of this customer's orders are still moving.
+   * How many of this customer's orders are still moving. A customer with one cannot close yet.
    *
-   * Two clauses, because "in flight" has two meanings that do not imply each other: an order
-   * still being fulfilled needs the customer reachable, and an order under a dispute hold
-   * needs them answerable. `$or` rather than two queries so the count is one round trip and
-   * cannot disagree with itself.
+   * The rule is `ORDER_IN_FLIGHT_FILTER`, shared with role closure: an order neither terminal
+   * nor completed needs the customer reachable, and one under a dispute hold needs them
+   * answerable. ⚠ It used to read `fulfillment_status` alone, so every delivered-and-confirmed
+   * physical order — which stays at `delivered` — refused closure forever.
    */
   async countActiveOrders(customerId: string, session?: ClientSession): Promise<number> {
     return await OrderModel.countDocuments({
       customer_id: customerId,
-      $or: [
-        { fulfillment_status: { $nin: SETTLED_FULFILMENT } },
-        { 'dispute_hold.active': true },
-      ],
+      ...ORDER_IN_FLIGHT_FILTER,
     })
       .session(session ?? null)
       .exec();

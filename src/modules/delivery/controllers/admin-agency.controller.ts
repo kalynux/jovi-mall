@@ -5,6 +5,8 @@ import { vectorisationService } from '../../catalog/domain/services/Vectorisatio
 import { actorFromRequest, roleActorFromRequest } from '../../../core/types/actor-source.types';
 import { AdminRejectAgencyKycSchema, AdminSetAgencyCodLimitSchema } from '../validators/admin-agency.validator';
 import { codLimitsService } from '../../cod/services/cod-limits.service';
+import { codRestrictionService } from '../../cod/services/cod-restriction.service';
+import { AdminSetCodRestrictionSchema } from '../../cod/validators/cod-restriction.validator';
 
 const adminAgencyService = new AdminAgencyService();
 
@@ -121,6 +123,45 @@ export class AdminAgencyController {
             success: true,
             data: report,
             message: maxAmount === null ? 'Agency COD limit pin released.' : 'Agency COD limit pinned.',
+        });
+    });
+
+    /**
+     * GET /api/internal/admin/agencies/:id/cod-restriction
+     *
+     * Whether an administrator switched cash on delivery off for this agency (owner decision
+     * 2026-10-10), with the reason and who did it. `restriction: null` = not restricted.
+     */
+    static getCodRestriction = asyncHandler(async (req: Request, res: Response) => {
+        const report = await codRestrictionService.reportForAgency(req.params.id);
+        res.json({ success: true, data: report });
+    });
+
+    /**
+     * PUT /api/internal/admin/agencies/:id/cod-restriction — body `{ restricted, reason }`.
+     *
+     * `restricted: true` stops NEW cash-on-delivery work reaching this agency: checkout
+     * refuses COD for a basket it would carry, and no COD shipment is handed to it (`force`
+     * does not waive that). `false` lifts it. Shipments it already holds, its cash chain, its
+     * own `policies.cod` and its cash limit are untouched either way.
+     *
+     * A compare-and-set: asking for the state the agency is already in is
+     * `409 COD_RESTRICTION_UNCHANGED`.
+     */
+    static setCodRestriction = asyncHandler(async (req: Request, res: Response) => {
+        const { restricted, reason } = AdminSetCodRestrictionSchema.parse(req.body);
+        const report = await codRestrictionService.setForAgency({
+            agencyId: req.params.id,
+            restricted,
+            reason,
+            actor: actorFromRequest(req),
+        });
+        res.json({
+            success: true,
+            data: report,
+            message: restricted
+                ? 'Cash on delivery restricted for this agency.'
+                : 'Cash on delivery restriction lifted for this agency.',
         });
     });
 

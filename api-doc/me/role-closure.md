@@ -122,7 +122,7 @@ administrator sees the answer.
 
 | Code | Role | Settle it by |
 |---|---|---|
-| `orders_in_flight` | customer | waiting for the orders to finish |
+| `orders_in_flight` | customer | waiting for the orders to finish — confirmed (completed), cancelled or returned, and out of any dispute. Same rule as `ACCOUNT_CLOSURE_ORDERS_IN_FLIGHT` in [account-closure.md](account-closure.md) |
 | `bookings_upcoming` | customer | finishing or cancelling the bookings |
 | `vendor_orders_in_flight` | vendor | fulfilling or cancelling the orders |
 | `vendor_bookings_open` | vendor | completing, cancelling or settling the bookings |

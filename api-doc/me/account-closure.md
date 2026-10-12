@@ -85,7 +85,7 @@ tokens are already dead (see *What happens to your session*, below).
 | 404 | `USER_NOT_FOUND` / `CUSTOMER_NOT_FOUND` | |
 | 409 | `USER_STATUS_CONFLICT` | The account is not `active` — most often, it was already closed by a request that raced this one |
 | 422 | `ACCOUNT_CLOSURE_ROLE_NOT_ELIGIBLE` | The account holds a role beyond `customer`. `details.blockingRoles` names them |
-| 422 | `ACCOUNT_CLOSURE_ORDERS_IN_FLIGHT` | Orders are still moving. `details.activeOrderCount` says how many |
+| 422 | `ACCOUNT_CLOSURE_ORDERS_IN_FLIGHT` | Orders are still moving. `details.activeOrderCount` says how many. An order counts when it is neither **completed** (`completion.confirmedAt` set — confirmed by the customer, by the COD code, or by the auto-confirm sweep) nor `fulfilled` / `cancelled` / `returned`, **or** it is under a dispute hold. A `delivered` order the customer has not yet confirmed still counts; a confirmed one never does (fixed 2026-10-09 — confirmed physical orders, which stay at `delivered`, used to block forever) |
 
 ---
 

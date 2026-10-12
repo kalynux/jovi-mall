@@ -10,7 +10,8 @@
  *   3. Races           the callback already settled it; a callback after the sweep; one bad row
  *   4. No fallback     a gateway without verifyPayout is skipped, never asked via verifyPayment
  *   5. Adapters        NotchPay's /transfers verdict and Campay's /transaction/ verdict refuse a
- *                      record that is not THIS payout
+ *                      record that is not THIS payout; NotchPay's /balance float is read in its
+ *                      live shape
  *   6. Scans           the worker takes the lock, pauses for maintenance, reads no settings
  *
  * Run: npm run test:payout-reconciliation
@@ -31,7 +32,7 @@ import {
     reconcileStuckPayouts,
 } from '../../src/modules/earnings/domain/payout-reconciliation';
 import { PaymentGatewayName, PaymentGatewayStatus, PayoutVerifyResult } from '../../src/modules/payments/gateways/gateway.interface';
-import { notchPayTransferVerdict } from '../../src/modules/payments/gateways/notchpay.gateway';
+import { notchPayAvailableBalance, notchPayTransferVerdict } from '../../src/modules/payments/gateways/notchpay.gateway';
 import { campayWithdrawalVerdict } from '../../src/modules/payments/gateways/campay.gateway';
 
 let passed = 0;
@@ -288,6 +289,26 @@ const verdict = (status: PaymentGatewayStatus, extra: Partial<PayoutVerifyResult
         const v = notchPayTransferVerdict({ transfer: { id: 'trf_1', reference: ours, status: 'failed', message: 'Invalid number' } }, ours, npNormalize);
         return v.status === 'FAILED' && v.reason === 'Invalid number';
     });
+
+    // The float the pre-send check reads. The first body is the LIVE account's, read 2026-10-12.
+    const npLiveBalance = { code: 200, balance: { reserved: 0, total: 6920, pending: 0, available: 6920, currency: 'XAF', environment: 'live' } };
+    await assert('NotchPay balance: the live shape (a number with its currency beside it) is read', () => {
+        const b = notchPayAvailableBalance(npLiveBalance, 'xaf');
+        return b?.available === 6920 && b.currency === 'XAF';
+    });
+    await assert('NotchPay balance: only `available` counts, never pending or total', () =>
+        notchPayAvailableBalance({ balance: { available: 0, pending: 5000, total: 5000, currency: 'XAF' } }, 'XAF')?.available === 0);
+    await assert('NotchPay balance: another currency, or none stated, is unknown (null), never a guess', () =>
+        notchPayAvailableBalance(npLiveBalance, 'USD') === null
+        && notchPayAvailableBalance({ balance: { available: 6920 } }, 'XAF') === null);
+    await assert('NotchPay balance: a map keyed by currency is still read', () =>
+        notchPayAvailableBalance({ balance: { available: { xaf: '1500' }, pending: { xaf: 0 } } }, 'XAF')?.available === 1500
+        && notchPayAvailableBalance({ balance: { available: { EUR: 10 } } }, 'XAF') === null);
+    await assert('NotchPay balance: no balance, or one that is not a number, is null', () =>
+        notchPayAvailableBalance({ code: 403, message: 'Forbidden' }, 'XAF') === null
+        && notchPayAvailableBalance(null, 'XAF') === null
+        && notchPayAvailableBalance({ balance: { available: 'n/a', currency: 'XAF' } }, 'XAF') === null
+        && notchPayAvailableBalance({ balance: { available: null, currency: 'XAF' } }, 'XAF') === null);
 
     await assert('Campay: a successful withdrawal with our reference → SUCCEEDED', () => {
         const v = campayWithdrawalVerdict({ reference: 'cmp_1', endpoint: 'withdraw', external_user: ours, status: 'SUCCESSFUL' }, ours);
