@@ -3715,13 +3715,13 @@ async function main(): Promise<void> {
      */
     const renderToolUrl = (template: string, value: string): string =>
         template.replace(/^=/, '').replace(/\{\{([\s\S]*?)\}\}/g, (_m, expr: string) =>
-            // eslint-disable-next-line @typescript-eslint/no-implied-eval, no-new-func
             String(new Function('$env', '$fromAI', `return (${expr});`)(
                 { JOVI_MALL_BASE_URL: 'http://jovi-mall:8022' },
                 () => value,
             )));
     const pathToolNodes = buildNodes(emitted).filter((n) => /\{[A-Za-z0-9_]+\}/.test(n.tool.operation.path));
     const shapeOf = (templatePath: string): RegExp =>
+        // eslint-disable-next-line no-restricted-syntax -- a route template from the emitted catalogue, escaped inline before its {param} slots are widened
         new RegExp(`^${templatePath.replace(/[.*+?^$()|[\]\\]/g, '\\$&').replace(/\{[A-Za-z0-9_]+\}/g, '[^/]+')}$`);
 
     assert('⛔ no path argument reaches a URL unwrapped', () => {

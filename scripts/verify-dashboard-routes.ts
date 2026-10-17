@@ -24,6 +24,8 @@ import path from 'path';
 import { WEBSITE_GUIDE } from '../src/modules/bot-surface/domain/website-guide';
 
 const ROOT = path.resolve(__dirname, '../../../frontend');
+/** A literal route segment counts as present when it appears between any two of these. */
+const QUOTES = ["'", '"', '`', '/'];
 
 function flag(name: string, fallback: string): string {
     const i = process.argv.indexOf(`--${name}`);
@@ -107,7 +109,7 @@ function main(): void {
                 ? hit.split('/').filter(Boolean)
                     .map((seg, i) => (seg.startsWith(':') ? routePath.split('/').filter(Boolean)[i] : null))
                     .filter((seg): seg is string => seg !== null)
-                    .filter((seg) => !new RegExp(`['"\`/]${seg}['"\`/]`).test(allSource))
+                    .filter((seg) => !QUOTES.some((a) => QUOTES.some((b) => allSource.includes(`${a}${seg}${b}`))))
                 : [];
             const ok = Boolean(hit) && loose.length === 0;
             console.log(`  ${ok ? '✅' : '❌'} ${t.key.padEnd(22)} ${routePath}${hit && hit !== routePath ? `   (${hit})` : ''}`);
