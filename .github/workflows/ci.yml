@@ -335,6 +335,36 @@ jobs:
           token: ${{ secrets.CROSS_REPO_TOKEN }}
           path: landing-app
 
+      # ── The two dashboards, for verify:dashboard-routes ───────────────────────
+      #
+      # The same argument as the landing app, for the website guide's vendor and agency
+      # topics (`website-guide-{vendor,agency}.ts`): a dashboard route renamed over there
+      # changes nothing here, and the bot starts linking people to a page that is gone.
+      #
+      # ⚠ Added 2026-10-18, after the suite's first CI run refused (exit 2, "a dashboard is
+      #   not here") — it landed 2026-10-09, but `check` was red on lint from 2026-10-12, so
+      #   this job had never reached it. The same skipped-reads-as-passing trap as above.
+      #
+      # `src` only: the suite reads nothing else, and agency-dash has `node_modules`
+      # committed. `main`, not a pinned ref, for the landing app's reason.
+      - name: Check out the vendor dashboard
+        uses: actions/checkout@v4
+        with:
+          repository: kalynux/vendor-dash
+          ref: main
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          path: vendor-dash
+          sparse-checkout: src
+
+      - name: Check out the agency dashboard
+        uses: actions/checkout@v4
+        with:
+          repository: kalynux/agency-dash
+          ref: main
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          path: agency-dash
+          sparse-checkout: src
+
       - name: Live suites
         run: |
           set -uo pipefail
@@ -360,7 +390,9 @@ jobs:
           #   own step below, because it is the one suite here that takes an ARGUMENT and this
           #   loop passes none. It needs a second repository (the landing app), which the step
           #   below checks out. See the long note there.
-          EXCLUDED="verify:gateways verify:negotiation-lock verify:landing-routes"
+          # ⚠ verify:dashboard-routes likewise — its own step, against the two dashboard
+          #   checkouts above.
+          EXCLUDED="verify:gateways verify:negotiation-lock verify:landing-routes verify:dashboard-routes"
           # EMPTY — see the note above the job. Kept so the next deliberate
           # exclusion has somewhere to go.
           BASELINED=""
@@ -389,6 +421,17 @@ jobs:
           # step fails on the checkout above with a 403 or 404, CROSS_REPO_TOKEN cannot read
           # kalynux/jovi-mall-landing and needs that repository added to its scope.
           npm run --silent verify:landing-routes -- --landing "${GITHUB_WORKSPACE}/landing-app"
+
+      # The landing step's twin, `always()` for the same reason. A 403/404 on either checkout
+      # above means CROSS_REPO_TOKEN needs kalynux/vendor-dash and kalynux/agency-dash added
+      # to its scope.
+      - name: verify:dashboard-routes (against the real dashboards)
+        if: always()
+        run: |
+          set -euo pipefail
+          npm run --silent verify:dashboard-routes -- \
+            --vendor "${GITHUB_WORKSPACE}/vendor-dash" \
+            --agency "${GITHUB_WORKSPACE}/agency-dash"
 
       # The "Baselined live suite (exact counts)" step that stood here asserted
       # verify:messaging-login at 36/1 and was DELETED on 2026-08-23, because the suite
