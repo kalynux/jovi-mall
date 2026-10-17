@@ -73,6 +73,9 @@ export type NotificationType =
     | 'delivery_fee_proposal.withdrawn'
     /** ADR-A11 (D-10): the customer declined a change-agency difference — the vendor covers it. */
     | 'delivery_fee_proposal.customer_declined'
+    /** 2026-10-14 — the agency answered the fee THIS vendor proposed. */
+    | 'delivery_fee_proposal.agency_approved'
+    | 'delivery_fee_proposal.agency_rejected'
     /**
      * Role closure (ADR-A10). `account.closure_requested` — an administrator asked to close
      * this vendor's SHOP; nothing happens unless the vendor confirms while signed in. Gated by
@@ -197,6 +200,8 @@ const VendorNotificationSchema = new Schema<IVendorNotification>(
                 'delivery_fee_proposal.edited',
                 'delivery_fee_proposal.withdrawn',
                 'delivery_fee_proposal.customer_declined',
+                'delivery_fee_proposal.agency_approved',
+                'delivery_fee_proposal.agency_rejected',
                 // ⚠ Hand-kept: every member of the union above must be here too.
                 'account.closure_requested',
                 'connection.ended_by_closure'

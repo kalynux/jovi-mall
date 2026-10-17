@@ -213,6 +213,9 @@ const PayoutRequestSchema = new Schema<IPayoutRequest>(
 // Admin queue listing + per-owner history.
 PayoutRequestSchema.index({ owner_type: 1, owner_id: 1, status: 1 });
 PayoutRequestSchema.index({ status: 1, created_at: -1 });
+// wi-admin’s platform transactions list (BR-027) walks this collection by `(created, _id)` keyset,
+// platform-wide. Without it that walk is a collection scan and an in-memory sort.
+PayoutRequestSchema.index({ created_at: -1, _id: -1 }, { name: 'admin_transactions_feed' });
 PayoutRequestSchema.index({ ticket_id: 1 });
 
 /**

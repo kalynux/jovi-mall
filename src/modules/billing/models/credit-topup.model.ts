@@ -92,6 +92,9 @@ const CreditTopupSchema = new Schema<ICreditTopup>(
 );
 
 CreditTopupSchema.index({ owner_type: 1, owner_id: 1, created_at: -1 });
+// wi-admin’s platform transactions list (BR-027) walks this collection by `(created, _id)` keyset,
+// platform-wide. Without it that walk is a collection scan and an in-memory sort.
+CreditTopupSchema.index({ created_at: -1, _id: -1 }, { name: 'admin_transactions_feed' });
 
 export const CreditTopupModel = mongoose.model<ICreditTopup>(
   MODELS.CREDIT_TOPUP,

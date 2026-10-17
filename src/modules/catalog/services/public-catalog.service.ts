@@ -169,7 +169,7 @@ export class PublicCatalogService {
      */
     async listByIdsWithVariant(
         productIds: string[],
-    ): Promise<Map<string, { item: PublicProductListItemDto; defaultVariantId: string | null }>> {
+    ): Promise<Map<string, { item: PublicProductListItemDto; defaultVariantId: string | null; variantCount: number }>> {
         const unique = [...new Set(productIds)];
         if (unique.length === 0) return new Map();
 
@@ -178,7 +178,12 @@ export class PublicCatalogService {
         return new Map(
             decorated.map((item, index) => [
                 item.id,
-                { item, defaultVariantId: rows[index].defaultVariantId },
+                /**
+                 * `variantCount` rides beside `defaultVariantId` for the same blast-radius reason:
+                 * the bot's card draws "See options" only when there IS a choice, and the
+                 * storefront's list contract has no use for the number.
+                 */
+                { item, defaultVariantId: rows[index].defaultVariantId, variantCount: rows[index].variantCount ?? 1 },
             ]),
         );
     }

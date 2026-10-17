@@ -4,6 +4,7 @@ import { CustomerOrderController } from './customer-order.controller';
 import {
   CustomerCombinedDeliveryRequestController,
   CustomerDeliveryFeeProposalController,
+  CustomerPayerProposalController,
 } from '../delivery-fee-proposals/controllers/delivery-fee-proposal.controller';
 
 /**
@@ -64,6 +65,12 @@ router.get('/:id/delivery-fee-proposals', CustomerDeliveryFeeProposalController.
 router.post('/:id/delivery-fee-proposals/:proposalId/approve', CustomerDeliveryFeeProposalController.approve);
 router.post('/:id/delivery-fee-proposals/:proposalId/reject', CustomerDeliveryFeeProposalController.reject);
 router.post('/:id/delivery-fee-proposals/:proposalId/pay', CustomerDeliveryFeeProposalController.pay);
+// Propose your OWN delivery fee to the delivery company on a parcel whose delivery you pay
+// (2026-10-14) — higher or lower; it answers, and pickup waits for that answer. Edit or withdraw
+// it while unanswered. Accepted and higher on an online order: pay the difference with `/pay`.
+router.post('/:id/shipments/:shipmentId/delivery-fee-proposals', CustomerPayerProposalController.propose);
+router.patch('/:id/delivery-fee-proposals/:proposalId', CustomerPayerProposalController.edit);
+router.post('/:id/delivery-fee-proposals/:proposalId/withdraw', CustomerPayerProposalController.withdraw);
 
 // COD: re-request the delivery code for one shipment (regenerates + resends via
 // WhatsApp, and returns it — it is the customer's own secret). Rate-limited.

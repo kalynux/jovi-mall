@@ -1148,16 +1148,35 @@ export class AgencyNotificationEventHandler {
         }
     }
 
-    /** `delivery_fee_proposal.created` — only an AGENT's proposal is news to the agency. */
+    /**
+     * `delivery_fee_proposal.created` — an AGENT's proposal, or (2026-10-14) a PAYER's proposal
+     * the agency must answer. The agency's own proposal is echo.
+     */
     async handleDeliveryFeeProposalCreated(event: DomainEvent): Promise<void> {
+        if (event.payload?.origin === 'payer') {
+            await this.feeProposalSituation(event, 'delivery_fee_proposal.payer_proposed');
+            return;
+        }
         if (event.payload?.proposedByRole !== 'agent') return;
         await this.feeProposalSituation(event, 'delivery_fee_proposal.agent_proposed');
     }
 
-    /** `delivery_fee_proposal.edited` — only when the AGENT edited (the agency's own edit is echo). */
+    /** `delivery_fee_proposal.edited` — when the AGENT or a PAYER edited (the agency's own edit is echo). */
     async handleDeliveryFeeProposalEdited(event: DomainEvent): Promise<void> {
-        if (editedByRoleOf(event.payload) !== 'agent') return;
+        const by = editedByRoleOf(event.payload);
+        if (by === 'vendor' || by === 'customer') {
+            await this.feeProposalSituation(event, 'delivery_fee_proposal.payer_edited');
+            return;
+        }
+        if (by !== 'agent') return;
         await this.feeProposalSituation(event, 'delivery_fee_proposal.agent_edited');
+    }
+
+    /** `delivery_fee_proposal.withdrawn` — only a PAYER taking their own proposal back (2026-10-14). */
+    async handleDeliveryFeeProposalWithdrawn(event: DomainEvent): Promise<void> {
+        const p = event.payload;
+        if (p?.origin !== 'payer' || (p.withdrawnBy !== 'vendor' && p.withdrawnBy !== 'customer')) return;
+        await this.feeProposalSituation(event, 'delivery_fee_proposal.payer_withdrawn');
     }
 
     /**
@@ -1168,12 +1187,19 @@ export class AgencyNotificationEventHandler {
      * new fee whoever covers it).
      */
     async handleDeliveryFeeProposalApproved(event: DomainEvent): Promise<void> {
+        // A PAYER's proposal: the agency (or its agent) answered it — echo — except when it
+        // closes on the customer's top-up, which is what unblocks the pickup (2026-10-14).
+        if (event.payload?.origin === 'payer') {
+            if (event.payload?.topupPaid) await this.feeProposalSituation(event, 'delivery_fee_proposal.payer_paid');
+            return;
+        }
         if (event.payload?.respondedByRole === 'system' || event.payload?.origin === 'change_agency') return;
         await this.feeProposalSituation(event, 'delivery_fee_proposal.approved');
     }
 
     async handleDeliveryFeeProposalRejected(event: DomainEvent): Promise<void> {
-        if (event.payload?.origin === 'change_agency') return;
+        // A payer proposal is rejected by the agency side itself — its own answer.
+        if (event.payload?.origin === 'change_agency' || event.payload?.origin === 'payer') return;
         await this.feeProposalSituation(event, 'delivery_fee_proposal.rejected');
     }
 
@@ -1210,6 +1236,10 @@ export class AgencyNotificationEventHandler {
             | 'delivery_fee_proposal.rejected'
             | 'delivery_fee_proposal.agent_proposed'
             | 'delivery_fee_proposal.agent_edited'
+            | 'delivery_fee_proposal.payer_proposed'
+            | 'delivery_fee_proposal.payer_edited'
+            | 'delivery_fee_proposal.payer_withdrawn'
+            | 'delivery_fee_proposal.payer_paid'
     ): Promise<void> {
         try {
             const p = event.payload;
@@ -1224,7 +1254,7 @@ export class AgencyNotificationEventHandler {
                 agencyId: p.agencyId,
                 aggregateType: 'shipment',
                 aggregateId: p.shipmentId,
-                idempotencyKey: situation === 'delivery_fee_proposal.agent_edited'
+                idempotencyKey: situation === 'delivery_fee_proposal.agent_edited' || situation === 'delivery_fee_proposal.payer_edited'
                     ? `${situation}:${p.proposalId}:${at}`
                     : `${situation}:${p.proposalId}`,
                 context: {
@@ -1235,6 +1265,10 @@ export class AgencyNotificationEventHandler {
                         ? ({ en: 'The customer', fr: 'Le client', pt: 'O cliente', es: 'El cliente', ar: 'العميل' } as Record<Language, string>)[lang]
                         : await this.resolveVendorName(p.vendorId, lang),
                     agentName: p.proposedByAgentId ? await this.resolveAgentName(p.proposedByAgentId) : 'An agent',
+                    // 2026-10-14: who proposed, when the payer did — the vendor's store, or the customer.
+                    payerName: p.proposedByRole === 'customer'
+                        ? ({ en: 'The customer', fr: 'Le client', pt: 'O cliente', es: 'El cliente', ar: 'العميل' } as Record<Language, string>)[lang]
+                        : await this.resolveVendorName(p.vendorId, lang),
                     currency: p.currency ?? '',
                     proposedFeeFormatted: Number(p.proposedFee ?? 0).toLocaleString(),
                     feeBeforeFormatted: Number(p.feeBefore ?? 0).toLocaleString(),

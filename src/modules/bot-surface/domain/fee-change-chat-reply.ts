@@ -35,7 +35,7 @@ export interface BotFeeChangeView {
     shipmentId: string;
     /** The figure the customer is shown — carried in the Accept / Decline tokens. */
     version: number;
-    origin: 'agency' | 'change_agency' | 'combined_request';
+    origin: 'agency' | 'change_agency' | 'combined_request' | 'payer';
     paymentMode: 'online' | 'cod';
     /** `awaiting_payment`: approved online, the top-up is due. */
     state: 'awaiting_answer' | 'awaiting_payment';
@@ -133,7 +133,8 @@ export function feeChangeQuestion(
         : null;
 
     if (view.state === 'awaiting_payment') {
-        lines.push(botFeeCopyFill('payQuestion', language, {
+        // The customer's OWN proposal the company accepted reads as theirs (2026-10-14).
+        lines.push(botFeeCopyFill(view.origin === 'payer' ? 'payQuestionOwn' : 'payQuestion', language, {
             proposed: price(view, view.proposedFee),
             order: view.orderNumber,
             amount: price(view, view.customerPays),
@@ -252,8 +253,35 @@ export function feeChangeAcceptedReply(view: BotFeeChangeView, language: string 
 export function feeChangeDeclinedReply(view: BotFeeChangeView, language: string | null): BotReplyIntent {
     return {
         kind: 'text',
-        text: botFeeCopy(view.origin === 'change_agency' ? 'declinedMove' : 'declinedCompany', language),
+        text: botFeeCopy(
+            view.origin === 'change_agency' ? 'declinedMove' : view.origin === 'payer' ? 'declinedOwn' : 'declinedCompany',
+            language,
+        ),
     };
+}
+
+/**
+ * The customer proposed a delivery fee to the company carrying a parcel (2026-10-14). Every figure
+ * is one the backend stored — the proposal's own `feeBefore` / `proposedFee`, formatted.
+ */
+export function feeProposalSentReply(
+    input: { orderNumber: string; agencyName: string; proposedText: string; beforeText: string },
+    language: string | null,
+): BotReplyIntent {
+    return {
+        kind: 'text',
+        text: botFeeCopyFill('proposalSent', language, {
+            proposed: input.proposedText,
+            before: input.beforeText,
+            agency: input.agencyName,
+            order: input.orderNumber,
+        }),
+    };
+}
+
+/** The customer withdrew their own proposal: the fee stays. */
+export function feeProposalWithdrawnReply(language: string | null): BotReplyIntent {
+    return { kind: 'text', text: botFeeCopy('declinedOwn', language) };
 }
 
 /** A tap on a change that has been answered, withdrawn or applied since the button was drawn. */

@@ -157,6 +157,9 @@ RefundTransactionSchema.index({ bookingId: 1 });
 
 // The refund request a row was written for (REFUND-FLOW-PLAN § 11.5)
 RefundTransactionSchema.index({ refundRequestId: 1 }, { sparse: true });
+// wi-admin’s platform transactions list (BR-027) walks this collection by `(created, _id)` keyset,
+// platform-wide. Without it that walk is a collection scan and an in-memory sort.
+RefundTransactionSchema.index({ createdAt: -1, _id: -1 }, { name: 'admin_transactions_feed' });
 
 /**
  * Business rule validation: Sum of refunds cannot exceed original payment

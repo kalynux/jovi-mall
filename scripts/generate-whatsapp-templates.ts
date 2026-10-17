@@ -156,6 +156,8 @@ const OPTIONAL_CLAUSES = new Set([
     // ADR-A11 (W-E): the delivery-fee money sentence — empty when nothing moves for the customer
     // (a decrease that only lowered the vendor's share), so it cannot be a template parameter.
     'moneyLine',
+    // 2026-10-14: the delivery company's optional note when it declines a payer's proposed fee.
+    'noteLine',
 ]);
 
 interface Row {

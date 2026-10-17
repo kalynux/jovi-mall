@@ -4660,6 +4660,235 @@
       "requires_customer_role": true
     },
     {
+      "name": "delivery_fees_propose",
+      "version": 1,
+      "title": "Propose your own delivery fee",
+      "tier": "core",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "The customer proposes THEIR delivery fee — higher or lower — to the delivery company carrying a parcel whose delivery they pay. The company accepts or declines; the parcel waits for that answer. Lower and accepted: the customer pays less (cash) or gets the difference back (paid online). Higher and accepted on an online order: the customer must pay the difference (delivery_fees_list_pending then shows Pay now). The platform words the outcome — relay the reply.",
+      "when_to_use": "The customer explicitly asks to pay a different delivery fee for one of their orders and names the amount (e.g. \"can I pay 1000 for delivery instead?\").",
+      "when_not_to_use": "Never invent the amount or the reason — ask. Never for an order whose delivery the shop pays (the refusal says so). Not for one price on several parcels of one checkout — that is combined_delivery_request. Not to answer a fee the company asked for — that is delivery_fees_list_pending.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/delivery-fees/propose"
+      },
+      "backing_endpoint": {
+        "method": "POST",
+        "path": "/api/customer/orders/:id/shipments/:shipmentId/delivery-fee-proposals",
+        "doc": "customer/delivery-fee-changes.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "orderId",
+          "proposedFee",
+          "reason"
+        ],
+        "properties": {
+          "orderId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "The order id, or the order number the customer read out."
+          },
+          "shipmentId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "Only after a 422 DELIVERY_FEE_PROPOSAL_SHIPMENT_AMBIGUOUS: the shipmentId of the parcel the customer chose from details.shipments, copied verbatim. Never composed."
+          },
+          "proposedFee": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The delivery fee the customer proposes, in the order's currency units (whole number), exactly as the customer said it."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 500,
+            "description": "Why, in the customer's own words. Reaches the delivery company."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "orderId",
+          "shipmentId",
+          "proposedFee",
+          "reason"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "proposalId",
+          "version",
+          "status",
+          "proposedFeeText",
+          "feeBeforeText",
+          "agencyName"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [
+        {
+          "code": "DELIVERY_FEE_PROPOSAL_SHIPMENT_AMBIGUOUS",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The order has several parcels; details.shipments lists them",
+          "customer_action": "disambiguate"
+        },
+        {
+          "code": "DELIVERY_FEE_PROPOSAL_NOT_PAYER",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The shop pays this parcel's delivery",
+          "customer_action": "explain"
+        },
+        {
+          "code": "DELIVERY_FEE_PROPOSAL_WINDOW_CLOSED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The parcel was already picked up (or not yet handed to a delivery company)",
+          "customer_action": "explain"
+        },
+        {
+          "code": "DELIVERY_FEE_PROPOSAL_ALREADY_PENDING",
+          "status": 409,
+          "category": "conflict",
+          "when": "A fee change on this parcel is already waiting for an answer",
+          "customer_action": "explain"
+        },
+        {
+          "code": "DELIVERY_FEE_PROPOSAL_LIMIT_REACHED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The customer already proposed twice on this parcel",
+          "customer_action": "explain"
+        },
+        {
+          "code": "DELIVERY_FEE_PROPOSAL_NO_CHANGE",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The amount is the fee the parcel already carries",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "DELIVERY_FEE_PROPOSAL_ORDER_NOT_PAID",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The order's online payment is not simply paid (refunded or disputed)",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "idempotency": "Keyed (Idempotency-Key). A second proposal on the same parcel while one waits is refused 409 ALREADY_PENDING, never a second proposal.",
+      "requires_confirmation": false,
+      "risk": "low",
+      "side_effects": [
+        "The delivery company is asked to accept or decline",
+        "The parcel is not picked up until it answers"
+      ],
+      "context_resolution": {
+        "subject": "order",
+        "policy": "explicit_only",
+        "must_echo": true
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "Ask for the amount if the customer did not say it. On SHIPMENT_AMBIGUOUS, list details.shipments (agencyName + feeText) and call again with the chosen shipmentId."
+      }
+    },
+    {
+      "name": "delivery_fees_withdraw",
+      "version": 1,
+      "title": "Withdraw your own delivery-fee proposal",
+      "tier": "core",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Take back a delivery fee the customer proposed with delivery_fees_propose, while the delivery company has not answered. The fee stays as it was and the parcel can be collected. Once the company accepted a higher fee the customer must pay, declining is the Decline button that delivery_fees_list_pending draws.",
+      "when_to_use": "The customer clearly says they no longer want the delivery fee they proposed.",
+      "when_not_to_use": "Not for a fee the delivery company asked for (that is delivery_fees_reject). Never on a guess about which proposal: use the proposalId returned by delivery_fees_propose.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/delivery-fees/{proposalId}/withdraw"
+      },
+      "backing_endpoint": {
+        "method": "POST",
+        "path": "/api/customer/orders/:id/delivery-fee-proposals/:proposalId/withdraw",
+        "doc": "customer/delivery-fee-changes.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "proposalId"
+        ],
+        "properties": {
+          "proposalId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "proposalId returned by delivery_fees_propose — copied verbatim, never composed."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "proposalId"
+        ],
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "withdrawn",
+          "status",
+          "stillWaiting"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [
+        {
+          "code": "DELIVERY_FEE_PROPOSAL_NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "Not this customer's own proposal",
+          "customer_action": "explain"
+        },
+        {
+          "code": "DELIVERY_FEE_TOPUP_IN_PROGRESS",
+          "status": 409,
+          "category": "conflict",
+          "when": "A payment for it is live on the customer's handset",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "idempotency": "A second withdrawal finds nothing pending and answers with the \"no longer waiting\" sentence (200).",
+      "requires_confirmation": false,
+      "risk": "low",
+      "side_effects": [
+        "The delivery company is told; the parcel can be collected at the current fee"
+      ],
+      "context_resolution": {
+        "subject": "delivery_fee_change",
+        "policy": "explicit_only",
+        "must_echo": true
+      },
+      "audit": true,
+      "requires_customer_role": true
+    },
+    {
       "name": "combined_delivery_eligible",
       "version": 1,
       "title": "Parcels that could get a combined delivery price",

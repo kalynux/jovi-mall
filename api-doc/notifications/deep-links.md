@@ -95,7 +95,7 @@ notification with no button, in an app that has not been rebuilt yet.
 
 | `path` | Sent by | Carries |
 |---|---|---|
-| `orders/{{orderId}}` | `order.created`, `order.cancelled`, `payment.received.partial`, `payment.received.full`, `shipment.rejected`, ⭐ `shipment.cod_limit_held`, ⭐ `delivery_fee_proposal.received`, ⭐ `delivery_fee_proposal.edited`, ⭐ `delivery_fee_proposal.withdrawn` | an Order id — the order detail is where "dispatch anyway" (force) and fee approve / reject live |
+| `orders/{{orderId}}` | `order.created`, `order.cancelled`, `payment.received.partial`, `payment.received.full`, `shipment.rejected`, ⭐ `shipment.cod_limit_held`, ⭐ `delivery_fee_proposal.received`, ⭐ `delivery_fee_proposal.edited`, ⭐ `delivery_fee_proposal.withdrawn`, 🆕 `delivery_fee_proposal.agency_approved`, 🆕 `delivery_fee_proposal.agency_rejected` | an Order id — the order detail is where "dispatch anyway" (force) and fee approve / reject live |
 | `bookings/{{bookingId}}` | `booking.created`, `booking.cancelled` | a Booking id |
 | `products/{{productId}}` | `storage.depot_changed`, `storage.product_suspended`, `storage.product_unsuspended` | a Product id |
 | `agency-connections/{{connectionId}}` | `connection.request_received`, `connection.approved`, `connection.rejected`, `connection.reapproval_needed`, ⭐ `connection.ended_by_closure` | a Connection id (for `ended_by_closure` the connection has ENDED — the agency closed its account) |
@@ -123,7 +123,7 @@ saying so — that is correct, and the table above is why.
 
 | `path` | Sent by | Carries |
 |---|---|---|
-| `shipments/{{shipmentId}}` | `shipment.assigned`, `shipment.offer.accepted`, `shipment.assignment.unfilled`, `shipment.agent.{picked_up,delivered,failed,returned}`, ⭐ `shipment.cod_limit.forced`, ⭐ `shipment.assignment.cod_limit_blocked`, ⭐ `delivery_fee_proposal.{approved,rejected,agent_proposed,agent_edited}` | a Shipment id |
+| `shipments/{{shipmentId}}` | `shipment.assigned`, `shipment.offer.accepted`, `shipment.assignment.unfilled`, `shipment.agent.{picked_up,delivered,failed,returned}`, ⭐ `shipment.cod_limit.forced`, ⭐ `shipment.assignment.cod_limit_blocked`, ⭐ `delivery_fee_proposal.{approved,rejected,agent_proposed,agent_edited}`, 🆕 `delivery_fee_proposal.{payer_proposed,payer_edited,payer_withdrawn,payer_paid}` | a Shipment id |
 | ⭐ **`cod/limit`** | **`cod.limit.pinned`, `cod.limit.released`** | — (one limit per agency) |
 | `agents/{{contractId}}` | the eight `agent_contract.*` situations, ⭐ `agent_contract.ended_by_closure` | ⚠ a **contract** id, not an agent id (for `ended_by_closure` the contract has ENDED — the agent closed their account) |
 | ⭐ **`account/closure`** | **`account.closure_requested`** (ADR-A10, 2026-10-04) | — (one open closure request per role). An administrator asked to close this agency account; the screen is where the owner **confirms or declines** while signed in. Must exist before the template is approved |
@@ -160,7 +160,7 @@ route would silently capture it.
 |---|---|---|
 | `offers/{{offerId}}` | `shipment.offer.received`, `shipment.offer.reminder`, `shipment.offer.expired` | an Offer id |
 | ⭐ **`offers`** | **`shipment.offer.batch_received`** (2026-10-03) | — (the offers list; a bulk offer is several offers) |
-| ⭐ **`shipments/{{shipmentId}}`** | **`delivery_fee_proposal.approved`, `.rejected`, `.edited`** | a Shipment id — one this agent holds |
+| ⭐ **`shipments/{{shipmentId}}`** | **`delivery_fee_proposal.approved`, `.rejected`, `.edited`**, 🆕 `.payer_proposed` | a Shipment id — one this agent holds |
 | ⭐ **`cod`** | **`cod.pool.pinned`, `cod.pool.released`** | — (one pool per agent) |
 | `cod/deposits/{{depositId}}` | `cod.deposit.recorded`, `cod.deposit.confirmed`, `cod.deposit.rejected` | an AgentDeposit id |
 | `memberships/{{contractId}}` | the eight `agent_contract.*` situations, ⭐ `fee_proposals.enabled`, ⭐ `fee_proposals.disabled`, ⭐ `agent_contract.ended_by_closure` (the agency closed its account) | ⚠ a **contract** id — see below |

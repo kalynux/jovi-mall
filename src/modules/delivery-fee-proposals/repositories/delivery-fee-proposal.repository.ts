@@ -9,7 +9,8 @@ import {
   IDeliveryFeeProposalHistoryEntry,
 } from '../models/delivery-fee-proposal.model';
 import { IShipment, ShipmentModel, ShipmentStatus } from '../../shipments/shipment.model';
-import { COUNTED_PROPOSAL_STATUSES } from '../domain/delivery-fee-proposal.rules';
+import { COUNTED_PROPOSAL_STATUSES, ProposalSide } from '../domain/delivery-fee-proposal.rules';
+import { PAYER_PROPOSER_ROLES } from '../models/delivery-fee-proposal.model';
 
 export interface ProposalPage {
   data: IDeliveryFeeProposal[];
@@ -54,15 +55,89 @@ export class DeliveryFeeProposalRepository {
   }
 
   /**
-   * Proposals counting against the two-per-shipment cap. A change-agency difference (ADR-A11
-   * D-10) is not the agency's proposal and does not spend its re-propose.
+   * Proposals counting against the two-per-shipment cap of ONE side. A change-agency difference
+   * (ADR-A11 D-10) is nobody's proposal and spends neither side's re-propose. The agency side and
+   * the payer side (vendor / customer, 2026-10-14) are counted apart.
    */
-  async countCountedForShipment(shipmentId: string): Promise<number> {
+  async countCountedForShipment(shipmentId: string, side: ProposalSide = 'agency'): Promise<number> {
     return DeliveryFeeProposalModel.countDocuments({
       shipment_id: new Types.ObjectId(shipmentId),
       status: { $in: [...COUNTED_PROPOSAL_STATUSES] },
       origin: { $ne: 'change_agency' },
+      proposed_by_role: side === 'payer' ? { $in: [...PAYER_PROPOSER_ROLES] } : { $nin: [...PAYER_PROPOSER_ROLES] },
     });
+  }
+
+  /**
+   * The agency side accepted a CUSTOMER's online increase: the figure is frozen and the top-up
+   * is asked for; the proposal stays pending until the money arrives (`DeliveryFeeTopupService`
+   * then applies it exactly as it applies a customer-approved increase). The customer agreed by
+   * proposing, so `customer_approval` is stamped with the proposer as the approving user.
+   * CAS on pending + the version the agency saw + not accepted yet.
+   */
+  async setPayerAcceptanceAwaitingTopup(
+    proposalId: Types.ObjectId,
+    input: {
+      version: number;
+      role: 'agency' | 'agent';
+      userId: string | null;
+      agentId: string | null;
+      customerUserId: Types.ObjectId | null;
+      topupAmount: number;
+      at: Date;
+    }
+  ): Promise<IDeliveryFeeProposal | null> {
+    const oid = (v: string | null) => (v && Types.ObjectId.isValid(v) ? new Types.ObjectId(v) : null);
+    return DeliveryFeeProposalModel.findOneAndUpdate(
+      { _id: proposalId, status: 'pending', version: input.version, approver: 'agency', payer_acceptance: null },
+      {
+        $set: {
+          payer_acceptance: {
+            role: input.role,
+            user_id: oid(input.userId),
+            agent_id: oid(input.agentId),
+            version: input.version,
+            at: input.at,
+          },
+          customer_approval: {
+            approved_at: input.at,
+            version: input.version,
+            user_id: input.customerUserId,
+            topup_amount: input.topupAmount,
+          },
+          topup: { amount: input.topupAmount, transaction_id: null, status: 'awaiting_payment', paid_at: null },
+        },
+        $push: {
+          status_history: {
+            status: 'pending',
+            changed_at: input.at,
+            changed_by_role: input.role,
+            changed_by_user_id: oid(input.userId),
+            note: 'accepted_awaiting_topup',
+          },
+        },
+      },
+      { new: true }
+    );
+  }
+
+  /** The agency's inbox: PAYER proposals on its shipments (`approver: 'agency'`), newest first. */
+  async listForAgency(
+    agencyId: string,
+    filter: { status?: DeliveryFeeProposalStatus },
+    page: number,
+    limit: number
+  ): Promise<ProposalPage> {
+    const query: FilterQuery<IDeliveryFeeProposal> = { agency_id: new Types.ObjectId(agencyId), approver: 'agency' };
+    if (filter.status) query.status = filter.status;
+    const [data, total] = await Promise.all([
+      DeliveryFeeProposalModel.find(query)
+        .sort({ created_at: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit),
+      DeliveryFeeProposalModel.countDocuments(query),
+    ]);
+    return { data, meta: { total, page, limit, pages: Math.max(1, Math.ceil(total / limit)) } };
   }
 
   /** The customer's view of one order: the proposals on its customer-paid shipments. */
@@ -183,7 +258,9 @@ export class DeliveryFeeProposalRepository {
     expectedVersion: number,
     edit: IDeliveryFeeProposalEdit,
     reason: string,
-    fee: number
+    fee: number,
+    /** A payer's edit may cross the current fee, so it re-states the direction (2026-10-14). */
+    direction?: 'increase' | 'decrease'
   ): Promise<IDeliveryFeeProposal | null> {
     return DeliveryFeeProposalModel.findOneAndUpdate(
       { _id: proposalId, status: 'pending', version: expectedVersion },
@@ -191,6 +268,7 @@ export class DeliveryFeeProposalRepository {
         $set: {
           proposed_fee: fee,
           reason,
+          ...(direction ? { direction } : {}),
           version: edit.version,
           last_edited_by: {
             role: edit.edited_by_role,

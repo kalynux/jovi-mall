@@ -103,6 +103,11 @@ const EarningsLedgerSchema = new Schema<IEarningsLedger>(
 );
 
 EarningsLedgerSchema.index({ owner_type: 1, owner_id: 1, created_at: -1 });
+// wi-admin’s platform transactions list (BR-027) walks this collection by `(created, _id)` keyset,
+// platform-wide. Without it that walk is a collection scan and an in-memory sort.
+EarningsLedgerSchema.index({ created_at: -1, _id: -1 }, { name: 'admin_transactions_feed' });
+// One order’s / booking’s movements (the list’s `?orderId=` and the detail read’s related rows).
+EarningsLedgerSchema.index({ source_id: 1, created_at: -1 }, { name: 'earnings_ledger_by_source' });
 
 export const EarningsLedgerModel = mongoose.model<IEarningsLedger>(
   MODELS.EARNINGS_LEDGER,

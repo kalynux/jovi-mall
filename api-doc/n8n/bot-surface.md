@@ -231,6 +231,8 @@ twice, each time because a step added one and nobody re-counted.
 | `delivery_fees_approve` | POST | `/delivery-fees/:proposalId/approve` | ✔ |
 | `delivery_fees_reject` | POST | `/delivery-fees/:proposalId/reject` | ✔ |
 | `delivery_fees_pay` | POST | `/delivery-fees/:proposalId/pay` | ✔ |
+| `delivery_fees_propose` | POST | `/delivery-fees/propose` | ✔ |
+| `delivery_fees_withdraw` | POST | `/delivery-fees/:proposalId/withdraw` | ✔ |
 | `profile_get_summary` | POST | `/profile` | |
 | `profile_update` | PATCH | `/profile` | ✔ |
 | `profile_set_language` | PATCH | `/profile/language` | ✔ |
@@ -380,6 +382,18 @@ difference); a decrease applies by itself and never appears here. Code:
 | `combined_delivery_eligible` | core | per checkout × delivery company, the ≥ 2 customer-paid parcels a combined price may be asked for — with their `cartId` / `agencyId` / shipment ids, resolved server-side by W-E's own predicate so the model never names an id |
 | `combined_delivery_request` | core | ask that company for a combined (lower-only) price. Draws a one-sentence confirmation |
 | `combined_delivery_list` · `combined_delivery_cancel` | extended | the requests and their answers (`savingText`, `answer.fees[]`); cancel an open one |
+| `delivery_fees_propose` | core | **2026-10-14** ([ADR-A12](../../docs/ADR-A12-PAYER-FEE-PROPOSALS.md)) — the customer proposes THEIR fee (higher or lower) for one parcel whose delivery they pay: `{ orderId, proposedFee, reason, shipmentId? }`. With several parcels and none named → `422 DELIVERY_FEE_PROPOSAL_SHIPMENT_AMBIGUOUS` and `details.shipments[] { shipmentId, agencyName, feeText, status }` — ask, then call again with the chosen `shipmentId`. Draws a one-sentence confirmation. The company answers; the parcel waits |
+| `delivery_fees_withdraw` | core | take back the customer's OWN unanswered proposal (`proposalId` from `delivery_fees_propose`). The fee stays |
+
+**The customer's own proposal, once answered.** Accepted lower (or higher on COD) applies by itself
+and arrives as `order.delivery_fee.lowered` / `updated`. Accepted higher on an ONLINE order
+arrives as `order.delivery_fee.topup_due` and shows up in `delivery_fees_list_pending` as
+`origin: 'payer'`, `state: 'awaiting_payment'` — the drawn question reads "The delivery company
+accepted your X … pay the difference" with **Pay now** · **Decline**; Decline there takes the
+proposal back (the fee stays). Declined by the company → `order.delivery_fee.proposal_declined`.
+⚠ The two tools exist on the backend and in `catalog.json`; the agent's tool nodes must be
+regenerated (`gen-mcp-workflow` against the live `wi-mall-core`) and published before the model
+can call them.
 
 ⛔ **Accepting and paying are NOT model tools, and the reason is the money.** Accepting commits the
 customer to more cash at the door or to a top-up; paying moves money. Both are reached only by the
@@ -2456,8 +2470,9 @@ row for them.
 | `cat:<digest>` | a category choice | opens that category as a grid. ⚠ The argument is a DIGEST of the category name, not an id — this platform has no category ids, and a long French or Arabic name would blow the 64-byte token | a screen button, or the cards | `{ opened: "listing", category }` |
 | `sim:<productId>` | an out-of-stock card, where the buy buttons are gone | products like that one | the similar cards, or the sentence saying there are none | `{ shown, total }` |
 | `save:<productId>` | an out-of-stock card | keeps it in the customer's saved items | one sentence. ⛔ **It promises no restock message** — nothing on this platform can send one, which is why the button says Save for later and not Notify me | `{ saved: true }` |
-| `open:pd:<productId>` | the reviews summary | opens the product screen at its reviews | a screen button; else the storefront product page | `{ handle, opened: "product" }` |
+| `open:pd:<productId>` | the reviews summary · **See options** on a product card whose product has several variants (2026-10-17) | opens the product screen, where the variants, their prices and their pictures are chosen | a screen button; else the storefront product page | `{ handle, opened: "product" }` |
 | `deal:<sessionId>:<round>` | a bargained counter-offer | accepts **that round's** price and puts the item in the basket at it | the agreed sentence + the same three buttons an ordinary add gets | `{ locked, price }` |
+| `take:<productId>:<variantId>:<price>` | the bargain question ("Make me an offer…"), as **Buy at 7 000 XAF** (2026-10-17) | skips the haggle: puts the variant in the basket at its **listed** price. The `<price>` is a CHECK, not an authority — if the live price differs, nothing is added and the current price comes back on a fresh button | the agreed sentence + the same three buttons an ordinary add gets; or the price-changed sentence + a fresh button | `{ outcome: "cart", verb: "take", negotiation: { closed: true, closedBy: "button", sessionId: null, … } }` — ⚠ **n8n clears the bargain flag on `negotiation.closed`**, exactly as for a `deal:` press (N8N-DEPLOY-DAY-CHANGES § 8.1); or `{ outcome: "price_changed", unitPrice }` |
 
 ⚠ **A category that has emptied since the button was drawn opens EVERYTHING and says so**, rather
 than refusing: the customer asked to browse, and an empty answer to "show me shoes" is worse than

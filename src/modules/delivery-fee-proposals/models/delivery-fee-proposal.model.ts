@@ -4,8 +4,14 @@ import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 /**
  * Who raised a proposal. The agency always may; the agent holding the accepted offer may
  * only while their agency has `assignment_settings.agents_can_propose_delivery_fee` on.
+ * Since 2026-10-14 the one who PAYS the delivery may propose too — the `vendor` on a
+ * vendor-paid parcel, the `customer` on a customer-paid one — and the agency answers
+ * (`approver: 'agency'`, `origin: 'payer'`).
  */
-export type DeliveryFeeProposerRole = 'agency' | 'agent' | 'system';
+export type DeliveryFeeProposerRole = 'agency' | 'agent' | 'system' | 'vendor' | 'customer';
+/** The proposer roles that are the PAYER of the delivery (the agency side answers them). */
+export const PAYER_PROPOSER_ROLES: readonly DeliveryFeeProposerRole[] = ['vendor', 'customer'];
+export const DELIVERY_FEE_PROPOSER_ROLES: readonly DeliveryFeeProposerRole[] = ['agency', 'agent', 'system', 'vendor', 'customer'];
 /**
  * Who answered or closed it. `system` is the auto-withdrawal on a decline / detach, and the
  * direct application of a customer-paid decrease (ADR-A11). `customer` answers a customer-paid
@@ -87,6 +93,22 @@ export interface IDeliveryFeeCustomerApproval {
   topup_amount: number;
 }
 
+/**
+ * The AGENCY side accepted a payer's proposal (2026-10-14). Set only on `origin: 'payer'`
+ * rows. A vendor-paid one or a customer-paid decrease / cash increase is `approved` in the same
+ * write; an ONLINE customer increase stays `pending` with this stamp until the customer pays
+ * the top-up (`customer_approval` + `topup` are set beside it — the customer already agreed
+ * by proposing).
+ */
+export interface IDeliveryFeePayerAcceptance {
+  role: 'agency' | 'agent';
+  user_id: Types.ObjectId | null;
+  agent_id: Types.ObjectId | null;
+  /** The version the agency accepted — an edit after it is impossible (the figure is frozen). */
+  version: number;
+  at: Date;
+}
+
 /** The online top-up an approved increase is waiting for. */
 export interface IDeliveryFeeTopup {
   amount: number;
@@ -97,7 +119,9 @@ export interface IDeliveryFeeTopup {
 }
 
 /**
- * A proposed change to ONE shipment's delivery fee, awaiting the vendor's approval.
+ * A proposed change to ONE shipment's delivery fee. Raised by the agency side (answered by
+ * the vendor or the customer, whoever pays the delivery) or — since 2026-10-14 — by the PAYER
+ * (answered by the agency, or its agent when the agency allows).
  *
  * The delivery fee is a flat per-shipment amount derived from the agency's
  * `policies.pricing` (`deliveryFeeForPickupMix`), and the VENDOR pays it out of their net —
@@ -147,6 +171,8 @@ export interface IDeliveryFeeProposal extends Document {
   combined_request_id: Types.ObjectId | null;
   customer_approval: IDeliveryFeeCustomerApproval | null;
   topup: IDeliveryFeeTopup | null;
+  /** The agency side accepted a payer's proposal (`origin: 'payer'`) — see the interface. */
+  payer_acceptance: IDeliveryFeePayerAcceptance | null;
 
   responded_by_role: DeliveryFeeResponderRole | null;
   responded_by_user_id: Types.ObjectId | null;
@@ -199,7 +225,7 @@ const DeliveryFeeProposalSchema = new Schema<IDeliveryFeeProposal>(
     vendor_id: { type: Schema.Types.ObjectId, ref: MODELS.VENDOR, required: true },
     agency_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENCY, required: true },
 
-    proposed_by_role: { type: String, enum: ['agency', 'agent', 'system'], required: true },
+    proposed_by_role: { type: String, enum: [...DELIVERY_FEE_PROPOSER_ROLES], required: true },
     proposed_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
     proposed_by_agent_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENT, default: null },
 
@@ -248,6 +274,20 @@ const DeliveryFeeProposalSchema = new Schema<IDeliveryFeeProposal>(
       default: null,
     },
 
+    payer_acceptance: {
+      type: new Schema<IDeliveryFeePayerAcceptance>(
+        {
+          role: { type: String, enum: ['agency', 'agent'], required: true },
+          user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
+          agent_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENT, default: null },
+          version: { type: Number, required: true, min: 1 },
+          at: { type: Date, required: true },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+
     responded_by_role: { type: String, enum: [...ROLES, null], default: null },
     responded_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
     responded_at: { type: Date, default: null },
@@ -278,7 +318,7 @@ const DeliveryFeeProposalSchema = new Schema<IDeliveryFeeProposal>(
       type: [
         new Schema<IDeliveryFeeProposalEdit>(
           {
-            edited_by_role: { type: String, enum: ['agency', 'agent', 'system'], required: true },
+            edited_by_role: { type: String, enum: [...DELIVERY_FEE_PROPOSER_ROLES], required: true },
             edited_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
             edited_by_agent_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENT, default: null },
             fee_before: { type: Number, required: true, min: 0 },
@@ -296,7 +336,7 @@ const DeliveryFeeProposalSchema = new Schema<IDeliveryFeeProposal>(
     last_edited_by: {
       type: new Schema(
         {
-          role: { type: String, enum: ['agency', 'agent', 'system'], required: true },
+          role: { type: String, enum: [...DELIVERY_FEE_PROPOSER_ROLES], required: true },
           user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
           agent_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENT, default: null },
           at: { type: Date, required: true },
@@ -338,6 +378,11 @@ DeliveryFeeProposalSchema.index(
 DeliveryFeeProposalSchema.index(
   { order_id: 1, created_at: -1 },
   { name: 'delivery_fee_proposal_by_order' }
+);
+// The agency's inbox of PAYER proposals awaiting its answer (2026-10-14).
+DeliveryFeeProposalSchema.index(
+  { agency_id: 1, approver: 1, status: 1, created_at: -1 },
+  { name: 'delivery_fee_proposal_agency_inbox' }
 );
 
 export const DeliveryFeeProposalModel = mongoose.model<IDeliveryFeeProposal>(

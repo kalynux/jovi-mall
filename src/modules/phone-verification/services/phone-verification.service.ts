@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { Language } from '../../../core/constants/languages';
@@ -213,6 +214,20 @@ export class PhoneVerificationService {
         // Meta addresses by bare digits; `login_phone` is strict E.164. The same mismatch that
         // made `identity-resolver.service.ts` match nothing for every user.
         const waPhoneId = phone.replace(/^\+/, '');
+
+        /**
+         * ⛔ **Every template send needs an idempotency key, and this one shipped without.**
+         * `WhatsAppPolicyValidator.isIdempotencyRequired('template')` is true, so a template sent
+         * with `meta: {}` is refused inside the messaging service with
+         * `WHATSAPP_IDEMPOTENCY_REQUIRED` and never reaches Meta. That made every out-of-window
+         * code a `PHONE_VERIFICATION_DELIVERY_FAILED` 502 from 2026-09-14 to 2026-10-15, with
+         * the template APPROVED and the number CONNECTED the whole time.
+         *
+         * ⚠ **One random id per delivery, never the code or the number.** A resend is a new
+         * code and must not be refused as a duplicate of the last one, and key NAMES are listed
+         * on `/system/cache/keys`: a code there is a live credential on the ops surface.
+         */
+        const attemptId = randomUUID();
         const withinWindow = await this.window.canSendFreeMessage(waPhoneId);
 
         if (withinWindow) {
@@ -251,7 +266,7 @@ export class PhoneVerificationService {
          * MARKETING/UTILITY templates — would break a working send.
          */
         const primary = PHONE_VERIFICATION_CONFIG.OTP_TEMPLATE_NAME.trim();
-        if (primary && await this.trySendTemplate(phone, lang, primary, [
+        if (primary && await this.trySendTemplate(phone, lang, primary, attemptId, [
             { type: 'body', parameters: [{ type: 'text', text: code }] },
             { type: 'button', sub_type: 'url', index: 0, parameters: [{ type: 'text', text: code }] },
         ])) {
@@ -285,7 +300,7 @@ export class PhoneVerificationService {
             const parameters = otpFallbackTemplateParams(code, OTP_LIMITS.ttlSeconds)
                 .map(text => ({ type: 'text' as const, text }));
 
-            if (await this.trySendTemplate(phone, lang, fallback, [{ type: 'body', parameters }])) {
+            if (await this.trySendTemplate(phone, lang, fallback, attemptId, [{ type: 'body', parameters }])) {
                 console.warn(
                     `[PhoneVerification] '${primary}' could not be sent; delivered through the `
                     + `UTILITY fallback '${fallback}'. The AUTHENTICATION template is APPROVED on `
@@ -319,6 +334,7 @@ export class PhoneVerificationService {
         phone: string,
         lang: Language,
         name: string,
+        attemptId: string,
         components: TemplateComponent[],
     ): Promise<boolean> {
         /**
@@ -351,10 +367,16 @@ export class PhoneVerificationService {
                 to: phone,
                 type: 'template',
                 message: { type: 'template', name, language, components },
-                meta: {},
+                // Per template, so the fallback is not refused as a duplicate of the primary.
+                meta: { idempotencyKey: `phone-verify:${attemptId}:${name}` },
             });
             if (!result?.success) {
-                console.warn(`[PhoneVerification] template '${name}' [${language}] was refused`);
+                // The code, not just the fact: "was refused" alone hid WHATSAPP_IDEMPOTENCY_REQUIRED
+                // for a month behind a 502 that read like a Meta outage.
+                console.warn(
+                    `[PhoneVerification] template '${name}' [${language}] was refused: `
+                    + `${result?.error?.code ?? 'unknown'} ${result?.error?.message ?? ''}`.trim(),
+                );
             }
             return Boolean(result?.success);
         } catch (error) {

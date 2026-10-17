@@ -137,6 +137,11 @@ export const BOT_ACTION_VERBS = Object.freeze([
     'save',
     /** `deal:<sessionId>:<round>` — take the price the agent offered in that round. */
     'deal',
+    /**
+     * `take:<productId>:<variantId>:<price>` — skip the haggle and buy at the LISTED price, from
+     * the button under "Make me an offer" (owner, 2026-10-17). See `listPriceActionId`.
+     */
+    'take',
     // ── Digital delivery ─────────────────────────────────────────────────────
     /**
      * `dl:<entitlementId>` — download the file this entitlement grants.
@@ -312,6 +317,41 @@ export function bargainActionId(productId: string, variantId: string): string {
 
 export function bookActionId(productId: string): string {
     return token('book', productId);
+}
+
+/**
+ * `take:<productId>:<variantId>:<price>` — **buy at the listed price**, the button under the
+ * bargain question (owner, 2026-10-17: "it should have the current price set as a button, so the
+ * user can just tap it to buy at the said price").
+ *
+ * ⚠ **The price in this token is a CHECK, never an authority, and that is why it may be here at
+ * all.** The `deal:` rule — "the token carries a reference, never a price" — exists because a price
+ * the server believed would let anyone who can post a callback lock any figure. This one is not
+ * believed: the handler re-reads the variant's live listed price and sells at THAT, and the figure
+ * here only makes it REFUSE when the two differ. Forging it can buy nothing but the shelf price,
+ * which anyone may already buy. What it buys the honest customer is the guarantee the button's own
+ * label makes: a tap on "7 000 XAF" never quietly charges 7 500 because the vendor moved the price
+ * while the message sat in the chat.
+ *
+ * Null when the price cannot ride the 64-byte cap: `take:` + two ObjectIds + two separators is 55
+ * bytes, which leaves nine digits. A price of a billion francs gets no button — never a truncated
+ * token that would silently do nothing on Telegram.
+ */
+export function listPriceActionId(productId: string, variantId: string, price: number): string | null {
+    if (!Number.isInteger(price) || price < 0 || String(price).length > 9) return null;
+    return token('take', `${productId}:${variantId}:${price}`);
+}
+
+/** The `take:` argument, or null when it is not one this service could have minted. */
+export function parseListPriceArgument(
+    argument: string,
+): { productId: string; variantId: string; price: number } | null {
+    const parts = argument.split(':');
+    if (parts.length !== 3) return null;
+    const [productId, variantId, rawPrice] = parts as [string, string, string];
+    const isId = (value: string): boolean => /^[0-9a-fA-F]{24}$/.test(value);
+    if (!isId(productId) || !isId(variantId) || !/^\d{1,9}$/.test(rawPrice)) return null;
+    return { productId, variantId, price: Number(rawPrice) };
 }
 
 /**

@@ -70,6 +70,13 @@ const PLANNED: PlannedIndex[] = [
     key: { order_id: 1, created_at: -1 },
     why: 'the proposals on one order (vendor order detail)',
   },
+  // 2026-10-14 — payer proposals: the vendor or the customer proposes, the AGENCY answers.
+  {
+    collection: COLLECTIONS.DELIVERY_FEE_PROPOSAL,
+    name: 'delivery_fee_proposal_agency_inbox',
+    key: { agency_id: 1, approver: 1, status: 1, created_at: -1 },
+    why: "the agency's inbox of proposals awaiting ITS answer (approver: agency)",
+  },
   // ── ADR-A11 (W-E, 2026-10-04): customer-paid fee changes. Same feature family, same ledger
   // entry — this migration had not been deployed when they were added.
   {

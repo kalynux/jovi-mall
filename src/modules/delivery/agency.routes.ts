@@ -10,7 +10,7 @@ import { AgencyAssignmentController } from '../shipment-assignment/controllers/a
 import { AgencyCodController } from '../cod/controllers/agency-cod.controller';
 import { uploadCodCashProof } from '../cod/controllers/cod-proof.http';
 import { TrackingController } from '../tracking-integration/controllers/tracking.controller';
-import { AgencyDeliveryFeeProposalController, AgencyCombinedDeliveryRequestController } from '../delivery-fee-proposals/controllers/delivery-fee-proposal.controller';
+import { AgencyDeliveryFeeProposalController, AgencyCombinedDeliveryRequestController, AgencyDeliveryFeeProposalInboxController } from '../delivery-fee-proposals/controllers/delivery-fee-proposal.controller';
 import { DeviceTokenController } from '../notifications/controllers/device-token.controller';
 
 const router = Router();
@@ -163,6 +163,11 @@ router.post('/shipments/:id/delivery-fee-proposals', AgencyDeliveryFeeProposalCo
 router.post('/shipments/:id/delivery-fee-proposals/:proposalId/withdraw', AgencyDeliveryFeeProposalController.withdraw);
 // Edit any pending proposal on this shipment (its agent's too — it becomes agency-owned).
 router.patch('/shipments/:id/delivery-fee-proposals/:proposalId', AgencyDeliveryFeeProposalController.edit);
+// 2026-10-14 — the one who PAYS the delivery (vendor or customer) proposed a fee: accept or decline
+// it, with the version you saw. Pickup waits for the answer. The inbox lists every such proposal.
+router.get('/delivery-fee-proposals', AgencyDeliveryFeeProposalInboxController.list);
+router.post('/shipments/:id/delivery-fee-proposals/:proposalId/approve', AgencyDeliveryFeeProposalController.approve);
+router.post('/shipments/:id/delivery-fee-proposals/:proposalId/reject', AgencyDeliveryFeeProposalController.reject);
 
 /**
  * Combined delivery-price requests (ADR-A11 D-8): a customer asks for ONE price on several of

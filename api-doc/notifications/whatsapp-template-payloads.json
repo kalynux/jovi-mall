@@ -5,8 +5,8 @@
     "en",
     "fr"
   ],
-  "templateCount": 157,
-  "submissionCount": 314,
+  "templateCount": 165,
+  "submissionCount": 330,
   "needsCopyReview": [
     {
       "name": "customer_booking_created",
@@ -10311,6 +10311,554 @@
               "type": "OTP",
               "otp_type": "COPY_CODE",
               "text": "Copier le code"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_delivery_fee_proposal_agency_approved",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Your delivery fee was accepted*\n\n*{{1}}* accepted the delivery fee you proposed, *{{2}}* *{{3}}*, for order #*{{4}}*. It now applies to this shipment.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_delivery_fee_proposal_agency_approved",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Vos frais de livraison ont été acceptés*\n\n*{{1}}* a accepté les frais de livraison que vous avez proposés, *{{2}}* *{{3}}*, pour la commande n°*{{4}}*. Ils s'appliquent désormais à cette expédition.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_delivery_fee_proposal_agency_rejected",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Your delivery fee was declined*\n\n*{{1}}* declined the delivery fee you proposed, *{{2}}* *{{3}}*, for order #*{{4}}*; the fee stays *{{2}}* *{{5}}*.\n\nTap Open below for the full details.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_delivery_fee_proposal_agency_rejected",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Vos frais de livraison ont été refusés*\n\n*{{1}}* a refusé les frais de livraison que vous avez proposés, *{{2}}* *{{3}}*, pour la commande n°*{{4}}*; les frais restent de *{{2}}* *{{5}}*.\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_delivery_fee_proposal_declined",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Your delivery fee proposal was declined — {{3}}*\n\nThe delivery company declined the delivery fee you proposed, *{{1}}* *{{2}}*, for order *{{3}}*. The fee stays *{{1}}* *{{4}}*.\n\nTap Open below for the full details.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_delivery_fee_proposal_declined",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Votre proposition de frais de livraison a été refusée — {{3}}*\n\nLa société de livraison a refusé les frais de livraison que vous avez proposés, *{{1}}* *{{2}}*, pour la commande *{{3}}*. Les frais restent de *{{1}}* *{{4}}*.\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_delivery_fee_proposal_payer_proposed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Update: {{1}} proposes a delivery fee*\n\n*{{1}}* proposes a delivery fee of *{{2}}* *{{3}}* instead of *{{2}}* *{{4}}* for order #*{{5}}*. Accept or decline it from the shipment — pickup waits for your answer.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_delivery_fee_proposal_payer_proposed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Mise à jour : {{1}} propose des frais de livraison*\n\n*{{1}}* propose des frais de livraison de *{{2}}* *{{3}}* au lieu de *{{2}}* *{{4}}* pour la commande n°*{{5}}*. Acceptez ou refusez depuis l'expédition — l'enlèvement attend votre réponse.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_delivery_fee_proposal_payer_edited",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Update: {{1}} changed a proposed fee*\n\n*{{1}}* changed the delivery fee they propose for order #*{{2}}* to *{{3}}* *{{4}}* (it was *{{3}}* *{{5}}*). Accept or decline the new amount from the shipment.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_delivery_fee_proposal_payer_edited",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Mise à jour : {{1}} a modifié des frais proposés*\n\n*{{1}}* a modifié les frais de livraison proposés pour la commande n°*{{2}}*: *{{3}}* *{{4}}* (au lieu de *{{3}}* *{{5}}*). Acceptez ou refusez le nouveau montant depuis l'expédition.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_delivery_fee_proposal_payer_withdrawn",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Proposed delivery fee withdrawn*\n\n*{{1}}* withdrew the delivery fee they proposed for order #*{{2}}*. The fee is unchanged and the shipment can be picked up.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_delivery_fee_proposal_payer_withdrawn",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Frais de livraison proposés retirés*\n\n*{{1}}* a retiré les frais de livraison proposés pour la commande n°*{{2}}*. Les frais restent inchangés et l'expédition peut être enlevée.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_delivery_fee_proposal_payer_paid",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Delivery fee paid — ready for pickup*\n\nThe customer paid the delivery fee of *{{1}}* *{{2}}* you accepted for order #*{{3}}*. The shipment can now be picked up.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_delivery_fee_proposal_payer_paid",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Frais de livraison payés — prêt à enlever*\n\nLe client a payé les frais de livraison de *{{1}}* *{{2}}* que vous avez acceptés pour la commande n°*{{3}}*. L'expédition peut maintenant être enlevée.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_delivery_fee_proposal_payer_proposed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Update: {{1}} proposes a delivery fee*\n\n*{{1}}* proposes a delivery fee of *{{2}}* *{{3}}* instead of *{{2}}* *{{4}}* for order #*{{5}}*. You or *{{6}}* can accept or decline it from the shipment — pickup waits for the answer.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5",
+                "example 6"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_delivery_fee_proposal_payer_proposed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Mise à jour : {{1}} propose des frais de livraison*\n\n*{{1}}* propose des frais de livraison de *{{2}}* *{{3}}* au lieu de *{{2}}* *{{4}}* pour la commande n°*{{5}}*. Vous ou *{{6}}* pouvez accepter ou refuser depuis l'expédition — l'enlèvement attend la réponse.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5",
+                "example 6"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
             }
           ]
         }

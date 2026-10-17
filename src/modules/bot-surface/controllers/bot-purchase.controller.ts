@@ -25,7 +25,14 @@ import {
 } from '../domain/bot-action-dispatch';
 import { inAppBaseUrl, inAppScreenUrl } from '../domain/inapp-url';
 import { PurchaseVerb, resolvePurchaseAffordance } from '../domain/purchase-affordance';
-import { addedToCartActions, bookInviteActions, purchaseInvitePrompt } from '../domain/purchase-chat-copy';
+import {
+    addedToCartActions,
+    bookInviteActions,
+    purchaseInvitePrompt,
+    purchaseInviteTitle,
+} from '../domain/purchase-chat-copy';
+import { ListedPrice, listPriceActions } from '../domain/list-price-option';
+import { pushCardIntoConversation } from '../services/conversation-push';
 import { conversationUrl } from '../domain/conversation-url';
 import { inAppSurfaceStore } from '../services/inapp-surface.store';
 import { pendingBargainStore } from '../services/pending-bargain.store';
@@ -154,7 +161,20 @@ export class BotPurchaseController {
                     { productId: result.productId, variantId: result.variantId },
                 );
             }
-            await pushIntoConversation(session.channel, session.externalId, result.message);
+            /**
+             * ⭐ **The Buy-at-price button rides the pushed question too** (2026-10-17), so a
+             * Bargain pressed on this screen lands on the same message a chat tap draws. A card
+             * the platform refuses falls back to the plain question rather than to nothing.
+             */
+            const actions = result.listedPrice ? listPriceActions(result.listedPrice, session.language) : [];
+            const pushedCard = actions.length > 0
+                && await pushCardIntoConversation(
+                    { channel: session.channel, externalId: session.externalId },
+                    { text: result.message, actions },
+                );
+            if (!pushedCard) {
+                await pushIntoConversation(session.channel, session.externalId, result.message);
+            }
         }
 
         sendSuccess(res, {
@@ -361,6 +381,13 @@ export interface PurchaseResult {
     productId: string;
     variantId: string | null;
     productTitle: string;
+    /**
+     * The variant's LISTED price, on a `bargain` result only — what the Buy-at-price button under
+     * the question shows and sells at (`list-price-option.ts`). Null on every other rung.
+     * Optional in the TYPE only, so hand-built results in other streams' suites still compile;
+     * `executePurchase` always sets it.
+     */
+    listedPrice?: ListedPrice | null;
 }
 
 /**
@@ -433,6 +460,7 @@ export async function executePurchase(ctx: PurchaseContext): Promise<PurchaseRes
         productId,
         variantId: variant?.id ?? null,
         productTitle: product.title,
+        listedPrice: null,
     };
 
     /**
@@ -468,8 +496,23 @@ export async function executePurchase(ctx: PurchaseContext): Promise<PurchaseRes
             return {
                 ...base,
                 outcome: 'chat',
-                message: purchaseInvitePrompt(product.title, 'bargain', language),
+                /**
+                 * ⚠ **The variant is NAMED when there is a choice** — the button under the question
+                 * carries THIS variant's price, and a card only ever showed the product's range.
+                 */
+                message: purchaseInvitePrompt(
+                    purchaseInviteTitle(product.title, product.variants.length > 1 ? variant!.name : null),
+                    'bargain',
+                    language,
+                ),
                 url: null,
+                // `bargain` is only ever resolved with a variant — `resolvePurchaseAffordance` needs one.
+                listedPrice: {
+                    productId,
+                    variantId: variant!.id,
+                    amount: variant!.price,
+                    currency: variant!.currency,
+                },
             };
 
         /**
@@ -580,9 +623,10 @@ function splitPurchaseToken(
  */
 function replyForPurchase(result: PurchaseResult, language: string | null): BotReplyIntent {
     /**
-     * ⚠ **`bargain` carries no actions, deliberately.** The next thing wanted from the customer is
-     * an offer, and a button beside that question is an invitation to answer it with a tap that
-     * means nothing here.
+     * ⭐ **`bargain` carries ONE, since 2026-10-17: the listed price** (`Buy at 7 000 XAF`). This used
+     * to say a button beside the offer question "is an invitation to answer it with a tap that means
+     * nothing here" — the owner's handset showed the opposite: a customer told to make an offer had
+     * no way to simply pay the price they had been shown. The question stays for the haggler.
      *
      * ⭐ **`book` carries ONE, since bookings phase 6: Choose a time** (`open:bk:<productId>`).
      * This comment used to say `book` needed none because the answer is "a day and a time" — true
@@ -590,7 +634,12 @@ function replyForPurchase(result: PurchaseResult, language: string | null): BotR
      * question is kept for the customer who would rather type; the button opens the picker.
      */
     if (result.outcome === 'chat') {
-        if (result.verb !== 'book') return { kind: 'text', text: result.message };
+        if (result.verb !== 'book') {
+            const actions = result.listedPrice ? listPriceActions(result.listedPrice, language) : [];
+            return actions.length > 0
+                ? { kind: 'text', text: result.message, actions }
+                : { kind: 'text', text: result.message };
+        }
         /**
          * ⭐ Straight to the picker when there is one: the question AND a button that opens the
          * screen itself (owner, 2026-09-27 — two steps fewer than a tap that then offers a

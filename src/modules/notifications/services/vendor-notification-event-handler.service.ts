@@ -972,6 +972,10 @@ export class VendorNotificationEventHandler {
      */
     async handleDeliveryFeeProposalRejected(event: DomainEvent): Promise<void> {
         const p = event.payload;
+        if (p?.origin === 'payer') {
+            if (p.proposedByRole === 'vendor') await this.payerAnswerSituation(event, 'delivery_fee_proposal.agency_rejected');
+            return;
+        }
         if (!p?.coveredByVendor || p.respondedByRole !== 'customer') return;
         try {
             if (!p.vendorId || !p.orderId) return;
@@ -993,6 +997,51 @@ export class VendorNotificationEventHandler {
             });
         } catch (error) {
             console.error('[NotificationHandler] Failed to handle delivery_fee_proposal.customer_declined:', error);
+        }
+    }
+
+    /** `delivery_fee_proposal.approved` (2026-10-14) — only the agency's yes to the VENDOR's own proposal. */
+    async handleDeliveryFeeProposalApproved(event: DomainEvent): Promise<void> {
+        const p = event.payload;
+        if (p?.origin !== 'payer' || p.proposedByRole !== 'vendor') return;
+        await this.payerAnswerSituation(event, 'delivery_fee_proposal.agency_approved');
+    }
+
+    /** The agency answered the fee THIS vendor proposed (2026-10-14). */
+    private async payerAnswerSituation(
+        event: DomainEvent,
+        situation: 'delivery_fee_proposal.agency_approved' | 'delivery_fee_proposal.agency_rejected'
+    ): Promise<void> {
+        try {
+            const p = event.payload;
+            if (!p?.vendorId || !p?.orderId) return;
+            const prefs = await this.preferenceRepo.getByVendor(p.vendorId);
+            if (prefs.preferences.deliveryFeeProposals === false) return;
+            const lang = resolveLanguage(await this.vendorRepo.findById(String(p.vendorId)));
+            const agencyName = (await this.magazinRepo.findNameByAgencyId(String(p.agencyId)).catch(() => null))
+                || this.fallbackAgencyName(lang);
+            const note = typeof p.note === 'string' && p.note.trim() ? p.note.trim() : null;
+            await this.dispatch({
+                situation,
+                prefs,
+                vendorId: p.vendorId,
+                aggregateType: 'order',
+                aggregateId: p.orderId,
+                idempotencyKey: `${situation}:${p.proposalId}`,
+                context: {
+                    orderId: p.orderId,
+                    orderNumber: (await this.orderNumberOf(p)) ?? '—',
+                    agencyName,
+                    currency: p.currency ?? '',
+                    proposedFeeFormatted: Number(p.proposedFee ?? 0).toLocaleString(),
+                    feeBeforeFormatted: Number(p.feeBefore ?? 0).toLocaleString(),
+                    noteLine: note
+                        ? this.line(lang, { en: `Their note: ${note}.`, fr: `Leur message : ${note}.`, pt: `A nota deles: ${note}.`, es: `Su nota: ${note}.`, ar: `ملاحظتهم: ${note}.` })
+                        : ''
+                }
+            });
+        } catch (error) {
+            console.error(`[NotificationHandler] Failed to handle ${situation}:`, error);
         }
     }
 

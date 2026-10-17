@@ -1806,6 +1806,20 @@ inside the caller's transaction — so `ShipmentService` publishes `delivery_fee
 Indexes: `npm run migrate:delivery-fee-proposal-indexes`. Contract:
 `api-doc/FRONTEND-CHANGELOG-delivery-fee-proposals.md`.
 
+**Since 2026-10-14 the PAYER proposes too, and the agency answers** (`docs/ADR-A12-PAYER-FEE-PROPOSALS.md`,
+owner decision). The vendor on a vendor-paid parcel, the customer on a customer-paid one (storefront
+and chat), higher or lower: `proposed_by_role: 'vendor' | 'customer'`, `approver: 'agency'`,
+`origin: 'payer'`. The agency answers — its agent too while `agents_can_propose_delivery_fee` is on —
+and **pickup waits** (the same pointer). Four rules: (1) accepting runs ONLY existing money paths —
+vendor-paid through `applyVendorPaidApproval` (the transaction the vendor's own approval runs),
+customer-paid through `planDecrease` / `planCustomerApprovedIncrease` + `applyInSession`; an ONLINE
+higher fee freezes (`payer_acceptance` + `customer_approval` + `topup`) and the unchanged top-up
+settlement applies it. (2) The two-proposal cap is PER SIDE (`proposalSideOf`): payer vs agency.
+(3) `resolveAvailableActions`' `approver: 'agency'` branch is the authority: payer withdraw/edit,
+agency approve/reject, and after an online acceptance payer pay/reject, agency reject. (4) A customer
+declining their own accepted proposal is recorded `withdrawn`, never `rejected` by the customer.
+Pinned by `test:delivery-fee-proposals` § 14.
+
 ### Two-sided stock adjustment (`src/modules/stock-requests/`)
 
 **On an `agency_storage` product, nobody writes `ProductVariant.stock` alone.** One party

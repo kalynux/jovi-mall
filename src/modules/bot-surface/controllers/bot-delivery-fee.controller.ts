@@ -23,6 +23,8 @@ import {
     feeChangeListReply,
     feeChangeNoLongerWaitingReply,
     feeChangeQuestion,
+    feeProposalSentReply,
+    feeProposalWithdrawnReply,
     feeTopupChargeReply,
     toBotFeeChangeProjection,
 } from '../domain/fee-change-chat-reply';
@@ -39,6 +41,7 @@ import {
     BotDeliveryFeeParamSchema,
     BotDeliveryFeePaySchema,
     BotDeliveryFeePendingSchema,
+    BotDeliveryFeeProposeSchema,
     BotDeliveryFeeRejectSchema,
     BotNoArgsSchema,
 } from '../validators/bot.validators';
@@ -317,6 +320,67 @@ export class BotDeliveryFeeController {
         const { proposalId } = BotDeliveryFeeParamSchema.parse(req.params);
         const { phone, paymentCode } = BotDeliveryFeePaySchema.parse(req.body ?? {});
         await pay(req, res, proposalId, phone ?? null, false, paymentCode ?? null);
+    });
+
+    /**
+     * `POST /delivery-fees/propose` — `delivery_fees_propose` (2026-10-14). The customer proposes
+     * THEIR delivery fee to the company carrying a parcel they pay delivery for, higher or lower.
+     * The same service call as the customer API; the company answers and pickup waits for it.
+     */
+    static propose = asyncHandler(async (req: Request, res: Response) => {
+        const caller = botCallerOf(req);
+        const language = botResponseLanguageOf(req);
+        const input = BotDeliveryFeeProposeSchema.parse(req.body ?? {});
+        const { order, shipmentId } = await botDeliveryFeeService.proposalTarget(caller.customerId, input.orderId, input.shipmentId ?? null);
+        const created = await deliveryFeeProposalService.proposeAsPayer(
+            { role: 'customer', customerId: caller.customerId, userId: caller.userId },
+            order._id.toString(),
+            shipmentId,
+            { proposedFee: input.proposedFee, reason: input.reason },
+        );
+        const proposal = await botDeliveryFeeService.ownedProposal(caller.customerId, created.id);
+        const agencyName = await botDeliveryFeeService.agencyName(proposal.agency_id.toString());
+        const proposedText = formatBotPrice(created.proposedFee, created.currency);
+        const beforeText = formatBotPrice(created.feeBefore, created.currency);
+        setBotReply(req, feeProposalSentReply({
+            orderNumber: order.order_number ?? order._id.toString(),
+            agencyName,
+            proposedText,
+            beforeText,
+        }, language));
+        sendSuccess(res, {
+            proposalId: created.id,
+            version: created.version,
+            orderId: order._id.toString(),
+            shipmentId,
+            status: created.status,
+            proposedFee: created.proposedFee,
+            proposedFeeText: proposedText,
+            feeBefore: created.feeBefore,
+            feeBeforeText: beforeText,
+            agencyName,
+        }, { status: 201 });
+    });
+
+    /** `POST /delivery-fees/:proposalId/withdraw` — `delivery_fees_withdraw`: take back your own proposal. */
+    static withdraw = asyncHandler(async (req: Request, res: Response) => {
+        const caller = botCallerOf(req);
+        const { proposalId } = BotDeliveryFeeParamSchema.parse(req.params);
+        BotNoArgsSchema.parse(req.body ?? {});
+        const proposal = await botDeliveryFeeService.ownedProposal(caller.customerId, proposalId);
+        let withdrawn;
+        try {
+            withdrawn = await deliveryFeeProposalService.withdrawAsPayer(
+                { role: 'customer', customerId: caller.customerId, userId: caller.userId },
+                proposal.order_id.toString(),
+                proposalId,
+            );
+        } catch (error) {
+            await explainMiss(req, res, proposalId, error);
+            return;
+        }
+        setBotReply(req, feeProposalWithdrawnReply(botResponseLanguageOf(req)));
+        sendSuccess(res, { withdrawn: true, proposalId, status: withdrawn.status });
     });
 
     /** `POST /delivery-fees/combined/eligible` — `combined_delivery_eligible`. Data for the model. */

@@ -2,6 +2,7 @@ import { PublicProductListItemDto } from '../../catalog/dto/public-product.dto';
 import {
     addToCartActionId,
     buyNowActionId,
+    openSurfaceActionId,
     saveForLaterActionId,
     similarItemsActionId,
 } from './bot-action-id';
@@ -103,6 +104,23 @@ export interface BotProductCard {
      */
     similarToken?: string | null;
     saveToken?: string | null;
+    /**
+     * `open:pd:<productId>` — **See options**, on a card whose product comes in several variants
+     * (owner, 2026-10-17). A card shows the product's price RANGE and its buttons act on the
+     * default variant, so without this a customer could not learn which colour or size cost what.
+     *
+     * ⚠ **A tap token, not a link** (owner's choice, 2026-10-17). WhatsApp will not put a URL
+     * button and reply buttons on one message, and a screen link minted into a card dies with its
+     * 30-minute session. The tap mints the screen fresh and answers with an Open button, so the
+     * card keeps Buy now · Add to cart and still works weeks later — at the cost of one extra tap.
+     *
+     * ⚠ **It is the card's THIRD button**, which is WhatsApp's whole budget, so on the last card of
+     * a page "See more" moves to its own message (`whatsappProductList`). Only on a card that also
+     * has its buy pair: a sold-out or service card is unchanged.
+     *
+     * Optional for `similarToken`'s compatibility reason.
+     */
+    optionsToken?: string | null;
     /**
      * The SHOP's free-delivery terms as one line (ADR-A11 D-1 — there is no product flag any more):
      * "Free delivery", "Free delivery from 20 000 XAF", or null (the shop charges delivery, shown
@@ -276,6 +294,8 @@ export function toBotProductCard(
     item: PublicProductListItemDto,
     defaultVariantId: string | null,
     language: string | null | undefined,
+    /** Sellable variants. Defaults to 1 — no "See options" — for a caller that does not know. */
+    variantCount = 1,
 ): BotProductCard {
     const priceText = item.priceRange
         ? formatBotPriceRange(item.priceRange.min, item.priceRange.max, item.currency)
@@ -328,6 +348,8 @@ export function toBotProductCard(
         buyToken: buyable ? buyNowActionId(item.id, buyable) : null,
         similarToken: soldOut ? similarItemsActionId(item.id) : null,
         saveToken: soldOut ? saveForLaterActionId(item.id) : null,
+        // Only beside a buy pair, and only when there is a choice to make.
+        optionsToken: buyable && variantCount > 1 ? openSurfaceActionId('pd', item.id) : null,
         // Only a parcel is delivered — a download or a service has no delivery terms to state.
         deliveryText: item.type === 'physical' ? deliveryTermsLine(item.deliveryTerms, item.currency, language) : null,
     };

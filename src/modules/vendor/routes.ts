@@ -7,7 +7,7 @@ import { VendorNotificationController } from './controller/vendor-notification.c
 import { DeviceTokenController } from '../notifications/controllers/device-token.controller';
 import { VendorCustomerController } from './controller/vendor-customer.controller';
 import { UserController } from '../users/user.controller';
-import { VendorDeliveryFeeProposalController } from '../delivery-fee-proposals/controllers/delivery-fee-proposal.controller';
+import { VendorDeliveryFeeProposalController, VendorPayerProposalController } from '../delivery-fee-proposals/controllers/delivery-fee-proposal.controller';
 
 const router = Router();
 
@@ -351,6 +351,11 @@ router.post('/orders/:id/delivery-fee-proposals/:proposalId/approve', VendorDeli
 router.post('/orders/:id/delivery-fee-proposals/:proposalId/reject', VendorDeliveryFeeProposalController.reject);
 // ADR-A11 D-10: take a change-agency difference on yourself (customer-paid orders only).
 router.post('/orders/:id/delivery-fee-proposals/:proposalId/cover', VendorDeliveryFeeProposalController.cover);
+// 2026-10-14 — propose YOUR delivery fee to the agency on a parcel whose delivery you pay (higher
+// or lower); the agency (or its agent, if allowed) answers, and pickup waits for that answer.
+router.post('/orders/:id/shipments/:shipmentId/delivery-fee-proposals', VendorPayerProposalController.propose);
+router.patch('/orders/:id/delivery-fee-proposals/:proposalId', VendorPayerProposalController.edit);
+router.post('/orders/:id/delivery-fee-proposals/:proposalId/withdraw', VendorPayerProposalController.withdraw);
 
 /**
  * POST /api/vendor/orders/:id/refund

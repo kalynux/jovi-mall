@@ -241,6 +241,7 @@
         "test:screen-bargain": "ts-node scripts/test/test-screen-bargain.ts",
         "test:website-guide": "ts-node scripts/test/test-website-guide.ts",
         "test:bargain-entry": "ts-node scripts/test/test-bargain-entry.ts",
+        "test:variant-options": "ts-node scripts/test/test-variant-options.ts",
         "test:inapp-checkout": "ts-node scripts/test/test-inapp-checkout.ts",
         "test:inapp-orders": "ts-node scripts/test/test-inapp-orders.ts",
         "test:inapp-fulfilment": "ts-node scripts/test/test-inapp-fulfilment.ts",

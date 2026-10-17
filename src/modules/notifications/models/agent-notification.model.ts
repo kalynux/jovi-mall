@@ -107,6 +107,8 @@ export type AgentNotificationType =
     | 'delivery_fee_proposal.rejected'
     | 'delivery_fee_proposal.edited'
     | 'delivery_fee_proposal.withdrawn'
+    /** 2026-10-14 — the payer proposed a fee on THIS agent's shipment, and the agency lets agents answer. */
+    | 'delivery_fee_proposal.payer_proposed'
     /** The agency turned its agents' permission to propose delivery fees on / off. */
     | 'fee_proposals.enabled'
     | 'fee_proposals.disabled'
@@ -200,6 +202,7 @@ export const AGENT_NOTIFICATION_TYPES: readonly AgentNotificationType[] = [
     'delivery_fee_proposal.rejected',
     'delivery_fee_proposal.edited',
     'delivery_fee_proposal.withdrawn',
+    'delivery_fee_proposal.payer_proposed',
     'fee_proposals.enabled',
     'fee_proposals.disabled',
     'cod.pool.pinned',

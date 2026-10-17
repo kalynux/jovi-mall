@@ -119,6 +119,15 @@ const PAY_QUESTION: Copy = {
     ar: 'وافقت على {proposed} لتوصيل الطلب {order}. ادفع الفرق البالغ {amount} ليتم استلام طردك.',
 };
 
+/** 2026-10-14 — the CUSTOMER's own proposal, accepted by the company: the difference is due. */
+const PAY_QUESTION_OWN: Copy = {
+    en: 'The delivery company accepted your {proposed} for the delivery of order {order}. Pay the difference of {amount} and your parcel can be collected.',
+    fr: 'La société de livraison a accepté vos {proposed} pour la livraison de la commande {order}. Payez la différence de {amount} et votre colis pourra être enlevé.',
+    pt: 'A empresa de entregas aceitou os seus {proposed} pela entrega da encomenda {order}. Pague a diferença de {amount} e a encomenda poderá ser recolhida.',
+    es: 'La empresa de envíos aceptó tus {proposed} por el envío del pedido {order}. Paga la diferencia de {amount} y tu paquete podrá recogerse.',
+    ar: 'قبلت شركة التوصيل اقتراحك {proposed} لتوصيل الطلب {order}. ادفع الفرق البالغ {amount} ليتم استلام طردك.',
+};
+
 const PAY_FROM: Copy = {
     en: 'It will be charged to your mobile money {phone}.',
     fr: 'Le montant sera débité de votre mobile money {phone}.',
@@ -165,6 +174,24 @@ const DECLINED_MOVE: Copy = {
     pt: 'Recusou — a loja paga a diferença. Não paga nada a mais por esta entrega.',
     es: 'Has rechazado — la tienda paga la diferencia. No pagas nada más por este envío.',
     ar: 'لقد رفضت — سيدفع المتجر الفرق. لن تدفع أي مبلغ إضافي مقابل هذا التوصيل.',
+};
+
+/** 2026-10-14 — the customer took back (or declined to pay) their OWN proposal. */
+const DECLINED_OWN: Copy = {
+    en: 'Done — your proposal is withdrawn. The delivery fee stays as it was.',
+    fr: 'C’est fait — votre proposition est retirée. Les frais de livraison restent inchangés.',
+    pt: 'Feito — a sua proposta foi retirada. A taxa de entrega mantém-se.',
+    es: 'Hecho — tu propuesta se retiró. La tarifa de envío no cambia.',
+    ar: 'تم — سُحب اقتراحك. تبقى رسوم التوصيل كما كانت.',
+};
+
+/** 2026-10-14 — the customer proposed a delivery fee to the delivery company. */
+const PROPOSAL_SENT: Copy = {
+    en: 'Sent — you proposed {proposed} instead of {before} to {agency} for order {order}. Your parcel waits for their answer; you will be told here.',
+    fr: 'Envoyé — vous avez proposé {proposed} au lieu de {before} à {agency} pour la commande {order}. Votre colis attend leur réponse ; vous serez prévenu ici.',
+    pt: 'Enviado — propôs {proposed} em vez de {before} a {agency} para a encomenda {order}. A encomenda aguarda a resposta deles; será avisado aqui.',
+    es: 'Enviado — propusiste {proposed} en lugar de {before} a {agency} para el pedido {order}. Tu paquete espera su respuesta; te avisaremos aquí.',
+    ar: 'تم الإرسال — اقترحت {proposed} بدلًا من {before} على {agency} للطلب {order}. طردك ينتظر ردّهم وسنخبرك هنا.',
 };
 
 const CHANGED_SINCE: Copy = {
@@ -262,6 +289,9 @@ const FEE_COPY = Object.freeze({
     acceptedNothingToPay: { copy: ACCEPTED_NOTHING_TO_PAY, cap: null },
     declinedCompany: { copy: DECLINED_COMPANY, cap: null },
     declinedMove: { copy: DECLINED_MOVE, cap: null },
+    declinedOwn: { copy: DECLINED_OWN, cap: null },
+    payQuestionOwn: { copy: PAY_QUESTION_OWN, cap: null },
+    proposalSent: { copy: PROPOSAL_SENT, cap: null },
     changedSince: { copy: CHANGED_SINCE, cap: null },
     noLongerWaiting: { copy: NO_LONGER_WAITING, cap: null },
     nothingPending: { copy: NOTHING_PENDING, cap: null },
@@ -284,6 +314,8 @@ const FEE_TEMPLATES: Readonly<Partial<Record<BotFeeCopyKey, readonly string[]>>>
     ifAcceptCod: ['amount'],
     ifAcceptOnline: ['amount'],
     payQuestion: ['proposed', 'order', 'amount'],
+    payQuestionOwn: ['proposed', 'order', 'amount'],
+    proposalSent: ['proposed', 'before', 'agency', 'order'],
     payFrom: ['phone'],
     acceptedCod: ['order', 'proposed', 'amount'],
     acceptedNothingToPay: ['order', 'proposed'],

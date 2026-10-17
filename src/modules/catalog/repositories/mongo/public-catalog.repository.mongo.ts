@@ -77,6 +77,11 @@ export interface PublicProductListRow {
     /** Product-level media ids, thumbnail-first resolution happens above. */
     fileIds: string[];
     defaultVariantId: string | null;
+    /**
+     * INTERNAL — how many SELLABLE variants the product has. Never copied onto a DTO. Read by the
+     * bot's product card, which offers "See options" only when there is something to choose.
+     */
+    variantCount: number;
     storeSlug: string;
     storeName: string;
     storeIsOpen: boolean;
@@ -417,6 +422,8 @@ export class PublicCatalogRepositoryMongo {
                 negotiable: { $ifNull: ['$_defaultVariant.negotiable', false] },
                 fileIds: { $ifNull: ['$fileIds', []] },
                 defaultVariantId: { $ifNull: [{ $toString: '$_defaultVariant._id' }, null] },
+                // The array the variant join already built — a count, no further read.
+                variantCount: { $size: { $ifNull: ['$sellableVariants', []] } },
                 storeSlug: '$store.slug',
                 storeName: '$store.name',
                 storeIsOpen: '$store.is_open',

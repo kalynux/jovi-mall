@@ -104,6 +104,12 @@ export type AgencyNotificationType =
     | 'delivery_fee_proposal.rejected'
     | 'delivery_fee_proposal.agent_proposed'
     | 'delivery_fee_proposal.agent_edited'
+    /** 2026-10-14 — the one who PAYS the delivery (vendor or customer) proposed a fee to this agency. */
+    | 'delivery_fee_proposal.payer_proposed'
+    | 'delivery_fee_proposal.payer_edited'
+    | 'delivery_fee_proposal.payer_withdrawn'
+    /** The customer paid the higher fee this agency accepted — pickup unblocks. */
+    | 'delivery_fee_proposal.payer_paid'
     /** ADR-A11 (D-8): a customer asks this agency for a combined price on several parcels. */
     | 'combined_delivery_request.received'
     /**
@@ -240,6 +246,10 @@ const AgencyNotificationSchema = new Schema<IAgencyNotification>(
                 'delivery_fee_proposal.rejected',
                 'delivery_fee_proposal.agent_proposed',
                 'delivery_fee_proposal.agent_edited',
+                'delivery_fee_proposal.payer_proposed',
+                'delivery_fee_proposal.payer_edited',
+                'delivery_fee_proposal.payer_withdrawn',
+                'delivery_fee_proposal.payer_paid',
                 'combined_delivery_request.received',
                 'shipment.cod_limit.forced',
                 'shipment.assignment.cod_limit_blocked',

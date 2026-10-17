@@ -410,13 +410,23 @@ async function deliverySection(): Promise<void> {
     const PHONE = '+237600001234';
 
     function harness(opts: { withinWindow: boolean; accept: Array<'text' | 'template'> }) {
-        const sent: Array<{ type: string; name?: string }> = [];
+        const sent: Array<{ type: string; name?: string; key?: string }> = [];
         const window = { canSendFreeMessage: async () => opts.withinWindow } as unknown as WhatsappService;
+        const policy = new WhatsAppPolicyValidator();
         const messaging = () => ({
             send: async (payload: WhatsAppSendPayload) => {
                 const type = payload.type;
                 const name = type === 'template' ? (payload.message as { name: string }).name : undefined;
-                sent.push({ type, name });
+                const key = payload.meta?.idempotencyKey;
+                sent.push({ type, name, key });
+                /**
+                 * ⛔ The REAL messaging service's first refusal, applied here too. This fake used
+                 * to accept any template, so the suite stayed green while every out-of-window
+                 * send in production died on WHATSAPP_IDEMPOTENCY_REQUIRED before reaching Meta.
+                 */
+                if (policy.isIdempotencyRequired(type) && !key) {
+                    return { success: false, error: { code: 'WHATSAPP_IDEMPOTENCY_REQUIRED', message: 'no key' } };
+                }
                 const ok = (opts.accept as string[]).includes(type);
                 return ok
                     ? { success: true, messageId: 'wamid.test' }
@@ -453,6 +463,21 @@ async function deliverySection(): Promise<void> {
         const outcome = await outcomeOf(h.deliver);
         assert('outside the window, the template goes and free text is never attempted',
             outcome === 'template' && h.sent.every(s => s.type === 'template'));
+    }
+
+    {
+        const a = harness({ withinWindow: false, accept: ['template'] });
+        const b = harness({ withinWindow: false, accept: ['template'] });
+        await outcomeOf(a.deliver);
+        await outcomeOf(b.deliver);
+        const keyA = a.sent[0]?.key ?? '';
+        const keyB = b.sent[0]?.key ?? '';
+        assert('⛔ a template send carries an idempotency key (the messaging service refuses one without)',
+            keyA.startsWith('phone-verify:'), `key=${keyA}`);
+        assert('⚠ two deliveries never share a key, so a resend is not refused as a duplicate',
+            keyA !== '' && keyA !== keyB);
+        assert('⚠ the key names neither the code nor the number (key names are listed on the ops surface)',
+            !keyA.includes('123456') && !keyA.includes(PHONE.replace(/^\+/, '')));
     }
 
     {

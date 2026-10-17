@@ -1111,6 +1111,21 @@ export const BotDeliveryFeeApproveSchema = z
     .object({ version: z.number().int().min(1) })
     .strict();
 
+/**
+ * `POST /delivery-fees/propose` (2026-10-14) — the customer's OWN fee for a parcel whose delivery
+ * they pay, higher or lower. `orderId` is the id or the number they read out; `shipmentId` only
+ * as returned in `details.shipments` of a 422 SHIPMENT_AMBIGUOUS, never composed. `proposedFee`
+ * is the amount the customer typed, in the order's currency units.
+ */
+export const BotDeliveryFeeProposeSchema = z
+    .object({
+        orderId: quotedReference,
+        shipmentId: objectId.optional(),
+        proposedFee: z.number().int().min(0),
+        reason: z.string().trim().min(3).max(500),
+    })
+    .strict();
+
 /** `POST /delivery-fees/:proposalId/reject` — the note reaches the delivery company. */
 export const BotDeliveryFeeRejectSchema = z
     .object({

@@ -20,7 +20,7 @@ import {
     COMBINED_REQUEST_MIN_SHIPMENTS,
     planCustomerApprovedIncrease,
 } from '../../delivery-fee-proposals/domain/customer-fee-change.rules';
-import { MAX_NON_WITHDRAWN_PROPOSALS } from '../../delivery-fee-proposals/domain/delivery-fee-proposal.rules';
+import { DELIVERY_FEE_PROPOSAL_WINDOW, MAX_NON_WITHDRAWN_PROPOSALS } from '../../delivery-fee-proposals/domain/delivery-fee-proposal.rules';
 import {
     CombinedDeliveryRequestModel,
     ICombinedDeliveryRequest,
@@ -197,6 +197,39 @@ export class BotDeliveryFeeService {
             reason: dto.reason?.trim() ? dto.reason.trim() : null,
             availableActions: actions,
         };
+    }
+
+    // ── The customer's own proposal (2026-10-14) ────────────────────────────
+
+    /**
+     * Which parcel a proposal typed in the chat is for. A named `shipmentId` must be on that order;
+     * with none named, the order's ONE parcel the customer pays delivery for and that has not been
+     * picked up yet is chosen — and with several, `422 DELIVERY_FEE_PROPOSAL_SHIPMENT_AMBIGUOUS`
+     * lists them (`details.shipments`) so the model asks which. The model never invents an id.
+     * Eligibility itself (payer, window, pending, cap) is the proposal service's to refuse.
+     */
+    async proposalTarget(customerId: string, orderRef: string, shipmentId?: string | null): Promise<{ order: IOrder; shipmentId: string }> {
+        const order = await this.ownedOrder(customerId, orderRef);
+        if (shipmentId) return { order, shipmentId };
+        const shipments = await ShipmentModel.find({ order_id: order._id });
+        if (shipments.length === 1) return { order, shipmentId: (shipments[0]._id as Types.ObjectId).toString() };
+        const candidates = shipments.filter(
+            (s) => deliveryPayerOf(order, s) === 'customer' && DELIVERY_FEE_PROPOSAL_WINDOW.includes(s.status),
+        );
+        if (candidates.length === 1) return { order, shipmentId: (candidates[0]._id as Types.ObjectId).toString() };
+        const listed = candidates.length > 0 ? candidates : shipments;
+        const rows = [];
+        for (const s of listed) {
+            const state = await customerFeeApplicationService.stateOf(s, order);
+            rows.push({
+                shipmentId: (s._id as Types.ObjectId).toString(),
+                agencyName: await this.agencyName(s.agency_id.toString()),
+                fee: state.fee,
+                feeText: formatBotPrice(state.fee, order.currency),
+                status: s.status,
+            });
+        }
+        throw createAppError(ERROR_CODES.DELIVERY_FEE_PROPOSAL_SHIPMENT_AMBIGUOUS, 422, undefined, { shipments: rows });
     }
 
     // ── Combined-price requests ─────────────────────────────────────────────

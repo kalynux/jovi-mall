@@ -290,6 +290,8 @@ export type BotReplyIntent =
               saveForLater?: string;
               /** The label on `nextToken`. Optional for the same reason as the two above. */
               nextPage?: string;
+              /** The label on a card's `optionsToken` ("See options"). Optional, same reason. */
+              seeOptions?: string;
           };
           /**
            * The approved WhatsApp carousel template, when the deployment has one.
@@ -886,6 +888,13 @@ function telegramCardKeyboard(
         ]);
     }
 
+    /** See options — its own row, under the buy pair it belongs to. Token AND label, as below. */
+    if (card.optionsToken && intent.labels.seeOptions) {
+        rows.push([
+            { text: truncate(intent.labels.seeOptions, TG_LIMITS.BUTTON_TEXT), callback_data: card.optionsToken },
+        ]);
+    }
+
     /**
      * The out-of-stock row: Similar items · Save for later.
      *
@@ -1194,6 +1203,9 @@ function whatsappProductList(intent: ProductListIntent, to: string): BotChannelR
 
     if (intent.text) replies.push(whatsappText(to, intent.text));
 
+    /** Set when "See more" rode the last card; otherwise it travels in `pagingMessage`. */
+    let pagingRode = false;
+
     intent.cards.forEach((card, index) => {
         const last = index === intent.cards.length - 1;
         const buttons: Record<string, unknown>[] = [];
@@ -1213,6 +1225,22 @@ function whatsappProductList(intent: ProductListIntent, to: string): BotChannelR
                     title: truncate(intent.labels.addToCart, WA_LIMITS.BUTTON_REPLY_TITLE),
                 },
             });
+
+            /**
+             * ⭐ **See options — the third button, on a product with several variants** (owner,
+             * 2026-10-17). A reply button, because Meta will not mix one with a URL button; its tap
+             * answers with the Open button to the product screen. It spends the card's whole budget
+             * of three, so the "See more" below cannot ride THIS card and goes to `pagingMessage`.
+             */
+            if (card.optionsToken && intent.labels.seeOptions) {
+                buttons.push({
+                    type: 'reply',
+                    reply: {
+                        id: card.optionsToken,
+                        title: truncate(intent.labels.seeOptions, WA_LIMITS.BUTTON_REPLY_TITLE),
+                    },
+                });
+            }
         }
 
         /**
@@ -1273,6 +1301,7 @@ function whatsappProductList(intent: ProductListIntent, to: string): BotChannelR
                     title: truncate(intent.labels.seeMore, WA_LIMITS.BUTTON_REPLY_TITLE),
                 },
             });
+            pagingRode = true;
         }
 
         const header = card.imageUrl
@@ -1345,7 +1374,13 @@ function whatsappProductList(intent: ProductListIntent, to: string): BotChannelR
      * per page — the price of not dropping a control silently, and the shape the carousel path
      * has always used.
      */
-    if (intent.hasMore && intent.nextToken && intent.labels.nextPage) {
+    /**
+     * ⚠ **And when "See more" travels alone but the last card was full** — a product with options
+     * spends all three buttons (Buy now · Add to cart · See options) — it follows on its own here
+     * rather than vanishing. Before See options existed that case could not arise.
+     */
+    const seeMoreStranded = Boolean(intent.moreToken) && !pagingRode;
+    if (intent.hasMore && ((intent.nextToken && intent.labels.nextPage) || seeMoreStranded)) {
         replies.push(pagingMessage());
     }
 

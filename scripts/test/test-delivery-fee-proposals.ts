@@ -43,6 +43,8 @@ import {
   splitOrderVendorNetAfter,
   checkEdit,
   checkVendorVersion,
+  checkPayerProposer,
+  proposalSideOf,
 } from '../../src/modules/delivery-fee-proposals/domain/delivery-fee-proposal.rules';
 import {
   CreateDeliveryFeeProposalSchema,
@@ -453,7 +455,8 @@ function main(): void {
   const model = src('src/modules/delivery-fee-proposals/models/delivery-fee-proposal.model.ts');
   const migration = src('scripts/migrate-delivery-fee-proposal-indexes.ts');
   const names = [...model.matchAll(/name: '(delivery_fee_proposal_[a-z_]+)'/g)].map((m) => m[1]);
-  assert(`the model declares 4 named indexes (found ${names.length})`, () => names.length === 4);
+  // 4 → 5 on 2026-10-14: + delivery_fee_proposal_agency_inbox (payer proposals awaiting the agency).
+  assert(`the model declares 5 named indexes (found ${names.length})`, () => names.length === 5);
   assert('the migration builds every one the model declares, by name', () => names.every((n) => migration.includes(`'${n}'`)));
   assert('the migration is in the ledger registry', () =>
     src('scripts/migrate.ts').includes("name: 'migrate:delivery-fee-proposal-indexes'"));
@@ -553,6 +556,112 @@ function main(): void {
   for (const code of ['DELIVERY_FEE_PROPOSAL_DIRECTION_CHANGED', 'DELIVERY_FEE_TOPUP_IN_PROGRESS', 'DELIVERY_FEE_TOPUP_NOT_DUE', 'DELIVERY_FEE_PROPOSAL_ORDER_NOT_PAID']) {
     assert(`${code} exists and has a default message`, () =>
       (ERROR_CODES as Record<string, string>)[code] === code && !!(DEFAULT_ERROR_MESSAGES as Record<string, string>)[code]);
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  section('14. Payer proposals (2026-10-14) — the one who PAYS proposes, the agency answers');
+
+  // Owner decisions: the vendor (vendor-paid) and the customer (customer-paid) may propose a fee,
+  // higher or lower; the agency answers, its agent too while agents may propose fees; pickup waits.
+  assert('the vendor may propose on a vendor-paid parcel', () =>
+    checkPayerProposer({ role: 'vendor', deliveryPayer: 'vendor' }) === null);
+  assert('the customer may propose on a customer-paid parcel', () =>
+    checkPayerProposer({ role: 'customer', deliveryPayer: 'customer' }) === null);
+  assert('the vendor may NOT propose on a customer-paid parcel (not_payer, says who pays)', () =>
+    JSON.stringify(checkPayerProposer({ role: 'vendor', deliveryPayer: 'customer' })) === '{"code":"not_payer","deliveryPayer":"customer"}');
+  assert('the customer may NOT propose on a vendor-paid parcel', () =>
+    checkPayerProposer({ role: 'customer', deliveryPayer: 'vendor' })?.code === 'not_payer');
+
+  assert('vendor and customer are the PAYER side', () =>
+    proposalSideOf('vendor') === 'payer' && proposalSideOf('customer') === 'payer');
+  assert('agency, agent and system are the AGENCY side', () =>
+    proposalSideOf('agency') === 'agency' && proposalSideOf('agent') === 'agency' && proposalSideOf('system') === 'agency');
+
+  const payerRow = (by: 'vendor' | 'customer', accepted = false) => ({
+    status: 'pending' as const,
+    proposed_by_role: by,
+    proposed_by_agent_id: null,
+    approver: 'agency' as const,
+    origin: 'payer' as const,
+    customer_approved: accepted,
+    payer_accepted: accepted,
+  });
+  const acts = (row: ReturnType<typeof payerRow>, viewer: Parameters<typeof resolveAvailableActions>[1]) =>
+    JSON.stringify(resolveAvailableActions(row, viewer));
+  assert('the proposing vendor may withdraw / edit its own', () => acts(payerRow('vendor'), { role: 'vendor' }) === '["withdraw","edit"]');
+  assert('the proposing customer may withdraw / edit their own', () => acts(payerRow('customer'), { role: 'customer' }) === '["withdraw","edit"]');
+  assert('the agency answers it: approve / reject', () => acts(payerRow('vendor'), { role: 'agency' }) === '["approve","reject"]');
+  assert('the agent answers it while agents may propose fees', () =>
+    acts(payerRow('customer'), { role: 'agent', agentId: AGENT, agentsMayPropose: true }) === '["approve","reject"]');
+  assert('the agent has NO verb when the agency switched agents off', () =>
+    acts(payerRow('customer'), { role: 'agent', agentId: AGENT, agentsMayPropose: false }) === '[]');
+  assert('the customer has no verb on a VENDOR\'s proposal (and the vendor none on a customer\'s)', () =>
+    acts(payerRow('vendor'), { role: 'customer' }) === '[]' && acts(payerRow('customer'), { role: 'vendor' }) === '[]');
+  assert('accepted and awaiting the top-up: the customer may pay or decline (no edit — the figure is frozen)', () =>
+    acts(payerRow('customer', true), { role: 'customer' }) === '["pay","reject"]');
+  assert('accepted and awaiting the top-up: the agency may only take it back (it may not wait forever)', () =>
+    acts(payerRow('customer', true), { role: 'agency' }) === '["reject"]');
+  assert('answered: nobody has a verb', () =>
+    acts({ ...payerRow('vendor'), status: 'approved' as any }, { role: 'agency' }) === '[]');
+  assert('the agency still has NO approve on its OWN (vendor-approver) proposal', () =>
+    JSON.stringify(resolveAvailableActions({ status: 'pending', proposed_by_role: 'agency', proposed_by_agent_id: null }, { role: 'agency' })) === '["withdraw","edit"]');
+
+  const svc14 = src('src/modules/delivery-fee-proposals/services/delivery-fee-proposal.service.ts');
+  const body = (from: string, to: string) => svc14.slice(svc14.indexOf(from), svc14.indexOf(to));
+  const propose14 = body('async proposeAsPayer(', 'async editAsPayer(');
+  const answer14 = body('async answerPayerProposal(', 'private async closePayerProposal(');
+  assert('a payer proposal claims the shipment pointer — the same thing that blocks pickup', () =>
+    propose14.includes('this.claimOrExplain(') && propose14.includes('DELIVERY_FEE_PROPOSAL_WINDOW'));
+  assert('a payer proposal counts against the PAYER side\'s cap only', () =>
+    propose14.includes("countCountedForShipment(shipmentId, 'payer')"));
+  assert('a payer proposal is answered by the agency (approver agency, origin payer)', () =>
+    propose14.includes("approver: 'agency'") && propose14.includes("origin: 'payer'"));
+  assert('a vendor proposal must leave the vendor earning (vendor-net ceiling)', () =>
+    propose14.indexOf("payer === 'vendor'") < propose14.indexOf('checkVendorNet('));
+  assert('the agency accepting a VENDOR proposal lands the money exactly as a vendor approval does', () =>
+    answer14.includes('this.applyVendorPaidApproval(') && body('async approve(', 'private async applyVendorPaidApproval(').includes('this.applyVendorPaidApproval('));
+  assert('a customer-paid lower fee uses planDecrease; a higher one the customer-approved plan', () =>
+    answer14.includes('planDecrease(state, proposal.proposed_fee)') && answer14.includes('planCustomerApprovedIncrease(state, proposal.proposed_fee)'));
+  assert('an ONLINE higher fee waits for the top-up (no money lands on acceptance)', () =>
+    answer14.includes('setPayerAcceptanceAwaitingTopup(') && answer14.indexOf("state.mode === 'online' && plan.topupDue > 0") > 0);
+  assert('the agent may answer only while agents may propose fees', () =>
+    answer14.includes("actor.role === 'agent'") && answer14.includes("refusalToError({ code: 'agents_not_allowed' })"));
+  assert('the answer carries the version the agency SAW', () =>
+    answer14.includes('checkVendorVersion(seenVersion') && answer14.includes('version: seenVersion'));
+  assert('a customer declining their own accepted proposal is a withdrawal, never a "rejected" by the customer', () =>
+    body('async customerReject(', 'async customerPay(').includes("proposal.origin === 'payer'"));
+  assert('the payer side is counted apart from the agency side in the repository', () =>
+    src('src/modules/delivery-fee-proposals/repositories/delivery-fee-proposal.repository.ts').includes("side === 'payer' ? { $in: [...PAYER_PROPOSER_ROLES] }"));
+
+  const model14 = src('src/modules/delivery-fee-proposals/models/delivery-fee-proposal.model.ts');
+  assert('the model accepts vendor / customer as proposer roles', () =>
+    model14.includes("export const DELIVERY_FEE_PROPOSER_ROLES: readonly DeliveryFeeProposerRole[] = ['agency', 'agent', 'system', 'vendor', 'customer']")
+    && model14.includes('enum: [...DELIVERY_FEE_PROPOSER_ROLES]'));
+  const rules14 = src('src/modules/delivery-fee-proposals/domain/customer-fee-change.rules.ts');
+  assert("the approver set holds 'agency' and the origin set holds 'payer'", () =>
+    rules14.includes("['vendor', 'customer', 'none', 'agency']") && rules14.includes("['agency', 'change_agency', 'combined_request', 'payer']"));
+
+  const routes14: Array<[string, string]> = [
+    ['src/modules/vendor/routes.ts', "router.post('/orders/:id/shipments/:shipmentId/delivery-fee-proposals', VendorPayerProposalController.propose)"],
+    ['src/modules/vendor/routes.ts', "router.patch('/orders/:id/delivery-fee-proposals/:proposalId', VendorPayerProposalController.edit)"],
+    ['src/modules/vendor/routes.ts', "router.post('/orders/:id/delivery-fee-proposals/:proposalId/withdraw', VendorPayerProposalController.withdraw)"],
+    ['src/modules/orders/customer-order.routes.ts', "router.post('/:id/shipments/:shipmentId/delivery-fee-proposals', CustomerPayerProposalController.propose)"],
+    ['src/modules/orders/customer-order.routes.ts', "router.patch('/:id/delivery-fee-proposals/:proposalId', CustomerPayerProposalController.edit)"],
+    ['src/modules/orders/customer-order.routes.ts', "router.post('/:id/delivery-fee-proposals/:proposalId/withdraw', CustomerPayerProposalController.withdraw)"],
+    ['src/modules/delivery/agency.routes.ts', "router.get('/delivery-fee-proposals', AgencyDeliveryFeeProposalInboxController.list)"],
+    ['src/modules/delivery/agency.routes.ts', "router.post('/shipments/:id/delivery-fee-proposals/:proposalId/approve', AgencyDeliveryFeeProposalController.approve)"],
+    ['src/modules/delivery/agency.routes.ts', "router.post('/shipments/:id/delivery-fee-proposals/:proposalId/reject', AgencyDeliveryFeeProposalController.reject)"],
+    ['src/modules/delivery/agent.routes.ts', "router.post('/shipments/:id/delivery-fee-proposals/:proposalId/approve', AgentDeliveryFeeProposalController.approve)"],
+    ['src/modules/delivery/agent.routes.ts', "router.post('/shipments/:id/delivery-fee-proposals/:proposalId/reject', AgentDeliveryFeeProposalController.reject)"],
+  ];
+  for (const [file, line] of routes14) {
+    assert(`route: ${line.slice(line.indexOf("'") + 1, line.indexOf("',"))} (${file.split('/').slice(-1)[0]})`, () => src(file).includes(line));
+  }
+  for (const code of ['DELIVERY_FEE_PROPOSAL_NOT_PAYER', 'DELIVERY_FEE_PROPOSAL_SHIPMENT_AMBIGUOUS']) {
+    assert(`${code} exists, has a default message and is documented`, () =>
+      (ERROR_CODES as Record<string, string>)[code] === code
+      && !!(DEFAULT_ERROR_MESSAGES as Record<string, string>)[code]
+      && src('api-doc/errors/README.md').includes('`' + code + '`'));
   }
 
   console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed\n`);

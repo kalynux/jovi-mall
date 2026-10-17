@@ -638,6 +638,45 @@ const LOCK_IT_IN_BUTTON: Copy = {
     ar: 'ثبّت السعر',
 };
 
+/**
+ * The button under the bargain question — buy at the LISTED price, no haggle (owner, 2026-10-17).
+ *
+ * A TEMPLATE, `cap: null`, for `lockItInButton`'s reason: the price is the part that must survive.
+ * Telegram draws it whole; on WhatsApp `listPriceOption` falls back to `✓ <price>` — the shape the
+ * counter-offer's button already uses — whenever this would pass the 20-character title cap.
+ */
+const BUY_AT_PRICE_BUTTON: Copy = {
+    en: 'Buy at {price}',
+    fr: 'Acheter à {price}',
+    pt: 'Comprar por {price}',
+    es: 'Comprar por {price}',
+    ar: 'اشترِ بسعر {price}',
+};
+
+/**
+ * A listed-price button pressed after the vendor changed that price. The fresh button follows, so
+ * the next press is on a figure that stands — the `deal:` superseded rule, for a shelf price.
+ */
+const LIST_PRICE_CHANGED_PROMPT: Copy = {
+    en: 'The price has changed since that message. Here is the current one.',
+    fr: 'Le prix a changé depuis ce message. Voici le prix actuel.',
+    pt: 'O preço mudou desde essa mensagem. Aqui está o preço atual.',
+    es: 'El precio ha cambiado desde ese mensaje. Este es el precio actual.',
+    ar: 'تغيّر السعر منذ تلك الرسالة. إليك السعر الحالي.',
+};
+
+/**
+ * On a product card whose product comes in several variants — opens the product screen, where the
+ * variants, their prices and their pictures can be seen and chosen (owner, 2026-10-17).
+ */
+const SEE_OPTIONS_BUTTON: Copy = {
+    en: 'See options',
+    fr: 'Voir les options',
+    pt: 'Ver opções',
+    es: 'Ver opciones',
+    ar: 'عرض الخيارات',
+};
+
 const BROWSE_CATEGORIES_PROMPT: Copy = {
     en: 'What kind of thing are you looking for?',
     fr: "Quel genre d'article cherchez-vous ?",
@@ -2192,6 +2231,10 @@ const CHROME = Object.freeze({
     bargainAgainButton: { copy: BARGAIN_AGAIN_BUTTON, cap: 20 },
     // ⚠ Uncapped deliberately — see the constant: the price, not the label, is the title.
     lockItInButton: { copy: LOCK_IT_IN_BUTTON, cap: null },
+    // ⚠ A template, uncapped for the same reason — see the constant.
+    buyAtPriceButton: { copy: BUY_AT_PRICE_BUTTON, cap: null },
+    listPriceChangedPrompt: { copy: LIST_PRICE_CHANGED_PROMPT, cap: null },
+    seeOptionsButton: { copy: SEE_OPTIONS_BUTTON, cap: 20 },
     browseCategoriesPrompt: { copy: BROWSE_CATEGORIES_PROMPT, cap: null },
     noCategoriesPrompt: { copy: NO_CATEGORIES_PROMPT, cap: null },
     categoryGonePrompt: { copy: CATEGORY_GONE_PROMPT, cap: null },
@@ -2348,6 +2391,7 @@ const CHROME_TEMPLATES: Readonly<Partial<Record<BotChromeKey, readonly string[]>
     checkoutFreeDeliveryHint: Object.freeze(['amount', 'shop']),
     checkoutFreeDeliveryHintOneShop: Object.freeze(['amount']),
     cardFreeDeliveryFrom: Object.freeze(['amount']),
+    buyAtPriceButton: Object.freeze(['price']),
     orderDeliveryIncluded: Object.freeze(['amount']),
 });
 

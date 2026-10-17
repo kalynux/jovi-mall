@@ -5,6 +5,7 @@ import {
   DeliveryFeeProposalStatus,
   DeliveryFeeProposerRole,
 } from '../models/delivery-fee-proposal.model';
+import type { ProposalApprover, ProposalOrigin } from './customer-fee-change.rules';
 
 /**
  * The delivery-fee proposal rules — the pure half, DB-free so `test:delivery-fee-proposals`
@@ -30,8 +31,20 @@ import {
  */
 export const DELIVERY_FEE_PROPOSAL_WINDOW: readonly ShipmentStatus[] = ['assigned', 'handing_over'];
 
-/** Two non-withdrawn proposals per shipment: the first, and ONE more after a rejection. */
+/**
+ * Two non-withdrawn proposals per shipment PER SIDE: the first, and ONE more after a rejection.
+ * The two sides are counted apart (2026-10-14): the agency side (agency, agent, a combined-price
+ * answer) and the PAYER side (the vendor or the customer who pays the delivery). Shared, a payer's
+ * two declined proposals would spend the agency's own right to re-propose, and the reverse.
+ */
 export const MAX_NON_WITHDRAWN_PROPOSALS = 2;
+
+/** Which side of the negotiation a proposer is on. */
+export type ProposalSide = 'agency' | 'payer';
+
+export function proposalSideOf(role: DeliveryFeeProposerRole): ProposalSide {
+  return role === 'vendor' || role === 'customer' ? 'payer' : 'agency';
+}
 
 /** Statuses that count against `MAX_NON_WITHDRAWN_PROPOSALS`. */
 export const COUNTED_PROPOSAL_STATUSES: readonly DeliveryFeeProposalStatus[] = [
@@ -48,7 +61,8 @@ export type ProposalRefusal =
   | { code: 'limit_reached'; used: number; max: number }
   | { code: 'invalid_fee' }
   | { code: 'no_change'; currentFee: number }
-  | { code: 'vendor_net_not_positive' };
+  | { code: 'vendor_net_not_positive' }
+  | { code: 'not_payer'; deliveryPayer: 'vendor' | 'customer' };
 
 export function isInProposalWindow(status: ShipmentStatus): boolean {
   return DELIVERY_FEE_PROPOSAL_WINDOW.includes(status);
@@ -76,6 +90,18 @@ export function checkProposer(input: ProposerCheckInput): ProposalRefusal | null
   }
   if (!input.agentsMayPropose) return { code: 'agents_not_allowed' };
   return null;
+}
+
+/**
+ * A PAYER proposal (2026-10-14): only the one who pays THIS parcel's delivery may propose —
+ * the vendor on a vendor-paid parcel, the customer on a customer-paid one. Ownership of the
+ * order is enforced by the scoped read before this runs.
+ */
+export function checkPayerProposer(input: {
+  role: 'vendor' | 'customer';
+  deliveryPayer: 'vendor' | 'customer';
+}): ProposalRefusal | null {
+  return input.role === input.deliveryPayer ? null : { code: 'not_payer', deliveryPayer: input.deliveryPayer };
 }
 
 export interface CreationCheckInput {
@@ -256,6 +282,15 @@ export interface ProposalViewer {
  *  - the agency          → withdraw / edit (any of its shipment's proposals, its agent's included).
  *  - the proposing agent → withdraw / edit their own — until the AGENCY edits it, after which
  *                          it is agency-owned; `edit` also needs the agency preference on.
+ *
+ * A PAYER's proposal (`approver: 'agency'`, 2026-10-14) turns the table around:
+ *  - the payer (vendor or customer) → withdraw / edit their own while unanswered; once the agency
+ *    accepted an ONLINE increase the customer must pay → pay / reject ("I no longer want it");
+ *  - the agency                     → approve / reject; after accepting, while the top-up is
+ *                                     unpaid → reject only (it may not wait forever);
+ *  - an agent on the shipment       → the agency's verbs, while the agency lets agents propose
+ *                                     fees (the same switch);
+ *  - anybody else (the other payer) → nothing.
  */
 export function resolveAvailableActions(
   proposal: {
@@ -264,15 +299,28 @@ export function resolveAvailableActions(
     proposed_by_agent_id: string | null;
     agency_edited?: boolean;
     /** ADR-A11. Absent on rows before it ⇒ `vendor` (the ADR-A09 flow). */
-    approver?: 'vendor' | 'customer' | 'none' | null;
-    origin?: 'agency' | 'change_agency' | 'combined_request' | null;
+    approver?: ProposalApprover | null;
+    origin?: ProposalOrigin | null;
     /** The customer approved an increase that still awaits its top-up (online). */
     customer_approved?: boolean;
+    /** A payer's proposal the agency side accepted, still awaiting the customer's top-up. */
+    payer_accepted?: boolean;
   },
   viewer: ProposalViewer
 ): ProposalAction[] {
   if (proposal.status !== 'pending') return [];
   const approver = proposal.approver ?? 'vendor';
+
+  if (approver === 'agency') {
+    const accepted = !!proposal.payer_accepted;
+    if (viewer.role === proposal.proposed_by_role) return accepted ? ['pay', 'reject'] : ['withdraw', 'edit'];
+    if (viewer.role === 'agency') return accepted ? ['reject'] : ['approve', 'reject'];
+    if (viewer.role === 'agent') {
+      if (viewer.agentsMayPropose === false) return [];
+      return accepted ? ['reject'] : ['approve', 'reject'];
+    }
+    return [];
+  }
 
   // A change-agency difference (D-10): the system raised it; the customer answers, and the
   // vendor — who moved the parcel and is the one covering otherwise — may cover it at once.

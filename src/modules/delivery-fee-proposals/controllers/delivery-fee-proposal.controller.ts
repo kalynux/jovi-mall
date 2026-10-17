@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
-import { deliveryFeeProposalService, ProposerActor } from '../services/delivery-fee-proposal.service';
+import { deliveryFeeProposalService, PayerActor, ProposerActor } from '../services/delivery-fee-proposal.service';
 import { DeliveryFeeProposalStatus } from '../models/delivery-fee-proposal.model';
 import { combinedDeliveryRequestService } from '../services/combined-delivery-request.service';
 import { deriveProviderOrThrow } from '../../payments/services/payment-routing.service';
@@ -13,10 +13,12 @@ import {
   CustomerRejectDeliveryFeeProposalSchema,
   PayDeliveryTopupSchema,
   RespondCombinedDeliveryRequestSchema,
+  AgencyProposalQuerySchema,
   ApproveDeliveryFeeProposalSchema,
   CreateDeliveryFeeProposalSchema,
   EditDeliveryFeeProposalSchema,
   OrderProposalParamsSchema,
+  OrderShipmentProposalParamsSchema,
   RejectDeliveryFeeProposalSchema,
   ShipmentProposalParamsSchema,
   VendorProposalQuerySchema,
@@ -46,7 +48,7 @@ export function buildProposerController(role: 'agency' | 'agent') {
       const { id } = ShipmentProposalParamsSchema.parse(req.params);
       const input = CreateDeliveryFeeProposalSchema.parse(req.body);
       const data = await deliveryFeeProposalService.propose(actorOf(req), id, input);
-      res.status(201).json({ success: true, data, message: 'Delivery-fee proposal sent to the vendor' });
+      res.status(201).json({ success: true, data, message: 'Delivery-fee proposal sent — awaiting an answer' });
     }),
 
     /** PATCH /shipments/:id/delivery-fee-proposals/:proposalId — body { proposedFee?, reason?, version? }. */
@@ -54,7 +56,7 @@ export function buildProposerController(role: 'agency' | 'agent') {
       const { id, proposalId } = ShipmentProposalParamsSchema.parse(req.params);
       const input = EditDeliveryFeeProposalSchema.parse(req.body);
       const data = await deliveryFeeProposalService.edit(actorOf(req), id, proposalId!, input);
-      res.json({ success: true, data, message: 'Delivery-fee proposal updated — still awaiting the vendor' });
+      res.json({ success: true, data, message: 'Delivery-fee proposal updated — still awaiting an answer' });
     }),
 
     /** POST /shipments/:id/delivery-fee-proposals/:proposalId/withdraw */
@@ -63,7 +65,92 @@ export function buildProposerController(role: 'agency' | 'agent') {
       const data = await deliveryFeeProposalService.withdraw(actorOf(req), id, proposalId!);
       res.json({ success: true, data, message: 'Delivery-fee proposal withdrawn' });
     }),
+
+    /**
+     * POST /shipments/:id/delivery-fee-proposals/:proposalId/approve — body { version }. Accept a
+     * fee the PAYER (vendor or customer) proposed (2026-10-14). An agent may while the agency lets
+     * agents propose fees.
+     */
+    approve: asyncHandler(async (req: Request, res: Response) => {
+      const { id, proposalId } = ShipmentProposalParamsSchema.parse(req.params);
+      const { version } = ApproveDeliveryFeeProposalSchema.parse(req.body ?? {});
+      const data = await deliveryFeeProposalService.answerPayerProposal(actorOf(req), id, proposalId!, 'approve', version);
+      res.json({
+        success: true,
+        data,
+        message: data.status === 'approved'
+          ? 'Delivery fee accepted — it now applies'
+          : 'Delivery fee accepted — waiting for the customer to pay the difference',
+      });
+    }),
+
+    /** POST /shipments/:id/delivery-fee-proposals/:proposalId/reject — body { version, note? }. */
+    reject: asyncHandler(async (req: Request, res: Response) => {
+      const { id, proposalId } = ShipmentProposalParamsSchema.parse(req.params);
+      const { version, note } = RejectDeliveryFeeProposalSchema.parse(req.body ?? {});
+      const data = await deliveryFeeProposalService.answerPayerProposal(actorOf(req), id, proposalId!, 'reject', version, note ?? null);
+      res.json({ success: true, data, message: 'Proposal declined — the current fee stands' });
+    }),
   };
+}
+
+/**
+ * The PAYER side of a payer proposal (2026-10-14) from one factory — the vendor (vendor-paid
+ * parcels) and the customer (customer-paid parcels) propose, edit and withdraw through mirror
+ * endpoints under their own order routes. The actor comes from the token, never the path.
+ */
+export function buildPayerProposalController(role: 'vendor' | 'customer') {
+  const actorOf = (req: Request): PayerActor =>
+    role === 'vendor'
+      ? { role: 'vendor', vendorId: req.auth!.role_entity._id.toString(), userId: req.auth!.user.id }
+      : { role: 'customer', customerId: req.auth!.role_entity._id.toString(), userId: req.auth!.user.id };
+
+  return {
+    /** POST /orders/:id/shipments/:shipmentId/delivery-fee-proposals — body { proposedFee, reason }. */
+    propose: asyncHandler(async (req: Request, res: Response) => {
+      const { id, shipmentId } = OrderShipmentProposalParamsSchema.parse(req.params);
+      const input = CreateDeliveryFeeProposalSchema.parse(req.body);
+      const data = await deliveryFeeProposalService.proposeAsPayer(actorOf(req), id, shipmentId, input);
+      res.status(201).json({ success: true, data, message: 'Delivery-fee proposal sent to the delivery company' });
+    }),
+
+    /** PATCH /orders/:id/delivery-fee-proposals/:proposalId — body { proposedFee?, reason?, version? }. */
+    edit: asyncHandler(async (req: Request, res: Response) => {
+      const { id, proposalId } = OrderProposalParamsSchema.parse(req.params);
+      const input = EditDeliveryFeeProposalSchema.parse(req.body);
+      const data = await deliveryFeeProposalService.editAsPayer(actorOf(req), id, proposalId!, input);
+      res.json({ success: true, data, message: 'Delivery-fee proposal updated — still awaiting the delivery company' });
+    }),
+
+    /** POST /orders/:id/delivery-fee-proposals/:proposalId/withdraw */
+    withdraw: asyncHandler(async (req: Request, res: Response) => {
+      const { id, proposalId } = OrderProposalParamsSchema.parse(req.params);
+      const data = await deliveryFeeProposalService.withdrawAsPayer(actorOf(req), id, proposalId!);
+      res.json({ success: true, data, message: 'Delivery-fee proposal withdrawn' });
+    }),
+  };
+}
+
+export const VendorPayerProposalController = buildPayerProposalController('vendor');
+export const CustomerPayerProposalController = buildPayerProposalController('customer');
+
+/** GET /api/agency/delivery-fee-proposals?status=&page=&limit= — payer proposals awaiting the agency. */
+export class AgencyDeliveryFeeProposalInboxController {
+  static list = asyncHandler(async (req: Request, res: Response) => {
+    const agencyId = req.auth!.role_entity._id.toString();
+    const q = AgencyProposalQuerySchema.parse(req.query);
+    const page = await deliveryFeeProposalService.listForAgency(
+      agencyId,
+      { status: q.status as DeliveryFeeProposalStatus | undefined },
+      q.page,
+      q.limit
+    );
+    res.json({
+      success: true,
+      data: page.data,
+      meta: { total: page.meta.total, page: page.meta.page, limit: page.meta.limit, totalPages: page.meta.pages },
+    });
+  });
 }
 
 export const AgencyDeliveryFeeProposalController = buildProposerController('agency');

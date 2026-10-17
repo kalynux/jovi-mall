@@ -2203,6 +2203,42 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Cus
         actions: [RETRY_DELIVERY_TOPUP]
     },
 
+    // 2026-10-14 — the customer proposed a delivery fee to the delivery company, which said no.
+    // (An ACCEPTED proposal reuses lowered / updated / topup_due: those describe the result.)
+    // Money, so no preference key. `{{noteLine}}` is the company's optional explanation.
+    'order.delivery_fee.proposal_declined': {
+        base: {
+            en: {
+                subject: 'Your delivery fee proposal was declined — {{orderNumber}}',
+                body: 'The delivery company declined the delivery fee you proposed, {{currency}} {{proposedFeeFormatted}}, for order {{orderNumber}}. The fee stays {{currency}} {{feeBeforeFormatted}}. {{noteLine}}'
+            },
+            fr: {
+                subject: 'Votre proposition de frais de livraison a été refusée — {{orderNumber}}',
+                body: 'La société de livraison a refusé les frais de livraison que vous avez proposés, {{currency}} {{proposedFeeFormatted}}, pour la commande {{orderNumber}}. Les frais restent de {{currency}} {{feeBeforeFormatted}}. {{noteLine}}'
+            },
+            pt: {
+                subject: 'A sua proposta de taxa de entrega foi recusada — {{orderNumber}}',
+                body: 'A empresa de entregas recusou a taxa de entrega que propôs, {{currency}} {{proposedFeeFormatted}}, para a encomenda {{orderNumber}}. A taxa mantém-se em {{currency}} {{feeBeforeFormatted}}. {{noteLine}}'
+            },
+            es: {
+                subject: 'Tu propuesta de tarifa de envío fue rechazada — {{orderNumber}}',
+                body: 'La empresa de envíos rechazó la tarifa de envío que propusiste, {{currency}} {{proposedFeeFormatted}}, para el pedido {{orderNumber}}. La tarifa sigue siendo {{currency}} {{feeBeforeFormatted}}. {{noteLine}}'
+            },
+            ar: {
+                subject: 'تم رفض اقتراحك لرسوم التوصيل — {{orderNumber}}',
+                body: 'رفضت شركة التوصيل رسوم التوصيل التي اقترحتها، {{currency}} {{proposedFeeFormatted}}، للطلب {{orderNumber}}. تبقى الرسوم {{currency}} {{feeBeforeFormatted}}. {{noteLine}}'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_order_delivery_fee_proposal_declined',
+                bodyParams: ['{{currency}}', '{{proposedFeeFormatted}}', '{{orderNumber}}', '{{feeBeforeFormatted}}']
+            }
+        },
+        button: ORDER_BUTTON
+    },
+
     'order.combined_delivery.answered': {
         base: {
             en: {

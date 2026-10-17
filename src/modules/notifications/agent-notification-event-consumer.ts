@@ -103,6 +103,8 @@ export function initializeAgentNotificationEventConsumers(): void {
     eventBus.subscribe('delivery_fee_proposal.rejected', handler.handleDeliveryFeeProposalRejected.bind(handler));
     eventBus.subscribe('delivery_fee_proposal.edited', handler.handleDeliveryFeeProposalEdited.bind(handler));
     eventBus.subscribe('delivery_fee_proposal.withdrawn', handler.handleDeliveryFeeProposalWithdrawn.bind(handler));
+    // 2026-10-14 — a payer's proposal on this agent's shipment, when the agency lets agents answer.
+    eventBus.subscribe('delivery_fee_proposal.created', handler.handleDeliveryFeeProposalCreated.bind(handler));
     eventBus.subscribe('agency.fee_proposal_permission_changed', handler.handleFeeProposalPermissionChanged.bind(handler));
     // 2026-10-02 — an administrator's pin / release of the agent's COD pool. The handler
     // ignores every non-'override' trigger (sync, reconcile, the mass reset to the default).

@@ -138,6 +138,7 @@ const UNMUTABLE: CustomerNotificationType[] = [
     'order.delivery_fee.refund_pending',
     'order.delivery_fee.refund_settled',
     'order.delivery_fee.topup_failed',
+    'order.delivery_fee.proposal_declined',
     'order.combined_delivery.answered',
     // The card payment page (GAP-008 + GAP-012). Money, so ungated on the same rule as
     // the rest of this list — and a page the customer asked for in a chat must not be
@@ -220,6 +221,9 @@ const EXPECTED_WA_PARAMS: Record<CustomerNotificationType, number> = {
     // W-E2 — the confirmation refund_pending promises (currency + amount + orderNumber).
     'order.delivery_fee.refund_settled': 3,
     'order.delivery_fee.topup_failed': 3,
+    // 2026-10-14 — the company declined the customer's own proposal (currency, proposed fee,
+    // order number, the fee that stands).
+    'order.delivery_fee.proposal_declined': 4,
     'order.combined_delivery.answered': 3,
     'ticket.replied': 1,
     'ticket.awaiting_customer': 1,
@@ -294,10 +298,11 @@ function main(): void {
     // 34 since 2026-10-04 (W-E): seven delivery-fee-change situations (ADR-A11).
     // 35 since 2026-10-04 (W-E2): `order.delivery_fee.refund_settled`, the confirmation refund_pending promised.
     // 46 since 2026-10-05 (refund flow, REFUND-FLOW-PLAN § 8): six `order.refund.*` + five `booking.refund.*`.
-    assert('catalog and model enum list the same 46 situations', () => {
+    // 46 → 47 on 2026-10-14: + order.delivery_fee.proposal_declined (the customer's own proposal).
+    assert('catalog and model enum list the same 47 situations', () => {
         const catalog = Object.keys(CUSTOMER_NOTIFICATION_CATALOG).sort();
         const model = [...CUSTOMER_NOTIFICATION_TYPES].sort();
-        return catalog.length === 46 && JSON.stringify(catalog) === JSON.stringify(model);
+        return catalog.length === 47 && JSON.stringify(catalog) === JSON.stringify(model);
     });
 
     // The aggregate enum is spread from CUSTOMER_AGGREGATE_TYPES rather than hand-kept —

@@ -79,6 +79,18 @@ export function purchaseInvitePrompt(
 }
 
 /**
+ * The product line above an invite question — the title, and the VARIANT when there is a choice.
+ *
+ * ⚠ **The variant is named because the price button under the question is that variant's price.**
+ * A card shows a product's price RANGE ("6 500 – 7 500 XAF"), and a Buy now tap haggles over the
+ * default variant — so without its name the customer was offered a price for a colour nobody had
+ * told them about (owner's handset, 2026-10-17). A one-variant product is just its title.
+ */
+export function purchaseInviteTitle(productTitle: string, variantName: string | null): string {
+    return variantName ? `${productTitle} — ${variantName}` : productTitle;
+}
+
+/**
  * **Choose a time** — the one button under the Book question, opening the day-and-time picker.
  *
  * ⚠ **The question stays, and this is a second way to answer it, not a replacement.** A customer
@@ -86,7 +98,9 @@ export function purchaseInvitePrompt(
  * for everybody else. It carries the PRODUCT id and no screen handle: the `bk` session is minted
  * on the tap, by the server, for whoever tapped (`open:bk` in `bot-booking.controller.ts`).
  *
- * ⚠ **`bargain` gets none, deliberately** — its next step is an offer only the customer can make.
+ * ⚠ **`bargain` gets a different one since 2026-10-17** — the listed price as a button
+ * (`list-price-option.ts`). Its next step is still an offer only the customer can make; the button
+ * is for the customer who would rather not haggle at all.
  */
 export function bookInviteActions(productId: string, language: string | null): BotReplyOption[] {
     return [{ id: openSurfaceActionId('bk', productId), label: botChrome('bookChooseTimeButton', language) }];

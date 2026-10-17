@@ -9,7 +9,7 @@ export interface DeliveryFeeProposalDto {
   orderId: string;
   agencyId: string;
   proposedBy: {
-    role: 'agency' | 'agent' | 'system';
+    role: 'agency' | 'agent' | 'system' | 'vendor' | 'customer';
     userId: string | null;
     agentId: string | null;
   };
@@ -17,9 +17,18 @@ export interface DeliveryFeeProposalDto {
    * ADR-A11. Who answers: `vendor` (vendor-paid), `customer` (an increase on a customer-paid
    * shipment), `none` (a customer-paid decrease — already applied when created).
    */
-  approver: 'vendor' | 'customer' | 'none';
-  /** `agency` (an agency/agent proposal) · `change_agency` (D-10 difference) · `combined_request`. */
-  origin: 'agency' | 'change_agency' | 'combined_request';
+  approver: 'vendor' | 'customer' | 'none' | 'agency';
+  /**
+   * `agency` (an agency/agent proposal) · `change_agency` (D-10 difference) · `combined_request` ·
+   * `payer` (2026-10-14: the vendor or the customer proposed; `approver: 'agency'` answers).
+   */
+  origin: 'agency' | 'change_agency' | 'combined_request' | 'payer';
+  /**
+   * A payer's proposal the agency side ACCEPTED: who and when. Null until then. On a customer-paid
+   * ONLINE increase it is set while the proposal is still `pending` — waiting for the customer's
+   * top-up (`topup`) — and pickup stays blocked until that is paid.
+   */
+  payerAcceptance: { role: 'agency' | 'agent'; agentId: string | null; version: number; at: Date } | null;
   direction: 'increase' | 'decrease' | null;
   /** The customer approved (online: the top-up it needs is on `topup`) — null otherwise. */
   customerApproval: { approvedAt: Date; version: number } | null;
@@ -51,7 +60,7 @@ export interface DeliveryFeeProposalDto {
   version: number;
   /** Append-only edit trail, oldest first. */
   edits: Array<{
-    editedBy: { role: 'agency' | 'agent' | 'system'; userId: string | null; agentId: string | null };
+    editedBy: { role: 'agency' | 'agent' | 'system' | 'vendor' | 'customer'; userId: string | null; agentId: string | null };
     feeBefore: number;
     feeAfter: number;
     reasonBefore: string;
@@ -59,7 +68,7 @@ export interface DeliveryFeeProposalDto {
     version: number;
     at: Date;
   }>;
-  lastEditedBy: { role: 'agency' | 'agent' | 'system'; userId: string | null; agentId: string | null; at: Date } | null;
+  lastEditedBy: { role: 'agency' | 'agent' | 'system' | 'vendor' | 'customer'; userId: string | null; agentId: string | null; at: Date } | null;
   /** True once the agency edited it — agency-owned from then on. */
   agencyEdited: boolean;
   /** The verbs THIS viewer may use right now — the same table the service enforces. */
@@ -92,6 +101,14 @@ export function toDeliveryFeeProposalDto(p: IDeliveryFeeProposal, viewer: Propos
       ? { approvedAt: p.customer_approval.approved_at, version: p.customer_approval.version }
       : null,
     topup: p.topup ? { amount: p.topup.amount, status: p.topup.status, paidAt: p.topup.paid_at ?? null } : null,
+    payerAcceptance: p.payer_acceptance
+      ? {
+          role: p.payer_acceptance.role,
+          agentId: p.payer_acceptance.agent_id ? p.payer_acceptance.agent_id.toString() : null,
+          version: p.payer_acceptance.version,
+          at: p.payer_acceptance.at,
+        }
+      : null,
     combinedRequestId: p.combined_request_id ? p.combined_request_id.toString() : null,
     currency: p.currency,
     feeBefore: p.fee_before,
@@ -157,6 +174,7 @@ export function toDeliveryFeeProposalDto(p: IDeliveryFeeProposal, viewer: Propos
         approver: p.approver ?? 'vendor',
         origin: p.origin ?? 'agency',
         customer_approved: !!p.customer_approval,
+        payer_accepted: !!p.payer_acceptance,
       },
       viewer
     ),
@@ -195,9 +213,14 @@ export interface CustomerDeliveryFeeProposalDto {
   id: string;
   shipmentId: string;
   orderId: string;
-  /** Who raised it, in the customer's terms: the delivery company, or the platform (a moved parcel). */
-  raisedBy: 'delivery_company' | 'platform';
-  origin: 'agency' | 'change_agency' | 'combined_request';
+  /**
+   * Who raised it, in the customer's terms: the delivery company, the platform (a moved parcel),
+   * or `you` — the customer's own proposal to the delivery company (2026-10-14).
+   */
+  raisedBy: 'delivery_company' | 'platform' | 'you';
+  origin: 'agency' | 'change_agency' | 'combined_request' | 'payer';
+  /** Your own proposal: the delivery company accepted it (online and higher: pay `topup`). */
+  acceptedByDeliveryCompany: boolean;
   direction: 'increase' | 'decrease' | null;
   currency: string;
   feeBefore: number;
@@ -218,7 +241,8 @@ export function toCustomerDeliveryFeeProposalDto(p: IDeliveryFeeProposal): Custo
     id: (p._id as any).toString(),
     shipmentId: p.shipment_id.toString(),
     orderId: p.order_id.toString(),
-    raisedBy: p.proposed_by_role === 'system' ? 'platform' : 'delivery_company',
+    raisedBy: p.proposed_by_role === 'system' ? 'platform' : p.proposed_by_role === 'customer' ? 'you' : 'delivery_company',
+    acceptedByDeliveryCompany: !!p.payer_acceptance,
     origin: p.origin ?? 'agency',
     direction: p.direction ?? null,
     currency: p.currency,
@@ -237,6 +261,7 @@ export function toCustomerDeliveryFeeProposalDto(p: IDeliveryFeeProposal): Custo
         approver: p.approver ?? 'vendor',
         origin: p.origin ?? 'agency',
         customer_approved: !!p.customer_approval,
+        payer_accepted: !!p.payer_acceptance,
       },
       { role: 'customer' }
     ),

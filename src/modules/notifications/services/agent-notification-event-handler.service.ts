@@ -39,6 +39,7 @@ import { renderTemplate } from '../catalog/message-renderer';
 import { AGENT_FEE_WITHDRAWN_REASON, AGENT_OFFER_BATCH_FORCED_LINE, AGENT_OFFER_FORCED_LINE } from '../catalog/agent-notification-catalog';
 import { agentContractRepository } from '../../agents';
 import { OrderModel } from '../../orders/order.model';
+import { ShipmentModel } from '../../shipments/shipment.model';
 import { EARNINGS_CONFIG } from '../../earnings/config/earnings.config';
 import {
     closureReasonParam,
@@ -947,6 +948,46 @@ export class AgentNotificationEventHandler {
     async handleDeliveryFeeProposalWithdrawn(event: DomainEvent): Promise<void> {
         if (event.payload?.withdrawnBy !== 'system') return;
         await this.ownFeeProposalSituation(event, 'delivery_fee_proposal.withdrawn');
+    }
+
+    /**
+     * `delivery_fee_proposal.created` (2026-10-14) — only a PAYER's proposal, and only to the agent
+     * holding the shipment while the agency lets agents answer fees (the same switch as proposing).
+     */
+    async handleDeliveryFeeProposalCreated(event: DomainEvent): Promise<void> {
+        try {
+            const p = event.payload;
+            if (p?.origin !== 'payer' || !p?.shipmentId || !p?.agencyId) return;
+            const shipment = await ShipmentModel.findById(String(p.shipmentId)).select('agent_id').lean().exec();
+            const agentId = (shipment as any)?.agent_id ? String((shipment as any).agent_id) : null;
+            if (!agentId) return;
+            const agency = await this.agencyRepo.findById(String(p.agencyId));
+            if (!agency?.assignment_settings?.agents_can_propose_delivery_fee) return;
+            const prefs = await this.preferenceRepo.getByAgent(agentId);
+            if (prefs.preferences.deliveryFeeProposals === false) return;
+            const lang = await this.resolveAgentLanguage(agentId);
+            await this.dispatch({
+                situation: 'delivery_fee_proposal.payer_proposed',
+                prefs,
+                agentId,
+                aggregateType: 'shipment',
+                aggregateId: p.shipmentId,
+                idempotencyKey: `delivery_fee_proposal.payer_proposed:${p.proposalId}`,
+                context: {
+                    shipmentId: p.shipmentId,
+                    orderNumber: (await this.orderNumberOf(p)) ?? '—',
+                    agencyName: await this.resolveAgencyName(p.agencyId),
+                    payerName: ((p.proposedByRole === 'customer'
+                        ? { en: 'The customer', fr: 'Le client', pt: 'O cliente', es: 'El cliente', ar: 'العميل' }
+                        : { en: 'The vendor', fr: 'Le vendeur', pt: 'O vendedor', es: 'El vendedor', ar: 'البائع' }) as Record<Language, string>)[lang],
+                    currency: p.currency ?? '',
+                    proposedFeeFormatted: Number(p.proposedFee ?? 0).toLocaleString(),
+                    feeBeforeFormatted: Number(p.feeBefore ?? 0).toLocaleString()
+                }
+            });
+        } catch (error) {
+            console.error('[AgentNotificationHandler] Failed to handle delivery_fee_proposal.payer_proposed:', error);
+        }
     }
 
     private async ownFeeProposalSituation(

@@ -140,6 +140,8 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
     delivery_fees_approve: BotDeliveryFeeController.approve,
     delivery_fees_reject: BotDeliveryFeeController.reject,
     delivery_fees_pay: BotDeliveryFeeController.pay,
+    delivery_fees_propose: BotDeliveryFeeController.propose,
+    delivery_fees_withdraw: BotDeliveryFeeController.withdraw,
     combined_delivery_eligible: BotDeliveryFeeController.combinedEligible,
     combined_delivery_list: BotDeliveryFeeController.combinedList,
     combined_delivery_request: BotDeliveryFeeController.combinedCreate,

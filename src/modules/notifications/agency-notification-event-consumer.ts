@@ -96,6 +96,8 @@ export function initializeAgencyNotificationEventConsumers(): void {
     eventBus.subscribe('delivery_fee_proposal.edited', handler.handleDeliveryFeeProposalEdited.bind(handler));
     eventBus.subscribe('delivery_fee_proposal.approved', handler.handleDeliveryFeeProposalApproved.bind(handler));
     eventBus.subscribe('delivery_fee_proposal.rejected', handler.handleDeliveryFeeProposalRejected.bind(handler));
+    // 2026-10-14 — a PAYER (vendor or customer) took back the fee they proposed to this agency.
+    eventBus.subscribe('delivery_fee_proposal.withdrawn', handler.handleDeliveryFeeProposalWithdrawn.bind(handler));
     // ADR-A11 D-8 — a customer asks this agency for a combined price on several parcels.
     eventBus.subscribe('combined_delivery_request.created', handler.handleCombinedDeliveryRequestCreated.bind(handler));
     // ADR-A10 role closure (published by src/modules/role-closure/, post-commit). Shared by

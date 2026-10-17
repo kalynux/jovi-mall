@@ -12,6 +12,7 @@ import { CHECKOUT_ACTION_HANDLERS } from './bot-checkout.controller';
 import { ACCOUNT_ACTION_HANDLERS } from './bot-account.controller';
 import { DISCOVERY_ACTION_HANDLERS } from './bot-discovery.controller';
 import { BARGAIN_ACTION_HANDLERS } from './bot-negotiation.controller';
+import { LIST_PRICE_ACTION_HANDLERS } from './bot-list-price.controller';
 import { DIGITAL_ACTION_HANDLERS } from './bot-catalog.controller';
 import { REVIEW_ACTION_HANDLERS } from './bot-review.controller';
 import { BOOKING_ACTION_HANDLERS } from './bot-booking.controller';
@@ -86,6 +87,11 @@ const HANDLERS = mergeActionHandlers([
     ['discovery', DISCOVERY_ACTION_HANDLERS],
     /** deal — accepting a price the bargaining agent offered in one numbered round. */
     ['bargain', BARGAIN_ACTION_HANDLERS],
+    /**
+     * take — skipping the haggle: buying at the LISTED price, from the button under the bargain
+     * question (2026-10-17). Apart from `deal` because it writes the basket directly — see the file.
+     */
+    ['listprice', LIST_PRICE_ACTION_HANDLERS],
     /**
      * dl — hand over a purchased file.
      *

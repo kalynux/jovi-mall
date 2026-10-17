@@ -590,6 +590,20 @@ reassigned away. Payloads carry `version`, `edits[]`, `lastEditedBy`, `agencyEdi
 Once approved, the shipment's `deliveryFeeOverride.amount` is the fee, and your `earning`
 (list, detail, offers) is cut from it — `earning.deliveryFee` shows it.
 
+**Answering a fee the PAYER proposed (2026-10-14, [ADR-A12](../../docs/ADR-A12-PAYER-FEE-PROPOSALS.md)).**
+The vendor or the customer — whoever pays the delivery — may propose a different fee on a shipment
+you hold. Your agency answers; **you may answer too while `agentsCanProposeDeliveryFee` is on**
+(`403 DELIVERY_FEE_PROPOSAL_AGENTS_NOT_ALLOWED` otherwise). Such a row has
+`proposedBy.role: 'vendor' | 'customer'`, `approver: 'agency'`, `availableActions: ["approve","reject"]`.
+**You cannot mark the shipment `picked_up` until it is answered.**
+
+- `POST /api/agent/shipments/:id/delivery-fee-proposals/:proposalId/approve` — `{ "version": int }`
+- `POST /api/agent/shipments/:id/delivery-fee-proposals/:proposalId/reject` — `{ "version": int, "note"?: string ≤ 500 }`
+
+An accepted higher fee on a customer-paid ONLINE order waits for the customer's payment
+(`topup.status: 'awaiting_payment'`) and pickup stays blocked until it arrives. Notification:
+`delivery_fee_proposal.payer_proposed` (only while you may answer).
+
 **Payload additions** on list rows, the detail, the status response and offer rows:
 `deliveryFeeProposalPending`, `pendingDeliveryFeeProposalId`, `deliveryFeeOverride`
 (`{ amount, proposalId, approvedAt }` | null); the detail adds `deliveryFeeProposals`.

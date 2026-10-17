@@ -219,7 +219,7 @@ export class ProductDisplayService {
         return set.productIds
             .map((id) => hydrated.get(id))
             .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined)
-            .map((entry) => toBotProductCard(entry.item, entry.defaultVariantId, set.language));
+            .map((entry) => toBotProductCard(entry.item, entry.defaultVariantId, set.language, entry.variantCount));
     }
 
     /**
@@ -240,7 +240,7 @@ export class ProductDisplayService {
         const cards = window
             .map((id) => hydrated.get(id))
             .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined)
-            .map((entry) => toBotProductCard(entry.item, entry.defaultVariantId, set.language));
+            .map((entry) => toBotProductCard(entry.item, entry.defaultVariantId, set.language, entry.variantCount));
 
         const hasMore = set.productIds.length > set.offset + window.length;
 
@@ -298,6 +298,8 @@ export class ProductDisplayService {
                     similarItems: botChrome('similarItemsButton', set.language),
                     saveForLater: botChrome('saveForLaterButton', set.language),
                     nextPage: botChrome('nextPageButton', set.language),
+                    // "See options" on a card with several variants — the renderer guards on this label.
+                    seeOptions: botChrome('seeOptionsButton', set.language),
                 },
                 carousel: cards.length === WA_CAROUSEL_CARDS ? carouselTemplate() : null,
                 /**

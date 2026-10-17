@@ -1597,3 +1597,40 @@ Until submitted and APPROVED these reach the customer in-app, by push, email, Te
 situation on its first day. Submit with the working form recorded in the 2026-10-02 section
 (`--submit` is idempotent and sends only the difference), e.g.
 `npm run whatsapp:templates:submit -- --only=customer_order_refund_requested,… --submit`.
+
+---
+
+## 2026-10-14 — payer fee proposals: 8 templates GENERATED, NOT SUBMITTED
+
+The one who PAYS a parcel's delivery — the vendor, or the customer — may now propose a delivery fee
+to the agency, higher or lower; the agency (or its agent, when the agency lets agents propose fees)
+accepts or declines, and pickup waits for the answer. Record: `jovi-mall/docs/ADR-A12-PAYER-FEE-PROPOSALS.md`.
+An ACCEPTED customer proposal reuses `lowered` / `updated` / `topup_due` (they describe the result);
+only the decline is new on the customer side. `{{noteLine}}` (the company's optional note) is an
+optional clause the template drops (`OPTIONAL_CLAUSES`).
+
+| Template name | Audience | Situation | Body params | Button |
+|---|---|---|---|---|
+| `customer_order_delivery_fee_proposal_declined` | customer | `order.delivery_fee.proposal_declined` | currency, proposed fee, order number, fee that stands | `shop/account/orders/detail/{{orderId}}` |
+| `vendor_delivery_fee_proposal_agency_approved` | vendor | `delivery_fee_proposal.agency_approved` | agency name, currency, proposed fee, order number | `orders/{{orderId}}` |
+| `vendor_delivery_fee_proposal_agency_rejected` | vendor | `delivery_fee_proposal.agency_rejected` | agency name, currency, proposed fee, order number, fee that stands | `orders/{{orderId}}` |
+| `agency_delivery_fee_proposal_payer_proposed` | agency | `delivery_fee_proposal.payer_proposed` | payer name, currency, proposed fee, fee before, order number | `shipments/{{shipmentId}}` |
+| `agency_delivery_fee_proposal_payer_edited` | agency | `delivery_fee_proposal.payer_edited` | payer name, order number, currency, new figure, previous figure | `shipments/{{shipmentId}}` |
+| `agency_delivery_fee_proposal_payer_withdrawn` | agency | `delivery_fee_proposal.payer_withdrawn` | payer name, order number | `shipments/{{shipmentId}}` |
+| `agency_delivery_fee_proposal_payer_paid` | agency | `delivery_fee_proposal.payer_paid` | currency, fee, order number | `shipments/{{shipmentId}}` |
+| `agent_delivery_fee_proposal_payer_proposed` | agent | `delivery_fee_proposal.payer_proposed` | payer name, currency, proposed fee, fee before, order number, agency name | `shipments/{{shipmentId}}` |
+
+Approval copy (`en`; the `fr` text is the catalog's and is in the payloads file):
+
+- `customer_order_delivery_fee_proposal_declined` — *Your delivery fee proposal was declined — {{3}}* · The delivery company declined the delivery fee you proposed, {{1}} {{2}}, for order {{3}}. The fee stays {{1}} {{4}}. Tap Open below for the full details.
+- `vendor_delivery_fee_proposal_agency_approved` — *Your delivery fee was accepted* · {{1}} accepted the delivery fee you proposed, {{2}} {{3}}, for order #{{4}}. It now applies to this shipment.
+- `vendor_delivery_fee_proposal_agency_rejected` — *Your delivery fee was declined* · {{1}} declined the delivery fee you proposed, {{2}} {{3}}, for order #{{4}}; the fee stays {{2}} {{5}}. Tap Open below for the full details.
+- `agency_delivery_fee_proposal_payer_proposed` — *Update: {{1}} proposes a delivery fee* · {{1}} proposes a delivery fee of {{2}} {{3}} instead of {{2}} {{4}} for order #{{5}}. Accept or decline it from the shipment — pickup waits for your answer.
+- `agency_delivery_fee_proposal_payer_edited` — *Update: {{1}} changed a proposed fee* · {{1}} changed the delivery fee they propose for order #{{2}} to {{3}} {{4}} (it was {{3}} {{5}}). Accept or decline the new amount from the shipment.
+- `agency_delivery_fee_proposal_payer_withdrawn` — *Proposed delivery fee withdrawn* · {{1}} withdrew the delivery fee they proposed for order #{{2}}. The fee is unchanged and the shipment can be picked up.
+- `agency_delivery_fee_proposal_payer_paid` — *Delivery fee paid — ready for pickup* · The customer paid the delivery fee of {{1}} {{2}} you accepted for order #{{3}}. The shipment can now be picked up.
+- `agent_delivery_fee_proposal_payer_proposed` — *Update: {{1}} proposes a delivery fee* · {{1}} proposes a delivery fee of {{2}} {{3}} instead of {{2}} {{4}} for order #{{5}}. You or {{6}} can accept or decline it from the shipment — pickup waits for the answer.
+
+Until submitted and APPROVED these reach their audience in-app, by push, email, Telegram and
+**in-window** WhatsApp only. Submit with the working form recorded in the 2026-10-02 section:
+`npm run whatsapp:templates:submit -- --only=customer_order_delivery_fee_proposal_declined,vendor_delivery_fee_proposal_agency_approved,vendor_delivery_fee_proposal_agency_rejected,agency_delivery_fee_proposal_payer_proposed,agency_delivery_fee_proposal_payer_edited,agency_delivery_fee_proposal_payer_withdrawn,agency_delivery_fee_proposal_payer_paid,agent_delivery_fee_proposal_payer_proposed --submit`.

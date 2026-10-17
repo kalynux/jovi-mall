@@ -52,6 +52,15 @@ export interface DetailVariant {
     inStock: boolean;
     /** `resolvePurchaseAffordance()`, verbatim, with its label translated. Never narrowed. */
     affordance: { verb: PurchaseVerb; label: string; enabled: boolean };
+    /**
+     * ⭐ **This variant's own picture**, raw — null when it has none and the product's gallery
+     * stands for it (2026-10-17). Until then the screen drew `product.images[0]` whatever was
+     * chosen, so picking "blue" changed the price and left the orange bottle on screen (owner's
+     * handset). Optional in the TYPE only so older Flow fixtures compile; the read always sets it.
+     */
+    imageSourceUrl?: string | null;
+    /** The "was" price, formatted — null when there is none to show. Same optional-type reason. */
+    compareAtText?: string | null;
 }
 
 export interface ProductDetailView {
@@ -65,6 +74,12 @@ export interface ProductDetailView {
     imageSourceUrl: string | null;
     /** The hero picture as a stored file, for a renderer that needs its bytes — see `image-source.ts`. */
     image: ImageSource | null;
+    /**
+     * Every picture of the product, raw, in gallery order — the product's own, then any variant
+     * picture it does not already hold, so each variant's photo is somewhere a customer can swipe
+     * to. Optional in the TYPE only, as `deliveryText` is; the read always sets it.
+     */
+    gallerySourceUrls?: string[];
     /** Only values some sellable variant can actually reach — see `selectableOptions`. */
     options: Array<{ name: string; values: Array<{ id: string; label: string }> }>;
     variants: DetailVariant[];
@@ -120,6 +135,7 @@ export async function readProductDetail(
         description: product.description || null,
         imageSourceUrl: product.images[0]?.url ?? null,
         image: toImageSource(product.images[0]),
+        gallerySourceUrls: galleryOf(product),
         /**
          * The option id is the join key this file needs and no renderer does — chips select by
          * value id and match by position — so it stays inside rather than being published.
@@ -169,6 +185,21 @@ function selectableOptions(product: PublicProductDetailDto): PickerOption[] {
                 .map((value) => ({ id: value.id, label: value.value })),
         }))
         .filter((option) => option.values.length > 0);
+}
+
+/**
+ * The product's pictures, then each sellable variant's that the product gallery does not already
+ * carry — de-duplicated by URL, order kept.
+ *
+ * ⚠ Both lists are already filtered to renderable images by the public DTO (`isRenderableImage`),
+ * so nothing here re-decides what a customer may be shown.
+ */
+function galleryOf(product: PublicProductDetailDto): string[] {
+    const urls = [
+        ...product.images.map((file) => file.url),
+        ...product.variants.flatMap((variant) => (variant.images ?? []).map((file) => file.url)),
+    ].filter((url): url is string => typeof url === 'string' && url !== '');
+    return [...new Set(urls)];
 }
 
 /** One option as a picker draws it. `id` orders a variant's `valueIds` and is never published. */
@@ -224,6 +255,14 @@ function toDetailVariant(
             label: botChrome(affordance.labelKey, language),
             enabled: affordance.enabled,
         },
+        imageSourceUrl: variant.images?.[0]?.url ?? null,
+        /**
+         * Formatted here, never on the page (`test:inapp-catalog`'s money rule). A service's "was"
+         * price is a unit rate beside a "from" price, so it is not drawn at all.
+         */
+        compareAtText: !variant.service && variant.compareAtPrice !== null && variant.compareAtPrice > variant.price
+            ? formatBotPrice(variant.compareAtPrice, variant.currency)
+            : null,
     };
 }
 

@@ -1010,6 +1010,68 @@ export const AGENCY_NOTIFICATION_CATALOG: Record<AgencyNotificationType, Situati
         button: SHIPMENT_BUTTON
     },
 
+    // 2026-10-14 — the one who PAYS the delivery (the vendor, or the customer) proposes a fee to
+    // this agency, which answers: accept or decline. Pickup waits for the answer.
+    'delivery_fee_proposal.payer_proposed': {
+        base: {
+            en: { subject: '{{payerName}} proposes a delivery fee', body: '{{payerName}} proposes a delivery fee of {{currency}} {{proposedFeeFormatted}} instead of {{currency}} {{feeBeforeFormatted}} for order #{{orderNumber}}. Accept or decline it from the shipment — pickup waits for your answer.' },
+            fr: { subject: '{{payerName}} propose des frais de livraison', body: '{{payerName}} propose des frais de livraison de {{currency}} {{proposedFeeFormatted}} au lieu de {{currency}} {{feeBeforeFormatted}} pour la commande n°{{orderNumber}}. Acceptez ou refusez depuis l\'expédition — l\'enlèvement attend votre réponse.' },
+            pt: { subject: '{{payerName}} propõe uma taxa de entrega', body: '{{payerName}} propõe uma taxa de entrega de {{currency}} {{proposedFeeFormatted}} em vez de {{currency}} {{feeBeforeFormatted}} para o pedido nº{{orderNumber}}. Aceite ou recuse a partir da remessa — a recolha aguarda a sua resposta.' },
+            es: { subject: '{{payerName}} propone una tarifa de envío', body: '{{payerName}} propone una tarifa de envío de {{currency}} {{proposedFeeFormatted}} en lugar de {{currency}} {{feeBeforeFormatted}} para el pedido n.º{{orderNumber}}. Acéptala o recházala desde el envío — la recogida espera tu respuesta.' },
+            ar: { subject: '{{payerName}} يقترح رسوم توصيل', body: 'يقترح {{payerName}} رسوم توصيل قدرها {{currency}} {{proposedFeeFormatted}} بدلًا من {{currency}} {{feeBeforeFormatted}} للطلب رقم {{orderNumber}}. اقبلها أو ارفضها من صفحة الشحنة — الاستلام بانتظار ردّك.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agency_delivery_fee_proposal_payer_proposed', bodyParams: ['{{payerName}}', '{{currency}}', '{{proposedFeeFormatted}}', '{{feeBeforeFormatted}}', '{{orderNumber}}'] }
+        },
+        button: SHIPMENT_BUTTON
+    },
+
+    'delivery_fee_proposal.payer_edited': {
+        base: {
+            en: { subject: '{{payerName}} changed a proposed fee', body: '{{payerName}} changed the delivery fee they propose for order #{{orderNumber}} to {{currency}} {{proposedFeeFormatted}} (it was {{currency}} {{previousFeeFormatted}}). Accept or decline the new amount from the shipment.' },
+            fr: { subject: '{{payerName}} a modifié des frais proposés', body: '{{payerName}} a modifié les frais de livraison proposés pour la commande n°{{orderNumber}} : {{currency}} {{proposedFeeFormatted}} (au lieu de {{currency}} {{previousFeeFormatted}}). Acceptez ou refusez le nouveau montant depuis l\'expédition.' },
+            pt: { subject: '{{payerName}} alterou uma taxa proposta', body: '{{payerName}} alterou a taxa de entrega proposta para o pedido nº{{orderNumber}} para {{currency}} {{proposedFeeFormatted}} (era {{currency}} {{previousFeeFormatted}}). Aceite ou recuse o novo valor a partir da remessa.' },
+            es: { subject: '{{payerName}} cambió una tarifa propuesta', body: '{{payerName}} cambió la tarifa de envío propuesta para el pedido n.º{{orderNumber}} a {{currency}} {{proposedFeeFormatted}} (era {{currency}} {{previousFeeFormatted}}). Acepta o rechaza el nuevo importe desde el envío.' },
+            ar: { subject: 'عدّل {{payerName}} رسومًا مقترحة', body: 'عدّل {{payerName}} رسوم التوصيل المقترحة للطلب رقم {{orderNumber}} إلى {{currency}} {{proposedFeeFormatted}} (كانت {{currency}} {{previousFeeFormatted}}). اقبل المبلغ الجديد أو ارفضه من صفحة الشحنة.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agency_delivery_fee_proposal_payer_edited', bodyParams: ['{{payerName}}', '{{orderNumber}}', '{{currency}}', '{{proposedFeeFormatted}}', '{{previousFeeFormatted}}'] }
+        },
+        button: SHIPMENT_BUTTON
+    },
+
+    'delivery_fee_proposal.payer_withdrawn': {
+        base: {
+            en: { subject: 'Proposed delivery fee withdrawn', body: '{{payerName}} withdrew the delivery fee they proposed for order #{{orderNumber}}. The fee is unchanged and the shipment can be picked up.' },
+            fr: { subject: 'Frais de livraison proposés retirés', body: '{{payerName}} a retiré les frais de livraison proposés pour la commande n°{{orderNumber}}. Les frais restent inchangés et l\'expédition peut être enlevée.' },
+            pt: { subject: 'Taxa de entrega proposta retirada', body: '{{payerName}} retirou a taxa de entrega proposta para o pedido nº{{orderNumber}}. A taxa mantém-se e a remessa pode ser recolhida.' },
+            es: { subject: 'Tarifa de envío propuesta retirada', body: '{{payerName}} retiró la tarifa de envío propuesta para el pedido n.º{{orderNumber}}. La tarifa no cambia y el envío puede recogerse.' },
+            ar: { subject: 'تم سحب رسوم التوصيل المقترحة', body: 'سحب {{payerName}} رسوم التوصيل التي اقترحها للطلب رقم {{orderNumber}}. تبقى الرسوم دون تغيير ويمكن استلام الشحنة.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agency_delivery_fee_proposal_payer_withdrawn', bodyParams: ['{{payerName}}', '{{orderNumber}}'] }
+        },
+        button: SHIPMENT_BUTTON
+    },
+
+    'delivery_fee_proposal.payer_paid': {
+        base: {
+            en: { subject: 'Delivery fee paid — ready for pickup', body: 'The customer paid the delivery fee of {{currency}} {{proposedFeeFormatted}} you accepted for order #{{orderNumber}}. The shipment can now be picked up.' },
+            fr: { subject: 'Frais de livraison payés — prêt à enlever', body: 'Le client a payé les frais de livraison de {{currency}} {{proposedFeeFormatted}} que vous avez acceptés pour la commande n°{{orderNumber}}. L\'expédition peut maintenant être enlevée.' },
+            pt: { subject: 'Taxa de entrega paga — pronta a recolher', body: 'O cliente pagou a taxa de entrega de {{currency}} {{proposedFeeFormatted}} que aceitou para o pedido nº{{orderNumber}}. A remessa já pode ser recolhida.' },
+            es: { subject: 'Tarifa de envío pagada — lista para recoger', body: 'El cliente pagó la tarifa de envío de {{currency}} {{proposedFeeFormatted}} que aceptaste para el pedido n.º{{orderNumber}}. El envío ya puede recogerse.' },
+            ar: { subject: 'تم دفع رسوم التوصيل — جاهزة للاستلام', body: 'دفع العميل رسوم التوصيل البالغة {{currency}} {{proposedFeeFormatted}} التي قبلتها للطلب رقم {{orderNumber}}. يمكن الآن استلام الشحنة.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agency_delivery_fee_proposal_payer_paid', bodyParams: ['{{currency}}', '{{proposedFeeFormatted}}', '{{orderNumber}}'] }
+        },
+        button: SHIPMENT_BUTTON
+    },
+
     // ADR-A11 (D-8): a customer asks for ONE price on several of their parcels this agency
     // carries. The agency answers by LOWERING fees (applied at once) or declining. Links to the
     // first parcel — the request lives beside it on the shipments screen.

@@ -1169,6 +1169,23 @@ export const AGENT_NOTIFICATION_CATALOG: Record<AgentNotificationType, Situation
         }
     },
 
+    // 2026-10-14 — the one who PAYS the delivery proposed a fee on the shipment this agent holds,
+    // and the agency lets its agents answer (the same switch that lets them propose).
+    'delivery_fee_proposal.payer_proposed': {
+        base: {
+            en: { subject: '{{payerName}} proposes a delivery fee', body: '{{payerName}} proposes a delivery fee of {{currency}} {{proposedFeeFormatted}} instead of {{currency}} {{feeBeforeFormatted}} for order #{{orderNumber}}. You or {{agencyName}} can accept or decline it from the shipment — pickup waits for the answer.' },
+            fr: { subject: '{{payerName}} propose des frais de livraison', body: '{{payerName}} propose des frais de livraison de {{currency}} {{proposedFeeFormatted}} au lieu de {{currency}} {{feeBeforeFormatted}} pour la commande n°{{orderNumber}}. Vous ou {{agencyName}} pouvez accepter ou refuser depuis l\'expédition — l\'enlèvement attend la réponse.' },
+            pt: { subject: '{{payerName}} propõe uma taxa de entrega', body: '{{payerName}} propõe uma taxa de entrega de {{currency}} {{proposedFeeFormatted}} em vez de {{currency}} {{feeBeforeFormatted}} para o pedido nº{{orderNumber}}. Você ou {{agencyName}} podem aceitar ou recusar a partir da remessa — a recolha aguarda a resposta.' },
+            es: { subject: '{{payerName}} propone una tarifa de envío', body: '{{payerName}} propone una tarifa de envío de {{currency}} {{proposedFeeFormatted}} en lugar de {{currency}} {{feeBeforeFormatted}} para el pedido n.º{{orderNumber}}. Tú o {{agencyName}} podéis aceptarla o rechazarla desde el envío — la recogida espera la respuesta.' },
+            ar: { subject: '{{payerName}} يقترح رسوم توصيل', body: 'يقترح {{payerName}} رسوم توصيل قدرها {{currency}} {{proposedFeeFormatted}} بدلًا من {{currency}} {{feeBeforeFormatted}} للطلب رقم {{orderNumber}}. يمكنك أنت أو {{agencyName}} قبولها أو رفضها من صفحة الشحنة — الاستلام بانتظار الرد.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agent_delivery_fee_proposal_payer_proposed', bodyParams: ['{{payerName}}', '{{currency}}', '{{proposedFeeFormatted}}', '{{feeBeforeFormatted}}', '{{orderNumber}}', '{{agencyName}}'] }
+        },
+        button: SHIPMENT_BUTTON
+    },
+
     // The agency's agents_can_propose_delivery_fee switch, fanned out to every agent with an
     // ACTIVE contract there. Lands on that contract (memberships/{{contractId}}).
     'fee_proposals.enabled': {

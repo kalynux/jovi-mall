@@ -554,5 +554,7 @@ Two new preference keys, both default `true` (a row written before them reads as
 | `deliveryFeeProposals` | `delivery_fee_proposal.received` | `order` | The agency (or its agent) proposed a different delivery fee for one of the order's shipments. Pickup waits for your answer. Named after the **agency** even when its agent raised it. | `orders/{orderId}` (approve / reject) |
 | `deliveryFeeProposals` | `delivery_fee_proposal.edited` | `order` | The pending figure changed (the agency or its agent edited it). Answer the new version. | `orders/{orderId}` |
 | `deliveryFeeProposals` | `delivery_fee_proposal.withdrawn` | `order` | The proposal was withdrawn — by its author, or automatically because the shipment moved on. Nothing to answer. | `orders/{orderId}` |
+| `deliveryFeeProposals` | `delivery_fee_proposal.agency_approved` | `order` | 🆕 2026-10-14 — the agency accepted the fee **you** proposed; it now applies. | `orders/{orderId}` |
+| `deliveryFeeProposals` | `delivery_fee_proposal.agency_rejected` | `order` | 🆕 The agency declined the fee you proposed (with its optional note); the fee stays. | `orders/{orderId}` |
 
 The vendor is **not** notified of its own approve / reject (it took the action).

@@ -550,8 +550,13 @@ function main(): void {
      * the builder must reach the two invite sentences. Checking only one half would pass while
      * the other quietly stopped asking anything.
      */
+    /**
+     * ⚠ Since 2026-10-17 the bargain question's product line also names the VARIANT when there is a
+     * choice (`purchaseInviteTitle`), because the Buy-at-price button under it is that variant's
+     * price. Still the same question, still built by `purchaseInvitePrompt`.
+     */
     assert('bargain and book ask a question rather than announcing anything', () =>
-        PURCHASE.includes("purchaseInvitePrompt(product.title, 'bargain'")
+        /purchaseInvitePrompt\(\s*purchaseInviteTitle\(product\.title,[^\n]*\n[^\n]*'bargain',/.test(PURCHASE)
         && PURCHASE.includes("purchaseInvitePrompt(product.title, 'book'")
         && CHAT_COPY.includes("'bargainInvitePrompt'")
         && CHAT_COPY.includes("'bookInvitePrompt'"));

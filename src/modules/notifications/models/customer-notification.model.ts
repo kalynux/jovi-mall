@@ -165,6 +165,8 @@ export type CustomerNotificationType =
     | 'order.delivery_fee.refund_settled'
     /** The top-up payment did not go through. */
     | 'order.delivery_fee.topup_failed'
+    /** The delivery company declined the fee the CUSTOMER proposed (2026-10-14). */
+    | 'order.delivery_fee.proposal_declined'
     /** The delivery company answered a combined-price request. */
     | 'order.combined_delivery.answered'
 
@@ -271,6 +273,7 @@ export const CUSTOMER_NOTIFICATION_TYPES: readonly CustomerNotificationType[] = 
     'order.delivery_fee.refund_pending',
     'order.delivery_fee.refund_settled',
     'order.delivery_fee.topup_failed',
+    'order.delivery_fee.proposal_declined',
     'order.combined_delivery.answered',
     'ticket.replied',
     'ticket.awaiting_customer',

@@ -149,6 +149,10 @@ router.post('/shipments/:id/delivery-fee-proposals', AgentDeliveryFeeProposalCon
 router.post('/shipments/:id/delivery-fee-proposals/:proposalId/withdraw', AgentDeliveryFeeProposalController.withdraw);
 // Edit your own pending proposal (while the agency preference is on and the agency has not edited it).
 router.patch('/shipments/:id/delivery-fee-proposals/:proposalId', AgentDeliveryFeeProposalController.edit);
+// 2026-10-14 — answer a fee the PAYER (vendor or customer) proposed on your shipment, while your
+// agency lets agents propose fees (403 DELIVERY_FEE_PROPOSAL_AGENTS_NOT_ALLOWED otherwise).
+router.post('/shipments/:id/delivery-fee-proposals/:proposalId/approve', AgentDeliveryFeeProposalController.approve);
+router.post('/shipments/:id/delivery-fee-proposals/:proposalId/reject', AgentDeliveryFeeProposalController.reject);
 
 // ─── Delivery proof (optional single image, charged to the AGENCY's storage) ──
 

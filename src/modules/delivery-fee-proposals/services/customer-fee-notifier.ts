@@ -74,6 +74,13 @@ const LINES = {
     es: 'no pudo ofrecer un precio combinado — tus tarifas de envío no cambian.',
     ar: 'لم تتمكن من تقديم سعر مجمّع — تبقى رسوم التوصيل كما هي.',
   },
+  company_note: {
+    en: 'Their note: {{note}}.',
+    fr: 'Leur message : {{note}}.',
+    pt: 'A nota deles: {{note}}.',
+    es: 'Su nota: {{note}}.',
+    ar: 'ملاحظتهم: {{note}}.',
+  },
   reason: {
     en: 'Reason given: {{reason}}.',
     fr: 'Motif indiqué : {{reason}}.',
@@ -100,6 +107,7 @@ async function dispatch(params: {
     | 'order.delivery_fee.refund_pending'
     | 'order.delivery_fee.refund_settled'
     | 'order.delivery_fee.topup_failed'
+    | 'order.delivery_fee.proposal_declined'
     | 'order.combined_delivery.answered';
   order: OrderLike;
   key: string;
@@ -227,6 +235,23 @@ export const customerFeeNotifier = {
       order,
       key: p.transactionId,
       context: () => ({ amountFormatted: fmt(p.amount) }),
+    });
+  },
+
+  /**
+   * The delivery company declined the fee the customer PROPOSED (2026-10-14). The fee stays.
+   * An accepted proposal is told through `lowered` / `updated` / `topupDue` — the result.
+   */
+  proposalDeclined(order: OrderLike, p: { proposalId: string; feeBefore: number; proposedFee: number; note: string | null }): void {
+    void dispatch({
+      situation: 'order.delivery_fee.proposal_declined',
+      order,
+      key: p.proposalId,
+      context: (lang) => ({
+        feeBeforeFormatted: fmt(p.feeBefore),
+        proposedFeeFormatted: fmt(p.proposedFee),
+        noteLine: p.note ? customerFeeLine('company_note', lang, { note: p.note }) : '',
+      }),
     });
   },
 

@@ -23,6 +23,7 @@ import {
 import {
   DeliveryFeeProposalStatus,
   DeliveryFeeProposerRole,
+  DeliveryFeeResponderRole,
   IDeliveryFeeApplication,
   IDeliveryFeeProposal,
   IDeliveryFeeProposalEdit,
@@ -34,6 +35,7 @@ import {
   checkCreation,
   checkEdit,
   checkVendorVersion,
+  checkPayerProposer,
   checkProposer,
   checkVendorNet,
   codShipmentVendorNet,
@@ -69,6 +71,14 @@ import { deliveryFeeRefundService } from './delivery-fee-refund.service';
 export type ProposerActor =
   | { role: 'agency'; agencyId: string; userId: string }
   | { role: 'agent'; agentId: string; userId: string };
+
+/**
+ * The one who PAYS a parcel's delivery, proposing a different fee to the agency (2026-10-14):
+ * the vendor on a vendor-paid parcel, the customer on a customer-paid one.
+ */
+export type PayerActor =
+  | { role: 'vendor'; vendorId: string; userId: string }
+  | { role: 'customer'; customerId: string; userId: string };
 
 export interface ProposeInput {
   proposedFee: number;
@@ -653,18 +663,47 @@ export class DeliveryFeeProposalService {
     this.assertStillApplies(proposal, shipment);
 
     const agency = await this.agencies.findById(shipment.agency_id.toString());
+    const approved = await this.applyVendorPaidApproval(order, proposal, shipment, agency?.policies ?? null, {
+      role: 'vendor',
+      userId,
+      scope: { vendor_id: new Types.ObjectId(vendorId), version: seenVersion },
+    });
+
+    this.emit('delivery_fee_proposal.approved', approved, {
+      orderNumber: (order as any).order_number ?? null,
+      respondedByRole: 'vendor',
+    });
+    return toDeliveryFeeProposalDto(approved, { role: 'vendor' });
+  }
+
+  /**
+   * Land an approved fee on a VENDOR-paid shipment and close the proposal, in ONE transaction:
+   * the vendor's own approval (ADR-A09) and, since 2026-10-14, the agency's acceptance of the
+   * VENDOR's proposal. COD and unsplit prepaid orders only record the override; a split prepaid
+   * order has its snapshot rewritten and the vendor's held allocation re-priced in place
+   * (`planFeeApplication`). The vendor-net ceiling is re-checked against today's numbers.
+   */
+  private async applyVendorPaidApproval(
+    order: IOrder,
+    proposal: IDeliveryFeeProposal,
+    shipment: IShipment,
+    policies: IAgencyPolicies | null,
+    t: { role: DeliveryFeeResponderRole; userId: string | null; scope: Record<string, unknown>; extraSet?: Record<string, unknown> }
+  ): Promise<IDeliveryFeeProposal> {
+    const orderId = order._id.toString();
+    const vendorId = order.vendor_id.toString();
     const isCod = order.payment_method === 'cash_on_delivery';
 
     // Re-check the ceiling against today's numbers (commission, sibling fees and the COD fee
     // may all have moved since the proposal was raised). A split prepaid order is checked
     // AGAIN inside the transaction against the allocation it actually re-prices.
     const netRefusal = checkVendorNet(
-      await this.vendorNetAt(order, shipment, proposal.proposed_fee, agency?.policies ?? null)
+      await this.vendorNetAt(order, shipment, proposal.proposed_fee, policies)
     );
     if (netRefusal) throw refusalToError(netRefusal);
 
     const approvedAt = new Date();
-    const approved = await transactionManager.runInTransactionWithRetry(async (session) => {
+    return transactionManager.runInTransactionWithRetry(async (session) => {
       const fresh = await this.proposals.findShipmentInSession(shipment._id.toString(), session);
       if (!fresh) throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
       this.assertStillApplies(proposal, fresh);
@@ -738,22 +777,17 @@ export class DeliveryFeeProposalService {
         proposal._id as Types.ObjectId,
         'approved',
         {
-          role: 'vendor',
-          userId,
+          role: t.role,
+          userId: t.userId,
           application,
-          scope: { vendor_id: new Types.ObjectId(vendorId), version: seenVersion },
+          scope: t.scope,
+          ...(t.extraSet ? { extraSet: t.extraSet } : {}),
         },
         session
       );
-      if (!updated) throw await this.answerMiss(proposalId);
+      if (!updated) throw await this.answerMiss((proposal._id as Types.ObjectId).toString());
       return updated;
     });
-
-    this.emit('delivery_fee_proposal.approved', approved, {
-      orderNumber: (order as any).order_number ?? null,
-      respondedByRole: 'vendor',
-    });
-    return toDeliveryFeeProposalDto(approved, { role: 'vendor' });
   }
 
   async reject(
@@ -894,6 +928,13 @@ export class DeliveryFeeProposalService {
       throw createAppError(ERROR_CODES.DELIVERY_FEE_TOPUP_IN_PROGRESS, 409);
     }
 
+    if (proposal.origin === 'payer') {
+      // Their OWN proposal, accepted by the agency and awaiting the top-up: declining to pay is
+      // taking it back (2026-10-14) — recorded as the customer's withdrawal; the fee stays.
+      const withdrawn = await this.closePayerProposal(order, proposal, { role: 'customer', userId, note: note ?? 'declined_to_pay' });
+      return toCustomerDeliveryFeeProposalDto(withdrawn);
+    }
+
     if (proposal.origin === 'change_agency') {
       // D-10: the customer declines to pay the new agency's higher price — the VENDOR covers it.
       const covered = await this.applyVendorCover(order, proposal, { role: 'customer', userId, note, seenVersion });
@@ -969,6 +1010,418 @@ export class DeliveryFeeProposalService {
       options
     );
     return { ...result, proposalId };
+  }
+
+  // ── Payer proposals (2026-10-14): the vendor or the customer proposes, the agency answers ──
+
+  /** The agency's inbox of payer proposals on its shipments. */
+  async listForAgency(
+    agencyId: string,
+    filter: { status?: DeliveryFeeProposalStatus },
+    page: number,
+    limit: number
+  ) {
+    const result = await this.proposals.listForAgency(agencyId, filter, page, limit);
+    return {
+      data: result.data.map((p) => toDeliveryFeeProposalDto(p, { role: 'agency' })),
+      meta: result.meta,
+    };
+  }
+
+  /**
+   * The one who pays this parcel's delivery proposes a different fee — higher or lower — to the
+   * agency carrying it. Same window, one-pending pointer and pickup block as an agency proposal
+   * (owner decision 2026-10-14: pickup WAITS for the agency's answer), with its own two-proposal
+   * cap. On a vendor-paid parcel the vendor's net must stay above zero at the proposed fee; on a
+   * customer-paid ONLINE order the payment must still be simply `paid`.
+   */
+  async proposeAsPayer(
+    actor: PayerActor,
+    orderId: string,
+    shipmentId: string,
+    input: ProposeInput
+  ): Promise<DeliveryFeeProposalDto | CustomerDeliveryFeeProposalDto> {
+    const order = await this.loadPayerOrder(actor, orderId);
+    if (!Types.ObjectId.isValid(shipmentId)) throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
+    const shipment = await ShipmentModel.findOne({ _id: shipmentId, order_id: order._id });
+    if (!shipment) throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
+
+    const payer = deliveryPayerOf(order, shipment);
+    const payerRefusal = checkPayerProposer({ role: actor.role, deliveryPayer: payer });
+    if (payerRefusal) throw refusalToError(payerRefusal);
+
+    const agency = await this.agencies.findById(shipment.agency_id.toString());
+    const currentFee = await this.effectiveFee(shipment, order, agency?.policies ?? null);
+    const counted = await this.proposals.countCountedForShipment(shipmentId, 'payer');
+    const creationRefusal = checkCreation({
+      shipmentStatus: shipment.status,
+      pendingProposalId: shipment.pending_delivery_fee_proposal_id ? shipment.pending_delivery_fee_proposal_id.toString() : null,
+      countedProposals: counted,
+      proposedFee: input.proposedFee,
+      currentFee,
+    });
+    if (creationRefusal) throw refusalToError(creationRefusal);
+
+    if (payer === 'vendor') {
+      const netRefusal = checkVendorNet(await this.vendorNetAt(order, shipment, input.proposedFee, agency?.policies ?? null));
+      if (netRefusal) throw refusalToError(netRefusal);
+    } else {
+      this.assertOnlinePaid(order);
+    }
+
+    const proposalId = new Types.ObjectId();
+    const now = new Date();
+    const created = await transactionManager.runInTransactionWithRetry(async (session) => {
+      await this.claimOrExplain(
+        { shipmentId, proposalId, agencyId: shipment.agency_id.toString(), agentId: null, window: DELIVERY_FEE_PROPOSAL_WINDOW },
+        shipment,
+        session
+      );
+      return this.proposals.create(
+        {
+          ...this.baseRow({
+            proposalId,
+            shipment,
+            order,
+            role: actor.role,
+            userId: actor.userId,
+            agentId: null,
+            feeBefore: currentFee,
+            proposedFee: input.proposedFee,
+            reason: input.reason,
+            now,
+          }),
+          approver: 'agency',
+          origin: 'payer',
+          direction: feeDirection(currentFee, input.proposedFee),
+          customer_id: payer === 'customer' ? (order.customer_id as Types.ObjectId) : null,
+        } as Partial<IDeliveryFeeProposal>,
+        session
+      );
+    });
+
+    this.emit('delivery_fee_proposal.created', created, { orderNumber: order.order_number ?? null });
+    return this.payerDto(actor, created);
+  }
+
+  /**
+   * The payer changes their own unanswered proposal (fee and/or reason). CAS on pending + version;
+   * an accepted proposal is frozen (its verbs are then pay / reject).
+   */
+  async editAsPayer(
+    actor: PayerActor,
+    orderId: string,
+    proposalId: string,
+    input: { proposedFee?: number; reason?: string; version?: number }
+  ): Promise<DeliveryFeeProposalDto | CustomerDeliveryFeeProposalDto> {
+    const order = await this.loadPayerOrder(actor, orderId);
+    const proposal = await this.loadPayerProposal(actor, orderId, proposalId);
+    if (!resolveAvailableActions(this.authorityOf(proposal), { role: actor.role }).includes('edit')) {
+      if (proposal.payer_acceptance) throw createAppError(ERROR_CODES.DELIVERY_FEE_TOPUP_IN_PROGRESS, 409);
+      throw createAppError(ERROR_CODES.DELIVERY_FEE_PROPOSAL_NOT_YOURS, 403);
+    }
+    const shipment = await ShipmentModel.findById(proposal.shipment_id);
+    if (!shipment) throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
+    if (!windowFor(proposal.origin).includes(shipment.status)) {
+      throw refusalToError({ code: 'window_closed', status: shipment.status });
+    }
+    const agency = await this.agencies.findById(shipment.agency_id.toString());
+    const currentFee = await this.effectiveFee(shipment, order, agency?.policies ?? null);
+    const editRefusal = checkEdit({
+      currentVersion: proposal.version ?? 1,
+      expectedVersion: input.version,
+      proposedFee: proposal.proposed_fee,
+      reason: proposal.reason,
+      newFee: input.proposedFee,
+      newReason: input.reason,
+      shipmentCurrentFee: currentFee,
+    });
+    if (editRefusal) throw editRefusalToError(editRefusal);
+    const newFee = input.proposedFee ?? proposal.proposed_fee;
+    const newReason = input.reason ?? proposal.reason;
+    if (actor.role === 'vendor' && newFee !== proposal.proposed_fee) {
+      const netRefusal = checkVendorNet(await this.vendorNetAt(order, shipment, newFee, agency?.policies ?? null));
+      if (netRefusal) throw refusalToError(netRefusal);
+    }
+
+    const fromVersion = proposal.version ?? 1;
+    const edit: IDeliveryFeeProposalEdit = {
+      edited_by_role: actor.role,
+      edited_by_user_id: Types.ObjectId.isValid(actor.userId) ? new Types.ObjectId(actor.userId) : null,
+      edited_by_agent_id: null,
+      fee_before: proposal.proposed_fee,
+      fee_after: newFee,
+      reason_before: proposal.reason,
+      reason_after: newReason,
+      version: fromVersion + 1,
+      at: new Date(),
+    };
+    // The direction follows the figure: an edit may cross the current fee.
+    const updated = await this.proposals.applyEdit(
+      proposal._id as Types.ObjectId,
+      fromVersion,
+      edit,
+      newReason,
+      newFee,
+      feeDirection(currentFee, newFee)
+    );
+    if (!updated) throw await this.answerMiss(proposalId);
+
+    this.emit('delivery_fee_proposal.edited', updated, {
+      orderNumber: order.order_number ?? null,
+      version: updated.version,
+      previousFee: edit.fee_before,
+      reasonChanged: edit.reason_before !== edit.reason_after,
+      editedByRole: actor.role,
+      editedByAgentId: null,
+    });
+    return this.payerDto(actor, updated);
+  }
+
+  /**
+   * The payer takes their own proposal back — or, accepted and awaiting the customer's top-up,
+   * declines to pay it. The fee stays what it was; pickup unblocks.
+   */
+  async withdrawAsPayer(
+    actor: PayerActor,
+    orderId: string,
+    proposalId: string
+  ): Promise<DeliveryFeeProposalDto | CustomerDeliveryFeeProposalDto> {
+    const order = await this.loadPayerOrder(actor, orderId);
+    const proposal = await this.loadPayerProposal(actor, orderId, proposalId);
+    const actions = resolveAvailableActions(this.authorityOf(proposal), { role: actor.role });
+    if (!actions.includes('withdraw') && !actions.includes('reject')) {
+      throw createAppError(ERROR_CODES.DELIVERY_FEE_PROPOSAL_NOT_YOURS, 403);
+    }
+    const withdrawn = await this.closePayerProposal(order, proposal, {
+      role: actor.role,
+      userId: actor.userId,
+      note: proposal.payer_acceptance ? 'declined_to_pay' : null,
+    });
+    return this.payerDto(actor, withdrawn);
+  }
+
+  /**
+   * The agency — or its agent on the parcel, while the agency lets agents propose fees — accepts
+   * or declines a payer's proposal. `seenVersion` is the version they were shown (an edit after
+   * it is refused, 409).
+   *
+   * Accepting:
+   *  - vendor-paid → the fee applies now, exactly as a vendor approval applies (snapshot / held
+   *    allocation re-priced in place; the vendor's net re-checked);
+   *  - customer-paid, LOWER → applied now (online: the difference is refunded; COD / cash for
+   *    delivery: less cash at the door);
+   *  - customer-paid, HIGHER, COD / cash for delivery → applied now (more cash at the door);
+   *  - customer-paid, HIGHER, ONLINE → the figure is frozen and the customer is asked for the
+   *    difference; it applies — and pickup unblocks — when that payment succeeds
+   *    (`DeliveryFeeTopupService`, unchanged). Until then the agency may still decline.
+   */
+  async answerPayerProposal(
+    actor: ProposerActor,
+    shipmentId: string,
+    proposalId: string,
+    decision: 'approve' | 'reject',
+    seenVersion: number,
+    note: string | null = null
+  ): Promise<DeliveryFeeProposalDto> {
+    const shipment = await this.loadScopedShipment(actor, shipmentId);
+    const proposal = await this.proposals.findById(proposalId);
+    if (!proposal || proposal.shipment_id.toString() !== shipmentId) {
+      throw createAppError(ERROR_CODES.DELIVERY_FEE_PROPOSAL_NOT_FOUND, 404);
+    }
+    if (proposal.status !== 'pending') {
+      throw createAppError(ERROR_CODES.DELIVERY_FEE_PROPOSAL_NOT_PENDING, 409, undefined, { status: proposal.status });
+    }
+    const versionRefusal = checkVendorVersion(seenVersion, proposal.version ?? 1);
+    if (versionRefusal) throw editRefusalToError(versionRefusal);
+
+    const agency = await this.agencies.findById(shipment.agency_id.toString());
+    const agentsMayPropose = agency?.assignment_settings?.agents_can_propose_delivery_fee ?? false;
+    if (actor.role === 'agent' && (proposal.approver ?? 'vendor') === 'agency' && !agentsMayPropose) {
+      throw refusalToError({ code: 'agents_not_allowed' });
+    }
+    const viewer = { ...this.viewerOf(actor), agentsMayPropose };
+    if (!resolveAvailableActions(this.authorityOf(proposal), viewer).includes(decision)) {
+      throw createAppError(ERROR_CODES.DELIVERY_FEE_PROPOSAL_NOT_YOURS, 403);
+    }
+    const order = await this.loadOrder(shipment.order_id.toString());
+    const scope = { agency_id: shipment.agency_id, version: seenVersion };
+
+    if (decision === 'reject') {
+      const rejected = await this.closePayerProposal(order, proposal, {
+        role: actor.role,
+        userId: actor.userId,
+        note,
+        status: 'rejected',
+        scope,
+      });
+      return toDeliveryFeeProposalDto(rejected, viewer);
+    }
+
+    this.assertStillApplies(proposal, shipment);
+    const acceptance = {
+      role: actor.role,
+      user_id: Types.ObjectId.isValid(actor.userId) ? new Types.ObjectId(actor.userId) : null,
+      agent_id: actor.role === 'agent' ? new Types.ObjectId(actor.agentId) : null,
+      version: seenVersion,
+      at: new Date(),
+    };
+    const orderNumber = order.order_number ?? null;
+
+    if (deliveryPayerOf(order, shipment) === 'vendor') {
+      const approved = await this.applyVendorPaidApproval(order, proposal, shipment, agency?.policies ?? null, {
+        role: actor.role,
+        userId: actor.userId,
+        scope,
+        extraSet: { payer_acceptance: acceptance },
+      });
+      this.emit('delivery_fee_proposal.approved', approved, { orderNumber, respondedByRole: actor.role });
+      return toDeliveryFeeProposalDto(approved, viewer);
+    }
+
+    this.assertOnlinePaid(order);
+    const state = await this.feeApp.stateOf(shipment, order);
+
+    if (proposal.proposed_fee < state.fee) {
+      const plan = planDecrease(state, proposal.proposed_fee);
+      const approved = await this.applyAndTransition(order, proposal, plan, {
+        status: 'approved',
+        role: actor.role,
+        userId: actor.userId,
+        scope,
+        extraSet: { payer_acceptance: acceptance },
+      });
+      this.emit('delivery_fee_proposal.approved', approved, { orderNumber, respondedByRole: actor.role });
+      customerFeeNotifier.lowered(order, {
+        proposalId: (approved._id as Types.ObjectId).toString(),
+        feeBefore: plan.feeBefore,
+        feeAfter: plan.feeAfter,
+        customerSaving: feeIsCash(state.mode) ? -plan.collectDelta : Math.max(0, plan.refundableAfter - this.refundableBefore(shipment)),
+      });
+      if (state.mode === 'online' && plan.refundableAfter > 0) {
+        void deliveryFeeRefundService.refundOutstanding(order._id.toString(), { cause: 'fee_decrease', shipmentId });
+      }
+      return toDeliveryFeeProposalDto(approved, viewer);
+    }
+
+    const plan = planCustomerApprovedIncrease(state, proposal.proposed_fee);
+    if (state.mode === 'online' && plan.topupDue > 0) {
+      // The customer agreed by proposing; the agency's yes freezes the figure and asks for the money.
+      const accepted = await this.proposals.setPayerAcceptanceAwaitingTopup(proposal._id as Types.ObjectId, {
+        version: seenVersion,
+        role: actor.role,
+        userId: actor.userId,
+        agentId: actor.role === 'agent' ? actor.agentId : null,
+        customerUserId: proposal.proposed_by_user_id ?? null,
+        topupAmount: plan.topupDue,
+        at: acceptance.at,
+      });
+      if (!accepted) throw await this.answerMiss(proposalId);
+      customerFeeNotifier.topupDue(order, {
+        proposalId: (accepted._id as Types.ObjectId).toString(),
+        amount: plan.topupDue,
+        proposedFee: accepted.proposed_fee,
+      });
+      return toDeliveryFeeProposalDto(accepted, viewer);
+    }
+
+    const approved = await this.applyAndTransition(order, proposal, plan, {
+      status: 'approved',
+      role: actor.role,
+      userId: actor.userId,
+      scope,
+      extraSet: { payer_acceptance: acceptance },
+    });
+    this.emit('delivery_fee_proposal.approved', approved, { orderNumber, respondedByRole: actor.role });
+    customerFeeNotifier.updated(order, {
+      proposalId: (approved._id as Types.ObjectId).toString(),
+      feeAfter: approved.proposed_fee,
+      how: 'cod_more',
+      amount: plan.collectDelta,
+    });
+    return toDeliveryFeeProposalDto(approved, viewer);
+  }
+
+  /**
+   * Close a payer proposal without applying it: the payer withdrawing (or, accepted and awaiting
+   * a top-up, declining to pay), or the agency side declining. The fee stays; pickup unblocks. A
+   * top-up charge in flight refuses it (the money would land on a closed proposal — and should it
+   * race anyway, `DeliveryFeeTopupService` credits it back to the customer).
+   */
+  private async closePayerProposal(
+    order: IOrder,
+    proposal: IDeliveryFeeProposal,
+    by: {
+      role: DeliveryFeeResponderRole;
+      userId: string | null;
+      note: string | null;
+      status?: 'withdrawn' | 'rejected';
+      scope?: Record<string, unknown>;
+    }
+  ): Promise<IDeliveryFeeProposal> {
+    if (proposal.customer_approval && (await this.hasLiveTopup(proposal._id as Types.ObjectId))) {
+      throw createAppError(ERROR_CODES.DELIVERY_FEE_TOPUP_IN_PROGRESS, 409);
+    }
+    const status = by.status ?? 'withdrawn';
+    const closed = await transactionManager.runInTransactionWithRetry(async (session) => {
+      const updated = await this.proposals.transitionFromPending(
+        proposal._id as Types.ObjectId,
+        status,
+        {
+          role: by.role,
+          userId: by.userId,
+          ...(status === 'rejected' ? { rejectionNote: by.note } : { withdrawalReason: by.note }),
+          scope: { approver: 'agency', ...(by.scope ?? {}) },
+        },
+        session
+      );
+      if (!updated) throw await this.answerMiss((proposal._id as Types.ObjectId).toString());
+      await this.proposals.releasePendingPointer(updated.shipment_id, updated._id as Types.ObjectId, session);
+      return updated;
+    });
+
+    const orderNumber = order.order_number ?? null;
+    if (status === 'rejected') {
+      this.emit('delivery_fee_proposal.rejected', closed, { orderNumber, respondedByRole: by.role, note: by.note });
+      if (closed.proposed_by_role === 'customer') {
+        customerFeeNotifier.proposalDeclined(order, {
+          proposalId: (closed._id as Types.ObjectId).toString(),
+          feeBefore: closed.fee_before,
+          proposedFee: closed.proposed_fee,
+          note: by.note,
+        });
+      }
+    } else {
+      this.emit('delivery_fee_proposal.withdrawn', closed, { orderNumber, withdrawnBy: by.role });
+    }
+    return closed;
+  }
+
+  /** The order the payer may propose on — scoped to them (404, never 403, for anyone else's). */
+  private async loadPayerOrder(actor: PayerActor, orderId: string): Promise<IOrder> {
+    return actor.role === 'vendor'
+      ? this.loadVendorOrder(actor.vendorId, orderId)
+      : this.loadCustomerOrder(actor.customerId, orderId);
+  }
+
+  /** A pending payer proposal on that order, raised by this payer — 404 for anybody else's. */
+  private async loadPayerProposal(actor: PayerActor, orderId: string, proposalId: string): Promise<IDeliveryFeeProposal> {
+    const proposal = await this.proposals.findById(proposalId);
+    if (!proposal || proposal.order_id.toString() !== orderId || proposal.proposed_by_role !== actor.role) {
+      throw createAppError(ERROR_CODES.DELIVERY_FEE_PROPOSAL_NOT_FOUND, 404);
+    }
+    if (actor.role === 'customer' && (!proposal.customer_id || proposal.customer_id.toString() !== actor.customerId)) {
+      throw createAppError(ERROR_CODES.DELIVERY_FEE_PROPOSAL_NOT_FOUND, 404);
+    }
+    if (proposal.status !== 'pending') {
+      throw createAppError(ERROR_CODES.DELIVERY_FEE_PROPOSAL_NOT_PENDING, 409, undefined, { status: proposal.status });
+    }
+    return proposal;
+  }
+
+  /** What each payer reads: the vendor's dashboard projection, or the customer's narrower one. */
+  private payerDto(actor: PayerActor, p: IDeliveryFeeProposal): DeliveryFeeProposalDto | CustomerDeliveryFeeProposalDto {
+    return actor.role === 'vendor' ? toDeliveryFeeProposalDto(p, { role: 'vendor' }) : toCustomerDeliveryFeeProposalDto(p);
   }
 
   // ── Lifecycle hooks (called by ShipmentService, inside ITS transaction) ─────
@@ -1173,7 +1626,7 @@ export class DeliveryFeeProposalService {
     plan: FeeChangePlan,
     t: {
       status: 'approved' | 'rejected';
-      role: 'customer' | 'vendor' | 'system';
+      role: DeliveryFeeResponderRole;
       userId: string | null;
       rejectionNote?: string | null;
       scope: Record<string, unknown>;
@@ -1321,6 +1774,7 @@ export class DeliveryFeeProposalService {
       approver: p.approver ?? 'vendor',
       origin: p.origin ?? 'agency',
       customer_approved: !!p.customer_approval,
+      payer_accepted: !!p.payer_acceptance,
     };
   }
 

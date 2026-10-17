@@ -121,6 +121,9 @@ EarningsAdjustmentSchema.index({ allocation_id: 1, kind: 1 });
 // The vendor-overflow rows of one source, and the analytics / statements readers.
 EarningsAdjustmentSchema.index({ source_type: 1, source_id: 1, kind: 1 });
 EarningsAdjustmentSchema.index({ beneficiary_type: 1, beneficiary_id: 1, created_at: -1 });
+// wi-admin's platform transactions list (BR-030) walks this collection by `(created, _id)` keyset,
+// platform-wide. Without it that walk is a collection scan and an in-memory sort.
+EarningsAdjustmentSchema.index({ created_at: -1, _id: -1 }, { name: 'admin_transactions_feed' });
 
 export const EarningsAdjustmentModel = mongoose.model<IEarningsAdjustment>(
   MODELS.EARNINGS_ADJUSTMENT,

@@ -52,6 +52,19 @@ export const OrderProposalParamsSchema = z.object({
   proposalId: objectId('proposal ID').optional(),
 });
 
+/** The parcel a PAYER proposes on (2026-10-14): `…/orders/:id/shipments/:shipmentId/delivery-fee-proposals`. */
+export const OrderShipmentProposalParamsSchema = z.object({
+  id: objectId('order ID'),
+  shipmentId: objectId('shipment ID'),
+});
+
+/** The agency's inbox of PAYER proposals awaiting its answer: `GET /api/agency/delivery-fee-proposals`. */
+export const AgencyProposalQuerySchema = z.object({
+  status: z.enum(DELIVERY_FEE_PROPOSAL_STATUSES as [string, ...string[]]).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
 export const VendorProposalQuerySchema = z.object({
   status: z.enum(DELIVERY_FEE_PROPOSAL_STATUSES as [string, ...string[]]).optional(),
   orderId: objectId('order ID').optional(),

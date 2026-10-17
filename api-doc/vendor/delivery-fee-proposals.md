@@ -32,6 +32,11 @@ While a proposal is pending, **that shipment cannot be picked up**, so answer pr
 > pending `origin: 'change_agency'` proposal (`availableActions: ["cover"]`). The new company is
 > paid its price, the customer pays nothing more, your net carries the difference.
 
+> **You can propose too (2026-10-14, [ADR-A12](../../docs/ADR-A12-PAYER-FEE-PROPOSALS.md)).** On a
+> parcel whose delivery YOU pay, you may propose a different fee — higher or lower — to the agency
+> carrying it. The agency (or its agent, while the agency lets agents propose fees) accepts or
+> declines; **pickup waits for that answer**. See [§ Proposing a fee yourself](#proposing-a-fee-yourself-2026-10-14).
+
 ## Endpoints
 
 | Method | Path | What |
@@ -120,11 +125,40 @@ The original fee stands and pickup is unblocked. The agency may then send **one*
 the usual `shipment.rejected` notification and route those items to another agency
 (`PATCH /api/vendor/orders/:id/delivery-agency`).
 
+## Proposing a fee yourself (2026-10-14)
+
+| Method | Path | What |
+|---|---|---|
+| POST | `/api/vendor/orders/:id/shipments/:shipmentId/delivery-fee-proposals` | propose. Body `{ "proposedFee": int ≥ 0, "reason": string 3–500 }` → `201` |
+| PATCH | `/api/vendor/orders/:id/delivery-fee-proposals/:proposalId` | change it while unanswered. Body `{ proposedFee?, reason?, version? }` |
+| POST | `/api/vendor/orders/:id/delivery-fee-proposals/:proposalId/withdraw` | take it back; the fee stays and the parcel can be picked up |
+
+Your proposal reads like any other, with `proposedBy.role: 'vendor'`, `approver: 'agency'`,
+`origin: 'payer'`, `availableActions: ["withdraw","edit"]` while unanswered, and `payerAcceptance`
+(who on the agency side accepted, and when) once accepted. **Accepted, it applies at once — exactly
+as your own approval of an agency's proposal applies** (same money path: the override, and on a paid,
+already-split order your held earnings move by the difference). The proposed fee must leave you
+earning more than zero (`422 DELIVERY_FEE_PROPOSAL_VENDOR_NET_NOT_POSITIVE`, checked when you propose
+AND when the agency accepts).
+
+- Only on a parcel whose delivery you pay: on a customer-paid parcel → `422 DELIVERY_FEE_PROPOSAL_NOT_PAYER`
+  (`details.deliveryPayer`).
+- Window: the shipment is `assigned` or `handing_over` (with the agency, not picked up).
+- One fee change per parcel at a time (yours or the agency's): `409 DELIVERY_FEE_PROPOSAL_ALREADY_PENDING`.
+- Two proposals per parcel for YOU (withdrawn ones do not count) — counted apart from the agency's two.
+- Notified: `delivery_fee_proposal.agency_approved` / `delivery_fee_proposal.agency_rejected`
+  (the latter with the agency's optional note).
+
 ## Errors
 
 | Code | Status | When |
 |---|---|---|
 | `ORDER_NOT_FOUND` | 404 | not your order |
+| `DELIVERY_FEE_PROPOSAL_NOT_PAYER` | 422 | you proposed on a parcel the customer pays delivery for (2026-10-14) |
+| `DELIVERY_FEE_PROPOSAL_ALREADY_PENDING` | 409 | a fee change on this parcel already waits for an answer |
+| `DELIVERY_FEE_PROPOSAL_LIMIT_REACHED` | 422 | you already proposed twice on this parcel |
+| `DELIVERY_FEE_PROPOSAL_WINDOW_CLOSED` | 422 | the parcel is not `assigned` / `handing_over` |
+| `DELIVERY_FEE_PROPOSAL_NO_CHANGE` | 422 | the amount is the current fee |
 | `DELIVERY_FEE_PROPOSAL_NOT_FOUND` | 404 | unknown proposal, or not on this order |
 | `DELIVERY_FEE_PROPOSAL_NOT_PENDING` | 409 | already answered or withdrawn (`details.status`) — reload |
 | `DELIVERY_FEE_PROPOSAL_VERSION_MISMATCH` | 409 | edited since you loaded it (`details.currentVersion`) — reload and show the new figure |
@@ -144,6 +178,8 @@ same day). Preference key `deliveryFeeProposals` (default `true`) on
 | `delivery_fee_proposal.received` | a proposal was raised (by the agency or its agent — named after the agency) |
 | `delivery_fee_proposal.edited` | the pending figure or reason changed — re-read it; your approve/reject must carry the new `version` |
 | `delivery_fee_proposal.withdrawn` | withdrawn by the proposer or by the system; nothing to answer |
+| `delivery_fee_proposal.agency_approved` | the agency accepted the fee YOU proposed — it now applies (2026-10-14) |
+| `delivery_fee_proposal.agency_rejected` | the agency declined the fee you proposed; the fee stays (2026-10-14) |
 
 You are not notified of your own approve/reject. Full contract:
 [FRONTEND-CHANGELOG-cod-fee-notifications.md](../FRONTEND-CHANGELOG-cod-fee-notifications.md).

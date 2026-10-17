@@ -52,13 +52,17 @@ export function feeIsCash(mode: PaymentMode): boolean {
   return mode === 'cod' || mode === 'cash_fee';
 }
 export type FeeDirection = 'increase' | 'decrease';
-/** Who must answer a proposal. `none` = applied on creation (a customer-paid decrease). */
-export type ProposalApprover = 'vendor' | 'customer' | 'none';
-/** Where a proposal came from. */
-export type ProposalOrigin = 'agency' | 'change_agency' | 'combined_request';
+/**
+ * Who must answer a proposal. `none` = applied on creation (a customer-paid decrease).
+ * `agency` (2026-10-14) = a PAYER's proposal (the vendor or the customer proposed): the agency
+ * answers, or its agent holding the parcel when the agency lets agents propose.
+ */
+export type ProposalApprover = 'vendor' | 'customer' | 'none' | 'agency';
+/** Where a proposal came from. `payer` = the vendor or the customer who pays the delivery. */
+export type ProposalOrigin = 'agency' | 'change_agency' | 'combined_request' | 'payer';
 
-export const PROPOSAL_APPROVERS: readonly ProposalApprover[] = ['vendor', 'customer', 'none'];
-export const PROPOSAL_ORIGINS: readonly ProposalOrigin[] = ['agency', 'change_agency', 'combined_request'];
+export const PROPOSAL_APPROVERS: readonly ProposalApprover[] = ['vendor', 'customer', 'none', 'agency'];
+export const PROPOSAL_ORIGINS: readonly ProposalOrigin[] = ['agency', 'change_agency', 'combined_request', 'payer'];
 
 /**
  * The window a proposal of each origin may be raised and answered in. An agency proposal (and a

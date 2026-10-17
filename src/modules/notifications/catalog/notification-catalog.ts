@@ -870,6 +870,38 @@ export const NOTIFICATION_CATALOG: Record<NotificationType, SituationMessages> =
         button: { type: 'url', label: VIEW_ORDER_LABEL, urlSuffix: 'orders/{{orderId}}' }
     },
 
+    // 2026-10-14 — the VENDOR proposed a delivery fee to the agency (on a vendor-paid parcel), and
+    // the agency (or its agent) answered. Approved: the fee already applies to the shipment.
+    'delivery_fee_proposal.agency_approved': {
+        base: {
+            en: { subject: 'Your delivery fee was accepted', body: '{{agencyName}} accepted the delivery fee you proposed, {{currency}} {{proposedFeeFormatted}}, for order #{{orderNumber}}. It now applies to this shipment.' },
+            fr: { subject: 'Vos frais de livraison ont été acceptés', body: '{{agencyName}} a accepté les frais de livraison que vous avez proposés, {{currency}} {{proposedFeeFormatted}}, pour la commande n°{{orderNumber}}. Ils s\'appliquent désormais à cette expédition.' },
+            pt: { subject: 'A sua taxa de entrega foi aceite', body: '{{agencyName}} aceitou a taxa de entrega que propôs, {{currency}} {{proposedFeeFormatted}}, para o pedido nº{{orderNumber}}. Passa a aplicar-se a esta remessa.' },
+            es: { subject: 'Tu tarifa de envío fue aceptada', body: '{{agencyName}} aceptó la tarifa de envío que propusiste, {{currency}} {{proposedFeeFormatted}}, para el pedido n.º{{orderNumber}}. Ya se aplica a este envío.' },
+            ar: { subject: 'تم قبول رسوم التوصيل التي اقترحتها', body: 'قبلت {{agencyName}} رسوم التوصيل التي اقترحتها، {{currency}} {{proposedFeeFormatted}}، للطلب رقم {{orderNumber}}. أصبحت تُطبَّق الآن على هذه الشحنة.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_delivery_fee_proposal_agency_approved', bodyParams: ['{{agencyName}}', '{{currency}}', '{{proposedFeeFormatted}}', '{{orderNumber}}'] }
+        },
+        button: { type: 'url', label: VIEW_ORDER_LABEL, urlSuffix: 'orders/{{orderId}}' }
+    },
+
+    'delivery_fee_proposal.agency_rejected': {
+        base: {
+            en: { subject: 'Your delivery fee was declined', body: '{{agencyName}} declined the delivery fee you proposed, {{currency}} {{proposedFeeFormatted}}, for order #{{orderNumber}}; the fee stays {{currency}} {{feeBeforeFormatted}}. {{noteLine}}' },
+            fr: { subject: 'Vos frais de livraison ont été refusés', body: '{{agencyName}} a refusé les frais de livraison que vous avez proposés, {{currency}} {{proposedFeeFormatted}}, pour la commande n°{{orderNumber}} ; les frais restent de {{currency}} {{feeBeforeFormatted}}. {{noteLine}}' },
+            pt: { subject: 'A sua taxa de entrega foi recusada', body: '{{agencyName}} recusou a taxa de entrega que propôs, {{currency}} {{proposedFeeFormatted}}, para o pedido nº{{orderNumber}}; a taxa mantém-se em {{currency}} {{feeBeforeFormatted}}. {{noteLine}}' },
+            es: { subject: 'Tu tarifa de envío fue rechazada', body: '{{agencyName}} rechazó la tarifa de envío que propusiste, {{currency}} {{proposedFeeFormatted}}, para el pedido n.º{{orderNumber}}; la tarifa sigue siendo {{currency}} {{feeBeforeFormatted}}. {{noteLine}}' },
+            ar: { subject: 'تم رفض رسوم التوصيل التي اقترحتها', body: 'رفضت {{agencyName}} رسوم التوصيل التي اقترحتها، {{currency}} {{proposedFeeFormatted}}، للطلب رقم {{orderNumber}}؛ تبقى الرسوم {{currency}} {{feeBeforeFormatted}}. {{noteLine}}' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_delivery_fee_proposal_agency_rejected', bodyParams: ['{{agencyName}}', '{{currency}}', '{{proposedFeeFormatted}}', '{{orderNumber}}', '{{feeBeforeFormatted}}'] }
+        },
+        button: { type: 'url', label: VIEW_ORDER_LABEL, urlSuffix: 'orders/{{orderId}}' }
+    },
+
     // ─── Role closure (ADR-A10) ──────────────────────────────────────────────
 
     /** An administrator asked to close this shop. Ungated — see the model's note. */

@@ -60,6 +60,8 @@ export function initializeVendorNotificationEventConsumers(): void {
     eventBus.subscribe('delivery_fee_proposal.withdrawn', handler.handleDeliveryFeeProposalWithdrawn.bind(handler));
     // ADR-A11 D-10 — the customer declined a change-agency difference; the vendor covers it.
     eventBus.subscribe('delivery_fee_proposal.rejected', handler.handleDeliveryFeeProposalRejected.bind(handler));
+    // 2026-10-14 — the agency answered a fee the VENDOR proposed.
+    eventBus.subscribe('delivery_fee_proposal.approved', handler.handleDeliveryFeeProposalApproved.bind(handler));
     // ADR-A10 role closure (published by src/modules/role-closure/, post-commit). Both events
     // are shared by the four stacks; each handler no-ops on payloads that are not its
     // audience's (`role` / `closingRole`), the same pattern `connection.*` uses.

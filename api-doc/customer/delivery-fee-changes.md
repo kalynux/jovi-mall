@@ -13,6 +13,7 @@ Delivery fees are posted prices at checkout. After you pay, a fee can change onl
 | The delivery company **raises** a fee | delivery company | approve or decline | online: approve → pay the difference (top-up) · COD: approve → more cash at the door · decline → the company carries at the old fee, proposes once more, or declines the job |
 | The shop **moves your parcel** to another delivery company | shop | if the new company costs more: approve or decline | you keep what you paid; lower → refunded/less cash; higher → approve (pay the difference) or decline (**the shop pays it**) |
 | You ask for a **combined price** on several parcels | you | wait for the answer | only lower fees are possible; applied at once like any decrease |
+| **You propose your own fee** for one parcel (since 2026-10-14) | you | wait for the delivery company to accept or decline | lower and accepted: refunded (online) / less cash (COD) · higher and accepted: online → pay the difference, COD → more cash · declined: the fee stays |
 
 All are before pickup. While an increase waits for your answer (or, online, for your top-up), the
 parcel **cannot be picked up**.
@@ -120,6 +121,63 @@ Body `{ "version": 1, "note": "optional" }`.
 
 ---
 
+## Propose your own delivery fee (2026-10-14)
+
+[ADR-A12](../../docs/ADR-A12-PAYER-FEE-PROPOSALS.md). On a parcel whose delivery **you pay**
+(`deliveryPayer: 'customer'`), you may propose a different fee — **higher or lower** — to the
+delivery company carrying it. The company (or its rider, if the company allows) accepts or declines.
+**The parcel is not picked up until it answers.** Same window as every fee change: after payment,
+before pickup (shipment `assigned` or `handing_over`).
+
+### POST /api/customer/orders/:id/shipments/:shipmentId/delivery-fee-proposals
+
+```json
+{ "proposedFee": 1000, "reason": "Two streets from the depot — 1 000 is fair" }
+```
+
+`proposedFee` integer ≥ 0 (the order's currency units); `reason` 3–500 characters, shown to the
+delivery company. `201` with the proposal as the customer reads it (below). The shipment ids come from
+`GET /api/customer/orders/:orderId/shipments` or `shipments[]` of the read above.
+
+### PATCH /api/customer/orders/:id/delivery-fee-proposals/:proposalId
+
+`{ proposedFee?, reason?, version? }` — change your own proposal while it is unanswered. `version`,
+when sent, must be the current one (`409 DELIVERY_FEE_PROPOSAL_VERSION_MISMATCH`). Every edit bumps
+it — the company answers the figure it SAW.
+
+### POST /api/customer/orders/:id/delivery-fee-proposals/:proposalId/withdraw
+
+Take it back. The fee stays; the parcel can be picked up.
+
+### What you read
+
+Your proposal appears in `proposals[]` of `GET …/delivery-fee-proposals` with `raisedBy: 'you'`,
+`origin: 'payer'` and `acceptedByDeliveryCompany`. Its `availableActions`:
+
+| State | `availableActions` |
+|---|---|
+| waiting for the company | `withdraw` · `edit` |
+| accepted, **higher, paid online** — the difference is due (`topup.status: 'awaiting_payment'`) | `pay` (the existing `…/pay` route) · `reject` (= "I no longer want it"; recorded `withdrawn`) |
+| answered / withdrawn | — |
+
+Once accepted: lower → applies at once (`order.delivery_fee.lowered`); higher and COD → applies at
+once (`order.delivery_fee.updated`); higher and online → `order.delivery_fee.topup_due`, and the
+parcel waits for that payment. Declined → `order.delivery_fee.proposal_declined`, the fee stays.
+
+### Errors
+
+| Code | Status | When |
+|---|---|---|
+| `DELIVERY_FEE_PROPOSAL_NOT_PAYER` | 422 | the shop pays this parcel's delivery — `details.deliveryPayer` |
+| `DELIVERY_FEE_PROPOSAL_WINDOW_CLOSED` | 422 | picked up already, or not yet with a delivery company |
+| `DELIVERY_FEE_PROPOSAL_ALREADY_PENDING` | 409 | a fee change on this parcel already waits for an answer (yours or the company's) |
+| `DELIVERY_FEE_PROPOSAL_LIMIT_REACHED` | 422 | you already proposed twice on this parcel (withdrawn ones do not count) |
+| `DELIVERY_FEE_PROPOSAL_NO_CHANGE` | 422 | the amount is the current fee |
+| `DELIVERY_FEE_PROPOSAL_ORDER_NOT_PAID` | 422 | the order's online payment is not simply `paid` |
+| `DELIVERY_FEE_TOPUP_IN_PROGRESS` | 409 | edit after acceptance, or taking it back while its payment is live |
+
+---
+
 ## Combined delivery price
 
 ### POST /api/customer/orders/groups/:cartId/combined-delivery-requests
@@ -165,6 +223,7 @@ While `open`. `409 COMBINED_DELIVERY_REQUEST_NOT_OPEN` otherwise.
 | `order.delivery_fee.refund_pending` | money owed back must be paid by hand |
 | `order.delivery_fee.refund_settled` | our team sent that money by hand (W-E2, 2026-10-04) |
 | `order.delivery_fee.topup_failed` | the top-up payment did not go through |
+| `order.delivery_fee.proposal_declined` | the delivery company declined the fee YOU proposed (2026-10-14) |
 | `order.combined_delivery.answered` | the delivery company answered your combined request |
 | `order.refunded` (existing) | an automatic refund went through |
 

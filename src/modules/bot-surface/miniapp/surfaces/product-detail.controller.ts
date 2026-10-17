@@ -130,14 +130,23 @@ export class ProductDetailController {
             /** ADR-A11 — the shop's free-delivery terms, worded; null when there are none to state. */
             deliveryText: detail.deliveryText ?? null,
             imageUrl: browserImageUrl(detail.imageSourceUrl),
+            /**
+             * ⭐ The whole gallery and each variant's own picture (2026-10-17), so choosing "blue"
+             * shows the blue one. Same browser rule as the hero; an unusable URL is dropped.
+             */
+            images: (detail.gallerySourceUrls ?? [])
+                .map((url) => browserImageUrl(url))
+                .filter((url): url is string => url !== null),
             description: detail.description,
             options: detail.options,
             variants: detail.variants.map((variant) => ({
                 variantId: variant.variantId,
                 valueIds: variant.valueIds,
                 priceText: variant.priceText,
+                compareAtText: variant.compareAtText ?? null,
                 inStock: variant.inStock,
                 affordance: variant.affordance,
+                imageUrl: browserImageUrl(variant.imageSourceUrl ?? null),
             })),
             defaultVariantId: detail.defaultVariantId,
             /** Draw the Similar-items button? False when there is nothing to show, or no way to ask. */

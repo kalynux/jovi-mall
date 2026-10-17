@@ -842,12 +842,18 @@ async function phase6(): Promise<void> {
      */
     /**
      * ⭐ **Straight to the picker** (owner, 2026-09-27): with a screen, the question AND a button
-     * that opens the picker itself; without one, the `open:bk` tap. Bargain draws nothing.
+     * that opens the picker itself; without one, the `open:bk` tap.
+     *
+     * ⚠ **Bargain draws ONE button since 2026-10-17 — the listed price** (owner: "it should have the
+     * current price set as a button"). This used to assert Bargain drew nothing; it now asserts the
+     * only thing it draws is that price, so a booking picker can never leak onto a haggle.
      */
-    assert('⛔ the Book reply keeps its question and opens the picker directly; Bargain draws nothing', () => {
+    assert('⛔ the Book reply keeps its question and opens the picker directly; Bargain draws only its listed price', () => {
         const purchase = stripped('src/modules/bot-surface/controllers/bot-purchase.controller.ts');
         const reply = spanOf(purchase, 'function replyForPurchase(', '\n}\n');
-        return reply.includes("if (result.verb !== 'book') return { kind: 'text', text: result.message };")
+        const notBook = spanOf(reply, "if (result.verb !== 'book') {", '\n        }\n');
+        return notBook.includes('listPriceActions(result.listedPrice, language)')
+            && !notBook.includes('bookInviteActions') && !notBook.includes('inapp')
             && /result\.url\s*\?\s*\{ kind: 'inapp', text: result\.message, label: botChrome\('bookChooseTimeButton', language\), url: result\.url \}\s*:\s*\{ kind: 'text', text: result\.message, actions: bookInviteActions\(result\.productId, language\) \}/.test(reply)
             && purchase.includes("message: purchaseInvitePrompt(product.title, 'book', language),");
     });

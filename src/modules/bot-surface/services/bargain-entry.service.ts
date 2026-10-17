@@ -10,7 +10,8 @@ import { botChrome } from '../domain/bot-chrome-copy';
 import { BotReplyIntent } from '../domain/channel-reply';
 import { onboardingReplyIntent } from '../domain/onboarding-reply';
 import { resolvePurchaseAffordance } from '../domain/purchase-affordance';
-import { purchaseInvitePrompt } from '../domain/purchase-chat-copy';
+import { purchaseInvitePrompt, purchaseInviteTitle } from '../domain/purchase-chat-copy';
+import { ListedPrice, listPriceActions } from '../domain/list-price-option';
 import { toBotSyncDto } from '../dto/bot-projections';
 import { currentRecords } from './bot-registration.service';
 import { pendingBargainStore } from './pending-bargain.store';
@@ -49,7 +50,15 @@ const customerRepository = new CustomerRepository();
 
 /** What the link resolves to, read live. */
 export type BargainEntryVerdict =
-    | { kind: 'bargain'; productId: string; variantId: string; productTitle: string }
+    | {
+        kind: 'bargain';
+        productId: string;
+        variantId: string;
+        /** The title, with the variant named when the product has several (`purchaseInviteTitle`). */
+        productTitle: string;
+        /** What the Buy-at-price button under the question shows and sells at. */
+        listedPrice: ListedPrice;
+    }
     | { kind: 'fixed'; verb: 'add' | 'buy' | 'book'; productId: string; variantId: string | null; productTitle: string };
 
 /**
@@ -91,7 +100,13 @@ export async function resolveBargainEntry(ids: BargainEntryIds): Promise<Bargain
     }
 
     if (affordance.verb === 'bargain' && variant) {
-        return { kind: 'bargain', productId: ids.productId, variantId: variant.id, productTitle: product.title };
+        return {
+            kind: 'bargain',
+            productId: ids.productId,
+            variantId: variant.id,
+            productTitle: purchaseInviteTitle(product.title, product.variants.length > 1 ? variant.name : null),
+            listedPrice: { productId: ids.productId, variantId: variant.id, amount: variant.price, currency: variant.currency },
+        };
     }
 
     return {
@@ -103,9 +118,15 @@ export async function resolveBargainEntry(ids: BargainEntryIds): Promise<Bargain
     };
 }
 
-/** The price question — byte-identical to what a `bargain:` tap asks. */
-export function bargainInviteIntent(productTitle: string, language: string | null): BotReplyIntent {
-    return { kind: 'text', text: purchaseInvitePrompt(productTitle, 'bargain', language) };
+/** The price question — byte-identical to what a `bargain:` tap asks, Buy-at-price button included. */
+export function bargainInviteIntent(
+    productTitle: string,
+    language: string | null,
+    listedPrice: ListedPrice | null = null,
+): BotReplyIntent {
+    const text = purchaseInvitePrompt(productTitle, 'bargain', language);
+    const actions = listedPrice ? listPriceActions(listedPrice, language) : [];
+    return actions.length > 0 ? { kind: 'text', text, actions } : { kind: 'text', text };
 }
 
 /** "This has a fixed price now — want it anyway?" with the ONE button that gets it. */
@@ -195,7 +216,7 @@ export async function beginBargainFromLink(caller: BargainLinkCaller, ids: Barga
     }
 
     return {
-        intent: bargainInviteIntent(verdict.productTitle, caller.language),
+        intent: bargainInviteIntent(verdict.productTitle, caller.language, verdict.listedPrice),
         outcome: 'bargain_invited',
         productId: verdict.productId,
         variantId: verdict.variantId,
@@ -259,7 +280,7 @@ export async function replyForHeldBargain(
             await pendingBargainStore.discard(conversation.channel, conversation.externalId);
             return fixedPriceIntent(verdict, language);
         }
-        return bargainInviteIntent(verdict.productTitle, language);
+        return bargainInviteIntent(verdict.productTitle, language, verdict.listedPrice);
     } catch (error) {
         console.warn('[BotSurface] could not read a held Bargain link at setup completion', error);
         return null;

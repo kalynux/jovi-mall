@@ -208,6 +208,9 @@ export const BOT_ROUTES: readonly BotRouteSpec[] = Object.freeze([
     // Sends a request to a delivery company; a retry would be answered 409 ALREADY_OPEN, not a second request — still keyed.
     { tool: 'combined_delivery_request', method: 'POST', path: '/delivery-fees/combined', mutating: true, requiresCustomerRole: true },
     { tool: 'combined_delivery_cancel', method: 'POST', path: '/delivery-fees/combined/:requestId/cancel', mutating: true, requiresCustomerRole: true },
+    // 2026-10-14 — the customer proposes THEIR delivery fee to the company; the company answers.
+    { tool: 'delivery_fees_propose', method: 'POST', path: '/delivery-fees/propose', mutating: true, requiresCustomerRole: true },
+    { tool: 'delivery_fees_withdraw', method: 'POST', path: '/delivery-fees/:proposalId/withdraw', mutating: true, requiresCustomerRole: true },
     { tool: 'delivery_fees_approve', method: 'POST', path: '/delivery-fees/:proposalId/approve', mutating: true, requiresCustomerRole: true },
     { tool: 'delivery_fees_reject', method: 'POST', path: '/delivery-fees/:proposalId/reject', mutating: true, requiresCustomerRole: true },
     // Opens a mobile-money charge — the top-up the approval froze.

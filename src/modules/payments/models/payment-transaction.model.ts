@@ -449,6 +449,9 @@ PaymentTransactionSchema.index({ orderIds: 1, status: 1 }); // Cart-group order 
 PaymentTransactionSchema.index({ bookingId: 1, status: 1 }); // Booking payment status
 PaymentTransactionSchema.index({ userId: 1, createdAt: -1 }); // Customer payment history
 PaymentTransactionSchema.index({ gateway: 1, status: 1, createdAt: -1 }); // Gateway analytics
+// wi-admin’s platform transactions list (BR-027) walks this collection by `(created, _id)` keyset,
+// platform-wide. Without it that walk is a collection scan and an in-memory sort.
+PaymentTransactionSchema.index({ createdAt: -1, _id: -1 }, { name: 'admin_transactions_feed' });
 // The hosted card page resolves a transaction by its link handle, unauthenticated. Unique
 // so a mint collision is a write failure rather than two transactions answering one URL;
 // sparse because most rows carry no link at all. See domain/pay-link.ts.

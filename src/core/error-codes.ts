@@ -1745,6 +1745,13 @@ export const ERROR_CODES = Object.freeze({
     // A customer-paid ONLINE order whose payment is no longer simply `paid` (refunded,
     // disputed): its delivery money cannot be moved by a fee change. `details.paymentStatus`. // 422
     DELIVERY_FEE_PROPOSAL_ORDER_NOT_PAID: 'DELIVERY_FEE_PROPOSAL_ORDER_NOT_PAID',
+    // ── Payer proposals (2026-10-14): the one who PAYS the delivery proposes, the agency answers ──
+    // The caller does not pay this parcel's delivery (a vendor on a customer-paid parcel, or a
+    // customer on a vendor-paid one). `details.deliveryPayer`. // 422
+    DELIVERY_FEE_PROPOSAL_NOT_PAYER: 'DELIVERY_FEE_PROPOSAL_NOT_PAYER',
+    // The order has several parcels the caller could propose on and none was named (chat).
+    // `details.shipments[] { shipmentId, agencyName, fee }`. // 422
+    DELIVERY_FEE_PROPOSAL_SHIPMENT_AMBIGUOUS: 'DELIVERY_FEE_PROPOSAL_SHIPMENT_AMBIGUOUS',
     // ── Cash for delivery (ADR-A11 § Cash for delivery, W-F) ──
     // `deliveryFeePayment: cash_to_rider` at checkout that cannot be honoured: the order is COD,
     // no shop part is customer-paid, or a carrying agency does not accept the fee in cash.

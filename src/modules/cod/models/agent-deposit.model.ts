@@ -149,6 +149,9 @@ const AgentDepositSchema = new Schema<IAgentDeposit>(
 
 AgentDepositSchema.index({ agency_id: 1, created_at: -1 });
 AgentDepositSchema.index({ agent_id: 1, created_at: -1 });
+// wi-admin’s platform transactions list (BR-027) walks this collection by `(created, _id)` keyset,
+// platform-wide. Without it that walk is a collection scan and an in-memory sort.
+AgentDepositSchema.index({ created_at: -1, _id: -1 }, { name: 'admin_transactions_feed' });
 // The agency's inbox, and the sweep's scan for declarations nobody answered.
 AgentDepositSchema.index({ status: 1, recipient: 1, declared_at: 1 });
 // Suppression check: what has this agent declared that is still open?

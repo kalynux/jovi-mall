@@ -204,6 +204,9 @@ CashCollectionSchema.index({ agency_id: 1, status: 1, delivered_at: 1 });
 CashCollectionSchema.index({ agent_id: 1, status: 1 });
 // Order payment recompute.
 CashCollectionSchema.index({ order_id: 1 });
+// wi-admin's platform transactions list (BR-030) walks this collection by `(created, _id)` keyset,
+// platform-wide. Without it that walk is a collection scan and an in-memory sort.
+CashCollectionSchema.index({ created_at: -1, _id: -1 }, { name: 'admin_transactions_feed' });
 
 /** A collection's kind; rows written before W-F carry none and are COD order cash. */
 export function collectionKindOf(collection: { kind?: CashCollectionKind | null }): CashCollectionKind {
