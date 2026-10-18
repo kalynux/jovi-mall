@@ -683,6 +683,7 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.CATALOG_IMAGE_LIMIT_EXCEEDED]: 'Too many images for this product',
     [ERROR_CODES.CATALOG_PRODUCT_SIMPLE_MODE_LOCKED]: 'This product uses the simple editor. Convert it to the advanced editor to use this operation',
     [ERROR_CODES.CATALOG_PRODUCT_NOT_SIMPLE_MODE]: 'This product uses the advanced editor — use the standard product and variant endpoints to edit it',
+    [ERROR_CODES.CATALOG_PRODUCT_DELETE_BLOCKED]: 'This product cannot be deleted permanently. The reasons are listed in the details',
     [ERROR_CODES.CATALOG_PRODUCT_NOT_DIGITAL]: 'catalog product not digital',
     [ERROR_CODES.CATALOG_PRODUCT_NO_DIGITAL_CONFIG]: 'catalog product no digital config',
     [ERROR_CODES.CATALOG_VARIANT_NOT_FOUND]: 'catalog variant not found',

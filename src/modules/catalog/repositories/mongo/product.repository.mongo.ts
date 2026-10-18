@@ -261,6 +261,7 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
     filters: {
       type?: string;
       status?: string;
+      excludeStatuses?: string[];
       searchQuery?: string;
     },
     pagination: PaginationOptions,
@@ -276,7 +277,13 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
     };
 
     if (filters.type) query.type = filters.type as any;
-    if (filters.status) query.status = filters.status as any;
+    // `status` and `excludeStatuses` combine (status = X AND status NOT IN [...]). Both go into
+    // the ONE query the count and the page share, so `total` / `totalPages` and the page size
+    // reflect the exclusion — post-filtering would return short pages with inflated totals.
+    const statusCondition: Record<string, unknown> = {};
+    if (filters.status) statusCondition.$eq = filters.status;
+    if (filters.excludeStatuses?.length) statusCondition.$nin = filters.excludeStatuses;
+    if (Object.keys(statusCondition).length > 0) query.status = statusCondition as any;
     // Escaped for the same reason as `searchAndFilter` above — see that comment.
     if (filters.searchQuery) {
       const term = buildSearchRegex(filters.searchQuery);

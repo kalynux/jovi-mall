@@ -200,6 +200,8 @@
         "test:ticket-order-parties": "ts-node scripts/test/test-ticket-order-parties.ts",
         "test:public-catalog": "ts-node scripts/test/test-public-catalog.ts",
         "test:product-categories": "ts-node scripts/test/test-product-categories.ts",
+        "test:product-delete": "ts-node scripts/test/test-product-delete.ts",
+        "test:product-list-exclude-status": "ts-node scripts/test/test-product-list-exclude-status.ts",
         "test:ai-copy": "ts-node scripts/test/test-ai-copy.ts",
         "test:rich-description": "ts-node scripts/test/test-rich-description.ts",
         "test:product-share": "ts-node scripts/test/test-product-share.ts",

@@ -166,12 +166,36 @@ export const VendorChangeProductStatusSchema = z.object({
     }),
 });
 
+const ProductStatusFilterSchema = z.enum(['draft', 'active', 'archived', 'pending_review', 'suspended']);
+
+/**
+ * `excludeStatus` — statuses to leave OUT of the vendor product list, e.g. `archived` or
+ * `archived,suspended`. Accepts a comma-separated string or a repeated parameter
+ * (`?excludeStatus=a&excludeStatus=b`, which Express hands over as an array). Empty tokens
+ * (a trailing comma, an empty value) are dropped and duplicates collapsed; an UNKNOWN
+ * status is a 400, never silently ignored. Absent or empty → `undefined`, i.e. no exclusion.
+ */
+const ExcludeStatusSchema = z.preprocess(
+    (raw) => {
+        if (raw === undefined) return undefined;
+        const parts = (Array.isArray(raw) ? raw : [raw])
+            .flatMap((v) => String(v).split(','))
+            .map((v) => v.trim())
+            .filter((v) => v.length > 0);
+        return parts.length > 0 ? Array.from(new Set(parts)) : undefined;
+    },
+    z.array(ProductStatusFilterSchema).optional(),
+);
+
 /**
  * Schema for product query/filtering
  */
 export const ProductQuerySchema = z.object({
     type: z.enum(['physical', 'digital', 'service']).optional(),
-    status: z.enum(['draft', 'active', 'archived', 'pending_review', 'suspended']).optional(),
+    status: ProductStatusFilterSchema.optional(),
+    // Applied in the database query alongside `status` (status = X AND status NOT IN [...]),
+    // so `data`, `meta.total` and `meta.totalPages` all reflect it.
+    excludeStatus: ExcludeStatusSchema,
     q: z.string().optional(), // Search query
 
     // Sorting
@@ -186,6 +210,19 @@ export const ProductQuerySchema = z.object({
 /**
  * Schema for bulk archive
  */
+/**
+ * `DELETE /api/vendor/products/:id/permanent` — the body is a deliberate act, not data.
+ *
+ * `confirm: true` is required and the object is `.strict()`, so a client that only ever
+ * knew `DELETE /:id` (which ARCHIVES) cannot reach permanent deletion by accident, and a
+ * mistyped key is a 400 rather than a silently ignored safety catch.
+ */
+export const PermanentDeleteProductSchema = z.object({
+    confirm: z.literal(true, {
+        errorMap: () => ({ message: 'Set confirm to true to delete this product permanently' }),
+    }),
+}).strict();
+
 export const BulkArchiveSchema = z.object({
     productIds: z.array(z.string().min(1, 'Product ID cannot be empty'))
         .min(1, 'At least one product ID is required')

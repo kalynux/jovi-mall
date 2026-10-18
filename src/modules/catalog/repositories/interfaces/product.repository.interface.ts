@@ -80,6 +80,7 @@ export interface IProductRepository {
     filters: {
       type?: string;
       status?: string;
+      excludeStatuses?: string[];
       searchQuery?: string;
     },
     pagination: PaginationOptions,

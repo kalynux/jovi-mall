@@ -13,7 +13,14 @@ export { SlugService } from './SlugService';
 export { ProductDraftService, CreateProductInput } from './ProductDraftService';
 export { ProductUpdateService, UpdateProductCommand } from './ProductUpdateService';
 export { ProductArchiveService } from './ProductArchiveService';
-export { ProductDeleteService } from './ProductDeleteService';
+
+/*
+ * WHAT WAS HERE TOO: `ProductDeleteService` (deleted 2026-10-18). It soft-deleted a product
+ * and stamped a `purgeAt` that nothing anywhere ever purged, checked no status and no
+ * order, and was instantiated by nothing. Permanent deletion is
+ * `ProductPermanentDeleteService` now — archived-first, never-sold only, immediate — and
+ * the rule it enforces lives in `product-permanent-delete.rule.ts`.
+ */
 
 /*
  * WHAT WAS HERE: `ProductPublishService` and `ProductRestoreService`, exported from this

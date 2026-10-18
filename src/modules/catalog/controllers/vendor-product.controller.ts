@@ -13,6 +13,10 @@ import { pickupLocationDetailResolver } from '../read-models/pickup-location-det
 import { ProductDraftService } from '../domain/services/ProductDraftService';
 import { ProductUpdateService } from '../domain/services/ProductUpdateService';
 import { ProductArchiveService } from '../domain/services/ProductArchiveService';
+import { ProductPermanentDeleteService } from '../domain/services/ProductPermanentDeleteService';
+import { FileDeleteService } from '../domain/services/media/FileDeleteService';
+import { transactionManager } from '../../../core/database/transaction.manager';
+import { ProductModel } from '../models/product.model';
 import { ProductListService } from '../domain/services/ProductListService';
 import { ProductDuplicateService } from '../domain/services/ProductDuplicateService';
 import { ProductStatusValidationService } from '../domain/services/ProductStatusValidationService';
@@ -26,6 +30,7 @@ import {
     VendorChangeProductStatusSchema,
     ProductQuerySchema,
     BulkArchiveSchema,
+    PermanentDeleteProductSchema,
     VendorBulkStatusChangeSchema,
     SetVectorisationSchema,
 } from '../validators/product.validator';
@@ -57,6 +62,11 @@ const fileReferenceService = new FileReferenceService(fileRepository, fileRefere
 const productDraftService = new ProductDraftService(productRepository, slugService, fileReferenceService);
 const productUpdateService = new ProductUpdateService(productRepository, slugService, fileReferenceService);
 const productArchiveService = new ProductArchiveService(productRepository);
+const productPermanentDeleteService = new ProductPermanentDeleteService(
+    transactionManager,
+    fileReferenceRepository,
+    new FileDeleteService(storageProvider, fileRepository, fileReferenceRepository),
+);
 const productListService = new ProductListService(productRepository, fileRepository, storageProvider);
 const productDuplicateService = new ProductDuplicateService(productRepository, slugService, fileReferenceService, variantRepository);
 const productStatusValidationService = new ProductStatusValidationService(productRepository, variantRepository);
@@ -127,6 +137,29 @@ async function handleProductAgencyOverrideChange(
  * Fire-and-forget after the response: a failed recompute must not fail the archive the
  * vendor actually asked for, and `PlanQuotaReconcileWorker` is the durable backstop.
  */
+/**
+ * Tell the AI-search index which of these products are now archived.
+ *
+ * Bulk archive reports only a COUNT, and some ids may have been refused (vectorisation in
+ * flight, wrong status), so it re-reads which ones actually are `archived` rather than
+ * telling the index something untrue about the rest. Fire-and-forget; never rejects.
+ */
+async function notifyArchived(vendorId: string, productIds: string[]): Promise<void> {
+    try {
+        const archived = await ProductModel.find(
+            { _id: { $in: productIds.filter(isObjectIdString) }, vendorId, status: 'archived', deletedAt: null },
+            { _id: 1 },
+        ).lean();
+        vectorisationService.notifyStatusChanges(archived.map((p) => p._id.toString()), 'archived');
+    } catch (err) {
+        console.error('[VendorProductController] archive → vectoriser notify failed:', err);
+    }
+}
+
+function isObjectIdString(id: string): boolean {
+    return /^[0-9a-fA-F]{24}$/.test(id);
+}
+
 function publishCapacityFreed(vendorId: string): void {
     void eventBus.publish('quota.capacity_freed', {
         eventType: 'quota.capacity_freed',
@@ -165,11 +198,10 @@ export class VendorProductController {
         const query = ProductQuerySchema.parse(req.query);
         const result = await productListService.execute(
             vendorId,
-            { type: query.type, status: query.status, searchQuery: query.q },
+            { type: query.type, status: query.status, excludeStatuses: query.excludeStatus, searchQuery: query.q },
             { page: query.page, limit: query.limit },
             { sortBy: query.sortBy, sortOrder: query.sortOrder }
         );
-        console.log({query, data: result.data})
         res.json({ success: true, data: result.data, meta: result.meta });
     });
 
@@ -396,6 +428,34 @@ export class VendorProductController {
 
         // A slot just came free — release the next-oldest quota-suspended product.
         publishCapacityFreed(vendorId);
+
+        // ⚠ The AI-search index must hear about it too. This route (and bulk archive below)
+        // used to say nothing, while `PATCH /:id/status` → archived did — so the usual way
+        // of archiving left the index calling the product active.
+        void vectorisationService.notifyStatusChange(id, 'archived');
+    });
+
+    /**
+     * DELETE /api/vendor/products/:id/permanent
+     * Permanently delete an ARCHIVED product that was never sold — immediately.
+     *
+     * Body `{ confirm: true }`. Refused with 422 `CATALOG_PRODUCT_DELETE_BLOCKED` and every
+     * reason in `details.blockers[]` (see `product-permanent-delete.rule.ts`).
+     */
+    static deleteProductPermanently = asyncHandler(async (req: Request, res: Response) => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { id } = req.params;
+        PermanentDeleteProductSchema.parse(req.body ?? {});
+
+        const result = await productPermanentDeleteService.execute(id, vendorId);
+        res.json({
+            success: true,
+            data: { productId: result.productId, deletedFileCount: result.releasedFileIds.length },
+            message: 'Product deleted permanently',
+        });
+
+        // Its files are gone, so storage came free — a quota-blocked file may return.
+        publishCapacityFreed(vendorId);
     });
 
     /**
@@ -408,7 +468,10 @@ export class VendorProductController {
         const result = await productBulkOperationsService.bulkArchive(input.productIds, vendorId);
         res.json({ success: true, data: result, message: `Archived ${result.success} of ${result.total} products` });
 
-        if (result.success > 0) publishCapacityFreed(vendorId);
+        if (result.success > 0) {
+            publishCapacityFreed(vendorId);
+            void notifyArchived(vendorId, input.productIds);
+        }
     });
 
     /**

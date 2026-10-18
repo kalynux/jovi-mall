@@ -2023,6 +2023,34 @@ once the conversion has run everywhere.
 Covered by `npm run test:product-categories` (91, no DB) and the multikey and unique-index
 assertions in `verify:storefront`.
 
+### Permanent product deletion (`catalog/domain/services/ProductPermanentDeleteService.ts`) — 2026-10-18
+
+`DELETE /api/vendor/products/:id/permanent` (body `{ confirm: true }`, `.strict()`) removes a
+product **immediately** — hard delete, no `purgeAt`. ⚠ `DELETE /api/vendor/products/:id` still
+**archives**, and must: every dashboard calls it meaning "archive". Owner decision "option A":
+only an **archived** product that was **never sold** — never on an order, booked, downloaded or
+reviewed — may go. That bar exists because those readers resolve the product LIVE (order-history
+picture, purchased download, booking name, public reviews). A sold product stays archived.
+Four things are load-bearing:
+
+- **The decision is pure** (`product-permanent-delete.rule.ts`) and reports EVERY blocker at
+  once: `422 CATALOG_PRODUCT_DELETE_BLOCKED`, `details.blockers[]`. The "ever" counts carry **no
+  `deletedAt` filter** on purpose.
+- **Check and delete share ONE transaction** (`runInTransactionWithRetry`), so a checkout racing
+  the delete is either seen or forces a retry.
+- **The AI index is told AFTER the commit, by id** (`VectorisationService.removeFromIndex`).
+  `deleteVectorisation` cannot be used: it looks the row up first and finds nothing.
+- ⚠ **A new collection that references a product must be classified.** `test:product-delete`
+  § 3 walks every model with `ref: MODELS.PRODUCT|PRODUCT_VARIANT` and fails unless the service
+  imports it or its `KEPT` list names it with a reason. Kept: shipments, agency storage invoices,
+  the agency stock movement ledger.
+
+Files the product held are deleted after commit **only if nothing else references them**
+(Duplicate shares pictures); a failure leaves them to the lonely-file sweep. The old
+`ProductDeleteService` (soft delete + a `purgeAt` nothing ever purged, zero callers) is deleted.
+Same change: both archive routes now `notifyStatusChange(…, 'archived')`, which before only
+`PATCH /:id/status` did. Contract: `api-doc/vendor/products.md#delete-product-permanently`.
+
 ### Bargainable pricing (`catalog/domain/services/bargain-price.rule.ts`)
 
 A variant may carry `bargain: { minPrice, maxPrice }` — the window a buyer may haggle within.

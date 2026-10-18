@@ -1053,6 +1053,10 @@ export const ERROR_CODES = Object.freeze({
     // refuse it, and the simple endpoints refuse an advanced product.
     CATALOG_PRODUCT_SIMPLE_MODE_LOCKED: 'CATALOG_PRODUCT_SIMPLE_MODE_LOCKED',
     CATALOG_PRODUCT_NOT_SIMPLE_MODE: 'CATALOG_PRODUCT_NOT_SIMPLE_MODE',
+    // Permanent deletion refused (422). `details.blockers[]` carries EVERY reason, each with
+    // a vendor-facing `message` — see `product-permanent-delete.rule.ts`. A product must be
+    // archived and never ordered, booked, downloaded or reviewed.
+    CATALOG_PRODUCT_DELETE_BLOCKED: 'CATALOG_PRODUCT_DELETE_BLOCKED',
     // Variants
     CATALOG_VARIANT_NOT_FOUND: 'CATALOG_VARIANT_NOT_FOUND',
     CATALOG_VARIANT_ACCESS_DENIED: 'CATALOG_VARIANT_ACCESS_DENIED',

@@ -9,6 +9,8 @@ import { categoryCatalogCache } from '../../../categories/services/category-cata
 export interface ProductListFilters {
     type?: 'physical' | 'digital' | 'service';
     status?: string;
+    /** Statuses to leave out — filtered in the query, so totals and page sizes reflect it. */
+    excludeStatuses?: string[];
     searchQuery?: string;
 }
 
@@ -55,6 +57,7 @@ export class ProductListService {
             {
                 type: filters.type,
                 status: filters.status,
+                excludeStatuses: filters.excludeStatuses,
                 searchQuery: filters.searchQuery,
             },
             {

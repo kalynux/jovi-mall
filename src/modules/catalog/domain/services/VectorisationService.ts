@@ -1014,20 +1014,7 @@ export class VectorisationService {
       // Nothing to delete upstream if we never had a vectorised id.
       const vectorisedId = product.vectorisedDataId;
       if (vectorisedId) {
-        try {
-          await vectoriserFetch<unknown>(
-            `${vectoriserConfig.baseUrl}/delete`,
-            { product_id: productId, vectorised_id: vectorisedId },
-            vectoriserConfig.timeoutSingleMs,
-          );
-          log('info', 'deleteVectorisation: upstream delete acknowledged', ctx);
-        } catch (err: any) {
-          // Non-critical — local state will still be reset below.
-          log('warn', 'deleteVectorisation: upstream delete failed (non-critical)', {
-            ...ctx,
-            error: err.message,
-          });
-        }
+        await this.removeFromIndex(productId, vectorisedId);
       } else {
         log('info', 'deleteVectorisation: no vectorisedDataId — local reset only', ctx);
       }
@@ -1050,6 +1037,35 @@ export class VectorisationService {
         ...ctx,
         error: err.message,
         stack: err.stack,
+      });
+    }
+  }
+
+  /**
+   * Remove one product from the upstream index — the `/delete` call ALONE, with no
+   * product lookup and no local reset.
+   *
+   * It exists for permanent deletion (`ProductPermanentDeleteService`): by the time the
+   * index should forget the product, the row is gone, so `deleteVectorisation`'s
+   * `findOne({ deletedAt: null })` would find nothing and skip the upstream call — leaving
+   * a product the bot can still recommend and nobody can buy. The caller captures the
+   * `vectorisedDataId` inside its transaction and calls this after the commit.
+   *
+   * Best-effort and never rejects, like every other upstream call here.
+   */
+  async removeFromIndex(productId: string, vectorisedId: string): Promise<void> {
+    const ctx = { productId };
+    try {
+      await vectoriserFetch<unknown>(
+        `${vectoriserConfig.baseUrl}/delete`,
+        { product_id: productId, vectorised_id: vectorisedId },
+        vectoriserConfig.timeoutSingleMs,
+      );
+      log('info', 'removeFromIndex: upstream delete acknowledged', ctx);
+    } catch (err: any) {
+      log('warn', 'removeFromIndex: upstream delete failed (non-critical)', {
+        ...ctx,
+        error: err.message,
       });
     }
   }

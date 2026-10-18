@@ -166,10 +166,25 @@ router.post('/:id/share', VendorProductShareController.share);
 /**
  * DELETE /api/vendor/products/:id
  * Archive a product (soft delete)
- * 
+ *
  * Sets status to 'archived'
+ *
+ * ⚠ This route ARCHIVES and must keep doing so. Every dashboard already calls it to mean
+ * "archive"; giving it permanent-delete semantics would turn each of those buttons into an
+ * irreversible delete. Permanent deletion is the separate route below.
  */
 router.delete('/:id', requireProductEditable, VendorProductController.archiveProduct);
+
+/**
+ * DELETE /api/vendor/products/:id/permanent — body `{ confirm: true }`
+ * Permanently delete an ARCHIVED product that was never ordered, booked, downloaded or
+ * reviewed. Immediate: no soft delete, no retention window. 422
+ * `CATALOG_PRODUCT_DELETE_BLOCKED` with every reason in `details.blockers[]` otherwise.
+ *
+ * Behind `requireProductEditable`: a vectorisation in flight would call back onto a
+ * product that no longer exists.
+ */
+router.delete('/:id/permanent', requireProductEditable, VendorProductController.deleteProductPermanently);
 
 /**
  * ==========================================

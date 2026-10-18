@@ -244,6 +244,7 @@ function main(): void {
       return writeAt >= 0 && callAt > writeAt;
     });
     assert(`${role} profile update echoes the promotion on status`, () =>
+      // eslint-disable-next-line no-restricted-syntax -- a source-scan pattern; `role` is one of three literals above, never input
       new RegExp(`activateRoleIfEligible\\('${role}', updated\\.user_id\\.toString\\(\\)\\)\\)\\s*\\{\\s*updated\\.status = 'active'`).test(code));
   }
 

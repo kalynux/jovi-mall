@@ -595,6 +595,14 @@ One marketplace-wide list; a product holds 1–5. Contract:
 | `CATEGORY_IN_USE` | 409 | Internal admin: a delete while live products still hold it | `{ productCount }` |
 | `CATEGORY_MERGE_INVALID` | 422 | Internal admin: merging into itself, or into a category that is not live | `{ reason, targetId? }` |
 
+## Permanent product deletion — 2026-10-18
+
+Vendor only. Contract: [vendor/products.md § Delete Product Permanently](../vendor/products.md#delete-product-permanently).
+
+| Code | Status | When | `details` |
+|---|---|---|---|
+| `CATALOG_PRODUCT_DELETE_BLOCKED` | 422 | `DELETE /api/vendor/products/:id/permanent` on a product that is not archived, or was ever sold (ordered, booked, downloaded, reviewed), or has something in flight. **Nothing was deleted** | `{ productId, blockers: [{ reason, count?, message }] }` — EVERY reason at once. `reason` is a closed set of nine; translate by `reason`, and fall back to the English `message` for one you do not know |
+
 ## Blog / editorial
 
 The public reader ([public/articles.md](../public/articles.md)). The editor moved to wi-admin at
