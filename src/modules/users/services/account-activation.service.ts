@@ -78,6 +78,44 @@ export class AccountActivationService {
 
         return activated;
     }
+
+    /**
+     * Try to activate ONE role entity — for the profile update of that role (2026-10-18).
+     *
+     * ⚠ **The rule has two halves and this is the second door.** Fundamentals are a proved
+     * phone AND a name. `activateEligibleRoles` sits at the bottom of the contact-proof
+     * funnel, so it catches the phone arriving last — but nothing caught the NAME arriving
+     * last: an account that proved its phone first and set `display_name` / `name` afterwards
+     * through its profile PATCH stayed `pending_verification` for good. Since the same day
+     * the directories list `active` accounts only, so that also hid it from every vendor or
+     * agency searching for it.
+     *
+     * The three profile updates call this after their write, unconditionally — whether or
+     * not the request touched the name. It costs one filtered update that matches nothing on
+     * the common call, and an account whose promotion was missed for any reason heals on its
+     * next profile save (the same argument the contact funnel makes). Only the role being
+     * edited is evaluated: the caller holds that entity, not the user's other roles.
+     *
+     * Best-effort and never fatal, like the funnel: a failed promotion must not fail the
+     * profile save the person just made.
+     *
+     * @returns true when the entity actually moved to `active`.
+     */
+    async activateRoleIfEligible(role: SelfActivatingRole, userId: string): Promise<boolean> {
+        const promoters: Record<SelfActivatingRole, () => Promise<unknown | null>> = {
+            vendor: () => this.vendorRepo.activateIfFundamentalsMet(userId),
+            agency: () => this.agencyRepo.activateIfFundamentalsMet(userId),
+            agent: () => this.agentRepo.activateIfFundamentalsMet(userId),
+        };
+        try {
+            const promoted = await promoters[role]();
+            if (promoted) console.log(`[AccountActivation] ${role} ${userId} activated on a profile update`);
+            return promoted !== null;
+        } catch (error) {
+            console.error(`[AccountActivation] failed to evaluate ${role} ${userId} after a profile update`, error);
+            return false;
+        }
+    }
 }
 
 function isSelfActivating(role: string): role is SelfActivatingRole {

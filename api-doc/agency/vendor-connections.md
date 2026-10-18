@@ -203,6 +203,14 @@ account status: `"active" | "pending_verification" | "inactive" | null` (`null` 
 record no longer exists). Approvals ignore it, so a request from a `pending_verification` vendor
 can be approved as usual; show it as a badge so you know the vendor has not finished activating.
 
+**`counterpartyProfile` (2026-10-18)** — the same responses also carry the **vendor's** display
+fields: `{ businessName, displayName, logo, kycVerified } | null` — the Store name and logo
+(`FileDetail | null`), the vendor's display name and KYC badge. **Name connection rows from this,
+never by scanning `GET /browse` for the vendor id**: browse lists `active` vendors only, so a
+pending vendor's row would go nameless. `businessName` is `""` if the vendor has no Store yet;
+`null` only if the vendor record no longer exists. Full shape:
+[Vendor: Agency Connections](../vendor/agency-connections.md#response-field-reference).
+
 ```typescript
 interface AgencyVendorListItemDto {
   id: string;

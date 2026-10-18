@@ -264,6 +264,7 @@
         "telegram:commands": "ts-node scripts/register-telegram-commands.ts",
         "verify:bot-commands": "node --max-old-space-size=4096 -r ts-node/register scripts/verify-bot-commands-live.ts",
         "test:account-activation": "ts-node scripts/test/test-account-activation.ts",
+        "test:connection-counterparty": "ts-node scripts/test/test-connection-counterparty.ts",
         "test:role-provisioning": "ts-node scripts/test/test-role-provisioning.ts",
         "test:payout-verification": "ts-node scripts/test/test-payout-verification.ts"
     },

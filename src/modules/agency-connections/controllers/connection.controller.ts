@@ -14,10 +14,10 @@ import { ConnectionParty, IVendorAgencyConnection } from '../connection.model';
 
 const connectionService = new ConnectionService();
 
-/** One connection's DTO, carrying the counterparty's account status the caller sees. */
+/** One connection's DTO, carrying the counterparty (status + display fields) the caller sees. */
 async function toCallerDto(role: ConnectionParty, connection: IVendorAgencyConnection) {
-  const statuses = await connectionService.counterpartyStatusesFor(role, [connection]);
-  return ConnectionMapper.toDto(connection, statuses.get(connection._id.toString()) ?? null);
+  const counterparties = await connectionService.counterpartiesFor(role, [connection]);
+  return ConnectionMapper.toDto(connection, counterparties.get(connection._id.toString()) ?? null);
 }
 
 /**
@@ -75,17 +75,17 @@ export class ConnectionController {
       : await connectionService.listForAgency(entityId, { status }, { page, limit });
 
     // An agency sees each vendor's COD terms beside the connection (2026-10-02).
-    const [codTerms, counterpartyStatuses] = await Promise.all([
+    const [codTerms, counterparties] = await Promise.all([
       role === 'agency'
         ? connectionService.vendorCodTermsFor(result.data.map((c) => c.vendor_id.toString()))
         : Promise.resolve(null),
-      connectionService.counterpartyStatusesFor(role, result.data),
+      connectionService.counterpartiesFor(role, result.data),
     ]);
 
     res.json({
       success: true,
       data: result.data.map((c) => {
-        const dto = ConnectionMapper.toDto(c, counterpartyStatuses.get(c._id.toString()) ?? null);
+        const dto = ConnectionMapper.toDto(c, counterparties.get(c._id.toString()) ?? null);
         return codTerms ? { ...dto, vendorCodTerms: codTerms.get(dto.vendorId) ?? null } : dto;
       }),
       meta: { total: result.meta.total, page: result.meta.page, limit: result.meta.limit, totalPages: result.meta.pages },

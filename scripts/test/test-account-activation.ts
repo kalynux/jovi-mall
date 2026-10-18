@@ -31,7 +31,7 @@ import {
   activationFilter,
   meetsActivationFundamentals,
 } from '../../src/core/accounts/activation';
-import { SELF_ACTIVATING_ROLES } from '../../src/modules/users/services/account-activation.service';
+import { AccountActivationService, SELF_ACTIVATING_ROLES } from '../../src/modules/users/services/account-activation.service';
 
 let passed = 0;
 let failed = 0;
@@ -219,6 +219,34 @@ function main(): void {
     return /this\.activation\.activateEligibleRoles\(user\)/.test(code);
   });
 
+  /**
+   * ── The NAME half (2026-10-18) ─────────────────────────────────────────────
+   * Fundamentals are a proved phone AND a name, and only the phone had a door: an account
+   * that proved its phone first and named itself afterwards stayed `pending_verification`
+   * for good — and, since the directories list `active` accounts only, unfindable. Each
+   * role's profile update must evaluate its own role, AFTER the write (evaluating first
+   * tests the previous name: the one-proof-behind bug the funnel's comment warns about).
+   */
+  console.log('\n── The name half: every profile update evaluates activation ──');
+
+  const profileUpdates: Array<[string, string, string]> = [
+    ['agency', 'modules/delivery/services/agency-profile.service.ts', 'this.agencyRepo.updateProfile(agencyId, payload)'],
+    ['vendor', 'modules/vendor/service/vendor-profile.service.ts', 'this.vendorRepo.updateProfileWithVersion('],
+    ['agent', 'modules/agents/domain/services/agent-profile.service.ts', 'this.agents.updateProfile(agentId, payload)'],
+  ];
+  for (const [role, file, writeCall] of profileUpdates) {
+    const code = stripComments(read(file));
+    const call = `accountActivationService.activateRoleIfEligible('${role}'`;
+    assert(`${role} profile update evaluates its own role`, () => code.includes(call));
+    assert(`${role} profile update evaluates AFTER the write`, () => {
+      const writeAt = code.indexOf(writeCall);
+      const callAt = code.indexOf(call);
+      return writeAt >= 0 && callAt > writeAt;
+    });
+    assert(`${role} profile update echoes the promotion on status`, () =>
+      new RegExp(`activateRoleIfEligible\\('${role}', updated\\.user_id\\.toString\\(\\)\\)\\)\\s*\\{\\s*updated\\.status = 'active'`).test(code));
+  }
+
   console.log(`\n${'─'.repeat(60)}`);
   console.log(`  ${passed} passed, ${failed} failed`);
   console.log(`${'─'.repeat(60)}\n`);
@@ -226,4 +254,31 @@ function main(): void {
   if (failed > 0) process.exit(1);
 }
 
+/**
+ * Behaviour, not source: the single-role door is best-effort. A repository that throws must
+ * leave the profile save it follows intact, and a no-match must read as "did not move".
+ */
+async function singleRoleDoor(): Promise<void> {
+  console.log('\n── activateRoleIfEligible: best-effort, per role ──');
+  const promotedDoc = { status: 'active' };
+  const svc = new AccountActivationService(
+    { activateIfFundamentalsMet: async () => promotedDoc } as any,
+    { activateIfFundamentalsMet: async () => null } as any,
+    { activateIfFundamentalsMet: async () => { throw new Error('mongo down'); } } as any,
+  );
+  const vendor = await svc.activateRoleIfEligible('vendor', 'u1');
+  const agency = await svc.activateRoleIfEligible('agency', 'u1');
+  let threw = false;
+  let agent: boolean | undefined;
+  try { agent = await svc.activateRoleIfEligible('agent', 'u1'); } catch { threw = true; }
+
+  assert('a promotion reports true', () => vendor === true);
+  assert('a no-match (already active, no phone, no name) reports false', () => agency === false);
+  assert('a throwing repository is caught and reports false, never fails the save', () => !threw && agent === false);
+
+  console.log(`\n  ${passed} passed, ${failed} failed (incl. the single-role door)`);
+  if (failed > 0) process.exit(1);
+}
+
 main();
+void singleRoleDoor();

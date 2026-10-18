@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { DeliveryAgencyRepository } from '../delivery-agency.repository';
+import { accountActivationService } from '../../users/services/account-activation.service';
 import {
     AgencyProfileMapper,
     GetAgencyProfileResponseDto,
@@ -264,6 +265,13 @@ export class AgencyProfileService {
             });
             // Post-commit: the paused connections' products are off sale; pause their search entries.
             vectorisationService.notifyStatusChanges(suspended, 'suspended');
+        }
+
+        // A display name may have just completed the activation fundamentals (a proved phone
+        // + a name) — the half the contact-proof funnel cannot see. Echoed on `status` so the
+        // dashboard can refresh. See AccountActivationService.activateRoleIfEligible.
+        if (await accountActivationService.activateRoleIfEligible('agency', updated.user_id.toString())) {
+            updated.status = 'active';
         }
 
         return AgencyProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider);

@@ -269,6 +269,7 @@ pause (see Overview).
 | `withdrawal` | `{ withdrawnByRole, withdrawnAt } \| null` | Set only if currently/previously `withdrawn`. |
 | `termination` | `{ terminatedByRole, terminatedAt, reason, note } \| null` | `reason` is `"unilateral"` or `"reapproval_declined"` (terminated instead of reapproving). |
 | `counterpartyStatus` | `"active" \| "pending_verification" \| "inactive" \| null` | **2026-10-18.** The OTHER party's account status — the agency's for you. `pending_verification`: the agency has not finished activating; you can approve, but it cannot carry physical products until it is `active`. `null` only if the agency record no longer exists. On every connection response (list, detail, request, approve, reject, withdraw, terminate). |
+| `counterpartyProfile` | `{ businessName, displayName, logo, kycVerified } \| null` | **2026-10-18.** The OTHER party's display fields — for you, the agency's Magazin name + logo (`FileDetail \| null`), its `displayName` and KYC badge. Render the connection row from this; never look the agency up in `/browse` (that lists `active` agencies only). `businessName` is `""` if the agency has no Magazin yet. `null` only if the agency record no longer exists. Same responses as `counterpartyStatus`. |
 | `createdAt` / `updatedAt` | | Standard timestamps. |
 
 ---
@@ -296,6 +297,12 @@ interface ConnectionDto {
   withdrawal: { withdrawnByRole: ConnectionParty; withdrawnAt: string } | null;
   termination: { terminatedByRole: ConnectionParty; terminatedAt: string; reason: 'unilateral' | 'reapproval_declined'; note: string | null } | null;
   counterpartyStatus: 'active' | 'pending_verification' | 'inactive' | null; // 2026-10-18
+  counterpartyProfile: {                                                       // 2026-10-18
+    businessName: string;          // '' when the counterparty has no Store/Magazin yet
+    displayName: string | null;
+    logo: FileDetail | null;
+    kycVerified: boolean;
+  } | null;
   createdAt: string;
   updatedAt: string;
 }

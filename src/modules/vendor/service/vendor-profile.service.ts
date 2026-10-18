@@ -10,6 +10,7 @@ import { auditLogger } from '../../../core/audit/audit-logger';
 import { VendorOnboardingStep, VendorOnboardingStepValue } from '../../../core/constants/onboarding-steps';
 import { IVendor, IVendorPolicies, IVendorSupportChannel, IVendorSupportPolicy } from '../../vendors/vendor.model';
 import { withGeoAddress } from '../../../core/types/geo-address.types';
+import { accountActivationService } from '../../users/services/account-activation.service';
 import {
   assertGeoInCountry,
   canonicalizeAddressRegion,
@@ -382,6 +383,13 @@ export class VendorProfileService {
       });
       // Post-commit: the paused connections' products are off sale; pause their search entries.
       vectorisationService.notifyStatusChanges(suspended, 'suspended');
+    }
+
+    // A display name may have just completed the activation fundamentals (a proved phone + a
+    // name) — the half the contact-proof funnel cannot see. Echoed on `status` so the dashboard
+    // can refresh. See AccountActivationService.activateRoleIfEligible.
+    if (await accountActivationService.activateRoleIfEligible('vendor', updated.user_id.toString())) {
+      updated.status = 'active';
     }
 
     await this.emitUpdateEvent(vendor, updated, vendorId);

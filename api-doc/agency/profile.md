@@ -174,6 +174,14 @@ See [profile-schema.md](./profile-schema.md) for the meaning and validation rule
 
 Update the authenticated agency's profile. **This is the endpoint to use for all post-onboarding edits** — including fields the agency originally set during onboarding (logistics, payout, branding, policies).
 
+> [!NOTE]
+> **Saving can activate the account (2026-10-18).** An agency becomes `active` once it has a
+> verified phone **and** a non-blank `displayName` ([auth/README.md](../auth/README.md) § account
+> activation). If this save completes that pair — typically setting `displayName` after the phone
+> was already verified — the agency is promoted in the same request and the response's `status`
+> reads `"active"`. Refresh the session's agency state from the response. Activation never fails
+> the save. See [FRONTEND-CHANGELOG-activation-and-counterparty.md](./FRONTEND-CHANGELOG-activation-and-counterparty.md).
+
 > [!IMPORTANT]
 > **When to use this vs. the onboarding endpoints.**
 > The `PUT /api/agency/onboarding/*` step endpoints are for the **first-time onboarding flow only**. Once onboarding is complete (`onboardingStep === 0`) they all return `409 DELIVERY_ONBOARDING_ALREADY_COMPLETED`.

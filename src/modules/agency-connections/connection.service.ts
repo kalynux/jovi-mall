@@ -22,7 +22,7 @@ import { reviewAggregateRepository } from '../reviews/repositories/review-aggreg
 import { AgencyVendorListItemDto, AgencyVendorMapper } from './dto/agency-vendor-browse.dto';
 import { VendorSettingsRepository } from '../vendors/repositories/vendor-settings.repository';
 import { VendorCodTerms, vendorCodTermsOf } from '../cod/domain/cod-limits';
-import { CounterpartyStatus } from './dto/connection.dto';
+import { Counterparty } from './dto/connection.dto';
 import {
   IVendorAgencyConnection,
   IConnectionStatusHistoryEntry,
@@ -719,21 +719,50 @@ export class ConnectionService {
   }
 
   /**
-   * The counterparty's account status for each connection, keyed by connection id — the
-   * agency's when the caller is a vendor, the vendor's when it is an agency. One query for
-   * a page. A counterparty that no longer exists maps to `null`.
+   * The counterparty of each connection — its account status plus its display fields —
+   * keyed by connection id. The agency when the caller is a vendor, the vendor when it is an
+   * agency. Three queries for a whole page (the entity rows, their Store/Magazin names, the
+   * logos), never one per row. A counterparty that no longer exists maps to `null`.
+   *
+   * ⚠ Resolved from the counterparty's OWN records, never from the browse query — that one
+   * lists `active` accounts only, so a row named through it goes nameless exactly when its
+   * counterparty is `pending_verification`.
    */
-  async counterpartyStatusesFor(
+  async counterpartiesFor(
     callerRole: ConnectionParty,
     connections: IVendorAgencyConnection[],
-  ): Promise<Map<string, CounterpartyStatus | null>> {
+  ): Promise<Map<string, Counterparty | null>> {
     const counterpartyOf = (c: IVendorAgencyConnection): string =>
       (callerRole === 'vendor' ? c.agency_id : c.vendor_id).toString();
-    const ids = connections.map(counterpartyOf);
-    const statuses: Map<string, CounterpartyStatus> = callerRole === 'vendor'
-      ? await this.agencyRepo.findStatusesByIds(ids)
-      : await this.vendorRepo.findStatusesByIds(ids);
-    return new Map(connections.map((c) => [c._id.toString(), statuses.get(counterpartyOf(c)) ?? null]));
+    const ids = [...new Set(connections.map(counterpartyOf))];
+    if (ids.length === 0) return new Map();
+
+    const [entities, businesses] = callerRole === 'vendor'
+      ? await Promise.all([this.agencyRepo.findConnectionCounterparts(ids), this.magazinRepo.findNamesByAgencyIds(ids)])
+      : await Promise.all([this.vendorRepo.findConnectionCounterparts(ids), this.storeRepo.findNamesByVendorIds(ids)]);
+
+    const logoByFileId = await resolveFileDetails(
+      ids.map((id) => businesses.get(id)?.logoFileId ?? null),
+      this.fileRepository,
+      this.storageProvider,
+    );
+
+    const byCounterpartyId = new Map<string, Counterparty>();
+    for (const id of ids) {
+      const entity = entities.get(id);
+      if (!entity) continue;
+      const business = businesses.get(id);
+      byCounterpartyId.set(id, {
+        status: entity.status,
+        profile: {
+          businessName: business?.name ?? '',
+          displayName: entity.displayName,
+          logo: business?.logoFileId ? logoByFileId.get(business.logoFileId) ?? null : null,
+          kycVerified: entity.kycVerified,
+        },
+      });
+    }
+    return new Map(connections.map((c) => [c._id.toString(), byCounterpartyId.get(counterpartyOf(c)) ?? null]));
   }
 
   async findByVendorAndAgency(vendorId: string, agencyId: string): Promise<IVendorAgencyConnection | null> {

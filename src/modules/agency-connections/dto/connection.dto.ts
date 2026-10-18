@@ -1,4 +1,5 @@
 import { IVendorAgencyConnection, ConnectionStatus, ConnectionParty } from '../connection.model';
+import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
 
 /**
  * The OTHER party's account status, as the caller sees it (2026-10-18). Same three values
@@ -6,6 +7,33 @@ import { IVendorAgencyConnection, ConnectionStatus, ConnectionParty } from '../c
  * `null` only when the counterparty row no longer exists.
  */
 export type CounterpartyStatus = 'active' | 'pending_verification' | 'inactive';
+
+/**
+ * The OTHER party's display fields (2026-10-18), so a connection row can be rendered
+ * without a second lookup. Same shape on both sides:
+ *   - for an agency caller: the vendor's Store name + logo, the vendor's display name;
+ *   - for a vendor caller:  the agency's Magazin name + logo, the agency's display name.
+ *
+ * ⚠ It exists because the directories list ACTIVE accounts only since the same day, and the
+ * agency dashboard had been naming connection rows by scanning `/browse` for the vendor id —
+ * so the rows that most needed a name (a `pending_verification` counterparty) lost it. A
+ * connection row must never depend on the directory to name itself.
+ *
+ * `businessName` is `''` when the counterparty has no Store/Magazin yet (the browse DTOs use
+ * the same fallback). Public fields only — the same ones the browse cards already show.
+ */
+export interface CounterpartyProfile {
+  businessName: string;
+  displayName: string | null;
+  logo: FileDetail | null;
+  kycVerified: boolean;
+}
+
+/** Both counterparty fields, resolved together by `ConnectionService.counterpartiesFor`. */
+export interface Counterparty {
+  status: CounterpartyStatus;
+  profile: CounterpartyProfile;
+}
 
 export interface ConnectionDto {
   id: string;
@@ -49,6 +77,9 @@ export interface ConnectionDto {
    */
   counterpartyStatus: CounterpartyStatus | null;
 
+  /** The counterparty's name, logo and KYC badge — see `CounterpartyProfile`. `null` only when the counterparty row no longer exists. */
+  counterpartyProfile: CounterpartyProfile | null;
+
   createdAt: string;
   updatedAt: string;
 }
@@ -62,11 +93,11 @@ export interface ConnectionListMeta {
 
 export class ConnectionMapper {
   /**
-   * `counterpartyStatus` is REQUIRED rather than optional so a new call site cannot forget
-   * it and silently ship `undefined` — resolve it with
-   * `ConnectionService.counterpartyStatusesFor`.
+   * `counterparty` is REQUIRED rather than optional so a new call site cannot forget it and
+   * silently ship `undefined` — resolve it with `ConnectionService.counterpartiesFor`.
+   * `null` means the counterparty row no longer exists.
    */
-  static toDto(connection: IVendorAgencyConnection, counterpartyStatus: CounterpartyStatus | null): ConnectionDto {
+  static toDto(connection: IVendorAgencyConnection, counterparty: Counterparty | null): ConnectionDto {
     return {
       id: connection._id.toString(),
       vendorId: connection.vendor_id.toString(),
@@ -106,7 +137,8 @@ export class ConnectionMapper {
         }
         : null,
 
-      counterpartyStatus,
+      counterpartyStatus: counterparty?.status ?? null,
+      counterpartyProfile: counterparty?.profile ?? null,
 
       createdAt: connection.created_at.toISOString(),
       updatedAt: connection.updated_at.toISOString(),

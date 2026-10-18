@@ -151,6 +151,13 @@ document. An agent can only ever act on their own record.
 
 **Purpose**: Update identity, vehicle and contact fields. All fields optional; only provided fields change.
 
+> **Saving can activate the account (2026-10-18).** An agent becomes `active` once it has a
+> verified phone **and** a non-blank `name` ([auth/README.md](../auth/README.md) § account
+> activation). If this save completes that pair — typically setting `name` after the phone was
+> already verified — the agent is promoted in the same request and the response's `status` reads
+> `"active"`. Refresh from the response. Activation never fails the save. See
+> [FRONTEND-CHANGELOG-activation.md](./FRONTEND-CHANGELOG-activation.md).
+
 **Auth**: Required · **Permissions**: `agent`
 
 ### Request body

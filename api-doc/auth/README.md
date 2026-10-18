@@ -1055,8 +1055,21 @@ answered by two:
 
 **An account activates itself.** A vendor, agency or agent moves from `pending_verification` to
 `active` as soon as it has **a verified phone number and a name** — nothing else, and nobody else.
-Registration creates every role entity at `pending_verification`; the promotion happens on the call
-that proves the phone (`POST /api/me/phone/verify/confirm`, or a confirmed contact change).
+Registration creates every role entity at `pending_verification`; the promotion happens on
+whichever call completes the pair:
+
+- the call that proves the phone (`POST /api/me/phone/verify/confirm`, or a confirmed contact
+  change), **or**
+- **since 2026-10-18**, the role's own profile update — `PATCH /api/vendor/profile`
+  (`displayName`), `PATCH /api/agency/profile` (`displayName`), `PATCH /api/agent/profile`
+  (`name`). Before that date an account that proved its phone first and set its name afterwards
+  stayed `pending_verification` for good. The response's `status` already reads `"active"` when
+  that save promoted it — refresh from the response, no extra call.
+
+Since 2026-10-18 this matters beyond the account itself: the vendor↔agency and agent directories
+list `active` accounts only, so a `pending_verification` vendor or agency cannot be found by the
+other side ([vendor](../vendor/FRONTEND-CHANGELOG-connection-activation.md) ·
+[agency](../agency/FRONTEND-CHANGELOG-connection-activation.md)).
 
 ⚠ **`status: "active"` therefore no longer means "an administrator approved this business".**
 Anything you were deriving from that — a trust badge, a warning banner, a gate — must read the KYC

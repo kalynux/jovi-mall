@@ -323,6 +323,14 @@ Authorization: Bearer <jwt_token>
 
 Update the authenticated vendor's profile. **This is the endpoint to use for all post-onboarding edits** — including fields the vendor originally set during onboarding (payout details, branding, policies, country/timezone, etc.).
 
+> [!NOTE]
+> **Saving can activate the account (2026-10-18).** A vendor becomes `active` once it has a
+> verified phone **and** a non-blank `displayName` ([auth/README.md](../auth/README.md) § account
+> activation). If this save completes that pair — typically setting `displayName` after the phone
+> was already verified — the vendor is promoted in the same request and the response's `status`
+> reads `"active"`. Refresh the session's vendor state from the response. Activation never fails
+> the save. See [FRONTEND-CHANGELOG-activation-and-counterparty.md](./FRONTEND-CHANGELOG-activation-and-counterparty.md).
+
 > [!IMPORTANT]
 > **When to use this vs. the onboarding endpoints.**
 > The `PUT /api/vendor/onboarding/*` step endpoints are for the **first-time onboarding flow only**. Once onboarding is complete (`onboarding_step === 0`) they all return `409 VENDOR_ONBOARDING_ALREADY_COMPLETED`.

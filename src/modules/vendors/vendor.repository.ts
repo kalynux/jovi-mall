@@ -208,18 +208,25 @@ export class VendorRepository {
   }
 
   /**
-   * `status` for a set of vendors, in one query — the counterparty state an agency sees on
-   * its connection list (`ConnectionService.counterpartyStatusesFor`). The projection is the
-   * one field; a vendor that no longer exists is simply absent from the map.
+   * What an agency sees about each vendor on its connection list
+   * (`ConnectionService.counterpartiesFor`): status, display name and the KYC badge, in one
+   * query. The business name and logo are the Store's and are resolved beside this. Same
+   * projection discipline as `findDisplayIdentities` — one boolean of the KYC sub-document
+   * and nothing else. A vendor that no longer exists is simply absent from the map.
    */
-  async findStatusesByIds(vendorIds: Array<string>): Promise<Map<string, VendorStatus>> {
+  async findConnectionCounterparts(
+    vendorIds: Array<string>,
+  ): Promise<Map<string, { status: VendorStatus; displayName: string | null; kycVerified: boolean }>> {
     const ids = [...new Set(vendorIds)].filter((id) => Types.ObjectId.isValid(id));
     if (ids.length === 0) return new Map();
     const docs = await VendorModel.find(
       { _id: { $in: ids.map((id) => new Types.ObjectId(id)) } },
-      { _id: 1, status: 1 },
+      { _id: 1, status: 1, display_name: 1, 'kyc_details.legit_verified': 1 },
     ).lean();
-    return new Map(docs.map((d) => [d._id.toString(), d.status]));
+    return new Map(docs.map((d) => [
+      d._id.toString(),
+      { status: d.status, displayName: d.display_name ?? null, kycVerified: d.kyc_details?.legit_verified === true },
+    ]));
   }
 
   /**

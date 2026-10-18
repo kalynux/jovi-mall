@@ -25,6 +25,7 @@ import { FileReferenceService } from '../../../catalog/domain/services/media/Fil
 import { getStorageProvider, IStorageProvider } from '../../../../core/storage';
 import { resolveFileDetail } from '../../../catalog/read-models/file-detail.resolver';
 import { mergeVehicleInfo, VehicleInfoPatch } from '../vehicle-info';
+import { accountActivationService } from '../../../users/services/account-activation.service';
 
 /**
  * AgentProfileService — the agent's own record: identity, vehicle, contacts,
@@ -172,6 +173,13 @@ export class AgentProfileService {
     if (newStep !== updated.onboarding_step) {
       await this.agents.updateOnboardingStep(agentId, newStep);
       updated.onboarding_step = newStep;
+    }
+
+    // A name may have just completed the activation fundamentals (a proved phone + a name) —
+    // the half the contact-proof funnel cannot see. Echoed on `status` so the app can refresh.
+    // See AccountActivationService.activateRoleIfEligible.
+    if (await accountActivationService.activateRoleIfEligible('agent', updated.user_id.toString())) {
+      updated.status = 'active';
     }
 
     return this.present(updated);
