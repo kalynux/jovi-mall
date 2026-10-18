@@ -10,9 +10,15 @@ import {
   BrowseAgenciesQuerySchema,
   BrowseVendorsQuerySchema,
 } from '../connection.validator';
-import { ConnectionParty } from '../connection.model';
+import { ConnectionParty, IVendorAgencyConnection } from '../connection.model';
 
 const connectionService = new ConnectionService();
+
+/** One connection's DTO, carrying the counterparty's account status the caller sees. */
+async function toCallerDto(role: ConnectionParty, connection: IVendorAgencyConnection) {
+  const statuses = await connectionService.counterpartyStatusesFor(role, [connection]);
+  return ConnectionMapper.toDto(connection, statuses.get(connection._id.toString()) ?? null);
+}
 
 /**
  * ConnectionController
@@ -33,7 +39,7 @@ export class ConnectionController {
 
     res.status(201).json({
       success: true,
-      data: ConnectionMapper.toDto(connection),
+      data: await toCallerDto(role, connection),
       message: 'Connection request sent',
     });
   });
@@ -69,14 +75,17 @@ export class ConnectionController {
       : await connectionService.listForAgency(entityId, { status }, { page, limit });
 
     // An agency sees each vendor's COD terms beside the connection (2026-10-02).
-    const codTerms = role === 'agency'
-      ? await connectionService.vendorCodTermsFor(result.data.map((c) => c.vendor_id.toString()))
-      : null;
+    const [codTerms, counterpartyStatuses] = await Promise.all([
+      role === 'agency'
+        ? connectionService.vendorCodTermsFor(result.data.map((c) => c.vendor_id.toString()))
+        : Promise.resolve(null),
+      connectionService.counterpartyStatusesFor(role, result.data),
+    ]);
 
     res.json({
       success: true,
       data: result.data.map((c) => {
-        const dto = ConnectionMapper.toDto(c);
+        const dto = ConnectionMapper.toDto(c, counterpartyStatuses.get(c._id.toString()) ?? null);
         return codTerms ? { ...dto, vendorCodTerms: codTerms.get(dto.vendorId) ?? null } : dto;
       }),
       meta: { total: result.meta.total, page: result.meta.page, limit: result.meta.limit, totalPages: result.meta.pages },
@@ -89,7 +98,7 @@ export class ConnectionController {
     const entityId = req.auth!.role_entity._id.toString();
 
     const connection = await connectionService.getOwnedById(req.params.id, role, entityId);
-    const dto = ConnectionMapper.toDto(connection);
+    const dto = await toCallerDto(role, connection);
 
     if (role === 'agency') {
       const codTerms = await connectionService.vendorCodTermsFor([dto.vendorId]);
@@ -107,7 +116,7 @@ export class ConnectionController {
 
     const connection = await connectionService.approve(role, entityId, userId, req.params.id);
 
-    res.json({ success: true, data: ConnectionMapper.toDto(connection), message: 'Connection approved' });
+    res.json({ success: true, data: await toCallerDto(role, connection), message: 'Connection approved' });
   });
 
   /** POST .../:id/reject */
@@ -119,7 +128,7 @@ export class ConnectionController {
 
     const connection = await connectionService.reject(role, entityId, userId, req.params.id, reason ?? null);
 
-    res.json({ success: true, data: ConnectionMapper.toDto(connection), message: 'Connection rejected' });
+    res.json({ success: true, data: await toCallerDto(role, connection), message: 'Connection rejected' });
   });
 
   /** POST .../:id/withdraw */
@@ -130,7 +139,7 @@ export class ConnectionController {
 
     const connection = await connectionService.withdraw(role, entityId, userId, req.params.id);
 
-    res.json({ success: true, data: ConnectionMapper.toDto(connection), message: 'Connection request withdrawn' });
+    res.json({ success: true, data: await toCallerDto(role, connection), message: 'Connection request withdrawn' });
   });
 
   /** POST .../:id/terminate */
@@ -142,6 +151,6 @@ export class ConnectionController {
 
     const connection = await connectionService.terminate(role, entityId, userId, req.params.id, note ?? null);
 
-    res.json({ success: true, data: ConnectionMapper.toDto(connection), message: 'Connection terminated' });
+    res.json({ success: true, data: await toCallerDto(role, connection), message: 'Connection terminated' });
   });
 }

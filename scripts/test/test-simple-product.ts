@@ -289,13 +289,17 @@ const OID2 = '507f1f77bcf86cd799439012';
     variants?: Variant[];
     defaultAgencyId?: string | null;
     agencyActive?: boolean;
+    /** The agency's account status when it exists (default `active`). */
+    agencyStatus?: 'active' | 'pending_verification' | 'inactive';
     connectionActive?: boolean;
   }) => new ProductStatusValidationService(
     {} as any,
     { findByProduct: async () => opts.variants ?? [variant()] } as any,
     { findById: async () => ({ default_delivery_agency_id: opts.defaultAgencyId === undefined ? OID : opts.defaultAgencyId, business_addresses: [] }) } as any,
-    { findById: async () => (opts.agencyActive === false ? null : { status: 'active', policies: { pricing: { storage_based: { enabled: true } } } }) } as any,
+    { findById: async () => (opts.agencyActive === false ? null : { status: opts.agencyStatus ?? 'active', policies: { pricing: { storage_based: { enabled: true } } } }) } as any,
     { findByVendorAndAgency: async () => ({ status: opts.connectionActive === false ? 'paused' : 'active' }) } as any,
+    undefined,
+    { findNameByAgencyId: async () => 'Akwa Express', findHqAddressIdsByAgencyId: async () => [] } as any,
   );
 
   const runs: Array<{ label: string; svc: ProductStatusValidationService; product: Product; expect: string[] }> = [
@@ -382,6 +386,45 @@ const OID2 = '507f1f77bcf86cd799439012';
           `parity: ${run.label} → validate() throws 422`);
       }
     }
+
+    // ── WHY the agency blocks (2026-10-18) ──────────────────────────────────────
+    // One code, four reasons. Approvals ignore activation, so a vendor can be connected
+    // to a `pending_verification` agency — and "not currently active" was the whole
+    // explanation they got. `details.reason` is what a dashboard picks its remedy from.
+    const reasonOf = async (svc: ProductStatusValidationService, p: Product = product()) => {
+      const b = (await svc.collectActivationBlockers(p)).find((x) => x.code === ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY);
+      return { reason: b?.details?.reason, scope: b?.details?.scope, name: b?.details?.agencyName, message: b?.message ?? '' };
+    };
+
+    const pending = await reasonOf(build({ agencyStatus: 'pending_verification' }));
+    assert(pending.reason === 'agency_pending_activation' && pending.scope === 'default',
+      `agency reason: a pending_verification default agency → agency_pending_activation (got ${pending.reason})`);
+    assert(pending.message.includes('Akwa Express') && pending.message.includes('finished activating'),
+      `agency reason: the pending message names the agency and the cause (got "${pending.message}")`);
+    assert(pending.name === 'Akwa Express', 'agency reason: details.agencyName carries the agency name');
+
+    const suspended = await reasonOf(build({ agencyStatus: 'inactive' }));
+    assert(suspended.reason === 'agency_inactive' && !suspended.message.includes('finished activating'),
+      `agency reason: an inactive default agency → agency_inactive, not the activation copy (got ${suspended.reason})`);
+
+    const missing = await reasonOf(build({ agencyActive: false }));
+    assert(missing.reason === 'agency_not_found', `agency reason: a dangling default → agency_not_found (got ${missing.reason})`);
+
+    assert((await reasonOf(build({ defaultAgencyId: null }))).reason === 'no_default_agency',
+      'agency reason: no default → no_default_agency');
+    assert((await reasonOf(build({ connectionActive: false }))).reason === 'connection_not_active',
+      'agency reason: a paused connection → connection_not_active');
+
+    // The product's own override gets the same treatment, scoped to the product.
+    const override = await reasonOf(
+      build({ agencyStatus: 'pending_verification' }),
+      product({ delivery: { agencyId: OID, pickupLocation: { source: 'agency_storage', vendorAddressId: null } } as any }),
+    );
+    const overrideBlockers = (await build({ agencyStatus: 'pending_verification' }).collectActivationBlockers(
+      product({ delivery: { agencyId: OID, pickupLocation: { source: 'agency_storage', vendorAddressId: null } } as any }),
+    )).filter((b) => b.code === ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY);
+    assert(override.scope === 'default' && overrideBlockers.some((b) => b.details?.scope === 'product' && b.details?.reason === 'agency_pending_activation'),
+      'agency reason: a pending override agency is reported with scope "product"');
 
     // A non-'active' target is a no-op, as before.
     let draftThrew = false;

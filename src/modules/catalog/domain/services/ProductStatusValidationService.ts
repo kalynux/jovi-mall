@@ -33,6 +33,27 @@ export function toActivationBlocker(blocker: CollectedBlocker): ActivationBlocke
 }
 
 /**
+ * `details` on every `CATALOG_PRODUCT_NO_DELIVERY_AGENCY` blocker (2026-10-18). The code
+ * stays one code — dashboards already branch on it — and `reason` says WHICH link of the
+ * chain failed, so a client can offer the right remedy instead of a generic sentence:
+ *   - `no_default_agency`          — the vendor has no default agency
+ *   - `agency_pending_activation`  — the agency exists but has not finished activating
+ *                                    (`pending_verification`); publishing works once it does
+ *   - `agency_inactive`            — the agency is suspended or closed
+ *   - `agency_not_found`           — the id points at nothing
+ *   - `connection_not_active`      — the agency is fine; the vendor↔agency connection is not
+ * `scope` says whether it is the vendor's default (`default`) or the product's own
+ * override (`product`). Nothing here is confidential: the caller is the vendor, and the
+ * agency is one they chose.
+ */
+export interface DeliveryAgencyBlockerDetails {
+    reason: 'no_default_agency' | 'agency_pending_activation' | 'agency_inactive' | 'agency_not_found' | 'connection_not_active';
+    scope: 'default' | 'product';
+    agencyId?: string;
+    agencyName?: string | null;
+}
+
+/**
  * Status transitions a VENDOR may trigger (PATCH /:id/status and the bulk
  * endpoints). Everything absent is reserved:
  *   - `suspended` is a system/admin lock (delivery-agency cascade) — a vendor can
@@ -139,6 +160,42 @@ export class ProductStatusValidationService {
      *   - pickup-location VALIDITY is skipped unless a location is present and an
      *     effective agency was actually resolved.
      */
+    /**
+     * The blocker for an agency that is not `active`, naming the cause (2026-10-18).
+     *
+     * ⚠ A `pending_verification` agency is the common case and the one that used to read
+     * as a bug: approvals ignore activation on purpose, so a vendor can be connected to an
+     * agency that has not proved its phone yet, and "not currently active" told them nothing
+     * about why or what to do. The name is looked up only on this failure path.
+     */
+    private async agencyNotActiveError(
+        scope: DeliveryAgencyBlockerDetails['scope'],
+        agencyId: string,
+        agency: IDeliveryAgency | null,
+    ): Promise<AppError> {
+        const reason: DeliveryAgencyBlockerDetails['reason'] = !agency
+            ? 'agency_not_found'
+            : agency.status === 'pending_verification' ? 'agency_pending_activation' : 'agency_inactive';
+        const agencyName = agency ? await this.magazinRepository.findNameByAgencyId(agencyId) : null;
+        const subject = scope === 'default'
+            ? `Your default delivery agency${agencyName ? ` (${agencyName})` : ''}`
+            : `This product's delivery agency${agencyName ? ` (${agencyName})` : ''}`;
+        const remedy = scope === 'default'
+            ? 'choose another active agency as your default'
+            : 'choose another agency for this product';
+
+        const message = reason === 'agency_pending_activation'
+            ? `${subject} has not finished activating its account yet, so it cannot carry products. You can publish once it does, or ${remedy}.`
+            : `${subject} is no longer active. To publish physical products, ${remedy}.`;
+
+        return createAppError(
+            ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
+            422,
+            message,
+            { reason, scope, agencyId, agencyName } satisfies DeliveryAgencyBlockerDetails,
+        );
+    }
+
     async collectActivationBlockers(product: Product, options?: RepositoryOptions): Promise<CollectedBlocker[]> {
         const session = options?.session;
         const blockers: CollectedBlocker[] = [];
@@ -208,16 +265,14 @@ export class ProductStatusValidationService {
                 add(createAppError(
                     ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
                     422,
-                    'Physical products require an active default delivery agency on your vendor profile.',
+                    'Physical products need a default delivery agency. Choose one of your connected, active agencies as your default.',
+                    { reason: 'no_default_agency', scope: 'default' } satisfies DeliveryAgencyBlockerDetails,
                 ));
             } else {
-                const agency = await this.deliveryAgencyRepository.findById(vendor.default_delivery_agency_id.toString(), session);
+                const agencyId = vendor.default_delivery_agency_id.toString();
+                const agency = await this.deliveryAgencyRepository.findById(agencyId, session);
                 if (!agency || agency.status !== 'active') {
-                    add(createAppError(
-                        ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
-                        422,
-                        'Your default delivery agency is not currently active. Set an active default delivery agency to activate physical products.',
-                    ));
+                    add(await this.agencyNotActiveError('default', agencyId, agency));
                 } else {
                     const defaultConnection = await this.connectionRepository.findByVendorAndAgency(
                         product.vendorId,
@@ -229,6 +284,7 @@ export class ProductStatusValidationService {
                             ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
                             422,
                             'Your connection with this delivery agency needs to be approved (or reapproved) before this product can be activated.',
+                            { reason: 'connection_not_active', scope: 'default', agencyId } satisfies DeliveryAgencyBlockerDetails,
                         ));
                     } else {
                         effectiveAgency = agency;
@@ -241,11 +297,7 @@ export class ProductStatusValidationService {
             if (product.delivery?.agencyId) {
                 const overrideAgency = await this.deliveryAgencyRepository.findById(product.delivery.agencyId, session);
                 if (!overrideAgency || overrideAgency.status !== 'active') {
-                    add(createAppError(
-                        ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
-                        422,
-                        "This product's own delivery agency is not currently active.",
-                    ));
+                    add(await this.agencyNotActiveError('product', product.delivery.agencyId, overrideAgency));
                 } else {
                     const overrideConnection = await this.connectionRepository.findByVendorAndAgency(
                         product.vendorId,
@@ -257,6 +309,7 @@ export class ProductStatusValidationService {
                             ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
                             422,
                             "Your connection with this product's delivery agency needs to be approved (or reapproved) before this product can be activated.",
+                            { reason: 'connection_not_active', scope: 'product', agencyId: product.delivery.agencyId } satisfies DeliveryAgencyBlockerDetails,
                         ));
                     } else {
                         // The override is what actually handles delivery when set —

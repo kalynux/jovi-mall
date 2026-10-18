@@ -1,5 +1,12 @@
 import { IVendorAgencyConnection, ConnectionStatus, ConnectionParty } from '../connection.model';
 
+/**
+ * The OTHER party's account status, as the caller sees it (2026-10-18). Same three values
+ * on both sides — `Vendor.status` and `DeliveryAgency.status` share the enum.
+ * `null` only when the counterparty row no longer exists.
+ */
+export type CounterpartyStatus = 'active' | 'pending_verification' | 'inactive';
+
 export interface ConnectionDto {
   id: string;
   vendorId: string;
@@ -33,6 +40,15 @@ export interface ConnectionDto {
     note: string | null;
   } | null;
 
+  /**
+   * The counterparty's account status — the AGENCY's for a vendor caller, the VENDOR's for
+   * an agency caller. ⚠ Approvals deliberately ignore it, so a connection can be `active`
+   * while this is `pending_verification`; for a vendor that means the agency cannot carry
+   * physical products yet (the activation gate requires an `active` agency) and the
+   * dashboard should say so beside the approve button and on the connection.
+   */
+  counterpartyStatus: CounterpartyStatus | null;
+
   createdAt: string;
   updatedAt: string;
 }
@@ -45,7 +61,12 @@ export interface ConnectionListMeta {
 }
 
 export class ConnectionMapper {
-  static toDto(connection: IVendorAgencyConnection): ConnectionDto {
+  /**
+   * `counterpartyStatus` is REQUIRED rather than optional so a new call site cannot forget
+   * it and silently ship `undefined` — resolve it with
+   * `ConnectionService.counterpartyStatusesFor`.
+   */
+  static toDto(connection: IVendorAgencyConnection, counterpartyStatus: CounterpartyStatus | null): ConnectionDto {
     return {
       id: connection._id.toString(),
       vendorId: connection.vendor_id.toString(),
@@ -84,6 +105,8 @@ export class ConnectionMapper {
           note: connection.termination.note,
         }
         : null,
+
+      counterpartyStatus,
 
       createdAt: connection.created_at.toISOString(),
       updatedAt: connection.updated_at.toISOString(),

@@ -222,7 +222,7 @@ const BOOLEAN_VARS: readonly string[] = Object.freeze([
     'MYCOOLPAY_VERIFY_CALLBACK_IP', 'CAMPAY_PAYOUTS_ENABLED',
     'CINETPAY_PAYOUTS_ENABLED', 'CINETPAY_DIRECT_PAY', 'FAPSHI_PAYOUTS_ENABLED',
     'MYCOOLPAY_PAYOUTS_ENABLED', 'NOVASEND_PAYOUTS_ENABLED', 'PAWAPAY_PAYOUTS_ENABLED',
-    'AI_COPY_ENABLED',
+    'AI_COPY_ENABLED', 'GEO_MAPBOX_PERMANENT',
 ]);
 
 const BOOLEAN_LITERALS = new Set(['true', 'false', '1', '0']);
@@ -472,8 +472,8 @@ export function validateEnv(source: NodeJS.ProcessEnv = process.env): EnvProblem
     }
 
     // ── Geocoding ────────────────────────────────────────────────────────────
-    // THREE adapters ship in this build — nominatim, geoapify, locationiq — plus `chain`,
-    // which fails over between them and is the intended production setting (ADR-A04 D-3).
+    // FOUR adapters ship in this build — mapbox, nominatim, geoapify, locationiq — plus
+    // `chain`, which fails over between them and is the intended production setting (ADR-A04 D-3).
     // The remaining names in GEO_PROVIDERS are type-level only and the factory throws for
     // them. Catching that here means the failure lands at boot rather than on a customer's
     // address search.
@@ -489,10 +489,16 @@ export function validateEnv(source: NodeJS.ProcessEnv = process.env): EnvProblem
         err('GEO_GOOGLE_API_KEY', 'is required when GEO_PROVIDER=google.');
     }
     if (geoProvider === 'mapbox' && !has('GEO_MAPBOX_TOKEN')) {
-        err('GEO_MAPBOX_TOKEN', 'is required when GEO_PROVIDER=mapbox.');
+        err('GEO_MAPBOX_TOKEN', 'is required when GEO_PROVIDER=mapbox. The adapter is built only when its token is present, so without it every lookup throws GEO_PROVIDER_NOT_CONFIGURED.');
     }
-    if (['google', 'mapbox', 'here'].includes(geoProvider)) {
-        err('GEO_PROVIDER', `is "${geoProvider}", which has no adapter in this build — getGeocodingProvider() throws GEO_PROVIDER_NOT_CONFIGURED on first use. Implemented: "chain", "nominatim", "geoapify", "locationiq".`);
+    if (['google', 'here'].includes(geoProvider)) {
+        err('GEO_PROVIDER', `is "${geoProvider}", which has no adapter in this build — getGeocodingProvider() throws GEO_PROVIDER_NOT_CONFIGURED on first use. Implemented: "chain", "mapbox", "nominatim", "geoapify", "locationiq".`);
+    }
+    // Temporary Mapbox results may not be cached or stored, and this platform does both
+    // (the Redis result cache, and the picked candidate on every order and saved address).
+    // Not refused — whether to accept that is the owner's call — but never silent.
+    if (has('GEO_MAPBOX_TOKEN') && ['false', '0'].includes((get('GEO_MAPBOX_PERMANENT') ?? '').toLowerCase())) {
+        warn('GEO_MAPBOX_PERMANENT', 'is off, so Mapbox is asked for TEMPORARY results. Mapbox\'s terms forbid caching or storing those, and this platform caches every geocoding result and stores the one a customer picks on their order and saved address.');
     }
     // A SINGLE-provider setting is fatal without its key: the factory builds it with
     // `required: true`, so the adapter cannot be built and every lookup throws.
@@ -509,7 +515,7 @@ export function validateEnv(source: NodeJS.ProcessEnv = process.env): EnvProblem
         // is precisely the failure worth warning about, because it is silent: the
         // deployment believes it runs on its primary and is actually running on
         // Nominatim's ~1 rps public instance.
-        const chainNames = (get('GEO_PROVIDER_CHAIN') ?? 'locationiq,geoapify')
+        const chainNames = (get('GEO_PROVIDER_CHAIN') ?? 'mapbox,locationiq,geoapify')
             .split(',')
             .map((name) => name.trim().toLowerCase())
             .filter((name) => name.length > 0);

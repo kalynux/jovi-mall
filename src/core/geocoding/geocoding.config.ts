@@ -38,6 +38,16 @@ export interface ApiKeyProviderConfig {
 }
 
 /**
+ * Mapbox carries one setting the other keyed providers do not: whether results are
+ * requested as PERMANENT. That is a licence question, not a tuning knob — see the
+ * header of `providers/mapbox.provider.ts`.
+ */
+export interface MapboxProviderConfig extends ApiKeyProviderConfig {
+    /** Sent as `permanent=`. Default true (`GEO_MAPBOX_PERMANENT`). */
+    permanent: boolean;
+}
+
+/**
  * The result cache (ADR-A04 D-1). Provider-independent by construction — it decorates
  * `IGeocodingProvider`, so it applies to whichever adapter is active and to the paid one when
  * it lands.
@@ -78,7 +88,7 @@ export interface GeocodingConfig {
 
     nominatim?: NominatimConfig;
     google?: ApiKeyProviderConfig;
-    mapbox?: ApiKeyProviderConfig;
+    mapbox?: MapboxProviderConfig;
     here?: ApiKeyProviderConfig;
     geoapify?: ApiKeyProviderConfig;
     locationiq?: ApiKeyProviderConfig;

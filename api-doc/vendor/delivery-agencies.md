@@ -37,7 +37,10 @@ Authorization: Bearer <access_token>
 **Description**: List delivery agencies available for selection. Use this endpoint during onboarding (Step 2) or any time the vendor wants to browse or change their default delivery agency.
 
 Only agencies that meet **both** of the following conditions are returned:
-- `status` is NOT `"inactive"` (i.e., `"active"` or `"pending_verification"`)
+- `status` is `"active"` — since 2026-10-18 a `"pending_verification"` agency (phone not yet
+  verified, or no display name) is **not** listed; it could not carry your physical products
+  anyway, because publishing needs an `active` agency. See
+  [FRONTEND-CHANGELOG-connection-activation.md](./FRONTEND-CHANGELOG-connection-activation.md).
 - `onboardingStep` is `0` (onboarding fully completed — all 4 steps done)
 
 **Authorization**: Vendor access required.

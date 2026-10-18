@@ -184,6 +184,51 @@ nothing.
 
 ---
 
+## D-4 · Mapbox goes first · **2026-10-18**
+
+**Decision (owner):** a third keyed adapter, `mapbox` (Geocoding API v6,
+`core/geocoding/providers/mapbox.provider.ts`), and a new default order:
+`GEO_PROVIDER_CHAIN=mapbox,locationiq,geoapify`, Nominatim still appended last. A deployment
+without `GEO_MAPBOX_TOKEN` skips the link and runs D-3's order unchanged, so this needed no
+migration and no coordinated deploy.
+
+**Taken without the six-address relevance comparison D-3's amendment asks for.** That rule
+still applies — the first slot is what a customer sees, because the chain never corrects a
+confident wrong answer — so `verify:geocoding-providers` now exercises Mapbox and prints its
+top-result distance beside the other two. If it ranks worse than LocationIQ on Cameroonian
+addresses, the remedy is reordering `GEO_PROVIDER_CHAIN`, which is configuration.
+
+**`permanent=true` by default, because the alternative breaches Mapbox's terms.** Temporary
+results (free, 100 000/month) may not be cached or stored; this platform caches every result
+(D-1) and stores the picked candidate on orders and saved addresses. Permanent is billed from
+the first request (US$5 / 1 000 at the time of writing, card on file required).
+`GEO_MAPBOX_PERMANENT=false` exists and is a boot warning, not a refusal — the trade is the
+owner's to make, but it must not be made silently.
+
+**Two adapter rules beyond D-3's:** a card-less account answers `permanent=true` with a **403**,
+which is `GEO_SEARCH_FAILED` and is deliberately *not* failed over (same posture as a 401), so
+it breaks search loudly rather than degrading to LocationIQ; and a query past v6's 256-char /
+20-word limit is answered `[]` locally rather than sent, so the chain falls through instead of
+failing on a 422.
+
+**Amended the same day — Mapbox answers at street level or not at all, and in Cameroon that
+means not at all.** The first live run put Mapbox's top result for "Boulevard de la Liberté,
+Akwa, Douala" at *"Douala, Littoral, Cameroon"* — the city centroid. Because the chain never
+corrects a non-empty answer, Mapbox-first would have stored a city centroid as a drop-off while
+LocationIQ, which had the exact street, was never asked. The adapter now requests
+`types=address,street,neighborhood,locality` and drops any coarser feature on reverse (owner
+decision). Probing eight well-known Douala/Yaoundé streets and quarters then returned **nothing
+finer than a city for any of them**, forward or reverse. So, measured: **in this market Mapbox
+contributes no geocoding answers; every lookup costs one Mapbox call and falls through to
+LocationIQ.** Its Directions and Matrix APIs do route inside Douala (Akwa → Bonapriso, 5.3 km),
+which is why geo-tracker keeps it first for routing. `verify:geocoding-providers` proves the
+mapping on a covered market (Paris) and REPORTS Cameroon coverage, so the day it changes is
+visible.
+
+**Separate from geo-tracker's Mapbox routing provider** (`MAPBOX_ACCESS_TOKEN` there,
+`GEO_MAPBOX_TOKEN` here). Holding one token on both sides is one quota with two spenders — the
+hazard `../CLAUDE.md` already records for the Geoapify and LocationIQ keys.
+
 ## Consequences
 
 - **`config/env.ts:405` starts passing for a value other than `nominatim`** — the boot check

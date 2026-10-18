@@ -37,6 +37,7 @@ dotenv.config();
 
 import { GeoapifyProvider } from '../../src/core/geocoding/providers/geoapify.provider';
 import { LocationIqProvider } from '../../src/core/geocoding/providers/locationiq.provider';
+import { MapboxProvider } from '../../src/core/geocoding/providers/mapbox.provider';
 import { GeoCandidate, IGeocodingProvider } from '../../src/core/geocoding/geocoding-provider.interface';
 
 let passed = 0;
@@ -141,8 +142,8 @@ async function exercise(label: string, provider: IGeocodingProvider): Promise<vo
 
     // ── a query nobody can resolve ───────────────────────────────────────────
     //
-    // Both providers signal "no match" differently — Geoapify with an empty
-    // FeatureCollection, LocationIQ with a 404 — and BOTH must arrive here as an
+    // The providers signal "no match" differently — Geoapify and Mapbox with an empty
+    // FeatureCollection, LocationIQ with a 404 — and ALL must arrive here as an
     // empty array rather than as a thrown error. Getting this wrong is what makes
     // the chain spend every provider's quota on every unmatchable address.
     const nothing = await provider.search('zzzz qqqq no such place zzzz', { limit: 1, countryCodes: ['cm'] });
@@ -156,6 +157,80 @@ async function main(): Promise<void> {
     console.log('═══════════════════════════════════════════════════════════════════════');
 
     const timeout = Number(process.env.GEO_REQUEST_TIMEOUT_MS) || 8000;
+
+    if (process.env.GEO_MAPBOX_TOKEN) {
+        const permanent = !['false', '0'].includes((process.env.GEO_MAPBOX_PERMANENT ?? '').toLowerCase());
+        // Printed because a 403 on every call below almost always means THIS: a
+        // permanent request on an account with no card on file.
+        console.log(`\n  ℹ  mapbox: permanent=${permanent}`);
+        const mapbox = new MapboxProvider(
+            { apiKey: process.env.GEO_MAPBOX_TOKEN, baseUrl: process.env.GEO_MAPBOX_BASE_URL, permanent },
+            timeout, 5, ['cm'],
+        );
+        console.log(`\n── mapbox ${'─'.repeat(56)}\n`);
+
+        // ⚠ NOT the shared `exercise`, and the reason is a measured fact rather than a
+        // preference. On 2026-10-18 Mapbox resolved NOTHING finer than a city anywhere
+        // in Cameroon — eight well-known Douala/Yaoundé streets and quarters all came
+        // back as `place: Douala` / `region: Littoral`, and the adapter (correctly)
+        // drops those. So `exercise`'s Douala fixture can no longer reach the mapping
+        // code at all. The MAPPING is proven on a market Mapbox does cover; Cameroon
+        // COVERAGE is reported, never asserted — it is Mapbox's data, not our bug.
+        const paris = await mapbox.search('10 Rue de Rivoli, Paris', { limit: 3, countryCodes: ['fr'] });
+        assert('mapbox: a street-level address in a covered market returns a candidate', paris.length > 0);
+        const p0 = paris[0];
+        if (p0) {
+            const [lon, lat] = p0.coordinates.coordinates;
+            assert('mapbox: candidate names this provider', p0.provider === 'mapbox');
+            assert('mapbox: formatted_address is non-empty', p0.formatted_address.trim().length > 0);
+            assert('mapbox: coordinates are [lng, lat] in that ORDER', Math.abs(lon - 2.35) < 0.2 && Math.abs(lat - 48.86) < 0.2,
+                `got [${lon}, ${lat}]`);
+            assert('mapbox: components.street is populated', (p0.components.street ?? '').length > 0,
+                `street = ${String(p0.components.street)}`);
+            assert('mapbox: components.city is populated', (p0.components.city ?? '').length > 0,
+                `city = ${String(p0.components.city)}`);
+            assert('mapbox: components.region is populated', (p0.components.region ?? '').length > 0,
+                `region = ${String(p0.components.region)}`);
+            assert('mapbox: components.country_code is FR', p0.components.country_code === 'FR',
+                `country_code = ${String(p0.components.country_code)}`);
+            assert('mapbox: provider_place_id is set', !!p0.provider_place_id);
+        }
+        const parisRev = await mapbox.reverse(48.8606, 2.3376);
+        assert('mapbox: reverse resolves a covered coordinate at street level',
+            parisRev !== null && (parisRev.components.street !== null || parisRev.components.neighbourhood !== null));
+
+        const nothing = await mapbox.search('zzzz qqqq no such place zzzz', { limit: 1 });
+        assert('mapbox: an unresolvable query returns [] rather than throwing', Array.isArray(nothing));
+
+        // Coverage in the market we serve — REPORTED.
+        const cm = await mapbox.search(QUERY, { limit: 3, countryCodes: ['cm'] });
+        const cmRev = await mapbox.reverse(LAT, LNG);
+        console.log(`  ℹ  mapbox: Cameroon street-level coverage — search "${QUERY}": ${cm.length} candidate(s); `
+            + `reverse Akwa: ${cmRev ? `"${cmRev.formatted_address}"` : 'none'}. `
+            + 'Zero means every Cameroonian lookup falls through to the next provider.');
+
+        // Mapbox-only: a query past v6's 20-word limit must come back EMPTY so the
+        // chain asks the next provider — never as a 422 the chain would not fall
+        // over on. Answered locally, so it spends no quota.
+        const long = await new MapboxProvider(
+            { apiKey: process.env.GEO_MAPBOX_TOKEN, permanent }, timeout, 5, ['cm'],
+        ).search(Array.from({ length: 25 }, (_, i) => `mot${i}`).join(' '));
+        assert('mapbox: a query past the 20-word limit returns [] (chain falls through)', long.length === 0);
+
+        // Mapbox-only: it may answer ONLY at street / neighbourhood level, so a city-
+        // level centroid can never block LocationIQ's street match (ADR-A04 D-4). A
+        // bare city name is the query most likely to tempt a coarse answer; [] is a
+        // pass, since the chain then asks the next provider.
+        const cityOnly = await new MapboxProvider(
+            { apiKey: process.env.GEO_MAPBOX_TOKEN, permanent }, timeout, 5, ['cm'],
+        ).search('Douala');
+        assert('mapbox: no candidate is coarser than a neighbourhood (city-only query)',
+            cityOnly.every(c => c.components.street !== null || c.components.neighbourhood !== null),
+            cityOnly.map(c => c.formatted_address).join(' | '));
+    } else {
+        console.log('\n  ⏭  mapbox SKIPPED — GEO_MAPBOX_TOKEN is not set');
+        skipped++;
+    }
 
     if (process.env.GEO_GEOAPIFY_API_KEY) {
         await exercise('geoapify', new GeoapifyProvider(
@@ -177,8 +252,8 @@ async function main(): Promise<void> {
         skipped++;
     }
 
-    if (skipped === 2) {
-        console.log('\n⚠ BOTH providers were skipped, so this run proved NOTHING about either');
+    if (skipped === 3) {
+        console.log('\n⚠ EVERY provider was skipped, so this run proved NOTHING about any');
         console.log('  adapter. They are written against the published response shapes and have');
         console.log('  never been exercised against a live key. Set a key and run this before');
         console.log('  trusting `GEO_PROVIDER=chain` in a deployment.\n');

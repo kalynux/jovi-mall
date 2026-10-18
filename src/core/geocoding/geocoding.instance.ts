@@ -14,10 +14,16 @@ import { CachedGeocodingProvider } from './geocoding.cache';
  * - GEO_PROVIDER            : 'chain' | 'nominatim' | 'geoapify' | 'locationiq' | 'google' |
  *                             'mapbox' | 'here' (default 'nominatim'). **'chain' is the
  *                             intended production setting** — see the factory.
- * - GEO_PROVIDER_CHAIN      : failover order for 'chain' (default 'locationiq,geoapify' —
- *                             LocationIQ FIRST, reversed by measurement 2026-08-23; see
- *                             `buildChain` in the factory for why relevance beats rate limits).
+ * - GEO_PROVIDER_CHAIN      : failover order for 'chain' (default 'mapbox,locationiq,geoapify' —
+ *                             Mapbox first since 2026-10-18; LocationIQ ahead of Geoapify by
+ *                             measurement 2026-08-23; see `buildChain` in the factory for why
+ *                             relevance beats rate limits). A link without its key is skipped.
  *                             `nominatim` is always appended as the keyless last resort.
+ * - GEO_MAPBOX_TOKEN        : Mapbox access token (a public `pk.` token is enough)
+ * - GEO_MAPBOX_BASE_URL     : override (default https://api.mapbox.com/search/geocode/v6)
+ * - GEO_MAPBOX_PERMANENT    : 'false' requests temporary results (default true). ⚠ Temporary
+ *                             results may not be cached or stored under Mapbox's terms, and
+ *                             this platform does both — see the adapter's header.
  * - GEO_REQUEST_TIMEOUT_MS  : per-request timeout (default 5000)
  * - GEO_DEFAULT_LIMIT       : default search result count (default 5)
  * - GEO_DEFAULT_COUNTRY_CODES: comma-separated ISO-2 bias, e.g. 'cm' (default 'cm')
@@ -67,11 +73,10 @@ function loadGeocodingConfig(): GeocodingConfig {
         defaultCountryCodes: parseCountryCodes(process.env.GEO_DEFAULT_COUNTRY_CODES ?? 'cm'),
         // Order matters, and the default order lives in buildChain() — NOT here: an unset
         // value must reach the factory as `undefined` so one default is applied in one
-        // place. ⚠ That default is LocationIQ first, which is the reverse of what the rate
-        // limits alone suggest; it was reversed on 2026-08-23 by measurement (ADR-A04 D-3's
-        // amendment), because the chain only consults the second provider when the first
-        // returns EMPTY or errors — so a confidently wrong first answer is never corrected,
-        // while a 429 is. This comment previously argued the opposite and outlived it.
+        // place. ⚠ That default is Mapbox, then LocationIQ, then Geoapify. The chain only
+        // consults the next provider when the one before returns EMPTY or errors — so a
+        // confidently wrong first answer is never corrected, while a 429 is; the first slot
+        // is therefore a relevance decision (ADR-A04 D-3 and its amendments).
         chain: parseChain(process.env.GEO_PROVIDER_CHAIN),
         cache: {
             // ON by default, unlike most optional infrastructure here. The cache is what makes
@@ -125,7 +130,14 @@ function loadGeocodingConfig(): GeocodingConfig {
         config.google = { apiKey: process.env.GEO_GOOGLE_API_KEY, baseUrl: process.env.GEO_GOOGLE_BASE_URL };
     }
     if (process.env.GEO_MAPBOX_TOKEN) {
-        config.mapbox = { apiKey: process.env.GEO_MAPBOX_TOKEN, baseUrl: process.env.GEO_MAPBOX_BASE_URL };
+        config.mapbox = {
+            apiKey: process.env.GEO_MAPBOX_TOKEN,
+            baseUrl: process.env.GEO_MAPBOX_BASE_URL,
+            // ON unless explicitly 'false'. This platform caches AND stores geocoding
+            // results, which Mapbox's terms permit only for permanent requests — so the
+            // default is the compliant one. See `providers/mapbox.provider.ts`.
+            permanent: !['false', '0'].includes((process.env.GEO_MAPBOX_PERMANENT ?? '').toLowerCase()),
+        };
     }
 
     return config;

@@ -209,20 +209,27 @@ A first-time vendor usually has no delivery agency configured. That does **not**
 > the message text, and do not build a client-side copy table from this example** — branch on
 > `code` and render the `message` you were given.
 >
-> ⚠ **`CATALOG_PRODUCT_NO_DELIVERY_AGENCY` alone has FIVE distinct messages**, because one code
-> covers five different situations (`ProductStatusValidationService.ts:211, 219, 231, 247, 259`):
+> ⚠ **`CATALOG_PRODUCT_NO_DELIVERY_AGENCY` covers several situations, and since 2026-10-18 an
+> activation blocker's `details` says which** — branch on `details.reason` + `details.scope`,
+> never on the message (the `PATCH /:id` pickup-location refusal carries no `details`):
 >
-> | Situation | Message |
-> |---|---|
-> | No vendor default agency | *"Physical products require an active default delivery agency on your vendor profile."* |
-> | Vendor default is not `active` | *"Your default delivery agency is not currently active. …"* |
-> | Connection to the vendor default not approved | *"Your connection with this delivery agency needs to be approved (or reapproved) …"* |
-> | The **product's own** override agency is not `active` | *"This product's own delivery agency is not currently active."* |
-> | Connection to the **override** agency not approved | *"Your connection with this product's delivery agency needs to be approved (or reapproved) …"* |
+> | `details.reason` | `scope` | Situation | Remedy to offer |
+> |---|---|---|---|
+> | `no_default_agency` | `default` | No default agency set | pick a default (`PUT /api/vendor/profile/default-delivery-agency`) |
+> | `agency_pending_activation` | `default` \| `product` | The agency exists but has **not finished activating** (`pending_verification`) | wait for the agency, or pick another one |
+> | `agency_inactive` | `default` \| `product` | The agency is suspended or closed | pick another agency |
+> | `agency_not_found` | `default` \| `product` | The agency id points at nothing | pick another agency |
+> | `connection_not_active` | `default` \| `product` | The agency is fine; your connection to it is not approved (or needs reapproval) | the connection screen |
 >
-> The last two are reachable only when the product carries its own `delivery.agencyId`, and they
-> are the pair a vendor finds most confusing — the code is identical to the profile-level one, so
-> a UI that maps code → its own sentence sends them to the wrong settings screen.
+> `details` also carries `agencyId` (absent for `no_default_agency`) and, for the three agency
+> reasons, `agencyName` (`string | null`). The message names the agency and the cause, e.g. *"Your
+> default delivery agency (Akwa Express) has not finished activating its account yet, so it
+> cannot carry products. You can publish once it does, or choose another active agency as your
+> default."*
+>
+> `scope: "product"` is reachable only when the product carries its own `delivery.agencyId`, and
+> it is the case a vendor finds most confusing — the code is identical to the profile-level one,
+> so a UI that maps code → its own sentence sends them to the wrong settings screen.
 
 Once the vendor fixes their setup, publish with either `PATCH /products/:id/status {"status":"active"}` or `PATCH /products/:id/simple {"publish": true}`.
 

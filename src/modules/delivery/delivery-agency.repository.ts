@@ -88,6 +88,21 @@ export class DeliveryAgencyRepository {
   }
 
   /**
+   * `status` for a set of agencies, in one query — the counterparty state a vendor sees on
+   * its connection list (`ConnectionService.counterpartyStatusesFor`). The projection is the
+   * one field; an agency that no longer exists is simply absent from the map.
+   */
+  async findStatusesByIds(agencyIds: string[]): Promise<Map<string, IDeliveryAgency['status']>> {
+    const ids = [...new Set(agencyIds)].filter((id) => Types.ObjectId.isValid(id));
+    if (ids.length === 0) return new Map();
+    const docs = await DeliveryAgencyModel.find(
+      { _id: { $in: ids.map((id) => new Types.ObjectId(id)) } },
+      { _id: 1, status: 1 },
+    ).lean();
+    return new Map(docs.map((d) => [d._id.toString(), d.status]));
+  }
+
+  /**
    * Toggle the agency's auto-assignment participation. Returns the updated
    * agency, or null when no such agency exists.
    */
@@ -459,8 +474,19 @@ export class DeliveryAgencyRepository {
    * vendor call sites.
    *
    * Hard filters (always applied):
-   *   - status ≠ 'inactive'
+   *   - status === 'active'
    *   - onboarding_step = 0 (fully completed)
+   *
+   * ⚠ **`=== 'active'`, deliberately NOT `!== 'inactive'`** (2026-10-18, owner decision).
+   * The negated form listed `pending_verification` agencies (phone not yet proved, or no
+   * display name — `core/accounts/activation.ts`), and a vendor could find, request and be
+   * approved by one, then be refused at product activation, which requires `=== 'active'`
+   * (`ProductStatusValidationService`). The directory now asks the same question the
+   * publish gate does. This is the OPPOSITE of the `requireAuth` rule — there, refusing
+   * `pending_verification` would lock people out of their own account; here, hiding it only
+   * keeps an agency out of other people's search results until it finishes activating.
+   * The agent directory reads this query too, and follows the same rule on purpose.
+   * Existing connections are untouched: the caller's own connection list is not filtered.
    *
    * Optional filters:
    *   - search: regex match on agency_name, coverage_areas[], headquarters_addresses[].city,
@@ -485,7 +511,7 @@ export class DeliveryAgencyRepository {
     // areas and HQ addresses live on the Magazin, so those filters run after the
     // $lookup below.
     const baseMatch: Record<string, unknown> = {
-      status: { $ne: 'inactive' },
+      status: 'active',
       onboarding_step: 0,
     };
     if (storage_based === true) baseMatch['policies.pricing.storage_based.enabled'] = true;

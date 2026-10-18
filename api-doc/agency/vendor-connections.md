@@ -51,7 +51,10 @@ current connection state to that vendor (if any).
 | `return_eligible` | `"true"` | — | Only vendors whose return policy accepts returns |
 | `cancellable` | `"true"` | — | Only vendors whose cancellation policy allows cancellation |
 
-Only vendors with `status ≠ "inactive"` and completed onboarding (`onboardingStep = 0`) are returned.
+Only vendors with `status = "active"` and completed onboarding (`onboardingStep = 0`) are returned.
+Since 2026-10-18 a `"pending_verification"` vendor is **not** listed, whatever your own agency's
+status — such a vendor can still find you and send you a request, and you can still approve it
+(see [FRONTEND-CHANGELOG-connection-activation.md](./FRONTEND-CHANGELOG-connection-activation.md)).
 
 **Success Response** (`200 OK`):
 ```json
@@ -194,6 +197,11 @@ Identical `ConnectionDto` shape and `AgencyVendorListItemDto`/`AgencyVendorPolic
 shape (mirroring `VendorAgencyListItemDto` on the vendor side) — see
 [Vendor: Agency Connections](../vendor/agency-connections.md#response-field-reference) for the
 full `ConnectionDto` reference.
+
+**`counterpartyStatus` (2026-10-18)** — every `ConnectionDto` you receive carries the **vendor's**
+account status: `"active" | "pending_verification" | "inactive" | null` (`null` only if the vendor
+record no longer exists). Approvals ignore it, so a request from a `pending_verification` vendor
+can be approved as usual; show it as a badge so you know the vendor has not finished activating.
 
 ```typescript
 interface AgencyVendorListItemDto {

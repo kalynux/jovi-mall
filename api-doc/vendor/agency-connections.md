@@ -116,6 +116,10 @@ current connection state to that agency (if any), so the UI can render the right
 `connection` is `null` when you've never requested a connection with that agency. Otherwise it's
 `{ id, status }` — use `id` to drive `approve`/`reject`/`withdraw`/`terminate` calls.
 
+**Only `active` agencies are listed** (since 2026-10-18), whatever your own vendor status — a
+`pending_verification` agency could not carry your physical products, so it is no longer offered.
+Your existing connections are unaffected and still appear in `GET /api/vendor/agency-connections`.
+
 ---
 
 ### POST /api/vendor/agency-connections
@@ -197,6 +201,14 @@ else (e.g. its own override agency is down) stays suspended until that is fixed 
 > [`PUT /api/vendor/profile/default-delivery-agency`](./profile.md#put-apivendorprofiledefault-delivery-agency),
 > e.g. once you have several active contracts to choose from. Reapproving an already-once-active
 > connection never triggers this (you'd already have a default by then).
+>
+> ⚠ **Since 2026-10-18 this happens only when the agency is `active`.** An agency can still send
+> you a request before it has finished activating, and you can still approve it — but it does
+> not become your default, because a default that is not `active` blocks every physical product.
+> Your default stays empty and the next approval with an `active` agency fills it. If the pending
+> agency activates later, it is **not** promoted automatically: set it via
+> `PUT /api/vendor/profile/default-delivery-agency`. Check `counterpartyStatus` on the request to
+> warn the vendor before they approve.
 
 **Success Response** (`200 OK`): the updated `ConnectionDto`, `status: "active"`.
 
@@ -256,6 +268,7 @@ pause (see Overview).
 | `rejection` | `{ reason, rejectedByRole, rejectedAt } \| null` | Set only if currently/previously `rejected`. |
 | `withdrawal` | `{ withdrawnByRole, withdrawnAt } \| null` | Set only if currently/previously `withdrawn`. |
 | `termination` | `{ terminatedByRole, terminatedAt, reason, note } \| null` | `reason` is `"unilateral"` or `"reapproval_declined"` (terminated instead of reapproving). |
+| `counterpartyStatus` | `"active" \| "pending_verification" \| "inactive" \| null` | **2026-10-18.** The OTHER party's account status — the agency's for you. `pending_verification`: the agency has not finished activating; you can approve, but it cannot carry physical products until it is `active`. `null` only if the agency record no longer exists. On every connection response (list, detail, request, approve, reject, withdraw, terminate). |
 | `createdAt` / `updatedAt` | | Standard timestamps. |
 
 ---
@@ -282,6 +295,7 @@ interface ConnectionDto {
   rejection: { reason: string | null; rejectedByRole: ConnectionParty; rejectedAt: string } | null;
   withdrawal: { withdrawnByRole: ConnectionParty; withdrawnAt: string } | null;
   termination: { terminatedByRole: ConnectionParty; terminatedAt: string; reason: 'unilateral' | 'reapproval_declined'; note: string | null } | null;
+  counterpartyStatus: 'active' | 'pending_verification' | 'inactive' | null; // 2026-10-18
   createdAt: string;
   updatedAt: string;
 }
@@ -301,7 +315,7 @@ POST /api/vendor/agency-connections/665f.../withdraw
 POST /api/vendor/agency-connections/665f.../terminate { "note": "Switching partners" }
 ```
 
-Your first `active` connection is automatically set as your default — nothing else to call. For
+Your first `active` connection **with an `active` agency** is automatically set as your default — nothing else to call. For
 any connection after that, set it as your default via
 [`PUT /api/vendor/profile/default-delivery-agency`](./profile.md#put-apivendorprofiledefault-delivery-agency),
 or as a per-product override via [`PATCH /api/vendor/products/:id`](./products.md).

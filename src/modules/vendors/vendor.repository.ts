@@ -208,6 +208,21 @@ export class VendorRepository {
   }
 
   /**
+   * `status` for a set of vendors, in one query — the counterparty state an agency sees on
+   * its connection list (`ConnectionService.counterpartyStatusesFor`). The projection is the
+   * one field; a vendor that no longer exists is simply absent from the map.
+   */
+  async findStatusesByIds(vendorIds: Array<string>): Promise<Map<string, VendorStatus>> {
+    const ids = [...new Set(vendorIds)].filter((id) => Types.ObjectId.isValid(id));
+    if (ids.length === 0) return new Map();
+    const docs = await VendorModel.find(
+      { _id: { $in: ids.map((id) => new Types.ObjectId(id)) } },
+      { _id: 1, status: 1 },
+    ).lean();
+    return new Map(docs.map((d) => [d._id.toString(), d.status]));
+  }
+
+  /**
    * Display name + the verified badge for a set of vendors, in one query — the profile half
    * of `resolveVendorSummaries` (the business name and logo are the Store's).
    *
@@ -404,8 +419,15 @@ export class VendorRepository {
    * Symmetric to DeliveryAgencyRepository.findAvailableForVendors.
    *
    * Hard filters (always applied):
-   *   - status ≠ 'inactive'
+   *   - status === 'active'
    *   - onboarding_step = 0 (fully completed)
+   *
+   * ⚠ **`=== 'active'`, deliberately NOT `!== 'inactive'`** (2026-10-18, owner decision),
+   * mirroring `DeliveryAgencyRepository.findAvailableForVendors` — read the reasoning there.
+   * A `pending_verification` vendor is hidden from agencies' search, never from anything it
+   * does itself: it can still browse active agencies and request them, and an agency can
+   * still approve that request. Do not "align" this with the `requireAuth` / storefront
+   * rule (`!== 'inactive'`), which answers a different question.
    *
    * Returns a field-projected, lean result (no payout details, no KYC numbers).
    */
@@ -416,7 +438,7 @@ export class VendorRepository {
 
     // Non-name filters run on the vendor document itself.
     const baseMatch: Record<string, unknown> = {
-      status: { $ne: 'inactive' },
+      status: 'active',
       onboarding_step: VendorOnboardingStep.COMPLETED,
     };
     if (city && city.trim()) baseMatch['business_addresses.city'] = buildSearchRegex(city);

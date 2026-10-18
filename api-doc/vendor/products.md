@@ -637,7 +637,7 @@ PATCH /api/vendor/products/:id/status
 | `CATALOG_PRODUCT_NO_VARIANTS` | No variants exist |
 | `CATALOG_PRODUCT_VARIANT_ZERO_PRICE` | An active variant has price = 0 |
 | `CATALOG_PRODUCT_NO_DEFAULT_VARIANT` | `defaultVariantId` missing or points to archived/nonexistent variant |
-| `CATALOG_PRODUCT_NO_DELIVERY_AGENCY` | Physical product: vendor has no active default delivery agency, or (if set) the product's own override agency isn't active, or its connection needs (re)approval |
+| `CATALOG_PRODUCT_NO_DELIVERY_AGENCY` | Physical product: vendor has no active default delivery agency, or (if set) the product's own override agency isn't active, or its connection needs (re)approval. **Since 2026-10-18 `details.reason` + `details.scope` say which** — see [simple-products.md](./simple-products.md) and [FRONTEND-CHANGELOG-connection-activation.md](./FRONTEND-CHANGELOG-connection-activation.md) |
 | `CATALOG_PRODUCT_NO_PICKUP_LOCATION` | Physical product: `delivery.pickupLocation` is not set |
 | `CATALOG_PRODUCT_INVALID_PICKUP_LOCATION` | Physical product: `delivery.pickupLocation` no longer matches the resolved agency's policy, or its referenced business address no longer exists |
 | `CATALOG_VARIANT_NO_DIGITAL_ASSET` | A digital product's active variant has no uploaded asset (details include the variant name/sku) |

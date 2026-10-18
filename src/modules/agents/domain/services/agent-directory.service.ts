@@ -132,8 +132,9 @@ export class AgentDirectoryService {
 
   /**
    * Reuses the agency query and list-item mapper the vendor browse already
-   * uses. The hard filter it applies (active + onboarding complete) is exactly
-   * the right one here too, and the vendor-only policy filters simply go
+   * uses. The hard filter it applies (`status === 'active'` + onboarding
+   * complete — so a `pending_verification` agency is not listed, owner decision
+   * 2026-10-18) is exactly the right one here too, and the vendor-only policy filters simply go
    * unpassed. The `Vendor`-prefixed names are historical — see the note on
    * DeliveryAgencyRepository.findAvailableForVendors.
    */

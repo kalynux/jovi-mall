@@ -22,6 +22,7 @@ import { reviewAggregateRepository } from '../reviews/repositories/review-aggreg
 import { AgencyVendorListItemDto, AgencyVendorMapper } from './dto/agency-vendor-browse.dto';
 import { VendorSettingsRepository } from '../vendors/repositories/vendor-settings.repository';
 import { VendorCodTerms, vendorCodTermsOf } from '../cod/domain/cod-limits';
+import { CounterpartyStatus } from './dto/connection.dto';
 import {
   IVendorAgencyConnection,
   IConnectionStatusHistoryEntry,
@@ -281,7 +282,16 @@ export class ConnectionService {
       // First-ever approved connection for this vendor becomes their default —
       // a reapproval can never be "first" (this same rule already resolved the
       // default the first time this connection went active).
-      if (!isReapproval && !vendor.default_delivery_agency_id) {
+      //
+      // ⚠ ...but only to an ACTIVE agency (2026-10-18). Approvals ignore activation on
+      // purpose, so a vendor can approve a `pending_verification` agency's request — and
+      // making THAT the default pointed every physical product at an agency the activation
+      // gate refuses (`agency.status !== 'active'`). Worse, it stuck: this branch only
+      // fills an EMPTY default, so connecting an active agency afterwards fixed nothing.
+      // Leaving it empty lets the next approval with an active agency fill it. Nothing
+      // fills it when the pending agency later activates — deliberately; the vendor picks a
+      // default themselves and the activation blocker tells them to.
+      if (!isReapproval && !vendor.default_delivery_agency_id && agency.status === 'active') {
         await this.vendorRepo.updateProfile(vendorId, { default_delivery_agency_id: agency._id }, session);
         await auditLogger.log({
           actor: { userId: actorUserId, role: actorRole },
@@ -706,6 +716,24 @@ export class ConnectionService {
     const out = new Map<string, VendorCodTerms>();
     for (const id of vendorIds) out.set(id, vendorCodTermsOf(stored.get(id) ?? null));
     return out;
+  }
+
+  /**
+   * The counterparty's account status for each connection, keyed by connection id — the
+   * agency's when the caller is a vendor, the vendor's when it is an agency. One query for
+   * a page. A counterparty that no longer exists maps to `null`.
+   */
+  async counterpartyStatusesFor(
+    callerRole: ConnectionParty,
+    connections: IVendorAgencyConnection[],
+  ): Promise<Map<string, CounterpartyStatus | null>> {
+    const counterpartyOf = (c: IVendorAgencyConnection): string =>
+      (callerRole === 'vendor' ? c.agency_id : c.vendor_id).toString();
+    const ids = connections.map(counterpartyOf);
+    const statuses: Map<string, CounterpartyStatus> = callerRole === 'vendor'
+      ? await this.agencyRepo.findStatusesByIds(ids)
+      : await this.vendorRepo.findStatusesByIds(ids);
+    return new Map(connections.map((c) => [c._id.toString(), statuses.get(counterpartyOf(c)) ?? null]));
   }
 
   async findByVendorAndAgency(vendorId: string, agencyId: string): Promise<IVendorAgencyConnection | null> {

@@ -6,6 +6,7 @@ import { IGeocodingProvider } from './geocoding-provider.interface';
 import { NominatimProvider } from './providers/nominatim.provider';
 import { GeoapifyProvider } from './providers/geoapify.provider';
 import { LocationIqProvider } from './providers/locationiq.provider';
+import { MapboxProvider } from './providers/mapbox.provider';
 import { ChainedGeocodingProvider } from './geocoding.chain';
 import { SanitizedGeocodingProvider } from './geocoding.sanitize';
 
@@ -104,10 +105,20 @@ function buildOne(
                 config.defaultCountryCodes,
             );
 
+        case 'mapbox':
+            if (!config.mapbox) {
+                return missing("GEO_MAPBOX_TOKEN is not set, so the 'mapbox' adapter cannot be built");
+            }
+            return new MapboxProvider(
+                config.mapbox,
+                config.requestTimeoutMs,
+                config.defaultLimit,
+                config.defaultCountryCodes,
+            );
+
         // Adapters not implemented in this build. The abstraction is ready — drop
         // in a provider class + config block and add a case here.
         case 'google':
-        case 'mapbox':
         case 'here':
             return missing(
                 `Geocoding provider '${name}' has no adapter in this build. `
@@ -143,15 +154,18 @@ function buildOne(
  * ⚠ A misspelt name is still fatal — see the `default` branch above.
  */
 function buildChain(config: GeocodingConfig): IGeocodingProvider {
-    // ⚠ LocationIQ FIRST. This is the reverse of what the rate limits alone
-    // suggest, and it was reversed on 2026-08-23 by measurement — see ADR-A04
-    // D-3's amendment. The short version: the chain only consults the second
-    // provider when the first returns EMPTY or errors, so a first provider that
-    // answers CONFIDENTLY AND WRONGLY is never corrected, while one that 429s is.
-    // The failover already absorbs the rate limit; nothing absorbs bad relevance.
+    // ⚠ Mapbox FIRST since 2026-10-18 (owner decision), then LocationIQ ahead of
+    // Geoapify — that second pair was reversed on 2026-08-23 by measurement (ADR-A04
+    // D-3's amendment). The rule both orderings answer to: the chain only consults
+    // the next provider when the one before returns EMPTY or errors, so a first
+    // provider that answers CONFIDENTLY AND WRONGLY is never corrected, while one
+    // that 429s is. Whoever is first is what a customer sees — so the first slot is
+    // a relevance decision, and `verify:geocoding-providers` prints the number it
+    // rests on. A deployment without GEO_MAPBOX_TOKEN skips Mapbox and runs exactly
+    // the previous order.
     const requested = config.chain && config.chain.length > 0
         ? [...config.chain]
-        : (['locationiq', 'geoapify'] as GeoProviderName[]);
+        : (['mapbox', 'locationiq', 'geoapify'] as GeoProviderName[]);
 
     if (!requested.includes('nominatim')) requested.push('nominatim');
 
