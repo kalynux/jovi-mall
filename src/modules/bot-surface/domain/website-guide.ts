@@ -875,7 +875,7 @@ export const SHOP_GUIDE: readonly GuideTopic[] = Object.freeze([
                 summary: 'Frequently asked questions and the contact form',
                 steps: [
                     'The FAQ answers common questions (Account → "Help & FAQ").',
-                    'To write to the team, use the contact page: https://wi-mall.com/contact — or email support@wi-mall.com.',
+                    'To write to the team: the contact page, or the email, phone and social pages in topic contact.',
                     'For a problem with an order, a support request (topic support) is faster.',
                 ],
                 notes: [],
@@ -885,10 +885,54 @@ export const SHOP_GUIDE: readonly GuideTopic[] = Object.freeze([
                 summary: 'Questions fréquentes et formulaire de contact',
                 steps: [
                     'La FAQ répond aux questions courantes (Compte → « Aide & FAQ »).',
-                    'Pour écrire à l’équipe, utilisez la page contact : https://wi-mall.com/fr/contact — ou support@wi-mall.com.',
+                    'Pour écrire à l’équipe : la page contact, ou l’e-mail, le téléphone et les réseaux sociaux du sujet contact.',
                     'Pour un problème de commande, une demande d’assistance (sujet support) est plus rapide.',
                 ],
                 notes: [],
+            },
+        },
+    }),
+    /**
+     * Wi-Mall's own contact details (owner, 2026-10-19: kept HERE rather than in the system
+     * prompt). Same values as the landing site (`frontend/landing/src/lib/constants.ts`
+     * `BRAND.email`, `SOCIAL_LINKS`) and the Legal Centre's support line — change all three
+     * together. Nothing checks they agree.
+     */
+    T({
+        key: 'contact',
+        app: 'shop',
+        path: '/contact',
+        signIn: false,
+        copy: {
+            en: {
+                title: 'Wi-Mall contact details: email, phone, Instagram, Facebook',
+                summary: 'Wi-Mall support email, support phone/WhatsApp, Instagram and Facebook',
+                steps: [
+                    'Email: support@wi-mall.com',
+                    'Support phone (also on WhatsApp): +237 621 236 023',
+                    'Instagram: https://www.instagram.com/wimallshop/',
+                    'Facebook: https://www.facebook.com/wimallshop',
+                    'Or the contact form on the LINK above.',
+                ],
+                notes: [
+                    'The support number is NOT this chat\'s number: this chat is the shopping assistant, that line reaches the Wi-Mall team.',
+                    'For a problem with an order, a support request from this chat (topic support) reaches the team with the order attached, which is faster.',
+                ],
+            },
+            fr: {
+                title: 'Coordonnées Wi-Mall : e-mail, téléphone, Instagram, Facebook',
+                summary: 'E-mail et téléphone/WhatsApp de l’assistance Wi-Mall, Instagram et Facebook',
+                steps: [
+                    'E-mail : support@wi-mall.com',
+                    'Téléphone de l’assistance (aussi sur WhatsApp) : +237 621 236 023',
+                    'Instagram : https://www.instagram.com/wimallshop/',
+                    'Facebook : https://www.facebook.com/wimallshop',
+                    'Ou le formulaire de contact au LIEN ci-dessus.',
+                ],
+                notes: [
+                    'Le numéro de l’assistance n’est PAS celui de ce chat : ce chat est l’assistant d’achat, cette ligne joint l’équipe Wi-Mall.',
+                    'Pour un problème de commande, une demande d’assistance depuis ce chat (sujet support) joint l’équipe avec la commande, c’est plus rapide.',
+                ],
             },
         },
     }),
