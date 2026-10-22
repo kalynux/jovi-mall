@@ -303,6 +303,14 @@ router.use('/public', publicReviewRoutes);
 import publicAppReleaseRoutes from '../modules/app-distribution/routes/public-app-release.routes';
 router.use('/public', publicAppReleaseRoutes);
 
+// Published service listings — the SEVENTH router on this prefix. Declares only `/listings`,
+// `/listings/by-ids` and `/listings/:slug`, which none of the six above has a route for. Same
+// rules: published data only (ONE predicate, `listings/domain/public-listing.filter.ts`),
+// five-minute cache, no identity — and no contact value on any DTO (L-26); a contact is reached
+// only by a signed-in customer's reveal.
+import publicListingRoutes from '../modules/listings/routes/public-listing.routes';
+router.use('/public', publicListingRoutes);
+
 // Earnings: commission/escrow ledger. Vendor sees held vs withdrawable balances;
 // agency sees its own held vs withdrawable delivery-fee balance; agent sees their
 // cut of the delivery fees on runs they completed; admin sees the platform
@@ -401,6 +409,18 @@ router.use('/agent/tickets', agentTicketRoutes);
 import { vendorConnectionRoutes, agencyConnectionRoutes } from '../modules/agency-connections';
 router.use('/vendor/agency-connections', vendorConnectionRoutes);
 router.use('/agency/vendor-connections', agencyConnectionRoutes);
+
+// Informational service listings — a PROVIDER vendor's listings and listing settings
+// (SERVICE-LISTINGS-PLAN § C-3). Each router is mounted at its OWN sub-prefix and carries a
+// router-level `requireVendorKind('provider')`, which is safe only because of that: it runs for
+// requests entering `/vendor/listings*` and never leaks onto a later `/vendor/*` mount.
+import vendorListingRoutes from '../modules/listings/routes/vendor-listing.routes';
+import vendorListingSettingsRoutes from '../modules/listings/routes/vendor-listing-settings.routes';
+router.use('/vendor/listings', vendorListingRoutes);
+router.use('/vendor/listing-settings', vendorListingSettingsRoutes);
+// A provider's leads (walk-order steps 6, 7, 9) — same shape: own prefix, router-level guard.
+import vendorLeadRoutes from '../modules/listings/routes/vendor-lead.routes';
+router.use('/vendor/leads', vendorLeadRoutes);
 
 // Live-tracking authorization resolution — consumed by the geo-tracker service
 // (forwarding the caller's token) to learn which agents the caller may track.
@@ -617,6 +637,13 @@ router.use('/internal/admin', internalAdminRoutes);
 // Saved payment methods (shared across all roles, resolved from req.auth)
 import paymentMethodRoutes from '../modules/payment-methods/routes';
 router.use('/me/payment-methods', paymentMethodRoutes);
+
+// Service listings, the customer side (SERVICE-LISTINGS-PLAN § C-3): unlocking a provider's
+// contact, and the opt-in to their messages. ABOVE `/me` for the same reason as the line above:
+// a request is resolved here before it ever enters the account router.
+import customerListingRoutes, { customerListingConsentRoutes } from '../modules/listings/routes/customer-listing.routes';
+router.use('/me/listings', customerListingRoutes);
+router.use('/me/listing-consents', customerListingConsentRoutes);
 
 // Account routes shared across all roles (password change), resolved from
 // req.auth — the password lives on the User model, not on any role entity.

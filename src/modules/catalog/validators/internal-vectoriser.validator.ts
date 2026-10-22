@@ -79,3 +79,55 @@ export const VectoriserCallbackSchema = z.object({
 
 export type VectoriserPayloadsInput = z.infer<typeof VectoriserPayloadsSchema>;
 export type VectoriserCallbackInput = z.infer<typeof VectoriserCallbackSchema>;
+
+// ─── `kind` dispatch: service listings (SERVICE-LISTINGS-PLAN L-18, § n8n) ────
+//
+// The vectoriser now indexes two kinds. A payload entry, a callback row or a `/payloads` body
+// carrying `kind: 'listing'` belongs to `listings/domain/services/listing-vectorisation.service`;
+// ANYTHING ELSE — including every body the workflow sends today, which carries no `kind` — is a
+// product, parsed by the schemas above exactly as before. The product schemas are untouched:
+// listing rows are split off BEFORE `VectoriserCallbackSchema` sees the body, and a body with no
+// listing row reaches it as the very same object.
+
+export const VECTORISER_LISTING_KIND = 'listing';
+
+/** `POST /api/internal/vectoriser/payloads` with `kind: 'listing'`. */
+export const VectoriserListingPayloadsSchema = z.object({
+  kind: z.literal(VECTORISER_LISTING_KIND),
+  listing_ids: z
+    .array(z.string().regex(/^[a-f\d]{24}$/i, 'Must be a valid listing id'))
+    .min(1, 'listing_ids must name at least one listing')
+    .max(PAYLOADS_MAX_IDS, `listing_ids may name at most ${PAYLOADS_MAX_IDS} listings per request`),
+});
+
+/** One listing's outcome inside a callback report. Loose on `status`, like the product row. */
+export const VectoriserListingResultSchema = z.object({
+  kind: z.literal(VECTORISER_LISTING_KIND),
+  listing_id: z.string().min(1),
+  status: z.string().min(1),
+  vectorised_id: z.string().nullish(),
+  error: z.string().nullish(),
+});
+
+export const VectoriserListingResultsSchema = z.array(VectoriserListingResultSchema);
+
+/** Whether a `/payloads` body asks for listings. */
+export function isListingPayloadsRequest(body: unknown): boolean {
+  return !!body && typeof body === 'object' && (body as { kind?: unknown }).kind === VECTORISER_LISTING_KIND;
+}
+
+/**
+ * Split a callback body by kind. `listingRows` is empty for every product-only report, and
+ * then `productBody` IS the body that came in — the same reference, byte for byte.
+ */
+export function splitCallbackByKind(body: unknown): { productBody: unknown; listingRows: unknown[] } {
+  const results = (body as { results?: unknown } | null)?.results;
+  if (!Array.isArray(results)) return { productBody: body, listingRows: [] };
+  const isListing = (r: unknown) => !!r && typeof r === 'object' && (r as { kind?: unknown }).kind === VECTORISER_LISTING_KIND;
+  const listingRows = results.filter(isListing);
+  if (listingRows.length === 0) return { productBody: body, listingRows: [] };
+  return {
+    productBody: { ...(body as Record<string, unknown>), results: results.filter((r) => !isListing(r)) },
+    listingRows,
+  };
+}

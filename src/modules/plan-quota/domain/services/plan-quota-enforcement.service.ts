@@ -11,6 +11,11 @@ import { DigitalAssetModel } from '../../../digital-delivery/models/digital-asse
 import { PlanQuotaStateModel } from '../../models/plan-quota-state.model';
 import { PLAN_QUOTA_REASONS, ProductStatus } from '../../../catalog/models/product.model';
 import { QuotaCandidate, planCountCutoff, planSizeCutoff } from '../quota-cutoff';
+import { listingRestoreTarget, toListingQuotaCandidate } from '../listing-quota';
+import { ListingQuotaRepository, listingQuotaRepository } from '../../repositories/listing-quota.repository';
+import { CreditWalletRepository } from '../../../billing/repositories/credit-wallet.repository';
+import { LISTING_REVEAL_FIRST_COST } from '../../../billing/config/credit.config';
+import { OwnerVendorKindResolver, resolveOwnerVendorKind } from '../../../billing/services/owner-vendor-kind';
 
 /** What one reconcile pass did. Reporting only — the truth is on the rows themselves. */
 export interface PlanQuotaOutcome {
@@ -24,6 +29,10 @@ export interface PlanQuotaOutcome {
     filesReleased: number;
     /** Total slots occupied after the pass. */
     productsAllowed: number;
+    /** PROVIDER vendors only (SERVICE-LISTINGS-PLAN O-16); 0 for everybody else. */
+    listingsSuspended: number;
+    listingsRestored: number;
+    listingsAllowed: number;
     /** Total metered bytes still served after the pass. */
     bytesAllowed: number;
 }
@@ -77,6 +86,9 @@ export class PlanQuotaEnforcementService {
             new ProductRepositoryMongo(),
             new VariantRepositoryMongo(),
         ),
+        private readonly listingRepo: ListingQuotaRepository = listingQuotaRepository,
+        private readonly kindOf: OwnerVendorKindResolver = resolveOwnerVendorKind,
+        private readonly walletRepo: CreditWalletRepository = new CreditWalletRepository(),
     ) { }
 
     /**
@@ -95,6 +107,9 @@ export class PlanQuotaEnforcementService {
             filesReleased: 0,
             productsAllowed: 0,
             bytesAllowed: 0,
+            listingsSuspended: 0,
+            listingsRestored: 0,
+            listingsAllowed: 0,
         };
 
         if (!Types.ObjectId.isValid(ownerId)) return empty;
@@ -109,9 +124,18 @@ export class PlanQuotaEnforcementService {
         // so their product axis is vacuously unlimited and only storage applies.
         const maxProducts = ownerType === 'vendor' ? plan.max_active_products : null;
         const maxStorageBytes = plan.max_storage_bytes;
+        // The listing axis (SERVICE-LISTINGS-PLAN O-16) is a vendor-plan field too. Its VALUE is
+        // stamped for every vendor (a seller plan carries null), so the drift check needs no
+        // kind; it is ENFORCED for providers only — a seller has no listings, and `null` here
+        // would otherwise mean "release everything" on a collection that is not theirs to touch.
+        const maxListings = ownerType === 'vendor' ? (plan.max_active_listings ?? null) : null;
 
         const products = ownerType === 'vendor'
             ? await this.applyProductQuota(ownerId, maxProducts)
+            : { suspended: 0, restored: 0, allowed: 0 };
+
+        const listings = ownerType === 'vendor' && (await this.kindOf(ownerType, ownerId)) === 'provider'
+            ? await this.applyListingQuota(ownerId, maxListings)
             : { suspended: 0, restored: 0, allowed: 0 };
 
         const files = maxStorageBytes === null
@@ -125,8 +149,10 @@ export class PlanQuotaEnforcementService {
                     enforced_plan_id: plan._id,
                     enforced_max_products: maxProducts,
                     enforced_max_storage_bytes: maxStorageBytes,
+                    enforced_max_listings: maxListings,
                     enforced_at: new Date(),
                     products_suspended: products.suspended,
+                    listings_suspended: listings.suspended,
                     files_blocked: files.blocked,
                     bytes_blocked: 0,
                 },
@@ -144,6 +170,9 @@ export class PlanQuotaEnforcementService {
             filesReleased: files.released,
             productsAllowed: products.allowed,
             bytesAllowed: files.allowedBytes,
+            listingsSuspended: listings.suspended,
+            listingsRestored: listings.restored,
+            listingsAllowed: listings.allowed,
         };
     }
 
@@ -227,6 +256,46 @@ export class PlanQuotaEnforcementService {
         }
 
         return restored;
+    }
+
+    // ── Listings (PROVIDER vendors — SERVICE-LISTINGS-PLAN O-16) ─────────────────
+
+    /**
+     * The product rule, on listings: oldest first, `planCountCutoff` over the listings holding
+     * (or held back from) a slot, suspend past the allowance, restore inside it.
+     *
+     * Restores run one at a time, oldest first (the cut-off's order), each a compare-and-set on
+     * the quota reason. A listing that was `live` comes back `live` — unless the provider's
+     * balance is below the first-reveal cost, when it comes back suspended `insufficient_credits`
+     * instead (`listingRestoreTarget`), which still frees nothing: that suspension occupies a slot,
+     * and the next top-up resumes it. The balance is read once per pass.
+     *
+     * ⚠ No index notification here, unlike products: a listing's search index is the listings
+     * module's (walk-order step 5), and it reads the status it finds. Nothing in this pass
+     * deletes or rewrites the listing's content or its `listing_contacts`.
+     */
+    private async applyListingQuota(
+        vendorId: string,
+        limit: number | null,
+    ): Promise<{ suspended: number; restored: number; allowed: number }> {
+        const slots = await this.listingRepo.listSlotsOldestFirst(vendorId);
+        const plan = planCountCutoff(slots.map(toListingQuotaCandidate), limit);
+
+        const suspended = await this.listingRepo.suspendForQuota(vendorId, plan.toBlock);
+
+        let restored = 0;
+        if (plan.toRelease.length > 0) {
+            const wallet = await this.walletRepo.findByOwner('vendor', vendorId);
+            const balance = wallet?.balance ?? 0;
+            for (const id of plan.toRelease) {
+                const previous = await this.listingRepo.findQuotaSuspendedPrevious(vendorId, id);
+                if (!previous) continue;
+                const target = listingRestoreTarget(previous, balance, LISTING_REVEAL_FIRST_COST);
+                if (await this.listingRepo.restoreFromQuota(vendorId, id, target)) restored += 1;
+            }
+        }
+
+        return { suspended: suspended.length, restored, allowed: plan.allowed.length };
     }
 
     // ── Storage ─────────────────────────────────────────────────────────────────

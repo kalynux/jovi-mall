@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { VendorInventoryController } from '../controllers/vendor-inventory.controller';
 import { requireAuth, requireRole } from '../../../api/middlewares/auth.middleware';
+import { requireVendorKind } from '../../../api/middlewares/vendor-kind.middleware';
 import multer from 'multer';
 
 const router = Router();
@@ -21,8 +22,9 @@ const upload = multer({
     }
 });
 
-// Vendor auth middleware
-const vendorAuth = [requireAuth, requireRole(['vendor'])];
+// Vendor auth middleware. Vendor kind (SERVICE-LISTINGS-PLAN § C-1): SELLER — stock belongs
+// to products, which a provider has none of.
+const vendorAuth = [requireAuth, requireRole(['vendor']), requireVendorKind('seller')];
 
 /**
  * Vendor Inventory Management Routes

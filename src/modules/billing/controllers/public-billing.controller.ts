@@ -9,6 +9,8 @@ import {
   VECTORISATION_COST,
   WHATSAPP_TEMPLATE_COST,
   AI_COPY_FIELD_COST,
+  LISTING_REVEAL_FIRST_COST,
+  LISTING_REVEAL_NEXT_COST,
 } from '../config/credit.config';
 
 /**
@@ -39,7 +41,7 @@ function cacheable(res: Response): Response {
 
 export class PublicBillingController {
   /**
-   * GET /api/public/plans[?role=vendor|agency|agent][&includeInactive=true]
+   * GET /api/public/plans[?role=vendor|agency|agent][&includeInactive=true][&vendorKind=seller|provider]
    *
    * Flat array across roles (grouped by role in `BILLING_OWNER_TYPES` order, then
    * by `sort_order`/`price` within a role) — the same shape and ordering as the
@@ -51,10 +53,19 @@ export class PublicBillingController {
    * Soft-deleted plans are never returned either way.
    */
   static listPlans = asyncHandler(async (req: Request, res: Response) => {
-    const { role, includeInactive } = PublicListPlansQuerySchema.parse(req.query);
-    const roles: BillingOwnerType[] = role ? [role] : [...BILLING_OWNER_TYPES];
+    const { role, includeInactive, vendorKind } = PublicListPlansQuerySchema.parse(req.query);
+    // `vendorKind` (SERVICE-LISTINGS-PLAN § C-5) asks for vendor plans of one kind, so it
+    // narrows the roles to `vendor` — an agency plan has no kind to match. `role=agency` with a
+    // `vendorKind` is therefore an empty list, honestly, rather than a silently ignored filter.
+    const roles: BillingOwnerType[] = vendorKind
+      ? (role && role !== 'vendor' ? [] : ['vendor'])
+      : role ? [role] : [...BILLING_OWNER_TYPES];
     const groups = await Promise.all(
-      roles.map((r) => pricingPlanService.listForRole(r, !includeInactive))
+      roles.map((r) =>
+        r === 'vendor' && vendorKind
+          ? pricingPlanService.listForVendorKind(vendorKind, !includeInactive)
+          : pricingPlanService.listForRole(r, !includeInactive)
+      )
     );
     cacheable(res).json({ success: true, data: groups.flat().map(toPublicPlanDto) });
   });
@@ -77,6 +88,11 @@ export class PublicBillingController {
           vectorisation: VECTORISATION_COST,
           whatsappTemplate: WHATSAPP_TEMPLATE_COST,
           aiCopyField: AI_COPY_FIELD_COST,
+          // SERVICE-LISTINGS-PLAN L-7 / § C-5: what a PROVIDER pays when a customer unlocks a
+          // listing's first contact field in a 30-day window, and each further one. Dashboards
+          // and the bot read these here and never hard-code them.
+          listingRevealFirst: LISTING_REVEAL_FIRST_COST,
+          listingRevealNext: LISTING_REVEAL_NEXT_COST,
         },
       },
     });

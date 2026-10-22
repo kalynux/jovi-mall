@@ -25,7 +25,18 @@ export type CreditReasonCode =
   | 'vectorisation'
   | 'whatsapp_template'
   | 'ai_listing_copy'   // AI listing-copy assistant, per field written (ref = generationId)
-  | 'admin_adjustment';
+  | 'admin_adjustment'
+  // Informational service listings (SERVICE-LISTINGS-PLAN § C-5)
+  | 'listing_reveal'           // a customer unlocked one contact field (type debit, ref = revealId)
+  | 'listing_reveal_refund'    // an administrator refunded that reveal (type refund, ref = revealId)
+  | 'credit_debt_written_off'; // a negative balance cleared at role closure (type adjustment, ref = closure request id)
+
+/** Every reason code — the schema enum spreads this, so the type and the enum cannot drift. */
+export const CREDIT_REASON_CODES: readonly CreditReasonCode[] = [
+  'plan_allowance', 'topup_purchase', 'topup_reversal', 'vectorisation', 'whatsapp_template',
+  'ai_listing_copy', 'admin_adjustment',
+  'listing_reveal', 'listing_reveal_refund', 'credit_debt_written_off',
+];
 
 export interface ICreditTransaction extends Document {
   wallet_id: mongoose.Types.ObjectId;
@@ -55,7 +66,7 @@ const CreditTransactionSchema = new Schema<ICreditTransaction>(
     balance_after: { type: Number, required: true },
     reason_code: {
       type: String,
-      enum: ['plan_allowance', 'topup_purchase', 'topup_reversal', 'vectorisation', 'whatsapp_template', 'ai_listing_copy', 'admin_adjustment'],
+      enum: [...CREDIT_REASON_CODES],
       required: true,
     },
     ref: { type: String, default: null },

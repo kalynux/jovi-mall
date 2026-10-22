@@ -174,6 +174,9 @@ const purchases = new PlanPurchaseService(
   { findById: async () => PLAN } as any,
   { findByOwnerAndStatus: async () => null } as any,
   {} as any,
+  // The vendor-kind resolver (SERVICE-LISTINGS-PLAN § C-5) reads the vendor row; this suite is
+  // DB-free, and its PLAN is a seller plan, so the owner is a seller.
+  async () => 'seller',
 );
 
 // The controllers' pipeline, exactly: parse the body, derive the provider, call the service.

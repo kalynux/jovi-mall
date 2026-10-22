@@ -1,6 +1,7 @@
 import { ClientSession, Types } from 'mongoose';
 import { ConnectionRepository } from './connection.repository';
 import { VendorRepository, VendorListQueryParams } from '../vendors/vendor.repository';
+import { isProviderVendor } from '../vendors/domain/vendor-kind';
 import { DeliveryAgencyRepository, AgencyListQueryParams } from '../delivery/delivery-agency.repository';
 import { StoreRepository } from '../store/repositories/store.repository';
 import { MagazinRepository } from '../magazin/repositories/magazin.repository';
@@ -154,6 +155,10 @@ export class ConnectionService {
       this.agencyRepo.findById(agencyId),
     ]);
     if (!vendor) throw createAppError(ERROR_CODES.CONNECTION_VENDOR_NOT_FOUND, 404);
+    // A PROVIDER is not a connectable vendor (SERVICE-LISTINGS-PLAN L-2): they ship nothing.
+    // The vendor side cannot reach this (its router is seller-only); an agency naming a
+    // provider's id is told what the directory already implies — there is no such vendor.
+    if (isProviderVendor(vendor)) throw createAppError(ERROR_CODES.CONNECTION_VENDOR_NOT_FOUND, 404);
     if (!agency) throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404);
 
     const existing = await this.connectionRepo.findByVendorAndAgency(vendorId, agencyId);

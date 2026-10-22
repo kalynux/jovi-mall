@@ -8,6 +8,7 @@ import { DeliveryAgencyRepository } from '../delivery/delivery-agency.repository
 import { AgentRepository } from '../agents';
 import { StoreProvisioningService } from '../store/service/store-provisioning.service';
 import { MagazinProvisioningService } from '../magazin/service/magazin-provisioning.service';
+import { VendorKind, newVendorKindFields } from '../vendors/domain/vendor-kind';
 import {
   AddRoleInput,
   AuthMeInput,
@@ -270,14 +271,21 @@ export class AuthService {
           email_verified: false, phone_verified: false
         });
         break;
-      case 'vendor':
+      case 'vendor': {
+        const kind: VendorKind = input.vendorKind ?? 'seller';
         roleEntity = await this.vendorRepo.create({
           user_id: user._id, display_name: input.name,
-          email: input.email, phone: input.phone, email_verified: false, phone_verified: false
+          email: input.email, phone: input.phone, email_verified: false, phone_verified: false,
+          ...newVendorKindFields(kind),
         });
         // The business name lives on the Store (source of truth) — provision it now.
-        await this.storeProvisioning.ensureStoreForVendor(roleEntity._id.toString(), input.business_name || input.name);
+        // A PROVIDER gets no Store (L-2): it is the store page that would publish their
+        // support contacts, and a provider's contacts are sold, not shown (L-26).
+        if (kind === 'seller') {
+          await this.storeProvisioning.ensureStoreForVendor(roleEntity._id.toString(), input.business_name || input.name);
+        }
         break;
+      }
       case 'agency':
         roleEntity = await this.agencyRepo.create({
           user_id: user._id, display_name: input.name,
@@ -500,18 +508,24 @@ export class AuthService {
           email_verified: false, phone_verified: false,
         });
         break;
-      case 'vendor':
+      case 'vendor': {
+        const kind: VendorKind = input.vendorKind ?? 'seller';
         roleEntity = await this.vendorRepo.create({
           user_id: user._id, display_name: input.name || undefined,
           email: user.login_email, phone: user.login_phone,
           email_verified: false, phone_verified: false,
+          ...newVendorKindFields(kind),
         });
         // The business name lives on the Store (source of truth) — provision it now.
-        await this.storeProvisioning.ensureStoreForVendor(
-          roleEntity._id.toString(),
-          input.business_name || input.name || undefined,
-        );
+        // Not for a provider: no Store (L-2), see `register`.
+        if (kind === 'seller') {
+          await this.storeProvisioning.ensureStoreForVendor(
+            roleEntity._id.toString(),
+            input.business_name || input.name || undefined,
+          );
+        }
         break;
+      }
       case 'agency':
         roleEntity = await this.agencyRepo.create({
           user_id: user._id, display_name: input.name || undefined,

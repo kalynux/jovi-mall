@@ -64,6 +64,10 @@ export enum TicketType {
     COMPLIANCE = 'COMPLIANCE',
     LEGAL_REQUEST = 'LEGAL_REQUEST',
 
+    // Informational service listings (SERVICE-LISTINGS-PLAN L-31): a provider's ONE
+    // "Report" on a lead — a refund request, a suspicious customer, or both.
+    LISTING_LEAD_REPORT = 'LISTING_LEAD_REPORT',
+
     // Other
     OTHER = 'OTHER'
 }
@@ -128,6 +132,8 @@ export enum EntityType {
     CUSTOMER = 'CUSTOMER',
     AGENT = 'AGENT',
     AGENCY = 'AGENCY',
+    /** A provider's lead (`listing_leads`), the subject of a LISTING_LEAD_REPORT ticket. */
+    LISTING_LEAD = 'LISTING_LEAD',
     OTHER = 'OTHER'
 }
 

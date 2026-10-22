@@ -30,6 +30,14 @@ export {
 } from './domain/services/plan-quota-enforcement.service';
 export { PlanQuotaReconcileWorker, planQuotaReconcileWorker } from './workers/plan-quota-reconcile.worker';
 export { registerPlanQuotaConsumer } from './events/plan-quota.consumer';
+// The listing axis — PROVIDER vendors only (SERVICE-LISTINGS-PLAN O-16).
+export {
+    LISTING_QUOTA_REASON,
+    LISTING_SLOT_STATUSES,
+    occupiesListingSlot,
+    toListingQuotaCandidate,
+    listingRestoreTarget,
+} from './domain/listing-quota';
 export {
     QuotaCandidate,
     QuotaPlan,

@@ -67,6 +67,9 @@ router.use(requireServiceToken);
  * Needed only by the spreadsheet path (`POST <base>/file`), where a row that is
  * just an id has to be resolved into a full product. jovi-mall's own submits
  * send the payload with the request and never call this.
+ *
+ * `{ kind: 'listing', listing_ids }` → `{ listings, missing }` (service listings, L-18):
+ * dispatched on `kind` in the controller; a body with no `kind` is the product request, unchanged.
  */
 router.post('/payloads', InternalVectoriserController.getPayloads);
 
@@ -76,6 +79,9 @@ router.post('/payloads', InternalVectoriserController.getPayloads);
  *
  * The asynchronous half of every submit. This is the only route in the service
  * that writes `vectorisationStatus: 'completed'`.
+ *
+ * Rows carrying `kind: 'listing'` are split off to the listings module before the product
+ * schema sees the report; a report with no such row reaches the product path unchanged.
  */
 router.post('/callback', InternalVectoriserController.receiveCallback);
 

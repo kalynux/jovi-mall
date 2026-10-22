@@ -3,6 +3,28 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { transactionManager } from '../../../core/database/transaction.manager';
 import { ProductModel } from '../../catalog/models/product.model';
+import { ListingModel } from '../../listings/models/listing.model';
+
+/**
+ * `ids` with `src` replaced by `tgt`, order kept, duplicates dropped — as an aggregation
+ * expression, so a merge rewrites every holder in one update. Shared by the product field and
+ * the two listing copies (SERVICE-LISTINGS-PLAN: listings hold the same 1–5 category ids).
+ */
+function mergedIdsExpr(path: string, src: Types.ObjectId, tgt: Types.ObjectId): Record<string, unknown> {
+    return {
+        $reduce: {
+            input: { $map: { input: path, as: 'c', in: { $cond: [{ $eq: ['$c', src] }, tgt, '$c'] } } },
+            initialValue: [],
+            in: { $cond: [{ $in: ['$this', '$value'] }, '$value', { $concatArrays: ['$value', ['$this']] }] },
+        },
+    };
+}
+
+/** A listing that still occupies the shelf: anything not archived (a draft may be submitted tomorrow). */
+const LISTING_HOLDS_CATEGORY = (oid: Types.ObjectId) => ({
+    status: { $ne: 'archived' },
+    $or: [{ 'published.category_ids': oid }, { 'pending.category_ids': oid }],
+});
 import { cleanCategoryName, matchKey, slugifyCategory } from '../domain/category-match';
 import {
     productCategoryRepository,
@@ -110,6 +132,7 @@ export class CategoryAdminService {
         source: AdminCategoryDto;
         target: AdminCategoryDto;
         productsUpdated: number;
+        listingsUpdated: number;
     }> {
         if (sourceId === targetId) {
             throw createAppError(ERROR_CODES.CATEGORY_MERGE_INVALID, 422, undefined, { reason: 'same_category' });
@@ -157,6 +180,20 @@ export class CategoryAdminService {
                 { session },
             ).exec();
 
+            // Service listings hold the same ids, in two copies (the published version and a
+            // revision under review). Each copy is rewritten only where it holds the source, so a
+            // null copy is never touched — a dotted `$set` on a null parent would invent one.
+            const listingsPublished = await ListingModel.updateMany(
+                { 'published.category_ids': src },
+                [{ $set: { 'published.category_ids': mergedIdsExpr('$published.category_ids', src, tgt) } }],
+                { session },
+            ).exec();
+            const listingsPending = await ListingModel.updateMany(
+                { 'pending.category_ids': src },
+                [{ $set: { 'pending.category_ids': mergedIdsExpr('$pending.category_ids', src, tgt) } }],
+                { session },
+            ).exec();
+
             const aliasKeys = [source.match_key, ...(source.alias_keys ?? [])].filter((k) => k !== target.match_key);
             const updatedTarget = await this.repo.addAliasKeys(targetId, aliasKeys, session);
             if (!updatedTarget) {
@@ -167,7 +204,11 @@ export class CategoryAdminService {
             }
             const retired = await this.repo.retire(sourceId, targetId, session);
             if (!retired) throw createAppError(ERROR_CODES.CATEGORY_NOT_FOUND, 404, undefined, { id: sourceId });
-            return { productsUpdated: update.modifiedCount, target: updatedTarget };
+            return {
+                productsUpdated: update.modifiedCount,
+                listingsUpdated: listingsPublished.modifiedCount + listingsPending.modifiedCount,
+                target: updatedTarget,
+            };
         });
 
         this.cache.invalidate();
@@ -175,6 +216,7 @@ export class CategoryAdminService {
             source: toAdminCategoryDto({ ...source, merged_into: tgt, deletedAt: new Date() }),
             target: toAdminCategoryDto(outcome.target),
             productsUpdated: outcome.productsUpdated,
+            listingsUpdated: outcome.listingsUpdated,
         };
     }
 
@@ -182,8 +224,9 @@ export class CategoryAdminService {
         const current = await this.mustFindLive(id);
         const oid = new Types.ObjectId(id);
         const productCount = await ProductModel.countDocuments({ categoryIds: oid, deletedAt: null }).exec();
-        if (productCount > 0) {
-            throw createAppError(ERROR_CODES.CATEGORY_IN_USE, 409, undefined, { productCount });
+        const listingCount = await ListingModel.countDocuments(LISTING_HOLDS_CATEGORY(oid)).exec();
+        if (productCount > 0 || listingCount > 0) {
+            throw createAppError(ERROR_CODES.CATEGORY_IN_USE, 409, undefined, { productCount, listingCount });
         }
         await transactionManager.runInTransaction(async (session) => {
             // Soft-deleted products may still hold it; drop it so a restore does not
@@ -191,6 +234,17 @@ export class CategoryAdminService {
             await ProductModel.updateMany(
                 { categoryIds: oid, deletedAt: { $ne: null } },
                 { $pull: { categoryIds: oid } },
+                { session },
+            ).exec();
+            // Archived listings likewise — they are final, but their pages are history.
+            await ListingModel.updateMany(
+                { status: 'archived', 'published.category_ids': oid },
+                { $pull: { 'published.category_ids': oid } },
+                { session },
+            ).exec();
+            await ListingModel.updateMany(
+                { status: 'archived', 'pending.category_ids': oid },
+                { $pull: { 'pending.category_ids': oid } },
                 { session },
             ).exec();
             const retired = await this.repo.retire(id, null, session);

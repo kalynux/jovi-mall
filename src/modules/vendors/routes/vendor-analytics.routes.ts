@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { VendorAnalyticsController } from '../controllers/vendor-analytics.controller';
 import { requireAuth, requireRole } from '../../../api/middlewares/auth.middleware';
+import { requireVendorKind } from '../../../api/middlewares/vendor-kind.middleware';
 
 /**
  * Vendor Analytics Routes
@@ -16,6 +17,8 @@ const controller = new VendorAnalyticsController();
 // endpoints stay vendor-only regardless of where the router is mounted.
 router.use(requireAuth);
 router.use(requireRole(['vendor']));
+// Vendor kind (SERVICE-LISTINGS-PLAN § C-1): SELLER — order-derived sales analytics; a provider has no orders (L-2).
+router.use(requireVendorKind('seller'));
 
 /**
  * GET /api/vendor/analytics/dashboard

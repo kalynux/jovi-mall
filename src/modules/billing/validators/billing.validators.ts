@@ -5,6 +5,7 @@ import {
   PaymentProviderSchema,
 } from '../../payments/validators/payment.validators';
 import { BILLING_OWNER_TYPES } from '../billing.types';
+import { VENDOR_KINDS } from '../../vendors/domain/vendor-kind';
 
 // Derived from the module's own list, never retyped beside it — the same rule the
 // notification catalogs follow, for the same reason: two hand-maintained copies of one
@@ -17,7 +18,7 @@ const PlanRoleSchema = z.enum([...BILLING_OWNER_TYPES]);
  * `max_unterminated_shipments`; agent plans carry `max_cod_pool` (⚠ `null` = no COD
  * at all, not unlimited — see the model). `live_tracking_enabled` defaults true everywhere.
  */
-export const CreatePlanSchema = z.object({
+const PlanFieldsSchema = z.object({
   role: PlanRoleSchema.default('vendor'),
   code: z.string().trim().min(2).max(40),
   name: z.string().trim().min(2).max(80),
@@ -33,10 +34,32 @@ export const CreatePlanSchema = z.object({
   live_tracking_enabled: z.boolean().optional(),
   is_active: z.boolean().optional(),
   sort_order: z.number().int().optional(),
+  /**
+   * SERVICE-LISTINGS-PLAN § C-5: which vendor KIND a vendor plan is for. Absent or null on a
+   * vendor plan means SELLER (every plan seeded before the field existed). Refused on an agency
+   * or agent plan below. Immutable once created — see `UpdatePlanSchema`.
+   */
+  vendor_kind: z.enum([...VENDOR_KINDS]).nullable().optional(),
+  /** Provider plans: listings occupying a slot (§ C-8a). `null` = unlimited. */
+  max_active_listings: z.number().int().min(0).nullable().optional(),
 });
 
-/** Admin: update a pricing plan (code/role are immutable, ignored if sent). */
-export const UpdatePlanSchema = CreatePlanSchema.partial().omit({ role: true, code: true });
+export const CreatePlanSchema = PlanFieldsSchema.superRefine((plan, ctx) => {
+  if (plan.role !== 'vendor' && plan.vendor_kind != null) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['vendor_kind'],
+      message: 'Only a vendor plan has a vendor kind',
+    });
+  }
+});
+
+/**
+ * Admin: update a pricing plan. `code`, `role` and `vendor_kind` are immutable and stripped if
+ * sent — the kind for the reason the role is: an in-place flip would move every subscriber on
+ * the plan onto a plan of the other kind (`PricingPlanService.update` deletes all three again).
+ */
+export const UpdatePlanSchema = PlanFieldsSchema.partial().omit({ role: true, code: true, vendor_kind: true });
 
 /** Admin: filter the plan catalog by role (optional). */
 export const ListPlansQuerySchema = z.object({
@@ -59,6 +82,12 @@ export const PublicListPlansQuerySchema = z.object({
     .string()
     .optional()
     .transform((v) => v === 'true'),
+  /**
+   * SERVICE-LISTINGS-PLAN § C-5: narrow to the VENDOR plans of one kind — the sign-up page's
+   * seller and provider price tables. Set, it returns vendor plans only (an agency plan has no
+   * kind); absent, every plan as before, each carrying `vendorKind` so a client can group.
+   */
+  vendorKind: z.enum([...VENDOR_KINDS]).optional(),
 });
 
 /** Admin: assign a plan to a vendor. */

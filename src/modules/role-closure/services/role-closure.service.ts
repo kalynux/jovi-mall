@@ -19,6 +19,7 @@ import { RoleClosureRequestRepository } from '../repositories/role-closure-reque
 import { RoleClosureBlockersService, roleClosureBlockersService } from './role-closure-blockers.service';
 import { RoleClosureManifest, roleClosureManifest, EndedRelationships, countEnded } from '../role-closure.manifest';
 import { ClosableRole, ROLE_CLOSURE_REQUEST_TTL_DAYS, RoleClosureOutcome } from '../role-closure.types';
+import { CreditWalletService, creditWalletService } from '../../billing/services/credit-wallet.service';
 
 /**
  * Role closure — the lifecycle (ADR-A10).
@@ -52,6 +53,7 @@ export class RoleClosureService {
     private readonly vendors: VendorRepository = new VendorRepository(),
     private readonly agencies: DeliveryAgencyRepository = new DeliveryAgencyRepository(),
     private readonly agents: AgentRepository = new AgentRepository(),
+    private readonly wallet: CreditWalletService = creditWalletService,
   ) {}
 
   // ─── administrator ─────────────────────────────────────────────────────────
@@ -213,7 +215,7 @@ export class RoleClosureService {
     const closedAt = new Date();
     const actor = { userId, role };
 
-    const { confirmed, ended, accountClosed } = await transactionManager.runInTransaction(async (session) => {
+    const { confirmed, ended, accountClosed, creditDebtWrittenOff } = await transactionManager.runInTransaction(async (session) => {
       const confirmed = await this.requests.confirm(
         request._id.toString(),
         { userId, source: 'platform', name: null },
@@ -238,6 +240,15 @@ export class RoleClosureService {
           break;
       }
 
+      // L-12 (SERVICE-LISTINGS-PLAN): a credit balance below zero is written off to exactly 0 —
+      // one `adjustment` ledger row, `credit_debt_written_off`, ref = this request — in THIS
+      // transaction, so a closure that rolls back leaves the debt where it was. Customers have no
+      // wallet. It is the one money write a closure makes, and it lives here rather than in the
+      // manifest, which touches no money (ADR-A02 D-1; `test:role-closure` scans its imports).
+      const creditDebtWrittenOff = role === 'customer'
+        ? 0
+        : await this.wallet.writeOffDebtInSession(role, roleEntityId, request._id.toString(), session);
+
       const { accountClosed } = await this.manifest.closeAccountIfLastRole(
         userId,
         role,
@@ -251,7 +262,7 @@ export class RoleClosureService {
         { closedAt, accountClosed, endedRelationships: countEnded(ended) },
         session,
       );
-      return { confirmed, ended, accountClosed };
+      return { confirmed, ended, accountClosed, creditDebtWrittenOff };
     });
 
     const outcome: RoleClosureOutcome = { closedAt, accountClosed, endedRelationships: countEnded(ended) };
@@ -294,6 +305,8 @@ export class RoleClosureService {
         requestId: confirmed._id.toString(),
         requestedBy: confirmed.requested_by_user_id?.toString() ?? null,
         ...outcome,
+        // L-12: the credits Wi-Mall absorbed (0 when the balance was not negative).
+        creditDebtWrittenOff,
       },
       timestamp: closedAt,
     });

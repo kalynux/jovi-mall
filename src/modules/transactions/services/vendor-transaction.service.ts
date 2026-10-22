@@ -15,20 +15,35 @@ import { BillingOwnerType } from '../../billing/billing.types';
 /** Credit ledger rows tied to a top-up — represented by the CreditTopup row instead. */
 const TOPUP_REASON_CODES: CreditReasonCode[] = ['topup_purchase', 'topup_reversal'];
 
-const CREDIT_TYPE_BY_REASON: Partial<Record<CreditReasonCode, string>> = {
+/** Every reason code that reaches the credit mapper — the top-up ones are filtered out above. */
+type FeedCreditReasonCode = Exclude<CreditReasonCode, 'topup_purchase' | 'topup_reversal'>;
+
+/**
+ * Feed `type` per ledger reason. TOTAL over `FeedCreditReasonCode`, so a reason code added to
+ * the ledger without a label here is a compile error rather than an anonymous "Credit movement"
+ * row. The three listing reasons (SERVICE-LISTINGS-PLAN § C-5) reuse the existing types — a
+ * reveal is usage, a refund and a write-off are adjustments — so no client meets a new value.
+ */
+export const CREDIT_TYPE_BY_REASON: Readonly<Record<FeedCreditReasonCode, string>> = {
   plan_allowance: 'credit_allowance',
   vectorisation: 'credit_usage',
   whatsapp_template: 'credit_usage',
   ai_listing_copy: 'credit_usage',
   admin_adjustment: 'credit_adjustment',
+  listing_reveal: 'credit_usage',
+  listing_reveal_refund: 'credit_adjustment',
+  credit_debt_written_off: 'credit_adjustment',
 };
 
-const CREDIT_DESC_BY_REASON: Partial<Record<CreditReasonCode, string>> = {
+export const CREDIT_DESC_BY_REASON: Readonly<Record<FeedCreditReasonCode, string>> = {
   plan_allowance: 'Plan credit allowance',
   vectorisation: 'Product vectorisation',
   whatsapp_template: 'WhatsApp template message',
   ai_listing_copy: 'AI listing copy',
   admin_adjustment: 'Admin credit adjustment',
+  listing_reveal: 'Contact revealed to a customer',
+  listing_reveal_refund: 'Contact reveal refunded',
+  credit_debt_written_off: 'Credit debt written off at account closure',
 };
 
 /**
@@ -151,13 +166,13 @@ export class VendorTransactionService {
     return {
       id: c._id.toString(),
       category: 'credit',
-      type: CREDIT_TYPE_BY_REASON[c.reason_code] ?? 'credit_movement',
+      type: CREDIT_TYPE_BY_REASON[c.reason_code as FeedCreditReasonCode] ?? 'credit_movement',
       status: 'completed',
       unit: 'credit',
       direction: c.amount >= 0 ? 'in' : 'out',
       amount: Math.abs(c.amount),
       credits: Math.abs(c.amount),
-      description: CREDIT_DESC_BY_REASON[c.reason_code] ?? 'Credit movement',
+      description: CREDIT_DESC_BY_REASON[c.reason_code as FeedCreditReasonCode] ?? 'Credit movement',
       source: c.ref ? { type: 'credit', id: c.ref } : undefined,
       createdAt: c.created_at,
     };

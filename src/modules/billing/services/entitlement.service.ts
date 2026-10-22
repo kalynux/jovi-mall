@@ -114,6 +114,37 @@ export class EntitlementService {
     }
   }
 
+  // ── Provider listings (SERVICE-LISTINGS-PLAN § Plans, § C-5) ─────────────────
+
+  /** Max active listings on the provider's plan, or `null` for unlimited. */
+  async getMaxActiveListings(vendorId: string): Promise<{ planCode: string; maxActiveListings: number | null }> {
+    const plan = await this.getActivePricingPlan('vendor', vendorId);
+    return { planCode: plan.code, maxActiveListings: plan.max_active_listings ?? null };
+  }
+
+  /**
+   * Throw `BILLING_LIMIT_EXCEEDED` (403 — the same code and status the product cap raises)
+   * when `adding` more listing slots on top of `currentCount` would exceed the plan.
+   *
+   * What occupies a slot is the caller's count (§ C-8a: `live`, `pending_review`, and
+   * `suspended` for any reason other than `plan_quota_exceeded`). Arithmetic, not a threshold
+   * test, for the reason `assertCanAddProducts` gives.
+   */
+  async assertCanAddListings(vendorId: string, currentCount: number, adding = 1): Promise<void> {
+    if (adding <= 0) return;
+    const { maxActiveListings, planCode } = await this.getMaxActiveListings(vendorId);
+    if (maxActiveListings === null) return;
+    if (currentCount + adding > maxActiveListings) {
+      const available = Math.max(0, maxActiveListings - currentCount);
+      throw createAppError(
+        ERROR_CODES.BILLING_LIMIT_EXCEEDED,
+        403,
+        `Your '${planCode}' plan allows up to ${maxActiveListings} active listings. Upgrade, or archive one first.`,
+        { limit: maxActiveListings, current: currentCount, requested: adding, available },
+      );
+    }
+  }
+
   // ── Agency / agent (shipment-cap + live tracking) ────────────────────────────
 
   async getShipmentEntitlements(

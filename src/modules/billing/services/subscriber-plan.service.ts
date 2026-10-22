@@ -10,6 +10,10 @@ import { ISubscriberPlan } from '../models/subscriber-plan.model';
 import { IPricingPlan } from '../models/pricing-plan.model';
 import { BillingOwnerType, freePlanCode } from '../billing.types';
 import { ActorRef } from '../../../core/types/actor-source.types';
+import { ICreditWallet } from '../models/credit-wallet.model';
+import { assertPlanServesOwner } from '../domain/plan-vendor-kind';
+import { publishWalletCredited } from '../domain/wallet-credited.event';
+import { OwnerVendorKindResolver, resolveOwnerVendorKind } from './owner-vendor-kind';
 
 export interface AssignPlanOptions {
   paymentRef?: string | null;
@@ -34,6 +38,13 @@ function assignedByFields(actor: ActorRef | null | undefined) {
   };
 }
 
+/** What one activation did inside its transaction: the new row, and the wallet if it granted credits. */
+interface Activation {
+  subscriberPlan: ISubscriberPlan;
+  /** The wallet after the allowance grant — `null` when nothing was granted. Published post-commit. */
+  credited: ICreditWallet | null;
+}
+
 export interface SubscriberPlanView {
   active: { plan: IPricingPlan; subscriberPlan: ISubscriberPlan } | null;
   pending: { plan: IPricingPlan; subscriberPlan: ISubscriberPlan } | null;
@@ -56,24 +67,30 @@ export class SubscriberPlanService {
   constructor(
     private readonly planRepoAssignments: SubscriberPlanRepository = new SubscriberPlanRepository(),
     private readonly planRepo: PricingPlanRepository = new PricingPlanRepository(),
-    private readonly wallet: CreditWalletService = creditWalletService
+    private readonly wallet: CreditWalletService = creditWalletService,
+    private readonly kindOf: OwnerVendorKindResolver = resolveOwnerVendorKind
   ) {}
 
   /**
    * The owner's active plan, lazily creating (and granting the allowance for) the
    * role's free tier the first time an owner has none.
+   *
+   * For a vendor the free tier depends on the KIND (SERVICE-LISTINGS-PLAN § C-5): a seller
+   * falls back to `starter`, a provider to `provider_free`. The vendor row is read only on this
+   * lazy-create path, never on the ordinary read.
    */
   async getActivePlan(ownerType: BillingOwnerType, ownerId: string): Promise<ISubscriberPlan> {
     const existing = await this.planRepoAssignments.findByOwnerAndStatus(ownerType, ownerId, 'active');
     if (existing) return existing;
 
-    const free = await this.requirePlanByCode(ownerType, freePlanCode(ownerType));
+    const free = await this.requirePlanByCode(ownerType, await this.freePlanCodeFor(ownerType, ownerId));
     try {
       const created = await transactionManager.runInTransaction((session) =>
         this.activateNew(ownerType, ownerId, free, { assignedBy: null, paymentRef: null }, true, session)
       );
       void this.emitActivated(ownerType, ownerId, free);
-      return created;
+      this.publishCredit(created);
+      return created.subscriberPlan;
     } catch (err) {
       // Lost a race to create the active default — re-read the winner.
       if (this.isDuplicateKey(err)) {
@@ -129,13 +146,9 @@ export class SubscriberPlanService {
     const plan = await this.planRepo.findById(planId);
     if (!plan) throw createAppError(ERROR_CODES.BILLING_PLAN_NOT_FOUND, 404, 'Pricing plan not found');
     if (!plan.is_active) throw createAppError(ERROR_CODES.BILLING_PLAN_INACTIVE, 409, 'Plan is not active');
-    if (plan.role !== ownerType) {
-      throw createAppError(
-        ERROR_CODES.BILLING_PLAN_ROLE_MISMATCH,
-        409,
-        `Plan does not belong to the ${ownerType} role`
-      );
-    }
+    // Role, and for a vendor the KIND (§ C-5): a provider plan is refused to a seller and the
+    // reverse, with the role mismatch's own code and status.
+    assertPlanServesOwner(plan, ownerType, await this.kindOf(ownerType, ownerId));
 
     const active = await this.getActivePlan(ownerType, ownerId);
     const now = new Date();
@@ -148,7 +161,8 @@ export class SubscriberPlanService {
         return this.activateNew(ownerType, ownerId, plan, opts, true, session);
       });
       void this.emitActivated(ownerType, ownerId, plan);
-      return activated;
+      this.publishCredit(activated);
+      return activated.subscriberPlan;
     }
 
     // Active plan still has time left → queue as pending.
@@ -189,7 +203,7 @@ export class SubscriberPlanService {
     const plan = await this.planRepo.findById(pending.plan_id.toString());
     if (!plan) return null;
 
-    const updated = await transactionManager.runInTransaction(async (session) => {
+    const updated = await transactionManager.runInTransaction(async (session): Promise<Activation> => {
       await this.planRepoAssignments.setStatus(expiredActiveId, { status: 'expired' }, session);
       const now = new Date();
       const promoted = await this.planRepoAssignments.setStatus(
@@ -201,32 +215,41 @@ export class SubscriberPlanService {
         },
         session
       );
-      if (!pending.allowance_granted && plan.credit_allowance > 0) {
-        await this.grantAllowance(ownerType, ownerId, pending._id, plan, session);
-      }
-      return promoted!;
+      const credited = !pending.allowance_granted && plan.credit_allowance > 0
+        ? await this.grantAllowance(ownerType, ownerId, pending._id, plan, session)
+        : null;
+      return { subscriberPlan: promoted!, credited };
     });
     void this.emitActivated(ownerType, ownerId, plan);
-    return updated;
+    this.publishCredit(updated);
+    return updated.subscriberPlan;
   }
 
   /**
    * Downgrade an expired paid plan to the role's free tier. The free allowance is
    * NOT re-granted (it's a one-time signup grant); the owner keeps any leftover
    * credits in their wallet.
+   *
+   * For a vendor, the free tier of their KIND (§ C-5) — a lapsed Provider Plus lands on
+   * `provider_free`, never on the seller `starter`.
    */
   async downgradeToFree(
     ownerType: BillingOwnerType,
     ownerId: string,
     expiredActiveId: Types.ObjectId
   ): Promise<ISubscriberPlan> {
-    const free = await this.requirePlanByCode(ownerType, freePlanCode(ownerType));
+    const free = await this.requirePlanByCode(ownerType, await this.freePlanCodeFor(ownerType, ownerId));
     const activated = await transactionManager.runInTransaction(async (session) => {
       await this.planRepoAssignments.setStatus(expiredActiveId, { status: 'expired' }, session);
       return this.activateNew(ownerType, ownerId, free, { assignedBy: null, paymentRef: null }, false, session);
     });
     void this.emitActivated(ownerType, ownerId, free);
-    return activated;
+    return activated.subscriberPlan;
+  }
+
+  /** The free tier an owner falls back to — per role, and per KIND for a vendor (§ C-5). */
+  async freePlanCodeFor(ownerType: BillingOwnerType, ownerId: string): Promise<string> {
+    return freePlanCode(ownerType, await this.kindOf(ownerType, ownerId));
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -242,7 +265,7 @@ export class SubscriberPlanService {
     opts: AssignPlanOptions,
     grantAllowance: boolean,
     session: ClientSession
-  ): Promise<ISubscriberPlan> {
+  ): Promise<Activation> {
     const now = new Date();
     const willGrant = grantAllowance && plan.credit_allowance > 0;
     const created = await this.planRepoAssignments.create(
@@ -260,21 +283,24 @@ export class SubscriberPlanService {
       },
       session
     );
-    if (willGrant) {
-      await this.grantAllowance(ownerType, ownerId, created._id, plan, session);
-    }
-    return created;
+    const credited = willGrant
+      ? await this.grantAllowance(ownerType, ownerId, created._id, plan, session)
+      : null;
+    return { subscriberPlan: created, credited };
   }
 
-  /** Credit a plan's allowance once and flag the SubscriberPlan, inside `session`. */
+  /**
+   * Credit a plan's allowance once and flag the SubscriberPlan, inside `session`. Returns the
+   * wallet after the grant, which the caller publishes AFTER its transaction commits.
+   */
   private async grantAllowance(
     ownerType: BillingOwnerType,
     ownerId: string,
     subscriberPlanId: Types.ObjectId,
     plan: IPricingPlan,
     session: ClientSession
-  ): Promise<void> {
-    await this.wallet.creditInSession(
+  ): Promise<ICreditWallet> {
+    const credited = await this.wallet.creditInSession(
       ownerType,
       ownerId,
       plan.credit_allowance,
@@ -284,6 +310,17 @@ export class SubscriberPlanService {
       session
     );
     await this.planRepoAssignments.setStatus(subscriberPlanId, { allowance_granted: true }, session);
+    return credited;
+  }
+
+  /**
+   * `billing.wallet.credited` for an activation that granted credits (§ C-5) — post-commit,
+   * fire-and-forget. A plan allowance pays a provider's debt first and may bring their suspended
+   * listings back. Called on every activation path that can grant: the lazy free tier, an
+   * immediate assignment, and a queued plan's promotion (`downgradeToFree` never grants).
+   */
+  private publishCredit(activation: Activation): void {
+    if (activation.credited) publishWalletCredited(activation.credited, 'plan_allowance');
   }
 
   /**

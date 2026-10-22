@@ -337,6 +337,15 @@ export const MIGRATIONS: Migration[] = [
         dryRun: true,
         note: 'TWO REFUNDS OF ONE ORDER CAN BOTH SEND MONEY — the partial unique refund_one_open_per_source is the only guard (any pre-check is a race), and the callback, reconciliation and COD-release lookups scan the collection',
     },
+    // SERVICE-LISTINGS-PLAN § C-7 (2026-10-19). Named, above the catch-all, because three of
+    // its indexes are the ONLY race guards on a money path: one reveal per (lead, field), one
+    // lead per (customer, listing, window), one active block per (customer, listing).
+    {
+        name: 'migrate:service-listings-indexes',
+        file: 'scripts/migrate-service-listings-indexes.ts',
+        dryRun: true,
+        note: 'A CUSTOMER CAN BE CHARGED TWICE FOR ONE CONTACT — the unique (lead_id, field) on listing_reveals is the reveal\'s only idempotency guard under a double tap, and listing search has no text index without it',
+    },
     // ── The catch-all, and it must stay LAST of all ──────────────────────────
     // Every row above builds a named handful somebody reasoned about. This one builds
     // everything the SCHEMAS declare that the database does not have — ~350 indexes on a

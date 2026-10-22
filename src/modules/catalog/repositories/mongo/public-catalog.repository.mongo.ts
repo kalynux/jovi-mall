@@ -896,6 +896,8 @@ export class PublicCatalogRepositoryMongo {
                                 $project: {
                                     _id: 0,
                                     status: 1,
+                                    // Projected only to be matched on below, never emitted.
+                                    kind: 1,
                                     country: 1,
                                     preferred_language: 1,
                                     verified: { $ifNull: ['$kyc_details.legit_verified', false] },
@@ -911,6 +913,13 @@ export class PublicCatalogRepositoryMongo {
                 },
                 { $unwind: { path: '$vendor', preserveNullAndEmptyArrays: false } },
                 { $match: { ...VENDOR_PUBLISHABLE_MATCH } },
+                // ⛔ A PROVIDER's store page never resolves (SERVICE-LISTINGS-PLAN L-2, L-26). This
+                // is the one public read that starts from a store and serves a page with zero
+                // products, so it is the one that would publish a provider's support contacts.
+                // Providers are refused a Store at creation (`ensureStoreForVendor`); this is the
+                // second lock, for a row created before that or by hand. `$ne`, not `$eq: 'seller'`:
+                // every vendor registered before 2026-10-19 has no `kind` and is a seller.
+                { $match: { 'vendor.kind': { $ne: 'provider' } } },
                 {
                     $lookup: {
                         from: COLLECTIONS.PRODUCT,

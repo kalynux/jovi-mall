@@ -1,6 +1,7 @@
 import { StoreRepository } from '../repositories/store.repository';
 import { IStore } from '../models/store.model';
 import { VendorRepository } from '../../vendors/vendor.repository';
+import { isProviderVendor } from '../../vendors/domain/vendor-kind';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 
@@ -40,6 +41,20 @@ export class StoreProvisioningService {
     const vendor = await this.vendorRepo.findById(vendorId);
     if (!vendor) {
       throw createAppError(ERROR_CODES.AUTH_USER_NOT_FOUND, 404, 'Vendor profile not found');
+    }
+
+    // ⛔ A PROVIDER never gets a Store (SERVICE-LISTINGS-PLAN L-2, L-26). This is the single
+    // creation path, so refusing here covers all seven call sites — registration, add-role,
+    // the three lazy store-route reads, branding and onboarding — including any added later.
+    // A Store is what `GET /api/public/stores/:slug` publishes support contacts from, and it
+    // serves a page with zero products; a provider's contacts are sold per reveal, never shown.
+    if (isProviderVendor(vendor)) {
+      throw createAppError(
+        ERROR_CODES.AUTH_VENDOR_KIND_FORBIDDEN,
+        403,
+        'A service provider has no store',
+        { required: 'seller' },
+      );
     }
 
     const name = this.deriveStoreName(seedName, vendor.display_name);

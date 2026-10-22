@@ -1,5 +1,7 @@
 import { IPricingPlan } from '../models/pricing-plan.model';
 import { BillingOwnerType } from '../billing.types';
+import type { VendorKind } from '../../vendors/domain/vendor-kind';
+import { planVendorKindOf } from '../domain/plan-vendor-kind';
 
 /**
  * The pricing-plan shape served to unauthenticated callers (the marketing site).
@@ -39,6 +41,17 @@ export interface PublicPlanDto {
   live_tracking_enabled: boolean;
 
   /**
+   * SERVICE-LISTINGS-PLAN § C-5: `'seller'` / `'provider'` on a vendor plan, `null` on an
+   * agency or agent plan. A vendor plan seeded with no kind reports `'seller'` (`planVendorKindOf`).
+   *
+   * ⚠ camelCase among snake_case siblings, deliberately: the contract names it `vendorKind`
+   * everywhere on the wire (§ C-1), and these two are the only fields this DTO gained since.
+   */
+  vendorKind: VendorKind | null;
+  /** Provider plans: listings occupying a slot. `null` = unlimited (and on every non-provider plan). */
+  maxActiveListings: number | null;
+
+  /**
    * Whether this tier can be bought TODAY. `false` covers two different
    * situations the model cannot tell apart — a tier defined ahead of launch and
    * a tier withdrawn from sale — which is why inactive rows are opt-in on the
@@ -64,6 +77,8 @@ export function toPublicPlanDto(plan: IPricingPlan): PublicPlanDto {
     max_unterminated_shipments: plan.max_unterminated_shipments ?? null,
     max_cod_pool: plan.max_cod_pool ?? null,
     live_tracking_enabled: plan.live_tracking_enabled,
+    vendorKind: planVendorKindOf(plan),
+    maxActiveListings: plan.max_active_listings ?? null,
     is_active: plan.is_active,
     sort_order: plan.sort_order,
   };

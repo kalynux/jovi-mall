@@ -74,8 +74,15 @@ export interface RoleClosureBlocker {
   currency?: string;
 }
 
-/** O-6: things the user LOSES on closure. Shown before confirming, never blocking. */
-export const ROLE_CLOSURE_WARNING_CODES = ['prepaid_plan_forfeited', 'credit_balance_forfeited'] as const;
+/**
+ * O-6: things the user LOSES on closure. Shown before confirming, never blocking.
+ *
+ * `credit_debt_written_off` (SERVICE-LISTINGS-PLAN L-12) is the mirror of
+ * `credit_balance_forfeited`: a provider whose grace reveals took the credit balance below zero
+ * may still close, and the debt is written off — Wi-Mall absorbs it. Informational, like the
+ * other two; the two credit warnings never appear together (a balance is one or the other).
+ */
+export const ROLE_CLOSURE_WARNING_CODES = ['prepaid_plan_forfeited', 'credit_balance_forfeited', 'credit_debt_written_off'] as const;
 export type RoleClosureWarningCode = (typeof ROLE_CLOSURE_WARNING_CODES)[number];
 
 export interface RoleClosureWarning {
@@ -84,7 +91,10 @@ export interface RoleClosureWarning {
   planCode?: string;
   /** When the forfeited term would have ended. */
   expiresAt?: Date;
-  /** For `credit_balance_forfeited`: the credits lost. */
+  /**
+   * For `credit_balance_forfeited`: the credits lost. For `credit_debt_written_off`: the debt
+   * written off, as a POSITIVE number (a balance of −30 reports 30).
+   */
   amount?: number;
 }
 

@@ -1,5 +1,7 @@
 import { Types, ClientSession } from 'mongoose';
 import { PricingPlanModel, IPricingPlan, PlanRole } from '../models/pricing-plan.model';
+import type { VendorKind } from '../../vendors/domain/vendor-kind';
+import { vendorPlanKindFilter } from '../domain/plan-vendor-kind';
 
 /**
  * Persistence for the admin-managed pricing plan catalog. Thin wrapper over the
@@ -22,10 +24,17 @@ export class PricingPlanRepository {
     return query.exec();
   }
 
-  /** List plans for a role. `activeOnly` filters to `is_active` (vendor-facing). */
-  async list(role: PlanRole, activeOnly: boolean): Promise<IPricingPlan[]> {
+  /**
+   * List plans for a role. `activeOnly` filters to `is_active` (vendor-facing).
+   *
+   * `vendorKind` narrows a VENDOR list to one kind (SERVICE-LISTINGS-PLAN § C-5) — through
+   * `vendorPlanKindFilter`, whose seller half is `$ne: 'provider'` so a plan seeded before the
+   * field existed still lists as a seller plan. Ignored for agency and agent plans.
+   */
+  async list(role: PlanRole, activeOnly: boolean, vendorKind?: VendorKind | null): Promise<IPricingPlan[]> {
     const filter: Record<string, unknown> = { role, deletedAt: null };
     if (activeOnly) filter.is_active = true;
+    if (role === 'vendor' && vendorKind) Object.assign(filter, vendorPlanKindFilter(vendorKind));
     return PricingPlanModel.find(filter).sort({ sort_order: 1, price: 1 });
   }
 

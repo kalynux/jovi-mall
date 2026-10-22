@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../api/middlewares/auth.middleware';
+import { requireVendorKind } from '../../api/middlewares/vendor-kind.middleware';
 import { VendorProfileController, uploadVendorPolicyDocuments } from './controller/vendor-profile.controller';
 import { VendorCalendarController } from './controller/vendor-calendar.controller';
 import { VendorOrderController } from './controller/vendor-order.controller';
@@ -23,11 +24,24 @@ router.use(requireAuth);
 router.use(requireRole(['vendor']));
 
 /**
+ * Vendor KIND, declared PER ROUTE (SERVICE-LISTINGS-PLAN § C-1).
+ *
+ * ⚠ Never as `router.use(requireVendorKind('seller'))`: this router is mounted at bare
+ * `/vendor`, and a sub-router's `use` runs for every request that enters it — including the
+ * provider-facing `/vendor/listings`, `/vendor/kyc` and `/vendor/tickets` mounted after it.
+ * `test:service-listings` refuses that form here and requires every route below to carry
+ * SELLER or BOTH. A provider holds a profile, notifications and devices (BOTH); everything
+ * about orders, delivery, stores, policies, calendars and customers is a seller's (L-2).
+ */
+const SELLER = requireVendorKind('seller');
+const BOTH = requireVendorKind('both');
+
+/**
  * GET /api/vendor/profile
  * 
  * Get authenticated vendor's profile
  */
-router.get('/profile', VendorProfileController.getProfile);
+router.get('/profile', BOTH, VendorProfileController.getProfile);
 
 /**
  * GET /api/vendor/profile/completion-status
@@ -35,7 +49,7 @@ router.get('/profile', VendorProfileController.getProfile);
  * Get onboarding step + missing fields for the authenticated vendor.
  * Frontend uses this to route to the correct onboarding screen.
  */
-router.get('/profile/completion-status', VendorProfileController.getCompletionStatus);
+router.get('/profile/completion-status', BOTH, VendorProfileController.getCompletionStatus);
 
 /**
  * PATCH /api/vendor/profile
@@ -43,7 +57,7 @@ router.get('/profile/completion-status', VendorProfileController.getCompletionSt
  * Update authenticated vendor's profile (general, outside onboarding flow).
  * Body: { displayName?, businessDescription?, email?, phone?, branding?, socialLinks?, ... version }
  */
-router.patch('/profile', VendorProfileController.updateProfile);
+router.patch('/profile', BOTH, VendorProfileController.updateProfile);
 
 /**
  * PATCH /api/vendor/profile/password
@@ -52,7 +66,7 @@ router.patch('/profile', VendorProfileController.updateProfile);
  * Kept so existing vendor frontends keep working.
  * Body: { oldPassword, newPassword }
  */
-router.patch('/profile/password', UserController.updatePassword);
+router.patch('/profile/password', BOTH, UserController.updatePassword);
 
 /**
  * GET /api/vendor/delivery-agencies
@@ -71,7 +85,7 @@ router.patch('/profile/password', UserController.updatePassword);
  *   returns_payer           ('vendor'|'agency'|'customer') — filter by returns payer
  *   min_claim_deadline_days (integer) — minimum damage claim window in days
  */
-router.get('/delivery-agencies', VendorProfileController.listDeliveryAgencies);
+router.get('/delivery-agencies', SELLER, VendorProfileController.listDeliveryAgencies);
 
 /**
  * GET /api/vendor/delivery-agencies/:agencyId/locations
@@ -88,7 +102,7 @@ router.get('/delivery-agencies', VendorProfileController.listDeliveryAgencies);
  * This is the one vendor-facing endpoint that goes past the primary HQ — the
  * listing endpoint above deliberately still shows only index 0.
  */
-router.get('/delivery-agencies/:agencyId/locations', VendorProfileController.listAgencyLocations);
+router.get('/delivery-agencies/:agencyId/locations', SELLER, VendorProfileController.listAgencyLocations);
 
 /**
  * GET /api/vendor/profile/default-delivery-agency
@@ -97,7 +111,7 @@ router.get('/delivery-agencies/:agencyId/locations', VendorProfileController.lis
  * Used by the frontend to show the agency in profile settings and preselect it
  * on the product editor.
  */
-router.get('/profile/default-delivery-agency', VendorProfileController.getDefaultDeliveryAgency);
+router.get('/profile/default-delivery-agency', SELLER, VendorProfileController.getDefaultDeliveryAgency);
 
 /**
  * PUT /api/vendor/profile/default-delivery-agency
@@ -107,7 +121,7 @@ router.get('/profile/default-delivery-agency', VendorProfileController.getDefaul
  * unset is a system cascade when the underlying agency is deactivated by an admin.
  * Body: { agencyId: string }
  */
-router.put('/profile/default-delivery-agency', VendorProfileController.setDefaultDeliveryAgency);
+router.put('/profile/default-delivery-agency', SELLER, VendorProfileController.setDefaultDeliveryAgency);
 
 /**
  * GET /api/vendor/profile/auto-redirect-orders
@@ -116,7 +130,7 @@ router.put('/profile/default-delivery-agency', VendorProfileController.setDefaul
  * plus the optional max-order-total cap.
  * Response: { autoRedirectOrdersToAgency: boolean, autoRedirectThresholdAmount: number | null }
  */
-router.get('/profile/auto-redirect-orders', VendorProfileController.getAutoRedirectOrders);
+router.get('/profile/auto-redirect-orders', SELLER, VendorProfileController.getAutoRedirectOrders);
 
 /**
  * PUT /api/vendor/profile/auto-redirect-orders
@@ -125,7 +139,7 @@ router.get('/profile/auto-redirect-orders', VendorProfileController.getAutoRedir
  * optionally set the max order total above which auto-dispatch is skipped.
  * Body: { enabled: boolean, thresholdAmount?: number | null }
  */
-router.put('/profile/auto-redirect-orders', VendorProfileController.setAutoRedirectOrders);
+router.put('/profile/auto-redirect-orders', SELLER, VendorProfileController.setAutoRedirectOrders);
 
 /**
  * GET /api/vendor/profile/auto-cancel-unpaid-days
@@ -133,7 +147,7 @@ router.put('/profile/auto-redirect-orders', VendorProfileController.setAutoRedir
  * Returns the number of days an order may stay unpaid before auto-cancellation.
  * Response: { autoCancelUnpaidDays: number }
  */
-router.get('/profile/auto-cancel-unpaid-days', VendorProfileController.getAutoCancelUnpaidDays);
+router.get('/profile/auto-cancel-unpaid-days', SELLER, VendorProfileController.getAutoCancelUnpaidDays);
 
 /**
  * PUT /api/vendor/profile/auto-cancel-unpaid-days
@@ -141,7 +155,7 @@ router.get('/profile/auto-cancel-unpaid-days', VendorProfileController.getAutoCa
  * Set the days an order may stay unpaid before auto-cancellation (min 1, max 90).
  * Body: { days: number }
  */
-router.put('/profile/auto-cancel-unpaid-days', VendorProfileController.setAutoCancelUnpaidDays);
+router.put('/profile/auto-cancel-unpaid-days', SELLER, VendorProfileController.setAutoCancelUnpaidDays);
 
 /**
  * GET /api/vendor/profile/cod-terms
@@ -149,7 +163,7 @@ router.put('/profile/auto-cancel-unpaid-days', VendorProfileController.setAutoCa
  * The vendor's cash-on-delivery terms (2026-10-02). Defaults when never set:
  * { codEnabled: true, maxCashPerAgency: null, updatedAt: null }.
  */
-router.get('/profile/cod-terms', VendorProfileController.getCodTerms);
+router.get('/profile/cod-terms', SELLER, VendorProfileController.getCodTerms);
 
 /**
  * PUT /api/vendor/profile/cod-terms
@@ -160,7 +174,7 @@ router.get('/profile/cod-terms', VendorProfileController.getCodTerms);
  * (dispatch gate, 422 COD_AGENCY_LIMIT_EXCEEDED unless force). Separate from `policies`:
  * does NOT bump policy_version or pause agency connections.
  */
-router.put('/profile/cod-terms', VendorProfileController.setCodTerms);
+router.put('/profile/cod-terms', SELLER, VendorProfileController.setCodTerms);
 
 /**
  * GET /api/vendor/profile/delivery-terms
@@ -168,7 +182,7 @@ router.put('/profile/cod-terms', VendorProfileController.setCodTerms);
  * Who pays delivery for this shop's orders (ADR-A11). Default when never set:
  * { mode: 'always', freeAboveAmount: null, updatedAt: null } — the shop pays.
  */
-router.get('/profile/delivery-terms', VendorProfileController.getDeliveryTerms);
+router.get('/profile/delivery-terms', SELLER, VendorProfileController.getDeliveryTerms);
 
 /**
  * PUT /api/vendor/profile/delivery-terms
@@ -177,7 +191,7 @@ router.get('/profile/delivery-terms', VendorProfileController.getDeliveryTerms);
  * freeAboveAmount (integer 1..100 000 000) is required with mode 'above' and must be null/absent
  * otherwise. Separate from `policies`: does NOT bump policy_version or pause agency connections.
  */
-router.put('/profile/delivery-terms', VendorProfileController.setDeliveryTerms);
+router.put('/profile/delivery-terms', SELLER, VendorProfileController.setDeliveryTerms);
 
 // ─── Onboarding ───────────────────────────────────────────────────────────────
 
@@ -186,35 +200,35 @@ router.put('/profile/delivery-terms', VendorProfileController.setDeliveryTerms);
  * Rich onboarding status: steps[], progressPercent, completedFields, warnings.
  * Frontend uses this to render the step indicator and route to the correct screen.
  */
-router.get('/onboarding/status', VendorProfileController.getOnboardingStatus);
+router.get('/onboarding/status', BOTH, VendorProfileController.getOnboardingStatus);
 
 /**
  * PUT /api/vendor/onboarding/basic-setup
  * Step 1 (Required): country, timezone, payout_details
  * Optional: { version } for optimistic concurrency
  */
-router.put('/onboarding/basic-setup', VendorProfileController.completeBasicSetup);
+router.put('/onboarding/basic-setup', SELLER, VendorProfileController.completeBasicSetup);
 
 /**
  * PUT /api/vendor/onboarding/delivery-linking
  * Step 2 (Optional/Skippable): { skip?: boolean, default_delivery_agency_id? }
  * Optional: { version } for optimistic concurrency
  */
-router.put('/onboarding/delivery-linking', VendorProfileController.completeDeliveryLinking);
+router.put('/onboarding/delivery-linking', SELLER, VendorProfileController.completeDeliveryLinking);
 
 /**
  * PUT /api/vendor/onboarding/branding
  * Step 3 (Optional/Skippable): { skip?: boolean, branding?, business_addresses? }
  * Optional: { version } for optimistic concurrency
  */
-router.put('/onboarding/branding', VendorProfileController.completeBrandingSetup);
+router.put('/onboarding/branding', SELLER, VendorProfileController.completeBrandingSetup);
 
 /**
  * PUT /api/vendor/onboarding/policy-setup
  * Step 4 (Optional/Skippable): { skip?: boolean, return_policy?, cancellation_policy?, support_policy? }
  * Optional: { version } for optimistic concurrency
  */
-router.put('/onboarding/policy-setup', VendorProfileController.completePolicySetup);
+router.put('/onboarding/policy-setup', SELLER, VendorProfileController.completePolicySetup);
 
 /**
  * POST /api/vendor/profile/policy-documents
@@ -223,7 +237,7 @@ router.put('/onboarding/policy-setup', VendorProfileController.completePolicySet
  * Returns public URLs to submit via `policies.documents` on the policy-setup
  * or profile-update endpoints.
  */
-router.post('/profile/policy-documents', uploadVendorPolicyDocuments, VendorProfileController.uploadPolicyDocuments);
+router.post('/profile/policy-documents', SELLER, uploadVendorPolicyDocuments, VendorProfileController.uploadPolicyDocuments);
 
 
 /**
@@ -236,19 +250,19 @@ router.post('/profile/policy-documents', uploadVendorPolicyDocuments, VendorProf
  * GET /api/vendor/calendar/status
  * Get calendar connection status for the vendor
  */
-router.get('/calendar/status', VendorCalendarController.getStatus);
+router.get('/calendar/status', SELLER, VendorCalendarController.getStatus);
 
 /**
  * POST /api/vendor/calendar/connect
  * Initiate OAuth flow for connecting Google Calendar
  */
-router.post('/calendar/connect', VendorCalendarController.initiateConnect);
+router.post('/calendar/connect', SELLER, VendorCalendarController.initiateConnect);
 
 /**
  * POST /api/vendor/calendar/disconnect
  * Disconnect Google Calendar
  */
-router.post('/calendar/disconnect', VendorCalendarController.disconnect);
+router.post('/calendar/disconnect', SELLER, VendorCalendarController.disconnect);
 
 /**
  * ==========================================
@@ -260,7 +274,7 @@ router.post('/calendar/disconnect', VendorCalendarController.disconnect);
  * GET /api/vendor/orders
  * List vendor orders with filters and pagination
  */
-router.get('/orders', VendorOrderController.listOrders);
+router.get('/orders', SELLER, VendorOrderController.listOrders);
 
 /**
  * POST /api/vendor/orders/bulk/status
@@ -272,68 +286,68 @@ router.get('/orders', VendorOrderController.listOrders);
  * registered after the :id routes, Express would match "bulk" as the :id value and
  * the bulk handler would never be reached.
  */
-router.post('/orders/bulk/status', VendorOrderController.bulkUpdateFulfillmentStatus);
+router.post('/orders/bulk/status', SELLER, VendorOrderController.bulkUpdateFulfillmentStatus);
 
 /**
  * POST /api/vendor/orders/bulk/dispatch
  * Bulk-dispatch many paid physical orders to their delivery agency/agencies.
  */
-router.post('/orders/bulk/dispatch', VendorOrderController.bulkDispatchToAgency);
+router.post('/orders/bulk/dispatch', SELLER, VendorOrderController.bulkDispatchToAgency);
 
 /**
  * GET /api/vendor/orders/:id
  * Get order details
  */
-router.get('/orders/:id', VendorOrderController.getOrderDetails);
+router.get('/orders/:id', SELLER, VendorOrderController.getOrderDetails);
 
 /**
  * PATCH /api/vendor/orders/:id/status
  * Update fulfillment status
  */
-router.patch('/orders/:id/status', VendorOrderController.updateFulfillmentStatus);
+router.patch('/orders/:id/status', SELLER, VendorOrderController.updateFulfillmentStatus);
 
 /**
  * POST /api/vendor/orders/:id/dispatch
  * Explicitly dispatch a reviewed, paid order to its delivery agency (advances
  * pending shipments to assigned — the vendor's manual review/approval gate).
  */
-router.post('/orders/:id/dispatch', VendorOrderController.dispatchToAgency);
+router.post('/orders/:id/dispatch', SELLER, VendorOrderController.dispatchToAgency);
 
 /**
  * GET /api/vendor/orders/:id/timeline
  * Get order timeline (audit trail)
  */
-router.get('/orders/:id/timeline', VendorOrderController.getTimeline);
+router.get('/orders/:id/timeline', SELLER, VendorOrderController.getTimeline);
 
 /**
  * POST /api/vendor/orders/:id/notes
  * Add vendor-internal note
  */
-router.post('/orders/:id/notes', VendorOrderController.addNote);
+router.post('/orders/:id/notes', SELLER, VendorOrderController.addNote);
 
 /**
  * GET /api/vendor/orders/:id/notes
  * Get vendor-internal notes
  */
-router.get('/orders/:id/notes', VendorOrderController.getNotes);
+router.get('/orders/:id/notes', SELLER, VendorOrderController.getNotes);
 
 /**
  * GET /api/vendor/orders/:id/notes/:noteId
  * Get a single vendor-internal note by ID (useful when following a timeline noteId reference)
  */
-router.get('/orders/:id/notes/:noteId', VendorOrderController.getNote);
+router.get('/orders/:id/notes/:noteId', SELLER, VendorOrderController.getNote);
 
 /**
  * PATCH /api/vendor/orders/:id/delivery-agency
  * Update delivery agency for physical order (NEW: Phase 1)
  */
-router.patch('/orders/:id/delivery-agency', VendorOrderController.updateDeliveryAgency);
+router.patch('/orders/:id/delivery-agency', SELLER, VendorOrderController.updateDeliveryAgency);
 
 /**
  * GET /api/vendor/orders/:id/refund-eligibility
  * Check whether the order can be refunded (vendor return policy + order state)
  */
-router.get('/orders/:id/refund-eligibility', VendorOrderController.getRefundEligibility);
+router.get('/orders/:id/refund-eligibility', SELLER, VendorOrderController.getRefundEligibility);
 
 /**
  * Delivery-fee proposals (modules/delivery-fee-proposals) — an agency (or its agent)
@@ -345,42 +359,42 @@ router.get('/orders/:id/refund-eligibility', VendorOrderController.getRefundElig
  *   POST /api/vendor/orders/:id/delivery-fee-proposals/:proposalId/approve
  *   POST /api/vendor/orders/:id/delivery-fee-proposals/:proposalId/reject   { note? }
  */
-router.get('/delivery-fee-proposals', VendorDeliveryFeeProposalController.list);
-router.get('/orders/:id/delivery-fee-proposals', VendorDeliveryFeeProposalController.listForOrder);
-router.post('/orders/:id/delivery-fee-proposals/:proposalId/approve', VendorDeliveryFeeProposalController.approve);
-router.post('/orders/:id/delivery-fee-proposals/:proposalId/reject', VendorDeliveryFeeProposalController.reject);
+router.get('/delivery-fee-proposals', SELLER, VendorDeliveryFeeProposalController.list);
+router.get('/orders/:id/delivery-fee-proposals', SELLER, VendorDeliveryFeeProposalController.listForOrder);
+router.post('/orders/:id/delivery-fee-proposals/:proposalId/approve', SELLER, VendorDeliveryFeeProposalController.approve);
+router.post('/orders/:id/delivery-fee-proposals/:proposalId/reject', SELLER, VendorDeliveryFeeProposalController.reject);
 // ADR-A11 D-10: take a change-agency difference on yourself (customer-paid orders only).
-router.post('/orders/:id/delivery-fee-proposals/:proposalId/cover', VendorDeliveryFeeProposalController.cover);
+router.post('/orders/:id/delivery-fee-proposals/:proposalId/cover', SELLER, VendorDeliveryFeeProposalController.cover);
 // 2026-10-14 — propose YOUR delivery fee to the agency on a parcel whose delivery you pay (higher
 // or lower); the agency (or its agent, if allowed) answers, and pickup waits for that answer.
-router.post('/orders/:id/shipments/:shipmentId/delivery-fee-proposals', VendorPayerProposalController.propose);
-router.patch('/orders/:id/delivery-fee-proposals/:proposalId', VendorPayerProposalController.edit);
-router.post('/orders/:id/delivery-fee-proposals/:proposalId/withdraw', VendorPayerProposalController.withdraw);
+router.post('/orders/:id/shipments/:shipmentId/delivery-fee-proposals', SELLER, VendorPayerProposalController.propose);
+router.patch('/orders/:id/delivery-fee-proposals/:proposalId', SELLER, VendorPayerProposalController.edit);
+router.post('/orders/:id/delivery-fee-proposals/:proposalId/withdraw', SELLER, VendorPayerProposalController.withdraw);
 
 /**
  * POST /api/vendor/orders/:id/refund
  * Action a refund on a paid, refundable order.
  * Body: { amount?, reason? } — amount defaults to the policy-computed maximum.
  */
-router.post('/orders/:id/refund', VendorOrderController.refundOrder);
+router.post('/orders/:id/refund', SELLER, VendorOrderController.refundOrder);
 
 /**
  * GET /api/vendor/orders/:id/entitlements
  * Get digital entitlements for order (NEW: Phase 2)
  */
-router.get('/orders/:id/entitlements', VendorOrderController.getOrderEntitlements);
+router.get('/orders/:id/entitlements', SELLER, VendorOrderController.getOrderEntitlements);
 
 /**
  * POST /api/vendor/entitlements/:id/revoke
  * Revoke digital entitlement (NEW: Phase 2)
  */
-router.post('/entitlements/:id/revoke', VendorOrderController.revokeEntitlement);
+router.post('/entitlements/:id/revoke', SELLER, VendorOrderController.revokeEntitlement);
 
 /**
  * POST /api/vendor/entitlements/:id/restore
  * Restore revoked digital entitlement (NEW: Phase 2)
  */
-router.post('/entitlements/:id/restore', VendorOrderController.restoreEntitlement);
+router.post('/entitlements/:id/restore', SELLER, VendorOrderController.restoreEntitlement);
 
 /**
  * ==========================================
@@ -396,10 +410,10 @@ router.post('/entitlements/:id/restore', VendorOrderController.restoreEntitlemen
  * PATCH  /api/vendor/customer-flags/:id    Update flag  { name?, color?, description? }
  * DELETE /api/vendor/customer-flags/:id    Soft-delete flag (and detach from customers)
  */
-router.get('/customer-flags', VendorCustomerController.listFlags);
-router.post('/customer-flags', VendorCustomerController.createFlag);
-router.patch('/customer-flags/:id', VendorCustomerController.updateFlag);
-router.delete('/customer-flags/:id', VendorCustomerController.deleteFlag);
+router.get('/customer-flags', SELLER, VendorCustomerController.listFlags);
+router.post('/customer-flags', SELLER, VendorCustomerController.createFlag);
+router.patch('/customer-flags/:id', SELLER, VendorCustomerController.updateFlag);
+router.delete('/customer-flags/:id', SELLER, VendorCustomerController.deleteFlag);
 
 /**
  * Customers who have ordered from this vendor (derived from orders).
@@ -411,10 +425,10 @@ router.delete('/customer-flags/:id', VendorCustomerController.deleteFlag);
  *
  * To view a customer's orders, call GET /api/vendor/orders?customerId=:id
  */
-router.get('/customers', VendorCustomerController.listCustomers);
-router.get('/customers/:id', VendorCustomerController.getCustomerDetail);
-router.patch('/customers/:id/name', VendorCustomerController.updateCustomerName);
-router.put('/customers/:id/flags', VendorCustomerController.setCustomerFlags);
+router.get('/customers', SELLER, VendorCustomerController.listCustomers);
+router.get('/customers/:id', SELLER, VendorCustomerController.getCustomerDetail);
+router.patch('/customers/:id/name', SELLER, VendorCustomerController.updateCustomerName);
+router.put('/customers/:id/flags', SELLER, VendorCustomerController.setCustomerFlags);
 
 /**
  * ==========================================
@@ -426,43 +440,43 @@ router.put('/customers/:id/flags', VendorCustomerController.setCustomerFlags);
  * GET /api/vendor/notifications
  * List vendor notifications with filters and pagination
  */
-router.get('/notifications', VendorNotificationController.listNotifications);
+router.get('/notifications', BOTH, VendorNotificationController.listNotifications);
 
 /**
  * PATCH /api/vendor/notifications/:id/read
  * Mark single notification as read
  */
-router.patch('/notifications/:id/read', VendorNotificationController.markAsRead);
+router.patch('/notifications/:id/read', BOTH, VendorNotificationController.markAsRead);
 
 /**
  * POST /api/vendor/notifications/read-all
  * Bulk mark all notifications as read
  */
-router.post('/notifications/read-all', VendorNotificationController.markAllAsRead);
+router.post('/notifications/read-all', BOTH, VendorNotificationController.markAllAsRead);
 
 /**
  * GET /api/vendor/notification-preferences
  * Get vendor notification preferences
  */
-router.get('/notification-preferences', VendorNotificationController.getPreferences);
+router.get('/notification-preferences', BOTH, VendorNotificationController.getPreferences);
 
 /**
  * PATCH /api/vendor/notification-preferences
  * Update vendor notification preferences
  */
-router.patch('/notification-preferences', VendorNotificationController.updatePreferences);
+router.patch('/notification-preferences', BOTH, VendorNotificationController.updatePreferences);
 
 /**
  * POST /api/vendor/devices
  * Register/refresh an FCM device token for push notifications
  */
-router.post('/devices', DeviceTokenController.register);
+router.post('/devices', BOTH, DeviceTokenController.register);
 
 /**
  * DELETE /api/vendor/devices
  * Unregister an FCM device token (e.g. on logout)
  */
-router.delete('/devices', DeviceTokenController.unregister);
+router.delete('/devices', BOTH, DeviceTokenController.unregister);
 
 /**
  * ==========================================

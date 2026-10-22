@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../../api/middlewares/auth.middleware';
+import { requireVendorKind } from '../../../api/middlewares/vendor-kind.middleware';
 import { aiCopyRateLimiter } from '../../../api/rate-limit/rate-limit.middleware';
 import { VendorAiCopyController } from '../controllers/vendor-ai-copy.controller';
 
@@ -12,6 +13,8 @@ import { VendorAiCopyController } from '../controllers/vendor-ai-copy.controller
 const router = Router();
 router.use(requireAuth);
 router.use(requireRole(['vendor']));
+// Vendor kind (SERVICE-LISTINGS-PLAN § C-1): SELLER — the writing assistant is not offered on listings in v1 (owner decision O-17).
+router.use(requireVendorKind('seller'));
 
 router.post('/listing-copy', aiCopyRateLimiter, VendorAiCopyController.generate);
 

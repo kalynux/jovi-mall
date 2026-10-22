@@ -908,6 +908,33 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
       'This category is still used by products. Merge it into another category instead of deleting it.',
     [ERROR_CODES.CATEGORY_MERGE_INVALID]: 'A category can only be merged into a different, live category',
 
+    // Informational service listings (SERVICE-LISTINGS-PLAN § C-4). `LISTING_UNREACHABLE` is
+    // deliberately vague: it covers a block (L-29), and the customer must not learn that.
+    [ERROR_CODES.AUTH_VENDOR_KIND_FORBIDDEN]: 'This feature is not available for your kind of vendor account',
+    [ERROR_CODES.LISTING_NOT_FOUND]: 'Listing not found',
+    [ERROR_CODES.LISTING_STATUS_CONFLICT]:
+        'This listing changed or is not in a state that allows this action. Reload and try again.',
+    [ERROR_CODES.LISTING_INCOMPLETE]: 'This listing is not complete yet',
+    [ERROR_CODES.LISTING_VIDEO_LINK_INVALID]: 'The location video must be a YouTube link or a Google Drive file link',
+    [ERROR_CODES.LISTING_VIDEO_NOT_WATCHABLE]: 'This YouTube video cannot be watched — it is private or was removed',
+    [ERROR_CODES.LISTING_VIDEO_UNAVAILABLE]: 'This video is no longer available. You were not charged.',
+    [ERROR_CODES.LISTING_UNREACHABLE]: 'This business can’t be reached right now',
+    [ERROR_CODES.LISTING_REVEAL_DAILY_LIMIT]: 'You’ve reached today’s limit for this business. Try again tomorrow.',
+    [ERROR_CODES.LISTING_FIELD_UNAVAILABLE]: 'This business has not shared that contact detail',
+    [ERROR_CODES.LISTING_REVEAL_NOT_FOUND]: 'Contact reveal not found',
+    [ERROR_CODES.LISTING_REVEAL_ALREADY_REFUNDED]: 'This contact reveal has already been refunded',
+    [ERROR_CODES.LISTING_REVEAL_BLOCK_EXISTS]: 'This customer is already blocked on this listing',
+    [ERROR_CODES.LISTING_REVEAL_BLOCK_NOT_FOUND]: 'This customer is not blocked on this listing',
+    [ERROR_CODES.LISTING_LEAD_NOT_FOUND]: 'Lead not found',
+    [ERROR_CODES.LISTING_MESSAGE_CONSENT_REQUIRED]: 'This customer has not agreed to receive messages from your business',
+    [ERROR_CODES.LISTING_MESSAGE_CAP_REACHED]: 'You have sent this customer the most messages allowed in 30 days',
+    [ERROR_CODES.LISTING_CALL_ME_ALREADY_SENT]: 'You already asked this customer to call you in the last 30 days',
+    [ERROR_CODES.LISTING_MESSAGE_WINDOW_CLOSED]:
+        'WhatsApp only allows free messages within 24 hours of the customer’s last message. It reopens when they write again.',
+    [ERROR_CODES.LISTING_MESSAGE_CHANNEL_UNAVAILABLE]: 'This customer has no WhatsApp or Telegram linked to their account',
+    [ERROR_CODES.LISTING_SETTINGS_INVALID]: 'These listing settings are not valid',
+    [ERROR_CODES.LISTING_REPORT_INVALID]: 'This report names contact reveals that are not part of this lead',
+
     // ── System operations (Phase 14) ──────────────────────────────────────────
     // The maintenance message is the one default here written for a CUSTOMER rather than an
     // operator — it is what a shopper sees mid-checkout. The operator's own reason is carried

@@ -7,7 +7,7 @@ import { SubscriberPlanRepository } from '../repositories/subscriber-plan.reposi
 import { SubscriberPlanService, subscriberPlanService } from '../services/subscriber-plan.service';
 import { BillingSettingsRepository } from '../repositories/billing-settings.repository';
 import { VendorSettingsRepository } from '../../vendors/repositories/vendor-settings.repository';
-import { BillingOwnerType, freePlanCode } from '../billing.types';
+import { BillingOwnerType } from '../billing.types';
 
 const DAY_MS = 86_400_000;
 /** Upper bound on per-owner notify windows (matches the setting's max). */
@@ -106,9 +106,10 @@ export class PlanExpiryWorker implements ObservableWorker {
       const ownerId = plan.owner_id.toString();
       try {
         const activated = await this.plans.activatePending(ownerType, ownerId, plan._id);
-        if (!activated) {
-          await this.plans.downgradeToFree(ownerType, ownerId, plan._id);
-        }
+        // The plan the owner lands on. A downgrade's is read from the row it created rather than
+        // re-derived: for a vendor the free tier depends on the KIND (SERVICE-LISTINGS-PLAN § C-5),
+        // and `downgradeToFree` is the one place that resolves it.
+        const downgraded = activated ? null : await this.plans.downgradeToFree(ownerType, ownerId, plan._id);
         await eventBus.publish('plan.expired', {
           eventType: 'plan.expired',
           aggregateId: ownerId,
@@ -118,7 +119,8 @@ export class PlanExpiryWorker implements ObservableWorker {
             ownerId,
             expiredPlanCode: plan.plan_code,
             handedOverToPending: !!activated,
-            newPlanCode: activated?.plan_code ?? freePlanCode(ownerType),
+            // Exactly one of the two is set: a promoted pending plan, or the downgrade's free tier.
+            newPlanCode: (activated ?? downgraded)!.plan_code,
           },
         });
       } catch (err) {

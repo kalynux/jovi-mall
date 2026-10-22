@@ -1,6 +1,14 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { GoogleCalendarProvider } from './google.provider';
 import { requireAuth } from '../../../../api/middlewares/auth.middleware';
+import { requireVendorKind } from '../../../../api/middlewares/vendor-kind.middleware';
+
+/**
+ * Vendor kind (SERVICE-LISTINGS-PLAN § C-1): SELLER — the vendor calendar exists for service
+ * BOOKINGS, and a provider has none (L-2). Per route because this router has no role guard of its
+ * own; the guard lets a non-vendor session through untouched (`requireRole` is not its job).
+ */
+const CALENDAR_SELLER_ONLY = requireVendorKind('seller');
 import { OAuthStateService } from '../../../auth/services/oauth-state.service';
 import { ConnectedCalendarAccount } from './connected-account.model';
 import { VendorModel } from '../../../vendors/vendor.model';
@@ -111,6 +119,7 @@ function redirectOAuthResult(
 router.get(
   '/connect',
   requireAuth,
+  CALENDAR_SELLER_ONLY,
   asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.auth!.user.id;
 
@@ -142,6 +151,7 @@ router.get(
 router.post(
   '/connect-url',
   requireAuth,
+  CALENDAR_SELLER_ONLY,
   asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.auth!.user.id;
     const raw = (req.body as { returnTo?: unknown } | undefined)?.returnTo;
@@ -263,6 +273,7 @@ router.get(
 router.get(
   '/status',
   requireAuth,
+  CALENDAR_SELLER_ONLY,
   asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.auth?.user.id;
     if (!userId) return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'Unauthorized'));
@@ -288,6 +299,7 @@ router.get(
 router.post(
   '/disconnect',
   requireAuth,
+  CALENDAR_SELLER_ONLY,
   asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.auth?.user.id;
     if (!userId) return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'Unauthorized'));
@@ -304,6 +316,7 @@ router.post(
 router.get(
   '/test',
   requireAuth,
+  CALENDAR_SELLER_ONLY,
   asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.auth?.user.id;
     if (!userId) return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'Unauthorized'));

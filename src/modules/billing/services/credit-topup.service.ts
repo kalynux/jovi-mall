@@ -8,6 +8,8 @@ import { findCreditPack } from '../config/credit.config';
 import { ICreditTopup } from '../models/credit-topup.model';
 import { CreditTopupModel } from '../models/credit-topup.model';
 import { BillingOwnerType } from '../billing.types';
+import { ICreditWallet } from '../models/credit-wallet.model';
+import { publishWalletCredited } from '../domain/wallet-credited.event';
 import { PaymentChannelInfo } from '../../payments/gateways/gateway.interface';
 import { getPaymentGateway } from '../../payments/gateways/registry';
 import { mintMerchantRef } from '../../payments/domain/merchant-reference';
@@ -167,17 +169,21 @@ export class CreditTopupService {
    * Safe to call from a verify poll or a future payment webhook.
    */
   async completeTopup(topupId: string): Promise<ICreditTopup> {
-    return transactionManager.runInTransaction(async (session) => {
+    // `credited` is set only by the run that actually credits, so a replayed completion publishes nothing.
+    const { topup: completed, credited } = await transactionManager.runInTransaction(async (session): Promise<{
+      topup: ICreditTopup;
+      credited: ICreditWallet | null;
+    }> => {
       const topup = await CreditTopupModel.findById(topupId).session(session);
       if (!topup) {
         throw createAppError(ERROR_CODES.BILLING_TOPUP_NOT_FOUND, 404, 'Top-up not found');
       }
-      if (topup.status === 'paid') return topup; // already completed
+      if (topup.status === 'paid') return { topup, credited: null }; // already completed
 
       topup.status = 'paid';
       topup.paid_at = new Date(); // statement fact (2026-09-27) — see ICreditTopup.paid_at
       await topup.save({ session });
-      await this.wallet.creditInSession(
+      const wallet = await this.wallet.creditInSession(
         topup.owner_type,
         topup.owner_id.toString(),
         topup.credits,
@@ -186,8 +192,12 @@ export class CreditTopupService {
         topup._id.toString(),
         session
       );
-      return topup;
+      return { topup, credited: wallet };
     });
+    // Post-commit (SERVICE-LISTINGS-PLAN § C-5): a provider's suspended listings come back on a
+    // top-up. The credit is arithmetic, so a top-up pays a negative balance's debt first.
+    if (credited) publishWalletCredited(credited, 'topup_purchase');
+    return completed;
   }
 
   /**
@@ -209,6 +219,8 @@ export class CreditTopupService {
       );
       if (!claimed) return null; // not paid / already reversed → no-op
 
+      // A NEGATIVE credit: it moves the balance down, so it publishes no `billing.wallet.credited`
+      // (the one creditInSession caller exempt from that rule — see test:service-listings-billing).
       await this.wallet.creditInSession(
         claimed.owner_type,
         claimed.owner_id.toString(),

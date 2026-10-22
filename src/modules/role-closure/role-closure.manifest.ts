@@ -27,6 +27,9 @@ import { ProductPlatformSuspensionService } from '../catalog/domain/services/Pro
 import { AdminAgencyService } from '../delivery/services/admin-agency.service';
 import { agentRepository } from '../agents/repositories/agent.repository';
 import { trackingOutboxEmitter } from '../tracking-integration/services/tracking-outbox.emitter';
+import { ListingModel } from '../listings/models/listing.model';
+import { listingContactRepository } from '../listings/repositories/listing-contact.repository';
+import { ProviderContactConsentModel } from '../listings/models/provider-contact-consent.model';
 import { ClosableRole } from './role-closure.types';
 
 /**
@@ -50,6 +53,33 @@ import { ClosableRole } from './role-closure.types';
  *              on them, so ending them strands nothing — it stops a counterparty seeing an
  *              "active" partner who no longer exists.
  *   UNTOUCHED  money and transactions, exactly as ADR-A02 D-1.
+ *
+ * ── Informational service listings (SERVICE-LISTINGS-PLAN § C-2, § C-8a, L-12) ──
+ * Seven collections; every one holding a name, a number or a link is classified here.
+ *   listings                    ARCHIVED on a vendor closure (`closeListings`). Public business
+ *                               content only — no contact is ever stored on it (§ C-2) — and its
+ *                               `_id` is what leads, reveals and the ledger point at, so it stays.
+ *   listing_contacts            ERASED on a vendor closure: `published` and `pending` nulled. It
+ *                               IS the provider's reachable contact data (phone, WhatsApp, email,
+ *                               links, the exact pin, the video link) — the one thing a closure must
+ *                               not leave behind. The row survives (one per listing, unique index).
+ *   listing_leads               KEPT. The record that a customer engaged a listing — money context
+ *                               for every reveal (ADR-A02 D-1). Ids only — which is why the masked
+ *                               name and number a provider sees must be DERIVED from the customer
+ *                               profile at read time, never snapshotted onto the lead: derived, a
+ *                               closed customer's lead reads "Closed account" with no write here.
+ *   listing_reveals             KEPT. The MONEY record (ledger refs, refunds). Holds a sha256
+ *                               fingerprint of each revealed value, never the value (§ C-2).
+ *   listing_reveal_blocks       KEPT. An administrator's fraud decision, cited by a report ticket
+ *                               and by refunds; ids plus the administrator's own reason text.
+ *   provider_contact_consents   CUSTOMER closure: every GRANTED consent is REVOKED (`revoked_at`).
+ *                               A consent is permission to reach the person — the class of row this
+ *                               file deletes — revoked rather than deleted so the history of who
+ *                               could message whom stays with the leads it explains. Vendor closure:
+ *                               kept; an inactive vendor can send nothing.
+ *   provider_customer_messages  KEPT. Messages already delivered to a customer; the L-24 caps count
+ *                               from them. Each carries the PROVIDER's own text, which the customer
+ *                               already holds.
  *
  * ── User-scoped rows survive a ROLE closure ───────────────────────────────────
  * Messaging connections and device tokens belong to the person, and their remaining roles
@@ -106,6 +136,12 @@ export class RoleClosureManifest {
     await this.accountClosure.deleteNotifications(customerId, session);
     await this.accountClosure.clearVendorAnnotations(customerId, session);
     await CustomerNotificationPreferenceModel.deleteMany({ customerId }, { session }).exec();
+    // L-14: a closed customer can no longer be messaged by any provider. See the header.
+    await ProviderContactConsentModel.updateMany(
+      { customer_id: customerId, granted_at: { $ne: null }, revoked_at: null },
+      { $set: { revoked_at: closedAt } },
+      { session },
+    ).exec();
     return NOTHING_ENDED();
   }
 
@@ -171,6 +207,11 @@ export class RoleClosureManifest {
     // activation gate refuses an `inactive` vendor, and the vendor restore refuses `closed_at`.
     await this.productSuspension.suspendForVendor(vendorId, { session });
 
+    // A provider's listings (SERVICE-LISTINGS-PLAN § C-8a). Unconditional: a seller has none, so
+    // this costs two no-op writes, and gating it on the kind would make a mis-kinded row the
+    // one place contacts survive a closure.
+    await this.closeListings(vendorId, closedAt, session);
+
     await UserPaymentMethodModel.deleteMany({ owner_role: 'vendor', owner_id: vendorId }, { session }).exec();
     await VendorNotificationModel.deleteMany({ vendorId }, { session }).exec();
     await VendorNotificationPreferenceModel.deleteMany({ vendorId }, { session }).exec();
@@ -178,6 +219,30 @@ export class RoleClosureManifest {
     await ConnectedCalendarAccount.deleteMany({ vendorId }, { session }).exec();
 
     return { contracts: [], connections: await this.endConnections('vendor', vendorId, actor, closedAt, session) };
+  }
+
+  /**
+   * Archive every listing and erase every contact set (§ C-8a, header above).
+   *
+   * Archived, never deleted: leads, reveals and the ledger reference the listing's `_id`.
+   * `suspension` is CLEARED — archived is terminal here, and a suspension left on an archived
+   * row would describe a state the listing is no longer in (the product `update` invariant). The
+   * unsubmitted or in-review revision (`pending` + `review`) is dropped too, so nothing of a
+   * closed provider waits in the review queue. `archived_at` is kept where already set.
+   */
+  private async closeListings(vendorId: string, closedAt: Date, session: ClientSession): Promise<void> {
+    await ListingModel.updateMany(
+      { vendor_id: vendorId, status: { $ne: 'archived' } },
+      { $set: { status: 'archived', archived_at: closedAt } },
+      { session },
+    ).exec();
+    await ListingModel.updateMany(
+      { vendor_id: vendorId },
+      { $set: { suspension: null, pending: null, review: null } },
+      { session },
+    ).exec();
+    // Through the ONE door to the sensitive collection (test:service-listings § 5), not the model.
+    await listingContactRepository.eraseForVendor(String(vendorId), session);
   }
 
   // ─── agency ────────────────────────────────────────────────────────────────

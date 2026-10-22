@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../../api/middlewares/auth.middleware';
+import { requireVendorKind } from '../../../api/middlewares/vendor-kind.middleware';
 import { ConnectionController } from '../controllers/connection.controller';
 
 /**
@@ -11,6 +12,8 @@ const router = Router();
 
 router.use(requireAuth);
 router.use(requireRole(['vendor']));
+// Vendor kind (SERVICE-LISTINGS-PLAN § C-1): SELLER — delivery-agency links — a provider ships nothing.
+router.use(requireVendorKind('seller'));
 
 router.post('/', ConnectionController.request);
 router.get('/', ConnectionController.list);

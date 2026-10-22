@@ -6,6 +6,7 @@ import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { sendSuccess, sendMessage } from '../../../core/responses';
+import { vendorKindForRole } from '../../vendors/domain/vendor-kind';
 import {
     AUTH_COOKIE,
     accessCookieOptions,
@@ -45,6 +46,7 @@ export class BrowserAuthController {
                 email: user.login_email,
                 role,
             },
+            vendorKind: vendorKindForRole(role, role_entity),
         });
     });
 

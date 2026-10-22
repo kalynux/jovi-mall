@@ -16,6 +16,10 @@ import { asyncHandler } from '../../api/middlewares/async-handler';
 import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
 import { sendSuccess, sendCreated, sendMessage } from '../../core/responses';
+// `vendorKind` rides beside `role_entity` on every response that issues or resolves a session
+// (SERVICE-LISTINGS-PLAN § C-1): the dashboards branch on it, and a cookie client cannot read
+// the token. `null` for every role but vendor.
+import { vendorKindForRole } from '../vendors/domain/vendor-kind';
 
 const authService = new AuthService();
 
@@ -31,14 +35,14 @@ export class AuthController {
     const input = RegisterSchema.parse(req.body);
     const { user, role, role_entity, accessToken, refreshToken } = await authService.register(input);
     setAuthCookies(res, accessToken, refreshToken);
-    sendCreated(res, { user, role, role_entity });
+    sendCreated(res, { user, role, role_entity, vendorKind: vendorKindForRole(role, role_entity) });
   });
 
   static login = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     const input = LoginSchema.parse(req.body);
     const { user, role, role_entity, accessToken, refreshToken } = await authService.login(input);
     setAuthCookies(res, accessToken, refreshToken);
-    sendSuccess(res, { user, role, role_entity });
+    sendSuccess(res, { user, role, role_entity, vendorKind: vendorKindForRole(role, role_entity) });
   });
 
   /**
@@ -92,7 +96,7 @@ export class AuthController {
     if (!user) {
       return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401));
     }
-    sendSuccess(res, { user, role, role_entity });
+    sendSuccess(res, { user, role, role_entity, vendorKind: vendorKindForRole(role, role_entity) });
   });
 
   static authMe = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
@@ -108,7 +112,7 @@ export class AuthController {
     const input = AuthMeSchema.parse({ userId, role });
     const { user, role: resolvedRole, role_entity, accessToken, refreshToken } = await authService.authMe(input, authTime);
     setAuthCookies(res, accessToken, refreshToken);
-    sendSuccess(res, { user, role: resolvedRole, role_entity });
+    sendSuccess(res, { user, role: resolvedRole, role_entity, vendorKind: vendorKindForRole(resolvedRole, role_entity) });
   });
 
   static addRole = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
@@ -120,7 +124,7 @@ export class AuthController {
     const input = AddRoleSchema.parse(req.body);
     const { user, role, role_entity, accessToken, refreshToken } = await authService.addRole(userId, input, authTime);
     setAuthCookies(res, accessToken, refreshToken);
-    sendCreated(res, { user, role, role_entity });
+    sendCreated(res, { user, role, role_entity, vendorKind: vendorKindForRole(role, role_entity) });
   });
 
   static sendEmailVerification = asyncHandler(async (req: Request, res: Response) => {

@@ -152,6 +152,12 @@ export const ERROR_CODES = Object.freeze({
      * the same person's customer account working. Raised by `requireAuth` and `login`.
      */
     AUTH_VENDOR_SUSPENDED: 'AUTH_VENDOR_SUSPENDED',
+    /**
+     * 403 — a vendor route declared for the other vendor kind (`requireVendorKind`,
+     * SERVICE-LISTINGS-PLAN § C-1): a provider calling a seller-only router, or a seller
+     * calling the listings / leads routers. `details.required` names the kind.
+     */
+    AUTH_VENDOR_KIND_FORBIDDEN: 'AUTH_VENDOR_KIND_FORBIDDEN',
 
     /**
      * The account was CLOSED by the person who owned it (ADR-A02 D-1).
@@ -2222,6 +2228,55 @@ export const ERROR_CODES = Object.freeze({
      * cannot see: the CDN answers that 404 itself.
      */
     APP_RELEASE_UNAVAILABLE: 'APP_RELEASE_UNAVAILABLE',
+
+    // ── INFORMATIONAL SERVICE LISTINGS (2026-10-19) ──────────────────────────
+    // SERVICE-LISTINGS-PLAN.md § C-4 is the table of record: each code at ONE status.
+    /** 404 — unknown listing, another vendor's, or (public) not publishable. */
+    LISTING_NOT_FOUND: 'LISTING_NOT_FOUND',
+    /** 409 — the action is not valid in the listing's current status, or the CAS missed. */
+    LISTING_STATUS_CONFLICT: 'LISTING_STATUS_CONFLICT',
+    /** 422 — submit with required content or every contact missing; `details.missing[]`. */
+    LISTING_INCOMPLETE: 'LISTING_INCOMPLETE',
+    /** 422 — the location video is not a YouTube or Google Drive link. */
+    LISTING_VIDEO_LINK_INVALID: 'LISTING_VIDEO_LINK_INVALID',
+    /** 422 — submit: YouTube's oEmbed answers that the video is private or deleted. */
+    LISTING_VIDEO_NOT_WATCHABLE: 'LISTING_VIDEO_NOT_WATCHABLE',
+    /** 422 — reveal: the YouTube video is gone; nothing charged, the vendor is alerted. */
+    LISTING_VIDEO_UNAVAILABLE: 'LISTING_VIDEO_UNAVAILABLE',
+    /**
+     * 422 — a reveal refused for a reason the customer must NOT be told apart: the listing is
+     * not live (and no grace applies), the customer is blocked on it (L-29), or the vendor's
+     * debt floor is reached. One neutral code so a drainer learns nothing from the refusal.
+     */
+    LISTING_UNREACHABLE: 'LISTING_UNREACHABLE',
+    /** 422 — this reveal would take the customer above the vendor's daily cap (L-30). */
+    LISTING_REVEAL_DAILY_LIMIT: 'LISTING_REVEAL_DAILY_LIMIT',
+    /** 422 — reveal of a contact field this listing does not have. */
+    LISTING_FIELD_UNAVAILABLE: 'LISTING_FIELD_UNAVAILABLE',
+    /** 404 — refund of an unknown reveal. */
+    LISTING_REVEAL_NOT_FOUND: 'LISTING_REVEAL_NOT_FOUND',
+    /** 409 — the reveal was already refunded (idempotent per reveal). */
+    LISTING_REVEAL_ALREADY_REFUNDED: 'LISTING_REVEAL_ALREADY_REFUNDED',
+    /** 409 — the customer is already blocked on this listing. */
+    LISTING_REVEAL_BLOCK_EXISTS: 'LISTING_REVEAL_BLOCK_EXISTS',
+    /** 404 — lift requested with no active block. */
+    LISTING_REVEAL_BLOCK_NOT_FOUND: 'LISTING_REVEAL_BLOCK_NOT_FOUND',
+    /** 404 — unknown lead, or not this vendor's. */
+    LISTING_LEAD_NOT_FOUND: 'LISTING_LEAD_NOT_FOUND',
+    /** 422 — call-me / message to a customer who has not opted in (L-14). */
+    LISTING_MESSAGE_CONSENT_REQUIRED: 'LISTING_MESSAGE_CONSENT_REQUIRED',
+    /** 422 — the 3-messages-per-customer-per-30-days cap (L-24). */
+    LISTING_MESSAGE_CAP_REACHED: 'LISTING_MESSAGE_CAP_REACHED',
+    /** 422 — the 1-call-me-per-customer-per-30-days cap (L-15). */
+    LISTING_CALL_ME_ALREADY_SENT: 'LISTING_CALL_ME_ALREADY_SENT',
+    /** 422 — free text outside WhatsApp's 24-hour window; the dashboard explains the rule. */
+    LISTING_MESSAGE_WINDOW_CLOSED: 'LISTING_MESSAGE_WINDOW_CLOSED',
+    /** 422 — the customer has no linked WhatsApp or Telegram to relay through. */
+    LISTING_MESSAGE_CHANNEL_UNAVAILABLE: 'LISTING_MESSAGE_CHANNEL_UNAVAILABLE',
+    /** 422 — daily cap below the first-reveal cost (no reveal could happen), or a positive floor. */
+    LISTING_SETTINGS_INVALID: 'LISTING_SETTINGS_INVALID',
+    /** 422 — a lead report naming reveals that are not on this lead. */
+    LISTING_REPORT_INVALID: 'LISTING_REPORT_INVALID',
 
     // ── MIDDLEWARE / ROUTER FALLBACKS — DO NOT USE IN SERVICES ───────────────
     INTERNAL_SERVER_ERROR: 'INTERNAL_SERVER_ERROR',  // assigned by global handler

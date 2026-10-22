@@ -52,6 +52,7 @@ import { FileModel } from '../../models/file.model';
 import { DigitalAssetModel } from '../../../digital-delivery/models/digital-asset.model';
 import { VendorModel } from '../../../vendors/vendor.model';
 import { StoreModel } from '../../../store/models/store.model';
+import { isProviderVendor } from '../../../vendors/domain/vendor-kind';
 import { creditWalletService } from '../../../billing/services/credit-wallet.service';
 import { VECTORISATION_COST } from '../../../billing/config/credit.config';
 import { toFileDetail } from '../../read-models/file-detail.resolver';
@@ -380,7 +381,11 @@ export class VectorisationService {
           display_name: vendorDoc.display_name,
           business_description: store?.description ?? null,
           country: vendorDoc.country,
-          email: vendorDoc.email,
+          // L-26: a SELLER's email stays in the payload, unchanged and deliberately (they sell
+          // goods, and the AI may show their contact as their store page does). A PROVIDER's
+          // never reaches the index. A provider has no products, so this branch is a second
+          // lock; their listings are indexed by a payload that carries no contact at all.
+          email: isProviderVendor(vendorDoc) ? null : vendorDoc.email,
           status: vendorDoc.status,
         };
         vendorDefaultAgencyId = vendorDoc.default_delivery_agency_id?.toString() ?? null;

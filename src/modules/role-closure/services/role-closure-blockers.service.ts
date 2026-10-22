@@ -17,7 +17,8 @@ import { ShipmentModel, UNTERMINATED_SHIPMENT_STATUSES } from '../../shipments/s
 import { ShipmentAssignmentOfferModel } from '../../shipment-assignment/models/shipment-assignment-offer.model';
 import { SubscriberPlanModel } from '../../billing/models/subscriber-plan.model';
 import { CreditWalletModel } from '../../billing/models/credit-wallet.model';
-import { freePlanCode } from '../../billing/billing.types';
+import { freePlanCodesForRole } from '../../billing/billing.types';
+import { debtToWriteOff } from '../../billing/domain/wallet-debt';
 import { ACTIVE_SHIPMENT_STATUSES } from '../../agents/config/agent.config';
 import {
   ClosableRole,
@@ -55,6 +56,17 @@ const OPEN_BOOKING_PAYMENT_STATUSES = ['pending', 'disputed', 'refund_pending'];
 const AGENCY_LIVE_SHIPMENT_STATUSES = [...UNTERMINATED_SHIPMENT_STATUSES, 'failed'];
 
 type Push = (code: RoleClosureBlockerCode, count: number, money?: { amount: number; currency?: string }) => void;
+
+/**
+ * The credit-wallet warning for a balance (O-6, SERVICE-LISTINGS-PLAN L-12) — pure.
+ * Positive: forfeited. Negative: the debt is written off at confirm (`amount` is the debt, as a
+ * positive number). Zero: nothing to say. Never blocking — closing in debt is allowed.
+ */
+export function creditWarningsFor(balance: number): RoleClosureWarning[] {
+  if (balance > 0) return [{ code: 'credit_balance_forfeited', amount: balance }];
+  const debt = debtToWriteOff(balance);
+  return debt > 0 ? [{ code: 'credit_debt_written_off', amount: debt }] : [];
+}
 
 function collector(): { blockers: RoleClosureBlocker[]; push: Push } {
   const blockers: RoleClosureBlocker[] = [];
@@ -98,7 +110,8 @@ export class RoleClosureBlockersService {
       owner_type: role,
       owner_id: roleEntityId,
       status: { $in: ['active', 'pending_activation'] },
-      plan_code: { $ne: freePlanCode(role) },
+      // Every free tier of the role — both vendor kinds (SERVICE-LISTINGS-PLAN § C-5).
+      plan_code: { $nin: freePlanCodesForRole(role) },
       expires_at: { $gt: now },
     }).lean().exec();
     for (const plan of plans) {
@@ -106,9 +119,7 @@ export class RoleClosureBlockersService {
     }
 
     const wallet = await CreditWalletModel.findOne({ owner_type: role, owner_id: roleEntityId }).lean().exec();
-    if (wallet && (wallet.balance ?? 0) > 0) {
-      out.push({ code: 'credit_balance_forfeited', amount: wallet.balance });
-    }
+    out.push(...creditWarningsFor(wallet?.balance ?? 0));
     return out;
   }
 

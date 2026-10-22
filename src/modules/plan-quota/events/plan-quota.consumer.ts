@@ -55,6 +55,8 @@ export function registerPlanQuotaConsumer(
                     productsRestored: outcome.productsRestored,
                     filesBlocked: outcome.filesBlocked,
                     filesReleased: outcome.filesReleased,
+                    listingsSuspended: outcome.listingsSuspended,
+                    listingsRestored: outcome.listingsRestored,
                 },
                 'plan quota: enforced after plan change',
             );
@@ -75,9 +77,11 @@ export function registerPlanQuotaConsumer(
      * everyone currently holding quota state, but only on its nightly cadence; this makes
      * the promised remedy take effect while the owner is still looking at the screen.
      *
-     * ⚠ Published by catalog, consumed here, precisely so **catalog never imports
-     * plan-quota**. This module reaches into catalog for products and files; an import the
-     * other way would close the cycle. Same shape as billing → agents via `plan.activated`.
+     * ⚠ Published by catalog (a product archive, a file delete) and by listings (a listing
+     * archive — SERVICE-LISTINGS-PLAN O-16), consumed here, precisely so **neither imports
+     * plan-quota**. Payload `{ ownerType, ownerId }`; the pass recomputes every axis. This
+     * module reaches into catalog (and listings) for what it sweeps; an import the other way
+     * would close the cycle. Same shape as billing → agents via `plan.activated`.
      *
      * Lossy by nature, and that is acceptable here in a way it is not for the enforcement
      * itself: dropping this event costs latency, never correctness, because the worker
@@ -92,7 +96,7 @@ export function registerPlanQuotaConsumer(
 
             const outcome = await enforcement.reconcileOwner(ownerType, ownerId);
             if (!outcome.enforced) return;
-            if (outcome.productsRestored === 0 && outcome.filesReleased === 0) return;
+            if (outcome.productsRestored === 0 && outcome.filesReleased === 0 && outcome.listingsRestored === 0) return;
 
             logger().info(
                 {
@@ -100,6 +104,7 @@ export function registerPlanQuotaConsumer(
                     ownerId,
                     productsRestored: outcome.productsRestored,
                     filesReleased: outcome.filesReleased,
+                    listingsRestored: outcome.listingsRestored,
                 },
                 'plan quota: released after capacity was freed',
             );

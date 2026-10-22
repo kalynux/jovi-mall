@@ -42,11 +42,18 @@ export interface IPlanQuotaState extends Document {
     /** `null` = unlimited, and distinct from `0` = none allowed. */
     enforced_max_products: number | null;
     enforced_max_storage_bytes: number | null;
+    /**
+     * The plan's `max_active_listings` (SERVICE-LISTINGS-PLAN O-16) — stamped for every vendor,
+     * `null` on a seller plan and for agencies/agents. Missing on rows written before 2026-10-19,
+     * which the drift check reads as `null`.
+     */
+    enforced_max_listings?: number | null;
 
     enforced_at: Date;
 
     // ── Reporting only — never read back as input ────────────────────────────────
     products_suspended: number;
+    listings_suspended?: number;
     files_blocked: number;
     bytes_blocked: number;
 
@@ -62,10 +69,12 @@ const PlanQuotaStateSchema = new Schema<IPlanQuotaState>(
         enforced_plan_id: { type: Schema.Types.ObjectId, default: null },
         enforced_max_products: { type: Number, default: null },
         enforced_max_storage_bytes: { type: Number, default: null },
+        enforced_max_listings: { type: Number, default: null },
 
         enforced_at: { type: Date, required: true },
 
         products_suspended: { type: Number, default: 0, min: 0 },
+        listings_suspended: { type: Number, default: 0, min: 0 },
         files_blocked: { type: Number, default: 0, min: 0 },
         bytes_blocked: { type: Number, default: 0, min: 0 },
     },

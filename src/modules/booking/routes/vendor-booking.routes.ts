@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../../api/middlewares/auth.middleware';
+import { requireVendorKind } from '../../../api/middlewares/vendor-kind.middleware';
 import { VendorBookingController } from '../controllers/vendor-booking.controller';
 
 const router = Router();
@@ -7,6 +8,8 @@ const router = Router();
 // Apply authentication & vendor role guard to all routes below
 router.use(requireAuth);
 router.use(requireRole(['vendor']));
+// Vendor kind (SERVICE-LISTINGS-PLAN § C-1): SELLER — bookings belong to bookable service PRODUCTS, which a provider has none of (L-2).
+router.use(requireVendorKind('seller'));
 
 /**
  * BOOKING LISTING & VIEWS

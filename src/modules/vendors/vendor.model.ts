@@ -7,6 +7,22 @@ import { SUPPORTED_LANGUAGES, Language } from '../../core/constants/languages';
 import { ActorSource, actorStampFields } from '../../core/types/actor-source.types';
 import { IKycDocumentFields, kycDocumentFields } from '../../core/types/kyc-documents.types';
 import { MODELS, COLLECTIONS } from '../../core/database/collections';
+import { VENDOR_KINDS, VendorKind } from './domain/vendor-kind';
+import { LISTING_ON_EMPTY, ListingSettings } from '../listings/domain/listing.types';
+
+/**
+ * A provider's listing settings (SERVICE-LISTINGS-PLAN L-10, L-11, L-30). The range rules
+ * that depend on the reveal cost (cap ≥ first-reveal cost) are judged by the service, which
+ * answers `LISTING_SETTINGS_INVALID`; the schema holds only the shape.
+ */
+const ListingSettingsSchema = new Schema(
+  {
+    on_empty: { type: String, enum: LISTING_ON_EMPTY, default: 'continue_engaged' },
+    debt_floor: { type: Number, default: null, max: 0 },
+    max_credits_per_customer_per_day: { type: Number, default: null, min: 0 },
+  },
+  { _id: false },
+);
 
 // ─── Vendor Policy Sub-Schemas ────────────────────────────────────────────────
 
@@ -389,6 +405,20 @@ export interface IVendor extends Document {
   closed_at: Date | null;
 
   /**
+   * The vendor KIND (SERVICE-LISTINGS-PLAN L-1): a `seller` sells goods and services through
+   * Wi-Mall; a `provider` publishes informational service listings and pays per contact reveal.
+   * Chosen at registration / add-role, ONE per account, never vendor-writable.
+   *
+   * ⚠ Optional on purpose — every vendor created before 2026-10-19 has NO value and is a
+   * seller (no backfill). Read it through `vendorKindOf()` (`vendors/domain/vendor-kind.ts`),
+   * and query sellers with `{ kind: { $ne: 'provider' } }`, never `{ kind: 'seller' }`,
+   * which would silently drop every existing seller.
+   */
+  kind?: VendorKind;
+  /** A provider's L-10 / L-11 / L-30 settings. Ignored for a seller. */
+  listing_settings?: ListingSettings;
+
+  /**
    * Suspension provenance — written as a whole by `AdminVendorService`, never a field
    * at a time, or a reason outlives the suspension it describes.
    */
@@ -457,6 +487,15 @@ const VendorSchema = new Schema<IVendor>(
     },
     policies: { type: VendorPoliciesSchema, default: null },
     policy_version: { type: Number, default: 0 },
+    // SERVICE-LISTINGS-PLAN § C-1. No `default` on `kind`, deliberately: a default would make
+    // Mongoose report `'seller'` on a read of a pre-2026-10-19 vendor while the document
+    // holds nothing, so a query `{ kind: 'seller' }` would match none of them while every
+    // read said they were sellers. Absent IS seller; `vendorKindOf()` says so in one place.
+    kind: { type: String, enum: VENDOR_KINDS },
+    listing_settings: {
+      type: ListingSettingsSchema,
+      default: undefined,
+    },
     default_delivery_agency_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENCY, default: null },
     notification_preferences: {
       email: { type: Boolean, default: true },

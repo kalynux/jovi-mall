@@ -25,6 +25,7 @@ import { buildAdminStaffIdentityRouter } from '../../modules/staff-identity/rout
 import { buildAdminGeoRouter } from '../../modules/geo/admin-geo.routes';
 import { buildAdminStatementMailRouter } from '../../modules/mail/admin-statement-mail.routes';
 import { buildAdminRefundRequestRouter } from '../../modules/payments/routes/admin-refund-request.routes';
+import { buildAdminListingRouter } from '../../modules/listings/routes/admin-listing.routes';
 
 /**
  * `/api/internal/admin/*` — the service-to-service surface the **wi-admin** backend calls.
@@ -365,5 +366,13 @@ router.use('/mail', buildAdminStatementMailRouter([requireAdminCaller]));
  * writer would reproduce and miss. Contract: `api-doc/admin/refunds.md`.
  */
 router.use('/refunds', buildAdminRefundRequestRouter([requireAdminCaller]));
+
+/**
+ * Service listings (SERVICE-LISTINGS-PLAN § C-3, § C-6) — approve / reject / suspend / unsuspend.
+ * Writes only: wi-admin reads `listings` (and `listing_contacts`, behind its own audited
+ * permission) directly. Approve copies BOTH collections in one transaction and derives
+ * `available_fields`; reject refunds the indexing fee; suspend/unsuspend move the AI index.
+ */
+router.use('/listings', buildAdminListingRouter([requireAdminCaller]));
 
 export default router;

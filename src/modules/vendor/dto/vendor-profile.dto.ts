@@ -13,6 +13,7 @@ import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repos
 import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
 import { toFileDetail } from '../../catalog/read-models/file-detail.resolver';
 import { IStorageProvider } from '../../../core/storage';
+import { VendorKind, vendorKindOf } from '../../vendors/domain/vendor-kind';
 
 // ─── Response DTOs ────────────────────────────────────────────────────────────
 
@@ -71,6 +72,8 @@ export interface GetVendorProfileResponseDto {
   twoFactorEnabled: boolean;
   preferredLanguage: string;
   status: string;
+  /** `seller` or `provider` (SERVICE-LISTINGS-PLAN § C-1). Read-only: chosen at sign-up. */
+  vendorKind: VendorKind;
   onboardingStep: number;
   version: number;
   createdAt: Date;
@@ -204,6 +207,7 @@ export class VendorProfileMapper {
       twoFactorEnabled: vendor.two_factor_enabled,
       preferredLanguage: vendor.preferred_language,
       status: vendor.status,
+      vendorKind: vendorKindOf(vendor),
       onboardingStep: vendor.onboarding_step,
       version: vendor.version,
       createdAt: vendor.created_at,

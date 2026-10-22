@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../../api/middlewares/auth.middleware';
+import { requireVendorKind } from '../../../api/middlewares/vendor-kind.middleware';
 import { VendorBillingController } from '../controllers/vendor-billing.controller';
 
 /**
@@ -11,6 +12,8 @@ const router = Router();
 
 router.use(requireAuth);
 router.use(requireRole(['vendor']));
+// Vendor kind (SERVICE-LISTINGS-PLAN § C-1): BOTH — plans + credits — a provider pays per reveal from this wallet. Bare /vendor mount: only BOTH may be router-level here.
+router.use(requireVendorKind('both'));
 
 // Plans
 router.get('/plans', VendorBillingController.listPlans);

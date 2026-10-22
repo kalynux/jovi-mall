@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../api/middlewares/auth.middleware';
+import { requireVendorKind } from '../../api/middlewares/vendor-kind.middleware';
 import { StoreProfileController } from './controller/store-profile.controller';
 
 const router = Router();
@@ -16,6 +17,8 @@ const router = Router();
 // Apply authentication to all routes
 router.use(requireAuth);
 router.use(requireRole(['vendor']));
+// Vendor kind (SERVICE-LISTINGS-PLAN § C-1): SELLER — a provider has NO store (L-2) — the store page is what would publish their contacts.
+router.use(requireVendorKind('seller'));
 
 /**
  * GET /api/vendor/store

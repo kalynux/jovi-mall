@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../../api/middlewares/auth.middleware';
+import { requireVendorKind } from '../../../api/middlewares/vendor-kind.middleware';
 import { buildStockRequestController } from '../controllers/stock-request.controller';
 
 const router = Router();
@@ -18,6 +19,8 @@ const controller = buildStockRequestController('vendor');
  */
 router.use(requireAuth);
 router.use(requireRole(['vendor']));
+// Vendor kind (SERVICE-LISTINGS-PLAN § C-1): SELLER — stock belongs to products.
+router.use(requireVendorKind('seller'));
 
 /**
  * POST /api/vendor/stock-requests

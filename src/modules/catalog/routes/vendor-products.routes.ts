@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../../api/middlewares/auth.middleware';
+import { requireVendorKind } from '../../../api/middlewares/vendor-kind.middleware';
 import { uploadSingle } from '../../../api/middlewares/upload.middleware';
 import { VendorProductController } from '../controllers/vendor-product.controller';
 import { VendorProductShareController } from '../controllers/vendor-product-share.controller';
@@ -23,6 +24,8 @@ const router = Router();
 // Apply authentication to all routes
 router.use(requireAuth);
 router.use(requireRole(['vendor']));
+// Vendor kind (SERVICE-LISTINGS-PLAN § C-1): SELLER — products are sold through Wi-Mall; a provider publishes listings instead (L-3).
+router.use(requireVendorKind('seller'));
 
 /**
  * ==========================================

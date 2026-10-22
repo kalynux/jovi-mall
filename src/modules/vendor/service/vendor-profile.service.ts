@@ -35,6 +35,7 @@ import { resolveFileDetail, resolveFileDetails } from '../../catalog/read-models
 import { getStorageProvider, IStorageProvider } from '../../../core/storage';
 import { VendorOrderService } from '../../orders/vendor-order.service';
 import { ConnectionService } from '../../agency-connections/connection.service';
+import { isProviderVendor } from '../../vendors/domain/vendor-kind';
 import {
   UpdateVendorProfileInput,
   VendorOnboardingStep1Input,
@@ -698,6 +699,12 @@ export class VendorProfileService {
    * explicit step constants instead.
    */
   private recalculateOnboardingStep(vendor: IVendor): VendorOnboardingStepValue {
+    // A provider has no seller checklist (payouts, delivery agencies, store branding, return
+    // policy — L-2) and is registered COMPLETED. Without this line their first profile edit
+    // would find no `payout_details` and drop them back to BASIC_SETUP, a step whose routes
+    // are seller-only — a dashboard stuck on a screen it cannot submit.
+    if (isProviderVendor(vendor)) return VendorOnboardingStep.COMPLETED;
+
     const step1Complete =
       !!vendor.country &&
       !!vendor.timezone &&

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../../api/middlewares/auth.middleware';
+import { requireVendorKind } from '../../../api/middlewares/vendor-kind.middleware';
 import { VendorCategoryController } from '../controllers/category.controller';
 
 /**
@@ -13,6 +14,8 @@ import { VendorCategoryController } from '../controllers/category.controller';
 const router = Router();
 router.use(requireAuth);
 router.use(requireRole(['vendor']));
+// Vendor kind (SERVICE-LISTINGS-PLAN § C-1): BOTH — listings share the product category list (plan § Shared pieces) and need its autocomplete.
+router.use(requireVendorKind('both'));
 
 router.get('/', VendorCategoryController.list);
 router.post('/check', VendorCategoryController.check);

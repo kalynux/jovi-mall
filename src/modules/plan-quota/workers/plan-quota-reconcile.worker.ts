@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import { Types } from 'mongoose';
 import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
 import { withWorkerLock, SWEEP_SKIPPED } from '../../../core/jobs/worker-lock';
+import { listingFundingService } from '../../listings/domain/services/listing-funding.service';
 import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
 import { BillingOwnerType, BILLING_OWNER_TYPES } from '../../billing/billing.types';
 import { SubscriberPlanRepository } from '../../billing/repositories/subscriber-plan.repository';
@@ -11,6 +12,7 @@ import { FileModel } from '../../catalog/models/file.model';
 import { PlanQuotaStateModel } from '../models/plan-quota-state.model';
 import { PlanQuotaEnforcementService, planQuotaEnforcementService } from '../domain/services/plan-quota-enforcement.service';
 import { PLAN_QUOTA_CONFIG } from '../config/plan-quota.config';
+import { ListingQuotaRepository, listingQuotaRepository } from '../repositories/listing-quota.repository';
 
 /**
  * PlanQuotaReconcileWorker — the durability guarantee behind plan-quota enforcement.
@@ -78,6 +80,7 @@ export class PlanQuotaReconcileWorker implements ObservableWorker {
         private readonly enforcement: PlanQuotaEnforcementService = planQuotaEnforcementService,
         private readonly planRepo: SubscriberPlanRepository = new SubscriberPlanRepository(),
         private readonly pricingRepo: PricingPlanRepository = new PricingPlanRepository(),
+        private readonly listingRepo: ListingQuotaRepository = listingQuotaRepository,
     ) { }
 
     start(): void {
@@ -145,6 +148,19 @@ export class PlanQuotaReconcileWorker implements ObservableWorker {
             }
         }
 
+        // Service listings' funding backstop (SERVICE-LISTINGS-PLAN L-10). Resuming a provider's
+        // listings rides `billing.wallet.credited` on the lossy in-memory bus, and a debit that
+        // is not a reveal (an indexing fee, a call-me template) suspends nothing by itself. This
+        // pass restores or suspends wherever a provider's balance and their listings disagree.
+        // Chained onto THIS sweep deliberately — same nightly cadence, same overlap lock — rather
+        // than a nineteenth worker: a missed resume costs a provider at most one night, and the
+        // next reveal re-checks the balance anyway. Its failure must not fail the quota sweep.
+        try {
+            await listingFundingService.reconcileAllProviderFunding();
+        } catch (err) {
+            console.error('[PlanQuotaReconcileWorker] Listing funding backstop failed:', err);
+        }
+
         return recomputed;
     }
 
@@ -173,6 +189,10 @@ export class PlanQuotaReconcileWorker implements ObservableWorker {
             deletedAt: null,
         });
         for (const id of suspendedVendorIds) holding.add(`vendor:${id.toString()}`);
+
+        // A provider holding a LISTING back (SERVICE-LISTINGS-PLAN O-16) — the same remedy
+        // ("archive an older one and the next comes back") needs the same pickup.
+        for (const id of await this.listingRepo.vendorsHoldingQuotaSuspensions()) holding.add(`vendor:${id}`);
 
         const blocked = await FileModel.aggregate<{ _id: { ownerType: string; ownerId: Types.ObjectId } }>([
             { $match: { quotaBlockedAt: { $ne: null }, deletedAt: null } },
@@ -208,12 +228,16 @@ export class PlanQuotaReconcileWorker implements ObservableWorker {
         if (!plan) return false; // Nothing to enforce against; leave the owner alone.
 
         const expectedMaxProducts = ownerType === 'vendor' ? plan.max_active_products : null;
+        // The listing slots (SERVICE-LISTINGS-PLAN O-16) — the third stamped value, so an
+        // administrator editing `max_active_listings` on a live provider plan is caught too.
+        const expectedMaxListings = ownerType === 'vendor' ? (plan.max_active_listings ?? null) : null;
 
         // `??` normalises undefined to null so a legacy row without the field compares
         // equal to an unlimited plan rather than drifting on every single sweep.
         return (
             (state.enforced_max_products ?? null) !== expectedMaxProducts ||
-            (state.enforced_max_storage_bytes ?? null) !== (plan.max_storage_bytes ?? null)
+            (state.enforced_max_storage_bytes ?? null) !== (plan.max_storage_bytes ?? null) ||
+            (state.enforced_max_listings ?? null) !== expectedMaxListings
         );
     }
 }

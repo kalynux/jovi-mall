@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../../api/middlewares/auth.middleware';
+import { requireVendorKind } from '../../../api/middlewares/vendor-kind.middleware';
 import { buildReviewController } from '../controllers/review.controller';
 
 const router = Router();
@@ -23,6 +24,8 @@ const controller = buildReviewController('vendor');
  */
 router.use(requireAuth);
 router.use(requireRole(['vendor']));
+// Vendor kind (SERVICE-LISTINGS-PLAN § C-1): SELLER — vendors review DELIVERIES; a provider has none.
+router.use(requireVendorKind('seller'));
 
 /** POST /api/vendor/reviews — `subjectType` must be `delivery`. */
 router.post('/', controller.create);

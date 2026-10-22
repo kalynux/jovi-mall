@@ -6,6 +6,7 @@ import { ActorRef, actorStamp } from '../../core/types/actor-source.types';
 import { COLLECTIONS } from '../../core/database/collections';
 import { buildSearchRegex } from '../../core/utils/regex.util';
 import { activationFilter, ACTIVATION_TARGET } from '../../core/accounts/activation';
+import { SELLER_VENDOR_FILTER } from './domain/vendor-kind';
 
 /**
  * A vendor row joined to its Store's business name + logo. The public business
@@ -447,6 +448,11 @@ export class VendorRepository {
     const baseMatch: Record<string, unknown> = {
       status: 'active',
       onboarding_step: VendorOnboardingStep.COMPLETED,
+      // ⛔ Never list a PROVIDER to agencies (SERVICE-LISTINGS-PLAN L-2): they ship nothing,
+      // and this projection carries the vendor's address line. A provider is registered at
+      // `onboarding_step: 0`, so without this they would pass the two lines above.
+      // `$ne`, not `'seller'`: vendors from before 2026-10-19 have no `kind`.
+      ...SELLER_VENDOR_FILTER,
     };
     if (city && city.trim()) baseMatch['business_addresses.city'] = buildSearchRegex(city);
     if (state && state.trim()) baseMatch['business_addresses.state'] = buildSearchRegex(state);

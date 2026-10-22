@@ -1,5 +1,8 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { requireAuth, requireRole } from '../../../api/middlewares/auth.middleware';
+// Vendor kind (SERVICE-LISTINGS-PLAN § C-1): the vendor half of payment-status is SELLER — bookings
+// are a seller's. The guard passes a customer session untouched.
+import { requireVendorKind } from '../../../api/middlewares/vendor-kind.middleware';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
@@ -56,7 +59,7 @@ router.post('/:id/pay', requireAuth, requireRole(['customer']), asyncHandler(asy
  * Get payment status for a booking.
  * Accessible by the customer who owns the booking, or a vendor who owns the booking.
  */
-router.get('/:id/payment-status', requireAuth, requireRole(['customer', 'vendor']), asyncHandler(async (req: Request, res: Response) => {
+router.get('/:id/payment-status', requireAuth, requireRole(['customer', 'vendor']), requireVendorKind('seller'), asyncHandler(async (req: Request, res: Response) => {
   const { id: bookingId } = req.params;
   const { role, role_entity, user } = req.auth!;
 

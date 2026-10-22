@@ -50,6 +50,16 @@ export interface IPricingPlan extends Document {
   /** Marketplace commission percentage applied to the vendor's sales. */
   commission_percent: number | null;
 
+  // ── Vendor kind (SERVICE-LISTINGS-PLAN L-19, § C-5) ──────────────────────────
+  /**
+   * Which vendor KIND a vendor plan is for: `seller` or `provider`; `null` for agency and agent
+   * plans. A vendor plan seeded before 2026-10-19 has no value and is a SELLER plan — read it
+   * with `planVendorKindOf()`, never `=== 'seller'`.
+   */
+  vendor_kind?: 'seller' | 'provider' | null;
+  /** Provider plans only: max listings occupying a slot (§ C-8a). `null` = unlimited. */
+  max_active_listings: number | null;
+
   // ── Agency / agent limits (null/absent for vendor plans) ────────────────────
   /**
    * Max "unterminated" shipments the owner may hold at once. For an agency this
@@ -103,6 +113,10 @@ const PricingPlanSchema = new Schema<IPricingPlan>(
     max_active_products: { type: Number, default: null, min: 0 },
     max_storage_bytes: { type: Number, default: null, min: 0 },
     commission_percent: { type: Number, default: null, min: 0, max: 100 },
+    // No default: an existing vendor plan without it is a seller plan (§ C-5). Schema-level
+    // only; which roles may carry it is the seed's and the admin validator's business.
+    vendor_kind: { type: String, enum: ['seller', 'provider', null] },
+    max_active_listings: { type: Number, default: null, min: 0 },
     max_unterminated_shipments: { type: Number, default: null, min: 0 },
     max_cod_pool: { type: Number, default: null, min: 0 },
     live_tracking_enabled: { type: Boolean, default: true },

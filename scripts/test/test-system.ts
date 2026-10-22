@@ -2003,8 +2003,11 @@ assert('MIGRATIONS covers every migrate:*/backfill:* binding, and every row has 
 // `refund_pending` bookings become refund requests awaiting approval), among the data rows — and
 // `migrate:refund-requests-indexes`, a named index build above the catch-all, because one of its
 // indexes is the only race guard between two refunds of one order.
-assert('all thirty-three are registered — the count is the count on disk', () =>
-    MIGRATIONS.length === 33);
+// ⚠ 33 -> 34 with `migrate:service-listings-indexes` (2026-10-19, SERVICE-LISTINGS-PLAN § C-7):
+// a named index build above the catch-all — the unique (lead_id, field) on `listing_reveals` is
+// the reveal's only guard against charging a provider twice for one double tap.
+assert('all thirty-four are registered — the count is the count on disk', () =>
+    MIGRATIONS.length === 34);
 
 // The catch-all is LAST, and unlike the general index-after-data rule below this is a
 // dependency on the OTHER INDEX MIGRATIONS: it builds only what the declared-vs-live diff

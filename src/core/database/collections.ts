@@ -273,6 +273,21 @@ export const MODELS = Object.freeze({
    */
   REVIEW_AGGREGATE: 'ReviewAggregate',
 
+  /**
+   * Informational service listings (2026-10-19, `PRODUCTION-READINESS/SERVICE-LISTINGS-PLAN.md`).
+   * A provider vendor's public listing, and — in a SEPARATE collection — its contact details,
+   * so nothing that indexes or lists `listings` can carry a phone number (privacy by where
+   * the data is stored, not by remembering to strip it). Leads and reveals are the money
+   * record of a customer unlocking a contact; blocks, consents and messages are L-29 / L-14.
+   */
+  LISTING: 'Listing',
+  LISTING_CONTACT: 'ListingContact',
+  LISTING_LEAD: 'ListingLead',
+  LISTING_REVEAL: 'ListingReveal',
+  LISTING_REVEAL_BLOCK: 'ListingRevealBlock',
+  PROVIDER_CONTACT_CONSENT: 'ProviderContactConsent',
+  PROVIDER_CUSTOMER_MESSAGE: 'ProviderCustomerMessage',
+
   // COD (cash on delivery: collections, cash liabilities, reconciliation)
   CASH_COLLECTION: 'CashCollection',
   COD_CASH_ACCOUNT: 'CodCashAccount',
@@ -453,6 +468,15 @@ export const COLLECTIONS = Object.freeze({
   // Reviews & ratings (see the MODELS entries above for what each holds)
   REVIEW: 'reviews',
   REVIEW_AGGREGATE: 'review_aggregates',
+
+  // Informational service listings (see the MODELS entries above)
+  LISTING: 'listings',
+  LISTING_CONTACT: 'listing_contacts',
+  LISTING_LEAD: 'listing_leads',
+  LISTING_REVEAL: 'listing_reveals',
+  LISTING_REVEAL_BLOCK: 'listing_reveal_blocks',
+  PROVIDER_CONTACT_CONSENT: 'provider_contact_consents',
+  PROVIDER_CUSTOMER_MESSAGE: 'provider_customer_messages',
 
   // COD (cash on delivery: collections, cash liabilities, reconciliation)
   CASH_COLLECTION: 'cash_collections',

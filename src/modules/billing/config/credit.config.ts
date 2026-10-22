@@ -39,6 +39,20 @@ export const WHATSAPP_TEMPLATE_COST = parseInt(process.env.CREDIT_COST_WHATSAPP_
 export const AI_COPY_FIELD_COST = parseInt(process.env.CREDIT_COST_AI_COPY_FIELD || '1', 10);
 
 /**
+ * Informational service listings (SERVICE-LISTINGS-PLAN L-7): what a PROVIDER pays when a
+ * customer unlocks one contact field of a listing, per customer per listing per 30-day
+ * window. The first field of a window costs FIRST, each further field NEXT.
+ *
+ * FIRST is also the suspension threshold (L-10): a provider whose balance falls below it has
+ * every live listing suspended `insufficient_credits` until a top-up brings it back.
+ *
+ * ⚠ Published by `GET /api/public/credit-packs` (`actionCosts.listingRevealFirst/Next`).
+ * Dashboards and the bot read them from there and must never hard-code them.
+ */
+export const LISTING_REVEAL_FIRST_COST = parseInt(process.env.CREDIT_COST_LISTING_REVEAL_FIRST || '7', 10);
+export const LISTING_REVEAL_NEXT_COST = parseInt(process.env.CREDIT_COST_LISTING_REVEAL_NEXT || '4', 10);
+
+/**
  * Purchasable credit packs. `code` is the stable identifier the client sends to
  * `POST /vendor/credits/topups`; price is in the wallet owner's currency (XAF).
  */

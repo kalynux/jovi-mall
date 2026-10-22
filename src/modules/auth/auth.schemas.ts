@@ -14,6 +14,7 @@ import {
 // The documented single source of truth for password strength — shared with
 // `PATCH /api/me/password` so a reset cannot land on a weaker rule than a change.
 import { PasswordStrengthSchema } from '../users/user.validator';
+import { VENDOR_KINDS } from '../vendors/domain/vendor-kind';
 
 /**
  * The roles a person may authenticate AS on this service.
@@ -121,6 +122,30 @@ export const TERMS_REQUIRED_MESSAGE = 'You must accept the Terms of Service and 
 
 const TermsAcceptedSchema = z.boolean().optional();
 
+/**
+ * The vendor kind chosen at sign-up (SERVICE-LISTINGS-PLAN L-1, § C-1): `seller` sells goods and
+ * services through Wi-Mall, `provider` publishes informational service listings. ONE per
+ * account and never changeable by the vendor — this body and `add-role`'s are the only
+ * writers. Absent means `seller`, so every existing client keeps registering sellers.
+ *
+ * camelCase although the rest of this body is snake_case: `vendorKind` is the field's name on
+ * every surface (the owner's brief), and one name is worth more than a consistent body.
+ */
+const VendorKindSchema = z.enum(VENDOR_KINDS).optional();
+
+function requireVendorKindOnlyForVendor(
+  value: { role: string; vendorKind?: string },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.vendorKind !== undefined && value.role !== 'vendor') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['vendorKind'],
+      message: 'vendorKind is only accepted with role "vendor"',
+    });
+  }
+}
+
 function requireTermsForRole(
   value: { role: string; terms_accepted?: boolean },
   ctx: z.RefinementCtx,
@@ -148,6 +173,7 @@ export const RegisterSchema = z.object({
   role: z.enum(AUTHENTICATABLE_ROLES).default('vendor'),
   business_name: z.string().optional(), // For vendors
   agency_name: z.string().optional(), // For agencies
+  vendorKind: VendorKindSchema,         // For vendors — see VendorKindSchema
   terms_accepted: TermsAcceptedSchema,
 })
   .superRefine((value, ctx) => {
@@ -159,6 +185,7 @@ export const RegisterSchema = z.object({
       });
     }
     requireTermsForRole(value, ctx);
+    requireVendorKindOnlyForVendor(value, ctx);
   })
   // Runs AFTER the refinement, so a customer's password is dropped rather than
   // validated-then-honoured. `AuthService.register` sees `undefined` and mints one.
@@ -226,8 +253,12 @@ export const AddRoleSchema = z.object({
   name: z.string().min(2, 'Name required').optional(),          // customer / agent
   business_name: z.string().optional(),                          // vendor
   agency_name: z.string().optional(),                            // agency
+  vendorKind: VendorKindSchema,                                  // vendor
   terms_accepted: TermsAcceptedSchema,
-}).superRefine(requireTermsForRole);
+}).superRefine((value, ctx) => {
+  requireTermsForRole(value, ctx);
+  requireVendorKindOnlyForVendor(value, ctx);
+});
 
 /**
  * `POST /auth/mobile/refresh`.

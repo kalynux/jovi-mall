@@ -4,7 +4,12 @@ import { vectorisationService } from '../domain/services/VectorisationService';
 import {
   VectoriserPayloadsSchema,
   VectoriserCallbackSchema,
+  VectoriserListingPayloadsSchema,
+  VectoriserListingResultsSchema,
+  isListingPayloadsRequest,
+  splitCallbackByKind,
 } from '../validators/internal-vectoriser.validator';
+import { listingVectorisationService } from '../../listings/domain/services/listing-vectorisation.service';
 
 /**
  * InternalVectoriserController — the surface the n8n `wi-mall-vectoriser`
@@ -39,6 +44,16 @@ export class InternalVectoriserController {
    * has since been deleted should index the rest and say which one it skipped.
    */
   static getPayloads = asyncHandler(async (req: Request, res: Response) => {
+    // `kind: 'listing'` (service listings, L-18) is answered by the listings module. Every
+    // other body — every body the workflow sends today — takes the product path below,
+    // unchanged.
+    if (isListingPayloadsRequest(req.body)) {
+      const { listing_ids } = VectoriserListingPayloadsSchema.parse(req.body);
+      const { listings, missing } = await listingVectorisationService.buildPayloadsFor(listing_ids);
+      res.json({ success: true, data: { listings, missing } });
+      return;
+    }
+
     const { product_ids } = VectoriserPayloadsSchema.parse(req.body);
 
     // Duplicates in a spreadsheet column are ordinary. Building the same payload
@@ -65,10 +80,22 @@ export class InternalVectoriserController {
    * cannot act on failure should be told things.
    */
   static receiveCallback = asyncHandler(async (req: Request, res: Response) => {
-    const report = VectoriserCallbackSchema.parse(req.body);
+    // Rows carrying `kind: 'listing'` are split off first. A report with none — every report
+    // the workflow sends today — reaches the product path as the SAME object, untouched.
+    const { productBody, listingRows } = splitCallbackByKind(req.body);
+    const report = VectoriserCallbackSchema.parse(productBody);
 
     const result = await vectorisationService.applyCallbackReport(report);
 
-    res.json({ success: true, data: result });
+    if (listingRows.length === 0) {
+      res.json({ success: true, data: result });
+      return;
+    }
+
+    const listings = await listingVectorisationService.applyCallbackResults(
+      report.job_id,
+      VectoriserListingResultsSchema.parse(listingRows),
+    );
+    res.json({ success: true, data: { ...result, listings } });
   });
 }

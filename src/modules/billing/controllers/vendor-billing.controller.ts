@@ -17,6 +17,7 @@ import { recordDeprecatedGatewayField } from '../../system/metrics/metrics';
 import { VendorSettingsRepository } from '../../vendors/repositories/vendor-settings.repository';
 import { entitlementService } from '../services/entitlement.service';
 import { mediaStorageService } from '../../catalog/domain/services/media/MediaStorageService';
+import { vendorKindOf } from '../../vendors/domain/vendor-kind';
 
 const vendorSettingsRepository = new VendorSettingsRepository();
 
@@ -25,8 +26,9 @@ const vendorSettingsRepository = new VendorSettingsRepository();
  * credit balance/ledger, and buy credit top-up packs.
  */
 export class VendorBillingController {
-  static listPlans = asyncHandler(async (_req: Request, res: Response) => {
-    const plans = await pricingPlanService.listForRole('vendor', true);
+  /** The plans of THIS vendor's kind only (SERVICE-LISTINGS-PLAN § C-5): a seller never sees a provider plan. */
+  static listPlans = asyncHandler(async (req: Request, res: Response) => {
+    const plans = await pricingPlanService.listForVendorKind(vendorKindOf(req.auth!.role_entity), true);
     res.json({ success: true, data: plans });
   });
 

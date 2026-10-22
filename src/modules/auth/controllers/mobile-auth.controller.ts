@@ -12,6 +12,7 @@ import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { sendSuccess, sendCreated } from '../../../core/responses';
+import { vendorKindForRole } from '../../vendors/domain/vendor-kind';
 
 /**
  * Bearer auth for clients that cannot hold a cookie — `/api/auth/mobile/*`.
@@ -55,6 +56,7 @@ export class MobileAuthController {
       user,
       role,
       role_entity,
+      vendorKind: vendorKindForRole(role, role_entity),
       tokens: tokenEnvelope({ accessToken, refreshToken }),
     });
   });
@@ -67,6 +69,7 @@ export class MobileAuthController {
       user,
       role,
       role_entity,
+      vendorKind: vendorKindForRole(role, role_entity),
       tokens: tokenEnvelope({ accessToken, refreshToken }),
     });
   });
@@ -97,6 +100,7 @@ export class MobileAuthController {
       user,
       role: resolvedRole,
       role_entity,
+      vendorKind: vendorKindForRole(resolvedRole, role_entity),
       tokens: tokenEnvelope({ accessToken, refreshToken }),
     });
   });
@@ -116,6 +120,7 @@ export class MobileAuthController {
       user,
       role,
       role_entity,
+      vendorKind: vendorKindForRole(role, role_entity),
       tokens: tokenEnvelope({ accessToken, refreshToken }),
     });
   });

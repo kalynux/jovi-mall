@@ -12,6 +12,15 @@ import { BillingOwnerType, BILLING_OWNER_TYPES } from '../billing.types';
  * Credits NEVER expire or reset: plan allowances, top-ups and leftovers from a
  * previous plan all accumulate here. `version` provides optimistic locking so
  * concurrent debits can't double-spend.
+ *
+ * ⚠ **`balance` may be NEGATIVE, and the schema deliberately does not say `min: 0`**
+ * (SERVICE-LISTINGS-PLAN L-10, L-11). A provider's grace reveal may take it below zero, down to
+ * the vendor's own floor. The guard moved into the service: `debitIfSufficient`'s
+ * `balance >= amount` filter refuses every ordinary debit a balance cannot cover — including
+ * every debit while the balance is negative — and `debitAllowingDebt` is the one debit that may
+ * cross zero (`test:service-listings-billing` pins its single caller). A `min: 0` here would
+ * never have bound an `$inc` anyway (update validators are off), only a `save()` — which is
+ * exactly where it would now throw on a legitimately indebted wallet.
  */
 
 /** A wallet's owner type IS its plan role — see `billing.types.ts`. */
@@ -32,7 +41,8 @@ const CreditWalletSchema = new Schema<ICreditWallet>(
   {
     owner_type: { type: String, enum: BILLING_OWNER_TYPES, required: true },
     owner_id: { type: Schema.Types.ObjectId, required: true },
-    balance: { type: Number, required: true, default: 0, min: 0 },
+    // No `min`: see the header. The service is the guard.
+    balance: { type: Number, required: true, default: 0 },
     currency_unit: { type: String, enum: ['credit'], default: 'credit' },
     version: { type: Number, default: 0 },
   },

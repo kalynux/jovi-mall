@@ -14,6 +14,8 @@ import { mintMerchantRef } from '../../payments/domain/merchant-reference';
 import { submitGatewayOtp, GatewayOtpResult } from '../domain/gateway-otp';
 import { BillingChargeSelection, chargeOrMarkFailed, resolveBillingCharge } from '../domain/billing-charge';
 import { PaymentProvider } from '../../payments/domain/payment-provider';
+import { assertPlanServesOwner } from '../domain/plan-vendor-kind';
+import { OwnerVendorKindResolver, resolveOwnerVendorKind } from './owner-vendor-kind';
 
 /**
  * PlanPurchaseService - owner SELF-SERVE plan purchase (vendor/agency/agent).
@@ -29,7 +31,8 @@ export class PlanPurchaseService {
     private readonly repo: PlanPurchaseRepository = new PlanPurchaseRepository(),
     private readonly planRepo: PricingPlanRepository = new PricingPlanRepository(),
     private readonly subscriberPlanRepo: SubscriberPlanRepository = new SubscriberPlanRepository(),
-    private readonly plans: SubscriberPlanService = subscriberPlanService
+    private readonly plans: SubscriberPlanService = subscriberPlanService,
+    private readonly kindOf: OwnerVendorKindResolver = resolveOwnerVendorKind
   ) {}
 
   /**
@@ -49,13 +52,10 @@ export class PlanPurchaseService {
     const plan = await this.planRepo.findById(planId);
     if (!plan) throw createAppError(ERROR_CODES.BILLING_PLAN_NOT_FOUND, 404, 'Pricing plan not found');
     if (!plan.is_active) throw createAppError(ERROR_CODES.BILLING_PLAN_INACTIVE, 409, 'Plan is not active');
-    if (plan.role !== ownerType) {
-      throw createAppError(
-        ERROR_CODES.BILLING_PLAN_ROLE_MISMATCH,
-        409,
-        `Plan does not belong to the ${ownerType} role`
-      );
-    }
+    // Role, and for a vendor the KIND (SERVICE-LISTINGS-PLAN § C-5) — refused BEFORE any money
+    // is asked for: a seller paying for Provider Plus would have the assignment refuse it after
+    // the gateway had already taken the payment.
+    assertPlanServesOwner(plan, ownerType, await this.kindOf(ownerType, ownerId));
     if (plan.price <= 0) {
       throw createAppError(
         ERROR_CODES.BILLING_PLAN_NOT_PURCHASABLE,

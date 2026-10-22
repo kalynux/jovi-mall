@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../api/middlewares/auth.middleware';
+import { requireVendorKind } from '../../api/middlewares/vendor-kind.middleware';
 import { StorageInvoiceController } from './controllers/storage-invoice.controller';
 
 /**
@@ -52,6 +53,8 @@ export const vendorStorageInvoiceRoutes = Router();
 
 vendorStorageInvoiceRoutes.use(requireAuth);
 vendorStorageInvoiceRoutes.use(requireRole(['vendor']));
+// Vendor kind (SERVICE-LISTINGS-PLAN § C-1): SELLER — warehousing rent for stocked products.
+vendorStorageInvoiceRoutes.use(requireVendorKind('seller'));
 
 /**
  * GET /api/vendor/storage-invoices

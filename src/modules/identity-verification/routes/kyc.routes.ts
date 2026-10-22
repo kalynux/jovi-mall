@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../../api/middlewares/auth.middleware';
+import { requireVendorKind } from '../../../api/middlewares/vendor-kind.middleware';
 import { KycRole } from '../domain/kyc-subject';
 import { KycController, uploadKycDocuments } from '../controllers/kyc.controller';
 
@@ -30,6 +31,9 @@ export function buildKycRouter(role: KycRole): Router {
 
     router.use(requireAuth);
     router.use(requireRole([role]));
+    // Vendor kind (SERVICE-LISTINGS-PLAN § C-1): BOTH — identity verification applies to a
+    // provider as to a seller. A no-op for the agency and agent instances (not vendor sessions).
+    router.use(requireVendorKind('both'));
 
     /** The whole record — the documents, the addresses, the verdict. */
     router.get('/', controller.get);

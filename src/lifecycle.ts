@@ -36,6 +36,7 @@ import { planExpiryWorker } from './modules/billing/workers/plan-expiry.worker';
 import { agencyShipmentCapWorker } from './modules/billing/workers/agency-shipment-cap.worker';
 import { registerAgentPlanCapacityConsumer } from './modules/agents/events/agent-plan-capacity.consumer';
 import { registerPlanQuotaConsumer } from './modules/plan-quota/events/plan-quota.consumer';
+import { registerListingSubscribers } from './modules/listings';
 import { planQuotaReconcileWorker } from './modules/plan-quota/workers/plan-quota-reconcile.worker';
 import { initializeVendorNotificationEventConsumers } from './modules/notifications/vendor-notification-event-consumer';
 import { initializeAgencyNotificationEventConsumers } from './modules/notifications/agency-notification-event-consumer';
@@ -426,6 +427,11 @@ function startBackgroundWork(): void {
     // emits no event at all). Dropping either leaves a real hole.
     registerPlanQuotaConsumer();
     planQuotaReconcileWorker.start();
+
+    // Service listings (SERVICE-LISTINGS-PLAN L-10): every credit to a provider's wallet may
+    // bring their credit-suspended listings back. The fast path is this subscriber on
+    // `billing.wallet.credited`; the durability backstop rides the plan-quota sweep above.
+    registerListingSubscribers();
 
     // Vendor notifications: in-app + multi-channel dispatch (incl. storage alerts)
     initializeVendorNotificationEventConsumers();
