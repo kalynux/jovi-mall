@@ -15,7 +15,7 @@
  *
  * Needs a Mongo REPLICA SET (clawback and claims open transactions) and a THROWAWAY database: it
  * drops the database it ran in when it finishes, and refuses to run unless the name contains
- * "verify".
+ * "verify" — except under CI, where it moves itself to `verify_refund_fees_ci` (see DB_NAME).
  *
  * Run: MONGO_URI=mongodb://127.0.0.1:27118/verify_refund_fees?replicaSet=rs0 npm run verify:refund-fees-live
  */
@@ -40,6 +40,11 @@ import { EarningsAdjustmentModel } from '../../src/modules/earnings/models/earni
 import { courierHoldSnapshot } from '../../src/modules/earnings/domain/courier-hold';
 
 const MONGO_URI = process.env.MONGO_URI || '';
+// CI's live job points every suite at ONE seeded database (jovi_mall_ci) that the running
+// server and the later suites still need, so dropping it would break them. There this suite
+// runs in a sibling throwaway database on the same replica set instead. Anywhere else a URI
+// without "verify" is still refused: it may name a real database.
+const DB_NAME = /verify/i.test(MONGO_URI) ? undefined : process.env.CI ? 'verify_refund_fees_ci' : null;
 const DAY = 86_400_000;
 
 let passed = 0;
@@ -190,9 +195,9 @@ const pending = async (type: string, id: string) =>
   (await EarningsAccountModel.findOne({ owner_type: type, owner_id: new Types.ObjectId(id) }).lean())?.pending_balance ?? 0;
 
 async function main(): Promise<void> {
-  if (!/verify/i.test(MONGO_URI)) throw new Error('Refusing to run: MONGO_URI must name a throwaway "verify" database');
-  await mongoose.connect(MONGO_URI);
-  console.log(`verify:refund-fees-live against ${MONGO_URI.replace(/\/\/[^@]*@/, '//***@')}`);
+  if (DB_NAME === null) throw new Error('Refusing to run: MONGO_URI must name a throwaway "verify" database');
+  await mongoose.connect(MONGO_URI, DB_NAME ? { dbName: DB_NAME } : {});
+  console.log(`verify:refund-fees-live against ${MONGO_URI.replace(/\/\/[^@]*@/, '//***@')} (database ${mongoose.connection.db?.databaseName})`);
   // A collection created INSIDE a transaction while Mongoose builds its indexes is a catalog
   // write conflict on a fresh database: create every collection and index first.
   for (const name of mongoose.modelNames()) {
