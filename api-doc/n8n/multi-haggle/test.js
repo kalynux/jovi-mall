@@ -92,6 +92,8 @@ check('compose turn: <open_haggles> lists both titles and names the reply as the
 check('compose turn: the system prompt (playbook) is untouched — cache prefix intact', turn.playbook === 'PLAYBOOK');
 const turnSingle = run('bargain.compose-turn.js', { Inbound: { variantId: 'v_old', quantity: 1, text: 'x', openItems: '' } }, { success: true, data: { content: 'P' } });
 check('compose turn: a single haggle gets no block', !turnSingle.userTurn.includes('open_haggles'));
+check('compose turn: prices for two items in one message → answer one, then ASK for the other again (never silence)',
+    turn.userTurn.includes('separate prices for SEVERAL items') && turn.userTurn.includes('send their price for it again') && !turnSingle.userTurn.includes('SEVERAL items'));
 
 // 5 · the agent closed the SHOES (switched mid-turn) → only the shoes leave the list
 const echo = JSON.stringify({ __messageId: 'in2', success: true, data: { verdict: 'approved', reply: 'Deal at 70 000', lock: { ref: 'nlk_x', unitPrice: 70000, expiresAt: 'z' }, subject: { productId: 'p_shoes', variantId: 'v_shoes', quantity: 1 } } });

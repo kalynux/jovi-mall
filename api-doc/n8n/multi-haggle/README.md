@@ -70,6 +70,7 @@ the agent can look the name up) and `subject` on an approved gate verdict (which
 | Workflow | Published | Rollback to |
 |---|---|---|
 | UP-wi-mall-bargain `lJdli0uwOtWBGx5R` | `67868ccb` | `e31972f0` |
+| UP-wi-mall-bargain — two prices in one message: answer one, ASK for the other again (same day) | `faa9f357` | `67868ccb` |
 | UP-wi-mall-core `vvbouV2136P5weCs` | `2535dc27` | `b0fd5058` |
 | UP-wi-mall-core — tool catch-up (categories, Orange `paymentCode`, reviews), same day | `23c4243e` | `2535dc27` |
 

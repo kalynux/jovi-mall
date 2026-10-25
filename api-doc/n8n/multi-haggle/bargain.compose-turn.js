@@ -69,6 +69,9 @@ if (openList.length > 1) {
   lines.push('- If it is about another item in this list, work on THAT item: call negotiation_context with its variantId. Never carry an offer for one item over to another.');
   lines.push('- If you cannot tell which item they mean, ask which one in one short sentence, naming the items. Name no price, and do not call negotiation_record.');
   lines.push('- If they give ONE figure for several items together, do not split it yourself: say you agree a price for each item separately, and ask what they would pay for each one. Name no price.');
+  // Owner, 2026-10-25: a turn sends ONE gate-approved reply, so a message pricing two items can only be
+  // answered for one. Never leave the other in silence: say so, and ask for it again.
+  lines.push('- If ONE message names separate prices for SEVERAL items in this list, answer ONE of them only (the subject above, unless the customer clearly put another first). Then END that same reply by naming the other item and asking them to send their price for it again in its own message - e.g. "...and for the Nike Air Max 90, send me your price again on its own." Never answer the prices of two items in one reply, and never leave the other one unanswered without saying so.');
   lines.push('- An item in this list is never "a different product": do not answer #HANDBACK# for it.');
   lines.push('</open_haggles>');
   lines.push('');
