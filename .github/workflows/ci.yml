@@ -153,8 +153,15 @@ jobs:
       #      override.
       #
       # Lower this to the default the moment @google-cloud/storage ships a bumped uuid.
+      #
+      # ── ONE ACCEPTED HIGH, named in a script (2026-10-25) ──────────────────────
+      # `zod` 3.x (GHSA-mrhx-c7xc-m3w5) is patched only in zod 4, a migration across 123
+      # files, so the owner accepted it until that upgrade. `npm audit` cannot accept a
+      # single advisory, so the gate moved into scripts/ci/audit-gate.ts: still high+,
+      # still fail-closed, and it fails when an accepted advisory DISAPPEARS too, so the
+      # zod 4 upgrade cannot land without deleting the acceptance.
       - name: npm audit (production dependencies)
-        run: npm audit --omit=dev --audit-level=high
+        run: npx ts-node scripts/ci/audit-gate.ts
 
   # ═══════════════════════════════════════════════════════════════════════════
   #  The live suites — the job that needs a database (plan step 24.3)

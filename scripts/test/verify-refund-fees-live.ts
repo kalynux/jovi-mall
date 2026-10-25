@@ -62,13 +62,17 @@ function eq<T>(actual: T, expected: T, what: string): void {
 }
 
 async function rejects(fn: () => Promise<unknown>, code: string): Promise<void> {
+  // The throw stays OUTSIDE the catch: `preserve-caught-error` wants a `cause` on an
+  // error raised inside one, and `new Error(msg, { cause })` needs the ES2022 lib.
+  let caught: any;
   try {
     await fn();
   } catch (error: any) {
-    if (error?.code === code || error?.errorCode === code || error?.error?.code === code || String(error?.message ?? '').includes(code)) return;
-    throw new Error(`expected ${code}, got ${error?.code ?? error?.message}`);
+    caught = error ?? {};
   }
-  throw new Error(`expected ${code}, nothing was thrown`);
+  if (caught === undefined) throw new Error(`expected ${code}, nothing was thrown`);
+  if (caught.code === code || caught.errorCode === code || caught.error?.code === code || String(caught.message ?? '').includes(code)) return;
+  throw new Error(`expected ${code}, got ${caught.code ?? caught.message}`);
 }
 
 const allocationRepo = new EarningsAllocationRepository();
