@@ -1,4 +1,4 @@
-import { escapeTelegramHtml } from '../../../core/richtext';
+import { escapeTelegramHtml, stripStrong, strongToTelegramHtml, strongToWhatsApp } from '../../../core/richtext';
 
 /**
  * Message Renderer
@@ -60,7 +60,9 @@ export function renderTemplate(template: string, ctx: RenderContext): string {
  * anything, and nothing in the system said so.
  */
 export function toTelegramNotificationBody(subject: string, body: string): string {
-    return `<b>${escapeTelegramHtml(subject)}</b>\n\n${escapeTelegramHtml(body)}`;
+    // A phrase marked `strong()` becomes `<b>` AFTER escaping — the marks are not HTML-special,
+    // so they survive it, and the tag must not be escaped.
+    return `<b>${escapeTelegramHtml(stripStrong(subject))}</b>\n\n${strongToTelegramHtml(escapeTelegramHtml(body))}`;
 }
 
 /**
@@ -101,8 +103,11 @@ const WHATSAPP_MARKERS = /[*_~`]/g;
  * a message a human reads is a worse trade than the occasional odd italic. This is also
  * exactly today's behaviour for the body, so the change cannot regress anything.
  */
-export function toWhatsAppNotificationBody(subject: string, body: string): string {
-    const heading = subject.trim();
+export function toWhatsAppNotificationBody(subject: string, rawBody: string): string {
+    // A phrase marked `strong()` in the body — usually resolved already by the catalog renderer,
+    // and a no-op then; resolved here too so a stack that does not resolve it cannot show a box.
+    const body = strongToWhatsApp(rawBody);
+    const heading = stripStrong(subject).trim();
     if (!heading) return body;
 
     // Reset `lastIndex` — WHATSAPP_MARKERS is a module-level /g regex, and `.test()` on a

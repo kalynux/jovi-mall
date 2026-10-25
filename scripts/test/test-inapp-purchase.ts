@@ -562,11 +562,30 @@ function main(): void {
         && CHAT_COPY.includes("'bookInvitePrompt'"));
 
     /**
-     * ⚠ **Neither rung writes.** A haggle has no agreed price yet and a booking has no slot
-     * yet; a cart line for either would be a line at a price nobody agreed to, or a service
-     * the cart is about to refuse.
+     * ⚠ **Book never writes; bargain writes ONLY behind an Add-to-cart press** (owner, 2026-10-25:
+     * Add to cart on a bargainable item puts it in the basket at the LISTED price, then asks for an
+     * offer). A booking has no slot yet, and a Bargain press, the screen and the WhatsApp form still
+     * write nothing. The one write is a plain add — no lock, so no price nobody agreed to.
      */
-    assert('⛔ neither bargain nor book reaches the cart', () => {
+    assert('⛔ book never reaches the cart; bargain only behind pressed === add, once, with no lock', () => {
+        const bargainAt = PURCHASE.lastIndexOf("case 'bargain':");
+        const bookAt = PURCHASE.indexOf("case 'book':", bargainAt);
+        const addAt = PURCHASE.indexOf("case 'add':", bargainAt);
+        if (bargainAt === -1 || bookAt <= bargainAt || addAt <= bookAt) return false;
+
+        const bargain = PURCHASE.slice(bargainAt, bookAt);
+        const book = PURCHASE.slice(bookAt, addAt);
+        const guardAt = bargain.indexOf("if (ctx.pressed === 'add') {");
+        const writes = bargain.split('cartService.addToCart(').length - 1;
+        const writeAt = bargain.indexOf('cartService.addToCart(');
+        const guardedReturnAt = bargain.indexOf('addedToCart: true', guardAt);
+        return !book.includes('addToCart')
+            && writes === 1
+            && guardAt !== -1 && writeAt > guardAt && writeAt < guardedReturnAt
+            && /cartService\.addToCart\(customerId, productId, variant!\.id, 1\);/.test(bargain);
+    });
+
+    assert('⛔ (the old guarantee, kept for every OTHER door) neither bargain nor book writes unguarded', () => {
         /**
          * ⚠ **The LAST `case 'bargain':` is the one that matters.** The first is the token
          * door listing the four rungs it accepts; this one is the rung switch inside
@@ -579,8 +598,31 @@ function main(): void {
         if (bargainAt === -1 || addAt <= bargainAt) return false;
 
         const conversational = PURCHASE.slice(bargainAt, addAt);
-        return conversational.includes("case 'book':") && !conversational.includes('addToCart');
+        // Cut out the ONE guarded Add-to-cart branch (asserted above); nothing else may write.
+        const guardAt = conversational.indexOf("if (ctx.pressed === 'add') {");
+        const guardEnd = conversational.indexOf('addedToCart: true', guardAt);
+        const unguarded = guardAt === -1 || guardEnd === -1
+            ? conversational
+            : conversational.slice(0, guardAt) + conversational.slice(guardEnd);
+        return conversational.includes("case 'book':") && !unguarded.includes('addToCart(');
     });
+
+    assert('an Add-to-cart bargain reply offers the basket buttons, never Buy-at-price (a second add)', () =>
+        /if \(result\.addedToCart\) \{\s*return \{ kind: 'text', text: result\.message, actions: addedToCartActions\(language\) \};/.test(PURCHASE)
+        // The CHAT reply's Buy-at-price (`, language)`); the screen push has its own, on `session.language`.
+        && PURCHASE.indexOf('if (result.addedToCart)') < PURCHASE.indexOf('listPriceActions(result.listedPrice, language)'));
+
+    assert('⭐ Buy now on a bargainable item runs the BUY rung (checkout at the listed price), and the switch follows it', () =>
+        PURCHASE.includes("const rung: PurchaseVerb = affordance.verb === 'bargain' && ctx.pressed === 'buy' ? 'buy' : affordance.verb;")
+        && PURCHASE.includes('switch (rung) {')
+        && PURCHASE.includes("if (rung === 'add') {")
+        && /const base = \{\s*verb: rung,/.test(PURCHASE)
+        // Nothing below the rung decision may branch on the ladder's raw answer again.
+        && PURCHASE.split('affordance.verb').length - 1 === 2);
+
+    assert('only the chat TAP says which button was pressed (screen and WhatsApp form keep their behaviour)', () =>
+        (PURCHASE.match(/pressed: action\.verb,/g) ?? []).length === 1
+        && !/pressed:/.test(codeOf(path.join(__dirname, '../../src/modules/whatsapp/flows/flow-screens.ts'))));
 
     /**
      * ⚠ **A Mini App cannot write to the chat**, so the two conversational rungs are posted

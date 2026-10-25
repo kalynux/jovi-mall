@@ -504,6 +504,21 @@ const BARGAIN_INVITE_PROMPT: Copy = {
 };
 
 /**
+ * **Add to cart** pressed on a product whose price can be bargained (owner, 2026-10-25): the item is
+ * ALREADY in the basket at `{price}` (its listed price), and the customer is invited to haggle it
+ * down. Same reasoning as {@link BARGAIN_INVITE_PROMPT} for ending on a question: nothing here can
+ * start the bargain, only the customer's reply can. If a price is agreed, the basket line is
+ * replaced with it — never a second line.
+ */
+const ADDED_THEN_BARGAIN_PROMPT: Copy = {
+    en: 'Added to your basket at {price}. Want to pay less? Make me an offer — what would you like to pay for it?',
+    fr: 'Ajouté à votre panier à {price}. Vous voulez payer moins ? Faites-moi une offre — combien voulez-vous payer ?',
+    pt: 'Adicionado ao seu carrinho por {price}. Quer pagar menos? Faça-me uma proposta — quanto gostaria de pagar?',
+    es: 'Añadido a tu cesta por {price}. ¿Quieres pagar menos? Hazme una oferta: ¿cuánto te gustaría pagar?',
+    ar: 'أُضيف إلى سلتك بسعر {price}. تريد أن تدفع أقل؟ اعرض عليّ سعرًا — كم تودّ أن تدفع مقابله؟',
+};
+
+/**
  * ⭐ **A Bargain pressed on the WEBSITE, by somebody the bot has not finished setting up.** The
  * price question cannot be asked yet — the next few messages belong to the setup checklist, and
  * an offer typed now would be read as a name. So this leads the setup question and says the
@@ -2190,6 +2205,7 @@ const CHROME = Object.freeze({
     tryAgainButton: { copy: TRY_AGAIN_BUTTON, cap: 20 },
     // ── The two rungs that finish as a conversation, not as a write ──────────
     bargainInvitePrompt: { copy: BARGAIN_INVITE_PROMPT, cap: null },
+    addedThenBargainPrompt: { copy: ADDED_THEN_BARGAIN_PROMPT, cap: null },
     // ── The website's Bargain link (`bargain-entry.service.ts`) ──────────────
     bargainAfterSetupPrompt: { copy: BARGAIN_AFTER_SETUP_PROMPT, cap: null },
     bargainFixedPricePrompt: { copy: BARGAIN_FIXED_PRICE_PROMPT, cap: null },
@@ -2392,6 +2408,7 @@ const CHROME_TEMPLATES: Readonly<Partial<Record<BotChromeKey, readonly string[]>
     checkoutFreeDeliveryHintOneShop: Object.freeze(['amount']),
     cardFreeDeliveryFrom: Object.freeze(['amount']),
     buyAtPriceButton: Object.freeze(['price']),
+    addedThenBargainPrompt: Object.freeze(['price']),
     orderDeliveryIncluded: Object.freeze(['amount']),
 });
 

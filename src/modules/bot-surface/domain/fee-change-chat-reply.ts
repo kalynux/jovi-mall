@@ -1,3 +1,4 @@
+import { strong } from '../../../core/richtext';
 import type { BotReplyIntent, BotReplyOption } from './channel-reply';
 import { botChrome, botChromeFill } from './bot-chrome-copy';
 import { botFeeCopy, botFeeCopyFill } from './bot-fee-change-copy';
@@ -161,7 +162,9 @@ export function feeChangeQuestion(
         before: price(view, view.feeBefore),
     }));
     if (view.reason && view.origin !== 'change_agency') {
-        lines.push(botFeeCopyFill('reasonLine', language, { reason: view.reason }));
+        // ⭐ Bold (owner, 2026-10-25): the company's reason is what the customer is deciding on, and
+        // in plain text it was easy to read past. `channel-reply.ts` renders the mark per channel.
+        lines.push(strong(botFeeCopyFill('reasonLine', language, { reason: view.reason })));
     }
     if (view.customerPays > 0) {
         lines.push(botFeeCopyFill(view.paymentMode === 'cod' ? 'ifAcceptCod' : 'ifAcceptOnline', language, {

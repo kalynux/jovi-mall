@@ -1,3 +1,4 @@
+import { stripStrong } from '../../../core/richtext';
 import type { BotReplyIntent } from './channel-reply';
 import type { PendingQuestionOwner } from './bot-pending-question';
 
@@ -138,7 +139,8 @@ export function compactSentText(
     labels: readonly string[] = [],
     max: number = RECENTLY_SENT_TEXT_MAX,
 ): string {
-    const flat = stripUrls(body).replace(/\s+/g, ' ').trim();
+    // A bold mark (`core/richtext` `strong`) means nothing to a model and draws as a box.
+    const flat = stripUrls(stripStrong(body)).replace(/\s+/g, ' ').trim();
     const chars = Array.from(flat);
     const clipped = chars.length <= max ? flat : `${chars.slice(0, max - 1).join('').trimEnd()}…`;
 

@@ -3738,7 +3738,7 @@
       "service": "jovi-mall",
       "surface": "bot_internal",
       "description": "One seller's order in full: what was bought, what it cost, where it is going, and how each line is delivered.",
-      "when_to_use": "The customer names an order number or follows up on one order from a list.",
+      "when_to_use": "The customer names an order number or follows up on one order from a list — including \"who pays the delivery on my order?\" or \"how much did delivery cost me?\".",
       "when_not_to_use": "For a delivery question, pair it with orders_list_shipments.",
       "operation": {
         "method": "POST",
@@ -3823,7 +3823,7 @@
       "audit": true,
       "requires_customer_role": true,
       "platform_notes": {
-        "whatsapp": ""
+        "whatsapp": "Who pays delivery: deliveryFees[] has one row per parcel and amount is what THE CUSTOMER pays for that parcel. 0 means the shop pays that delivery and it costs the customer nothing — say so plainly. Quote only these figures; never work out a fee."
       },
       "commands": [
         "order",
@@ -4668,8 +4668,8 @@
       "service": "jovi-mall",
       "surface": "bot_internal",
       "description": "The customer proposes THEIR delivery fee — higher or lower — to the delivery company carrying a parcel whose delivery they pay. The company accepts or declines; the parcel waits for that answer. Lower and accepted: the customer pays less (cash) or gets the difference back (paid online). Higher and accepted on an online order: the customer must pay the difference (delivery_fees_list_pending then shows Pay now). The platform words the outcome — relay the reply.",
-      "when_to_use": "The customer explicitly asks to pay a different delivery fee for one of their orders and names the amount (e.g. \"can I pay 1000 for delivery instead?\").",
-      "when_not_to_use": "Never invent the amount or the reason — ask. Never for an order whose delivery the shop pays (the refusal says so). Not for one price on several parcels of one checkout — that is combined_delivery_request. Not to answer a fee the company asked for — that is delivery_fees_list_pending.",
+      "when_to_use": "The customer wants to pay a DIFFERENT delivery fee on one of their orders — lower or higher — e.g. \"can I pay 1000 for delivery instead?\", \"delivery is too expensive, I propose 1500\". If they did not say the amount, or why, ask first, then call it.",
+      "when_not_to_use": "Never invent the amount or the reason — ask. When the shop pays the delivery (orders_get_order deliveryFees amount 0), do not call it: tell the customer the shop handles that delivery and it costs them nothing — and if a call is refused for that reason, relay the refusal. Not for one price on several parcels of one checkout — that is combined_delivery_request. Not to answer a fee the company asked for — that is delivery_fees_list_pending.",
       "operation": {
         "method": "POST",
         "path": "/api/internal/bot/delivery-fees/propose"

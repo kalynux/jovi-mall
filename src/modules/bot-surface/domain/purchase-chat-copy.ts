@@ -1,4 +1,4 @@
-import { botChrome } from './bot-chrome-copy';
+import { botChrome, botChromeFill } from './bot-chrome-copy';
 import { cartViewActionId, openSurfaceActionId } from './bot-action-id';
 import type { BotReplyOption } from './channel-reply';
 
@@ -76,6 +76,14 @@ export function purchaseInvitePrompt(
 ): string {
     const key = verb === 'bargain' ? 'bargainInvitePrompt' : 'bookInvitePrompt';
     return `${title}\n\n${botChrome(key, language)}`;
+}
+
+/**
+ * **Add to cart** on a bargainable item (owner, 2026-10-25): the product, then "added at <price> —
+ * make me an offer". The item is already in the basket; the question opens the haggle.
+ */
+export function addedThenBargainPrompt(title: string, priceText: string, language: string | null): string {
+    return `${title}\n\n${botChromeFill('addedThenBargainPrompt', language, { price: priceText })}`;
 }
 
 /**

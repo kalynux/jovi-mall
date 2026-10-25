@@ -1634,3 +1634,27 @@ Approval copy (`en`; the `fr` text is the catalog's and is in the payloads file)
 Until submitted and APPROVED these reach their audience in-app, by push, email, Telegram and
 **in-window** WhatsApp only. Submit with the working form recorded in the 2026-10-02 section:
 `npm run whatsapp:templates:submit -- --only=customer_order_delivery_fee_proposal_declined,vendor_delivery_fee_proposal_agency_approved,vendor_delivery_fee_proposal_agency_rejected,agency_delivery_fee_proposal_payer_proposed,agency_delivery_fee_proposal_payer_edited,agency_delivery_fee_proposal_payer_withdrawn,agency_delivery_fee_proposal_payer_paid,agent_delivery_fee_proposal_payer_proposed --submit`.
+
+## 2026-10-25 — the delivery-fee REASON, in bold: 1 template GENERATED, NOT SUBMITTED
+
+Owner request: the delivery company's reason on an approve-or-decline fee change must be bold so a
+customer cannot miss it. Everything the backend words itself is already bold (the chat question,
+the in-window WhatsApp and Telegram notification — `core/richtext` `strong()`, `test:fee-reason-bold`).
+The approved `customer_order_delivery_fee_approval_needed` carries **no reason at all** (the
+generator stripped `{{reasonLine}}` as an optional clause), so out of the 24-hour window the reason
+needs a new template:
+
+| Template name | Audience | Situation | Body params | Button |
+|---|---|---|---|---|
+| `customer_order_delivery_fee_approval_needed_v2` | customer | `order.delivery_fee.approval_needed` | currency, proposed fee, fee before, order number, **reason line** (`*{{5}}*`) | as v1 + quick reply **See the new fee** |
+
+- en — *Delivery fee change to approve — {{4}}* · The delivery company asks {{1}} {{2}} instead of {{1}} {{3}} to deliver your order {{4}}. {{5}} (bold) Open the order to approve or decline — your parcel waits for your answer.
+
+`{{5}}` is "Reason given: …" in the customer's language, or "No reason was given." — never empty,
+because Meta refuses an empty parameter. Payloads (en + fr):
+`api-doc/notifications/pending/fee-reason-template-v2.json`. Submit:
+`npm run whatsapp:templates:submit -- --submit --only=customer_order_delivery_fee_approval_needed_v2 --in=api-doc/notifications/pending/fee-reason-template-v2.json`.
+
+⛔ **Then, and only once BOTH languages are APPROVED**, flip `FEE_REASON_TEMPLATE_APPROVED` to
+`true` in `customer-notification-catalog.ts` and deploy. Sending v2 before approval fails every
+out-of-window delivery of this notification; until the flip, v1 keeps being sent unchanged.

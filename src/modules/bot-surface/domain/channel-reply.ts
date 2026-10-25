@@ -1,5 +1,12 @@
 import { MessagingChannel } from '../../channel-connections';
-import { escapeTelegramHtml } from '../../../core/richtext';
+import {
+    escapeTelegramHtml,
+    hasStrong,
+    stripStrong,
+    strongToTelegramEntities,
+    strongToTelegramHtml,
+    strongToWhatsApp,
+} from '../../../core/richtext';
 import { WA_LIMITS, truncate } from '../../whatsapp/constants/whatsapp-limits';
 import type { BotProductCard } from './product-card';
 
@@ -1409,9 +1416,64 @@ export function renderBotReply(
     channel: MessagingChannel,
     recipient: string,
 ): BotChannelReply {
-    return channel === 'telegram'
+    return resolveStrong(channel === 'telegram'
         ? renderTelegram(intent, recipient)
-        : renderWhatsApp(intent, recipient);
+        : renderWhatsApp(intent, recipient));
+}
+
+/**
+ * Turn a phrase marked bold in the copy (`core/richtext` `strong()`) into the rendered body's own
+ * form — the last step of every render, so no intent kind has to know about it.
+ *
+ * - WhatsApp: `*phrase*` where the platform draws formatting (a text body, an interactive body, a
+ *   caption); stripped everywhere else — a button title or a header prints a `*` literally.
+ * - Telegram with `parse_mode: 'HTML'`: `<b>phrase</b>` in `text` / `caption`.
+ * - Telegram with no `parse_mode`: a `bold` entity beside `text` (or `caption`), leaving every
+ *   other character exactly as it was. Switching the message to HTML instead would mean escaping
+ *   text that was never escaped before.
+ *
+ * A body with no marker is returned as the same object, so every existing reply is unchanged.
+ */
+function resolveStrong(reply: BotChannelReply): BotChannelReply {
+    if (!hasStrong(JSON.stringify(reply.body))) return reply;
+
+    if (reply.channel === 'whatsapp') {
+        const body = mapStrings(reply.body, [], (path, value) => {
+            const last = path[path.length - 1];
+            const parent = path[path.length - 2];
+            const formatted = (parent === 'text' && last === 'body')
+                || (parent === 'body' && last === 'text')
+                || last === 'caption';
+            return formatted ? strongToWhatsApp(value) : stripStrong(value);
+        });
+        return { ...reply, body: body as Record<string, unknown> };
+    }
+
+    const html = reply.body.parse_mode === 'HTML';
+    const body: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(reply.body)) {
+        if ((key === 'text' || key === 'caption') && typeof value === 'string') {
+            if (html) {
+                body[key] = strongToTelegramHtml(value);
+            } else {
+                const { text, entities } = strongToTelegramEntities(value);
+                body[key] = text;
+                if (entities.length) body[key === 'text' ? 'entities' : 'caption_entities'] = entities;
+            }
+        } else {
+            body[key] = mapStrings(value, [key], (_path, s) => stripStrong(s));
+        }
+    }
+    return { ...reply, body };
+}
+
+function mapStrings(value: unknown, path: string[], fn: (path: string[], value: string) => string): unknown {
+    if (typeof value === 'string') return fn(path, value);
+    if (Array.isArray(value)) return value.map((item, i) => mapStrings(item, [...path, String(i)], fn));
+    if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, mapStrings(v, [...path, k], fn)]));
+    }
+    return value;
 }
 
 /**
@@ -1439,9 +1501,9 @@ export function renderBotReplies(
     recipient: string,
 ): BotChannelReply[] {
     if (intent.kind === 'product_list') {
-        return channel === 'telegram'
+        return (channel === 'telegram'
             ? telegramProductList(intent, recipient)
-            : whatsappProductList(intent, recipient);
+            : whatsappProductList(intent, recipient)).map(resolveStrong);
     }
     return [renderBotReply(intent, channel, recipient)];
 }

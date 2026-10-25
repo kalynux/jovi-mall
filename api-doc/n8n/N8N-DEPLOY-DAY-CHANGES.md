@@ -1081,7 +1081,7 @@ re-opened, by a press that the bargainer never sees.
 
 | Key | Meaning | Read by |
 |---|---|---|
-| `wi-mall:bargain:<channel>:<externalId>` | a negotiation is open — this turn belongs to the seller | `read bargain flag` (requires `variantId` **and** an unexpired `expiresAt`) |
+| `wi-mall:bargain:<channel>:<externalId>` | a negotiation is open — this turn belongs to the seller. ⭐ Since 2026-10-25 a LIST of open items (`items[]`, one per product), merged on every write and closed one item at a time — see [`multi-haggle/`](multi-haggle/README.md) | `read bargain flag` (requires `variantId` **and** an unexpired `expiresAt`) |
 | `wi-mall:bargain:lock:<channel>:<externalId>` | a price was just agreed — the main agent may spend `ref` | `read bargain flag` → the system prompt's `agreedPrice` |
 
 ### 8.1 · "Lock it in" closes a deal — both keys must go

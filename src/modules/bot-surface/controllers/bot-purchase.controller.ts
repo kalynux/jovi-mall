@@ -26,11 +26,13 @@ import {
 import { inAppBaseUrl, inAppScreenUrl } from '../domain/inapp-url';
 import { PurchaseVerb, resolvePurchaseAffordance } from '../domain/purchase-affordance';
 import {
+    addedThenBargainPrompt,
     addedToCartActions,
     bookInviteActions,
     purchaseInvitePrompt,
     purchaseInviteTitle,
 } from '../domain/purchase-chat-copy';
+import { formatBotPrice } from '../domain/product-card';
 import { ListedPrice, listPriceActions } from '../domain/list-price-option';
 import { pushCardIntoConversation } from '../services/conversation-push';
 import { conversationUrl } from '../domain/conversation-url';
@@ -238,6 +240,7 @@ async function handlePurchaseTap(req: Request, res: Response, action: ParsedBotA
         language,
         productId: ids.productId,
         variantId: ids.variantId,
+        pressed: action.verb,
     });
 
     setBotReply(req, replyForPurchase(result, language));
@@ -252,6 +255,14 @@ async function handlePurchaseTap(req: Request, res: Response, action: ParsedBotA
         verb: result.verb,
         productId: result.productId,
         variantId: result.variantId,
+        /**
+         * ⭐ The automation layer files a Bargain tap in its list of the customer's OPEN haggles
+         * (2026-10-25: several at once), and names them back to the bargaining agent so it can tell
+         * which item a later message is about. Public catalogue text, nothing priced.
+         */
+        ...(result.verb === 'bargain' ? { productTitle: result.productTitle } : {}),
+        // Add to cart on a bargainable item: it IS in the basket, and the haggle is open too.
+        ...(result.addedToCart ? { addedToCart: true } : {}),
         ...(result.outcome === 'checkout' ? { url: result.url } : {}),
     });
 }
@@ -365,6 +376,15 @@ export interface PurchaseContext extends SessionOwner {
     productId: string;
     /** Null when the token carried none — a `book:` tap. */
     variantId: string | null;
+    /**
+     * The button the customer actually PRESSED, when the door knows it (the chat tap only).
+     *
+     * ⚠ It never chooses the rung — the ladder below still does, from live data. It changes one
+     * thing: **Add to cart** on a bargainable variant writes the cart at the listed price and THEN
+     * asks for an offer, instead of only asking (owner, 2026-10-25). Absent on the screen and the
+     * WhatsApp form, which keep their behaviour.
+     */
+    pressed?: 'add' | 'buy' | 'bargain' | 'book';
 }
 
 /**
@@ -388,6 +408,12 @@ export interface PurchaseResult {
      * `executePurchase` always sets it.
      */
     listedPrice?: ListedPrice | null;
+    /**
+     * True when a `bargain` result ALSO wrote the cart — Add to cart pressed on a bargainable item
+     * (2026-10-25). The reply then offers the basket buttons instead of Buy-at-price, which would
+     * add the same item a second time.
+     */
+    addedToCart?: boolean;
 }
 
 /**
@@ -455,8 +481,17 @@ export async function executePurchase(ctx: PurchaseContext): Promise<PurchaseRes
         variantId: variant?.id ?? null,
     });
 
+    /**
+     * ⭐ **Buy now on a bargainable item goes straight to checkout at the LISTED price** (owner,
+     * 2026-10-25). The ladder says `bargain`; a customer who pressed Buy now has said they do not
+     * want to haggle, so the press runs the ordinary `buy` rung — the same cart write, no lock, the
+     * same checkout. Chat tap only (`pressed`); the screen and the WhatsApp form are unchanged.
+     * Answered as `buy`, so the automation layer opens no haggle.
+     */
+    const rung: PurchaseVerb = affordance.verb === 'bargain' && ctx.pressed === 'buy' ? 'buy' : affordance.verb;
+
     const base = {
-        verb: affordance.verb,
+        verb: rung,
         productId,
         variantId: variant?.id ?? null,
         productTitle: product.title,
@@ -478,7 +513,7 @@ export async function executePurchase(ctx: PurchaseContext): Promise<PurchaseRes
         );
     }
 
-    switch (affordance.verb) {
+    switch (rung) {
         /**
          * ⚠ **`bargain` and `book` WRITE NOTHING**, and that is why they are separate rungs
          * rather than variations on a cart write. A haggle has no agreed price yet and a booking
@@ -493,6 +528,29 @@ export async function executePurchase(ctx: PurchaseContext): Promise<PurchaseRes
          * produces the reply that actually starts it.
          */
         case 'bargain':
+            /**
+             * ⭐ **Add to cart on a bargainable item: into the basket FIRST, then the haggle**
+             * (owner, 2026-10-25 — a customer who pressed Add to cart was asked for an offer and the
+             * item never reached the basket). The same cart write as the `add` rung, at the listed
+             * price, no lock. Still answered as `bargain` / `chat`, which is what makes the
+             * automation layer open the haggle on the customer's next message. If a price is then
+             * agreed, the locked add REPLACES this line's price and quantity
+             * (`CartService.addToCart`, "A LOCKED add SETS the line") — never a second line.
+             */
+            if (ctx.pressed === 'add') {
+                await cartService.addToCart(customerId, productId, variant!.id, 1);
+                return {
+                    ...base,
+                    outcome: 'chat',
+                    message: addedThenBargainPrompt(
+                        purchaseInviteTitle(product.title, product.variants.length > 1 ? variant!.name : null),
+                        formatBotPrice(variant!.price, variant!.currency),
+                        language,
+                    ),
+                    url: null,
+                    addedToCart: true,
+                };
+            }
             return {
                 ...base,
                 outcome: 'chat',
@@ -554,7 +612,7 @@ export async function executePurchase(ctx: PurchaseContext): Promise<PurchaseRes
              */
             const cart = await cartService.addToCart(customerId, productId, variant!.id, 1);
 
-            if (affordance.verb === 'add') {
+            if (rung === 'add') {
                 return {
                     ...base,
                     outcome: 'cart',
@@ -634,6 +692,10 @@ function replyForPurchase(result: PurchaseResult, language: string | null): BotR
      * question is kept for the customer who would rather type; the button opens the picker.
      */
     if (result.outcome === 'chat') {
+        /** Already in the basket: the basket's own three buttons, never Buy-at-price (a second add). */
+        if (result.addedToCart) {
+            return { kind: 'text', text: result.message, actions: addedToCartActions(language) };
+        }
         if (result.verb !== 'book') {
             const actions = result.listedPrice ? listPriceActions(result.listedPrice, language) : [];
             return actions.length > 0

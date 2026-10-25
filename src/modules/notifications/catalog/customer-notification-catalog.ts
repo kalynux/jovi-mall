@@ -1,6 +1,7 @@
 import { CustomerNotificationType } from '../models/customer-notification.model';
 import type { ShipmentFailureReason } from '../../shipments/shipment.model';
 import { renderTemplate, RenderContext } from './message-renderer';
+import { stripStrong, strongToWhatsApp } from '../../../core/richtext';
 import { Language, DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES } from './notification-i18n';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
@@ -419,7 +420,21 @@ const PAY_DELIVERY_LABEL: Record<Language, string> = {
  * `parseDeliveryFeeArgument`, and `assertCustomerCatalogComplete` pins these literals to it.
  * Out of window the template button falls back to `dfee:list` — every change waiting.
  */
-const SEE_DELIVERY_FEE: QuickReplyDef = { token: 'dfee:{{orderId}}', label: SEE_DELIVERY_FEE_LABEL, templateFallback: 'dfee:list' };
+/**
+ * ⛔ **Flip to `true` ONLY once Meta has APPROVED `customer_order_delivery_fee_approval_needed_v2`
+ * in every language a customer may hold (en + fr today).** Owner request 2026-10-25: the delivery
+ * company's REASON, in bold, in the out-of-window message too.
+ *
+ * The approved v1 template carries no reason at all (it was stripped as an optional clause by
+ * `generate-whatsapp-templates.ts`). v2 adds it as a fifth parameter, which the generator wraps in
+ * `*…*`. Sending v2 before it is approved fails every out-of-window delivery of this notification,
+ * which is why this is a switch and not simply the new entry: until it flips, v1 is sent unchanged.
+ *
+ * Payload to submit: `api-doc/notifications/pending/fee-reason-template-v2.json`.
+ */
+const FEE_REASON_TEMPLATE_APPROVED = false;
+
+const SEE_DELIVERY_FEE: QuickReplyDef ={ token: 'dfee:{{orderId}}', label: SEE_DELIVERY_FEE_LABEL, templateFallback: 'dfee:list' };
 const PAY_DELIVERY_TOPUP: QuickReplyDef = { token: 'dfee:{{orderId}}', label: PAY_DELIVERY_LABEL, templateFallback: 'dfee:list' };
 const RETRY_DELIVERY_TOPUP: QuickReplyDef = { token: 'dfee:{{orderId}}', label: TRY_AGAIN_LABEL, templateFallback: 'dfee:list' };
 
@@ -2030,10 +2045,15 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Cus
         },
         whatsapp: {
             text: {},
-            template: {
-                name: 'customer_order_delivery_fee_approval_needed',
-                bodyParams: ['{{currency}}', '{{proposedFeeFormatted}}', '{{feeBeforeFormatted}}', '{{orderNumber}}']
-            }
+            template: FEE_REASON_TEMPLATE_APPROVED
+                ? {
+                    name: 'customer_order_delivery_fee_approval_needed_v2',
+                    bodyParams: ['{{currency}}', '{{proposedFeeFormatted}}', '{{feeBeforeFormatted}}', '{{orderNumber}}', '{{reasonLine}}']
+                }
+                : {
+                    name: 'customer_order_delivery_fee_approval_needed',
+                    bodyParams: ['{{currency}}', '{{proposedFeeFormatted}}', '{{feeBeforeFormatted}}', '{{orderNumber}}']
+                }
         },
         button: ORDER_BUTTON,
         actions: [SEE_DELIVERY_FEE]
@@ -2784,9 +2804,10 @@ export function renderCustomerInApp(
     ctx: RenderContext
 ): { title: string; message: string } {
     const base = pickLang(CUSTOMER_NOTIFICATION_CATALOG[situation].base, lang)!;
+    // The inbox and push draw no bold, so a phrase marked `strong()` in the context is plain here.
     return {
-        title: renderTemplate(base.subject, ctx),
-        message: renderTemplate(base.body, ctx)
+        title: stripStrong(renderTemplate(base.subject, ctx)),
+        message: stripStrong(renderTemplate(base.body, ctx))
     };
 }
 
@@ -2812,9 +2833,18 @@ export function renderCustomerChannelText(
 
     const override = overrideMap ? pickLang(overrideMap, lang) : undefined;
 
+    const subject = stripStrong(renderTemplate(override?.subject ?? base.subject, ctx));
+    const body = renderTemplate(override?.body ?? base.body, ctx);
+
+    /**
+     * A phrase marked `strong()` in the context (the delivery-fee reason, 2026-10-25), resolved
+     * for the channel. WhatsApp: `*…*` now, because its body is sent as-is by three different
+     * message shapes. Telegram: KEPT, because its body is HTML-escaped later and only
+     * `toTelegramNotificationBody` can add a tag after that. Email: plain.
+     */
     return {
-        subject: renderTemplate(override?.subject ?? base.subject, ctx),
-        body: renderTemplate(override?.body ?? base.body, ctx)
+        subject,
+        body: channel === 'whatsapp' ? strongToWhatsApp(body) : channel === 'telegram' ? body : stripStrong(body)
     };
 }
 
@@ -2834,7 +2864,8 @@ export function renderCustomerWhatsAppTemplateParams(
     if (!tpl) return [];
     const inApp = renderCustomerInApp(situation, lang, ctx);
     const merged: RenderContext = { ...ctx, title: inApp.title, message: inApp.message };
-    return tpl.bodyParams.map(param => renderTemplate(param, merged));
+    // Plain: a template's bold lives in Meta's approved body (`*{{5}}*`), never in a parameter.
+    return tpl.bodyParams.map(param => stripStrong(renderTemplate(param, merged)));
 }
 
 /**

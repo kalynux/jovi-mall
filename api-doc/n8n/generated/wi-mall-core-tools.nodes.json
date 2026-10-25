@@ -656,7 +656,7 @@
     "type": "n8n-nodes-base.httpRequestTool",
     "typeVersion": 4.5,
     "parameters": {
-      "toolDescription": "One seller's order in full: what was bought, what it cost, where it is going, and how each line is delivered. USE IT WHEN: The customer names an order number or follows up on one order from a list. NOT THIS TOOL: For a delivery question, pair it with orders_list_shipments.",
+      "toolDescription": "One seller's order in full: what was bought, what it cost, where it is going, and how each line is delivered. USE IT WHEN: The customer names an order number or follows up on one order from a list — including \"who pays the delivery on my order?\" or \"how much did delivery cost me?\". NOT THIS TOOL: For a delivery question, pair it with orders_list_shipments. ⚠ Who pays delivery: deliveryFees[] has one row per parcel and amount is what THE CUSTOMER pays for that parcel. 0 means the shop pays that delivery and it costs the customer nothing — say so plainly. Quote only these figures; never work out a fee.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/orders/{{ encodeURIComponent(String($fromAI(\"orderId\", \"The order id, or the order number the customer quoted — the bot surface accepts either.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}",
       "authentication": "genericCredentialType",
@@ -791,6 +791,90 @@
       "sendBody": true,
       "specifyBody": "json",
       "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, version: $fromAI(\"version\", \"The version from the SAME changes[] row, copied verbatim. It proves which figure the customer saw; never change it.\", \"number\"), note: $fromAI(\"note\", \"Optional: the customer's own reason, in their words. Reaches the delivery company. At most 500 characters.\", \"string\") || undefined }) }}",
+      "options": {
+        "response": {
+          "response": {
+            "neverError": true
+          }
+        },
+        "timeout": 20000
+      }
+    },
+    "credentials": {
+      "httpBearerAuth": {
+        "id": "lz5ivIop9DF8mPHa",
+        "name": "jovi-mall-Bearer Auth account"
+      }
+    }
+  },
+  {
+    "name": "delivery_fees_propose",
+    "type": "n8n-nodes-base.httpRequestTool",
+    "typeVersion": 4.5,
+    "parameters": {
+      "toolDescription": "The customer proposes THEIR delivery fee — higher or lower — to the delivery company carrying a parcel whose delivery they pay. The company accepts or declines; the parcel waits for that answer. Lower and accepted: the customer pays less (cash) or gets the difference back (paid online). Higher and accepted on an online order: the customer must pay the difference (delivery_fees_list_pending then shows Pay now). The platform words the outcome — relay the reply. USE IT WHEN: The customer wants to pay a DIFFERENT delivery fee on one of their orders — lower or higher — e.g. \"can I pay 1000 for delivery instead?\", \"delivery is too expensive, I propose 1500\". If they did not say the amount, or why, ask first, then call it. NOT THIS TOOL: Never invent the amount or the reason — ask. When the shop pays the delivery (orders_get_order deliveryFees amount 0), do not call it: tell the customer the shop handles that delivery and it costs them nothing — and if a call is refused for that reason, relay the refusal. Not for one price on several parcels of one checkout — that is combined_delivery_request. Not to answer a fee the company asked for — that is delivery_fees_list_pending. ⚠ Ask for the amount if the customer did not say it. On SHIPMENT_AMBIGUOUS, list details.shipments (agencyName + feeText) and call again with the chosen shipmentId.",
+      "method": "POST",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/delivery-fees/propose",
+      "authentication": "genericCredentialType",
+      "genericAuthType": "httpBearerAuth",
+      "sendHeaders": true,
+      "headerParameters": {
+        "parameters": [
+          {
+            "name": "X-Webhook-Secret",
+            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+          },
+          {
+            "name": "Idempotency-Key",
+            "value": "={{ $execution.id }}-{{ $now.toMillis() }}-delivery_fees_propose"
+          }
+        ]
+      },
+      "sendBody": true,
+      "specifyBody": "json",
+      "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, orderId: $fromAI(\"orderId\", \"The order id, or the order number the customer read out. At most 64 characters.\", \"string\"), shipmentId: $fromAI(\"shipmentId\", \"Only after a 422 DELIVERY_FEE_PROPOSAL_SHIPMENT_AMBIGUOUS: the shipmentId of the parcel the customer chose from details.shipments, copied verbatim. Never composed. A 24-character hexadecimal id.\", \"string\") || undefined, proposedFee: $fromAI(\"proposedFee\", \"The delivery fee the customer proposes, in the order's currency units (whole number), exactly as the customer said it.\", \"number\"), reason: $fromAI(\"reason\", \"Why, in the customer's own words. Reaches the delivery company. At most 500 characters.\", \"string\") }) }}",
+      "options": {
+        "response": {
+          "response": {
+            "neverError": true
+          }
+        },
+        "timeout": 20000
+      }
+    },
+    "credentials": {
+      "httpBearerAuth": {
+        "id": "lz5ivIop9DF8mPHa",
+        "name": "jovi-mall-Bearer Auth account"
+      }
+    }
+  },
+  {
+    "name": "delivery_fees_withdraw",
+    "type": "n8n-nodes-base.httpRequestTool",
+    "typeVersion": 4.5,
+    "parameters": {
+      "toolDescription": "Take back a delivery fee the customer proposed with delivery_fees_propose, while the delivery company has not answered. The fee stays as it was and the parcel can be collected. Once the company accepted a higher fee the customer must pay, declining is the Decline button that delivery_fees_list_pending draws. USE IT WHEN: The customer clearly says they no longer want the delivery fee they proposed. NOT THIS TOOL: Not for a fee the delivery company asked for (that is delivery_fees_reject). Never on a guess about which proposal: use the proposalId returned by delivery_fees_propose.",
+      "method": "POST",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/delivery-fees/{{ encodeURIComponent(String($fromAI(\"proposalId\", \"proposalId returned by delivery_fees_propose — copied verbatim, never composed. A 24-character hexadecimal id.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}/withdraw",
+      "authentication": "genericCredentialType",
+      "genericAuthType": "httpBearerAuth",
+      "sendHeaders": true,
+      "headerParameters": {
+        "parameters": [
+          {
+            "name": "X-Webhook-Secret",
+            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+          },
+          {
+            "name": "Idempotency-Key",
+            "value": "={{ $execution.id }}-{{ $now.toMillis() }}-delivery_fees_withdraw"
+          }
+        ]
+      },
+      "sendBody": true,
+      "specifyBody": "json",
+      "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language } }) }}",
       "options": {
         "response": {
           "response": {

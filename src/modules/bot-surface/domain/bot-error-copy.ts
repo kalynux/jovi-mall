@@ -865,6 +865,19 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         ar: 'يجري استرداد دفعة هذا الطلب أو مراجعتها، لذا لا يمكن تغيير رسوم التوصيل الآن. تواصل مع الدعم إذا احتجت إلى مساعدة.',
     },
     /**
+     * The customer tried to propose a delivery fee on a parcel whose delivery the SHOP pays
+     * (owner, 2026-10-25: "inform the customer that it is handled by the vendor"). On the chat a
+     * customer is the only caller, so the payer is always the shop here. The generic sentence
+     * ("only the one who pays… can propose") left the customer wondering who that was.
+     */
+    [ERROR_CODES.DELIVERY_FEE_PROPOSAL_NOT_PAYER]: {
+        en: 'The shop pays the delivery of this parcel, so you have no delivery fee to pay on it — and nothing to propose. The shop and the delivery company settle it between them.',
+        fr: 'La boutique paie la livraison de ce colis : vous n’avez donc aucuns frais de livraison à payer dessus — ni rien à proposer. La boutique et la société de livraison s’arrangent entre elles.',
+        pt: 'A loja paga a entrega desta encomenda, por isso não tem taxa de entrega a pagar — nem nada a propor. A loja e a empresa de entregas acertam isso entre si.',
+        es: 'La tienda paga el envío de este paquete, así que no tienes tarifa de envío que pagar — ni nada que proponer. La tienda y la empresa de envíos lo arreglan entre ellas.',
+        ar: 'المتجر يدفع توصيل هذا الطرد، لذا لا توجد عليك رسوم توصيل — ولا شيء لتقترحه. يتفق المتجر وشركة التوصيل على ذلك فيما بينهما.',
+    },
+    /**
      * "Delivery in cash" (W-F) can no longer be honoured — a delivery company stopped taking the fee
      * in cash since the review, or no shop charges delivery. Before the spend: Pay now still works.
      */
