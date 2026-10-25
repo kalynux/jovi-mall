@@ -1,5 +1,6 @@
 import { ERROR_CATEGORIES, ErrorCategory } from '../../../core/error-category';
 import { ERROR_CODES, ErrorCode } from '../../../core/error-codes';
+import { bilingualText } from './bilingual-copy';
 
 /**
  * What the CUSTOMER is told when a bot call fails — a sentence, in their language.
@@ -1029,6 +1030,16 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
  * that returns the code — a raw `BOT_IDENTITY_UNRESOLVED` in a chat window is the exact
  * failure this function exists to make impossible.
  */
+/**
+ * ⭐ The refusals that can only reach someone with NO account yet — the Telegram share-your-number
+ * step, which comes before the language question (owner, 2026-10-26). Answered in English AND
+ * French whatever the guess; see `bilingual-copy.ts`.
+ */
+const BEFORE_LANGUAGE_CODES: ReadonlySet<string> = new Set<string>([
+    ERROR_CODES.BOT_IDENTITY_NEEDS_CONTACT,
+    ERROR_CODES.MAGIC_CONTACT_UNVERIFIED,
+]);
+
 export function customerMessageFor(
     code: string,
     category: ErrorCategory,
@@ -1041,6 +1052,9 @@ export function customerMessageFor(
 ): string {
     const lang = toBotCopyLanguage(language);
     const specific = CODE_COPY[code as ErrorCode];
+
+    // Said before the customer has an account, so before anybody knows their language: both.
+    if (specific && BEFORE_LANGUAGE_CODES.has(code)) return bilingualText(specific);
 
     if (specific) return fillUssd(specific[lang] ?? specific[DEFAULT_LANGUAGE], lang, details);
 

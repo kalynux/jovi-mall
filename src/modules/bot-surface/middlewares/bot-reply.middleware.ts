@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { botChrome } from '../domain/bot-chrome-copy';
+import { bilingualLabel } from '../domain/bilingual-copy';
 import { recoveryFor } from '../domain/bot-recovery-actions';
 import { botPendingQuestionStore } from '../services/bot-pending-question.store';
 import { botRecentlySentStore } from '../services/bot-recently-sent.store';
@@ -127,7 +128,8 @@ function errorReply(req: Request, error: Record<string, unknown>): BotChannelRep
             {
                 kind: 'contact_request',
                 text,
-                buttonLabel: botChrome('contactButton', req.bot!.language),
+                // Both languages, like the sentence above it — no account, so no language yet.
+                buttonLabel: bilingualLabel(botChrome('contactButton', 'en'), botChrome('contactButton', 'fr')),
             },
             channel,
             externalId,

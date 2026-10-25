@@ -2,6 +2,7 @@ import { MessagingChannel } from '../../channel-connections';
 import { BOT_COPY_LANGUAGES, BotCopyLanguage, toBotCopyLanguage } from './bot-error-copy';
 import { BOT_ONBOARDING_STEPS, BotOnboardingStep, isRequiredStep } from './bot-onboarding';
 import { botChrome } from './bot-chrome-copy';
+import { bilingualText } from './bilingual-copy';
 
 /**
  * What the bot SAYS when it asks for an onboarding field — a sentence, in the customer's
@@ -253,10 +254,14 @@ export function onboardingPromptFor(
     if (step === 'phone') {
         // Telegram is the only channel with a verified-contact mechanism, and it is the only
         // channel on which this step is normally pending at all.
+        //
+        // ⭐ English AND French, whatever the guess (owner, 2026-10-26): the phone comes BEFORE the
+        // language question, so nobody knows yet which one the customer reads — see
+        // `bilingual-copy.ts`. `lang` is no longer read for this step.
         if (channel === 'telegram') {
-            return { prompt: PHONE_TELEGRAM[lang] ?? PHONE_TELEGRAM.en, requestContact: true };
+            return { prompt: bilingualText(PHONE_TELEGRAM), requestContact: true };
         }
-        return { prompt: PHONE_TYPED[lang] ?? PHONE_TYPED.en };
+        return { prompt: bilingualText(PHONE_TYPED) };
     }
 
     const copy = PROMPTS[step];

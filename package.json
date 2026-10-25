@@ -255,6 +255,7 @@
         "test:inapp-discovery": "ts-node scripts/test/test-inapp-discovery.ts",
         "test:dead-ends": "ts-node scripts/test/test-bot-dead-ends.ts",
         "test:fee-reason-bold": "ts-node scripts/test/test-fee-reason-bold.ts",
+        "test:bilingual-first-contact": "ts-node scripts/test/test-bilingual-first-contact.ts",
         "test:inapp-bookings": "ts-node scripts/test/test-inapp-bookings.ts",
         "test:chat-answer": "ts-node scripts/test/test-chat-answer.ts",
         "test:recently-sent": "ts-node scripts/test/test-recently-sent.ts",

@@ -1,6 +1,7 @@
 import type { BotSyncDto } from '../dto/bot-projections';
 import { acceptTermsActionId, skipActionId } from './bot-action-id';
 import { botChrome } from './bot-chrome-copy';
+import { bilingualLabel } from './bilingual-copy';
 import { languageChoiceIntent } from './language-choice';
 import type { BotReplyIntent } from './channel-reply';
 
@@ -34,7 +35,12 @@ export function onboardingReplyIntent(next: BotOnboardingNextDto, language: stri
 
     if (next.requestContact) {
         // The phone step. A verified contact is its own control, and it is never skippable.
-        return { kind: 'contact_request', text: next.prompt, buttonLabel: botChrome('contactButton', language) };
+        // Both languages, like the prompt: the phone comes before the language question.
+        return {
+            kind: 'contact_request',
+            text: next.prompt,
+            buttonLabel: bilingualLabel(botChrome('contactButton', 'en'), botChrome('contactButton', 'fr')),
+        };
     }
 
     if (next.requestLocation) {
