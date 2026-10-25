@@ -25,6 +25,7 @@ import { buildAdminStaffIdentityRouter } from '../../modules/staff-identity/rout
 import { buildAdminGeoRouter } from '../../modules/geo/admin-geo.routes';
 import { buildAdminStatementMailRouter } from '../../modules/mail/admin-statement-mail.routes';
 import { buildAdminRefundRequestRouter } from '../../modules/payments/routes/admin-refund-request.routes';
+import { buildAdminAgencyClaimRouter } from '../../modules/earnings/routes/admin-agency-claims.routes';
 
 /**
  * `/api/internal/admin/*` — the service-to-service surface the **wi-admin** backend calls.
@@ -365,5 +366,13 @@ router.use('/mail', buildAdminStatementMailRouter([requireAdminCaller]));
  * writer would reproduce and miss. Contract: `api-doc/admin/refunds.md`.
  */
 router.use('/refunds', buildAdminRefundRequestRouter([requireAdminCaller]));
+
+/**
+ * Damage claims on an agency (owner F-8, 2026-10-22) — no public twin. A claim charges the agency
+ * and credits the vendor in one transaction, inside the agency's own window and under its own
+ * per-item limit. wi-admin delegates the write (audited fail-closed there) and the reads.
+ * Contract: `api-doc/admin/agency-claims.md`.
+ */
+router.use('/agency-claims', buildAdminAgencyClaimRouter([requireAdminCaller]));
 
 export default router;

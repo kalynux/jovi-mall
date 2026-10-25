@@ -394,9 +394,19 @@ refund was ever requested:
 "refund": {
   "status": "sending",              // requested | waiting_for_cash | sending | in_progress | completed | declined
   "grossAmount": 5000,              // what the refund is worth
-  "feeAmount": 100,                 // the transfer fee kept (2% by default); 0 for a card refund
-  "feePercent": 2,                  // for the copy "minus a 2% transfer fee"; 0 for a card refund
-  "netAmount": 4900,                // ⭐ what the customer RECEIVES — show this as the refund amount
+  "feeAmount": 198,                 // EVERYTHING deducted: payment fee + transfer fee (2026-10-22); 0 when the seller pays
+  "feePercent": 2,                  // the TRANSFER fee percent; 0 for a card refund
+  "paymentFee": 100,                // 🆕 kept by the payment provider when you paid (2%); 0 for cash on delivery
+  "paymentFeePercent": 2,
+  "transferFee": 98,                // 🆕 to send the money back (2% of what is left); 0 for a card refund
+  "feesPaidBy": "customer",         // 🆕 "seller" when the seller cancelled after payment: you receive everything
+  "lines": [                        // 🆕 ready to show, line by line — switch on `code` for another language
+    { "code": "refund_amount", "label": "Refund", "amount": 5000, "percent": null },
+    { "code": "payment_fee", "label": "Payment provider fee, kept when you paid", "amount": -100, "percent": 2 },
+    { "code": "transfer_fee", "label": "Transfer fee to send the money back", "amount": -98, "percent": 2 },
+    { "code": "you_receive", "label": "You receive", "amount": 4802, "percent": null }
+  ],
+  "netAmount": 4802,                // ⭐ what the customer RECEIVES — show this as the refund amount
   "currency": "XAF",
   "channel": "payout",              // card_refund | payout | external | null (not decided yet)
   "destinationMasked": "+•••••••••512",   // the number it goes to, masked; null for a card refund
@@ -414,9 +424,18 @@ refund was ever requested:
 | `completed` | The money arrived (or was paid outside the platform — `channel: external`) | "Refunded" |
 | `declined` | The request was turned down after review. The administrator's reason is **not** exposed | "Refund declined — contact support if you think this is a mistake" |
 
-**The fee line.** When `feeAmount > 0`, show the net and why it is less:
-*"You receive 4,900 XAF (5,000 minus a 2% transfer fee)."* A card refund (`channel: card_refund`)
-has `feeAmount: 0` — show the full amount and **no fee line**.
+**The fee lines (2026-10-22).** Show `lines`: they add up on screen (refund + fees = you receive)
+and explain why the customer receives less. Two fees, each only where it happened:
+
+| Paid by | Payment fee | Transfer fee | 10,000 refunded → you receive |
+|---|---|---|---|
+| mobile money | 2% kept by the payment provider when you paid | 2% to send it back | 9,604 |
+| card | 2% | — (back on the card) | 9,800 |
+| cash on delivery | — | 2% | 9,800 |
+| any — the **seller** cancelled after you paid | paid by the seller | paid by the seller | 10,000 |
+
+`fees_paid_by_seller` is a line with amount 0: say "Fees are paid by the seller". A refund created
+before 2026-10-22 has only a transfer fee (`paymentFee: 0`).
 
 `refund` is independent of `deliveryFeeRefund` (the delivery-fee ledger, `{ owed, returned }`),
 which keeps its meaning; and of `paymentStatus`, which becomes `refunded` only when the whole order

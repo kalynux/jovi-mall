@@ -29,12 +29,41 @@ export interface RefundEarningsPort {
   /** Rejected, or failed and abandoned: resume, ONLY if the active pause reason is 'refund_in_progress'. */
   onRequestClosedWithoutRefund(target: PauseTarget, refundRequestId: string): Promise<void>;
   /** Money arrived: claw back by attribution, then close the pause. */
-  onRefundCompleted(input: {
-    refundKey: string;
-    target: PauseTarget;
-    attribution: { goods: number; delivery: number };
-    codCollectionIds: string[];
-  }): Promise<void>;
+  onRefundCompleted(input: RefundCompletedInput): Promise<void>;
+  /**
+   * Parcels an administrator says were delivered at FAULT (owner F-6/F-7, 2026-10-22): for each,
+   * whether its agency is inside its own window and what customer-paid delivery money its agency
+   * and rider fund. Read-only. Refuses a parcel that is not the order's (422).
+   */
+  assessDeliveryFault(orderId: string, shipmentIds: string[], now: Date): Promise<DeliveryFaultAssessment[]>;
+}
+
+export interface RefundCompletedInput {
+  refundKey: string;
+  target: PauseTarget;
+  attribution: { goods: number; delivery: number };
+  codCollectionIds: string[];
+  /** Seller-fault fees (refund-fees.ts F-5): charged to the seller beyond their share. 0/absent: none. */
+  vendorCharge?: number;
+  /** The at-fault parcels whose agency is INSIDE its window — the only ones that give back. */
+  deliveryFault?: DeliveryFaultAssessment[];
+  /** For the explanations the vendor and the agency read. */
+  orderNumber?: string | null;
+}
+
+export interface DeliveryFaultAssessment {
+  shipmentId: string;
+  agencyId: string | null;
+  trackingNumber: string | null;
+  deliveredAt: Date | null;
+  raisedAt: Date;
+  windowDays: number;
+  insideWindow: boolean;
+  /** Customer-paid delivery money of this parcel the couriers fund; 0 outside the window. */
+  customerDeliveryAmount: number;
+  /** The agency's terms that made the window, for the explanation. */
+  claimDeadlineDays: number | null;
+  returnsPayer: string | null;
 }
 
 export interface CodCoveragePort {

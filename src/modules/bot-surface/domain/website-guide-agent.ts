@@ -524,7 +524,7 @@ export const AGENT_GUIDE: readonly GuideTopic[] = Object.freeze([
                 title: 'Agent app: earnings, requesting a payout, payout number',
                 summary: 'See earnings, withdraw them, and set the mobile-money number payouts go to',
                 steps: [
-                    'Open "More" → "Earnings & payouts". "Available now" can be withdrawn; "Still held" is released 3 days after the whole order is delivered.',
+                    'Open "More" → "Earnings & payouts". "Available now" can be withdrawn; "Still held" is released up to 3 days after your parcel is delivered, depending on your agency\'s terms — sometimes the very next night after the delivery is confirmed.',
                     'First set where money goes: "Payout destinations" → "Add a destination" → "Mobile money", "Network", "Phone number", "Name on the account" → "Save".',
                     'Tap "Request payout", then "Request". Follow it under "Support tickets" ("Open its ticket").',
                     '"My earnings" shows what was earned over a period.',
@@ -539,7 +539,7 @@ export const AGENT_GUIDE: readonly GuideTopic[] = Object.freeze([
                 title: 'App agent : gains, demander un virement, numéro de virement',
                 summary: 'Voir les gains, les retirer, et choisir le numéro mobile money qui reçoit les virements',
                 steps: [
-                    'Ouvrez « Plus » → « Revenus et virements ». « Disponible maintenant » peut être retiré ; « Encore bloqué » est libéré 3 jours après la livraison complète de la commande.',
+                    'Ouvrez « Plus » → « Revenus et virements ». « Disponible maintenant » peut être retiré ; « Encore bloqué » est libéré jusqu’à 3 jours après la livraison de votre colis, selon les conditions de votre agence — parfois dès la nuit qui suit la confirmation de la livraison.',
                     'D’abord la destination : « Destinations de virement » → « Ajouter une destination » → « Mobile money », « Opérateur », « Numéro de téléphone », « Nom du titulaire du compte » → « Enregistrer ».',
                     'Touchez « Demander un virement », puis « Demander ». Suivez-le dans « Tickets d’assistance » (« Ouvrir son ticket »).',
                     '« Mes gains » montre ce qui a été gagné sur une période.',

@@ -1,4 +1,5 @@
-import type { RefundEarningsPort } from '../../payments/domain/refund-ports';
+import type { DeliveryFaultAssessment, RefundCompletedInput, RefundEarningsPort } from '../../payments/domain/refund-ports';
+import { courierLiabilityService } from './courier-liability.service';
 import { earningsClawbackService, EarningsClawbackService } from './earnings-clawback.service';
 import { earningsPauseService, EarningsPauseService, PauseTarget, SYSTEM_PAUSE_ACTOR } from './earnings-pause.service';
 import { ticketEarningsHoldService } from '../../tickets/services/ticket-earnings-hold.service';
@@ -60,19 +61,21 @@ export class RefundEarningsAdapter implements RefundEarningsPort {
     }
   }
 
-  async onRefundCompleted(input: {
-    refundKey: string;
-    target: PauseTarget;
-    attribution: { goods: number; delivery: number };
-    codCollectionIds: string[];
-  }): Promise<void> {
+  async onRefundCompleted(input: RefundCompletedInput): Promise<void> {
     await this.clawback.applyRefund({
       refundKey: input.refundKey,
       target: input.target,
       attribution: input.attribution,
       codCollectionIds: input.codCollectionIds.length > 0 ? input.codCollectionIds : undefined,
+      vendorCharge: input.vendorCharge ?? 0,
+      deliveryFault: input.deliveryFault ?? [],
     });
     await this.pauses.closeOnRefund(input.target, `Refund ${input.refundKey} completed`);
+  }
+
+  /** Read-only: the agency side of parcels named as delivered at fault (courier-liability.service.ts). */
+  async assessDeliveryFault(orderId: string, shipmentIds: string[], now: Date): Promise<DeliveryFaultAssessment[]> {
+    return courierLiabilityService.assessDeliveryFault(orderId, shipmentIds, now);
   }
 }
 

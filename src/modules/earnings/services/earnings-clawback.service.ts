@@ -17,6 +17,10 @@ import { ClawPlanLine, ClawPlanRow, planClawback, planRemaining } from '../domai
 import { TakenFrom } from '../domain/clawback-netting';
 import { EarningsAccountService, earningsAccountService } from './earnings-account.service';
 import { bookingSourcesOf, PauseTarget } from './earnings-pause.service';
+import { earningsCompletionService } from './earnings-completion.service';
+import type { DeliveryFaultAssessment } from '../../payments/domain/refund-ports';
+import { CourierGiveLine, courierGiveback, takeFromCouriers } from '../domain/courier-liability';
+import { Explanation, explainDeliveryFault, explainRefundShare, explainVendorBeyond } from '../domain/adjustment-explanations';
 
 /**
  * Earnings recovery ("clawback") — REFUND-FLOW-PLAN § 6, contract § 11.3.
@@ -40,7 +44,10 @@ import { bookingSourcesOf, PauseTarget } from './earnings-pause.service';
  * ── Scope (§ 6.2) ──────────────────────────────────────────────────────────────────────────
  *  - order: its `order` rows and, for COD, the rows of `codCollectionIds` (default: every goods
  *    collection of the order) — vendor, platform and platform_ai only. Agency and agent rows are
- *    NEVER touched (C-1), nor the agency's COD handling fee (C-3), nor a fee-only collection.
+ *    not in this scope (C-1), nor the agency's COD handling fee (C-3), nor a fee-only collection.
+ *    The ONE exception (owner F-6/F-7, 2026-10-22): a parcel named as delivered at fault INSIDE
+ *    its agency's window — `applyRefund` takes that parcel's delivery fee from its agency and
+ *    rider (`deliveryFault`), never its COD handling fee.
  *    Plus the VENDOR's own `shipment`-source rows (an RTO leftover handed back to them — C-8).
  *  - Whether the delivery money was SPENT (any `shipment` row, or an agency/agent row on the
  *    order or its collections) decides who bears the goods gap and the delivery part: spent →
@@ -77,6 +84,30 @@ export interface ApplyRefundInput {
   target: PauseTarget;
   attribution: RefundAttribution;
   codCollectionIds?: string[];
+  /**
+   * Seller-fault fees (owner F-5, 2026-10-22, `payments/domain/refund-fees.ts`): the payment and
+   * transfer fees of a refund the SELLER caused, charged to them beyond their share. 0/absent: none.
+   */
+  vendorCharge?: number;
+  /**
+   * Parcels whose delivery was at fault (owner F-6/F-7). Only those INSIDE their agency's window
+   * give back: their agency and rider fund the customer-paid delivery money of the parcel first,
+   * then relieve the vendor of a free delivery's courier cost (C-8).
+   */
+  deliveryFault?: DeliveryFaultAssessment[];
+}
+
+/** What a plan hands the engine. */
+interface PlannedClaw {
+  lines: ClawPlanLine[];
+  /** Rows outside the refund's normal scope that the plan claws (a faulted parcel's courier rows). */
+  extraRows?: IEarningsAllocation[];
+  vendorBeyond: { goods: number; delivery: number; fees: number; total: number };
+  feesReason: 'seller_cancelled' | 'dispute_lost' | null;
+  unrecovered: number;
+  attribution: RefundAttribution;
+  /** A row-specific explanation; the default is "your share of the refund". */
+  explain?: (row: IEarningsAllocation, line: ClawPlanLine) => Explanation | null;
 }
 
 export interface WriteOffInput {
@@ -112,10 +143,15 @@ export interface DebtorRow {
   updatedAt: string;
 }
 
-/** Shares a refund may take back. Agency and agent rows are never in scope (C-1, C-3). */
+/**
+ * Shares a refund may take back by its NORMAL scope. Agency and agent rows are not here (C-1, C-3);
+ * a delivery at fault reaches them separately, as `PlannedClaw.extraRows`.
+ */
 const CLAWABLE_BENEFICIARIES: readonly EarningsOwnerType[] = ['vendor', 'platform', 'platform_ai'];
 
 interface Scope {
+  /** The order or booking number, for the explanations. */
+  reference: string | null;
   /** Sources whose rows are in scope. */
   sources: SourceRef[];
   /** The order/booking sources (where a vendor-beyond row is filed). */
@@ -175,22 +211,126 @@ export class EarningsClawbackService {
   /** A refund's money ARRIVED: take back `attribution` by the rules of § 6.2. */
   async applyRefund(input: ApplyRefundInput): Promise<ClawbackOutcome> {
     const { refundKey, target, attribution } = input;
+    const vendorCharge = input.vendorCharge ?? 0;
     assertAmount('goods', attribution.goods);
     assertAmount('delivery', attribution.delivery);
-    if (attribution.goods + attribution.delivery === 0) return EMPTY(refundKey, false);
+    assertAmount('vendorCharge', vendorCharge);
+    if (attribution.goods + attribution.delivery + vendorCharge === 0) return EMPTY(refundKey, false);
 
     const scope = await this.scopeOf(target, input.codCollectionIds);
+    // Only an order has parcels, and only a parcel INSIDE its agency's window gives back (F-6).
+    const faults = target.kind === 'order' ? (input.deliveryFault ?? []).filter((f) => f.insideWindow) : [];
+    const parcels = await Promise.all(
+      faults.map(async (fault) => {
+        const shipment: any = await ShipmentModel.findById(fault.shipmentId, { delivery_fee_snapshot: 1 }).lean();
+        const fee = typeof shipment?.delivery_fee_snapshot === 'number' ? shipment.delivery_fee_snapshot : null;
+        return {
+          fault,
+          sources: await earningsCompletionService.sourcesOfShipment(fault.shipmentId),
+          feeSnapshot: fee,
+          // The part of the courier's fee the VENDOR bore (a free delivery): relief for C-8.
+          vendorBorne: fee !== null ? Math.max(0, fee - fault.customerDeliveryAmount) : 0,
+        };
+      })
+    );
+
     return this.run(refundKey, scope, async (rows, session) => {
       const prior = await this.priorAttribution(refundKey, rows, scope, session);
+
+      // 1. The customer-paid delivery money of the faulted parcels comes from their couriers.
+      const extraRows: IEarningsAllocation[] = [];
+      const courierTake = new Map<string, { goods: number; delivery: number }>();
+      const courierFault = new Map<string, DeliveryFaultAssessment>();
+      const leftOver: CourierGiveLine[][] = [];
+      let customerNeed = Math.min(attribution.delivery, faults.reduce((s, f) => s + f.customerDeliveryAmount, 0));
+      let courierFunded = 0;
+      for (const parcel of parcels) {
+        const prows = (await this.allocationRepo.findBySources(parcel.sources, session)).filter(
+          (r) => (r.beneficiary_type === 'agency' || r.beneficiary_type === 'agent') && r.status !== 'reversed'
+        );
+        prows.forEach((r) => {
+          extraRows.push(r);
+          courierFault.set((r._id as Types.ObjectId).toString(), parcel.fault);
+        });
+        let lines = courierGiveback(
+          prows.map((r) => ({
+            id: (r._id as Types.ObjectId).toString(),
+            beneficiary_type: r.beneficiary_type,
+            amount: r.amount,
+            remaining: toPlanRow(r).remaining,
+          })),
+          parcel.feeSnapshot
+        );
+        const need = Math.min(parcel.fault.customerDeliveryAmount, customerNeed);
+        if (need > 0) {
+          const taken = takeFromCouriers(lines, need);
+          for (const t of taken.lines) {
+            const cur = courierTake.get(t.id) ?? { goods: 0, delivery: 0 };
+            courierTake.set(t.id, { goods: cur.goods, delivery: cur.delivery + t.give });
+            courierFunded += t.give;
+            customerNeed -= t.give;
+          }
+          lines = lines.map((l) => ({ id: l.id, give: l.give - (taken.lines.find((t) => t.id === l.id)?.give ?? 0) }));
+        }
+        leftOver.push(lines);
+      }
+
+      // 2. The rest of the delivery money follows the vendor's rows, as before (C-1).
+      const vendorDelivery = attribution.delivery - courierFunded;
       const plan = planClawback({
         rows: rows.map(toPlanRow),
         goods: attribution.goods,
-        delivery: attribution.delivery,
+        delivery: vendorDelivery,
         priorGoods: prior.goods,
         priorDelivery: prior.delivery,
         deliverySpent: await this.deliverySpent(scope, session),
       });
-      return { lines: plan.lines, vendorBeyond: plan.vendorBeyond, unrecovered: plan.unrecovered, attribution };
+
+      // 3. A free delivery's courier cost the vendor would carry (C-8) is the faulted couriers' instead.
+      let beyondGoods = plan.vendorBeyond.goods;
+      parcels.forEach((parcel, i) => {
+        if (beyondGoods <= 0 || parcel.vendorBorne <= 0) return;
+        const taken = takeFromCouriers(leftOver[i], Math.min(parcel.vendorBorne, beyondGoods));
+        for (const t of taken.lines) {
+          const cur = courierTake.get(t.id) ?? { goods: 0, delivery: 0 };
+          courierTake.set(t.id, { goods: cur.goods + t.give, delivery: cur.delivery });
+          beyondGoods -= t.give;
+        }
+      });
+
+      const courierLines: ClawPlanLine[] = [...courierTake.entries()]
+        .map(([id, t]) => ({ id, goods: t.goods, delivery: t.delivery, total: t.goods + t.delivery }))
+        .filter((l) => l.total > 0);
+      return {
+        lines: [...plan.lines, ...courierLines],
+        extraRows,
+        vendorBeyond: {
+          goods: beyondGoods,
+          delivery: plan.vendorBeyond.delivery,
+          fees: vendorCharge,
+          total: beyondGoods + plan.vendorBeyond.delivery + vendorCharge,
+        },
+        feesReason: vendorCharge > 0 ? 'seller_cancelled' : null,
+        unrecovered: plan.unrecovered,
+        // What the vendor-scope rows answered — the next partial refund reads it as "prior".
+        attribution: { goods: attribution.goods, delivery: vendorDelivery },
+        explain: (row, line) => {
+          const fault = courierFault.get((row._id as Types.ObjectId).toString());
+          if (!fault) return null;
+          return explainDeliveryFault({
+            orderNumber: scope.reference,
+            trackingNumber: fault.trackingNumber,
+            amount: line.total,
+            currency: row.currency ?? scope.currency,
+            raisedAt: new Date(fault.raisedAt),
+            deliveredAt: fault.deliveredAt ? new Date(fault.deliveredAt) : null,
+            windowDays: fault.windowDays,
+            claimDeadlineDays: fault.claimDeadlineDays,
+            returnsPaidByAgency: fault.returnsPayer === 'agency',
+            role: row.beneficiary_type === 'agent' ? 'agent' : 'agency',
+          });
+        },
+      };
     });
   }
 
@@ -198,18 +338,31 @@ export class EarningsClawbackService {
    * Dispute lost (or any "everything goes back"): every in-scope share gives back all it still
    * has, released ones included. Same scope and idempotency as `applyRefund`.
    */
-  async reverseRemaining(target: PauseTarget, refundKey: string): Promise<ClawbackOutcome> {
+  async reverseRemaining(
+    target: PauseTarget,
+    refundKey: string,
+    options: { vendorCharge?: number; dispute?: boolean } = {}
+  ): Promise<ClawbackOutcome> {
+    const vendorCharge = options.vendorCharge ?? 0;
+    assertAmount('vendorCharge', vendorCharge);
     const scope = await this.scopeOf(target);
-    return this.run(refundKey, scope, async (rows) => {
-      const lines = planRemaining(rows.map(toPlanRow));
-      const goods = lines.reduce((s, l) => s + l.total, 0);
-      return {
-        lines,
-        vendorBeyond: { goods: 0, delivery: 0, total: 0 },
-        unrecovered: 0,
-        attribution: { goods, delivery: 0 },
-      };
-    });
+    return this.run(
+      refundKey,
+      scope,
+      async (rows) => {
+        const lines = planRemaining(rows.map(toPlanRow));
+        const goods = lines.reduce((s, l) => s + l.total, 0);
+        return {
+          lines,
+          // A lost dispute (owner F-9): the vendor also carries the pay-in fee Wi-Mall already lost.
+          vendorBeyond: { goods: 0, delivery: 0, fees: vendorCharge, total: vendorCharge },
+          feesReason: vendorCharge > 0 ? 'dispute_lost' : null,
+          unrecovered: 0,
+          attribution: { goods, delivery: 0 },
+        };
+      },
+      { dispute: options.dispute === true }
+    );
   }
 
   /**
@@ -296,16 +449,11 @@ export class EarningsClawbackService {
   private async run(
     refundKey: string,
     scope: Scope,
-    plan: (
-      rows: IEarningsAllocation[],
-      session: ClientSession
-    ) => Promise<{
-      lines: ClawPlanLine[];
-      vendorBeyond: { goods: number; delivery: number; total: number };
-      unrecovered: number;
-      attribution: RefundAttribution;
-    }>
+    plan: (rows: IEarningsAllocation[], session: ClientSession) => Promise<PlannedClaw>,
+    meta: { dispute?: boolean } = {}
   ): Promise<ClawbackOutcome> {
+    // A refund request's id is its key; a dispute's key is `dispute:<id>` (no request behind it).
+    const refundRequestId = /^[a-f\d]{24}$/i.test(refundKey) ? refundKey : null;
     if (!refundKey || !refundKey.trim()) {
       throw createAppError(ERROR_CODES.EARNINGS_CLAWBACK_INVALID_AMOUNT, 422, 'refundKey is required');
     }
@@ -323,7 +471,7 @@ export class EarningsClawbackService {
           CLAWABLE_BENEFICIARIES.includes(r.beneficiary_type)
         );
         const planned = await plan(rows, session);
-        const byId = new Map(rows.map((r) => [(r._id as Types.ObjectId).toString(), r]));
+        const byId = new Map([...rows, ...(planned.extraRows ?? [])].map((r) => [(r._id as Types.ObjectId).toString(), r]));
         const now = new Date();
 
         const add = (taken: TakenFrom, ownerType: EarningsOwnerType, ownerId: string | null): void => {
@@ -370,6 +518,9 @@ export class EarningsClawbackService {
               goods_amount: line.goods,
               delivery_amount: line.delivery,
               refund_attribution: planned.attribution,
+              refund_request_id: refundRequestId,
+              ...(planned.explain?.(row, line) ??
+                explainRefundShare({ orderNumber: scope.reference, amount: line.total, currency: row.currency, dispute: meta.dispute })),
             },
             session
           );
@@ -400,7 +551,17 @@ export class EarningsClawbackService {
               kind: 'refund_clawback',
               goods_amount: planned.vendorBeyond.goods,
               delivery_amount: planned.vendorBeyond.delivery,
+              fee_amount: planned.vendorBeyond.fees,
               refund_attribution: planned.attribution,
+              refund_request_id: refundRequestId,
+              ...explainVendorBeyond({
+                orderNumber: scope.reference,
+                currency: home?.currency ?? scope.currency,
+                goods: planned.vendorBeyond.goods,
+                delivery: planned.vendorBeyond.delivery,
+                fees: planned.vendorBeyond.fees,
+                feesReason: planned.feesReason,
+              }),
             },
             session
           );
@@ -497,10 +658,11 @@ export class EarningsClawbackService {
   /** The in-scope sources of an order or booking (§ 6.2). */
   private async scopeOf(target: PauseTarget, codCollectionIds?: string[]): Promise<Scope> {
     if (target.kind === 'booking') {
-      const booking: any = await Booking.findById(target.id, { vendorId: 1, currency: 1 }).lean();
+      const booking: any = await Booking.findById(target.id, { vendorId: 1, currency: 1, bookingNumber: 1 }).lean();
       if (!booking) throw createAppError(ERROR_CODES.EARNINGS_PAUSE_TARGET_NOT_FOUND, 404);
       const sources = await bookingSourcesOf(target.id);
       return {
+        reference: booking.bookingNumber ?? null,
         sources,
         homeSources: sources,
         homeSource: sources[0],
@@ -510,7 +672,7 @@ export class EarningsClawbackService {
       };
     }
 
-    const order: any = await OrderModel.findById(target.id, { vendor_id: 1, currency: 1 }).lean();
+    const order: any = await OrderModel.findById(target.id, { vendor_id: 1, currency: 1, order_number: 1 }).lean();
     if (!order) throw createAppError(ERROR_CODES.EARNINGS_PAUSE_TARGET_NOT_FOUND, 404);
     const orderId = new Types.ObjectId(target.id);
     // A FEE-ONLY collection is delivery cash for the agency side (W-F, C-1/C-3): never in scope.
@@ -526,6 +688,7 @@ export class EarningsClawbackService {
     const home: SourceRef = { sourceType: 'order', sourceId: target.id };
     const shipmentSources: SourceRef[] = shipments.map((s: any) => ({ sourceType: 'shipment' as const, sourceId: s._id.toString() }));
     return {
+      reference: order.order_number ?? null,
       sources: [
         home,
         ...collections.map((c: any) => ({ sourceType: 'cod_collection' as const, sourceId: c._id.toString() })),

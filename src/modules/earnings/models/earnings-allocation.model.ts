@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 import { EarningsOwnerType } from './earnings-account.model';
+import { CourierHoldSnapshot } from '../domain/courier-hold';
 
 /**
  * EarningsAllocation - The SOURCE OF TRUTH for one beneficiary's share of one
@@ -29,7 +30,12 @@ import { EarningsOwnerType } from './earnings-account.model';
  * what lets one agency hold two shipments on one order without colliding on the
  * uniqueness index below.
  */
-export type EarningsSourceType = 'order' | 'booking' | 'cod_collection' | 'shipment';
+/**
+ * 'agency_claim' (2026-10-22): the two shares a DAMAGE CLAIM creates — the vendor's compensation
+ * and the platform's investigation fee (`agency-claim.service.ts`). Never an order's source, never
+ * paused with one, never counted as a sale.
+ */
+export type EarningsSourceType = 'order' | 'booking' | 'cod_collection' | 'shipment' | 'agency_claim';
 export type EarningsAllocationStatus = 'held' | 'released' | 'reversed';
 
 export interface IEarningsAllocation extends Document {
@@ -88,6 +94,16 @@ export interface IEarningsAllocation extends Document {
   requires_cash_settlement: boolean;
   cash_settled_at: Date | null;
 
+  /**
+   * AGENCY and RIDER rows of a delivery only (owner decision, 2026-10-22): the agency's terms
+   * as they stood when this share was written, and the hold they give it. Present ⇒ this row
+   * runs on its OWN clock — started by its parcel (`syncShipmentCourierHold`), never by the
+   * order's delivery or completion — and an administrator's ORDER pause skips it when
+   * `days === 0`. Null on every other row and on rows written before the rule, which keep the
+   * order-level hold. See earnings/domain/courier-hold.ts.
+   */
+  courier_hold: CourierHoldSnapshot | null;
+
   created_at: Date;
   updated_at: Date;
 }
@@ -96,7 +112,7 @@ const EarningsAllocationSchema = new Schema<IEarningsAllocation>(
   {
     source_type: {
       type: String,
-      enum: ['order', 'booking', 'cod_collection', 'shipment'],
+      enum: ['order', 'booking', 'cod_collection', 'shipment', 'agency_claim'],
       required: true,
     },
     source_id: { type: Schema.Types.ObjectId, required: true },
@@ -120,6 +136,21 @@ const EarningsAllocationSchema = new Schema<IEarningsAllocation>(
 
     requires_cash_settlement: { type: Boolean, required: true, default: false },
     cash_settled_at: { type: Date, default: null },
+
+    courier_hold: {
+      type: new Schema(
+        {
+          shipment_id: { type: String, required: true },
+          agency_id: { type: String, required: true },
+          days: { type: Number, required: true, min: 0 },
+          protection_days: { type: Number, required: true, min: 0 },
+          returns_payer: { type: String, default: null },
+          claim_deadline_days: { type: Number, default: null },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );

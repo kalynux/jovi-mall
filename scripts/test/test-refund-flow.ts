@@ -428,7 +428,7 @@ async function main(): Promise<void> {
     codeOf(() => getRefundEarningsPort()) === ERROR_CODES.REFUND_PORT_NOT_REGISTERED);
   assert('getCodCoveragePort without registration → REFUND_PORT_NOT_REGISTERED', () =>
     codeOf(() => getCodCoveragePort()) === ERROR_CODES.REFUND_PORT_NOT_REGISTERED);
-  const earningsStub = { onRequestOpened: async () => {}, onRequestClosedWithoutRefund: async () => {}, onRefundCompleted: async () => {} };
+  const earningsStub = { onRequestOpened: async () => {}, onRequestClosedWithoutRefund: async () => {}, onRefundCompleted: async () => {}, assessDeliveryFault: async () => [] };
   registerRefundPorts({ earnings: earningsStub });
   assert('registration is partial: earnings registered, COD still throws', () =>
     getRefundEarningsPort() === earningsStub && codeOf(() => getCodCoveragePort()) === ERROR_CODES.REFUND_PORT_NOT_REGISTERED);

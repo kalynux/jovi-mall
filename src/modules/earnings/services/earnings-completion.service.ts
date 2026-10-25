@@ -7,6 +7,7 @@ import { CashCollectionModel } from '../../cod/models/cash-collection.model';
 import { ShipmentModel } from '../../shipments/shipment.model';
 import { OrderModel } from '../../orders/order.model';
 import { holdReleaseFrom, isCourierFinished } from '../domain/earnings-hold';
+import { courierHoldStartOf } from '../domain/courier-hold';
 
 /**
  * EarningsCompletionService — starts the escrow hold on an order's or booking's money.
@@ -63,8 +64,65 @@ export class EarningsCompletionService {
    *
    * Best-effort like the splits it follows: callers `void` it with a catch. The order's
    * completion is the backstop that starts anything this missed.
+   *
+   * It then syncs every parcel's COURIER clock (agency and rider rows with their own terms,
+   * earnings/domain/courier-hold.ts): every caller is already a moment a parcel's state may
+   * have changed, so this is the one hook they all go through. A courier failure is logged,
+   * never thrown: the order's own hold above is already written. The nightly sweep is the
+   * courier clock's backstop (`EarningsReleaseWorker.startCourierHolds`).
    */
   async syncOrderHold(orderId: string, now: Date = new Date()): Promise<void> {
+    await this.syncOrderClock(orderId, now);
+    try {
+      const shipments = await ShipmentModel.find({ order_id: new Types.ObjectId(orderId) }, { _id: 1 }).lean();
+      for (const s of shipments) await this.syncShipmentCourierHold(s._id.toString(), now);
+    } catch (error) {
+      console.error(`[EarningsCompletionService] courier hold sync failed for order ${orderId}:`, error);
+    }
+  }
+
+  /** Every source one delivery's money hangs off: its `shipment` row and its COD collections. */
+  async sourcesOfShipment(shipmentId: string): Promise<SourceRef[]> {
+    const collections = await CashCollectionModel.find({ shipment_id: new Types.ObjectId(shipmentId) }, { _id: 1 });
+    return [
+      { sourceType: 'shipment', sourceId: shipmentId },
+      ...collections.map((c) => ({ sourceType: 'cod_collection' as const, sourceId: c._id.toString() })),
+    ];
+  }
+
+  /**
+   * Bring one delivery's agency and rider rows in line with the parcel (owner decision,
+   * 2026-10-22). Each row carries its agency's terms (`courier_hold`):
+   *  - parcel at a starting status for that row (`courierStartStatuses`) and the row not
+   *    started → started from the parcel's own history, released `days` later (0 = at the
+   *    next nightly sweep);
+   *  - parcel no longer at one (`agent_delivered → failed`) and the row started → un-started.
+   * Rows without a snapshot are the order's business and are not touched. Idempotent; never
+   * moves a date it already wrote (a resume may have moved it since).
+   */
+  async syncShipmentCourierHold(shipmentId: string, now: Date = new Date()): Promise<void> {
+    const rows = await this.allocationRepo.findHeldCourierBySources(await this.sourcesOfShipment(shipmentId), true);
+    if (rows.length === 0) return;
+    const shipment = await ShipmentModel.findById(shipmentId, {
+      status: 1, status_history: 1, customer_confirmation: 1, order_id: 1,
+    }).lean();
+    if (!shipment) return;
+    const order = await OrderModel.findById(shipment.order_id, { payment_method: 1 }).lean();
+    const isCod = order?.payment_method === 'cash_on_delivery';
+
+    for (const row of rows) {
+      const hold = row.courier_hold!;
+      const start = courierHoldStartOf(shipment as any, isCod, hold.days === 0, now);
+      if (start && !row.completed_at) {
+        await this.allocationRepo.startCourierHold(row._id as Types.ObjectId, start, holdReleaseFrom(start, hold.days));
+      } else if (!start && row.completed_at) {
+        await this.allocationRepo.clearCourierHold(row._id as Types.ObjectId);
+      }
+    }
+  }
+
+  /** The order-level half of `syncOrderHold`: every row that is not on a courier clock. */
+  private async syncOrderClock(orderId: string, now: Date): Promise<void> {
     const order = await OrderModel.findById(orderId, {
       order_type: 1, payment_method: 1, payment_status: 1, delivered_at: 1, completion: 1,
     });

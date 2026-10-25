@@ -3,6 +3,7 @@ import { MODELS, COLLECTIONS } from '../../core/database/collections';
 import { GeoPointSchema, IGeoPoint } from '../../core/types/geo.types';
 import { GeoAddressSchema, IGeoAddress } from '../../core/types/geo-address.types';
 import { ACTOR_SOURCES, ActorSource } from '../../core/types/actor-source.types';
+import { EarningsPauseSchema, IEarningsPause } from '../earnings/models/earnings-pause.schema';
 
 // `handing_over` is the post-pickup reassignment state: an agent had picked the
 // parcel up but could not deliver it, so the shipment was pulled off them and is
@@ -454,6 +455,13 @@ export interface IShipment extends Document {
    */
   delivery_fee_snapshot?: number | null;
   /**
+   * The DELIVERY pause (owner decision, 2026-10-22): an administrator stopping this parcel's
+   * agency and rider money — and nothing else on the order. The order's own pause cannot do
+   * that for an agency whose terms free it (earnings/domain/courier-hold.ts). Same record and
+   * same arithmetic as the order's; written only by `EarningsPauseService`.
+   */
+  earnings_pause?: IEarningsPause | null;
+  /**
    * A per-shipment delivery fee the VENDOR approved (modules/delivery-fee-proposals),
    * replacing what the agency's `policies.pricing` formula would charge. Read by
    * `EarningsQuoteService.computeShipmentDeliveryFee` BEFORE the formula, so every consumer
@@ -682,6 +690,7 @@ const ShipmentSchema = new Schema<IShipment>({
     default: [],
   },
   delivery_fee_snapshot: { type: Number, default: null, min: 0 },
+  earnings_pause: { type: EarningsPauseSchema, default: null },
   delivery_fee_override: {
     type: new Schema<IShipmentDeliveryFeeOverride>(
       {

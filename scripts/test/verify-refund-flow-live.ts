@@ -104,6 +104,7 @@ registerRefundPorts({
   earnings: {
     onRequestOpened: async (target, id) => { earningsCalls.push({ kind: 'opened', args: { target, id } }); return true; },
     onRequestClosedWithoutRefund: async (target, id) => { earningsCalls.push({ kind: 'closed', args: { target, id } }); },
+    assessDeliveryFault: async () => [],
     onRefundCompleted: async (input) => {
       if (failNextRecovery) {
         failNextRecovery = false;
@@ -178,8 +179,11 @@ async function main(): Promise<void> {
     await check('created approved and claimed: status sending, one leg to the payer (E.164)', () =>
       a.status === 'sending' && a.transfer_legs.length === 1 && a.transfer_legs[0].phone === '+237677000001'
       && a.transfer_gateway === 'NOTCHPAY' && /^jm_rf_/.test(a.transfer_reference ?? ''));
-    await check('gross 6000, fee 2% = 120, net 5880 sent', () =>
-      a.gross_amount === 6000 && a.fee_amount === 120 && a.net_amount === 5880 && sent[sent.length - 1].amount === 5880);
+    // 2026-10-22 (owner F-1…F-4): mobile money pays BOTH fees — 2% pay-in on the gross (120), then
+    // 2% transfer on what is left (2% of 5,880 = 118). 6,000 − 238 = 5,762 sent.
+    await check('gross 6000, payment fee 120 + transfer fee 118 = 238, net 5762 sent', () =>
+      a.gross_amount === 6000 && a.fee_amount === 238 && a.net_amount === 5762 && sent[sent.length - 1].amount === 5762
+      && a.fees?.paid_by === 'customer' && a.fees.payin_amount === 120 && a.fees.payout_amount === 118);
     await check('the earnings pause was raised (onRequestOpened)', () =>
       earningsCalls.some((c) => c.kind === 'opened' && (c.args as any).id === a.id));
     await check('⛔ a second OPEN request on the same order is refused by the index', async () =>
@@ -194,7 +198,7 @@ async function main(): Promise<void> {
     await check('the callback completes it', () => done?.status === 'completed' && done.refund_transaction_ids.length === 1);
     await check('ledger row: refundAmount GROSS, fee, net, channel payout, refundRequestId', async () => {
       const row = await RefundTransactionModel.findOne({ refundRequestId: a._id }).lean();
-      return !!row && row.refundAmount === 6000 && row.feeAmount === 120 && row.netAmount === 5880 && row.channel === 'payout';
+      return !!row && row.refundAmount === 6000 && row.feeAmount === 238 && row.netAmount === 5762 && row.channel === 'payout';
     });
     await check('payment totals and the order status moved in the same commit', async () => {
       const p = await PaymentTransactionModel.findById(created.payments[0]).lean();

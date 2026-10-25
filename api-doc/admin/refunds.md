@@ -25,6 +25,40 @@ threshold). This service re-checks only what it can see:
 **Nothing is audited on this side** — `X-Actor-Id` is a header the token holder sets. wi-admin
 audits every write fail-closed, where the human is known.
 
+## Fees and delivery at fault (2026-10-22)
+
+Owner decisions F-1…F-7, record `PRODUCTION-READINESS/REFUND-FEES-AND-AGENCY-LIABILITY-PLAN.md`.
+
+**Two fees, one assumed rate each for every aggregator.** The PAYMENT fee (`payin_fee_percent`,
+default 2) is what the aggregator kept when the customer paid; Wi-Mall never had it, so a refund
+does not give it back. The TRANSFER fee (`refund_fee_percent`, default 2) is 2% of what is owed
+after it. Only the fee that happened applies:
+
+| Paid by | Payment fee | Transfer fee | 10,000 refunded → customer receives |
+|---|---|---|---|
+| mobile money · billing | 2% of the gross (200) | 2% of the rest (196) | **9,604** |
+| card (refunded on the card) | 200 | — | **9,800** |
+| cash on delivery | — | 200 | **9,800** |
+
+**The seller pays them** on a request the seller-cancel path opens (an order cancelled after
+payment, a paid booking cancelled from the status menu): the customer receives 100%, and both fees
+(the transfer fee on the whole amount) are charged to the seller beyond their share
+(`fees.vendorCharge`). Every other request: the customer pays them.
+
+`feeAmount` is **everything deducted from the customer** (0 when the seller pays), so
+`netAmount = grossAmount − feeAmount` still holds; `feeRate` stays the transfer rate. The parts are
+in `fees`. A request created before 2026-10-22 has `fees: null`: its whole fee was the transfer fee.
+
+**Delivery at fault.** `deliveryFaultShipmentIds` (create; administrators and Support only, order
+sources only) names parcels whose DELIVERY was at fault. Each is judged against its agency's own
+window — its damage-claim deadline counted from its parcel's delivery (at least 3 days when it
+pays returns), the problem dated by the earliest problem report of the order's own customer, else
+now. Inside it, that parcel's customer-paid delivery money becomes refundable whatever the vendor's
+return setting, and the agency and its rider fund it (their COD handling fee stays); on a free
+(vendor-paid) delivery their fee relieves the vendor of the courier cost instead. Outside it, or a
+free agency (deadline 0, returns not on it), nothing changes. The verdict per parcel is
+`deliveryFault[]` on the DTO and on the eligibility preview.
+
 ## The DTO
 
 Every write answers the standard envelope with `data` = the camelCase projection of one
@@ -37,7 +71,14 @@ Every write answers the standard envelope with `data` = the camelCase projection
   "reasonKind": "cancellation", "reason": "Customer cancelled before dispatch",
   "itemDefective": null, "overridePolicy": false,
   "attribution": { "goods": 5000, "delivery": 0 },
-  "grossAmount": 5000, "feeRate": 2, "feeAmount": 100, "netAmount": 4900, "currency": "XAF",
+  "grossAmount": 5000, "feeRate": 2, "feeAmount": 198, "netAmount": 4802, "currency": "XAF",
+  "fees": {                                      // 2026-10-22; null on older requests (transfer fee only, customer paid)
+    "paidBy": "customer",                        // customer | vendor (the seller cancelled a paid order: the customer gets 100%)
+    "paymentFeePercent": 2, "paymentFee": 100,   // kept by the aggregator when the customer paid; 0 for COD
+    "transferFeePercent": 2, "transferFee": 98,  // 2% of what is left (4,900); 0 for a card refund
+    "vendorCharge": 0                            // both fees, when the seller pays them
+  },
+  "deliveryFault": [],                           // parcels named as delivered at fault — see "Fees and delivery at fault"
   "paymentChannel": "mobile_money",              // card | mobile_money | cod | billing
   "channel": "payout",                           // card_refund | payout | external | null (not decided yet)
   "destination": { "phone": "+237677000512", "name": "Jean", "source": "payer" },   // or "typed", or null
@@ -49,7 +90,7 @@ Every write answers the standard envelope with `data` = the camelCase projection
   "rejectedBy": null, "rejectionReason": null,
   "transferReference": "jm_rf_…", "transferGateway": "NOTCHPAY", "transferGatewayRef": null,
   "transferFailureReason": null, "transferNote": null,
-  "transferLegs": [{ "phone": "+237677000512", "amount": 4900, "gross": 5000, "reference": "jm_rf_…", "gatewayRef": null, "status": "sending", "failureReason": null }],
+  "transferLegs": [{ "phone": "+237677000512", "amount": 4802, "gross": 5000, "reference": "jm_rf_…", "gatewayRef": null, "status": "sending", "failureReason": null }],
   "externalSettlement": null,                    // or { method, reference, proofFileId, settledBy, settledAt, grossAmount, netAmount } — see settle-external
   "ticketId": null, "refundTransactionIds": [], "completedAt": null,
   "earningsImpact": "clawback",                  // clawback (earnings paused, then recovered) | none (unallocated delivery money: no pause, no clawback)
@@ -85,6 +126,7 @@ Query (strict — an unknown parameter is a 400):
 | `reasonKind` | no | selects which row `maxRefundable` reports. Default: `return` if the order was delivered, else `cancellation` |
 | `itemDefective` | no | `true` / `false` — only matters under `customer_reimbursed_if_defect` |
 | `amount` | no | integer; decides whether `above_policy_maximum` is in `overrides` (default: `maxRefundable`) |
+| `deliveryFaultShipmentIds` | no | comma-separated parcel ids said to be delivered at fault (2026-10-22). Judged per parcel in `deliveryFault[]`; inside the window, their delivery money is added to what is refundable |
 
 ```jsonc
 {
@@ -99,10 +141,11 @@ Query (strict — an unknown parameter is a 400):
     "goods": 5000, "delivery": 1000,     // of maxRefundable
     "goodsAmount": 5000, "deliveryAmountPaid": 1000, "delivered": false,
     "remaining": 6000,                   // money still refundable, before the attribution rule
-    "feeAmount": 120, "netAmount": 5880, // of maxRefundable
+    "feeAmount": 238, "netAmount": 5762, // of maxRefundable: payment fee 120 + transfer fee 118
+    "paymentFee": 120, "transferFee": 118,
     "byReasonKind": {
-      "cancellation":       { "maxRefundable": 6000, "goods": 5000, "delivery": 1000, "feeAmount": 120, "netAmount": 5880 },
-      "return":             { "maxRefundable": 5000, "goods": 5000, "delivery": 0,    "feeAmount": 100, "netAmount": 4900 },
+      "cancellation":       { "maxRefundable": 6000, "goods": 5000, "delivery": 1000, "feeAmount": 238, "netAmount": 5762, "paymentFee": 120, "transferFee": 118 },
+      "return":             { "maxRefundable": 5000, "goods": 5000, "delivery": 0,    "feeAmount": 198, "netAmount": 4802, "paymentFee": 100, "transferFee": 98 },
       "goodwill":           { … },
       "dispute_settlement": { … }
     }
@@ -110,7 +153,14 @@ Query (strict — an unknown parameter is a 400):
   "returnShippingPayer": "customer",     // vendor | customer | customer_reimbursed_if_defect | null
   "overrides": [],                       // vendor return-policy gates a refund would bypass (orders only)
   "codCoverage": [],                     // COD orders: one row per cash collection (below)
-  "feePercent": 2                        // 0 for a card payment (R-3)
+  "feePercent": 2,                       // the TRANSFER fee; 0 for a card payment (R-3)
+  "paymentFeePercent": 2,                // 2026-10-22: the PAYMENT fee; 0 for cash on delivery
+  "deliveryFault": [                     // one row per parcel in deliveryFaultShipmentIds
+    { "shipmentId": "…", "agencyId": "…", "trackingNumber": "TRK-…",
+      "deliveredAt": "…", "raisedAt": "…", "windowDays": 2, "insideWindow": true,
+      "customerDeliveryAmount": 1000,    // what the agency and rider fund; 0 outside the window
+      "claimDeadlineDays": 2, "returnsPayer": "vendor" }
+  ]
 }
 ```
 
@@ -143,7 +193,8 @@ payment) · `409 REFUND_ORDER_NOT_PAID` (COD with no cash collected yet; an unpa
   "destinationProofFileId": "6721…",     // required with `destination`: an id from POST /proofs
   "requestedByRole": "admin",            // required: admin | support
   "approveNow": false,                   // optional
-  "ticketId": "6722…"                    // optional: the support ticket it was raised from
+  "ticketId": "6722…",                   // optional: the support ticket it was raised from
+  "deliveryFaultShipmentIds": ["6723…"]  // optional (2026-10-22): parcels delivered at FAULT — orders only
 }
 ```
 
@@ -166,7 +217,8 @@ Strict at every level: an unknown key is a `400`; optional keys are **omitted**,
 | 409 | `REFUND_ORDER_NOT_PAID` · `REFUND_ALREADY_FULLY_REFUNDED` | nothing to refund |
 | 409 | `REFUND_ALREADY_OPEN` | one open request per source (`awaiting_approval … failed`) — refused before anything is paused |
 | 422 | `REFUND_NOT_ELIGIBLE` | `details.reason: 'billing_full_refund_only'`: a plan purchase or credit top-up is refunded in FULL only (`details.required`). Completing it takes the plan back (downgrade to free) or debits the credits back |
-| 422 | `REFUND_POLICY_OVERRIDE_REQUIRED` | order beyond the vendor's return policy without `overridePolicy: true`; `details.overrides` |
+| 422 | `REFUND_POLICY_OVERRIDE_REQUIRED` | order beyond the vendor's return policy without `overridePolicy: true`; `details.overrides`. The couriers' at-fault delivery money is not counted against the vendor's policy |
+| 422 | `REFUND_DELIVERY_FAULT_INVALID` | a named parcel is not this order's, or a fault on a booking / billing / unallocated refund (`details.reason: 'not_allowed'`) |
 | 422 | `REFUND_DESTINATION_PROOF_REQUIRED` | typed number without a proof, or a proof id that is not a file in the `refund-proofs` tree (`details.reason: 'proof_not_found'`) |
 | 422 | `REFUND_NO_DESTINATION` | typed number unreadable (`details.reason: 'typed_phone_invalid'`), or `approveNow` by an admin with nowhere to send |
 | 500 | `REFUND_PORT_NOT_REGISTERED` | boot wiring missing — nothing was written |

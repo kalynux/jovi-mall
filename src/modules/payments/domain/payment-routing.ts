@@ -59,6 +59,14 @@ export interface PaymentSettings {
 export const REFUND_FEE_PERCENT_DEFAULT = 2;
 export const REFUND_FEE_PERCENT_MAX = 20;
 
+/**
+ * The PAY-IN fee every aggregator is ASSUMED to keep when a customer pays (owner F-2,
+ * 2026-10-22): a refund does not give it back (`payments/domain/refund-fees.ts`). One rate for
+ * all aggregators, whatever each really charges, so switching aggregators never changes a refund.
+ * Same bounds as the refund (payout) fee, validated by `isValidRefundFeePercent`.
+ */
+export const PAYIN_FEE_PERCENT_DEFAULT = 2;
+
 /** Whether a value may be stored as `refund_fee_percent`: a finite number in [0, 20]. */
 export function isValidRefundFeePercent(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= REFUND_FEE_PERCENT_MAX;
@@ -66,8 +74,10 @@ export function isValidRefundFeePercent(value: unknown): value is number {
 
 /** The whole stored document, minus `_id`. */
 export interface PaymentSettingsRecord extends PaymentSettings {
-  /** Percent, 0–20, default 2. See `REFUND_FEE_PERCENT_DEFAULT`. */
+  /** Percent, 0–20, default 2. See `REFUND_FEE_PERCENT_DEFAULT`. The PAYOUT fee on a refund. */
   refund_fee_percent: number;
+  /** Percent, 0–20, default 2. See `PAYIN_FEE_PERCENT_DEFAULT`. */
+  payin_fee_percent: number;
   /** Compare-and-set counter. 0 means "no document yet". */
   version: number;
   updated_at: Date | null;
@@ -91,6 +101,7 @@ export const DEFAULT_PAYMENT_SETTINGS: Readonly<PaymentSettingsRecord> = Object.
     CARD: Object.freeze({ enabled: false }),
   }),
   refund_fee_percent: REFUND_FEE_PERCENT_DEFAULT,
+  payin_fee_percent: PAYIN_FEE_PERCENT_DEFAULT,
   version: 0,
   updated_at: null,
   updated_by_id: null,

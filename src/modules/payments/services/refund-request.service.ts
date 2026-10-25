@@ -36,7 +36,8 @@ import {
   writeRefundTransactionInSession,
 } from './refund-ledger';
 import { mintMerchantRef } from '../domain/merchant-reference';
-import { computeRefundFee, RefundPaymentChannel } from '../domain/refund-fee';
+import { RefundPaymentChannel } from '../domain/refund-fee';
+import { computeRefundFees, RefundFeesPaidBy } from '../domain/refund-fees';
 import { attributeRefund, maxAttributable, RefundReasonKind, ReturnShippingPayer } from '../domain/refund-attribution';
 import { maskRefundPhone, resolveRefundDestination } from '../domain/refund-destination';
 import {
@@ -124,6 +125,17 @@ export interface CreateRefundRequestInput {
   ticketId?: string | null;
   /** ORDER sources only: which payment returns money first (see `refund-legs.ts`). */
   prefer?: 'primary_first' | 'topup_first';
+  /**
+   * Who pays the payment and transfer fees (owner F-5, 2026-10-22). Default `customer`. The
+   * seller-cancel path (`raiseRefundOwed`) passes `vendor`: the customer then gets 100%.
+   */
+  feesPaidBy?: RefundFeesPaidBy;
+  /**
+   * Parcels an administrator or Support says were delivered at FAULT (owner F-6/F-7). Each is
+   * judged against its agency's window; those inside it fund their delivery money from the agency
+   * and rider. Order sources only; never from a vendor.
+   */
+  deliveryFaultShipmentIds?: string[];
   /**
    * `none` for money that was never allocated (a delivery-fee decrease, an unspent customer-paid
    * return fee — § 6.2): no earnings pause, no clawback, and the amount is bounded by the money
@@ -272,6 +284,21 @@ export class RefundRequestService {
       });
     }
     const facts = await this.loadSource(input.source.kind, input.source.id);
+    const now = new Date();
+
+    // Delivery at fault (owner F-6/F-7, 2026-10-22): judged per parcel against its agency's window.
+    const faultIds = [...new Set((input.deliveryFaultShipmentIds ?? []).filter(Boolean))];
+    if (faultIds.length > 0) {
+      const allowed = input.source.kind === 'order' && input.earningsImpact !== 'none'
+        && (input.requestedBy.role === 'admin' || input.requestedBy.role === 'support');
+      if (!allowed) {
+        throw createAppError(ERROR_CODES.REFUND_DELIVERY_FAULT_INVALID, 422,
+          'Only an administrator or Support can say a delivery was at fault, and only on an order', { reason: 'not_allowed' });
+      }
+    }
+    const deliveryFault = faultIds.length > 0
+      ? await getRefundEarningsPort().assessDeliveryFault(input.source.id, faultIds, now)
+      : [];
 
     // Amount: within the attribution rule AND the money still refundable.
     const attributionInput = {
@@ -281,6 +308,7 @@ export class RefundRequestService {
       goodsAmount: facts.goodsAmount,
       deliveryAmountPaid: facts.deliveryAmountPaid,
       delivered: facts.delivered,
+      faultDeliveryAmount: deliveryFault.reduce((sum, f) => sum + f.customerDeliveryAmount, 0),
     };
     // Unallocated delivery money (`earningsImpact: 'none'`) is bounded by the money alone: it is
     // not goods, and nobody's earnings carry it, so the goods-first attribution does not apply.
@@ -328,9 +356,16 @@ export class RefundRequestService {
       paymentShares = planned;
     }
 
-    // Fee (R-3, D-1..D-3), from the PAYMENT channel.
+    // Fees (owner F-1…F-5, 2026-10-22): the pay-in fee the aggregator kept and the transfer fee,
+    // each only where it happened, paid by the customer unless the seller caused the refund.
     const settings = getPaymentSettingsSync();
-    const fee = computeRefundFee(gross, settings.refund_fee_percent, facts.paymentChannel);
+    const fees = computeRefundFees({
+      gross,
+      paymentChannel: facts.paymentChannel,
+      payinRatePercent: settings.payin_fee_percent,
+      payoutRatePercent: settings.refund_fee_percent,
+      paidBy: input.feesPaidBy ?? 'customer',
+    });
 
     // Destination (R-7, D-6).
     const usedLegs = paymentShares.map((s) => facts.legs.find((l) => l.id === s.paymentTransactionId)!);
@@ -384,7 +419,6 @@ export class RefundRequestService {
     // THIS call raised it, which is the only pause a failed create may lift (review finding 7).
     const raisedPause = earnings && target ? (await earnings.onRequestOpened(target, id.toString())) === true : false;
 
-    const now = new Date();
     let row: IRefundRequest;
     try {
       row = await this.repo.create({
@@ -400,9 +434,31 @@ export class RefundRequestService {
         override_policy: input.overridePolicy === true,
         attribution,
         gross_amount: gross,
-        fee_rate: fee.feeRate,
-        fee_amount: fee.feeAmount,
-        net_amount: fee.netAmount,
+        // `fee_amount` is everything deducted from the customer, so `net = gross − fee` holds and
+        // the transfer plan spreads it unchanged; `fee_rate` stays the payout rate for older readers.
+        fee_rate: fees.payoutRate,
+        fee_amount: fees.customerFee,
+        net_amount: fees.net,
+        fees: {
+          paid_by: fees.paidBy,
+          payin_rate: fees.payinRate,
+          payin_amount: fees.payinAmount,
+          payout_rate: fees.payoutRate,
+          payout_amount: fees.payoutAmount,
+          vendor_charge: fees.vendorCharge,
+        },
+        delivery_fault: deliveryFault.map((d) => ({
+          shipment_id: new Types.ObjectId(d.shipmentId),
+          agency_id: d.agencyId ? new Types.ObjectId(d.agencyId) : null,
+          tracking_number: d.trackingNumber,
+          delivered_at: d.deliveredAt,
+          raised_at: d.raisedAt,
+          window_days: d.windowDays,
+          inside_window: d.insideWindow,
+          customer_delivery_amount: d.customerDeliveryAmount,
+          claim_deadline_days: d.claimDeadlineDays,
+          returns_payer: d.returnsPayer,
+        })),
         currency: facts.currency,
         payment_channel: facts.paymentChannel,
         channel: null,
@@ -1182,6 +1238,20 @@ export class RefundRequestService {
       target,
       attribution: { goods: row.attribution.goods, delivery: row.attribution.delivery },
       codCollectionIds: row.cod_collection_ids.map((c) => c.toString()),
+      vendorCharge: row.fees?.vendor_charge ?? 0,
+      deliveryFault: (row.delivery_fault ?? []).map((d) => ({
+        shipmentId: d.shipment_id.toString(),
+        agencyId: d.agency_id ? d.agency_id.toString() : null,
+        trackingNumber: d.tracking_number ?? null,
+        deliveredAt: d.delivered_at ?? null,
+        raisedAt: d.raised_at,
+        windowDays: d.window_days,
+        insideWindow: d.inside_window,
+        customerDeliveryAmount: d.customer_delivery_amount,
+        claimDeadlineDays: d.claim_deadline_days ?? null,
+        returnsPayer: d.returns_payer ?? null,
+      })),
+      orderNumber: row.order_number,
     });
     await this.repo.stampCompletedMarker(row.id, 'earnings_settled_at', new Date());
   }
@@ -1296,6 +1366,15 @@ export class RefundRequestService {
         grossAmount: row.gross_amount,
         feeAmount: row.fee_amount,
         feeRate: row.fee_rate,
+        // 2026-10-22: the two fees apart, so the customer's message names each one. Absent on an
+        // older request (its whole fee was the transfer fee). 0 when the seller pays them.
+        ...(row.fees
+          ? {
+              paymentFee: row.fees.paid_by === 'customer' ? row.fees.payin_amount : 0,
+              transferFee: row.fees.paid_by === 'customer' ? row.fees.payout_amount : 0,
+              feesPaidBy: row.fees.paid_by,
+            }
+          : {}),
         netAmount: row.net_amount,
         currency: row.currency,
         destinationMasked: maskRefundPhone(row.destination?.phone ?? null),

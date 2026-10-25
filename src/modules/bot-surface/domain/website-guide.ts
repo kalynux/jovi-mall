@@ -777,7 +777,7 @@ export const SHOP_GUIDE: readonly GuideTopic[] = Object.freeze([
                     'If declined: "Contact support". "How refunds work" opens the policy.',
                 ],
                 notes: [
-                    'Mobile-money refunds go to the number that paid, minus a transfer fee shown on the line; card refunds go back to the card.',
+                    'Mobile-money refunds go to the number that paid, minus the 2% payment fee kept when you paid and a 2% transfer fee, each shown on its own line; card refunds go back to the card minus the payment fee. If the seller cancelled, you get everything back.',
                     'Wi-Mall can only refund while it still holds the seller’s payment: the problem must be reported within 3 days of delivery (the order page shows the exact date). After that the seller has been paid and it is between the customer and the seller. Never promise a refund.',
                 ],
             },
@@ -790,7 +790,7 @@ export const SHOP_GUIDE: readonly GuideTopic[] = Object.freeze([
                     'S’il est refusé : « Contacter l’assistance ». « Comment fonctionnent les remboursements » ouvre la politique.',
                 ],
                 notes: [
-                    'Un remboursement mobile money va au numéro qui a payé, moins des frais de transfert affichés ; une carte est remboursée sur la carte.',
+                    'Un remboursement mobile money va au numéro qui a payé, moins les 2 % de frais de paiement retenus lors du paiement et 2 % de frais de transfert, chacun affiché sur sa ligne ; une carte est remboursée sur la carte moins les frais de paiement. Si le vendeur a annulé, vous récupérez tout.',
                     'Wi-Mall ne peut rembourser que tant qu’il conserve le paiement du vendeur : le problème doit être signalé dans les 3 jours suivant la livraison (la page de la commande affiche la date exacte). Ensuite le vendeur a été payé et cela se règle entre le client et le vendeur. Ne promettez jamais un remboursement.',
                 ],
             },

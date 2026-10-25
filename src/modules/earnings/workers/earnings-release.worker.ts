@@ -1,4 +1,5 @@
 import cron from 'node-cron';
+import { Types } from 'mongoose';
 import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
 import { withWorkerLock, SWEEP_SKIPPED } from '../../../core/jobs/worker-lock';
 import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
@@ -23,7 +24,8 @@ import { CashCollectionModel } from '../../cod/models/cash-collection.model';
 import { paysDeliveryFeeInCash } from '../../orders/domain/delivery-payer';
 import { COD_CONFIG, daysFromNow } from '../../cod/config/cod.config';
 import { codDiscrepancyService } from '../../cod/services/cod-discrepancy.service';
-import { earningsPauseService } from '../services/earnings-pause.service';
+import { earningsPauseService, PauseCache } from '../services/earnings-pause.service';
+import { earningsCompletionService } from '../services/earnings-completion.service';
 import { SYSTEM_ACTOR_ID } from '../../../core/types/system-actor';
 import { ActorRole } from '../../tickets/types/ticket.types';
 
@@ -33,6 +35,10 @@ import { ActorRole } from '../../tickets/types/ticket.types';
  *  1. Auto-confirm: orders that reached `delivered`/`fulfilled` but were never
  *     confirmed by the customer within `AUTO_CONFIRM_DAYS` are auto-completed
  *     (which starts their escrow hold window).
+ *  1b. Courier clocks: agency and rider rows on their own terms (courier-hold.ts, owner
+ *     decision 2026-10-22) whose clock has not started are synced with their parcel — the
+ *     backstop for a missed event, so a free agency's share proven yesterday is released
+ *     by stage 2 of this same sweep.
  *  2. Release: held allocations whose `hold_release_at` has elapsed move from
  *     `pending_balance` to `available_balance` (withdrawable). COD-sourced
  *     allocations additionally require `cash_settled_at` (repo-level filter).
@@ -139,6 +145,7 @@ export class EarningsReleaseWorker implements ObservableWorker {
         console.log('[EarningsReleaseWorker] Starting earnings sweep');
         await this.autoConfirmStaleShipments(now);
         await this.autoConfirmStaleOrders(now);
+        await this.startCourierHolds(now);
         await this.releaseMaturedHolds(now);
         await this.recoverMissedCodSplits(now);
         await this.recoverMissedDeliverySplits(now);
@@ -213,10 +220,42 @@ export class EarningsReleaseWorker implements ObservableWorker {
     }
   }
 
+  /**
+   * Stage 1b — start courier clocks a missed event left unstarted (courier-hold.ts). Every
+   * parcel transition already syncs them through `syncOrderHold`; this catches the one that
+   * failed. Walks the whole worklist by `_id`, a page at a time, so rows that legitimately wait
+   * (a free prepaid share waiting for the customer's confirmation) never crowd out the rest;
+   * the page cap bounds a pathological night. Each parcel is synced once per sweep.
+   */
+  private async startCourierHolds(now: Date): Promise<void> {
+    const MAX_PAGES = 25;
+    const seen = new Set<string>();
+    let after: Types.ObjectId | null = null;
+    try {
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const rows = await this.allocationRepo.findUnstartedCourierRows(after, EARNINGS_CONFIG.BATCH_SIZE);
+        if (rows.length === 0) break;
+        after = rows[rows.length - 1]._id;
+        for (const { shipmentId } of rows) {
+          if (seen.has(shipmentId)) continue;
+          seen.add(shipmentId);
+          try {
+            await earningsCompletionService.syncShipmentCourierHold(shipmentId, now);
+          } catch (error) {
+            console.error(`[EarningsReleaseWorker] Courier hold sync failed for shipment ${shipmentId}:`, error);
+          }
+        }
+        if (rows.length < EARNINGS_CONFIG.BATCH_SIZE) break;
+      }
+    } catch (error) {
+      console.error('[EarningsReleaseWorker] Courier hold stage failed:', error);
+    }
+  }
+
   /** Stage 2 — release matured held allocations into available balances. */
   private async releaseMaturedHolds(now: Date): Promise<void> {
     const matured = await this.allocationRepo.findMaturedHeld(now, EARNINGS_CONFIG.BATCH_SIZE);
-    const pauseCache = new Map<string, Date | null>();
+    const pauseCache: PauseCache = new Map();
 
     for (const allocation of matured) {
       try {
@@ -359,6 +398,8 @@ export class EarningsReleaseWorker implements ObservableWorker {
           continue;
         }
         await earningsSplitService.splitCodCollection(order, collection);
+        // A recovered split writes courier rows unstarted (courier-hold.ts): start them now.
+        await earningsCompletionService.syncShipmentCourierHold(collection.shipment_id.toString(), now);
         console.log(
           `[EarningsReleaseWorker] Recovered missing COD split for collection ${collection._id.toString()}`
         );
@@ -416,6 +457,7 @@ export class EarningsReleaseWorker implements ObservableWorker {
         // both mean the run succeeded; only `returned` earns the rto rate.
         const outcome = shipment.status === 'returned' ? 'returned' : 'delivered';
         await earningsSplitService.splitShipmentDelivery(order, shipment, outcome);
+        await earningsCompletionService.syncShipmentCourierHold(shipmentId, now);
         console.log(
           `[EarningsReleaseWorker] Recovered missing delivery split for shipment ${shipmentId}`
         );

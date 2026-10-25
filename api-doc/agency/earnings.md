@@ -56,12 +56,22 @@ agency's share of that order is computed from its own pricing policy (`policies.
 ### When it lands, and why not sooner
 
 The fee is **earned at delivery, not at payment**. When the shipment reaches `agent_delivered` the
-fee is divided and held (`pending`); it moves to **available** (withdrawable) **3 days after the
-last parcel of the order is delivered** (`EARNINGS_HOLD_DAYS`; until 2026-10-05 it was 7 days after
-the order's completion). Paused earnings (a seller cancelled a paid order, a card dispute, a problem the customer
+fee is divided and held (`pending`). **Since 2026-10-22 how long it stays held depends on your own
+policy terms** ([FRONTEND-CHANGELOG-earnings-release-by-terms.md](./FRONTEND-CHANGELOG-earnings-release-by-terms.md)):
+
+| Your terms | Held after **your parcel** is delivered |
+|---|---|
+| Returns paid by the agency (`policies.returns.payer = agency`) | 3 days |
+| Otherwise: damage claim deadline N days (`policies.damage.claim_deadline_days`) | N days, at most 3 (4 → 3, 2 → 2) |
+| Neither (returns not paid by you, claim deadline 0) | released at the **next nightly run** after the delivery is **confirmed**: by the customer, by the COD code, or automatically after 3 days |
+
+The terms are read when the delivery is recorded, so editing them later does not move money already
+counted. Your agent's share on the delivery follows your terms. Until 2026-10-22 every agency waited
+3 days after the **last** parcel of the whole order; before 2026-10-05 it was 7 days after the
+order's completion. Paused earnings (a seller cancelled a paid order, a card dispute, a problem the customer
 reported before the money was released — 2026-10-10, see
 [FRONTEND-CHANGELOG-wi-mall-protection.md](./FRONTEND-CHANGELOG-wi-mall-protection.md) — or our
-team) are not released until resumed, and the paused time does not count.
+team, which can pause one delivery's payment) are not released until resumed, and the paused time does not count.
 
 It cannot be credited at payment time, because the fee is shared: the agent who makes the delivery
 takes their contracted cut of it (`fee_split` on their contract with this agency — see
@@ -317,3 +327,66 @@ with `409 EARNINGS_PAYOUT_ALREADY_PENDING` — the message names the actual stat
 "Request payout" control on all three, not on `pending` alone.
 
 | `resolvedAt` | `string \| null` | When an admin marked it paid/rejected; `null` while `pending`. |
+
+## Why money was taken back — `GET /api/agency/earnings/adjustments` (2026-10-22)
+
+Every movement that took money from you, paid off a debt, or forgave one, newest first, **each with
+the reason in plain words**. Query: `page`, `limit` (≤ 100). Paginated envelope.
+
+```jsonc
+{
+  "id": "…",
+  "kind": "refund_clawback",        // refund_clawback (taken back) · clawback_recovery (new earnings paid a debt) · write_off (debt forgiven)
+  "amount": 1500, "currency": "XAF",
+  "takenFrom": { "pending": 1500, "reserve": 0, "available": 0, "debt": 0 },   // held money, COD reserve, available, or now owed
+  "feeAmount": 0,                   // the part that is fees (seller-cancel fees, a lost dispute's payment fee)
+  "reasonCode": "refund_delivery_fault",
+  "reasonParams": { "orderNumber": "ORD-…", "trackingNumber": "TRK-…", "windowDays": 2, "raisedAt": "…", … },
+  "explanation": "The customer was refunded on order ORD-…, parcel TRK-…, and the delivery was found at fault. …",
+  "refundRequestId": "…", "agencyClaimId": null,
+  "sourceType": "shipment", "sourceId": "…",
+  "createdAt": "…"
+}
+```
+
+Show `explanation`; switch on `reasonCode` (with `reasonParams`) to render it in another language:
+
+| `reasonCode` | Means |
+|---|---|
+| `refund_share` | A customer was refunded; this share of the sale went back |
+| `refund_beyond_share` | Charged beyond the share: delivery money under the return-shipping setting, a free delivery's courier cost, or the **payment and transfer fees of an order the seller cancelled after payment** |
+| `refund_delivery_fault` | The delivery was found at fault, inside the agency's own window: its fee for that parcel went back |
+| `dispute_share` · `dispute_payin_fee` | The customer won a card dispute: the share went back, and the 2% payment fee the provider kept |
+| `damage_claim` | A damage claim was charged to the agency for a parcel |
+| `null` | A row written before 2026-10-22 — `explanation` is a plain sentence from its `kind` |
+
+### When a refund takes your delivery fee back (2026-10-22)
+
+Only when **both** are true:
+
+1. an administrator found the **delivery at fault** (damaged or lost in delivery) — a wrong item or
+   a change of mind never touches you; and
+2. the problem was raised **inside your own window**: your damage-claim deadline counted from your
+   parcel's delivery (at least 3 days when you pay returns). The problem's date is the customer's
+   first problem report about the order or the parcel, else the refund.
+
+Then your fee for that parcel and your agent's go back (your **COD handling fee stays**). With a
+claim deadline of 0 and returns not on you, a refund never takes anything back from you.
+
+### Damage claims — `GET /api/agency/earnings/claims`
+
+Inside the same window an administrator can charge you a **damage claim** for a parcel: at most your
+own **max refund per item** × the damaged items, plus your **investigation fee**. It comes from your
+money held for that parcel, then your available balance, then as a debt your next earnings pay
+first; **your agent is never charged**. One claim per parcel. Each claim:
+
+```jsonc
+{
+  "id": "…", "kind": "damage", "shipmentId": "…", "orderId": "…", "orderNumber": "ORD-…", "trackingNumber": "TRK-…",
+  "itemCount": 1, "maxPerItem": 5000, "cap": 5000, "amount": 5000, "investigationFee": 1000, "currency": "XAF",
+  "deliveredAt": "…", "raisedAt": "…", "windowDays": 2,
+  "reasonCode": "damage_claim", "reasonParams": { … },
+  "explanation": "Damage claim on order ORD-…, parcel TRK-…: 1 item(s) damaged in delivery, reported on …, within your 2-day damage-claim window. Your terms allow up to 5,000 XAF per item, so 5,000 XAF was charged, plus your investigation fee of 1,000 XAF.",
+  "createdAt": "…"
+}
+```

@@ -1,6 +1,7 @@
 import type { IRefundRequest } from '../models/refund-request.model';
 import type { RefundRequestStatus } from '../domain/refund-status';
 import { maskRefundPhone } from '../domain/refund-destination';
+import { customerRefundLines, CustomerRefundLine } from '../domain/refund-fees';
 
 /**
  * The refund block a CUSTOMER sees on an order or a booking (REFUND-FLOW-PLAN § 8, R9).
@@ -75,10 +76,25 @@ export interface CustomerRefundBlock {
   status: CustomerRefundStatus;
   /** What the refund is worth — what the order or booking loses. */
   grossAmount: number;
-  /** The transfer fee kept (R-3: 2% by default; 0 for a card refund). */
+  /**
+   * Everything deducted from what the customer receives: the payment provider fee kept when they
+   * paid plus the transfer fee (2026-10-22). 0 when the seller pays the fees.
+   */
   feeAmount: number;
-  /** The fee rate in percent (e.g. 2), so a screen can say "minus a 2% transfer fee". 0 for a card. */
+  /** The TRANSFER fee rate in percent (e.g. 2). 0 for a card refund (no transfer). */
   feePercent: number;
+  /** The payment provider fee kept when the customer paid (2026-10-22). 0 for cash on delivery. */
+  paymentFee: number;
+  paymentFeePercent: number;
+  /** The transfer fee to send the money back. 0 for a card refund. */
+  transferFee: number;
+  /** `seller` when the seller cancelled after payment: the customer receives everything they paid. */
+  feesPaidBy: 'customer' | 'seller';
+  /**
+   * The refund line by line, ready to show — "Refund 10,000 · Payment provider fee −200 · Transfer
+   * fee −196 · You receive 9,604". Switch on `code` to render another language.
+   */
+  lines: CustomerRefundLine[];
   /** What the customer receives: `grossAmount − feeAmount`. */
   netAmount: number;
   currency: string;
@@ -99,16 +115,32 @@ export interface CustomerRefundBlock {
 export type CustomerRefundSourceRow = Pick<
   IRefundRequest,
   'status' | 'gross_amount' | 'fee_amount' | 'fee_rate' | 'net_amount' | 'currency' | 'channel' | 'destination' | 'completed_at'
->;
+> & Partial<Pick<IRefundRequest, 'fees'>>;
 
 export function toCustomerRefundBlock(row: CustomerRefundSourceRow | null | undefined): CustomerRefundBlock | null {
   if (!row) return null;
   const status = toCustomerRefundStatus(row.status);
+  // A request created before 2026-10-22 has no breakdown: its whole fee was the transfer fee.
+  const fees = row.fees
+    ? {
+        paidBy: row.fees.paid_by,
+        payinRate: row.fees.payin_rate,
+        payinAmount: row.fees.payin_amount,
+        payoutRate: row.fees.payout_rate,
+        payoutAmount: row.fees.payout_amount,
+        net: row.net_amount,
+      }
+    : { paidBy: 'customer' as const, payinRate: 0, payinAmount: 0, payoutRate: row.fee_rate ?? 0, payoutAmount: row.fee_amount, net: row.net_amount };
   return {
     status,
     grossAmount: row.gross_amount,
     feeAmount: row.fee_amount,
-    feePercent: row.fee_rate ?? 0,
+    feePercent: fees.payoutRate,
+    paymentFee: fees.payinAmount,
+    paymentFeePercent: fees.payinRate,
+    transferFee: fees.payoutAmount,
+    feesPaidBy: fees.paidBy === 'vendor' ? 'seller' : 'customer',
+    lines: customerRefundLines(fees, row.gross_amount),
     netAmount: row.net_amount,
     currency: row.currency,
     channel: row.channel ?? null,

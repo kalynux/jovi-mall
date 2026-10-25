@@ -143,6 +143,9 @@ interface RefundedPayload {
     grossAmount?: number;
     feeAmount?: number;
     feeRate?: number;
+    /** 2026-10-22: the fee the payment provider kept when the customer paid, and the transfer fee. */
+    paymentFee?: number;
+    transferFee?: number;
     netAmount?: number;
     currency: string;
     /** `card_refund` · `payout` · `external`; absent on a legacy (orchestrator) event. */
@@ -164,6 +167,8 @@ export interface RefundStatusChangedPayload {
     grossAmount?: number;
     feeAmount?: number;
     feeRate?: number;
+    paymentFee?: number;
+    transferFee?: number;
     netAmount?: number;
     currency?: string;
     destinationMasked?: string | null;
@@ -1124,7 +1129,16 @@ export class CustomerNotificationEventHandler {
 
     /** The money half of every refund message: net, destination and the R-3 fee line. */
     private refundMoneyContext(
-        p: { amount?: number; netAmount?: number; grossAmount?: number; feeAmount?: number; feeRate?: number; destinationMasked?: string | null },
+        p: {
+            amount?: number;
+            netAmount?: number;
+            grossAmount?: number;
+            feeAmount?: number;
+            feeRate?: number;
+            paymentFee?: number;
+            transferFee?: number;
+            destinationMasked?: string | null;
+        },
         currency: string,
         lang: Language
     ): RenderContext {
@@ -1135,7 +1149,15 @@ export class CustomerNotificationEventHandler {
             netFormatted: this.formatAmount(net),
             destination: refundDestinationLabel(p.destinationMasked ?? null, lang),
             amountLine: refundAmountLine(
-                { netAmount: net, grossAmount: gross, feeAmount: fee, feePercent: p.feeRate ?? feePercentOf(gross, fee), currency },
+                {
+                    netAmount: net,
+                    grossAmount: gross,
+                    feeAmount: fee,
+                    feePercent: p.feeRate ?? feePercentOf(gross, fee),
+                    currency,
+                    paymentFee: p.paymentFee,
+                    transferFee: p.transferFee,
+                },
                 lang
             )
         };

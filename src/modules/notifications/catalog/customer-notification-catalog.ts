@@ -624,6 +624,28 @@ const REFUND_AMOUNT_WITH_FEE_LINE: Record<Language, string> = {
     ar: 'ستستلم {{net}} {{currency}} ({{gross}} مطروحًا منها رسوم تحويل بنسبة {{percent}}٪).'
 };
 
+/**
+ * 2026-10-22 (owner F-1…F-4): the payment provider kept a fee when the customer PAID, and a
+ * transfer fee sends it back. Both are named, as amounts, so the customer can see why they
+ * receive less — "10,000 minus 200 kept by the payment provider and a 196 transfer fee".
+ */
+const REFUND_AMOUNT_WITH_BOTH_FEES_LINE: Record<Language, string> = {
+    en: 'You receive {{net}} {{currency}} ({{gross}} minus {{paymentFee}} kept by the payment provider when you paid and a {{transferFee}} transfer fee).',
+    fr: 'Vous recevez {{net}} {{currency}} ({{gross}} moins {{paymentFee}} retenus par le prestataire de paiement lors de votre paiement et {{transferFee}} de frais de transfert).',
+    pt: 'Recebe {{net}} {{currency}} ({{gross}} menos {{paymentFee}} retidos pelo prestador de pagamento quando pagou e {{transferFee}} de taxa de transferência).',
+    es: 'Recibes {{net}} {{currency}} ({{gross}} menos {{paymentFee}} que retuvo el proveedor de pago cuando pagaste y {{transferFee}} de comisión de transferencia).',
+    ar: 'ستستلم {{net}} {{currency}} ({{gross}} مطروحًا منها {{paymentFee}} احتفظ بها مزوّد الدفع عند الدفع و{{transferFee}} رسوم تحويل).'
+};
+
+/** A card refund (2026-10-22): no transfer, only the fee the payment provider kept when they paid. */
+const REFUND_AMOUNT_WITH_PAYMENT_FEE_LINE: Record<Language, string> = {
+    en: 'You receive {{net}} {{currency}} ({{gross}} minus {{paymentFee}} kept by the payment provider when you paid).',
+    fr: 'Vous recevez {{net}} {{currency}} ({{gross}} moins {{paymentFee}} retenus par le prestataire de paiement lors de votre paiement).',
+    pt: 'Recebe {{net}} {{currency}} ({{gross}} menos {{paymentFee}} retidos pelo prestador de pagamento quando pagou).',
+    es: 'Recibes {{net}} {{currency}} ({{gross}} menos {{paymentFee}} que retuvo el proveedor de pago cuando pagaste).',
+    ar: 'ستستلم {{net}} {{currency}} ({{gross}} مطروحًا منها {{paymentFee}} احتفظ بها مزوّد الدفع عند الدفع).'
+};
+
 /** …and when none was (a card refund, or a fee rate set to 0). */
 const REFUND_AMOUNT_NO_FEE_LINE: Record<Language, string> = {
     en: 'You receive {{net}} {{currency}}.',
@@ -642,15 +664,34 @@ const REFUND_AMOUNT_NO_FEE_LINE: Record<Language, string> = {
  * a card refund never mentions a fee, because there is none (Stripe returns the full amount).
  */
 export function refundAmountLine(
-    input: { netAmount: number; grossAmount: number; feeAmount: number; feePercent: number; currency: string },
+    input: {
+        netAmount: number;
+        grossAmount: number;
+        feeAmount: number;
+        feePercent: number;
+        currency: string;
+        /** 2026-10-22: the two fees apart. Absent (an older refund): the whole fee was the transfer fee. */
+        paymentFee?: number;
+        transferFee?: number;
+    },
     lang: Language
 ): string {
     const fmt = (n: number) => new Intl.NumberFormat('en-US').format(Math.round(n));
-    const variants = input.feeAmount > 0 ? REFUND_AMOUNT_WITH_FEE_LINE : REFUND_AMOUNT_NO_FEE_LINE;
+    const paymentFee = input.paymentFee ?? 0;
+    const transferFee = input.transferFee ?? (input.paymentFee === undefined ? input.feeAmount : 0);
+    const variants = !(input.feeAmount > 0)
+        ? REFUND_AMOUNT_NO_FEE_LINE
+        : paymentFee > 0 && transferFee > 0
+            ? REFUND_AMOUNT_WITH_BOTH_FEES_LINE
+            : paymentFee > 0
+                ? REFUND_AMOUNT_WITH_PAYMENT_FEE_LINE
+                : REFUND_AMOUNT_WITH_FEE_LINE;
     return renderTemplate(variants[lang] ?? variants[DEFAULT_LANGUAGE], {
         net: fmt(input.netAmount),
         gross: fmt(input.grossAmount),
         percent: String(input.feePercent),
+        paymentFee: fmt(paymentFee),
+        transferFee: fmt(transferFee),
         currency: input.currency
     });
 }

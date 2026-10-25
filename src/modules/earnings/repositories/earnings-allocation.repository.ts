@@ -5,6 +5,7 @@ import {
   EarningsSourceType,
 } from '../models/earnings-allocation.model';
 import { EarningsOwnerType } from '../models/earnings-account.model';
+import { CourierHoldSnapshot } from '../domain/courier-hold';
 
 export interface CreateAllocationInput {
   source_type: EarningsSourceType;
@@ -27,7 +28,16 @@ export interface CreateAllocationInput {
    */
   completed_at?: Date;
   hold_release_at?: Date;
+  /**
+   * An agency's or rider's share of a delivery: its terms snapshot (earnings/domain/courier-hold.ts).
+   * A row carrying one is ALWAYS written unstarted — `completed_at`/`hold_release_at` are
+   * ignored — because only its own parcel starts it (`syncShipmentCourierHold`).
+   */
+  courier_hold?: CourierHoldSnapshot | null;
 }
+
+/** Rows on their own courier clock are never started, cleared or re-dated by the ORDER's hold. */
+const ORDER_CLOCK_ONLY = { courier_hold: null } as const;
 
 /** One source an allocation hangs off. An order's money spans `order`, `shipment` and `cod_collection`. */
 export interface SourceRef {
@@ -58,8 +68,9 @@ export class EarningsAllocationRepository {
           currency: input.currency,
           status: 'held',
           requires_cash_settlement: input.requires_cash_settlement ?? false,
-          completed_at: input.completed_at ?? null,
-          hold_release_at: input.hold_release_at ?? null,
+          completed_at: input.courier_hold ? null : (input.completed_at ?? null),
+          hold_release_at: input.courier_hold ? null : (input.hold_release_at ?? null),
+          courier_hold: input.courier_hold ?? null,
         },
       ],
       { session: session ?? undefined }
@@ -109,6 +120,7 @@ export class EarningsAllocationRepository {
         source_id: new Types.ObjectId(sourceId),
         status: 'held',
         completed_at: null,
+        ...ORDER_CLOCK_ONLY,
       },
       { $set: { completed_at: completedAt, hold_release_at: holdReleaseAt } },
       { session: session ?? undefined }
@@ -140,11 +152,25 @@ export class EarningsAllocationRepository {
     return EarningsAllocationModel.find({ status: 'held', $or: sourceFilters(sources) });
   }
 
-  /** Copy a pause onto every still-`held` row of these sources. Returns the count touched. */
-  async markPausedBySources(sources: SourceRef[], pausedAt: Date): Promise<number> {
+  /**
+   * Copy a pause onto every still-`held` row of these sources. Returns the count touched.
+   * `exceptFreeCourier`: leave out agency/rider rows whose own terms free them — an
+   * administrator's ORDER pause does not reach them (`orderPauseReachesRow`).
+   */
+  async markPausedBySources(
+    sources: SourceRef[],
+    pausedAt: Date,
+    options: { exceptFreeCourier?: boolean } = {}
+  ): Promise<number> {
     if (sources.length === 0) return 0;
     const res = await EarningsAllocationModel.updateMany(
-      { status: 'held', paused_at: null, $or: sourceFilters(sources) },
+      {
+        status: 'held',
+        paused_at: null,
+        $or: sourceFilters(sources),
+        // `$ne: 0` also matches a row with no snapshot at all, which is every non-courier row.
+        ...(options.exceptFreeCourier ? { 'courier_hold.days': { $ne: 0 } } : {}),
+      },
       { $set: { paused_at: pausedAt } }
     );
     return res.modifiedCount ?? 0;
@@ -181,7 +207,7 @@ export class EarningsAllocationRepository {
   ): Promise<number> {
     if (sources.length === 0) return 0;
     const res = await EarningsAllocationModel.updateMany(
-      { status: 'held', completed_at: null, $or: sourceFilters(sources) },
+      { status: 'held', completed_at: null, $or: sourceFilters(sources), ...ORDER_CLOCK_ONLY },
       { $set: { completed_at: completedAt, hold_release_at: holdReleaseAt } }
     );
     return res.modifiedCount ?? 0;
@@ -194,10 +220,83 @@ export class EarningsAllocationRepository {
   async clearHoldBySources(sources: SourceRef[]): Promise<number> {
     if (sources.length === 0) return 0;
     const res = await EarningsAllocationModel.updateMany(
-      { status: 'held', completed_at: { $ne: null }, $or: sourceFilters(sources) },
+      { status: 'held', completed_at: { $ne: null }, $or: sourceFilters(sources), ...ORDER_CLOCK_ONLY },
       { $set: { completed_at: null, hold_release_at: null } }
     );
     return res.modifiedCount ?? 0;
+  }
+
+  // ── The courier clock (earnings/domain/courier-hold.ts) ─────────────────────────────
+
+  /**
+   * Still-`held` agency and rider rows of these sources (one delivery: its `shipment` source
+   * and its COD collections). `onlyCourierClock` narrows to rows carrying a terms snapshot.
+   */
+  async findHeldCourierBySources(sources: SourceRef[], onlyCourierClock: boolean): Promise<IEarningsAllocation[]> {
+    if (sources.length === 0) return [];
+    return EarningsAllocationModel.find({
+      status: 'held',
+      beneficiary_type: { $in: ['agency', 'agent'] },
+      $or: sourceFilters(sources),
+      ...(onlyCourierClock ? { courier_hold: { $ne: null } } : {}),
+    });
+  }
+
+  /** Copy a pause onto these still-`held` rows (a DELIVERY pause: its agency and rider rows). */
+  async markPausedByIds(ids: Types.ObjectId[], pausedAt: Date): Promise<number> {
+    if (ids.length === 0) return 0;
+    const res = await EarningsAllocationModel.updateMany(
+      { _id: { $in: ids }, status: 'held', paused_at: null },
+      { $set: { paused_at: pausedAt } }
+    );
+    return res.modifiedCount ?? 0;
+  }
+
+  /**
+   * Start one courier row's hold. Compare-and-set on "held and not started", so a concurrent
+   * sync or a re-run never moves a date already written (a resume may have moved it since).
+   */
+  async startCourierHold(allocationId: Types.ObjectId, startedAt: Date, holdReleaseAt: Date): Promise<boolean> {
+    const res = await EarningsAllocationModel.updateOne(
+      { _id: allocationId, status: 'held', completed_at: null, courier_hold: { $ne: null } },
+      { $set: { completed_at: startedAt, hold_release_at: holdReleaseAt } }
+    );
+    return (res.modifiedCount ?? 0) > 0;
+  }
+
+  /** Un-start one courier row: its parcel left the starting statuses (`agent_delivered → failed`). */
+  async clearCourierHold(allocationId: Types.ObjectId): Promise<boolean> {
+    const res = await EarningsAllocationModel.updateOne(
+      { _id: allocationId, status: 'held', completed_at: { $ne: null }, courier_hold: { $ne: null } },
+      { $set: { completed_at: null, hold_release_at: null } }
+    );
+    return (res.modifiedCount ?? 0) > 0;
+  }
+
+  /**
+   * One page of courier rows still waiting for their clock to start — the nightly backstop's
+   * worklist, walked by `_id` so rows that legitimately wait (a free prepaid share waits for
+   * the customer's confirmation, up to the auto-confirm window) can never crowd out the rest.
+   */
+  async findUnstartedCourierRows(
+    afterId: Types.ObjectId | null,
+    limit: number
+  ): Promise<Array<{ _id: Types.ObjectId; shipmentId: string }>> {
+    const rows = await EarningsAllocationModel.find(
+      {
+        status: 'held',
+        hold_release_at: null,
+        courier_hold: { $ne: null },
+        ...(afterId ? { _id: { $gt: afterId } } : {}),
+      },
+      { 'courier_hold.shipment_id': 1 }
+    )
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean();
+    return rows
+      .filter((r) => !!r.courier_hold?.shipment_id)
+      .map((r) => ({ _id: r._id as Types.ObjectId, shipmentId: r.courier_hold!.shipment_id }));
   }
 
   /**

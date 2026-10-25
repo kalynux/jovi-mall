@@ -393,6 +393,18 @@ export const ERROR_CODES = Object.freeze({
     REFUND_INSUFFICIENT_GATEWAY_BALANCE: 'REFUND_INSUFFICIENT_GATEWAY_BALANCE',
     /** A refund paid outside the platform needs its picture proof (R-7b). 422. */
     REFUND_EXTERNAL_PROOF_REQUIRED: 'REFUND_EXTERNAL_PROOF_REQUIRED',
+    /** A parcel named as delivered at fault is not this order's, or the source has no parcels (2026-10-22). 422. */
+    REFUND_DELIVERY_FAULT_INVALID: 'REFUND_DELIVERY_FAULT_INVALID',
+    /** Damage claims on an agency (owner F-8, 2026-10-22). */
+    AGENCY_CLAIM_NOT_FOUND: 'AGENCY_CLAIM_NOT_FOUND',
+    /** One damage claim per parcel. 409. */
+    AGENCY_CLAIM_EXISTS: 'AGENCY_CLAIM_EXISTS',
+    /** The problem was raised outside the agency's own window (its damage-claim deadline). 422. */
+    AGENCY_CLAIM_OUTSIDE_WINDOW: 'AGENCY_CLAIM_OUTSIDE_WINDOW',
+    /** More than the agency's max refund per item × the damaged items. 422. */
+    AGENCY_CLAIM_EXCEEDS_CAP: 'AGENCY_CLAIM_EXCEEDS_CAP',
+    /** The parcel cannot carry a claim: not delivered, no agency, or the agency allows nothing per item. 422. */
+    AGENCY_CLAIM_NOT_ELIGIBLE: 'AGENCY_CLAIM_NOT_ELIGIBLE',
     /** Boot wiring: `registerRefundPorts` was never called. Never skipped silently. 500. */
     REFUND_PORT_NOT_REGISTERED: 'REFUND_PORT_NOT_REGISTERED',
     /**

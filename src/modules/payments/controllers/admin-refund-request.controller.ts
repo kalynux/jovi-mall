@@ -74,6 +74,7 @@ export class AdminRefundRequestController {
       amount: body.amount,
       reasonKind: body.reasonKind,
       itemDefective: body.itemDefective ?? null,
+      deliveryFaultShipmentIds: body.deliveryFaultShipmentIds,
     });
     if (overrides.length > 0 && body.overridePolicy !== true) {
       throw createAppError(
@@ -99,6 +100,7 @@ export class AdminRefundRequestController {
       // ⛔ Support may hold, never send — refused here as well as in `mayApproveAtCreation`.
       approveNow: body.requestedByRole === 'admin' && body.approveNow === true,
       ticketId: body.ticketId ?? null,
+      deliveryFaultShipmentIds: body.deliveryFaultShipmentIds,
     });
     sendCreated(res, toRefundRequestDto(row));
   });

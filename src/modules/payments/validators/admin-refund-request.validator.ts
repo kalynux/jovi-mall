@@ -41,6 +41,11 @@ export const AdminCreateRefundRequestSchema = z
     approveNow: z.boolean().optional(),
     /** The support ticket the request was raised from, when there is one. */
     ticketId: objectId.optional(),
+    /**
+     * Parcels whose DELIVERY was at fault (owner F-6/F-7, 2026-10-22). Each is judged against its
+     * agency's window; inside it, the agency and rider fund that parcel's delivery money.
+     */
+    deliveryFaultShipmentIds: z.array(objectId).min(1).max(20).optional(),
   })
   .strict();
 
@@ -75,6 +80,13 @@ export const AdminRefundEligibilityQuerySchema = z
     reasonKind: reasonKind.optional(),
     itemDefective: z.enum(['true', 'false']).transform((v) => v === 'true').optional(),
     amount: z.coerce.number().int().positive().optional(),
+    /** Comma-separated parcel ids said to be delivered at fault (2026-10-22). */
+    deliveryFaultShipmentIds: z
+      .string()
+      .trim()
+      .transform((v) => v.split(",").map((x) => x.trim()).filter(Boolean))
+      .pipe(z.array(objectId).min(1).max(20))
+      .optional(),
   })
   .strict();
 

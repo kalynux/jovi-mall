@@ -367,7 +367,8 @@ function withStripe<T>(fn: () => T): T {
 
   await assert('toPaymentSettingsView is the camelCase projection routing.md fixes', () => {
     const v = toPaymentSettingsView(record());
-    return same(Object.keys(v), ['collectionAggregator', 'payoutAggregator', 'stripeEnabled', 'providers', 'refundFeePercent', 'version', 'updatedAt', 'updatedBy', 'reason'])
+    // `payinFeePercent` (2026-10-22): the payment fee every aggregator is assumed to keep (refund-fees.ts).
+    return same(Object.keys(v), ['collectionAggregator', 'payoutAggregator', 'stripeEnabled', 'providers', 'refundFeePercent', 'payinFeePercent', 'version', 'updatedAt', 'updatedBy', 'reason'])
       && v.updatedBy?.id === 'adm-1' && same(Object.keys(v.providers), ['MTN', 'ORANGE', 'MOOV', 'CARD']);
   });
 

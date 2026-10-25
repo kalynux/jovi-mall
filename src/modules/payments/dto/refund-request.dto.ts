@@ -58,6 +58,32 @@ export interface RefundRequestDto {
   earningsSettledAt: Date | null;
   /** When a completed billing refund took the plan or credits back; null until then. */
   billingReversedAt: Date | null;
+  /**
+   * The two fees and who pays them (2026-10-22, `domain/refund-fees.ts`). `feeAmount` above is
+   * their sum when the customer pays them, 0 when the seller does (`vendorCharge`). Null on
+   * requests created before: read those as a transfer fee only, paid by the customer.
+   */
+  fees: {
+    paidBy: 'customer' | 'vendor';
+    paymentFeePercent: number;
+    paymentFee: number;
+    transferFeePercent: number;
+    transferFee: number;
+    vendorCharge: number;
+  } | null;
+  /** Parcels named as delivered at fault, each judged against its agency's window (2026-10-22). */
+  deliveryFault: Array<{
+    shipmentId: string;
+    agencyId: string | null;
+    trackingNumber: string | null;
+    deliveredAt: Date | null;
+    raisedAt: Date;
+    windowDays: number;
+    insideWindow: boolean;
+    customerDeliveryAmount: number;
+    claimDeadlineDays: number | null;
+    returnsPayer: string | null;
+  }>;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -124,6 +150,28 @@ export function toRefundRequestDto(row: IRefundRequest): RefundRequestDto {
     earningsImpact: row.earnings_impact ?? 'clawback',
     earningsSettledAt: row.earnings_settled_at ?? null,
     billingReversedAt: row.billing_reversed_at ?? null,
+    fees: row.fees
+      ? {
+          paidBy: row.fees.paid_by,
+          paymentFeePercent: row.fees.payin_rate,
+          paymentFee: row.fees.payin_amount,
+          transferFeePercent: row.fees.payout_rate,
+          transferFee: row.fees.payout_amount,
+          vendorCharge: row.fees.vendor_charge,
+        }
+      : null,
+    deliveryFault: (row.delivery_fault ?? []).map((d) => ({
+      shipmentId: d.shipment_id.toString(),
+      agencyId: d.agency_id ? d.agency_id.toString() : null,
+      trackingNumber: d.tracking_number ?? null,
+      deliveredAt: d.delivered_at ?? null,
+      raisedAt: d.raised_at,
+      windowDays: d.window_days,
+      insideWindow: d.inside_window,
+      customerDeliveryAmount: d.customer_delivery_amount,
+      claimDeadlineDays: d.claim_deadline_days ?? null,
+      returnsPayer: d.returns_payer ?? null,
+    })),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

@@ -46,6 +46,11 @@ export const SetPaymentSettingsSchema = z.object({
      * externally (never off a card refund). Reported on the GET as `settings.refundFeePercent`.
      */
     refundFeePercent: z.number().min(0).max(20).optional(),
+    /**
+     * 2026-10-22: the PAY-IN fee every aggregator is assumed to keep; a refund does not give it
+     * back (`payments/domain/refund-fees.ts`). Reported on the GET as `settings.payinFeePercent`.
+     */
+    payinFeePercent: z.number().min(0).max(20).optional(),
     /** 0 when no document exists yet. A mismatch is 409 `PAYMENT_SETTINGS_VERSION_CONFLICT`. */
     expectedVersion: z.number().int().min(0),
     reason: z.string().trim().min(1).max(500),

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requireAuth, requireRole } from '../../../api/middlewares/auth.middleware';
 import { AgentEarningsController } from '../controllers/agent-earnings.controller';
 import { PayoutRequestController } from '../controllers/payout-request.controller';
+import { EarningsExplanationsController } from '../controllers/earnings-explanations.controller';
 
 /**
  * Agent earnings routes. Mounted at `/api/agent` → `/agent/earnings`.
@@ -22,6 +23,9 @@ router.use(requireAuth);
 router.use(requireRole(['agent']));
 
 router.get('/earnings', AgentEarningsController.getEarnings);
+
+// Why money was taken back (a refund at the delivery's fault) — 2026-10-22.
+router.get('/earnings/adjustments', EarningsExplanationsController.listMyAdjustments);
 
 // Request a payout of the entire available balance; opens a PAYOUT_REQUEST ticket.
 router.post('/earnings/payout', PayoutRequestController.requestPayout);

@@ -215,7 +215,8 @@ function main(): void {
     });
     assert('the block exposes exactly the documented keys', () =>
         JSON.stringify(Object.keys(toCustomerRefundBlock(row())!).sort()) === JSON.stringify(
-            ['channel', 'completedAt', 'currency', 'destinationMasked', 'feeAmount', 'feePercent', 'grossAmount', 'netAmount', 'status', 'waitingForCash'].sort()));
+            ['channel', 'completedAt', 'currency', 'destinationMasked', 'feeAmount', 'feePercent', 'feesPaidBy', 'grossAmount',
+             'lines', 'netAmount', 'paymentFee', 'paymentFeePercent', 'status', 'transferFee', 'waitingForCash'].sort()));
 
     console.log('\n── 2b · The order DTO carries it ──');
     const order = {

@@ -299,6 +299,33 @@ A **completed refund** closes `refund_in_progress`, `seller_cancelled_paid_order
 `booking_cancelled_unrefunded` and `customer_problem_reported` — never `card_dispute` or `admin` — and, unlike a resume, does
 **not** move hold dates. A booking's pause covers its balance-payment shares too.
 
+### Agency and rider shares: the courier hold (2026-10-22)
+
+An agency's and its rider's share of a delivery no longer waits the seller's 3 days. Each share
+carries its agency's terms as they stood at the delivery (`courier_hold` on the allocation) and is
+held for:
+
+| Agency terms | Held for |
+|---|---|
+| `policies.returns.payer = 'agency'` | the full window (`EARNINGS_HOLD_DAYS`, 3) |
+| otherwise, `policies.damage.claim_deadline_days = N` | `min(N, 3)` days — 4 → 3, 2 → 2 |
+| neither (payer not the agency, `N = 0`) | **0** — released at the next nightly sweep after the delivery is **proven** |
+
+The longer of the two rows applies. The clock is the agency's **own parcel**, not the order's last
+one. A held share starts at the same moment the seller's would (prepaid: the rider's tap; COD: the
+code). A free (0-day) share starts only at **proof**: the customer's confirmation, or the auto-confirm
+sweep after `EARNINGS_SHIPMENT_AUTO_CONFIRM_DAYS`, or the COD code. Released money cannot be taken back
+from an agency, so a free share must not ride on the tap alone. Rules: `earnings/domain/courier-hold.ts`;
+the nightly sweep's stage 1b starts any clock a missed event left unstarted. Shares written before
+2026-10-22 have no snapshot and keep the order's hold.
+
+**Which pauses reach which shares.** An **administrator's ORDER pause** (`reason: 'admin'`) does not
+reach a free agency or its rider. Every other order pause does: a customer's problem report, a refund,
+a seller's cancel, a card dispute. To stop a free agency deliberately, pause **the delivery**:
+`kind: 'shipment'` below. It reaches only that parcel's agency and rider shares. A share held by
+both an order pause and a delivery pause stays held until both end, and its release date then moves
+by the whole unbroken paused span.
+
 ## Refund clawback debt — `/internal/admin/earnings/clawbacks` (2026-10-05)
 
 A refund that lands after the money was released takes it back: from the share's pending money
@@ -318,8 +345,12 @@ The platform absorbs the amount. Four-eyes at ≥ 2,000,000 is enforced by wi-ad
 `409 EARNINGS_CLAWBACK_NOTHING_OWED` (no debt) · `409 EARNINGS_CLAWBACK_WRITE_OFF_EXCEEDS_DEBT` (more than owed).
 
 ### GET `/internal/admin/earnings/pauses`
-Every order and booking paused now, newest pause first. Query: `kind?` (`order`|`booking`), `page`, `limit` (≤ 100).
+Every order, booking and delivery paused now, newest pause first. Query: `kind?` (`order`|`booking`|`shipment`), `page`, `limit` (≤ 100).
 Rows: `{ kind, id, reference, vendorId, amount, currency, pause }` — `reference` is the order or booking number, `amount` what the customer paid.
+A `shipment` row (a delivery pause) has `reference` = the tracking number, `amount` = its delivery fee,
+`vendorId`/`currency` from its order, plus `orderId` and `agencyId`.
+
+`:kind` everywhere below is `order`, `booking` or `shipment` (one delivery — its agency's and rider's shares only).
 
 ### GET `/internal/admin/earnings/pauses/:kind/:id`
 `{ kind, id, pause }`; `pause` is `null` if it was never paused. `404 EARNINGS_PAUSE_TARGET_NOT_FOUND` for an unknown id.
@@ -333,12 +364,13 @@ Body `{ "note"?: string (1–500) }`, `.strict()`. Lifts **any** pause, whoever 
 `409 EARNINGS_NOT_PAUSED` if it is not paused. `409 EARNINGS_PAUSE_HELD_BY_REFUND`
 (`details.refundRequestId`, `details.refundRequestStatus`) while a refund request of this order or
 booking is open, or a completed one has not recovered its earnings yet (C-4) — the refund resumes
-or closes the pause itself.
+or closes the pause itself. Never on a `shipment`: no refund holds a delivery pause.
 
 The `pause` object: `{ active, reason, note, paused_at, paused_by_user_id, paused_by_source, paused_by_name,
 resumed_at, resumed_by_user_id, resumed_by_source, resumed_by_name, resume_note }`. A system pause has
 `paused_by_user_id: null` and `paused_by_name: "system"`. Orders also get `earnings.paused` /
-`earnings.resumed` timeline entries.
+`earnings.resumed` timeline entries; a delivery pause writes them on its order's timeline, naming the
+parcel (`metadata.shipmentId`).
 
 ## Business rules & notes
 

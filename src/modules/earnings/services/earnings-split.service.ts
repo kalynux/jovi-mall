@@ -36,6 +36,7 @@ import {
 // why `vendorGross` is `P×qty − aiMargin` and never `floor×qty + 0.7·U`.
 import { computeOrderAiMargin, NegotiatedLineInput } from './negotiation-margin.service';
 import { deliveredAtOf } from '../domain/earnings-hold';
+import { courierHoldSnapshot, CourierHoldSnapshot } from '../domain/courier-hold';
 // Who pays delivery, and how much (ADR-A11) — the pure readers every money path shares.
 import {
   collectionBreakdownOf,
@@ -593,6 +594,7 @@ export class EarningsSplitService {
         : {}),
     };
 
+    const courierHold = this.courierHoldOf((shipment._id as any).toString(), agencyId, agency?.policies ?? null);
     const allocations: CreateAllocationInput[] = [
       { ...codDefaults, beneficiary_type: 'vendor', beneficiary_id: vendorId, amount: vendorNet },
       { ...codDefaults, beneficiary_type: 'platform', beneficiary_id: null, amount: commission },
@@ -601,11 +603,15 @@ export class EarningsSplitService {
       // the agency deliberately — fee_split is defined as a share "of the delivery
       // fee", and the agency is the party carrying the cash-accountability (it is
       // their balance the rolling reserve is held against).
+      //
+      // The agency and agent rows run on their OWN clock (courier-hold.ts): their agency's
+      // terms decide how long they wait, counted from this parcel's delivery — not the order's.
       {
         ...codDefaults,
         beneficiary_type: 'agency',
         beneficiary_id: agencyId,
         amount: agencyCut,
+        courier_hold: courierHold,
       },
       // The agent is paid by the PLATFORM, like any other beneficiary — hold →
       // release → available → payout. `requires_cash_settlement` is inherited
@@ -613,7 +619,7 @@ export class EarningsSplitService {
       // they collected has physically reached the platform. That is deliberate:
       // an agent must not be able to withdraw a cut of money they are still
       // holding, or never handed back.
-      { ...codDefaults, beneficiary_type: 'agent', beneficiary_id: agentId, amount: agentCut },
+      { ...codDefaults, beneficiary_type: 'agent', beneficiary_id: agentId, amount: agentCut, courier_hold: courierHold },
       // The bargaining agent's share of THIS shipment's uplift — see the
       // docstring. Zero on an ordinary collection, and `persist` skips a
       // zero-value row, so nothing is written for one.
@@ -770,9 +776,11 @@ export class EarningsSplitService {
         : {}),
     };
 
+    // Both rows run on the courier clock (courier-hold.ts), like a COD collection's.
+    const courierHold = this.courierHoldOf((shipment._id as any).toString(), agencyId, agency?.policies ?? null);
     await this.persist([
-      { ...defaults, beneficiary_type: 'agency', beneficiary_id: agencyId, amount: agencyCut },
-      { ...defaults, beneficiary_type: 'agent', beneficiary_id: agentId, amount: agentCut },
+      { ...defaults, beneficiary_type: 'agency', beneficiary_id: agencyId, amount: agencyCut, courier_hold: courierHold },
+      { ...defaults, beneficiary_type: 'agent', beneficiary_id: agentId, amount: agentCut, courier_hold: courierHold },
     ]);
 
     await this.emitSplit('cod_collection', sourceId, vendorId, {
@@ -985,12 +993,16 @@ export class EarningsSplitService {
         : {}),
     };
 
+    // The agency and agent rows run on their own clock (courier-hold.ts); the vendor's
+    // leftover below stays on the order's.
+    const courierHold = this.courierHoldOf(sourceId, agencyId, policies);
     const allocations: CreateAllocationInput[] = [
       {
         ...shipmentDefaults,
         beneficiary_type: 'agency',
         beneficiary_id: agencyId,
         amount: agencyCut,
+        courier_hold: courierHold,
       },
       // Paid by the PLATFORM like any other beneficiary — hold → release →
       // available → payout — even though it is the AGENCY that owes it under the
@@ -1002,6 +1014,7 @@ export class EarningsSplitService {
               beneficiary_type: 'agent' as const,
               beneficiary_id: agentId,
               amount: agentCut,
+              courier_hold: courierHold,
             },
           ]
         : []),
@@ -1238,6 +1251,19 @@ export class EarningsSplitService {
   }
 
   /** Create allocations and hold each share — all in ONE transaction. */
+  /**
+   * The terms snapshot an agency or rider row of this delivery carries (courier-hold.ts),
+   * read from the agency's policies as they stand now — the delivery. `EARNINGS_HOLD_DAYS` is
+   * the ceiling. Missing policies hold the full window.
+   */
+  private courierHoldOf(
+    shipmentId: string,
+    agencyId: string,
+    policies: IAgencyPolicies | null
+  ): CourierHoldSnapshot {
+    return courierHoldSnapshot(shipmentId, agencyId, policies, EARNINGS_CONFIG.HOLD_DAYS);
+  }
+
   private async persist(allocations: CreateAllocationInput[]): Promise<void> {
     await transactionManager.runInTransaction(async (session) => {
       for (const input of allocations) {

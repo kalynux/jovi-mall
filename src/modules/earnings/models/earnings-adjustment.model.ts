@@ -67,6 +67,19 @@ export interface IEarningsAdjustment extends Document {
   actor: { id: string | null; name: string | null } | null;
   /** Write-offs: the administrator's reason. Otherwise null. */
   reason: string | null;
+  /**
+   * WHY, for the person it happened to (2026-10-22, `domain/adjustment-explanations.ts`): a closed
+   * code, the numbers the sentence quotes, and the English sentence. Null on rows written before.
+   */
+  reason_code: string | null;
+  reason_params: Record<string, unknown> | null;
+  explanation: string | null;
+  /** The refund request behind a refund clawback, when there is one. */
+  refund_request_id: mongoose.Types.ObjectId | null;
+  /** The damage claim behind a charge (`agency_claims`), when there is one. */
+  agency_claim_id: mongoose.Types.ObjectId | null;
+  /** The part of `amount` that is fees (seller-cancel fees, a lost dispute's pay-in fee). */
+  fee_amount: number;
   created_at: Date;
 }
 
@@ -84,7 +97,7 @@ const EarningsAdjustmentSchema = new Schema<IEarningsAdjustment>(
   {
     refund_key: { type: String, required: true, trim: true },
     allocation_id: { type: Schema.Types.ObjectId, ref: MODELS.EARNINGS_ALLOCATION, default: null },
-    source_type: { type: String, enum: ['order', 'booking', 'cod_collection', 'shipment', null], default: null },
+    source_type: { type: String, enum: ['order', 'booking', 'cod_collection', 'shipment', 'agency_claim', null], default: null },
     source_id: { type: Schema.Types.ObjectId, default: null },
     beneficiary_type: {
       type: String,
@@ -107,6 +120,13 @@ const EarningsAdjustmentSchema = new Schema<IEarningsAdjustment>(
       default: null,
     },
     reason: { type: String, default: null, trim: true, maxlength: 500 },
+    reason_code: { type: String, default: null },
+    reason_params: { type: Schema.Types.Mixed, default: null },
+    explanation: { type: String, default: null, maxlength: 1000 },
+    refund_request_id: { type: Schema.Types.ObjectId, default: null },
+    agency_claim_id: { type: Schema.Types.ObjectId, default: null },
+    /** Part of `amount` that is FEES (seller-cancel payment + transfer fees, a lost dispute's pay-in fee). */
+    fee_amount: { type: Number, default: 0, min: 0 },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: false } }
 );

@@ -236,6 +236,7 @@ export const MODELS = Object.freeze({
   EARNINGS_LEDGER: 'EarningsLedger',
   EARNINGS_RESERVE_HOLD: 'EarningsReserveHold',
   EARNINGS_ADJUSTMENT: 'EarningsAdjustment',
+  AGENCY_CLAIM: 'AgencyClaim',
   PAYOUT_REQUEST: 'PayoutRequest',
 
   // Blog / editorial (the marketing site's article pages)
@@ -441,6 +442,7 @@ export const COLLECTIONS = Object.freeze({
   EARNINGS_LEDGER: 'earnings_ledgers',
   EARNINGS_RESERVE_HOLD: 'earnings_reserve_holds',
   EARNINGS_ADJUSTMENT: 'earnings_adjustments',
+  AGENCY_CLAIM: 'agency_claims',
   PAYOUT_REQUEST: 'payout_requests',
 
   // Blog / editorial (the marketing site's article pages)

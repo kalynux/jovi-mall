@@ -322,10 +322,12 @@ async function main(): Promise<void> {
     && disputeRefundKey(null, 'pi_1', 'o1') === 'dispute:pi_1'
     && disputeRefundKey(null, '', 'o1') === 'dispute:o1');
   const dispute = src('modules/payments/services/dispute.service.ts');
-  assert('a lost ORDER dispute recovers with that key', () =>
-    dispute.includes('earningsRefundService.onOrderRefund(orderId, disputeRefundKey(disputeId, paymentIntentId, orderId))'));
-  assert('a lost BOOKING dispute recovers with that key (booking + balance rows)', () =>
-    dispute.includes("earningsRefundService.onRefund('booking', bookingId, disputeRefundKey(disputeId, paymentIntentId, bookingId))"));
+  // 2026-10-22 (owner F-9): the call also carries the vendor's pay-in charge on a chargeback.
+  const flat = dispute.replace(/\s+/g, ' ');
+  assert('a lost ORDER dispute recovers with that key (and the pay-in charge)', () =>
+    flat.includes('earningsRefundService.onOrderRefund( orderId, disputeRefundKey(disputeId, paymentIntentId, orderId), await this.disputeRecovery(paymentIntentId, reason) )'));
+  assert('a lost BOOKING dispute recovers with that key (booking + balance rows, and the pay-in charge)', () =>
+    flat.includes("earningsRefundService.onRefund( 'booking', bookingId, disputeRefundKey(disputeId, paymentIntentId, bookingId), await this.disputeRecovery(paymentIntentId, reason) )"));
   assert('resolving a dispute by hand keys on the dispute the order was frozen by', () =>
     dispute.includes("held?.dispute_hold?.gateway_dispute_id ?? null"));
   assert('the webhook\'s own idempotency is untouched (already-refunded → no unwind)', () =>

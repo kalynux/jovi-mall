@@ -321,3 +321,49 @@ with `409 EARNINGS_PAYOUT_ALREADY_PENDING` — the message names the actual stat
 "Request payout" control on all three, not on `pending` alone.
 
 | `resolvedAt` | `string \| null` | When an admin marked it paid/rejected; `null` while `pending`. |
+
+## Why money was taken back — `GET /api/vendor/earnings/adjustments` (2026-10-22)
+
+Every movement that took money from you, paid off a debt, or forgave one, newest first, **each with
+the reason in plain words**. Query: `page`, `limit` (≤ 100). Paginated envelope.
+
+```jsonc
+{
+  "id": "…",
+  "kind": "refund_clawback",        // refund_clawback (taken back) · clawback_recovery (new earnings paid a debt) · write_off (debt forgiven)
+  "amount": 1500, "currency": "XAF",
+  "takenFrom": { "pending": 1500, "reserve": 0, "available": 0, "debt": 0 },   // held money, COD reserve, available, or now owed
+  "feeAmount": 0,                   // the part that is fees (seller-cancel fees, a lost dispute's payment fee)
+  "reasonCode": "refund_delivery_fault",
+  "reasonParams": { "orderNumber": "ORD-…", "trackingNumber": "TRK-…", "windowDays": 2, "raisedAt": "…", … },
+  "explanation": "The customer was refunded on order ORD-…, parcel TRK-…, and the delivery was found at fault. …",
+  "refundRequestId": "…", "agencyClaimId": null,
+  "sourceType": "shipment", "sourceId": "…",
+  "createdAt": "…"
+}
+```
+
+Show `explanation`; switch on `reasonCode` (with `reasonParams`) to render it in another language:
+
+| `reasonCode` | Means |
+|---|---|
+| `refund_share` | A customer was refunded; this share of the sale went back |
+| `refund_beyond_share` | Charged beyond the share: delivery money under the return-shipping setting, a free delivery's courier cost, or the **payment and transfer fees of an order the seller cancelled after payment** |
+| `refund_delivery_fault` | The delivery was found at fault, inside the agency's own window: its fee for that parcel went back |
+| `dispute_share` · `dispute_payin_fee` | The customer won a card dispute: the share went back, and the 2% payment fee the provider kept |
+| `damage_claim` | A damage claim was charged to the agency for a parcel |
+| `null` | A row written before 2026-10-22 — `explanation` is a plain sentence from its `kind` |
+
+### Damage claims that compensated you — `GET /api/vendor/earnings/agency-claims`
+
+When an agency damaged a parcel of yours in delivery and an administrator charged it a **damage
+claim**, the claim amount is credited to you (released at the next nightly run, paying any refund
+debt first). Same list shape as the agency's — see [../admin/agency-claims.md](../admin/agency-claims.md),
+without the administrator's note.
+
+### Seller-cancelled paid orders: you pay the fees (2026-10-22)
+
+When **you** cancel an order the customer already paid, the customer is refunded **everything** they
+paid, and the payment fee (2%) and the transfer fee (2% of the amount sent) are charged to you on
+top of your share — one `refund_beyond_share` row whose `feeAmount` is the fees. A lost card dispute
+charges you the 2% payment fee the same way (`dispute_payin_fee`).

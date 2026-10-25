@@ -88,7 +88,7 @@ const EarningsLedgerSchema = new Schema<IEarningsLedger>(
     available_after: { type: Number, required: true },
     source_type: {
       type: String,
-      enum: ['order', 'booking', 'cod_collection', 'shipment'],
+      enum: ['order', 'booking', 'cod_collection', 'shipment', 'agency_claim'],
       required: true,
     },
     source_id: { type: Schema.Types.ObjectId, required: true },

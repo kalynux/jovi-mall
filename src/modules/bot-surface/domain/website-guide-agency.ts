@@ -790,7 +790,7 @@ export const AGENCY_GUIDE: readonly GuideTopic[] = Object.freeze([
                 summary: 'See available, pending and reserve earnings; withdraw; set payout mobile-money numbers',
                 steps: [
                     'Open Account → "Payout" (phone: the "Payout" tab in the bottom bar).',
-                    '"Earnings" shows "Available", "Pending" (3 days after delivery), "Reserve" and "Requested". Tap "Withdraw …" — it takes the whole available balance. Follow it with "View in Tickets".',
+                    '"Earnings" shows "Available", "Pending" (up to 3 days after your parcel is delivered, by your returns and damage-claim terms — none of either: the night after the delivery is confirmed), "Reserve" and "Requested". Tap "Withdraw …" — it takes the whole available balance. Follow it with "View in Tickets".',
                     '"Payout Methods" → "Add payout method" → "Mobile Money", "Provider", "Phone Number", "Account Name" → "Save method", then "Save changes". Up to 3; the first is preferred.',
                 ],
                 notes: [
@@ -803,7 +803,7 @@ export const AGENCY_GUIDE: readonly GuideTopic[] = Object.freeze([
                 summary: 'Voir les gains disponibles, en attente et en réserve ; retirer ; choisir les numéros de versement',
                 steps: [
                     'Ouvrez Compte → « Versements » (téléphone : l’onglet « Versements » de la barre du bas).',
-                    '« Revenus » montre « Disponible », « En attente » (3 jours après la livraison), « Réserve » et « Demandé ». Touchez « Retirer … » — tout le solde disponible part. Suivez-le avec « Voir dans les tickets ».',
+                    '« Revenus » montre « Disponible », « En attente » (jusqu’à 3 jours après la livraison de votre colis, selon vos conditions de retours et de réclamations pour dommages — sans l’un ni l’autre : la nuit après la confirmation de la livraison), « Réserve » et « Demandé ». Touchez « Retirer … » — tout le solde disponible part. Suivez-le avec « Voir dans les tickets ».',
                     '« Moyens de versement » → « Ajouter un moyen de versement » → « Mobile Money », « Opérateur », numéro, « Nom du titulaire » → « Enregistrer le moyen », puis « Enregistrer les modifications ». Jusqu’à 3 ; le premier est préféré.',
                 ],
                 notes: [
