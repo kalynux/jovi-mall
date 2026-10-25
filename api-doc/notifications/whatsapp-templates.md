@@ -1635,7 +1635,10 @@ Until submitted and APPROVED these reach their audience in-app, by push, email, 
 **in-window** WhatsApp only. Submit with the working form recorded in the 2026-10-02 section:
 `npm run whatsapp:templates:submit -- --only=customer_order_delivery_fee_proposal_declined,vendor_delivery_fee_proposal_agency_approved,vendor_delivery_fee_proposal_agency_rejected,agency_delivery_fee_proposal_payer_proposed,agency_delivery_fee_proposal_payer_edited,agency_delivery_fee_proposal_payer_withdrawn,agency_delivery_fee_proposal_payer_paid,agent_delivery_fee_proposal_payer_proposed --submit`.
 
-## 2026-10-25 — the delivery-fee REASON, in bold: 1 template GENERATED, NOT SUBMITTED
+## 2026-10-25 — the delivery-fee REASON, in bold: 1 template SUBMITTED (en + fr), PENDING Meta review
+
+Submitted 2026-10-25: en `3714309768718945`, fr `1812935133279116` — both PENDING. Command used (the `.env` names the account `WHATSAPP_BUSINESS_ACCOUNT_ID`, the script reads `WHATSAPP_WABA_ID`):
+`WHATSAPP_WABA_ID=<waba> npx ts-node -r dotenv/config scripts/submit-whatsapp-templates.ts --only=customer_order_delivery_fee_approval_needed_v2 --in=api-doc/notifications/pending/fee-reason-template-v2.json --submit`
 
 Owner request: the delivery company's reason on an approve-or-decline fee change must be bold so a
 customer cannot miss it. Everything the backend words itself is already bold (the chat question,
