@@ -26,6 +26,7 @@ import {
     type IBookingStatusChange,
 } from '../../src/modules/booking/domain/booking-status-history';
 import { BookingStatus } from '../../src/modules/booking/types/booking.types';
+import { toCustomerBookingShape } from '../../src/modules/booking/domain/appointment';
 
 let passed = 0;
 let failed = 0;
@@ -65,10 +66,10 @@ const INTERNAL_MOUNT = code('api/routes/internal-admin.routes.ts');
 
 /** The body of one method of a class, by name — from its signature to the next method at the same depth. */
 function methodBody(source: string, name: string): string {
-    const start = source.search(new RegExp(`\\n  (?:async |private async |private )?${name}\\(`));
-    if (start < 0) return '';
-    const rest = source.slice(start + 1);
-    const next = rest.slice(1).search(/\n  (?:async |private async |private |static |get )?[a-zA-Z]+\(/);
+    const signature = [...source.matchAll(/\n {2}(?:async |private async |private )?(\w+)\(/g)].find((m) => m[1] === name);
+    if (!signature) return '';
+    const rest = source.slice(signature.index! + 1);
+    const next = rest.slice(1).search(/\n {2}(?:async |private async |private |static |get )?[a-zA-Z]+\(/);
     return next < 0 ? rest : rest.slice(0, next + 1);
 }
 
@@ -209,7 +210,6 @@ assert('an admin cancellation reads "Wi-Mall support", never "the provider"', ()
 section('§6 the history never reaches a customer or a vendor');
 
 assert('⛔ the customer guard strips statusHistory', () => {
-    const { toCustomerBookingShape } = require('../../src/modules/booking/domain/appointment');
     const shaped = toCustomerBookingShape(
         { id: 'b1', status: 'cancelled', statusHistory: [{ actorRole: 'admin', actorId: 'a1', reason: 'internal note' }] },
         { status: 'cancelled', paymentStatus: 'paid', requiresPayment: true, startAt: new Date(), endAt: new Date(), access: null, location: null, rescheduleProposal: null },
