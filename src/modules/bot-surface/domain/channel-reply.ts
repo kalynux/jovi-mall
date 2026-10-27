@@ -147,6 +147,35 @@ export type BotReplyIntent =
           /** A second keyboard button meaning "skip this step". Telegram only. */
           skipLabel?: string;
       }
+    /**
+     * ⭐ **A map pin the platform SENDS** — the opposite direction from `location_request`.
+     *
+     * Telegram renders `sendVenue` (a map with a title and an address line under it); WhatsApp a
+     * `location` message with the same two. Both platforms draw the map themselves from the
+     * coordinates, and a tap opens the phone's own maps app — which is the whole point: the
+     * customer gets directions without a link to copy.
+     *
+     * ⚠ **The coordinates are the only place a point leaves this surface**, and only for a place
+     * the customer is entitled to see (an appointment's address, through the same gate the
+     * website uses). They are never put into `text` anywhere, so the model's context — fed from
+     * `sentTextForIntent` — never holds them.
+     *
+     * ⚠ **`name` and `address` must be non-empty**: Telegram refuses a venue without both.
+     */
+    | { kind: 'place'; latitude: number; longitude: number; name: string; address: string }
+    /**
+     * ⭐ **Several messages for one turn, in order** — a pin, then the words that go with it; or
+     * a question with buttons, then the location request that cannot share its message.
+     *
+     * ⚠ **Why this exists:** Telegram's `reply_markup` is a union, so a message asking for a
+     * location (a reply keyboard) cannot also carry inline buttons. A turn that needs both — the
+     * appointment's "which address?" with one button per saved address, AND "or share your
+     * location" — is two messages, and only `product_list` could render to more than one.
+     *
+     * `renderBotReplies` sends every part; `renderBotReply` (a caller that can send one) sends the
+     * first. Parts are never nested sequences or product lists.
+     */
+    | { kind: 'sequence'; parts: readonly BotSingleReplyIntent[] }
     /** Pick one of a short list. */
     | {
           kind: 'choice';
@@ -329,6 +358,9 @@ export type BotReplyIntent =
           carouselUrlSuffix?: ((card: BotProductCard) => string) | null;
       };
 
+/** One message's worth of intent — anything but a `sequence` or a `product_list`. */
+export type BotSingleReplyIntent = Exclude<BotReplyIntent, { kind: 'sequence' } | { kind: 'product_list' }>;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Platform limits this renderer is responsible for
 // ─────────────────────────────────────────────────────────────────────────────
@@ -348,6 +380,8 @@ const TG_LIMITS = {
      * `callback_data` is not rejected with an error, the keyboard simply does not work.
      */
     CALLBACK_DATA_BYTES: 64,
+    /** `sendVenue.title` / `.address`. Not documented; a venue card shows two short lines. */
+    VENUE_TEXT: 256,
 } as const;
 
 /** WhatsApp interactive maxima that are counts rather than lengths. */
@@ -609,6 +643,27 @@ function renderTelegram(intent: BotReplyIntent, chatId: string): BotChannelReply
          */
         case 'product_list':
             return telegramProductList(intent, chatId)[0];
+
+        /**
+         * `sendVenue`, not `sendLocation`: a bare location is an unlabelled dot, and a customer
+         * looking at two appointments' pins must be able to tell which is which without tapping.
+         */
+        case 'place':
+            return {
+                channel: 'telegram',
+                method: 'sendVenue',
+                body: {
+                    chat_id: chatId,
+                    latitude: intent.latitude,
+                    longitude: intent.longitude,
+                    title: truncate(intent.name, TG_LIMITS.VENUE_TEXT) as string,
+                    address: truncate(intent.address, TG_LIMITS.VENUE_TEXT) as string,
+                },
+            };
+
+        /** The first part. `renderBotReplies` sends them all. */
+        case 'sequence':
+            return renderTelegram(intent.parts[0] ?? { kind: 'text', text: '' }, chatId);
     }
 }
 
@@ -855,6 +910,21 @@ function renderWhatsApp(intent: BotReplyIntent, to: string): BotChannelReply {
         /** See the Telegram side: the first of several. `renderBotReplies` gets them all. */
         case 'product_list':
             return whatsappProductList(intent, to)[0];
+
+        /** The same wire body `service-message.builder.ts` sends on the notification path. */
+        case 'place':
+            return waEnvelope(to, 'location', {
+                location: {
+                    latitude: intent.latitude,
+                    longitude: intent.longitude,
+                    name: truncate(intent.name, WA_LIMITS.LOCATION_NAME) as string,
+                    address: truncate(intent.address, WA_LIMITS.LOCATION_ADDRESS) as string,
+                },
+            });
+
+        /** See the Telegram side: the first part. */
+        case 'sequence':
+            return renderWhatsApp(intent.parts[0] ?? { kind: 'text', text: '' }, to);
     }
 }
 
@@ -1519,6 +1589,9 @@ export function renderBotReplies(
         return (channel === 'telegram'
             ? telegramProductList(intent, recipient)
             : whatsappProductList(intent, recipient)).map(resolveStrong);
+    }
+    if (intent.kind === 'sequence') {
+        return intent.parts.map((part) => renderBotReply(part, channel, recipient));
     }
     return [renderBotReply(intent, channel, recipient)];
 }

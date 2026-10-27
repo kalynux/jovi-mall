@@ -3478,10 +3478,12 @@ async function main(): Promise<void> {
      * Accept / Pay now buttons the list draws — and are NOT emitted (`test:bot-fee-changes`).
      * 68 → 70 on 2026-10-14: + delivery_fees_propose, delivery_fees_withdraw (the customer proposes
      * their OWN delivery fee to the company; owner decision — customers propose like vendors do).
+     * 70 → 71 on 2026-10-27: + bookings_show_place (where an appointment happens: a map pin and the
+     * address, or the link — BOT-BOOKING-ADDRESS-AND-PLACE-PLAN). bookings_address_step is flow_only.
      */
-    assert('the generator emits 70 tools — update this when one lands', () => {
-        if (emitted.length !== 70) console.error(`     ↳ emitted ${emitted.length}`);
-        return emitted.length === 70;
+    assert('the generator emits 71 tools — update this when one lands', () => {
+        if (emitted.length !== 71) console.error(`     ↳ emitted ${emitted.length}`);
+        return emitted.length === 71;
     });
 
     /**

@@ -223,7 +223,17 @@ export type InAppSurfaceSession =
      * ⚠ **The handle authorises ONE booking or ONE move** — `consume` on the confirm, so a
      * double tap cannot take two slots. Reading the picker stays repeatable.
      */
-    | (InAppSessionBase & { kind: 'bk'; productId: string; bookingId: string | null })
+    | (InAppSessionBase & {
+          kind: 'bk';
+          productId: string;
+          bookingId: string | null;
+          /**
+           * The appointment address the chat already collected (2026-10-27) — one of the customer's
+           * saved addresses. Present → the picker shows it instead of asking; absent on older
+           * sessions and on every service that does not come to the customer.
+           */
+          addressId?: string | null;
+      })
     /**
      * Pay a booking's deposit or its balance.
      *

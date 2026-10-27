@@ -8613,6 +8613,91 @@
       ]
     },
     {
+      "name": "bookings_address_step",
+      "version": 1,
+      "title": "Answer the appointment address question",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "The customer's next message while the appointment address step is open: typed text, a shared location, or a tapped map match (gc_...). The backend decides what it answers (address, town or description), saves the address to the account at the end, and opens the time picker with it chosen.",
+      "when_to_use": "ONLY from wi-mall-core's routing, when /identity/sync returns data.bookingAddress (not null) and the message is text that is not a /command, a location, or a gc_ token.",
+      "when_not_to_use": "Never from the model. Never when data.bookingAddress is null.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/bookings/address-step"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 300,
+            "description": "Exactly what the customer typed."
+          },
+          "location": {
+            "type": "object",
+            "description": "The shared location, { lat, lng }."
+          },
+          "token": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "A gc_ map-match token the customer tapped."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "text",
+          "location",
+          "token"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "active",
+          "stage",
+          "addressId",
+          "productId"
+        ],
+        "result_kind": "booking_address_step"
+      },
+      "errors": [
+        {
+          "code": "VALIDATION_ERROR",
+          "status": 400,
+          "category": "validation",
+          "when": "Not exactly one of text, location, token",
+          "customer_action": "reprompt"
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "idempotency": "A map-match handle is single-use; the step is keyed per conversation and every answer overwrites it.",
+      "requires_confirmation": false,
+      "risk": "medium",
+      "side_effects": [
+        "The last answer saves an address to the customer's account"
+      ],
+      "context_resolution": {
+        "subject": "none",
+        "policy": "not_applicable"
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "Always carries a reply; relay it.",
+        "telegram": "Always carries a reply; relay it."
+      },
+      "commands": [
+        "bookings"
+      ]
+    },
+    {
       "name": "bookings_list",
       "version": 1,
       "title": "The customer's appointments",
@@ -8785,6 +8870,87 @@
       "requires_customer_role": true,
       "platform_notes": {
         "whatsapp": "Read awaitingVendorApproval, NEVER status — status pending means the seller has not accepted yet; never say they are booked before that."
+      },
+      "commands": [
+        "bookings"
+      ]
+    },
+    {
+      "name": "bookings_show_place",
+      "version": 1,
+      "title": "Where an appointment happens",
+      "tier": "extended",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Sends the customer where their appointment takes place: a map pin plus the address and its description for one at the shop, their own address for one at home, or the session link for one online. The shop's instructions and the link come only when the website would show them (accepted, paid, and from the shop's margin before the start).",
+      "when_to_use": "The customer asks where an appointment is, for its address, location, map, directions or link (\"where is my appointment?\", \"send me the location\", \"what is the link?\").",
+      "when_not_to_use": "Not to book or to move one. Never repeat the address, the link or the instructions in your own words: the messages are sent for you, so your whole answer is [sent].",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/bookings/{bookingId}/place"
+      },
+      "backing_endpoint": {
+        "method": "GET",
+        "path": "/api/customer/bookings/:id",
+        "doc": "customer/bookings.md#managing-your-bookings"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bookingId"
+        ],
+        "properties": {
+          "bookingId": {
+            "type": "string",
+            "description": "The appointment id, from bookings_list."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "bookingId"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "bookingId",
+          "locationKind",
+          "addressVisible",
+          "accessState"
+        ],
+        "never_relay": [
+          "coordinates"
+        ],
+        "result_kind": "booking_place"
+      },
+      "errors": [
+        {
+          "code": "NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "Not this customer's booking",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": false,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "low",
+      "context_resolution": {
+        "subject": "booking",
+        "policy": "focus_or_most_recent",
+        "must_echo": true
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "The answer carries reply/replies (a location message, then a text) and they are sent to the customer for you. Your whole answer is [sent].",
+        "telegram": "Same: a venue (map) message, then a text, sent for you."
       },
       "commands": [
         "bookings"

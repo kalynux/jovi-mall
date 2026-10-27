@@ -197,6 +197,7 @@
     "test:payout-methods": "ts-node scripts/test/test-payout-methods.ts",
         "test:booking-availability": "ts-node scripts/test/test-booking-availability.ts",
         "test:appointment-access": "ts-node scripts/test/test-appointment-access.ts",
+        "test:bot-booking-address": "ts-node scripts/test/test-bot-booking-address.ts",
         "test:admin-bookings": "ts-node scripts/test/test-admin-bookings.ts",
         "test:vendor-booking-dash": "ts-node scripts/test/test-vendor-booking-dash.ts",
         "test:booking-notification": "ts-node scripts/test/test-booking-notification.ts",

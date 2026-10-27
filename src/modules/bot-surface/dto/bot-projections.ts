@@ -262,6 +262,14 @@ export interface BotSyncDto {
      * that never reaches the bargaining route; it waits for the next sync instead.
      */
     pendingBargain: { productId: string; variantId: string; quantity: number } | null;
+    /**
+     * ⭐ **The appointment address step is waiting for this message** (2026-10-27). Present →
+     * the automation layer sends the customer's text, shared location or `gc_…` tap to
+     * `POST /bookings/address-step` instead of to the assistant. `stage` is informational: the
+     * backend decides what the message answers. Null whenever onboarding has a question of its
+     * own, which always goes first.
+     */
+    bookingAddress: { stage: 'address' | 'city' | 'description' } | null;
 }
 
 /**
@@ -322,6 +330,8 @@ export function toBotSyncDto(input: {
         },
         // Only `/identity/sync` ever sets it, and only after reading the checklist above.
         pendingBargain: null,
+        // Only `/identity/sync` sets it, from the step store.
+        bookingAddress: null,
     };
 }
 

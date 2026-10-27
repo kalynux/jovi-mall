@@ -411,6 +411,19 @@ const RETRY_BOOKING_BALANCE: QuickReplyDef = { token: 'bpay:{{payBalanceBookingI
 /** Reuses `PAY_BALANCE_LABEL` — the URL button's own words — rather than a second construction. */
 const PAY_BOOKING_BALANCE: QuickReplyDef = { token: 'bpay:{{bookingId}}:b', label: PAY_BALANCE_LABEL, templateFallback: 'open:bl' };
 
+/**
+ * ⭐ **Show the place** (owner decision A-8, 2026-10-27) — `place:<bookingId>` sends the appointment's
+ * map pin and address (or its link) into the chat, through the website's own gates
+ * (`domain/booking-place-reply.ts`). On the "booking confirmed" message and the reminder, and on
+ * their WhatsApp templates too. For an appointment at the customer's own address it answers with
+ * that address, which is still the true answer to "where is it". Same label as the chat receipt's
+ * button (`bot-booking-place-copy.ts`), ≤ 20 characters.
+ */
+const SHOW_PLACE_LABEL: Record<Language, string> = {
+    en: 'Show the place', fr: 'Voir le lieu', pt: 'Ver o local', es: 'Ver el lugar', ar: 'عرض المكان'
+};
+const SHOW_BOOKING_PLACE: QuickReplyDef = { token: 'place:{{bookingId}}', label: SHOW_PLACE_LABEL, templateFallback: 'open:bl' };
+
 /** ≤ 20 characters in every language — WhatsApp's reply-button cap. */
 const SEE_DELIVERY_FEE_LABEL: Record<Language, string> = {
     en: 'See the new fee', fr: 'Voir les frais', pt: 'Ver a taxa', es: 'Ver la tarifa', ar: 'عرض الرسوم'
@@ -807,7 +820,8 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Cus
                 bodyParams: ['{{vendorName}}', '{{serviceName}}', '{{startAt}}']
             }
         },
-        button: BOOKING_BUTTON
+        button: BOOKING_BUTTON,
+        actions: [SHOW_BOOKING_PLACE]
     },
 
     // Both the old and the new time, always. A message carrying only the new one
@@ -1049,7 +1063,8 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Cus
                 bodyParams: ['{{serviceName}}', '{{vendorName}}', '{{startAt}}', '{{whenPhrase}}']
             }
         },
-        button: BOOKING_BUTTON
+        button: BOOKING_BUTTON,
+        actions: [SHOW_BOOKING_PLACE]
     },
 
     'booking.payment.received': {

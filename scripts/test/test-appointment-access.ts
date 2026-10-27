@@ -334,7 +334,8 @@ function main(): void {
         || code('modules/catalog/routes/product-booking.routes.ts').includes('metadata,\n    addressId'));
     assert('…the bot tool and the mini-app too', () =>
         code('modules/bot-surface/controllers/bot-booking.controller.ts').includes('input.addressId ?? null')
-        && code('modules/bot-surface/miniapp/surfaces/booking.core.ts').includes('input.addressId ?? null'));
+        // The screen's own choice first, then the address the chat's address step collected (2026-10-27).
+        && code('modules/bot-surface/miniapp/surfaces/booking.core.ts').includes('input.addressId ?? session.addressId ?? null'));
 
     originalConsole.log(`\n${passed} passed, ${failed} failed\n`);
     if (failed > 0) process.exitCode = 1;

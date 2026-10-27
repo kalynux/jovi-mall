@@ -35,6 +35,8 @@ import {
 import { formatBotPrice } from '../domain/product-card';
 import { ListedPrice, listPriceActions } from '../domain/list-price-option';
 import { pushCardIntoConversation } from '../services/conversation-push';
+import { serviceLocationKind } from '../miniapp/surfaces/booking.core';
+import { startBookingAddressStep, startBookingAddressStepFor } from './bot-booking-address.controller';
 import { conversationUrl } from '../domain/conversation-url';
 import { inAppSurfaceStore } from '../services/inapp-surface.store';
 import { pendingBargainStore } from '../services/pending-bargain.store';
@@ -150,7 +152,18 @@ export class BotPurchaseController {
          * thread while the customer is choosing a time would be a second, stale conversation.
          */
         const straightToPicker = result.verb === 'book' && result.url !== null;
-        if (result.outcome === 'chat' && !straightToPicker) {
+        /**
+         * ⭐ A service that comes to the customer: the address step opens in the chat, pushed —
+         * this screen cannot ask it (2026-10-27).
+         */
+        if (result.needsAddress) {
+            const card = await startBookingAddressStepFor(
+                { userId: session.owner, channel: session.channel },
+                result.productId,
+                session.language,
+            );
+            await pushCardIntoConversation({ channel: session.channel, externalId: session.externalId }, card);
+        } else if (result.outcome === 'chat' && !straightToPicker) {
             /**
              * ⚠ **Recorded BEFORE the push**, so a customer quick enough to answer the pushed
              * question cannot reach `/identity/sync` ahead of the record. The question is what
@@ -243,7 +256,11 @@ async function handlePurchaseTap(req: Request, res: Response, action: ParsedBotA
         pressed: action.verb,
     });
 
-    setBotReply(req, replyForPurchase(result, language));
+    if (result.needsAddress) {
+        await startBookingAddressStep(req, result.productId);
+    } else {
+        setBotReply(req, replyForPurchase(result, language));
+    }
 
     sendSuccess(res, {
         outcome: result.outcome,
@@ -414,6 +431,12 @@ export interface PurchaseResult {
      * add the same item a second time.
      */
     addedToCart?: boolean;
+    /**
+     * True on a `book` result for a service the provider travels to (2026-10-27): no picker was
+     * minted, because the chat asks WHERE first (`bot-booking-address.controller.ts`). Each door
+     * opens that step instead of drawing the Book question.
+     */
+    needsAddress?: boolean;
 }
 
 /**
@@ -580,13 +603,17 @@ export async function executePurchase(ctx: PurchaseContext): Promise<PurchaseRes
          * for the customer who would rather type a day and a time, and for a deployment with no
          * screen (`url` null), where the chat offers the `open:bk` button instead.
          */
-        case 'book':
+        case 'book': {
+            // A service that comes to the customer asks where before any picker (owner, A-4).
+            const needsAddress = (await serviceLocationKind(productId)) === 'customer_address';
             return {
                 ...base,
                 outcome: 'chat',
                 message: purchaseInvitePrompt(product.title, 'book', language),
-                url: await mintPickerUrl(ctx, productId),
+                url: needsAddress ? null : await mintPickerUrl(ctx, productId),
+                needsAddress,
             };
+        }
 
         /**
          * `add` and `buy` are one cart write and two different next steps.

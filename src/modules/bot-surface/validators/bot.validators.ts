@@ -703,6 +703,26 @@ export const BotBookingListSchema = z
     .strict();
 
 export const BotBookingParamSchema = z.object({ bookingId: objectId });
+
+/**
+ * `POST /bookings/address-step` — the customer's next message while the appointment address step
+ * is open (2026-10-27): what they typed, the location they shared, or the map match they tapped
+ * (`gc_…`). Exactly one, forwarded verbatim by the automation layer, which interprets none of it.
+ */
+export const BotBookingAddressStepSchema = z
+    .object({
+        text: z.string().trim().min(1).max(300).optional(),
+        location: z
+            .object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) })
+            .strict()
+            .optional(),
+        token: z.string().trim().min(3).max(128).optional(),
+    })
+    .strict()
+    .refine(
+        (body) => [body.text, body.location, body.token].filter((v) => v !== undefined).length === 1,
+        { message: 'Send exactly one of text, location or token' },
+    );
 export const BotBookingCancelSchema = z
     .object({ reason: z.string().trim().max(500).optional() })
     .strict();

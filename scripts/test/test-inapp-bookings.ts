@@ -802,7 +802,11 @@ async function phase6(): Promise<void> {
      * time, drawn by `booking.reschedule_proposed`; both take the booking id and answer it through
      * `BookingService.answerRescheduleProposal`.
      */
-    const SERVES_A_BOOKING = new Set(['bpay', 'book', 'open:bl', 'tkt', 'yes:bkprop', 'no:bkprop']);
+    /*
+     * `place` (2026-10-27, A-8): Show the place, drawn by `booking.confirmed` and `booking.reminder`;
+     * `answerPlace` reads the booking owner-scoped (`getUserBooking`) and answers its place.
+     */
+    const SERVES_A_BOOKING = new Set(['bpay', 'book', 'open:bl', 'tkt', 'yes:bkprop', 'no:bkprop', 'place']);
     assert('⛔ no booking.* notification draws a token whose handler cannot serve a booking', () => {
         const bookingSituations = Object.keys(CUSTOMER_NOTIFICATION_CATALOG).filter((s) => s.startsWith('booking.'));
         const tokens = bookingSituations.flatMap((s) =>
@@ -863,7 +867,7 @@ async function phase6(): Promise<void> {
      * rules here would be a second opinion — ordered, and each position must exist.
      */
     assert('⛔ open:bk: 24-hex id, then the availability read\'s own refusals, then the mint', () => {
-        const shape = pickTap.indexOf('if (!/^[0-9a-f]{24}$/.test(productId)) throw unknownBotAction();');
+        const shape = pickTap.indexOf('if (!/^[0-9a-f]{24}$/.test(productId) || rest.length > 0) throw unknownBotAction();');
         const refused = pickTap.indexOf('await readBookingDays({ productId,');
         const minted = pickTap.indexOf('openInAppScreen(req, {');
         return shape > 0 && refused > shape && minted > refused
@@ -916,7 +920,8 @@ async function phase6(): Promise<void> {
         return origin > 0 && minted > origin
             && mint.includes("kind: 'bk',") && mint.includes('bookingId: null,')
             && mint.includes('owner: ctx.userId,') && mint.includes('channel: ctx.channel,')
-            && purchase.includes('url: await mintPickerUrl(ctx, productId),');
+            && purchase.includes('url: needsAddress ? null : await mintPickerUrl(ctx, productId),')
+            && purchase.includes("const needsAddress = (await serviceLocationKind(productId)) === 'customer_address';");
     });
 
     assert('⛔ the product screen goes straight to the picker and pushes no question into the chat', () => {
@@ -955,9 +960,9 @@ async function phase6(): Promise<void> {
             && !/if \(channel !== 'telegram'\) return;[\s\S]*if \(channel === 'whatsapp'\)/.test(receipt)
             && receipt.includes('sendButtons({')
             && receipt.includes('body: text,')
-            && receipt.includes('buttons: [{ id: myBookings.token, title: myBookings.label }],')
+            && receipt.includes('{ id: myBookings.token, title: myBookings.label },')
             && receipt.includes("token: openSurfaceActionId('bl')")
-            && receipt.includes('callbackData: myBookings.token,');
+            && receipt.includes('{ text: myBookings.label, callbackData: myBookings.token },');
     });
 
     // ── #1 — one message, in the chat they booked from ──────────────────────────────────────

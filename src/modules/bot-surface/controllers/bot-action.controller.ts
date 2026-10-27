@@ -16,6 +16,9 @@ import { LIST_PRICE_ACTION_HANDLERS } from './bot-list-price.controller';
 import { DIGITAL_ACTION_HANDLERS } from './bot-catalog.controller';
 import { REVIEW_ACTION_HANDLERS } from './bot-review.controller';
 import { BOOKING_ACTION_HANDLERS } from './bot-booking.controller';
+import { BOOKING_ADDRESS_ACTION_HANDLERS } from './bot-booking-address.controller';
+import { bookingAddressStepStore } from '../services/booking-address-step.store';
+import { BOOKING_ADDRESS_CONTEXT } from '../domain/bot-action-id';
 import { IDENTITY_ACTION_HANDLERS } from './bot-identity.controller';
 import { DELIVERY_FEE_ACTION_HANDLERS } from './bot-delivery-fee.controller';
 
@@ -117,6 +120,11 @@ const HANDLERS = mergeActionHandlers([
      * them, so neither may sit in a chat history waiting to be pressed.
      */
     ['bookings', BOOKING_ACTION_HANDLERS],
+    /**
+     * yes:bkadr · no:bkadr · place — where an appointment happens (2026-10-27): the address
+     * step's buttons, and Show the place. `open:bk:<productId>:<addressId>` stays with `bookings`.
+     */
+    ['appointments', BOOKING_ADDRESS_ACTION_HANDLERS],
     /** yes:tos — the Accept button on the last onboarding step (terms of service). */
     ['identity', IDENTITY_ACTION_HANDLERS],
     /**
@@ -166,6 +174,20 @@ export class BotActionController {
             console.warn('[BotSurface] could not clear the pending question on a tap', error);
         }
 
+        /**
+         * ⭐ **Any other button ends the appointment address step** (2026-10-27) — a step left open
+         * would read the customer's next, unrelated message as an address. Only the step's own
+         * Yes buttons and the saved-address tap (which clears it itself) leave it alone.
+         * Best-effort, like the clear above: the step lapses on its own in fifteen minutes.
+         */
+        if (!keepsBookingAddressStep(token)) {
+            try {
+                await bookingAddressStepStore.clear({ userId: caller.userId, channel: req.bot!.envelope.channel });
+            } catch (error) {
+                console.warn('[BotSurface] could not clear the booking address step on a tap', error);
+            }
+        }
+
         await routeTap(req, res, token);
     });
 
@@ -207,6 +229,11 @@ export class BotActionController {
  * `test:inapp-purchase` pins that the door resolves the caller before anything parses a token, by
  * position in this file.
  */
+/** The taps that continue the appointment address step rather than leaving it. */
+function keepsBookingAddressStep(token: string): boolean {
+    return token.startsWith(`yes:${BOOKING_ADDRESS_CONTEXT}:`) || token.startsWith('open:bk:');
+}
+
 async function routeTap(req: Request, res: Response, token: string): Promise<void> {
     const parsed = parseBotActionId(token);
     if (!parsed) throw unknownBotAction();

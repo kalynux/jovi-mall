@@ -3,6 +3,7 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { botPendingQuestionStore } from './bot-pending-question.store';
 import { botRecentlySentStore } from './bot-recently-sent.store';
+import { bookingAddressStepStore } from './booking-address-step.store';
 
 /**
  * ⭐ **An administrator wipes the bot's conversation memory for one customer** — the jovi-mall half.
@@ -75,7 +76,12 @@ const MONGO_PORTS: BotMemoryResetPorts = {
         ).lean<{ bot_memory_epoch?: number }>();
         return updated ? updated.bot_memory_epoch ?? 0 : null;
     },
-    clearPendingQuestions: (userId) => botPendingQuestionStore.clearForUser(userId),
+    // The appointment address step is a question waiting for an answer too — a reset that left
+    // it would read the customer's next message as an address.
+    clearPendingQuestions: async (userId) => {
+        await botPendingQuestionStore.clearForUser(userId);
+        await bookingAddressStepStore.clearForUser(userId);
+    },
     clearRecentlySent: (userId) => botRecentlySentStore.clearForUser(userId),
 };
 

@@ -2513,6 +2513,11 @@ happened.
 | `bpay:<bookingId>` · `bpay:<bookingId>:b` | **Try again**, under the `booking.payment_failed` notification (the first form for the appointment's price, the second for a balance) · **Pay balance**, under `booking.balance.due` | the payment screen for that appointment — its price, or with `:b` the balance a longer job came to. **Charges nothing by itself**: the screen shows the amount and the customer presses Pay there. Refused, with one sentence, when there is nothing to pay any more (cancelled, already paid, no payment required, balance settled) | a screen button; without screens configured, the storefront's page for that booking | `{ handle, opened: "booking_payment", purpose }`. ⛔ `handle` is a credential — § 19.5. Another customer's booking is `404 BOOKING_NOT_FOUND` |
 | `yes:bkprop:<bookingId>` | 🆕 2026-10-26 · **Accept new time**, under the `booking.reschedule_proposed` notification (the vendor proposed a new time — owner decision D-9) | accepts the vendor's proposal: the booking moves to the proposed time (occupancy re-checked, calendar mirrored), and the vendor is told. Same code as the website's accept | text: *"Done — your appointment is now Tue 3 Nov, 09:00."* in the customer's language, on the shop's clock. A proposal already answered, withdrawn or lapsed: *"That new time is no longer waiting for an answer…"* — not the expired-button sentence | the booking, as `toBotBookingDto` (with `rescheduleProposal.status: "accepted"`), or `{ answered: false, bookingId }`. Another customer's booking is `404 BOOKING_NOT_FOUND` |
 | `no:bkprop:<bookingId>` | 🆕 2026-10-26 · **Keep my time**, under the same notification | declines it: the original time stays, and the customer may now cancel with a **full refund whatever the cancellation policy says**; the vendor is told | text: *"Got it — your appointment stays … you can cancel it with a full refund."* · same "no longer waiting" sentence when nothing is open | the booking (`rescheduleProposal.status: "declined"`), or `{ answered: false, bookingId }` |
+| `open:bk:<productId>:<addressId>` | 🆕 2026-10-27 · one of the customer's **saved addresses**, under the appointment address question (a service the provider travels to) | opens the day-and-time picker with that address already chosen; the address must still be one of the TAPPER's saved addresses (else the unknown-tap sentence). Ends the address step | as `open:bk:<productId>` | `{ opened: "booking_picker", productId, addressId }` |
+| `yes:bkadr:typed` | 🆕 2026-10-27 · **Use what I typed**, under the map matches of a typed appointment address (or the "not on the map" sentence) | keeps the typed text as the address (no map point) and asks the town | text: *"Which town or city is it in?"* + Cancel | `{ active: true, stage: "city" }` |
+| `yes:bkadr:nodesc` | 🆕 2026-10-27 · **No description**, under the description question | saves the address to the account (map point when one was chosen; the typed text and town otherwise) and opens the picker with it chosen | *"Saved: … Now choose a time."* then the picker door | `{ active: false, addressId, productId }` |
+| `no:bkadr` | 🆕 2026-10-27 · **Cancel**, on every message of the address step | ends the step; nothing is saved | text: *"OK, I've stopped. Tap Book again whenever you're ready."* | `{ active: false }` |
+| `place:<bookingId>` | 🆕 2026-10-27 · **Show the place**, under the chat booking receipt (vendor's place or online), the `booking.confirmed` message and the `booking.reminder` (chat and template) | sends where the appointment happens, through the website's own gates (`customerAppointmentFields`): a **map pin** (Telegram `sendVenue`, WhatsApp `location`) and the address + description for one at the shop; the customer's own address for one at home; the link for one online. The shop's instructions and the link only once accepted, paid and inside the shop's margin — otherwise when they will appear. Writes nothing | the pin, then a text (`replies`) | `{ bookingId, locationKind, addressVisible, accessState }`. Another customer's booking is `404 BOOKING_NOT_FOUND` |
 
 ⚠ **A button names a BOOKING or a PRODUCT, never a screen handle.** A picker handle (`bk`)
 lives fifteen minutes and a payment handle (`bp`) moves money, so neither may sit in a chat
@@ -2523,6 +2528,24 @@ again when Pay is pressed.
 
 ⚠ **`bpay:` replaced `pay:rt:` under a failed booking payment.** `pay:rt:`'s handler serves
 orders only, so a booking's Try again answered the customer about their orders.
+
+#### The appointment address step and the place (2026-10-27)
+
+Owner decisions A-1…A-8, `PRODUCTION-READINESS/BOT-BOOKING-ADDRESS-AND-PLACE-PLAN.md`.
+
+**A service the provider travels to (`customer_address`) asks WHERE before the time picker.** Both Book doors (`book:` and `open:bk:<productId>`) answer, for such a service, with the address question instead of the picker: one message with the customer's saved addresses as `open:bk:<productId>:<addressId>` rows and **Cancel**, then a location request (*"Or type a new address… or share your location"*). With no saved address, only the location request. Every other service asks nothing.
+
+⭐ **The routing rule for the automation layer.** While the step is open, `/identity/sync` returns `data.bookingAddress: { stage }` (and `null` otherwise, and always `null` while `onboarding.next` is set). When it is set, the customer's next message goes to **`POST /bookings/address-step`** — never to the assistant — if it is one of:
+
+| Message | Body |
+|---|---|
+| text that is not a `/command` | `{ "text": "<verbatim>" }` |
+| a shared location (`kind: location`) | `{ "location": { "lat": …, "lng": … } }` |
+| a tapped map match (`gc_…` token) | `{ "token": "gc_…" }` |
+
+Every answer carries `reply` (sometimes `replies`); relay it. Every other tap goes to `/catalog/action` as usual and **ends the step**, as does a command the platform answers; the step also lapses after 15 minutes. The answers, in order: a typed address → up to five map matches + **Use what I typed** (`yes:bkadr:typed`), or *"I couldn't find that on the map"* + the same button; a location → *"Is this the place?"* with one row; a match or a confirmed pin → the optional description (*No description* = `yes:bkadr:nodesc`); **Use what I typed** → *"Which town or city is it in?"* then the description. The last answer saves the address to the customer's account (map point when one was chosen, the typed text and town otherwise — never a `location` key) and replies *"Saved: … Now choose a time."* followed by the picker door, which opens with that address already chosen (the Telegram page pre-selects it; the WhatsApp form draws its plain times screen).
+
+**`bookings_show_place`** (`POST /bookings/:bookingId/place`, the model's tool) and the **`place:<bookingId>`** button send where an appointment happens, through `customerAppointmentFields`: a **map pin** (Telegram `sendVenue`, WhatsApp `type: location`) then a text with the description and, when open, the shop's instructions — or when they will appear. The model answers `[sent]`; the messages are already on their way. Coordinates never appear in any text, `recentlySent` included.
 
 #### Reviews
 

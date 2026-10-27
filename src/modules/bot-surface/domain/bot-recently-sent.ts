@@ -194,6 +194,16 @@ export function sentTextForIntent(intent: BotReplyIntent | null | undefined): st
                 intent.text || intent.browsePrompt,
                 intent.cards.map((card) => card.title),
             );
+        case 'place':
+            // ⚠ The name and the address line only — never the coordinates, which are the
+            // one thing this record must not carry into a model's context.
+            return compactSentText(intent.name, [intent.address]);
+        case 'sequence': {
+            const lines = intent.parts
+                .map((part) => sentTextForIntent(part))
+                .filter((line): line is string => !!line);
+            return lines.length > 0 ? compactSentText(lines.join(' · '), []) : null;
+        }
         default: {
             const exhaustive: never = intent;
             return exhaustive;

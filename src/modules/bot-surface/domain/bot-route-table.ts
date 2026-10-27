@@ -384,7 +384,16 @@ export const BOT_ROUTES: readonly BotRouteSpec[] = Object.freeze([
      * can end with a slot held. See `BotBookingController.create`.
      */
     { tool: 'bookings_create', method: 'POST', path: '/bookings', mutating: true, requiresCustomerRole: true },
+    /**
+     * The appointment address step (2026-10-27): the customer's next text, location or map-match
+     * tap while `/identity/sync` reports `bookingAddress`. Flow-only — the automation layer
+     * routes to it on that field, never the model. A LITERAL, so above the `:bookingId` rows.
+     * `mutating`: its last answer saves an address to the account.
+     */
+    { tool: 'bookings_address_step', method: 'POST', path: '/bookings/address-step', mutating: true, requiresCustomerRole: true },
     { tool: 'bookings_get', method: 'POST', path: '/bookings/:bookingId', mutating: false, requiresCustomerRole: true },
+    /** Where it happens — a map pin and the address, or the link — sent as the reply (2026-10-27). */
+    { tool: 'bookings_show_place', method: 'POST', path: '/bookings/:bookingId/place', mutating: false, requiresCustomerRole: true },
     { tool: 'bookings_get_balance', method: 'POST', path: '/bookings/:bookingId/balance', mutating: false, requiresCustomerRole: true },
     { tool: 'bookings_payment_status', method: 'POST', path: '/bookings/:bookingId/payment-status', mutating: false, requiresCustomerRole: true },
     /**

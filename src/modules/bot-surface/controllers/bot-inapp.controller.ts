@@ -371,7 +371,7 @@ export type InAppScreenPayload =
      * disagree.
      */
     | { kind: 'bl' }
-    | { kind: 'bk'; productId: string; bookingId: string | null }
+    | { kind: 'bk'; productId: string; bookingId: string | null; addressId?: string | null }
     | { kind: 'bp'; bookingId: string; purpose: 'primary' | 'balance' };
 
 /**

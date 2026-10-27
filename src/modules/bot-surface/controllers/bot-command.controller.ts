@@ -7,6 +7,7 @@ import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { BotCommandDispatchSchema } from '../validators/bot.validators';
 import { openBookingsScreen } from './bot-booking.controller';
 import { beginBargainFromLink } from '../services/bargain-entry.service';
+import { bookingAddressStepStore } from '../services/booking-address-step.store';
 
 /**
  * `POST /command` — the typed slash-command door.
@@ -65,6 +66,19 @@ export class BotCommandController {
             },
             language: botResponseLanguageOf(req),
         });
+
+        /**
+         * ⭐ A command the platform answers ends the appointment address step (2026-10-27): the
+         * customer moved on, and a step left open would read their next message as an address.
+         * Best-effort — the step lapses on its own in fifteen minutes.
+         */
+        if (outcome.kind !== 'to_model') {
+            try {
+                await bookingAddressStepStore.clear({ userId: caller.userId, channel: caller.channel });
+            } catch (error) {
+                console.warn('[BotSurface] could not clear the booking address step on a command', error);
+            }
+        }
 
         if (outcome.kind === 'to_model') {
             /**

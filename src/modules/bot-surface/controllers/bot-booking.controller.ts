@@ -20,7 +20,8 @@ import { surfacePath, windowForChat } from '../domain/bot-list-window';
 import { openInAppScreen } from './bot-inapp.controller';
 import { parseBookingPayArgument } from '../domain/bot-action-id';
 import { assertSomethingDue } from '../miniapp/surfaces/booking-rows';
-import { readBookingDays } from '../miniapp/surfaces/booking.core';
+import { readBookingDays, serviceLocationKind } from '../miniapp/surfaces/booking.core';
+import { openPickerAtAddress, startBookingAddressStep } from './bot-booking-address.controller';
 import {
     BotActionHandlers,
     ParsedBotAction,
@@ -611,10 +612,31 @@ async function bookingPayTap(req: Request, res: Response, action: ParsedBotActio
  * store slug. Never null; `BOT_MINIAPP_BASE_URL` is unset in production and this is what runs.
  */
 async function bookingPickerTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
-    const productId = action.argument;
-    if (!/^[0-9a-f]{24}$/.test(productId)) throw unknownBotAction();
+    /**
+     * `open:bk:<productId>` or, from the appointment address step, `open:bk:<productId>:<addressId>`
+     * — a saved address the customer tapped (2026-10-27, `bot-booking-address.controller.ts`).
+     */
+    const [productId, addressId, ...rest] = action.argument.split(':');
+    if (!/^[0-9a-f]{24}$/.test(productId) || rest.length > 0) throw unknownBotAction();
+    if (addressId !== undefined && !/^[0-9a-f]{24}$/.test(addressId)) throw unknownBotAction();
 
     await readBookingDays({ productId, language: botResponseLanguageOf(req) });
+
+    if (addressId) {
+        await openPickerAtAddress(req, productId, addressId);
+        sendSuccess(res, { opened: 'booking_picker', productId, addressId });
+        return;
+    }
+
+    /**
+     * ⭐ **A service the provider travels to asks WHERE first, in the chat** (owner decision A-4):
+     * a saved address, a shared location or a typed one — then the picker opens with it chosen.
+     */
+    if ((await serviceLocationKind(productId)) === 'customer_address') {
+        await startBookingAddressStep(req, productId);
+        sendSuccess(res, { opened: 'booking_address_step', productId });
+        return;
+    }
 
     const handle = await openInAppScreen(req, {
         payload: { kind: 'bk', productId, bookingId: null },

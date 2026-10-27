@@ -183,6 +183,17 @@ export const BOT_ACTION_VERBS = Object.freeze([
      * Worst case `dfee:<24>:<24>` = 54 bytes. Grammar owned by `parseDeliveryFeeArgument`.
      */
     'dfee',
+    // ── Where an appointment happens (2026-10-27) ────────────────────────────
+    /**
+     * `place:<bookingId>` — send this appointment's place into the chat: a map pin and the
+     * address, or the link of an online session, through the same gates the website applies.
+     *
+     * ⚠ **Its own verb because it is neither a screen nor a confirm.** `open:` means *leave the
+     * chat for a screen* and this keeps the customer in it; `yes:` is an answer to a question and
+     * nothing was asked. The notification catalogue writes it as a LITERAL (`place:{{…}}`), the
+     * `bpay:` precedent. 30 bytes.
+     */
+    'place',
 ] as const);
 export type BotActionVerb = (typeof BOT_ACTION_VERBS)[number];
 
@@ -575,6 +586,42 @@ export function paymentStatusActionId(transactionId: string): string {
  */
 export function bookingPayActionId(bookingId: string, purpose: 'primary' | 'balance'): string {
     return token('bpay', purpose === 'balance' ? `${bookingId}:b` : bookingId);
+}
+
+/** `place:<bookingId>` — see the verb's note in `BOT_ACTION_VERBS`. */
+export function bookingPlaceActionId(bookingId: string): string {
+    return token('place', bookingId);
+}
+
+/**
+ * `open:bk:<productId>:<addressId>` — the time picker, with the appointment's address already
+ * chosen (one of the customer's saved addresses). 57 bytes.
+ *
+ * ⚠ **The address id is re-checked on the tap** — it must still be one of the TAPPER's saved
+ * addresses — so a button forwarded into another chat books nothing at a stranger's door.
+ */
+export function bookingPickerAtAddressActionId(productId: string, addressId: string): string {
+    return openSurfaceActionId('bk', `${productId}:${addressId}`);
+}
+
+/**
+ * The three buttons of the appointment address step (2026-10-27), on the shared confirm pair
+ * under ONE context, `bkadr` — never answerable in words (it is not in
+ * `ANSWERABLE_QUESTION_CONTEXTS`), so drawing them clears any typed-answer question instead.
+ *
+ *     yes:bkadr:typed    keep what the customer typed (no map match chosen)
+ *     yes:bkadr:nodesc   no description — save the address and open the picker
+ *     no:bkadr           stop asking
+ */
+export const BOOKING_ADDRESS_CONTEXT = 'bkadr';
+export type BookingAddressStepButton = 'typed' | 'nodesc';
+
+export function bookingAddressStepActionId(button: BookingAddressStepButton): string {
+    return confirmActionId(BOOKING_ADDRESS_CONTEXT, button);
+}
+
+export function bookingAddressCancelActionId(): string {
+    return declineActionId(BOOKING_ADDRESS_CONTEXT);
 }
 
 /** The argument of a `bpay:` token, or null when it is not one this service could have drawn. */

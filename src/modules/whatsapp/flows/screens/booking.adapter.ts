@@ -52,11 +52,19 @@ export interface BookingPlaceView {
     kind: string;
     copy: { title: string; none: string } | null;
     addresses: Array<{ addressId: string; label: string; line: string }> | null;
+    /** The address the chat already collected (2026-10-27): nothing left to ask. */
+    chosenAddressId?: string | null;
 }
 
-/** Whether this place needs the customer to pick an address. */
+/**
+ * Whether this place needs the customer to pick an address.
+ *
+ * ⚠ **Not when the chat already collected one** (`chosenAddressId`): the plain `TIMES` screen is
+ * drawn and the confirm falls back to the session's address — so the published form needs no
+ * change, and a one-option drop-down the customer must still open is never drawn.
+ */
 export function needsAddress(place: BookingPlaceView | null | undefined): boolean {
-    return place?.kind === 'customer_address';
+    return place?.kind === 'customer_address' && !place.chosenAddressId;
 }
 
 /**

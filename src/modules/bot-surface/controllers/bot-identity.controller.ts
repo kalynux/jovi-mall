@@ -12,6 +12,7 @@ import { FulfillmentStatus } from '../../orders/order.model';
 import { geoCandidateStore } from '../services/geo-candidate.store';
 import { pendingBargainStore } from '../services/pending-bargain.store';
 import { botPendingQuestionStore } from '../services/bot-pending-question.store';
+import { bookingAddressStepStore } from '../services/booking-address-step.store';
 import { botRecentlySentStore } from '../services/bot-recently-sent.store';
 import { BotPendingQuestion, PendingQuestionOwner } from '../domain/bot-pending-question';
 import { BotRecentlySentEntry } from '../domain/bot-recently-sent';
@@ -200,9 +201,18 @@ export class BotIdentityController {
             ? null
             : await pendingBargainStore.consume(envelope.channel, envelope.externalId, outcome.account.userId);
 
+        /**
+         * The appointment address step, when one is open and onboarding has nothing to ask —
+         * the field n8n routes the next message on (2026-10-27). Fail-open to null: a Redis blip
+         * sends this one message to the assistant, which is the pre-step behaviour.
+         */
+        const bookingAddress = dto.onboarding.next
+            ? null
+            : await bookingAddressStepOf({ userId: outcome.account.userId, channel: outcome.account.channel });
+
         sendSuccess(
             res,
-            { ...dto, pendingBargain },
+            { ...dto, pendingBargain, bookingAddress },
             // 201 on the call that created the account, 200 otherwise. `isNew` in the body
             // is the field a caller should branch on — the status is for the HTTP log.
             { status: outcome.createdAccount ? 201 : 200 },
@@ -584,6 +594,16 @@ async function describe(req: Request, outcome: BotRegistrationOutcome) {
  * turn. The cost of a null is that the model does not know about the question, and the customer
  * taps the button instead — nothing runs on its own.
  */
+async function bookingAddressStepOf(owner: PendingQuestionOwner): Promise<BotSyncDto['bookingAddress']> {
+    try {
+        const step = await bookingAddressStepStore.peek(owner);
+        return step ? { stage: step.stage } : null;
+    } catch (error) {
+        console.warn('[BotSurface] could not read the booking address step', error);
+        return null;
+    }
+}
+
 async function waitingQuestionOf(owner: PendingQuestionOwner): Promise<BotPendingQuestion | null> {
     try {
         return await botPendingQuestionStore.peek(owner);
@@ -734,7 +754,9 @@ async function setCompletionReply(
      */
     const review = onboardingReviewFor(reviewFactsOf(customer), language);
     const intent = await replyForHeldBargain(conversation, language);
-    if (intent) {
+    // A held bargain answers with a worded intent; the two that carry no `text` (a pin, a
+    // sequence) are never among them, and fall through to the welcome if they ever were.
+    if (intent && intent.kind !== 'place' && intent.kind !== 'sequence') {
         setBotReply(req, { ...intent, text: `${review}\n\n${intent.text}` });
         return;
     }

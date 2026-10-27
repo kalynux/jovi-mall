@@ -2050,6 +2050,44 @@
     }
   },
   {
+    "name": "bookings_show_place",
+    "type": "n8n-nodes-base.httpRequestTool",
+    "typeVersion": 4.5,
+    "parameters": {
+      "toolDescription": "Sends the customer where their appointment takes place: a map pin plus the address and its description for one at the shop, their own address for one at home, or the session link for one online. The shop's instructions and the link come only when the website would show them (accepted, paid, and from the shop's margin before the start). USE IT WHEN: The customer asks where an appointment is, for its address, location, map, directions or link (\"where is my appointment?\", \"send me the location\", \"what is the link?\"). NOT THIS TOOL: Not to book or to move one. Never repeat the address, the link or the instructions in your own words: the messages are sent for you, so your whole answer is [sent]. ⚠ The answer carries reply/replies (a location message, then a text) and they are sent to the customer for you. Your whole answer is [sent].",
+      "method": "POST",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/bookings/{{ encodeURIComponent(String($fromAI(\"bookingId\", \"The appointment id, from bookings_list.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}/place",
+      "authentication": "genericCredentialType",
+      "genericAuthType": "httpBearerAuth",
+      "sendHeaders": true,
+      "headerParameters": {
+        "parameters": [
+          {
+            "name": "X-Webhook-Secret",
+            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+          }
+        ]
+      },
+      "sendBody": true,
+      "specifyBody": "json",
+      "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language } }) }}",
+      "options": {
+        "response": {
+          "response": {
+            "neverError": true
+          }
+        },
+        "timeout": 20000
+      }
+    },
+    "credentials": {
+      "httpBearerAuth": {
+        "id": "lz5ivIop9DF8mPHa",
+        "name": "jovi-mall-Bearer Auth account"
+      }
+    }
+  },
+  {
     "name": "bookings_get_balance",
     "type": "n8n-nodes-base.httpRequestTool",
     "typeVersion": 4.5,

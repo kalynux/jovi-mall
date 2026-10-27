@@ -20,6 +20,7 @@ import { BotDiscoveryController } from './controllers/bot-discovery.controller';
 import { BotActionController } from './controllers/bot-action.controller';
 import { BotCheckoutController } from './controllers/bot-checkout.controller';
 import { BotBookingController } from './controllers/bot-booking.controller';
+import { BotBookingAddressController } from './controllers/bot-booking-address.controller';
 import { BotPaymentMethodController } from './controllers/bot-payment-method.controller';
 import { BotReviewController } from './controllers/bot-review.controller';
 import { BotNotificationController } from './controllers/bot-notification.controller';
@@ -234,6 +235,8 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
     bookings_pay_balance: BotBookingController.payBalance,
     bookings_cancel: BotBookingController.cancel,
     bookings_reschedule: BotBookingController.reschedule,
+    bookings_address_step: BotBookingAddressController.answer,
+    bookings_show_place: BotBookingAddressController.place,
 
     // ── Saved payment methods ────────────────────────────────────────────────
     payment_methods_list: BotPaymentMethodController.list,

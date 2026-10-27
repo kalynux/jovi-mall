@@ -161,9 +161,16 @@
     var list = place.addresses || [];
     el.placeLabel.textContent = list.length > 0 ? (words.title || "") : (words.none || "");
     el.placeSelect.hidden = list.length === 0;
-    el.placeSelect.innerHTML = '<option value="">—</option>' + list.map(function (a) {
+    // The address the chat already collected: it is the only entry, already chosen, with no
+    // empty "—" row to fall back to (2026-10-27).
+    var preset = place.chosenAddressId || null;
+    el.placeSelect.innerHTML = (preset ? "" : '<option value="">—</option>') + list.map(function (a) {
       return '<option value="' + esc(a.addressId) + '">' + esc(a.label ? a.label + " — " + a.line : a.line) + "</option>";
     }).join("");
+    if (preset) {
+      el.placeSelect.value = preset;
+      chosenAddress = preset;
+    }
   }
 
   function canConfirm() {

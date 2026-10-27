@@ -10,6 +10,7 @@ import { inAppSurfaceStore } from '../../services/inapp-surface.store';
 import { bookingChatReceipt } from '../../domain/bot-booking-copy';
 import { botChrome } from '../../domain/bot-chrome-copy';
 import { openSurfaceActionId } from '../../domain/bot-action-id';
+import { showPlaceOption } from '../../domain/booking-place-reply';
 import { toBotCopyLanguage } from '../../domain/bot-error-copy';
 import { __IN_APP_SCREEN_PATH } from '../../domain/inapp-url';
 import {
@@ -197,6 +198,14 @@ async function pushReceipt(
         language,
     );
     const myBookings = { label: botChrome('myBookingsButton', language), token: openSurfaceActionId('bl') };
+    /**
+     * ⭐ **Show the place** (owner decision A-8, 2026-10-27) — a map pin and the address, or the
+     * link, sent into the chat on the tap through the website's own gates. Not for an appointment
+     * at the customer's own address, nor for a move (the place did not change).
+     */
+    const place = !outcome.moved && (outcome.placeKind === 'vendor_address' || outcome.placeKind === 'online')
+        ? showPlaceOption(outcome.bookingId, language)
+        : null;
 
     if (channel === 'whatsapp') {
         try {
@@ -209,7 +218,10 @@ async function pushReceipt(
                 // Meta's bare-digit `wa_id` → strict E.164, or the messenger refuses it outright.
                 to: messagingPhoneToE164(externalId) ?? externalId,
                 body: text,
-                buttons: [{ id: myBookings.token, title: myBookings.label }],
+                buttons: [
+                    ...(place ? [{ id: place.id, title: place.label }] : []),
+                    { id: myBookings.token, title: myBookings.label },
+                ],
             });
             if (!sent.success) {
                 console.warn(`[BookingScreens] WhatsApp receipt refused: ${sent.error?.code ?? 'unknown'}`);
@@ -237,10 +249,10 @@ async function pushReceipt(
                  * a scope that belongs to them — which is also what lets the WhatsApp half say a
                  * content-free sentence and still be useful.
                  */
-                buttons: [{
-                    text: myBookings.label,
-                    callbackData: myBookings.token,
-                }],
+                buttons: [
+                    ...(place ? [{ text: place.label, callbackData: place.id }] : []),
+                    { text: myBookings.label, callbackData: myBookings.token },
+                ],
             },
         );
     } catch (error) {

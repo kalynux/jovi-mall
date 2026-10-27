@@ -287,26 +287,50 @@ export interface BookingPlaceOption {
     kind: AppointmentLocationKind;
     copy: ReturnType<typeof bookingPlaceCopy> | null;
     addresses: Array<{ addressId: string; label: string; line: string }> | null;
+    /**
+     * The address the chat already collected (2026-10-27), when the session carries one that is
+     * still the customer's. `addresses` is then that one address alone, and a screen shows it
+     * rather than asking; `confirm` uses it when the screen sends none.
+     */
+    chosenAddressId?: string | null;
 }
 
-async function placeOf(productId: string, owner: string, language: string | null | undefined): Promise<BookingPlaceOption | null> {
+/**
+ * Where a service happens — `null` when the vendor has not said (a service from before the
+ * appointment-location work). The ONE read of it on this surface: the chat's address step, the
+ * Book doors and the picker all ask here.
+ */
+export async function serviceLocationKind(productId: string): Promise<AppointmentLocationKind | null> {
     const variant = await ProductVariantModel.findOne({
         productId,
         status: 'active',
         optionSignature: DEFAULT_VARIANT_SIGNATURE,
     }).select('serviceConfig.location').lean();
-    const kind = variant?.serviceConfig?.location?.kind;
+    return variant?.serviceConfig?.location?.kind ?? null;
+}
+
+async function placeOf(
+    productId: string,
+    owner: string,
+    language: string | null | undefined,
+    presetAddressId: string | null = null,
+): Promise<BookingPlaceOption | null> {
+    const kind = await serviceLocationKind(productId);
     if (!kind) return null;
     if (kind !== 'customer_address') return { kind, copy: null, addresses: null };
-    const saved = await appointmentLocationService.customerAddresses(owner);
+    const saved = (await appointmentLocationService.customerAddresses(owner)).map((a) => ({
+        addressId: String(a._id),
+        label: a.label ?? '',
+        line: [a.address_line1, a.city].filter(Boolean).join(', '),
+    }));
+    // ⚠ Re-checked against the customer's CURRENT addresses: one deleted since the chat chose it
+    // falls back to asking, never to booking at an address that no longer exists.
+    const chosen = presetAddressId ? saved.find((a) => a.addressId === presetAddressId) ?? null : null;
     return {
         kind,
         copy: bookingPlaceCopy(language),
-        addresses: saved.map((a) => ({
-            addressId: String(a._id),
-            label: a.label ?? '',
-            line: [a.address_line1, a.city].filter(Boolean).join(', '),
-        })),
+        addresses: chosen ? [chosen] : saved,
+        chosenAddressId: chosen ? chosen.addressId : null,
     };
 }
 
@@ -363,7 +387,7 @@ export async function readBookingPicker(
             date: times.date,
             label: times.label,
             slots: times.slots,
-            place: moving ? null : await placeOf(session.productId, session.owner, session.language),
+            place: moving ? null : await placeOf(session.productId, session.owner, session.language, session.addressId ?? null),
         };
     }
 
@@ -375,7 +399,7 @@ export async function readBookingPicker(
         moving,
         copy,
         timezone: days.timezone,
-        place: moving ? null : await placeOf(session.productId, session.owner, session.language),
+        place: moving ? null : await placeOf(session.productId, session.owner, session.language, session.addressId ?? null),
         days: days.days.map((day) => ({
             ...day,
             /** "6 times free" — the row's description, built here because a form cannot count. */
@@ -419,6 +443,11 @@ export interface BookingConfirmed {
      * `when` is then the REQUESTED time and the appointment keeps its current one meanwhile.
      */
     requested: boolean;
+    /**
+     * Where it happens (2026-10-27) — decides whether the receipt carries **Show the place**:
+     * the vendor's place or an online session, never the customer's own address.
+     */
+    placeKind?: AppointmentLocationKind | null;
 }
 
 export async function confirmBooking(
@@ -462,7 +491,8 @@ export async function confirmBooking(
              * the platform's own "booking created" kept in the inbox (owner, 2026-09-27).
              */
             { ...(input.notes ? { notes: input.notes } : {}), bookedInChat: session.channel },
-            input.addressId ?? null,
+            // The screen's own choice first; the address the chat collected otherwise.
+            input.addressId ?? session.addressId ?? null,
         );
         return receiptFor(created.booking, productId, false, languageOf(session.language));
     } catch (error) {
@@ -503,6 +533,7 @@ async function receiptFor(
         service: (product as { title?: string } | null)?.title ?? '',
         awaitingShop: booking.status === 'pending',
         requested,
+        placeKind: booking.location?.kind ?? null,
     };
 }
 
