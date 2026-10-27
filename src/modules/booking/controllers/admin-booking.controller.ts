@@ -5,6 +5,7 @@ import { adminCallerActor } from '../../../api/middlewares/admin-caller.middlewa
 import { sendSuccess } from '../../../core/responses';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
+import { currentRequestContext } from '../../../core/logging/request-context';
 import { IBooking } from '../models/booking.model';
 import { adminBookingService } from '../services/admin-booking.service';
 
@@ -98,7 +99,7 @@ export class AdminBookingController {
   /** POST /:bookingId/reminder — send the customer the appointment reminder again. */
   static resendReminder = asyncHandler(async (req: Request, res: Response) => {
     OptionalReasonSchema.parse(req.body ?? {});
-    const result = await adminBookingService.resendReminder(req.params.bookingId, req.requestId ?? String(Date.now()));
+    const result = await adminBookingService.resendReminder(req.params.bookingId, currentRequestContext()?.requestId ?? String(Date.now()));
     sendSuccess(res, result, {
       message: result.sent ? 'Reminder sent' : 'Nothing sent — this booking has no customer profile to notify',
     });
