@@ -1,15 +1,17 @@
 import { ClientSession, Types } from 'mongoose';
-import { Booking, IBooking, BookingPaymentStatus } from '../models/booking.model';
+import { Booking, IBooking, BookingPaymentStatus, IRescheduleProposal } from '../models/booking.model';
 import { CreateBookingInput, BookingStatus, CalendarDayBooking } from '../types/booking.types';
 import { BookedWindow } from '../utils/availability-windows.util';
 import { transactionManager } from '../../../core/database/transaction.manager';
 import { isCalendarNotConnected } from '../utils/calendar-error.util';
+import { bookingEventDescription } from '../utils/calendar-description.util';
 import { SlotLockService, SLOT_HOLD_TTL_SECONDS } from './slot-lock.service';
 import { SlotGeneratorService } from './slot-generator.service';
 import { GroupBookingService } from './group-booking.service';
 import { CalendarClientFactory } from '../../integrations/calendar/calendar-client.factory';
 import { CalendarEventInput } from '../../integrations/calendar/interfaces/calendar-client.interface';
-import { ProductModel } from "../../catalog/models";
+import { ProductModel, ProductVariantModel } from "../../catalog/models";
+import { DEFAULT_VARIANT_SIGNATURE } from "../../catalog/domain/services/variants/constants";
 import { UserModel } from "../../users/user.model";
 import { getCalendarColorIdByStatus } from '../../integrations/calendar/utils/calendar-event-colors.util';
 import { eventBus } from '../../../core/events/event-bus';
@@ -27,6 +29,17 @@ import { BookingNumberGenerator } from '../utils/booking-number.generator';
 import { CustomerModel } from '../../customers/customer.model';
 import { formatInTimeZone } from 'date-fns-tz';
 import { BOOKING_CONFIG } from '../config/booking.config';
+// Types only — erased at runtime, so this adds no module cycle (the service itself is lazy-loaded).
+import type { OfferedSlot, SlotSelection } from '../../catalog/domain/services/booking/ProductBookingService';
+import { AppointmentSettingsPatch, calendarLocationOf, mergeAccessSetting } from '../domain/appointment';
+import {
+  declinedVendorProposal,
+  hasLiveProposal,
+  openProposalMatch,
+  proposalExpiry,
+  rescheduleDecision,
+} from '../domain/reschedule-proposal';
+import { applyStatusChange, BookingStatusActor, statusChange } from '../domain/booking-status-history';
 
 export class BookingService {
   private slotLockService: SlotLockService;
@@ -58,7 +71,10 @@ export class BookingService {
    * @returns Created booking
    */
   async createBooking(input: CreateBookingInput, lockOwnerId: string): Promise<IBooking> {
-    const { slotId, userId, productId, vendorId, metadata, priceSnapshot, currency, requiresPayment, bookingMode } = input;
+    const { slotId, userId, productId, vendorId, metadata, priceSnapshot, currency, requiresPayment, bookingMode, location, access } = input;
+    // Consecutive slots booked as one appointment are each held under their own id; `slotId` is
+    // then the span's id, which parses to the whole interval below.
+    const heldSlotIds = input.heldSlotIds?.length ? input.heldSlotIds : [slotId];
 
     const product = await ProductModel.findById(productId);
     if (!product) {
@@ -69,8 +85,10 @@ export class BookingService {
     if (!user) {
       throw createAppError(ERROR_CODES.BOOKING_USER_NOT_FOUND, 404, 'User not found');
     }
-    // Step 1: Assert slot is locked by the owner
-    await this.slotLockService.assertLocked(slotId, lockOwnerId);
+    // Step 1: Assert every slot is locked by the owner
+    for (const held of heldSlotIds) {
+      await this.slotLockService.assertLocked(held, lockOwnerId);
+    }
 
     // Step 2: Parse slot to get start/end times
     const { start, end } = this.slotGenerator.parseSlotId(slotId);
@@ -118,10 +136,15 @@ export class BookingService {
             startAt: start,
             endAt: end,
             status: isManual ? BookingStatus.PENDING : BookingStatus.CONFIRMED,
+            statusHistory: [
+              statusChange(null, isManual ? BookingStatus.PENDING : BookingStatus.CONFIRMED, { role: 'customer', id: userId }),
+            ],
             metadata,
             priceSnapshot,
             currency: currency || 'XAF',
             requiresPayment: needsPayment,
+            location: location ?? null,
+            access: access ?? null,
           },
         ],
         { session }
@@ -129,8 +152,10 @@ export class BookingService {
       return created;
     });
 
-    // Step 4: Release the slot hold — the booking row now holds the interval.
-    await this.slotLockService.release(slotId, lockOwnerId);
+    // Step 4: Release the slot holds — the booking row now holds the interval.
+    for (const held of heldSlotIds) {
+      await this.slotLockService.release(held, lockOwnerId);
+    }
 
     // Step 5: Mirror onto the vendor's calendar. Best-effort and AFTER the commit:
     // external I/O must never sit inside a transaction, and a Google outage must
@@ -142,10 +167,18 @@ export class BookingService {
       const paymentPrefix = needsPayment ? '[UNPAID]' : '[FREE]';
       const eventInput: CalendarEventInput = {
         title: `${paymentPrefix} ${product.title}`,
-        description: `Booked by ${user.login_email}\nPrice: ${priceSnapshot} ${currency || 'XAF'}\nBooking #${booking.bookingNumber ?? booking._id}${metadata?.notes ? `\nNotes: ${metadata.notes}` : ''}`,
+        description: bookingEventDescription({
+          email: user.login_email,
+          priceSnapshot,
+          currency,
+          bookingNumber: booking.bookingNumber,
+          bookingId: booking._id,
+          metadata,
+        }),
         start,
         end,
         colorId: getCalendarColorIdByStatus(paymentStatus),
+        location: calendarLocationOf(location, access),
         metadata: {
           ...metadata,
           bookingUserId: userId,
@@ -260,11 +293,40 @@ export class BookingService {
       },
     ]);
 
-    return rows.map((row) => ({
-      start: new Date(row._id.start),
-      end: new Date(row._id.end),
-      count: row.count,
-    }));
+    /**
+     * ⚠ **An OPEN proposal of a new time holds that time too** (plan Part B). While the other side
+     * decides, the booking keeps its original time AND the proposed one, so nobody else can book
+     * the slot an answer is about to need. A lapsed proposal (past `expiresAt`) holds nothing —
+     * the date is in the query, so no job has to clear it first.
+     */
+    const proposals = await Booking.aggregate<{ _id: { start: Date; end: Date }; count: number }>([
+      {
+        $match: {
+          productId: new Types.ObjectId(productId),
+          status: { $in: [BookingStatus.PENDING, BookingStatus.CONFIRMED] },
+          deletedAt: null,
+          ...openProposalMatch(new Date()),
+          'rescheduleProposal.startAt': { $lt: toDate },
+          'rescheduleProposal.endAt': { $gt: fromDate },
+        },
+      },
+      {
+        $group: {
+          _id: { start: '$rescheduleProposal.startAt', end: '$rescheduleProposal.endAt' },
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const merged = new Map<string, BookedWindow>();
+    for (const row of [...rows, ...proposals]) {
+      const start = new Date(row._id.start);
+      const end = new Date(row._id.end);
+      const key = `${start.getTime()}:${end.getTime()}`;
+      const prev = merged.get(key);
+      merged.set(key, { start, end, count: (prev?.count ?? 0) + row.count });
+    }
+    return [...merged.values()];
   }
 
   /**
@@ -278,14 +340,23 @@ export class BookingService {
     productId: string,
     start: Date,
     end: Date,
-    session?: ClientSession
+    session?: ClientSession,
+    excludeBookingId?: string
   ): Promise<number> {
     return Booking.countDocuments({
       productId: new Types.ObjectId(productId),
       status: { $in: [BookingStatus.PENDING, BookingStatus.CONFIRMED] },
       deletedAt: null,
-      startAt: { $lt: end },
-      endAt: { $gt: start },
+      ...(excludeBookingId ? { _id: { $ne: new Types.ObjectId(excludeBookingId) } } : {}),
+      // Its own time, OR an open proposal of a new time — see `findActiveBookingWindows`.
+      $or: [
+        { startAt: { $lt: end }, endAt: { $gt: start } },
+        {
+          ...openProposalMatch(new Date()),
+          'rescheduleProposal.startAt': { $lt: end },
+          'rescheduleProposal.endAt': { $gt: start },
+        },
+      ],
     }).session(session ?? null);
   }
 
@@ -366,19 +437,26 @@ export class BookingService {
       );
     }
 
-    // Enforce the vendor's cancellation policy (customer-initiated cancellation).
-    const vendor = await this.vendorRepo.findById(booking.vendorId.toString());
-    assertCancellationAllowed(vendor?.policies?.cancellation_policy ?? null, {
-      createdAt: booking.createdAt,
-      serviceOrDeliveryAt: booking.startAt,
-      isPending: booking.status === BookingStatus.PENDING,
-    });
+    /**
+     * Enforce the vendor's cancellation policy (customer-initiated cancellation) — EXCEPT after
+     * the customer declined the VENDOR's proposal of a new time (D-9). The vendor started that
+     * change, so the customer may walk away with a full refund whatever the policy says.
+     */
+    const vendorDeclined = declinedVendorProposal(booking.rescheduleProposal);
+    if (!vendorDeclined) {
+      const vendor = await this.vendorRepo.findById(booking.vendorId.toString());
+      assertCancellationAllowed(vendor?.policies?.cancellation_policy ?? null, {
+        createdAt: booking.createdAt,
+        serviceOrDeliveryAt: booking.startAt,
+        isPending: booking.status === BookingStatus.PENDING,
+      });
+    }
 
     // Take it off the calendar — or, for a group service, take one seat off the class.
     await this.detachFromCalendarOnCancel(booking);
 
     // Update booking status
-    booking.status = BookingStatus.CANCELLED;
+    applyStatusChange(booking, BookingStatus.CANCELLED, { role: 'customer', id: userId }, reason);
     booking.cancelledAt = new Date();
     booking.cancelledReason = reason;
     await booking.save();
@@ -388,7 +466,8 @@ export class BookingService {
     // plus a support ticket rather than blocking the cancellation.
     //
     // Runs BEFORE the event so the notification reports the real payment outcome.
-    await this.refundIfPaid(booking, userId, 'customer', reason);
+    // A full refund after a declined vendor proposal: the VENDOR bears the fees (D-9).
+    await this.refundIfPaid(booking, userId, 'customer', reason, vendorDeclined ? 'vendor' : undefined);
 
     // Emit booking.cancelled event
     await this.emitBookingCancelledEvent(booking, 'customer');
@@ -407,14 +486,16 @@ export class BookingService {
     booking: IBooking,
     initiatedBy: string,
     initiatedByRole: 'customer' | 'vendor' | 'admin',
-    reason?: string
+    reason?: string,
+    feesPaidBy?: 'customer' | 'vendor'
   ): Promise<void> {
     try {
       const outcome = await bookingRefundService.refundCancelledBooking(
         booking,
         initiatedBy,
         initiatedByRole,
-        reason
+        reason,
+        feesPaidBy
       );
       if (outcome.status !== 'not_applicable') {
         console.log(
@@ -434,7 +515,8 @@ export class BookingService {
    * 404 rather than a 403 — the same rule the shipment endpoints follow.
    *
    * @param bookingId Existing booking ID
-   * @param newSlotId New slot ID
+   * @param newSlotId New slot ID — or, for a CUSTOMER, a run of consecutive slot ids, each held,
+   *   covering an interval of the appointment's own length (2026-10-26)
    * @param lockOwnerId Owner of the hold on the new slot: the signed-in USER's id, because that is
    *   the only id a hold is ever written under. ⚠ For a shop this is NOT `actor.id` — see
    *   `VendorBookingController.rescheduleBooking`.
@@ -442,7 +524,7 @@ export class BookingService {
    */
   async rescheduleBooking(
     bookingId: string,
-    newSlotId: string,
+    newSlotId: SlotSelection,
     lockOwnerId: string,
     actor?: { role: 'vendor' | 'customer'; id: string }
   ): Promise<IBooking> {
@@ -467,9 +549,19 @@ export class BookingService {
       );
     }
 
+    // A new time already waiting for an answer: that question is settled first (accept, decline,
+    // or withdraw it) — two open proposals on one booking would leave nobody sure which one an
+    // answer was about.
+    if (hasLiveProposal(booking.rescheduleProposal)) {
+      throw createAppError(ERROR_CODES.BOOKING_PROPOSAL_PENDING, 409, undefined, {
+        proposedBy: booking.rescheduleProposal!.proposedBy,
+      });
+    }
+
     // Step 0: the new time must be one THIS side may move to, before any hold is asserted or
     // any occupancy counted. See `assertRescheduleTarget` for the two rules and why they differ.
-    const { start, end } = await this.assertRescheduleTarget(booking, newSlotId, actor);
+    const target = await this.assertRescheduleTarget(booking, newSlotId, actor);
+    const { start, end } = target;
 
     // Step 1: Is this a group service? Everything below branches on the answer, and the
     // FIRST thing it decides is which Redis key the hold lives under.
@@ -484,10 +576,217 @@ export class BookingService {
     const group = await this.groupBookingService.resolveCapacity(booking.productId.toString());
     const scopeToOwner = group !== null;
 
-    await this.slotLockService.assertLocked(newSlotId, lockOwnerId, scopeToOwner);
+    // A class is joined one session at a time — the same refusal a new group booking gets.
+    if (group && target.heldSlotIds.length > 1) {
+      throw createAppError(ERROR_CODES.BOOKING_MULTI_SLOT_NOT_SUPPORTED, 422, undefined, {
+        slotCount: target.heldSlotIds.length,
+      });
+    }
+
+    for (const held of target.heldSlotIds) {
+      await this.slotLockService.assertLocked(held, lockOwnerId, scopeToOwner);
+    }
 
     // Step 2: the new interval is the one Step 0 validated — never re-parsed from the raw id.
 
+    /**
+     * Step 3: does this move APPLY, or does it wait for the other side? (D-8, D-9)
+     * A vendor's move always waits for the customer. A customer's move waits for the vendor only
+     * on a `manual` service — the vendor chose to approve each booking by hand. An absent actor
+     * gets the customer rule, the same default `assertRescheduleTarget` gives it.
+     */
+    const role = actor?.role ?? 'customer';
+    // A shop's move proposes whatever the mode, so the mode is read only for a customer's.
+    const mode = role === 'vendor' || group ? 'capacity' : await this.resolveBookingMode(booking.productId.toString());
+
+    if (rescheduleDecision(role, mode) === 'propose') {
+      await this.assertTargetFree(booking, target.slotId, { start, end }, group);
+      const now = new Date();
+      booking.rescheduleProposal = {
+        status: 'open',
+        proposedBy: role,
+        // The whole interval's id — a span parses back to it when the proposal is accepted.
+        slotId: target.slotId,
+        startAt: start,
+        endAt: end,
+        previousStartAt: booking.startAt,
+        previousEndAt: booking.endAt,
+        proposedAt: now,
+        expiresAt: proposalExpiry(booking.startAt, start),
+        answeredAt: null,
+      };
+      await booking.save();
+      // The proposal itself now holds the interval (`openProposalMatch`), so the short holds go.
+      for (const held of target.heldSlotIds) {
+        await this.slotLockService.release(held, lockOwnerId, scopeToOwner);
+      }
+      await this.emitRescheduleProposedEvent(booking);
+      return booking;
+    }
+
+    // A move applied directly is the latest word on the time — an earlier answered proposal
+    // (a decline in particular, which waives the cancellation policy) no longer describes it.
+    booking.rescheduleProposal = null;
+    const previousStartAt = booking.startAt;
+    await this.applyMove(booking, target.slotId, { start, end }, group);
+
+    // Step 6: Release slot locks — under the same key namespace they were asserted with.
+    for (const held of target.heldSlotIds) {
+      await this.slotLockService.release(held, lockOwnerId, scopeToOwner);
+    }
+
+    // Step 7: Tell the customer, with BOTH times — a message carrying only the
+    // new one is indistinguishable from a duplicate of the original booking. `movedBy` lets the
+    // vendor's handler tell them when it was the customer who moved it.
+    await this.emitBookingRescheduledEvent(booking, previousStartAt, role);
+
+    return booking;
+  }
+
+  /**
+   * Answer the open proposal of a new time on a booking (D-8, D-9). Only the OTHER side may
+   * answer; the proposer withdraws instead (`withdrawRescheduleProposal`).
+   *
+   * - **accept** → the booking moves to the proposed time, through the same move as a direct
+   *   reschedule (occupancy re-checked, calendar mirrored), and both sides are told.
+   * - **decline** → the original time stands. A customer who declines a VENDOR's proposal may then
+   *   cancel with a full refund whatever the cancellation policy says (`declinedVendorProposal`).
+   *
+   * A proposal past `expiresAt` has lapsed: it is recorded as such here and refused with
+   * `BOOKING_PROPOSAL_NOT_FOUND` — the original time stood, as D-9 says.
+   */
+  async answerRescheduleProposal(
+    bookingId: string,
+    actor: { role: 'vendor' | 'customer'; id: string },
+    answer: 'accept' | 'decline'
+  ): Promise<IBooking> {
+    const booking = await this.findScopedBooking(bookingId, actor);
+    const proposal = await this.liveProposalOrThrow(booking);
+
+    if (proposal.proposedBy === actor.role) {
+      throw createAppError(ERROR_CODES.BOOKING_PROPOSAL_NOT_YOURS, 403, undefined, {
+        proposedBy: proposal.proposedBy,
+      });
+    }
+
+    const now = new Date();
+    if (answer === 'decline') {
+      booking.rescheduleProposal = { ...proposal, status: 'declined', answeredAt: now };
+      await booking.save();
+      await this.emitRescheduleAnsweredEvent(booking, 'declined');
+      return booking;
+    }
+
+    const group = await this.groupBookingService.resolveCapacity(booking.productId.toString());
+    const previousStartAt = booking.startAt;
+    // Written by the move's own save, so the time and the answer land together.
+    booking.rescheduleProposal = { ...proposal, status: 'accepted', answeredAt: now };
+    await this.applyMove(booking, proposal.slotId, { start: proposal.startAt, end: proposal.endAt }, group);
+
+    await this.emitBookingRescheduledEvent(booking, previousStartAt, 'agreed');
+    await this.emitRescheduleAnsweredEvent(booking, 'accepted');
+    return booking;
+  }
+
+  /** The proposer takes their proposal back. The original time stands; the other side is not asked. */
+  async withdrawRescheduleProposal(
+    bookingId: string,
+    actor: { role: 'vendor' | 'customer'; id: string }
+  ): Promise<IBooking> {
+    const booking = await this.findScopedBooking(bookingId, actor);
+    const proposal = await this.liveProposalOrThrow(booking);
+    if (proposal.proposedBy !== actor.role) {
+      throw createAppError(ERROR_CODES.BOOKING_PROPOSAL_NOT_YOURS, 403, undefined, {
+        proposedBy: proposal.proposedBy,
+      });
+    }
+    booking.rescheduleProposal = { ...proposal, status: 'withdrawn', answeredAt: new Date() };
+    await booking.save();
+    return booking;
+  }
+
+  /** A booking scoped to the side asking, 404 otherwise — the rule `rescheduleBooking` follows. */
+  private async findScopedBooking(
+    bookingId: string,
+    actor: { role: 'vendor' | 'customer'; id: string }
+  ): Promise<IBooking> {
+    if (!Types.ObjectId.isValid(bookingId)) {
+      throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, 'Booking not found');
+    }
+    const scope: Record<string, unknown> = { _id: bookingId, deletedAt: null };
+    if (actor.role === 'vendor') scope.vendorId = new Types.ObjectId(actor.id);
+    else scope.userId = new Types.ObjectId(actor.id);
+    const booking = await Booking.findOne(scope);
+    if (!booking) {
+      throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, 'Booking not found');
+    }
+    return booking;
+  }
+
+  /**
+   * The booking's proposal if it is open and unexpired. An open-but-expired one is written down
+   * as `lapsed` on the way past — the lazy half of "no job runs".
+   */
+  private async liveProposalOrThrow(booking: IBooking): Promise<IRescheduleProposal> {
+    const stored = booking.rescheduleProposal ? plainProposal(booking.rescheduleProposal) : null;
+    if (stored && stored.status === 'open' && !hasLiveProposal(stored)) {
+      booking.rescheduleProposal = { ...stored, status: 'lapsed' };
+      await booking.save();
+    }
+    const live: BookingStatus[] = [BookingStatus.PENDING, BookingStatus.CONFIRMED];
+    if (!stored || !hasLiveProposal(stored) || !live.includes(booking.status)) {
+      throw createAppError(ERROR_CODES.BOOKING_PROPOSAL_NOT_FOUND, 404, undefined, {
+        status: booking.rescheduleProposal?.status ?? null,
+      });
+    }
+    return stored;
+  }
+
+  /** The service's booking mode — `calendar` when it cannot be read, which is the confirm-at-once default. */
+  private async resolveBookingMode(productId: string): Promise<string> {
+    const variant = await ProductVariantModel.findOne({
+      productId: new Types.ObjectId(productId),
+      status: 'active',
+      optionSignature: DEFAULT_VARIANT_SIGNATURE,
+      deletedAt: null,
+    }).select('serviceConfig.bookingMode').lean();
+    return variant?.serviceConfig?.bookingMode ?? 'calendar';
+  }
+
+  /** The target is free for this booking — the occupancy half of a move, without moving. */
+  private async assertTargetFree(
+    booking: IBooking,
+    slotId: string,
+    window: { start: Date; end: Date },
+    group: { maxBookings: number } | null
+  ): Promise<void> {
+    if (group) {
+      const taken = await this.groupBookingService.countSeatsTaken(booking.productId, window, booking._id.toString());
+      if (taken >= group.maxBookings) {
+        throw createAppError(ERROR_CODES.BOOKING_SLOT_FULL, 409, `This slot is full (${group.maxBookings} seats)`, { slotId });
+      }
+      return;
+    }
+    const overlapping = await this.countOverlappingBookings(
+      booking.productId.toString(), window.start, window.end, undefined, booking._id.toString()
+    );
+    if (overlapping > 0) {
+      throw createAppError(ERROR_CODES.BOOKING_SLOT_UNAVAILABLE, 409, 'That time is no longer free. Please choose another slot.', { slotId });
+    }
+  }
+
+  /**
+   * Move a booking to `window`: occupancy re-checked, the row written, the calendar mirrored.
+   * Shared by a direct reschedule and an accepted proposal, so the two cannot drift.
+   * The caller has validated the target and holds whatever hold applies.
+   */
+  private async applyMove(
+    booking: IBooking,
+    slotId: string,
+    window: { start: Date; end: Date },
+    group: { maxBookings: number } | null
+  ): Promise<void> {
+    const { start, end } = window;
     const previousStartAt = booking.startAt;
     const previousEndAt = booking.endAt;
     const previousEventId = booking.externalCalendarEventId;
@@ -498,26 +797,28 @@ export class BookingService {
     if (group) {
       await this.groupBookingService.moveIntoSlot(
         booking,
-        newSlotId,
+        slotId,
         { start, end },
         group.maxBookings
       );
     } else {
       // Single occupancy: the target must actually be free. The hold guards concurrent
       // movers; this guards against moving onto an interval that is already sold.
+      // This booking is excluded outright — its own time and its own proposal hold are not
+      // competitors for the move. (It used to be counted and then subtracted when it overlapped.)
       const overlapping = await this.countOverlappingBookings(
         booking.productId.toString(),
         start,
-        end
+        end,
+        undefined,
+        booking._id.toString()
       );
-      const selfOverlaps =
-        booking.startAt.getTime() < end.getTime() && booking.endAt.getTime() > start.getTime();
-      if (overlapping > (selfOverlaps ? 1 : 0)) {
+      if (overlapping > 0) {
         throw createAppError(
           ERROR_CODES.BOOKING_SLOT_UNAVAILABLE,
           409,
           'That time is no longer free. Please choose another slot.',
-          { slotId: newSlotId }
+          { slotId: slotId }
         );
       }
 
@@ -547,7 +848,7 @@ export class BookingService {
         previousEventId,
         group.maxBookings,
         product?.title ?? 'Booking',
-        newSlotId
+        slotId
       );
     } else if (booking.externalCalendarEventId) {
       try {
@@ -567,10 +868,19 @@ export class BookingService {
         );
         await calendarClient.updateEvent(booking.externalCalendarEventId, {
           title,
-          description: `Rescheduled booking by ${user?.login_email || 'Unknown'}\nBooking #${booking.bookingNumber ?? booking._id}`,
+          description: bookingEventDescription({
+            lead: 'Rescheduled booking by',
+            email: user?.login_email,
+            priceSnapshot: booking.priceSnapshot,
+            currency: booking.currency,
+            bookingNumber: booking.bookingNumber,
+            bookingId: booking._id,
+            metadata: booking.metadata,
+          }),
           start,
           end,
           colorId: getCalendarColorIdByStatus(booking.paymentStatus), // Preserve payment status color
+          location: calendarLocationOf(booking.location, booking.access),
           metadata: booking.metadata as Record<string, string>,
         });
       } catch (error) {
@@ -578,14 +888,6 @@ export class BookingService {
       }
     }
 
-    // Step 6: Release slot lock — under the same key namespace it was asserted with.
-    await this.slotLockService.release(newSlotId, lockOwnerId, scopeToOwner);
-
-    // Step 7: Tell the customer, with BOTH times — a message carrying only the
-    // new one is indistinguishable from a duplicate of the original booking.
-    await this.emitBookingRescheduledEvent(booking, previousStartAt);
-
-    return booking;
   }
 
   /**
@@ -619,18 +921,37 @@ export class BookingService {
    * import here is a module cycle, and a cycle resolved at load time hands one of the two modules
    * an `undefined`. Resolved at call time, both are loaded. `test:booking-slot-offer` pins that
    * the customer branch really calls the check, so this indirection cannot quietly become a no-op.
+   *
+   * ── A CUSTOMER keeps the appointment's LENGTH too (2026-10-26) ──────────────
+   * Once a booking could span several consecutive slots, "a time the service offers" stopped
+   * implying "the same length": one offered slot is shorter than a two-slot appointment, and moving
+   * onto it silently halved what the customer had paid for. So the customer names a run of the
+   * same length (`newSlotId` as a list), and a different length is refused as the shop's is —
+   * `BOOKING_INVALID_SLOT_ID` 400 `length_changed`.
    */
   private async assertRescheduleTarget(
     booking: IBooking,
-    newSlotId: string,
+    newSlotId: SlotSelection,
     actor?: { role: 'vendor' | 'customer'; id: string }
-  ): Promise<{ start: Date; end: Date }> {
-    if (actor?.role === 'vendor') return this.assertShopRuleSlot(booking, newSlotId);
+  ): Promise<OfferedSlot> {
+    if (actor?.role === 'vendor') {
+      return this.assertShopRuleSlot(booking, newSlotId);
+    }
 
     const { productBookingService } = await import(
       '../../catalog/domain/services/booking/product-booking.instance'
     );
-    return productBookingService.assertOfferedSlot(booking.productId.toString(), newSlotId);
+    const offered = await productBookingService.assertOfferedSlot(booking.productId.toString(), newSlotId);
+    const length = offered.end.getTime() - offered.start.getTime();
+    if (length !== booking.endAt.getTime() - booking.startAt.getTime()) {
+      throw createAppError(
+        ERROR_CODES.BOOKING_INVALID_SLOT_ID,
+        400,
+        'Choose a new time of the same length as the appointment.',
+        { slotId: offered.slotId, reason: 'length_changed' }
+      );
+    }
+    return offered;
   }
 
   /**
@@ -649,34 +970,60 @@ export class BookingService {
    * ⚠ **Shared with the hold, on purpose.** `holdSlotForReschedule` calls this same method, so a
    * hold can never be granted for a time the move would then refuse. Two copies of a rule split
    * across two endpoints is how a dashboard ends up holding a slot it cannot use.
+   *
+   * ── A RUN OF CONSECUTIVE SLOTS (2026-10-27) ─────────────────────────────────
+   * An appointment booked over several slots is longer than any one slot `GET /availability`
+   * lists, so a shop picking from that grid had no single id of the right length and every move
+   * of such a booking failed `length_changed`. The shop now names the run, exactly as a customer
+   * does: each id is parsed, the run must be contiguous (`not_contiguous`, the customer's
+   * refusal), and the rule above is applied to the whole interval. `heldSlotIds` are the ids as
+   * named — what each hold is written under — and `slotId` is the span's id.
    */
   private assertShopRuleSlot(
     booking: IBooking,
-    newSlotId: string,
+    selection: SlotSelection,
     now: Date = new Date()
-  ): { start: Date; end: Date } {
-    const { start, end } = this.slotGenerator.parseSlotId(newSlotId);
-    const length = end.getTime() - start.getTime();
-    const current = booking.endAt.getTime() - booking.startAt.getTime();
+  ): OfferedSlot {
+    const heldSlotIds = typeof selection === 'string' ? [selection] : [...selection];
+    const named = heldSlotIds.length === 1 ? { slotId: heldSlotIds[0] } : { slotIds: heldSlotIds };
 
-    const refuse = (reason: 'inverted' | 'length_changed' | 'not_future', message: string): never => {
-      throw createAppError(ERROR_CODES.BOOKING_INVALID_SLOT_ID, 400, message, {
-        slotId: newSlotId,
-        reason,
-      });
+    const refuse = (
+      reason: 'slot_count' | 'inverted' | 'not_contiguous' | 'length_changed' | 'not_future',
+      message: string
+    ): never => {
+      throw createAppError(ERROR_CODES.BOOKING_INVALID_SLOT_ID, 400, message, { ...named, reason });
     };
 
-    if (length <= 0) {
+    if (heldSlotIds.length === 0 || heldSlotIds.length > BOOKING_CONFIG.maxSlotsPerBooking) {
+      refuse('slot_count', `Choose between 1 and ${BOOKING_CONFIG.maxSlotsPerBooking} consecutive slots.`);
+    }
+
+    const parts = heldSlotIds.map((id) => this.slotGenerator.parseSlotId(id));
+    const start = parts[0].start;
+    const end = parts[parts.length - 1].end;
+    const current = booking.endAt.getTime() - booking.startAt.getTime();
+
+    if (parts.some((p) => p.end.getTime() <= p.start.getTime())) {
       refuse('inverted', 'A rescheduled appointment must keep its original length.');
     }
-    if (length !== current) {
+    for (let i = 1; i < parts.length; i++) {
+      if (parts[i].start.getTime() !== parts[i - 1].end.getTime()) {
+        refuse('not_contiguous', 'The slots of one appointment must follow each other with no gap.');
+      }
+    }
+    if (end.getTime() - start.getTime() !== current) {
       refuse('length_changed', 'A rescheduled appointment must keep its original length.');
     }
     if (start.getTime() <= now.getTime()) {
       refuse('not_future', 'An appointment cannot be moved to a time that has already passed.');
     }
 
-    return { start, end };
+    return {
+      start,
+      end,
+      slotId: heldSlotIds.length === 1 ? heldSlotIds[0] : this.slotGenerator.spanId(start, end),
+      heldSlotIds,
+    };
   }
 
   /**
@@ -701,13 +1048,18 @@ export class BookingService {
    * ⚠ **Seats are NOT checked for a group service.** Capacity is enforced when the move happens,
    * under the target slot's mutex; checking it here as well would be a second opinion that can
    * disagree, and a hold is not a seat.
+   *
+   * ⚠ **A run is held slot by slot (2026-10-27)**, each under its own id, so the move asserts
+   * exactly the keys written here — and the storefront, whose holds are per slot, sees each one.
+   * If any slot of the run is already held by someone else, the ones taken so far are released:
+   * half a run held is a time nobody can use.
    */
   async holdSlotForReschedule(
     bookingId: string,
-    newSlotId: string,
+    newSlotId: SlotSelection,
     holdOwnerId: string,
     actor: { role: 'vendor'; id: string }
-  ): Promise<{ slotId: string; start: Date; end: Date; expiresAt: Date }> {
+  ): Promise<{ slotId: string; slotIds: string[]; start: Date; end: Date; expiresAt: Date }> {
     const booking = await Booking.findOne({
       _id: bookingId,
       vendorId: new Types.ObjectId(actor.id),
@@ -726,10 +1078,18 @@ export class BookingService {
       );
     }
 
-    const { start, end } = this.assertShopRuleSlot(booking, newSlotId);
+    const target = this.assertShopRuleSlot(booking, newSlotId);
+    const { start, end } = target;
 
     const group = await this.groupBookingService.resolveCapacity(booking.productId.toString());
     const scopeToOwner = group !== null;
+
+    // A class is joined one session at a time — refused here as the move will refuse it.
+    if (group && target.heldSlotIds.length > 1) {
+      throw createAppError(ERROR_CODES.BOOKING_MULTI_SLOT_NOT_SUPPORTED, 422, undefined, {
+        slotCount: target.heldSlotIds.length,
+      });
+    }
 
     // Single occupancy only: the target must not already be sold. The booking being moved is
     // still counted, so moving an appointment a little earlier — overlapping itself — is allowed,
@@ -747,27 +1107,36 @@ export class BookingService {
           ERROR_CODES.BOOKING_SLOT_UNAVAILABLE,
           409,
           'That time is no longer free. Please choose another slot.',
-          { slotId: newSlotId }
+          { slotId: target.slotId }
         );
       }
     }
 
-    const held = await this.slotLockService.lock(
-      newSlotId,
-      holdOwnerId,
-      SLOT_HOLD_TTL_SECONDS,
-      scopeToOwner
-    );
-    if (!held) {
-      throw createAppError(
-        ERROR_CODES.BOOKING_SLOT_LOCKED,
-        409,
-        'This slot is already locked by another user'
+    const taken: string[] = [];
+    for (const slotId of target.heldSlotIds) {
+      const held = await this.slotLockService.lock(
+        slotId,
+        holdOwnerId,
+        SLOT_HOLD_TTL_SECONDS,
+        scopeToOwner
       );
+      if (!held) {
+        for (const done of taken) {
+          await this.slotLockService.release(done, holdOwnerId, scopeToOwner);
+        }
+        throw createAppError(
+          ERROR_CODES.BOOKING_SLOT_LOCKED,
+          409,
+          'This slot is already locked by another user',
+          { slotId }
+        );
+      }
+      taken.push(slotId);
     }
 
     return {
-      slotId: newSlotId,
+      slotId: target.slotId,
+      slotIds: target.heldSlotIds,
       start,
       end,
       expiresAt: new Date(Date.now() + SLOT_HOLD_TTL_SECONDS * 1000),
@@ -869,19 +1238,25 @@ export class BookingService {
    * @param bookingId Booking ID to update
    * @param vendorId Vendor ID for ownership verification
    * @param newStatus New booking status
+   * @param actor Who is changing it — the vendor by default. An ADMINISTRATOR may also move a
+   *   `no-show` to `completed` (ADMIN-BOOKINGS-PLAN § 4: a paid no-show waits for an
+   *   administrator, who completes it — the vendor is paid after the hold — or cancels it).
+   * @param reason Kept on the status history row.
    * @returns Updated booking
    */
   async updateBookingStatus(
     bookingId: string,
     vendorId: string,
-    newStatus: BookingStatus
+    newStatus: BookingStatus,
+    actor: BookingStatusActor = { role: 'vendor', id: vendorId },
+    reason?: string | null
   ): Promise<IBooking> {
     // Booking status transition rules
     const VALID_TRANSITIONS: Record<string, string[]> = {
       pending: ['confirmed', 'cancelled'],
       confirmed: ['completed', 'cancelled', 'no-show'],
       completed: [],    // Terminal state
-      'no-show': [],    // Terminal state — no calendar sync
+      'no-show': actor.role === 'admin' ? ['completed'] : [],    // Terminal for the vendor — no calendar sync
       cancelled: [],    // Terminal state
     };
 
@@ -905,7 +1280,7 @@ export class BookingService {
     // Update status. A completion is dated here, once, and the earnings hold below starts
     // from this same date — it is what the customer's protection window is counted from.
     const completedAt = newStatus === BookingStatus.COMPLETED ? new Date() : null;
-    booking.status = newStatus;
+    applyStatusChange(booking, newStatus, actor, reason);
     if (completedAt) booking.completedAt = completedAt;
     await booking.save();
 
@@ -924,10 +1299,18 @@ export class BookingService {
 
             const calendarEvent = await calendarClient.createEvent({
               title: `${paymentPrefix} ${product.title}`,
-              description: `Booked by ${user?.login_email || 'Unknown'}\nBooking #${booking.bookingNumber ?? booking._id}`,
+              description: bookingEventDescription({
+                email: user?.login_email,
+                priceSnapshot: booking.priceSnapshot,
+                currency: booking.currency,
+                bookingNumber: booking.bookingNumber,
+                bookingId: booking._id,
+                metadata: booking.metadata,
+              }),
               start: booking.startAt,
               end: booking.endAt,
               colorId,
+              location: calendarLocationOf(booking.location, booking.access),
             });
 
             // Update booking with calendar event ID
@@ -968,7 +1351,7 @@ export class BookingService {
       await this.emitBookingConfirmedEvent(booking);
     }
     if (newStatus === BookingStatus.CANCELLED) {
-      await this.emitBookingCancelledEvent(booking, 'vendor');
+      await this.emitBookingCancelledEvent(booking, actor.role === 'admin' ? 'admin' : 'vendor');
 
       // Cancelled from the STATUS MENU after the customer paid. Unlike the seller's cancel
       // action (`vendorCancelBooking` → BookingRefundService), this path refunds nothing, so
@@ -986,6 +1369,39 @@ export class BookingService {
       }
     }
 
+    return booking;
+  }
+
+  /**
+   * Change ONE booking's link / instructions / reveal margin (owner decision D-5) — for the
+   * meeting tools that generate a different link per session. The service's defaults are not
+   * touched, and no other booking changes.
+   *
+   * Refused on a finished booking: the access window is over and the record should say what the
+   * customer was actually given.
+   *
+   * The customer is not notified: the link reaches them through the time gate like any other,
+   * and a message carrying it early would be the leak the gate exists to prevent.
+   */
+  async updateBookingAccess(
+    bookingId: string,
+    vendorId: string,
+    patch: AppointmentSettingsPatch['access'],
+  ): Promise<IBooking> {
+    if (!Types.ObjectId.isValid(bookingId)) {
+      throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, 'Booking not found');
+    }
+    const booking = await Booking.findOne({ _id: bookingId, vendorId, deletedAt: null });
+    if (!booking) {
+      throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, 'Booking not found');
+    }
+    const finished: BookingStatus[] = [BookingStatus.CANCELLED, BookingStatus.COMPLETED, BookingStatus.NO_SHOW];
+    if (finished.includes(booking.status)) {
+      throw createAppError(ERROR_CODES.BOOKING_ACCESS_NOT_EDITABLE, 409, undefined, { status: booking.status });
+    }
+
+    booking.access = mergeAccessSetting(booking.access ?? null, patch) ?? null;
+    await booking.save();
     return booking;
   }
 
@@ -1179,7 +1595,12 @@ export class BookingService {
     // Non-blocking, once.
     await this.detachFromCalendarOnCancel(booking);
 
-    booking.status = BookingStatus.CANCELLED;
+    applyStatusChange(
+      booking,
+      BookingStatus.CANCELLED,
+      actorRole === 'system' ? { role: 'system', id: null } : { role: 'vendor', id: vendorId },
+      reason
+    );
     booking.cancelledAt = new Date();
     booking.cancelledReason = reason;
     await booking.save();
@@ -1193,6 +1614,135 @@ export class BookingService {
     // provider cancelled" when nobody did would reasonably blame the vendor.
     await this.emitBookingCancelledEvent(booking, actorRole);
 
+    return booking;
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Administrator decisions (ADMIN-BOOKINGS-PLAN § 4)
+  //
+  // An administrator is a THIRD actor on the same paths the customer and the vendor use, never a
+  // parallel implementation of them: the calendar detach, the refund and the events below are the
+  // ones every other cancellation and completion runs. Reached only from wi-admin, through
+  // `/api/internal/admin/bookings` — authorization and the audit row live on that side.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Cancel a booking for a party, and refund the customer through the ordinary cancellation refund.
+   *
+   * `fault` decides who bears the payment and transfer fees, nothing else:
+   * - `vendor`   → the customer gets 100% back (the D-9 rule a declined vendor proposal uses);
+   * - `customer` → the refund service's default, the customer bears the fees.
+   *
+   * Differences from the two existing cancellations, each deliberate:
+   * - the vendor's cancellation POLICY is not applied — it is the vendor's promise to the customer,
+   *   and the platform is not party to it (the order rule, `AdminOrderController.cancel`);
+   * - a `no-show` may be cancelled: a PAID no-show holds its money until an administrator either
+   *   completes it (the vendor is paid) or cancels it (the customer is refunded) — owner decision
+   *   2026-10-27. A `completed` booking is refused: its refund is the refund queue's, which also
+   *   recovers the vendor's earnings.
+   */
+  async cancelAsAdmin(
+    bookingId: string,
+    adminId: string,
+    reason: string,
+    fault: 'vendor' | 'customer'
+  ): Promise<IBooking> {
+    const booking = await this.findLiveBookingOrThrow(bookingId);
+
+    if (booking.status === BookingStatus.CANCELLED) {
+      throw createAppError(ERROR_CODES.BOOKING_ALREADY_CANCELLED, 409, 'Booking is already cancelled');
+    }
+    if (booking.status === BookingStatus.COMPLETED) {
+      throw createAppError(ERROR_CODES.BOOKING_TERMINAL_STATE, 409, undefined, {
+        status: booking.status,
+        hint: 'A completed booking is refunded through the refund queue, which also recovers the vendor\'s earnings.',
+      });
+    }
+
+    await this.detachFromCalendarOnCancel(booking);
+
+    applyStatusChange(booking, BookingStatus.CANCELLED, { role: 'admin', id: adminId }, reason);
+    booking.cancelledAt = new Date();
+    booking.cancelledReason = reason;
+    await booking.save();
+
+    await this.refundIfPaid(booking, adminId, 'admin', reason, fault === 'vendor' ? 'vendor' : 'customer');
+    await this.emitBookingCancelledEvent(booking, 'admin');
+
+    return booking;
+  }
+
+  /**
+   * Complete a booking for the vendor — the vendor is paid once the ordinary hold ends.
+   *
+   * From `confirmed` (the vendor never closed it) or `no-show` (a paid no-show the administrator
+   * decided in the vendor's favour, or a wrong mark). Through `updateBookingStatus`, so the hold
+   * starts exactly as a vendor completion starts it and the customer keeps the same protection
+   * window. Completed at the BOOKED price: there is no settlement — an administrator does not know
+   * how long a duration-priced session really ran.
+   *
+   * Refused while the customer has not paid (`BOOKING_ADMIN_COMPLETE_UNPAID`). The point of this
+   * action is releasing money already held; completing an unpaid booking would instead ask the
+   * customer for money, which is the vendor's call. A cash payment is recorded first
+   * (`markAsPaidByCash`). Refused before the appointment starts (`BOOKING_NOT_STARTED`).
+   */
+  async completeAsAdmin(bookingId: string, adminId: string, reason: string): Promise<IBooking> {
+    const booking = await this.findLiveBookingOrThrow(bookingId);
+
+    if (booking.requiresPayment && booking.paymentStatus !== 'paid') {
+      throw createAppError(ERROR_CODES.BOOKING_ADMIN_COMPLETE_UNPAID, 409, undefined, {
+        paymentStatus: booking.paymentStatus,
+        paymentMethod: booking.paymentMethod ?? null,
+      });
+    }
+    if (booking.status === BookingStatus.CONFIRMED && booking.startAt.getTime() > Date.now()) {
+      throw createAppError(ERROR_CODES.BOOKING_NOT_STARTED, 409, undefined, { startAt: booking.startAt });
+    }
+
+    const updated = await this.updateBookingStatus(
+      bookingId,
+      booking.vendorId.toString(),
+      BookingStatus.COMPLETED,
+      { role: 'admin', id: adminId },
+      reason
+    );
+    await this.emitBookingCompletedEvent(updated, updated.priceSnapshot, 0);
+    return updated;
+  }
+
+  /**
+   * Withdraw the open proposal of a new time, whichever side made it. The original time stands,
+   * as it does when a proposal lapses. Nobody is notified — the proposer's own withdrawal notifies
+   * nobody either, and the booking simply keeps the time both sides already have.
+   */
+  async withdrawProposalAsAdmin(bookingId: string): Promise<IBooking> {
+    const booking = await this.findLiveBookingOrThrow(bookingId);
+    const proposal = await this.liveProposalOrThrow(booking);
+    booking.rescheduleProposal = { ...proposal, status: 'withdrawn', answeredAt: new Date() };
+    await booking.save();
+    return booking;
+  }
+
+  /** Every live seat of one class: same service, same start (a group service's session). */
+  async findSessionSeats(productId: string, startAt: Date): Promise<IBooking[]> {
+    if (!Types.ObjectId.isValid(productId)) return [];
+    return Booking.find({
+      productId: new Types.ObjectId(productId),
+      startAt,
+      status: { $in: [BookingStatus.PENDING, BookingStatus.CONFIRMED] },
+      deletedAt: null,
+    }).sort({ createdAt: 1 });
+  }
+
+  /** A booking by id, not soft-deleted, or 404 — unscoped, for the administrator paths only. */
+  private async findLiveBookingOrThrow(bookingId: string): Promise<IBooking> {
+    if (!Types.ObjectId.isValid(bookingId)) {
+      throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, 'Booking not found');
+    }
+    const booking = await Booking.findOne({ _id: bookingId, deletedAt: null });
+    if (!booking) {
+      throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, 'Booking not found');
+    }
     return booking;
   }
 
@@ -1378,7 +1928,7 @@ export class BookingService {
    */
   private async emitBookingCancelledEvent(
     booking: IBooking,
-    cancelledByRole: 'customer' | 'vendor' | 'system' = 'vendor'
+    cancelledByRole: 'customer' | 'vendor' | 'system' | 'admin' = 'vendor'
   ): Promise<void> {
     try {
       await eventBus.publish('booking.cancelled', {
@@ -1441,10 +1991,18 @@ export class BookingService {
     }
   }
 
-  /** Emit booking.rescheduled — carries BOTH times so the move is verifiable. */
+  /**
+   * Emit booking.rescheduled — carries BOTH times so the move is verifiable.
+   *
+   * `movedBy` says who made it happen: `customer` (moved it themselves — the VENDOR is told, D-8),
+   * `vendor` (only ever via an accepted proposal today, kept for completeness), `agreed` (a
+   * proposal one side made and the other accepted — both already know, the customer is told the
+   * new time as a confirmation).
+   */
   private async emitBookingRescheduledEvent(
     booking: IBooking,
-    previousStartAt: Date
+    previousStartAt: Date,
+    movedBy: 'customer' | 'vendor' | 'agreed'
   ): Promise<void> {
     try {
       await eventBus.publish('booking.rescheduled', {
@@ -1457,13 +2015,80 @@ export class BookingService {
           userId: booking.userId.toString(),
           productId: booking.productId.toString(),
           productTitle: await this.resolveProductTitle(booking.productId.toString()),
+          bookingNumber: booking.bookingNumber ?? null,
+          vendorTimezone: (await this.resolveVendorIdentity(booking.vendorId.toString())).vendorTimezone,
+          customerName: await this.resolveCustomerName(booking.userId.toString()),
           startAt: booking.startAt,
           endAt: booking.endAt,
-          previousStartAt
+          previousStartAt,
+          movedBy
         }
       });
     } catch (error: any) {
       console.error('[BookingService] Failed to emit booking.rescheduled event:', error);
+    }
+  }
+
+  /**
+   * Emit booking.reschedule_proposed — one side asked for a new time and the OTHER must answer
+   * (D-8, D-9). Carries both times and the deadline after which the original time stands.
+   */
+  private async emitRescheduleProposedEvent(booking: IBooking): Promise<void> {
+    const proposal = booking.rescheduleProposal;
+    if (!proposal) return;
+    try {
+      await eventBus.publish('booking.reschedule_proposed', {
+        eventType: 'booking.reschedule_proposed',
+        aggregateId: booking._id.toString(),
+        occurredAt: new Date(),
+        payload: {
+          bookingId: booking._id.toString(),
+          vendorId: booking.vendorId.toString(),
+          userId: booking.userId.toString(),
+          productId: booking.productId.toString(),
+          productTitle: await this.resolveProductTitle(booking.productId.toString()),
+          ...(await this.resolveVendorIdentity(booking.vendorId.toString())),
+          customerName: await this.resolveCustomerName(booking.userId.toString()),
+          bookingNumber: booking.bookingNumber ?? null,
+          proposedBy: proposal.proposedBy,
+          startAt: proposal.startAt,
+          endAt: proposal.endAt,
+          previousStartAt: proposal.previousStartAt,
+          expiresAt: proposal.expiresAt
+        }
+      });
+    } catch (error: any) {
+      console.error('[BookingService] Failed to emit booking.reschedule_proposed event:', error);
+    }
+  }
+
+  /** Emit booking.reschedule_answered — the other side accepted or declined. The PROPOSER is told. */
+  private async emitRescheduleAnsweredEvent(booking: IBooking, answer: 'accepted' | 'declined'): Promise<void> {
+    const proposal = booking.rescheduleProposal;
+    if (!proposal) return;
+    try {
+      await eventBus.publish('booking.reschedule_answered', {
+        eventType: 'booking.reschedule_answered',
+        aggregateId: booking._id.toString(),
+        occurredAt: new Date(),
+        payload: {
+          bookingId: booking._id.toString(),
+          vendorId: booking.vendorId.toString(),
+          userId: booking.userId.toString(),
+          productId: booking.productId.toString(),
+          productTitle: await this.resolveProductTitle(booking.productId.toString()),
+          ...(await this.resolveVendorIdentity(booking.vendorId.toString())),
+          customerName: await this.resolveCustomerName(booking.userId.toString()),
+          bookingNumber: booking.bookingNumber ?? null,
+          proposedBy: proposal.proposedBy,
+          answer,
+          proposedStartAt: proposal.startAt,
+          previousStartAt: proposal.previousStartAt,
+          startAt: booking.startAt
+        }
+      });
+    } catch (error: any) {
+      console.error('[BookingService] Failed to emit booking.reschedule_answered event:', error);
     }
   }
 
@@ -1587,4 +2212,24 @@ export class BookingService {
       return null;
     }
   }
+}
+
+/**
+ * A proposal as a plain object. The stored one is a Mongoose sub-document, and spreading that
+ * (`{ ...proposal, status }`) copies its internals rather than its fields — every write of a new
+ * status goes through this first.
+ */
+function plainProposal(p: IRescheduleProposal): IRescheduleProposal {
+  return {
+    status: p.status,
+    proposedBy: p.proposedBy,
+    slotId: p.slotId,
+    startAt: p.startAt,
+    endAt: p.endAt,
+    previousStartAt: p.previousStartAt,
+    previousEndAt: p.previousEndAt,
+    proposedAt: p.proposedAt,
+    expiresAt: p.expiresAt,
+    answeredAt: p.answeredAt ?? null,
+  };
 }

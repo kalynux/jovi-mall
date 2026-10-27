@@ -427,14 +427,22 @@ const ORANGE = '+237655000000';
   assert('the payout\'s idempotency key is derived from its reference (a retry presents the same one)', () =>
     seen[0]?.headers['X-Idempotency-Key'] === novasendIdempotencyKey('payout', payoutRef));
 
-  script([[/\/v1\/direct\/payout$/, () => ({ status: 400, body: { code: 'wallet_not_enough_cash', message: 'Solde insuffisant' } })]]);
+  script([[/\/v1\/direct\/payout$/, () => ({ status: 403, body: { code: 'wallet_not_enough_cash', message: 'Solde insuffisant' } })]]);
   const broke = await gateway.createPayout(payoutInput);
-  assert('a 4xx (short float) is a refusal that sent nothing, worded for an administrator', () =>
+  assert('a 403 short float (as documented) is a refusal that sent nothing, worded for an administrator', () =>
     !broke.success && !broke.unsupported && /enough/.test(broke.message ?? ''));
+  script([[/\/v1\/direct\/payout$/, () => ({ status: 403, body: { message: 'client_not_enough_cash' } })]]);
+  const brokeByMessage = await gateway.createPayout(payoutInput);
+  assert('a short float named only in `message` (how the SDK reads errors) is still a short float', () =>
+    !brokeByMessage.success && !brokeByMessage.unsupported && /enough/.test(brokeByMessage.message ?? ''));
 
   script([[/\/v1\/direct\/payout$/, () => ({ status: 403, body: { code: 'api_token_invalid' } })]]);
   const forbidden = await gateway.createPayout(payoutInput);
-  assert('a 403 is `unsupported` (credentials / account), nothing sent', () => !forbidden.success && forbidden.unsupported === true);
+  assert('a credential refusal is `unsupported` (credentials / account), nothing sent', () => !forbidden.success && forbidden.unsupported === true);
+  script([[/\/v1\/direct\/payout$/, () => ({ status: 403, body: { message: 'transaction_error' } })]]);
+  const txError = await gateway.createPayout(payoutInput);
+  assert('any other 403 is a plain refusal naming NovaSend\'s code, not a credentials diagnosis', () =>
+    !txError.success && !txError.unsupported && /transaction_error/.test(txError.message ?? '') && !/NOVASEND_API_KEY/.test(txError.message ?? ''));
 
   script([
     [/\/v1\/direct\/payout$/, () => ({ status: 409, body: { code: 'transaction_is_already_processed' } })],

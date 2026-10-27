@@ -1040,6 +1040,8 @@ export const ERROR_CODES = Object.freeze({
     CATALOG_PRODUCT_SERVICE_NO_DURATION: 'CATALOG_PRODUCT_SERVICE_NO_DURATION',
     CATALOG_PRODUCT_SERVICE_NO_CAPACITY: 'CATALOG_PRODUCT_SERVICE_NO_CAPACITY',
     CATALOG_PRODUCT_SERVICE_NO_AVAILABILITY: 'CATALOG_PRODUCT_SERVICE_NO_AVAILABILITY',
+    /** The service is set to happen at a vendor address that is no longer on the vendor's profile. */
+    CATALOG_PRODUCT_SERVICE_LOCATION_ADDRESS_MISSING: 'CATALOG_PRODUCT_SERVICE_LOCATION_ADDRESS_MISSING',
     CATALOG_PRODUCT_VARIANT_ZERO_PRICE: 'CATALOG_PRODUCT_VARIANT_ZERO_PRICE',
     CATALOG_PRODUCT_NOT_DIGITAL: 'CATALOG_PRODUCT_NOT_DIGITAL',
     CATALOG_PRODUCT_NO_DIGITAL_CONFIG: 'CATALOG_PRODUCT_NO_DIGITAL_CONFIG',
@@ -1966,6 +1968,35 @@ export const ERROR_CODES = Object.freeze({
     BOOKING_SLOT_UNAVAILABLE: 'BOOKING_SLOT_UNAVAILABLE',
     /** The booking is past the point where it can be cancelled by its owner. */
     BOOKING_NOT_CANCELLABLE: 'BOOKING_NOT_CANCELLABLE',
+    /** The service happens at the customer's address and none was chosen. */
+    BOOKING_ADDRESS_REQUIRED: 'BOOKING_ADDRESS_REQUIRED',
+    /** The chosen address is not one of the customer's saved addresses. */
+    BOOKING_ADDRESS_NOT_FOUND: 'BOOKING_ADDRESS_NOT_FOUND',
+    /** The service's own address was removed from the vendor's profile — it cannot be booked until set again. */
+    BOOKING_LOCATION_UNAVAILABLE: 'BOOKING_LOCATION_UNAVAILABLE',
+    /** Access details cannot be changed on a cancelled, completed or no-show booking. */
+    BOOKING_ACCESS_NOT_EDITABLE: 'BOOKING_ACCESS_NOT_EDITABLE',
+    /** There is no open proposal of a new time on this booking. */
+    BOOKING_PROPOSAL_NOT_FOUND: 'BOOKING_PROPOSAL_NOT_FOUND',
+    /** A proposal of a new time is already waiting for an answer on this booking. */
+    BOOKING_PROPOSAL_PENDING: 'BOOKING_PROPOSAL_PENDING',
+    /** The proposal can only be answered by the other side — not by whoever made it. */
+    BOOKING_PROPOSAL_NOT_YOURS: 'BOOKING_PROPOSAL_NOT_YOURS',
+    /** A group class (capacity mode) is booked one class at a time — several consecutive slots are refused. */
+    BOOKING_MULTI_SLOT_NOT_SUPPORTED: 'BOOKING_MULTI_SLOT_NOT_SUPPORTED',
+    // ── Administrator decisions on a booking (ADMIN-BOOKINGS-PLAN, 2026-10-27) ──
+    /** An administrator completes a booking only once its money is held: unpaid ones are refused. */
+    BOOKING_ADMIN_COMPLETE_UNPAID: 'BOOKING_ADMIN_COMPLETE_UNPAID',
+    /** The appointment has not started yet, so it cannot be completed. */
+    BOOKING_NOT_STARTED: 'BOOKING_NOT_STARTED',
+    /** The payment re-check is for a booking whose payment reads `pending`; this one does not. */
+    BOOKING_PAYMENT_NOT_PENDING: 'BOOKING_PAYMENT_NOT_PENDING',
+    /** The provider says the payment succeeded but the booking still reads `pending` — needs an engineer. */
+    BOOKING_PAYMENT_STATE_MISMATCH: 'BOOKING_PAYMENT_STATE_MISMATCH',
+    /** A reminder is only sent for a confirmed booking that has not started yet. */
+    BOOKING_REMINDER_NOT_APPLICABLE: 'BOOKING_REMINDER_NOT_APPLICABLE',
+    /** No live seat starts at that time on that service. */
+    BOOKING_SESSION_EMPTY: 'BOOKING_SESSION_EMPTY',
 
     // ── AVAILABILITY RULES (service products) ─────────────────────────────────
     AVAILABILITY_PRODUCT_NOT_FOUND: 'AVAILABILITY_PRODUCT_NOT_FOUND',

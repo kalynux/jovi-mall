@@ -11,6 +11,11 @@ export type NotificationType =
     | 'order.cancelled'
     | 'booking.created'
     | 'booking.cancelled'
+    // Appointment moves (2026-10-26, owner decisions D-8/D-9) — see notification-catalog.ts.
+    | 'booking.rescheduled'
+    | 'booking.reschedule_requested'
+    | 'booking.reschedule_accepted'
+    | 'booking.reschedule_declined'
     | 'payment.received.partial'
     | 'payment.received.full'
     | 'storage.alert'
@@ -171,6 +176,10 @@ const VendorNotificationSchema = new Schema<IVendorNotification>(
                 'order.cancelled',
                 'booking.created',
                 'booking.cancelled',
+                'booking.rescheduled',
+                'booking.reschedule_requested',
+                'booking.reschedule_accepted',
+                'booking.reschedule_declined',
                 'payment.received.partial',
                 'payment.received.full',
                 'storage.alert',

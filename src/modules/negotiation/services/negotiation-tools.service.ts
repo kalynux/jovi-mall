@@ -315,7 +315,7 @@ export class NegotiationToolsService {
 
         const filtered = rows
             .filter((row) => input.maxPrice === undefined || row.reachableFloor <= input.maxPrice)
-            .filter((row) => input.inStockOnly !== true || row.variants.some((v) => stockOf(v).sellable))
+            .filter((row) => input.inStockOnly !== true || row.variants.some((v) => stockOf(v, row.type).sellable))
             // The repository returns no order; the ranking is the caller's, and it is the
             // co-occurrence count. `id` breaks ties so two identical calls agree.
             .sort((a, b) => (ordersById.get(b.id) ?? 0) - (ordersById.get(a.id) ?? 0) || a.id.localeCompare(b.id))
@@ -472,7 +472,7 @@ export class NegotiationToolsService {
                     compareAtPrice: compareAtPriceOf(row.vectorisationEnabled, variant),
                     bargainable: window !== null,
                     window,
-                    stock: stockOf(variant),
+                    stock: stockOf(variant, row.type),
                     images: pickFiles(variant.fileIds, fileMap),
                 };
             }),
@@ -517,7 +517,7 @@ export class NegotiationToolsService {
                     askingPrice: askingPriceOf(row.vectorisationEnabled, entry),
                     bargainable: window !== null,
                     window,
-                    stock: stockOf(entry),
+                    stock: stockOf(entry, row.type),
                 },
                 floorMin: row.reachableFloor,
                 floorMax: Math.max(...row.variants.map((v) => v.price)),

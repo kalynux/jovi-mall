@@ -8496,6 +8496,11 @@
             "type": "string",
             "maxLength": 500,
             "description": "The customer's own words about the appointment. This reaches the vendor's calendar, so pass what they said rather than a summary."
+          },
+          "addressId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "One of the customer's saved addresses, from addresses_list. REQUIRED when the service's locationKind is customer_address (the vendor comes to them); ignored otherwise. Ask the customer which address — never assume the default."
           }
         }
       },
@@ -8503,7 +8508,8 @@
         "body": [
           "productId",
           "slotId",
-          "notes"
+          "notes",
+          "addressId"
         ]
       },
       "response": {
@@ -8559,6 +8565,27 @@
           "details_fields": [
             "fields"
           ]
+        },
+        {
+          "code": "BOOKING_ADDRESS_REQUIRED",
+          "status": 422,
+          "category": "validation",
+          "when": "The service happens at the customer's address and no addressId was sent",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "BOOKING_ADDRESS_NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "addressId is not one of this customer's saved addresses",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "BOOKING_LOCATION_UNAVAILABLE",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The vendor removed the address this service happens at",
+          "customer_action": "explain"
         }
       ],
       "mutating": true,

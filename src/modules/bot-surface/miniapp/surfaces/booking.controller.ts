@@ -22,6 +22,7 @@ import {
     readCustomerBookings,
 } from './booking.core';
 import { PaymentCodeSchema } from '../../../payments/validators/payment.validators';
+import { composeTypedNumber } from '../../../../core/validation/dial-codes';
 
 const telegramBotService = new TelegramBotService();
 
@@ -29,9 +30,13 @@ const telegramBotService = new TelegramBotService();
  * The pay screen's body. `phone` stays `unknown` and is judged inside `payBooking`, as before;
  * unknown keys are dropped (not refused) so a page from before this schema keeps working.
  * `paymentCode`: the `CODE_FIRST` code (NovaSend Orange Money), sent after `422 PAYMENT_CODE_REQUIRED`.
+ * `dial` (2026-10-27): the country picker's ISO code. It only COMPOSES a typed number
+ * (`composeTypedNumber`, the checkout's and the WhatsApp form's rule); an unknown value composes
+ * nothing, and empty `phone` still means the account's own number.
  */
 const PayBodySchema = z.object({
     phone: z.unknown().optional(),
+    dial: z.unknown().optional(),
     paymentCode: PaymentCodeSchema.optional(),
 });
 
@@ -87,7 +92,7 @@ export class BookingScreensController {
      */
     static confirm = asyncHandler(async (req: Request, res: Response) => {
         const handle = String(req.params.handle ?? '');
-        const body = (req.body ?? {}) as { slotId?: unknown; notes?: unknown };
+        const body = (req.body ?? {}) as { slotId?: unknown; notes?: unknown; addressId?: unknown };
         if (typeof body.slotId !== 'string' || body.slotId.length === 0) {
             throw createAppError(ERROR_CODES.VALIDATION_ERROR, 400, 'slotId is required');
         }
@@ -101,6 +106,8 @@ export class BookingScreensController {
         const outcome = await confirmBooking(handle, {
             slotId: body.slotId,
             notes: typeof body.notes === 'string' ? body.notes : null,
+            // Required by a service the vendor travels to — the page asks (`place` on the days read).
+            addressId: typeof body.addressId === 'string' ? body.addressId : null,
         });
 
         if (session) {
@@ -144,7 +151,7 @@ export class BookingScreensController {
     static pay = asyncHandler(async (req: Request, res: Response) => {
         const body = PayBodySchema.parse(req.body ?? {});
         sendSuccess(res, await payBooking(String(req.params.handle ?? ''), {
-            phone: body.phone,
+            phone: composeTypedNumber(body.phone, body.dial),
             paymentCode: body.paymentCode ?? null,
         }));
     });
@@ -185,7 +192,7 @@ async function pushReceipt(
     outcome: BookingConfirmed,
 ): Promise<void> {
     const text = bookingChatReceipt(
-        { moved: outcome.moved, awaitingShop: outcome.awaitingShop },
+        { moved: outcome.moved, awaitingShop: outcome.awaitingShop, requested: outcome.requested },
         { reference: outcome.reference, when: outcome.when, service: outcome.service },
         language,
     );

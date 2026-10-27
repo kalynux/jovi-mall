@@ -270,22 +270,26 @@ async function main(): Promise<void> {
             ['viewStoresButton', 'browseAllButton', 'openButton', 'loadMoreRow'].every(
                 (key) => botChrome(key as never, lang).trim().length > 0)));
 
-    assert('⛔ the storefront fallback is still wired into the in-app doors', () => {
-        const src = fs.readFileSync(
-            path.join(__dirname, '../../src/modules/bot-surface/controllers/bot-inapp.controller.ts'), 'utf8');
-        return src.includes('botStorefrontLink') && src.includes("kind: 'link'");
-    });
+    /**
+     * ⚠ Since 2026-10-26 the ladder lives in ONE place, `screenReplyIntent` (command-reply.ts) —
+     * which also attaches a published WhatsApp form — and `respondWithScreen` delegates to it, as
+     * its own header always said it should. Both halves are pinned: the ladder, and the delegation.
+     */
+    const ladderSrc = () => fs.readFileSync(
+        path.join(__dirname, '../../src/modules/command-bus/command-reply.ts'), 'utf8');
+    const doorSrc = () => fs.readFileSync(
+        path.join(__dirname, '../../src/modules/bot-surface/controllers/bot-inapp.controller.ts'), 'utf8');
+    assert('⛔ the storefront fallback is still wired into the in-app doors', () =>
+        ladderSrc().includes('botStorefrontLink') && ladderSrc().includes("kind: 'link'")
+        && doorSrc().includes('setBotReply(req, screenReplyIntent({'));
 
     /**
      * ⚠ The third case is the one that gets forgotten: a deployment with **neither** a screen
      * nor a storefront URL must set no reply at all and let the model speak. What it must
      * never do is render a control with an empty target.
      */
-    assert('⛔ with neither a screen nor a storefront, NO control is rendered', () => {
-        const src = fs.readFileSync(
-            path.join(__dirname, '../../src/modules/bot-surface/controllers/bot-inapp.controller.ts'), 'utf8');
-        return src.includes('setBotReply(req, fallbackUrl ?');
-    });
+    assert('⛔ with neither a screen nor a storefront, NO control is rendered', () =>
+        ladderSrc().includes("return fallbackUrl ? { kind: 'link', text, label, url: fallbackUrl } : null;"));
 
     console.log('\n── Store screens show a CITY and never an address ──');
 

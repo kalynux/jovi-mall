@@ -33,7 +33,9 @@ Complete API reference for managing bookings in the multi-vendor ecommerce platf
 - [Complete Booking (settle final price)](#complete-booking-settle-final-price)
 - [Mark Cash Booking as Paid](#mark-cash-booking-as-paid)
 - [Hold Any Time (shop rule)](#hold-any-time-shop-rule) 🆕
-- [Reschedule Booking](#reschedule-booking)
+- [Reschedule Booking](#reschedule-booking) 🔴 proposes since 2026-10-26
+- [Answer or withdraw a proposed time](#answer-or-withdraw-a-proposed-time) 🆕
+- [Edit a booking's access details](#edit-a-bookings-access-details) 🆕
 - [Cancel Booking](#cancel-booking)
 - [Booking Status State Machine](#booking-status-state-machine)
 - [Error Codes](#error-codes)
@@ -117,6 +119,15 @@ List all bookings for the authenticated vendor with filtering and pagination.
 > [!NOTE]
 > **`priceSnapshot`** is captured when the booking is created, computed by the backend from the service product's single default variant: `variant.price` is the base price per `serviceConfig.durationMinutes`, prorated by the booked slot duration, plus any peak-hours surcharge. On completion it can be recomputed from the actual elapsed duration — see [Complete Booking](#complete-booking-settle-final-price).
 
+> [!IMPORTANT]
+> **Every booking amount is whole XAF** (confirmed 2026-10-26): `priceSnapshot`,
+> `settlement.finalPrice`, `settlement.balanceDue`, `settlement.balancePaid`,
+> `settlement.creditDue`, and the `fixedPrice` you send to
+> [Complete Booking](#complete-booking-settle-final-price). `5000` means **5 000 XAF**. XAF has
+> no minor unit, so never divide or multiply by 100. The example above (`50000`) is 50 000 XAF.
+> No notification, email, bot message, analytics figure or earnings row converts a booking
+> amount either.
+
 ---
 
 ## Get Booking
@@ -125,7 +136,22 @@ List all bookings for the authenticated vendor with filtering and pagination.
 GET /api/vendor/bookings/:id
 ```
 
-Retrieve a single booking by ID.
+Retrieve a single booking by ID. Same shape as a list row (`id`, never `_id`; `productId` as
+`{ id, title, type }`), plus:
+
+- `userId` is `{ _id, login_email, login_phone }`. `login_phone` is on the **detail read only**
+  (the list carries `{ _id, login_email }`). Show it as a tap-to-call number; it may be `null`.
+- `metadata` — free-form, as booked. **`metadata.notes`** is the customer's note (trimmed, at
+  most 500 characters, absent when they wrote none). Show it as "Customer note". It also
+  appears in your Google Calendar event.
+- `bookingNumber` (may be `null` on old bookings), `priceSnapshot`, `currency`, `status`,
+  `paymentStatus`, `paymentMethod`, `paidAt`, `requiresPayment`, `settlement`,
+  `cancelledReason`.
+- 🆕 2026-10-26: `location`, `access`, `rescheduleProposal`. See
+  [Edit a booking's access details](#edit-a-bookings-access-details) and
+  [Reschedule Booking](#reschedule-booking).
+
+These field names are what the vendor dashboard reads. They are a contract.
 
 **Error Responses:**
 
@@ -439,10 +465,15 @@ answer as a booking that does not exist, so nobody can discover other shops' boo
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `slotId` | string | yes | The time you want to hold, as `slot_{startMs}_{endMs}_{hash}` — epoch **milliseconds**. For a time inside opening hours, pass back exactly what `GET /availability` returned. For a time outside them there is nothing to pass back, so build the id from the two instants and any trailing segment (the server reads only the two numbers). |
+| `slotId` | string | one of the two | The time you want to hold, as `slot_{startMs}_{endMs}_{hash}` — epoch **milliseconds**. For a time inside opening hours, pass back exactly what `GET /availability` returned. For a time outside them there is nothing to pass back, so build the id from the two instants and any trailing segment (the server reads only the two numbers). |
+| `slotIds` | string[] | one of the two | 🆕 2026-10-27. **A run of consecutive slots**, for an appointment that spans several (the customer booked 2 × 1 h, say). Each slot must start where the previous one ends, at most `BOOKING_MAX_SLOTS_PER_BOOKING` (default 8). Each slot is held under its own id. Send `slotId` **or** `slotIds`, never both. |
 
 ```json
 { "slotId": "slot_1771426800000_1771430400000_shop" }
+```
+
+```json
+{ "slotIds": ["slot_1771426800000_1771430400000_a1b2c3d4", "slot_1771430400000_1771434000000_e5f6a7b8"] }
 ```
 
 > ⚠ **The field is `slotId` here and `newSlotId` on the reschedule.** The hold names the time you
@@ -457,6 +488,7 @@ answer as a booking that does not exist, so nobody can discover other shops' boo
   "data": {
     "held": true,
     "slotId": "slot_1771426800000_1771430400000_shop",
+    "slotIds": ["slot_1771426800000_1771430400000_shop"],
     "startAt": "2026-02-18T18:00:00.000Z",
     "endAt": "2026-02-18T19:00:00.000Z",
     "expiresAt": "2026-02-18T14:15:00.000Z"
@@ -466,26 +498,31 @@ answer as a booking that does not exist, so nobody can discover other shops' boo
 ```
 
 `expiresAt` is **15 minutes** after the hold was taken. `startAt` / `endAt` are the instants the
-server read out of the slot id — render those, rather than re-parsing the id yourself.
+server read out of the slot id — render those, rather than re-parsing the id yourself. For a run,
+`startAt` / `endAt` cover the whole run, `slotIds` echoes the ids held, and `slotId` is the id of
+the whole interval (🆕 2026-10-27; for one slot, `slotIds` is that one id).
 
 **Refusals** — each one, with the sentence to show
 
 | Status | `code` | `details.reason` | What happened | Sentence to show |
 |---|---|---|---|---|
-| 400 | `VALIDATION_ERROR` | — | `slotId` missing or empty | "Choose a time first." |
+| 400 | `VALIDATION_ERROR` | — | `slotId` / `slotIds` missing or empty, or both sent | "Choose a time first." |
 | 400 | `BOOKING_INVALID_SLOT_ID` | — | The slot id is not `slot_{ms}_{ms}_…` | "That time could not be read. Pick it again." |
 | 400 | `BOOKING_INVALID_SLOT_ID` | `inverted` | The end is before the start | "That time ends before it starts." |
+| 400 | `BOOKING_INVALID_SLOT_ID` | `not_contiguous` | 🆕 The slots of `slotIds` leave a gap, overlap or are out of order | "Pick times that follow each other." |
+| 400 | `BOOKING_INVALID_SLOT_ID` | `slot_count` | 🆕 More slots than `BOOKING_MAX_SLOTS_PER_BOOKING` | "That is too many times for one appointment." |
+| 422 | `BOOKING_MULTI_SLOT_NOT_SUPPORTED` | — | 🆕 `slotIds` with several slots on a class / group service | "A class is moved one session at a time." |
 | 400 | `BOOKING_INVALID_SLOT_ID` | `length_changed` | Not the appointment's length | "Keep the same length as the original appointment — 1 hour." |
 | 400 | `BOOKING_INVALID_SLOT_ID` | `not_future` | The time has already passed | "Choose a time in the future." |
 | 409 | `BOOKING_SLOT_UNAVAILABLE` | — | Another appointment already occupies it | "That time is no longer free. Please choose another." |
-| 409 | `BOOKING_SLOT_LOCKED` | — | Somebody else is holding it right now | "Someone is booking that time. Try again in a few minutes." |
+| 409 | `BOOKING_SLOT_LOCKED` | — | Somebody else is holding it (for a run: any one slot of it — `details.slotId` names which; nothing of the run stays held) | "Someone is booking that time. Try again in a few minutes." |
 | 409 | `BOOKING_NOT_RESCHEDULABLE` | — | The booking is cancelled, completed or a no-show | "This appointment can no longer be moved." |
 | 404 | `BOOKING_NOT_FOUND` | — | Not your booking, or no such booking | "That appointment was not found." |
 | 403 | `AUTH_ROLE_NOT_FOUND` | — | Signed in, but not as a shop | "Sign in as your shop to change appointments." |
 | 401 | `AUTH_MISSING_TOKEN` | — | Not signed in | "Sign in to continue." |
 
 The `message` in the envelope is the server's own English; `details.reason` is what the screen
-should branch on, because it is stable and the three 400s share one code.
+should branch on, because it is stable and the 400s share one code.
 
 **Three rules, and one that is deliberately absent.** The length must match the appointment being
 moved; the start must be in the future; the time must not already be sold (single-appointment
@@ -498,10 +535,14 @@ the move actually happens, so a hold is never a promise of a seat.
 ```
 1. POST /api/vendor/bookings/:id/slot-hold      { "slotId": "slot_…" }      → 200, expiresAt
 2. PATCH /api/vendor/bookings/:id/reschedule    { "newSlotId": "slot_…" }   → 200, the booking
+
+   — or, for an appointment spanning several slots (🆕 2026-10-27):
+1. POST /api/vendor/bookings/:id/slot-hold      { "slotIds": ["slot_…", "slot_…"] }
+2. PATCH /api/vendor/bookings/:id/reschedule    { "newSlotIds": ["slot_…", "slot_…"] }
 ```
 
-Use the same slot id in both. Call the second within the 15 minutes; it re-applies the same rules,
-so a hold never lets through a move that would be refused.
+Use the same slot id (or the same list, in the same order) in both. Call the second within the 15
+minutes; it re-applies the same rules, so a hold never lets through a move that would be refused.
 
 > [!IMPORTANT]
 > **If the hold succeeds and the move then fails**, the time is still held by you, for the rest of
@@ -527,7 +568,23 @@ so a hold never lets through a move that would be refused.
 PATCH /api/vendor/bookings/:id/reschedule
 ```
 
-Reschedule a booking to a new time slot. Updates the Google Calendar event.
+> [!IMPORTANT]
+> 🔴 **Since 2026-10-26 this PROPOSES a new time; it no longer moves the booking** (owner
+> decision D-9). The customer accepts or declines. Until they answer, the booking keeps its time
+> (`startAt`/`endAt` unchanged) and the response's `rescheduleProposal` reads
+> `{ status: "open", proposedBy: "vendor", startAt, endAt, previousStartAt, expiresAt, … }`.
+> The proposed time is held, so nobody else can book it. With no answer by `expiresAt` (the
+> original start, or the proposed start if earlier) the original time stands. Show
+> "Waiting for the customer" while the proposal is `open`, and withdraw it with
+> [`DELETE …/reschedule-proposal`](#answer-or-withdraw-a-proposed-time).
+>
+> If the customer **declines**, they may cancel with a **full refund whatever your cancellation
+> policy says**, with the refund fees charged to the shop. You are notified either way
+> (`booking.reschedule_accepted` / `booking.reschedule_declined`).
+>
+> A second proposal while one is open → `409 BOOKING_PROPOSAL_PENDING`.
+
+Proposes a new time slot for the booking. The Google Calendar event moves only when the customer accepts.
 
 > [!IMPORTANT]
 > **Slot Lock Required**
@@ -558,11 +615,33 @@ Reschedule a booking to a new time slot. Updates the Google Calendar event.
 
 **Eligibility:** Only `pending` or `confirmed` bookings can be rescheduled.
 
-**Request Body:**
+**Request Body:** `newSlotId` **or** `newSlotIds`, never both.
 
 ```json
 { "newSlotId": "slot_1739365200000_1739372400000_a1b2c3d4" }
 ```
+
+> [!IMPORTANT]
+> 🆕 **2026-10-27 — appointments that span several slots can be moved.** A customer may book
+> several consecutive slots as one appointment (2 × 1 h = a 2-hour booking). No single slot from
+> `GET /availability` has that length, so until this date every move of such a booking failed
+> `400 BOOKING_INVALID_SLOT_ID` / `length_changed`. Now send the run:
+>
+> ```json
+> { "newSlotIds": ["slot_1739365200000_1739368800000_a1b2c3d4", "slot_1739368800000_1739372400000_e5f6a7b8"] }
+> ```
+>
+> - **How many slots:** `(booking.endAt − booking.startAt) ÷ (slot.end − slot.start)` of any slot
+>   `GET /availability` returns (each is one `durationMinutes` long). One
+>   → keep sending `newSlotId`. More than one → pick that many **consecutive** slots and send
+>   `newSlotIds`, in time order.
+> - **Hold each one first**, signed in as the shop: inside opening hours, the storefront lock
+>   route once per slot; anywhere, `POST …/slot-hold` with the same `slotIds` (one call).
+> - The run must have **no gap** (`400 … not_contiguous`) and the **same total length** as the
+>   appointment (`400 … length_changed`). A class / group service is always one slot
+>   (`422 BOOKING_MULTI_SLOT_NOT_SUPPORTED`).
+> - It is still a **proposal** the customer accepts or declines; `rescheduleProposal.startAt` /
+>   `endAt` cover the whole run.
 
 > ⚠ **The example here read `slot-2026-02-10T14:00:00Z-60` until 2026-09-06 — that shape does
 > not exist.** A slot id is `slot_{startMs}_{endMs}_{hash}`, built at
@@ -577,13 +656,71 @@ Reschedule a booking to a new time slot. Updates the Google Calendar event.
 
 **Error Responses:**
 
-- `400 VALIDATION_ERROR`: `newSlotId` missing
+- `400 VALIDATION_ERROR`: neither `newSlotId` nor `newSlotIds`, or both
+- `400 BOOKING_INVALID_SLOT_ID` (`details.reason`): `length_changed` (not the appointment's length), `not_contiguous` (🆕 a run with a gap), `slot_count` (🆕 too many slots), `not_future`, `inverted`
+- `422 BOOKING_MULTI_SLOT_NOT_SUPPORTED`: 🆕 a run of several slots on a class / group service
 - `404 BOOKING_NOT_FOUND`: Booking not found
 - `409 BOOKING_NOT_RESCHEDULABLE`: Booking status doesn't allow rescheduling (must be `pending` or `confirmed`)
 - `409 BOOKING_SLOT_NOT_LOCKED`: New slot is not locked, or the lock has expired
 - `403 BOOKING_UNAUTHORIZED`: New slot is locked by a different owner
 - `409 BOOKING_ALREADY_CANCELLED`: Booking is already cancelled
 - ~~`500 BOOKING_CALENDAR_SYNC_FAILED`: Calendar event update failed~~ — **never sent.** Calendar mirroring is best-effort on every path; the throw was removed when it became so (`booking.service.ts:515`), and no site anywhere raises this code. A reschedule whose Google event fails to update returns `200` and logs.
+- `409 BOOKING_PROPOSAL_PENDING`: a proposed time is already waiting for an answer on this booking
+- `409 BOOKING_SLOT_UNAVAILABLE` / `409 BOOKING_SLOT_FULL`: the time is taken (another booking, or another open proposal, holds it)
+
+---
+
+## Answer or withdraw a proposed time
+
+🆕 2026-10-26 (owner decisions D-8, D-9).
+
+```http
+POST   /api/vendor/bookings/:id/reschedule-proposal/accept
+POST   /api/vendor/bookings/:id/reschedule-proposal/decline
+DELETE /api/vendor/bookings/:id/reschedule-proposal
+```
+
+- **accept / decline** answer a **customer's** request for a new time. A customer's request only
+  exists on a service in `manual` mode, which you approve by hand. On `calendar` and `capacity`
+  services a customer's move applies at once and you are notified (`booking.rescheduled`).
+  Accept moves the booking (calendar mirrored); decline keeps the original time.
+- **DELETE** withdraws **your own** proposal while it is still `open`.
+
+Every response is the booking. `rescheduleProposal.status` becomes `accepted` · `declined` ·
+`withdrawn` (`lapsed` once an open one passes `expiresAt` unanswered).
+
+| Error | When |
+|---|---|
+| `404 BOOKING_PROPOSAL_NOT_FOUND` | nothing open on this booking, or it lapsed (`details.status`) |
+| `403 BOOKING_PROPOSAL_NOT_YOURS` | answering your own proposal, or withdrawing the customer's |
+| `409 BOOKING_SLOT_UNAVAILABLE` / `BOOKING_SLOT_FULL` | on accept, if the time stopped being free |
+
+---
+
+## Edit a booking's access details
+
+🆕 2026-10-26 (owner decision D-5).
+
+```http
+PATCH /api/vendor/bookings/:id/access
+```
+
+```json
+{ "meetingUrl": "https://meet.google.com/abc-defg-hij", "instructions": "Ring the second bell", "revealMinutesBefore": 30 }
+```
+
+Changes **this booking only**: useful when your meeting tool makes a different link for every
+session. The service's defaults (`serviceConfig.access`, see [variants.md](./variants.md)) are not
+touched. Every field is optional, but at least one is required. `null` or `""` clears a text field.
+`meetingUrl` must be `https://`, max 500 characters. `instructions` is plain text, max 2 000.
+`revealMinutesBefore` is 0–1440.
+
+The customer sees the link and instructions **only from `revealMinutesBefore` minutes before the
+start until one hour after the end, and only when the booking is confirmed AND paid** (online, or
+cash you marked as paid). Before that, they are **not sent** to the customer's app at all. Your
+own reads (`GET /api/vendor/bookings/:id`) always carry `access` and `location` in full.
+
+`409 BOOKING_ACCESS_NOT_EDITABLE` on a cancelled, completed or no-show booking.
 
 ---
 

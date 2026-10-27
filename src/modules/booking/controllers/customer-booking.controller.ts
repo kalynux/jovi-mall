@@ -12,6 +12,9 @@ import { customerRefundViewService } from '../../payments/services/customer-refu
 import type { CustomerRefundBlock } from '../../payments/dto/customer-refund.dto';
 import { toCustomerProtection, CustomerProtectionBlock } from '../../earnings/domain/earnings-hold';
 import { EARNINGS_CONFIG } from '../../earnings/config/earnings.config';
+import { toCustomerBookingShape } from '../domain/appointment';
+import { customerBookingViewService } from '../services/customer-booking-view';
+import { BOOKING_CONFIG } from '../config/booking.config';
 
 const bookingService = new BookingService();
 const paymentOrchestrator = new PaymentOrchestratorService();
@@ -35,12 +38,19 @@ const paymentOrchestrator = new PaymentOrchestratorService();
 async function withRefunds<T extends { _id: unknown }>(
     bookings: T[],
 ): Promise<Array<Record<string, unknown> & { refund: CustomerRefundBlock | null; protection: CustomerProtectionBlock }>> {
-    const byBooking = await customerRefundViewService.latestBySources(
-        'booking',
-        bookings.map((b) => String(b._id)),
-    );
+    const [byBooking, parties] = await Promise.all([
+        customerRefundViewService.latestBySources(
+            'booking',
+            bookings.map((b) => String(b._id)),
+        ),
+        // `product` / `vendor` / `store`, and `productId` / `vendorId` back to id strings — see
+        // `customer-booking-view.ts`. Added AFTER the shaping below, so it can only add keys.
+        customerBookingViewService.partiesFor(
+            bookings as unknown as Array<{ productId?: unknown; vendorId?: unknown }>,
+        ),
+    ]);
     const now = new Date();
-    return bookings.map((b) => {
+    return bookings.map((b, i) => {
         const plain = typeof (b as { toJSON?: () => unknown }).toJSON === 'function'
             ? ((b as unknown as { toJSON: () => Record<string, unknown> }).toJSON())
             : ({ ...(b as unknown as Record<string, unknown>) });
@@ -56,7 +66,9 @@ async function withRefunds<T extends { _id: unknown }>(
         );
         const { earningsPause: _internal, ...visible } = plain;
         void _internal;
-        return { ...visible, refund: byBooking.get(String(b._id)) ?? null, protection };
+        // ⛔ The raw `access` holds the meeting link in clear — replaced by the time-gated view.
+        const shaped = toCustomerBookingShape(visible, b as unknown as Parameters<typeof toCustomerBookingShape>[1], now);
+        return { ...shaped, ...parties[i], refund: byBooking.get(String(b._id)) ?? null, protection };
     });
 }
 
@@ -98,8 +110,17 @@ const CancelBookingSchema = z.object({
     reason: z.string().max(500).optional(),
 });
 
+/**
+ * `newSlotIds` (2026-10-26) moves an appointment that spans several consecutive slots: the customer
+ * holds a run of the same total length. Exactly one of the two fields; an older client sending
+ * `newSlotId` alone keeps working, and the service refuses any change of length either way.
+ */
 const RescheduleBookingSchema = z.object({
-    newSlotId: z.string().min(1, 'newSlotId is required'),
+    newSlotId: z.string().min(1).optional(),
+    newSlotIds: z.array(z.string().min(1)).min(1).max(BOOKING_CONFIG.maxSlotsPerBooking).optional(),
+}).refine((d) => (d.newSlotId === undefined) !== (d.newSlotIds === undefined), {
+    message: 'Send newSlotId or newSlotIds',
+    path: ['newSlotId'],
 });
 
 // ─── Controller ────────────────────────────────────────────────────────────────
@@ -187,22 +208,55 @@ export class CustomerBookingController {
      */
     static rescheduleBooking = asyncHandler(async (req: Request, res: Response): Promise<void> => {
         const userId = req.auth!.user._id.toString();
-        const { newSlotId } = RescheduleBookingSchema.parse(req.body);
+        const { newSlotId, newSlotIds } = RescheduleBookingSchema.parse(req.body);
 
         const booking = await bookingService.rescheduleBooking(
             req.params.id,
-            newSlotId,
+            newSlotIds ?? newSlotId!,
             userId, // the customer holds the slot in their own name
             { role: 'customer', id: userId }
         );
 
         // Through the same projection as every other customer read of a booking.
         const [data] = await withRefunds([booking]);
+        // ⚠ On a service the vendor approves by hand (D-8) the move is a REQUEST: the booking keeps
+        // its time and `rescheduleProposal.status` is `open` until the vendor answers.
+        const proposed = booking.rescheduleProposal?.status === 'open';
         res.json({
             success: true,
             data,
-            message: 'Booking rescheduled',
+            message: proposed ? 'New time requested — the vendor will accept or decline it' : 'Booking rescheduled',
         });
+    });
+
+    /**
+     * POST /api/customer/bookings/:id/reschedule-proposal/accept | /decline
+     *
+     * Answer the vendor's proposal of a new time (D-9). Accept moves the booking; decline keeps
+     * the original time AND lets the customer cancel with a full refund whatever the cancellation
+     * policy says. 404 BOOKING_PROPOSAL_NOT_FOUND when none is open (or it lapsed),
+     * 403 BOOKING_PROPOSAL_NOT_YOURS on the customer's own request (withdraw it instead).
+     */
+    static acceptProposal = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const userId = req.auth!.user._id.toString();
+        const booking = await bookingService.answerRescheduleProposal(req.params.id, { role: 'customer', id: userId }, 'accept');
+        const [data] = await withRefunds([booking]);
+        res.json({ success: true, data, message: 'New time accepted' });
+    });
+
+    static declineProposal = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const userId = req.auth!.user._id.toString();
+        const booking = await bookingService.answerRescheduleProposal(req.params.id, { role: 'customer', id: userId }, 'decline');
+        const [data] = await withRefunds([booking]);
+        res.json({ success: true, data, message: 'New time declined — your original time stands' });
+    });
+
+    /** DELETE /api/customer/bookings/:id/reschedule-proposal — take back the customer's own request. */
+    static withdrawProposal = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const userId = req.auth!.user._id.toString();
+        const booking = await bookingService.withdrawRescheduleProposal(req.params.id, { role: 'customer', id: userId });
+        const [data] = await withRefunds([booking]);
+        res.json({ success: true, data, message: 'Request withdrawn' });
     });
 
     /**

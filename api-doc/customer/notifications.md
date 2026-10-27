@@ -140,6 +140,8 @@ PATCH /api/customer/notifications/read-all
 | `booking.created` | The booking is placed. Says whether it is confirmed or awaiting the vendor. | `bookingUpdates` |
 | `booking.confirmed` | The vendor accepted a `manual` booking. | `bookingUpdates` |
 | `booking.rescheduled` | Moved to a new time. Carries **both** the old and new times. | `bookingUpdates` |
+| `booking.reschedule_proposed` 🆕 | The vendor asks to move the appointment; accept or decline before the deadline. On WhatsApp/Telegram it carries **Accept new time** / **Keep my time** buttons. | `bookingUpdates` |
+| `booking.reschedule_declined` 🆕 | The vendor declined the customer's request for a new time; the appointment keeps its time. | `bookingUpdates` |
 | `booking.cancelled` | Called off. Names who did it and where the money went, in one message. | **No** |
 | `booking.completed` | The appointment happened and was settled. | `bookingUpdates` |
 | `booking.reminder` | ~24h before `startAt`, from the reminder sweep. | `bookingReminders` |

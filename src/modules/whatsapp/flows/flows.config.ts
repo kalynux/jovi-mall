@@ -61,14 +61,14 @@ function privateKeyPassphrase(): string {
  * screen, where a missing single id degrades exactly one.
  *
  * ⚠ **The keys are `InAppSurfaceKind`, so a screen and its Flow name the same thing.** `ol`,
- * `sl`, `tf` and the three booking kinds are declared with no variable because their forms are
- * not published yet — a Flow cannot exist before the screen it mirrors, and leaving them out of
+ * `sl` and `tf` are declared with no variable because their forms are not
+ * published yet — a Flow cannot exist before the screen it mirrors, and leaving them out of
  * the type would mean editing this map when they land.
  *
- * ⚠ **`tf`, `bl`, `bk` and `bp` have DRAFT definitions already** (`ticket-form.flow.ts`,
- * `booking.flow.ts`), deliberately absent from `publish-whatsapp-flows.ts` until the reads they
- * project exist. A draft with no id here is exactly right: nothing can reach Meta, and the id
- * appears the day the Flow is published.
+ * ⚠ **`tf` has a DRAFT definition** (`ticket-form.flow.ts`), deliberately absent from
+ * `publish-whatsapp-flows.ts` until the read it projects exists. The three booking forms joined the
+ * publish list on 2026-10-26, when their reads (`booking.core.ts`) were all in place; each still
+ * reaches a customer only once its id is set here, which is the day it is published.
  *
  * ⚠ **The map is TOTAL over the kinds on purpose, and that is what makes it useful.** When
  * another stream adds a screen kind, this file stops compiling until somebody decides whether
@@ -82,9 +82,10 @@ const FLOW_ID_READERS: Readonly<Record<InAppSurfaceKind, () => string>> = Object
     ol: () => '',
     sl: () => '',
     tf: () => '',
-    bl: () => '',
-    bk: () => '',
-    bp: () => '',
+    /** The three booking forms (2026-10-26): the list, the day-and-time picker, the payment. */
+    bl: () => process.env.WHATSAPP_FLOW_ID_BOOKING_LIST || '',
+    bk: () => process.env.WHATSAPP_FLOW_ID_BOOKING_SLOT || '',
+    bp: () => process.env.WHATSAPP_FLOW_ID_BOOKING_PAY || '',
 });
 
 let cachedKey: KeyObject | null = null;

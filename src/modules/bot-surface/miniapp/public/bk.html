@@ -34,6 +34,12 @@
   `moving` says which, and only the session knows: it is what the tap minted, not something the
   page or the form is told.  The notice above the days is the only difference the customer sees,
   and saying nothing there is how somebody ends up believing they booked a second appointment.
+
+  ── ⚠ A SERVICE THE VENDOR TRAVELS TO NEEDS AN ADDRESS ──────────────────────
+  `place.kind === 'customer_address'` on the days read lists the customer's saved addresses.
+  Confirm stays disabled until one is CHOSEN — nothing is pre-selected, because booking a
+  provider to the default address the customer forgot about is not undone by a later edit.
+  The server refuses a missing one anyway (`422 BOOKING_ADDRESS_REQUIRED`).
 -->
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <link rel="stylesheet" href="/api/bot/miniapp/shell.css">
@@ -49,6 +55,8 @@
   .opt__sub { font-size: 12px; color: var(--muted); }
   .foot { display: flex; gap: 8px; margin-block-start: 16px; }
   .foot button { flex: 1; }
+  .place { margin-block-end: 12px; }
+  .place select { width: 100%; padding: 10px; border-radius: 10px; background: var(--card); color: inherit; font: inherit; border: 0; }
 </style>
 </head>
 <body>
@@ -61,6 +69,10 @@
 
     <div id="sheet" hidden>
       <div class="notice" id="notice" hidden></div>
+      <div class="place" id="place" hidden>
+        <div class="block__label" id="placeLabel"></div>
+        <select id="placeSelect"></select>
+      </div>
       <div class="block__label" id="label"></div>
       <div class="opts" id="opts"></div>
       <div class="foot" id="foot" hidden>
@@ -92,12 +104,18 @@
     opts: document.getElementById("opts"),
     foot: document.getElementById("foot"),
     back: document.getElementById("back"),
-    confirm: document.getElementById("confirm")
+    confirm: document.getElementById("confirm"),
+    place: document.getElementById("place"),
+    placeLabel: document.getElementById("placeLabel"),
+    placeSelect: document.getElementById("placeSelect")
   };
 
   var copy = null;
   var chosenDate = null;
   var chosenSlot = null;
+  /** Set from the days read; only `customer_address` asks for a choice. */
+  var needsAddress = false;
+  var chosenAddress = null;
   /** ⚠ Latches on the first press of Confirm and is never cleared — the handle is spent. */
   var sent = false;
 
@@ -134,9 +152,28 @@
     return copy.failed;
   }
 
+  function showPlace(place) {
+    needsAddress = !!(place && place.kind === "customer_address");
+    chosenAddress = null;
+    el.place.hidden = !needsAddress;
+    if (!needsAddress) return;
+    var words = place.copy || {};
+    var list = place.addresses || [];
+    el.placeLabel.textContent = list.length > 0 ? (words.title || "") : (words.none || "");
+    el.placeSelect.hidden = list.length === 0;
+    el.placeSelect.innerHTML = '<option value="">—</option>' + list.map(function (a) {
+      return '<option value="' + esc(a.addressId) + '">' + esc(a.label ? a.label + " — " + a.line : a.line) + "</option>";
+    }).join("");
+  }
+
+  function canConfirm() {
+    return !!chosenSlot && (!needsAddress || !!chosenAddress);
+  }
+
   function showDays(data) {
     chosenDate = null;
     chosenSlot = null;
+    if (data.place !== undefined) showPlace(data.place);
     el.title.textContent = copy.pickTitle || FALLBACK.pickTitle;
     el.notice.hidden = !data.moving;
     el.notice.textContent = data.moving ? (copy.movingNotice || "") : "";
@@ -205,7 +242,12 @@
     Array.prototype.forEach.call(el.opts.querySelectorAll(".opt"), function (other) {
       other.setAttribute("aria-pressed", other === button ? "true" : "false");
     });
-    el.confirm.disabled = false;
+    el.confirm.disabled = !canConfirm();
+  });
+
+  el.placeSelect.addEventListener("change", function () {
+    chosenAddress = el.placeSelect.value || null;
+    el.confirm.disabled = !canConfirm();
   });
 
   el.back.addEventListener("click", function () { if (!sent) load(null); });
@@ -216,7 +258,7 @@
    * refusal invites exactly that. A refusal is explained; it is not made retryable here.
    */
   el.confirm.addEventListener("click", function () {
-    if (sent || !chosenSlot) return;
+    if (sent || !canConfirm()) return;
     sent = true;
     el.confirm.disabled = true;
     el.back.disabled = true;
@@ -224,7 +266,7 @@
     json(base + "/confirm", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ slotId: chosenSlot })
+      body: JSON.stringify(chosenAddress ? { slotId: chosenSlot, addressId: chosenAddress } : { slotId: chosenSlot })
     }).then(function (res) {
       if (!res.ok || !res.body || res.body.success === false) {
         state(explain(res), true);

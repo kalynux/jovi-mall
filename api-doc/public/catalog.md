@@ -88,6 +88,13 @@ Availability is `stock − units held by in-flight checkouts`. That number is re
 moment it is read. Ask for `?inStock=true` to narrow; render "in stock" / "out of stock",
 never "3 left".
 
+⚠ **A `service` is always `inStock: true`** (changed 2026-10-26). A service is scheduled,
+not stocked, and before this date every service read `false` — its variant keeps
+`stock: 0` forever — so a brand-new class with a whole free week was captioned "Fully
+booked". Whether a time is free is `GET /api/products/:productId/availability`'s answer
+(each slot carries `spotsRemaining` in capacity mode); show "Fully booked" only when that
+returns no slots. A published service always has at least one availability rule.
+
 ### 4. A closed store still sells — the flag is yours to render
 
 `store.isOpen: false` is a vendor's vacation mode. It does **not** suspend their products,
@@ -350,7 +357,8 @@ The product page. `GET /api/public/products/:productId` returns the identical bo
           "bufferBeforeMinutes": 0,
           "bufferAfterMinutes": 15,
           "priceUnit": "per 1 h",
-          "priceFrom": 24000
+          "priceFrom": 24000,
+          "locationKind": "vendor_address"   // 🆕 2026-10-26 — vendor_address | customer_address | online | null
         }
       }
     ],

@@ -152,6 +152,34 @@ For the single variant of a `type: "service"` product, read endpoints also retur
 
 `peakHours` is optional. When present, the surcharge applies **only to the minutes of a booking that overlap `[startTime, endTime)` on the listed `daysOfWeek`** (empty `daysOfWeek` = every day). `priceType: "percentage"` scales the peak-portion price by `value` percent; `priceType: "fixed"` adds a flat `value` when any peak overlap exists.
 
+🆕 **Where the appointment happens, and its access details** (2026-10-26). These are accepted on
+create, on `PATCH …/variants/:variantId` (inside `serviceConfig`) and on
+`PATCH …/variants/:variantId/service/config`:
+
+```json
+"location": { "kind": "vendor_address", "vendorAddressId": "66f1a2b3c4d5e6f708192a60" },
+"access": {
+  "meetingUrl": "https://meet.google.com/abc-defg-hij",
+  "instructions": "Ring the second bell. Bring your ID.",
+  "revealMinutesBefore": 30
+}
+```
+
+- `location.kind`: `vendor_address` (one of **your** profile's business addresses, by id;
+  `vendorAddressId` required) · `customer_address` (you go to the customer, who picks one of their
+  saved addresses when booking) · `online`. One place per service. `location` is replaced whole
+  when sent; omitted, it is kept.
+- `access` is the **default** every new booking copies. Each field is optional; `null` or `""`
+  clears a text field. `meetingUrl` is `https://` only (max 500), `instructions` is plain text
+  (max 2 000), and `revealMinutesBefore` (0–1440, default 30) is how long before the start the
+  customer may see the link and instructions. Change one booking's details with
+  [`PATCH /api/vendor/bookings/:id/access`](./bookings.md#edit-a-bookings-access-details).
+- ⚠ An address that is not on your profile → `422 CATALOG_PRODUCT_SERVICE_LOCATION_ADDRESS_MISSING`,
+  on the write and at publishing. A service from before this change has no `location`
+  ("not specified") and keeps selling.
+- The public product page shows only `service.locationKind`, never the address or the access
+  details.
+
 **Field reference:**
 
 | Field | Type | Description |
@@ -163,7 +191,7 @@ For the single variant of a `type: "service"` product, read endpoints also retur
 | `displayName` | string | Computed label, always present. Fallback: `name` → `"<asset> - <format> - <size>"` → product title → sku |
 | `status` | `"active"` \| `"archived"` | Archived variants are excluded from listings. For digital variants, `active` requires an uploaded asset |
 | `digital` | object \| undefined | Digital variants only. `{ asset?, maxDownloads, expiresAfterDays }`. `asset` is `{ id, originalName, mimeType, size }` once uploaded; the raw download URL is never exposed here |
-| `serviceConfig` | object \| undefined | Service variant only. `{ durationMinutes, bufferBeforeMinutes, bufferAfterMinutes, bookingMode, maxBookings?, peakHours? }`. `price` is the base price per `durationMinutes`. `maxBookings` is the seats-per-slot, present only for capacity mode |
+| `serviceConfig` | object \| undefined | Service variant only. `{ durationMinutes, bufferBeforeMinutes, bufferAfterMinutes, bookingMode, maxBookings?, peakHours?, location?, access? }`. `price` is the base price per `durationMinutes`. `maxBookings` is the seats-per-slot, present only for capacity mode. `location` / `access`: see above (🆕 2026-10-26) |
 | `optionSignature` | string | System-generated at CREATE and never recomputed. Pipe-joined sorted `optionValueIds` when there are options; **the variant’s own `sku`** when there are none; the constant `DEFAULT_VARIANT_SIGNATURE` for a **service** variant (`vendor-variant.controller.ts:178-182`). ⚠ **Never the empty string** — `{ productId, optionSignature }` is a unique index and a product may hold several option-less variants, so a shared constant like `""` would make the second one impossible |
 | `price` | number | Selling price |
 | `compareAtPrice` | number \| undefined | Original/MSRP price — show as "was" price if > price |

@@ -756,6 +756,22 @@ Two behaviours this surface inherits from the fix, and neither is bot-specific:
 - Seats are counted on the **exact** window, so a move into a class that already has other
   attendees succeeds. The single-occupancy overlap check would have refused it.
 
+🆕 **2026-10-26: where it happens, the link, and moves that need agreement**
+(`PRODUCTION-READINESS/APPOINTMENT-LOCATION-AND-ACCESS-PLAN.md`):
+
+- A product's service block carries `locationKind` (`vendor_address` · `customer_address` ·
+  `online` · `null`). For `customer_address`, `bookings_create` **requires `addressId`**, one of
+  the customer's saved addresses from `addresses_list`. Ask which one; never assume the default.
+  Missing → `422 BOOKING_ADDRESS_REQUIRED`.
+- Every booking this surface returns carries `location`, `access` and `rescheduleProposal`,
+  through the **same gate as the website**. `access.meetingUrl` / `access.instructions` exist
+  only when `access.state === "open"` (from the vendor's margin before the start, only once
+  confirmed AND paid). Never invent or promise the link early: `locked` with `reason` says why.
+- `bookings_reschedule` on a `manual` service is a **request**. The booking keeps its time and
+  `rescheduleProposal.status` is `open`; the receipt says "requested", not "moved". A vendor's
+  move arrives as `rescheduleProposal.proposedBy: "vendor"`. ⚠ This surface has **no tool to
+  accept or decline it yet**: send the customer to the booking on the website.
+
 **Availability is a list, and it is capped like every other one.** `bookings_get_availability`
 returns at most five slots and its `moreUrl` is the **product's own page** — the first list
 on this surface whose "rest" lives on an entity page rather than one of the fixed account
@@ -2495,6 +2511,8 @@ happened.
 | `open:bl` | **My bookings**, under a booking receipt (Telegram and WhatsApp) | the customer's own appointments as a screen | a screen button; without screens the storefront's bookings page — **that second case is production today** | `{ handle, opened: "bookings" }`. ⛔ `handle` is a credential — § 19.5 |
 | `open:bk:<productId>` | **Choose a time**, under the Book question where no screen is configured, and after **Book** in the WhatsApp product form | the day-and-time picker for that service: the days that have times, then that day's times. **Writes nothing**: the appointment is made by the Confirm on the screen, which then sends its own receipt with **My bookings** in the same chat — Telegram and WhatsApp. That receipt is the booking's only confirmation: the platform's own `booking.created` is kept in the inbox for a booking made in a chat. An unknown, unpublished or suspended product is `404 CATALOG_BOOKING_PRODUCT_NOT_FOUND`; a product that is not a service is `422 CATALOG_BOOKING_INVALID_PRODUCT_TYPE` — the availability read's own refusals | a screen button; without screens configured, the product's own page | `{ handle, opened: "booking_picker", productId }`. ⛔ `handle` is a credential — § 19.5 |
 | `bpay:<bookingId>` · `bpay:<bookingId>:b` | **Try again**, under the `booking.payment_failed` notification (the first form for the appointment's price, the second for a balance) · **Pay balance**, under `booking.balance.due` | the payment screen for that appointment — its price, or with `:b` the balance a longer job came to. **Charges nothing by itself**: the screen shows the amount and the customer presses Pay there. Refused, with one sentence, when there is nothing to pay any more (cancelled, already paid, no payment required, balance settled) | a screen button; without screens configured, the storefront's page for that booking | `{ handle, opened: "booking_payment", purpose }`. ⛔ `handle` is a credential — § 19.5. Another customer's booking is `404 BOOKING_NOT_FOUND` |
+| `yes:bkprop:<bookingId>` | 🆕 2026-10-26 · **Accept new time**, under the `booking.reschedule_proposed` notification (the vendor proposed a new time — owner decision D-9) | accepts the vendor's proposal: the booking moves to the proposed time (occupancy re-checked, calendar mirrored), and the vendor is told. Same code as the website's accept | text: *"Done — your appointment is now Tue 3 Nov, 09:00."* in the customer's language, on the shop's clock. A proposal already answered, withdrawn or lapsed: *"That new time is no longer waiting for an answer…"* — not the expired-button sentence | the booking, as `toBotBookingDto` (with `rescheduleProposal.status: "accepted"`), or `{ answered: false, bookingId }`. Another customer's booking is `404 BOOKING_NOT_FOUND` |
+| `no:bkprop:<bookingId>` | 🆕 2026-10-26 · **Keep my time**, under the same notification | declines it: the original time stays, and the customer may now cancel with a **full refund whatever the cancellation policy says**; the vendor is told | text: *"Got it — your appointment stays … you can cancel it with a full refund."* · same "no longer waiting" sentence when nothing is open | the booking (`rescheduleProposal.status: "declined"`), or `{ answered: false, bookingId }` |
 
 ⚠ **A button names a BOOKING or a PRODUCT, never a screen handle.** A picker handle (`bk`)
 lives fifteen minutes and a payment handle (`bp`) moves money, so neither may sit in a chat

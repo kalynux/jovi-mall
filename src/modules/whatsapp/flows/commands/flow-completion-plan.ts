@@ -44,7 +44,13 @@ export type CompletionPlan =
      * they moved one reads as a second appointment. It comes from the SESSION's own knowledge —
      * a `bk` handle that named a booking to move — never from anything the form sent.
      */
-    | { kind: 'booking_ack'; moved: boolean }
+    | { kind: 'booking_ack'; moved: boolean; requested: boolean }
+    /**
+     * A booking chosen on the bookings LIST form (2026-10-26): open its pay form in the chat — the
+     * WhatsApp twin of the Pay button on each Telegram row. The pay screen is minted by the
+     * handler from the LIST session's owner, never from the payload.
+     */
+    | { kind: 'open_payment'; bookingId: string }
     /** The session has lapsed: say so, in words, and open nothing. */
     | { kind: 'expired' }
     /** Nothing for the chat to add. */
@@ -125,14 +131,34 @@ export function planCompletion(input: {
      * this is the conversation's own acknowledgement, and it names nothing about the appointment.
      */
     if (input.completedScreen === 'bk') {
-        if (outcome !== 'booked' && outcome !== 'moved') return { kind: 'silent' };
+        if (outcome !== 'booked' && outcome !== 'moved' && outcome !== 'requested') return { kind: 'silent' };
         /**
          * ⚠ **No sender check is possible and none is needed.** `confirmBooking` consumed the
          * handle, so there is no session left to compare against — and the sentence discloses
          * nothing, while the button resolves against whoever is actually asking rather than
          * against the completion.
          */
-        return { kind: 'booking_ack', moved: outcome === 'moved' };
+        return { kind: 'booking_ack', moved: outcome !== 'booked', requested: outcome === 'requested' };
+    }
+
+    /**
+     * The pay form. Its exchange already opened the charge; the payment path tells the chat the
+     * outcome, and a "got that" here would talk over the message the customer is waiting for.
+     */
+    if (input.completedScreen === 'bp') return { kind: 'silent' };
+
+    /**
+     * The bookings list. The footer CLOSES with the chosen booking; the chat opens its pay form.
+     * ⚠ **The session must be live and this conversation's** — the list's `bl` handle is READ,
+     * never spent, so a replay of an old completion after its life is over opens nothing.
+     */
+    if (input.completedScreen === 'bl') {
+        if (input.params.outcome !== undefined) return { kind: 'silent' };
+        const bookingId = input.params.bookingId;
+        if (typeof bookingId !== 'string' || !OBJECT_ID.test(bookingId)) return { kind: 'silent' };
+        if (!input.session) return { kind: 'expired' };
+        if (!fromThisConversation(input.session, input.sender)) return { kind: 'silent' };
+        return { kind: 'open_payment', bookingId };
     }
 
     if (input.completedScreen !== 'pl') return { kind: 'silent' };

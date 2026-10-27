@@ -289,6 +289,15 @@ const CANCEL_BOOKING_LABEL: Record<Language, string> = {
     en: 'Cancel booking', fr: 'Annuler', pt: 'Cancelar', es: 'Cancelar', ar: 'إلغاء الحجز'
 };
 
+/** The vendor's proposal of a new time (D-9): ≤ 20 characters in every language, WhatsApp's cap. */
+const ACCEPT_NEW_TIME_LABEL: Record<Language, string> = {
+    en: 'Accept new time', fr: 'Accepter', pt: 'Aceitar', es: 'Aceptar', ar: 'قبول الموعد'
+};
+
+const KEEP_MY_TIME_LABEL: Record<Language, string> = {
+    en: 'Keep my time', fr: 'Garder mon horaire', pt: 'Manter a hora', es: 'Mantener mi hora', ar: 'إبقاء موعدي'
+};
+
 const THAT_WORKS_LABEL: Record<Language, string> = {
     en: 'That works', fr: 'Ça me va', pt: 'Está bem', es: 'Me va bien', ar: 'يناسبني'
 };
@@ -856,6 +865,90 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Cus
     // `{{refundLine}}` is substituted by the handler: a paid booking must say
     // where the money went in the SAME message, not a separate one that may
     // arrive later or not at all.
+    /**
+     * The VENDOR asks to move the appointment (owner decision D-9). Until the customer answers, the
+     * appointment keeps its original time; with no answer by `{{expiresAt}}` the original stands.
+     * Says what declining buys them — cancelling with a full refund — because that is the one fact
+     * that makes "decline" a real choice.
+     *
+     * Answered in the chat with two buttons (`yes:bkprop:` / `no:bkprop:`, handled in
+     * `bot-booking.controller.ts`) — the same answer the website gives.
+     */
+    'booking.reschedule_proposed': {
+        base: {
+            en: {
+                subject: 'New time proposed: {{serviceName}}',
+                body: '{{vendorName}} asks to move your {{serviceName}} from {{previousStartAt}} to {{startAt}}. Accept or decline it in your bookings before {{expiresAt}} — with no answer, your original time stays. If you decline, you can cancel with a full refund.'
+            },
+            fr: {
+                subject: 'Nouvel horaire proposé : {{serviceName}}',
+                body: '{{vendorName}} propose de déplacer votre {{serviceName}} du {{previousStartAt}} au {{startAt}}. Acceptez ou refusez dans vos réservations avant le {{expiresAt}} — sans réponse, votre horaire initial est maintenu. Si vous refusez, vous pouvez annuler avec un remboursement intégral.'
+            },
+            pt: {
+                subject: 'Nova hora proposta: {{serviceName}}',
+                body: '{{vendorName}} pede para alterar a sua {{serviceName}} de {{previousStartAt}} para {{startAt}}. Aceite ou recuse nas suas reservas antes de {{expiresAt}} — sem resposta, mantém-se a hora original. Se recusar, pode cancelar com reembolso total.'
+            },
+            es: {
+                subject: 'Nueva hora propuesta: {{serviceName}}',
+                body: '{{vendorName}} propone mover tu {{serviceName}} del {{previousStartAt}} al {{startAt}}. Acepta o rechaza en tus reservas antes del {{expiresAt}}; sin respuesta, se mantiene tu hora original. Si rechazas, puedes cancelar con reembolso completo.'
+            },
+            ar: {
+                subject: 'موعد جديد مقترح: {{serviceName}}',
+                body: 'يقترح {{vendorName}} نقل {{serviceName}} من {{previousStartAt}} إلى {{startAt}}. اقبل أو ارفض من حجوزاتك قبل {{expiresAt}} — وبدون رد يبقى موعدك الأصلي. إذا رفضت، يمكنك الإلغاء مع استرداد كامل.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_booking_reschedule_proposed',
+                bodyParams: ['{{vendorName}}', '{{serviceName}}', '{{previousStartAt}}', '{{startAt}}', '{{expiresAt}}']
+            }
+        },
+        button: BOOKING_BUTTON,
+        actions: [
+            { token: 'yes:bkprop:{{bookingId}}', label: ACCEPT_NEW_TIME_LABEL, templateFallback: 'open:bl' },
+            { token: 'no:bkprop:{{bookingId}}', label: KEEP_MY_TIME_LABEL, templateFallback: 'open:bl' }
+        ]
+    },
+
+    /**
+     * The vendor declined the customer's request for a new time (D-8 — a service the vendor
+     * approves by hand). Nothing changed: the appointment is where it was.
+     *
+     */
+    'booking.reschedule_declined': {
+        base: {
+            en: {
+                subject: 'New time not accepted: {{serviceName}}',
+                body: '{{vendorName}} could not take your {{serviceName}} at {{proposedStartAt}}. Your appointment stays at {{startAt}} — you can pick another time or cancel from your bookings.'
+            },
+            fr: {
+                subject: 'Nouvel horaire non accepté : {{serviceName}}',
+                body: '{{vendorName}} ne peut pas vous recevoir pour {{serviceName}} le {{proposedStartAt}}. Votre rendez-vous reste le {{startAt}} — vous pouvez choisir un autre horaire ou annuler depuis vos réservations.'
+            },
+            pt: {
+                subject: 'Nova hora não aceite: {{serviceName}}',
+                body: '{{vendorName}} não pode fazer a sua {{serviceName}} em {{proposedStartAt}}. A sua marcação mantém-se em {{startAt}} — pode escolher outra hora ou cancelar nas suas reservas.'
+            },
+            es: {
+                subject: 'Nueva hora no aceptada: {{serviceName}}',
+                body: '{{vendorName}} no puede atender tu {{serviceName}} el {{proposedStartAt}}. Tu cita sigue el {{startAt}}; puedes elegir otra hora o cancelar desde tus reservas.'
+            },
+            ar: {
+                subject: 'لم يُقبل الموعد الجديد: {{serviceName}}',
+                body: 'لا يستطيع {{vendorName}} تقديم {{serviceName}} في {{proposedStartAt}}. يبقى موعدك في {{startAt}} — يمكنك اختيار وقت آخر أو الإلغاء من حجوزاتك.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_booking_reschedule_declined',
+                bodyParams: ['{{vendorName}}', '{{serviceName}}', '{{proposedStartAt}}', '{{startAt}}']
+            }
+        },
+        button: BOOKING_BUTTON
+    },
+
     'booking.cancelled': {
         base: {
             en: {
@@ -2555,7 +2648,7 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Cus
  * the customer's 24-hour window. The boot check requires a template of every situation NOT
  * listed here, so a template cannot go missing by accident; it can only be left out on purpose.
  */
-export const IN_WINDOW_ONLY_SITUATIONS: ReadonlySet<CustomerNotificationType> = new Set(['cart.abandoned']);
+export const IN_WINDOW_ONLY_SITUATIONS: ReadonlySet<CustomerNotificationType> = new Set<CustomerNotificationType>(['cart.abandoned']);
 
 /**
  * "Blue dress" · "Blue dress and 2 more", localized. The basket reminder's one value: what is

@@ -46,8 +46,11 @@
   .for { color: var(--muted); font-size: 14px; }
   .field { margin-block-start: 18px; }
   .field__hint { font-size: 12px; color: var(--muted); margin-block-start: 6px; }
-  input[type="tel"] { width: 100%; padding: 12px; border-radius: 10px; background: var(--card);
+  input[type="tel"], select { width: 100%; padding: 12px; border-radius: 10px; background: var(--card);
                       border: 0; color: inherit; font: inherit; }
+  .phone-row { display: flex; gap: 8px; }
+  .phone-row select { flex: 0 0 auto; width: auto; max-width: 42%; }
+  .phone-row input { flex: 1 1 auto; min-width: 0; }
   .pay { width: 100%; margin-block-start: 18px; }
 </style>
 </head>
@@ -64,7 +67,15 @@
       <div class="for" id="for"></div>
 
       <div class="field">
-        <input type="tel" id="phone" inputmode="tel" autocomplete="tel">
+        <!--
+          ⚠ A <select>, not a second <input>, as on the checkout (`co.html`): the country is CHOSEN
+          from the server's list, starts on the account number's country (else Cameroon), and only
+          composes a TYPED number. Empty phone still means "my account's number".
+        -->
+        <div class="phone-row">
+          <select id="dial" name="dial" aria-label="Country" hidden></select>
+          <input type="tel" id="phone" inputmode="tel" autocomplete="tel-national">
+        </div>
         <div class="field__hint" id="phoneHint"></div>
       </div>
 
@@ -98,6 +109,7 @@
     amount: document.getElementById("amount"),
     for: document.getElementById("for"),
     phone: document.getElementById("phone"),
+    dial: document.getElementById("dial"),
     phoneHint: document.getElementById("phoneHint"),
     codeField: document.getElementById("codeField"),
     code: document.getElementById("code"),
@@ -169,8 +181,8 @@
 
   function codeValue() {
     if (el.codeField.hidden) return null;
-    var digits = el.code.value.replace(/s+/g, "");
-    return /^d{4,8}$/.test(digits) ? digits : null;
+    var digits = el.code.value.replace(/\s+/g, "");
+    return /^\d{4,8}$/.test(digits) ? digits : null;
   }
 
   function draw(data) {
@@ -180,6 +192,22 @@
     el.phoneHint.textContent = data.maskedPayer
       ? data.maskedPayer + " — " + copy.payNumberHint
       : copy.payNumberHint;
+    /*
+     * The country picker. Rows are the server's (ids are ISO codes, titles already localized), set
+     * through `option.textContent` — never markup. No rows (an older server) leaves it hidden, and
+     * the typed number is then sent exactly as before: it must carry its own +code.
+     */
+    el.dial.innerHTML = "";
+    var rows = Array.isArray(data.dialOptions) ? data.dialOptions : [];
+    rows.forEach(function (row) {
+      var o = document.createElement("option");
+      o.value = String(row.id);
+      o.textContent = String(row.title);
+      el.dial.appendChild(o);
+    });
+    el.dial.hidden = rows.length === 0;
+    if (data.countryLabel) el.dial.setAttribute("aria-label", data.countryLabel);
+    if (data.dialCountry) el.dial.value = data.dialCountry;
     el.pay.textContent = copy.payButton;
     el.pay.disabled = false;
     /* The server words the field (`paymentCode.label` / `.hint`, USSD substituted); null → no field. */
@@ -211,7 +239,11 @@
     json(base + "/pay", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ phone: el.phone.value, paymentCode: codeValue() })
+      body: JSON.stringify({
+        phone: el.phone.value,
+        dial: el.dial.hidden ? null : el.dial.value || null,
+        paymentCode: codeValue()
+      })
     }).then(function (res) {
       if (!res.ok || !res.body || res.body.success === false) {
         state(explain(res), true);

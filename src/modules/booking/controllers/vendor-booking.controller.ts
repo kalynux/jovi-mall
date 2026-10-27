@@ -7,6 +7,8 @@ import { ERROR_CODES } from '../../../core/error-codes';
 import { Booking } from '../models/booking.model';
 import { BookingService } from '../services/booking.service';
 import { BookingStatus } from '../types/booking.types';
+import { BookingAccessPatchSchema } from '../domain/appointment.validators';
+import { BOOKING_CONFIG } from '../config/booking.config';
 import { ProductRepositoryMongo } from '../../catalog/repositories/mongo/product.repository.mongo';
 import { VariantRepositoryMongo } from '../../catalog/repositories/mongo/variant.repository.mongo';
 import { BookingPriceResolver } from '../../catalog/domain/services/booking/BookingPriceResolver';
@@ -59,17 +61,31 @@ const UpdateBookingStatusSchema = z.object({
     status: z.enum(BOOKING_STATUSES),
 });
 
+/**
+ * `newSlotIds` (2026-10-27) moves an appointment that spans several consecutive slots — the run
+ * the shop picked from `GET /availability`, each slot held first. Exactly one of the two fields,
+ * as on the customer route; the shop rule refuses any change of length either way.
+ */
 const RescheduleBookingSchema = z.object({
-    newSlotId: z.string().min(1, 'newSlotId is required'),
+    newSlotId: z.string().min(1).optional(),
+    newSlotIds: z.array(z.string().min(1)).min(1).max(BOOKING_CONFIG.maxSlotsPerBooking).optional(),
+}).refine((d) => (d.newSlotId === undefined) !== (d.newSlotIds === undefined), {
+    message: 'Send newSlotId or newSlotIds',
+    path: ['newSlotId'],
 });
 
 /**
  * ⚠ **`slotId`, not `newSlotId`.** The hold names the time being taken; the reschedule names the
  * time being moved TO. Two names for two calls is worth the asymmetry — a dashboard that sends
  * `newSlotId` here gets a validation error naming the field, rather than a hold on `undefined`.
+ * `slotIds` holds a run of consecutive slots (2026-10-27), each under its own id.
  */
 const HoldSlotSchema = z.object({
-    slotId: z.string().min(1, 'slotId is required'),
+    slotId: z.string().min(1).optional(),
+    slotIds: z.array(z.string().min(1)).min(1).max(BOOKING_CONFIG.maxSlotsPerBooking).optional(),
+}).refine((d) => (d.slotId === undefined) !== (d.slotIds === undefined), {
+    message: 'Send slotId or slotIds',
+    path: ['slotId'],
 });
 
 const CancelBookingSchema = z.object({
@@ -230,6 +246,21 @@ export class VendorBookingController {
     });
 
     /**
+     * PATCH /api/vendor/bookings/:id/access
+     * Change THIS booking's meeting link, instructions or reveal margin (D-5). The service's
+     * defaults are untouched. `null` or `''` clears a text field.
+     * Body: { instructions?, meetingUrl?, revealMinutesBefore? } — at least one.
+     */
+    static updateBookingAccess = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const patch = BookingAccessPatchSchema.parse(req.body);
+
+        const booking = await bookingService.updateBookingAccess(req.params.id, vendorId, patch);
+
+        res.json({ success: true, data: booking, message: 'Booking access details updated' });
+    });
+
+    /**
      * POST /api/vendor/bookings/:id/complete
      *
      * Mark a service appointment completed and settle its final price. The price is
@@ -352,22 +383,47 @@ export class VendorBookingController {
         const holdOwnerId = req.auth!.user._id.toString();
         const { id } = req.params;
 
-        const { newSlotId } = RescheduleBookingSchema.parse(req.body);
+        const { newSlotId, newSlotIds } = RescheduleBookingSchema.parse(req.body);
 
         // Ownership scoping and the pending/confirmed eligibility check both live in
         // the service now, so the vendor and customer paths cannot drift apart.
         const updatedBooking = await bookingService.rescheduleBooking(
             id,
-            newSlotId,
+            newSlotIds ?? newSlotId!,
             holdOwnerId,
             { role: 'vendor', id: vendorId },
         );
 
+        // ⚠ Since 2026-10-26 (D-9) a shop's move is a PROPOSAL: the booking keeps its time and
+        // `rescheduleProposal` (status `open`) waits for the customer to accept or decline.
         res.json({
             success: true,
             data: updatedBooking,
-            message: 'Booking rescheduled',
+            message: 'New time proposed — the customer will accept or decline it',
         });
+    });
+
+    /**
+     * POST /api/vendor/bookings/:id/reschedule-proposal/accept | /decline
+     * Answer a customer's request for a new time on a service the shop approves by hand (D-8).
+     */
+    static acceptProposal = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const booking = await bookingService.answerRescheduleProposal(req.params.id, { role: 'vendor', id: vendorId }, 'accept');
+        res.json({ success: true, data: booking, message: 'New time accepted' });
+    });
+
+    static declineProposal = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const booking = await bookingService.answerRescheduleProposal(req.params.id, { role: 'vendor', id: vendorId }, 'decline');
+        res.json({ success: true, data: booking, message: 'New time declined — the original time stands' });
+    });
+
+    /** DELETE /api/vendor/bookings/:id/reschedule-proposal — take back the shop's own proposal. */
+    static withdrawProposal = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const booking = await bookingService.withdrawRescheduleProposal(req.params.id, { role: 'vendor', id: vendorId });
+        res.json({ success: true, data: booking, message: 'Proposal withdrawn' });
     });
 
     /**
@@ -387,11 +443,11 @@ export class VendorBookingController {
     static holdSlot = asyncHandler(async (req: Request, res: Response): Promise<void> => {
         const vendorId = req.auth!.role_entity._id.toString();
         const holdOwnerId = req.auth!.user._id.toString();
-        const { slotId } = HoldSlotSchema.parse(req.body ?? {});
+        const { slotId, slotIds } = HoldSlotSchema.parse(req.body ?? {});
 
         const hold = await bookingService.holdSlotForReschedule(
             req.params.id,
-            slotId,
+            slotIds ?? slotId!,
             holdOwnerId,
             { role: 'vendor', id: vendorId },
         );
@@ -401,6 +457,7 @@ export class VendorBookingController {
             data: {
                 held: true,
                 slotId: hold.slotId,
+                slotIds: hold.slotIds,
                 startAt: hold.start,
                 endAt: hold.end,
                 expiresAt: hold.expiresAt,

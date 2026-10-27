@@ -86,6 +86,27 @@ const MOVED: Copy = {
 };
 
 /**
+ * A move that became a REQUEST (owner decision D-8): the shop approves this service's bookings by
+ * hand, so the appointment keeps its time until they accept. ⚠ Never "Moved" — the customer would
+ * turn up at a time the shop never agreed to.
+ */
+const MOVE_REQUESTED: Copy = {
+    en: (r) => `Requested: ${r.service} at ${r.when}. The shop still has to accept — until then your appointment keeps its current time. Reference ${r.reference}.`,
+    fr: (r) => `Demandé : ${r.service} le ${r.when}. La boutique doit encore accepter — d'ici là, votre rendez-vous garde son horaire actuel. Référence ${r.reference}.`,
+    pt: (r) => `Pedido: ${r.service} em ${r.when}. A loja ainda tem de aceitar — até lá, a sua marcação mantém a hora atual. Referência ${r.reference}.`,
+    es: (r) => `Solicitado: ${r.service} el ${r.when}. La tienda aún debe aceptar; hasta entonces tu cita mantiene su hora actual. Referencia ${r.reference}.`,
+    ar: (r) => `تم الطلب: ${r.service} في ${r.when}. لا يزال على المتجر القبول — وحتى ذلك يبقى موعدك في وقته الحالي. المرجع ${r.reference}.`,
+};
+
+const MOVE_REQUESTED_ACK: Record<Language, string> = {
+    en: "I've asked the shop to move your appointment. It keeps its current time until they accept.",
+    fr: 'J\'ai demandé à la boutique de déplacer votre rendez-vous. Il garde son horaire actuel jusqu\'à leur accord.',
+    pt: 'Pedi à loja para alterar a sua marcação. Mantém a hora atual até aceitarem.',
+    es: 'He pedido a la tienda que mueva tu cita. Mantiene su hora actual hasta que acepten.',
+    ar: 'طلبت من المتجر نقل موعدك. يبقى في وقته الحالي حتى يوافقوا.',
+};
+
+/**
  * ⚠ **A `pending` booking is NOT confirmed, and saying so is the whole point of this line.**
  * A `manual`-mode service is an appointment the shop has not accepted yet; telling a customer it
  * is booked, and then that it was declined, is worse than telling them it is requested. This is
@@ -290,6 +311,30 @@ export function bookingScreenCopy(language: string | null | undefined): Omit<Boo
     return words;
 }
 
+/**
+ * The address step of a booking whose vendor comes to the customer (`customer_address`).
+ *
+ * ⚠ The customer CHOOSES — the screen never pre-books at the default — because sending a
+ * provider to the wrong house is not something a "you can change it later" undoes.
+ */
+export interface BookingPlaceCopy {
+    title: string;
+    /** No saved address at all: say where to add one, rather than showing an empty list. */
+    none: string;
+}
+
+const PLACE: Record<Language, BookingPlaceCopy> = {
+    en: { title: 'Where should they come?', none: 'Add an address to your profile first — the provider comes to you.' },
+    fr: { title: 'Où doit-on venir ?', none: 'Ajoutez d\'abord une adresse à votre profil — le prestataire vient chez vous.' },
+    pt: { title: 'Onde devem ir?', none: 'Adicione primeiro um endereço ao seu perfil — o prestador vai até si.' },
+    es: { title: '¿Adónde deben ir?', none: 'Primero añade una dirección a tu perfil: el profesional va a tu casa.' },
+    ar: { title: 'إلى أين يأتي مقدم الخدمة؟', none: 'أضف عنوانًا إلى ملفك أولًا — مقدم الخدمة يأتي إليك.' },
+};
+
+export function bookingPlaceCopy(language: string | null | undefined): BookingPlaceCopy {
+    return pick(PLACE, language);
+}
+
 /** The description line under one day: how many times are free. */
 export function bookingTimesAvailable(count: number, language: string | null | undefined): string {
     return pick(SCREEN, language).timesAvailable(count);
@@ -362,9 +407,10 @@ export function bookingRowStatusLabel(status: BookingRowStatus, language: string
  * short one.
  */
 export function bookingChatAcknowledgement(
-    outcome: { moved: boolean },
+    outcome: { moved: boolean; requested?: boolean },
     language: string | null | undefined,
 ): string {
+    if (outcome.moved && outcome.requested) return pick(MOVE_REQUESTED_ACK, language);
     return pick(outcome.moved ? MOVED_ACK : BOOKED_ACK, language);
 }
 
@@ -391,10 +437,12 @@ const MOVED_ACK: Record<Language, string> = {
  * forgeable in the path. See `bookingChatAcknowledgement` for the other half.
  */
 export function bookingChatReceipt(
-    outcome: { moved: boolean; awaitingShop: boolean },
+    outcome: { moved: boolean; awaitingShop: boolean; requested?: boolean },
     receipt: BookingChatReceipt,
     language: string | null | undefined,
 ): string {
+    // A move the shop must still accept says so in its own sentence, which already covers the wait.
+    if (outcome.moved && outcome.requested) return pick(MOVE_REQUESTED, language)(receipt);
     const headline = pick(outcome.moved ? MOVED : BOOKED, language)(receipt);
     return outcome.awaitingShop ? `${headline} ${pick(AWAITING_SHOP, language)}` : headline;
 }

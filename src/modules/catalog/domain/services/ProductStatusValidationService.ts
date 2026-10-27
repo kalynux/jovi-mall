@@ -419,6 +419,16 @@ export class ProductStatusValidationService {
             if (activeRules === 0) {
                 add(createAppError(ERROR_CODES.CATALOG_PRODUCT_SERVICE_NO_AVAILABILITY, 422));
             }
+            // At one of the vendor's addresses → that address must still be on their profile,
+            // the same rule `pickup_location` follows. An unset place does NOT block: services
+            // from before 2026-10-26 carry none and must keep selling.
+            const location = defaultVariant?.serviceConfig?.location;
+            if (location?.kind === 'vendor_address') {
+                const held = !!location.vendorAddressId && !!vendor?.business_addresses?.some(
+                    (a) => String(a._id) === location.vendorAddressId,
+                );
+                if (!held) add(createAppError(ERROR_CODES.CATALOG_PRODUCT_SERVICE_LOCATION_ADDRESS_MISSING, 422));
+            }
         }
 
         return blockers;

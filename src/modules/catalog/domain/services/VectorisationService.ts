@@ -551,7 +551,16 @@ export class VectorisationService {
       }
 
       if (v.serviceConfig) {
-        variant.serviceConfig = v.serviceConfig;
+        // ⛔ An explicit copy, never the whole object: `serviceConfig.access` holds the meeting
+        // link and private instructions, revealed to a booked customer shortly before the
+        // appointment. The vectoriser payload feeds the bot's search, so copying it here would
+        // hand every online session's link to anyone who asks the bot about the service.
+        // `location.kind` is fine to publish ("online", "at your address") — the address id is not.
+        const { access: _private, location, ...publicConfig } = v.serviceConfig;
+        variant.serviceConfig = {
+          ...publicConfig,
+          ...(location ? { location: { kind: location.kind } } : {}),
+        };
       }
 
       return variant;

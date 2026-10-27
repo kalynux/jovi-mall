@@ -1288,8 +1288,14 @@ section('13. Paying twice — every way one impatient customer could');
 // no ops on an already paid order, so a second charge settles silently against nothing and
 // the customer is simply out the money.
 
-assert('every initiate path looks for a live attempt before opening one', () =>
-  countOf('await this.findLiveAttempt(') === 5);
+// ⚠ Five INITIATE paths, plus one reader that opens nothing: `releaseFailedBookingCharge` asks
+// the same question before marking a booking `failed`, so a dead attempt cannot fail a booking
+// a newer attempt is still paying. Counted apart so a sixth initiate path still has to be seen.
+assert('every initiate path looks for a live attempt before opening one', () => {
+  const release = ORCHESTRATOR.split('private async releaseFailedBookingCharge(')[1]?.split('private async ')[0] ?? '';
+  const inRelease = release.split('await this.findLiveAttempt(').length - 1;
+  return inRelease === 1 && countOf('await this.findLiveAttempt(') - inRelease === 5;
+});
 
 assert('live means INITIATED or PENDING — the two states a charge can complete from', () => {
   const body = ORCHESTRATOR.split('private async findLiveAttempt')[1]?.slice(0, 400) ?? '';

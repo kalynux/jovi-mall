@@ -19,6 +19,15 @@ export const BOOKING_CONFIG = {
   slotHoldTtlSeconds: parseInt(process.env.BOOKING_SLOT_HOLD_TTL_SECONDS || '900', 10),
 
   /**
+   * The most consecutive slots one booking may span (`POST /products/:id/book` with `slotIds`).
+   *
+   * A bound, not a business rule: every slot in the run is checked against availability and held,
+   * so an unbounded list is an unbounded number of Redis reads on one request. 24 covers a full
+   * day of half-hour slots.
+   */
+  maxSlotsPerBooking: parseInt(process.env.BOOKING_MAX_SLOTS_PER_BOOKING || '24', 10),
+
+  /**
    * Unpaid-booking sweep: how long a booking that requires payment may sit
    * unpaid before it is cancelled and its slot released.
    *

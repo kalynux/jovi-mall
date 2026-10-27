@@ -192,8 +192,11 @@ export class BookingReminderWorker implements ObservableWorker {
      * A bare timestamp is exactly what a forgetful reader skims past, and this is
      * the notification whose entire job is to be noticed. Deliberately coarse —
      * the exact time follows it in the same sentence.
+     *
+     * Public for the administrator's resend (ADMIN-BOOKINGS-PLAN § 4), so a resent reminder
+     * reads exactly like the swept one.
      */
-    private whenPhrase(startAt: Date, lang: Language): string {
+    whenPhrase(startAt: Date, lang: Language): string {
         const hoursAway = (startAt.getTime() - Date.now()) / 3_600_000;
 
         const phrases: Record<'soon' | 'today' | 'tomorrow', Record<Language, string>> = {

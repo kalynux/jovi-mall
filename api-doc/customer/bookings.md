@@ -34,11 +34,103 @@ Everything after the purchase lives under `/api/customer/bookings` (beside `/api
 | Method | Endpoint | Purpose |
 |---|---|---|
 | `GET` | `/api/customer/bookings` | List your bookings. Query: `status`, `paymentStatus`, `startDate`, `endDate`, `page`, `limit`. Returns `{ data, meta: { total, page, limit, totalPages } }`. |
-| `GET` | `/api/customer/bookings/:id` | One booking, with product and vendor populated. |
+| `GET` | `/api/customer/bookings/:id` | One booking, with `product`, `vendor` and `store` (see below). |
 | `POST` | `/api/customer/bookings/:id/cancel` | Cancel. Body: `{ reason? }`. Subject to the vendor's cancellation policy. |
-| `PATCH` | `/api/customer/bookings/:id/reschedule` | Move to another slot. Body: `{ newSlotId }`. **Lock the new slot first** (step 2 above). `pending`/`confirmed` only. Works for capacity services — see below. |
+| `PATCH` | `/api/customer/bookings/:id/reschedule` | Move to another slot. Body: `{ newSlotId }`, or 🆕 `{ newSlotIds }` for an appointment spanning several slots. The new time must be the same length, otherwise `400 BOOKING_INVALID_SLOT_ID` `length_changed`. See [Booking several consecutive slots](#booking-several-consecutive-slots). **Lock the new slot first** (step 2 above). `pending`/`confirmed` only. Works for capacity services — see below. 🆕 On a service the vendor approves by hand (`manual`) this **requests** the time instead — see [Appointment moves](#appointment-moves-who-must-agree). |
+| `POST` | `/api/customer/bookings/:id/reschedule-proposal/accept` | 🆕 Accept the vendor's proposed time. The booking moves. |
+| `POST` | `/api/customer/bookings/:id/reschedule-proposal/decline` | 🆕 Decline it. The original time stays, and the customer may then cancel with a **full refund whatever the policy says**. |
+| `DELETE` | `/api/customer/bookings/:id/reschedule-proposal` | 🆕 Withdraw the customer's own request (manual services). |
 | `GET` | `/api/customer/bookings/:id/balance` | What is still owed after completion (and what was overpaid). |
 | `POST` | `/api/customer/bookings/:id/pay-balance` | Pay that balance. Body: `{ provider, channel }` — same shape as step 4. |
+
+🆕 **2026-10-26 — the service and the shop, on every read.** The list, the single read and the
+cancel answer carry `productId` / `vendorId` as **id strings** (they arrived as populated objects
+before, against this doc), plus three keys:
+
+```json
+"product": {
+  "id": "507f1f77bcf86cd799439012", "title": "Box braids", "slug": "box-braids", "type": "service",
+  "image": { "id": "…", "url": "https://…", "access": "public", "mimeType": "image/jpeg" },
+  "images": [ { "id": "…", "url": "https://…", "access": "public", "mimeType": "image/jpeg" } ]
+},
+"vendor": { "id": "507f1f77bcf86cd799439014", "name": "Salon Amina" },
+"store": { "name": "Salon Amina", "slug": "salon-amina" }
+```
+
+- **`product`** — `null` when the product no longer exists. `images` is the service's current
+  gallery (default variant first, product second, at most six, renderable images only) and `image`
+  is `images[0]` or `null`. Resolved live, like an order line's pictures. Link to the storefront
+  with `store.slug` + `product.slug`.
+- **`vendor.name`** is the store's business name, the profile's display name failing it; `vendor`
+  is `null` when neither exists. **`store`** is `null` when the vendor has no store.
+
+🆕 **2026-10-26 — where the appointment happens, and the link to join it.** Every booking these
+reads return (the list, the single read, the cancel, the reschedule, the proposal answers, and
+`POST /api/products/:id/book`) carries three new keys:
+
+```json
+"location": {
+  "kind": "vendor_address",
+  "addressVisible": true,
+  "label": "Main salon", "addressLine1": "12 Rue de la Joie", "addressLine2": null,
+  "city": "Douala", "state": "Littoral", "country": "CM",
+  "formattedAddress": "12 Rue de la Joie, Douala", "coordinates": [9.7, 4.05]
+},
+"access": {
+  "state": "locked", "reason": "too_early",
+  "opensAt": "2026-11-02T13:30:00.000Z", "closesAt": "2026-11-02T16:00:00.000Z",
+  "hasMeetingUrl": true, "hasInstructions": true
+},
+"rescheduleProposal": null
+```
+
+- **`location`** — `kind` is `vendor_address` (go to the vendor), `customer_address` (the vendor
+  comes to the customer's chosen address) or `online`. The vendor's address is shown **once the
+  vendor has accepted the booking** (`addressVisible: false` and no address lines while it is
+  `pending`). The customer's own address is always shown. `null` on bookings made before this
+  change.
+- **`access`** — the meeting link and the vendor's instructions. `state` is `locked`, `open` or
+  `closed`. `meetingUrl` and `instructions` are **present only when `state` is `open`**. While
+  locked they are **not sent at all**, so read them only from an `open` block. It opens at
+  `opensAt` (the vendor's margin before the start, 30 minutes by default), only when the booking
+  is **confirmed AND paid** (online, or cash the vendor marked as paid), and it closes at
+  `closesAt` (one hour after the end). `reason` says why it is shut: `not_confirmed` · `not_paid` ·
+  `too_early` · `ended`. Nothing pushes the link at `opensAt`: re-read the booking (a countdown to
+  `opensAt`, then a refresh, is enough). `null` when the vendor set no link and no instructions.
+- **`rescheduleProposal`** — see [Appointment moves](#appointment-moves-who-must-agree).
+
+---
+
+## Appointment moves: who must agree
+
+🆕 2026-10-26 (owner decisions D-8, D-9).
+
+| Who moves it | Service mode | What happens |
+|---|---|---|
+| the **customer** | `calendar`, `capacity` | Applies at once; the vendor is told. Unchanged for the customer. |
+| the **customer** | `manual` (vendor approves by hand) | A **request**: the booking keeps its time, and `rescheduleProposal` is `open` with `proposedBy: "customer"` until the vendor answers. The customer may withdraw it. |
+| the **vendor** | any | A **proposal**: the booking keeps its time; `rescheduleProposal` is `open` with `proposedBy: "vendor"`. The customer accepts or declines. |
+
+```json
+"rescheduleProposal": {
+  "status": "open",
+  "proposedBy": "vendor",
+  "startAt": "2026-11-03T09:00:00.000Z", "endAt": "2026-11-03T10:00:00.000Z",
+  "previousStartAt": "2026-11-02T14:00:00.000Z", "previousEndAt": "2026-11-02T15:00:00.000Z",
+  "proposedAt": "…", "expiresAt": "2026-11-02T14:00:00.000Z", "answeredAt": null
+}
+```
+
+- `status`: `open` · `accepted` · `declined` · `withdrawn` · `lapsed`. With no answer by
+  `expiresAt` (the original start, or the proposed start if earlier) a proposal **lapses** and the
+  original time stands. The block then reads `lapsed`; nothing else is needed.
+- While one is `open`, a second move is refused (`409 BOOKING_PROPOSAL_PENDING`). The proposed time
+  is held, so it disappears from availability for everyone else.
+- **Declining a vendor's proposal** lets the customer cancel with a **full refund whatever the
+  vendor's cancellation policy says** (no `CANCELLATION_NOT_ALLOWED`; the refund fees are the
+  vendor's). Show that next to the decline button: it is what makes declining a real choice.
+- Errors: `404 BOOKING_PROPOSAL_NOT_FOUND` (nothing open, or it lapsed), `403
+  BOOKING_PROPOSAL_NOT_YOURS` (answering your own request / withdrawing the vendor's).
 
 🆕 **2026-10-10 — every booking returned by the list, the single read, the cancel and the reschedule now carries a `protection` key**: `{ days, startsAt, endsAt, status, onHold, problemReported }`, the same block an order carries ([orders.md](./orders.md), [FRONTEND-CHANGELOG-wi-mall-protection.md](./FRONTEND-CHANGELOG-wi-mall-protection.md)). A booking's window opens when the seller marks the service completed. ⚠ The raw `earningsPause` object these reads used to carry (never documented, an internal record) is **no longer sent**.
 
@@ -313,7 +405,9 @@ In all cases `paymentStatus` starts as `unpaid`.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `slotId` | string | **Yes** | Slot `id` to book (must be locked by the caller) |
+| `slotId` | string | **Yes**, unless `slotIds` | Slot `id` to book (must be locked by the caller) |
+| `slotIds` | string[] | 🆕 instead of `slotId` | **Several consecutive slots booked as ONE appointment** (2026-10-26). Each slot is locked by the caller first, and each one starts exactly where the previous one ends. The booking runs from the first slot's `start` to the last one's `end` and is priced over that whole interval. Send `slotId` **or** `slotIds`, never both (`400 VALIDATION_ERROR`). See [Booking several consecutive slots](#booking-several-consecutive-slots). |
+| `addressId` | string | 🆕 when the service's `locationKind` is `customer_address` | One of the customer's saved addresses (`GET /api/customer/profile` → `saved_addresses[]`, see [profile.md](./profile.md)). The vendor comes there. Ask the customer to choose; do not pre-select the default. Missing → `422 BOOKING_ADDRESS_REQUIRED`; not theirs → `404 BOOKING_ADDRESS_NOT_FOUND`. Ignored for other services. |
 | `metadata` | object | No | Free-form notes carried onto the booking and the calendar event (e.g. `notes`, `customerEmail`) |
 
 **Response:** `201 Created`
@@ -347,7 +441,7 @@ In all cases `paymentStatus` starts as `unpaid`.
 }
 ```
 
-`priceSnapshot` and `price.amount` are in the smallest currency unit (e.g. `5000` = 50.00 XAF). The booking is now awaiting payment — proceed to **Pay for a Booking**.
+`priceSnapshot` and `price.amount` are whole XAF francs, the same unit as the variant `price` the vendor typed (`5000` = 5 000 XAF — XAF has no cents; do **not** divide by 100. Corrected 2026-10-26: this line used to say `5000` = 50.00 XAF, and the vendor dashboard showed a 5 000 XAF booking as 50 XAF). The booking is now awaiting payment — proceed to **Pay for a Booking**.
 
 > [!NOTE]
 > **`bookingNumber`** is the booking's human-readable handle — `BKG-2026-000123`, the same shape
@@ -374,6 +468,38 @@ In all cases `paymentStatus` starts as `unpaid`.
 - `422 CATALOG_BOOKING_PRODUCT_NOT_ACTIVE`: Product is not `active`
 - `422 CATALOG_BOOKING_MISSING_SERVICE_CONFIG`: Product's default variant has no `serviceConfig`
 - `422 CATALOG_BOOKING_INVALID_PRICE`: Product has no usable default variant price for the booking
+- 🆕 `400 BOOKING_INVALID_SLOT_ID` with `details.reason: "not_contiguous"`: the `slotIds` have a gap, repeat a slot or are out of order
+- 🆕 `400 BOOKING_INVALID_SLOT_ID` with `details.reason: "slot_count"`: more than `BOOKING_MAX_SLOTS_PER_BOOKING` (default 24) slots
+- 🆕 `422 BOOKING_MULTI_SLOT_NOT_SUPPORTED`: `slotIds` with more than one slot for a group class (capacity service)
+
+### Booking several consecutive slots
+
+🆕 2026-10-26. A customer can make one appointment longer than the service's slot. For example,
+two back-to-back one-hour slots make a two-hour booking.
+
+1. Lock **every** slot of the run (`POST .../slots/:slotId/lock`, once per slot). Release any slot
+   that leaves the run, as you would release a single abandoned slot.
+2. `POST .../book` with `{ "slotIds": ["slot_…_a", "slot_…_b"] }`, in time order.
+
+Every slot must be one the availability read lists. Each must start exactly where the previous
+one ends, so a gap in the shop's grid (a break, another appointment) ends the run. One booking
+comes back, with `startAt` = the first slot's start and `endAt` = the last slot's end. The price
+is prorated over the whole interval (`price / durationMinutes × minutes`), so two slots cost two
+slots' price, plus any peak surcharge on the minutes it overlaps. Every hold is released by the
+booking.
+
+⚠ **Send `slotIds` without `slotId`.** An API older than this field reads `slotId` alone. Sent
+both, it would book the first slot only. Sent `slotIds` alone, it answers `400 VALIDATION_ERROR`.
+Clients should also compare the returned `endAt` with the end they asked for.
+
+A group class (capacity service) is one session at a time: more than one slot is
+`422 BOOKING_MULTI_SLOT_NOT_SUPPORTED`.
+
+**Moving one.** An appointment keeps its length when it moves. `PATCH /api/customer/bookings/:id/reschedule`
+takes `{ "newSlotIds": [...] }`, a locked run of the same total length. A different length, a run
+or a single slot, is `400 BOOKING_INVALID_SLOT_ID` with `details.reason: "length_changed"`. Send
+`newSlotId` **or** `newSlotIds`. Single-slot bookings move exactly as before, with one change:
+the customer's move now also refuses a length change, which previously only a shop's move did.
 
 ---
 
@@ -560,3 +686,9 @@ Point 1 is decided from the platform's own booking records, so availability stay
 | `CATALOG_BOOKING_PRODUCT_NOT_ACTIVE` | 422 | Product not `active` |
 | `CATALOG_BOOKING_MISSING_SERVICE_CONFIG` | 422 | Product has no `serviceConfig` |
 | `CATALOG_BOOKING_INVALID_PRICE` | 422 | No usable variant price |
+| `BOOKING_ADDRESS_REQUIRED` | 422 | 🆕 Book — the service happens at the customer's address and no `addressId` was sent |
+| `BOOKING_ADDRESS_NOT_FOUND` | 404 | 🆕 Book — `addressId` is not one of the customer's saved addresses |
+| `BOOKING_LOCATION_UNAVAILABLE` | 422 | 🆕 Book — the vendor removed the address this service happens at |
+| `BOOKING_PROPOSAL_PENDING` | 409 | 🆕 Reschedule — a new time is already waiting for an answer |
+| `BOOKING_PROPOSAL_NOT_FOUND` | 404 | 🆕 Accept / decline / withdraw — nothing open (or it lapsed) |
+| `BOOKING_PROPOSAL_NOT_YOURS` | 403 | 🆕 Accept / decline your own request, or withdraw the vendor's |

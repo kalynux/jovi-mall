@@ -206,7 +206,7 @@ export class CommandRouterService {
          * reach the automation layer's failure branch and reach them as silence. Only the
          * contact-share guard throws, and that one is meant to.
          */
-        const intent = commandReplyIntent(result, input.language);
+        const intent = commandReplyIntent(result, input.language, input.sender.channel);
 
         if (!intent) {
             // A handler that answered with no message has nothing to say; let the model speak

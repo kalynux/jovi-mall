@@ -2168,6 +2168,8 @@ export class PaymentOrchestratorService {
        * purchases and have their own billing notifications.
        */
       if (transaction.bookingId) {
+        await this.releaseFailedBookingCharge(transaction);
+
         const booking = await Booking.findById(transaction.bookingId).select('vendorId userId');
         await eventBus.publish('payment.failed', {
           eventType: 'payment.failed',
@@ -2253,6 +2255,58 @@ export class PaymentOrchestratorService {
    * 
    * @param transaction - Successful payment transaction for booking
    */
+  /**
+   * Move a booking whose ORIGINAL charge died from `pending` to `failed`.
+   *
+   * ⛔ **Until 2026-10-26 nothing did, and a booking stayed `pending` for ever.** Initiation sets
+   * `pending` once the gateway answers; success sets `paid`; a refused or abandoned charge only
+   * announced itself (`payment.failed`) and left the booking where it was. Three things followed,
+   * each worse than the last:
+   * - the customer's booking read "processing" indefinitely;
+   * - `initiateBookingPayment` refuses `pending` with `PAYMENT_BOOKING_IN_PROGRESS`, so the
+   *   customer could **never pay again** for that booking;
+   * - `UnpaidBookingCancelWorker` sweeps `unpaid`/`failed` only, so the slot stayed taken for
+   *   ever by a booking nobody could pay.
+   *
+   * `failed` is the status both the retry guard and the sweep already understand, so setting it
+   * is the whole repair.
+   *
+   * ⚠ **Compare-and-set on `pending`**, never a blind write: a success that landed first (`paid`),
+   * a dispute, a refund or a cancellation must not be overwritten by a late failure callback.
+   *
+   * ⚠ **Not while another attempt is live.** `pending` blocks a second initiation, so this is
+   * normally impossible — but a reconciliation sweep closing an old attempt after the customer
+   * was let through on a newer one would otherwise mark a payment in progress as failed.
+   *
+   * ⚠ **The original price only.** A `booking_balance` charge is made against a booking that is
+   * already `paid`; its failure changes nothing about the booking's own payment status.
+   *
+   * Never throws — the caller is a webhook, and the announcement below must still go out.
+   */
+  private async releaseFailedBookingCharge(transaction: IPaymentTransaction): Promise<void> {
+    if (!transaction.bookingId || (transaction.purpose ?? 'primary') !== 'primary') return;
+    try {
+      const newer = await this.findLiveAttempt({
+        bookingId: transaction.bookingId,
+        purpose: 'primary',
+        _id: { $ne: transaction._id },
+      });
+      if (newer) return;
+
+      const booking = await Booking.findOneAndUpdate(
+        { _id: transaction.bookingId, paymentStatus: 'pending' },
+        { $set: { paymentStatus: 'failed' } },
+        { new: true }
+      );
+      if (!booking) return;
+
+      console.log(`[PaymentOrchestrator] Booking ${booking._id} payment pending → failed (transaction ${transaction._id})`);
+      await this.calendarSync.syncBookingPaymentStatus(booking);
+    } catch (error) {
+      console.error(`[PaymentOrchestrator] Failed to release booking ${transaction.bookingId} after a failed charge:`, error);
+    }
+  }
+
   private async handleBookingPaymentSuccess(transaction: IPaymentTransaction): Promise<void> {
     if (!transaction.bookingId) {
       throw createAppError(ERROR_CODES.PAYMENT_MISSING_BOOKING_ID, 500);

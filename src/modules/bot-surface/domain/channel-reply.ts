@@ -210,7 +210,13 @@ export type BotReplyIntent =
            * for this intent on a proactive turn must not pass `flow`; the window will usually
            * be shut and Meta refuses the send.
            */
-          flow?: { id: string; screen?: string | null; params?: Record<string, unknown> } | null;
+          /**
+           * `token`: the screen's `ia_` handle. Present → an ENDPOINT-backed form: sent as
+           * `data_exchange` with the handle as `flow_token`, which is how the encrypted endpoint
+           * knows whose session it is serving (Meta, "Sending a Flow": `flow_message_version` "3",
+           * no `flow_action_payload`). Absent → the older `navigate` shape.
+           */
+          flow?: { id: string; token?: string | null; screen?: string | null; params?: Record<string, unknown> } | null;
       }
     /**
      * ⭐ **A LIST OF PRODUCTS, drawn rather than narrated** — and the one intent that renders
@@ -806,20 +812,29 @@ function renderWhatsApp(intent: BotReplyIntent, to: string): BotChannelReply {
                           body: { text: truncate(intent.text, WA_LIMITS.INTERACTIVE_BODY) as string },
                           action: {
                               name: 'flow',
-                              parameters: {
-                                  flow_id: intent.flow.id,
-                                  // `navigate` opens a screen with data already supplied;
-                                  // `data_exchange` would require the encrypted endpoint this
-                                  // platform has not built, so it is deliberately not offered.
-                                  flow_action: 'navigate',
-                                  flow_cta: truncate(intent.label, WA_LIMITS.CTA_DISPLAY_TEXT),
-                                  ...(intent.flow.screen
-                                      ? { flow_action_payload: {
-                                            screen: intent.flow.screen,
-                                            data: intent.flow.params ?? {},
-                                        } }
-                                      : {}),
-                              },
+                              parameters: intent.flow.token
+                                  ? {
+                                        // The endpoint-backed form: the handle IS the token the
+                                        // encrypted endpoint resolves the session from.
+                                        flow_message_version: '3',
+                                        flow_token: intent.flow.token,
+                                        flow_id: intent.flow.id,
+                                        flow_cta: truncate(intent.label, WA_LIMITS.CTA_DISPLAY_TEXT),
+                                        flow_action: 'data_exchange',
+                                    }
+                                  : {
+                                        flow_id: intent.flow.id,
+                                        // `navigate` opens a screen with data already supplied — the
+                                        // shape for a form with no endpoint behind it.
+                                        flow_action: 'navigate',
+                                        flow_cta: truncate(intent.label, WA_LIMITS.CTA_DISPLAY_TEXT),
+                                        ...(intent.flow.screen
+                                            ? { flow_action_payload: {
+                                                  screen: intent.flow.screen,
+                                                  data: intent.flow.params ?? {},
+                                              } }
+                                            : {}),
+                                    },
                           },
                       },
                   })

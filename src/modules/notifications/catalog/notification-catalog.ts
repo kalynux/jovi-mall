@@ -349,7 +349,28 @@ export const VENDOR_COD_HOLD_REASON = {
 
 // ─── Catalog ─────────────────────────────────────────────────────────────────
 
-export const NOTIFICATION_CATALOG: Record<NotificationType, SituationMessages> = {
+/**
+ * The vendor stack's entry shape: `SituationMessages` with the template OPTIONAL — but only for a
+ * situation listed in `VENDOR_IN_WINDOW_ONLY_SITUATIONS`, which `assertCatalogComplete` enforces
+ * both ways (the customer stack's rule, `IN_WINDOW_ONLY_SITUATIONS`, applied here).
+ *
+ * ⛔ Never name a template that was not submitted just to fill the field: a named template that
+ * Meta does not hold is a refused send, recorded as a delivery error, reaching nobody.
+ */
+export interface VendorSituationMessages extends Omit<SituationMessages, 'whatsapp'> {
+    whatsapp: Omit<SituationMessages['whatsapp'], 'template'> & { template?: WhatsAppTemplateDef };
+}
+
+/**
+ * Situations with no WhatsApp template — outside Meta's 24-hour window they skip WhatsApp; every
+ * other channel still delivers. EMPTY today: the four appointment-move messages were listed here
+ * on 2026-10-26 and left the same day, when their templates were named and submitted. The
+ * mechanism stays for the next situation whose template is not approved yet — the boot check
+ * refuses a template-less situation that is not listed here.
+ */
+export const VENDOR_IN_WINDOW_ONLY_SITUATIONS: ReadonlySet<NotificationType> = new Set<NotificationType>([]);
+
+export const NOTIFICATION_CATALOG: Record<NotificationType, VendorSituationMessages> = {
     'order.created': {
         base: {
             en: { subject: 'New order received', body: 'You received a new order #{{orderNumber}} for {{currency}} {{amountFormatted}}.' },
@@ -425,6 +446,75 @@ export const NOTIFICATION_CATALOG: Record<NotificationType, SituationMessages> =
         whatsapp: {
             text: {},
             template: { name: 'vendor_booking_cancelled', bodyParams: ['{{bookingNumber}}'] }
+        },
+        button: { type: 'url', label: VIEW_BOOKING_LABEL, urlSuffix: 'bookings/{{bookingId}}' }
+    },
+
+    /**
+     * A customer moved a confirmed appointment to another open time (D-8): it applied at once, the shop is told.
+     */
+    'booking.rescheduled': {
+        base: {
+            en: { subject: "Booking moved by the customer", body: "{{customerName}} moved booking #{{bookingNumber}} ({{serviceName}}) from {{previousStartDate}} to {{startDate}}. It fits your published hours, so nothing to do." },
+            fr: { subject: "Réservation déplacée par le client", body: "{{customerName}} a déplacé la réservation n°{{bookingNumber}} ({{serviceName}}) du {{previousStartDate}} au {{startDate}}. Le créneau respecte vos horaires publiés — rien à faire." },
+            pt: { subject: "Reserva alterada pelo cliente", body: "{{customerName}} alterou a reserva nº{{bookingNumber}} ({{serviceName}}) de {{previousStartDate}} para {{startDate}}. Está dentro do seu horário publicado — não é preciso fazer nada." },
+            es: { subject: "Reserva movida por el cliente", body: "{{customerName}} movió la reserva n.º{{bookingNumber}} ({{serviceName}}) del {{previousStartDate}} al {{startDate}}. Está dentro de tu horario publicado — no hace falta hacer nada." },
+            ar: { subject: "نقل العميل الحجز", body: "نقل {{customerName}} الحجز رقم {{bookingNumber}} ({{serviceName}}) من {{previousStartDate}} إلى {{startDate}}. الموعد ضمن ساعات عملك المنشورة — لا حاجة لأي إجراء." }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_booking_rescheduled', bodyParams: ['{{customerName}}', '{{bookingNumber}}', '{{serviceName}}', '{{previousStartDate}}', '{{startDate}}'] }
+        },
+        button: { type: 'url', label: VIEW_BOOKING_LABEL, urlSuffix: 'bookings/{{bookingId}}' }
+    },
+    /**
+     * A customer asked to move a booking of a service the shop approves by hand (D-8): the shop must answer.
+     */
+    'booking.reschedule_requested': {
+        base: {
+            en: { subject: "New time requested", body: "{{customerName}} asks to move booking #{{bookingNumber}} ({{serviceName}}) from {{previousStartDate}} to {{startDate}}. Accept or decline it before {{expiresDate}} — with no answer the original time stands." },
+            fr: { subject: "Nouvel horaire demandé", body: "{{customerName}} demande de déplacer la réservation n°{{bookingNumber}} ({{serviceName}}) du {{previousStartDate}} au {{startDate}}. Acceptez ou refusez avant le {{expiresDate}} — sans réponse, l'horaire initial est maintenu." },
+            pt: { subject: "Nova hora pedida", body: "{{customerName}} pede para alterar a reserva nº{{bookingNumber}} ({{serviceName}}) de {{previousStartDate}} para {{startDate}}. Aceite ou recuse antes de {{expiresDate}} — sem resposta, mantém-se a hora original." },
+            es: { subject: "Nueva hora solicitada", body: "{{customerName}} pide mover la reserva n.º{{bookingNumber}} ({{serviceName}}) del {{previousStartDate}} al {{startDate}}. Acepta o rechaza antes del {{expiresDate}}; sin respuesta, se mantiene la hora original." },
+            ar: { subject: "طلب موعد جديد", body: "يطلب {{customerName}} نقل الحجز رقم {{bookingNumber}} ({{serviceName}}) من {{previousStartDate}} إلى {{startDate}}. اقبل أو ارفض قبل {{expiresDate}} — وبدون رد يبقى الموعد الأصلي." }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_booking_reschedule_requested', bodyParams: ['{{customerName}}', '{{bookingNumber}}', '{{serviceName}}', '{{previousStartDate}}', '{{startDate}}', '{{expiresDate}}'] }
+        },
+        button: { type: 'url', label: VIEW_BOOKING_LABEL, urlSuffix: 'bookings/{{bookingId}}' }
+    },
+    /**
+     * The customer accepted the shop's proposal of a new time (D-9).
+     */
+    'booking.reschedule_accepted': {
+        base: {
+            en: { subject: "New time accepted", body: "{{customerName}} accepted your new time for booking #{{bookingNumber}} ({{serviceName}}): it is now {{startDate}}." },
+            fr: { subject: "Nouvel horaire accepté", body: "{{customerName}} a accepté votre nouvel horaire pour la réservation n°{{bookingNumber}} ({{serviceName}}) : elle est maintenant le {{startDate}}." },
+            pt: { subject: "Nova hora aceite", body: "{{customerName}} aceitou a sua nova hora para a reserva nº{{bookingNumber}} ({{serviceName}}): passa a ser {{startDate}}." },
+            es: { subject: "Nueva hora aceptada", body: "{{customerName}} aceptó tu nueva hora para la reserva n.º{{bookingNumber}} ({{serviceName}}): ahora es el {{startDate}}." },
+            ar: { subject: "تم قبول الموعد الجديد", body: "قبل {{customerName}} موعدك الجديد للحجز رقم {{bookingNumber}} ({{serviceName}}): أصبح {{startDate}}." }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_booking_reschedule_accepted', bodyParams: ['{{customerName}}', '{{bookingNumber}}', '{{serviceName}}', '{{startDate}}'] }
+        },
+        button: { type: 'url', label: VIEW_BOOKING_LABEL, urlSuffix: 'bookings/{{bookingId}}' }
+    },
+    /**
+     * The customer declined the shop's proposal of a new time (D-9). The decline waives the cancellation policy.
+     */
+    'booking.reschedule_declined': {
+        base: {
+            en: { subject: "New time declined", body: "{{customerName}} declined your new time for booking #{{bookingNumber}} ({{serviceName}}). The original time, {{startDate}}, stands — and they may now cancel with a full refund." },
+            fr: { subject: "Nouvel horaire refusé", body: "{{customerName}} a refusé votre nouvel horaire pour la réservation n°{{bookingNumber}} ({{serviceName}}). L'horaire initial, le {{startDate}}, est maintenu — et le client peut désormais annuler avec un remboursement intégral." },
+            pt: { subject: "Nova hora recusada", body: "{{customerName}} recusou a sua nova hora para a reserva nº{{bookingNumber}} ({{serviceName}}). Mantém-se a hora original, {{startDate}} — e o cliente pode agora cancelar com reembolso total." },
+            es: { subject: "Nueva hora rechazada", body: "{{customerName}} rechazó tu nueva hora para la reserva n.º{{bookingNumber}} ({{serviceName}}). Se mantiene la hora original, el {{startDate}}, y ahora puede cancelar con reembolso completo." },
+            ar: { subject: "تم رفض الموعد الجديد", body: "رفض {{customerName}} موعدك الجديد للحجز رقم {{bookingNumber}} ({{serviceName}}). يبقى الموعد الأصلي {{startDate}} — ويمكن للعميل الآن الإلغاء مع استرداد كامل." }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_booking_reschedule_declined', bodyParams: ['{{customerName}}', '{{bookingNumber}}', '{{serviceName}}', '{{startDate}}'] }
         },
         button: { type: 'url', label: VIEW_BOOKING_LABEL, urlSuffix: 'bookings/{{bookingId}}' }
     },
@@ -940,6 +1030,16 @@ export const NOTIFICATION_CATALOG: Record<NotificationType, SituationMessages> =
  */
 export function assertCatalogComplete(): void {
     for (const situation of Object.keys(NOTIFICATION_CATALOG) as NotificationType[]) {
+        const hasTemplate = NOTIFICATION_CATALOG[situation].whatsapp.template !== undefined;
+        if (hasTemplate === VENDOR_IN_WINDOW_ONLY_SITUATIONS.has(situation)) {
+            throw createAppError(
+                ERROR_CODES.CONFIG_NOTIFICATION_CATALOG_INCOMPLETE,
+                500,
+                hasTemplate
+                    ? `'${situation}' is listed as in-window-only but names a template`
+                    : `'${situation}' has no WhatsApp template and is not listed in VENDOR_IN_WINDOW_ONLY_SITUATIONS — out of window it would reach nobody`
+            );
+        }
         for (const lang of SUPPORTED_LANGUAGES) {
             if (!NOTIFICATION_CATALOG[situation].base[lang]) {
                 throw createAppError(
@@ -998,9 +1098,9 @@ export function renderChannelText(
     };
 }
 
-/** The Meta template name for a situation. */
-export function whatsAppTemplateName(situation: NotificationType): string {
-    return NOTIFICATION_CATALOG[situation].whatsapp.template.name;
+/** The Meta template name for a situation — `null` for an in-window-only one (see above). */
+export function whatsAppTemplateName(situation: NotificationType): string | null {
+    return NOTIFICATION_CATALOG[situation].whatsapp.template?.name ?? null;
 }
 
 /** Render the ordered WhatsApp template body parameters for a situation. */
@@ -1010,6 +1110,7 @@ export function renderWhatsAppTemplateParams(
     ctx: RenderContext
 ): string[] {
     const tpl = NOTIFICATION_CATALOG[situation].whatsapp.template;
+    if (!tpl) return [];
     const inApp = renderInApp(situation, lang, ctx);
     const merged: RenderContext = { ...ctx, title: inApp.title, message: inApp.message };
     return tpl.bodyParams.map(param => renderTemplate(param, merged));

@@ -750,14 +750,16 @@ export function novasendPayoutRefusal(error: unknown): { message: string; unsupp
   const code = typeof details.body?.code === 'string' ? details.body.code : '';
   const said = typeof details.body?.message === 'string' ? details.body.message : '';
   const what = [code, said].filter(Boolean).join(': ');
-  if (status === 401 || status === 403) {
+  // NovaSend answers most refusals with 403 (docs § Erreurs Globales), a short wallet included,
+  // so the documented code decides, not the status. The SDK reads the code out of `message`.
+  if (/not_enough_cash/i.test(what)) {
+    return { message: 'The NovaSend wallet does not hold enough to send this payout. Nothing was sent; top it up and retry.' };
+  }
+  if (status === 401 || /api_token_|client_kyc_not_approved/i.test(what)) {
     return {
       unsupported: true,
       message: `NovaSend refused the payout (${status}${what ? ` ${what}` : ''}). Check NOVASEND_API_KEY / NOVASEND_API_SECRET and that payouts are enabled on the NovaSend account.`,
     };
-  }
-  if (/not_enough_cash/i.test(code)) {
-    return { message: 'The NovaSend wallet does not hold enough to send this payout. Nothing was sent; top it up and retry.' };
   }
   return { message: `NovaSend refused the payout (${status}${what ? ` ${what}` : ''}). Nothing was sent.` };
 }

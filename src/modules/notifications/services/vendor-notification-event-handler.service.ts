@@ -375,6 +375,75 @@ export class VendorNotificationEventHandler {
         }
     }
 
+    /**
+     * `booking.rescheduled` — told to the shop ONLY when the CUSTOMER moved it (D-8). A move the
+     * shop proposed and the customer accepted reaches it as `booking.reschedule_accepted` instead,
+     * and `agreed` here would be the same news twice.
+     */
+    async handleBookingRescheduled(event: DomainEvent): Promise<void> {
+        try {
+            const p = event.payload;
+            if (p.movedBy !== 'customer') return;
+            await this.dispatchMove('booking.rescheduled', p, `booking.rescheduled:${p.bookingId}:${new Date(p.startAt).getTime()}`);
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle booking.rescheduled:', error);
+        }
+    }
+
+    /** `booking.reschedule_proposed` — the shop hears only of the CUSTOMER's requests (D-8). */
+    async handleBookingRescheduleProposed(event: DomainEvent): Promise<void> {
+        try {
+            const p = event.payload;
+            if (p.proposedBy !== 'customer') return;
+            await this.dispatchMove('booking.reschedule_requested', p, `booking.reschedule_requested:${p.bookingId}:${new Date(p.startAt).getTime()}`);
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle booking.reschedule_proposed:', error);
+        }
+    }
+
+    /** `booking.reschedule_answered` — the shop hears the customer's answer to the SHOP's proposal (D-9). */
+    async handleBookingRescheduleAnswered(event: DomainEvent): Promise<void> {
+        try {
+            const p = event.payload;
+            if (p.proposedBy !== 'vendor') return;
+            const situation = p.answer === 'accepted' ? 'booking.reschedule_accepted' : 'booking.reschedule_declined';
+            await this.dispatchMove(situation, p, `${situation}:${p.bookingId}:${new Date(p.proposedStartAt).getTime()}`);
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle booking.reschedule_answered:', error);
+        }
+    }
+
+    /** The four appointment-move messages share their context and their preference flag. */
+    private async dispatchMove(
+        situation: 'booking.rescheduled' | 'booking.reschedule_requested' | 'booking.reschedule_accepted' | 'booking.reschedule_declined',
+        p: Record<string, any>,
+        idempotencyKey: string
+    ): Promise<void> {
+        const prefs = await this.preferenceRepo.getByVendor(p.vendorId);
+        // Rows from before the flag existed carry no value: `undefined` is ON.
+        if (prefs.preferences.bookingRescheduled === false) return;
+
+        const vendor = await this.vendorRepo.findById(String(p.vendorId));
+        const lang = resolveLanguage(vendor);
+        await this.dispatch({
+            situation,
+            prefs,
+            vendorId: p.vendorId,
+            aggregateType: 'booking',
+            aggregateId: p.bookingId,
+            idempotencyKey,
+            context: {
+                bookingNumber: p.bookingNumber || this.genericBookingRef(lang),
+                serviceName: p.productTitle || this.genericService(lang),
+                customerName: p.customerName || this.genericCustomer(lang),
+                startDate: this.formatBookingMoment(p.startAt, p.vendorTimezone),
+                previousStartDate: this.formatBookingMoment(p.previousStartAt, p.vendorTimezone),
+                expiresDate: p.expiresAt ? this.formatBookingMoment(p.expiresAt, p.vendorTimezone) : '',
+                bookingId: p.bookingId
+            }
+        });
+    }
+
     /** Handle payment.received.partial event */
     async handlePaymentReceivedPartial(event: DomainEvent): Promise<void> {
         try {
@@ -1540,7 +1609,14 @@ export class VendorNotificationEventHandler {
                 );
             }
         } else {
-            // Outside the window only approved templates are deliverable.
+            // Outside the window only approved templates are deliverable — and an in-window-only
+            // situation has none yet (`VENDOR_IN_WINDOW_ONLY_SITUATIONS`). It still reached the
+            // vendor in-app, by push and on their other channels; WhatsApp is skipped, honestly.
+            const templateName = whatsAppTemplateName(situation);
+            if (!templateName) {
+                console.log(`[NotificationHandler] ${situation} has no WhatsApp template; outside the 24h window it is not sent on WhatsApp`);
+                return;
+            }
             const components: TemplateComponent[] = [
                 {
                     type: 'body',
@@ -1566,7 +1642,7 @@ export class VendorNotificationEventHandler {
                 type: 'template',
                 message: {
                     type: 'template',
-                    name: whatsAppTemplateName(situation),
+                    name: templateName,
                     /**
                      * ⛔ **`templateLanguage`, never `META_LANGUAGE_CODE[lang]`.** Templates are
                      * approved in English and French ONLY, so naming the recipient's own language

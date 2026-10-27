@@ -10,6 +10,7 @@ import { buildAdminVendorRouter } from '../../modules/vendors/admin-vendor.route
 import { buildAdminCategoryRouter } from '../../modules/categories/routes/admin-category.routes';
 import { buildAdminOrderRouter } from '../../modules/orders/admin-order.routes';
 import { buildAdminShipmentRouter } from '../../modules/shipments/admin-shipment.routes';
+import { buildAdminBookingRouter } from '../../modules/booking/routes/admin-booking.routes';
 import { buildAdminBillingRouter } from '../../modules/billing/routes/admin-billing.routes';
 import { buildAdminEarningsRouter } from '../../modules/earnings/routes/admin-earnings.routes';
 import { buildAdminPayoutRequestsRouter } from '../../modules/earnings/routes/admin-payout-requests.routes';
@@ -189,6 +190,15 @@ router.use('/orders', buildAdminOrderRouter([requireAdminCaller], 'internal'));
  * outbox row, and a second writer would move the agent and leave the session open.
  */
 router.use('/shipments', buildAdminShipmentRouter([requireAdminCaller]));
+
+/**
+ * Bookings (ADMIN-BOOKINGS-PLAN, 2026-10-27) — the service counterpart of orders. wi-admin reads
+ * `bookings` directly; cancel, complete, the payment re-check, the cash record, withdrawing a
+ * proposal and the reminder are delegated because each rides a path with post-commit effects (a
+ * refund request, the earnings hold, the calendar, the customer's messages). Two VERDICT reads
+ * ride along: the access gate and the storefront's slot list.
+ */
+router.use('/bookings', buildAdminBookingRouter([requireAdminCaller]));
 
 /**
  * Money (Phase 11) — billing, earnings and payouts, the three routers that still had no

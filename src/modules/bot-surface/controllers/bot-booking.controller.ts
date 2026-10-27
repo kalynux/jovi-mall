@@ -2,7 +2,10 @@ import { Request, Response } from 'express';
 import { ZodError } from 'zod';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { sendSuccess } from '../../../core/responses';
-import { createAppError } from '../../../core/errors';
+import { AppError, createAppError } from '../../../core/errors';
+import { setBotReply } from '../middlewares/bot-reply.middleware';
+import { VendorModel } from '../../vendors/vendor.model';
+import { proposalAnswerCopy, proposalMoment } from '../domain/bot-booking-proposal-copy';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { BookingService } from '../../booking/services/booking.service';
 import { BookingStatus } from '../../booking/types/booking.types';
@@ -255,6 +258,7 @@ export class BotBookingController {
                     ...(input.notes ? { notes: input.notes } : {}),
                     bookedInChat: req.bot!.envelope.channel,
                 },
+                input.addressId ?? null,
             );
         } catch (error) {
             /**
@@ -633,10 +637,61 @@ async function bookingPickerTap(req: Request, res: Response, action: ParsedBotAc
  * with the close-account buttons; `test-bot-surface` § 20 now compares every DRAWN token against
  * every ROUTED key, and would fail `DRAWN BUT NOT ROUTED` naming the builder.
  */
+/**
+ * `yes:bkprop:<bookingId>` / `no:bkprop:<bookingId>` — the customer answers the VENDOR's proposal
+ * of a new time (owner decision D-9, 2026-10-26), from the buttons on the
+ * `booking.reschedule_proposed` message.
+ *
+ * ⚠ **The same answer as the website**, through `BookingService.answerRescheduleProposal`: it
+ * scopes the booking to the customer who tapped (another customer's id is a 404), refuses an
+ * answer to the customer's OWN request, and treats a proposal past its deadline as lapsed. No
+ * signed reference is needed, unlike cancel: the tap can only ever do what the proposal still
+ * open on the customer's own booking allows, and a stale tap finds nothing open.
+ *
+ * ⚠ **"Nothing open" is answered, not refused.** A button sits in the chat after the proposal is
+ * answered, withdrawn or lapsed; the customer is told the time is as their bookings show, which is
+ * true in all three cases, instead of the generic expired-button sentence.
+ *
+ * Sub-key `bkprop`, NOT the withdrawn `bkmove` — old "That works" buttons may still carry
+ * `yes:bkmove:` in chat histories, and they must not start accepting proposals.
+ */
+async function answerProposalTap(
+    req: Request,
+    res: Response,
+    action: ParsedBotAction,
+    answer: 'accept' | 'decline',
+): Promise<void> {
+    const bookingId = action.argument;
+    if (!/^[0-9a-f]{24}$/.test(bookingId)) throw unknownBotAction();
+
+    const caller = botCallerOf(req);
+    const language = botResponseLanguageOf(req);
+    const copy = proposalAnswerCopy(language);
+
+    let booking;
+    try {
+        booking = await bookingService.answerRescheduleProposal(bookingId, { role: 'customer', id: caller.userId }, answer);
+    } catch (error) {
+        if (error instanceof AppError && error.code === ERROR_CODES.BOOKING_PROPOSAL_NOT_FOUND) {
+            setBotReply(req, { kind: 'text', text: copy.gone });
+            sendSuccess(res, { answered: false, bookingId });
+            return;
+        }
+        throw error;
+    }
+
+    const vendor = await VendorModel.findById(booking.vendorId).select('timezone').lean();
+    const when = proposalMoment(booking.startAt, (vendor as { timezone?: string } | null)?.timezone, language);
+    setBotReply(req, { kind: 'text', text: answer === 'accept' ? copy.accepted(when) : copy.declined(when) });
+    sendSuccess(res, toBotBookingDto(booking, await refundOf(booking)));
+}
+
 export const BOOKING_ACTION_HANDLERS: BotActionHandlers = Object.freeze({
     'open:bl': bookingsScreenTap,
     'open:bk': bookingPickerTap,
     bpay: bookingPayTap,
+    'yes:bkprop': (req: Request, res: Response, action: ParsedBotAction) => answerProposalTap(req, res, action, 'accept'),
+    'no:bkprop': (req: Request, res: Response, action: ParsedBotAction) => answerProposalTap(req, res, action, 'decline'),
 });
 
 /**

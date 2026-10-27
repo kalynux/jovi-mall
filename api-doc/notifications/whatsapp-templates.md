@@ -1661,3 +1661,25 @@ because Meta refuses an empty parameter. Payloads (en + fr):
 ⛔ **Then, and only once BOTH languages are APPROVED**, flip `FEE_REASON_TEMPLATE_APPROVED` to
 `true` in `customer-notification-catalog.ts` and deploy. Sending v2 before approval fails every
 out-of-window delivery of this notification; until the flip, v1 keeps being sent unchanged.
+
+---
+
+## 2026-10-26 — appointment moves (D-8 / D-9): 6 templates SUBMITTED (en + fr), PENDING Meta review
+
+✅ **Submitted 2026-10-26: 12 created, 0 failed, every one PENDING review.** Sent with `--only=` these six
+names, so other unsubmitted payloads in the file were NOT sent. `customer_booking_refund_pending` also
+changed in this regeneration (another stream's catalog edit) and was deliberately NOT sent. Same
+production button hosts as before (`--base-customer=https://wi-mall.com`, `--base-vendor=https://vendor.wi-mall.com`, …).
+Plan: `PRODUCTION-READINESS/APPOINTMENT-LOCATION-AND-ACCESS-PLAN.md`.
+
+Until Meta approves them, an out-of-window send of these situations is refused by Meta and recorded
+as a delivery error; in-app, push, email and Telegram are unaffected.
+
+| Template name | Audience | Situation | Body params | Buttons |
+|---|---|---|---|---|
+| `vendor_booking_rescheduled` | vendor | `booking.rescheduled` (customer moved it) | customer, booking no., service, previous time, new time | View booking |
+| `vendor_booking_reschedule_requested` | vendor | `booking.reschedule_requested` (manual service) | customer, booking no., service, previous, requested, answer-by | View booking |
+| `vendor_booking_reschedule_accepted` | vendor | `booking.reschedule_accepted` | customer, booking no., service, new time | View booking |
+| `vendor_booking_reschedule_declined` | vendor | `booking.reschedule_declined` | customer, booking no., service, original time | View booking |
+| `customer_booking_reschedule_proposed` | customer | `booking.reschedule_proposed` | vendor, service, previous, proposed, answer-by | View booking + quick replies **Accept new time** (`yes:bkprop:<bookingId>`) · **Keep my time** (`no:bkprop:<bookingId>`); fallback `open:bl` |
+| `customer_booking_reschedule_declined` | customer | `booking.reschedule_declined` | vendor, service, requested time, kept time | View booking |

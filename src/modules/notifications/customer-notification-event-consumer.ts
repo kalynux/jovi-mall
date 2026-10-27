@@ -42,6 +42,8 @@ export function initializeCustomerNotificationEventConsumers(): void {
     eventBus.subscribe('booking.created', handler.handleBookingCreated.bind(handler));
     eventBus.subscribe('booking.confirmed', handler.handleBookingConfirmed.bind(handler));
     eventBus.subscribe('booking.rescheduled', handler.handleBookingRescheduled.bind(handler));
+    eventBus.subscribe('booking.reschedule_proposed', handler.handleBookingRescheduleProposed.bind(handler));
+    eventBus.subscribe('booking.reschedule_answered', handler.handleBookingRescheduleAnswered.bind(handler));
     eventBus.subscribe('booking.cancelled', handler.handleBookingCancelled.bind(handler));
     eventBus.subscribe('booking.completed', handler.handleBookingCompleted.bind(handler));
     // Covers paid / refunded / refund_pending; the handler ignores the rest.

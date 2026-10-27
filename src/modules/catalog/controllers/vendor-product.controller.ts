@@ -67,7 +67,7 @@ const productPermanentDeleteService = new ProductPermanentDeleteService(
     fileReferenceRepository,
     new FileDeleteService(storageProvider, fileRepository, fileReferenceRepository),
 );
-const productListService = new ProductListService(productRepository, fileRepository, storageProvider);
+const productListService = new ProductListService(productRepository, fileRepository, storageProvider, variantRepository);
 const productDuplicateService = new ProductDuplicateService(productRepository, slugService, fileReferenceService, variantRepository);
 const productStatusValidationService = new ProductStatusValidationService(productRepository, variantRepository);
 const productBulkOperationsService = new ProductBulkOperationsService(

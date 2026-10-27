@@ -3,8 +3,11 @@ import { screenResponse, type FlowResponseBody } from '../domain/flow-protocol';
 import {
     BOOKING_DAY_SCREEN,
     BOOKING_LIST_SCREEN,
+    BOOKING_PAY_SCREEN,
+    BOOKING_TIMES_AT_SCREEN,
     BOOKING_TIMES_SCREEN,
 } from '../definitions/booking.flow';
+import { dialOptions } from '../../../../core/validation/dial-codes';
 import type { FlowCopy } from './flow-copy';
 import { noticeResponse } from './listing.adapter';
 import { FLOW_CAPS, fitText } from './flow-text';
@@ -37,6 +40,23 @@ export interface BookingTimesView {
     copy: { pickTime: string; confirm: string; listEmpty: string };
     label?: string;
     slots: Array<{ slotId: string; label: string; description?: string | null }>;
+    /**
+     * Where the appointment happens (2026-10-26). Only `customer_address` changes this screen: it
+     * becomes `TIMES_AT`, which also asks which of the customer's addresses.
+     */
+    place?: BookingPlaceView | null;
+}
+
+/** `readBookingPicker`'s place block, as this side reads it. */
+export interface BookingPlaceView {
+    kind: string;
+    copy: { title: string; none: string } | null;
+    addresses: Array<{ addressId: string; label: string; line: string }> | null;
+}
+
+/** Whether this place needs the customer to pick an address. */
+export function needsAddress(place: BookingPlaceView | null | undefined): boolean {
+    return place?.kind === 'customer_address';
 }
 
 /**
@@ -107,7 +127,34 @@ export function toBookingDayScreen(view: BookingDayView, copy: FlowCopy): FlowRe
 export function toBookingTimesScreen(view: BookingTimesView, copy: FlowCopy): FlowResponseBody {
     if (view.slots.length === 0) return noticeResponse(view.copy.listEmpty, copy);
 
-    return screenResponse(BOOKING_TIMES_SCREEN, {
+    /**
+     * ⚠ **A service the vendor travels to draws `TIMES_AT`**, the same times plus the address
+     * picker. No saved address at all → the place's own sentence on the notice, because a
+     * required drop-down with nothing in it is a form that cannot be sent. (The day screen
+     * already refuses that case; this is the second line, for an address deleted in between.)
+     */
+    if (needsAddress(view.place)) {
+        const addresses = view.place?.addresses ?? [];
+        const words = view.place?.copy ?? null;
+        if (addresses.length === 0) return noticeResponse(words?.none ?? copy.failed, copy);
+        const times = timesScreenData(view, copy);
+        return screenResponse(BOOKING_TIMES_AT_SCREEN, {
+            ...times,
+            placeLabel: fitText(words?.title ?? '', FLOW_CAPS.inputLabel),
+            addresses: addresses.slice(0, FLOW_CAPS.dropdownOptions).map((a) => ({
+                id: a.addressId,
+                title: fitText(a.label || a.line, FLOW_CAPS.optionTitle),
+                ...(a.label && a.line ? { description: fitText(a.line, FLOW_CAPS.optionDescription) } : {}),
+            })),
+        });
+    }
+
+    return screenResponse(BOOKING_TIMES_SCREEN, timesScreenData(view, copy));
+}
+
+/** The fields `TIMES` and `TIMES_AT` share — one construction, so the two cannot word a time apart. */
+function timesScreenData(view: BookingTimesView, copy: FlowCopy): Record<string, unknown> {
+    return {
         dayLine: fitText(view.label ?? '', FLOW_CAPS.caption),
         chooseLabel: fitText(view.copy.pickTime, FLOW_CAPS.inputLabel),
         /**
@@ -126,6 +173,42 @@ export function toBookingTimesScreen(view: BookingTimesView, copy: FlowCopy): Fl
                 : {}),
         })),
         confirmLabel: fitText(view.copy.confirm, FLOW_CAPS.footerLabel),
+    };
+}
+
+/** What `readBookingPayment` answers, as the pay form reads it. */
+export interface BookingPayView {
+    copy: { payTitle: string; payBalanceTitle: string; payNumberHint: string; payButton: string };
+    purpose: 'primary' | 'balance';
+    service: string;
+    when: string;
+    amountText: string;
+    maskedPayer: string | null;
+    dialCountry: string;
+    language?: string | null;
+}
+
+/**
+ * The pay form — the checkout's number pair, for an appointment.
+ *
+ * ⚠ **Every figure is the read's**: `amountText` re-resolved from the booking now, the masked
+ * number verbatim, the country the stored number belongs to (else Cameroon). Nothing is added up
+ * or re-masked here.
+ */
+export function toBookingPayScreen(view: BookingPayView, copy: FlowCopy, language: string | null): FlowResponseBody {
+    return screenResponse(BOOKING_PAY_SCREEN, {
+        totalText: fitText(
+            `${view.purpose === 'balance' ? view.copy.payBalanceTitle : view.copy.payTitle} — ${view.amountText}`,
+            FLOW_CAPS.heading,
+        ),
+        bookingLine: fitText([view.service, view.when].filter(Boolean).join(' · '), FLOW_CAPS.body),
+        phoneLabel: fitText(copy.flowPhoneLabel, FLOW_CAPS.inputLabel),
+        phoneHint: fitText(view.copy.payNumberHint, FLOW_CAPS.caption),
+        dialLabel: fitText(copy.checkoutCountry, FLOW_CAPS.inputLabel),
+        dialOptions: dialOptions(language, FLOW_CAPS.optionTitle),
+        dialDefault: view.dialCountry,
+        phoneMasked: fitText(view.maskedPayer ?? '', 80),
+        payLabel: fitText(view.copy.payButton, FLOW_CAPS.footerLabel),
     });
 }
 
@@ -143,9 +226,10 @@ export function toBookingTimesScreen(view: BookingTimesView, copy: FlowCopy): Fl
  * @param receipt the full sentence, already composed by the booking copy module.
  */
 export function bookingConfirmedResponse(
-    confirmed: Pick<BookingConfirmed, 'moved'>,
+    confirmed: Pick<BookingConfirmed, 'moved'> & { requested?: boolean },
     receipt: string,
     copy: FlowCopy,
 ): FlowResponseBody {
-    return noticeResponse(receipt, copy, confirmed.moved ? 'moved' : 'booked');
+    const stamp = confirmed.moved ? (confirmed.requested ? 'requested' : 'moved') : 'booked';
+    return noticeResponse(receipt, copy, stamp);
 }

@@ -242,20 +242,20 @@ function main(): void {
     section('3. Stock — a count is not a verdict, and a verdict is not a count');
 
     assert('a counted variant reports its real number', () => {
-        const s = stockOf({ price: 1, stock: 2, isInfiniteStock: false, allow_oversell: false });
+        const s = stockOf({ price: 1, stock: 2, isInfiniteStock: false, allow_oversell: false }, 'physical');
         eq(s.onHand, 2, 'onHand');
         eq(s.isInfinite, false, 'isInfinite');
         eq(s.sellable, true, 'sellable');
     });
 
     assert('an infinite-stock variant reports onHand NULL, never 0', () => {
-        const s = stockOf({ price: 1, stock: 0, isInfiniteStock: true, allow_oversell: false });
+        const s = stockOf({ price: 1, stock: 0, isInfiniteStock: true, allow_oversell: false }, 'physical');
         eq(s.onHand, null, 'onHand must be null so no scarcity claim can be built from it');
         eq(s.sellable, true, 'sellable');
     });
 
     assert('⚠ sellable can be TRUE at zero stock — overselling', () => {
-        const s = stockOf({ price: 1, stock: 0, isInfiniteStock: false, allow_oversell: true });
+        const s = stockOf({ price: 1, stock: 0, isInfiniteStock: false, allow_oversell: true }, 'physical');
         eq(s.onHand, 0, 'onHand');
         eq(s.sellable, true, 'the cart would accept this order');
         // This pair is the whole reason `sellable` and `onHand` are separate fields: a model
@@ -263,12 +263,28 @@ function main(): void {
     });
 
     assert('a sold-out variant with no oversell is not sellable', () => {
-        const s = stockOf({ price: 1, stock: 0, isInfiniteStock: false, allow_oversell: false });
+        const s = stockOf({ price: 1, stock: 0, isInfiniteStock: false, allow_oversell: false }, 'physical');
         eq(s.sellable, false, 'sellable');
     });
 
     assert('a missing stock field reads as 0, not as unknown', () =>
-        eq(stockOf({ price: 1 }).onHand, 0, 'onHand'));
+        eq(stockOf({ price: 1 }, 'physical').onHand, 0, 'onHand'));
+
+    assert('⚠ a service is sellable at the schema defaults, with NO count to claim scarcity from', () => {
+        const s = stockOf({ price: 1, stock: 0, isInfiniteStock: false, allow_oversell: false }, 'service');
+        eq(s.sellable, true, 'a service is scheduled, not stocked');
+        eq(s.onHand, null, 'onHand must be null — "0 left" about a class with free seats is false');
+    });
+
+    assert('⚠ the catalogue\'s `_sellable` carries the same service exception', () => {
+        const src = readFileSync(
+            join(__dirname, '..', '..', 'src', 'modules', 'negotiation', 'repositories', 'negotiation-catalog.repository.ts'),
+            'utf8',
+        );
+        if (!/_sellable:\s*\{\s*\$or:\s*\[\s*\{\s*\$eq:\s*\['\$type',\s*'service'\]\s*\}/.test(src)) {
+            throw new Error('`_sellable` lost `{ $eq: [\'$type\', \'service\'] }`');
+        }
+    });
 
     // ── 4. The subject rule ──────────────────────────────────────────────────
     section('4. The subject — a tool called without naming a product');

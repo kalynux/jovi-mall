@@ -43,6 +43,21 @@ router.post('/:id/cancel', CustomerBookingController.cancelBooking);
 router.patch('/:id/reschedule', CustomerBookingController.rescheduleBooking);
 
 /**
+ * POST /api/customer/bookings/:id/reschedule-proposal/accept
+ * POST /api/customer/bookings/:id/reschedule-proposal/decline
+ * Answer the vendor's proposal of a new time. Decline keeps the original time and waives the
+ * cancellation policy for this booking (full refund on cancel).
+ */
+router.post('/:id/reschedule-proposal/accept', CustomerBookingController.acceptProposal);
+router.post('/:id/reschedule-proposal/decline', CustomerBookingController.declineProposal);
+
+/**
+ * DELETE /api/customer/bookings/:id/reschedule-proposal
+ * Withdraw the customer's own request for a new time (manual-approval services only).
+ */
+router.delete('/:id/reschedule-proposal', CustomerBookingController.withdrawProposal);
+
+/**
  * GET /api/customer/bookings/:id/balance
  * What is still owed on a completed booking (and what was overpaid).
  */

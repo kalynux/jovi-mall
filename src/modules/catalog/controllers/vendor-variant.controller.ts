@@ -17,6 +17,8 @@ import { vectorisationService } from '../domain/services/VectorisationService';
 import { assertNotSimpleMode } from '../domain/services/simple/mode-guard';
 import { DEFAULT_VARIANT_SIGNATURE } from '../domain/services/variants/constants';
 import { Variant } from '../repositories/mappers/variant.mapper';
+import { mergeAppointmentSettings } from '../../booking/domain/appointment';
+import { appointmentLocationService } from '../../booking/services/appointment-location.service';
 // Concrete file, not the module barrel: stock-requests imports catalog repositories.
 import { stockChangeGate } from '../../stock-requests/services/stock-change-gate';
 import {
@@ -114,6 +116,9 @@ export class VendorVariantController {
             const existingForProduct = await variantRepository.findByProduct(productId);
             if (existingForProduct.length > 0)
                 throw createAppError(ERROR_CODES.CATALOG_SERVICE_VARIANT_EXISTS, 409);
+
+            // The place must be one of this vendor's own addresses.
+            await appointmentLocationService.assertVendorAddress(vendorId, input.serviceConfig.location);
         }
 
         // Digital product restrictions — only pricing variants, no physical attributes
@@ -225,6 +230,10 @@ export class VendorVariantController {
                     bookingMode: input.serviceConfig.bookingMode,
                     maxBookings: input.serviceConfig.maxBookings,
                     peakHours: input.serviceConfig.peakHours,
+                    ...mergeAppointmentSettings(undefined, {
+                        location: input.serviceConfig.location,
+                        access: input.serviceConfig.access,
+                    }),
                 }
                 : undefined,
             deletedAt: null,
@@ -432,6 +441,7 @@ export class VendorVariantController {
             delete updates.isInfiniteStock;
         }
         if (scInput) {
+            await appointmentLocationService.assertVendorAddress(vendorId, scInput.location);
             const existing = existingVariant.serviceConfig;
             updates.serviceConfig = {
                 durationMinutes: scInput.durationMinutes ?? existing?.durationMinutes ?? 0,
@@ -442,6 +452,8 @@ export class VendorVariantController {
                 peakHours: scInput.peakHours === null
                     ? undefined
                     : (scInput.peakHours ?? existing?.peakHours),
+                // ⛔ Without this the place and the link are wiped by any other service edit.
+                ...mergeAppointmentSettings(existing, { location: scInput.location, access: scInput.access }),
             };
         }
 
@@ -620,6 +632,8 @@ export class VendorVariantController {
         if (!existingVariant || existingVariant.productId !== productId)
             throw createAppError(ERROR_CODES.CATALOG_VARIANT_NOT_FOUND, 404);
 
+        await appointmentLocationService.assertVendorAddress(vendorId, input.location);
+
         // Merge over the existing config so the repository's whole-object $set keeps
         // untouched fields. A null peakHours clears the surcharge.
         const existing = existingVariant.serviceConfig;
@@ -632,6 +646,8 @@ export class VendorVariantController {
             peakHours: input.peakHours === null
                 ? undefined
                 : (input.peakHours ?? existing?.peakHours),
+            // ⛔ Without this the place and the link are wiped by any other service edit.
+            ...mergeAppointmentSettings(existing, { location: input.location, access: input.access }),
         };
 
         const updated = await variantRepository.update(variantId, { serviceConfig: merged });

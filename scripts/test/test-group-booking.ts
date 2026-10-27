@@ -229,6 +229,12 @@ async function main(): Promise<void> {
 
   const bookingSrc = read('modules/booking/services/booking.service.ts');
   const reschedule = methodBody(bookingSrc, 'async rescheduleBooking(');
+  /**
+   * Since 2026-10-26 the occupancy check, the write and the calendar mirror live in `applyMove`,
+   * shared by a direct reschedule and an accepted proposal (owner decisions D-8/D-9), and the
+   * reschedule releases its hold on BOTH of its endings — after a proposal and after a move.
+   */
+  const applyMove = methodBody(bookingSrc, 'private async applyMove(');
 
   assert('rescheduleBooking asks whether the product is a group service', () =>
     /groupBookingService\.resolveCapacity\(/.test(reschedule)
@@ -239,24 +245,26 @@ async function main(): Promise<void> {
     return calls.length === 1 && arity(calls[0]) === 3;
   });
 
-  assert('release is called with a scope argument, never the 2-arg default', () => {
+  assert('release is called with a scope argument, never the 2-arg default — on both endings', () => {
     const calls = callArgs(reschedule, 'slotLockService.release(');
-    return calls.length === 1 && arity(calls[0]) === 3;
+    return calls.length === 2 && calls.every((c) => arity(c) === 3);
   });
 
   assert('both calls pass the SAME scope value — a hold read where it was written', () => {
     const asserted = callArgs(reschedule, 'slotLockService.assertLocked(')[0];
-    const released = callArgs(reschedule, 'slotLockService.release(')[0];
+    const releases = callArgs(reschedule, 'slotLockService.release(');
+    const released = releases[0];
+    if (releases.some((r) => r !== released)) return false;
     const scopeOf = (args: string) => args.split(',').pop()!.trim();
     return scopeOf(asserted) === scopeOf(released) && scopeOf(asserted) === 'scopeToOwner';
   });
 
   assert('a group move goes through moveIntoSlot, not the single-occupancy overlap check', () =>
-    /groupBookingService\.moveIntoSlot\(/.test(reschedule)
+    /groupBookingService\.moveIntoSlot\(/.test(applyMove) && /this\.applyMove\(/.test(reschedule)
   );
 
-  assert('the single-occupancy overlap check is still there for non-group products', () =>
-    /countOverlappingBookings\(/.test(reschedule) && /selfOverlaps/.test(reschedule)
+  assert('the single-occupancy overlap check is still there for non-group products, excluding the booking itself', () =>
+    /countOverlappingBookings\(/.test(applyMove) && /booking\._id\.toString\(\)/.test(applyMove)
   );
 
   // The create path is single-occupancy and MUST keep the exclusive key. Pinning this
@@ -303,7 +311,7 @@ async function main(): Promise<void> {
   });
 
   assert('a group move re-renders BOTH classes rather than dragging one event', () =>
-    /groupBookingService\.syncCalendarForMove\(/.test(reschedule)
+    /groupBookingService\.syncCalendarForMove\(/.test(applyMove)
   );
 
   // ── 3. One definition of "is this a group service" ───────────────────────────────────

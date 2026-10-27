@@ -678,8 +678,8 @@
 
   function codeValue() {
     if (el.codeBlock.hidden) return null;
-    var digits = el.code.value.replace(/s+/g, "");
-    return /^d{4,8}$/.test(digits) ? digits : null;
+    var digits = el.code.value.replace(/\s+/g, "");
+    return /^\d{4,8}$/.test(digits) ? digits : null;
   }
 
   function boot(d) {

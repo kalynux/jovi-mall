@@ -389,7 +389,12 @@ console.log('\n3 · vendor booking templates: bodyParams cover their own copy');
 
 for (const { situation } of VENDOR_BOOKING_SITUATIONS) {
     const entry = NOTIFICATION_CATALOG[situation];
-    const params = new Set(entry.whatsapp.template.bodyParams.flatMap(placeholdersIn));
+    // Optional on the vendor stack since 2026-10-26 (in-window-only situations) — but these two
+    // were approved long ago, and the assertions below are about the template they DO name.
+    const template = entry.whatsapp.template;
+    assert(`${situation}: names its approved WhatsApp template`, () => template !== undefined);
+    if (!template) continue;
+    const params = new Set(template.bodyParams.flatMap(placeholdersIn));
 
     assert(`${situation}: every body placeholder is a bodyParam`, () => {
         const inBody = new Set<string>();
@@ -405,15 +410,15 @@ for (const { situation } of VENDOR_BOOKING_SITUATIONS) {
     });
 
     assert(`${situation}: bodyParams count matches the template registry`, () => {
-        const declared = registryParamCount(entry.whatsapp.template.name);
+        const declared = registryParamCount(template.name);
         if (declared === null) {
-            console.error(`     ${entry.whatsapp.template.name} is not in the template registry`);
+            console.error(`     ${template.name} is not in the template registry`);
             return false;
         }
-        if (declared !== entry.whatsapp.template.bodyParams.length) {
-            console.error(`     registry says ${declared}, catalog sends ${entry.whatsapp.template.bodyParams.length}`);
+        if (declared !== template.bodyParams.length) {
+            console.error(`     registry says ${declared}, catalog sends ${template.bodyParams.length}`);
         }
-        return declared === entry.whatsapp.template.bodyParams.length;
+        return declared === template.bodyParams.length;
     });
 }
 
@@ -601,13 +606,44 @@ for (const method of ['initiateBookingPayment', 'initiateBookingBalancePayment']
 assert('⛔ both booking publishers carry originChannel — success and failure', () => {
     const success = methodSpan(ORCHESTRATOR, 'private async emitPaymentEvent(');
     const bookingExtras = success.slice(success.indexOf("...(type === 'booking'"));
-    const failureAt = ORCHESTRATOR.indexOf('if (transaction.bookingId) {\n        const booking = await Booking.findById(transaction.bookingId).select(');
+    const failureAt = ORCHESTRATOR.indexOf('if (transaction.bookingId) {\n        await this.releaseFailedBookingCharge(transaction);');
     const failure = balancedBody(ORCHESTRATOR, failureAt);
     const carried = 'originChannel: transaction.originChat?.channel ?? undefined';
     return bookingExtras.includes(carried)
         && failureAt > 0
         && failure.includes("aggregateType: 'booking'")
         && failure.includes(carried);
+});
+
+/**
+ * ⛔ A failed booking charge used to leave the booking `pending` for ever: "processing" on the
+ * customer's screen, `PAYMENT_BOOKING_IN_PROGRESS` on every retry, and a slot the unpaid sweep
+ * (`unpaid`/`failed` only) never released. The failure branch now moves it to `failed` first.
+ */
+assert('⛔ a failed booking charge releases the booking BEFORE it is announced', () => {
+    const failureAt = ORCHESTRATOR.indexOf('if (transaction.bookingId) {\n        await this.releaseFailedBookingCharge(transaction);');
+    const failure = balancedBody(ORCHESTRATOR, failureAt);
+    return failureAt > 0
+        && failure.indexOf('releaseFailedBookingCharge') < failure.indexOf("eventBus.publish('payment.failed'");
+});
+
+assert('⛔ the release is a compare-and-set on pending → failed, original price only, never beside a live attempt', () => {
+    const body = methodSpan(ORCHESTRATOR, 'private async releaseFailedBookingCharge(');
+    return body.includes("(transaction.purpose ?? 'primary') !== 'primary'")
+        && body.includes("this.findLiveAttempt({")
+        && body.includes("_id: { $ne: transaction._id }")
+        && body.includes("{ _id: transaction.bookingId, paymentStatus: 'pending' }")
+        && body.includes("{ $set: { paymentStatus: 'failed' } }")
+        // Never throws: the webhook must still answer and the announcement still go out.
+        && /try \{[\s\S]*\} catch \(error\) \{/.test(body);
+});
+
+assert('the retry guard and the unpaid sweep both understand `failed` — which is why it is the status to set', () => {
+    const initiate = methodSpan(ORCHESTRATOR, 'async initiateBookingPayment(');
+    const sweep = stripComments(read('modules/booking/workers/unpaid-booking-cancel.worker.ts'));
+    return initiate.includes("booking.paymentStatus === 'pending'")
+        && !initiate.includes("booking.paymentStatus === 'failed'")
+        && sweep.includes("paymentStatus: { $in: ['unpaid', 'failed'] }");
 });
 
 for (const handler of ['handleBookingPaymentReceived', 'handleBookingPaymentFailed']) {

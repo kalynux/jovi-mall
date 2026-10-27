@@ -21,6 +21,10 @@ export function initializeVendorNotificationEventConsumers(): void {
     eventBus.subscribe('order.cancelled', handler.handleOrderCancelled.bind(handler));
     eventBus.subscribe('booking.created', handler.handleBookingCreated.bind(handler));
     eventBus.subscribe('booking.cancelled', handler.handleBookingCancelled.bind(handler));
+    // Appointment moves (2026-10-26, D-8/D-9): each handler filters to the moves the SHOP did not make.
+    eventBus.subscribe('booking.rescheduled', handler.handleBookingRescheduled.bind(handler));
+    eventBus.subscribe('booking.reschedule_proposed', handler.handleBookingRescheduleProposed.bind(handler));
+    eventBus.subscribe('booking.reschedule_answered', handler.handleBookingRescheduleAnswered.bind(handler));
     eventBus.subscribe('payment.received.partial', handler.handlePaymentReceivedPartial.bind(handler));
     eventBus.subscribe('payment.received.full', handler.handlePaymentReceivedFull.bind(handler));
     eventBus.subscribe('vendor.storage.alert', handler.handleStorageAlert.bind(handler));

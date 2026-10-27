@@ -33,6 +33,10 @@ export type CustomerNotificationType =
     | 'booking.confirmed'
     /** Moved to a different time (by either side). */
     | 'booking.rescheduled'
+    /** The VENDOR proposes a new time; the customer accepts or declines (D-9, 2026-10-26). */
+    | 'booking.reschedule_proposed'
+    /** The vendor declined the customer's request for a new time (D-8, manual services). */
+    | 'booking.reschedule_declined'
     /** Called off. Copy differs by who did it — see the catalog. */
     | 'booking.cancelled'
     /** The appointment happened and was settled. */
@@ -236,6 +240,8 @@ export const CUSTOMER_NOTIFICATION_TYPES: readonly CustomerNotificationType[] = 
     'booking.created',
     'booking.confirmed',
     'booking.rescheduled',
+    'booking.reschedule_proposed',
+    'booking.reschedule_declined',
     'booking.cancelled',
     'booking.completed',
     'booking.reminder',

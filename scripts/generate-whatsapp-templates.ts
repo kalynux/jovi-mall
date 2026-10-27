@@ -346,6 +346,13 @@ const BUTTON_LABEL: Record<string, Record<string, string>> = {
     customer_order_payment_failed: { en: 'View order', fr: 'Voir la commande' },
     customer_booking_payment_failed: { en: 'View booking', fr: 'Voir la réservation' },
     customer_booking_balance_received: { en: 'View booking', fr: 'Voir la réservation' },
+    // Appointment moves (2026-10-26, D-8 / D-9) — new names, so the label is free to be specific.
+    customer_booking_reschedule_proposed: { en: 'View booking', fr: 'Voir la réservation' },
+    customer_booking_reschedule_declined: { en: 'View booking', fr: 'Voir la réservation' },
+    vendor_booking_rescheduled: { en: 'View booking', fr: 'Voir la réservation' },
+    vendor_booking_reschedule_requested: { en: 'View booking', fr: 'Voir la réservation' },
+    vendor_booking_reschedule_accepted: { en: 'View booking', fr: 'Voir la réservation' },
+    vendor_booking_reschedule_declined: { en: 'View booking', fr: 'Voir la réservation' },
     // The payout six, submitted 2026-09-27 for the same reason: the send path names them and the
     // WABA did not hold them, so a vendor, agency or agent outside the window was told nothing —
     // including when a transfer FAILED and their money sat reserved. Each opens its own app's

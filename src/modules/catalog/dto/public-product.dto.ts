@@ -40,6 +40,7 @@
  */
 import { Product } from '../repositories/mappers/product.mapper';
 import { Variant } from '../repositories/mappers/variant.mapper';
+import type { AppointmentLocationKind } from '../../booking/domain/appointment';
 import { FileDetail } from '../read-models/product-detail.read-model';
 import { isBargainEffective } from '../domain/services/bargain-price.rule';
 import { publicCompareAtPrice, publicDisplayPrice } from '../read-models/public-display-price';
@@ -360,6 +361,13 @@ export interface PublicVariantDto {
         bufferAfterMinutes: number;
         priceUnit: string;
         priceFrom: number;
+        /**
+         * Where it happens, as a KIND only: `vendor_address` (at the shop), `customer_address`
+         * (they come to you), `online`. `null` when the vendor has not said. The address itself
+         * is never public — a booked customer sees it once the vendor accepts — and the meeting
+         * link never leaves the booking's time gate.
+         */
+        locationKind: AppointmentLocationKind | null;
     };
 }
 
@@ -430,8 +438,19 @@ export function isSellableVariant(variant: Variant): boolean {
  * `isInfiniteStock` and `allowOversell` both mean "yes regardless of the counter" — the
  * first because nothing is being counted, the second because the vendor has said they will
  * source it. Everything else is `stock > 0`.
+ *
+ * ⚠ **A service is never out of stock — it is scheduled, not stocked.** Its variant is created
+ * with the schema defaults (`stock: 0`, `isInfiniteStock: false`) and no write path ever moves
+ * them, so the counter rule answered `false` for every service on the platform and the
+ * storefront captioned a brand-new class "Fully booked" while its slot picker offered a full
+ * week. Whether a slot is free is `GET /api/products/:productId/availability`'s question, and
+ * the booking path enforces it (`assertOfferedSlot`, `BOOKING_SLOT_FULL`); a published service
+ * has at least one availability rule, which the activation gate requires. The two pipeline
+ * copies of this rule in `public-catalog.repository.mongo.ts` and the negotiation tools'
+ * `stockOf` carry the same exception, and must keep carrying it.
  */
-export function variantInStock(variant: Variant): boolean {
+export function variantInStock(variant: Variant, productType: Product['type']): boolean {
+    if (productType === 'service') return true;
     if (variant.isInfiniteStock || variant.allowOversell) return true;
     return variant.stock > 0;
 }
@@ -588,7 +607,8 @@ export function buildVariantDisplayName(
 
 /**
  * @param parent the variant's product. Required, not optional — see `PublicPricingParent`.
- *   Every call site already holds it, so this costs no query.
+ *   Every call site already holds it, so this costs no query. `type` decides `inStock`
+ *   (see `variantInStock`).
  */
 export function toPublicVariantDto(
     variant: Variant,
@@ -596,7 +616,7 @@ export function toPublicVariantDto(
     optionsById: Map<string, { id: string; name: string }>,
     valuesById: Map<string, { id: string; optionId: string; value: string }>,
     images: FileDetail[],
-    parent: PublicPricingParent,
+    parent: PublicPricingParent & Pick<Product, 'type'>,
 ): PublicVariantDto {
     const options: PublicVariantOptionDto[] = variant.optionValueIds
         .map((valueId) => {
@@ -622,7 +642,7 @@ export function toPublicVariantDto(
         price: publicDisplayPrice(parent.vectorisationEnabled, variant),
         compareAtPrice: publicCompareAtPrice(parent.vectorisationEnabled, variant),
         currency,
-        inStock: variantInStock(variant),
+        inStock: variantInStock(variant, parent.type),
         // The predicate the two lines above already branch on, named. Computed here rather
         // than read from a pipeline because this path holds the real domain objects — the
         // list row's identical field is projected in Mongo for the opposite reason.
@@ -647,6 +667,7 @@ export function toPublicVariantDto(
                     bufferAfterMinutes: variant.serviceConfig.bufferAfterMinutes,
                     priceUnit: servicePriceUnit(variant.serviceConfig.durationMinutes),
                     priceFrom: servicePriceFrom(variant, parent),
+                    locationKind: variant.serviceConfig.location?.kind ?? null,
                 },
             }
             : {}),

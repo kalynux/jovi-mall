@@ -1,3 +1,5 @@
+import { openProposalMatch } from '../domain/reschedule-proposal';
+import { statusChange } from '../domain/booking-status-history';
 import { ClientSession, Types } from 'mongoose';
 import { Booking, IBooking } from '../models/booking.model';
 import { BookingStatus, CreateBookingInput, TimeWindow } from '../types/booking.types';
@@ -7,6 +9,8 @@ import { ProductVariantModel } from '../../catalog/models';
 import { DEFAULT_VARIANT_SIGNATURE } from '../../catalog/domain/services/variants/constants';
 import { CalendarClientFactory } from '../../integrations/calendar/calendar-client.factory';
 import { isCalendarNotConnected } from '../utils/calendar-error.util';
+import { capacityEventDescription } from '../utils/calendar-description.util';
+import { UserModel } from '../../users/user.model';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 
@@ -111,10 +115,18 @@ export class GroupBookingService {
   ): Promise<number> {
     const filter: Record<string, unknown> = {
       productId: new Types.ObjectId(productId.toString()),
-      startAt: window.start,
-      endAt: window.end,
       status: { $in: [BookingStatus.PENDING, BookingStatus.CONFIRMED] },
       deletedAt: null,
+      // A seat in this class, OR an open proposal to move into it — the proposal holds the
+      // seat while the other side decides (plan Part B).
+      $or: [
+        { startAt: window.start, endAt: window.end },
+        {
+          ...openProposalMatch(new Date()),
+          'rescheduleProposal.startAt': window.start,
+          'rescheduleProposal.endAt': window.end,
+        },
+      ],
     };
     if (excludeBookingId) {
       filter._id = { $ne: new Types.ObjectId(excludeBookingId.toString()) };
@@ -179,6 +191,8 @@ export class GroupBookingService {
       priceSnapshot,
       currency,
       requiresPayment,
+      location,
+      access,
     } = input;
 
     const { start, end } = this.slotGenerator.parseSlotId(slotId);
@@ -204,6 +218,7 @@ export class GroupBookingService {
           window: { start, end },
           maxBookings,
           seatsOverride: taken + 1,
+          pendingSeat: { userId: userId.toString(), bookingNumber, metadata },
           idempotencyKey: slotId,
         });
 
@@ -215,11 +230,14 @@ export class GroupBookingService {
           startAt: start,
           endAt: end,
           status: BookingStatus.CONFIRMED,
+          statusHistory: [statusChange(null, BookingStatus.CONFIRMED, { role: 'customer', id: userId.toString() })],
           externalCalendarEventId: sharedEventId ?? undefined,
           metadata,
           priceSnapshot,
           currency: currency || 'XAF',
           requiresPayment: needsPayment,
+          location: location ?? null,
+          access: access ?? null,
         });
       });
     } finally {
@@ -334,6 +352,22 @@ export class GroupBookingService {
   }
 
   /**
+   * Re-renders the shared event of the class `booking` sits in, counting every seat — nothing
+   * excluded, nothing added. For the one-off rewrite of events written before the description
+   * listed each customer and their note (`scripts/rewrite-booking-calendar-events.ts`).
+   */
+  async rerenderSlotEvent(booking: IBooking, maxBookings: number, productTitle: string): Promise<string | null> {
+    return this.syncSlotEvent({
+      vendorId: booking.vendorId.toString(),
+      productId: booking.productId.toString(),
+      productTitle,
+      window: { start: booking.startAt, end: booking.endAt },
+      maxBookings,
+      knownEventId: booking.externalCalendarEventId,
+    });
+  }
+
+  /**
    * Brings one slot's shared `[x/N]` event in line with how many seats are actually taken:
    * updates it, creates it when the first seat lands, and deletes it when the last leaves.
    *
@@ -350,6 +384,8 @@ export class GroupBookingService {
     knownEventId?: string;
     /** Seat count to render instead of querying — for a row that does not exist yet. */
     seatsOverride?: number;
+    /** That not-yet-written row, so its customer and note are listed too. */
+    pendingSeat?: { userId: string; bookingNumber: string; metadata?: unknown };
     /** Ignore this booking when counting: it is leaving this window. */
     excludeBookingId?: string;
     /** Passed to `createEvent` so a retry cannot open a second event for one slot. */
@@ -363,13 +399,42 @@ export class GroupBookingService {
       maxBookings,
       knownEventId,
       seatsOverride,
+      pendingSeat,
       excludeBookingId,
       idempotencyKey,
     } = params;
 
     try {
-      const seats =
-        seatsOverride ?? (await this.countSeatsTaken(productId, window, excludeBookingId));
+      // The seats themselves, not just their count — the shared event lists each
+      // customer with their note, which is otherwise nowhere in the vendor's calendar.
+      const seatRows = await Booking.find({
+        productId: new Types.ObjectId(productId),
+        startAt: window.start,
+        endAt: window.end,
+        status: { $in: [BookingStatus.PENDING, BookingStatus.CONFIRMED] },
+        deletedAt: null,
+        ...(excludeBookingId ? { _id: { $ne: new Types.ObjectId(excludeBookingId) } } : {}),
+      })
+        .select('_id userId bookingNumber metadata')
+        .sort({ createdAt: 1 })
+        .lean();
+      const seats = seatsOverride ?? seatRows.length;
+
+      const attendeeRows = [
+        ...seatRows.map((r) => ({
+          userId: r.userId?.toString(),
+          bookingNumber: r.bookingNumber,
+          bookingId: r._id,
+          metadata: r.metadata,
+        })),
+        ...(pendingSeat ? [{ ...pendingSeat, bookingId: null }] : []),
+      ];
+      const users = await UserModel.find({
+        _id: { $in: attendeeRows.map((a) => a.userId).filter((id): id is string => !!id && Types.ObjectId.isValid(id)) },
+      })
+        .select('login_email')
+        .lean();
+      const emailById = new Map(users.map((u) => [u._id.toString(), u.login_email as string | undefined]));
 
       // Whichever remaining seat carries the id is as good as any — they share one event.
       const existingEventId =
@@ -396,7 +461,11 @@ export class GroupBookingService {
       }
 
       const title = `[${seats}/${maxBookings}] ${productTitle}`;
-      const description = `Capacity booking — ${seats}/${maxBookings} seats filled`;
+      const description = capacityEventDescription(
+        seats,
+        maxBookings,
+        attendeeRows.map((a) => ({ ...a, email: a.userId ? emailById.get(a.userId) : null })),
+      );
 
       if (existingEventId) {
         await calendarClient.updateEvent(existingEventId, {

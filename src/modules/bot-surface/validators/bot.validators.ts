@@ -764,6 +764,12 @@ export const BotBookingCreateSchema = z
         slotId,
         /** The customer's own words about the appointment. Reaches the vendor's calendar. */
         notes: z.string().trim().min(1).max(500).optional(),
+        /**
+         * One of the customer's saved addresses (`addresses_list`). REQUIRED when the service's
+         * `locationKind` is `customer_address` — the vendor comes to them — and ignored otherwise.
+         * Missing → `422 BOOKING_ADDRESS_REQUIRED`: ask which address, never guess the default.
+         */
+        addressId: objectId.optional(),
     })
     .strict();
 

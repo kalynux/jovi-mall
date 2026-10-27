@@ -79,6 +79,16 @@ export class VariantRepositoryMongo extends BaseRepository<IProductVariant, Vari
     return super.findById(id, options);
   }
 
+  async findManyByIds(ids: string[], options?: RepositoryOptions): Promise<Variant[]> {
+    const validIds = ids.filter(id => Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: validIds.map(id => new Types.ObjectId(id)) }, deletedAt: null })
+      .session(options?.session || null)
+      .exec();
+    return docs.map(doc => this.mapper.toDomain(doc));
+  }
+
   async create(variant: Omit<Variant, 'id' | 'createdAt' | 'updatedAt'>, options?: RepositoryOptions): Promise<Variant> {
     const doc = await this.model.create(
       [variant],

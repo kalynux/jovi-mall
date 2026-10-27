@@ -7,6 +7,8 @@ export interface IVariantRepository {
 
   findByProduct(productId: string, options?: RepositoryOptions): Promise<Variant[]>;
   findById(id: string, options?: RepositoryOptions): Promise<Variant | null>;
+  /** Batch read for a page of list rows — one query, missing/deleted ids are simply absent. */
+  findManyByIds(ids: string[], options?: RepositoryOptions): Promise<Variant[]>;
   findBySku(sku: string, options?: RepositoryOptions): Promise<Variant | null>;
   findByOptionSignature(productId: string, signature: string, options?: RepositoryOptions): Promise<Variant | null>;
 

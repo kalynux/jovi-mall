@@ -3,6 +3,17 @@ import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../cor
 import { BookingStatus } from '../types/booking.types';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 import { EarningsPauseSchema, IEarningsPause } from '../../earnings/models/earnings-pause.schema';
+import {
+  APPOINTMENT_LIMITS,
+  APPOINTMENT_LOCATION_KINDS,
+  AppointmentAccessSetting,
+  BookingLocationSnapshot,
+} from '../domain/appointment';
+import {
+  BOOKING_STATUS_ACTOR_ROLES,
+  IBookingStatusChange,
+  STATUS_REASON_MAX,
+} from '../domain/booking-status-history';
 
 export type BookingPaymentStatus =
   | 'unpaid'
@@ -108,6 +119,55 @@ export interface IBooking extends IBaseDocument {
    * dispute, or an administrator). See earnings/models/earnings-pause.schema.ts.
    */
   earningsPause?: IEarningsPause | null;
+
+  /**
+   * Where the appointment happens, frozen when it was booked — see
+   * booking/domain/appointment.ts. `null` on bookings from before 2026-10-26 and on services
+   * whose vendor never set a place.
+   */
+  location?: BookingLocationSnapshot | null;
+  /**
+   * The link and instructions, copied from the service when booked and editable on this booking
+   * alone (owner decision D-5). ⚠ Shown to the customer ONLY through `computeAppointmentAccess`.
+   */
+  access?: AppointmentAccessSetting | null;
+  /** The latest proposal of a new time (Part B of the plan). Kept after it is answered — see the type. */
+  rescheduleProposal?: IRescheduleProposal | null;
+  /**
+   * Every status change, oldest first, with who made it (ADMIN-BOOKINGS-PLAN § 3). Written only
+   * through `applyStatusChange`. Empty on bookings from before 2026-10-27 — "not recorded".
+   */
+  statusHistory?: IBookingStatusChange[];
+}
+
+export const RESCHEDULE_PROPOSAL_STATUSES = ['open', 'accepted', 'declined', 'withdrawn', 'lapsed'] as const;
+export type RescheduleProposalStatus = (typeof RESCHEDULE_PROPOSAL_STATUSES)[number];
+
+/**
+ * A new time one side asked for and the other must answer (owner decisions D-8, D-9).
+ *
+ * - `proposedBy: 'vendor'` — every move a VENDOR makes. The customer accepts or declines.
+ * - `proposedBy: 'customer'` — a customer's move of a `manual`-mode service, which the vendor
+ *   chose to approve booking by booking. A calendar/capacity move applies at once instead.
+ *
+ * While `open` the booking keeps its ORIGINAL time, and the proposed interval is held as busy so
+ * nobody else books it. It lapses — with the original time standing — once `expiresAt` passes
+ * with no answer. That is checked on read; no job runs.
+ *
+ * Kept after it is answered rather than cleared: a `declined` vendor proposal is what lets the
+ * customer cancel with a full refund whatever the cancellation policy says (D-9).
+ */
+export interface IRescheduleProposal {
+  status: RescheduleProposalStatus;
+  proposedBy: 'vendor' | 'customer';
+  slotId: string;
+  startAt: Date;
+  endAt: Date;
+  previousStartAt: Date;
+  previousEndAt: Date;
+  proposedAt: Date;
+  expiresAt: Date;
+  answeredAt: Date | null;
 }
 
 const BookingSchema = new Schema<IBooking>(
@@ -227,6 +287,76 @@ const BookingSchema = new Schema<IBooking>(
       default: undefined,
     },
     earningsPause: { type: EarningsPauseSchema, default: null },
+    location: {
+      type: new Schema(
+        {
+          kind: { type: String, enum: [...APPOINTMENT_LOCATION_KINDS], required: true },
+          label: { type: String, default: null },
+          addressLine1: { type: String, default: null },
+          addressLine2: { type: String, default: null },
+          city: { type: String, default: null },
+          state: { type: String, default: null },
+          country: { type: String, default: null },
+          formattedAddress: { type: String, default: null },
+          // A plain pair, NOT a GeoJSON point: nothing queries it, and a 2dsphere-indexed
+          // path holding null is what bricks a document (see the GeoPoint memory note).
+          coordinates: { type: [Number], default: undefined },
+          sourceAddressId: { type: String, default: null },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+    access: {
+      type: new Schema(
+        {
+          instructions: { type: String, default: null, maxlength: APPOINTMENT_LIMITS.instructionsMax },
+          meetingUrl: { type: String, default: null, maxlength: APPOINTMENT_LIMITS.meetingUrlMax },
+          revealMinutesBefore: {
+            type: Number,
+            default: APPOINTMENT_LIMITS.revealMinutesDefault,
+            min: 0,
+            max: APPOINTMENT_LIMITS.revealMinutesMax,
+          },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+    rescheduleProposal: {
+      type: new Schema(
+        {
+          status: { type: String, enum: [...RESCHEDULE_PROPOSAL_STATUSES], required: true },
+          proposedBy: { type: String, enum: ['vendor', 'customer'], required: true },
+          slotId: { type: String, required: true },
+          startAt: { type: Date, required: true },
+          endAt: { type: Date, required: true },
+          previousStartAt: { type: Date, required: true },
+          previousEndAt: { type: Date, required: true },
+          proposedAt: { type: Date, required: true },
+          expiresAt: { type: Date, required: true },
+          answeredAt: { type: Date, default: null },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+    statusHistory: {
+      type: [
+        new Schema(
+          {
+            from: { type: String, enum: [...Object.values(BookingStatus)], default: null },
+            to: { type: String, enum: [...Object.values(BookingStatus)], required: true },
+            at: { type: Date, required: true },
+            actorRole: { type: String, enum: [...BOOKING_STATUS_ACTOR_ROLES], required: true },
+            actorId: { type: String, default: null },
+            reason: { type: String, default: null, maxlength: STATUS_REASON_MAX },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
     ...BaseSchemaFields,
   },
   BaseSchemaOptions
@@ -255,6 +385,23 @@ BookingSchema.index(
   { bookingNumber: 1 },
   { unique: true, partialFilterExpression: { bookingNumber: { $type: 'string' } } }
 );
+
+/**
+ * ⛔ `statusHistory` never leaves this service in a serialised booking (ADMIN-BOOKINGS-PLAN § 3).
+ * The vendor endpoints answer with the document itself (`res.json({ data: booking })`), and the
+ * history names administrators' account ids and the reasons they gave. wi-admin reads the
+ * collection directly and is unaffected; the customer guard (`toCustomerBookingShape`) strips it
+ * separately, for the paths that build plain objects. Showing it to a vendor is a decision, not a
+ * side effect of adding the field.
+ */
+BookingSchema.set('toJSON', {
+  ...BaseSchemaOptions.toJSON,
+  transform: (doc: unknown, ret: any) => {
+    const out = BaseSchemaOptions.toJSON.transform(doc, ret);
+    delete out.statusHistory;
+    return out;
+  },
+});
 
 // Pre-save hook: Auto-mark free bookings as paid
 BookingSchema.pre('save', function (next) {

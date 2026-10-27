@@ -75,6 +75,8 @@ const SITUATION_PREFERENCE: Partial<
     'booking.created': 'bookingUpdates',
     'booking.confirmed': 'bookingUpdates',
     'booking.rescheduled': 'bookingUpdates',
+    'booking.reschedule_proposed': 'bookingUpdates',
+    'booking.reschedule_declined': 'bookingUpdates',
     'booking.completed': 'bookingUpdates',
     'booking.reminder': 'bookingReminders',
     'order.created': 'orderUpdates',
@@ -443,13 +445,86 @@ export class CustomerNotificationEventHandler {
         });
     }
 
+    /** `booking.reschedule_proposed` — the customer hears only of the VENDOR's proposals (D-9). */
+    async handleBookingRescheduleProposed(event: DomainEvent): Promise<void> {
+        const p = event.payload as {
+            bookingId: string;
+            userId: string;
+            proposedBy: 'vendor' | 'customer';
+            productTitle?: string;
+            vendorName?: string | null;
+            startAt: string | Date;
+            previousStartAt: string | Date;
+            expiresAt: string | Date;
+        };
+        if (p.proposedBy !== 'vendor') return;
+
+        const customer = await this.resolveCustomerByUserId(undefined, p.userId);
+        if (!customer) return;
+        const lang = resolveLanguage(customer);
+
+        await this.notify({
+            situation: 'booking.reschedule_proposed',
+            customerId: customer._id.toString(),
+            aggregateType: 'booking',
+            aggregateId: p.bookingId,
+            idempotencyKey: `customer.booking.reschedule_proposed:${p.bookingId}:${new Date(p.startAt).getTime()}`,
+            context: {
+                bookingId: p.bookingId,
+                serviceName: p.productTitle ?? this.genericService(lang),
+                vendorName: p.vendorName ?? this.genericVendor(lang),
+                startAt: this.formatMoment(p.startAt, customer, lang),
+                previousStartAt: this.formatMoment(p.previousStartAt, customer, lang),
+                expiresAt: this.formatMoment(p.expiresAt, customer, lang)
+            }
+        });
+    }
+
+    /**
+     * `booking.reschedule_answered` — the customer hears the vendor's answer to THEIR request
+     * (D-8). An acceptance already reaches them as `booking.rescheduled` (the new time, both
+     * times quoted), so only a decline is sent from here.
+     */
+    async handleBookingRescheduleAnswered(event: DomainEvent): Promise<void> {
+        const p = event.payload as {
+            bookingId: string;
+            userId: string;
+            proposedBy: 'vendor' | 'customer';
+            answer: 'accepted' | 'declined';
+            productTitle?: string;
+            vendorName?: string | null;
+            proposedStartAt: string | Date;
+            startAt: string | Date;
+        };
+        if (p.proposedBy !== 'customer' || p.answer !== 'declined') return;
+
+        const customer = await this.resolveCustomerByUserId(undefined, p.userId);
+        if (!customer) return;
+        const lang = resolveLanguage(customer);
+
+        await this.notify({
+            situation: 'booking.reschedule_declined',
+            customerId: customer._id.toString(),
+            aggregateType: 'booking',
+            aggregateId: p.bookingId,
+            idempotencyKey: `customer.booking.reschedule_declined:${p.bookingId}:${new Date(p.proposedStartAt).getTime()}`,
+            context: {
+                bookingId: p.bookingId,
+                serviceName: p.productTitle ?? this.genericService(lang),
+                vendorName: p.vendorName ?? this.genericVendor(lang),
+                proposedStartAt: this.formatMoment(p.proposedStartAt, customer, lang),
+                startAt: this.formatMoment(p.startAt, customer, lang)
+            }
+        });
+    }
+
     async handleBookingCancelled(event: DomainEvent): Promise<void> {
         const p = event.payload as {
             bookingId: string;
             userId: string;
             productTitle?: string;
             startAt: string | Date;
-            cancelledByRole?: 'customer' | 'vendor' | 'system';
+            cancelledByRole?: 'customer' | 'vendor' | 'system' | 'admin';
             paymentStatus?: string;
             priceSnapshot?: number;
             currency?: string;
@@ -1614,6 +1689,17 @@ export class CustomerNotificationEventHandler {
                 pt: 'o sistema (o pagamento não foi concluído a tempo)',
                 es: 'el sistema (el pago no se completó a tiempo)',
                 ar: 'النظام (لم يكتمل الدفع في الوقت المحدد)'
+            });
+        }
+        // An administrator settling a case (ADMIN-BOOKINGS-PLAN § 4). Saying "the provider" here
+        // would blame the vendor for a decision the platform made.
+        if (role === 'admin') {
+            return this.line(lang, {
+                en: 'Wi-Mall support',
+                fr: 'le support Wi-Mall',
+                pt: 'o apoio Wi-Mall',
+                es: 'el soporte de Wi-Mall',
+                ar: 'دعم Wi-Mall'
             });
         }
         return this.line(lang, {

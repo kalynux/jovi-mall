@@ -1,3 +1,10 @@
+import {
+    AppointmentAccessSetting,
+    BookingLocationSnapshot,
+    CustomerAppointmentFields,
+    ProposalLike,
+    customerAppointmentFields,
+} from '../../booking/domain/appointment';
 import { GeoCandidate } from '../../../core/geocoding';
 import { ICustomerSavedAddress } from '../../customers/customer.model';
 import { GetCustomerProfileResponseDto } from '../../customers/dto/customer-profile.dto';
@@ -819,6 +826,15 @@ export interface BotBookingDto {
      * will not arrive. A card refund has `feeAmount: 0`.
      */
     refund: CustomerRefundBlock | null;
+    /**
+     * Where it happens, and the link + instructions — through the SAME gate as the website
+     * (`customerAppointmentFields`): the address once the vendor accepted, the link only from
+     * the vendor's margin before the start and only once PAID. `null` when there is none.
+     */
+    location: CustomerAppointmentFields['location'];
+    access: CustomerAppointmentFields['access'];
+    /** A new time waiting for an answer (or the last one answered). */
+    rescheduleProposal: CustomerAppointmentFields['rescheduleProposal'];
 }
 
 /**
@@ -862,7 +878,10 @@ export function toBotBookingDto(booking: {
     cancelledAt?: Date | string | null;
     cancelledReason?: string | null;
     settlement?: { balanceDue?: number; balancePaid?: number } | null;
-}, refund: CustomerRefundBlock | null = null): BotBookingDto {
+    location?: BookingLocationSnapshot | null;
+    access?: AppointmentAccessSetting | null;
+    rescheduleProposal?: ProposalLike | null;
+}, refund: CustomerRefundBlock | null = null, now: Date = new Date()): BotBookingDto {
     const settlement = booking.settlement ?? null;
     const outstanding = Math.max(0, (settlement?.balanceDue ?? 0) - (settlement?.balancePaid ?? 0));
 
@@ -885,6 +904,16 @@ export function toBotBookingDto(booking: {
         cancelledAt: booking.cancelledAt ? new Date(booking.cancelledAt).toISOString() : null,
         cancelledReason: booking.cancelledReason ?? null,
         refund,
+        ...customerAppointmentFields({
+            status: booking.status,
+            paymentStatus: booking.paymentStatus,
+            requiresPayment: booking.requiresPayment,
+            startAt: new Date(booking.startAt),
+            endAt: new Date(booking.endAt),
+            access: booking.access ?? null,
+            location: booking.location ?? null,
+            rescheduleProposal: booking.rescheduleProposal ?? null,
+        }, now),
     };
 }
 

@@ -1,3 +1,5 @@
+import type { AppointmentAccessSetting, BookingLocationSnapshot } from '../domain/appointment';
+
 export interface TimeWindow {
   start: Date;
   end: Date;
@@ -20,7 +22,13 @@ export interface SlotLockData {
 }
 
 export interface CreateBookingInput {
+  /** The id of the booked interval — one slot's own id, or a span id for consecutive slots. */
   slotId: string;
+  /**
+   * The slots the caller holds for this booking, each under its own checkout hold. Omitted means
+   * `[slotId]`. Every one is asserted held before the write and released after it.
+   */
+  heldSlotIds?: string[];
   userId: string;
   productId: string;
   vendorId: string;
@@ -41,6 +49,10 @@ export interface CreateBookingInput {
    *   slot sharing one calendar event, via `createCapacityBooking`.
    */
   bookingMode?: 'calendar' | 'manual' | 'capacity';
+  /** Where it happens, frozen now — `AppointmentLocationService.snapshotForBooking`. */
+  location?: BookingLocationSnapshot | null;
+  /** The service's link and instructions, copied now — `accessSnapshotFor`. */
+  access?: AppointmentAccessSetting | null;
 }
 
 export enum BookingStatus {

@@ -7,8 +7,8 @@ import { ERROR_CODES } from '../../../core/error-codes';
 import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
 import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { botChrome, BotChromeKey } from '../domain/bot-chrome-copy';
-import { botStorefrontLink, surfacePath } from '../domain/bot-list-window';
-import { inAppScreenUrl } from '../domain/inapp-url';
+import { surfacePath } from '../domain/bot-list-window';
+import { screenReplyIntent } from '../../command-bus/command-reply';
 import {
     InAppListingQuery,
     InAppSurfaceKind,
@@ -324,20 +324,20 @@ export function respondWithScreen(
         textKey?: BotChromeKey;
     },
 ): void {
-    const label = botChrome(input.labelKey, input.language);
-    const text = botChrome(input.textKey ?? screenPromptOf(input.kind), input.language);
-
-    const screenUrl = inAppScreenUrl(input.kind, input.handle, input.language);
-    if (screenUrl) {
-        setBotReply(req, { kind: 'inapp', text, label, url: screenUrl });
-        return;
-    }
-
-    const fallbackUrl = input.fallbackPath
-        ? botStorefrontLink(input.fallbackPath, input.language)
-        : null;
-
-    setBotReply(req, fallbackUrl ? { kind: 'link', text, label, url: fallbackUrl } : null);
+    /**
+     * ⚠ **Delegates to `screenReplyIntent`** — the one composition its own header says this door
+     * must share. Until 2026-10-26 the two were copies, and neither attached the WhatsApp form; a
+     * second copy is how one door would open the form and the other a browser for the same screen.
+     */
+    setBotReply(req, screenReplyIntent({
+        kind: input.kind,
+        handle: input.handle,
+        language: input.language,
+        labelKey: input.labelKey,
+        fallbackPath: input.fallbackPath,
+        text: botChrome(input.textKey ?? screenPromptOf(input.kind), input.language),
+        channel: req.bot!.envelope.channel,
+    }));
 }
 
 /**

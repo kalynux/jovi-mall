@@ -135,6 +135,11 @@ export class TemplateRegistry {
             // until then out-of-window sends for this situation fail.
             ['vendor_booking_created', 5, true, 'Vendor: new booking received'],
             ['vendor_booking_cancelled', 1, true, 'Vendor: booking cancelled'],
+            // Appointment moves (2026-10-26, owner decisions D-8 / D-9).
+            ['vendor_booking_rescheduled', 5, true, 'Vendor: a customer moved a booking'],
+            ['vendor_booking_reschedule_requested', 6, true, 'Vendor: a customer asks to move a booking'],
+            ['vendor_booking_reschedule_accepted', 4, true, 'Vendor: the customer accepted the new time'],
+            ['vendor_booking_reschedule_declined', 4, true, 'Vendor: the customer declined the new time'],
             ['vendor_payment_partial', 2, true, 'Vendor: partial payment received'],
             ['vendor_payment_full', 2, true, 'Vendor: full payment received'],
             ['vendor_storage_alert', 3, true, 'Vendor: media storage threshold alert'],
@@ -196,6 +201,8 @@ export class TemplateRegistry {
             ['customer_booking_created', 3, true, 'Customer: booking requested'],
             ['customer_booking_confirmed', 3, true, 'Customer: vendor accepted the booking'],
             ['customer_booking_rescheduled', 3, true, 'Customer: booking moved to a new time'],
+            ['customer_booking_reschedule_proposed', 5, true, 'Customer: the vendor proposes a new time (Accept / Keep buttons)'],
+            ['customer_booking_reschedule_declined', 4, true, 'Customer: the vendor declined their new-time request'],
             ['customer_booking_cancelled', 3, true, 'Customer: booking cancelled'],
             ['customer_booking_completed', 3, true, 'Customer: appointment completed and settled'],
             ['customer_booking_reminder', 3, true, 'Customer: appointment reminder'],

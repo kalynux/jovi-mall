@@ -40,6 +40,7 @@ import {
 } from '../../src/modules/bot-surface/miniapp/surfaces/booking-rows';
 import { inAppCopy } from '../../src/modules/bot-surface/miniapp/inapp-copy';
 import { AppError } from '../../src/core/errors';
+import { composeTypedNumber } from '../../src/core/validation/dial-codes';
 import {
     bookingPayActionId,
     parseBookingPayArgument,
@@ -364,6 +365,41 @@ async function main(): Promise<void> {
         return page.includes('copy.paySent')
             && !/\bpaid\b|payment (failed|received|confirmed|complete)|\bsuccessful\b/i.test(page);
     });
+
+    /**
+     * ⭐ **The country picker (2026-10-27)** — the checkout page's control, on the booking pay page.
+     * Until then a customer paying from Telegram had to type `+237` themselves, which most did not:
+     * the WhatsApp form and `co.html` had a picker and this page alone did not. The read sends the
+     * rows and the starting country, the page sends `dial`, and the route composes with the same
+     * `composeTypedNumber` the checkout and the WhatsApp form use.
+     */
+    assert('⭐ the Telegram pay page has the country picker, and the route composes with it', () => {
+        const page = read('src/modules/bot-surface/miniapp/public/bp.html');
+        const core = stripped(CORE);
+        const payRead = spanOf(core, 'export async function readBookingPayment(', 'export async function payBooking(');
+        const screens = stripped(SCREENS);
+        return page.includes('<select id="dial"')
+            && page.includes('el.dial.value = data.dialCountry')
+            && /dial: el\.dial\.hidden \? null : el\.dial\.value/.test(page)
+            && payRead.includes('dialOptions: dialOptions(session.language)')
+            && /dial: z\.unknown\(\)\.optional\(\)/.test(screens)
+            && screens.includes('composeTypedNumber(body.phone, body.dial)')
+            && composeTypedNumber('672745831', 'CM') === '+237672745831';
+    });
+
+    /**
+     * ⛔ **The payment-code regexes had lost their backslashes** — `/^d{4,8}$/` on both pay pages,
+     * which matches the letter `d` four times and no real code. So an Orange Money customer typed
+     * their code, the page sent `null`, and the server asked for the code again. Found 2026-10-27.
+     */
+    assert('⛔ both pay pages read the payment code with real \\d and \\s, not a backslash-stripped copy', () =>
+        ['bp', 'co'].every((kind) => {
+            const page = read(`src/modules/bot-surface/miniapp/public/${kind}.html`);
+            return page.includes('/^\\d{4,8}$/.test(digits)')
+                && page.includes('.replace(/\\s+/g, "")')
+                && !page.includes('/^d{4,8}$/')
+                && !page.includes('replace(/s+/g');
+        }));
 
     console.log('\n══ § 5 · The words ══');
 
@@ -761,7 +797,12 @@ async function phase6(): Promise<void> {
      * bare form `orderId: null` — a support request needs no order. Verified 2026-09-27, not
      * assumed; `pay` is absent on purpose, and that absence is this assertion.
      */
-    const SERVES_A_BOOKING = new Set(['bpay', 'book', 'open:bl', 'tkt']);
+    /*
+     * `yes:bkprop` / `no:bkprop` (2026-10-26, D-9): accept / decline the vendor's proposal of a new
+     * time, drawn by `booking.reschedule_proposed`; both take the booking id and answer it through
+     * `BookingService.answerRescheduleProposal`.
+     */
+    const SERVES_A_BOOKING = new Set(['bpay', 'book', 'open:bl', 'tkt', 'yes:bkprop', 'no:bkprop']);
     assert('⛔ no booking.* notification draws a token whose handler cannot serve a booking', () => {
         const bookingSituations = Object.keys(CUSTOMER_NOTIFICATION_CATALOG).filter((s) => s.startsWith('booking.'));
         const tokens = bookingSituations.flatMap((s) =>

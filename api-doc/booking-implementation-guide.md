@@ -104,7 +104,7 @@ Everything after the purchase. All under `/api/customer/bookings`, customer role
 - **Auth:** send the `access_token` cookie (browser) or `Authorization: Bearer <token>`. The calendar **connect** step must run as a browser navigation so it carries the cookie and can redirect.
 - **Success envelope:** `{ "success": true, "data": ... }` (booking management adds `meta` for lists).
 - **Error envelope:** `{ "success": false, "requestId": "...", "error": { "code", "message", "statusCode", "details?" } }`. Match on `error.code`. Validation failures use `VALIDATION_ERROR` with `details.fields: [{ path, message, code }]`.
-- **Money:** `priceSnapshot` / `price.amount` are in the smallest currency unit (e.g. `5000` = 50.00 XAF).
+- **Money:** `priceSnapshot` / `price.amount` are whole XAF francs, the same unit as the variant `price` the vendor typed (`5000` = 5 000 XAF — XAF has no cents; do **not** divide by 100. Corrected 2026-10-26: this line used to say `5000` = 50.00 XAF, and the vendor dashboard showed a 5 000 XAF booking as 50 XAF).
 
 ---
 

@@ -6,6 +6,7 @@ import { OrderTimelineRepository } from '../../orders/order-timeline.repository'
 import { TimelineActorType } from '../../orders/order-timeline.model';
 import { Booking } from '../../booking/models/booking.model';
 import { BookingStatus } from '../../booking/types/booking.types';
+import { applyStatusChange } from '../../booking/domain/booking-status-history';
 import { BookingCalendarSyncService } from '../../booking/services/booking-calendar-sync.service';
 import { earningsRefundService } from '../../earnings/services/earnings-refund.service';
 import { planPurchaseService } from '../../billing/services/plan-purchase.service';
@@ -395,7 +396,7 @@ export class PaymentDisputeService {
     if (booking.paymentStatus === 'refunded') return; // already unwound
 
     booking.paymentStatus = 'refunded';
-    booking.status = BookingStatus.CANCELLED;
+    applyStatusChange(booking, BookingStatus.CANCELLED, { role: 'system', id: null }, `Payment ${reason}`);
     booking.cancelledAt = new Date();
     booking.cancelledReason = `Payment ${reason} (Stripe dispute ${disputeId ?? 'n/a'})`;
     await booking.save();

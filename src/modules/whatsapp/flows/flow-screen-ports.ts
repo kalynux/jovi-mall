@@ -10,6 +10,8 @@ import {
 } from '../../bot-surface/domain/bot-booking-copy';
 import {
     confirmBooking,
+    payBooking,
+    readBookingPayment,
     readBookingPicker,
     readCustomerBookings,
     type BookingConfirmed,
@@ -45,6 +47,8 @@ export const flowScreenPorts: FlowScreenPorts = Object.freeze({
     executePurchase,
     readBookingPicker,
     confirmBooking,
+    readBookingPayment,
+    payBooking,
     readCustomerBookings,
     bookingWords: bookingScreenCopy,
     /**
@@ -54,7 +58,7 @@ export const flowScreenPorts: FlowScreenPorts = Object.freeze({
      * the details removed, which renders "Booked: , ." and was nearly shipped that way.
      */
     bookingReceipt: (confirmed: BookingConfirmed, language: string | null) => bookingChatReceipt(
-        { moved: confirmed.moved, awaitingShop: confirmed.awaitingShop },
+        { moved: confirmed.moved, awaitingShop: confirmed.awaitingShop, requested: confirmed.requested },
         { reference: confirmed.reference, when: confirmed.when, service: confirmed.service },
         language,
     ),

@@ -86,12 +86,16 @@ export class BookingRefundService {
    * @param initiatedBy The acting user's id.
    * @param initiatedByRole Who cancelled — recorded on the request's name for the audit trail.
    * @param reason Free-text reason carried onto the refund and any ticket.
+   * @param feesPaidBy Who bears the payment + transfer fees. Absent = the refund service's own
+   *   default (the customer). `vendor` gives the customer 100% back — used when a customer cancels
+   *   after declining the VENDOR's proposal of a new time (owner decision D-9).
    */
   async refundCancelledBooking(
     booking: IBooking,
     initiatedBy: string,
     initiatedByRole: 'customer' | 'vendor' | 'admin',
-    reason?: string
+    reason?: string,
+    feesPaidBy?: 'customer' | 'vendor'
   ): Promise<BookingRefundOutcome> {
     const bookingId = booking._id.toString();
 
@@ -127,6 +131,7 @@ export class BookingRefundService {
         // person who cancelled is recorded, not made the requester: a customer may not approve.
         requestedBy: { id: initiatedBy || null, role: 'system', name: `booking cancelled by ${initiatedByRole}` },
         approveNow: true,
+        ...(feesPaidBy ? { feesPaidBy } : {}),
       });
     } catch (error) {
       const code = error instanceof AppError ? error.code : undefined;

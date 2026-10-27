@@ -269,7 +269,11 @@ assert('the customer BOOKING view projects the same block, from the completion d
 
 assert('⛔ …and the internal pause record (who paused, their note) never reaches the customer', () => {
   const ctl = code('modules/booking/controllers/customer-booking.controller.ts');
-  return /const \{ earningsPause: _internal, \.\.\.visible \} = plain;/.test(ctl) && ctl.includes('return { ...visible,');
+  // Since 2026-10-26 `visible` goes on through the appointment projection (`toCustomerBookingShape`),
+  // which only REMOVES more private fields — the pause record is still gone before it.
+  return /const \{ earningsPause: _internal, \.\.\.visible \} = plain;/.test(ctl)
+    && ctl.includes('const shaped = toCustomerBookingShape(visible,')
+    && ctl.includes('return { ...shaped,');
 });
 
 assert('a booking is dated ONCE at completion, and its hold starts from that same date', () => {

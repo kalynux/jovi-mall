@@ -233,6 +233,10 @@ const EXPECTED_WA_PARAMS: Record<CustomerNotificationType, number> = {
     'ticket.resolved': 2,
     // In-window-only: no template, so no template parameters.
     'cart.abandoned': 0,
+    // Appointment moves (2026-10-26): vendorName, serviceName, previousStartAt, startAt, expiresAt.
+    'booking.reschedule_proposed': 5,
+    // vendorName, serviceName, proposedStartAt, startAt.
+    'booking.reschedule_declined': 4,
     // reason + expiresAt (ADR-A10). Both always filled — each has a localized fallback.
     'account.closure_requested': 2
 };
@@ -299,10 +303,11 @@ function main(): void {
     // 35 since 2026-10-04 (W-E2): `order.delivery_fee.refund_settled`, the confirmation refund_pending promised.
     // 46 since 2026-10-05 (refund flow, REFUND-FLOW-PLAN § 8): six `order.refund.*` + five `booking.refund.*`.
     // 46 → 47 on 2026-10-14: + order.delivery_fee.proposal_declined (the customer's own proposal).
-    assert('catalog and model enum list the same 47 situations', () => {
+    // 47 → 49 on 2026-10-26: + booking.reschedule_proposed / booking.reschedule_declined (D-8, D-9).
+    assert('catalog and model enum list the same 49 situations', () => {
         const catalog = Object.keys(CUSTOMER_NOTIFICATION_CATALOG).sort();
         const model = [...CUSTOMER_NOTIFICATION_TYPES].sort();
-        return catalog.length === 47 && JSON.stringify(catalog) === JSON.stringify(model);
+        return catalog.length === 49 && JSON.stringify(catalog) === JSON.stringify(model);
     });
 
     // The aggregate enum is spread from CUSTOMER_AGGREGATE_TYPES rather than hand-kept —
@@ -741,7 +746,7 @@ function main(): void {
         // Mirrors the handler's SITUATION_PREFERENCE table by construction: these
         // situations must be absent from it, so no setting can silence them.
         const gated = new Set<CustomerNotificationType>([
-            'booking.created', 'booking.confirmed', 'booking.rescheduled', 'booking.completed',
+            'booking.created', 'booking.confirmed', 'booking.rescheduled', 'booking.completed', 'booking.reschedule_proposed', 'booking.reschedule_declined',
             'booking.reminder', 'order.created', 'order.shipped', 'order.out_for_delivery',
             'order.delivered', 'order.delivery_failed', 'cart.abandoned'
         ]);
@@ -750,7 +755,7 @@ function main(): void {
 
     assert('every situation is either gated or explicitly unmutable', () => {
         const gated = new Set<CustomerNotificationType>([
-            'booking.created', 'booking.confirmed', 'booking.rescheduled', 'booking.completed',
+            'booking.created', 'booking.confirmed', 'booking.rescheduled', 'booking.completed', 'booking.reschedule_proposed', 'booking.reschedule_declined',
             'booking.reminder', 'order.created', 'order.shipped', 'order.out_for_delivery',
             'order.delivered', 'order.delivery_failed', 'cart.abandoned'
         ]);

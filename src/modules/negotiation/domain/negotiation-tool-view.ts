@@ -35,6 +35,7 @@
  */
 
 import { BargainRange, isBargainEffective } from '../../catalog/domain/services/bargain-price.rule';
+import { ProductType } from '../../catalog/models/product.model';
 
 /**
  * The platform's single currency.
@@ -65,7 +66,7 @@ export interface NegotiationWindow {
  * number, and never from `sellable`.
  */
 export interface NegotiationStock {
-    /** Units on hand. `null` when the variant is infinite-stock — not zero. */
+    /** Units on hand. `null` when the variant is infinite-stock or a service — not zero. */
     onHand: number | null;
     isInfinite: boolean;
     /** Whether an order for this variant would be accepted today. */
@@ -152,8 +153,13 @@ export function withinBudget(variant: Pick<VariantLike, 'price'>, budget: number
  * `PublicCatalogRepositoryMongo.variantJoinStages`, which is the definition a shopper is
  * already being shown. A tool that disagreed with the grid would have the sub-agent
  * refusing a sale the cart would have accepted.
+ *
+ * ⚠ **Including its service exception**: a service is scheduled, not stocked, so it is always
+ * `sellable` with no count (`variantInStock` in `public-product.dto.ts` says why). Without it
+ * every service read as sold out here, since no write path ever moves a service's `stock`.
  */
-export function stockOf(variant: VariantLike): NegotiationStock {
+export function stockOf(variant: VariantLike, productType: ProductType): NegotiationStock {
+    if (productType === 'service') return { onHand: null, isInfinite: false, sellable: true };
     const isInfinite = variant.isInfiniteStock === true;
     const onHand = isInfinite ? null : (variant.stock ?? 0);
     return {
