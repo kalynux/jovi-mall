@@ -18,7 +18,7 @@ import { REVIEW_ACTION_HANDLERS } from './bot-review.controller';
 import { BOOKING_ACTION_HANDLERS } from './bot-booking.controller';
 import { BOOKING_ADDRESS_ACTION_HANDLERS } from './bot-booking-address.controller';
 import { bookingAddressStepStore } from '../services/booking-address-step.store';
-import { BOOKING_ADDRESS_CONTEXT } from '../domain/bot-action-id';
+import { continuesBookingAddressStep } from '../domain/bot-action-id';
 import { IDENTITY_ACTION_HANDLERS } from './bot-identity.controller';
 import { DELIVERY_FEE_ACTION_HANDLERS } from './bot-delivery-fee.controller';
 
@@ -180,7 +180,7 @@ export class BotActionController {
          * Yes buttons and the saved-address tap (which clears it itself) leave it alone.
          * Best-effort, like the clear above: the step lapses on its own in fifteen minutes.
          */
-        if (!keepsBookingAddressStep(token)) {
+        if (!continuesBookingAddressStep(token)) {
             try {
                 await bookingAddressStepStore.clear({ userId: caller.userId, channel: req.bot!.envelope.channel });
             } catch (error) {
@@ -229,11 +229,6 @@ export class BotActionController {
  * `test:inapp-purchase` pins that the door resolves the caller before anything parses a token, by
  * position in this file.
  */
-/** The taps that continue the appointment address step rather than leaving it. */
-function keepsBookingAddressStep(token: string): boolean {
-    return token.startsWith(`yes:${BOOKING_ADDRESS_CONTEXT}:`) || token.startsWith('open:bk:');
-}
-
 async function routeTap(req: Request, res: Response, token: string): Promise<void> {
     const parsed = parseBotActionId(token);
     if (!parsed) throw unknownBotAction();

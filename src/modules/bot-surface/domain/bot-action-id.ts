@@ -624,6 +624,21 @@ export function bookingAddressCancelActionId(): string {
     return declineActionId(BOOKING_ADDRESS_CONTEXT);
 }
 
+/**
+ * Does this tap CONTINUE the appointment address step, rather than leave it? The step's own Yes
+ * buttons (`yes:bkadr:…`) and a picker tap (`open:bk:…`, which ends the step itself). Every other
+ * tap ends it — see `BotActionController.dispatch`.
+ *
+ * Decided through `parseBotActionId`, never by matching token text: the grammar has one owner.
+ */
+export function continuesBookingAddressStep(token: string): boolean {
+    const parsed = parseBotActionId(token);
+    if (!parsed) return false;
+    const [subKey] = parsed.argument.split(':');
+    return (parsed.verb === 'yes' && subKey === BOOKING_ADDRESS_CONTEXT)
+        || (parsed.verb === 'open' && subKey === 'bk');
+}
+
 /** The argument of a `bpay:` token, or null when it is not one this service could have drawn. */
 export function parseBookingPayArgument(
     argument: string,

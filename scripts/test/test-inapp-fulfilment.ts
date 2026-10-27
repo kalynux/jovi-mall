@@ -1585,6 +1585,10 @@ function tokenContainmentSection(): void {
             // a controller a second time. Every one is 100% keys and 0 composed.
             'modules/bot-surface/controllers/bot-account.controller.ts': { shape: 'keys-only', reason: 'registry keys' },
             'modules/bot-surface/controllers/bot-booking.controller.ts': { shape: 'keys-only', reason: 'registry keys' },
+            // `'yes:bkadr'` / `'no:bkadr'` (2026-10-27), the appointment address step's buttons. The
+            // tokens are built by `bookingAddressStepActionId` / `bookingAddressCancelActionId` and
+            // parse-tested in test:bot-booking-address § 3.
+            'modules/bot-surface/controllers/bot-booking-address.controller.ts': { shape: 'keys-only', reason: 'registry keys' },
             // `'yes:co'` / `'no:co'` (2026-09-22). The tokens themselves are composed in
             // `domain/bot-checkout-actions.ts` by builders, and parse-tested in test:inapp-checkout § 13.
             'modules/bot-surface/controllers/bot-checkout.controller.ts': { shape: 'keys-only', reason: 'registry keys' },

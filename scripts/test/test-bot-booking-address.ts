@@ -27,6 +27,7 @@ import {
     bookingAddressStepActionId,
     bookingPickerAtAddressActionId,
     bookingPlaceActionId,
+    continuesBookingAddressStep,
     parseBotActionId,
 } from '../../src/modules/bot-surface/domain/bot-action-id';
 import { actionKeyOf } from '../../src/modules/bot-surface/domain/bot-action-dispatch';
@@ -313,8 +314,13 @@ function main(): void {
         ctl.includes("if (!saved.some((a) => String(a._id) === addressId)) throw unknownBotAction();"));
 
     assert('⛔ any other tap ends the step; only the step\'s own Yes and open:bk keep it', () =>
-        action.includes('if (!keepsBookingAddressStep(token)) {')
-        && action.includes("return token.startsWith(`yes:${BOOKING_ADDRESS_CONTEXT}:`) || token.startsWith('open:bk:');"));
+        action.includes('if (!continuesBookingAddressStep(token)) {')
+        && continuesBookingAddressStep(bookingAddressStepActionId('typed'))
+        && continuesBookingAddressStep(bookingAddressStepActionId('nodesc'))
+        && continuesBookingAddressStep(bookingPickerAtAddressActionId(HEX, HEX2))
+        && !continuesBookingAddressStep(bookingAddressCancelActionId())
+        && !continuesBookingAddressStep(bookingPlaceActionId(HEX))
+        && !continuesBookingAddressStep('not a token'));
 
     assert('⛔ a command the platform answers ends the step', () =>
         command.includes("if (outcome.kind !== 'to_model') {") && command.includes('bookingAddressStepStore.clear('));
