@@ -8,6 +8,7 @@ import { ERROR_CODES } from '../../../core/error-codes';
 import { currentRequestContext } from '../../../core/logging/request-context';
 import { IBooking } from '../models/booking.model';
 import { adminBookingService } from '../services/admin-booking.service';
+import type { AdminCancelRefund } from '../domain/admin-cancel-refund';
 
 /**
  * Booking administration — the write surface wi-admin delegates to (`/api/internal/admin/bookings`,
@@ -51,6 +52,14 @@ function ack(booking: IBooking) {
   };
 }
 
+const CANCEL_MESSAGES: Record<AdminCancelRefund, string> = {
+  none: 'Booking cancelled — nothing was owed',
+  requested: 'Booking cancelled — the refund is in the refund queue',
+  refunded: 'Booking cancelled — the customer has been refunded',
+  manual: 'Booking cancelled — the refund must be made by hand; a ticket was raised',
+  failed: 'Booking cancelled — the refund step failed and recorded nothing; the refund must be handled by hand',
+};
+
 /** The acting administrator's id. wi-admin always sends it; a call without one is refused. */
 function adminIdOf(req: Request): string {
   const actor = adminCallerActor(req);
@@ -61,11 +70,15 @@ function adminIdOf(req: Request): string {
 }
 
 export class AdminBookingController {
-  /** POST /:bookingId/cancel — `{ reason, fault }`. The customer is refunded through the ordinary cancellation refund. */
+  /**
+   * POST /:bookingId/cancel — `{ reason, fault }`. The customer is refunded through the ordinary
+   * cancellation refund. The answer is the acknowledgement plus `refund`: what that refund did
+   * (`AdminCancelRefund`), since the cancel commits whatever it does.
+   */
   static cancel = asyncHandler(async (req: Request, res: Response) => {
     const { reason, fault } = CancelSchema.parse(req.body ?? {});
-    const booking = await adminBookingService.cancel(req.params.bookingId, adminIdOf(req), reason, fault);
-    sendSuccess(res, ack(booking), { message: 'Booking cancelled' });
+    const { booking, refund } = await adminBookingService.cancel(req.params.bookingId, adminIdOf(req), reason, fault);
+    sendSuccess(res, { ...ack(booking), refund }, { message: CANCEL_MESSAGES[refund] });
   });
 
   /** POST /:bookingId/complete — `{ reason }`. The vendor is paid once the ordinary hold ends. */

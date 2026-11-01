@@ -4,6 +4,7 @@ import { BookingStatus } from '../types/booking.types';
 import { BookingService } from './booking.service';
 import { BookingCalendarSyncService } from './booking-calendar-sync.service';
 import { computeAppointmentAccess } from '../domain/appointment';
+import type { AdminCancelRefund } from '../domain/admin-cancel-refund';
 import { bookingReminderWorker } from '../workers/booking-reminder.worker';
 import { PaymentTransactionModel, PaymentStatus } from '../../payments/models/payment-transaction.model';
 import { PaymentOrchestratorService } from '../../payments/services/payment-orchestrator.service';
@@ -54,7 +55,8 @@ export interface PaymentRecheckResult {
 export interface SessionCancelResult {
   productId: string;
   startAt: Date;
-  cancelled: Array<{ bookingId: string; bookingNumber: string | null }>;
+  /** Each seat with what its own refund did — every seat is refunded separately. */
+  cancelled: Array<{ bookingId: string; bookingNumber: string | null; refund: AdminCancelRefund }>;
   failed: Array<{ bookingId: string; bookingNumber: string | null; code: string }>;
 }
 
@@ -64,7 +66,12 @@ export class AdminBookingService {
   private readonly calendarSync = new BookingCalendarSyncService();
   private readonly vendorRepo = new VendorRepository();
 
-  cancel(bookingId: string, adminId: string, reason: string, fault: 'vendor' | 'customer'): Promise<IBooking> {
+  cancel(
+    bookingId: string,
+    adminId: string,
+    reason: string,
+    fault: 'vendor' | 'customer'
+  ): Promise<{ booking: IBooking; refund: AdminCancelRefund }> {
     return this.bookings.cancelAsAdmin(bookingId, adminId, reason, fault);
   }
 
@@ -249,8 +256,8 @@ export class AdminBookingService {
     for (const seat of seats) {
       const ref = { bookingId: seat._id.toString(), bookingNumber: seat.bookingNumber ?? null };
       try {
-        await this.bookings.cancelAsAdmin(ref.bookingId, adminId, reason, fault);
-        result.cancelled.push(ref);
+        const { refund } = await this.bookings.cancelAsAdmin(ref.bookingId, adminId, reason, fault);
+        result.cancelled.push({ ...ref, refund });
       } catch (error) {
         const code = (error as { code?: string })?.code ?? 'UNEXPECTED';
         console.error(`[AdminBookingService] Could not cancel seat ${ref.bookingId}:`, error);

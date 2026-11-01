@@ -12,7 +12,9 @@
  *       re-implementing them, and the fault decides the fees;
  *   §4  the internal surface — mounted internal-only, answering a THIN acknowledgement, never the
  *       booking document (which carries the address, the link and the metadata);
- *   §5  the customer is told "Wi-Mall support" cancelled, not "the provider".
+ *   §5  the customer is told "Wi-Mall support" cancelled, not "the provider";
+ *   §7  the cancel says what its refund did — the refund is best-effort after the commit, so a
+ *       200 says nothing about the money on its own (BR-033 § 4).
  *
  * Offline: no database, no server. Run: npm run test:admin-bookings
  */
@@ -27,6 +29,12 @@ import {
 } from '../../src/modules/booking/domain/booking-status-history';
 import { BookingStatus } from '../../src/modules/booking/types/booking.types';
 import { toCustomerBookingShape } from '../../src/modules/booking/domain/appointment';
+import {
+    ADMIN_CANCEL_REFUND_OUTCOMES,
+    adminCancelRefundOf,
+    type AdminCancelRefund,
+} from '../../src/modules/booking/domain/admin-cancel-refund';
+import type { BookingRefundOutcome } from '../../src/modules/booking/services/booking-refund.service';
 
 let passed = 0;
 let failed = 0;
@@ -189,8 +197,10 @@ for (const [method, path] of [
 }
 assert('the literal /services/… routes are declared above /:bookingId/…', () =>
     ADMIN_ROUTES.indexOf("'/services/") < ADMIN_ROUTES.indexOf("'/:bookingId/"));
-assert('⛔ every write answers ack(booking), never the document', () =>
-    !/sendSuccess\(res, booking\b/.test(ADMIN_CONTROLLER) && (ADMIN_CONTROLLER.match(/sendSuccess\(res, ack\(booking\)/g) ?? []).length === 4);
+assert('⛔ every write answers ack(booking), never the document (the cancel adds only `refund`)', () =>
+    !/sendSuccess\(res, booking\b/.test(ADMIN_CONTROLLER)
+    && (ADMIN_CONTROLLER.match(/sendSuccess\(res, ack\(booking\)/g) ?? []).length === 3
+    && /sendSuccess\(res, \{ \.\.\.ack\(booking\), refund \}/.test(ADMIN_CONTROLLER));
 assert('the request bodies are strict (an unknown field is a 400, not ignored)', () =>
     (ADMIN_CONTROLLER.match(/\.strict\(\)/g) ?? []).length >= 4);
 assert('the cancel body requires a fault of vendor | customer', () =>
@@ -220,6 +230,48 @@ assert('⛔ a serialised booking document (the vendor endpoints) drops statusHis
     const model = code('modules/booking/models/booking.model.ts');
     return /BookingSchema\.set\('toJSON'/.test(model) && /delete out\.statusHistory/.test(model);
 });
+
+// ─── §7 ──────────────────────────────────────────────────────────────────────
+section('§7 the cancel says what its refund did (BR-033 § 4)');
+
+/**
+ * The cancel commits first and refunds best-effort after, so it answers 200 whatever the refund
+ * did. The outcome used to be logged and dropped; the dashboard had to infer it from a re-read
+ * that can come back null. Every outcome of `refundCancelledBooking`, plus a throw, maps to one
+ * wire value — and the two outcomes that once shared `refund_pending` map apart.
+ */
+const OUTCOME_TABLE: Array<[BookingRefundOutcome | null, AdminCancelRefund]> = [
+    [{ status: 'not_applicable', reason: 'free' }, 'none'],
+    [{ status: 'refund_requested', refundRequestId: 'r1', requestStatus: 'sending', amount: 100, currency: 'XAF' }, 'requested'],
+    [{ status: 'refund_already_open', reason: 'open' }, 'requested'],
+    [{ status: 'refunded', refundId: 't1', amount: 100, currency: 'XAF' }, 'refunded'],
+    [{ status: 'refund_pending', reason: 'cash' }, 'manual'],
+    [null, 'failed'],
+];
+for (const [outcome, expected] of OUTCOME_TABLE) {
+    assert(`${outcome?.status ?? 'a throw'} → ${expected}`, () => adminCancelRefundOf(outcome) === expected);
+}
+assert('every wire value is reachable, and none is outside the published set', () => {
+    const produced = new Set(OUTCOME_TABLE.map(([outcome]) => adminCancelRefundOf(outcome)));
+    return produced.size === ADMIN_CANCEL_REFUND_OUTCOMES.length
+        && ADMIN_CANCEL_REFUND_OUTCOMES.every((value) => produced.has(value));
+});
+
+const REFUND_SERVICE = code('modules/booking/services/booking-refund.service.ts');
+assert('an already-open request is its own outcome, not the manual one', () =>
+    /REFUND_ALREADY_OPEN[\s\S]{0,200}status: 'refund_already_open'/.test(REFUND_SERVICE));
+assert('refundIfPaid returns the outcome, and null when the refund step threw', () => {
+    const body = methodBody(BOOKING_SERVICE, 'refundIfPaid');
+    return body.includes('return outcome;') && /catch \(error\)[\s\S]{0,200}return null;/.test(body);
+});
+assert('cancelAsAdmin returns the mapped outcome beside the booking', () =>
+    CANCEL_ADMIN.includes('const refund = await this.refundIfPaid(')
+    && CANCEL_ADMIN.includes('return { booking, refund: adminCancelRefundOf(refund) };'));
+assert('every cancelled seat of a class carries its own refund outcome', () =>
+    ADMIN_SERVICE.includes('const { refund } = await this.bookings.cancelAsAdmin(')
+    && ADMIN_SERVICE.includes('result.cancelled.push({ ...ref, refund });'));
+assert('the cancel answer has a message for every outcome', () =>
+    ADMIN_CANCEL_REFUND_OUTCOMES.every((value) => ADMIN_CONTROLLER.includes(`\n  ${value}: '`)));
 
 console.log(`\n━━━ admin bookings: ${passed}/${passed + failed} passed${failed ? `, ${failed} FAILED` : ''} ━━━`);
 process.exit(failed > 0 ? 1 : 0);

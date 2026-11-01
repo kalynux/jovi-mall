@@ -33,6 +33,21 @@ metadata. wi-admin re-reads its own projection after each write.
 Bodies are `.strict()`: an unknown field is a `400`. `reason` is 3–500 characters wherever it
 appears.
 
+**The cancel adds one field, `refund`**, and its `message` varies with it (2026-11-01, BR-033 § 4).
+The cancellation commits first and the refund runs after it, best-effort, so a `200` says nothing
+about the money on its own:
+
+| `refund` | Means | `paymentStatus` |
+|---|---|---|
+| `none` | Nothing was owed: free, unpaid, or never collected | unchanged |
+| `requested` | A refund request is open, new or already there. The refund queue has it | `refund_pending` |
+| `refunded` | The money is already back | `refunded` (a full refund) |
+| `manual` | No request could be opened, always the case for cash. The booking's earnings are paused and a HIGH ticket was raised | `refund_pending` |
+| `failed` | The refund step threw before recording anything. Nothing says a refund is owed, so a person must act | `paid` |
+
+The value comes from `adminCancelRefundOf` (`booking/domain/admin-cancel-refund.ts`), pinned by
+`test:admin-bookings` § 7.
+
 ## The writes
 
 | Route | Body | What it does | Refusals |
@@ -48,7 +63,8 @@ appears.
 The re-check answers `{ outcome, paymentStatusBefore, paymentStatusAfter, transaction }`, where
 `outcome` is `settled` (the booking now reads `paid` or `failed`), `still_pending` (nothing
 changed) or `released` (the last attempt had failed and the booking was stuck). The session
-cancel answers `{ productId, startAt, cancelled: [{bookingId, bookingNumber}], failed: [{…, code}] }`.
+cancel answers `{ productId, startAt, cancelled: [{bookingId, bookingNumber, refund}], failed: [{bookingId, bookingNumber, code}] }`.
+Each cancelled seat is refunded on its own, so each carries its own `refund` (the table above).
 
 ⚠ **The cancel refund has no second administrator**, the same as a customer's own cancellation.
 The 2,000,000 four-eyes line lives on the refund queue, not here.

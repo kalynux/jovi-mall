@@ -18,6 +18,12 @@ export type BookingRefundOutcome =
    * (`awaiting_approval` — no paying number on record; `failed` — the gateway refused it).
    */
   | { status: 'refund_requested'; refundRequestId: string; requestStatus: string; amount: number; currency: string }
+  /**
+   * Somebody had already opened a request (an administrator, a retry): that request IS the refund.
+   * Kept apart from `refund_pending` because the two need different things from a person — this
+   * one nothing, that one a ticket worked by hand.
+   */
+  | { status: 'refund_already_open'; reason: string }
   /** No request could be opened (cash, or no payment on record): a person refunds it from a ticket. */
   | { status: 'refund_pending'; reason: string };
 
@@ -138,7 +144,7 @@ export class BookingRefundService {
       if (code === ERROR_CODES.REFUND_ALREADY_OPEN) {
         // Somebody already opened one (an administrator, a retry): that request is the refund.
         await this.flagRefundPending(bookingId);
-        return { status: 'refund_pending', reason: 'A refund request is already open for this booking' };
+        return { status: 'refund_already_open', reason: 'A refund request is already open for this booking' };
       }
       const expected =
         code === ERROR_CODES.REFUND_PAYMENT_NOT_FOUND ||

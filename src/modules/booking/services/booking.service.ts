@@ -21,7 +21,8 @@ import { ERROR_CODES } from '../../../core/error-codes';
 import { earningsCompletionService } from '../../earnings/services/earnings-completion.service';
 import { earningsSplitService } from '../../earnings/services/earnings-split.service';
 import { raiseRefundOwed } from '../../earnings/services/refund-owed.service';
-import { bookingRefundService } from './booking-refund.service';
+import { bookingRefundService, BookingRefundOutcome } from './booking-refund.service';
+import { AdminCancelRefund, adminCancelRefundOf } from '../domain/admin-cancel-refund';
 import { VendorRepository } from '../../vendors/vendor.repository';
 import { StoreRepository } from '../../store/repositories/store.repository';
 import { assertCancellationAllowed } from '../../vendors/utils/cancellation-policy.util';
@@ -488,7 +489,7 @@ export class BookingService {
     initiatedByRole: 'customer' | 'vendor' | 'admin',
     reason?: string,
     feesPaidBy?: 'customer' | 'vendor'
-  ): Promise<void> {
+  ): Promise<BookingRefundOutcome | null> {
     try {
       const outcome = await bookingRefundService.refundCancelledBooking(
         booking,
@@ -502,8 +503,11 @@ export class BookingService {
           `[BookingService] Booking ${booking._id} cancellation refund → ${outcome.status}`
         );
       }
+      return outcome;
     } catch (error) {
       console.error('[BookingService] Refund on cancellation failed:', error);
+      // `null` = the refund step threw: nothing was recorded. Only the administrator path reads it.
+      return null;
     }
   }
 
@@ -1640,13 +1644,16 @@ export class BookingService {
    *   completes it (the vendor is paid) or cancels it (the customer is refunded) — owner decision
    *   2026-10-27. A `completed` booking is refused: its refund is the refund queue's, which also
    *   recovers the vendor's earnings.
+   *
+   * Returns what the refund did beside the booking (`AdminCancelRefund`, BR-033 § 4): the cancel
+   * commits whatever the refund does, so the administrator is told rather than left to infer it.
    */
   async cancelAsAdmin(
     bookingId: string,
     adminId: string,
     reason: string,
     fault: 'vendor' | 'customer'
-  ): Promise<IBooking> {
+  ): Promise<{ booking: IBooking; refund: AdminCancelRefund }> {
     const booking = await this.findLiveBookingOrThrow(bookingId);
 
     if (booking.status === BookingStatus.CANCELLED) {
@@ -1666,10 +1673,10 @@ export class BookingService {
     booking.cancelledReason = reason;
     await booking.save();
 
-    await this.refundIfPaid(booking, adminId, 'admin', reason, fault === 'vendor' ? 'vendor' : 'customer');
+    const refund = await this.refundIfPaid(booking, adminId, 'admin', reason, fault === 'vendor' ? 'vendor' : 'customer');
     await this.emitBookingCancelledEvent(booking, 'admin');
 
-    return booking;
+    return { booking, refund: adminCancelRefundOf(refund) };
   }
 
   /**
