@@ -21,6 +21,7 @@
  *   10,000 paid → pay-in 200 → 9,800 owed → payout 196 → the customer receives 9,604.
  * The SELLER, when the seller cancelled a paid order (F-5): the customer receives 100%, so the
  * payout fee is 2% of the whole amount sent, and both fees are charged to the seller.
+ * The AGENCY, the same way, when a partial order's parcel came back through its fault (D-12).
  *
  * Integer arithmetic and half-up rounding come from `refundFeeFor` (refund-fee.ts), so every fee
  * in the platform rounds the same way.
@@ -28,8 +29,8 @@
 
 import { refundFeeFor, RefundPaymentChannel } from './refund-fee';
 
-export type RefundFeesPaidBy = 'customer' | 'vendor';
-export const REFUND_FEES_PAID_BY: readonly RefundFeesPaidBy[] = Object.freeze(['customer', 'vendor'] as RefundFeesPaidBy[]);
+export type RefundFeesPaidBy = 'customer' | 'vendor' | 'agency';
+export const REFUND_FEES_PAID_BY: readonly RefundFeesPaidBy[] = Object.freeze(['customer', 'vendor', 'agency'] as RefundFeesPaidBy[]);
 
 export interface RefundFeesInput {
   /** What the refund is worth (the gross the source loses). */
@@ -53,6 +54,8 @@ export interface RefundFees {
   customerFee: number;
   /** Charged to the SELLER on top of their share: both fees when they pay them, else 0. */
   vendorCharge: number;
+  /** Charged to the AGENCY at fault: both fees when it pays them, else 0. */
+  agencyCharge: number;
   /** What the customer receives: `gross − customerFee`. */
   net: number;
 }
@@ -76,17 +79,18 @@ export function computeRefundFees(input: RefundFeesInput): RefundFees {
   const payoutRate = payoutFeeApplies(input.paymentChannel) ? rateOrZero(input.payoutRatePercent) : 0;
   const payinAmount = refundFeeFor(gross, payinRate);
 
-  if (input.paidBy === 'vendor') {
+  if (input.paidBy === 'vendor' || input.paidBy === 'agency') {
     // The customer receives everything; the transfer is of the whole gross.
     const payoutAmount = refundFeeFor(gross, payoutRate);
     return {
-      paidBy: 'vendor',
+      paidBy: input.paidBy,
       payinRate,
       payinAmount,
       payoutRate,
       payoutAmount,
       customerFee: 0,
-      vendorCharge: payinAmount + payoutAmount,
+      vendorCharge: input.paidBy === 'vendor' ? payinAmount + payoutAmount : 0,
+      agencyCharge: input.paidBy === 'agency' ? payinAmount + payoutAmount : 0,
       net: gross,
     };
   }
@@ -101,6 +105,7 @@ export function computeRefundFees(input: RefundFeesInput): RefundFees {
     payoutAmount,
     customerFee: payinAmount + payoutAmount,
     vendorCharge: 0,
+    agencyCharge: 0,
     net: owed - payoutAmount,
   };
 }
@@ -113,7 +118,7 @@ export function disputeVendorCharge(disputedAmount: number, payinRatePercent: nu
   return refundFeeFor(nonNegInt(disputedAmount), rateOrZero(payinRatePercent));
 }
 
-export type CustomerRefundLineCode = 'refund_amount' | 'payment_fee' | 'transfer_fee' | 'fees_paid_by_seller' | 'you_receive';
+export type CustomerRefundLineCode = 'refund_amount' | 'payment_fee' | 'transfer_fee' | 'fees_paid_by_seller' | 'fees_paid_by_delivery_company' | 'you_receive';
 
 export interface CustomerRefundLine {
   code: CustomerRefundLineCode;
@@ -136,6 +141,10 @@ export function customerRefundLines(fees: Pick<RefundFees, 'paidBy' | 'payinRate
   if (fees.paidBy === 'vendor') {
     if (fees.payinAmount + fees.payoutAmount > 0) {
       lines.push({ code: 'fees_paid_by_seller', label: 'Payment and transfer fees are paid by the seller', amount: 0, percent: null });
+    }
+  } else if (fees.paidBy === 'agency') {
+    if (fees.payinAmount + fees.payoutAmount > 0) {
+      lines.push({ code: 'fees_paid_by_delivery_company', label: 'Payment and transfer fees are paid by the delivery company', amount: 0, percent: null });
     }
   } else {
     if (fees.payinAmount > 0) {

@@ -81,6 +81,12 @@ export interface ChatReviewForReply {
          * cash" beside Pay now. Server-formatted amounts. Optional only for older fixtures.
          */
         deliveryFeeCash?: { onlineText: string; toRiderText: string } | null;
+        /**
+         * Pay part now (2026-11-01): set when the customer may pay part online and the rest in cash.
+         * An amount somebody types cannot be a button, so the confirmation says so in words and the
+         * model places it. Optional only for older fixtures.
+         */
+        partialPayment?: { minimumText: string; maximumText: string } | null;
     };
     addAddressUrl: string | null;
     /** Shops below their delivery minimum. Non-empty exactly when `blocker` is `below_delivery_minimum`. */
@@ -110,6 +116,8 @@ export interface ChatPlacementForReply {
     instructions: unknown;
     /** W-F: the delivery cash for the riders, formatted — null/absent when paid with the order. */
     deliveryCashText?: string | null;
+    /** Pay part now: the cash still due at delivery, formatted — null/absent otherwise. */
+    cashDueText?: string | null;
 }
 
 /** Basket lines shown before the "+ N more" line. */
@@ -273,6 +281,10 @@ export function checkoutReviewReply(
             // W-F: what the "Delivery in cash" choice would charge now and leave for the rider.
             ...(feeCash
                 ? [botChromeFill('checkoutDeliveryFeeCashLine', language, { online: feeCash.onlineText, toRider: feeCash.toRiderText })]
+                : []),
+            // Pay part now: no button can carry an amount, so the customer says it in the chat.
+            ...(phone && review.payment.partialPayment
+                ? [botChromeFill('checkoutPartialPaymentLine', language, { minimum: review.payment.partialPayment.minimumText, maximum: review.payment.partialPayment.maximumText })]
                 : []),
             '',
             botChrome(cod || feeCash ? 'checkoutHowToPayQuestion' : 'checkoutPlaceQuestion', language),
@@ -452,7 +464,9 @@ export function checkoutPlacedReply(
     // W-F: the delivery fee goes to the rider in cash — said once, under the order numbers.
     const placed = placement.deliveryCashText
         ? [placedLine, botChromeFill('checkoutDeliveryFeeCashPlaced', language, { toRider: placement.deliveryCashText })].join('\n')
-        : placedLine;
+        : placement.cashDueText
+            ? [placedLine, botChromeFill('checkoutPartialPaymentPlaced', language, { cash: placement.cashDueText })].join('\n')
+            : placedLine;
 
     if (placement.state === 'settled') {
         return { kind: 'text', text: [placed, '', botChrome('checkoutPaymentReceived', language)].join('\n') };

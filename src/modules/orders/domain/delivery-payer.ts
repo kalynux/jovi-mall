@@ -184,16 +184,26 @@ export function riderCollectsCash(
  * The cash a rider collects for a shipment, split as the collection stores it. `itemsAmount` is
  * the goods for a COD order and 0 for a fee-only collection (the goods were paid online); the
  * delivery part is `customerDeliveryFeeOf` in both. `null` kind ⇒ nothing to collect.
+ *
+ * `prepaidAmount` is what a PARTIAL order already paid online for this parcel: it reduces the cash
+ * and leaves the two parts at their full values, which is what the split measures the sale on.
  */
 export function cashToCollectOf(
   kind: CashCollectionKind | null,
   goodsAmount: number,
   customerDeliveryFee: number,
-): { itemsAmount: number; deliveryFeeAmount: number; expectedAmount: number } {
-  if (kind === null) return { itemsAmount: 0, deliveryFeeAmount: 0, expectedAmount: 0 };
+  prepaidAmount = 0,
+): { itemsAmount: number; deliveryFeeAmount: number; prepaidAmount: number; expectedAmount: number } {
+  if (kind === null) return { itemsAmount: 0, deliveryFeeAmount: 0, prepaidAmount: 0, expectedAmount: 0 };
   const itemsAmount = kind === 'order' ? Math.max(0, goodsAmount) : 0;
   const deliveryFeeAmount = Math.max(0, customerDeliveryFee);
-  return { itemsAmount, deliveryFeeAmount, expectedAmount: itemsAmount + deliveryFeeAmount };
+  const prepaid = kind === 'order' ? Math.max(0, prepaidAmount) : 0;
+  return {
+    itemsAmount,
+    deliveryFeeAmount,
+    prepaidAmount: prepaid,
+    expectedAmount: Math.max(0, itemsAmount + deliveryFeeAmount - prepaid),
+  };
 }
 
 /**

@@ -46,6 +46,7 @@ import {
   paysDeliveryFeeInCash,
   rtoLeftoverShares,
 } from '../../orders/domain/delivery-payer';
+import { codHandlingFeeBaseOf } from '../../orders/domain/partial-payment';
 
 // The pure fee arithmetic lives in `EarningsQuoteService` — see its header. Both
 // halves of every division are defined there (`applyFeeSplit` for the agent,
@@ -111,6 +112,8 @@ export interface CodCollectionSplitInput {
   itemsAmount: number;
   /** The customer-paid delivery fee inside the same cash. */
   deliveryFeeAmount: number;
+  /** What a partial order already paid online for this parcel; 0 otherwise. */
+  prepaidAmount?: number;
 }
 
 /** What `splitCodCollection` divides one collection into. `vendorNet` may be negative here. */
@@ -545,6 +548,7 @@ export class EarningsSplitService {
       agencyId,
       itemsAmount,
       deliveryFeeAmount: customerDeliveryCash,
+      prepaidAmount: collection.prepaid_amount ?? 0,
     });
 
     // Record it for audit. COD computes the fee once, at collection, so it cannot
@@ -676,8 +680,12 @@ export class EarningsSplitService {
     // in cash (only a fee raised above the cash collected would leave a remainder).
     const shares = deliveryFeeShares(deliveryFee, input.deliveryFeeAmount);
 
-    // D-5: on the GOODS only — never on the delivery fee the agent also collects.
-    const codFee = computeCodHandlingFee(input.policies?.pricing?.additional_fees?.cod_handling_fee, gross);
+    // D-5: on the GOODS only — never on the delivery fee the agent also collects. And on a partial
+    // order, never on money the agent did not carry (`codHandlingFeeBaseOf`).
+    const codFee = computeCodHandlingFee(
+      input.policies?.pricing?.additional_fees?.cod_handling_fee,
+      codHandlingFeeBaseOf(gross, gross + input.deliveryFeeAmount - (input.prepaidAmount ?? 0))
+    );
 
     // The agent's cut comes OUT of the delivery fee, not on top of it: the
     // vendor pays the same either way, and the agency shares the fee with the
@@ -1039,6 +1047,45 @@ export class EarningsSplitService {
       vendorRefund,
       customerRefundable,
     });
+  }
+
+  /**
+   * Pay the agency and agent for a PARTIAL order's returned parcel, out of what the customer prepaid
+   * (D-2) or, when the vendor is at fault, at the vendor's charge (D-12). Called when the parcel's
+   * refund completes, so an administrator changing the fault can never leave an agency paid for a
+   * refund that went the other way.
+   *
+   * `requires_cash_settlement: false`: no cash came back with this parcel, and this money is already
+   * at the platform. Idempotent on the shipment source, like every delivery split.
+   */
+  async splitPartialReturn(order: IOrder, shipment: IShipment, amount: number): Promise<void> {
+    const sourceId = (shipment._id as any).toString();
+    if (amount <= 0) return;
+    if (await this.allocationRepo.existsForSource('shipment', sourceId)) return;
+
+    const agencyId = shipment.agency_id.toString();
+    const agency = await this.agencyRepo.findById(agencyId);
+    const agentId = shipment.agent_id ? shipment.agent_id.toString() : null;
+    const agentCut = agentId ? await this.computeAgentCut(agentId, agencyId, amount) : 0;
+    const courierHold = this.courierHoldOf(sourceId, agencyId, agency?.policies ?? null);
+    const heldFrom = deliveredAtOf(order);
+    const defaults = {
+      source_type: 'shipment' as const,
+      source_id: sourceId,
+      gross_snapshot: amount,
+      commission_percent_snapshot: 0,
+      currency: order.currency,
+      requires_cash_settlement: false,
+      courier_hold: courierHold,
+      ...(heldFrom ? { completed_at: heldFrom, hold_release_at: daysFromNow(EARNINGS_CONFIG.HOLD_DAYS, heldFrom) } : {}),
+    };
+
+    await this.persist([
+      { ...defaults, beneficiary_type: 'agency', beneficiary_id: agencyId, amount: computeAgencyCut(amount, agentCut) },
+      ...(agentId ? [{ ...defaults, beneficiary_type: 'agent' as const, beneficiary_id: agentId, amount: agentCut }] : []),
+    ]);
+
+    await this.emitSplit('shipment', sourceId, order.vendor_id.toString(), { returnFee: amount, agentCut });
   }
 
   /**

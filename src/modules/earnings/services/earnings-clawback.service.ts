@@ -20,7 +20,7 @@ import { bookingSourcesOf, PauseTarget } from './earnings-pause.service';
 import { earningsCompletionService } from './earnings-completion.service';
 import type { DeliveryFaultAssessment } from '../../payments/domain/refund-ports';
 import { CourierGiveLine, courierGiveback, takeFromCouriers } from '../domain/courier-liability';
-import { Explanation, explainDeliveryFault, explainRefundShare, explainVendorBeyond } from '../domain/adjustment-explanations';
+import { Explanation, explainDeliveryFault, explainPartialReturnCharge, explainRefundShare, explainVendorBeyond } from '../domain/adjustment-explanations';
 
 /**
  * Earnings recovery ("clawback") — REFUND-FLOW-PLAN § 6, contract § 11.3.
@@ -363,6 +363,61 @@ export class EarningsClawbackService {
       },
       { dispute: options.dispute === true }
     );
+  }
+
+  /**
+   * Charge the vendor or agency at fault for a partial order's returned parcel (D-12): available
+   * balance first, then debt that every later inflow pays down. There is no share behind it, because
+   * that parcel never earned anybody anything. Idempotent on `refundKey`, like every clawback.
+   */
+  async chargeForPartialReturn(input: {
+    refundKey: string;
+    ownerType: 'vendor' | 'agency';
+    ownerId: string;
+    amount: number;
+    returnFee: number;
+    fees: number;
+    shipmentId: string;
+    orderNumber: string | null;
+    currency: string;
+  }): Promise<void> {
+    assertAmount('amount', input.amount);
+    if (input.amount <= 0 || (await this.adjustmentRepo.existsForRefund(input.refundKey))) return;
+    try {
+      await transactionManager.runInTransactionWithRetry(async (session) => {
+        if (await this.adjustmentRepo.existsForRefund(input.refundKey, session)) return;
+        const taken = await this.accounts.clawBeyondInSession(input.ownerType, input.ownerId, input.amount, null, session);
+        await this.adjustmentRepo.create(
+          {
+            refund_key: input.refundKey,
+            allocation_id: null,
+            source_type: 'shipment',
+            source_id: input.shipmentId,
+            beneficiary_type: input.ownerType,
+            beneficiary_id: input.ownerId,
+            amount: input.amount,
+            currency: input.currency,
+            taken_from: taken,
+            kind: 'refund_clawback',
+            goods_amount: 0,
+            delivery_amount: input.returnFee,
+            fee_amount: input.fees,
+            refund_attribution: { goods: 0, delivery: 0 },
+            refund_request_id: /^[a-f\d]{24}$/i.test(input.refundKey) ? input.refundKey : null,
+            ...explainPartialReturnCharge({
+              orderNumber: input.orderNumber,
+              currency: input.currency,
+              returnFee: input.returnFee,
+              fees: input.fees,
+            }),
+          },
+          session
+        );
+      });
+    } catch (error) {
+      if (isDuplicateKey(error)) return; // a concurrent run won: nothing moved here
+      throw error;
+    }
   }
 
   /**

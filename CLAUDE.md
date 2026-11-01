@@ -1009,6 +1009,32 @@ refund obligation.
 
 **COD delivery is closed to every other path, and that is deliberate.** For COD, `delivered` ⟺ cash collected — `recomputeCodPaymentStatus` derives the order's payment status from that equivalence, and `splitCodCollection` only ever runs off a collection, so a COD shipment that reaches `delivered` without one leaves an order that is delivered, completed, and that **nobody is ever paid for** (not even the vendor), with a payment status that is a lie. Consequently: the customer's `confirm-delivery` endpoint **rejects COD** (their code is their confirmation), and the shipment auto-confirm sweep does **not** confirm COD — it routes through `CashCollectionService.autoCollectWithoutCode`, which records the cash and delivers in one transaction. Any new route to `delivered` must go through a collection too.
 
+### Partial payment (`orders/domain/partial-payment.ts`) — 2026-11-01
+
+A customer pays part online and the rest in cash at the door. **There is no third payment method:** a
+partial order is `payment_method: 'cash_on_delivery'` with `order.prepayment`, so every COD mechanism keeps
+working, and `total_amount` stays the whole order. Plan and the twelve owner decisions:
+`../PRODUCTION-READINESS/PARTIAL-PAYMENT-PLAN.md`. Five things are load-bearing:
+
+- ⛔ **`purpose: 'order_prepayment'` branches first in `handlePaymentSuccess`.** Past it,
+  `OrderService.handlePaymentSuccess` would mark a 30%-paid order `paid` and split it as prepaid, and nothing
+  downstream would look wrong.
+- ⛔ **`AWAITING_PAYMENT` on COD means "dispatchable" except here.** `prepaymentIsDue` gates dispatch, the
+  stock commit and auto-dispatch at checkout, and the unpaid-cancel sweep includes these orders.
+- **Nothing is allocated when the online part is paid.** `splitCodCollection` runs at the handoff on the
+  parcel's FULL goods, with `requires_cash_settlement`, so every share waits for that parcel's cash. On the
+  collection, `items_amount` and `delivery_fee_amount` stay full, and only `expected_amount` is net of
+  `prepaid_amount`. The COD handling fee's base is `codHandlingFeeBaseOf`.
+- **A returned parcel is not `failed`** while the platform holds the money. `PartialReturnService` opens a
+  refund that waits for an administrator (one per order at a time; the nightly `RefundCashRecheckWorker` opens
+  the next). The money moves in `PartialReturnSettlementService` when that refund COMPLETES, so a changed fault
+  can never leave an agency paid for a refund that went the other way.
+- **A refund returns one channel at a time:** the online part first, then the cash once covered, so the "only
+  the fee that happened" rule still holds per request (`loadOrder`).
+
+Pinned by `npm run test:partial-payment` (offline) and `npm run verify:partial-payment` (the whole chain; needs
+a local replica set and refuses any other `MONGO_URI`, because it writes real money rows).
+
 ### COD restrictions (`cod/domain/cod-restriction.ts`) — 2026-10-10
 
 An administrator can switch cash on delivery OFF for one **customer** or one delivery **agency**,

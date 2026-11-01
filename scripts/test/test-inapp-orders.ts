@@ -1017,6 +1017,7 @@ function groupsOf(groups: number, perGroup: number): CustomerOrderGroup[] {
             paymentMethod: 'online',
             paymentStatus: 'paid',
             fulfillmentStatus: 'processing',
+            partialPayment: null,
             itemCount: 1,
             createdAt: new Date(Date.UTC(2026, 8, 20 - g)),
         })),
@@ -1113,6 +1114,7 @@ function codGroup(): CustomerOrderGroup {
         paymentMethod: 'cash_on_delivery',
         paymentStatus: 'pending',
         fulfillmentStatus: 'processing',
+        partialPayment: null,
         itemCount: 1,
         createdAt: new Date('2026-09-16T10:00:00Z'),
     });

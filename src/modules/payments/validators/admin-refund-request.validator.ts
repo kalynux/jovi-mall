@@ -52,6 +52,11 @@ export const AdminCreateRefundRequestSchema = z
 export const AdminApproveRefundSchema = z.object({}).strict();
 export const AdminRetryRefundSchema = z.object({}).strict();
 
+/** POST /:id/partial-return-fault — whose fault a partial order's returned parcel is. */
+export const AdminSetPartialReturnFaultSchema = z
+  .object({ fault: z.enum(['customer', 'vendor', 'agency']) })
+  .strict();
+
 export const AdminRejectRefundSchema = z
   .object({ reason: z.string().trim().min(1, 'A reason is required').max(1000) })
   .strict();

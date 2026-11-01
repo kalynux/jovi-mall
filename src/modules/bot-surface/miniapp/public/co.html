@@ -102,6 +102,18 @@
         <div class="row__end money" id="feeCashNow"></div>
       </div>
 
+      <!--
+        Pay part now (2026-11-01): shown only when the server sent `partialPayment`. The amount is
+        checked by the server before the checkout is spent, so a mistyped one costs nothing.
+      -->
+      <div class="block" id="partialRow" hidden>
+        <button type="button" class="btn btn--block" id="partial" aria-pressed="false"></button>
+      </div>
+      <div class="block field" id="partialAmountBlock" hidden>
+        <label class="block__label" for="partialAmount" id="partialAmountLabel"></label>
+        <input id="partialAmount" name="partialAmount" type="number" inputmode="numeric" min="1" step="1">
+      </div>
+
       <div class="block">
         <div class="block__label" id="addressLabel"></div>
         <div class="panel"><div class="panel__value" id="address"></div></div>
@@ -170,6 +182,11 @@
     lines: document.getElementById("lines"),
     delivery: document.getElementById("delivery"),
     feeCashRow: document.getElementById("feeCashRow"),
+    partialRow: document.getElementById("partialRow"),
+    partial: document.getElementById("partial"),
+    partialAmountBlock: document.getElementById("partialAmountBlock"),
+    partialAmountLabel: document.getElementById("partialAmountLabel"),
+    partialAmount: document.getElementById("partialAmount"),
     feeCash: document.getElementById("feeCash"),
     feeCashNowRow: document.getElementById("feeCashNowRow"),
     feeCashNowLabel: document.getElementById("feeCashNowLabel"),
@@ -453,9 +470,51 @@
       };
     }
 
+    /*
+     * Pay part now. Offered only when the SERVER sent the limits; it judges the typed amount before
+     * the checkout is spent. The label's two amounts are its own formatted strings.
+     */
+    var pp = data.partialPayment;
+    var ppOk = !!(pp && typeof pp.minimumText === "string" && typeof pp.maximumText === "string" && !data.address.digital);
+    el.partialRow.hidden = !ppOk;
+    el.partial.setAttribute("aria-pressed", "false");
+    el.partialAmountBlock.hidden = true;
+    if (ppOk) {
+      var ppLabel = String(copy.checkoutPartial || "Pay part now, the rest in cash at delivery");
+      el.partial.textContent = ppLabel;
+      el.partialAmountLabel.textContent = String(copy.checkoutPartialAmount || "How much now? From {{minimum}} to {{maximum}}")
+        .split("{{minimum}}").join(pp.minimumText)
+        .split("{{maximum}}").join(pp.maximumText);
+      el.partialAmount.min = String(pp.minimumAmount);
+      el.partialAmount.max = String(pp.maximumAmount);
+      el.partial.onclick = function () {
+        if (placed) return;
+        var on = el.partial.getAttribute("aria-pressed") !== "true";
+        el.partial.setAttribute("aria-pressed", on ? "true" : "false");
+        el.partial.textContent = (on ? "✓ " : "") + ppLabel;
+        el.partialAmountBlock.hidden = !on;
+        /* A partial order is cash on delivery with a prepaid part: the two cash choices exclude. */
+        el.feeCashRow.hidden = on || !fcOk;
+        el.feeCashNowRow.hidden = true;
+        if (on) el.feeCash.setAttribute("aria-pressed", "false");
+        el.cod.hidden = on || !(data.cashOnDelivery === true && !data.address.digital);
+        if (on) el.partialAmount.focus();
+      };
+    }
+
     el.state.hidden = true;
     el.sheet.hidden = false;
     el.foot.hidden = false;
+  }
+
+  function partialChosen() {
+    return !el.partialRow.hidden && el.partial.getAttribute("aria-pressed") === "true";
+  }
+
+  /* The typed amount as a positive whole number, or null. No arithmetic: the server sets the limits. */
+  function typedPartialAmount() {
+    var typed = Number(el.partialAmount.value);
+    return Number.isInteger(typed) && typed > 0 ? typed : null;
   }
 
   /*
@@ -498,6 +557,16 @@
     if (placed) return;
     /* A disabled button can still be reached by a stray synthetic click; see the note in draw. */
     if (el.pay.disabled) return;
+    /*
+     * Pay part now with no usable amount: nothing to send, so nothing is spent. Checked here because
+     * a malformed amount would be refused by the schema with no `spent` marker, which latches the page.
+     */
+    if (partialChosen() && typedPartialAmount() === null) {
+      el.partialAmount.setAttribute("aria-invalid", "true");
+      el.partialAmount.focus();
+      say(el.partialAmountLabel.textContent, true);
+      return;
+    }
     placed = true;
     el.pay.disabled = true;
     el.cod.disabled = true;
@@ -516,7 +585,9 @@
         /* NovaSend Orange Money: the code dialled for BEFORE paying. Digits only; empty → not sent. */
         paymentCode: codeValue(),
         /* W-F: the items now, the delivery fee in cash to the rider — re-checked by the server. */
-        deliveryFeePayment: !el.feeCashRow.hidden && el.feeCash.getAttribute("aria-pressed") === "true" ? "cash_to_rider" : "with_order"
+        deliveryFeePayment: !el.feeCashRow.hidden && el.feeCash.getAttribute("aria-pressed") === "true" ? "cash_to_rider" : "with_order",
+        /* Pay part now: a whole number the server judges against the limits before spending anything. */
+        partialAmount: partialChosen() ? typedPartialAmount() : null
       })
     }).then(function (res) {
       var refusal = res.body && res.body.error;
@@ -558,6 +629,13 @@
          */
         if (refusal.code === "PAYMENT_CODE_REQUIRED") {
           showCode(refusal.details.ussd || null, true);
+          return;
+        }
+        /* The amount is what was wrong, not the number: point at that field, in the customer's language. */
+        if (refusal.code === "PARTIAL_PAYMENT_AMOUNT_OUT_OF_RANGE") {
+          el.partialAmount.setAttribute("aria-invalid", "true");
+          el.partialAmount.focus();
+          say(el.partialAmountLabel.textContent, true);
           return;
         }
         el.phone.setAttribute("aria-invalid", "true");

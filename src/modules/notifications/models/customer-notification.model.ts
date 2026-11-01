@@ -107,6 +107,8 @@ export type CustomerNotificationType =
     // ── Orders (physical/digital goods) ─────────────────────────────────────
     | 'order.created'
     | 'order.payment.received'
+    /** A partial order's online part arrived; the customer still owes cash at the door (2026-11-01). */
+    | 'order.prepayment.received'
     /**
      * A card payment page is waiting to be opened (GAP-008 + GAP-012).
      *
@@ -258,6 +260,7 @@ export const CUSTOMER_NOTIFICATION_TYPES: readonly CustomerNotificationType[] = 
     'booking.refund.declined',
     'order.created',
     'order.payment.received',
+    'order.prepayment.received',
     'order.payment_link',
     'order.payment_failed',
     'order.shipped',

@@ -39,6 +39,7 @@ const paymentOptionsService = new PaymentOptionsService({
  *   orderId?: string,  // single-order payment
  *   provider?: 'MTN' | 'ORANGE' | 'CARD',   // what the customer pays with (ADR-A08)
  *   gateway?: string,  // DEPRECATED — accepted and ignored; the server picks the aggregator
+ *   amount?: number,   // a PARTIAL order's online part: required there, refused anywhere else
  *   channel?: {
  *     phoneNumber?: string,
  *     phoneOperator?: 'MTN' | 'ORANGE' | 'MOOV',
@@ -63,7 +64,7 @@ router.post('/initiate', asyncHandler(async (req: Request, res: Response) => {
   // now covers the same rules plus the contact formats, and reports them in the
   // platform's standard validation-error shape.
   const body = InitiatePaymentRequestSchema.parse(req.body);
-  const { cartId, orderId, channel } = body;
+  const { cartId, orderId, channel, amount } = body;
 
   // The customer names a provider; the server picks the aggregator (ADR-A08). An app built
   // before `provider` existed still works: its `gateway` is ignored and counted, and the
@@ -72,8 +73,8 @@ router.post('/initiate', asyncHandler(async (req: Request, res: Response) => {
   const selection = { provider: deriveProviderOrThrow(body) };
 
   const result = cartId
-    ? await paymentOrchestrator.initiatePaymentForCart(cartId, selection, channel)
-    : await paymentOrchestrator.initiatePayment(orderId!, selection, channel);
+    ? await paymentOrchestrator.initiatePaymentForCart(cartId, selection, channel, { amount })
+    : await paymentOrchestrator.initiatePayment(orderId!, selection, channel, { amount });
 
   res.status(200).json({ success: result.status !== 'FAILED', ...result });
 }));

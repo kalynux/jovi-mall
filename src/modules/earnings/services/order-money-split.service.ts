@@ -20,6 +20,7 @@ import {
   orderItemsGrossOf,
   paysDeliveryFeeInCash,
 } from '../../orders/domain/delivery-payer';
+import { isPartialOrder } from '../../orders/domain/partial-payment';
 import { EarningsAllocationModel } from '../models/earnings-allocation.model';
 import { EarningsAdjustmentModel } from '../models/earnings-adjustment.model';
 import { EARNINGS_CONFIG } from '../config/earnings.config';
@@ -465,6 +466,12 @@ export class OrderMoneySplitService {
       };
     }
     if (orderVoid) return { ...base, state: 'none', noneReason: 'order_void' };
+    // A partial order's returned parcel: no cash, but the agency's return fee is paid from what the
+    // customer prepaid (or charged to the vendor at fault), on rows sourced by the shipment.
+    const returnFeeRows = rowsFor('shipment', shipment._id);
+    if (isPartialOrder(order) && returnFeeRows.length > 0) {
+      return { ...base, source: { type: 'shipment', id: String(shipment._id) }, lines: compact(returnFeeRows.map((row) => lineFromAllocation(row, now))) };
+    }
     if (isReturnedCod(order, shipment)) return { ...base, state: 'none', noneReason: 'returned_without_cash' };
 
     try {
@@ -478,6 +485,7 @@ export class OrderMoneySplitService {
         agencyId: shipment.agency_id.toString(),
         itemsAmount: amounts.itemsAmount,
         deliveryFeeAmount: amounts.deliveryFeeAmount,
+        prepaidAmount: collection ? collection.prepaid_amount ?? 0 : shipment.prepaid_amount ?? 0,
       });
       const notes: MoneySplitNote[] = ['commission_rate_may_change'];
       if (!agentId) notes.push('agent_not_assigned');

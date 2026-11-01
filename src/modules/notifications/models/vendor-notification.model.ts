@@ -8,6 +8,7 @@ import { MODELS, COLLECTIONS } from '../../../core/database/collections';
  */
 export type NotificationType =
     | 'order.created'
+    | 'order.created.partial'
     | 'order.cancelled'
     | 'booking.created'
     | 'booking.cancelled'
@@ -173,6 +174,7 @@ const VendorNotificationSchema = new Schema<IVendorNotification>(
             type: String,
             enum: [
                 'order.created',
+                'order.created.partial',
                 'order.cancelled',
                 'booking.created',
                 'booking.cancelled',

@@ -90,6 +90,11 @@ export const InitiatePaymentRequestSchema = z
     provider: PaymentProviderSchema.optional(),
     gateway: DeprecatedGatewaySchema,
     channel: PaymentChannelSchema.default({}),
+    /**
+     * A partial order's online part (2026-11-01): required there, refused anywhere else. Judged
+     * against the order's own limits by the orchestrator, which is the only place that knows them.
+     */
+    amount: z.number().int().positive().optional(),
   })
   .refine((body) => Boolean(body.cartId || body.orderId), {
     message: 'Either cartId or orderId is required',

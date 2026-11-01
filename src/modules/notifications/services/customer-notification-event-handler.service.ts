@@ -878,6 +878,8 @@ export class CustomerNotificationEventHandler {
             /** Units (sum of quantities). `itemCount` is LINES — two packs of one product are 1. */
             unitCount?: number;
             paymentStatus?: string;
+            /** Part online, part in cash (2026-11-01): the order waits for the online part. */
+            partialPayment?: boolean;
         };
 
         const customer = await this.loadCustomer(p.customerId);
@@ -900,7 +902,15 @@ export class CustomerNotificationEventHandler {
                 currency: p.currency,
                 amountFormatted: this.formatAmount(p.totalAmount),
                 paymentLine:
-                    p.paymentStatus === 'paid'
+                    p.partialPayment === true
+                        ? this.line(lang, {
+                            en: 'Pay your part online to confirm it. The rest is paid in cash at delivery.',
+                            fr: 'Payez votre part en ligne pour la confirmer. Le reste se paie en espèces à la livraison.',
+                            pt: 'Pague a sua parte online para a confirmar. O resto paga-se em dinheiro na entrega.',
+                            es: 'Paga tu parte en línea para confirmarlo. El resto se paga en efectivo en la entrega.',
+                            ar: 'ادفع حصتك عبر الإنترنت لتأكيده. يُدفع الباقي نقدًا عند التسليم.'
+                        })
+                        : p.paymentStatus === 'paid'
                         ? this.line(lang, {
                             en: 'Payment received.',
                             fr: 'Paiement reçu.',
@@ -953,6 +963,40 @@ export class CustomerNotificationEventHandler {
                 vendorName: p.vendorName ?? vendorName ?? this.genericVendor(lang),
                 currency: p.currency,
                 amountFormatted: this.formatAmount(p.amount)
+            }
+        });
+    }
+
+    /** A partial order's online part arrived. Answered in the chat the checkout came from, if any. */
+    async handleOrderPrepaymentReceived(event: DomainEvent): Promise<void> {
+        const p = event.payload as {
+            orderId: string;
+            customerId?: string;
+            orderNumber?: string;
+            amountPaidOnline: number;
+            balanceDue: number;
+            currency: string;
+            originChannel?: string;
+        };
+
+        const { customer, orderNumber, vendorName } = await this.customerFromOrder(p.orderId, p.customerId);
+        if (!customer) return;
+        const lang = resolveLanguage(customer);
+
+        await this.notify({
+            situation: 'order.prepayment.received',
+            customerId: customer._id.toString(),
+            aggregateType: 'order',
+            aggregateId: p.orderId,
+            idempotencyKey: `customer.order.prepayment.received:${p.orderId}`,
+            originChat: originChatOf(p.originChannel),
+            context: {
+                orderId: p.orderId,
+                orderNumber: p.orderNumber ?? orderNumber ?? p.orderId,
+                vendorName: vendorName ?? this.genericVendor(lang),
+                currency: p.currency,
+                paidFormatted: this.formatAmount(p.amountPaidOnline),
+                balanceFormatted: this.formatAmount(p.balanceDue)
             }
         });
     }

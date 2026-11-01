@@ -19,6 +19,7 @@ import {
   RefundChannel,
   RefundRequestModel,
   RefundEarningsImpact,
+  IRefundPartialReturn,
   RefundRequesterRole,
   RefundSourceKind,
   ExternalSettlementMethod,
@@ -36,6 +37,8 @@ import {
   writeRefundTransactionInSession,
 } from './refund-ledger';
 import { mintMerchantRef } from '../domain/merchant-reference';
+import { amountPaidOnlineOf } from '../../orders/domain/partial-payment';
+import { ShipmentModel } from '../../shipments/shipment.model';
 import { RefundPaymentChannel } from '../domain/refund-fee';
 import { computeRefundFees, RefundFeesPaidBy } from '../domain/refund-fees';
 import { attributeRefund, maxAttributable, RefundReasonKind, ReturnShippingPayer } from '../domain/refund-attribution';
@@ -143,6 +146,8 @@ export interface CreateRefundRequestInput {
    * Default `clawback`. See `IRefundRequest.earnings_impact`.
    */
   earningsImpact?: RefundEarningsImpact;
+  /** A partial order's returned parcel — see `IRefundRequest.partial_return`. */
+  partialReturn?: IRefundPartialReturn | null;
 }
 
 export type TransferOutcomeSource =
@@ -446,7 +451,9 @@ export class RefundRequestService {
           payout_rate: fees.payoutRate,
           payout_amount: fees.payoutAmount,
           vendor_charge: fees.vendorCharge,
+          agency_charge: fees.agencyCharge,
         },
+        partial_return: input.partialReturn ?? null,
         delivery_fault: deliveryFault.map((d) => ({
           shipment_id: new Types.ObjectId(d.shipmentId),
           agency_id: d.agencyId ? new Types.ObjectId(d.agencyId) : null,
@@ -528,6 +535,15 @@ export class RefundRequestService {
     const row = await this.getByIdOrThrow(id);
     if (row.status !== 'awaiting_approval') {
       throw conflict('Only a refund awaiting approval can be approved', { status: row.status });
+    }
+    // The agent's report named nobody: an administrator must say whose fault it was first, because
+    // that decides how much the customer gets and who pays (D-11, D-12).
+    if (row.partial_return && !row.partial_return.fault) {
+      throw createAppError(
+        ERROR_CODES.REFUND_PARTIAL_RETURN_FAULT_REQUIRED,
+        422,
+        'Say whose fault this returned parcel is before approving its refund'
+      );
     }
     if (
       secondApproverRequired({
@@ -889,6 +905,14 @@ export class RefundRequestService {
         { status: row.status }
       );
     }
+    // Paying by hand is another road to the same money: it must not skip saying whose fault it is.
+    if (row.partial_return && !row.partial_return.fault) {
+      throw createAppError(
+        ERROR_CODES.REFUND_PARTIAL_RETURN_FAULT_REQUIRED,
+        422,
+        'Say whose fault this returned parcel is before settling its refund'
+      );
+    }
     // Review finding 4: after a multi-transfer refund part of which already left (a succeeded
     // transfer leg, or a card leg Stripe refunded), the administrator pays ONLY the remainder.
     // The succeeded parts are recorded as what they were (`payout` / `card_refund`) by `complete`.
@@ -1187,9 +1211,22 @@ export class RefundRequestService {
   /** Is the source square after this refund? Read before the transaction, like the orchestrator. */
   private async fullRefundVerdict(row: IRefundRequest): Promise<{ fullyRefunded: boolean; sourceTotal: number }> {
     if (row.source_kind === 'order') {
-      const order = await OrderModel.findById(row.source_id).select('total_amount').lean<{ total_amount: number } | null>();
-      const total = order?.total_amount ?? 0;
+      const order = await OrderModel.findById(row.source_id)
+        .select('total_amount prepayment')
+        .lean<{ total_amount: number; prepayment?: { amount?: number | null; paid_at?: Date | null } | null } | null>();
       const already = await sumCompletedRefundsForOrder(row.source_id.toString());
+      // A partial order is square when everything actually PAID came back and nothing is still on
+      // its way: its total includes cash that may never have been handed over.
+      if (order && amountPaidOnlineOf(order) > 0) {
+        const orderId = row.source_id.toString();
+        const [coverage, stillOut] = await Promise.all([
+          getCodCoveragePort().coverageForOrder(orderId),
+          ShipmentModel.countDocuments({ order_id: row.source_id, status: { $nin: ['delivered', 'returned', 'rejected'] } }),
+        ]);
+        const paid = amountPaidOnlineOf(order) + coverage.filter((c) => c.status === 'collected').reduce((s, c) => s + c.expected, 0);
+        return { fullyRefunded: stillOut === 0 && already + row.gross_amount >= paid, sourceTotal: paid };
+      }
+      const total = order?.total_amount ?? 0;
       return { fullyRefunded: total > 0 && already + row.gross_amount >= total, sourceTotal: total };
     }
     if (row.source_kind === 'booking') {
@@ -1231,6 +1268,7 @@ export class RefundRequestService {
       await this.repo.stampCompletedMarker(row.id, 'billing_reversed_at', new Date());
       return;
     }
+    if (row.partial_return) return this.settlePartialReturnAftermath(row);
     const target = pauseTargetOf(row);
     if (!target || row.earnings_settled_at) return;
     await getRefundEarningsPort().onRefundCompleted({
@@ -1251,6 +1289,24 @@ export class RefundRequestService {
         claimDeadlineDays: d.claim_deadline_days ?? null,
         returnsPayer: d.returns_payer ?? null,
       })),
+      orderNumber: row.order_number,
+    });
+    await this.repo.stampCompletedMarker(row.id, 'earnings_settled_at', new Date());
+  }
+
+  /**
+   * A partial order's returned parcel: pay the agency its return fee and charge whoever is at
+   * fault, now that the customer has their money. Idempotent on the request id, like the others.
+   */
+  private async settlePartialReturnAftermath(row: IRefundRequest): Promise<void> {
+    if (!row.partial_return || row.earnings_settled_at) return;
+    await getRefundEarningsPort().onPartialReturnCompleted({
+      refundKey: row.id,
+      orderId: row.source_id.toString(),
+      shipmentId: row.partial_return.shipment_id.toString(),
+      fault: row.partial_return.fault ?? 'customer',
+      returnFee: row.partial_return.return_fee,
+      feesCharge: (row.fees?.vendor_charge ?? 0) + (row.fees?.agency_charge ?? 0),
       orderNumber: row.order_number,
     });
     await this.repo.stampCompletedMarker(row.id, 'earnings_settled_at', new Date());
@@ -1391,7 +1447,7 @@ export class RefundRequestService {
 
   private async loadOrder(id: string): Promise<SourceFacts> {
     const order = await OrderModel.findById(id)
-      .select('order_number vendor_id customer_id currency payment_method total_amount price_breakdown delivered_at')
+      .select('order_number vendor_id customer_id currency payment_method total_amount price_breakdown delivered_at prepayment')
       .lean<any>();
     if (!order) throw createAppError(ERROR_CODES.REFUND_ORDER_NOT_FOUND, 404, 'The order to refund was not found', { orderId: id });
 
@@ -1411,22 +1467,7 @@ export class RefundRequestService {
       returnShippingPayer: (vendor?.policies?.return_policy?.return_shipping_payer ?? null) as ReturnShippingPayer | null,
     };
 
-    if (order.payment_method === 'cash_on_delivery') {
-      const coverage = await getCodCoveragePort().coverageForOrder(id);
-      const collected = coverage.filter((c) => c.status === 'collected');
-      if (collected.length === 0) {
-        throw createAppError(ERROR_CODES.REFUND_ORDER_NOT_PAID, 409, 'No cash has been collected for this order yet — there is nothing to refund');
-      }
-      const paid = collected.reduce((s, c) => s + c.expected, 0);
-      const already = await sumCompletedRefundsForOrder(id);
-      return { ...base, paymentChannel: 'cod', legs: [], remaining: Math.max(0, paid - already), codCollections: coverage };
-    }
-
-    const r = await this.orchestrator.refundableFor({ kind: 'order', orderId: id });
-    if (r.legs.length === 0) {
-      throw createAppError(ERROR_CODES.REFUND_PAYMENT_NOT_FOUND, 404, 'No settled payment was found for this order');
-    }
-    return {
+    const onlineFacts = (r: Awaited<ReturnType<PaymentOrchestratorService['refundableFor']>>): SourceFacts => ({
       ...base,
       paymentChannel: r.legs.every((l) => l.tx.gateway === 'STRIPE') ? 'card' : 'mobile_money',
       legs: r.legs.map((l) => ({
@@ -1439,7 +1480,32 @@ export class RefundRequestService {
       })),
       remaining: r.remaining,
       codCollections: [],
-    };
+    });
+
+    if (order.payment_method === 'cash_on_delivery') {
+      // A partial order holds money two ways, and one request returns one of them: the online part
+      // first (the payer's own number, nothing to wait for), then the cash once it is covered. So
+      // every fee rule still applies to one channel at a time ("only the fee that happened").
+      const paidOnline = amountPaidOnlineOf(order);
+      if (paidOnline > 0) {
+        const online = await this.orchestrator.refundableFor({ kind: 'order', orderId: id });
+        if (online.remaining > 0) return onlineFacts(online);
+      }
+      const coverage = await getCodCoveragePort().coverageForOrder(id);
+      const collected = coverage.filter((c) => c.status === 'collected');
+      if (collected.length === 0 && paidOnline <= 0) {
+        throw createAppError(ERROR_CODES.REFUND_ORDER_NOT_PAID, 409, 'No cash has been collected for this order yet — there is nothing to refund');
+      }
+      const paid = collected.reduce((s, c) => s + c.expected, 0) + paidOnline;
+      const already = await sumCompletedRefundsForOrder(id);
+      return { ...base, paymentChannel: 'cod', legs: [], remaining: Math.max(0, paid - already), codCollections: coverage };
+    }
+
+    const r = await this.orchestrator.refundableFor({ kind: 'order', orderId: id });
+    if (r.legs.length === 0) {
+      throw createAppError(ERROR_CODES.REFUND_PAYMENT_NOT_FOUND, 404, 'No settled payment was found for this order');
+    }
+    return onlineFacts(r);
   }
 
   private async loadBooking(id: string): Promise<SourceFacts> {

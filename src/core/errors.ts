@@ -157,6 +157,12 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.COD_AGENCY_NOT_SUPPORTED]: 'This agency does not accept cash on delivery',
     [ERROR_CODES.COD_ORDER_AMOUNT_EXCEEDS_LIMIT]: 'This order is worth more than the cash-on-delivery limit allows',
     [ERROR_CODES.COD_VENDOR_NOT_ACCEPTED]: 'This seller does not accept cash on delivery',
+    [ERROR_CODES.PARTIAL_PAYMENT_NOT_AVAILABLE]: 'Paying part online and part in cash is not available for this order',
+    [ERROR_CODES.PARTIAL_PAYMENT_AMOUNT_REQUIRED]: 'Say how much you want to pay online now',
+    [ERROR_CODES.PARTIAL_PAYMENT_AMOUNT_OUT_OF_RANGE]: 'That amount is outside what can be paid online for this order',
+    [ERROR_CODES.PARTIAL_PAYMENT_NOT_APPLICABLE]: 'This order is not paid in parts, so an amount cannot be chosen',
+    [ERROR_CODES.REFUND_PARTIAL_RETURN_FAULT_REQUIRED]: 'Say whose fault this returned parcel is before approving its refund',
+    [ERROR_CODES.REFUND_PARTIAL_RETURN_NOT_APPLICABLE]: 'This refund is not a returned parcel still awaiting approval',
     [ERROR_CODES.COD_AGENCY_LIMIT_EXCEEDED]:
         'Handing this shipment over would put the agency above its cash-on-delivery limit — dispatch it with force to proceed anyway',
     [ERROR_CODES.COD_CUSTOMER_RESTRICTED]:

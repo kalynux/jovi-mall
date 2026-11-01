@@ -2299,6 +2299,10 @@
           "deliveryFeeCash.reason",
           "deliveryFeeCash.amountDueOnline",
           "deliveryFeeCash.amountDueToRider",
+          "partialPayment.available",
+          "partialPayment.reason",
+          "partialPayment.minimumAmount",
+          "partialPayment.maximumAmount",
           "perVendor[].deliveryFeeCash"
         ],
         "result_kind": "receipt",
@@ -2607,7 +2611,11 @@
           "deliveryShortfalls[].shortfallText",
           "deliveryShortfalls[].payable",
           "payment.deliveryFeeCash.onlineText",
-          "payment.deliveryFeeCash.toRiderText"
+          "payment.deliveryFeeCash.toRiderText",
+          "payment.partialPayment.minimumAmount",
+          "payment.partialPayment.maximumAmount",
+          "payment.partialPayment.minimumText",
+          "payment.partialPayment.maximumText"
         ],
         "result_kind": "cart_summary",
         "never_relay": [
@@ -2690,6 +2698,11 @@
             "type": "string",
             "pattern": "^d{4,8}$",
             "description": "Orange Money only, and only after a PAYMENT_CODE_REQUIRED refusal: the payment code the customer got by dialling details.ussd and typed back to you. Digits only. Never ask for it up front, never invent it, never repeat it back."
+          },
+          "partialAmount": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "ONLY when the review's payment.partialPayment was set and the customer said how much they want to pay now: a whole number between its minimumAmount and maximumAmount. This is charged now and the rest is paid in cash at delivery. Never invent it. On PARTIAL_PAYMENT_AMOUNT_OUT_OF_RANGE (details.spent false), tell them the limits and ask again; nothing was spent."
           }
         }
       },
@@ -2699,7 +2712,8 @@
           "deliveryAddressId",
           "phone",
           "deliveryFeePayment",
-          "paymentCode"
+          "paymentCode",
+          "partialAmount"
         ]
       },
       "response": {
@@ -2961,13 +2975,19 @@
             "type": "string",
             "pattern": "^d{4,8}$",
             "description": "Orange Money only, and only after a PAYMENT_CODE_REQUIRED refusal: the payment code the customer got by dialling details.ussd and typed back to you. Digits only. Never ask for it up front, never invent it, never repeat it back."
+          },
+          "partialAmount": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Only on a checkout paid part online, and only when the customer named a different amount to pay now (for example their wallet was short). Omit to retry the same amount."
           }
         }
       },
       "request": {
         "body": [
           "phone",
-          "paymentCode"
+          "paymentCode",
+          "partialAmount"
         ]
       },
       "response": {

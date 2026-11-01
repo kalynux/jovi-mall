@@ -234,6 +234,19 @@ export const ERROR_CODES = Object.freeze({
      */
     PAYMENT_PAYER_NUMBER_REQUIRED: 'PAYMENT_PAYER_NUMBER_REQUIRED',
     PAYMENT_ORDER_IS_COD: 'PAYMENT_ORDER_IS_COD',
+    // ── Partial payment (2026-11-01): part online now, the rest in cash at the door ──
+    // Checkout refused. `details.reason` is one of `PARTIAL_PAYMENT_UNAVAILABLE_REASONS`. // 422
+    PARTIAL_PAYMENT_NOT_AVAILABLE: 'PARTIAL_PAYMENT_NOT_AVAILABLE',
+    // Paying a partial order with no amount. `details`: `{ minimum, maximum }`.          // 422
+    PARTIAL_PAYMENT_AMOUNT_REQUIRED: 'PARTIAL_PAYMENT_AMOUNT_REQUIRED',
+    // The amount is outside the order's limits. `details`: `{ minimum, maximum, requested }`. // 422
+    PARTIAL_PAYMENT_AMOUNT_OUT_OF_RANGE: 'PARTIAL_PAYMENT_AMOUNT_OUT_OF_RANGE',
+    // An `amount` was sent for an order that is not partial.                             // 422
+    PARTIAL_PAYMENT_NOT_APPLICABLE: 'PARTIAL_PAYMENT_NOT_APPLICABLE',
+    // Approving a returned parcel's refund before an administrator said whose fault it was. // 422
+    REFUND_PARTIAL_RETURN_FAULT_REQUIRED: 'REFUND_PARTIAL_RETURN_FAULT_REQUIRED',
+    // Setting a fault on a refund that is not a returned parcel's, or no longer awaiting approval. // 422
+    REFUND_PARTIAL_RETURN_NOT_APPLICABLE: 'REFUND_PARTIAL_RETURN_NOT_APPLICABLE',
     STRIPE_WEBHOOK_SIGNATURE_INVALID: 'STRIPE_WEBHOOK_SIGNATURE_INVALID',
     /**
      * A mobile-money charge could not be routed to MTN or Orange.

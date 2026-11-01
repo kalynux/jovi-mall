@@ -76,10 +76,17 @@ export interface ICashCollection extends Document {
   kind?: CashCollectionKind;
 
   /**
-   * Cash to collect for this shipment (snapshot): `items_amount + delivery_fee_amount`.
-   * Before ADR-A11 it was the items alone (and those rows carry no breakdown).
+   * Cash to collect for this shipment (snapshot): `items_amount + delivery_fee_amount`, minus
+   * `prepaid_amount` on a partial order. Before ADR-A11 it was the items alone (and those rows
+   * carry no breakdown).
    */
   expected_amount: number;
+  /**
+   * What the customer already paid online for this parcel (partial order, 2026-11-01). 0 or absent
+   * everywhere else. `items_amount` and `delivery_fee_amount` stay the FULL values: the split
+   * measures the sale on them, while liability, coverage and exposure read `expected_amount`.
+   */
+  prepaid_amount?: number | null;
   /** Σ order-item price × shipment qty — the goods. The split's gross and the COD fee's base (D-5). */
   items_amount?: number | null;
   /**
@@ -149,6 +156,7 @@ const CashCollectionSchema = new Schema<ICashCollection>(
     // The breakdown of expected_amount (ADR-A11). Null on rows written before it.
     items_amount: { type: Number, default: null, min: 0 },
     delivery_fee_amount: { type: Number, default: null, min: 0 },
+    prepaid_amount: { type: Number, default: 0, min: 0 },
     currency: { type: String, required: true, uppercase: true, trim: true },
 
     status: {

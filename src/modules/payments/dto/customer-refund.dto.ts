@@ -89,7 +89,7 @@ export interface CustomerRefundBlock {
   /** The transfer fee to send the money back. 0 for a card refund. */
   transferFee: number;
   /** `seller` when the seller cancelled after payment: the customer receives everything they paid. */
-  feesPaidBy: 'customer' | 'seller';
+  feesPaidBy: 'customer' | 'seller' | 'delivery_company';
   /**
    * The refund line by line, ready to show — "Refund 10,000 · Payment provider fee −200 · Transfer
    * fee −196 · You receive 9,604". Switch on `code` to render another language.
@@ -139,7 +139,7 @@ export function toCustomerRefundBlock(row: CustomerRefundSourceRow | null | unde
     paymentFee: fees.payinAmount,
     paymentFeePercent: fees.payinRate,
     transferFee: fees.payoutAmount,
-    feesPaidBy: fees.paidBy === 'vendor' ? 'seller' : 'customer',
+    feesPaidBy: fees.paidBy === 'vendor' ? 'seller' : fees.paidBy === 'agency' ? 'delivery_company' : 'customer',
     lines: customerRefundLines(fees, row.gross_amount),
     netAmount: row.net_amount,
     currency: row.currency,

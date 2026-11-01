@@ -24,6 +24,8 @@ export const ADJUSTMENT_REASON_CODES = [
   'dispute_payin_fee',
   /** A damage claim charged the agency for a parcel. */
   'damage_claim',
+  /** A partial order's parcel came back through this vendor's or agency's fault. */
+  'partial_return_fault',
 ] as const;
 export type AdjustmentReasonCode = (typeof ADJUSTMENT_REASON_CODES)[number];
 
@@ -81,6 +83,26 @@ export function explainVendorBeyond(p: {
       feesReason: p.feesReason,
     },
     explanation: `Charged on ${order(p.orderNumber)}, beyond your share of the sale: ${parts.join('; ') || 'nothing'}.`,
+  };
+}
+
+/**
+ * A partial order's returned parcel, charged to whoever caused it (D-12). `returnFee` is 0 for an
+ * agency, which simply earns nothing for the trip.
+ */
+export function explainPartialReturnCharge(p: {
+  orderNumber: string | null;
+  currency: string;
+  returnFee: number;
+  fees: number;
+}): Explanation {
+  const parts: string[] = [];
+  if (p.returnFee > 0) parts.push(`${money(p.returnFee, p.currency)} for the delivery company's return trip`);
+  if (p.fees > 0) parts.push(`${money(p.fees, p.currency)} of payment and transfer fees on the customer's refund`);
+  return {
+    reason_code: 'partial_return_fault',
+    reason_params: { orderNumber: p.orderNumber, currency: p.currency, returnFee: p.returnFee, fees: p.fees },
+    explanation: `A parcel on ${order(p.orderNumber)} came back through your fault, and the customer got back everything they paid online: ${parts.join('; ') || 'nothing'}.`,
   };
 }
 

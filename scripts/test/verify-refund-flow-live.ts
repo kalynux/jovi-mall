@@ -105,6 +105,8 @@ registerRefundPorts({
     onRequestOpened: async (target, id) => { earningsCalls.push({ kind: 'opened', args: { target, id } }); return true; },
     onRequestClosedWithoutRefund: async (target, id) => { earningsCalls.push({ kind: 'closed', args: { target, id } }); },
     assessDeliveryFault: async () => [],
+    returnFeeOfParcel: async () => 0,
+    onPartialReturnCompleted: async () => {},
     onRefundCompleted: async (input) => {
       if (failNextRecovery) {
         failNextRecovery = false;

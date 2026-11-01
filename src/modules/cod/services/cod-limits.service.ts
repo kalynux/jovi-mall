@@ -202,7 +202,7 @@ export class CodLimitsService {
           collection && collection.status === 'pending'
             ? collection.expected_amount ?? 0
             : kind === 'order'
-              ? expectedCodAmount(order.items ?? [], s.items ?? [], customerDeliveryFeeOf(order, s))
+              ? expectedCodAmount(order.items ?? [], s.items ?? [], customerDeliveryFeeOf(order, s), s.prepaid_amount ?? 0)
               : customerDeliveryFeeOf(order, s),
         collectionStatus: collection?.status ?? null,
         agencyOnly: kind === 'delivery_fee',

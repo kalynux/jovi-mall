@@ -64,12 +64,26 @@ export interface RefundRequestDto {
    * requests created before: read those as a transfer fee only, paid by the customer.
    */
   fees: {
-    paidBy: 'customer' | 'vendor';
+    paidBy: 'customer' | 'vendor' | 'agency';
     paymentFeePercent: number;
     paymentFee: number;
     transferFeePercent: number;
     transferFee: number;
     vendorCharge: number;
+    agencyCharge: number;
+  } | null;
+  /**
+   * A partial order's returned parcel (2026-11-01). `fault: null` means an administrator must say
+   * whose fault it is before this can be approved (`POST /:id/partial-return-fault`).
+   */
+  partialReturn: {
+    shipmentId: string;
+    fault: 'customer' | 'vendor' | 'agency' | null;
+    returnFee: number;
+    prepaidAmount: number;
+    agentReason: string | null;
+    agentNote: string | null;
+    faultSetBy: { id: string | null; name: string | null; at: Date } | null;
   } | null;
   /** Parcels named as delivered at fault, each judged against its agency's window (2026-10-22). */
   deliveryFault: Array<{
@@ -158,6 +172,20 @@ export function toRefundRequestDto(row: IRefundRequest): RefundRequestDto {
           transferFeePercent: row.fees.payout_rate,
           transferFee: row.fees.payout_amount,
           vendorCharge: row.fees.vendor_charge,
+          agencyCharge: row.fees.agency_charge ?? 0,
+        }
+      : null,
+    partialReturn: row.partial_return
+      ? {
+          shipmentId: row.partial_return.shipment_id.toString(),
+          fault: row.partial_return.fault ?? null,
+          returnFee: row.partial_return.return_fee,
+          prepaidAmount: row.partial_return.prepaid_amount,
+          agentReason: row.partial_return.agent_reason ?? null,
+          agentNote: row.partial_return.agent_note ?? null,
+          faultSetBy: row.partial_return.fault_set_by
+            ? { id: row.partial_return.fault_set_by.id, name: row.partial_return.fault_set_by.name, at: row.partial_return.fault_set_by.at }
+            : null,
         }
       : null,
     deliveryFault: (row.delivery_fault ?? []).map((d) => ({

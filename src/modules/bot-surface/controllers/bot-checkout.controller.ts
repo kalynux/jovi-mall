@@ -273,8 +273,8 @@ export class BotCheckoutController {
      * the screen cannot disagree about which wallet is charged.
      */
     static retryPayment = asyncHandler(async (req: Request, res: Response) => {
-        const { phone, paymentCode } = RetrySchema.parse(req.body ?? {});
-        await retryCharge(req, res, null, phone, paymentCode ?? null);
+        const { phone, paymentCode, partialAmount } = RetrySchema.parse(req.body ?? {});
+        await retryCharge(req, res, null, phone, paymentCode ?? null, partialAmount ?? null);
     });
 
     /**
@@ -346,8 +346,8 @@ export class BotCheckoutController {
      * ⚠ **The body lives in `placeChatCheckout`**, the one placement the Place order tap runs too.
      */
     static placeInChat = asyncHandler(async (req: Request, res: Response) => {
-        const { checkoutRef, deliveryAddressId, phone, deliveryFeePayment, paymentCode } = ChatPlaceSchema.parse(req.body ?? {});
-        await placeChatCheckout(req, res, checkoutRef, deliveryAddressId ?? null, phone, deliveryFeePayment, paymentCode ?? null);
+        const { checkoutRef, deliveryAddressId, phone, deliveryFeePayment, paymentCode, partialAmount } = ChatPlaceSchema.parse(req.body ?? {});
+        await placeChatCheckout(req, res, checkoutRef, deliveryAddressId ?? null, phone, deliveryFeePayment, paymentCode ?? null, partialAmount ?? null);
     });
 }
 
@@ -396,6 +396,11 @@ const ChatPlaceSchema = z
          * was told to dial for one (`422 PAYMENT_CODE_REQUIRED`, `details.ussd`) and typed it back.
          */
         paymentCode: PaymentCodeSchema.optional(),
+        /**
+         * Pay part now (2026-11-01): the amount the customer named, within the review's
+         * `payment.partialPayment` limits. The rest is paid in cash at delivery.
+         */
+        partialAmount: z.number().int().positive().optional(),
     })
     .strict();
 
@@ -417,6 +422,8 @@ const RetrySchema = z
         phone: TypedPayerNumberSchema,
         /** The `CODE_FIRST` payment code, as on `ChatPlaceSchema`. */
         paymentCode: PaymentCodeSchema.optional(),
+        /** A partial order's online part, when the customer wants to retry with a different amount. */
+        partialAmount: z.number().int().positive().optional(),
     })
     .strict();
 
@@ -509,6 +516,12 @@ async function reviewChatCheckout(
              * it. Server-formatted amounts; null when not offered.
              */
             deliveryFeeCash: view.deliveryFeeCash,
+            /**
+             * Pay part now (2026-11-01): the customer names an amount between these, and it goes to
+             * `checkout_place` as `partialAmount`; the rest is paid in cash at delivery. Null when not
+             * offered. An amount a customer types cannot be a button, so this one is the model's.
+             */
+            partialPayment: view.partialPayment,
         },
         /**
          * The website's address page, only when an address is what would unblock this. Null
@@ -561,6 +574,8 @@ async function placeChatCheckout(
     deliveryFeePayment: 'with_order' | 'cash_to_rider' = 'with_order',
     /** The `CODE_FIRST` payment code the model relayed. A tap never carries one (null). */
     paymentCode: string | null = null,
+    /** Pay part now: the amount the customer named. A tap never carries one (null). */
+    partialAmount: number | null = null,
 ): Promise<void> {
     const caller = botCallerOf(req);
     /** Composed only — `placeCheckout` judges it, before the spend, exactly as it judges the screen's. */
@@ -570,6 +585,7 @@ async function placeChatCheckout(
         callerCustomerId: caller.customerId,
         addressId: deliveryAddressId,
         paymentCode,
+        partialAmount,
         deliveryFeePayment,
     });
 
@@ -598,6 +614,10 @@ async function placeChatCheckout(
          */
         deliveryCashText: placed.deliveryCashToRider > 0 && placed.currency
             ? formatBotPrice(placed.deliveryCashToRider, placed.currency)
+            : null,
+        /** Pay part now: the cash still due at delivery, formatted; null on any other placement. */
+        cashDueText: placed.cashDueAtDelivery > 0 && placed.currency
+            ? formatBotPrice(placed.cashDueAtDelivery, placed.currency)
             : null,
     };
 
@@ -660,6 +680,8 @@ async function retryCharge(
     phone: string | null,
     /** The `CODE_FIRST` payment code the model relayed. A tap never carries one (null). */
     paymentCode: string | null = null,
+    /** A partial order's online part, when the customer named a different amount. */
+    partialAmount: number | null = null,
 ): Promise<void> {
     const caller = botCallerOf(req);
     const transaction = await resolveCheckoutPayment(caller.customerId, transactionId);
@@ -699,7 +721,14 @@ async function retryCharge(
             route,
             { phoneNumber: payerNumber, customerName: customer.name, ...(paymentCode ? { paymentCode } : {}) },
             // The retry is asked for in THIS chat, so its result is told here — see `placeCheckout`.
-            { originChat: req.bot!.envelope.channel },
+            // A partial order keeps the amount of the attempt that failed unless a new one was named:
+            // a Try again tap cannot carry one, and the orchestrator requires it.
+            {
+                originChat: req.bot!.envelope.channel,
+                ...(transaction.purpose === 'order_prepayment'
+                    ? { amount: partialAmount ?? transaction.amountSnapshot }
+                    : {}),
+            },
         );
     } catch (error) {
         /**

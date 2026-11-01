@@ -82,8 +82,27 @@ export interface VendorOrderListItemDTO {
 
     fulfillmentStatus: string;
     paymentStatus: string;
+    /** Paid part online, part in cash (2026-11-01). `null` on every other order. */
+    partialPayment: VendorPartialPaymentDTO | null;
 
     itemCount: number;
+}
+
+export interface VendorPartialPaymentDTO {
+    amountPaidOnline: number;
+    /** What the delivery agent collects in cash at delivery. */
+    balanceDue: number;
+    paidAt: Date | null;
+}
+
+/** The vendor's view of a partial order's online part, or `null` on any other order. */
+export function toVendorPartialPaymentDto(order: {
+    total_amount: number;
+    prepayment?: { amount?: number | null; paid_at?: Date | null } | null;
+}): VendorPartialPaymentDTO | null {
+    if (!order.prepayment) return null;
+    const paid = order.prepayment.paid_at ? order.prepayment.amount ?? 0 : 0;
+    return { amountPaidOnline: paid, balanceDue: order.total_amount - paid, paidAt: order.prepayment.paid_at ?? null };
 }
 
 export interface OrderItemDTO {
@@ -182,6 +201,8 @@ export interface VendorOrderDetailsDTO {
 
     fulfillmentStatus: string;
     paymentStatus: string;
+    /** Paid part online, part in cash (2026-11-01). `null` on every other order. */
+    partialPayment: VendorPartialPaymentDTO | null;
     paymentIntentId?: string;
 
     /** Delivery info for physical orders. null for digital orders. */

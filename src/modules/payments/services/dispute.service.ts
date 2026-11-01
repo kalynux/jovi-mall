@@ -2,6 +2,7 @@ import { PaymentTransactionModel } from '../models/payment-transaction.model';
 import { disputeVendorCharge } from '../domain/refund-fees';
 import { getPaymentSettingsSync } from './payment-settings.service';
 import { OrderModel, FulfillmentStatus } from '../../orders/order.model';
+import { amountPaidOnlineOf } from '../../orders/domain/partial-payment';
 import { OrderTimelineRepository } from '../../orders/order-timeline.repository';
 import { TimelineActorType } from '../../orders/order-timeline.model';
 import { Booking } from '../../booking/models/booking.model';
@@ -241,7 +242,8 @@ export class PaymentDisputeService {
       { _id: order._id },
       {
         $set: {
-          payment_status: 'paid',
+          // A partial order's disputed charge was only its online part: the cash is still to come.
+          payment_status: amountPaidOnlineOf(order) > 0 ? 'partially_paid' : 'paid',
           'dispute_hold.active': false,
           'dispute_hold.resolved_at': new Date(),
           updated_at: new Date(),
@@ -251,7 +253,9 @@ export class PaymentDisputeService {
 
     await this.appendTimeline(
       orderId,
-      'Dispute won — order unfrozen, payment restored to paid',
+      amountPaidOnlineOf(order) > 0
+        ? 'Dispute won — order unfrozen, online part restored'
+        : 'Dispute won — order unfrozen, payment restored to paid',
       { disputeId },
       actor
     );

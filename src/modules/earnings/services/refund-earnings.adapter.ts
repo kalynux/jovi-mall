@@ -1,5 +1,6 @@
-import type { DeliveryFaultAssessment, RefundCompletedInput, RefundEarningsPort } from '../../payments/domain/refund-ports';
+import type { DeliveryFaultAssessment, PartialReturnCompletedInput, RefundCompletedInput, RefundEarningsPort } from '../../payments/domain/refund-ports';
 import { courierLiabilityService } from './courier-liability.service';
+import { partialReturnSettlementService } from './partial-return-settlement.service';
 import { earningsClawbackService, EarningsClawbackService } from './earnings-clawback.service';
 import { earningsPauseService, EarningsPauseService, PauseTarget, SYSTEM_PAUSE_ACTOR } from './earnings-pause.service';
 import { ticketEarningsHoldService } from '../../tickets/services/ticket-earnings-hold.service';
@@ -76,6 +77,14 @@ export class RefundEarningsAdapter implements RefundEarningsPort {
   /** Read-only: the agency side of parcels named as delivered at fault (courier-liability.service.ts). */
   async assessDeliveryFault(orderId: string, shipmentIds: string[], now: Date): Promise<DeliveryFaultAssessment[]> {
     return courierLiabilityService.assessDeliveryFault(orderId, shipmentIds, now);
+  }
+
+  async returnFeeOfParcel(shipmentId: string): Promise<number> {
+    return partialReturnSettlementService.returnFeeOfParcel(shipmentId);
+  }
+
+  async onPartialReturnCompleted(input: PartialReturnCompletedInput): Promise<void> {
+    await partialReturnSettlementService.settle(input);
   }
 }
 

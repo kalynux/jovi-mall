@@ -124,7 +124,11 @@ export class VendorNotificationEventHandler {
     /** Handle order.created event */
     async handleOrderCreated(event: DomainEvent): Promise<void> {
         try {
-            const { orderId, vendorId, orderNumber, totalAmount, currency } = event.payload;
+            const { orderId, vendorId, orderNumber, totalAmount, currency, partialPayment } = event.payload;
+
+            // A partial order: nothing is paid yet, and the vendor must not prepare it. They are
+            // told by `order.prepayment.received` when there is money behind it.
+            if (partialPayment === true) return;
 
             const prefs = await this.preferenceRepo.getByVendor(vendorId);
             if (!prefs.preferences.orderCreated) return; // Disabled
@@ -146,6 +150,35 @@ export class VendorNotificationEventHandler {
         } catch (error) {
             console.error('[NotificationHandler] Failed to handle order.created:', error);
             // Do not throw - event processing must continue
+        }
+    }
+
+    /** The online part of a partial order was paid: the vendor's "new order", with the split in it. */
+    async handleOrderPrepaymentReceived(event: DomainEvent): Promise<void> {
+        try {
+            const { orderId, vendorId, orderNumber, totalAmount, amountPaidOnline, balanceDue, currency } = event.payload;
+
+            const prefs = await this.preferenceRepo.getByVendor(vendorId);
+            if (!prefs.preferences.orderCreated) return; // Disabled
+
+            await this.dispatch({
+                situation: 'order.created.partial',
+                prefs,
+                vendorId,
+                aggregateType: 'order',
+                aggregateId: orderId,
+                idempotencyKey: `order.created.partial:${orderId}:${vendorId}`,
+                context: {
+                    orderNumber,
+                    currency,
+                    amountFormatted: Number(totalAmount).toLocaleString(),
+                    paidFormatted: Number(amountPaidOnline).toLocaleString(),
+                    balanceFormatted: Number(balanceDue).toLocaleString(),
+                    orderId
+                }
+            });
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle order.prepayment.received:', error);
         }
     }
 

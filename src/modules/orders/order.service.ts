@@ -1,5 +1,7 @@
 import mongoose, { ClientSession } from 'mongoose';
-import { IOrder, OrderType, OrderPaymentMethod, FulfillmentStatus } from './order.model';
+import { IOrder, IOrderPrepayment, OrderType, OrderPaymentMethod, FulfillmentStatus } from './order.model';
+import { amountPaidOnlineOf, isPartialOrder, prepaymentIsDue } from './domain/partial-payment';
+import { partialPaymentService } from './services/partial-payment.service';
 import { OrderRepository } from './order.repository';
 import { CustomerModel } from '../customers/customer.model';
 import { IGeoAddress, GeoAddressInput, toGeoAddress } from '../../core/types/geo-address.types';
@@ -191,8 +193,9 @@ export class OrderService {
       });
     }
 
-    // Paid orders require a refund — out of scope for this eligibility-only path.
-    if (order.payment_status === 'paid') {
+    // Paid orders require a refund — out of scope for this eligibility-only path. So does a partial
+    // order whose online part is paid: the platform holds the customer's money.
+    if (order.payment_status === 'paid' || amountPaidOnlineOf(order) > 0) {
       throw createAppError(ERROR_CODES.ORDER_CANCEL_REQUIRES_REFUND, 422);
     }
     if (order.payment_status !== 'pending' && order.payment_status !== 'AWAITING_PAYMENT') {
@@ -498,9 +501,12 @@ export class OrderService {
       throw createAppError(ERROR_CODES.ORDER_WRONG_TYPE, 400, 'Only physical orders can be dispatched to a delivery agency');
     }
     // Prepaid orders dispatch only once paid. COD orders fulfil BEFORE payment
-    // by design — dispatchable while the cash is still outstanding.
+    // by design — dispatchable while the cash is still outstanding. ⛔ A partial order waits for
+    // its online part: until then it reads AWAITING_PAYMENT like any COD order, and nothing has
+    // been paid to justify sending anybody.
     const codAwaitingCash =
       order.payment_method === 'cash_on_delivery' &&
+      !prepaymentIsDue(order) &&
       (order.payment_status === 'AWAITING_PAYMENT' || order.payment_status === 'partially_paid');
     if (order.payment_status !== 'paid' && !codAwaitingCash) {
       throw createAppError(ERROR_CODES.ORDER_PAYMENT_REQUIRED, 422, undefined, { paymentStatus: order.payment_status });
@@ -579,7 +585,7 @@ export class OrderService {
         agencyId: s.agency_id.toString(),
         vendorId: order.vendor_id.toString(),
         // The cash the agent will carry: goods + a customer-paid delivery fee (ADR-A11).
-        amount: isCod ? expectedCodAmount(order.items as any[], s.items as any[], customerDeliveryFeeOf(order, s)) : 0,
+        amount: isCod ? expectedCodAmount(order.items as any[], s.items as any[], customerDeliveryFeeOf(order, s), s.prepaid_amount ?? 0) : 0,
       })),
       { force }
     );
@@ -702,8 +708,14 @@ export class OrderService {
     customerId: string,
     paymentMethod: OrderPaymentMethod = 'online',
     deliveryInput?: { addressId?: string | null; address?: GeoAddressInput | null } | null,
-    options: { deliveryFeePayment?: DeliveryFeePayment | null } = {}
+    options: { deliveryFeePayment?: DeliveryFeePayment | null; partialPayment?: boolean } = {}
   ): Promise<{ cartId: string; orders: IOrder[]; shipments: any[] }> {
+    // Partial payment (2026-11-01): `cash_on_delivery` plus an online part (`order.prepayment`).
+    // Every vendor in the checkout must accept it (D-6): `buildVendorOrder` refuses otherwise.
+    const partialPayment = options.partialPayment === true;
+    if (partialPayment && paymentMethod !== 'cash_on_delivery') {
+      throw createAppError(ERROR_CODES.PARTIAL_PAYMENT_NOT_AVAILABLE, 422, 'Partial payment is part online and part in cash on delivery', { reason: 'not_cash_on_delivery' });
+    }
     // Cash for delivery (ADR-A11 § Cash for delivery, W-F): the customer may pay the goods online
     // and a CUSTOMER-PAID delivery fee to the rider in cash. Decided per vendor order below; these
     // two refusals hold for the whole checkout and are answered before anything is read.
@@ -761,6 +773,10 @@ export class OrderService {
 
     if (orderType !== 'physical' && orderType !== 'digital') {
       throw createAppError(ERROR_CODES.ORDER_CART_INVALID, 400, `Order type must be 'physical' or 'digital', got '${orderType}'`);
+    }
+
+    if (partialPayment && orderType !== 'physical') {
+      throw createAppError(ERROR_CODES.PARTIAL_PAYMENT_NOT_AVAILABLE, 422, undefined, { reason: 'digital_items' });
     }
 
     // COD is physical-only: nothing is handed over for digital goods, so there
@@ -864,7 +880,7 @@ export class OrderService {
 
       for (const [vendorId, items] of vendorGroups) {
         const built = await this.buildVendorOrder(
-          { customerId, cartId: cart.cartId!, vendorId, items, orderType, currency, paymentMethod, deliveryAddress, deliveryFeePayment },
+          { customerId, cartId: cart.cartId!, vendorId, items, orderType, currency, paymentMethod, deliveryAddress, deliveryFeePayment, partialPayment },
           session
         );
         createdOrders.push(built.order);
@@ -887,7 +903,10 @@ export class OrderService {
       // carries it out — so the units leave the shelf now, not when the cash arrives at the
       // door. Committed in the same transaction that created the order, because if the
       // order does not exist neither should the decrement.
-      if (paymentMethod === 'cash_on_delivery') {
+      //
+      // ⛔ NOT a partial order: it fulfils only once its online part is paid, so the units stay
+      // held exactly like a prepaid order's, and `handlePrepaymentSuccess` commits them.
+      if (paymentMethod === 'cash_on_delivery' && !partialPayment) {
         for (const order of createdOrders) {
           await orderStockService.commitForOrder(order, session);
         }
@@ -904,8 +923,9 @@ export class OrderService {
 
       // COD orders have no payment-success moment before fulfilment, so the
       // vendor's auto-redirect (normally fired on payment success) runs at
-      // checkout instead. Best-effort, same as the payment-success path.
-      if (order.payment_method === 'cash_on_delivery' && order.order_type === 'physical') {
+      // checkout instead. Best-effort, same as the payment-success path. A partial order has that
+      // moment: `handlePrepaymentSuccess` dispatches it.
+      if (order.payment_method === 'cash_on_delivery' && order.order_type === 'physical' && !partialPayment) {
         await this.maybeDispatchToAgencies(order);
         try {
           await order.save();
@@ -1064,6 +1084,8 @@ export class OrderService {
       deliveryAddress: IGeoAddress | null;
       /** What the customer asked for (W-F); applied to this vendor order only when customer-paid. */
       deliveryFeePayment?: DeliveryFeePayment;
+      /** Part online, part in cash (2026-11-01): this vendor order must accept it, or checkout refuses. */
+      partialPayment?: boolean;
     },
     session: ClientSession
   ): Promise<{ order: IOrder; shipments: any[] }> {
@@ -1262,7 +1284,27 @@ export class OrderService {
       // (its agent collects that shipment's cash) — measured on the order total INCLUDING
       // customer-paid delivery, which is cash the agent carries too. Validated inside the
       // checkout transaction so a failure rolls back the whole group.
-      if (paymentMethod === 'cash_on_delivery') {
+      //
+      // A partial order asks its own question: the vendor's partial-payment setting rather than
+      // their COD terms (D-5), and the most cash the order can leave at the door.
+      let prepayment: IOrderPrepayment | null = null;
+      if (params.partialPayment) {
+        const limits = await codEligibilityService.assertVendorOrderEligibleForPartial({
+          orderType,
+          totalAmount: total,
+          agencyIds: Object.keys(agencyGroups),
+          parcelCount: Object.keys(agencyGroups).length,
+          vendorId,
+        });
+        prepayment = {
+          min_percent: limits.minPercent,
+          minimum_amount: limits.minimumAmount,
+          maximum_amount: limits.maximumAmount,
+          amount: null,
+          paid_at: null,
+          transaction_id: null,
+        };
+      } else if (paymentMethod === 'cash_on_delivery') {
         await codEligibilityService.assertVendorOrderEligible({
           orderType,
           totalAmount: total,
@@ -1286,6 +1328,7 @@ export class OrderService {
         delivery_payer_reason: pricing.payerReason,
         free_delivery_shortfall: pricing.freeDeliveryShortfall,
         delivery_fee_payment: cashFee ? 'cash_to_rider' : 'with_order',
+        prepayment,
         payment_method: paymentMethod,
         payment_status: 'AWAITING_PAYMENT',  // Ready for payment (COD: paid at handoff)
         fulfillment_status: 'pending',
@@ -1517,6 +1560,91 @@ export class OrderService {
   }
 
   /**
+   * The ONLINE PART of a partial order was paid (owner, 2026-11-01).
+   *
+   * ⛔ Not `handlePaymentSuccess`, which would mark a 30%-paid order `paid` and split it as prepaid.
+   * The order becomes `partially_paid`, its parcels learn what they prepaid, the stock it was holding
+   * is committed and it may dispatch, exactly what a COD order does at checkout. **No earnings are
+   * written:** a COD order splits at the cash handoff, on the parcel's full value, and every share
+   * then waits for that cash to reach the platform (`splitCodCollection`).
+   *
+   * Idempotent on `prepayment.paid_at`, so a re-delivered webhook does nothing.
+   *
+   * Paid after the order was cancelled (a mobile-money prompt approved late): the money is real and
+   * the order is not coming back, so a refund is opened for an administrator instead.
+   */
+  async handlePrepaymentSuccess(
+    orderId: string,
+    amount: number,
+    transactionId: string,
+    /** The chat the checkout came from, so the result is told there (`IPaymentTransaction.originChat`). */
+    originChannel?: string | null
+  ): Promise<boolean> {
+    const applied = await transactionManager.runInTransaction((session) =>
+      partialPaymentService.applyPaidInSession(orderId, amount, transactionId, session)
+    );
+    if (!applied) {
+      console.log(`[OrderService] Order ${orderId} online part already recorded. Skipping duplicate.`);
+      return false;
+    }
+
+    const order = await this.orderRepo.findById(orderId);
+    if (!order) return false;
+
+    await this.timelineRepo.appendEvent({
+      orderId,
+      eventType: 'payment.updated',
+      description: `Paid online: ${amount} ${order.currency} of ${order.total_amount}. The rest is paid in cash at delivery.`,
+      metadata: { transactionId, amount, balanceDue: order.total_amount - amount, paymentStatus: order.payment_status },
+      actorType: 'system',
+      actorId: null,
+    });
+
+    if (order.fulfillment_status === 'cancelled') {
+      const { partialReturnService } = await import('../payments/services/partial-return.service');
+      await partialReturnService.openForLatePayment(order);
+      return true;
+    }
+
+    await orderStockService.commitForOrder(order);
+    await this.maybeDispatchToAgencies(order);
+    try {
+      await order.save();
+    } catch (error) {
+      console.error('[OrderService] Failed to persist the dispatch of a partial order:', error);
+    }
+    await this.markProductsOrdered(order);
+
+    try {
+      await this.vendorCustomerSync.recordPaymentPaid(order.vendor_id, order.customer_id, amount);
+    } catch (error) {
+      console.error('[OrderService] Failed to sync vendor customer on the online part:', error);
+    }
+
+    // The vendor hears about a partial order now, once there is money behind it (`order.created`
+    // skipped them at checkout). Awaited but never thrown: the bus swallows handler errors.
+    await eventBus.publish('order.prepayment.received', {
+      eventType: 'order.prepayment.received',
+      aggregateId: orderId,
+      occurredAt: new Date(),
+      payload: {
+        orderId,
+        vendorId: order.vendor_id.toString(),
+        customerId: order.customer_id.toString(),
+        orderNumber: order.order_number,
+        totalAmount: order.total_amount,
+        amountPaidOnline: amount,
+        balanceDue: order.total_amount - amount,
+        currency: order.currency,
+        transactionId,
+        ...(originChannel ? { originChannel } : {}),
+      },
+    }).catch((error) => console.error('[OrderService] Failed to emit order.prepayment.received:', error));
+
+    return true;
+  }
+
+  /**
    * Stamp `lastOrderedAt = now` on every product/variant in a freshly-paid
    * order. This is the activity signal the file-cleanup inactivity clock reads,
    * so a product that sells today is never swept for media detachment.
@@ -1594,7 +1722,9 @@ export class OrderService {
           // Units, not lines: two packs of one product are ONE line and TWO units. The customer's
           // "order placed" said "1 item(s)" for two packs (owner's handset, 2026-09-22). Additive —
           // `itemCount` keeps its meaning for every existing consumer.
-          unitCount: order.items.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0)
+          unitCount: order.items.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0),
+          // A partial order: the vendor is told when its online part is paid, not now.
+          partialPayment: isPartialOrder(order)
         }
       });
 

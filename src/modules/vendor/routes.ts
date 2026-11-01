@@ -163,6 +163,23 @@ router.get('/profile/cod-terms', VendorProfileController.getCodTerms);
 router.put('/profile/cod-terms', VendorProfileController.setCodTerms);
 
 /**
+ * GET /api/vendor/profile/partial-payment
+ *
+ * Whether this vendor accepts orders paid part online and part in cash (2026-11-01). Default when
+ * never set: { enabled: false, minPercent: null, updatedAt: null }.
+ */
+router.get('/profile/partial-payment', VendorProfileController.getPartialPayment);
+
+/**
+ * PUT /api/vendor/profile/partial-payment
+ *
+ * Replace it. Body: { enabled: boolean, minPercent: integer 10..90 | null } (required when enabled).
+ * Independent of COD terms: a vendor with COD off may still accept partial payment. Separate from
+ * `policies`: does NOT bump policy_version or pause agency connections.
+ */
+router.put('/profile/partial-payment', VendorProfileController.setPartialPayment);
+
+/**
  * GET /api/vendor/profile/delivery-terms
  *
  * Who pays delivery for this shop's orders (ADR-A11). Default when never set:

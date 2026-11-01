@@ -34,6 +34,11 @@ Turn the customer's current cart into orders — **one order per vendor**. Re-va
 `cartId` and start in `payment_status='AWAITING_PAYMENT'`. The cart is cleared on success. Order
 creation is **atomic**: if any order fails to create, none are persisted and the cart is left intact.
 
+> **Paying part online, part in cash (2026-11-01):** send `paymentMethod: "cash_on_delivery"` with
+> `partialPayment: true`, then pay the online part with `POST /api/payments/initiate { cartId, amount }`.
+> The order waits for that payment. See
+> [FRONTEND-CHANGELOG-partial-payment.md](./FRONTEND-CHANGELOG-partial-payment.md).
+
 ### Request Body
 
 ```json
@@ -216,6 +221,7 @@ order that may contain several per-vendor orders. Paginated by group.
           "paymentMethod": "online",
           "paymentStatus": "AWAITING_PAYMENT",
           "fulfillmentStatus": "pending",
+          "partialPayment": null,
           "itemCount": 2,
           "createdAt": "2026-07-02T10:00:00.000Z"
         }
@@ -230,7 +236,8 @@ The group-level `paymentStatus` is an aggregate of its orders: `paid` (all paid)
 (none paid), `partially_paid` (some paid — including COD orders partway through their per-shipment
 cash collection), `refunded` / `failed` (all of them), `disputed` (any of them), `unknown` (an empty
 group), or `mixed`. Each order also carries its own `paymentMethod`
-(`"online"` | `"cash_on_delivery"`).
+(`"online"` | `"cash_on_delivery"`) and `partialPayment`: `{ "paidAt": ... }` on an order paid part
+online, part in cash (`paidAt: null` means the online part is still owed), `null` on every other order.
 
 > **Changed 2026-08-14.** `refunded`, `failed`, `disputed` and `unknown` are new. Previously
 > a fully refunded group reported `mixed` — a word that told the customer nothing while they

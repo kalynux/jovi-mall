@@ -6,6 +6,7 @@ import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
 import { PaginationOptions, Page } from '../../core/repositories/base.repository';
 import { IOrder, OrderModel } from '../orders/order.model';
+import { isPartialOrder } from '../orders/domain/partial-payment';
 import { ICashCollection } from '../cod/models/cash-collection.model';
 import { OrderRepository } from '../orders/order.repository';
 import { OrderFulfillmentAggregationService, orderFulfillmentAggregationService } from '../orders/domain/services/OrderFulfillmentAggregationService';
@@ -1497,6 +1498,14 @@ export class ShipmentService {
             split = earningsSplitService
                 .splitShipmentDelivery(order, updated!, outcome)
                 .catch((err) => console.error('[ShipmentService] delivery earnings split failed:', err));
+        }
+
+        // A partial order's parcel came back: the platform holds what the customer prepaid on it.
+        // Best-effort and post-commit; the nightly sweep (`RefundCashRecheckWorker`) is the backstop.
+        if (newStatus === 'returned' && isPartialOrder(order)) {
+            void import('../payments/services/partial-return.service')
+                .then(({ partialReturnService }) => partialReturnService.openForReturnedParcels(order._id.toString()))
+                .catch((err) => console.error('[ShipmentService] could not open the refund of a returned partial parcel:', err));
         }
 
         // Start (or un-start) the order's earnings hold: since 2026-10-05 it runs from the

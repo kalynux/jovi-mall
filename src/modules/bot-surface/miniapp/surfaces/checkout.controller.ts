@@ -122,6 +122,11 @@ const PlaceBodySchema = z
          * `422 PAYMENT_CODE_REQUIRED` (`spent: false`), then submits again with it.
          */
         paymentCode: PaymentCodeSchema.optional(),
+        /**
+         * Pay part now (2026-11-01): how much the customer chose to pay online; the rest is paid in
+         * cash at delivery. Offered by the page only when the data read's `partialPayment` is set.
+         */
+        partialAmount: z.number().int().positive().nullable().optional(),
     })
     .strict();
 
@@ -213,6 +218,28 @@ export interface CheckoutView {
      * form's fixtures, like `delivery`.
      */
     deliveryFeeCash?: CheckoutDeliveryFeeCash | null;
+    /** Pay part now (2026-11-01): the limits, or null when it is not offered. */
+    partialPayment?: CheckoutPartialPayment | null;
+}
+
+/** "Pay part now" as a screen or the chat offers it. The amounts judge the typed value; the texts show it. */
+export interface CheckoutPartialPayment {
+    minimumAmount: number;
+    maximumAmount: number;
+    minimumText: string;
+    maximumText: string;
+}
+
+/** The quote's checkout-wide verdict, formatted — or null when not offered. */
+function partialPaymentOf(quote: CartQuote): CheckoutPartialPayment | null {
+    const partial = quote.partialPayment;
+    if (!partial?.available) return null;
+    return {
+        minimumAmount: partial.minimumAmount,
+        maximumAmount: partial.maximumAmount,
+        minimumText: formatBotPrice(partial.minimumAmount, quote.currency),
+        maximumText: formatBotPrice(partial.maximumAmount, quote.currency),
+    };
 }
 
 /** The cash-for-delivery choice as a screen or the chat draws it — server-formatted strings. */
@@ -277,6 +304,8 @@ export interface CheckoutPlacement extends CheckoutPlaced {
     instructions: unknown;
     /** Cash for delivery (W-F): the delivery cash for the riders — 0 when paid with the order. */
     deliveryCashToRider: number;
+    /** Pay part now: the cash still due at delivery — 0 on any other placement. */
+    cashDueAtDelivery: number;
     currency: string | null;
 }
 
@@ -306,6 +335,12 @@ export interface PlaceCheckoutOptions {
      * Already validated by the door's schema. Forwarded to the charge and nowhere else.
      */
     paymentCode?: string | null;
+    /**
+     * Pay part now (2026-11-01): what the customer named to pay online. The orders are created as
+     * partial and this is charged; the rest is paid in cash at delivery. Checked BEFORE the spend on
+     * both doors, because the amount is the one thing here a customer simply mistypes.
+     */
+    partialAmount?: number | null;
 }
 
 /**
@@ -364,6 +399,7 @@ export async function readCheckoutView(handle: string): Promise<CheckoutView> {
         delivery: (await deliveryLinesFor(quote, session.language)).map(({ label, valueText, hint }) => ({ label, valueText, hint })),
         /** W-F — quoted at the same default address the screen places at. */
         deliveryFeeCash: address && !address.digital ? deliveryFeeCashOf(quote) : null,
+        partialPayment: address && !address.digital ? partialPaymentOf(quote) : null,
     };
 }
 
@@ -442,7 +478,10 @@ export async function placeCheckout(
      * review). Refused with the handle alive (`spent: false`), so Pay now stays one tap away.
      * `createOrdersFromCart` re-checks it inside its transaction either way.
      */
-    const deliveryFeePayment = options.deliveryFeePayment === 'cash_to_rider' ? 'cash_to_rider' : 'with_order';
+    const partialAmount = options.partialAmount ?? null;
+    if (partialAmount !== null) await precheckPartialAmount(handle, addressId, partialAmount);
+    // A partial order is cash on delivery with a prepaid part: the fee is in the total, never apart.
+    const deliveryFeePayment = options.deliveryFeePayment === 'cash_to_rider' && partialAmount === null ? 'cash_to_rider' : 'with_order';
     // The CHAT door only: it knows its caller before the spend. The screen learns its customer from
     // the session it consumes (no pre-spend check, by design) — `createOrdersFromCart` refuses there.
     if (deliveryFeePayment === 'cash_to_rider' && options.callerCustomerId) {
@@ -465,7 +504,7 @@ export async function placeCheckout(
      * aggregator needs neither, so no other aggregator's door does any extra work.
      */
     if (routeNeedsPreChargeFacts()) {
-        await precheckPreChargeFacts(handle, typedNumber, addressId, deliveryFeePayment, paymentCode);
+        await precheckPreChargeFacts(handle, typedNumber, addressId, deliveryFeePayment, paymentCode, partialAmount);
     }
 
     const session = await inAppSurfaceStore.consume('co', plausibleHandle(handle));
@@ -510,13 +549,14 @@ export async function placeCheckout(
          * ⚠ **`'online'` — this function is Pay NOW.** Pay on delivery is its sibling,
          * `placeCheckoutCashOnDelivery` (owner decision 2026-09-27): a COD checkout takes no
          * payment, produces a delivery code per shipment, and is refused outright by
-         * `initiatePaymentForCart`, so the two must never share this path.
+         * `initiatePaymentForCart`, so the two must never share this path. Pay part now does take a
+         * payment, so it is here: `cash_on_delivery` with an online part, which that method accepts.
          */
         const { cartId, orders } = await orderService.createOrdersFromCart(
             session.customerId,
-            'online',
+            partialAmount !== null ? 'cash_on_delivery' : 'online',
             { addressId, address: null },
-            { deliveryFeePayment },
+            partialAmount !== null ? { partialPayment: true } : { deliveryFeePayment },
         );
 
         /**
@@ -536,9 +576,13 @@ export async function placeCheckout(
             phoneNumber: payerNumber,
             customerName: customer.name,
             ...(paymentCode ? { paymentCode } : {}),
-        }, { originChat: session.channel });
+        }, { originChat: session.channel, ...(partialAmount !== null ? { amount: partialAmount } : {}) });
 
         return {
+            /** Pay part now: the cash still due at delivery; 0 otherwise. */
+            cashDueAtDelivery: partialAmount !== null
+                ? orders.reduce((sum, order) => sum + order.total_amount, 0) - partialAmount
+                : 0,
             orderCount: orders.length,
             transactionId: payment.transactionId,
             status: payment.status,
@@ -566,6 +610,7 @@ async function precheckPreChargeFacts(
     addressId: string | null,
     deliveryFeePayment: 'with_order' | 'cash_to_rider',
     paymentCode: string | null,
+    partialAmount: number | null = null,
 ): Promise<void> {
     const session = await inAppSurfaceStore.read('co', plausibleHandle(handle));
     if (!session) return;
@@ -577,13 +622,37 @@ async function precheckPreChargeFacts(
     let amount: number | null;
     try {
         const quote = await cartQuoteService.quoteForCustomer(session.customerId, addressId ?? undefined);
-        amount = deliveryFeePayment === 'cash_to_rider' && quote.deliveryFeeCash?.available
-            ? quote.deliveryFeeCash.amountDueOnline
-            : quote.total;
+        amount = partialAmount !== null
+            ? partialAmount
+            : deliveryFeePayment === 'cash_to_rider' && quote.deliveryFeeCash?.available
+                ? quote.deliveryFeeCash.amountDueOnline
+                : quote.total;
     } catch {
         amount = null; // the address or basket problem is reported after the spend, as before
     }
     mobileMoneyRoute(payer.number, false, payer.savedProvider, { paymentCode, amount });
+}
+
+/**
+ * Pay part now, checked before the handle is spent (`read` never spends): the basket must still
+ * allow it and the amount must be within its limits. Refused with `spent: false`, so the customer
+ * can correct a mistyped amount without losing the checkout. Order creation re-checks all of it.
+ */
+async function precheckPartialAmount(handle: string, addressId: string | null, amount: number): Promise<void> {
+    const session = await inAppSurfaceStore.read('co', plausibleHandle(handle));
+    if (!session) return; // `consume` answers an unknown handle in its own words
+    const { partialPayment } = await cartQuoteService.quoteForCustomer(session.customerId, addressId ?? undefined);
+    if (!partialPayment.available) {
+        throw createAppError(ERROR_CODES.PARTIAL_PAYMENT_NOT_AVAILABLE, 422, undefined, { reason: partialPayment.reason, spent: false });
+    }
+    if (amount < partialPayment.minimumAmount || amount > partialPayment.maximumAmount) {
+        throw createAppError(
+            ERROR_CODES.PARTIAL_PAYMENT_AMOUNT_OUT_OF_RANGE,
+            422,
+            `The amount must be between ${partialPayment.minimumAmount} and ${partialPayment.maximumAmount}`,
+            { minimum: partialPayment.minimumAmount, maximum: partialPayment.maximumAmount, requested: amount, spent: false },
+        );
+    }
 }
 
 /** What a pay-on-delivery placement knows: orders, and no charge — the cash is taken at the door. */
@@ -713,6 +782,7 @@ export async function readChatCheckout(
         deliveryCharged: deliveryLines.some((line) => line.charged),
         /** W-F — quoted at the destination the review names, like the total. */
         deliveryFeeCash: destination.kind === 'address' ? deliveryFeeCashOf(quote) : null,
+        partialPayment: destination.kind === 'address' ? partialPaymentOf(quote) : null,
     };
 }
 
@@ -841,6 +911,8 @@ export interface ChatCheckoutView {
     deliveryCharged: boolean;
     /** Cash for delivery (W-F) is on offer at the reviewed address — see `CheckoutDeliveryFeeCash`. */
     deliveryFeeCash: CheckoutDeliveryFeeCash | null;
+    /** Pay part now is on offer at the reviewed address — see `CheckoutPartialPayment`. */
+    partialPayment: CheckoutPartialPayment | null;
 }
 
 export class CheckoutController {
@@ -861,6 +933,8 @@ export class CheckoutController {
             delivery: view.delivery ?? [],
             /** W-F — the "delivery in cash" choice, or null when it is not offered. */
             deliveryFeeCash: view.deliveryFeeCash ?? null,
+            /** Pay part now (2026-11-01): the limits, or null when it is not offered. */
+            partialPayment: view.partialPayment ?? null,
             /** NovaSend `CODE_FIRST`: `{ ussd }` → draw the optional payment-code field; null → do not. */
             paymentCode: view.paymentCode ?? null,
         });
@@ -885,10 +959,11 @@ export class CheckoutController {
      * page whatever the placement gains next.
      */
     static place = asyncHandler(async (req: Request, res: Response) => {
-        const { phone, dial, deliveryFeePayment, paymentCode } = PlaceBodySchema.parse(req.body ?? {});
+        const { phone, dial, deliveryFeePayment, paymentCode, partialAmount } = PlaceBodySchema.parse(req.body ?? {});
         const placed = await placeCheckout(String(req.params.handle ?? ''), composeTypedNumber(phone, dial), {
             deliveryFeePayment,
             paymentCode: paymentCode ?? null,
+            partialAmount: partialAmount ?? null,
         });
         const answer: CheckoutPlaced = {
             orderCount: placed.orderCount,

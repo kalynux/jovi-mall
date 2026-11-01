@@ -9,6 +9,7 @@ import {
 } from '../domain/refund-status';
 import { REFUND_REASON_KINDS, RefundReasonKind } from '../domain/refund-attribution';
 import type { RefundPaymentChannel } from '../domain/refund-fee';
+import { PARTIAL_RETURN_FAULTS, PartialReturnFault } from '../../orders/domain/partial-payment';
 
 /**
  * `refund_requests` — the MONEY-OUT lifecycle of a refund (REFUND-FLOW-PLAN § 3.1, § 11.1).
@@ -168,18 +169,41 @@ export interface IRefundRequest extends Document {
    * agency does or does not give back. Empty when nobody said the delivery was at fault.
    */
   delivery_fault: IRefundDeliveryFault[];
+  /**
+   * Set when this request returns a PARTIAL order's prepaid part for a parcel that came back
+   * (owner, 2026-11-01). `earnings_impact` is then `none`, because that parcel has no allocations;
+   * the return fee and any fault charge are settled when the refund completes.
+   */
+  partial_return?: IRefundPartialReturn | null;
   created_at: Date;
   updated_at: Date;
 }
 
+export interface IRefundPartialReturn {
+  shipment_id: mongoose.Types.ObjectId;
+  /** Whose fault the parcel's return is. `null`: an administrator must say before approving (D-11). */
+  fault: PartialReturnFault | null;
+  /** What the agency's return fee came to when this was opened. */
+  return_fee: number;
+  /** What the customer prepaid on this parcel. */
+  prepaid_amount: number;
+  /** The agent's report, which the administrator weighs (D-10). */
+  agent_reason: string | null;
+  agent_note: string | null;
+  /** Who chose the fault; `null` while it is only what the agent's report proposed. */
+  fault_set_by: IRefundActorStamp | null;
+}
+
 export interface IRefundFees {
-  paid_by: 'customer' | 'vendor';
+  paid_by: 'customer' | 'vendor' | 'agency';
   payin_rate: number;
   payin_amount: number;
   payout_rate: number;
   payout_amount: number;
   /** Charged to the seller on top of their share (seller cancelled a paid order). */
   vendor_charge: number;
+  /** Charged to the agency at fault (a partial order's returned parcel, D-12). */
+  agency_charge?: number;
 }
 
 export interface IRefundDeliveryFault {
@@ -317,12 +341,28 @@ const RefundRequestSchema = new Schema<IRefundRequest>(
     fees: {
       type: new Schema(
         {
-          paid_by: { type: String, enum: ['customer', 'vendor'], required: true },
+          paid_by: { type: String, enum: ['customer', 'vendor', 'agency'], required: true },
           payin_rate: { type: Number, required: true, min: 0 },
           payin_amount: { type: Number, required: true, min: 0 },
           payout_rate: { type: Number, required: true, min: 0 },
           payout_amount: { type: Number, required: true, min: 0 },
           vendor_charge: { type: Number, required: true, min: 0 },
+          agency_charge: { type: Number, default: 0, min: 0 },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+    partial_return: {
+      type: new Schema(
+        {
+          shipment_id: { type: Schema.Types.ObjectId, ref: MODELS.SHIPMENT, required: true },
+          fault: { type: String, enum: [...PARTIAL_RETURN_FAULTS, null], default: null },
+          return_fee: { type: Number, required: true, min: 0 },
+          prepaid_amount: { type: Number, required: true, min: 0 },
+          agent_reason: { type: String, default: null },
+          agent_note: { type: String, default: null },
+          fault_set_by: { type: ActorStampSchema, default: null },
         },
         { _id: false }
       ),

@@ -255,6 +255,50 @@ export function cashOnDeliveryVerdictOf(refusals: CodRefusal[] | null): CashOnDe
     return { available: false, reason: COD_REASON_BY_CODE[refusals[0].error.code] ?? null, vendorIds };
 }
 
+/** Why a basket cannot be paid part online and part in cash. Checkout refuses for the same ones. */
+export const PARTIAL_PAYMENT_UNAVAILABLE_REASONS = [
+    'digital_items',
+    'customer_restricted',
+    /** A vendor in the basket has not opted in (D-6: one vendor decides it for the whole basket). */
+    'vendor_not_accepted',
+    'agency_not_supported',
+    'order_amount_exceeds_limit',
+    /** Too small to leave cash on every parcel at the vendor's minimum. */
+    'order_too_small',
+    'below_delivery_minimum',
+] as const;
+export type PartialPaymentUnavailableReason = (typeof PARTIAL_PAYMENT_UNAVAILABLE_REASONS)[number];
+
+/**
+ * Part online now, the rest in cash at the door (2026-11-01). `minimumAmount` / `maximumAmount` are
+ * the whole checkout's limits: the customer names ONE amount between them, at `POST /payments/initiate`.
+ */
+export interface PartialPaymentQuote {
+    available: boolean;
+    /** The first refusal; `null` when available, and when the rules could not be evaluated. */
+    reason: PartialPaymentUnavailableReason | null;
+    /** The vendors that refuse. Empty for the basket-wide reasons. */
+    vendorIds: string[];
+    minimumAmount: number;
+    maximumAmount: number;
+    /** What the basket costs as a partial order (priced as cash on delivery). */
+    total: number;
+}
+
+const PARTIAL_REASON_BY_COD_CODE: Readonly<Record<string, PartialPaymentUnavailableReason>> = {
+    [ERROR_CODES.COD_AGENCY_NOT_SUPPORTED]: 'agency_not_supported',
+    [ERROR_CODES.COD_ORDER_AMOUNT_EXCEEDS_LIMIT]: 'order_amount_exceeds_limit',
+    [ERROR_CODES.COD_CUSTOMER_RESTRICTED]: 'customer_restricted',
+};
+
+export function partialReasonOf(error: AppError): PartialPaymentUnavailableReason | null {
+    if (error.code === ERROR_CODES.PARTIAL_PAYMENT_NOT_AVAILABLE) {
+        const reason = (error.details as { reason?: PartialPaymentUnavailableReason } | undefined)?.reason;
+        return reason && PARTIAL_PAYMENT_UNAVAILABLE_REASONS.includes(reason) ? reason : null;
+    }
+    return PARTIAL_REASON_BY_COD_CODE[error.code] ?? null;
+}
+
 export interface CartQuote {
     currency: string;
     /** The items. */
@@ -294,6 +338,8 @@ export interface CartQuote {
     cashOnDelivery: CashOnDeliveryQuote;
     /** Cash for delivery for the whole checkout (W-F) — see `CartQuoteDeliveryFeeCashTotal`. */
     deliveryFeeCash: CartQuoteDeliveryFeeCashTotal;
+    /** Part online, part in cash for the whole checkout (2026-11-01). Independent of `paymentMethod`. */
+    partialPayment: PartialPaymentQuote;
     perVendor: CartQuoteVendorLine[];
 }
 
@@ -416,9 +462,68 @@ export class CartQuoteService {
             meetsDeliveryMinimum: perVendor.every((v) => v.deliveryMinimum?.met ?? true),
             cashOnDelivery: cashOnDeliveryVerdictOf(refusals),
             deliveryFeeCash: deliveryFeeCashTotalOf(perVendor, cart.productType ?? null),
+            partialPayment: await this.partialPaymentOf(cart.productType ?? null, priced, refusals),
             perVendor,
         };
         return { quote, codRefusal };
+    }
+
+    /**
+     * Would checkout accept this basket paid part online? Asks checkout's own rules, on the same
+     * cash-on-delivery pricing the orders would be created with. A lookup that fails reads "not
+     * available": not evaluated is never passed, and it only hides an option.
+     *
+     * The account-wide half is the COD verdict just computed (`codRefusals`, `vendorId: null`), so
+     * the customer's restriction is asked once per quote. The vendor's COD terms in that verdict are
+     * ignored on purpose: this option has its own setting (D-5).
+     */
+    private async partialPaymentOf(
+        productType: string | null,
+        priced: PricedVendor[],
+        codRefusals: CodRefusal[] | null,
+    ): Promise<PartialPaymentQuote> {
+        const refused = (reason: PartialPaymentUnavailableReason | null, vendorIds: string[] = []): PartialPaymentQuote =>
+            ({ available: false, reason, vendorIds, minimumAmount: 0, maximumAmount: 0, total: 0 });
+        if (productType !== 'physical') return refused('digital_items');
+        if (codRefusals === null) return refused(null);
+        const accountRefusal = codRefusals.find((r) => r.vendorId === null);
+        if (accountRefusal) return refused(partialReasonOf(accountRefusal.error));
+
+        try {
+            let minimumAmount = 0;
+            let maximumAmount = 0;
+            let total = 0;
+            const refusals: Array<{ vendorId: string; reason: PartialPaymentUnavailableReason | null }> = [];
+            for (const p of priced) {
+                const pricing = p.byMethod.get('cash_on_delivery');
+                if (!p.input.physical || !pricing) continue;
+                if (pricing.deliveryMinimum && !pricing.deliveryMinimum.met) {
+                    refusals.push({ vendorId: p.input.vendorId, reason: 'below_delivery_minimum' });
+                    continue;
+                }
+                const agencyIds = p.input.groups.map((g) => g.agencyId);
+                try {
+                    const limits = await this.codEligibility.assertVendorOrderEligibleForPartial({
+                        orderType: 'physical',
+                        totalAmount: pricing.total,
+                        agencyIds,
+                        parcelCount: agencyIds.length,
+                        vendorId: p.input.vendorId,
+                    });
+                    minimumAmount += limits.minimumAmount;
+                    maximumAmount += limits.maximumAmount;
+                    total += pricing.total;
+                } catch (error) {
+                    if (!(error instanceof AppError)) throw error;
+                    refusals.push({ vendorId: p.input.vendorId, reason: partialReasonOf(error) });
+                }
+            }
+            if (refusals.length > 0) return refused(refusals[0].reason, refusals.map((r) => r.vendorId));
+            return { available: true, reason: null, vendorIds: [], minimumAmount, maximumAmount, total };
+        } catch (error) {
+            console.error('[CartQuoteService] Partial payment not evaluable:', error);
+            return refused(null);
+        }
     }
 
     /**

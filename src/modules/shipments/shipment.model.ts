@@ -493,6 +493,18 @@ export interface IShipment extends Document {
    */
   customer_delivery_fee?: number | null;
   /**
+   * This parcel's share of what the customer paid online on a PARTIAL order (owner, 2026-11-01).
+   * Written when the online part is paid, and re-shared if items or fees move before the cash
+   * changes hands. 0 / absent on every other shipment. The agent collects what is left.
+   */
+  prepaid_amount?: number | null;
+  /**
+   * This parcel came back and what was prepaid on it is being dealt with (owner, 2026-11-01). `null`
+   * until then: the return path and the nightly sweep open a refund for a returned parcel carrying
+   * none. Settled parcels cannot go out again, because the customer has their money back.
+   */
+  prepaid_return?: { refund_request_id: mongoose.Types.ObjectId | null; opened_at: Date; settled_at: Date | null } | null;
+  /**
    * The formula's itemisation at checkout, for display (base / weight / region / ceiling).
    * Informational only — no money path reads it; `delivery_fee_snapshot` is the number.
    */
@@ -707,6 +719,18 @@ const ShipmentSchema = new Schema<IShipment>({
   // Customer-paid delivery (ADR-A11) — see IShipment. No index: read with the shipment.
   delivery_payer: { type: String, enum: ['vendor', 'customer', null], default: null },
   customer_delivery_fee: { type: Number, default: null, min: 0 },
+  prepaid_amount: { type: Number, default: 0, min: 0 },
+  prepaid_return: {
+    type: new Schema(
+      {
+        refund_request_id: { type: Schema.Types.ObjectId, default: null },
+        opened_at: { type: Date, required: true },
+        settled_at: { type: Date, default: null },
+      },
+      { _id: false }
+    ),
+    default: null,
+  },
   fee_components: {
     type: new Schema<IShipmentFeeComponents>(
       {

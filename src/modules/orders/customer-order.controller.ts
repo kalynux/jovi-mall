@@ -85,6 +85,10 @@ const CheckoutSchema = z
     // customer-paid delivery fee to the rider in cash. Only with `online`; refused (422
     // DELIVERY_FEE_CASH_NOT_AVAILABLE) where a carrying agency does not accept it.
     deliveryFeePayment: z.enum(['with_order', 'cash_to_rider']).optional().default('with_order'),
+    // Partial payment (2026-11-01): part online now, the rest in cash at the door. Only with
+    // `cash_on_delivery`. The customer names the amount at POST /payments/initiate; this creates
+    // the orders, which wait for it. Refused (422 PARTIAL_PAYMENT_NOT_AVAILABLE) per the quote.
+    partialPayment: z.boolean().optional().default(false),
     // Drop-off address for a physical checkout. Provide EITHER the id of one of
     // the customer's saved addresses OR a selected geocoding result inline. Both
     // optional (back-compat): when neither is given the order falls back to the
@@ -98,6 +102,10 @@ const CheckoutSchema = z
   .refine(d => !(d.deliveryAddressId && d.deliveryAddress), {
     message: 'Provide either deliveryAddressId or deliveryAddress, not both',
     path: ['deliveryAddress'],
+  })
+  .refine(d => !d.partialPayment || d.paymentMethod === 'cash_on_delivery', {
+    message: 'partialPayment requires paymentMethod cash_on_delivery',
+    path: ['partialPayment'],
   });
 
 const CancelOrderSchema = z.object({
@@ -121,7 +129,7 @@ export class CustomerOrderController {
    */
   static checkout = asyncHandler(async (req: Request, res: Response) => {
     const customerId = req.auth!.role_entity._id.toString();
-    const { paymentMethod, deliveryAddressId, deliveryAddress, deliveryFeePayment } = CheckoutSchema.parse(req.body ?? {});
+    const { paymentMethod, deliveryAddressId, deliveryAddress, deliveryFeePayment, partialPayment } = CheckoutSchema.parse(req.body ?? {});
 
     const { cartId, orders } = await orderService.createOrdersFromCart(
       customerId,
@@ -130,7 +138,7 @@ export class CustomerOrderController {
         addressId: deliveryAddressId ?? null,
         address: deliveryAddress ?? null,
       },
-      { deliveryFeePayment }
+      { deliveryFeePayment, partialPayment }
     );
 
     res.status(201).json({
@@ -138,6 +146,12 @@ export class CustomerOrderController {
       data: {
         cartId,
         paymentMethod,
+        partialPayment: partialPayment
+          ? {
+              minimumAmount: orders.reduce((sum, o) => sum + (o.prepayment?.minimum_amount ?? 0), 0),
+              maximumAmount: orders.reduce((sum, o) => sum + (o.prepayment?.maximum_amount ?? 0), 0),
+            }
+          : null,
         orders: orders.map(order => ({
           id: order._id.toString(),
           orderNumber: order.order_number,
@@ -155,7 +169,9 @@ export class CustomerOrderController {
           itemCount: order.items.length,
         })),
       },
-      message: paymentMethod === 'cash_on_delivery'
+      message: partialPayment
+        ? 'Orders created. Pay your part online to confirm them; the rest is paid in cash at delivery.'
+        : paymentMethod === 'cash_on_delivery'
         ? 'Orders created. Pay the delivery agent in cash at handoff — you will receive a delivery code for each shipment.'
         : 'Orders created. Complete payment for the cart to proceed.',
     });

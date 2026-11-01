@@ -18,6 +18,7 @@ export function initializeVendorNotificationEventConsumers(): void {
 
     // Subscribe to split payment events
     eventBus.subscribe('order.created', handler.handleOrderCreated.bind(handler));
+    eventBus.subscribe('order.prepayment.received', handler.handleOrderPrepaymentReceived.bind(handler));
     eventBus.subscribe('order.cancelled', handler.handleOrderCancelled.bind(handler));
     eventBus.subscribe('booking.created', handler.handleBookingCreated.bind(handler));
     eventBus.subscribe('booking.cancelled', handler.handleBookingCancelled.bind(handler));

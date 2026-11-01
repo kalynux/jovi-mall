@@ -241,6 +241,19 @@ Only from `awaiting_approval` or `failed` (**never from `sending`**), and never 
 money has left. Resumes the earnings pause if it is still the refund's own. **`200`**, DTO.
 Errors: `404 REFUND_REQUEST_NOT_FOUND` · `409 REFUND_REQUEST_STATUS_CONFLICT`.
 
+## `POST /:id/partial-return-fault` — `{ fault }`
+
+A partial order's returned parcel (2026-11-01). `fault` is `customer` · `vendor` · `agency`. Sends no
+money. Only while `awaiting_approval`. **It REPLACES the request**, because the amount and who pays the
+fees depend on the fault: the old one becomes `rejected` and the **`200`** DTO is the new one, with a new `id`.
+
+The request carries `partialReturn`: `{ shipmentId, fault, returnFee, prepaidAmount, agentReason, agentNote,
+faultSetBy }`. `fault: null` (the agent's reason named nobody) cannot be approved or settled by hand:
+`422 REFUND_PARTIAL_RETURN_FAULT_REQUIRED`. Errors here: `404 REFUND_REQUEST_NOT_FOUND` ·
+`422 REFUND_PARTIAL_RETURN_NOT_APPLICABLE`.
+
+`fees.paidBy` may now be `agency`, with `fees.agencyCharge`.
+
 ## `POST /:id/retry` — `{}`
 
 Claim and send again: `failed` (or an `approved` row whose send was refused before its claim).

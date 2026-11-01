@@ -1,12 +1,12 @@
 {
-  "generatedAt": "2026-10-27T20:34:54.962Z",
+  "generatedAt": "2026-11-01T21:56:09.642Z",
   "note": "GENERATED from the notification catalogs by scripts/generate-whatsapp-templates.ts. Do not hand-edit: names, placeholder counts and placeholder ORDER are derived from the same functions the send path uses, and editing them here makes the approved template disagree with what is sent.",
   "languages": [
     "en",
     "fr"
   ],
-  "templateCount": 171,
-  "submissionCount": 342,
+  "templateCount": 173,
+  "submissionCount": 346,
   "needsCopyReview": [
     {
       "name": "vendor_delivery_fee_proposal_agency_rejected",
@@ -147,6 +147,76 @@
                 "example 1",
                 "example 2",
                 "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_order_created_partial",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*New order, partly paid*\n\nOrder #*{{1}}*: the customer paid *{{2}}* online out of *{{3}}* *{{4}}*. The delivery agent collects the remaining *{{5}}* in cash at delivery. You can prepare it now.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_order_created_partial",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Nouvelle commande, payée en partie*\n\nCommande n°*{{1}}*: le client a payé *{{2}}* en ligne sur *{{3}}* *{{4}}*. Le livreur encaisse les *{{5}}* restants en espèces à la livraison. Vous pouvez la préparer.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
               ]
             ]
           }
@@ -3983,6 +4053,76 @@
                 "example 2",
                 "example 3",
                 "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_prepayment_received",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Payment received for {{2}}*\n\nWe received *{{1}}* online for order *{{2}}*. *{{3}}* is preparing it. You pay the remaining *{{4}}* *{{5}}* in cash at delivery.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_prepayment_received",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Paiement reçu pour {{2}}*\n\nNous avons reçu *{{1}}* en ligne pour la commande *{{2}}*. *{{3}}* la prépare. Vous payez les *{{4}}* *{{5}}* restants en espèces à la livraison.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
               ]
             ]
           }

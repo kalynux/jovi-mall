@@ -386,6 +386,23 @@ export const NOTIFICATION_CATALOG: Record<NotificationType, VendorSituationMessa
         button: { type: 'url', label: VIEW_ORDER_LABEL, urlSuffix: 'orders/{{orderId}}' }
     },
 
+    // A partial order (2026-11-01): sent instead of `order.created`, once its online part is paid,
+    // so a vendor never hears about an order with no money behind it.
+    'order.created.partial': {
+        base: {
+            en: { subject: 'New order, partly paid', body: 'Order #{{orderNumber}}: the customer paid {{paidFormatted}} online out of {{amountFormatted}} {{currency}}. The delivery agent collects the remaining {{balanceFormatted}} in cash at delivery. You can prepare it now.' },
+            fr: { subject: 'Nouvelle commande, payée en partie', body: 'Commande n°{{orderNumber}} : le client a payé {{paidFormatted}} en ligne sur {{amountFormatted}} {{currency}}. Le livreur encaisse les {{balanceFormatted}} restants en espèces à la livraison. Vous pouvez la préparer.' },
+            pt: { subject: 'Novo pedido, pago em parte', body: 'Pedido nº{{orderNumber}}: o cliente pagou {{paidFormatted}} online de um total de {{amountFormatted}} {{currency}}. O estafeta recebe os restantes {{balanceFormatted}} em dinheiro na entrega. Já pode prepará-lo.' },
+            es: { subject: 'Nuevo pedido, pagado en parte', body: 'Pedido n.º{{orderNumber}}: el cliente pagó {{paidFormatted}} en línea de un total de {{amountFormatted}} {{currency}}. El repartidor cobra los {{balanceFormatted}} restantes en efectivo en la entrega. Ya puedes prepararlo.' },
+            ar: { subject: 'طلب جديد مدفوع جزئيًا', body: 'الطلب رقم {{orderNumber}}: دفع العميل {{paidFormatted}} عبر الإنترنت من أصل {{amountFormatted}} {{currency}}. يحصّل مندوب التوصيل المبلغ المتبقي {{balanceFormatted}} نقدًا عند التسليم. يمكنك تجهيزه الآن.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_order_created_partial', bodyParams: ['{{orderNumber}}', '{{paidFormatted}}', '{{amountFormatted}}', '{{currency}}', '{{balanceFormatted}}'] }
+        },
+        button: { type: 'url', label: VIEW_ORDER_LABEL, urlSuffix: 'orders/{{orderId}}' }
+    },
+
     'order.cancelled': {
         base: {
             en: { subject: 'Order cancelled', body: 'Order #{{orderNumber}} has been cancelled.' },

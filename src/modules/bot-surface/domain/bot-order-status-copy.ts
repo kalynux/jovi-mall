@@ -339,17 +339,25 @@ export const ORDER_CASH_ON_DELIVERY_COPY: Readonly<Copy> = Object.freeze({
  * ⚠ **`cashOnDelivery` means EVERY order being described is cash on delivery** — one order for a
  * chat card, all of a checkout's orders for a listing row. A group mixing prepaid and COD orders is
  * not "cash on delivery", and saying so would hide the prepaid half's debt.
+ *
+ * ⚠ **`onlinePartDue` wins over it**: a partial order is cash on delivery by method, and until its
+ * online part is paid the customer owes money NOW and the order will not ship.
  */
 export function botPaymentStateLabel(
     state: BotOrderPaymentState,
     language: string | null | undefined,
-    options: { cashOnDelivery?: boolean } = {},
+    options: { cashOnDelivery?: boolean; onlinePartDue?: boolean } = {},
 ): string {
     if (state === 'unknown') return botOrderStatusUnavailable(language);
-    if (options.cashOnDelivery && state === 'awaiting_payment') {
+    if (options.cashOnDelivery && !options.onlinePartDue && state === 'awaiting_payment') {
         return pick(ORDER_CASH_ON_DELIVERY_COPY, language);
     }
     return pick(ORDER_PAYMENT_COPY[state], language);
+}
+
+/** A partial order whose online part is not paid yet. */
+export function onlinePartDueOf(order: { partialPayment?: { paidAt: Date | null } | null }): boolean {
+    return !!order.partialPayment && !order.partialPayment.paidAt;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

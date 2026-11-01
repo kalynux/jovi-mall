@@ -374,6 +374,23 @@ const CHECKOUT_DELIVERY_CASH: Copy = {
     ar: 'ادفع رسوم التوصيل ({{toRider}}) نقدًا لمندوب التوصيل',
 };
 
+/** Pay part now (2026-11-01). `{{minimum}}` and `{{maximum}}` are the SERVER's formatted amounts. */
+const CHECKOUT_PARTIAL: Copy = {
+    en: 'Pay part now, the rest in cash at delivery',
+    fr: 'Payer une partie maintenant, le reste en espèces à la livraison',
+    pt: 'Pagar uma parte agora, o resto em dinheiro na entrega',
+    es: 'Pagar una parte ahora, el resto en efectivo en la entrega',
+    ar: 'ادفع جزءًا الآن والباقي نقدًا عند التسليم',
+};
+
+const CHECKOUT_PARTIAL_AMOUNT: Copy = {
+    en: 'How much now? From {{minimum}} to {{maximum}}',
+    fr: 'Combien maintenant ? De {{minimum}} à {{maximum}}',
+    pt: 'Quanto agora? De {{minimum}} a {{maximum}}',
+    es: '¿Cuánto ahora? De {{minimum}} a {{maximum}}',
+    ar: 'كم الآن؟ من {{minimum}} إلى {{maximum}}',
+};
+
 const CHECKOUT_DELIVERY_CASH_NOW: Copy = {
     en: 'Paid now',
     fr: 'Payé maintenant',
@@ -543,6 +560,8 @@ const PAGE = Object.freeze({
     checkoutCodPlaced: CHECKOUT_COD_PLACED,
     checkoutDeliveryCash: CHECKOUT_DELIVERY_CASH,
     checkoutDeliveryCashNow: CHECKOUT_DELIVERY_CASH_NOW,
+    checkoutPartial: CHECKOUT_PARTIAL,
+    checkoutPartialAmount: CHECKOUT_PARTIAL_AMOUNT,
 
     ordersHeading: ORDERS_HEADING,
     storesHeading: STORES_HEADING,

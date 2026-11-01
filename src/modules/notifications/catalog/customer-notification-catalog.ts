@@ -1564,6 +1564,42 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Cus
         button: ORDER_BUTTON
     },
 
+    // A partial order's online part arrived (2026-11-01). Its own situation rather than
+    // `order.payment.received`: that one says the payment is done, and here the customer still owes
+    // cash at the door. Money, so nobody can mute it.
+    'order.prepayment.received': {
+        base: {
+            en: {
+                subject: 'Payment received for {{orderNumber}}',
+                body: 'We received {{paidFormatted}} online for order {{orderNumber}}. {{vendorName}} is preparing it. You pay the remaining {{balanceFormatted}} {{currency}} in cash at delivery.'
+            },
+            fr: {
+                subject: 'Paiement reçu pour {{orderNumber}}',
+                body: 'Nous avons reçu {{paidFormatted}} en ligne pour la commande {{orderNumber}}. {{vendorName}} la prépare. Vous payez les {{balanceFormatted}} {{currency}} restants en espèces à la livraison.'
+            },
+            pt: {
+                subject: 'Pagamento recebido para {{orderNumber}}',
+                body: 'Recebemos {{paidFormatted}} online pela encomenda {{orderNumber}}. {{vendorName}} está a prepará-la. Paga os restantes {{balanceFormatted}} {{currency}} em dinheiro na entrega.'
+            },
+            es: {
+                subject: 'Pago recibido para {{orderNumber}}',
+                body: 'Recibimos {{paidFormatted}} en línea por el pedido {{orderNumber}}. {{vendorName}} lo está preparando. Pagas los {{balanceFormatted}} {{currency}} restantes en efectivo en la entrega.'
+            },
+            ar: {
+                subject: 'تم استلام الدفعة للطلب {{orderNumber}}',
+                body: 'استلمنا {{paidFormatted}} عبر الإنترنت للطلب {{orderNumber}}. تقوم {{vendorName}} بتجهيزه. تدفع المبلغ المتبقي {{balanceFormatted}} {{currency}} نقدًا عند التسليم.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_order_prepayment_received',
+                bodyParams: ['{{paidFormatted}}', '{{orderNumber}}', '{{vendorName}}', '{{balanceFormatted}}', '{{currency}}']
+            }
+        },
+        button: ORDER_BUTTON
+    },
+
     // ⚠ **The only situation here the automation layer RAISES rather than observes**, and
     // the only one whose button does not point at an order. It carries a card payment page
     // (GAP-008) to a customer whose chat window has closed, which is the exact shape

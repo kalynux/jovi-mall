@@ -25,7 +25,7 @@ import { FileRepositoryMongo } from '../catalog/repositories/mongo/file.reposito
 import { getStorageProvider, IStorageProvider } from '../../core/storage';
 import { resolveFileDetails, resolveFileDetail } from '../catalog/read-models/file-detail.resolver';
 import { deliveryPayerOf, paysDeliveryFeeInCash } from './domain/delivery-payer';
-import { toVendorShipmentDeliveryFee, VendorShipmentDeliveryFeeDTO } from '../vendor/dto/vendor-order.dto';
+import { toVendorPartialPaymentDto, toVendorShipmentDeliveryFee, VendorShipmentDeliveryFeeDTO } from '../vendor/dto/vendor-order.dto';
 import {
     checkItemStillWhereSeen,
     groupMovesBySource,
@@ -39,6 +39,8 @@ import {
 import { shipmentAssignmentOfferRepository } from '../shipment-assignment/repositories/shipment-assignment-offer.repository';
 import { shipmentAssignmentSessionRepository } from '../shipment-assignment/repositories/shipment-assignment-session.repository';
 import { raiseRefundOwed } from '../earnings/services/refund-owed.service';
+import { amountPaidOnlineOf, isPartialOrder } from './domain/partial-payment';
+import { partialPaymentService } from './services/partial-payment.service';
 import { syncTicketFollowersForOrder } from '../tickets/services/ticket-order-parties.service';
 
 /**
@@ -211,6 +213,7 @@ export class VendorOrderService {
                 fulfillmentStatus: order.fulfillment_status,
                 paymentMethod: order.payment_method,
                 paymentStatus: order.payment_status,
+                partialPayment: toVendorPartialPaymentDto(order),
 
                 // Item count
                 itemCount: order.items.length,
@@ -321,6 +324,7 @@ export class VendorOrderService {
             fulfillmentStatus: order.fulfillment_status,
             paymentMethod: order.payment_method,
             paymentStatus: order.payment_status,
+            partialPayment: toVendorPartialPaymentDto(order),
             paymentIntentId: order.payment_intent_id,
 
             // Delivery overview: one entry per agency/shipment handling this order
@@ -745,12 +749,12 @@ export class VendorOrderService {
             // must not reach the seller and a person must refund the customer: pause the
             // earnings and open a high-priority refund ticket (owner, 2026-10-05). Read from
             // the order as it was BEFORE this write — that is what the customer paid.
-            if (order.payment_status === 'paid') {
+            if (order.payment_status === 'paid' || amountPaidOnlineOf(order) > 0) {
                 await raiseRefundOwed({
                     target: { kind: 'order', id: orderId },
                     reason: 'seller_cancelled_paid_order',
                     reference: updatedOrder.order_number ?? orderId,
-                    amount: order.total_amount,
+                    amount: order.payment_status === 'paid' ? order.total_amount : amountPaidOnlineOf(order),
                     currency: order.currency,
                     paymentMethod: order.payment_method ?? null,
                     cancelledBy: 'the seller',
@@ -1470,12 +1474,21 @@ export class VendorOrderService {
             await changeAgencyFeeService.carryInSession(wholeMoveFee, destinationId, session);
         }
 
+        // A partial order: what the customer prepaid follows the items to the parcels they now
+        // ride on. BEFORE the collections re-price, which read each shipment's prepaid part.
+        if (isPartialOrder(order)) {
+            await partialPaymentService.reshareInSession(order._id.toString(), session);
+        }
+
         // The pending COD collections follow what each shipment now carries (a collection
         // exists from agent accept, so an `assigned` shipment may already hold one). AFTER the
         // carry, so the destination's cash includes the customer fee it now carries.
         if (order.payment_method === 'cash_on_delivery') {
             if (sourceShipmentId) {
-                await cashCollectionService.followItemMoveInSession(order, sourceShipmentId, remainingSource, session);
+                const source = remainingSource && isPartialOrder(order)
+                    ? await ShipmentModel.findById(sourceShipmentId, null, { session })
+                    : remainingSource;
+                await cashCollectionService.followItemMoveInSession(order, sourceShipmentId, source, session);
             }
             const destNow = await ShipmentModel.findById(destinationId, null, { session });
             if (!destNow) throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);

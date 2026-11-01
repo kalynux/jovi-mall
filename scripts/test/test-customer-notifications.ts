@@ -106,6 +106,7 @@ function assert(name: string, fn: () => boolean): void {
  * someone else's action here, not the owner of a dashboard.
  */
 const UNMUTABLE: CustomerNotificationType[] = [
+    'order.prepayment.received',
     'booking.cancelled',
     'booking.payment.received',
     // Money, on the same footing as the line above: it is the RECEIPT for a balance the
@@ -196,6 +197,8 @@ const EXPECTED_WA_PARAMS: Record<CustomerNotificationType, number> = {
     'booking.refund.declined': 1,
     'order.created': 5,
     'order.payment.received': 4,
+    // paid online + orderNumber + vendorName + cash due + currency: the customer must see what is left.
+    'order.prepayment.received': 5,
     'order.shipped': 3,
     'order.out_for_delivery': 1,
     'order.delivered': 1,
@@ -304,10 +307,11 @@ function main(): void {
     // 46 since 2026-10-05 (refund flow, REFUND-FLOW-PLAN § 8): six `order.refund.*` + five `booking.refund.*`.
     // 46 → 47 on 2026-10-14: + order.delivery_fee.proposal_declined (the customer's own proposal).
     // 47 → 49 on 2026-10-26: + booking.reschedule_proposed / booking.reschedule_declined (D-8, D-9).
-    assert('catalog and model enum list the same 49 situations', () => {
+    // 49 → 50 on 2026-11-01: + order.prepayment.received (partial payment).
+    assert('catalog and model enum list the same 50 situations', () => {
         const catalog = Object.keys(CUSTOMER_NOTIFICATION_CATALOG).sort();
         const model = [...CUSTOMER_NOTIFICATION_TYPES].sort();
-        return catalog.length === 49 && JSON.stringify(catalog) === JSON.stringify(model);
+        return catalog.length === 50 && JSON.stringify(catalog) === JSON.stringify(model);
     });
 
     // The aggregate enum is spread from CUSTOMER_AGGREGATE_TYPES rather than hand-kept —
@@ -1638,8 +1642,10 @@ function main(): void {
      */
     assert('all four payment result events carry the chat (cart AND booking; received AND failed)', () =>
         orchestratorSource.split('originChannel: transaction.originChat?.channel ?? undefined').length - 1 === 4);
-    assert('all four customer handlers pass it on, filtered to the two chat channels', () =>
-        originHandlerSource.split('originChat: originChatOf(p.originChannel)').length - 1 === 4
+    // Five since 2026-11-01: the partial order's online part is a payment result too. Its event is
+    // published by `OrderService`, which is why the count above stays at four.
+    assert('all five customer handlers pass it on, filtered to the two chat channels', () =>
+        originHandlerSource.split('originChat: originChatOf(p.originChannel)').length - 1 === 5
         && /value === 'whatsapp' \|\| value === 'telegram' \? value : undefined/.test(originHandlerSource));
     assert('the stored value is one of the two chats, and absent (never null) elsewhere', () =>
         /originChat: \{\s*type: \{\s*channel: \{ type: String, enum: \['whatsapp', 'telegram'\], required: true \}\s*\},\s*default: undefined/.test(modelSource));

@@ -279,6 +279,17 @@ Languages are kept in sync with `SUPPORTED_LANGUAGES`
 | es | Nuevo pedido recibido | Has recibido un nuevo pedido n.º{{1}} por {{2}} {{3}}. | Ver pedido |
 | ar | تم استلام طلب جديد | لقد استلمت طلبًا جديدًا رقم {{1}} بقيمة {{2}} {{3}}. | عرض الطلب |
 
+## 1b. `vendor_order_created_partial`
+
+- **Body params:** `{{1}}`=order number, `{{2}}`=paid online, `{{3}}`=order total, `{{4}}`=currency, `{{5}}`=cash to collect
+- **Button:** URL → `orders/{{orderId}}`
+- **Added 2026-11-01 (partial payment). ⚠ Must be approved in Business Manager before a vendor can receive it outside the service window.**
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | New order, partly paid | Order #{{1}}: the customer paid {{2}} online out of {{3}} {{4}}. The delivery agent collects the remaining {{5}} in cash at delivery. You can prepare it now. | View order |
+| fr | Nouvelle commande, payée en partie | Commande n°{{1}} : le client a payé {{2}} en ligne sur {{3}} {{4}}. Le livreur encaisse les {{5}} restants en espèces à la livraison. Vous pouvez la préparer. | Voir la commande |
+
 ## 2. `vendor_order_cancelled`
 
 - **Body params:** `{{1}}`=order number
@@ -903,6 +914,18 @@ balance payment stays unannounced pending the proactive-message design (see
 | pt_PT | Encomenda {{1}} efetuada | A sua encomenda {{1}} em {{2}} foi registada, no valor de {{3}} {{4}}. | Ver encomenda |
 | es | Pedido {{1}} realizado | Tu pedido {{1}} con {{2}} está registrado, por {{3}} {{4}}. | Ver pedido |
 | ar | تم تسجيل الطلب {{1}} | تم تسجيل طلبك {{1}} لدى {{2}} بقيمة {{3}} {{4}}. | عرض الطلب |
+
+### `customer_order_prepayment_received`
+
+- **Situation:** `order.prepayment.received`
+- **Body params:** `{{1}}`=paid online, `{{2}}`=orderNumber, `{{3}}`=vendorName, `{{4}}`=cash due, `{{5}}`=currency
+- **Button:** URL → `orders/{{orderId}}`
+- **Added 2026-11-01 (partial payment). ⚠ Must be approved in Business Manager before a customer can receive it outside the service window.**
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Payment received for {{2}} | We received {{1}} online for order {{2}}. {{3}} is preparing it. You pay the remaining {{4}} {{5}} in cash at delivery. | View order |
+| fr | Paiement reçu pour {{2}} | Nous avons reçu {{1}} en ligne pour la commande {{2}}. {{3}} la prépare. Vous payez les {{4}} {{5}} restants en espèces à la livraison. | Voir la commande |
 
 ### `customer_order_payment_received`
 

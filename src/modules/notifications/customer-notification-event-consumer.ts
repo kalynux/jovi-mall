@@ -51,6 +51,7 @@ export function initializeCustomerNotificationEventConsumers(): void {
 
     // ── Orders ──────────────────────────────────────────────────────────────
     eventBus.subscribe('order.created', handler.handleOrderCreated.bind(handler));
+    eventBus.subscribe('order.prepayment.received', handler.handleOrderPrepaymentReceived.bind(handler));
     eventBus.subscribe('order.cancelled', handler.handleOrderCancelled.bind(handler));
     // Also fires for plan purchases and credit top-ups; the handler no-ops on
     // payloads carrying no orderId, the same way the shared cod.* events do.

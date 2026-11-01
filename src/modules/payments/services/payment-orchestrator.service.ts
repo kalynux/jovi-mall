@@ -26,7 +26,14 @@ import { amountsEqual, currenciesEqual } from '../domain/money';
 import { PAYMENTS_CONFIG } from '../config/payments.config';
 import { OrderRepository } from '../../orders/order.repository';
 import { OrderService } from '../../orders/order.service';
-import { OrderModel } from '../../orders/order.model';
+import { IOrder, OrderModel } from '../../orders/order.model';
+import {
+  allocatePrepaymentAcrossOrders,
+  amountPaidOnlineOf,
+  groupPrepaymentLimitsOf,
+  OrderPrepaymentInput,
+  prepaymentIsDue,
+} from '../../orders/domain/partial-payment';
 import { Booking, IBooking } from '../../booking/models/booking.model';
 import { BookingCalendarSyncService } from '../../booking/services/booking-calendar-sync.service';
 
@@ -62,6 +69,8 @@ type NewPaymentAttempt = {
   purpose?: PaymentPurpose;
   /** `order_delivery_topup` only — the shipment and proposal the top-up settles (ADR-A11). */
   deliveryTopup?: { shipmentId: Types.ObjectId; proposalId: Types.ObjectId; appliedAt: null };
+  /** `order_prepayment` only — what each order receives of this charge. */
+  prepaymentAllocations?: Array<{ orderId: Types.ObjectId; amount: number }>;
   /** The chat the checkout came from, if any — see `IPaymentTransaction.originChat`. */
   originChat?: { channel: 'whatsapp' | 'telegram' };
   /** Who is paying, as entered at initiate — see `payerOf` and `IPaymentTransaction.payer`. */
@@ -196,7 +205,8 @@ export class PaymentOrchestratorService {
   async initiatePayment(
     orderId: string,
     selection: ChargeSelection,
-    channel: PaymentChannelInfo
+    channel: PaymentChannelInfo,
+    options: { amount?: number } = {}
   ): Promise<{
     transactionId: string;
     status: PaymentStatus;
@@ -222,10 +232,17 @@ export class PaymentOrchestratorService {
     const userId = order.customer_id.toString();
 
     // COD orders are paid in cash at handoff (see src/modules/cod/) — they
-    // never go through a gateway.
-    if (order.payment_method === 'cash_on_delivery') {
+    // never go through a gateway. A partial order's online part does, once.
+    const prepaying = prepaymentIsDue(order);
+    if (amountPaidOnlineOf(order) > 0) throw createAppError(ERROR_CODES.PAYMENT_ORDER_ALREADY_PAID, 409);
+    if (order.payment_method === 'cash_on_delivery' && !prepaying) {
       throw createAppError(ERROR_CODES.PAYMENT_ORDER_IS_COD, 422, 'This order is cash on delivery — no online payment is required');
     }
+    const prepaymentPlan = prepaying ? this.planPrepayment([order], options.amount) : null;
+    if (!prepaying && options.amount !== undefined) {
+      throw createAppError(ERROR_CODES.PARTIAL_PAYMENT_NOT_APPLICABLE, 422);
+    }
+    const chargeAmount = prepaymentPlan ? prepaymentPlan.amount : order.total_amount;
 
     // Validate order status
     if (order.payment_status === 'paid') {
@@ -237,7 +254,7 @@ export class PaymentOrchestratorService {
     }
 
     // 2. GENERATE IDEMPOTENCY KEY
-    const idempotencyKey = this.generateIdempotencyKey(orderId, userId, order.total_amount);
+    const idempotencyKey = this.generateIdempotencyKey(orderId, userId, chargeAmount);
 
     // 3. CHECK FOR EXISTING TRANSACTION
     // One shape for every "you already have this payment" answer in this method. The
@@ -296,7 +313,7 @@ export class PaymentOrchestratorService {
     if (liveElsewhere) return respondWithExisting(liveElsewhere);
 
     // 4. ROUTE — only now is a NEW attempt certain to be needed. Throws before any write.
-    const gateway = charge.route(order.total_amount);
+    const gateway = charge.route(chargeAmount);
 
     // Failed/cancelled → this is a NEW attempt, and it needs the key the dead one holds.
     // Only once we KNOW it is dead, though: `FAILED` is written for a refusal AND for a
@@ -317,12 +334,13 @@ export class PaymentOrchestratorService {
       method: methodFor(charge.provider, gateway),
       status: 'INITIATED',
       gatewayRef: '', // Will be updated after gateway call
-      amountSnapshot: order.total_amount,
+      amountSnapshot: chargeAmount,
       currencySnapshot: order.currency,
       idempotencyKey,
       merchantRef: mintMerchantRef('pt'),
       payer: payerOf(channel),
-      rawGatewayPayloads: []
+      rawGatewayPayloads: [],
+      ...(prepaymentPlan ? { purpose: 'order_prepayment' as const, prepaymentAllocations: prepaymentPlan.allocations } : {})
     }, idempotencyKey);
     if ('raced' in attempt) return respondWithExisting(attempt.raced);
     const transaction = attempt.opened;
@@ -332,7 +350,7 @@ export class PaymentOrchestratorService {
       const gatewayResult = await gatewayInstance.initiatePayment({
         orderId,
         userId,
-        amount: order.total_amount,
+        amount: chargeAmount,
         currency: order.currency,
         channel: charge.channel,
         merchantRef: transaction.merchantRef!,
@@ -419,7 +437,7 @@ export class PaymentOrchestratorService {
     cartId: string,
     selection: ChargeSelection,
     channel: PaymentChannelInfo,
-    options: { originChat?: 'whatsapp' | 'telegram' | null } = {}
+    options: { originChat?: 'whatsapp' | 'telegram' | null; amount?: number } = {}
   ): Promise<{
     transactionId: string;
     status: PaymentStatus;
@@ -437,10 +455,21 @@ export class PaymentOrchestratorService {
     }
 
     // The payment method is chosen for the WHOLE checkout group — a COD group
-    // is paid in cash at handoff (see src/modules/cod/), never via a gateway.
-    if (orders.some(o => o.payment_method === 'cash_on_delivery')) {
+    // is paid in cash at handoff (see src/modules/cod/), never via a gateway. A PARTIAL checkout's
+    // online part does, once: the orders still owing it are what this charge is for.
+    const prepaying = orders.filter((o) => prepaymentIsDue(o) && o.fulfillment_status !== 'cancelled');
+    // Its online part went through: the same good news as a paid checkout, which a "Try again"
+    // button sitting in a chat must hear as that, not as a refusal.
+    if (prepaying.length === 0 && orders.some((o) => amountPaidOnlineOf(o) > 0)) {
+      throw createAppError(ERROR_CODES.PAYMENT_ORDER_ALREADY_PAID, 409, undefined, { cartId });
+    }
+    if (prepaying.length === 0 && orders.some(o => o.payment_method === 'cash_on_delivery')) {
       throw createAppError(ERROR_CODES.PAYMENT_ORDER_IS_COD, 422, 'This checkout is cash on delivery — no online payment is required', { cartId });
     }
+    if (prepaying.length === 0 && options.amount !== undefined) {
+      throw createAppError(ERROR_CODES.PARTIAL_PAYMENT_NOT_APPLICABLE, 422);
+    }
+    const prepaymentPlan = prepaying.length > 0 ? this.planPrepayment(prepaying, options.amount) : null;
 
     // All orders already paid → nothing to do
     if (orders.every(o => o.payment_status === 'paid')) {
@@ -448,9 +477,9 @@ export class PaymentOrchestratorService {
     }
 
     // Payable = still awaiting payment (never re-charge a paid order)
-    const payable = orders.filter(
-      o => o.payment_status === 'AWAITING_PAYMENT' || o.payment_status === 'pending'
-    );
+    const payable = prepaymentPlan
+      ? prepaying
+      : orders.filter(o => o.payment_status === 'AWAITING_PAYMENT' || o.payment_status === 'pending');
     if (payable.length === 0) {
       throw createAppError(ERROR_CODES.PAYMENT_CART_NO_PAYABLE_ORDERS, 409, undefined, { cartId });
     }
@@ -463,7 +492,7 @@ export class PaymentOrchestratorService {
     const currency = currencies[0];
 
     const userId = payable[0].customer_id.toString();
-    const groupTotal = payable.reduce((sum, o) => sum + o.total_amount, 0);
+    const groupTotal = prepaymentPlan ? prepaymentPlan.amount : payable.reduce((sum, o) => sum + o.total_amount, 0);
     const orderIds = payable.map(o => o._id);
 
     // 2. IDEMPOTENCY KEY (cartId stands in for orderId)
@@ -545,7 +574,8 @@ export class PaymentOrchestratorService {
       // ⚠ Written WITH the row, before the gateway is called: a charge can settle within
       // seconds, and a result announced before the origin was stamped would go to the
       // preference channel — the very defect this field exists to close.
-      ...(options.originChat ? { originChat: { channel: options.originChat } } : {})
+      ...(options.originChat ? { originChat: { channel: options.originChat } } : {}),
+      ...(prepaymentPlan ? { purpose: 'order_prepayment' as const, prepaymentAllocations: prepaymentPlan.allocations } : {})
     }, idempotencyKey);
     if ('raced' in attempt) return respondWithExisting(attempt.raced);
     const transaction = attempt.opened;
@@ -904,7 +934,7 @@ export class PaymentOrchestratorService {
     const orderObjectId = new Types.ObjectId(source.orderId);
     const txs = await PaymentTransactionModel.find({
       $or: [{ orderId: orderObjectId }, { orderIds: orderObjectId }],
-      purpose: { $in: ['primary', 'order_delivery_topup', null] },
+      purpose: { $in: ['primary', 'order_delivery_topup', 'order_prepayment', null] },
       status: { $in: ['SUCCEEDED', 'REFUNDED'] }
     });
     const topups = txs.filter((t) => t.purpose === 'order_delivery_topup');
@@ -916,6 +946,11 @@ export class PaymentOrchestratorService {
       throw createAppError(ERROR_CODES.REFUND_ORDER_NOT_FOUND, 404, undefined, { orderId: source.orderId });
     }
     const topupsPaid = topups.reduce((s, t) => s + t.amountSnapshot, 0);
+    // A partial order's charge holds only its online part, and on a checkout only THIS order's
+    // share of it: that share, not the order's total, is what it can return.
+    const prepaidShare = primary?.purpose === 'order_prepayment'
+      ? primary.prepaymentAllocations?.find((s) => s.orderId.equals(orderObjectId))?.amount ?? 0
+      : null;
 
     const legs: Array<{ tx: IPaymentTransaction; purpose: RefundLegPurpose; remaining: number }> = [];
     if (primary) {
@@ -927,8 +962,8 @@ export class PaymentOrchestratorService {
         tx: primary,
         purpose: 'primary',
         remaining: primaryLegRemaining({
-          orderTotal: (order as { total_amount: number }).total_amount,
-          topupsPaid,
+          orderTotal: prepaidShare ?? (order as { total_amount: number }).total_amount,
+          topupsPaid: prepaidShare === null ? topupsPaid : 0,
           refundedFromThisLegForOrder: onLeg?.total ?? 0,
           paymentRemaining: primary.amountSnapshot - primary.totalRefunded
         })
@@ -2033,6 +2068,21 @@ export class PaymentOrchestratorService {
         return;
       }
 
+      // ⛔ A PARTIAL order's online part branches here too, for the same kind of reason. Past this
+      // point `OrderService.handlePaymentSuccess` would mark a 30%-paid order `paid` and split it
+      // as prepaid, and nothing downstream would look wrong. See `order_prepayment`.
+      if (transaction.purpose === 'order_prepayment') {
+        for (const share of transaction.prepaymentAllocations ?? []) {
+          await this.orderService.handlePrepaymentSuccess(
+            share.orderId.toString(),
+            share.amount,
+            transaction._id.toString(),
+            transaction.originChat?.channel ?? null
+          );
+        }
+        return;
+      }
+
       // Route based on transaction type
       if (transaction.cartId && transaction.orderIds && transaction.orderIds.length > 0) {
         // CHECKOUT GROUP: one payment settles every order in the group. Each
@@ -2478,6 +2528,41 @@ export class PaymentOrchestratorService {
   assertChargeRequest(selection: ChargeSelection, channel: PaymentChannelInfo): void {
     const check = checkChargeRequestOrThrow(selection.provider, channel);
     if (!check.ok) throw (selection.onMissingField ?? missingFieldValidationError)(check.missing);
+  }
+
+  /**
+   * What a partial checkout's named amount charges, and what each order receives of it (D-8). The
+   * limits are the orders' own snapshots, taken at checkout. Refuses before anything is written.
+   */
+  private planPrepayment(
+    orders: IOrder[],
+    amount: number | undefined
+  ): { amount: number; allocations: Array<{ orderId: Types.ObjectId; amount: number }> } {
+    const inputs: OrderPrepaymentInput[] = orders.map((o) => ({
+      orderId: o._id.toString(),
+      total: o.total_amount,
+      minimumAmount: o.prepayment?.minimum_amount ?? 0,
+      maximumAmount: o.prepayment?.maximum_amount ?? 0,
+    }));
+    const { minimumAmount: minimum, maximumAmount: maximum } = groupPrepaymentLimitsOf(inputs);
+    if (amount === undefined) {
+      throw createAppError(ERROR_CODES.PARTIAL_PAYMENT_AMOUNT_REQUIRED, 422, undefined, { minimum, maximum });
+    }
+    if (amount < minimum || amount > maximum) {
+      throw createAppError(
+        ERROR_CODES.PARTIAL_PAYMENT_AMOUNT_OUT_OF_RANGE,
+        422,
+        `The amount must be between ${minimum} and ${maximum}`,
+        { minimum, maximum, requested: amount }
+      );
+    }
+    return {
+      amount,
+      allocations: allocatePrepaymentAcrossOrders(amount, inputs).map((share) => ({
+        orderId: new Types.ObjectId(share.orderId),
+        amount: share.amount,
+      })),
+    };
   }
 
   /**

@@ -129,6 +129,8 @@ export class TemplateRegistry {
         const notificationTemplates: Array<[string, number, boolean, string]> = [
             // ── Vendor ───────────────────────────────────────────────────────
             ['vendor_order_created', 3, true, 'Vendor: new order received'],
+            // A partial order, once its online part is paid (2026-11-01). Needs Meta's approval.
+            ['vendor_order_created_partial', 5, true, 'Vendor: new order, partly paid'],
             ['vendor_order_cancelled', 1, true, 'Vendor: order cancelled'],
             // 3 -> 5: gained the customer's name and the confirm-or-decline line.
             // Re-approve in Business Manager before deploying, in all 5 languages —
@@ -212,6 +214,8 @@ export class TemplateRegistry {
             ['customer_booking_refund_pending', 3, true, 'Customer: refund being sent manually'],
             ['customer_order_created', 4, true, 'Customer: order placed'],
             ['customer_order_payment_received', 3, true, 'Customer: order payment received'],
+            // A partial order's online part (2026-11-01). Needs Meta's approval.
+            ['customer_order_prepayment_received', 5, true, 'Customer: online part received, cash due at delivery'],
             // GAP-008 + GAP-012: the card payment page, delivered outside the service
             // window. Its URL button carries `pay/{token}`, so approve the button with a
             // dynamic URL suffix exactly as the order templates do.

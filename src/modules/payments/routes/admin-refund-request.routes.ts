@@ -37,6 +37,7 @@ export function buildAdminRefundRequestRouter(guards: RequestHandler[] = []): Ro
   router.post('/', AdminRefundRequestController.create);
   router.post('/:id/approve', AdminRefundRequestController.approve);
   router.post('/:id/reject', AdminRefundRequestController.reject);
+  router.post('/:id/partial-return-fault', AdminRefundRequestController.setPartialReturnFault);
   router.post('/:id/retry', AdminRefundRequestController.retry);
   router.post('/:id/settle-external', AdminRefundRequestController.settleExternal);
   router.post('/:id/resolve-unknown', AdminRefundRequestController.resolveUnknown);

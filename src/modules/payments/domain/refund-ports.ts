@@ -1,4 +1,5 @@
 import type { PauseTarget } from '../../earnings/services/earnings-pause.service';
+import type { PartialReturnFault } from '../../orders/domain/partial-payment';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 
@@ -36,6 +37,24 @@ export interface RefundEarningsPort {
    * and rider fund. Read-only. Refuses a parcel that is not the order's (422).
    */
   assessDeliveryFault(orderId: string, shipmentIds: string[], now: Date): Promise<DeliveryFaultAssessment[]>;
+  /** What this parcel's return earns its agency (the agency's own return fee). Read-only. */
+  returnFeeOfParcel(shipmentId: string): Promise<number>;
+  /**
+   * A partial order's returned parcel is settled: pay the agency its return fee and charge whoever
+   * is at fault (D-2, D-12). Idempotent on `refundKey`.
+   */
+  onPartialReturnCompleted(input: PartialReturnCompletedInput): Promise<void>;
+}
+
+export interface PartialReturnCompletedInput {
+  refundKey: string;
+  orderId: string;
+  shipmentId: string;
+  fault: PartialReturnFault;
+  returnFee: number;
+  /** The refund's payment and transfer fees, when the party at fault pays them. */
+  feesCharge: number;
+  orderNumber?: string | null;
 }
 
 export interface RefundCompletedInput {
