@@ -40,6 +40,7 @@ import { replyForHeldBargain } from '../services/bargain-entry.service';
 import { supportFormActionId } from '../domain/bot-ticket-actions';
 import { BotActionHandlers, ParsedBotAction, unknownBotAction } from '../domain/bot-action-dispatch';
 import { BotIdentitySyncSchema, BotOnboardingSubmitSchema } from '../validators/bot.validators';
+import { parseReferralCodeFromMessage } from '../../referrals/domain/referral-rules';
 import { __toSavedAddressInput as toSavedAddressInput, setLanguageTap } from './bot-profile.controller';
 
 const customerRepository = new CustomerRepository();
@@ -148,10 +149,10 @@ export class BotIdentityController {
      * keyboard from the same field it reads in every other state.
      */
     static sync = asyncHandler(async (req: Request, res: Response) => {
-        BotIdentitySyncSchema.parse(req.body ?? {});
+        const { messageText } = BotIdentitySyncSchema.parse(req.body ?? {});
         const envelope = botEnvelopeOf(req);
 
-        const outcome = await botRegistrationService.sync(envelope);
+        const outcome = await botRegistrationService.sync(envelope, parseReferralCodeFromMessage(messageText));
 
         if (!outcome) {
             // Telegram, first contact. No account, so no stored checklist — the pristine

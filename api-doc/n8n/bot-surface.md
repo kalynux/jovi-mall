@@ -20,6 +20,10 @@ customer bearer token is ever issued to the automation layer.
 
 > ### Start here if you are wiring n8n
 >
+> **Send the message's text as `messageText` on `POST /identity/sync` (added 2026-11-02, optional).** A referral link
+> puts its code into the customer's first message: `Wi-Mall ref: CODE` on WhatsApp, `/start ref_CODE` on Telegram. Without
+> this field the customer registers normally and the partner is never credited. Nothing else reads it, and it is not stored.
+>
 > **Call `POST /identity/sync` on every inbound message, before anything else.** It creates
 > the customer account if there is none, tells you whether this is their first message, and
 > tells you what is still missing from their profile. §11 is the whole flow.

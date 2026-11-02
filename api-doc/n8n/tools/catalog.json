@@ -203,7 +203,7 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {},
-        "description": "No model-supplied parameters. The identity envelope is attached by the transport, and carries the optional `language` hint (Telegram from.language_code) used to seed a new account."
+        "description": "No model-supplied parameters. The identity envelope is attached by the transport, and carries the optional `language` hint (Telegram from.language_code) used to seed a new account. The transport also sends the inbound text as the optional `messageText`, read only for a referral code on a first contact and never stored."
       },
       "request": {
         "body": []

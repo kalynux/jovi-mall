@@ -130,7 +130,8 @@ function main(): void {
     && /const amount = available;/.test(accounts));
 
   assert('requestPayout passes no ceiling into the move', () =>
-    /moveAvailableToRequestedInSession\(\s*ownerType,\s*ownerId,\s*session\s*\)/s.test(service)
+    // `options.minAmount` is the referral program's FLOOR on a request. It caps nothing.
+    /moveAvailableToRequestedInSession\(\s*ownerType,\s*ownerId,\s*session(,\s*options\.minAmount)?\s*\)/s.test(service)
     && !/\bceiling\b/.test(service));
 
   assert('no windowed paid-sum survives in the repository', () => !repo.includes('sumPaidSince'));

@@ -104,6 +104,18 @@ export interface IEarningsAllocation extends Document {
    */
   courier_hold: CourierHoldSnapshot | null;
 
+  /**
+   * PLATFORM rows only (REFERRAL-PROGRAM-PLAN § 5.4): when the referral program judged this
+   * commission, whether or not it paid anybody. Null means it has not been judged yet.
+   */
+  referral_evaluated_at: Date | null;
+  /**
+   * PLATFORM rows only (§ 5.6): a refund reduced this commission and the rewards on it have not
+   * caught up. Written in the refund's own transaction, so it cannot be lost; `syncCommission`
+   * clears it.
+   */
+  referral_resync: { at: Date; refund_key: string | null } | null;
+
   created_at: Date;
   updated_at: Date;
 }
@@ -151,6 +163,18 @@ const EarningsAllocationSchema = new Schema<IEarningsAllocation>(
       ),
       default: null,
     },
+
+    referral_evaluated_at: { type: Date, default: null },
+    referral_resync: {
+      type: new Schema(
+        {
+          at: { type: Date, required: true },
+          refund_key: { type: String, default: null },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );
@@ -163,6 +187,21 @@ EarningsAllocationSchema.index(
 );
 // Release-worker sweep: held allocations whose hold window has elapsed.
 EarningsAllocationSchema.index({ status: 1, hold_release_at: 1 });
+// The referral stages' two worklists. Partial, because only a released commission can be on the first.
+EarningsAllocationSchema.index(
+  { referral_evaluated_at: 1, _id: 1 },
+  {
+    name: 'referral_commission_to_evaluate',
+    partialFilterExpression: { beneficiary_type: 'platform', status: 'released' },
+  }
+);
+EarningsAllocationSchema.index(
+  { 'referral_resync.at': 1 },
+  {
+    name: 'referral_commission_to_resync',
+    partialFilterExpression: { 'referral_resync.at': { $type: 'date' } },
+  }
+);
 // Beneficiary ledger/earnings queries.
 EarningsAllocationSchema.index({ beneficiary_type: 1, beneficiary_id: 1, created_at: -1 });
 

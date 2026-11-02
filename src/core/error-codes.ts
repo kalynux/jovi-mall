@@ -1505,6 +1505,25 @@ export const ERROR_CODES = Object.freeze({
      * progress" without a second call.
      */
     ACCOUNT_CLOSURE_ORDERS_IN_FLIGHT: 'ACCOUNT_CLOSURE_ORDERS_IN_FLIGHT',
+    /** The account's referral wallet still holds or owes money. */
+    ACCOUNT_CLOSURE_REFERRAL_BALANCE: 'ACCOUNT_CLOSURE_REFERRAL_BALANCE',
+
+    // ── REFERRAL PROGRAM (REFERRAL-PROGRAM-PLAN) ─────────────────────────────
+    /** The program is switched off: nobody may apply. */
+    REFERRAL_PROGRAM_DISABLED: 'REFERRAL_PROGRAM_DISABLED',
+    /** This person already has an application or a partnership. `details.status`. */
+    REFERRAL_ALREADY_APPLIED: 'REFERRAL_ALREADY_APPLIED',
+    /** Rejected or terminated, and no administrator has allowed a new application (owner R-9). */
+    REFERRAL_REAPPLY_NOT_ALLOWED: 'REFERRAL_REAPPLY_NOT_ALLOWED',
+    REFERRAL_PARTNER_NOT_FOUND: 'REFERRAL_PARTNER_NOT_FOUND',
+    /** That verb cannot run from the partner's current status. `details.status`. */
+    REFERRAL_PARTNER_STATUS_CONFLICT: 'REFERRAL_PARTNER_STATUS_CONFLICT',
+    /** Suspended or terminated: nothing may be withdrawn until an administrator decides (owner R-9). */
+    REFERRAL_BALANCE_FROZEN: 'REFERRAL_BALANCE_FROZEN',
+    /** There is no frozen balance to release, or it was already released. */
+    REFERRAL_BALANCE_NOT_FROZEN: 'REFERRAL_BALANCE_NOT_FROZEN',
+    /** A role on this account holds the destination; it is edited on that role's page. `details.source`. */
+    REFERRAL_PAYOUT_METHOD_MANAGED_ELSEWHERE: 'REFERRAL_PAYOUT_METHOD_MANAGED_ELSEWHERE',
 
     // ── ROLE CLOSURE (administrator-requested, user-confirmed — ADR-A10) ─────
     /** No pending closure request for this user + role (or for the caller's current role). */

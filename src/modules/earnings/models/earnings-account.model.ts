@@ -35,7 +35,12 @@ import { MODELS, COLLECTIONS } from '../../../core/database/collections';
  * feature has to be judged on. Like `platform` it is keyed by a `null` owner_id
  * and is never paid out (see PAYOUT_OWNER_TYPES).
  */
-export type EarningsOwnerType = 'vendor' | 'agency' | 'platform' | 'agent' | 'platform_ai';
+/**
+ * `referral_partner` (REFERRAL-PROGRAM-PLAN) is keyed by the partner's id, not a role entity's: a
+ * partner may be a customer, who holds no other wallet. Rewards enter it through `referral_rewards`,
+ * never through an allocation.
+ */
+export type EarningsOwnerType = 'vendor' | 'agency' | 'platform' | 'agent' | 'platform_ai' | 'referral_partner';
 
 /**
  * The owner types the platform itself holds — a `null` `owner_id`, one row each.
@@ -94,7 +99,7 @@ export interface IEarningsAccount extends Document {
 
 const EarningsAccountSchema = new Schema<IEarningsAccount>(
   {
-    owner_type: { type: String, enum: ['vendor', 'agency', 'platform', 'agent', 'platform_ai'], required: true },
+    owner_type: { type: String, enum: ['vendor', 'agency', 'platform', 'agent', 'platform_ai', 'referral_partner'], required: true },
     owner_id: { type: Schema.Types.ObjectId, default: null },
     currency: { type: String, required: true, uppercase: true, trim: true, default: 'XAF' },
     pending_balance: { type: Number, required: true, default: 0, min: 0 },

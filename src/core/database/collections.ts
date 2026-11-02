@@ -239,6 +239,12 @@ export const MODELS = Object.freeze({
   AGENCY_CLAIM: 'AgencyClaim',
   PAYOUT_REQUEST: 'PayoutRequest',
 
+  // Referral program (REFERRAL-PROGRAM-PLAN): partners earn from commission on accounts they brought
+  REFERRAL_SETTINGS: 'ReferralSettings',
+  REFERRAL_PARTNER: 'ReferralPartner',
+  REFERRAL_RELATIONSHIP: 'ReferralRelationship',
+  REFERRAL_REWARD: 'ReferralReward',
+
   // Blog / editorial (the marketing site's article pages)
   ARTICLE: 'Article',
   ARTICLE_AUTHOR: 'ArticleAuthor',
@@ -444,6 +450,12 @@ export const COLLECTIONS = Object.freeze({
   EARNINGS_ADJUSTMENT: 'earnings_adjustments',
   AGENCY_CLAIM: 'agency_claims',
   PAYOUT_REQUEST: 'payout_requests',
+
+  // Referral program
+  REFERRAL_SETTINGS: 'referral_settings',
+  REFERRAL_PARTNER: 'referral_partners',
+  REFERRAL_RELATIONSHIP: 'referral_relationships',
+  REFERRAL_REWARD: 'referral_rewards',
 
   // Blog / editorial (the marketing site's article pages)
   ARTICLE: 'articles',

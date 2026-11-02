@@ -27,6 +27,7 @@ import { buildAdminGeoRouter } from '../../modules/geo/admin-geo.routes';
 import { buildAdminStatementMailRouter } from '../../modules/mail/admin-statement-mail.routes';
 import { buildAdminRefundRequestRouter } from '../../modules/payments/routes/admin-refund-request.routes';
 import { buildAdminAgencyClaimRouter } from '../../modules/earnings/routes/admin-agency-claims.routes';
+import { buildAdminReferralRouter } from '../../modules/referrals/routes/admin-referral.routes';
 
 /**
  * `/api/internal/admin/*` — the service-to-service surface the **wi-admin** backend calls.
@@ -199,6 +200,7 @@ router.use('/shipments', buildAdminShipmentRouter([requireAdminCaller]));
  * ride along: the access gate and the storefront's slot list.
  */
 router.use('/bookings', buildAdminBookingRouter([requireAdminCaller]));
+router.use('/referrals', buildAdminReferralRouter([requireAdminCaller]));
 
 /**
  * Money (Phase 11) — billing, earnings and payouts, the three routers that still had no

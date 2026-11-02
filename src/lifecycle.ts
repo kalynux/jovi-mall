@@ -42,6 +42,7 @@ import { initializeAgencyNotificationEventConsumers } from './modules/notificati
 import { initializeAgentNotificationEventConsumers } from './modules/notifications/agent-notification-event-consumer';
 import { initializeCustomerNotificationEventConsumers } from './modules/notifications/customer-notification-event-consumer';
 import { registerDeliveryFeeRefundConsumer } from './modules/delivery-fee-proposals/services/delivery-fee-refund.service';
+import { initializeReferralNotifications } from './modules/referrals/services/referral-notifications';
 import { fileCleanupWorker } from './modules/file-cleanup/workers/file-cleanup.worker';
 import { earningsReleaseWorker } from './modules/earnings/workers/earnings-release.worker';
 import { unpaidOrderCancelWorker } from './modules/orders/workers/unpaid-order-cancel.worker';
@@ -408,6 +409,7 @@ function startBackgroundWork(): void {
     // Billing: agent plan → capacity sync (plan.activated drives max_active_shipments)
     // and the agency unterminated-shipment soft-cap monitor (alert only, never blocks).
     registerAgentPlanCapacityConsumer();
+    initializeReferralNotifications();
     agencyShipmentCapWorker.start();
 
     // Agent COD pool: KYC verdict × administrator pin, else the platform default (500 000).

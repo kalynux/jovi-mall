@@ -28,6 +28,7 @@ import { earningsPauseService, PauseCache } from '../services/earnings-pause.ser
 import { earningsCompletionService } from '../services/earnings-completion.service';
 import { SYSTEM_ACTOR_ID } from '../../../core/types/system-actor';
 import { ActorRole } from '../../tickets/types/ticket.types';
+import { referralRewardService } from '../../referrals/services/referral-reward.service';
 
 /**
  * EarningsReleaseWorker - daily sweep with idempotent stages:
@@ -147,6 +148,7 @@ export class EarningsReleaseWorker implements ObservableWorker {
         await this.autoConfirmStaleOrders(now);
         await this.startCourierHolds(now);
         await this.releaseMaturedHolds(now);
+        await this.runReferralStages(now);
         await this.recoverMissedCodSplits(now);
         await this.recoverMissedDeliverySplits(now);
         await this.recoverCustomerDeliveryRefunds();
@@ -311,6 +313,19 @@ export class EarningsReleaseWorker implements ObservableWorker {
           error
         );
       }
+    }
+  }
+
+  /**
+   * Stage 2b — the referral program, straight after the commissions it pays from were released
+   * (REFERRAL-PROGRAM-PLAN § 5.4). Never throws: nothing here may stop the stages that move
+   * vendors' and couriers' money.
+   */
+  private async runReferralStages(now: Date): Promise<void> {
+    try {
+      await referralRewardService.runNightlyStages(now, EARNINGS_CONFIG.BATCH_SIZE);
+    } catch (error) {
+      console.error('[EarningsReleaseWorker] Referral stages failed:', error);
     }
   }
 
@@ -493,6 +508,8 @@ export class EarningsReleaseWorker implements ObservableWorker {
       // comparing to one literal. The `!account.owner_id` half already covered
       // the new one, but only by accident.
       if (isPlatformOwnerType(account.owner_type) || !account.owner_id) continue;
+      // Partners are paid on request, and only while their balance is not frozen (owner R-3, R-9).
+      if (account.owner_type === 'referral_partner') continue;
 
       const ownerType = account.owner_type as 'vendor' | 'agency' | 'agent';
       const ownerId = account.owner_id.toString();

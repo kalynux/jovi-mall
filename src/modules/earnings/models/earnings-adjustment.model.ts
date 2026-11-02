@@ -101,7 +101,7 @@ const EarningsAdjustmentSchema = new Schema<IEarningsAdjustment>(
     source_id: { type: Schema.Types.ObjectId, default: null },
     beneficiary_type: {
       type: String,
-      enum: ['vendor', 'agency', 'platform', 'agent', 'platform_ai'],
+      enum: ['vendor', 'agency', 'platform', 'agent', 'platform_ai', 'referral_partner'],
       required: true,
     },
     beneficiary_id: { type: Schema.Types.ObjectId, default: null },

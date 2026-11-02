@@ -21,6 +21,7 @@ import { earningsCompletionService } from './earnings-completion.service';
 import type { DeliveryFaultAssessment } from '../../payments/domain/refund-ports';
 import { CourierGiveLine, courierGiveback, takeFromCouriers } from '../domain/courier-liability';
 import { Explanation, explainDeliveryFault, explainPartialReturnCharge, explainRefundShare, explainVendorBeyond } from '../domain/adjustment-explanations';
+import { referralRewardService } from '../../referrals/services/referral-reward.service';
 
 /**
  * Earnings recovery ("clawback") — REFUND-FLOW-PLAN § 6, contract § 11.3.
@@ -515,10 +516,12 @@ export class EarningsClawbackService {
     if (await this.adjustmentRepo.existsForRefund(refundKey)) return EMPTY(refundKey, true);
 
     const debtors = new Map<string, { ownerType: EarningsOwnerType; ownerId: string }>();
+    const reducedCommissions = new Set<string>();
     let outcome: ClawbackOutcome;
     try {
       outcome = await transactionManager.runInTransactionWithRetry(async (session) => {
         debtors.clear();
+        reducedCommissions.clear();
         const result = EMPTY(refundKey, false);
         if (await this.adjustmentRepo.existsForRefund(refundKey, session)) return EMPTY(refundKey, true);
 
@@ -581,6 +584,12 @@ export class EarningsClawbackService {
           );
           add(taken, row.beneficiary_type, row.beneficiary_id ? row.beneficiary_id.toString() : null);
           result.allocationsTouched += 1;
+          // Referral rewards follow the commission Wi-Mall keeps. Only the mark is written here, so
+          // a reward fault can never stop a refund (REFERRAL-PROGRAM-PLAN § 5.6).
+          if (row.beneficiary_type === 'platform') {
+            await this.allocationRepo.markReferralResync(row._id as Types.ObjectId, refundKey, now, session);
+            reducedCommissions.add(line.id);
+          }
         }
 
         if (planned.vendorBeyond.total > 0 && scope.vendorId) {
@@ -634,6 +643,7 @@ export class EarningsClawbackService {
     }
 
     if (!outcome.alreadyApplied && debtors.size > 0) await this.notePendingPayouts(refundKey, [...debtors.values()]);
+    if (!outcome.alreadyApplied) await referralRewardService.syncAfterRefund([...reducedCommissions]);
     return outcome;
   }
 

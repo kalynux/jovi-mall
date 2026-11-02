@@ -1009,6 +1009,25 @@ refund obligation.
 
 **COD delivery is closed to every other path, and that is deliberate.** For COD, `delivered` ⟺ cash collected — `recomputeCodPaymentStatus` derives the order's payment status from that equivalence, and `splitCodCollection` only ever runs off a collection, so a COD shipment that reaches `delivered` without one leaves an order that is delivered, completed, and that **nobody is ever paid for** (not even the vendor), with a payment status that is a lie. Consequently: the customer's `confirm-delivery` endpoint **rejects COD** (their code is their confirmation), and the shipment auto-confirm sweep does **not** confirm COD — it routes through `CashCollectionService.autoCollectWithoutCode`, which records the cash and delivers in one transaction. Any new route to `delivered` must go through a collection too.
 
+### The referral program (`modules/referrals/`) — 2026-11-02
+
+An approved partner earns a percentage of the vendor commission Wi-Mall earns on accounts they referred. Plan and
+the owner's decisions: `../PRODUCTION-READINESS/REFERRAL-PROGRAM-PLAN.md`. Off until tier 1 switches it on. Five
+things are load-bearing:
+
+- ⛔ **Nothing here runs inside the release or refund transactions.** Three stages of `EarningsReleaseWorker`
+  (`referralRewardService.runNightlyStages`) work from marks on the `platform` row: `referral_evaluated_at` and
+  `referral_resync`. Each row gets its own transaction, in which the rewards and the mark are written together.
+- ⛔ **A reward is never an `earnings_allocations` row.** See `referral-reward.model.ts`.
+- **Only `platform` rows of `order`, `cod_collection` and `booking` pay.** So the bargain fee and a damage-claim fee never do.
+- **The wallet is an `earnings_accounts` row of owner type `referral_partner`,** keyed by the partner's id. Debt netting,
+  the ledger and the payout pipeline are reused. A new owner type has to reach the enums on the account, ledger and
+  adjustment models, `PAYOUT_OWNER_TYPES`, and wi-admin's write-off map. Allocations deliberately don't accept it.
+- **A partner's DTOs carry no order, booking, vendor or commission**, and `test:referrals` fails on those keys.
+
+Pinned by `npm run test:referrals` (offline) and `npm run verify:referrals` (the whole chain through the real sweep;
+needs a local replica set and refuses any other `MONGO_URI`, and works in its own database, which it drops).
+
 ### Partial payment (`orders/domain/partial-payment.ts`) — 2026-11-01
 
 A customer pays part online and the rest in cash at the door. **There is no third payment method:** a

@@ -27,6 +27,7 @@ import {
 } from '../domain/bot-onboarding';
 import { BotIdentityEnvelope } from './bot-identity.service';
 import { parseLanguageAnswer } from '../domain/language-choice';
+import { referralAttributionService } from '../../referrals/services/referral-attribution.service';
 
 /**
  * Registration on first contact, and the chat-collected profile that follows it — GAP-002.
@@ -136,7 +137,10 @@ export class BotRegistrationService {
      * password reset, and would collide the moment the person shared a number that already
      * belonged to an account.
      */
-    async sync(envelope: BotIdentityEnvelope): Promise<BotRegistrationOutcome | null> {
+    async sync(
+        envelope: BotIdentityEnvelope,
+        referralCode: string | null = null,
+    ): Promise<BotRegistrationOutcome | null> {
         /**
          * ⚠ FIRST, AND BEFORE EVERY EARLY RETURN. An inbound message is a fact about the
          * channel, not about whether we could resolve an account from it — a Telegram
@@ -156,8 +160,13 @@ export class BotRegistrationService {
         }
 
         // Telegram, first contact. Nothing to create, nothing to refuse — the contact share
-        // is the next step and the controller says so.
-        if (resolution.status === 'needs_contact') return null;
+        // is the next step and the controller says so. A referral code in `/start` waits for it.
+        if (resolution.status === 'needs_contact') {
+            if (referralCode) {
+                await referralAttributionService.rememberPendingCode(envelope.channel, envelope.externalId, referralCode);
+            }
+            return null;
+        }
 
         /**
          * ⚠ **A suspended account is REFUSED, not routed around.** Without this branch the
@@ -173,7 +182,7 @@ export class BotRegistrationService {
         const phone = messagingPhoneToE164(envelope.externalId);
         if (envelope.channel !== 'whatsapp' || !phone) return null;
 
-        return this.createAccount(envelope, phone);
+        return this.createAccount(envelope, phone, referralCode);
     }
 
     /**
@@ -255,6 +264,7 @@ export class BotRegistrationService {
     private async createAccount(
         envelope: BotIdentityEnvelope,
         phone: string,
+        referralCode: string | null,
     ): Promise<BotRegistrationOutcome> {
         const now = new Date();
         const displayName = cleanName(envelope.displayName);
@@ -289,6 +299,13 @@ export class BotRegistrationService {
 
         await this.bind(created.user._id.toString(), envelope);
         await this.seedNotificationChannel(created.customer._id.toString(), envelope.channel);
+        // Never throws: a referral fault must not cost a customer their first reply.
+        await referralAttributionService.attach({
+            userId: created.user._id,
+            category: 'customer',
+            code: referralCode,
+            channel: envelope.channel,
+        });
 
         return {
             account: {
@@ -594,7 +611,8 @@ export class BotRegistrationService {
         this.assertNotRefused(resolution);
 
         // `no_account` — nobody holds this number. Create, and bind to this chat.
-        return this.createAccount(envelope, phone);
+        const referralCode = await referralAttributionService.consumePendingCode(envelope.channel, envelope.externalId);
+        return this.createAccount(envelope, phone, referralCode);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

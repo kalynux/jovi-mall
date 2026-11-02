@@ -147,6 +147,7 @@ const FIXTURES: Record<string, Record<string, unknown>> = {
     'vendor-notification': { vendorName: 'Chez Ada', title: 'New order', message: 'You have a new order.', actionLabel: 'View', actionUrl: LINK },
     'agency-notification': { agencyName: 'Douala Express', title: 'Shipment assigned', message: 'A shipment needs an agent.', actionLabel: 'Assign', actionUrl: LINK },
     'agent-notification': { agentName: 'Paul', title: 'New delivery offer', message: 'A delivery is waiting for you.', actionLabel: 'Accept', actionUrl: LINK },
+    'referral-status': { title: 'Your partnership is suspended', message: 'You will not earn new rewards while it is suspended.', reasonLabel: 'Reason', reason: 'Under review', link: LINK, buttonLabel: 'Open my referral page' },
     'account-statement': { title: 'Your account statement', recipientName: 'Chez Ada', from: '2026-09-01', to: '2026-09-30', fileName: 'statement-2026-09.pdf' },
 };
 

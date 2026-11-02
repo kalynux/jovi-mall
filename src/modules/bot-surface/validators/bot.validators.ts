@@ -378,7 +378,15 @@ export const BotAddressUpdateSchema = z
  * already the natural place for it. `onboarding.complete` flipping to true is the signal to
  * replay it. Product owner's decision, 2026-08-26.
  */
-export const BotIdentitySyncSchema = z.object({}).strict();
+export const BotIdentitySyncSchema = z
+    .object({
+        /**
+         * The inbound message's text. Read for a referral code on a first contact, and then
+         * forgotten: the account does not exist yet, so nothing else could use it.
+         */
+        messageText: z.string().max(4096).optional(),
+    })
+    .strict();
 
 /**
  * A Telegram `contact` payload, as the onboarding phone step accepts it.

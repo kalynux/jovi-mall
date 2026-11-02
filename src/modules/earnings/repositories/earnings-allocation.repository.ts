@@ -353,6 +353,23 @@ export class EarningsAllocationRepository {
     );
   }
 
+  /**
+   * A refund reduced this commission: the referral rewards on it must catch up. In the refund's
+   * own transaction, so the mark cannot be lost and a reward fault cannot stop the refund.
+   */
+  async markReferralResync(
+    allocationId: Types.ObjectId,
+    refundKey: string,
+    at: Date,
+    session: ClientSession
+  ): Promise<void> {
+    await EarningsAllocationModel.updateOne(
+      { _id: allocationId },
+      { $set: { referral_resync: { at, refund_key: refundKey } } },
+      { session }
+    );
+  }
+
   /** One beneficiary's row for a source, or null. Session-aware for in-transaction reads. */
   async findOneBySourceAndBeneficiary(
     sourceType: EarningsSourceType,

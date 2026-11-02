@@ -631,7 +631,9 @@ export class EarningsAccountService {
   async moveAvailableToRequestedInSession(
     ownerType: EarningsOwnerType,
     ownerId: string | null,
-    session: ClientSession
+    session: ClientSession,
+    /** The referral program has its own minimum (owner R-3); every other owner takes the default. */
+    minAmount: number = EARNINGS_CONFIG.MIN_PAYOUT_AMOUNT
   ): Promise<{ amount: number; currency: string }> {
     const account = await this.accountRepo.getOrCreate(ownerType, ownerId, session);
     const available = account.available_balance;
@@ -645,13 +647,13 @@ export class EarningsAccountService {
 
     const amount = available;
 
-    if (amount < EARNINGS_CONFIG.MIN_PAYOUT_AMOUNT) {
+    if (amount < minAmount) {
       throw createAppError(
         ERROR_CODES.EARNINGS_PAYOUT_BELOW_MINIMUM,
         409,
-        `Available balance must be at least ${EARNINGS_CONFIG.MIN_PAYOUT_AMOUNT} ${account.currency} to request a payout`,
+        `Available balance must be at least ${minAmount} ${account.currency} to request a payout`,
         {
-          minAmount: EARNINGS_CONFIG.MIN_PAYOUT_AMOUNT,
+          minAmount,
           available,
         }
       );
