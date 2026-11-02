@@ -15,6 +15,7 @@ import { publicCatalogService } from '../../../catalog/services/public-catalog.s
 import { formatBotPrice, toPublicMediaUrl } from '../../domain/product-card';
 import { BotDeliveryLine, deliveryLinesOf } from '../../domain/delivery-lines';
 import { deliveryCashOfOrders } from '../../../orders/domain/delivery-payer';
+import { cashDueAtDeliveryOf } from '../../../orders/domain/partial-payment';
 import { botStorefrontLink, surfacePath } from '../../domain/bot-list-window';
 import { maskPhone } from '../../dto/bot-projections';
 import { composeTypedNumber, dialOptions } from '../../../../core/validation/dial-codes';
@@ -580,9 +581,7 @@ export async function placeCheckout(
 
         return {
             /** Pay part now: the cash still due at delivery; 0 otherwise. */
-            cashDueAtDelivery: partialAmount !== null
-                ? orders.reduce((sum, order) => sum + order.total_amount, 0) - partialAmount
-                : 0,
+            cashDueAtDelivery: partialAmount !== null ? cashDueAtDeliveryOf(orders, partialAmount) : 0,
             orderCount: orders.length,
             transactionId: payment.transactionId,
             status: payment.status,

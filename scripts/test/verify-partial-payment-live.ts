@@ -43,6 +43,7 @@ import { CartModel } from '../../src/modules/cart/models/cart.model';
 import { OrderModel } from '../../src/modules/orders/order.model';
 import { OrderService } from '../../src/modules/orders/order.service';
 import { OrderRepository } from '../../src/modules/orders/order.repository';
+import { PricingPlanModel } from '../../src/modules/billing/models/pricing-plan.model';
 import { onlinePartDueOf } from '../../src/modules/bot-surface/domain/bot-order-status-copy';
 import { cartQuoteService } from '../../src/modules/orders/services/cart-quote.service';
 import { partialPaymentService } from '../../src/modules/orders/services/partial-payment.service';
@@ -67,6 +68,9 @@ import { eventBus } from '../../src/core/events/event-bus';
 import { IGeoAddress, GeoAddressInput } from '../../src/core/types/geo-address.types';
 
 const MONGO_URI = process.env.MONGO_URI ?? '';
+// CI's live job shares ONE seeded database and later suites count its rows, while this suite leaves
+// its fixtures behind. So under CI it moves to a sibling database, as `verify-refund-fees-live` does.
+const DB_NAME = process.env.CI && !/verify/i.test(MONGO_URI) ? 'verify_partial_payment_ci' : undefined;
 const CURRENCY = 'XAF';
 const TAG = 'e2epp-';
 const PRICE_A = 30_000;
@@ -288,13 +292,19 @@ async function main(): Promise<void> {
     console.error('Refusing to run: MONGO_URI must point at a local replica set. This suite writes real money rows.');
     process.exit(1);
   }
-  await mongoose.connect(MONGO_URI);
+  await mongoose.connect(MONGO_URI, DB_NAME ? { dbName: DB_NAME } : {});
   initializeRefundDomain();
   // Collections cannot be created inside a transaction on a fresh database, and an index still
   // building refuses the transaction's lock.
   for (const model of Object.values(mongoose.models)) {
     await model.createCollection().catch(() => undefined);
     await model.init().catch(() => undefined);
+  }
+  // Every money path resolves a pricing plan, and CI seeds them into the database this one left.
+  if (DB_NAME) {
+    const seeded = mongoose.connection.useDb(new URL(MONGO_URI).pathname.slice(1));
+    const plans = await seeded.collection(PricingPlanModel.collection.name).find().toArray();
+    for (const plan of plans) await PricingPlanModel.collection.replaceOne({ _id: plan._id }, plan, { upsert: true });
   }
 
   // ═══ 1 ═══════════════════════════════════════════════════════════════════════

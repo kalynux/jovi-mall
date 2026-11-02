@@ -94,7 +94,7 @@
         rider. Shown only when the server sent `deliveryFeeCash`; both amounts are its strings.
       -->
       <div class="block" id="feeCashRow" hidden>
-        <!-- A toggle BUTTON, not an <input>: the page's only field stays the mobile-money number. -->
+        <!-- A toggle BUTTON, not an <input>: this choice adds no field to the page. -->
         <button type="button" class="btn btn--block" id="feeCash" aria-pressed="false"></button>
       </div>
       <div class="row" id="feeCashNowRow" hidden>
@@ -720,6 +720,8 @@
     expired: "This page is no longer available. Ask me again in the chat.",
     retry: "Try again",
     checkoutHeading: "Checkout",
+    checkoutPartial: "Pay part now, the rest in cash at delivery",
+    checkoutPartialAmount: "How much now? From {{minimum}} to {{maximum}}",
     checkoutTotal: "Total",
     checkoutAddress: "Deliver to",
     checkoutNoAddress: "You have no saved delivery address yet. Add one on our website, then come back to the chat and I will reopen checkout.",

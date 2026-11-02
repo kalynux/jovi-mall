@@ -22,6 +22,7 @@ import {
   allocatePrepaymentAcrossOrders,
   allocatePrepaymentAcrossParcels,
   amountPaidOnlineOf,
+  cashDueAtDeliveryOf,
   codHandlingFeeBaseOf,
   groupPrepaymentLimitsOf,
   isPartialOrder,
@@ -356,6 +357,8 @@ async function main(): Promise<void> {
     return repo.includes("prepayment: '$prepayment'")
       && repo.includes('partialPayment: o.prepayment ? { paidAt: o.prepayment.paid_at ?? null } : null');
   });
+  await assert('the cash due at delivery is the whole checkout minus what was paid online', () =>
+    cashDueAtDeliveryOf([{ total_amount: 20_000 }, { total_amount: 5_000 }], 7_500) === 17_500);
   await assert('a returned parcel\'s settlement is stamped only AFTER the money step, and the sweep finds it', () => {
     const svc = stripComments(read('modules/payments/services/refund-request.service.ts'));
     const body = spanOf(svc, 'private async settlePartialReturnAftermath(', 'async settleUnsettledCompleted(');

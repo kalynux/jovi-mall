@@ -1076,13 +1076,12 @@ export class EarningsSplitService {
       commission_percent_snapshot: 0,
       currency: order.currency,
       requires_cash_settlement: false,
-      courier_hold: courierHold,
       ...(heldFrom ? { completed_at: heldFrom, hold_release_at: daysFromNow(EARNINGS_CONFIG.HOLD_DAYS, heldFrom) } : {}),
     };
 
     await this.persist([
-      { ...defaults, beneficiary_type: 'agency', beneficiary_id: agencyId, amount: computeAgencyCut(amount, agentCut) },
-      ...(agentId ? [{ ...defaults, beneficiary_type: 'agent' as const, beneficiary_id: agentId, amount: agentCut }] : []),
+      { ...defaults, beneficiary_type: 'agency', beneficiary_id: agencyId, amount: computeAgencyCut(amount, agentCut), courier_hold: courierHold },
+      ...(agentId ? [{ ...defaults, beneficiary_type: 'agent' as const, beneficiary_id: agentId, amount: agentCut, courier_hold: courierHold }] : []),
     ]);
 
     await this.emitSplit('shipment', sourceId, order.vendor_id.toString(), { returnFee: amount, agentCut });

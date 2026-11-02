@@ -183,7 +183,8 @@ console.log('\n4. wiring');
 const split = code('modules/earnings/services/earnings-split.service.ts');
 assert('every agency and agent row the splits write carries its terms (courier_hold)', () => {
   const rows = split.match(/beneficiary_type: '(?:agency|agent)'(?: as const)?,[^}]*\}/g) ?? [];
-  return rows.length === 6 && rows.every((r) => /courier_hold: courierHold/.test(r));
+  // 8 since 2026-11-01: `splitPartialReturn` pays an agency and an agent for a returned parcel.
+  return rows.length === 8 && rows.every((r) => /courier_hold: courierHold/.test(r));
 });
 assert('the vendor\'s delivery leftover stays on the ORDER\'s clock (no snapshot)', () => {
   const rows = split.match(/beneficiary_type: 'vendor',[^}]*\}/g) ?? [];

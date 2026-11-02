@@ -235,6 +235,11 @@ export function prepaymentIsDue(order: PrepaymentCarrier | null | undefined): bo
   return Boolean(order?.prepayment) && !order?.prepayment?.paid_at;
 }
 
+/** The cash still due at delivery across a checkout's orders, once `paidOnline` of it is paid. */
+export function cashDueAtDeliveryOf(orders: ReadonlyArray<{ total_amount: number }>, paidOnline: number): number {
+  return orders.reduce((sum, order) => sum + order.total_amount, 0) - paidOnline;
+}
+
 /** What was paid online. 0 on any other order. */
 export function amountPaidOnlineOf(order: PrepaymentCarrier | null | undefined): number {
   return order?.prepayment?.paid_at ? Math.max(0, order.prepayment.amount ?? 0) : 0;
