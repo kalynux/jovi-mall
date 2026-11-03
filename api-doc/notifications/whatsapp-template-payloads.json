@@ -1,12 +1,12 @@
 {
-  "generatedAt": "2026-11-01T21:56:09.642Z",
+  "generatedAt": "2026-11-03T00:29:27.737Z",
   "note": "GENERATED from the notification catalogs by scripts/generate-whatsapp-templates.ts. Do not hand-edit: names, placeholder counts and placeholder ORDER are derived from the same functions the send path uses, and editing them here makes the approved template disagree with what is sent.",
   "languages": [
     "en",
     "fr"
   ],
-  "templateCount": 173,
-  "submissionCount": 346,
+  "templateCount": 183,
+  "submissionCount": 366,
   "needsCopyReview": [
     {
       "name": "vendor_delivery_fee_proposal_agency_rejected",
@@ -96,6 +96,24 @@
       "name": "agency_shipment_agent_returned",
       "unsuppliedValues": [
         "reasonSuffix"
+      ]
+    },
+    {
+      "name": "referral_partner_rejected",
+      "unsuppliedValues": [
+        "reasonLine"
+      ]
+    },
+    {
+      "name": "referral_partner_suspended",
+      "unsuppliedValues": [
+        "reasonLine"
+      ]
+    },
+    {
+      "name": "referral_partner_terminated",
+      "unsuppliedValues": [
+        "reasonLine"
       ]
     }
   ],
@@ -11331,6 +11349,288 @@
               ]
             }
           ]
+        }
+      ]
+    },
+    {
+      "name": "referral_partner_approved",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Referral application approved*\n\nYour application to the Wi-Mall referral program was approved. Your referral code is *{{1}}*. Your link and your earnings are on the referral page of your Wi-Mall app.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "referral_partner_approved",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Candidature de parrainage approuvée*\n\nVotre candidature au programme de parrainage Wi-Mall a été approuvée. Votre code de parrainage est *{{1}}*. Votre lien et vos gains se trouvent sur la page de parrainage de votre application Wi-Mall.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "referral_partner_rejected",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Referral application not approved*\n\nYour application to the Wi-Mall referral program was not approved. You can see the details on the referral page of your Wi-Mall app."
+        }
+      ]
+    },
+    {
+      "name": "referral_partner_rejected",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Candidature de parrainage non approuvée*\n\nVotre candidature au programme de parrainage Wi-Mall n'a pas été approuvée. Vous pouvez voir les détails sur la page de parrainage de votre application Wi-Mall."
+        }
+      ]
+    },
+    {
+      "name": "referral_partner_suspended",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Referral partnership suspended*\n\nYour Wi-Mall referral partnership has been suspended. You earn no new rewards during the suspension and your balance cannot be withdrawn. What you already earned stays recorded."
+        }
+      ]
+    },
+    {
+      "name": "referral_partner_suspended",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Partenariat de parrainage suspendu*\n\nVotre partenariat de parrainage Wi-Mall a été suspendu. Vous ne gagnez aucune nouvelle récompense pendant la suspension et votre solde ne peut pas être retiré. Ce que vous avez déjà gagné reste enregistré."
+        }
+      ]
+    },
+    {
+      "name": "referral_partner_reinstated",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Referral partnership active again*\n\nYour Wi-Mall referral partnership is active again, and your balance can be withdrawn. You earn rewards again from today. The suspended period is not paid."
+        }
+      ]
+    },
+    {
+      "name": "referral_partner_reinstated",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Partenariat de parrainage de nouveau actif*\n\nVotre partenariat de parrainage Wi-Mall est de nouveau actif et votre solde peut être retiré. Vous gagnez à nouveau des récompenses à partir d'aujourd'hui. La période de suspension n'est pas payée."
+        }
+      ]
+    },
+    {
+      "name": "referral_partner_terminated",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Referral partnership ended*\n\nYour Wi-Mall referral partnership has ended. You earn no new rewards, and your balance cannot be withdrawn until Wi-Mall has reviewed it. What you already earned stays recorded."
+        }
+      ]
+    },
+    {
+      "name": "referral_partner_terminated",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Fin du partenariat de parrainage*\n\nVotre partenariat de parrainage Wi-Mall a pris fin. Vous ne gagnez plus de récompenses et votre solde ne peut pas être retiré tant que Wi-Mall ne l'a pas examiné. Ce que vous avez déjà gagné reste enregistré."
+        }
+      ]
+    },
+    {
+      "name": "referral_balance_released",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Referral balance released*\n\nWi-Mall has reviewed your referral balance and released it. You can now request a withdrawal on the referral page of your Wi-Mall app."
+        }
+      ]
+    },
+    {
+      "name": "referral_balance_released",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Solde de parrainage libéré*\n\nWi-Mall a examiné votre solde de parrainage et l'a libéré. Vous pouvez maintenant demander un retrait sur la page de parrainage de votre application Wi-Mall."
+        }
+      ]
+    },
+    {
+      "name": "referral_account_restriction_removed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Referral account status updated*\n\nThe restriction on your Wi-Mall referral account has been removed, so a new application from your account is now accepted. Your current status is on the referral page of your Wi-Mall app."
+        }
+      ]
+    },
+    {
+      "name": "referral_account_restriction_removed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Statut de votre compte de parrainage mis à jour*\n\nLa restriction sur votre compte de parrainage Wi-Mall a été levée: une nouvelle candidature de votre part est désormais acceptée. Votre statut actuel figure sur la page de parrainage de votre application Wi-Mall."
+        }
+      ]
+    },
+    {
+      "name": "referral_payout_paid",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Referral withdrawal sent*\n\nYour referral withdrawal of *{{1}}* *{{2}}* has been sent to your payout destination.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "referral_payout_paid",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Retrait de parrainage envoyé*\n\nVotre retrait de parrainage de *{{1}}* *{{2}}* a été envoyé vers votre moyen de paiement.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "referral_payout_rejected",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Referral withdrawal refused*\n\nYour referral withdrawal of *{{1}}* *{{2}}* was refused, and the money is back in your referral balance. You can see the reason on the referral page of your Wi-Mall app.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "referral_payout_rejected",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Retrait de parrainage refusé*\n\nVotre retrait de parrainage de *{{1}}* *{{2}}* a été refusé et l'argent est revenu sur votre solde de parrainage. Vous pouvez voir le motif sur la page de parrainage de votre application Wi-Mall.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "referral_payout_transfer_failed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Problem sending your referral withdrawal*\n\nWe hit a problem sending your referral withdrawal of *{{1}}* *{{2}}*. Your money is safe and still reserved for it, and our team is working on it.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "referral_payout_transfer_failed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Problème d'envoi de votre retrait de parrainage*\n\nNous avons rencontré un problème en envoyant votre retrait de parrainage de *{{1}}* *{{2}}*. Votre argent est en sécurité et toujours réservé pour ce retrait, et notre équipe s'en occupe.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
         }
       ]
     },

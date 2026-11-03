@@ -19,9 +19,23 @@ import {
 } from '../domain/referral-rules';
 import { IPartnerStatusChange, IReferralPartner, ReferralPartnerModel } from '../models/referral-partner.model';
 import { ReferralSettingsService, referralSettingsService } from './referral-settings.service';
-import { notifyPartnerStatus } from './referral-notifications';
+import { notifyPartner } from './referral-notifications';
+import { ReferralSituation } from '../../notifications/catalog/referral-notification-catalog';
 
 const CODE_ATTEMPTS = 8;
+
+const VERB_SITUATION: Readonly<Record<PartnerVerb, ReferralSituation>> = {
+  approve: 'partner.approved',
+  reject: 'partner.rejected',
+  suspend: 'partner.suspended',
+  reinstate: 'partner.reinstated',
+  terminate: 'partner.terminated',
+};
+
+/** After the commit, never awaited: a slow or failing send must not hold up an administrator's request. */
+function tell(partner: IReferralPartner, situation: ReferralSituation): void {
+  void notifyPartner(partner, situation, `${situation}:${partner._id.toString()}:${partner.updated_at.getTime()}`);
+}
 
 export interface PartnerTermsPatch {
   terms: Partial<Record<EarningCategory, { ratePercent?: number | null; durationMonths?: number | null }>>;
@@ -154,7 +168,7 @@ export class ReferralPartnerService {
     if (!updated) throw createAppError(ERROR_CODES.REFERRAL_PARTNER_STATUS_CONFLICT, 409);
 
     if (verb === 'suspend' || verb === 'terminate') await this.notePendingPayout(updated, verb);
-    await notifyPartnerStatus(updated);
+    tell(updated, VERB_SITUATION[verb]);
     return updated;
   }
 
@@ -165,7 +179,10 @@ export class ReferralPartnerService {
       { $set: { can_reapply: true } },
       { new: true }
     );
-    if (updated) return updated;
+    if (updated) {
+      tell(updated, 'partner.reapply_allowed');
+      return updated;
+    }
     const partner = await this.getOrThrow(partnerId);
     throw createAppError(ERROR_CODES.REFERRAL_PARTNER_STATUS_CONFLICT, 409, undefined, {
       status: partner.status,
@@ -184,7 +201,10 @@ export class ReferralPartnerService {
       },
       { new: true }
     );
-    if (updated) return updated;
+    if (updated) {
+      tell(updated, 'partner.balance_released');
+      return updated;
+    }
     const partner = await this.getOrThrow(partnerId);
     throw createAppError(ERROR_CODES.REFERRAL_BALANCE_NOT_FROZEN, 409, undefined, { status: partner.status });
   }

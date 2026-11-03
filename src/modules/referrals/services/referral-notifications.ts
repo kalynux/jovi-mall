@@ -1,25 +1,45 @@
+import { Language, DEFAULT_LANGUAGE } from '../../../core/constants/languages';
 import { eventBus, DomainEvent } from '../../../core/events/event-bus';
+import { connectionService } from '../../channel-connections';
 import { MailService } from '../../mail/mail.service';
 import { UserModel } from '../../users/user.model';
 import { CustomerModel } from '../../customers/customer.model';
+import { VendorModel } from '../../vendors/vendor.model';
+import { DeliveryAgencyModel } from '../../delivery/delivery-agency.model';
+import { DeliveryAgentModel } from '../../agents/models/agent.model';
+import { WhatsappService } from '../../whatsapp/whatsapp.service';
+import { WaServiceMessage } from '../../whatsapp/builders/service-message.builder';
+import { getWhatsAppMessagingService } from '../../whatsapp/services/whatsapp-messaging.service';
+import { isSupportedLanguage, templateLanguage } from '../../notifications/catalog/notification-i18n';
+import { toWhatsAppNotificationBody, RenderContext } from '../../notifications/catalog/message-renderer';
+import {
+  assertReferralCatalogComplete,
+  REFERRAL_PAGE_LABEL,
+  referralReasonLine,
+  ReferralSituation,
+  referralWhatsAppTemplateName,
+  renderReferralChannelText,
+  renderReferralWhatsAppTemplateParams,
+} from '../../notifications/catalog/referral-notification-catalog';
 import { IReferralPartner, ReferralPartnerModel } from '../models/referral-partner.model';
 
 /**
- * Email to a partner when something about their participation changes (plan Q-2).
+ * Telling a partner what changed (owner, 2026-11-03): WhatsApp first, and email only when WhatsApp
+ * could not deliver. A customer often has no email; every role has a phone.
  *
- * Email only, and only where the account has an address: WhatsApp needs new templates approved by
- * Meta, and the referral page always shows the current status. Best-effort throughout: a mail
- * failure must never undo an administrator's decision or a payout.
+ * A partner is a person, so this is deliberately not a fifth notification stack: it writes no inbox
+ * row and reads no preference. There is nothing here a partner would mute, since each message says
+ * their status or their money changed.
+ *
+ * ⛔ **Nothing here may throw into the caller, and callers do not wait for it.** A delivery fault
+ * must never undo an administrator's decision or a payout, and a dead Redis can hang a send for
+ * minutes, which must not hang the administrator's request with it.
  */
-type Lang = 'en' | 'fr';
 
-interface Copy {
-  subject: string;
-  title: string;
-  body: string;
-}
+let mail: MailService | null = null;
+let window: WhatsappService | null = null;
 
-/** The agent app has no web address, so an agent's email carries no button. */
+/** The page lives in the app the partner applied from. The agent app has no web address, so no button. */
 function referralPageUrl(role: string): string | null {
   const trim = (url: string | undefined): string | null => (url ? url.replace(/\/+$/, '') : null);
   if (role === 'agent') return null;
@@ -29,140 +49,173 @@ function referralPageUrl(role: string): string | null {
   return shop ? `${shop}/shop/account/referrals` : null;
 }
 
-const STATUS_COPY: Record<string, Record<Lang, Copy>> = {
-  active: {
-    en: {
-      subject: 'You are now a Wi-Mall referral partner',
-      title: 'Welcome to the referral program',
-      body: 'Your application was approved. Your referral link is ready on your referral page.',
-    },
-    fr: {
-      subject: 'Vous êtes maintenant partenaire de parrainage Wi-Mall',
-      title: 'Bienvenue dans le programme de parrainage',
-      body: 'Votre candidature a été approuvée. Votre lien de parrainage est disponible sur votre page de parrainage.',
-    },
-  },
-  rejected: {
-    en: {
-      subject: 'Your referral program application',
-      title: 'Your application was not approved',
-      body: 'Your application to the referral program was not approved.',
-    },
-    fr: {
-      subject: 'Votre candidature au programme de parrainage',
-      title: "Votre candidature n'a pas été approuvée",
-      body: "Votre candidature au programme de parrainage n'a pas été approuvée.",
-    },
-  },
-  suspended: {
-    en: {
-      subject: 'Your referral partnership is suspended',
-      title: 'Your partnership is suspended',
-      body: 'You will not earn new rewards while it is suspended, and your balance cannot be withdrawn. What you have already earned stays recorded.',
-    },
-    fr: {
-      subject: 'Votre partenariat de parrainage est suspendu',
-      title: 'Votre partenariat est suspendu',
-      body: 'Vous ne gagnez aucune nouvelle récompense pendant la suspension et votre solde ne peut pas être retiré. Ce que vous avez déjà gagné reste enregistré.',
-    },
-  },
-  terminated: {
-    en: {
-      subject: 'Your referral partnership has ended',
-      title: 'Your partnership has ended',
-      body: 'You will not earn new rewards, and your balance cannot be withdrawn until an administrator has reviewed it. What you have already earned stays recorded.',
-    },
-    fr: {
-      subject: 'Votre partenariat de parrainage a pris fin',
-      title: 'Votre partenariat a pris fin',
-      body: "Vous ne gagnez plus de récompenses et votre solde ne peut pas être retiré tant qu'un administrateur ne l'a pas examiné. Ce que vous avez déjà gagné reste enregistré.",
-    },
-  },
-};
+interface PartnerContact {
+  lang: Language;
+  /** Bare digits, as Meta addresses it and as the 24-hour window is keyed. Null: not reachable. */
+  whatsapp: string | null;
+  email: string | null;
+}
 
-const PAYOUT_COPY: Record<string, Record<Lang, Copy>> = {
-  'payout.paid': {
-    en: {
-      subject: 'Your referral payout was sent',
-      title: 'Your payout was sent',
-      body: 'Your withdrawal of {{amount}} was sent to your payout destination.',
-    },
-    fr: {
-      subject: 'Votre retrait de parrainage a été envoyé',
-      title: 'Votre retrait a été envoyé',
-      body: 'Votre retrait de {{amount}} a été envoyé vers votre moyen de paiement.',
-    },
-  },
-  'payout.rejected': {
-    en: {
-      subject: 'Your referral payout was not sent',
-      title: 'Your payout was not sent',
-      body: 'Your withdrawal of {{amount}} was refused and the money returned to your balance.',
-    },
-    fr: {
-      subject: "Votre retrait de parrainage n'a pas été envoyé",
-      title: "Votre retrait n'a pas été envoyé",
-      body: "Votre retrait de {{amount}} a été refusé et l'argent est revenu sur votre solde.",
-    },
-  },
-};
+/**
+ * The profile of the role they applied from, because that is where their language and proven phone
+ * are. A customer's language is under `preferences`; the other three hold `preferred_language`.
+ */
+async function roleProfileOf(partner: IReferralPartner): Promise<{ phone?: string | null; phone_verified?: boolean; language?: unknown }> {
+  const query = { user_id: partner.user_id };
+  const fields = 'phone phone_verified preferred_language';
+  const row: any =
+    partner.applied_as_role === 'vendor' ? await VendorModel.findOne(query).select(fields).lean()
+      : partner.applied_as_role === 'agency' ? await DeliveryAgencyModel.findOne(query).select(fields).lean()
+        : partner.applied_as_role === 'agent' ? await DeliveryAgentModel.findOne(query).select(fields).lean()
+          : await CustomerModel.findOne(query).select('phone phone_verified preferences.language').lean();
+  return { phone: row?.phone, phone_verified: row?.phone_verified, language: row?.preferences?.language ?? row?.preferred_language };
+}
 
-const STATUS_REASON_LABEL: Record<Lang, string> = { en: 'Reason', fr: 'Motif' };
-const BUTTON_LABEL: Record<Lang, string> = { en: 'Open my referral page', fr: 'Ouvrir ma page de parrainage' };
+async function contactOf(partner: IReferralPartner): Promise<PartnerContact> {
+  const [user, profile, connection] = await Promise.all([
+    UserModel.findById(partner.user_id).select('login_email').lean(),
+    roleProfileOf(partner),
+    connectionService.getConnection(partner.user_id, 'whatsapp'),
+  ]);
+  // The connection is proven by the chat itself. Otherwise only a phone the person verified: this
+  // text names their money, and an unverified number may be somebody else's.
+  const phone = connection?.external_id ?? (profile.phone_verified ? profile.phone : null);
+  return {
+    lang: isSupportedLanguage(profile.language) ? profile.language : DEFAULT_LANGUAGE,
+    whatsapp: phone ? phone.replace(/^\+/, '') : null,
+    email: user?.login_email ?? null,
+  };
+}
 
-let mail: MailService | null = null;
+/**
+ * Free text inside the 24-hour window, the approved template outside it. True only when Meta took
+ * it. A template still in review, a refused number or a provider outage all answer false, and the
+ * caller then tries email.
+ */
+async function sendWhatsApp(
+  contact: PartnerContact,
+  situation: ReferralSituation,
+  ctx: RenderContext,
+  deliveryKey: string
+): Promise<boolean> {
+  if (!contact.whatsapp || !process.env.WHATSAPP_ACCESS_TOKEN || !process.env.WHATSAPP_PHONE_NUMBER_ID) return false;
+  const to = `+${contact.whatsapp}`;
+  try {
+    window ??= new WhatsappService();
+    const free = await window.canSendFreeMessage(contact.whatsapp);
+    const result = free
+      ? await getWhatsAppMessagingService().send(
+        WaServiceMessage.text({
+          to,
+          body: (() => {
+            const text = renderReferralChannelText(situation, 'whatsapp', contact.lang, ctx);
+            return toWhatsAppNotificationBody(text.subject, text.body);
+          })(),
+        })
+      )
+      : await getWhatsAppMessagingService().send({
+        to,
+        type: 'template',
+        message: {
+          type: 'template',
+          name: referralWhatsAppTemplateName(situation),
+          // ⛔ Never the recipient's own language: templates are approved in English and French only.
+          language: templateLanguage(contact.lang),
+          components: [
+            {
+              type: 'body',
+              parameters: renderReferralWhatsAppTemplateParams(situation, contact.lang, ctx).map((text) => ({
+                type: 'text' as const,
+                text,
+              })),
+            },
+          ],
+        },
+        meta: { idempotencyKey: `referral:${deliveryKey}:whatsapp` },
+      });
+    return result.success;
+  } catch (error) {
+    console.error(`[ReferralNotifications] WhatsApp refused ${situation}:`, error);
+    return false;
+  }
+}
 
-async function send(partner: IReferralPartner, copy: Record<Lang, Copy>, amount: string | null, note: string | null): Promise<void> {
-  const user = await UserModel.findById(partner.user_id).select('login_email').lean();
-  if (!user?.login_email) return;
-
-  const customer = await CustomerModel.findOne({ user_id: partner.user_id }).select('preferences.language').lean();
-  const lang: Lang = customer?.preferences?.language === 'fr' ? 'fr' : 'en';
-  const text = copy[lang];
-
+async function sendEmail(
+  partner: IReferralPartner,
+  contact: PartnerContact,
+  situation: ReferralSituation,
+  ctx: RenderContext
+): Promise<void> {
+  if (!contact.email) return;
+  const text = renderReferralChannelText(situation, 'email', contact.lang, ctx);
   mail ??= new MailService();
   await mail.send({
-    to: user.login_email,
+    to: contact.email,
     type: 'SYSTEM',
     subject: text.subject,
     template: 'referral-status',
     variables: {
-      title: text.title,
-      message: amount ? text.body.replace('{{amount}}', amount) : text.body,
-      reasonLabel: STATUS_REASON_LABEL[lang],
-      reason: note,
+      title: text.subject,
+      message: text.body,
       link: referralPageUrl(partner.applied_as_role),
-      buttonLabel: BUTTON_LABEL[lang],
+      buttonLabel: REFERRAL_PAGE_LABEL[contact.lang],
     },
   });
 }
 
-export async function notifyPartnerStatus(partner: IReferralPartner): Promise<void> {
-  const copy = STATUS_COPY[partner.status];
-  if (!copy) return;
+/**
+ * Never throws. `deliveryKey` must be unique per event: a retried send of the same event is then
+ * refused by the messaging service rather than sent twice.
+ */
+export async function notifyPartner(
+  partner: IReferralPartner,
+  situation: ReferralSituation,
+  deliveryKey: string,
+  ctx: RenderContext = {}
+): Promise<void> {
   try {
-    await send(partner, copy, null, partner.status_reason);
+    const contact = await contactOf(partner);
+    const full: RenderContext = {
+      referralCode: partner.code ?? '',
+      reasonLine: referralReasonLine(contact.lang, partner.status_reason),
+      ...ctx,
+    };
+    if (await sendWhatsApp(contact, situation, full, deliveryKey)) return;
+    await sendEmail(partner, contact, situation, full);
   } catch (error) {
-    console.error(`[ReferralNotifications] Could not email partner ${String(partner._id)}:`, error);
+    console.error(`[ReferralNotifications] Could not tell partner ${String(partner._id)} about ${situation}:`, error);
   }
 }
 
+const PAYOUT_SITUATIONS: Readonly<Record<string, ReferralSituation>> = {
+  'payout.paid': 'payout.paid',
+  'payout.rejected': 'payout.rejected',
+  'payout.transfer_failed': 'payout.transfer_failed',
+};
+
 async function onPayoutEvent(event: DomainEvent): Promise<void> {
   try {
-    const { ownerType, ownerId, amount, currency, reason } = event.payload as Record<string, any>;
+    const { ownerType, ownerId, amount, currency, payoutRequestId } = event.payload as Record<string, any>;
     if (ownerType !== 'referral_partner') return;
-    const copy = PAYOUT_COPY[event.eventType];
-    if (!copy) return;
+    const situation = PAYOUT_SITUATIONS[event.eventType];
+    if (!situation) return;
     const partner = await ReferralPartnerModel.findById(ownerId);
     if (!partner) return;
-    await send(partner, copy, `${currency} ${Number(amount).toLocaleString()}`, reason ?? null);
+    await notifyPartner(partner, situation, `${situation}:${String(payoutRequestId)}`, {
+      currency: String(currency),
+      amountFormatted: Number(amount).toLocaleString('en-US'),
+      // A payout's refusal is shown on the page. The partnership's own reason does not belong in it.
+      reasonLine: '',
+    });
   } catch (error) {
-    console.error('[ReferralNotifications] Could not email a payout outcome:', error);
+    console.error('[ReferralNotifications] Could not handle a payout outcome:', error);
   }
 }
 
 /** The vendor, agency and agent stacks each ignore this owner type, so it has its own subscriber. */
 export function initializeReferralNotifications(): void {
+  assertReferralCatalogComplete();
   eventBus.subscribe('payout.paid', onPayoutEvent);
   eventBus.subscribe('payout.rejected', onPayoutEvent);
+  eventBus.subscribe('payout.transfer_failed', onPayoutEvent);
 }

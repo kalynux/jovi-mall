@@ -25,7 +25,7 @@ Every partner write answers a thin acknowledgement, never the document:
 
 A rate is 0 to 25 with up to two decimals, and a duration is 1 to 120 whole months.
 
-`reason` on a rejection, suspension or termination is **shown to the partner**, on their page and in the email.
+`reason` on a rejection, suspension or termination is **shown to the partner**, on their page and in the WhatsApp message or email.
 
 There is deliberately no route that creates or changes a referral relationship (owner, 2026-11-02: someone
 who forgot the code asks the referrer).

@@ -1706,3 +1706,37 @@ as a delivery error; in-app, push, email and Telegram are unaffected.
 | `vendor_booking_reschedule_declined` | vendor | `booking.reschedule_declined` | customer, booking no., service, original time | View booking |
 | `customer_booking_reschedule_proposed` | customer | `booking.reschedule_proposed` | vendor, service, previous, proposed, answer-by | View booking + quick replies **Accept new time** (`yes:bkprop:<bookingId>`) · **Keep my time** (`no:bkprop:<bookingId>`); fallback `open:bl` |
 | `customer_booking_reschedule_declined` | customer | `booking.reschedule_declined` | vendor, service, requested time, kept time | View booking |
+
+---
+
+## 14. Referral partner templates (one set for all four roles)
+
+**Submitted 2026-11-03, `en` + `fr`.** Nine names were APPROVED as `UTILITY` that day; `referral_account_restriction_removed` was still in review when this was written. Re-measure rather than trusting this line.
+Catalog: [referral-notification-catalog.ts](../../src/modules/notifications/catalog/referral-notification-catalog.ts).
+Sender: [referral-notifications.ts](../../src/modules/referrals/services/referral-notifications.ts).
+
+⚠ **Different from every other section.** A partner is a person, not a role, so one set serves a vendor, an agency, an
+agent and a customer. They carry **no URL button**: Meta bakes a button's host in permanently, the apps are on four
+hosts, and the agent app has no web page. A button would need four sets of these.
+
+⚠ **Not gated on a preference or a connection, unlike the four stacks.** Each one says a partner's status or money
+changed. It goes to the connected WhatsApp number, else to a phone the person verified, and falls back to email when
+WhatsApp cannot deliver, which includes while these are in review. An unverified phone is never messaged.
+
+| Name | Sent when | Parameters |
+|---|---|---|
+| `referral_partner_approved` | application approved | code |
+| `referral_partner_rejected` | application rejected | none |
+| `referral_partner_suspended` | partnership suspended | none |
+| `referral_partner_reinstated` | suspended partner reinstated | none |
+| `referral_partner_terminated` | partnership ended | none |
+| `referral_balance_released` | a frozen balance is released | none |
+| `referral_account_restriction_removed` | a rejected or terminated person may apply again | none |
+| `referral_payout_paid` | withdrawal sent | currency, amount |
+| `referral_payout_rejected` | withdrawal refused | currency, amount |
+| `referral_payout_transfer_failed` | the transfer failed | currency, amount |
+
+⚠ `referral_reapply_allowed` is still on the WABA and nothing sends it. Meta approved it as MARKETING on 2026-11-03, a name keeps its category, and a recipient can opt out of MARKETING, so it was reworded as an account-status notice under the name above.
+
+The administrator's reason is **not** a parameter: it is free text, and Meta refuses a line break in one. Inside the
+24-hour window the free message and the email carry it; the template points at the referral page, which always shows it.

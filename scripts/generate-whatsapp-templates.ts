@@ -76,6 +76,12 @@ import {
     renderAgentButton,
     renderAgentChannelText,
 } from '../src/modules/notifications/catalog/agent-notification-catalog';
+import {
+    REFERRAL_NOTIFICATION_CATALOG,
+    referralWhatsAppTemplateName,
+    renderReferralWhatsAppTemplateParams,
+    renderReferralChannelText,
+} from '../src/modules/notifications/catalog/referral-notification-catalog';
 import { META_LANGUAGE_CODE } from '../src/modules/notifications/catalog/notification-i18n';
 import { otpFallbackTemplateBody, otpExpiryMinutes } from '../src/modules/phone-verification/domain/otp-copy';
 import { OTP_LIMITS } from '../src/modules/phone-verification/config/phone-verification.config';
@@ -420,6 +426,8 @@ collect('vendor', NOTIFICATION_CATALOG as Record<string, unknown>, whatsAppTempl
 collect('customer', CUSTOMER_NOTIFICATION_CATALOG as Record<string, unknown>, customerWhatsAppTemplateName as never, renderCustomerChannelText as never, renderCustomerWhatsAppTemplateParams as never, renderCustomerButton as never);
 collect('agency', AGENCY_NOTIFICATION_CATALOG as Record<string, unknown>, agencyWhatsAppTemplateName as never, renderAgencyChannelText as never, renderAgencyWhatsAppTemplateParams as never, renderAgencyButton as never);
 collect('agent', AGENT_NOTIFICATION_CATALOG as Record<string, unknown>, agentWhatsAppTemplateName as never, renderAgentChannelText as never, renderAgentWhatsAppTemplateParams as never, renderAgentButton as never);
+// One set for all four roles, with no button: see `referral-notification-catalog.ts` for why.
+collect('referral', REFERRAL_NOTIFICATION_CATALOG as Record<string, unknown>, referralWhatsAppTemplateName as never, renderReferralChannelText as never, renderReferralWhatsAppTemplateParams as never, (() => null) as never);
 
 /**
  * The host baked into each audience's approved URL button.

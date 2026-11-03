@@ -65,5 +65,7 @@ Show the masked destination from `payoutDestination`. See [me/referrals.md § Th
 
 ## Who is notified
 
-Email only, where the account has an address: approved, rejected, suspended, terminated, payout sent and payout
-refused. There are no in-app, push or WhatsApp notifications, so the page itself must show the current status.
+By WhatsApp, for all four roles, and by email only when WhatsApp cannot deliver: approved (with the code), rejected,
+suspended, reinstated, terminated, balance released, allowed to apply again, withdrawal sent, withdrawal refused and
+transfer failed. There are no in-app or push notifications, so the page itself must always show the current status and
+`statusReason`: a WhatsApp message outside the 24-hour window points at the page instead of quoting the reason.

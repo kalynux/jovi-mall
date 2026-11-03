@@ -15,6 +15,7 @@
  *   9. Codes and masks.
  *  10. What a partner may see: the DTO keys.
  *  11. SOURCE SCANS: the wiring no behavioural test can see.
+ *  12. What a partner is told: the copy, the templates, and WhatsApp before email.
  *
  * Run: npm run test:referrals
  */
@@ -50,6 +51,17 @@ import {
   PlanPartner,
   PlanRelationship,
 } from '../../src/modules/referrals/domain/referral-reward-plan';
+import {
+  assertReferralCatalogComplete,
+  REFERRAL_NOTIFICATION_CATALOG,
+  REFERRAL_SITUATIONS,
+  referralReasonLine,
+  renderReferralChannelText,
+  renderReferralWhatsAppTemplateParams,
+} from '../../src/modules/notifications/catalog/referral-notification-catalog';
+import { TemplateRegistry } from '../../src/modules/whatsapp/handlers/template/template-registry';
+import { WEBSITE_GUIDE_KEYS } from '../../src/modules/bot-surface/domain/website-guide';
+import { REFERRAL_GUIDE_TOPICS } from '../../src/modules/referrals/domain/referral-guide-topics';
 
 let passed = 0;
 let failed = 0;
@@ -466,6 +478,76 @@ console.log('\n11. Source scans');
   assert('there is no way to change a referrer', !/relationship/i.test(admin));
   const api = read('api/routes/internal-admin.routes.ts');
   assert('the admin surface is mounted behind the admin caller', api.includes("router.use('/referrals', buildAdminReferralRouter([requireAdminCaller]));"));
+}
+
+console.log('\n12. What a partner is told');
+{
+  let complete = true;
+  try {
+    assertReferralCatalogComplete();
+  } catch {
+    complete = false;
+  }
+  assert('every situation has copy in all five languages', complete);
+
+  const names = REFERRAL_SITUATIONS.map((s) => REFERRAL_NOTIFICATION_CATALOG[s].template.name);
+  assert('every template name is its own, and says referral', new Set(names).size === names.length && names.every((n) => n.startsWith('referral_')));
+
+  const file = JSON.parse(readFileSync(join(ROOT, 'api-doc', 'notifications', 'whatsapp-template-payloads.json'), 'utf8')) as {
+    payloads: Array<{ name: string; language: string; category: string; components: Array<{ type: string; text?: string }> }>;
+  };
+  const payload = (name: string, language: string) => file.payloads.find((p) => p.name === name && p.language === language);
+  assert('each is in the submission set, in English and French', names.every((n) => !!payload(n, 'en') && !!payload(n, 'fr')));
+  assert('each is UTILITY', names.every((n) => payload(n, 'en')?.category === 'UTILITY' && payload(n, 'fr')?.category === 'UTILITY'));
+  assert('none carries a button: its host would be permanent, and the roles have different ones',
+    names.every((n) => !payload(n, 'en')?.components.some((c) => c.type === 'BUTTONS') && !payload(n, 'fr')?.components.some((c) => c.type === 'BUTTONS')));
+  const body = (n: string, lang: string) => payload(n, lang)?.components.find((c) => c.type === 'BODY')?.text ?? '';
+  assert('the placeholder count matches what the send passes',
+    REFERRAL_SITUATIONS.every((s) => {
+      const count = REFERRAL_NOTIFICATION_CATALOG[s].template.bodyParams.length;
+      const name = REFERRAL_NOTIFICATION_CATALOG[s].template.name;
+      return ['en', 'fr'].every((lang) => (body(name, lang).match(/\{\{\d+\}\}/g) ?? []).length === count);
+    }));
+  assert('the reason never reaches a template: Meta refuses a line break in a parameter',
+    names.every((n) => !body(n, 'en').includes('reasonLine')) && REFERRAL_SITUATIONS.every((s) => !REFERRAL_NOTIFICATION_CATALOG[s].template.bodyParams.some((p) => p.includes('reasonLine'))));
+  assert('the code is in the approval message',
+    renderReferralWhatsAppTemplateParams('partner.approved', 'en', { referralCode: 'ULRICH123' }).join() === 'ULRICH123');
+  assert('a payout passes its currency, then its amount',
+    renderReferralWhatsAppTemplateParams('payout.paid', 'en', { currency: 'XAF', amountFormatted: '2,100' }).join() === 'XAF,2,100');
+  const registry = new TemplateRegistry();
+  assert('the registry knows them, and warns about nothing that exists', names.every((n) => registry.has(n, 'en') && registry.has(n, 'fr')));
+
+  const withReason = renderReferralChannelText('partner.suspended', 'whatsapp', 'en', { reasonLine: referralReasonLine('en', 'Under review') });
+  assert('a free message carries the reason', withReason.body.includes('Reason: Under review.'));
+  const noReason = renderReferralChannelText('partner.suspended', 'whatsapp', 'en', { reasonLine: '' });
+  assert('and reads cleanly without one', !noReason.body.includes('  ') && !noReason.body.includes('Reason'));
+  assert('a reason keeps its own full stop, and loses its line breaks', referralReasonLine('fr', 'Fraude\nprobable.') === 'Motif: Fraude probable.');
+  assert('no reason is no clause', referralReasonLine('en', null) === '' && referralReasonLine('en', '  ') === '');
+
+  const service = stripComments(read('modules/referrals/services/referral-notifications.ts'));
+  assert('WhatsApp is tried first, and email only if it did not deliver', /if \(await sendWhatsApp\([^)]*\)\) return;\s*await sendEmail\(/.test(service));
+  assert('outside the window it sends the template, in an approved language', service.includes('templateLanguage(contact.lang)') && !service.includes('META_LANGUAGE_CODE'));
+  assert('an unverified phone is never messaged', service.includes('profile.phone_verified ? profile.phone : null'));
+  assert('a failed transfer is told too', service.includes("eventBus.subscribe('payout.transfer_failed', onPayoutEvent)"));
+  assert('a payout message never carries the partnership\'s reason', /reasonLine: '',/.test(service));
+  const notify = service.slice(service.indexOf('export async function notifyPartner('), service.indexOf('const PAYOUT_SITUATIONS'));
+  assert('it cannot throw into a caller', /try \{[\s\S]*\} catch \(error\)/.test(notify));
+
+  const partners = stripComments(read('modules/referrals/services/referral-partner.service.ts'));
+  assert('an administrator never waits for the send', partners.includes('void notifyPartner(') && !partners.includes('await notifyPartner('));
+  assert('reinstating has its own message, not the welcome one', partners.includes("reinstate: 'partner.reinstated'") && partners.includes("approve: 'partner.approved'"));
+  assert('releasing a balance and allowing an application are both told', partners.includes("tell(updated, 'partner.balance_released')") && partners.includes("tell(updated, 'partner.reapply_allowed')"));
+}
+
+console.log('\n13. The bot guide');
+{
+  assert('a topic is written for each of the four apps, in English and French',
+    ['shop', 'vendor', 'agency', 'agent'].every((app) => {
+      const topic = REFERRAL_GUIDE_TOPICS.find((t) => t.app === app);
+      return !!topic && topic.copy.en.steps.length === topic.copy.fr.steps.length && topic.copy.en.notes.length === topic.copy.fr.notes.length;
+    }));
+  assert('none is served until the pages exist: the bot would send people to a 404',
+    REFERRAL_GUIDE_TOPICS.every((t) => !WEBSITE_GUIDE_KEYS.includes(t.key)));
 }
 
 console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed\n`);

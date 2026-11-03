@@ -69,6 +69,7 @@ import {
 } from '../../src/modules/notifications/models/customer-notification.model';
 import { AGENT_NOTIFICATION_TYPES } from '../../src/modules/notifications/models/agent-notification.model';
 import { AGENT_NOTIFICATION_CATALOG } from '../../src/modules/notifications/catalog/agent-notification-catalog';
+import { REFERRAL_NOTIFICATION_CATALOG } from '../../src/modules/notifications/catalog/referral-notification-catalog';
 import { AGENCY_NOTIFICATION_CATALOG } from '../../src/modules/notifications/catalog/agency-notification-catalog';
 import { NOTIFICATION_CATALOG } from '../../src/modules/notifications/catalog/notification-catalog';
 import {
@@ -1148,6 +1149,10 @@ function main(): void {
                 }
             }
         }
+        // The referral catalogue is shared by all four roles, and every situation names a template.
+        for (const [situation, entry] of Object.entries(REFERRAL_NOTIFICATION_CATALOG)) {
+            out.set(entry.template.name, `referral catalogue: ${situation}`);
+        }
         return out;
     };
 
@@ -1233,11 +1238,11 @@ function main(): void {
         new Map([...catalogTemplateNames(), ...literalTemplateNames(moduleSources())]);
 
     // Non-vacuity first: an empty set on either side satisfies "every X is in Y" for nothing.
-    assert('the name scan read all four catalogues and found a send-site literal', () => {
+    assert('the name scan read all five catalogues and found a send-site literal', () => {
         const fromCatalogs = catalogTemplateNames();
         const literals = literalTemplateNames(moduleSources());
         const audiences = new Set([...fromCatalogs.values()].map(w => w.split(' ')[0]));
-        return audiences.size === 4 && literals.size > 0 && submittedNames.size > 0;
+        return audiences.size === 5 && literals.size > 0 && submittedNames.size > 0;
     });
 
     assert('⛔ every template name a send can ask for was submitted, and every submitted name is sent', () => {

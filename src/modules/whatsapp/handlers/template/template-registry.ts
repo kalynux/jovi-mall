@@ -129,6 +129,17 @@ export class TemplateRegistry {
         const notificationTemplates: Array<[string, number, boolean, string]> = [
             // ── Vendor ───────────────────────────────────────────────────────
             ['vendor_order_created', 3, true, 'Vendor: new order received'],
+            // Referral partners, any role. No button: see referral-notification-catalog.ts.
+            ['referral_partner_approved', 1, false, 'Referral: application approved, carries the code'],
+            ['referral_partner_rejected', 0, false, 'Referral: application not approved'],
+            ['referral_partner_suspended', 0, false, 'Referral: partnership suspended, balance frozen'],
+            ['referral_partner_reinstated', 0, false, 'Referral: partnership active again'],
+            ['referral_partner_terminated', 0, false, 'Referral: partnership ended, balance frozen'],
+            ['referral_balance_released', 0, false, 'Referral: frozen balance released for withdrawal'],
+            ['referral_account_restriction_removed', 0, false, 'Referral: a new application is accepted again'],
+            ['referral_payout_paid', 2, false, 'Referral: withdrawal sent'],
+            ['referral_payout_rejected', 2, false, 'Referral: withdrawal refused, money back in the balance'],
+            ['referral_payout_transfer_failed', 2, false, 'Referral: problem sending the withdrawal'],
             // A partial order, once its online part is paid (2026-11-01). Needs Meta's approval.
             ['vendor_order_created_partial', 5, true, 'Vendor: new order, partly paid'],
             ['vendor_order_cancelled', 1, true, 'Vendor: order cancelled'],
