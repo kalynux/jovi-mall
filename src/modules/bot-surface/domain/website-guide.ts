@@ -3,6 +3,7 @@ import { GuideApp, GuideLanguage, GuideTopic, T as topic } from './website-guide
 import { VENDOR_GUIDE } from './website-guide-vendor';
 import { AGENCY_GUIDE } from './website-guide-agency';
 import { AGENT_GUIDE } from './website-guide-agent';
+import { REFERRAL_GUIDE_TOPICS } from '../../referrals/domain/referral-guide-topics';
 
 export type { GuideApp, GuideLanguage, GuideTopic } from './website-guide-types';
 
@@ -947,6 +948,7 @@ export const WEBSITE_GUIDE: readonly GuideTopic[] = Object.freeze([
     ...VENDOR_GUIDE,
     ...AGENCY_GUIDE,
     ...AGENT_GUIDE,
+    ...REFERRAL_GUIDE_TOPICS,
 ]);
 
 export const WEBSITE_GUIDE_KEYS: readonly string[] = Object.freeze(WEBSITE_GUIDE.map((t) => t.key));

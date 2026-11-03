@@ -1,15 +1,12 @@
 import { GuideTopic, T } from '../../bot-surface/domain/website-guide-types';
 
 /**
- * The referral program's guide topics, written and NOT YET SERVED (2026-11-03).
+ * The referral program's guide topics, served through `WEBSITE_GUIDE` since the storefront and the
+ * two dashboards shipped their pages (2026-11-03). This is the owner's R-11: the bot guides people
+ * to the website.
  *
- * ⚠ **Deliberately outside `WEBSITE_GUIDE` until the pages exist.** Their paths are
- * `/shop/account/referrals` and `/dashboard/account/referrals`, which the frontends have not built.
- * Served now, the bot would send people to pages that 404, and `verify:landing-routes` and
- * `verify:dashboard-routes` turn CI red, which is what happened on 260fc60.
- *
- * **When the screens ship:** spread this into `WEBSITE_GUIDE` in `bot-surface/domain/website-guide.ts`. That one line,
- * and the owner's R-11 (the bot guides people to the website) is met.
+ * ⚠ A link to a page that does not exist turns `verify:landing-routes` and `verify:dashboard-routes`
+ * red, which is what happened on 260fc60.
  */
 export const REFERRAL_GUIDE_TOPICS: readonly GuideTopic[] = Object.freeze([
     T({
@@ -120,6 +117,17 @@ export const REFERRAL_GUIDE_TOPICS: readonly GuideTopic[] = Object.freeze([
             },
         },
     }),
+]);
+
+/**
+ * ⚠ **Written and NOT SERVED until the agent app ships its referral screens.** The app has no web
+ * path, so no route check can catch this one: served early, the bot would send agents to a menu row
+ * their installed app does not have. On 2026-11-03 the published app was still 0.1.9 of 28 October
+ * and the screens were uncommitted in `agent_app`.
+ *
+ * **When a build with them is published:** move this into `REFERRAL_GUIDE_TOPICS`.
+ */
+export const HELD_REFERRAL_GUIDE_TOPICS: readonly GuideTopic[] = Object.freeze([
     T({
         key: 'agentreferrals',
         app: 'agent',
@@ -130,7 +138,7 @@ export const REFERRAL_GUIDE_TOPICS: readonly GuideTopic[] = Object.freeze([
                 title: "Agent app: the referral program",
                 summary: "Apply to become a partner, share your link, follow and withdraw your rewards",
                 steps: [
-                    "Open \"More\" → \"Referrals\". If the program is open, read the terms, tick the box and send the application. Wi-Mall reviews it.",
+                    "Open \"More\" → \"Referral program\". If the program is open, read the terms, tick the box and send the application. Wi-Mall reviews it.",
                     "Once approved, the page shows your code and link, what you earned, and the accounts you referred. Share the link.",
                     "To withdraw: when \"available\" reaches the minimum shown there, tap withdraw. Wi-Mall reviews and pays it.",
                 ],
@@ -144,7 +152,7 @@ export const REFERRAL_GUIDE_TOPICS: readonly GuideTopic[] = Object.freeze([
                 title: "App agent : le programme de parrainage",
                 summary: "Devenir partenaire, partager votre lien, suivre et retirer vos récompenses",
                 steps: [
-                    "Ouvrez « Plus » → « Parrainage ». Si le programme est ouvert, lisez les conditions, cochez la case et envoyez la candidature. Wi-Mall l’examine.",
+                    "Ouvrez « Plus » → « Programme de parrainage ». Si le programme est ouvert, lisez les conditions, cochez la case et envoyez la candidature. Wi-Mall l’examine.",
                     "Une fois approuvé, la page montre votre code et votre lien, vos gains et les comptes parrainés. Partagez le lien.",
                     "Pour retirer : quand le « disponible » atteint le minimum indiqué, appuyez sur retirer. Wi-Mall examine et paie.",
                 ],

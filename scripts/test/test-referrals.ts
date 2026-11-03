@@ -61,7 +61,7 @@ import {
 } from '../../src/modules/notifications/catalog/referral-notification-catalog';
 import { TemplateRegistry } from '../../src/modules/whatsapp/handlers/template/template-registry';
 import { WEBSITE_GUIDE_KEYS } from '../../src/modules/bot-surface/domain/website-guide';
-import { REFERRAL_GUIDE_TOPICS } from '../../src/modules/referrals/domain/referral-guide-topics';
+import { HELD_REFERRAL_GUIDE_TOPICS, REFERRAL_GUIDE_TOPICS } from '../../src/modules/referrals/domain/referral-guide-topics';
 
 let passed = 0;
 let failed = 0;
@@ -543,11 +543,13 @@ console.log('\n13. The bot guide');
 {
   assert('a topic is written for each of the four apps, in English and French',
     ['shop', 'vendor', 'agency', 'agent'].every((app) => {
-      const topic = REFERRAL_GUIDE_TOPICS.find((t) => t.app === app);
+      const topic = [...REFERRAL_GUIDE_TOPICS, ...HELD_REFERRAL_GUIDE_TOPICS].find((t) => t.app === app);
       return !!topic && topic.copy.en.steps.length === topic.copy.fr.steps.length && topic.copy.en.notes.length === topic.copy.fr.notes.length;
     }));
-  assert('none is served until the pages exist: the bot would send people to a 404',
-    REFERRAL_GUIDE_TOPICS.every((t) => !WEBSITE_GUIDE_KEYS.includes(t.key)));
+  assert('the storefront and both dashboards are served: the bot guides people to the website (R-11)',
+    REFERRAL_GUIDE_TOPICS.length === 3 && REFERRAL_GUIDE_TOPICS.every((t) => WEBSITE_GUIDE_KEYS.includes(t.key)));
+  assert('the agent topic is not served until the app ships its screens: no route check can catch it',
+    HELD_REFERRAL_GUIDE_TOPICS.every((t) => t.app === 'agent' && !WEBSITE_GUIDE_KEYS.includes(t.key)));
 }
 
 console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed\n`);
