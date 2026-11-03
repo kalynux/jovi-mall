@@ -727,6 +727,8 @@ the same object and mean unrelated things.**
 | `status: "pending"` | the **vendor** has not accepted the appointment. A `manual`-mode service is held until they do. Nothing is wrong, nobody owes anything |
 | `payment.status: "pending"` | **money is in flight** — a mobile-money prompt is on the customer's handset right now |
 
+🆕 2026-11-03: `awaitingVendorApproval` is **false** while a proposed price waits on the customer (`pricing.proposal.status: "open"`), although `status` is still `pending`. The ball is in the customer's court. They answer with the **Accept price** / **Decline price** buttons under the `booking.price_proposed` message, or on the website: there is no tool for it, so never say it has been accepted. A typed "yes" never counts (owner, 2026-11-03): `priceQuestion` on the booking and the `recentlySent` line both tell the model to ask them to press a button. The appointments list (`bl`) also carries the two answers, through `POST /api/bot/miniapp/s/bl/:handle/answer-price`.
+
 A model handed both words merges them, and the two mistakes available are the two worst
 ones: telling somebody they are booked when the vendor has not looked, or telling them to
 pay again while a charge is live. So the vendor one is named explicitly and the raw `status`

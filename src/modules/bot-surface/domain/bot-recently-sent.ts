@@ -153,6 +153,22 @@ export function compactSentText(
 }
 
 /**
+ * What the model is told about a question only a button can answer (owner, 2026-11-03: a proposed
+ * price commits the customer's money, so a typed "yes" must never count). In English because the
+ * reader is the model, and short because the record is capped at `RECENTLY_SENT_TEXT_MAX`.
+ *
+ * ⚠ **This is what makes the rule true on the day of the deploy.** The backend owns this line, so it
+ * needs no change to the workflow's prompt.
+ */
+export const BUTTON_ONLY_ANSWER_NOTE =
+    'Buttons only: if they reply in words, ask them to press one. You cannot answer it for them.';
+
+/** The record of a notification that asks a button-only question. */
+export function buttonOnlySentText(subject: string): string {
+    return `${subject}. ${BUTTON_ONLY_ANSWER_NOTE}`;
+}
+
+/**
  * What a drawn reply says, as one line — or null when the intent carries nothing worth recording.
  *
  * ⚠ **A `switch` over the whole union, with an exhaustiveness check**, so an intent kind added

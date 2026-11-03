@@ -14,6 +14,7 @@ import { showPlaceOption } from '../../domain/booking-place-reply';
 import { toBotCopyLanguage } from '../../domain/bot-error-copy';
 import { __IN_APP_SCREEN_PATH } from '../../domain/inapp-url';
 import {
+    answerPriceFromList,
     BookingConfirmed,
     confirmBooking,
     openPaymentFromList,
@@ -129,6 +130,15 @@ export class BookingScreensController {
         sendSuccess(res, {
             url: `${__IN_APP_SCREEN_PATH}/bp/${opened.handle}?lang=${toBotCopyLanguage(opened.language)}`,
         });
+    });
+
+    /** `POST /api/bot/miniapp/s/bl/:handle/answer-price` — Accept or Decline on a row. See the core. */
+    static answerPrice = asyncHandler(async (req: Request, res: Response) => {
+        const body = (req.body ?? {}) as { bookingId?: unknown; answer?: unknown };
+        sendSuccess(res, await answerPriceFromList(String(req.params.handle ?? ''), {
+            bookingId: body.bookingId,
+            answer: body.answer,
+        }));
     });
 
     /** `GET /api/bot/miniapp/s/bp/:handle/data` — what is owed, re-resolved now. Repeatable. */

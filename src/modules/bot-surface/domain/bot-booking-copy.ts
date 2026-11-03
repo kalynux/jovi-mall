@@ -189,6 +189,18 @@ export interface BookingScreenCopy {
      * cancelled, a payment already on its way). The list redraws under this line.
      */
     listChanged: string;
+    /** `bl`, the two answers on a row whose price is waiting on the customer (owner, 2026-11-03). */
+    acceptPrice: string;
+    declinePrice: string;
+    /** `{price}` and `{previous}` are placed here, on the server: the page formats nothing. */
+    priceOffer: string;
+    /** The same with a new time, because one answer covers both. `{when}` is on the shop's clock. */
+    priceMove: string;
+    priceDeclineNote: string;
+    priceAccepted: string;
+    priceDeclined: string;
+    /** A payment is in flight, so the price cannot move yet. */
+    priceBusy: string;
 }
 
 const SCREEN: Record<Language, BookingScreenCopy> = {
@@ -213,6 +225,14 @@ const SCREEN: Record<Language, BookingScreenCopy> = {
         payNothingDue: 'There is nothing to pay on this appointment.',
         payRow: 'Pay now',
         listChanged: 'That appointment has changed. Here is where it stands now.',
+        acceptPrice: "Accept price",
+        declinePrice: "Decline price",
+        priceOffer: "New price proposed: {price}, instead of {previous}.",
+        priceMove: "New time proposed: {when}, at {price} instead of {previous}.",
+        priceDeclineNote: "If you decline, you can cancel with a full refund.",
+        priceAccepted: "Done — your appointment is updated. If anything is owed, you can pay it below.",
+        priceDeclined: "Got it — nothing has changed. You can still cancel with a full refund.",
+        priceBusy: "A payment is still going through. Please wait a moment and try again.",
     },
     fr: {
         listTitle: 'Vos rendez-vous',
@@ -235,6 +255,14 @@ const SCREEN: Record<Language, BookingScreenCopy> = {
         payNothingDue: "Il n'y a rien à payer pour ce rendez-vous.",
         payRow: 'Payer maintenant',
         listChanged: "Ce rendez-vous a changé. Voici où il en est.",
+        acceptPrice: "Accepter le prix",
+        declinePrice: "Refuser le prix",
+        priceOffer: "Nouveau prix proposé : {price}, au lieu de {previous}.",
+        priceMove: "Nouvel horaire proposé : {when}, à {price} au lieu de {previous}.",
+        priceDeclineNote: "Si vous refusez, vous pouvez annuler avec un remboursement intégral.",
+        priceAccepted: "C'est fait — votre rendez-vous est mis à jour. Si un montant est dû, vous pouvez le payer ci-dessous.",
+        priceDeclined: "C'est noté — rien n'a changé. Vous pouvez toujours annuler avec un remboursement intégral.",
+        priceBusy: "Un paiement est encore en cours. Patientez un instant, puis réessayez.",
     },
     pt: {
         listTitle: 'As suas marcações',
@@ -257,6 +285,14 @@ const SCREEN: Record<Language, BookingScreenCopy> = {
         payNothingDue: 'Não há nada a pagar nesta marcação.',
         payRow: 'Pagar agora',
         listChanged: 'Essa marcação mudou. Eis o ponto em que está agora.',
+        acceptPrice: "Aceitar preço",
+        declinePrice: "Recusar preço",
+        priceOffer: "Novo preço proposto: {price}, em vez de {previous}.",
+        priceMove: "Nova hora proposta: {when}, por {price} em vez de {previous}.",
+        priceDeclineNote: "Se recusar, pode cancelar com reembolso total.",
+        priceAccepted: "Feito — a sua marcação foi atualizada. Se houver algo em dívida, pode pagar abaixo.",
+        priceDeclined: "Entendido — nada mudou. Ainda pode cancelar com reembolso total.",
+        priceBusy: "Um pagamento ainda está em curso. Aguarde um momento e tente de novo.",
     },
     es: {
         listTitle: 'Tus citas',
@@ -279,6 +315,14 @@ const SCREEN: Record<Language, BookingScreenCopy> = {
         payNothingDue: 'No hay nada que pagar en esta cita.',
         payRow: 'Pagar ahora',
         listChanged: 'Esa cita ha cambiado. Así está ahora.',
+        acceptPrice: "Aceptar precio",
+        declinePrice: "Rechazar precio",
+        priceOffer: "Nuevo precio propuesto: {price}, en lugar de {previous}.",
+        priceMove: "Nueva hora propuesta: {when}, por {price} en lugar de {previous}.",
+        priceDeclineNote: "Si rechazas, puedes cancelar con reembolso completo.",
+        priceAccepted: "Listo — tu cita está actualizada. Si queda algo por pagar, puedes hacerlo abajo.",
+        priceDeclined: "Entendido — nada ha cambiado. Aún puedes cancelar con reembolso completo.",
+        priceBusy: "Un pago sigue en curso. Espera un momento e inténtalo de nuevo.",
     },
     ar: {
         listTitle: 'مواعيدك',
@@ -301,8 +345,31 @@ const SCREEN: Record<Language, BookingScreenCopy> = {
         payNothingDue: 'لا يوجد ما يُدفع على هذا الموعد.',
         payRow: 'ادفع الآن',
         listChanged: 'تغيّر هذا الموعد. إليك وضعه الحالي.',
+        acceptPrice: "قبول السعر",
+        declinePrice: "رفض السعر",
+        priceOffer: "سعر جديد مقترح: {price} بدلًا من {previous}.",
+        priceMove: "موعد جديد مقترح: {when} بسعر {price} بدلًا من {previous}.",
+        priceDeclineNote: "إذا رفضت، يمكنك الإلغاء مع استرداد كامل.",
+        priceAccepted: "تم — تم تحديث موعدك. إذا كان هناك مبلغ مستحق، يمكنك دفعه أدناه.",
+        priceDeclined: "حسنًا — لم يتغير شيء. لا يزال بإمكانك الإلغاء مع استرداد كامل.",
+        priceBusy: "لا تزال هناك عملية دفع جارية. انتظر لحظة ثم حاول مرة أخرى.",
     },
 };
+
+/**
+ * The sentence on a row whose price waits on the customer, with its figures placed. Built here for
+ * the same reason as every other word on these screens: the page formats nothing.
+ */
+export function bookingPriceQuestionText(
+    language: string | null | undefined,
+    facts: { price: string; previous: string; when: string | null },
+): string {
+    const words = pick(SCREEN, language);
+    return (facts.when ? words.priceMove : words.priceOffer)
+        .replace('{price}', facts.price)
+        .replace('{previous}', facts.previous)
+        .replace('{when}', facts.when ?? '');
+}
 
 /** The screen's words, with the counts already placed — a page never computes a sentence. */
 export function bookingScreenCopy(language: string | null | undefined): Omit<BookingScreenCopy, 'timesAvailable'> {
@@ -374,14 +441,14 @@ const SPOTS_LEFT: Record<Language, (count: number) => string> = {
  * no surface may call an unaccepted appointment "booked". `missed` exists because the platform
  * records a `no-show`, and "finished" would tell the customer something happened that did not.
  */
-export type BookingRowStatus = 'awaitingShop' | 'unpaid' | 'balanceDue' | 'cancelled' | 'done' | 'missed';
+export type BookingRowStatus = 'priceProposed' | 'awaitingShop' | 'unpaid' | 'balanceDue' | 'cancelled' | 'done' | 'missed';
 
 const ROW_STATUS: Record<Language, Record<BookingRowStatus, string>> = {
-    en: { awaitingShop: 'Awaiting the shop', unpaid: 'Not paid yet', balanceDue: 'Balance to pay', cancelled: 'Cancelled', done: 'Finished', missed: 'Missed' },
-    fr: { awaitingShop: 'À confirmer', unpaid: 'Non payé', balanceDue: 'Solde à payer', cancelled: 'Annulé', done: 'Terminé', missed: 'Manqué' },
-    pt: { awaitingShop: 'A confirmar', unpaid: 'Não pago', balanceDue: 'Saldo a pagar', cancelled: 'Cancelado', done: 'Concluído', missed: 'Não compareceu' },
-    es: { awaitingShop: 'Por confirmar', unpaid: 'Sin pagar', balanceDue: 'Saldo por pagar', cancelled: 'Cancelado', done: 'Finalizada', missed: 'No asistió' },
-    ar: { awaitingShop: 'في انتظار التأكيد', unpaid: 'غير مدفوع', balanceDue: 'رصيد مستحق', cancelled: 'ملغى', done: 'منتهٍ', missed: 'لم يحضر' },
+    en: { priceProposed: 'New price to answer', awaitingShop: 'Awaiting the shop', unpaid: 'Not paid yet', balanceDue: 'Balance to pay', cancelled: 'Cancelled', done: 'Finished', missed: 'Missed' },
+    fr: { priceProposed: 'Nouveau prix à valider', awaitingShop: 'À confirmer', unpaid: 'Non payé', balanceDue: 'Solde à payer', cancelled: 'Annulé', done: 'Terminé', missed: 'Manqué' },
+    pt: { priceProposed: 'Novo preço por responder', awaitingShop: 'A confirmar', unpaid: 'Não pago', balanceDue: 'Saldo a pagar', cancelled: 'Cancelado', done: 'Concluído', missed: 'Não compareceu' },
+    es: { priceProposed: 'Nuevo precio por responder', awaitingShop: 'Por confirmar', unpaid: 'Sin pagar', balanceDue: 'Saldo por pagar', cancelled: 'Cancelado', done: 'Finalizada', missed: 'No asistió' },
+    ar: { priceProposed: 'سعر جديد بانتظار ردك', awaitingShop: 'في انتظار التأكيد', unpaid: 'غير مدفوع', balanceDue: 'رصيد مستحق', cancelled: 'ملغى', done: 'منتهٍ', missed: 'لم يحضر' },
 };
 
 export function bookingRowStatusLabel(status: BookingRowStatus, language: string | null | undefined): string {

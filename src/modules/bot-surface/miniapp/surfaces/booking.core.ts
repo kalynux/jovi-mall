@@ -69,6 +69,7 @@ import {
 } from '../../domain/bot-booking-copy';
 import {
     assertSomethingDue,
+    customerPriceQuestion,
     payPurposeOrRefuse,
     CustomerBookingRow,
     CustomerBookingSource,
@@ -757,6 +758,53 @@ export async function openPaymentFromList(
         purpose,
     });
     return { handle: paymentHandle, language: session.language };
+}
+
+/**
+ * **Accept** / **Decline** on a row of the appointments list: answer the vendor's proposed price
+ * (owner, 2026-11-03).
+ *
+ * ⛔ **The page sends a booking id and an answer, and nothing else.** The id is checked against the
+ * LIST'S owner in the query, so another customer's is a 404. Which proposal is being answered is
+ * re-decided here from the booking as it is now, never from the row the page drew, and the answer
+ * runs through the same service as the website and the chat buttons.
+ *
+ * The `bl` handle is READ, not spent: the customer stays on the list, and pays from the same row.
+ */
+export async function answerPriceFromList(
+    handle: string,
+    input: { bookingId?: unknown; answer?: unknown },
+): Promise<{ message: string }> {
+    const session = await inAppSurfaceStore.read('bl', handle);
+    if (!session) {
+        throw createAppError(ERROR_CODES.BOT_SCREEN_SESSION_EXPIRED, 410, undefined, { kind: 'bl' });
+    }
+    const answer = input.answer;
+    if (answer !== 'accept' && answer !== 'decline') {
+        throw createAppError(ERROR_CODES.VALIDATION_ERROR, 400, 'answer must be accept or decline');
+    }
+    const bookingId = typeof input.bookingId === 'string' ? input.bookingId : '';
+    if (!Types.ObjectId.isValid(bookingId)) {
+        throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, undefined, { bookingId });
+    }
+
+    const booking = await Booking.findOne({ _id: bookingId, userId: new Types.ObjectId(session.owner), deletedAt: null });
+    if (!booking) {
+        throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, undefined, { bookingId });
+    }
+    const question = customerPriceQuestion(booking);
+    if (!question) {
+        throw createAppError(ERROR_CODES.BOOKING_PRICE_PROPOSAL_NOT_FOUND, 404, undefined, { bookingId });
+    }
+
+    if (question.kind === 'price') {
+        await bookingService.answerPriceProposal(bookingId, session.owner, answer);
+    } else {
+        await bookingService.answerRescheduleProposal(bookingId, { role: 'customer', id: session.owner }, answer);
+    }
+
+    const words = bookingScreenCopy(session.language);
+    return { message: answer === 'accept' ? words.priceAccepted : words.priceDeclined };
 }
 
 /**

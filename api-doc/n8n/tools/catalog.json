@@ -8726,7 +8726,7 @@
       "gap_ref": "GAP-001",
       "service": "jovi-mall",
       "surface": "bot_internal",
-      "description": "The customer's booked appointments: when, whether confirmed, whether paid.",
+      "description": "The customer's booked appointments: when, whether confirmed, whether paid. If `priceQuestion` is set, the customer must answer a proposed price by pressing a button under that message: ask them to press Accept price or Decline price. You cannot answer it for them, a typed yes does not count, and you must never say it was accepted.",
       "when_to_use": "The customer asks about an appointment or service they booked.",
       "when_not_to_use": "It cannot make a booking — booking happens on the website.",
       "operation": {
@@ -8814,7 +8814,7 @@
       "gap_ref": "GAP-001",
       "service": "jovi-mall",
       "surface": "bot_internal",
-      "description": "One appointment in full: when, who provides it, what it costs, and its payment state.",
+      "description": "One appointment in full: when, who provides it, what it costs, and its payment state. If `priceQuestion` is set, the customer must answer a proposed price by pressing a button under that message: ask them to press Accept price or Decline price. You cannot answer it for them, a typed yes does not count, and you must never say it was accepted.",
       "when_to_use": "The customer asks about a specific appointment.",
       "when_not_to_use": "Not to list (bookings_list). Not for a completed appointment's balance (bookings_get_balance).",
       "operation": {

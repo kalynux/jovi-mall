@@ -73,19 +73,33 @@ export function priceFloorOf(booking: Pick<PriceFacts, 'originalPrice' | 'priceS
     return booking.originalPrice ?? booking.priceSnapshot;
 }
 
-/** What is owed now because the agreed price went up. Zero unless a difference is `due`. */
-export function outstandingTopup(booking: { priceTopup?: IPriceTopup | null }): number {
+/** How much of the agreed price was never paid: a fact about the money, whatever became of the booking. */
+function unpaidDifference(booking: { priceTopup?: IPriceTopup | null }): number {
     return booking.priceTopup?.status === 'due' ? booking.priceTopup.amount : 0;
+}
+
+/**
+ * What the customer owes NOW because the agreed price went up. A cancelled booking owes nothing,
+ * whatever was due when it was cancelled.
+ *
+ * ⚠ `status` is required on purpose: a caller that could leave it out would report a difference on a
+ * cancelled booking as money still owed, which `/balance` and the bot both once did.
+ */
+export function outstandingTopup(booking: { status: BookingStatus | string; priceTopup?: IPriceTopup | null }): number {
+    return booking.status === BookingStatus.CANCELLED ? 0 : unpaidDifference(booking);
 }
 
 /**
  * What the customer has actually paid towards the agreed price — the question `priceSnapshot` alone
  * can no longer answer. A booking in a refund or dispute state has paid nothing this rule can count
  * on, and every path here refuses those states first.
+ *
+ * ⚠ **`unpaidDifference`, not `outstandingTopup`.** Cancelling a booking does not change what was
+ * paid: 5,000 of an agreed 7,000 is still 5,000, and a refund ticket reading this must not claim 7,000.
  */
 export function amountPaidOf(booking: Pick<PriceFacts, 'paymentStatus' | 'priceSnapshot' | 'priceTopup'>): number {
     if (booking.paymentStatus !== 'paid') return 0;
-    return Math.max(0, booking.priceSnapshot - outstandingTopup(booking));
+    return Math.max(0, booking.priceSnapshot - unpaidDifference(booking));
 }
 
 export type PriceChangeEffect =
@@ -203,8 +217,7 @@ export function pricingView(booking: PriceFacts, now: Date = new Date()): Pricin
                 answeredAt: proposal.answeredAt ?? null,
             }
             : null,
-        // A cancelled booking owes nothing, whatever was due when it was cancelled.
-        topup: booking.priceTopup?.status === 'due' && booking.status !== BookingStatus.CANCELLED
+        topup: booking.priceTopup && outstandingTopup(booking) > 0
             ? { amount: booking.priceTopup.amount, dueAt: booking.priceTopup.dueAt }
             : null,
     };

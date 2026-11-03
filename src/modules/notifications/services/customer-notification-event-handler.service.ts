@@ -14,6 +14,7 @@ import { connectionService } from '../../channel-connections';
  * so it closes no cycle. See `noteSentToChat`.
  */
 import { botRecentlySentStore } from '../../bot-surface/services/bot-recently-sent.store';
+import { buttonOnlySentText } from '../../bot-surface/domain/bot-recently-sent';
 import { MailService } from '../../mail/mail.service';
 import { TelegramNotificationService } from '../../telegram/services/telegram-notification.service';
 import { getWhatsAppMessagingService } from '../../whatsapp/services/whatsapp-messaging.service';
@@ -105,6 +106,12 @@ const SITUATION_PREFERENCE: Partial<
     // either — one that can only sensibly hold one value is a switch with a wrong
     // position.
 };
+
+/** The questions a typed word must never answer, because the answer commits the customer's money. */
+export const BUTTON_ONLY_SITUATIONS: ReadonlySet<CustomerNotificationType> = new Set<CustomerNotificationType>([
+    'booking.price_proposed',
+    'booking.reschedule_price_proposed',
+]);
 
 /**
  * Which of the eight ticket statuses a customer is told about (GAP-012).
@@ -823,6 +830,7 @@ export class CustomerNotificationEventHandler {
             bookingId?: string;
             userId?: string;
             purpose?: string;
+            paymentId?: string;
             amount?: number;
             currency?: string;
             /** The chat the payment was asked for from, if any (`IPaymentTransaction.originChat`). */
@@ -856,8 +864,11 @@ export class CustomerNotificationEventHandler {
             customerId: customer._id.toString(),
             aggregateType: 'booking',
             aggregateId: p.bookingId,
+            // ⚠ A balance is keyed by its PAYMENT: since price proposals one booking can take several
+            // (a difference, another after a reschedule, a balance at completion), and a key per
+            // booking swallowed every receipt after the first.
             idempotencyKey: isBalance
-                ? `customer.booking.balance.received:${p.bookingId}`
+                ? `customer.booking.balance.received:${p.bookingId}:${p.paymentId ?? ''}`
                 : `customer.booking.payment.received:${p.bookingId}`,
             /**
              * ⭐ **In the chat the customer paid in** — the booking twin of the order fix of
@@ -2109,7 +2120,7 @@ export class CustomerNotificationEventHandler {
             const delivered = await this.attemptDelivery(notification, 'telegram', () =>
                 this.sendTelegram(customer, content, button, quickReplies)
             );
-            if (delivered) this.noteSentToChat(customer, 'telegram', content, button, quickReplies);
+            if (delivered) this.noteSentToChat(customer, 'telegram', content, button, quickReplies, situation);
         }
 
         if (channels.includes('email')) {
@@ -2134,7 +2145,7 @@ export class CustomerNotificationEventHandler {
                  * byte-exact transcript of it.
                  */
                 const content = renderCustomerChannelText(situation, 'whatsapp', lang, context);
-                this.noteSentToChat(customer, 'whatsapp', content, button, quickReplies);
+                this.noteSentToChat(customer, 'whatsapp', content, button, quickReplies, situation);
             }
         }
     }
@@ -2164,7 +2175,8 @@ export class CustomerNotificationEventHandler {
         channel: 'whatsapp' | 'telegram',
         content: ChannelText,
         button: { label: string; url: string } | null,
-        quickReplies: Array<{ token: string; label: string }>
+        quickReplies: Array<{ token: string; label: string }>,
+        situation: CustomerNotificationType
     ): void {
         const labels = [
             ...(button ? [button.label] : []),
@@ -2175,8 +2187,11 @@ export class CustomerNotificationEventHandler {
             .noteSent(
                 { userId: customer.user_id.toString(), channel },
                 // Subject and body, exactly as both channels compose them — the record is one
-                // line, so the two are joined rather than kept apart.
-                `${content.subject}: ${content.body}`,
+                // line, so the two are joined rather than kept apart. A question about money only a
+                // button can answer tells the model that instead of its body (owner, 2026-11-03).
+                BUTTON_ONLY_SITUATIONS.has(situation)
+                    ? buttonOnlySentText(content.subject)
+                    : `${content.subject}: ${content.body}`,
                 labels
             )
             .catch((error: unknown) => {

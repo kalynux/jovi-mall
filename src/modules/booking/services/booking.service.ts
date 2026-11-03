@@ -13,7 +13,7 @@ import { CalendarEventInput } from '../../integrations/calendar/interfaces/calen
 import { ProductModel, ProductVariantModel } from "../../catalog/models";
 import { DEFAULT_VARIANT_SIGNATURE } from "../../catalog/domain/services/variants/constants";
 import { UserModel } from "../../users/user.model";
-import { getCalendarColorIdByStatus } from '../../integrations/calendar/utils/calendar-event-colors.util';
+import { getCalendarColorIdByStatus, getStatusPrefix } from '../../integrations/calendar/utils/calendar-event-colors.util';
 import { eventBus } from '../../../core/events/event-bus';
 import { BookingCalendarSyncService } from './booking-calendar-sync.service';
 import { createAppError } from '../../../core/errors';
@@ -1133,7 +1133,7 @@ export class BookingService {
           ProductModel.findById(booking.productId),
           UserModel.findById(booking.userId),
         ]);
-        const paymentPrefix = booking.requiresPayment ? '[UNPAID]' : '[FREE]';
+        const paymentPrefix = booking.requiresPayment ? getStatusPrefix(booking.paymentStatus) : '[FREE]';
         const title = product
           ? `${paymentPrefix} ${product.title}`
           : `${paymentPrefix} Booking`;
@@ -1577,7 +1577,7 @@ export class BookingService {
           const product = await ProductModel.findById(booking.productId);
           if (product) {
             const user = await UserModel.findById(booking.userId);
-            const paymentPrefix = booking.requiresPayment ? '[UNPAID]' : '[FREE]';
+            const paymentPrefix = booking.requiresPayment ? getStatusPrefix(booking.paymentStatus) : '[FREE]';
             const colorId = getCalendarColorIdByStatus(booking.paymentStatus);
 
             const calendarEvent = await calendarClient.createEvent({
@@ -1793,7 +1793,7 @@ export class BookingService {
 
     // A price difference collected at the counter. All of it or nothing, since the booking is
     // cancelled over what is still owed. No earnings row: the same as the original price in cash.
-    const topupDue = booking.status === BookingStatus.CANCELLED ? 0 : outstandingTopup(booking);
+    const topupDue = outstandingTopup(booking);
     if (topupDue > 0) {
       if (amount !== undefined && Math.round(amount) < topupDue) {
         throw createAppError(ERROR_CODES.VALIDATION_ERROR, 400, `The difference owed is ${topupDue}`, { minimum: topupDue });

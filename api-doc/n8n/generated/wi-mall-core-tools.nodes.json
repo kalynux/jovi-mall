@@ -1978,7 +1978,7 @@
     "type": "n8n-nodes-base.httpRequestTool",
     "typeVersion": 4.5,
     "parameters": {
-      "toolDescription": "The customer's booked appointments: when, whether confirmed, whether paid. USE IT WHEN: The customer asks about an appointment or service they booked. NOT THIS TOOL: It cannot make a booking — booking happens on the website. ⚠ Read awaitingVendorApproval, NOT status: status pending means the SELLER has not accepted; payment.status pending means a charge is live on their phone. outstandingBalance above zero — see bookings_get_balance. Times are UTC; give them in the customer's timezone.",
+      "toolDescription": "The customer's booked appointments: when, whether confirmed, whether paid. If `priceQuestion` is set, the customer must answer a proposed price by pressing a button under that message: ask them to press Accept price or Decline price. You cannot answer it for them, a typed yes does not count, and you must never say it was accepted. USE IT WHEN: The customer asks about an appointment or service they booked. NOT THIS TOOL: It cannot make a booking — booking happens on the website. ⚠ Read awaitingVendorApproval, NOT status: status pending means the SELLER has not accepted; payment.status pending means a charge is live on their phone. outstandingBalance above zero — see bookings_get_balance. Times are UTC; give them in the customer's timezone.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/bookings/list",
       "authentication": "genericCredentialType",
@@ -2016,7 +2016,7 @@
     "type": "n8n-nodes-base.httpRequestTool",
     "typeVersion": 4.5,
     "parameters": {
-      "toolDescription": "One appointment in full: when, who provides it, what it costs, and its payment state. USE IT WHEN: The customer asks about a specific appointment. NOT THIS TOOL: Not to list (bookings_list). Not for a completed appointment's balance (bookings_get_balance). ⚠ Read awaitingVendorApproval, NEVER status — status pending means the seller has not accepted yet; never say they are booked before that.",
+      "toolDescription": "One appointment in full: when, who provides it, what it costs, and its payment state. If `priceQuestion` is set, the customer must answer a proposed price by pressing a button under that message: ask them to press Accept price or Decline price. You cannot answer it for them, a typed yes does not count, and you must never say it was accepted. USE IT WHEN: The customer asks about a specific appointment. NOT THIS TOOL: Not to list (bookings_list). Not for a completed appointment's balance (bookings_get_balance). ⚠ Read awaitingVendorApproval, NEVER status — status pending means the seller has not accepted yet; never say they are booked before that.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/bookings/{{ encodeURIComponent(String($fromAI(\"bookingId\", \"The appointment id, from bookings_list.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}",
       "authentication": "genericCredentialType",

@@ -6,7 +6,11 @@ import {
     customerAppointmentFields,
 } from '../../booking/domain/appointment';
 import { PartyReminderStamps } from '../../booking/domain/party-reminder';
-import { IPriceProposal, IPriceTopup, outstandingTopup } from '../../booking/domain/price-proposal';
+import { hasLivePriceProposal, IPriceProposal, IPriceTopup, outstandingTopup } from '../../booking/domain/price-proposal';
+import type { IRescheduleProposal } from '../../booking/models/booking.model';
+import { BookingStatus } from '../../booking/types/booking.types';
+import { customerPriceQuestion } from '../miniapp/surfaces/booking-rows';
+import { BUTTON_ONLY_ANSWER_NOTE } from '../domain/bot-recently-sent';
 import { GeoCandidate } from '../../../core/geocoding';
 import { ICustomerSavedAddress } from '../../customers/customer.model';
 import { GetCustomerProfileResponseDto } from '../../customers/dto/customer-profile.dto';
@@ -851,6 +855,11 @@ export interface BotBookingDto {
     reminder: CustomerAppointmentFields['reminder'];
     /** The agreed price, the floor, what was paid, a proposal waiting for an answer, anything owed. */
     pricing: CustomerAppointmentFields['pricing'];
+    /**
+     * Set while a proposed price waits on this customer: what the model must do about it, in words
+     * it reads rather than relays. A typed "yes" must never count (owner, 2026-11-03).
+     */
+    priceQuestion: string | null;
 }
 
 /**
@@ -919,11 +928,19 @@ export function toBotBookingDto(booking: {
             method: booking.paymentMethod ?? null,
             required: booking.requiresPayment,
         },
-        awaitingVendorApproval: booking.status === 'pending',
+        // A booking whose open price proposal waits on the CUSTOMER is not waiting on the vendor. Said
+        // otherwise, the chat tells them there is nothing to do while it sits on their answer.
+        awaitingVendorApproval: booking.status === 'pending'
+            && !hasLivePriceProposal({ status: booking.status, priceProposal: booking.priceProposal ?? null }, now),
         outstandingBalance: outstanding,
         cancelledAt: booking.cancelledAt ? new Date(booking.cancelledAt).toISOString() : null,
         cancelledReason: booking.cancelledReason ?? null,
         refund,
+        priceQuestion: customerPriceQuestion({
+            status: booking.status as BookingStatus,
+            priceProposal: booking.priceProposal ?? null,
+            rescheduleProposal: (booking.rescheduleProposal ?? null) as IRescheduleProposal | null,
+        }, now) ? BUTTON_ONLY_ANSWER_NOTE : null,
         ...customerAppointmentFields({
             status: booking.status,
             paymentStatus: booking.paymentStatus,

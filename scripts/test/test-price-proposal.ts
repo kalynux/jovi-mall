@@ -33,7 +33,14 @@ import {
 } from '../../src/modules/booking/domain/price-proposal';
 import { computeAppointmentAccess, customerAppointmentFields } from '../../src/modules/booking/domain/appointment';
 import { vendorPriceProposalWaivesPolicy } from '../../src/modules/booking/domain/reschedule-proposal';
-import { bookingPayable, payPurposeOrRefuse } from '../../src/modules/bot-surface/miniapp/surfaces/booking-rows';
+import { bookingPayable, bookingRowStatus, customerPriceQuestion, payPurposeOrRefuse } from '../../src/modules/bot-surface/miniapp/surfaces/booking-rows';
+import {
+    BUTTON_ONLY_ANSWER_NOTE,
+    buttonOnlySentText,
+    RECENTLY_SENT_TEXT_MAX,
+} from '../../src/modules/bot-surface/domain/bot-recently-sent';
+import { bookingRowStatusLabel } from '../../src/modules/bot-surface/domain/bot-booking-copy';
+import { toBotBookingDto } from '../../src/modules/bot-surface/dto/bot-projections';
 
 let passed = 0;
 let failed = 0;
@@ -152,9 +159,20 @@ assert('what was paid is the agreed price minus what is still owed', () =>
     && amountPaidOf({ paymentStatus: 'paid', priceSnapshot: 7000, priceTopup: { ...dueTopup, status: 'paid' } }) === 7000
     && amountPaidOf({ paymentStatus: 'unpaid', priceSnapshot: 7000 }) === 0);
 assert('only a difference still `due` is owed', () =>
-    outstandingTopup({ priceTopup: dueTopup }) === 2000
-    && outstandingTopup({ priceTopup: { ...dueTopup, status: 'superseded' } }) === 0
-    && outstandingTopup({}) === 0);
+    outstandingTopup({ status: BookingStatus.CONFIRMED, priceTopup: dueTopup }) === 2000
+    && outstandingTopup({ status: BookingStatus.CONFIRMED, priceTopup: { ...dueTopup, status: 'superseded' } }) === 0
+    && outstandingTopup({ status: BookingStatus.CONFIRMED }) === 0);
+assert('⛔ a cancelled booking owes nothing, whatever was due when it was cancelled', () =>
+    outstandingTopup({ status: BookingStatus.CANCELLED, priceTopup: dueTopup }) === 0);
+assert('⛔ …and what was paid does not grow because of it: 5,000 of 7,000 is still 5,000', () =>
+    amountPaidOf({ paymentStatus: 'paid', priceSnapshot: 7000, priceTopup: dueTopup }) === 5000);
+assert('⛔ the chat\'s own figure drops to nothing on a cancelled booking too', () => {
+    const facts = {
+        _id: 'x', startAt: START, endAt: START, priceSnapshot: 7000, currency: 'XAF', requiresPayment: true, paymentStatus: 'paid', priceTopup: dueTopup,
+    };
+    return toBotBookingDto({ ...facts, status: BookingStatus.CANCELLED }, null, NOW).outstandingBalance === 0
+        && toBotBookingDto({ ...facts, status: BookingStatus.CONFIRMED }, null, NOW).outstandingBalance === 2000;
+});
 assert('the customer\'s read says all of it', () => {
     const view = pricingView({ ...waiting, status: BookingStatus.CONFIRMED, priceSnapshot: 7000, paymentStatus: 'paid', priceTopup: dueTopup }, NOW);
     return view.originalPrice === 5000 && view.currentPrice === 7000 && view.amountPaid === 5000 && view.topup?.amount === 2000;
@@ -200,6 +218,57 @@ assert('a difference is payable as a balance on a confirmed appointment', () =>
     && bookingPayable(payable) === null);
 assert('a cancelled booking is not payable, whatever was due', () =>
     bookingPayable({ ...payable, status: BookingStatus.CANCELLED, priceTopup: dueTopup }) === null);
+
+assert('⛔ a booking waiting on the customer\'s answer does not read "awaiting the shop"', () => {
+    const row: Parameters<typeof bookingRowStatus>[0] = { ...payable, status: BookingStatus.PENDING, paymentStatus: 'unpaid' };
+    return bookingRowStatus({ ...row, priceProposal: { ...openProposal, expiresAt: new Date(Date.now() + 86_400_000) } }, null) === 'priceProposed'
+        && bookingRowStatus({ ...row, priceProposal: { ...openProposal, status: 'declined' } }, null) === 'awaitingShop'
+        && bookingRowStatus(row, null) === 'awaitingShop';
+});
+assert('…and the chat is not told the vendor has it', () => {
+    const facts = {
+        _id: 'x', status: 'pending', startAt: START, endAt: START, priceSnapshot: 5000, currency: 'XAF', requiresPayment: true, paymentStatus: 'unpaid',
+    };
+    return toBotBookingDto({ ...facts, priceProposal: openProposal }, null, NOW).awaitingVendorApproval === false
+        && toBotBookingDto(facts, null, NOW).awaitingVendorApproval === true;
+});
+assert('every language has the word', () =>
+    ['en', 'fr', 'pt', 'es', 'ar'].every((lang) => bookingRowStatusLabel('priceProposed', lang).length > 0));
+
+const future = new Date(Date.now() + 86_400_000);
+const openMove = {
+    status: 'open' as const, proposedBy: 'vendor' as const, slotId: 's', startAt: future, endAt: future, previousStartAt: future,
+    previousEndAt: future, proposedAt: new Date(), expiresAt: future, answeredAt: null, price: 8000, previousPrice: 7000,
+};
+assert('the list and the tap read one rule: a proposed price is a question', () => {
+    const question = customerPriceQuestion({ status: BookingStatus.PENDING, priceProposal: { ...openProposal, expiresAt: future } });
+    return question?.kind === 'price' && question.amount === 7000 && question.previousAmount === 5000;
+});
+assert('a new time WITH a price is a question too, and its time comes along', () => {
+    const question = customerPriceQuestion({ status: BookingStatus.CONFIRMED, rescheduleProposal: openMove });
+    return question?.kind === 'reschedule' && question.amount === 8000 && question.startAt === future;
+});
+assert('⛔ a new time with NO price, the customer\'s own request, or one already answered is not', () =>
+    customerPriceQuestion({ status: BookingStatus.CONFIRMED, rescheduleProposal: { ...openMove, price: null } }) === null
+    && customerPriceQuestion({ status: BookingStatus.CONFIRMED, rescheduleProposal: { ...openMove, proposedBy: 'customer' } }) === null
+    && customerPriceQuestion({ status: BookingStatus.CONFIRMED, rescheduleProposal: { ...openMove, status: 'declined' } }) === null
+    && customerPriceQuestion({ status: BookingStatus.CANCELLED, rescheduleProposal: openMove }) === null);
+assert('⛔ the AI is told to ask for the button, both when it reads a booking and in what it was sent', () => {
+    const facts = {
+        _id: 'x', status: 'pending', startAt: START, endAt: START, priceSnapshot: 5000, currency: 'XAF', requiresPayment: true, paymentStatus: 'unpaid',
+    };
+    return toBotBookingDto({ ...facts, priceProposal: openProposal }, null, NOW).priceQuestion === BUTTON_ONLY_ANSWER_NOTE
+        && toBotBookingDto(facts, null, NOW).priceQuestion === null
+        && buttonOnlySentText('New price proposed: Box braids').includes('press one')
+        && buttonOnlySentText('New price proposed: Box braids').length <= RECENTLY_SENT_TEXT_MAX;
+});
+assert('⛔ a typed "yes" cannot accept a price: neither question is ever recorded as a waiting one', () => {
+    const customer = code('notifications/services/customer-notification-event-handler.service.ts');
+    const pending = code('bot-surface/domain/bot-pending-question.ts');
+    return customer.includes("'booking.price_proposed',") && customer.includes("'booking.reschedule_price_proposed',")
+        && customer.includes('BUTTON_ONLY_SITUATIONS.has(situation)')
+        && !pending.includes('bkprice') && !pending.includes('bkprop');
+});
 
 console.log('\n§4 the unpaid sweep');
 const cutoff = new Date(NOW.getTime() - 86_400_000);
@@ -286,6 +355,14 @@ assert('⛔ a lower price refunds the difference with the fees on the vendor (P-
 assert('⛔ …and leaves the booking `paid`, since the appointment is on', () => !REFUND.includes('flagRefundPending'));
 assert('cash cannot be refunded by the engine: a person is told', () =>
     REFUND.includes("booking.paymentMethod !== 'cash'") && REFUND.includes('createSystemTicket'));
+
+assert('⛔ each later payment gets its own receipt: one key per booking swallowed all but the first', () =>
+    code('notifications/services/customer-notification-event-handler.service.ts')
+        .includes('`customer.booking.balance.received:${p.bookingId}:${p.paymentId ?? \'\'}`'));
+assert('the calendar title reads the payment, so a paid booking is not called unpaid', () => {
+    const titles = SERVICE.match(/const paymentPrefix = booking\.requiresPayment \? [^;]+;/g) ?? [];
+    return titles.length === 2 && titles.every((title) => title.includes('getStatusPrefix(booking.paymentStatus)'));
+});
 
 assert('both routes are mounted, and both customer answers', () => {
     const vendor = code('booking/routes/vendor-booking.routes.ts');

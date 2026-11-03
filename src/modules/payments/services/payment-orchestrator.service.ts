@@ -2462,7 +2462,7 @@ export class PaymentOrchestratorService {
     }
 
     const paid = transaction.amountSnapshot;
-    const due = claimed.status === 'cancelled' ? 0 : outstandingTopup(claimed);
+    const due = outstandingTopup(claimed);
     const credited = Math.min(paid, due);
     if (credited >= due && due > 0) {
       claimed.set({ 'priceTopup.status': 'paid', 'priceTopup.paidAt': new Date(), 'priceTopup.method': 'online' });

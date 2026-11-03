@@ -51,7 +51,7 @@ After accepting there are two cases:
 | Nothing paid yet | `paymentStatus` is `unpaid` or `failed` | The existing `POST /api/bookings/:id/pay`, which now charges the agreed price |
 | Already paid part | `pricing.topup` is not null | `POST /api/customer/bookings/:id/pay-balance`, same body as today |
 
-`GET /api/customer/bookings/:id/balance` now counts a difference in `outstanding`, with a new `topupDue`.
+`GET /api/customer/bookings/:id/balance` now counts a difference in `outstanding`, with a new `topupDue`. Both are zero on a cancelled booking, matching `pricing.topup`, which is null there.
 
 🔴 **Show `pricing.topup.dueAt` plainly.** If it is not paid by then, the booking is cancelled automatically and what was paid is refunded. An unpaid booking has the same 24 hours, counted from when it was confirmed.
 

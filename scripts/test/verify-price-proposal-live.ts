@@ -19,18 +19,27 @@ process.env.LOG_STDOUT = 'false';
 
 import dotenv from 'dotenv';
 dotenv.config();
+// Every gateway below is a stub, but a route is only offered while its keys are present, and CI has
+// none. Read at import, so set before the payment modules load. Nothing can reach NotchPay with these.
+process.env.NOTCHPAY_PUBLIC_KEY ||= 'verify-stub';
+process.env.NOTCHPAY_PRIVATE_KEY ||= 'verify-stub';
+process.env.NOTCHPAY_WEBHOOK_SECRET ||= 'verify-stub';
 import mongoose, { Types } from 'mongoose';
 import { BookingStatus } from '../../src/modules/booking/types/booking.types';
 import { Booking, IBooking } from '../../src/modules/booking/models/booking.model';
 import { BookingService } from '../../src/modules/booking/services/booking.service';
-import { amountPaidOf, unpaidSweepFilter } from '../../src/modules/booking/domain/price-proposal';
+import { amountPaidOf, outstandingTopup, unpaidSweepFilter } from '../../src/modules/booking/domain/price-proposal';
+import { toBotBookingDto } from '../../src/modules/bot-surface/dto/bot-projections';
+import { inAppSurfaceStore } from '../../src/modules/bot-surface/services/inapp-surface.store';
+import { answerPriceFromList, readCustomerBookings } from '../../src/modules/bot-surface/miniapp/surfaces/booking.core';
 import { computeAppointmentAccess, toCustomerBookingShape } from '../../src/modules/booking/domain/appointment';
 import { CompletionPricingService } from '../../src/modules/catalog/domain/services/booking/CompletionPricingService';
 import { CustomerNotificationModel } from '../../src/modules/notifications/models/customer-notification.model';
 import { VendorNotificationModel } from '../../src/modules/notifications/models/vendor-notification.model';
 import { CustomerNotificationPreferenceModel } from '../../src/modules/notifications/models/customer-notification-preference.model';
 import { VendorNotificationPreferenceModel } from '../../src/modules/notifications/models/vendor-notification-preference.model';
-import { initializeCustomerNotificationEventConsumers } from '../../src/modules/notifications/customer-notification-event-consumer';
+import { getCustomerNotificationHandler, initializeCustomerNotificationEventConsumers } from '../../src/modules/notifications/customer-notification-event-consumer';
+import { CalendarClientFactory } from '../../src/modules/integrations/calendar/calendar-client.factory';
 import { initializeVendorNotificationEventConsumers } from '../../src/modules/notifications/vendor-notification-event-consumer';
 import { CustomerModel } from '../../src/modules/customers/customer.model';
 import { VendorModel } from '../../src/modules/vendors/vendor.model';
@@ -383,6 +392,52 @@ async function main(): Promise<void> {
         const b = await load(overdue);
         return toCustomerBookingShape(b.toJSON() as Record<string, unknown>, b as never).pricing.topup === null;
     });
+    await assert('⛔ …and neither /balance\'s figure nor the chat\'s says otherwise, though the record stays', async () => {
+        const b = await load(overdue);
+        return b.priceTopup?.status === 'due' && outstandingTopup(b) === 0 && toBotBookingDto(b as never).outstandingBalance === 0;
+    });
+
+    console.log('\nanswering from the mini-app list (owner, 2026-11-03)');
+    const session = { owner: U(), language: 'en', customerId: customerId.toString(), channel: 'telegram', externalId: 'x' };
+    const realRead = inAppSurfaceStore.read;
+    (inAppSurfaceStore as any).read = async () => session;
+    try {
+        const onList = await aBooking();
+        await payFirst(onList, 5000);
+        await service.proposePrice(onList, V(), 7000);
+        const drawn = await readCustomerBookings({ userId: U(), language: 'en' });
+        const row = drawn.bookings.find((b) => b.bookingId === onList);
+        await assert('the row asks the question with both prices, and says it is waiting on the customer', () => {
+            console.log(`      "${row?.priceQuestion?.text}"`);
+            return !!row?.priceQuestion?.text.includes('XAF 7,000') && !!row.priceQuestion.text.includes('XAF 5,000')
+                && row.status === BookingStatus.PENDING && !!row.statusLabel?.includes('New price');
+        });
+        await assert('another customer\'s booking is a 404', () => {
+            (inAppSurfaceStore as any).read = async () => ({ ...session, owner: oid().toString() });
+            return refusedWith('BOOKING_NOT_FOUND', () => answerPriceFromList('h', { bookingId: onList, answer: 'accept' }))
+                .finally(() => { (inAppSurfaceStore as any).read = async () => session; });
+        });
+        await assert('an answer that is neither is refused', () =>
+            refusedWith('VALIDATION_ERROR', () => answerPriceFromList('h', { bookingId: onList, answer: 'maybe' })));
+        await answerPriceFromList('h', { bookingId: onList, answer: 'decline' });
+        await assert('declining from the row changes nothing and ends the question', async () => {
+            const b = await load(onList);
+            return b.priceSnapshot === 5000 && b.status === BookingStatus.PENDING && b.priceProposal?.status === 'declined';
+        });
+        await service.proposePrice(onList, V(), 6500);
+        const answered = await answerPriceFromList('h', { bookingId: onList, answer: 'accept' });
+        await assert('⛔ accepting from the row confirms at that price, and leaves the difference to pay on the same row', async () => {
+            const b = await load(onList);
+            const again = await readCustomerBookings({ userId: U(), language: 'en' });
+            const redrawn = again.bookings.find((r) => r.bookingId === onList);
+            return b.status === BookingStatus.CONFIRMED && b.priceSnapshot === 6500 && b.priceTopup?.amount === 1500
+                && redrawn?.payable === 'balance' && redrawn.priceQuestion === null && answered.message.length > 0;
+        });
+        await assert('a second tap finds nothing open', () =>
+            refusedWith('BOOKING_PRICE_PROPOSAL_NOT_FOUND', () => answerPriceFromList('h', { bookingId: onList, answer: 'accept' })));
+    } finally {
+        (inAppSurfaceStore as any).read = realRead;
+    }
 
     console.log('\nthe unpaid clock');
     const slow = await aBooking({ createdAt: new Date(Date.now() - 3 * 86_400_000) });
@@ -391,6 +446,64 @@ async function main(): Promise<void> {
     await assert('⛔ accepted three days after it was made, it is NOT cancelled on the next sweep', async () => !(await swept(slow)));
     const instant = await aBooking({ status: BookingStatus.CONFIRMED, createdAt: new Date(Date.now() - 3 * 86_400_000) });
     await assert('one confirmed at creation and unpaid for days still is', () => swept(instant));
+
+    console.log('\nthe vendor\'s calendar follows the agreed price');
+    const calendarCalls: Array<{ kind: string; title?: string; description?: string }> = [];
+    const realForVendor = CalendarClientFactory.forVendor;
+    (CalendarClientFactory as any).forVendor = async () => ({
+        createEvent: async (e: { title: string; description: string }) => {
+            calendarCalls.push({ kind: 'create', title: e.title, description: e.description });
+            return { externalId: `evt_${calendarCalls.length}` };
+        },
+        updateEvent: async (_id: string, e: { title: string; description: string }) => {
+            calendarCalls.push({ kind: 'update', title: e.title, description: e.description });
+            return {};
+        },
+    });
+    try {
+        const onCalendar = await aBooking();
+        await payFirst(onCalendar, 5000);
+        await service.proposePrice(onCalendar, V(), 7000);
+        await service.answerPriceProposal(onCalendar, U(), 'accept');
+        const created = calendarCalls.find((c) => c.kind === 'create');
+        await assert('⛔ the event written on approval carries the agreed price, and a paid booking is not called unpaid', () =>
+            !!created?.description?.includes('Price: 7000 ') && !!created?.title?.startsWith('[PAID]'));
+
+        const moving = await load(onCalendar);
+        const movedTo = new Date(moving.startAt.getTime() + 86_400_000);
+        await col(Booking.collection.name).updateOne({ _id: moving._id }, {
+            $set: {
+                'priceTopup.status': 'superseded',
+                rescheduleProposal: {
+                    status: 'open', proposedBy: 'vendor', slotId: 'unused', startAt: movedTo, endAt: new Date(movedTo.getTime() + 3_600_000),
+                    previousStartAt: moving.startAt, previousEndAt: moving.endAt, proposedAt: new Date(), expiresAt: moving.startAt,
+                    answeredAt: null, price: 8000, previousPrice: 7000,
+                },
+            },
+        });
+        calendarCalls.length = 0;
+        await service.answerRescheduleProposal(onCalendar, { role: 'customer', id: U() }, 'accept');
+        const updated = calendarCalls.find((c) => c.kind === 'update');
+        await assert('⛔ the event rewritten on a priced reschedule carries the NEW price', () =>
+            !!updated?.description?.includes('Price: 8000 ') && !!updated?.title?.startsWith('[PAID]'));
+    } finally {
+        (CalendarClientFactory as any).forVendor = realForVendor;
+    }
+
+    console.log('\nevery payment gets its own receipt');
+    const receipts = await aBooking({ status: BookingStatus.CONFIRMED, paymentStatus: 'paid' });
+    const handler = getCustomerNotificationHandler();
+    const receiptFor = (paymentId: string) => handler.handleBookingPaymentReceived({
+        eventType: 'payment.received.partial',
+        aggregateId: receipts,
+        occurredAt: new Date(),
+        payload: { aggregateType: 'booking', bookingId: receipts, userId: U(), purpose: 'booking_balance', paymentId, amount: 1000, currency: 'XAF' },
+    } as never);
+    await receiptFor('payment-one');
+    await receiptFor('payment-two');
+    await receiptFor('payment-two');
+    await assert('⛔ two payments, two receipts, and a repeat of the second is not a third', async () =>
+        (await CustomerNotificationModel.countDocuments({ aggregateId: receipts, type: 'booking.balance.received' })) === 2);
 
     console.log('\nthe customer asks to move, and the vendor answers with a price (P-6)');
     const asks = await aBooking({ status: BookingStatus.CONFIRMED, paymentDueFrom: new Date() });

@@ -675,11 +675,18 @@ async function phase6(): Promise<void> {
             && c({ status: 'completed' as never, settlement: { balanceDue: 5000, balancePaid: 5000 } as never }) === null;
     });
 
-    /** M-1 on the list: `payable` names a charge and carries no figure. */
-    await assertAsync('⛔ a row carries NO amount — the figure is bp\'s to resolve', async () => {
+    /**
+     * M-1 on the list: `payable` names a charge and carries no figure.
+     *
+     * `priceQuestion` is the one exception, and it is not a charge: a proposed price is the question
+     * itself, so the customer has to read it to answer. It is null on any other row, and what a Pay
+     * button then charges is still `bp`'s to resolve (BOOKING-PRICE-PROPOSAL-PLAN § 8).
+     */
+    await assertAsync('⛔ a row carries NO amount to charge — the figure is bp\'s to resolve', async () => {
         const [out] = await project([row({ id: '10', paymentStatus: 'unpaid' })], 'en', () => 'x');
-        const keys = Object.keys(out);
+        const keys = Object.keys(out).filter((k) => k !== 'priceQuestion');
         return out.payable === 'primary'
+            && out.priceQuestion === null
             && !keys.some((k) => /amount|price|total|balance|due/i.test(k));
     });
 
@@ -1009,6 +1016,14 @@ async function phase6(): Promise<void> {
             && !/\b(amount|price|total)\b/.test(mint);
     });
 
+    assert('the list\'s price answer is mounted, and the page sends a booking id and an answer, nothing else', () => {
+        const routes = stripped('src/modules/bot-surface/miniapp/miniapp.routes.ts');
+        const answer = spanOf(screens, 'static answerPrice = asyncHandler', '\n    });\n');
+        return routes.includes("router.post('/s/bl/:handle/answer-price', BookingScreensController.answerPrice);")
+            && answer.includes('bookingId: body.bookingId')
+            && answer.includes('answer: body.answer');
+    });
+
     assert('the list\'s Pay route is mounted, and answers a same-origin URL', () => {
         const routes = stripped('src/modules/bot-surface/miniapp/miniapp.routes.ts');
         const open = spanOf(screens, 'static openPay = asyncHandler', '\n    });\n');
@@ -1020,10 +1035,17 @@ async function phase6(): Promise<void> {
     /** The page decides nothing about money: a button only where the SERVER said payable. */
     assert('⛔ bl draws Pay only where the server said payable, and sends only the booking id', () => {
         const page = pageScript(PAGES[0]);
+        // The named words of the price answer are not a figure: their sentence arrives built.
+        const figures = page.replace(/priceQuestion|priceBusy|answerPrice|answer-price/g, '');
         return page.includes('+ (booking.payable')
             && page.includes('body: JSON.stringify({ bookingId: button.getAttribute("data-pay") })')
             && page.includes('json(base + "/pay", {')
-            && !/amount|price/i.test(page);
+            && !/amount|price/i.test(figures);
+    });
+    assert('⛔ bl sends only a booking id and an answer, and shows the sentence it was given', () => {
+        const page = pageScript(PAGES[0]);
+        return page.includes('body: JSON.stringify({ bookingId: button.getAttribute("data-booking"), answer: button.getAttribute("data-answer") })')
+            && page.includes('esc(booking.priceQuestion.text)');
     });
 }
 
