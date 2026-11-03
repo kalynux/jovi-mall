@@ -2983,6 +2983,11 @@ read from a request or from the stored record, and a customer role is **never au
   expired-and-swept, and a code/identifier mismatch. Splitting any of them makes the endpoint a
   registration oracle answering "is this phone a customer here?" for any number, with no account.
   `MAGIC_CODE_EXPIRED` is reached only *after* the code is matched to the record's own account.
+- ⚠ **Two identifiers match a typed code, and `/login` and the code do not find an account the same
+  way** (2026-11-03). `/login` reads `channel_connections` first, so a number linked with `/connect`
+  reaches an account whose `login_phone` is a different one. So the WhatsApp number that requested
+  the code matches as well as the account's own phone or email. WhatsApp only, because a Telegram
+  chat id merely looks like a number, and the session is always the record's account.
 - ⚠ **The magic link points at `STOREFRONT_URL`, never `API_PUBLIC_URL`, and the page POSTs the
   token.** WhatsApp and Telegram *fetch* URLs to build preview cards, so a `GET` that signed you
   in would be spent by the crawler before the user tapped — a dead link, every time.

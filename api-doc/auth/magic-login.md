@@ -121,7 +121,10 @@ is indistinguishable from a password login — same claims, same lifetimes, same
 
 ## `POST /api/auth/magic/code`
 
-Redeem the typed code, paired with the account's phone number or email address.
+Redeem the typed code, paired with the account's phone number or email address, **or with the
+WhatsApp number that requested the code**. Those can differ: a number linked with `/connect`
+reaches an account registered under another number, and either number now works. The session is
+always the account the bot issued the code for.
 
 ```json
 { "identifier": "+237600000000", "code": "4B2K91QN" }

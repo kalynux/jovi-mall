@@ -973,6 +973,105 @@ async function main(): Promise<void> {
     return last === 'MAGIC_ATTEMPTS_EXCEEDED';
   });
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  console.log('\n▶ ⚠ The number that asked for the code may be typed beside it (WhatsApp only)');
+
+  /**
+   * The bot finds an account through `channel_connections` first, so a WhatsApp number linked
+   * with `/connect` reaches an account whose `login_phone` is a different number. The link
+   * worked for that person and the code never did, because the code compared against
+   * `login_phone` alone — and the failed attempt spent both credentials.
+   */
+  const LINKED_ACCOUNT_PHONE = '+237699000111';
+  const linkedUser = () => makeUser({ login_phone: LINKED_ACCOUNT_PHONE, login_email: 'linked@example.com' });
+  /** The fake Redis is shared across this suite, and earlier groups spend STORED_PHONE's attempts. */
+  const linkedWorld = async (users: FakeUser[] = [linkedUser()]) => {
+    const world = serviceWith(users);
+    await world.store.clearAttempts(STORED_PHONE);
+    return world;
+  };
+
+  await assertAsync('the WhatsApp number that requested the code signs in', async () => {
+    const { service, store: s } = await linkedWorld();
+    const minted = await s.issue({ ...ACCOUNT });
+    const result = await service.redeemCode(STORED_PHONE, minted.code);
+    return result.role === 'customer' && String(result.user.id) === USER_ID;
+  });
+
+  await assertAsync("the account's own login_phone still signs in", async () => {
+    const { service, store: s } = await linkedWorld();
+    const minted = await s.issue({ ...ACCOUNT });
+    const result = await service.redeemCode(LINKED_ACCOUNT_PHONE, minted.code);
+    return String(result.user.id) === USER_ID;
+  });
+
+  await assertAsync("the account's own email still signs in", async () => {
+    const { service, store: s } = await linkedWorld();
+    const minted = await s.issue({ ...ACCOUNT });
+    const result = await service.redeemCode('linked@example.com', minted.code);
+    return String(result.user.id) === USER_ID;
+  });
+
+  await assertAsync('a third number is still refused, and it still spends the code', async () => {
+    const { service, store: s } = await linkedWorld();
+    const minted = await s.issue({ ...ACCOUNT });
+    const refused = await codeFrom(() => service.redeemCode('+237655554444', minted.code));
+    const linkAfter = await codeFrom(() => service.redeemLink(minted.token));
+    return refused === 'MAGIC_CODE_INVALID' && linkAfter === 'MAGIC_LINK_INVALID';
+  });
+
+  await assertAsync('a wrong code beside the requesting number is still INVALID', async () => {
+    const { service, store: s } = await linkedWorld();
+    await s.issue({ ...ACCOUNT });
+    return (await codeFrom(() => service.redeemCode(STORED_PHONE, 'ZZZZZZZZ')))
+      === 'MAGIC_CODE_INVALID';
+  });
+
+  await assertAsync('an expired code beside the requesting number answers EXPIRED', async () => {
+    const { service, store: s } = await linkedWorld();
+    const minted = await s.issue({ ...ACCOUNT });
+    const sessionKey = fakeRedis.keys().find((k) => k.startsWith('login:session:'))!;
+
+    const entry = (fakeRedis as any).store.get(sessionKey);
+    const record = JSON.parse(entry.value);
+    record.expiresAt = new Date(Date.now() - 60_000).toISOString();
+    entry.value = JSON.stringify(record);
+    return (await codeFrom(() => service.redeemCode(STORED_PHONE, minted.code)))
+      === 'MAGIC_CODE_EXPIRED';
+  });
+
+  /**
+   * The session is always the RECORD's account. If the requesting number happens to be another
+   * account's `login_phone`, typing it signs in the account the bot issued the code for, which
+   * is what the link does too — never the account that number names.
+   */
+  await assertAsync("⚠ a requesting number that is ANOTHER account's login_phone never reaches that account", async () => {
+    const other = makeUser({ id: OTHER_USER_ID, _id: OTHER_USER_ID, login_phone: STORED_PHONE });
+    const { service, store: s } = await linkedWorld([linkedUser(), other]);
+    const minted = await s.issue({ ...ACCOUNT });
+    const result = await service.redeemCode(STORED_PHONE, minted.code);
+    return String(result.user.id) === USER_ID;
+  });
+
+  /**
+   * A Telegram chat id is all digits, so `messagingPhoneToE164` would happily turn it into
+   * something shaped like a phone number. Only WhatsApp's sender id IS a phone number.
+   */
+  await assertAsync('⚠ a Telegram chat id typed as a phone number is refused', async () => {
+    const { service, store: s } = await linkedWorld();
+    const minted = await s.issue({ ...ACCOUNT, channel: 'telegram', externalIdentity: TG_CHAT_ID });
+    return (await codeFrom(() => service.redeemCode(`+${TG_CHAT_ID}`, minted.code)))
+      === 'MAGIC_CODE_INVALID';
+  });
+
+  await assertAsync('⚠ an administrator-issued code gets no such allowance', async () => {
+    const { service, store: s } = await linkedWorld();
+    const minted = await s.issue({ ...ACCOUNT, channel: 'admin', externalIdentity: WA_PHONE_ID });
+    return (await codeFrom(() => service.redeemCode(STORED_PHONE, minted.code)))
+      === 'MAGIC_CODE_INVALID';
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
   console.log('\n▶ The identifier — normalisation collapses spellings');
 
   assert('an email is lowercased', () =>
