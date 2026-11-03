@@ -180,6 +180,55 @@ export class BookingRefundService {
     };
   }
 
+  /**
+   * The agreed price came down on a rescheduled appointment, below what the customer has paid
+   * (owner decision P-3). The difference goes back through the normal refund engine, with the fees
+   * on the vendor, whose change it was.
+   *
+   * ⚠ **The booking stays `paid`, so `flagRefundPending` is not called.** That status says a refund
+   * is open against the booking as a whole, and here the appointment is very much on.
+   *
+   * Cash, or a request that cannot be opened: a ticket for a person. The vendor holds the notes.
+   * Best-effort and never throws, because the agreement has already committed.
+   */
+  async refundPriceDifference(booking: IBooking, amount: number): Promise<void> {
+    const bookingId = booking._id.toString();
+    if (booking.paymentMethod !== 'cash') {
+      try {
+        const refunds = await this.getRefunds();
+        await refunds.create({
+          source: { kind: 'booking', id: bookingId },
+          amount,
+          reasonKind: 'goodwill',
+          reason: 'The agreed price was lowered when the appointment was rescheduled',
+          requestedBy: { id: null, role: 'system', name: 'agreed price lowered' },
+          approveNow: true,
+          feesPaidBy: 'vendor',
+        });
+        return;
+      } catch (error) {
+        console.error(`[BookingRefundService] Could not open the price-difference refund on booking ${bookingId}:`, error);
+      }
+    }
+
+    try {
+      await ticketService.createSystemTicket({
+        type: TicketType.PAYMENT_ISSUE,
+        entityType: EntityType.BOOKING,
+        entityId: bookingId,
+        subject: `Price difference owed on booking ${booking.bookingNumber ?? bookingId}`,
+        description:
+          `The agreed price of booking ${booking.bookingNumber ?? bookingId} came down, and the customer has paid more than it.\n` +
+          `Owed back: ${amount} ${booking.currency}\n` +
+          `Payment method: ${booking.paymentMethod ?? 'unknown'}\n\n` +
+          `The appointment is still on. The customer has NOT yet been paid this.`,
+        importance: TicketImportance.HIGH,
+      });
+    } catch (error) {
+      console.error('[BookingRefundService] Failed to open the price-difference ticket:', error);
+    }
+  }
+
   /** `paid → refund_pending`, as a compare-and-set: a request already completed wins. */
   private async flagRefundPending(bookingId: string): Promise<void> {
     try {

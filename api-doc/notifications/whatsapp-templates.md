@@ -1706,6 +1706,16 @@ as a delivery error; in-app, push, email and Telegram are unaffected.
 | `vendor_booking_reschedule_declined` | vendor | `booking.reschedule_declined` | customer, booking no., service, original time | View booking |
 | `customer_booking_reschedule_proposed` | customer | `booking.reschedule_proposed` | vendor, service, previous, proposed, answer-by | View booking + quick replies **Accept new time** (`yes:bkprop:<bookingId>`) · **Keep my time** (`no:bkprop:<bookingId>`); fallback `open:bl` |
 | `customer_booking_reschedule_declined` | customer | `booking.reschedule_declined` | vendor, service, requested time, kept time | View booking |
+| `customer_booking_price_proposed` | customer | `booking.price_proposed` (the vendor proposes a different price on a manual booking) | vendor, currency, proposed, current, service, time, answer-by | View booking + quick replies **Accept price** (`yes:bkprice:<bookingId>`) · **Decline price** (`no:bkprice:<bookingId>`); fallback `open:bl` |
+| `customer_booking_reschedule_price_proposed` | customer | `booking.reschedule_price_proposed` (a new time and a new price, one answer) | vendor, service, previous time, new time, currency, proposed, current, answer-by | View booking + quick replies **Accept new time** (`yes:bkprop:<bookingId>`) · **Keep my time** (`no:bkprop:<bookingId>`); fallback `open:bl` |
+| `customer_booking_price_topup_due` | customer | `booking.price_topup_due` (what is owed for the agreed price) | service, currency, agreed price, amount owed, deadline | View booking + quick reply **Pay now** (`bpay:<bookingId>[:b]`); fallback `open:bl` |
+| `vendor_booking_price_accepted` | vendor | `booking.price_accepted` | customer, currency, amount, booking no., service, time | View booking |
+| `vendor_booking_price_declined` | vendor | `booking.price_declined` | customer, currency, amount, booking no., service, current price | View booking |
+| `vendor_booking_reminder` | vendor | `booking.reminder` (the customer's one reminder). Submitted and measured APPROVED (UTILITY) 2026-11-03 in `en` + `fr`, ids `1620431219552107` / `2316152389208612` | customer, booking no., service, time | View booking |
+
+The five price templates above were submitted on 2026-11-03 and read **PENDING, category UTILITY**, when last measured that day. Re-measure them. `en` / `fr` ids: `vendor_booking_price_accepted` `1386574309970521` / `1131578362901876` · `vendor_booking_price_declined` `1873815500449245` / `2094312597875655` · `customer_booking_price_proposed` `1656938702742294` / `1480211947319066` · `customer_booking_reschedule_price_proposed` `2038840300109858` / `1202134775811569` · `customer_booking_price_topup_due` `1704061321278238` / `1442771877921683`.
+
+⚠ Meta refused the first English `vendor_booking_price_declined` as having too many variables for its length, while the French passed. The English body gained a closing sentence for that reason.
 
 ---
 

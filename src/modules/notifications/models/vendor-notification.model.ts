@@ -17,6 +17,11 @@ export type NotificationType =
     | 'booking.reschedule_requested'
     | 'booking.reschedule_accepted'
     | 'booking.reschedule_declined'
+    /** The customer used their one reminder on this appointment (BOOKING-PARTY-REMINDER-PLAN). */
+    | 'booking.reminder'
+    /** The customer's answer to the shop's proposed price (BOOKING-PRICE-PROPOSAL-PLAN). */
+    | 'booking.price_accepted'
+    | 'booking.price_declined'
     | 'payment.received.partial'
     | 'payment.received.full'
     | 'storage.alert'
@@ -182,6 +187,9 @@ const VendorNotificationSchema = new Schema<IVendorNotification>(
                 'booking.reschedule_requested',
                 'booking.reschedule_accepted',
                 'booking.reschedule_declined',
+                'booking.reminder',
+                'booking.price_accepted',
+                'booking.price_declined',
                 'payment.received.partial',
                 'payment.received.full',
                 'storage.alert',

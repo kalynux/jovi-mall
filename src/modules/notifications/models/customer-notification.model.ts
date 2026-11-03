@@ -35,6 +35,12 @@ export type CustomerNotificationType =
     | 'booking.rescheduled'
     /** The VENDOR proposes a new time; the customer accepts or declines (D-9, 2026-10-26). */
     | 'booking.reschedule_proposed'
+    /** The same, with a new price: the customer accepts or declines both (BOOKING-PRICE-PROPOSAL-PLAN). */
+    | 'booking.reschedule_price_proposed'
+    /** The vendor proposes a different price before approving a manual booking. */
+    | 'booking.price_proposed'
+    /** The agreed price is set, and this is what is owed for it. */
+    | 'booking.price_topup_due'
     /** The vendor declined the customer's request for a new time (D-8, manual services). */
     | 'booking.reschedule_declined'
     /** Called off. Copy differs by who did it — see the catalog. */
@@ -243,6 +249,9 @@ export const CUSTOMER_NOTIFICATION_TYPES: readonly CustomerNotificationType[] = 
     'booking.confirmed',
     'booking.rescheduled',
     'booking.reschedule_proposed',
+    'booking.reschedule_price_proposed',
+    'booking.price_proposed',
+    'booking.price_topup_due',
     'booking.reschedule_declined',
     'booking.cancelled',
     'booking.completed',

@@ -3,9 +3,20 @@ import { VendorNotificationEventHandler } from './services/vendor-notification-e
 import { assertCatalogComplete } from './catalog/notification-catalog';
 import { isFcmConfigured } from '../../config/fcm.config';
 
+let handlerInstance: VendorNotificationEventHandler | null = null;
+
+/**
+ * The vendor notification handler. Exposed for the one sender that is not an event: a customer's
+ * one-time reminder, whose caller must know whether it was recorded before it can answer them.
+ */
+export function getVendorNotificationHandler(): VendorNotificationEventHandler {
+    if (!handlerInstance) handlerInstance = new VendorNotificationEventHandler();
+    return handlerInstance;
+}
+
 /**
  * Initialize Vendor Notification Event Consumers
- * 
+ *
  * Registers all notification event handlers on app startup.
  * 
  * CRITICAL: Payment events are split into partial and full.
@@ -14,7 +25,7 @@ export function initializeVendorNotificationEventConsumers(): void {
     // Fail fast on an incomplete localized catalog before wiring handlers.
     assertCatalogComplete();
 
-    const handler = new VendorNotificationEventHandler();
+    const handler = getVendorNotificationHandler();
 
     // Subscribe to split payment events
     eventBus.subscribe('order.created', handler.handleOrderCreated.bind(handler));
@@ -26,6 +37,7 @@ export function initializeVendorNotificationEventConsumers(): void {
     eventBus.subscribe('booking.rescheduled', handler.handleBookingRescheduled.bind(handler));
     eventBus.subscribe('booking.reschedule_proposed', handler.handleBookingRescheduleProposed.bind(handler));
     eventBus.subscribe('booking.reschedule_answered', handler.handleBookingRescheduleAnswered.bind(handler));
+    eventBus.subscribe('booking.price_answered', handler.handleBookingPriceAnswered.bind(handler));
     eventBus.subscribe('payment.received.partial', handler.handlePaymentReceivedPartial.bind(handler));
     eventBus.subscribe('payment.received.full', handler.handlePaymentReceivedFull.bind(handler));
     eventBus.subscribe('vendor.storage.alert', handler.handleStorageAlert.bind(handler));

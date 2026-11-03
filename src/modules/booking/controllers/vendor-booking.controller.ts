@@ -9,6 +9,9 @@ import { BookingService } from '../services/booking.service';
 import { BookingStatus } from '../types/booking.types';
 import { BookingAccessPatchSchema } from '../domain/appointment.validators';
 import { BOOKING_CONFIG } from '../config/booking.config';
+import { partyReminderService } from '../services/party-reminder.service';
+import { partyReminderView } from '../domain/party-reminder';
+import { vendorPricingView } from '../domain/price-proposal';
 import { ProductRepositoryMongo } from '../../catalog/repositories/mongo/product.repository.mongo';
 import { VariantRepositoryMongo } from '../../catalog/repositories/mongo/variant.repository.mongo';
 import { BookingPriceResolver } from '../../catalog/domain/services/booking/BookingPriceResolver';
@@ -66,9 +69,19 @@ const UpdateBookingStatusSchema = z.object({
  * the shop picked from `GET /availability`, each slot held first. Exactly one of the two fields,
  * as on the customer route; the shop rule refuses any change of length either way.
  */
+/** A price the shop names: whole currency units, as every booking amount is. */
+const ProposedPriceSchema = z.number().int().positive().max(1_000_000_000);
+
+const ProposePriceSchema = z.object({ price: ProposedPriceSchema });
+
+/** Accepting a customer's request for a new time, optionally at a different price (P-6). */
+const AcceptProposalSchema = z.object({ price: ProposedPriceSchema.optional() });
+
 const RescheduleBookingSchema = z.object({
     newSlotId: z.string().min(1).optional(),
     newSlotIds: z.array(z.string().min(1)).min(1).max(BOOKING_CONFIG.maxSlotsPerBooking).optional(),
+    /** A new agreed price to go with the new time. Manual services only. */
+    price: ProposedPriceSchema.optional(),
 }).refine((d) => (d.newSlotId === undefined) !== (d.newSlotIds === undefined), {
     message: 'Send newSlotId or newSlotIds',
     path: ['newSlotId'],
@@ -184,13 +197,32 @@ export class VendorBookingController {
 
         res.json({
             success: true,
-            data: bookings,
+            data: bookings.map((booking) => ({
+                ...booking.toJSON(),
+                reminder: partyReminderView(booking, 'vendor'),
+                pricing: vendorPricingView(booking, booking.bookingMode),
+            })),
             meta: {
                 total,
                 page,
                 limit,
                 totalPages: Math.ceil(total / limit),
             },
+        });
+    });
+
+    /**
+     * POST /api/vendor/bookings/:id/reminder
+     * The shop's one reminder to the customer. Scoped by the VENDOR entity, so another shop's
+     * booking is a 404.
+     */
+    static sendReminder = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const booking = await partyReminderService.remindCustomer(req.params.id, req.auth!.role_entity._id.toString());
+
+        res.json({
+            success: true,
+            data: { reminder: partyReminderView(booking, 'vendor') },
+            message: 'Reminder sent to the customer',
         });
     });
 
@@ -219,7 +251,14 @@ export class VendorBookingController {
             throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, 'Booking not found');
         }
 
-        res.json({ success: true, data: booking });
+        res.json({
+            success: true,
+            data: {
+                ...booking.toJSON(),
+                reminder: partyReminderView(booking, 'vendor'),
+                pricing: vendorPricingView(booking, booking.bookingMode),
+            },
+        });
     });
 
     /**
@@ -383,7 +422,7 @@ export class VendorBookingController {
         const holdOwnerId = req.auth!.user._id.toString();
         const { id } = req.params;
 
-        const { newSlotId, newSlotIds } = RescheduleBookingSchema.parse(req.body);
+        const { newSlotId, newSlotIds, price } = RescheduleBookingSchema.parse(req.body);
 
         // Ownership scoping and the pending/confirmed eligibility check both live in
         // the service now, so the vendor and customer paths cannot drift apart.
@@ -392,6 +431,7 @@ export class VendorBookingController {
             newSlotIds ?? newSlotId!,
             holdOwnerId,
             { role: 'vendor', id: vendorId },
+            { price },
         );
 
         // ⚠ Since 2026-10-26 (D-9) a shop's move is a PROPOSAL: the booking keeps its time and
@@ -409,8 +449,38 @@ export class VendorBookingController {
      */
     static acceptProposal = asyncHandler(async (req: Request, res: Response): Promise<void> => {
         const vendorId = req.auth!.role_entity._id.toString();
-        const booking = await bookingService.answerRescheduleProposal(req.params.id, { role: 'vendor', id: vendorId }, 'accept');
-        res.json({ success: true, data: booking, message: 'New time accepted' });
+        const { price } = AcceptProposalSchema.parse(req.body ?? {});
+        const booking = await bookingService.answerRescheduleProposal(req.params.id, { role: 'vendor', id: vendorId }, 'accept', { price });
+        // With a different price nothing moved yet: the customer has to agree to it first.
+        const waiting = booking.rescheduleProposal?.status === 'open';
+        res.json({ success: true, data: booking, message: waiting ? 'New time and price proposed — the customer will accept or decline them' : 'New time accepted' });
+    });
+
+    /**
+     * POST /api/vendor/bookings/:id/price-proposal
+     * Propose a different price on a manual booking still waiting for approval. Only the vendor
+     * proposes, and never below what the customer booked at (BOOKING-PRICE-PROPOSAL-PLAN).
+     */
+    static proposePrice = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { price } = ProposePriceSchema.parse(req.body);
+        const booking = await bookingService.proposePrice(req.params.id, vendorId, price);
+        res.json({
+            success: true,
+            data: { ...booking.toJSON(), pricing: vendorPricingView(booking, booking.bookingMode) },
+            message: 'Price proposed — the customer will accept or decline it',
+        });
+    });
+
+    /** DELETE /api/vendor/bookings/:id/price-proposal — take the proposal back. */
+    static withdrawPrice = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const booking = await bookingService.withdrawPriceProposal(req.params.id, vendorId);
+        res.json({
+            success: true,
+            data: { ...booking.toJSON(), pricing: vendorPricingView(booking, booking.bookingMode) },
+            message: 'Proposal withdrawn',
+        });
     });
 
     static declineProposal = asyncHandler(async (req: Request, res: Response): Promise<void> => {

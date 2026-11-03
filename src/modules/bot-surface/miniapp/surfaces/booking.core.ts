@@ -36,6 +36,7 @@
 import { Types } from 'mongoose';
 import { productBookingService } from '../../../catalog/domain/services/booking/product-booking.instance';
 import { BookingService } from '../../../booking/services/booking.service';
+import { outstandingTopup } from '../../../booking/domain/price-proposal';
 import { Booking, IBooking } from '../../../booking/models/booking.model';
 import { ProductModel, ProductVariantModel } from '../../../catalog/models';
 import { DEFAULT_VARIANT_SIGNATURE } from '../../../catalog/domain/services/variants/constants';
@@ -795,7 +796,7 @@ function amountDueFor(booking: IBooking, purpose: 'primary' | 'balance'): number
     if (purpose !== 'balance') return booking.priceSnapshot;
 
     const settlement = booking.settlement;
-    const outstanding = (settlement?.balanceDue ?? 0) - (settlement?.balancePaid ?? 0);
+    const outstanding = outstandingTopup(booking) + (settlement?.balanceDue ?? 0) - (settlement?.balancePaid ?? 0);
     if (outstanding <= 0) {
         throw createAppError(ERROR_CODES.BOOKING_BALANCE_ALREADY_SETTLED, 409, undefined, {
             bookingId: String(booking._id),

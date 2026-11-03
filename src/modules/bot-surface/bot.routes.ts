@@ -237,6 +237,7 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
     bookings_reschedule: BotBookingController.reschedule,
     bookings_address_step: BotBookingAddressController.answer,
     bookings_show_place: BotBookingAddressController.place,
+    bookings_send_reminder: BotBookingController.sendReminder,
 
     // ── Saved payment methods ────────────────────────────────────────────────
     payment_methods_list: BotPaymentMethodController.list,

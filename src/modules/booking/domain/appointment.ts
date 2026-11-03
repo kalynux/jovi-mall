@@ -21,6 +21,8 @@
  */
 
 import { BookingStatus } from '../types/booking.types';
+import { PartyReminderStamps, PartyReminderView, partyReminderView } from './party-reminder';
+import { IPriceProposal, IPriceTopup, outstandingTopup, PricingView, pricingView } from './price-proposal';
 
 export const APPOINTMENT_LOCATION_KINDS = ['vendor_address', 'customer_address', 'online'] as const;
 export type AppointmentLocationKind = (typeof APPOINTMENT_LOCATION_KINDS)[number];
@@ -164,6 +166,7 @@ export interface AccessGateBooking {
     startAt: Date;
     endAt: Date;
     access?: AppointmentAccessSetting | null;
+    priceTopup?: IPriceTopup | null;
 }
 
 /**
@@ -211,7 +214,8 @@ export function computeAppointmentAccess(
         return shut('closed', 'ended');
     }
     if (status !== BookingStatus.CONFIRMED) return shut('locked', 'not_confirmed');
-    const settled = booking.paymentStatus === 'paid' || booking.requiresPayment === false;
+    // A price difference still owed is unpaid money, the same as the original price (D-3).
+    const settled = (booking.paymentStatus === 'paid' && outstandingTopup(booking) === 0) || booking.requiresPayment === false;
     if (!settled) return shut('locked', 'not_paid');
     if (now.getTime() < opensAt.getTime()) return shut('locked', 'too_early');
 
@@ -292,6 +296,8 @@ export interface ProposalLike {
     proposedAt: Date;
     expiresAt: Date;
     answeredAt: Date | null;
+    price?: number | null;
+    previousPrice?: number | null;
 }
 
 /**
@@ -314,6 +320,9 @@ export interface ProposalView {
     proposedAt: Date;
     expiresAt: Date;
     answeredAt: Date | null;
+    /** The price that comes with the new time. Null when the move leaves the price alone. */
+    price: number | null;
+    previousPrice: number | null;
 }
 
 export function proposalView(p: ProposalLike | null | undefined, now: Date = new Date()): ProposalView | null {
@@ -328,6 +337,8 @@ export function proposalView(p: ProposalLike | null | undefined, now: Date = new
         proposedAt: p.proposedAt,
         expiresAt: p.expiresAt,
         answeredAt: p.answeredAt,
+        price: p.price ?? null,
+        previousPrice: p.previousPrice ?? null,
     };
 }
 
@@ -344,6 +355,10 @@ export interface CustomerAppointmentFields {
     location: CustomerLocationView | null;
     access: AppointmentAccessView | null;
     rescheduleProposal: ProposalView | null;
+    /** The one-time reminder to the vendor, as this customer may use it. */
+    reminder: PartyReminderView;
+    /** The agreed price, the floor, what was paid, any proposal waiting and anything still owed. */
+    pricing: PricingView;
 }
 
 /**
@@ -359,6 +374,10 @@ export function customerAppointmentFields(
     booking: AccessGateBooking & {
         location?: BookingLocationSnapshot | null;
         rescheduleProposal?: ProposalLike | null;
+        partyReminders?: PartyReminderStamps | null;
+        priceSnapshot?: number;
+        originalPrice?: number | null;
+        priceProposal?: IPriceProposal | null;
     },
     now: Date = new Date(),
 ): CustomerAppointmentFields {
@@ -366,6 +385,19 @@ export function customerAppointmentFields(
         location: customerLocationView(booking.status, booking.location),
         access: computeAppointmentAccess(booking, now),
         rescheduleProposal: proposalView(booking.rescheduleProposal, now),
+        reminder: partyReminderView(booking, 'customer', now),
+        // Named field by field: `booking` is often a Mongoose document, and spreading one copies its
+        // internals rather than its fields.
+        pricing: pricingView({
+            status: booking.status,
+            startAt: booking.startAt,
+            priceSnapshot: booking.priceSnapshot ?? 0,
+            originalPrice: booking.originalPrice,
+            requiresPayment: booking.requiresPayment,
+            paymentStatus: booking.paymentStatus,
+            priceProposal: booking.priceProposal,
+            priceTopup: booking.priceTopup,
+        }, now),
     };
 }
 

@@ -394,6 +394,8 @@ export const BOT_ROUTES: readonly BotRouteSpec[] = Object.freeze([
     { tool: 'bookings_get', method: 'POST', path: '/bookings/:bookingId', mutating: false, requiresCustomerRole: true },
     /** Where it happens — a map pin and the address, or the link — sent as the reply (2026-10-27). */
     { tool: 'bookings_show_place', method: 'POST', path: '/bookings/:bookingId/place', mutating: false, requiresCustomerRole: true },
+    /** The customer's one reminder to the vendor. `mutating` because it spends it (BOOKING-PARTY-REMINDER-PLAN). */
+    { tool: 'bookings_send_reminder', method: 'POST', path: '/bookings/:bookingId/reminder', mutating: true, requiresCustomerRole: true },
     { tool: 'bookings_get_balance', method: 'POST', path: '/bookings/:bookingId/balance', mutating: false, requiresCustomerRole: true },
     { tool: 'bookings_payment_status', method: 'POST', path: '/bookings/:bookingId/payment-status', mutating: false, requiresCustomerRole: true },
     /**

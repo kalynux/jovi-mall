@@ -25,6 +25,7 @@ function attachRoutes(router: Router): Router {
   router.post('/:bookingId/payment/cash', AdminBookingController.markCashPaid);
   router.post('/:bookingId/proposal/withdraw', AdminBookingController.withdrawProposal);
   router.post('/:bookingId/reminder', AdminBookingController.resendReminder);
+  router.post('/:bookingId/reminder/vendor', AdminBookingController.remindVendor);
   return router;
 }
 

@@ -36,6 +36,8 @@ import {
 } from '../../orders/domain/partial-payment';
 import { Booking, IBooking } from '../../booking/models/booking.model';
 import { BookingCalendarSyncService } from '../../booking/services/booking-calendar-sync.service';
+import { BOOKING_CONFIG } from '../../booking/config/booking.config';
+import { outstandingTopup } from '../../booking/domain/price-proposal';
 
 /**
  * What a refund is being issued against.
@@ -1405,29 +1407,38 @@ export class PaymentOrchestratorService {
       throw createAppError(ERROR_CODES.PAYMENT_BOOKING_NOT_FOUND, 404);
     }
 
-    // A balance only exists once the vendor has settled the appointment.
-    if (booking.status !== 'completed') {
-      throw createAppError(ERROR_CODES.BOOKING_NOT_COMPLETED, 409, undefined, {
-        status: booking.status
-      });
-    }
+    // A price difference is owed before completion, and is the same second payment by the same
+    // doors (BOOKING-PRICE-PROPOSAL-PLAN § 5).
+    const topup = booking.priceTopup?.status === 'due' && booking.status !== 'cancelled' ? booking.priceTopup : null;
+    let outstanding: number;
+    if (topup) {
+      outstanding = topup.amount;
+    } else {
+      // A balance only exists once the vendor has settled the appointment.
+      if (booking.status !== 'completed') {
+        throw createAppError(ERROR_CODES.BOOKING_NOT_COMPLETED, 409, undefined, {
+          status: booking.status
+        });
+      }
 
-    const settlement = booking.settlement;
-    if (!settlement || settlement.balanceDue <= 0) {
-      throw createAppError(ERROR_CODES.BOOKING_NO_BALANCE_DUE, 400);
-    }
+      const settlement = booking.settlement;
+      if (!settlement || settlement.balanceDue <= 0) {
+        throw createAppError(ERROR_CODES.BOOKING_NO_BALANCE_DUE, 400);
+      }
 
-    const outstanding = settlement.balanceDue - (settlement.balancePaid ?? 0);
-    if (outstanding <= 0) {
-      throw createAppError(ERROR_CODES.BOOKING_BALANCE_ALREADY_SETTLED, 409);
+      outstanding = settlement.balanceDue - (settlement.balancePaid ?? 0);
+      if (outstanding <= 0) {
+        throw createAppError(ERROR_CODES.BOOKING_BALANCE_ALREADY_SETTLED, 409);
+      }
     }
 
     const userId = booking.userId.toString();
 
     // Scoped by purpose so it can never collide with the ORIGINAL booking payment,
-    // whose key is hash(bookingId, userId, priceSnapshot).
+    // whose key is hash(bookingId, userId, priceSnapshot). A difference carries its sequence too:
+    // a second one of the same amount must not read as already paid.
     const idempotencyKey = this.generateIdempotencyKey(
-      `${bookingId}:balance`,
+      topup ? `${bookingId}:topup:${topup.seq}` : `${bookingId}:balance`,
       userId,
       outstanding
     );
@@ -1492,6 +1503,7 @@ export class PaymentOrchestratorService {
     const attempt = await this.openAttempt({
       bookingId: new Types.ObjectId(bookingId),
       purpose: 'booking_balance',
+      ...(topup ? { bookingTopupSeq: topup.seq } : {}),
       userId: new Types.ObjectId(userId),
       gateway,
       provider: charge.provider,
@@ -2392,6 +2404,21 @@ export class PaymentOrchestratorService {
       booking.paymentMethod = 'online';
     }
 
+    // The agreed price moved while this charge was out, which the answer's own guard makes rare but
+    // cannot make impossible for a late result. The money exists, so it is reconciled: a shortfall
+    // is asked for, and an excess goes back below.
+    const shortfall = booking.priceSnapshot - transaction.amountSnapshot;
+    if (shortfall > 0) {
+      booking.priceTopup = {
+        status: 'due',
+        amount: shortfall,
+        dueAt: new Date(Date.now() + BOOKING_CONFIG.unpaidExpiry.afterMinutes * 60_000),
+        seq: (booking.priceTopup?.seq ?? 0) + 1,
+        paidAt: null,
+        method: null
+      };
+    }
+
     await booking.save();
 
     // Sync calendar event with new payment status
@@ -2400,12 +2427,68 @@ export class PaymentOrchestratorService {
     // Split the paid amount into held earnings (vendor net + platform commission).
     // Idempotent and best-effort: a failure must not fail webhook processing.
     try {
-      await earningsSplitService.splitBooking(booking);
+      await earningsSplitService.splitBooking(booking, transaction.amountSnapshot);
     } catch (error) {
       console.error('[PaymentOrchestrator] Failed to split booking earnings:', error);
     }
 
+    if (shortfall < 0) {
+      await this.refundPriceDifference(booking, -shortfall);
+    }
+
     console.log(`[PaymentOrchestrator] Booking ${booking._id} marked as paid and calendar updated`);
+  }
+
+  /**
+   * Credit a payment of a price difference (BOOKING-PRICE-PROPOSAL-PLAN § 5).
+   *
+   * Idempotent on the transaction, through one atomic `$addToSet`-style claim: the same result
+   * arriving twice neither credits nor splits twice.
+   *
+   * ⚠ **The money is taken as it arrives, whatever has happened since.** If the difference was
+   * replaced while this was out, what it covers is credited and any excess goes back. If the booking
+   * was cancelled meanwhile, the cancellation's refund has already been decided without this money,
+   * so all of it goes back.
+   */
+  private async handleBookingTopupSuccess(booking: IBooking, transaction: IPaymentTransaction): Promise<void> {
+    const claimed = await Booking.findOneAndUpdate(
+      { _id: booking._id, topupTransactionIds: { $ne: transaction._id } },
+      { $addToSet: { topupTransactionIds: transaction._id } },
+      { new: true }
+    );
+    if (!claimed) {
+      console.log(`[PaymentOrchestrator] Price difference ${transaction._id} on booking ${booking._id} already credited.`);
+      return;
+    }
+
+    const paid = transaction.amountSnapshot;
+    const due = claimed.status === 'cancelled' ? 0 : outstandingTopup(claimed);
+    const credited = Math.min(paid, due);
+    if (credited >= due && due > 0) {
+      claimed.set({ 'priceTopup.status': 'paid', 'priceTopup.paidAt': new Date(), 'priceTopup.method': 'online' });
+      await claimed.save();
+    } else if (credited > 0) {
+      claimed.set({ 'priceTopup.amount': due - credited });
+      await claimed.save();
+    }
+
+    try {
+      await earningsSplitService.splitBookingTopup(claimed, paid, (transaction._id as Types.ObjectId).toString());
+    } catch (error) {
+      console.error('[PaymentOrchestrator] Failed to split price-difference earnings:', error);
+    }
+
+    if (paid > credited) {
+      await this.refundPriceDifference(claimed, paid - credited);
+    }
+
+    console.log(`[PaymentOrchestrator] Booking ${booking._id} price difference of ${paid} credited (${credited} applied)`);
+  }
+
+  /** Loaded on first use: the booking refund service reaches back into this module's graph. */
+  private async refundPriceDifference(booking: IBooking, amount: number): Promise<void> {
+    const { bookingRefundService } = await import('../../booking/services/booking-refund.service');
+    await bookingRefundService.refundPriceDifference(booking, amount);
   }
 
   /**
@@ -2420,6 +2503,11 @@ export class PaymentOrchestratorService {
     booking: IBooking,
     transaction: IPaymentTransaction
   ): Promise<void> {
+    if (transaction.bookingTopupSeq !== undefined && transaction.bookingTopupSeq !== null) {
+      await this.handleBookingTopupSuccess(booking, transaction);
+      return;
+    }
+
     const settlement = booking.settlement;
     if (!settlement) {
       console.error(`[PaymentOrchestrator] Booking ${booking._id} balance paid but no settlement recorded`);

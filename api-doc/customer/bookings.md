@@ -42,6 +42,9 @@ Everything after the purchase lives under `/api/customer/bookings` (beside `/api
 | `DELETE` | `/api/customer/bookings/:id/reschedule-proposal` | 🆕 Withdraw the customer's own request (manual services). |
 | `GET` | `/api/customer/bookings/:id/balance` | What is still owed after completion (and what was overpaid). |
 | `POST` | `/api/customer/bookings/:id/pay-balance` | Pay that balance. Body: `{ provider, channel }` — same shape as step 4. |
+| `POST` | `/api/customer/bookings/:id/reminder` | 🆕 Send the vendor this customer's **one** reminder for this appointment. No body: the platform writes the message. Answers `{ data: { reminder } }`. `409 BOOKING_REMINDER_ALREADY_SENT` (`details.sentAt`) · `409 BOOKING_REMINDER_NOT_APPLICABLE` (not confirmed, or already started). |
+
+🆕 **2026-11-03: `reminder` on every read.** `{ canSend, sentAt, receivedAt }`, computed for the customer: `sentAt` is when they sent theirs, `receivedAt` when the vendor sent theirs. Show the button from `canSend`. It is separate from the automatic reminder ~24 hours before, which neither spends it nor is limited by it. See [the changelog](./FRONTEND-CHANGELOG-booking-reminder.md).
 
 🆕 **2026-10-26 — the service and the shop, on every read.** The list, the single read and the
 cancel answer carry `productId` / `vendorId` as **id strings** (they arrived as populated objects
@@ -158,6 +161,21 @@ namespaced to you, which is what lets several customers hold the same class at o
 > correct the request was, because the reschedule looked for the hold under a different key
 > from the one the lock endpoint writes. A client that special-cased capacity services out of
 > its reschedule UI can stop doing so.
+
+---
+
+## A vendor's proposed price
+
+🆕 2026-11-03, services the vendor approves by hand only. See [the changelog](./FRONTEND-CHANGELOG-booking-price-proposal.md).
+
+```http
+POST /api/customer/bookings/:id/price-proposal/accept
+POST /api/customer/bookings/:id/price-proposal/decline
+```
+
+Only the vendor proposes, and never below what the customer booked at. Every read carries `pricing`: `{ originalPrice, currentPrice, amountPaid, proposal, topup }`. `priceSnapshot` is now the agreed price.
+
+Accepting confirms the booking at that price. Declining changes nothing, and lets the customer cancel with a full refund whatever the cancellation policy says. If they already paid part, `pricing.topup` says what is owed and by when, it is paid through `pay-balance`, and the booking is cancelled and refunded if it is not. `rescheduleProposal` may also carry `price` and `previousPrice`: the accept and decline routes then answer for the time and the price together.
 
 ---
 

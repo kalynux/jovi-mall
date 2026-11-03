@@ -49,7 +49,8 @@ import {
 import type { ShipmentFailureReason } from '../../shipments/shipment.model';
 import { ChannelText } from '../catalog/notification-catalog';
 import { Language, resolveLanguage, templateLanguage, DEFAULT_LANGUAGE } from '../catalog/notification-i18n';
-import { RenderContext, toTelegramNotificationBody, toWhatsAppNotificationBody } from '../catalog/message-renderer';
+import { RenderContext, formatMomentsInContext, toTelegramNotificationBody, toWhatsAppNotificationBody } from '../catalog/message-renderer';
+import { appointmentWhenPhrase } from '../../booking/domain/party-reminder';
 import { DomainEvent } from '../../../core/events/event-bus';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
@@ -255,6 +256,11 @@ interface DispatchParams {
      * in the chat they booked from (owner decision, 2026-09-27). Unlinked since → preference order.
      */
     alreadyToldInChat?: OriginChatChannel;
+    /**
+     * The vendor's one-time reminder: reaches a customer who muted the automatic ones, because it
+     * is someone else's action, capped at one (BOOKING-PARTY-REMINDER-PLAN D-5).
+     */
+    deliverDespiteMute?: boolean;
 }
 
 /** A chat a notification can answer in — the two the bot runs on. */
@@ -323,6 +329,39 @@ export class CustomerNotificationEventHandler {
                 error
             );
         }
+    }
+
+    /**
+     * A vendor used their one reminder on this appointment. The same `booking.reminder` the sweep
+     * sends: approved template, tested copy, and it already names the vendor.
+     *
+     * ⚠ **Throws, unlike `notify`.** The caller has already spent the reminder and releases it if
+     * the inbox row could not be written, so a failure has to reach it. A failed secondary channel
+     * still does not throw: it is recorded on the notification, as everywhere.
+     */
+    async sendBookingReminderFromVendor(p: {
+        customer: ICustomer;
+        bookingId: string;
+        serviceName?: string | null;
+        vendorName?: string | null;
+        startAt: Date;
+    }): Promise<void> {
+        const lang = resolveLanguage(p.customer);
+        await this.dispatch({
+            situation: 'booking.reminder',
+            customerId: p.customer._id.toString(),
+            aggregateType: 'booking',
+            aggregateId: p.bookingId,
+            idempotencyKey: `customer.booking.reminder.from_vendor:${p.bookingId}`,
+            deliverDespiteMute: true,
+            context: {
+                bookingId: p.bookingId,
+                serviceName: p.serviceName || this.genericService(lang),
+                vendorName: p.vendorName || this.genericVendor(lang),
+                whenPhrase: appointmentWhenPhrase(p.startAt, lang, p.customer.timezone),
+                startAt: p.startAt
+            }
+        });
     }
 
     // ─── Booking events ──────────────────────────────────────────────────────
@@ -456,26 +495,111 @@ export class CustomerNotificationEventHandler {
             startAt: string | Date;
             previousStartAt: string | Date;
             expiresAt: string | Date;
+            currency?: string;
+            price?: number | null;
+            previousPrice?: number | null;
         };
         if (p.proposedBy !== 'vendor') return;
 
         const customer = await this.resolveCustomerByUserId(undefined, p.userId);
         if (!customer) return;
         const lang = resolveLanguage(customer);
+        const priced = p.price !== null && p.price !== undefined;
 
         await this.notify({
-            situation: 'booking.reschedule_proposed',
+            situation: priced ? 'booking.reschedule_price_proposed' : 'booking.reschedule_proposed',
             customerId: customer._id.toString(),
             aggregateType: 'booking',
             aggregateId: p.bookingId,
-            idempotencyKey: `customer.booking.reschedule_proposed:${p.bookingId}:${new Date(p.startAt).getTime()}`,
+            idempotencyKey: priced
+                ? `customer.booking.reschedule_price_proposed:${p.bookingId}:${new Date(p.startAt).getTime()}:${p.price}`
+                : `customer.booking.reschedule_proposed:${p.bookingId}:${new Date(p.startAt).getTime()}`,
             context: {
                 bookingId: p.bookingId,
                 serviceName: p.productTitle ?? this.genericService(lang),
                 vendorName: p.vendorName ?? this.genericVendor(lang),
                 startAt: this.formatMoment(p.startAt, customer, lang),
                 previousStartAt: this.formatMoment(p.previousStartAt, customer, lang),
+                expiresAt: this.formatMoment(p.expiresAt, customer, lang),
+                currency: p.currency,
+                amountFormatted: priced ? this.formatAmount(p.price!) : undefined,
+                previousFormatted: priced ? this.formatAmount(p.previousPrice ?? 0) : undefined
+            }
+        });
+    }
+
+    /** `booking.price_proposed` — the vendor asks for a different price. No preference silences it. */
+    async handleBookingPriceProposed(event: DomainEvent): Promise<void> {
+        const p = event.payload as {
+            bookingId: string;
+            userId: string;
+            productTitle?: string | null;
+            vendorName?: string | null;
+            currency: string;
+            startAt: string | Date;
+            amount: number;
+            previousAmount: number;
+            proposedAt: string | Date;
+            expiresAt: string | Date;
+        };
+        const customer = await this.resolveCustomerByUserId(undefined, p.userId);
+        if (!customer) return;
+        const lang = resolveLanguage(customer);
+
+        await this.notify({
+            situation: 'booking.price_proposed',
+            customerId: customer._id.toString(),
+            aggregateType: 'booking',
+            aggregateId: p.bookingId,
+            idempotencyKey: `customer.booking.price_proposed:${p.bookingId}:${new Date(p.proposedAt).getTime()}`,
+            context: {
+                bookingId: p.bookingId,
+                serviceName: p.productTitle ?? this.genericService(lang),
+                vendorName: p.vendorName ?? this.genericVendor(lang),
+                currency: p.currency,
+                amountFormatted: this.formatAmount(p.amount),
+                previousFormatted: this.formatAmount(p.previousAmount),
+                startAt: this.formatMoment(p.startAt, customer, lang),
                 expiresAt: this.formatMoment(p.expiresAt, customer, lang)
+            }
+        });
+    }
+
+    /**
+     * `booking.price_topup_due` — the agreed price is set, and this is what is owed for it. `purpose`
+     * picks which of the two Pay buttons is drawn, because the two charges open differently: the first
+     * payment of an unpaid booking, or the difference on one already paid.
+     */
+    async handleBookingPriceTopupDue(event: DomainEvent): Promise<void> {
+        const p = event.payload as {
+            bookingId: string;
+            userId: string;
+            productTitle?: string | null;
+            currency: string;
+            amount: number;
+            price: number;
+            dueAt: string | Date;
+            purpose: 'primary' | 'balance';
+        };
+        const customer = await this.resolveCustomerByUserId(undefined, p.userId);
+        if (!customer) return;
+        const lang = resolveLanguage(customer);
+
+        await this.notify({
+            situation: 'booking.price_topup_due',
+            customerId: customer._id.toString(),
+            aggregateType: 'booking',
+            aggregateId: p.bookingId,
+            idempotencyKey: `customer.booking.price_topup_due:${p.bookingId}:${p.amount}:${new Date(p.dueAt).getTime()}`,
+            context: {
+                bookingId: p.bookingId,
+                serviceName: p.productTitle ?? this.genericService(lang),
+                currency: p.currency,
+                amountFormatted: this.formatAmount(p.amount),
+                priceFormatted: this.formatAmount(p.price),
+                dueAt: this.formatMoment(p.dueAt, customer, lang),
+                payPriceBookingId: p.purpose === 'primary' ? p.bookingId : '',
+                payBalanceBookingId: p.purpose === 'balance' ? p.bookingId : ''
             }
         });
     }
@@ -1808,7 +1932,7 @@ export class CustomerNotificationEventHandler {
         // A muted group suppresses the whole notification, in-app record included.
         // Money and cancellations carry no key and therefore cannot be muted.
         const prefKey = SITUATION_PREFERENCE[params.situation];
-        if (prefKey && prefs.preferences[prefKey] === false) return;
+        if (prefKey && !params.deliverDespiteMute && prefs.preferences[prefKey] === false) return;
 
         const deliveredVia = await this.determineDeliveryChannels(
             customer,
@@ -1816,8 +1940,9 @@ export class CustomerNotificationEventHandler {
             params.originChat,
             params.alreadyToldInChat,
         );
-        const inApp = renderCustomerInApp(params.situation, lang, params.context);
-        const action = this.resolveAction(params.situation, lang, params.context);
+        const context = formatMomentsInContext(params.context, customer.timezone || 'Africa/Douala');
+        const inApp = renderCustomerInApp(params.situation, lang, context);
+        const action = this.resolveAction(params.situation, lang, context);
 
         const notification = await this.notificationRepo.createIfNotExists({
             customerId: params.customerId,
@@ -1838,7 +1963,7 @@ export class CustomerNotificationEventHandler {
             params.situation,
             lang,
             customer,
-            params.context
+            context
         );
     }
 

@@ -8977,6 +8977,96 @@
       ]
     },
     {
+      "name": "bookings_send_reminder",
+      "version": 1,
+      "title": "Remind the provider about an appointment",
+      "tier": "extended",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Sends the provider the customer's ONE reminder for a confirmed appointment that has not started. The platform writes the message; the customer cannot add text to it.",
+      "when_to_use": "The customer explicitly asks to remind the provider or the shop about their appointment (\"remind the salon about my booking\", \"can you remind them I am coming?\").",
+      "when_not_to_use": "Never on your own initiative: each appointment allows only one. Not to pass on a message, a question or a change of plan. Not when `reminder.canSend` is false on the booking.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/bookings/{bookingId}/reminder"
+      },
+      "backing_endpoint": {
+        "method": "POST",
+        "path": "/api/customer/bookings/:id/reminder",
+        "doc": "customer/bookings.md#managing-your-bookings"
+      },
+      "doc": "customer/bookings.md#managing-your-bookings",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bookingId"
+        ],
+        "properties": {
+          "bookingId": {
+            "type": "string",
+            "description": "The appointment id, from bookings_list."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "bookingId"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "id",
+          "bookingNumber",
+          "status",
+          "startAt",
+          "service",
+          "vendor",
+          "reminder"
+        ]
+      },
+      "errors": [
+        {
+          "code": "NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "Not this customer's booking",
+          "customer_action": "explain"
+        },
+        {
+          "code": "BOOKING_REMINDER_ALREADY_SENT",
+          "status": 409,
+          "category": "conflict",
+          "when": "This customer already sent their one reminder for this appointment",
+          "customer_action": "explain"
+        },
+        {
+          "code": "BOOKING_REMINDER_NOT_APPLICABLE",
+          "status": 409,
+          "category": "conflict",
+          "when": "The appointment is not confirmed, or has already started",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "requires_confirmation": false,
+      "risk": "low",
+      "context_resolution": {
+        "subject": "booking",
+        "policy": "focus_or_most_recent",
+        "must_echo": true
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "commands": [
+        "bookings"
+      ]
+    },
+    {
       "name": "bookings_get_balance",
       "version": 1,
       "title": "What the appointment came to",

@@ -454,7 +454,10 @@ export class EarningsPauseService {
         // PaymentTransaction's, see `splitBookingBalance`) — map it back to its booking, or a
         // paused booking's balance share would be released straight through the pause.
         if (await Booking.exists({ _id: allocation.source_id })) return { kind: 'booking', id };
-        const owner = await Booking.findOne({ 'settlement.balanceTransactionId': allocation.source_id }, { _id: 1 }).lean();
+        const owner = await Booking.findOne(
+          { $or: [{ 'settlement.balanceTransactionId': allocation.source_id }, { topupTransactionIds: allocation.source_id }] },
+          { _id: 1 }
+        ).lean();
         return owner ? { kind: 'booking', id: (owner as any)._id.toString() } : { kind: 'booking', id };
       }
       case 'shipment': {
@@ -556,10 +559,14 @@ async function shipmentIdOf(row: IEarningsAllocation): Promise<string | null> {
  */
 export async function bookingSourcesOf(bookingId: string): Promise<SourceRef[]> {
   const sources: SourceRef[] = [{ sourceType: 'booking', sourceId: bookingId }];
-  const booking = await Booking.findById(bookingId, { 'settlement.balanceTransactionId': 1 }).lean();
+  const booking = await Booking.findById(bookingId, { 'settlement.balanceTransactionId': 1, topupTransactionIds: 1 }).lean();
   const balanceId = (booking as any)?.settlement?.balanceTransactionId;
   if (balanceId && balanceId.toString() !== bookingId) {
     sources.push({ sourceType: 'booking', sourceId: balanceId.toString() });
+  }
+  // A paid price difference is split under its payment's id too (`splitBookingTopup`).
+  for (const topupId of ((booking as any)?.topupTransactionIds ?? [])) {
+    sources.push({ sourceType: 'booking', sourceId: topupId.toString() });
   }
   return sources;
 }

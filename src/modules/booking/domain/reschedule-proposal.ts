@@ -64,3 +64,15 @@ export function declinedVendorProposal(
 ): boolean {
     return !!p && p.status === 'declined' && p.proposedBy === 'vendor';
 }
+
+/**
+ * The same protection for a price (owner decision P-5): while a booking is waiting on a vendor who
+ * has asked for more money, the customer may leave with a full refund whatever the policy says. Any
+ * proposal on a booking still `pending` qualifies, whatever became of it, because the vendor started
+ * it and has not confirmed since.
+ */
+export function vendorPriceProposalWaivesPolicy(
+    booking: { status: string; priceProposal?: { status: string } | null },
+): boolean {
+    return booking.status === 'pending' && !!booking.priceProposal;
+}

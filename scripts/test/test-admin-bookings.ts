@@ -174,6 +174,15 @@ assert('recording cash runs the vendor\'s own markAsPaidByCash', () =>
     ADMIN_SERVICE.includes('this.bookings.markAsPaidByCash(bookingId, booking.vendorId.toString())'));
 assert('a resent reminder uses a FRESH idempotency key (the first one would swallow it)', () =>
     ADMIN_SERVICE.includes('customer.booking.reminder.resend:${booking._id}:${requestId}'));
+assert('an administrator can remind the VENDOR, under the same rule and with a fresh key each time', () => {
+    const body = ADMIN_SERVICE.split('async remindVendor(')[1].split('async accessState(')[0];
+    const handler = readFileSync(join(__dirname, '../../src/modules/notifications/services/vendor-notification-event-handler.service.ts'), 'utf-8');
+    return body.includes('booking.status !== BookingStatus.CONFIRMED')
+        && body.includes('BOOKING_REMINDER_NOT_APPLICABLE')
+        && body.includes('sendBookingReminderFromAdmin(')
+        && !body.includes('partyReminders')
+        && handler.includes('`booking.reminder.admin:${p.bookingId}:${p.requestId}`');
+});
 assert('⛔ the access verdict leaves the link and the instructions out', () =>
     /const \{ instructions: _i, meetingUrl: _m, \.\.\.verdict \} = view;/.test(ADMIN_SERVICE));
 
@@ -192,6 +201,7 @@ for (const [method, path] of [
     ['post', '/:bookingId/payment/cash'],
     ['post', '/:bookingId/proposal/withdraw'],
     ['post', '/:bookingId/reminder'],
+    ['post', '/:bookingId/reminder/vendor'],
 ] as const) {
     assert(`${method.toUpperCase()} ${path} is served`, () => ADMIN_ROUTES.includes(`router.${method}('${path}'`));
 }

@@ -107,6 +107,10 @@ function assert(name: string, fn: () => boolean): void {
  * someone else's action here, not the owner of a dashboard.
  */
 const UNMUTABLE: CustomerNotificationType[] = [
+    // A question about money the appointment waits on, and the request for that money.
+    'booking.price_proposed',
+    'booking.reschedule_price_proposed',
+    'booking.price_topup_due',
     'order.prepayment.received',
     'booking.cancelled',
     'booking.payment.received',
@@ -173,6 +177,9 @@ const EXPECTED_WA_PARAMS: Record<CustomerNotificationType, number> = {
     'booking.created': 3,
     'booking.confirmed': 3,
     'booking.rescheduled': 3,
+    'booking.reschedule_price_proposed': 8,
+    'booking.price_proposed': 7,
+    'booking.price_topup_due': 5,
     'booking.cancelled': 3,
     'booking.completed': 4,
     'booking.reminder': 4,
@@ -309,10 +316,10 @@ function main(): void {
     // 46 → 47 on 2026-10-14: + order.delivery_fee.proposal_declined (the customer's own proposal).
     // 47 → 49 on 2026-10-26: + booking.reschedule_proposed / booking.reschedule_declined (D-8, D-9).
     // 49 → 50 on 2026-11-01: + order.prepayment.received (partial payment).
-    assert('catalog and model enum list the same 50 situations', () => {
+    assert('catalog and model enum list the same 53 situations', () => {
         const catalog = Object.keys(CUSTOMER_NOTIFICATION_CATALOG).sort();
         const model = [...CUSTOMER_NOTIFICATION_TYPES].sort();
-        return catalog.length === 50 && JSON.stringify(catalog) === JSON.stringify(model);
+        return catalog.length === 53 && JSON.stringify(catalog) === JSON.stringify(model);
     });
 
     // The aggregate enum is spread from CUSTOMER_AGGREGATE_TYPES rather than hand-kept —

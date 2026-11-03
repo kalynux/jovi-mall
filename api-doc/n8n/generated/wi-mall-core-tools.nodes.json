@@ -2088,6 +2088,48 @@
     }
   },
   {
+    "name": "bookings_send_reminder",
+    "type": "n8n-nodes-base.httpRequestTool",
+    "typeVersion": 4.5,
+    "parameters": {
+      "toolDescription": "Sends the provider the customer's ONE reminder for a confirmed appointment that has not started. The platform writes the message; the customer cannot add text to it. USE IT WHEN: The customer explicitly asks to remind the provider or the shop about their appointment (\"remind the salon about my booking\", \"can you remind them I am coming?\"). NOT THIS TOOL: Never on your own initiative: each appointment allows only one. Not to pass on a message, a question or a change of plan. Not when `reminder.canSend` is false on the booking.",
+      "method": "POST",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/bookings/{{ encodeURIComponent(String($fromAI(\"bookingId\", \"The appointment id, from bookings_list.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}/reminder",
+      "authentication": "genericCredentialType",
+      "genericAuthType": "httpBearerAuth",
+      "sendHeaders": true,
+      "headerParameters": {
+        "parameters": [
+          {
+            "name": "X-Webhook-Secret",
+            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+          },
+          {
+            "name": "Idempotency-Key",
+            "value": "={{ $execution.id }}-{{ $now.toMillis() }}-bookings_send_reminder"
+          }
+        ]
+      },
+      "sendBody": true,
+      "specifyBody": "json",
+      "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language } }) }}",
+      "options": {
+        "response": {
+          "response": {
+            "neverError": true
+          }
+        },
+        "timeout": 20000
+      }
+    },
+    "credentials": {
+      "httpBearerAuth": {
+        "id": "lz5ivIop9DF8mPHa",
+        "name": "jovi-mall-Bearer Auth account"
+      }
+    }
+  },
+  {
     "name": "bookings_get_balance",
     "type": "n8n-nodes-base.httpRequestTool",
     "typeVersion": 4.5,

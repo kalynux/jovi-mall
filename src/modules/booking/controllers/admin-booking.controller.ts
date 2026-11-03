@@ -118,6 +118,13 @@ export class AdminBookingController {
     });
   });
 
+  /** POST /:bookingId/reminder/vendor — remind the vendor of the appointment. */
+  static remindVendor = asyncHandler(async (req: Request, res: Response) => {
+    OptionalReasonSchema.parse(req.body ?? {});
+    const result = await adminBookingService.remindVendor(req.params.bookingId, currentRequestContext()?.requestId ?? String(Date.now()));
+    sendSuccess(res, result, { message: 'Reminder sent to the vendor' });
+  });
+
   /** GET /:bookingId/access-state — can the customer see the link yet, and why not. Never the link itself. */
   static accessState = asyncHandler(async (req: Request, res: Response) => {
     const verdict = await adminBookingService.accessState(req.params.bookingId);

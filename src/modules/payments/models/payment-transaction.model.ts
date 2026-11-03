@@ -75,6 +75,11 @@ export interface IPaymentTransaction extends Document {
   orderIds?: Types.ObjectId[];      // The group's orders (required when cartId is set)
   /** What this payment settles. See PaymentPurpose. */
   purpose: PaymentPurpose;
+  /**
+   * Set only on a `booking_balance` that pays a price difference, naming which one. Absent on a
+   * balance settled at completion: this is how the success handler tells the two apart.
+   */
+  bookingTopupSeq?: number | null;
   /** Set only on `purpose: 'order_delivery_topup'` — see IDeliveryTopupLink. */
   deliveryTopup?: IDeliveryTopupLink | null;
   /**
@@ -258,6 +263,8 @@ const PaymentTransactionSchema = new Schema<IPaymentTransaction>({
     required: true,
     default: 'primary'
   },
+  // Set only on a `booking_balance` paying a price difference (BOOKING-PRICE-PROPOSAL-PLAN).
+  bookingTopupSeq: { type: Number, default: undefined },
   // ADR-A11 — see IDeliveryTopupLink. `default: undefined` so no other row carries the key.
   deliveryTopup: {
     type: {

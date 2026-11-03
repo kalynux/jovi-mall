@@ -153,6 +153,14 @@ export class TemplateRegistry {
             ['vendor_booking_reschedule_requested', 6, true, 'Vendor: a customer asks to move a booking'],
             ['vendor_booking_reschedule_accepted', 4, true, 'Vendor: the customer accepted the new time'],
             ['vendor_booking_reschedule_declined', 4, true, 'Vendor: the customer declined the new time'],
+            // A customer's one-time reminder (2026-11-03). Needs Meta's approval.
+            ['vendor_booking_reminder', 4, true, 'Vendor: the customer sent their one reminder'],
+            // The vendor's price proposal (2026-11-03). Needs Meta's approval.
+            ['vendor_booking_price_accepted', 6, true, 'Vendor: the customer accepted the proposed price'],
+            ['vendor_booking_price_declined', 6, true, 'Vendor: the customer declined the proposed price'],
+            ['customer_booking_price_proposed', 7, true, 'Customer: the vendor proposes a different price (Accept / Decline buttons)'],
+            ['customer_booking_reschedule_price_proposed', 8, true, 'Customer: the vendor proposes a new time and price (Accept / Keep buttons)'],
+            ['customer_booking_price_topup_due', 5, true, 'Customer: what is owed for the agreed price'],
             ['vendor_payment_partial', 2, true, 'Vendor: partial payment received'],
             ['vendor_payment_full', 2, true, 'Vendor: full payment received'],
             ['vendor_storage_alert', 3, true, 'Vendor: media storage threshold alert'],

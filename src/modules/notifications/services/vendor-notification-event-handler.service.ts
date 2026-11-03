@@ -439,11 +439,133 @@ export class VendorNotificationEventHandler {
         try {
             const p = event.payload;
             if (p.proposedBy !== 'vendor') return;
+            // A move that carried a price is told as the price: it is the one message that says both.
+            if (p.price !== null && p.price !== undefined) {
+                await this.dispatchPriceAnswer({ ...p, amount: p.price });
+                return;
+            }
             const situation = p.answer === 'accepted' ? 'booking.reschedule_accepted' : 'booking.reschedule_declined';
             await this.dispatchMove(situation, p, `${situation}:${p.bookingId}:${new Date(p.proposedStartAt).getTime()}`);
         } catch (error) {
             console.error('[NotificationHandler] Failed to handle booking.reschedule_answered:', error);
         }
+    }
+
+    /**
+     * A customer used their one reminder on this appointment.
+     *
+     * ⚠ **Throws, unlike every event handler above.** The caller has already spent the reminder and
+     * releases it if the inbox row could not be written, so a failure has to reach it. A failed
+     * secondary channel still does not throw: it is recorded on the notification, as everywhere.
+     *
+     * No preference is read as a gate — see the catalog entry.
+     */
+    async sendBookingReminderFromCustomer(p: {
+        vendorId: string;
+        bookingId: string;
+        bookingNumber?: string | null;
+        serviceName?: string | null;
+        customerName?: string | null;
+        startAt: Date;
+    }): Promise<void> {
+        await this.dispatchBookingReminder(
+            p,
+            (lang) => p.customerName || this.genericCustomer(lang),
+            `booking.reminder:${p.bookingId}:${p.vendorId}`,
+        );
+    }
+
+    /**
+     * An administrator reminded the vendor. Same message and template as the customer's, opening
+     * with the platform's name in the sender's place. A fresh key per request, because an
+     * administrator may send it again; it neither spends nor is limited by the customer's one.
+     * Throws for the same reason `sendBookingReminderFromCustomer` does.
+     */
+    async sendBookingReminderFromAdmin(p: {
+        vendorId: string;
+        bookingId: string;
+        bookingNumber?: string | null;
+        serviceName?: string | null;
+        startAt: Date;
+        requestId: string;
+    }): Promise<void> {
+        await this.dispatchBookingReminder(
+            p,
+            (lang) => ({
+                en: 'Wi-Mall support',
+                fr: 'Le support Wi-Mall',
+                pt: 'O apoio Wi-Mall',
+                es: 'El soporte de Wi-Mall',
+                ar: 'دعم Wi-Mall',
+            })[lang],
+            `booking.reminder.admin:${p.bookingId}:${p.requestId}`,
+        );
+    }
+
+    /** No preference is read as a gate — see the catalog entry. */
+    private async dispatchBookingReminder(
+        p: { vendorId: string; bookingId: string; bookingNumber?: string | null; serviceName?: string | null; startAt: Date },
+        senderName: (lang: Language) => string,
+        idempotencyKey: string,
+    ): Promise<void> {
+        const [prefs, vendor] = await Promise.all([
+            this.preferenceRepo.getByVendor(p.vendorId),
+            this.vendorRepo.findById(p.vendorId),
+        ]);
+        const lang = resolveLanguage(vendor);
+        await this.dispatch({
+            situation: 'booking.reminder',
+            prefs,
+            vendorId: p.vendorId,
+            aggregateType: 'booking',
+            aggregateId: p.bookingId,
+            idempotencyKey,
+            context: {
+                bookingNumber: p.bookingNumber || this.genericBookingRef(lang),
+                serviceName: p.serviceName || this.genericService(lang),
+                customerName: senderName(lang),
+                startDate: this.formatBookingMoment(p.startAt, vendor?.timezone),
+                bookingId: p.bookingId
+            }
+        });
+    }
+
+    /** `booking.price_answered` — the shop hears the customer's answer to its proposed price. */
+    async handleBookingPriceAnswered(event: DomainEvent): Promise<void> {
+        try {
+            await this.dispatchPriceAnswer(event.payload);
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle booking.price_answered:', error);
+        }
+    }
+
+    /** No preference silences either: the shop asked this question and is waiting on the answer. */
+    private async dispatchPriceAnswer(p: Record<string, any>): Promise<void> {
+        const situation = p.answer === 'accepted' ? 'booking.price_accepted' : 'booking.price_declined';
+        const [prefs, vendor] = await Promise.all([
+            this.preferenceRepo.getByVendor(p.vendorId),
+            this.vendorRepo.findById(String(p.vendorId)),
+        ]);
+        const lang = resolveLanguage(vendor);
+        await this.dispatch({
+            situation,
+            prefs,
+            vendorId: p.vendorId,
+            aggregateType: 'booking',
+            aggregateId: p.bookingId,
+            // The amount is in the key: a vendor may propose again, and each answer is its own news.
+            idempotencyKey: `${situation}:${p.bookingId}:${p.amount}:${Date.now()}`,
+            context: {
+                bookingNumber: p.bookingNumber || this.genericBookingRef(lang),
+                serviceName: p.productTitle || this.genericService(lang),
+                customerName: p.customerName || this.genericCustomer(lang),
+                currency: p.currency,
+                amountFormatted: Number(p.amount).toLocaleString(),
+                currentFormatted: Number(p.currentPrice).toLocaleString(),
+                startDate: this.formatBookingMoment(p.startAt, vendor?.timezone),
+                bookingId: p.bookingId
+            }
+        });
     }
 
     /** The four appointment-move messages share their context and their preference flag. */

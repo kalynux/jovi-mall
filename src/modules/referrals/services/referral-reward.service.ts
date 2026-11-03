@@ -234,7 +234,7 @@ export class ReferralRewardService {
   private async bookingEvent(row: IEarningsAllocation): Promise<CommissionEvent | null> {
     // A balance payment's row carries the payment's id as its source, not the booking's.
     const booking: any = await Booking.findOne(
-      { $or: [{ _id: row.source_id }, { 'settlement.balanceTransactionId': row.source_id }] },
+      { $or: [{ _id: row.source_id }, { 'settlement.balanceTransactionId': row.source_id }, { topupTransactionIds: row.source_id }] },
       { vendorId: 1, userId: 1 }
     ).lean();
     if (!booking) return this.missingSource(row);

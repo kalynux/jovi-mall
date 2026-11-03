@@ -58,6 +58,51 @@ export function proposalAnswerCopy(language: string | null | undefined): Proposa
 }
 
 /**
+ * The chat's answer when a customer taps **Accept price** / **Decline price** on the vendor's
+ * proposal. The same rule as above: every sentence says what is true now.
+ */
+export interface PriceAnswerCopy {
+    /** Accepted — the appointment is confirmed. The payment request follows in its own message. */
+    accepted: (price: string) => string;
+    /** Declined — the price stays, and cancelling now refunds in full. */
+    declined: (price: string) => string;
+    /** Nothing open to answer: answered, withdrawn or lapsed. */
+    gone: string;
+}
+
+const PRICE_COPY: Record<Language, PriceAnswerCopy> = {
+    en: {
+        accepted: (price) => `Done — your appointment is confirmed at ${price}.`,
+        declined: (price) => `Got it — the price stays at ${price}, and the provider can answer you. If you would rather not wait, you can cancel with a full refund.`,
+        gone: 'That price is no longer waiting for an answer — your booking is as shown in your bookings.',
+    },
+    fr: {
+        accepted: (price) => `C'est fait — votre rendez-vous est confirmé à ${price}.`,
+        declined: (price) => `C'est noté — le prix reste à ${price}, et le prestataire peut vous répondre. Si vous préférez ne pas attendre, vous pouvez annuler avec un remboursement intégral.`,
+        gone: 'Ce prix n\'attend plus de réponse — votre réservation est celle affichée dans vos réservations.',
+    },
+    pt: {
+        accepted: (price) => `Feito — a sua marcação está confirmada por ${price}.`,
+        declined: (price) => `Entendido — o preço mantém-se em ${price}, e o prestador pode responder-lhe. Se preferir não esperar, pode cancelar com reembolso total.`,
+        gone: 'Esse preço já não aguarda resposta — a sua marcação é a que aparece nas suas reservas.',
+    },
+    es: {
+        accepted: (price) => `Listo — tu cita está confirmada por ${price}.`,
+        declined: (price) => `Entendido — el precio sigue en ${price}, y el proveedor puede responderte. Si prefieres no esperar, puedes cancelar con reembolso completo.`,
+        gone: 'Ese precio ya no espera respuesta — tu cita es la que aparece en tus reservas.',
+    },
+    ar: {
+        accepted: (price) => `تم — تم تأكيد موعدك بسعر ${price}.`,
+        declined: (price) => `حسنًا — يبقى السعر ${price}، ويمكن لمقدم الخدمة الرد عليك. إذا كنت تفضل عدم الانتظار، يمكنك الإلغاء مع استرداد كامل.`,
+        gone: 'لم يعد هذا السعر بانتظار رد — حجزك هو المعروض في حجوزاتك.',
+    },
+};
+
+export function priceAnswerCopy(language: string | null | undefined): PriceAnswerCopy {
+    return PRICE_COPY[languageOf(language)];
+}
+
+/**
  * "Tue 3 Nov, 09:00" in the customer's language, on the SHOP's clock — the same wall clock the
  * shop booked against. An unknown zone falls back to the platform default rather than failing the
  * answer the customer is waiting for.

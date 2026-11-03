@@ -13,6 +13,7 @@
  * moves when the shop settles the appointment.
  */
 import type { IBooking } from '../../../booking/models/booking.model';
+import { outstandingTopup } from '../../../booking/domain/price-proposal';
 import { AppError, createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
 import {
@@ -28,11 +29,15 @@ export type BookingPayPurpose = 'primary' | 'balance';
 export type BookingRowSource = Pick<
     IBooking,
     'status' | 'paymentStatus' | 'requiresPayment' | 'settlement' | 'startAt'
->;
+> & Partial<Pick<IBooking, 'priceTopup'>>;
 
-/** What is still owed above the quote once the shop settled the appointment. Never negative. */
+/**
+ * What is still owed above the first payment: a difference on the agreed price, or what the shop
+ * settled above it. Never negative, and a difference owed before completion counts as much as a
+ * balance owed after it, since both are paid through the same second charge.
+ */
 function outstandingBalance(booking: BookingRowSource): number {
-    return (booking.settlement?.balanceDue ?? 0) - (booking.settlement?.balancePaid ?? 0);
+    return outstandingTopup(booking) + (booking.settlement?.balanceDue ?? 0) - (booking.settlement?.balancePaid ?? 0);
 }
 
 /**
@@ -57,6 +62,7 @@ export function bookingPayable(booking: BookingRowSource): BookingPayPurpose | n
     }
 
     if (booking.status === 'completed' && outstandingBalance(booking) > 0) return 'balance';
+    if (outstandingTopup(booking) > 0) return 'balance';
     return null;
 }
 

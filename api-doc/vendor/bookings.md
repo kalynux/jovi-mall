@@ -36,6 +36,8 @@ Complete API reference for managing bookings in the multi-vendor ecommerce platf
 - [Reschedule Booking](#reschedule-booking) 🔴 proposes since 2026-10-26
 - [Answer or withdraw a proposed time](#answer-or-withdraw-a-proposed-time) 🆕
 - [Edit a booking's access details](#edit-a-bookings-access-details) 🆕
+- [Propose a price](#propose-a-price) 🆕
+- [Send a reminder](#send-a-reminder) 🆕
 - [Cancel Booking](#cancel-booking)
 - [Booking Status State Machine](#booking-status-state-machine)
 - [Error Codes](#error-codes)
@@ -670,6 +672,23 @@ Proposes a new time slot for the booking. The Google Calendar event moves only w
 
 ---
 
+## Propose a price
+
+🆕 2026-11-03, `manual` services only. See [the changelog](./FRONTEND-CHANGELOG-booking-price-proposal.md).
+
+```http
+POST   /api/vendor/bookings/:id/price-proposal    { "price": 7000 }
+DELETE /api/vendor/bookings/:id/price-proposal
+```
+
+On a `pending` booking only, and always above what the customer booked at (`pricing.originalPrice`). The customer accepts or declines, and accepting confirms the booking at that price. While a proposal is open, confirming is refused (`409 BOOKING_PRICE_PROPOSAL_OPEN`). After a decline the vendor may propose again, confirm at the current price, or cancel. The list and the detail carry a `pricing` block.
+
+`PATCH /:id/reschedule` and `POST /:id/reschedule-proposal/accept` accept an optional `price` too, never below `pricing.originalPrice`. The customer then answers the time and the price together. If the price falls below what they paid, the difference is refunded automatically with the fees on the vendor.
+
+At completion, `fixedPrice` is refused on a manual service (`422 BOOKING_PRICE_LOCKED`). Extra time still adds its own cost on top of the agreed price.
+
+---
+
 ## Answer or withdraw a proposed time
 
 🆕 2026-10-26 (owner decisions D-8, D-9).
@@ -721,6 +740,29 @@ cash you marked as paid). Before that, they are **not sent** to the customer's a
 own reads (`GET /api/vendor/bookings/:id`) always carry `access` and `location` in full.
 
 `409 BOOKING_ACCESS_NOT_EDITABLE` on a cancelled, completed or no-show booking.
+
+---
+
+## Send a reminder
+
+🆕 2026-11-03. The shop's **one** reminder to the customer for this appointment. The customer has one of their own for the shop, and the two are independent.
+
+```http
+POST /api/vendor/bookings/:id/reminder
+```
+
+No body: the platform writes the message. Answers `{ data: { reminder: { canSend, sentAt, receivedAt } } }`.
+
+`GET /api/vendor/bookings` and `GET /api/vendor/bookings/:id` carry the same `reminder` block, so show the button from `canSend`. `sentAt` is when the shop sent theirs, `receivedAt` when the customer sent theirs. A customer's reminder reaches the shop as the notification type `booking.reminder`.
+
+It is separate from the automatic reminder customers get ~24 hours before, which neither spends it nor is limited by it. A later time does not give another one.
+
+| Refusal | When |
+|---|---|
+| `409 BOOKING_REMINDER_ALREADY_SENT` | Already used. `details.sentAt` says when |
+| `409 BOOKING_REMINDER_NOT_APPLICABLE` | Not `confirmed`, already started, or no customer account to notify |
+
+See [the changelog](./FRONTEND-CHANGELOG-booking-reminder.md).
 
 ---
 
@@ -804,6 +846,13 @@ stateDiagram-v2
 | `BOOKING_NOT_FOUND` | 404 | Booking not found or doesn't belong to vendor |
 | `BOOKING_INVALID_STATUS_TRANSITION` | 400 | Status transition not allowed by the state machine |
 | `BOOKING_NOT_RESCHEDULABLE` | 409 | Booking is not `pending`/`confirmed`, so it cannot be rescheduled |
+| `BOOKING_PRICE_BELOW_FLOOR` | 422 | Under what the customer booked at. `details.minimum` is the floor |
+| `BOOKING_PRICE_NOT_PROPOSABLE` | 409 | `details.reason`: `not_manual` · `free` · `not_pending` · `started` · `proposal_open` · `payment_state` |
+| `BOOKING_PRICE_PROPOSAL_NOT_FOUND` | 404 | No proposed price is open |
+| `BOOKING_PRICE_PROPOSAL_OPEN` | 409 | Withdraw the proposed price before confirming |
+| `BOOKING_PRICE_LOCKED` | 422 | A typed price at completion on a manual service |
+| `BOOKING_REMINDER_ALREADY_SENT` | 409 | The shop already sent its one reminder for this booking |
+| `BOOKING_REMINDER_NOT_APPLICABLE` | 409 | Not confirmed, already started, or no customer account to notify |
 | `BOOKING_SLOT_FULL` | 409 | Capacity-mode slot is full (`maxBookings` reached) — surfaced on the customer book endpoint |
 | `BOOKING_PAYMENT_NOT_REQUIRED` | 400 | `requiresPayment` is `false`, so it cannot be marked paid |
 | `BOOKING_INVALID_PAYMENT_METHOD` | 400 | Booking has a non-cash payment method |

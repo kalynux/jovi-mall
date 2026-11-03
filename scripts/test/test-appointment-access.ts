@@ -326,8 +326,8 @@ function main(): void {
         && groupService.includes('...openProposalMatch(new Date())'));
     assert('a live proposal blocks a second move', () =>
         /if \(hasLiveProposal\(booking\.rescheduleProposal\)\) \{\s*throw createAppError\(ERROR_CODES\.BOOKING_PROPOSAL_PENDING/.test(bookingService));
-    assert('the cancellation policy is skipped ONLY behind declinedVendorProposal, and the vendor then pays the fees', () =>
-        /const vendorDeclined = declinedVendorProposal\(booking\.rescheduleProposal\);\s*if \(!vendorDeclined\) \{/.test(bookingService)
+    assert('the cancellation policy is skipped ONLY behind a vendor\'s proposal of a time or a price (P-5), and the vendor then pays the fees', () =>
+        /const vendorDeclined = declinedVendorProposal\(booking\.rescheduleProposal\)\s*\|\| vendorPriceProposalWaivesPolicy\(booking\);\s*if \(!vendorDeclined\) \{/.test(bookingService)
         && bookingService.includes("vendorDeclined ? 'vendor' : undefined"));
     assert('every booking door passes the customer\'s address to bookProduct', () =>
         code('modules/catalog/routes/product-booking.routes.ts').includes('addressId\n')

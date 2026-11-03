@@ -13,6 +13,7 @@ import { ProductModel } from '../../catalog/models';
 import { CustomerModel } from '../../customers/customer.model';
 import { VendorRepository } from '../../vendors/vendor.repository';
 import { getCustomerNotificationHandler } from '../../notifications/customer-notification-event-consumer';
+import { getVendorNotificationHandler } from '../../notifications/vendor-notification-event-consumer';
 import { resolveLanguage } from '../../notifications/catalog/notification-i18n';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
@@ -205,9 +206,35 @@ export class AdminBookingService {
         bookingId: booking._id.toString(),
         serviceName: (product as { title?: string } | null)?.title ?? '',
         vendorName: vendor?.display_name ?? '',
-        whenPhrase: bookingReminderWorker.whenPhrase(booking.startAt, lang),
+        whenPhrase: bookingReminderWorker.whenPhrase(booking.startAt, lang, customer.timezone),
         startAt: booking.startAt,
       },
+    });
+    return { sent: true, reason: null };
+  }
+
+  /**
+   * Remind the VENDOR of this appointment. Under the same rule as the customer's resend, and like
+   * it neither spends nor is limited by the one-time reminders the two sides hold
+   * (BOOKING-PARTY-REMINDER-PLAN D-4).
+   */
+  async remindVendor(bookingId: string, requestId: string): Promise<{ sent: boolean; reason: string | null }> {
+    const booking = await this.findOrThrow(bookingId);
+    if (booking.status !== BookingStatus.CONFIRMED || booking.startAt.getTime() <= Date.now()) {
+      throw createAppError(ERROR_CODES.BOOKING_REMINDER_NOT_APPLICABLE, 409, undefined, {
+        status: booking.status,
+        startAt: booking.startAt,
+      });
+    }
+
+    const product = await ProductModel.findById(booking.productId).select('title').lean();
+    await getVendorNotificationHandler().sendBookingReminderFromAdmin({
+      vendorId: booking.vendorId.toString(),
+      bookingId: booking._id.toString(),
+      bookingNumber: booking.bookingNumber,
+      serviceName: (product as { title?: string } | null)?.title,
+      startAt: booking.startAt,
+      requestId,
     });
     return { sent: true, reason: null };
   }

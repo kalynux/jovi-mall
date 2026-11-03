@@ -640,7 +640,8 @@ assert('⛔ the release is a compare-and-set on pending → failed, original pri
 
 assert('the retry guard and the unpaid sweep both understand `failed` — which is why it is the status to set', () => {
     const initiate = methodSpan(ORCHESTRATOR, 'async initiateBookingPayment(');
-    const sweep = stripComments(read('modules/booking/workers/unpaid-booking-cancel.worker.ts'));
+    // The sweep's filter lives beside the price rules since 2026-11-03: its clock depends on them.
+    const sweep = stripComments(read('modules/booking/domain/price-proposal.ts'));
     return initiate.includes("booking.paymentStatus === 'pending'")
         && !initiate.includes("booking.paymentStatus === 'failed'")
         && sweep.includes("paymentStatus: { $in: ['unpaid', 'failed'] }");

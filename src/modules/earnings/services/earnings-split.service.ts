@@ -1179,12 +1179,14 @@ export class EarningsSplitService {
    * Split a paid booking (service product): platform commission + vendor net.
    * Bookings have no delivery agency.
    */
-  async splitBooking(booking: IBooking): Promise<void> {
+  async splitBooking(booking: IBooking, grossPaid?: number): Promise<void> {
     const sourceId = booking._id.toString();
     if (await this.allocationRepo.existsForSource('booking', sourceId)) return; // idempotent
 
     const vendorId = booking.vendorId.toString();
-    const gross = booking.priceSnapshot;
+    // What this payment actually carried, when the caller knows: the agreed price can have moved
+    // since the charge was opened (BOOKING-PRICE-PROPOSAL-PLAN § 5).
+    const gross = grossPaid ?? booking.priceSnapshot;
     const currency = booking.currency;
 
     const { commissionPercent } = await this.entitlements.getEntitlements(vendorId);
@@ -1220,6 +1222,62 @@ export class EarningsSplitService {
     await this.persist(allocations);
 
     await this.emitSplit('booking', sourceId, vendorId, { gross, commission, vendorNet });
+  }
+
+  /**
+   * Split a payment of a price difference (BOOKING-PRICE-PROPOSAL-PLAN § 5). Commission as usual, on
+   * the whole agreed price, and under the payment's own id, for the reason `splitBookingBalance`
+   * gives.
+   *
+   * ⚠ **Unlike a balance it stays HELD until the appointment completes**, because it usually exists
+   * before then. `BookingService.updateBookingStatus` matures it from `topupTransactionIds`. Only a
+   * booking already completed matures here, since nothing would come along later to do it.
+   */
+  async splitBookingTopup(booking: IBooking, amount: number, transactionId: string): Promise<void> {
+    if (amount <= 0) return;
+    if (await this.allocationRepo.existsForSource('booking', transactionId)) return; // idempotent
+
+    const vendorId = booking.vendorId.toString();
+    const currency = booking.currency;
+    const { commissionPercent } = await this.entitlements.getEntitlements(vendorId);
+    const commission = Math.floor((amount * commissionPercent) / 100);
+    const vendorNet = amount - commission;
+    if (vendorNet < 0) {
+      throw createAppError(ERROR_CODES.EARNINGS_INVALID_SPLIT, 422, undefined, { gross: amount, commission });
+    }
+
+    await this.persist([
+      {
+        source_type: 'booking',
+        source_id: transactionId,
+        beneficiary_type: 'vendor',
+        beneficiary_id: vendorId,
+        gross_snapshot: amount,
+        commission_percent_snapshot: commissionPercent,
+        amount: vendorNet,
+        currency,
+      },
+      {
+        source_type: 'booking',
+        source_id: transactionId,
+        beneficiary_type: 'platform',
+        beneficiary_id: null,
+        gross_snapshot: amount,
+        commission_percent_snapshot: commissionPercent,
+        amount: commission,
+        currency,
+      },
+    ]);
+
+    if (booking.status === 'completed') {
+      try {
+        await earningsCompletionService.onSourceCompleted('booking', transactionId);
+      } catch (error) {
+        console.error('[EarningsSplitService] Failed to mature price-difference allocations:', error);
+      }
+    }
+
+    await this.emitSplit('booking', transactionId, vendorId, { gross: amount, commission, vendorNet });
   }
 
   /**

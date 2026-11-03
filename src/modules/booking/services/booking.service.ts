@@ -39,8 +39,22 @@ import {
   openProposalMatch,
   proposalExpiry,
   rescheduleDecision,
+  vendorPriceProposalWaivesPolicy,
 } from '../domain/reschedule-proposal';
 import { applyStatusChange, BookingStatusActor, statusChange } from '../domain/booking-status-history';
+import {
+  amountPaidOf,
+  hasLivePriceProposal,
+  outstandingTopup,
+  PriceChangeEffect,
+  PriceChangeKind,
+  priceBelowFloor,
+  priceChangeEffect,
+  priceFloorOf,
+  priceMayMoveNow,
+  priceProposalRefusal,
+} from '../domain/price-proposal';
+import { PaymentTransactionModel } from '../../payments/models/payment-transaction.model';
 
 export class BookingService {
   private slotLockService: SlotLockService;
@@ -142,6 +156,8 @@ export class BookingService {
             ],
             metadata,
             priceSnapshot,
+            originalPrice: priceSnapshot,
+            bookingMode,
             currency: currency || 'XAF',
             requiresPayment: needsPayment,
             location: location ?? null,
@@ -441,9 +457,11 @@ export class BookingService {
     /**
      * Enforce the vendor's cancellation policy (customer-initiated cancellation) — EXCEPT after
      * the customer declined the VENDOR's proposal of a new time (D-9). The vendor started that
-     * change, so the customer may walk away with a full refund whatever the policy says.
+     * change, so the customer may walk away with a full refund whatever the policy says. The same
+     * goes for a vendor who asked for a different price and has not confirmed since (P-5).
      */
-    const vendorDeclined = declinedVendorProposal(booking.rescheduleProposal);
+    const vendorDeclined = declinedVendorProposal(booking.rescheduleProposal)
+      || vendorPriceProposalWaivesPolicy(booking);
     if (!vendorDeclined) {
       const vendor = await this.vendorRepo.findById(booking.vendorId.toString());
       assertCancellationAllowed(vendor?.policies?.cancellation_policy ?? null, {
@@ -525,12 +543,16 @@ export class BookingService {
    *   the only id a hold is ever written under. ⚠ For a shop this is NOT `actor.id` — see
    *   `VendorBookingController.rescheduleBooking`.
    * @param actor Which side is asking, and their id (for a shop, the VENDOR id the booking holds)
+   * @param options.price A new agreed price to go with the new time. A shop's only, manual services
+   *   only, and never below the floor (BOOKING-PRICE-PROPOSAL-PLAN). The customer accepts or
+   *   declines the time and the price together.
    */
   async rescheduleBooking(
     bookingId: string,
     newSlotId: SlotSelection,
     lockOwnerId: string,
-    actor?: { role: 'vendor' | 'customer'; id: string }
+    actor?: { role: 'vendor' | 'customer'; id: string },
+    options: { price?: number } = {}
   ): Promise<IBooking> {
     const scope: Record<string, unknown> = { _id: bookingId, deletedAt: null };
     if (actor?.role === 'vendor') scope.vendorId = new Types.ObjectId(actor.id);
@@ -560,6 +582,15 @@ export class BookingService {
       throw createAppError(ERROR_CODES.BOOKING_PROPOSAL_PENDING, 409, undefined, {
         proposedBy: booking.rescheduleProposal!.proposedBy,
       });
+    }
+
+    // Judged before any hold is touched: a price this booking cannot take refuses the whole move.
+    const newPrice = options.price !== undefined && options.price !== booking.priceSnapshot ? options.price : null;
+    if (newPrice !== null) {
+      if (actor?.role !== 'vendor') {
+        throw createAppError(ERROR_CODES.BOOKING_PRICE_NOT_PROPOSABLE, 409, undefined, { reason: 'not_vendor' });
+      }
+      await this.assertMayReprice(booking, newPrice);
     }
 
     // Step 0: the new time must be one THIS side may move to, before any hold is asserted or
@@ -618,6 +649,8 @@ export class BookingService {
         proposedAt: now,
         expiresAt: proposalExpiry(booking.startAt, start),
         answeredAt: null,
+        price: newPrice,
+        previousPrice: newPrice === null ? null : booking.priceSnapshot,
       };
       await booking.save();
       // The proposal itself now holds the interval (`openProposalMatch`), so the short holds go.
@@ -658,11 +691,18 @@ export class BookingService {
    *
    * A proposal past `expiresAt` has lapsed: it is recorded as such here and refused with
    * `BOOKING_PROPOSAL_NOT_FOUND` — the original time stood, as D-9 says.
+   *
+   * ⚠ **A proposal carrying a price is the same answer about both.** Accepting moves the time and
+   * the price in one save; declining keeps both.
+   *
+   * ⚠ **A vendor answering a customer's request with a different `price` does not move anything**
+   * (owner decision P-6). The request becomes the vendor's proposal, and the customer answers it.
    */
   async answerRescheduleProposal(
     bookingId: string,
     actor: { role: 'vendor' | 'customer'; id: string },
-    answer: 'accept' | 'decline'
+    answer: 'accept' | 'decline',
+    options: { price?: number } = {}
   ): Promise<IBooking> {
     const booking = await this.findScopedBooking(bookingId, actor);
     const proposal = await this.liveProposalOrThrow(booking);
@@ -681,6 +721,30 @@ export class BookingService {
       return booking;
     }
 
+    if (actor.role === 'vendor' && options.price !== undefined && options.price !== booking.priceSnapshot) {
+      await this.assertMayReprice(booking, options.price);
+      booking.rescheduleProposal = {
+        ...proposal,
+        proposedBy: 'vendor',
+        proposedAt: now,
+        price: options.price,
+        previousPrice: booking.priceSnapshot,
+      };
+      await booking.save();
+      await this.emitRescheduleProposedEvent(booking);
+      return booking;
+    }
+
+    let effect: PriceChangeEffect = { kind: 'none' };
+    const priced = proposal.price !== null && proposal.price !== undefined;
+    if (priced) {
+      await this.assertNoChargeInFlight(booking);
+      const write = this.agreedPriceWrite(booking, proposal.price!, 'reschedule', now);
+      effect = write.effect;
+      booking.set(write.set);
+      booking.priceHistory = [...(booking.priceHistory ?? []), write.change];
+    }
+
     const group = await this.groupBookingService.resolveCapacity(booking.productId.toString());
     const previousStartAt = booking.startAt;
     // Written by the move's own save, so the time and the answer land together.
@@ -689,7 +753,214 @@ export class BookingService {
 
     await this.emitBookingRescheduledEvent(booking, previousStartAt, 'agreed');
     await this.emitRescheduleAnsweredEvent(booking, 'accepted');
-    return booking;
+    if (!priced) return booking;
+
+    // A vendor who named a price has agreed to the appointment (owner decision P-1).
+    const settled = booking.status === BookingStatus.PENDING
+      ? await this.updateBookingStatus(bookingId, booking.vendorId.toString(), BookingStatus.CONFIRMED, { role: 'customer', id: booking.userId.toString() })
+      : booking;
+    await this.settlePriceChange(settled, effect);
+    return settled;
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // The vendor's proposal of a price (BOOKING-PRICE-PROPOSAL-PLAN)
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /** Propose a price on a booking still waiting for approval. Only the vendor ever does. */
+  async proposePrice(bookingId: string, vendorId: string, amount: number): Promise<IBooking> {
+    const booking = await this.findScopedBooking(bookingId, { role: 'vendor', id: vendorId });
+
+    const refusal = priceProposalRefusal(booking, await this.modeOf(booking));
+    if (refusal) {
+      throw createAppError(ERROR_CODES.BOOKING_PRICE_NOT_PROPOSABLE, 409, undefined, { reason: refusal });
+    }
+    const floor = priceFloorOf(booking);
+    if (priceBelowFloor(booking, amount, 'approval')) {
+      throw createAppError(ERROR_CODES.BOOKING_PRICE_BELOW_FLOOR, 422, undefined, { minimum: floor });
+    }
+
+    const now = new Date();
+    const updated = await Booking.findOneAndUpdate(
+      {
+        _id: booking._id,
+        status: BookingStatus.PENDING,
+        priceSnapshot: booking.priceSnapshot,
+        $or: [{ 'priceProposal.status': { $ne: 'open' } }, { 'priceProposal.expiresAt': { $lte: now } }],
+      },
+      {
+        $set: {
+          originalPrice: floor,
+          priceProposal: {
+            status: 'open',
+            amount,
+            previousAmount: booking.priceSnapshot,
+            proposedAt: now,
+            expiresAt: booking.startAt,
+            answeredAt: null,
+          },
+        },
+      },
+      { new: true }
+    );
+    if (!updated) {
+      throw createAppError(ERROR_CODES.BOOKING_PRICE_NOT_PROPOSABLE, 409, undefined, { reason: 'proposal_open' });
+    }
+
+    await this.emitPriceProposedEvent(updated);
+    return updated;
+  }
+
+  /** The vendor takes their proposal back. The price is as it was, and they may confirm again. */
+  async withdrawPriceProposal(bookingId: string, vendorId: string): Promise<IBooking> {
+    const booking = await this.findScopedBooking(bookingId, { role: 'vendor', id: vendorId });
+    const updated = await Booking.findOneAndUpdate(
+      { _id: booking._id, status: BookingStatus.PENDING, 'priceProposal.status': 'open', 'priceProposal.expiresAt': { $gt: new Date() } },
+      { $set: { 'priceProposal.status': 'withdrawn', 'priceProposal.answeredAt': new Date() } },
+      { new: true }
+    );
+    if (!updated) throw createAppError(ERROR_CODES.BOOKING_PRICE_PROPOSAL_NOT_FOUND, 404);
+    return updated;
+  }
+
+  /**
+   * The customer answers the vendor's proposal.
+   *
+   * - **accept** → the booking is confirmed at the new price (owner decision P-1). Whatever is then
+   *   owed is asked for, and the 24-hour clock starts (P-2).
+   * - **decline** → nothing changes. The vendor may propose again, confirm at the current price or
+   *   cancel, and the customer may cancel with a full refund whatever the policy says (P-5).
+   *
+   * ⚠ **The accept is one compare-and-set**, on the proposal AND on the price and payment state it
+   * was judged against. Two taps cannot both win, and a payment that landed in between refuses the
+   * answer rather than leaving it computed against money that has since moved.
+   */
+  async answerPriceProposal(bookingId: string, userId: string, answer: 'accept' | 'decline'): Promise<IBooking> {
+    const booking = await this.findScopedBooking(bookingId, { role: 'customer', id: userId });
+    const proposal = booking.priceProposal;
+    if (!proposal || !hasLivePriceProposal(booking)) {
+      throw createAppError(ERROR_CODES.BOOKING_PRICE_PROPOSAL_NOT_FOUND, 404);
+    }
+
+    const now = new Date();
+    const scope = { _id: booking._id, userId: booking.userId, status: BookingStatus.PENDING, 'priceProposal.status': 'open' };
+
+    if (answer === 'decline') {
+      const declined = await Booking.findOneAndUpdate(
+        scope,
+        { $set: { 'priceProposal.status': 'declined', 'priceProposal.answeredAt': now } },
+        { new: true }
+      );
+      if (!declined) throw createAppError(ERROR_CODES.BOOKING_PRICE_PROPOSAL_NOT_FOUND, 404);
+      await this.emitPriceAnsweredEvent(declined, 'declined', proposal.amount);
+      return declined;
+    }
+
+    await this.assertNoChargeInFlight(booking);
+    const write = this.agreedPriceWrite(booking, proposal.amount, 'approval', now);
+    const accepted = await Booking.findOneAndUpdate(
+      { ...scope, priceSnapshot: booking.priceSnapshot, paymentStatus: booking.paymentStatus },
+      {
+        $set: { ...write.set, 'priceProposal.status': 'accepted', 'priceProposal.answeredAt': now },
+        $push: { priceHistory: write.change },
+      },
+      { new: true }
+    );
+    if (!accepted) throw createAppError(ERROR_CODES.BOOKING_PRICE_PROPOSAL_NOT_FOUND, 404);
+
+    const confirmed = await this.updateBookingStatus(
+      bookingId,
+      accepted.vendorId.toString(),
+      BookingStatus.CONFIRMED,
+      { role: 'customer', id: userId }
+    );
+    await this.emitPriceAnsweredEvent(confirmed, 'accepted', proposal.amount);
+    await this.settlePriceChange(confirmed, write.effect);
+    return confirmed;
+  }
+
+  /** The stored mode, or the service's on a booking made before the mode was stored. */
+  async modeOf(booking: IBooking): Promise<string> {
+    return booking.bookingMode ?? this.resolveBookingMode(booking.productId.toString());
+  }
+
+  /** Whether a reschedule may bring this price with it. The status is the move's own check. */
+  private async assertMayReprice(booking: IBooking, amount: number): Promise<void> {
+    const refuse = (reason: string) =>
+      createAppError(ERROR_CODES.BOOKING_PRICE_NOT_PROPOSABLE, 409, undefined, { reason });
+    if ((await this.modeOf(booking)) !== 'manual') throw refuse('not_manual');
+    if (!booking.requiresPayment || booking.priceSnapshot <= 0) throw refuse('free');
+    if (hasLivePriceProposal(booking)) throw refuse('proposal_open');
+    if (!priceMayMoveNow(booking.paymentStatus)) throw refuse('payment_state');
+    if (priceBelowFloor(booking, amount, 'reschedule')) {
+      throw createAppError(ERROR_CODES.BOOKING_PRICE_BELOW_FLOOR, 422, undefined, { minimum: priceFloorOf(booking) });
+    }
+  }
+
+  /**
+   * A price must never move under a charge that is still in flight: the charge carries the old
+   * amount, and its result would then describe a booking that no longer exists. So the customer is
+   * told to wait, with the code that already means that everywhere else.
+   */
+  private async assertNoChargeInFlight(booking: IBooking): Promise<void> {
+    if (!priceMayMoveNow(booking.paymentStatus)) {
+      if (booking.paymentStatus === 'pending') throw createAppError(ERROR_CODES.PAYMENT_BOOKING_IN_PROGRESS, 409);
+      throw createAppError(ERROR_CODES.BOOKING_PRICE_NOT_PROPOSABLE, 409, undefined, { reason: 'payment_state' });
+    }
+    const live = await PaymentTransactionModel.exists({ bookingId: booking._id, status: { $in: ['INITIATED', 'PENDING'] } });
+    if (live) throw createAppError(ERROR_CODES.PAYMENT_BOOKING_IN_PROGRESS, 409);
+  }
+
+  /**
+   * What agreeing on `newPrice` writes, and what it means for money already paid. Computed once, so
+   * the one compare-and-set and the one save that use it cannot disagree.
+   */
+  private agreedPriceWrite(
+    booking: IBooking,
+    newPrice: number,
+    kind: PriceChangeKind,
+    now: Date
+  ): { set: Record<string, unknown>; change: { from: number; to: number; at: Date; kind: PriceChangeKind }; effect: PriceChangeEffect } {
+    const effect = priceChangeEffect(booking, newPrice);
+    const set: Record<string, unknown> = {
+      originalPrice: priceFloorOf(booking),
+      priceSnapshot: newPrice,
+    };
+    const previousTopup = booking.priceTopup;
+    if (effect.kind === 'topup') {
+      set.priceTopup = {
+        status: 'due',
+        amount: effect.amount,
+        dueAt: new Date(now.getTime() + BOOKING_CONFIG.unpaidExpiry.afterMinutes * 60_000),
+        seq: (previousTopup?.seq ?? 0) + 1,
+        paidAt: null,
+        method: null,
+      };
+    } else if (previousTopup?.status === 'due') {
+      set['priceTopup.status'] = 'superseded';
+    }
+    return { set, effect, change: { from: booking.priceSnapshot, to: newPrice, at: now, kind } };
+  }
+
+  /**
+   * After the new price has committed: ask for what is owed, or send back what is not. Best-effort,
+   * as a cancellation's refund is: the agreement stands, and money owed stays visible in the refund
+   * queue or a ticket.
+   */
+  private async settlePriceChange(booking: IBooking, effect: PriceChangeEffect): Promise<void> {
+    if (effect.kind === 'refund') {
+      await bookingRefundService.refundPriceDifference(booking, effect.amount);
+      return;
+    }
+    if (effect.kind === 'topup') {
+      await this.emitPriceTopupDueEvent(booking, effect.amount, booking.priceTopup!.dueAt, 'balance');
+      return;
+    }
+    if (booking.requiresPayment && booking.paymentStatus !== 'paid') {
+      const from = booking.paymentDueFrom ?? booking.createdAt;
+      const dueAt = new Date(from.getTime() + BOOKING_CONFIG.unpaidExpiry.afterMinutes * 60_000);
+      await this.emitPriceTopupDueEvent(booking, booking.priceSnapshot, dueAt, 'primary');
+    }
   }
 
   /** The proposer takes their proposal back. The original time stands; the other side is not asked. */
@@ -1281,11 +1552,19 @@ export class BookingService {
       throw createAppError(ERROR_CODES.BOOKING_INVALID_STATUS_TRANSITION, 400, `Cannot transition from ${currentStatus} to ${newStatus}. Allowed transitions: ${VALID_TRANSITIONS[currentStatus]?.join(', ') || 'none (terminal state)'}`);
     }
 
+    // Confirming over an open proposal would leave the customer's answer about nothing.
+    if (newStatus === BookingStatus.CONFIRMED && hasLivePriceProposal(booking)) {
+      throw createAppError(ERROR_CODES.BOOKING_PRICE_PROPOSAL_OPEN, 409);
+    }
+
     // Update status. A completion is dated here, once, and the earnings hold below starts
     // from this same date — it is what the customer's protection window is counted from.
     const completedAt = newStatus === BookingStatus.COMPLETED ? new Date() : null;
     applyStatusChange(booking, newStatus, actor, reason);
     if (completedAt) booking.completedAt = completedAt;
+    // The unpaid sweep's clock starts here. Counted from creation, a booking the vendor took more
+    // than a day to accept was cancelled on the next sweep, minutes after they accepted it.
+    if (newStatus === BookingStatus.CONFIRMED) booking.paymentDueFrom = new Date();
     await booking.save();
 
     // Handle calendar sync (non-blocking - log errors but don't throw)
@@ -1340,6 +1619,10 @@ export class BookingService {
     if (newStatus === BookingStatus.COMPLETED) {
       try {
         await earningsCompletionService.onSourceCompleted('booking', booking._id.toString(), completedAt ?? new Date());
+        // A paid price difference is split under its payment's id, and waited for this moment too.
+        for (const topupId of booking.topupTransactionIds ?? []) {
+          await earningsCompletionService.onSourceCompleted('booking', topupId.toString(), completedAt ?? new Date());
+        }
       } catch (earningsError) {
         console.error('[BookingService] Failed to mature booking earnings on completion:', earningsError);
       }
@@ -1365,7 +1648,7 @@ export class BookingService {
           target: { kind: 'booking', id: booking._id.toString() },
           reason: 'booking_cancelled_unrefunded',
           reference: booking.bookingNumber ?? booking._id.toString(),
-          amount: booking.priceSnapshot,
+          amount: amountPaidOf(booking),
           currency: booking.currency,
           paymentMethod: booking.paymentMethod ?? null,
           cancelledBy: 'the seller (status menu)',
@@ -1506,6 +1789,18 @@ export class BookingService {
 
     if (!booking) {
       throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, 'Booking not found');
+    }
+
+    // A price difference collected at the counter. All of it or nothing, since the booking is
+    // cancelled over what is still owed. No earnings row: the same as the original price in cash.
+    const topupDue = booking.status === BookingStatus.CANCELLED ? 0 : outstandingTopup(booking);
+    if (topupDue > 0) {
+      if (amount !== undefined && Math.round(amount) < topupDue) {
+        throw createAppError(ERROR_CODES.VALIDATION_ERROR, 400, `The difference owed is ${topupDue}`, { minimum: topupDue });
+      }
+      booking.set({ 'priceTopup.status': 'paid', 'priceTopup.paidAt': new Date(), 'priceTopup.method': 'cash' });
+      await booking.save();
+      return booking;
     }
 
     if (booking.status !== BookingStatus.COMPLETED) {
@@ -1696,7 +1991,7 @@ export class BookingService {
   async completeAsAdmin(bookingId: string, adminId: string, reason: string): Promise<IBooking> {
     const booking = await this.findLiveBookingOrThrow(bookingId);
 
-    if (booking.requiresPayment && booking.paymentStatus !== 'paid') {
+    if ((booking.requiresPayment && booking.paymentStatus !== 'paid') || outstandingTopup(booking) > 0) {
       throw createAppError(ERROR_CODES.BOOKING_ADMIN_COMPLETE_UNPAID, 409, undefined, {
         paymentStatus: booking.paymentStatus,
         paymentMethod: booking.paymentMethod ?? null,
@@ -2061,11 +2356,95 @@ export class BookingService {
           startAt: proposal.startAt,
           endAt: proposal.endAt,
           previousStartAt: proposal.previousStartAt,
-          expiresAt: proposal.expiresAt
+          expiresAt: proposal.expiresAt,
+          currency: booking.currency,
+          price: proposal.price ?? null,
+          previousPrice: proposal.previousPrice ?? null
         }
       });
     } catch (error: any) {
       console.error('[BookingService] Failed to emit booking.reschedule_proposed event:', error);
+    }
+  }
+
+  /** The fields every price event carries: who, what and which booking. */
+  private async priceEventBase(booking: IBooking): Promise<Record<string, unknown>> {
+    return {
+      bookingId: booking._id.toString(),
+      vendorId: booking.vendorId.toString(),
+      userId: booking.userId.toString(),
+      productTitle: await this.resolveProductTitle(booking.productId.toString()),
+      ...(await this.resolveVendorIdentity(booking.vendorId.toString())),
+      customerName: await this.resolveCustomerName(booking.userId.toString()),
+      bookingNumber: booking.bookingNumber ?? null,
+      currency: booking.currency,
+      startAt: booking.startAt,
+    };
+  }
+
+  /** The customer is asked about a price. Best-effort: the proposal is on the booking either way. */
+  private async emitPriceProposedEvent(booking: IBooking): Promise<void> {
+    const proposal = booking.priceProposal;
+    if (!proposal) return;
+    try {
+      await eventBus.publish('booking.price_proposed', {
+        eventType: 'booking.price_proposed',
+        aggregateId: booking._id.toString(),
+        occurredAt: new Date(),
+        payload: {
+          ...(await this.priceEventBase(booking)),
+          amount: proposal.amount,
+          previousAmount: proposal.previousAmount,
+          proposedAt: proposal.proposedAt,
+          expiresAt: proposal.expiresAt,
+        },
+      });
+    } catch (error: any) {
+      console.error('[BookingService] Failed to emit booking.price_proposed event:', error);
+    }
+  }
+
+  /** The vendor hears the customer's answer. */
+  private async emitPriceAnsweredEvent(booking: IBooking, answer: 'accepted' | 'declined', amount: number): Promise<void> {
+    try {
+      await eventBus.publish('booking.price_answered', {
+        eventType: 'booking.price_answered',
+        aggregateId: booking._id.toString(),
+        occurredAt: new Date(),
+        payload: {
+          ...(await this.priceEventBase(booking)),
+          answer,
+          amount,
+          currentPrice: booking.priceSnapshot,
+        },
+      });
+    } catch (error: any) {
+      console.error('[BookingService] Failed to emit booking.price_answered event:', error);
+    }
+  }
+
+  /** The customer is asked to pay. `purpose` decides which charge their Pay button opens. */
+  private async emitPriceTopupDueEvent(
+    booking: IBooking,
+    amount: number,
+    dueAt: Date,
+    purpose: 'primary' | 'balance'
+  ): Promise<void> {
+    try {
+      await eventBus.publish('booking.price_topup_due', {
+        eventType: 'booking.price_topup_due',
+        aggregateId: booking._id.toString(),
+        occurredAt: new Date(),
+        payload: {
+          ...(await this.priceEventBase(booking)),
+          amount,
+          price: booking.priceSnapshot,
+          dueAt,
+          purpose,
+        },
+      });
+    } catch (error: any) {
+      console.error('[BookingService] Failed to emit booking.price_topup_due event:', error);
     }
   }
 
@@ -2091,7 +2470,10 @@ export class BookingService {
           answer,
           proposedStartAt: proposal.startAt,
           previousStartAt: proposal.previousStartAt,
-          startAt: booking.startAt
+          startAt: booking.startAt,
+          currency: booking.currency,
+          price: proposal.price ?? null,
+          currentPrice: booking.priceSnapshot
         }
       });
     } catch (error: any) {
@@ -2238,5 +2620,7 @@ function plainProposal(p: IRescheduleProposal): IRescheduleProposal {
     proposedAt: p.proposedAt,
     expiresAt: p.expiresAt,
     answeredAt: p.answeredAt ?? null,
+    price: p.price ?? null,
+    previousPrice: p.previousPrice ?? null,
   };
 }

@@ -108,6 +108,22 @@ router.post('/:id/reschedule-proposal/decline', VendorBookingController.declineP
 router.delete('/:id/reschedule-proposal', VendorBookingController.withdrawProposal);
 
 /**
+ * POST   /api/vendor/bookings/:id/price-proposal — propose a different price before approving.
+ *        Body: { price }, above what the customer booked at. Manual services only.
+ * DELETE /api/vendor/bookings/:id/price-proposal — withdraw it.
+ * 422 BOOKING_PRICE_BELOW_FLOOR · 409 BOOKING_PRICE_NOT_PROPOSABLE · 404 BOOKING_PRICE_PROPOSAL_NOT_FOUND
+ */
+router.post('/:id/price-proposal', VendorBookingController.proposePrice);
+router.delete('/:id/price-proposal', VendorBookingController.withdrawPrice);
+
+/**
+ * POST /api/vendor/bookings/:id/reminder
+ * Send the customer the shop's one reminder for this appointment. No body: the message is fixed.
+ * 409 BOOKING_REMINDER_ALREADY_SENT · 409 BOOKING_REMINDER_NOT_APPLICABLE
+ */
+router.post('/:id/reminder', VendorBookingController.sendReminder);
+
+/**
  * POST /api/vendor/bookings/:id/cancel
  * Cancel a booking with an optional reason.
  * Returns 409 on double-cancel or terminal state.

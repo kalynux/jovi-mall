@@ -1,12 +1,12 @@
 {
-  "generatedAt": "2026-11-03T00:29:27.737Z",
+  "generatedAt": "2026-11-03T16:58:56.936Z",
   "note": "GENERATED from the notification catalogs by scripts/generate-whatsapp-templates.ts. Do not hand-edit: names, placeholder counts and placeholder ORDER are derived from the same functions the send path uses, and editing them here makes the approved template disagree with what is sent.",
   "languages": [
     "en",
     "fr"
   ],
-  "templateCount": 183,
-  "submissionCount": 366,
+  "templateCount": 189,
+  "submissionCount": 378,
   "needsCopyReview": [
     {
       "name": "vendor_delivery_fee_proposal_agency_rejected",
@@ -707,6 +707,218 @@
                 "example 2",
                 "example 3",
                 "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Voir la réservation",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_booking_reminder",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Appointment reminder*\n\n*{{1}}* sent you a reminder about booking #*{{2}}* (*{{3}}*) on *{{4}}*. Open the booking if anything has changed.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "View booking",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_booking_reminder",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Rappel de rendez-vous*\n\n*{{1}}* vous envoie un rappel pour la réservation n°*{{2}}* (*{{3}}*) du *{{4}}*. Ouvrez la réservation si quelque chose a changé.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Voir la réservation",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_booking_price_accepted",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Price accepted*\n\n*{{1}}* accepted *{{2}}* *{{3}}* for booking #*{{4}}* (*{{5}}*) on *{{6}}*. The booking is confirmed at that price.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5",
+                "example 6"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "View booking",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_booking_price_accepted",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Prix accepté*\n\n*{{1}}* a accepté *{{2}}* *{{3}}* pour la réservation n°*{{4}}* (*{{5}}*) du *{{6}}*. La réservation est confirmée à ce prix.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5",
+                "example 6"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Voir la réservation",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_booking_price_declined",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Price declined*\n\n*{{1}}* declined *{{2}}* *{{3}}* for booking #*{{4}}* (*{{5}}*). The current price, *{{2}}* *{{6}}*, stands. Open the booking to see what you can do next.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5",
+                "example 6"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "View booking",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_booking_price_declined",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Prix refusé*\n\n*{{1}}* a refusé *{{2}}* *{{3}}* pour la réservation n°*{{4}}* (*{{5}}*). Le prix actuel, *{{2}}* *{{6}}*, est maintenu.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5",
+                "example 6"
               ]
             ]
           }
@@ -2919,6 +3131,266 @@
             {
               "type": "QUICK_REPLY",
               "text": "Garder mon horaire"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_reschedule_price_proposed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*New time and price proposed: {{2}}*\n\n*{{1}}* asks to move your *{{2}}* from *{{3}}* to *{{4}}*, at *{{5}}* *{{6}}* instead of *{{5}}* *{{7}}*. Accept or decline before *{{8}}* — with no answer, your time and price stay. If you decline, you can cancel with a full refund.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5",
+                "example 6",
+                "example 7",
+                "example 8"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "View booking",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Accept new time"
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Keep my time"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_reschedule_price_proposed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Nouvel horaire et nouveau prix proposés: {{2}}*\n\n*{{1}}* propose de déplacer votre *{{2}}* du *{{3}}* au *{{4}}*, à *{{5}}* *{{6}}* au lieu de *{{5}}* *{{7}}*. Acceptez ou refusez avant le *{{8}}* — sans réponse, votre horaire et votre prix sont maintenus. Si vous refusez, vous pouvez annuler avec un remboursement intégral.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5",
+                "example 6",
+                "example 7",
+                "example 8"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Voir la réservation",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Accepter"
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Garder mon horaire"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_price_proposed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*New price proposed: {{5}}*\n\n*{{1}}* proposes *{{2}}* *{{3}}* instead of *{{2}}* *{{4}}* for your *{{5}}* on *{{6}}*. Accept to confirm your booking at that price, or decline it before *{{7}}*. If you decline, you can cancel with a full refund.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5",
+                "example 6",
+                "example 7"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "View booking",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Accept price"
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Decline price"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_price_proposed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Nouveau prix proposé: {{5}}*\n\n*{{1}}* propose *{{2}}* *{{3}}* au lieu de *{{2}}* *{{4}}* pour votre *{{5}}* du *{{6}}*. Acceptez pour confirmer votre réservation à ce prix, ou refusez avant le *{{7}}*. Si vous refusez, vous pouvez annuler avec un remboursement intégral.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5",
+                "example 6",
+                "example 7"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Voir la réservation",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Accepter le prix"
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Refuser le prix"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_price_topup_due",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Payment needed: {{2}} {{4}}*\n\nYour *{{1}}* booking is agreed at *{{2}}* *{{3}}*. Please pay *{{2}}* *{{4}}* by *{{5}}*, or the booking will be cancelled.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "View booking",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Pay now"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_price_topup_due",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Paiement requis: {{2}} {{4}}*\n\nVotre réservation *{{1}}* est convenue à *{{2}}* *{{3}}*. Veuillez payer *{{2}}* *{{4}}* avant le *{{5}}*, sinon la réservation sera annulée.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Voir la réservation",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            },
+            {
+              "type": "QUICK_REPLY",
+              "text": "Payer maintenant"
             }
           ]
         }

@@ -535,6 +535,57 @@ export const NOTIFICATION_CATALOG: Record<NotificationType, VendorSituationMessa
         },
         button: { type: 'url', label: VIEW_BOOKING_LABEL, urlSuffix: 'bookings/{{bookingId}}' }
     },
+    /**
+     * The customer used their one reminder on this appointment. No preference silences it: it is
+     * someone else's action, capped at one (BOOKING-PARTY-REMINDER-PLAN D-5).
+     */
+    'booking.reminder': {
+        base: {
+            en: { subject: "Appointment reminder", body: "{{customerName}} sent you a reminder about booking #{{bookingNumber}} ({{serviceName}}) on {{startDate}}. Open the booking if anything has changed." },
+            fr: { subject: "Rappel de rendez-vous", body: "{{customerName}} vous envoie un rappel pour la réservation n°{{bookingNumber}} ({{serviceName}}) du {{startDate}}. Ouvrez la réservation si quelque chose a changé." },
+            pt: { subject: "Lembrete de agendamento", body: "{{customerName}} enviou-lhe um lembrete da reserva nº{{bookingNumber}} ({{serviceName}}) de {{startDate}}. Abra a reserva se algo tiver mudado." },
+            es: { subject: "Recordatorio de cita", body: "{{customerName}} te envió un recordatorio de la reserva n.º{{bookingNumber}} ({{serviceName}}) del {{startDate}}. Abre la reserva si algo ha cambiado." },
+            ar: { subject: "تذكير بموعد", body: "أرسل إليك {{customerName}} تذكيرًا بالحجز رقم {{bookingNumber}} ({{serviceName}}) في {{startDate}}. افتح الحجز إذا تغير شيء." }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_booking_reminder', bodyParams: ['{{customerName}}', '{{bookingNumber}}', '{{serviceName}}', '{{startDate}}'] }
+        },
+        button: { type: 'url', label: VIEW_BOOKING_LABEL, urlSuffix: 'bookings/{{bookingId}}' }
+    },
+    /**
+     * The customer accepted the shop's proposed price, with or without a new time. Told on every
+     * accept: the appointment is confirmed by it, so there is nothing left for the shop to do.
+     */
+    'booking.price_accepted': {
+        base: {
+            en: { subject: "Price accepted", body: "{{customerName}} accepted {{currency}} {{amountFormatted}} for booking #{{bookingNumber}} ({{serviceName}}) on {{startDate}}. The booking is confirmed at that price." },
+            fr: { subject: "Prix accepté", body: "{{customerName}} a accepté {{currency}} {{amountFormatted}} pour la réservation n°{{bookingNumber}} ({{serviceName}}) du {{startDate}}. La réservation est confirmée à ce prix." },
+            pt: { subject: "Preço aceite", body: "{{customerName}} aceitou {{currency}} {{amountFormatted}} para a reserva nº{{bookingNumber}} ({{serviceName}}) de {{startDate}}. A reserva está confirmada por esse preço." },
+            es: { subject: "Precio aceptado", body: "{{customerName}} aceptó {{currency}} {{amountFormatted}} para la reserva n.º{{bookingNumber}} ({{serviceName}}) del {{startDate}}. La reserva está confirmada a ese precio." },
+            ar: { subject: "تم قبول السعر", body: "قبل {{customerName}} مبلغ {{currency}} {{amountFormatted}} للحجز رقم {{bookingNumber}} ({{serviceName}}) في {{startDate}}. تم تأكيد الحجز بهذا السعر." }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_booking_price_accepted', bodyParams: ['{{customerName}}', '{{currency}}', '{{amountFormatted}}', '{{bookingNumber}}', '{{serviceName}}', '{{startDate}}'] }
+        },
+        button: { type: 'url', label: VIEW_BOOKING_LABEL, urlSuffix: 'bookings/{{bookingId}}' }
+    },
+    /** The customer declined the shop's proposed price. Nothing changed. */
+    'booking.price_declined': {
+        base: {
+            en: { subject: "Price declined", body: "{{customerName}} declined {{currency}} {{amountFormatted}} for booking #{{bookingNumber}} ({{serviceName}}). The current price, {{currency}} {{currentFormatted}}, stands. Open the booking to see what you can do next." },
+            fr: { subject: "Prix refusé", body: "{{customerName}} a refusé {{currency}} {{amountFormatted}} pour la réservation n°{{bookingNumber}} ({{serviceName}}). Le prix actuel, {{currency}} {{currentFormatted}}, est maintenu." },
+            pt: { subject: "Preço recusado", body: "{{customerName}} recusou {{currency}} {{amountFormatted}} para a reserva nº{{bookingNumber}} ({{serviceName}}). Mantém-se o preço atual, {{currency}} {{currentFormatted}}." },
+            es: { subject: "Precio rechazado", body: "{{customerName}} rechazó {{currency}} {{amountFormatted}} para la reserva n.º{{bookingNumber}} ({{serviceName}}). Se mantiene el precio actual, {{currency}} {{currentFormatted}}." },
+            ar: { subject: "تم رفض السعر", body: "رفض {{customerName}} مبلغ {{currency}} {{amountFormatted}} للحجز رقم {{bookingNumber}} ({{serviceName}}). يبقى السعر الحالي {{currency}} {{currentFormatted}}." }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_booking_price_declined', bodyParams: ['{{customerName}}', '{{currency}}', '{{amountFormatted}}', '{{bookingNumber}}', '{{serviceName}}', '{{currentFormatted}}'] }
+        },
+        button: { type: 'url', label: VIEW_BOOKING_LABEL, urlSuffix: 'bookings/{{bookingId}}' }
+    },
 
     'payment.received.partial': {
         base: {

@@ -5,6 +5,8 @@ import {
     ProposalLike,
     customerAppointmentFields,
 } from '../../booking/domain/appointment';
+import { PartyReminderStamps } from '../../booking/domain/party-reminder';
+import { IPriceProposal, IPriceTopup, outstandingTopup } from '../../booking/domain/price-proposal';
 import { GeoCandidate } from '../../../core/geocoding';
 import { ICustomerSavedAddress } from '../../customers/customer.model';
 import { GetCustomerProfileResponseDto } from '../../customers/dto/customer-profile.dto';
@@ -845,6 +847,10 @@ export interface BotBookingDto {
     access: CustomerAppointmentFields['access'];
     /** A new time waiting for an answer (or the last one answered). */
     rescheduleProposal: CustomerAppointmentFields['rescheduleProposal'];
+    /** The customer's one reminder to the vendor: `canSend`, `sentAt`, `receivedAt`. */
+    reminder: CustomerAppointmentFields['reminder'];
+    /** The agreed price, the floor, what was paid, a proposal waiting for an answer, anything owed. */
+    pricing: CustomerAppointmentFields['pricing'];
 }
 
 /**
@@ -891,9 +897,13 @@ export function toBotBookingDto(booking: {
     location?: BookingLocationSnapshot | null;
     access?: AppointmentAccessSetting | null;
     rescheduleProposal?: ProposalLike | null;
+    partyReminders?: PartyReminderStamps | null;
+    originalPrice?: number | null;
+    priceProposal?: IPriceProposal | null;
+    priceTopup?: IPriceTopup | null;
 }, refund: CustomerRefundBlock | null = null, now: Date = new Date()): BotBookingDto {
     const settlement = booking.settlement ?? null;
-    const outstanding = Math.max(0, (settlement?.balanceDue ?? 0) - (settlement?.balancePaid ?? 0));
+    const outstanding = Math.max(0, outstandingTopup(booking) + (settlement?.balanceDue ?? 0) - (settlement?.balancePaid ?? 0));
 
     return {
         id: String(booking._id),
@@ -923,6 +933,11 @@ export function toBotBookingDto(booking: {
             access: booking.access ?? null,
             location: booking.location ?? null,
             rescheduleProposal: booking.rescheduleProposal ?? null,
+            partyReminders: booking.partyReminders ?? null,
+            priceSnapshot: booking.priceSnapshot,
+            originalPrice: booking.originalPrice ?? null,
+            priceProposal: booking.priceProposal ?? null,
+            priceTopup: booking.priceTopup ?? null,
         }, now),
     };
 }

@@ -526,6 +526,27 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         es: 'Esa cita ya no se puede mover. Puedo ayudarle a reservar una nueva.',
         ar: 'لم يعد بالإمكان تغيير موعد هذا الحجز. يمكنني مساعدتك في حجز موعد جديد.',
     },
+    [ERROR_CODES.BOOKING_PRICE_PROPOSAL_NOT_FOUND]: {
+        en: 'That price is no longer waiting for an answer. Your booking is as shown in your bookings.',
+        fr: "Ce prix n'attend plus de réponse. Votre réservation est celle affichée dans vos réservations.",
+        pt: 'Esse preço já não aguarda resposta. A sua marcação é a que aparece nas suas reservas.',
+        es: 'Ese precio ya no espera respuesta. Tu cita es la que aparece en tus reservas.',
+        ar: 'لم يعد هذا السعر بانتظار رد. حجزك هو المعروض في حجوزاتك.',
+    },
+    [ERROR_CODES.BOOKING_REMINDER_ALREADY_SENT]: {
+        en: 'You have already sent the provider your one reminder for this appointment.',
+        fr: "Vous avez déjà envoyé au prestataire votre unique rappel pour ce rendez-vous.",
+        pt: 'Já enviou ao prestador o seu único lembrete para este agendamento.',
+        es: 'Ya enviaste al proveedor tu único recordatorio para esta cita.',
+        ar: 'لقد أرسلت بالفعل إلى مقدم الخدمة تذكيرك الوحيد لهذا الموعد.',
+    },
+    [ERROR_CODES.BOOKING_REMINDER_NOT_APPLICABLE]: {
+        en: 'A reminder can only be sent for a confirmed appointment that has not started yet.',
+        fr: "Un rappel ne peut être envoyé que pour un rendez-vous confirmé qui n'a pas encore commencé.",
+        pt: 'Só é possível enviar um lembrete para um agendamento confirmado que ainda não começou.',
+        es: 'Solo se puede enviar un recordatorio para una cita confirmada que aún no ha empezado.',
+        ar: 'لا يمكن إرسال تذكير إلا لموعد مؤكد لم يبدأ بعد.',
+    },
     // ⚠ The dangerous one. "Try again" here is a second charge on a real handset.
     [ERROR_CODES.PAYMENT_BOOKING_IN_PROGRESS]: {
         en: 'A payment for that is already going through. Please check your phone rather than paying again.',

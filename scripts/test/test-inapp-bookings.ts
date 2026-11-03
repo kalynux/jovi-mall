@@ -806,7 +806,7 @@ async function phase6(): Promise<void> {
      * `place` (2026-10-27, A-8): Show the place, drawn by `booking.confirmed` and `booking.reminder`;
      * `answerPlace` reads the booking owner-scoped (`getUserBooking`) and answers its place.
      */
-    const SERVES_A_BOOKING = new Set(['bpay', 'book', 'open:bl', 'tkt', 'yes:bkprop', 'no:bkprop', 'place']);
+    const SERVES_A_BOOKING = new Set(['bpay', 'book', 'open:bl', 'tkt', 'yes:bkprop', 'no:bkprop', 'yes:bkprice', 'no:bkprice', 'place']);
     assert('⛔ no booking.* notification draws a token whose handler cannot serve a booking', () => {
         const bookingSituations = Object.keys(CUSTOMER_NOTIFICATION_CATALOG).filter((s) => s.startsWith('booking.'));
         const tokens = bookingSituations.flatMap((s) =>

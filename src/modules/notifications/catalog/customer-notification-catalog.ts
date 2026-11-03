@@ -298,6 +298,14 @@ const KEEP_MY_TIME_LABEL: Record<Language, string> = {
     en: 'Keep my time', fr: 'Garder mon horaire', pt: 'Manter a hora', es: 'Mantener mi hora', ar: 'إبقاء موعدي'
 };
 
+const ACCEPT_PRICE_LABEL: Record<Language, string> = {
+    en: 'Accept price', fr: 'Accepter le prix', pt: 'Aceitar preço', es: 'Aceptar precio', ar: 'قبول السعر'
+};
+
+const DECLINE_PRICE_LABEL: Record<Language, string> = {
+    en: 'Decline price', fr: 'Refuser le prix', pt: 'Recusar preço', es: 'Rechazar precio', ar: 'رفض السعر'
+};
+
 const THAT_WORKS_LABEL: Record<Language, string> = {
     en: 'That works', fr: 'Ça me va', pt: 'Está bem', es: 'Me va bien', ar: 'يناسبني'
 };
@@ -410,6 +418,9 @@ const RETRY_BOOKING_PRICE: QuickReplyDef = { token: 'bpay:{{payPriceBookingId}}'
 const RETRY_BOOKING_BALANCE: QuickReplyDef = { token: 'bpay:{{payBalanceBookingId}}:b', label: TRY_AGAIN_LABEL, templateFallback: 'open:bl' };
 /** Reuses `PAY_BALANCE_LABEL` — the URL button's own words — rather than a second construction. */
 const PAY_BOOKING_BALANCE: QuickReplyDef = { token: 'bpay:{{bookingId}}:b', label: PAY_BALANCE_LABEL, templateFallback: 'open:bl' };
+/** The agreed price's two Pay buttons, ONE of which is drawn, by the same rule as the retry pair above. */
+const PAY_AGREED_PRICE: QuickReplyDef = { token: 'bpay:{{payPriceBookingId}}', label: PAY_NOW_LABEL, templateFallback: 'open:bl' };
+const PAY_PRICE_DIFFERENCE: QuickReplyDef = { token: 'bpay:{{payBalanceBookingId}}:b', label: PAY_NOW_LABEL, templateFallback: 'open:bl' };
 
 /**
  * ⭐ **Show the place** (owner decision A-8, 2026-10-27) — `place:<bookingId>` sends the appointment's
@@ -923,6 +934,123 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Cus
             { token: 'yes:bkprop:{{bookingId}}', label: ACCEPT_NEW_TIME_LABEL, templateFallback: 'open:bl' },
             { token: 'no:bkprop:{{bookingId}}', label: KEEP_MY_TIME_LABEL, templateFallback: 'open:bl' }
         ]
+    },
+
+    /**
+     * The vendor proposes a new time AND a new price, on a manual service (BOOKING-PRICE-PROPOSAL-PLAN).
+     * One answer for both, through the same buttons as a new time alone.
+     */
+    'booking.reschedule_price_proposed': {
+        base: {
+            en: {
+                subject: 'New time and price proposed: {{serviceName}}',
+                body: '{{vendorName}} asks to move your {{serviceName}} from {{previousStartAt}} to {{startAt}}, at {{currency}} {{amountFormatted}} instead of {{currency}} {{previousFormatted}}. Accept or decline before {{expiresAt}} — with no answer, your time and price stay. If you decline, you can cancel with a full refund.'
+            },
+            fr: {
+                subject: 'Nouvel horaire et nouveau prix proposés : {{serviceName}}',
+                body: '{{vendorName}} propose de déplacer votre {{serviceName}} du {{previousStartAt}} au {{startAt}}, à {{currency}} {{amountFormatted}} au lieu de {{currency}} {{previousFormatted}}. Acceptez ou refusez avant le {{expiresAt}} — sans réponse, votre horaire et votre prix sont maintenus. Si vous refusez, vous pouvez annuler avec un remboursement intégral.'
+            },
+            pt: {
+                subject: 'Nova hora e novo preço propostos: {{serviceName}}',
+                body: '{{vendorName}} pede para alterar a sua {{serviceName}} de {{previousStartAt}} para {{startAt}}, por {{currency}} {{amountFormatted}} em vez de {{currency}} {{previousFormatted}}. Aceite ou recuse antes de {{expiresAt}} — sem resposta, mantêm-se a hora e o preço. Se recusar, pode cancelar com reembolso total.'
+            },
+            es: {
+                subject: 'Nueva hora y nuevo precio propuestos: {{serviceName}}',
+                body: '{{vendorName}} propone mover tu {{serviceName}} del {{previousStartAt}} al {{startAt}}, por {{currency}} {{amountFormatted}} en lugar de {{currency}} {{previousFormatted}}. Acepta o rechaza antes del {{expiresAt}}; sin respuesta, se mantienen tu hora y tu precio. Si rechazas, puedes cancelar con reembolso completo.'
+            },
+            ar: {
+                subject: 'موعد وسعر جديدان مقترحان: {{serviceName}}',
+                body: 'يقترح {{vendorName}} نقل {{serviceName}} من {{previousStartAt}} إلى {{startAt}} بسعر {{currency}} {{amountFormatted}} بدلًا من {{currency}} {{previousFormatted}}. اقبل أو ارفض قبل {{expiresAt}} — وبدون رد يبقى موعدك وسعرك. إذا رفضت، يمكنك الإلغاء مع استرداد كامل.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_booking_reschedule_price_proposed',
+                bodyParams: ['{{vendorName}}', '{{serviceName}}', '{{previousStartAt}}', '{{startAt}}', '{{currency}}', '{{amountFormatted}}', '{{previousFormatted}}', '{{expiresAt}}']
+            }
+        },
+        button: BOOKING_BUTTON,
+        actions: [
+            { token: 'yes:bkprop:{{bookingId}}', label: ACCEPT_NEW_TIME_LABEL, templateFallback: 'open:bl' },
+            { token: 'no:bkprop:{{bookingId}}', label: KEEP_MY_TIME_LABEL, templateFallback: 'open:bl' }
+        ]
+    },
+
+    /**
+     * The vendor proposes a different price before approving a manual booking. Always sent: it is a
+     * question the appointment waits on, and it can only ever ask for more than the customer booked.
+     */
+    'booking.price_proposed': {
+        base: {
+            en: {
+                subject: 'New price proposed: {{serviceName}}',
+                body: '{{vendorName}} proposes {{currency}} {{amountFormatted}} instead of {{currency}} {{previousFormatted}} for your {{serviceName}} on {{startAt}}. Accept to confirm your booking at that price, or decline it before {{expiresAt}}. If you decline, you can cancel with a full refund.'
+            },
+            fr: {
+                subject: 'Nouveau prix proposé : {{serviceName}}',
+                body: '{{vendorName}} propose {{currency}} {{amountFormatted}} au lieu de {{currency}} {{previousFormatted}} pour votre {{serviceName}} du {{startAt}}. Acceptez pour confirmer votre réservation à ce prix, ou refusez avant le {{expiresAt}}. Si vous refusez, vous pouvez annuler avec un remboursement intégral.'
+            },
+            pt: {
+                subject: 'Novo preço proposto: {{serviceName}}',
+                body: '{{vendorName}} propõe {{currency}} {{amountFormatted}} em vez de {{currency}} {{previousFormatted}} para a sua {{serviceName}} de {{startAt}}. Aceite para confirmar a reserva por esse preço, ou recuse antes de {{expiresAt}}. Se recusar, pode cancelar com reembolso total.'
+            },
+            es: {
+                subject: 'Nuevo precio propuesto: {{serviceName}}',
+                body: '{{vendorName}} propone {{currency}} {{amountFormatted}} en lugar de {{currency}} {{previousFormatted}} para tu {{serviceName}} del {{startAt}}. Acepta para confirmar tu reserva a ese precio, o rechaza antes del {{expiresAt}}. Si rechazas, puedes cancelar con reembolso completo.'
+            },
+            ar: {
+                subject: 'سعر جديد مقترح: {{serviceName}}',
+                body: 'يقترح {{vendorName}} مبلغ {{currency}} {{amountFormatted}} بدلًا من {{currency}} {{previousFormatted}} لـ {{serviceName}} في {{startAt}}. اقبل لتأكيد حجزك بهذا السعر، أو ارفض قبل {{expiresAt}}. إذا رفضت، يمكنك الإلغاء مع استرداد كامل.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_booking_price_proposed',
+                bodyParams: ['{{vendorName}}', '{{currency}}', '{{amountFormatted}}', '{{previousFormatted}}', '{{serviceName}}', '{{startAt}}', '{{expiresAt}}']
+            }
+        },
+        button: BOOKING_BUTTON,
+        actions: [
+            { token: 'yes:bkprice:{{bookingId}}', label: ACCEPT_PRICE_LABEL, templateFallback: 'open:bl' },
+            { token: 'no:bkprice:{{bookingId}}', label: DECLINE_PRICE_LABEL, templateFallback: 'open:bl' }
+        ]
+    },
+
+    /** The agreed price is set, and this is what is owed for it. Says when, and what happens after. */
+    'booking.price_topup_due': {
+        base: {
+            en: {
+                subject: 'Payment needed: {{currency}} {{amountFormatted}}',
+                body: 'Your {{serviceName}} booking is agreed at {{currency}} {{priceFormatted}}. Please pay {{currency}} {{amountFormatted}} by {{dueAt}}, or the booking will be cancelled.'
+            },
+            fr: {
+                subject: 'Paiement requis : {{currency}} {{amountFormatted}}',
+                body: 'Votre réservation {{serviceName}} est convenue à {{currency}} {{priceFormatted}}. Veuillez payer {{currency}} {{amountFormatted}} avant le {{dueAt}}, sinon la réservation sera annulée.'
+            },
+            pt: {
+                subject: 'Pagamento necessário: {{currency}} {{amountFormatted}}',
+                body: 'A sua reserva de {{serviceName}} ficou acordada em {{currency}} {{priceFormatted}}. Pague {{currency}} {{amountFormatted}} até {{dueAt}}, ou a reserva será cancelada.'
+            },
+            es: {
+                subject: 'Pago necesario: {{currency}} {{amountFormatted}}',
+                body: 'Tu reserva de {{serviceName}} está acordada en {{currency}} {{priceFormatted}}. Paga {{currency}} {{amountFormatted}} antes del {{dueAt}}, o la reserva se cancelará.'
+            },
+            ar: {
+                subject: 'الدفع مطلوب: {{currency}} {{amountFormatted}}',
+                body: 'تم الاتفاق على حجز {{serviceName}} بسعر {{currency}} {{priceFormatted}}. يرجى دفع {{currency}} {{amountFormatted}} قبل {{dueAt}}، وإلا فسيتم إلغاء الحجز.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_booking_price_topup_due',
+                bodyParams: ['{{serviceName}}', '{{currency}}', '{{priceFormatted}}', '{{amountFormatted}}', '{{dueAt}}']
+            }
+        },
+        button: BOOKING_BUTTON,
+        actions: [PAY_AGREED_PRICE, PAY_PRICE_DIFFERENCE]
     },
 
     /**

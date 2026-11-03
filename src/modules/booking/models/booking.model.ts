@@ -14,6 +14,15 @@ import {
   IBookingStatusChange,
   STATUS_REASON_MAX,
 } from '../domain/booking-status-history';
+import { PartyReminderStamps } from '../domain/party-reminder';
+import {
+  IPriceChange,
+  IPriceProposal,
+  IPriceTopup,
+  PRICE_CHANGE_KINDS,
+  PRICE_PROPOSAL_STATUSES,
+  PRICE_TOPUP_STATUSES,
+} from '../domain/price-proposal';
 
 export type BookingPaymentStatus =
   | 'unpaid'
@@ -73,14 +82,35 @@ export interface IBooking extends IBaseDocument {
   paymentMethod?: BookingPaymentMethod;
   paymentTransactionId?: Types.ObjectId;
   paidAt?: Date; // Set when cash payment is manually confirmed by vendor
+  /**
+   * The AGREED price: what the customer booked at, until a vendor's proposal is accepted
+   * (BOOKING-PRICE-PROPOSAL-PLAN). Every charge and earnings split reads this.
+   */
   priceSnapshot: number;
+  /** The FLOOR: what the customer booked at. Read through `priceFloorOf`, since legacy rows lack it. */
+  originalPrice?: number | null;
+  /** The service's mode when this was booked. Absent on legacy rows, which read the service. */
+  bookingMode?: 'calendar' | 'manual' | 'capacity' | null;
+  /** The vendor's latest proposal of a price, kept after it is answered. See `domain/price-proposal.ts`. */
+  priceProposal?: IPriceProposal | null;
+  /** What a paid booking still owes after its agreed price went up. */
+  priceTopup?: IPriceTopup | null;
+  /** Each payment of a difference. Their earnings rows carry these as their source. */
+  topupTransactionIds?: Types.ObjectId[];
+  /** Every agreed change of price, oldest first. */
+  priceHistory?: IPriceChange[];
+  /**
+   * When the clock on an unpaid booking starts: its confirmation. Absent on a booking confirmed at
+   * creation, where `createdAt` is the same moment.
+   */
+  paymentDueFrom?: Date | null;
   currency: string;
   requiresPayment: boolean;
 
   /**
    * Completion settlement — what the service actually cost once it was done.
    *
-   * `priceSnapshot` stays the ORIGINAL quote forever; these describe the
+   * `priceSnapshot` stays the agreed price; these describe the
    * difference. Kept as first-class fields rather than inside `metadata` because
    * money the platform intends to collect has to be queryable (an outstanding
    * balance is a report, and `metadata` is `Mixed` with no index).
@@ -138,6 +168,11 @@ export interface IBooking extends IBaseDocument {
    * through `applyStatusChange`. Empty on bookings from before 2026-10-27 — "not recorded".
    */
   statusHistory?: IBookingStatusChange[];
+  /**
+   * The one-time reminders the two sides sent each other, keyed by who RECEIVED them. Written only
+   * by `partyReminderService`, and shown to a vendor or customer only through `partyReminderView`.
+   */
+  partyReminders?: PartyReminderStamps | null;
 }
 
 export const RESCHEDULE_PROPOSAL_STATUSES = ['open', 'accepted', 'declined', 'withdrawn', 'lapsed'] as const;
@@ -168,6 +203,10 @@ export interface IRescheduleProposal {
   proposedAt: Date;
   expiresAt: Date;
   answeredAt: Date | null;
+  /** The price the move would bring with it. Null when it leaves the price alone. */
+  price?: number | null;
+  /** The agreed price when this was proposed. Null with `price`. */
+  previousPrice?: number | null;
 }
 
 const BookingSchema = new Schema<IBooking>(
@@ -256,6 +295,52 @@ const BookingSchema = new Schema<IBooking>(
       required: true,
       min: 0,
     },
+    originalPrice: { type: Number, min: 0, default: undefined },
+    bookingMode: { type: String, enum: ['calendar', 'manual', 'capacity'], default: undefined },
+    priceProposal: {
+      type: new Schema(
+        {
+          status: { type: String, enum: [...PRICE_PROPOSAL_STATUSES], required: true },
+          amount: { type: Number, required: true, min: 0 },
+          previousAmount: { type: Number, required: true, min: 0 },
+          proposedAt: { type: Date, required: true },
+          expiresAt: { type: Date, required: true },
+          answeredAt: { type: Date, default: null },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
+    priceTopup: {
+      type: new Schema(
+        {
+          status: { type: String, enum: [...PRICE_TOPUP_STATUSES], required: true },
+          amount: { type: Number, required: true, min: 0 },
+          dueAt: { type: Date, required: true },
+          seq: { type: Number, required: true, min: 1 },
+          paidAt: { type: Date, default: null },
+          method: { type: String, enum: ['online', 'cash', null], default: null },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
+    topupTransactionIds: { type: [Schema.Types.ObjectId], default: undefined },
+    priceHistory: {
+      type: [
+        new Schema(
+          {
+            from: { type: Number, required: true },
+            to: { type: Number, required: true },
+            at: { type: Date, required: true },
+            kind: { type: String, enum: [...PRICE_CHANGE_KINDS], required: true },
+          },
+          { _id: false }
+        ),
+      ],
+      default: undefined,
+    },
+    paymentDueFrom: { type: Date, default: undefined },
     currency: {
       type: String,
       required: true,
@@ -336,6 +421,9 @@ const BookingSchema = new Schema<IBooking>(
           proposedAt: { type: Date, required: true },
           expiresAt: { type: Date, required: true },
           answeredAt: { type: Date, default: null },
+          // Null unless the move also changes the price (BOOKING-PRICE-PROPOSAL-PLAN).
+          price: { type: Number, min: 0, default: null },
+          previousPrice: { type: Number, min: 0, default: null },
         },
         { _id: false }
       ),
@@ -356,6 +444,16 @@ const BookingSchema = new Schema<IBooking>(
         ),
       ],
       default: [],
+    },
+    partyReminders: {
+      type: new Schema(
+        {
+          toCustomerAt: { type: Date, default: null },
+          toVendorAt: { type: Date, default: null },
+        },
+        { _id: false }
+      ),
+      default: undefined,
     },
     ...BaseSchemaFields,
   },
@@ -399,6 +497,15 @@ BookingSchema.set('toJSON', {
   transform: (doc: unknown, ret: any) => {
     const out = BaseSchemaOptions.toJSON.transform(doc, ret);
     delete out.statusHistory;
+    // Each reader gets `reminder`, computed for their side, rather than the two raw stamps.
+    delete out.partyReminders;
+    // The same for the price: `pricing`, not these. `originalPrice` is in that block too.
+    delete out.priceProposal;
+    delete out.priceTopup;
+    delete out.topupTransactionIds;
+    delete out.priceHistory;
+    delete out.originalPrice;
+    delete out.paymentDueFrom;
     return out;
   },
 });

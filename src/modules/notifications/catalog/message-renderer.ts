@@ -1,3 +1,4 @@
+import { formatInTimeZone } from 'date-fns-tz';
 import { escapeTelegramHtml, stripStrong, strongToTelegramHtml, strongToWhatsApp } from '../../../core/richtext';
 
 /**
@@ -39,6 +40,27 @@ export function renderTemplate(template: string, ctx: RenderContext): string {
         .replace(SPACE_BEFORE_PUNCTUATION, '$1')
         .replace(REPEATED_SPACES, ' ')
         .trim();
+}
+
+/**
+ * A context with every `Date` value written out as a time in `timezone`.
+ *
+ * ⚠ **`renderTemplate` calls `String(value)`**, so a `Date` that reaches it prints as
+ * `Wed Nov 04 2026 14:00:00 GMT+0000 (Coordinated Universal Time)`. The appointment reminder sent
+ * exactly that, in UTC, to every customer, because the sweep and the administrator's resend hand
+ * over `booking.startAt` as it is. Same format as the handler's `formatMoment`.
+ */
+export function formatMomentsInContext(ctx: RenderContext, timezone: string): RenderContext {
+    const entries = Object.entries(ctx).map(([key, value]) => {
+        if (!(value instanceof Date)) return [key, value];
+        if (Number.isNaN(value.getTime())) return [key, ''];
+        try {
+            return [key, formatInTimeZone(value, timezone, 'yyyy-MM-dd HH:mm')];
+        } catch {
+            return [key, value.toISOString().slice(0, 16).replace('T', ' ')];
+        }
+    });
+    return Object.fromEntries(entries);
 }
 
 /**

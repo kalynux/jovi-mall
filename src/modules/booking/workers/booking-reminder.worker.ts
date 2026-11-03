@@ -9,7 +9,8 @@ import { ProductModel } from '../../catalog/models';
 import { CustomerModel } from '../../customers/customer.model';
 import { VendorRepository } from '../../vendors/vendor.repository';
 import { getCustomerNotificationHandler } from '../../notifications/customer-notification-event-consumer';
-import { resolveLanguage, Language, DEFAULT_LANGUAGE } from '../../notifications/catalog/notification-i18n';
+import { resolveLanguage, Language } from '../../notifications/catalog/notification-i18n';
+import { appointmentWhenPhrase } from '../domain/party-reminder';
 
 /**
  * BookingReminderWorker — tells customers their appointment is coming up.
@@ -161,7 +162,7 @@ export class BookingReminderWorker implements ObservableWorker {
                             vendorName: vendorNames.get(booking.vendorId.toString()) ?? '',
                             // `startAt` is formatted in the customer's timezone by the
                             // handler; this is the human phrase in front of it.
-                            whenPhrase: this.whenPhrase(booking.startAt, lang),
+                            whenPhrase: this.whenPhrase(booking.startAt, lang, customer.timezone),
                             startAt: booking.startAt,
                         },
                     });
@@ -187,44 +188,11 @@ export class BookingReminderWorker implements ObservableWorker {
     }
 
     /**
-     * "tomorrow" / "today" / "soon", localized.
-     *
-     * A bare timestamp is exactly what a forgetful reader skims past, and this is
-     * the notification whose entire job is to be noticed. Deliberately coarse —
-     * the exact time follows it in the same sentence.
-     *
      * Public for the administrator's resend (ADMIN-BOOKINGS-PLAN § 4), so a resent reminder
-     * reads exactly like the swept one.
+     * reads exactly like the swept one. The phrase's rule is `appointmentWhenPhrase`.
      */
-    whenPhrase(startAt: Date, lang: Language): string {
-        const hoursAway = (startAt.getTime() - Date.now()) / 3_600_000;
-
-        const phrases: Record<'soon' | 'today' | 'tomorrow', Record<Language, string>> = {
-            soon: {
-                en: 'coming up shortly',
-                fr: 'dans très peu de temps',
-                pt: 'já a seguir',
-                es: 'muy pronto',
-                ar: 'قريبًا جدًا',
-            },
-            today: {
-                en: 'later today',
-                fr: 'plus tard dans la journée',
-                pt: 'ainda hoje',
-                es: 'más tarde hoy',
-                ar: 'لاحقًا اليوم',
-            },
-            tomorrow: {
-                en: 'tomorrow',
-                fr: 'demain',
-                pt: 'amanhã',
-                es: 'mañana',
-                ar: 'غدًا',
-            },
-        };
-
-        const key = hoursAway <= 3 ? 'soon' : hoursAway <= 18 ? 'today' : 'tomorrow';
-        return phrases[key][lang] ?? phrases[key][DEFAULT_LANGUAGE];
+    whenPhrase(startAt: Date, lang: Language, timezone?: string): string {
+        return appointmentWhenPhrase(startAt, lang, timezone);
     }
 
     private async titlesByProduct(

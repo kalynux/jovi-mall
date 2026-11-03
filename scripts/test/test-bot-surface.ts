@@ -3480,10 +3480,12 @@ async function main(): Promise<void> {
      * their OWN delivery fee to the company; owner decision — customers propose like vendors do).
      * 70 → 71 on 2026-10-27: + bookings_show_place (where an appointment happens: a map pin and the
      * address, or the link — BOT-BOOKING-ADDRESS-AND-PLACE-PLAN). bookings_address_step is flow_only.
+     * 71 → 72 on 2026-11-03: + bookings_send_reminder (the customer's one reminder to the vendor —
+     * BOOKING-PARTY-REMINDER-PLAN).
      */
-    assert('the generator emits 71 tools — update this when one lands', () => {
-        if (emitted.length !== 71) console.error(`     ↳ emitted ${emitted.length}`);
-        return emitted.length === 71;
+    assert('the generator emits 72 tools — update this when one lands', () => {
+        if (emitted.length !== 72) console.error(`     ↳ emitted ${emitted.length}`);
+        return emitted.length === 72;
     });
 
     /**

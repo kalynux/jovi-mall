@@ -359,6 +359,14 @@ const BUTTON_LABEL: Record<string, Record<string, string>> = {
     vendor_booking_reschedule_requested: { en: 'View booking', fr: 'Voir la réservation' },
     vendor_booking_reschedule_accepted: { en: 'View booking', fr: 'Voir la réservation' },
     vendor_booking_reschedule_declined: { en: 'View booking', fr: 'Voir la réservation' },
+    // A customer's one-time reminder (2026-11-03). Needs Meta's approval.
+    vendor_booking_reminder: { en: 'View booking', fr: 'Voir la réservation' },
+    // The vendor's price proposal (2026-11-03). Needs Meta's approval.
+    vendor_booking_price_accepted: { en: 'View booking', fr: 'Voir la réservation' },
+    vendor_booking_price_declined: { en: 'View booking', fr: 'Voir la réservation' },
+    customer_booking_price_proposed: { en: 'View booking', fr: 'Voir la réservation' },
+    customer_booking_reschedule_price_proposed: { en: 'View booking', fr: 'Voir la réservation' },
+    customer_booking_price_topup_due: { en: 'View booking', fr: 'Voir la réservation' },
     // The payout six, submitted 2026-09-27 for the same reason: the send path names them and the
     // WABA did not hold them, so a vendor, agency or agent outside the window was told nothing —
     // including when a transfer FAILED and their money sat reserved. Each opens its own app's

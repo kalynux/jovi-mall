@@ -2027,6 +2027,18 @@ export const ERROR_CODES = Object.freeze({
     BOOKING_PAYMENT_STATE_MISMATCH: 'BOOKING_PAYMENT_STATE_MISMATCH',
     /** A reminder is only sent for a confirmed booking that has not started yet. */
     BOOKING_REMINDER_NOT_APPLICABLE: 'BOOKING_REMINDER_NOT_APPLICABLE',
+    /** This side already used its one reminder on this booking. */
+    BOOKING_REMINDER_ALREADY_SENT: 'BOOKING_REMINDER_ALREADY_SENT',
+    /** The proposed price is under what the customer booked at. `details.minimum` is the floor. */
+    BOOKING_PRICE_BELOW_FLOOR: 'BOOKING_PRICE_BELOW_FLOOR',
+    /** A price cannot be proposed on this booking now. `details.reason` says why. */
+    BOOKING_PRICE_NOT_PROPOSABLE: 'BOOKING_PRICE_NOT_PROPOSABLE',
+    /** No proposal of a price is waiting for an answer. */
+    BOOKING_PRICE_PROPOSAL_NOT_FOUND: 'BOOKING_PRICE_PROPOSAL_NOT_FOUND',
+    /** The vendor tried to confirm while their own price proposal is unanswered. */
+    BOOKING_PRICE_PROPOSAL_OPEN: 'BOOKING_PRICE_PROPOSAL_OPEN',
+    /** A manual service's price cannot be typed at completion, only extra time billed. */
+    BOOKING_PRICE_LOCKED: 'BOOKING_PRICE_LOCKED',
     /** No live seat starts at that time on that service. */
     BOOKING_SESSION_EMPTY: 'BOOKING_SESSION_EMPTY',
 

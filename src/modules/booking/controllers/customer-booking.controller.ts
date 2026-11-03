@@ -15,6 +15,9 @@ import { EARNINGS_CONFIG } from '../../earnings/config/earnings.config';
 import { toCustomerBookingShape } from '../domain/appointment';
 import { customerBookingViewService } from '../services/customer-booking-view';
 import { BOOKING_CONFIG } from '../config/booking.config';
+import { partyReminderService } from '../services/party-reminder.service';
+import { partyReminderView } from '../domain/party-reminder';
+import { outstandingTopup } from '../domain/price-proposal';
 
 const bookingService = new BookingService();
 const paymentOrchestrator = new PaymentOrchestratorService();
@@ -176,6 +179,36 @@ export class CustomerBookingController {
     });
 
     /**
+     * POST /api/customer/bookings/:id/price-proposal/accept | /decline
+     *
+     * Answer the vendor's proposed price. Accepting confirms the booking at that price, and whatever
+     * is then owed is asked for separately. Declining changes nothing, and lets the customer cancel
+     * with a full refund whatever the cancellation policy says.
+     */
+    static acceptPrice = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const booking = await bookingService.answerPriceProposal(req.params.id, req.auth!.user._id.toString(), 'accept');
+        const [data] = await withRefunds([booking]);
+        res.json({ success: true, data, message: 'Price accepted — your booking is confirmed' });
+    });
+
+    static declinePrice = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const booking = await bookingService.answerPriceProposal(req.params.id, req.auth!.user._id.toString(), 'decline');
+        const [data] = await withRefunds([booking]);
+        res.json({ success: true, data, message: 'Price declined' });
+    });
+
+    /** POST /api/customer/bookings/:id/reminder — this customer's one reminder to the vendor. */
+    static sendReminder = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const booking = await partyReminderService.remindVendor(req.params.id, req.auth!.user._id.toString());
+
+        res.json({
+            success: true,
+            data: { reminder: partyReminderView(booking, 'customer') },
+            message: 'Reminder sent to the vendor',
+        });
+    });
+
+    /**
      * POST /api/customer/bookings/:id/cancel
      *
      * Cancels the customer's own booking, subject to the vendor's cancellation
@@ -311,9 +344,11 @@ export class CustomerBookingController {
                 finalPrice: settlement?.finalPrice ?? null,
                 balanceDue: settlement?.balanceDue ?? 0,
                 balancePaid: settlement?.balancePaid ?? 0,
+                // A price difference, owed before completion and paid through the same route.
+                topupDue: outstandingTopup(booking),
                 outstanding: Math.max(
                     0,
-                    (settlement?.balanceDue ?? 0) - (settlement?.balancePaid ?? 0)
+                    outstandingTopup(booking) + (settlement?.balanceDue ?? 0) - (settlement?.balancePaid ?? 0)
                 ),
                 balancePaymentMethod: settlement?.balancePaymentMethod ?? null,
                 // Recorded, never auto-refunded — see the booking model.
