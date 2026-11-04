@@ -679,6 +679,16 @@
       if (tg && tg.HapticFeedback) { try { tg.HapticFeedback.notificationOccurred("success"); } catch (e) {} }
 
       /*
+       * ⚠ The customer has something to DO (dial a code, look for a merchant name), so this replaces
+       * the sentence above and the page stays open: closing it would take the instruction with it.
+       */
+      var handsetStep = res.body.data && res.body.data.handsetStep;
+      if (handsetStep) {
+        say(handsetStep, false);
+        return;
+      }
+
+      /*
        * ⚠ **Longer than the other screens' 900ms, on purpose.** This is the one message the
        * customer must actually read before the page disappears — it is what tells them the
        * payment prompt is coming to their handset and the result to the chat.

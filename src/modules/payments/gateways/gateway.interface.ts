@@ -73,6 +73,12 @@ export interface PaymentInstructions {
   ussdCode?: string;            // e.g., "*126#"
   message?: string;             // User instructions
   /**
+   * The merchant name the operator shows on the customer's phone, when it is not Wi-Mall. NovaSend's
+   * operator screens name "Moon SARL", and a customer who was not told may refuse a request they do
+   * not recognise. Data, so an app can say it in its own language without naming an aggregator.
+   */
+  payeeName?: string;
+  /**
    * The customer must submit a one-time code before the charge proceeds.
    *
    * My-CoolPay answers `action: "REQUIRE_OTP"` for Orange Money: the operator

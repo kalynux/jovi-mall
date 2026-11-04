@@ -443,6 +443,18 @@ export function instructionLines(instructions: unknown): string[] {
 }
 
 /**
+ * What the customer must do on their phone, when the gateway names who they will see there.
+ *
+ * ⚠ Keyed on `payeeName`, which only NovaSend sends: on Orange through NovaSend no prompt arrives
+ * (the customer dials), so an in-app page's "approve it on your phone" alone leaves them waiting for
+ * one. Any other gateway's `message` restates that sentence in English, and stays off the page.
+ */
+export function handsetStepOf(instructions: unknown): string | null {
+    const { payeeName, message } = (instructions ?? {}) as { payeeName?: unknown; message?: unknown };
+    return typeof payeeName === 'string' && payeeName && typeof message === 'string' && message.trim() ? message : null;
+}
+
+/**
  * The reply a placement draws — from `checkout_place` and from the Place order tap alike.
  *
  *   waiting  the order numbers, where the prompt went and for how much, the operator's own

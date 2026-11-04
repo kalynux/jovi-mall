@@ -14,6 +14,7 @@ import { PaymentStatus } from '../../../payments/models/payment-transaction.mode
 import { publicCatalogService } from '../../../catalog/services/public-catalog.service';
 import { formatBotPrice, toPublicMediaUrl } from '../../domain/product-card';
 import { BotDeliveryLine, deliveryLinesOf } from '../../domain/delivery-lines';
+import { handsetStepOf } from '../../domain/checkout-chat-reply';
 import { deliveryCashOfOrders } from '../../../orders/domain/delivery-payer';
 import { cashDueAtDeliveryOf } from '../../../orders/domain/partial-payment';
 import { botStorefrontLink, surfacePath } from '../../domain/bot-list-window';
@@ -287,6 +288,8 @@ export interface CheckoutPlaced {
      * (`stateOf`). Found 2026-09-22: the page said "approve it" for every 200.
      */
     status: PaymentStatus;
+    /** What the customer must do on their phone, when the gateway says so — `handsetStepOf`. */
+    handsetStep?: string | null;
 }
 
 /**
@@ -968,6 +971,7 @@ export class CheckoutController {
             orderCount: placed.orderCount,
             transactionId: placed.transactionId,
             status: placed.status,
+            handsetStep: handsetStepOf(placed.instructions),
         };
         sendSuccess(res, answer);
     });

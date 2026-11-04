@@ -99,7 +99,7 @@ interface GatewayCapabilities {
 | `CAMPAY` | `PUSH`, requires `phoneNumber` | `PUSH`, requires `phoneNumber` | — | — | `true` | ✅ (behind `CAMPAY_PAYOUTS_ENABLED`, **and** "API withdrawals" allowed in the Campay app) |
 | `CINETPAY` | `PUSH`, requires `phoneNumber` | `PUSH`, requires `phoneNumber` | — | — | `true` | ✅ (behind `CINETPAY_PAYOUTS_ENABLED`, and the server IP whitelisted by CinetPay) |
 | `FAPSHI` | `PUSH`, requires `phoneNumber` | `PUSH`, requires `phoneNumber` | — | — | `true` | ✅ (behind `FAPSHI_PAYOUTS_ENABLED`, a separate payout service, and payouts enabled on it by Fapshi support) |
-| `NOVASEND` | `PUSH`, requires `phoneNumber`, limits 200–500,000 | `CODE_FIRST`, requires `phoneNumber` + `paymentCode`, limits 200–500,000 | — | — | `true` | ✅ (behind `NOVASEND_PAYOUTS_ENABLED`; payouts 200–500,000 XAF) |
+| `NOVASEND` | `PUSH`, requires `phoneNumber`, limits 301–500,000 | `PUSH`, requires `phoneNumber`, limits 301–500,000; ⚠ no prompt reaches the phone, the customer dials `instructions.ussdCode` | — | — | `true` | ✅ (behind `NOVASEND_PAYOUTS_ENABLED`; payouts 301–500,000 XAF) |
 | `PAWAPAY` | `PUSH`, requires `phoneNumber`, 1–1,000,000 XAF | `PUSH`, requires `phoneNumber`, 1–500,000 XAF | — | — | `true` | ✅ (behind `PAWAPAY_PAYOUTS_ENABLED`, payouts enabled for the provider on the PawaPay account, and a funded XAF wallet) |
 
 Flows, for a client:
@@ -110,7 +110,7 @@ Flows, for a client:
 | `OTP` | the charge **may** answer `instructions.requiresOtp: true`; then collect the SMS code and `POST /payments/:transactionId/authorize` |
 | `CARD_ELEMENT` | mount Stripe's Payment Element with `instructions.clientSecret` (a browser is required) |
 | `REDIRECT` | open `instructions.redirectUrl` (reserved for Flutterwave cards, Phase 2) |
-| `CODE_FIRST` | **before** `initiate`: tell the customer to dial `codeUssd`, collect the payment code they receive, and send it as `channel.paymentCode` **with** the charge; then exactly as `PUSH`. See [The payment code](#the-payment-code-code_first) |
+| `CODE_FIRST` | **No gateway uses this today.** **Before** `initiate`: tell the customer to dial `codeUssd`, collect the payment code they receive, and send it as `channel.paymentCode` **with** the charge; then exactly as `PUSH`. See [The payment code](#the-payment-code-code_first) |
 
 ⚠ **`CINETPAY` is `PUSH` and may still answer `instructions.redirectUrl`.** It asks CinetPay to
 push the PIN prompt; an account without CinetPay's "direct" mode answers that the customer must be
@@ -121,6 +121,11 @@ for a prompt that never comes.
 ⚠ **`flow` is a hint for which screen to prepare, never a promise.** A client must always honour
 `instructions.requiresOtp` and `instructions.redirectUrl` on the `initiate` response, whatever
 `/options` said. `PaymentInstructions` gains `redirectUrl?: string` for this.
+
+⚠ **`instructions.payeeName` (optional, 2026-11-04) is the merchant name the customer will see on their
+phone, when it is not Wi-Mall.** Only NovaSend sends it (`"Moon SARL"`). When it is present, make the
+instruction the main thing on the waiting screen: an Orange customer gets no prompt and must dial
+`instructions.ussdCode`. See [`FRONTEND-CHANGELOG-novasend-moon-sarl.md`](../FRONTEND-CHANGELOG-novasend-moon-sarl.md).
 
 ---
 
@@ -289,14 +294,14 @@ routed through Stripe, a CARD entry appears:
 | `flow` | which screen to prepare. See [Flows](#capability-matrix-declared-on-each-adapter) |
 | `fields` | the `channel` fields the charge requires (the route's `requires`) |
 | `mayRequireOtp` | `true` exactly when `flow` is `OTP` |
-| `codeUssd` | only on a `CODE_FIRST` entry: what the customer dials to get the payment code (e.g. `"#144*82#"`) |
+| `codeUssd` | only on a `CODE_FIRST` entry, and no gateway has one today: what the customer dials to get the payment code |
 | `limits` | only when the route declares them: `{ min, max }` in XAF. Outside them the charge is refused `422 PAYMENT_AMOUNT_OUT_OF_RANGE` before anything is written |
 
 With NovaSend active:
 
 ```jsonc
-{ "provider": "MTN",    "kind": "MOBILE_MONEY", "flow": "PUSH",       "fields": ["phoneNumber"],                "mayRequireOtp": false, "limits": { "min": 200, "max": 500000 } },
-{ "provider": "ORANGE", "kind": "MOBILE_MONEY", "flow": "CODE_FIRST", "fields": ["phoneNumber", "paymentCode"], "mayRequireOtp": false, "codeUssd": "#144*82#", "limits": { "min": 200, "max": 500000 } }
+{ "provider": "MTN",    "kind": "MOBILE_MONEY", "flow": "PUSH", "fields": ["phoneNumber"], "mayRequireOtp": false, "limits": { "min": 301, "max": 500000 } },
+{ "provider": "ORANGE", "kind": "MOBILE_MONEY", "flow": "PUSH", "fields": ["phoneNumber"], "mayRequireOtp": false, "limits": { "min": 301, "max": 500000 } }
 ```
 | `publishableKey` | only on a `CARD_ELEMENT` entry: the Stripe publishable key (never an `sk_`/`rk_` key; the pay-link guard is reused) |
 
@@ -349,10 +354,13 @@ forwards it). So are the three added with NovaSend (2026-10-05).
 
 ## The payment code (`CODE_FIRST`)
 
-NovaSend's Orange Money takes a **payment code the customer obtains BEFORE paying** (dial
-`codeUssd`, the operator answers with a short code) and that code travels **with** the charge.
-It is the opposite order from `OTP` (charge first, then an SMS code to `/authorize`), so it is a
-separate flow. Only a route whose capability is `CODE_FIRST` needs it; every other route ignores
+⚠ **No gateway uses this flow today.** It was built for NovaSend's Orange Money from its documentation; a
+live test on 2026-11-04 showed Orange Cameroon takes no code, and the machinery stays dormant for a
+gateway that does.
+
+A `CODE_FIRST` route takes a **payment code the customer obtains BEFORE paying** (dial `codeUssd`, the
+operator answers with a short code) and that code travels **with** the charge. It is the opposite
+order from `OTP` (charge first, then an SMS code to `/authorize`), so it is a separate flow. Only a route whose capability is `CODE_FIRST` needs it; every other route ignores
 the field.
 
 | Door | Where the code goes |
@@ -368,11 +376,11 @@ the field.
   error, so the code is asked for on the next try.
 - **Refused by the operator** → `422 PAYMENT_CODE_REJECTED` `{ provider, ussd }`. Nothing was
   charged; ask for a fresh code.
-- **Never stored or logged.** It reaches NovaSend's `payin.otp` and nothing else: it is not on the
+- **Never stored or logged.** It is not on the
   transaction's `payer`, not in the raw gateway payloads, and `paymentCode` is a redacted name in
   the audit log.
-- **Old clients** that never send it get `PAYMENT_CODE_REQUIRED` with a readable message while
-  NovaSend is active. Nothing changes for them on any other aggregator.
+- **Through NovaSend it is ignored:** a build that still sends it is charged as normal, and the code
+  is neither forwarded nor stored.
 
 The old `400 PAYMENT_GATEWAY_NOT_SUPPORTED` stays for doors that still take an aggregator name
 (pay-link minting). It is no longer raised for an ignored legacy `gateway`.
@@ -504,7 +512,7 @@ now"):
 | `MYCOOLPAY` | ✅ (jovi-mall `83e8535`) | `MYCOOLPAY_PAYOUTS_ENABLED=true` (the service refuses to boot with it on unless `MYCOOLPAY_PUBLIC_KEY` and `MYCOOLPAY_PRIVATE_KEY` are both set), and the server's egress IP registered with My-CoolPay. The second is invisible to `payoutAvailable()`: an unregistered IP surfaces per payout as a retryable `FAILED` ("Nothing was sent") |
 | `CINETPAY` | ✅ | `CINETPAY_PAYOUTS_ENABLED=true` and the server's egress IP whitelisted by CinetPay. An unlisted IP is refused per call as `NOT_ALLOWED` (2011) and surfaces as `unsupported`; nothing is sent |
 | `FAPSHI` | ✅ | `FAPSHI_PAYOUTS_ENABLED=true` and the payout service's own pair (`FAPSHI_PAYOUT_API_USER` / `_KEY`): a Fapshi service that pays out can no longer collect. Live payouts are off until Fapshi support enables them for that service. Fapshi documents no idempotency, so a resend first reads `GET /transaction/{reference}` and sends nothing when an earlier attempt succeeded or is still pending |
-| `NOVASEND` | ✅ | `NOVASEND_PAYOUTS_ENABLED=true` and the key pair (one pair serves both directions). Every send carries `X-Idempotency-Key` = a UUID derived from our reference, so a resend presents the same key; a `409` is answered by reading the payout back (`GET /v1/direct/payout/{reference}`). 200–500,000 XAF: outside that range the payout is refused `unsupported` with nothing sent. No balance endpoint is documented |
+| `NOVASEND` | ✅ | `NOVASEND_PAYOUTS_ENABLED=true` and the key pair (one pair serves both directions). Every send carries `X-Idempotency-Key` = a UUID derived from our reference, so a resend presents the same key. A sent payout is read back on `GET /v1/payout/{id}` with NovaSend's `tr_…` id, the stored `gatewayRef`; live, the documented `/v1/direct/payout/*` is no route and our reference is 404. A `409` holds no id, so it normally stays processing until the webhook settles it, and is never resent. 301–500,000 XAF: outside that range the payout is refused `unsupported` with nothing sent. No balance endpoint is documented |
 | `PAWAPAY` | ✅ | `PAWAPAY_PAYOUTS_ENABLED=true` and the token. Payouts must also be enabled per provider on the PawaPay account (`PAYOUTS_NOT_ALLOWED` surfaces per call as `unsupported`), and they draw on the XAF wallet that collections fund (`PAWAPAY_WALLET_OUT_OF_FUNDS` is a retryable "top it up"). PawaPay deduplicates on the `payoutId`, which is derived from our reference, so a resend is `DUPLICATE_IGNORED`; a payout PawaPay reports FAILED is retried under the next derived id |
 | `STRIPE` | ❌ | — |
 

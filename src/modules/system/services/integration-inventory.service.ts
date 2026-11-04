@@ -441,8 +441,6 @@ function configurationOf(key: IntegrationKey): {
                     sandbox: NOVASEND_CONFIG.BASE_URL === NOVASEND_SANDBOX_BASE_URL,
                     baseUrl: NOVASEND_CONFIG.BASE_URL,
                     returnUrlSet: NOVASEND_CONFIG.RETURN_URL !== '',
-                    // What an Orange Money customer is told to dial for the payment code.
-                    orangeCodeUssd: NOVASEND_CONFIG.ORANGE_CODE_USSD,
                     // Refunds are sent as payouts (REFUND-FLOW-PLAN R-1).
                     refundSupported: gatewaySupportsRefund('NOVASEND'),
                     payoutsEnabled: NOVASEND_CONFIG.PAYOUTS_ENABLED,

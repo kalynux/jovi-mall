@@ -288,13 +288,10 @@ export const NOVASEND_LIVE_BASE_URL = 'https://business.novasend.app';
  * API_KEY / API_SECRET → HTTP Basic `base64(API_KEY:API_SECRET)` on every call (Business portal →
  *               Paramètres → Token). One pair serves collections AND payouts.
  * WEBHOOK_SECRET → the per-webhook secret set in the portal; NovaSend signs each notification
- *               `hex(HMAC-SHA256(body, secret))`, on `X-Webhook-Signature` or `X-Signature-Value`
+ *               `hex(HMAC-SHA256(body, secret))`, on `X-Webhook-Signature`
  *               (`NOVASEND_SIGNATURE_HEADERS`). Different from the API secret.
  * RETURN_URL   → `action.successUrl` / `action.failureUrl`, required by NovaSend on every pay-in
  *               even though a direct (handset) payment never redirects.
- * ORANGE_CODE_USSD → what an Orange Money customer dials to get the payment code NovaSend
- *               requires WITH the charge (`flow: 'CODE_FIRST'`). The docs show `#144*82#`, which
- *               is Orange Côte d'Ivoire's; Cameroon's must be confirmed with NovaSend support.
  * SANDBOX_SCENARIO → `completed` | `failed` | `pending`, sent as `sandboxScenario` ONLY while
  *               BASE_URL is the sandbox host. Unset = NovaSend's sandbox default.
  *
@@ -313,7 +310,6 @@ export const NOVASEND_CONFIG = Object.freeze({
     process.env.API_PUBLIC_URL ||
     ''
   ).trim(),
-  ORANGE_CODE_USSD: (process.env.NOVASEND_ORANGE_CODE_USSD || '#144*82#').trim(),
   SANDBOX_SCENARIO: (process.env.NOVASEND_SANDBOX_SCENARIO || '').trim(),
   /**
    * Whether PAYOUTS are enabled for this deployment. ⚠ Default FALSE: turn it on only after a

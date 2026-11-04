@@ -1,3 +1,5 @@
+> ⚠ **SUPERSEDED 2026-11-04.** A live test with real money showed Orange Cameroon takes no payment code through NovaSend, so **do not build this step**. See [./FRONTEND-CHANGELOG-novasend-moon-sarl.md](./FRONTEND-CHANGELOG-novasend-moon-sarl.md).
+
 # Agent app — the Orange Money payment code, and mobile-money limits
 
 **Applies to:** the agent app's billing (plan purchase, credit top-up)

@@ -265,6 +265,16 @@
        * place that has one.
        */
       state(copy.paySent, false);
+      /*
+       * ⚠ The customer has something to DO (dial a code, look for a merchant name), so this replaces
+       * the sentence above and the page stays open: closing it would take the instruction with it.
+       * Keyed on `payeeName`, as the checkout page's `handsetStep` is.
+       */
+      var given = res.body.data && res.body.data.instructions;
+      if (given && given.payeeName && given.message) {
+        state(given.message, false);
+        return;
+      }
       if (tg) { setTimeout(function () { tg.close(); }, 2000); }
     }).catch(function () {
       /* A lost response may still have opened a charge: latched, and the chat will say. */
