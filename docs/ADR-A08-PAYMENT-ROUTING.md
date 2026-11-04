@@ -312,9 +312,11 @@ payouts, payouts behind `NOVASEND_PAYOUTS_ENABLED` (default off). Owner decision
   so the `jm_…` reference is also the stored `gatewayRef`. Every write carries the documented
   REQUIRED `X-Idempotency-Key`, which must be a UUID: ours is a version-5 UUID of
   `<purpose>:<reference>`, so a resend presents the same key.
-- **The notification is HMAC-SHA256 over the body** (`X-Signature-Value`). Raw bytes (SDK) and the
-  re-serialised body (docs) are both accepted; both need the secret. `confirmWebhookEvent` re-reads
-  the record anyway, because the status words differ between the documentation's own pages.
+- **The notification is HMAC-SHA256 over the body.** Raw bytes (SDK) and the re-serialised body
+  (docs) are both accepted; both need the secret. The header name is contradicted the same way
+  (`X-Webhook-Signature` in the docs, `X-Signature-Value` in the SDK), so both are read and the one
+  that verified is logged by name. `confirmWebhookEvent` re-reads the record anyway, because the
+  status words differ between the documentation's own pages.
 - **D-12 · `CODE_FIRST`, a new collect flow.** NovaSend's Direct API requires `payin.otp` for Orange
   Money: a code the customer obtains by dialling a USSD code BEFORE paying, sent WITH the charge.
   That is the reverse of `OTP` (charge, then SMS code to `/authorize`), so it is its own flow with

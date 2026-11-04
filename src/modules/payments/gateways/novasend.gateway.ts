@@ -65,8 +65,11 @@ import { recordIntegrationCall } from '../../system/domain/integration-observati
  * here with nothing sent.
  *
  * ── THE NOTIFICATION IS SIGNED OVER THE WHOLE BODY ───────────────────────────
- * `X-Signature-Value: hex(HMAC-SHA256(body, webhookSecret))`. The SDK signs the raw bytes; the
- * docs' sample re-serialises (`JSON.stringify(body)`). Both are accepted, both need the secret.
+ * `hex(HMAC-SHA256(body, webhookSecret))`. The SDK signs the raw bytes; the docs' sample
+ * re-serialises (`JSON.stringify(body)`). Both are accepted, both need the secret.
+ * ⚠ The header's NAME is contradicted too: the docs' webhook page says `X-Webhook-Signature`, the
+ * SDK says `X-Signature-Value`. Both are read (`NOVASEND_SIGNATURE_HEADERS`), and the one that
+ * verified is logged by name, so a live notification settles it.
  * `confirmWebhookEvent` still re-reads NovaSend's record: the status vocabulary differs between
  * pages (`success` / `processed` / `failed` / `expired`), and the record is what is acted on.
  *
@@ -215,8 +218,11 @@ export class NovaSendGateway implements PaymentGateway {
     // Refuse, never skip.
     if (!secret) return { ok: false, reason: 'missing_secret' };
 
-    const presented = headerValue(input.headers, ['x-signature-value']);
-    if (!presented) return { ok: false, reason: 'missing_signature' };
+    const presented = NOVASEND_SIGNATURE_HEADERS.flatMap((name) => {
+      const value = headerValue(input.headers, [name]);
+      return value ? [{ name, value }] : [];
+    });
+    if (presented.length === 0) return { ok: false, reason: 'missing_signature' };
 
     if (!Buffer.isBuffer(input.rawBody)) {
       return {
@@ -228,10 +234,14 @@ export class NovaSendGateway implements PaymentGateway {
     const parsed = parseRawJson(input.rawBody);
     if (!parsed.ok) return { ok: false, reason: 'unparsable' };
 
-    if (!novasendSignatureMatches(input.rawBody, parsed.value, presented, secret)) {
-      return { ok: false, reason: 'bad_signature' };
+    const rawBody = input.rawBody;
+    const verifiedOn = presented.find((p) => novasendSignatureMatches(rawBody, parsed.value, p.value, secret));
+    if (!verifiedOn) {
+      return { ok: false, reason: 'bad_signature', detail: `presented on ${presented.map((p) => p.name).join(', ')}` };
     }
-    return { ok: true, payload: parsed.value, rawBody: input.rawBody };
+    // The header NAME only, never its value: this line is what settles which one live really sends.
+    console.info(`[NOVASENDWebhook] signature verified on ${verifiedOn.name}`);
+    return { ok: true, payload: parsed.value, rawBody };
   }
 
   /** The notification's claims. Re-read through `confirmWebhookEvent` before anything acts on them. */
@@ -656,6 +666,8 @@ export function novasendInstructions(operator: CameroonMobileOperator, record: u
 }
 
 /** The two signature forms NovaSend's material describes: raw bytes (SDK) and re-serialised body (docs). */
+export const NOVASEND_SIGNATURE_HEADERS = Object.freeze(['x-signature-value', 'x-webhook-signature'] as const);
+
 export function novasendSignatureMatches(
   rawBody: Buffer,
   parsed: Record<string, unknown>,

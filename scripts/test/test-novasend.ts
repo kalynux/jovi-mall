@@ -210,9 +210,35 @@ const ORANGE = '+237655000000';
   const compact = JSON.stringify(payinRecord(ref, 'success'));
   const spaced = JSON.stringify(payinRecord(ref, 'success'), null, 2);
 
-  assert('no X-Signature-Value → missing_signature', () => {
+  assert('neither signature header → missing_signature', () => {
     const v = gateway.verifyWebhook({ rawBody: Buffer.from(compact), headers: {} });
     return !v.ok && v.reason === 'missing_signature';
+  });
+  assert('a signature on X-Webhook-Signature verifies (the docs\' header name)', () =>
+    gateway.verifyWebhook({ rawBody: Buffer.from(compact), headers: { 'x-webhook-signature': sign(compact) } }).ok);
+  assert('a wrong signature on X-Webhook-Signature → bad_signature, naming the header and not its value', () => {
+    const forged = sign(compact, 'other');
+    const v = gateway.verifyWebhook({ rawBody: Buffer.from(compact), headers: { 'x-webhook-signature': forged } });
+    return !v.ok && v.reason === 'bad_signature' && v.detail === 'presented on x-webhook-signature' && !v.detail.includes(forged);
+  });
+  assert('both headers, one wrong → the good one still verifies, whichever it is', () =>
+    gateway.verifyWebhook({ rawBody: Buffer.from(compact), headers: { 'x-signature-value': sign(compact, 'other'), 'x-webhook-signature': sign(compact) } }).ok
+    && gateway.verifyWebhook({ rawBody: Buffer.from(compact), headers: { 'x-signature-value': sign(compact), 'x-webhook-signature': sign(compact, 'other') } }).ok);
+  assert('both headers, both wrong → bad_signature', () => {
+    const v = gateway.verifyWebhook({ rawBody: Buffer.from(compact), headers: { 'x-signature-value': sign(compact, 'other'), 'x-webhook-signature': sign(compact, 'another') } });
+    return !v.ok && v.reason === 'bad_signature';
+  });
+  assert('the verified header is logged by NAME and its value is never logged', () => {
+    const lines: string[] = [];
+    const realInfo = console.info;
+    console.info = (...args: unknown[]) => { lines.push(args.join(' ')); };
+    const signature = sign(compact);
+    try {
+      gateway.verifyWebhook({ rawBody: Buffer.from(compact), headers: { 'x-webhook-signature': signature } });
+    } finally {
+      console.info = realInfo;
+    }
+    return lines.length === 1 && lines[0] === '[NOVASENDWebhook] signature verified on x-webhook-signature' && !lines[0].includes(signature);
   });
   assert('a signature made with another secret → bad_signature', () => {
     const v = gateway.verifyWebhook({ rawBody: Buffer.from(compact), headers: { 'x-signature-value': sign(compact, 'other') } });

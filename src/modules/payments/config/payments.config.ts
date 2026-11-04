@@ -288,7 +288,8 @@ export const NOVASEND_LIVE_BASE_URL = 'https://business.novasend.app';
  * API_KEY / API_SECRET → HTTP Basic `base64(API_KEY:API_SECRET)` on every call (Business portal →
  *               Paramètres → Token). One pair serves collections AND payouts.
  * WEBHOOK_SECRET → the per-webhook secret set in the portal; NovaSend signs each notification
- *               `X-Signature-Value: hex(HMAC-SHA256(body, secret))`. Different from the API secret.
+ *               `hex(HMAC-SHA256(body, secret))`, on `X-Webhook-Signature` or `X-Signature-Value`
+ *               (`NOVASEND_SIGNATURE_HEADERS`). Different from the API secret.
  * RETURN_URL   → `action.successUrl` / `action.failureUrl`, required by NovaSend on every pay-in
  *               even though a direct (handset) payment never redirects.
  * ORANGE_CODE_USSD → what an Orange Money customer dials to get the payment code NovaSend

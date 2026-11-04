@@ -43,7 +43,8 @@ const arg = (name: string): string | null =>
 const scenario = arg('scenario');
 if (scenario) process.env.NOVASEND_SANDBOX_SCENARIO = scenario;
 
-const OWNER_NUMBERS = new Set(['672745831', '652705926']);
+// 691550800: the owner's Orange test line, named for the NovaSend live test (2026-11-04).
+const OWNER_NUMBERS = new Set(['672745831', '652705926', '691550800']);
 const MAX_AMOUNT_XAF = 200;
 const AMOUNT = Number(arg('amount') ?? '200');
 
