@@ -3,7 +3,8 @@ import { CommandHandler } from '../../../command-bus/command-bus';
 import type { RenderableCommandResult } from '../../../command-bus/command-reply';
 import { botChrome } from '../../../bot-surface/domain/bot-chrome-copy';
 import { openSurfaceActionId } from '../../../bot-surface/domain/bot-action-id';
-import { bookingChatAcknowledgement } from '../../../bot-surface/domain/bot-booking-copy';
+import { bookingChatAcknowledgement, bookingScreenCopy } from '../../../bot-surface/domain/bot-booking-copy';
+import { openPaymentFromList } from '../../../bot-surface/miniapp/surfaces/booking.core';
 import type { BotReplyOption } from '../../../bot-surface/domain/channel-reply';
 import {
     addedToCartActions,
@@ -19,6 +20,15 @@ import {
 import { planCompletion } from './flow-completion-plan';
 
 export const command_name = 'flow_complete';
+
+/** The pay read's "nothing to charge" refusals — the same list `bp.html` and the pay form use. */
+const NOTHING_DUE_CODES: ReadonlySet<string> = new Set([
+    'PAYMENT_BOOKING_ALREADY_PAID',
+    'PAYMENT_BOOKING_CANCELLED',
+    'PAYMENT_BOOKING_NO_PAYMENT_REQUIRED',
+    'BOOKING_BALANCE_ALREADY_SETTLED',
+    'BOOKING_NO_BALANCE_DUE',
+]);
 
 /**
  * `flow_complete` — a customer finished a WhatsApp Flow.
@@ -98,8 +108,15 @@ export interface FlowCompleteReply extends RenderableCommandResult {
     actions?: readonly BotReplyOption[];
 }
 
+/**
+ * The kinds a form can stamp. ⛔ **`bl`, `bk` and `bp` were missing until 2026-10-26**, so the
+ * booking form's completion resolved to "no screen" and its acknowledgement was never sent — the
+ * draft was unpublished, so nobody met it, but the first published booking would have closed into
+ * silence.
+ */
 const isKind = (value: string): value is InAppSurfaceKind =>
-    value === 'pl' || value === 'pd' || value === 'ol' || value === 'sl' || value === 'co';
+    value === 'pl' || value === 'pd' || value === 'ol' || value === 'sl' || value === 'co'
+    || value === 'bl' || value === 'bk' || value === 'bp';
 
 export const handler: CommandHandler<z.infer<typeof schema>, FlowCompleteReply> = async (
     payload,
@@ -119,7 +136,7 @@ export const handler: CommandHandler<z.infer<typeof schema>, FlowCompleteReply> 
      * that as a failure would tell every customer whose order succeeded that it failed.
      */
     const session =
-        flowToken && (completedScreen === 'pl' || completedScreen === 'pd')
+        flowToken && (completedScreen === 'pl' || completedScreen === 'pd' || completedScreen === 'bl')
             ? await inAppSurfaceStore.read(completedScreen, flowToken)
             : null;
 
@@ -196,13 +213,41 @@ export const handler: CommandHandler<z.infer<typeof schema>, FlowCompleteReply> 
     if (plan.kind === 'booking_ack') {
         return {
             ...base,
-            message: bookingChatAcknowledgement({ moved: plan.moved }, language),
+            message: bookingChatAcknowledgement({ moved: plan.moved, requested: plan.requested }, language),
             actions: [{
                 id: openSurfaceActionId('bl'),
                 label: botChrome('myBookingsButton', language),
             }],
             language,
         };
+    }
+
+    /**
+     * A booking chosen on the list form: its pay form, minted from the LIST session (owner, chat,
+     * language — never the payload) by the same core the Telegram row's Pay calls. Nothing to pay
+     * → the read's own sentence; a booking that is not theirs → the core's 404, said as nothing.
+     */
+    if (plan.kind === 'open_payment') {
+        try {
+            const opened = await openPaymentFromList(flowToken as string, { bookingId: plan.bookingId });
+            return {
+                ...base,
+                message: '',
+                language: opened.language,
+                screen: {
+                    kind: 'bp',
+                    handle: opened.handle,
+                    labelKey: 'payAppointmentButton',
+                    fallbackPath: `/shop/account/bookings/${plan.bookingId}`,
+                },
+            };
+        } catch (error) {
+            const code = (error as { code?: unknown } | null)?.code;
+            if (typeof code === 'string' && NOTHING_DUE_CODES.has(code)) {
+                return { ...base, message: bookingScreenCopy(language).payNothingDue, language };
+            }
+            return { ...base, message: '' };
+        }
     }
 
     if (plan.kind === 'invite_reply') {

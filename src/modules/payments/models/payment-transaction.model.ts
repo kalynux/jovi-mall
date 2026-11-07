@@ -51,9 +51,13 @@ export type PaymentGatewayType = PaymentGatewayName;
  * difference after approving a higher delivery fee on a customer-paid shipment. It carries
  * `orderId` like a single-order payment, so the success handler MUST branch on it before the
  * order's already-paid early return — exactly the booking-balance lesson.
+ *
+ * `order_prepayment` is the online part of a PARTIAL order (owner, 2026-11-01). ⛔ Its success
+ * handler must branch before the order's: `OrderService.handlePaymentSuccess` would mark a 30%-paid
+ * order `paid` and split it as prepaid. `prepaymentAllocations` says what each order received.
  */
-export type PaymentPurpose = 'primary' | 'booking_balance' | 'order_delivery_topup';
-export const PAYMENT_PURPOSES: readonly PaymentPurpose[] = ['primary', 'booking_balance', 'order_delivery_topup'];
+export type PaymentPurpose = 'primary' | 'booking_balance' | 'order_delivery_topup' | 'order_prepayment';
+export const PAYMENT_PURPOSES: readonly PaymentPurpose[] = ['primary', 'booking_balance', 'order_delivery_topup', 'order_prepayment'];
 
 /** What an `order_delivery_topup` pays for — the shipment and the fee proposal it settles. */
 export interface IDeliveryTopupLink {
@@ -71,8 +75,19 @@ export interface IPaymentTransaction extends Document {
   orderIds?: Types.ObjectId[];      // The group's orders (required when cartId is set)
   /** What this payment settles. See PaymentPurpose. */
   purpose: PaymentPurpose;
+  /**
+   * Set only on a `booking_balance` that pays a price difference, naming which one. Absent on a
+   * balance settled at completion: this is how the success handler tells the two apart.
+   */
+  bookingTopupSeq?: number | null;
   /** Set only on `purpose: 'order_delivery_topup'` — see IDeliveryTopupLink. */
   deliveryTopup?: IDeliveryTopupLink | null;
+  /**
+   * Set only on `purpose: 'order_prepayment'`: each order's share of `amountSnapshot`, fixed when
+   * the charge opened, so success applies exactly what was charged and a refund can read one
+   * order's share of a checkout's single payment.
+   */
+  prepaymentAllocations?: Array<{ orderId: Types.ObjectId; amount: number }> | null;
   /**
    * Who paid — but NOT one kind of id, despite the `ref` below.
    *
@@ -248,6 +263,8 @@ const PaymentTransactionSchema = new Schema<IPaymentTransaction>({
     required: true,
     default: 'primary'
   },
+  // Set only on a `booking_balance` paying a price difference (BOOKING-PRICE-PROPOSAL-PLAN).
+  bookingTopupSeq: { type: Number, default: undefined },
   // ADR-A11 — see IDeliveryTopupLink. `default: undefined` so no other row carries the key.
   deliveryTopup: {
     type: {
@@ -257,6 +274,19 @@ const PaymentTransactionSchema = new Schema<IPaymentTransaction>({
     },
     default: undefined,
     _id: false
+  },
+  // A partial order's shares — see the interface. `default: undefined` for the same reason.
+  prepaymentAllocations: {
+    type: [
+      new Schema(
+        {
+          orderId: { type: Schema.Types.ObjectId, ref: MODELS.ORDER, required: true },
+          amount: { type: Number, required: true, min: 0 }
+        },
+        { _id: false }
+      )
+    ],
+    default: undefined
   },
   userId: {
     type: Schema.Types.ObjectId,

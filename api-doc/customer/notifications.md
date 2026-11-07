@@ -140,9 +140,14 @@ PATCH /api/customer/notifications/read-all
 | `booking.created` | The booking is placed. Says whether it is confirmed or awaiting the vendor. | `bookingUpdates` |
 | `booking.confirmed` | The vendor accepted a `manual` booking. | `bookingUpdates` |
 | `booking.rescheduled` | Moved to a new time. Carries **both** the old and new times. | `bookingUpdates` |
+| `booking.reschedule_proposed` 🆕 | The vendor asks to move the appointment; accept or decline before the deadline. On WhatsApp/Telegram it carries **Accept new time** / **Keep my time** buttons. | `bookingUpdates` |
+| `booking.reschedule_declined` 🆕 | The vendor declined the customer's request for a new time; the appointment keeps its time. | `bookingUpdates` |
 | `booking.cancelled` | Called off. Names who did it and where the money went, in one message. | **No** |
 | `booking.completed` | The appointment happened and was settled. | `bookingUpdates` |
-| `booking.reminder` | ~24h before `startAt`, from the reminder sweep. | `bookingReminders` |
+| `booking.reminder` | ~24h before `startAt`, from the reminder sweep. 🆕 Also when the vendor sends their one reminder, which the switch does **not** silence: it is someone else's action, capped at one. | `bookingReminders` (the automatic one only) |
+| `booking.price_proposed` | 🆕 The vendor proposes a different price before approving. | **No** |
+| `booking.reschedule_price_proposed` | 🆕 The vendor proposes a new time and a new price, answered together. | **No** |
+| `booking.price_topup_due` | 🆕 The agreed price is set, and this is what is owed for it, and by when. | **No** |
 | `booking.payment.received` | Payment succeeded. | **No** |
 | `booking.balance.due` | The service cost more than quoted and a balance is payable. | **No** |
 | `booking.refunded` | A **card** refund completed — the full amount, back to the card, no fee. Raised from `payment.refunded` (🆕 2026-10-05: nothing raised it before). | **No** |

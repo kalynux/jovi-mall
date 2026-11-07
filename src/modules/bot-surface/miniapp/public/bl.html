@@ -29,6 +29,11 @@
   It cancels nothing.  Cancelling an appointment is a decision with money attached and it stays
   in the chat, where the refund rules can be explained and confirmed.  This page lists, and
   hands a row back to the conversation.
+
+  ── ONE ANSWER IT DOES GIVE ──────────────────────────────────────────────────
+  A row whose price waits on the customer carries Accept and Decline, because the buttons under
+  the chat message may be a long way up.  The sentence and the labels arrive built, and the server
+  re-decides at the tap which proposal is being answered.
 -->
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <link rel="stylesheet" href="/api/bot/miniapp/shell.css">
@@ -39,6 +44,9 @@
   .row__title { font-weight: 600; }
   .row__sub { font-size: 13px; color: var(--muted); margin-block-start: 2px; }
   .row__pay { margin-block-start: 10px; width: 100%; }
+  .row__question { font-size: 14px; margin-block-start: 8px; }
+  .row__answers { display: flex; gap: 8px; margin-block-start: 10px; }
+  .row__answers .btn { flex: 1 1 0; }
   .notice { padding: 10px 12px; border-radius: 10px; background: var(--card); font-size: 13px; margin-block-end: 8px; }
 </style>
 </head>
@@ -123,6 +131,16 @@
       return '<div class="row">'
         + '<div class="row__title">' + esc(booking.title) + "</div>"
         + (booking.description ? '<div class="row__sub">' + esc(booking.description) + "</div>" : "")
+        + (booking.priceQuestion
+          ? '<div class="row__question">' + esc(booking.priceQuestion.text) + "</div>"
+            + '<div class="row__sub">' + esc(booking.priceQuestion.note) + "</div>"
+            + '<div class="row__answers">'
+            + '<button type="button" class="btn btn--primary" data-answer="accept" data-booking="' + esc(booking.bookingId) + '">'
+            + esc(booking.priceQuestion.acceptLabel) + "</button>"
+            + '<button type="button" class="btn" data-answer="decline" data-booking="' + esc(booking.bookingId) + '">'
+            + esc(booking.priceQuestion.declineLabel) + "</button>"
+            + "</div>"
+          : "")
         + (booking.payable
           ? '<button type="button" class="btn btn--primary row__pay" data-pay="' + esc(booking.bookingId) + '">'
             + esc(copy.payRow || FALLBACK.payRow) + "</button>"
@@ -134,7 +152,39 @@
     el.rows.hidden = false;
   }
 
+  function answerPrice(button) {
+    opening = true;
+    button.disabled = true;
+
+    json(base + "/answer-price", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ bookingId: button.getAttribute("data-booking"), answer: button.getAttribute("data-answer") })
+    }).then(function (res) {
+      opening = false;
+      if (res.status === 410) { state(copy.expired, true); return; }
+      var code = res.body && res.body.error && res.body.error.code;
+      /* Whatever the answer did, the list redraws, so the row shows where it really stands. A Pay
+         button appears on it when the server says something is owed. */
+      el.notice.textContent = res.ok && res.body && res.body.data && res.body.data.message
+        ? res.body.data.message
+        : code === "PAYMENT_BOOKING_IN_PROGRESS"
+          ? (copy.priceBusy || FALLBACK.priceBusy)
+          : (copy.listChanged || FALLBACK.listChanged);
+      el.notice.hidden = false;
+      load();
+    }).catch(function () {
+      opening = false;
+      state(copy.failed, true);
+    });
+  }
+
   el.rows.addEventListener("click", function (event) {
+    var answer = event.target.closest ? event.target.closest("[data-answer]") : null;
+    if (answer) {
+      if (!opening) answerPrice(answer);
+      return;
+    }
     var button = event.target.closest ? event.target.closest("[data-pay]") : null;
     if (!button || opening) return;
     opening = true;
@@ -191,7 +241,8 @@
     listTitle: "Your appointments",
     listEmpty: "You have no appointments yet.",
     payRow: "Pay now",
-    listChanged: "That appointment has changed. Here is where it stands now."
+    listChanged: "That appointment has changed. Here is where it stands now.",
+    priceBusy: "A payment is still going through. Please wait a moment and try again."
   };
 
   /* ⚠ `base + "/copy"`, as every other screen: `/api/bot/miniapp/copy` has never existed, and this

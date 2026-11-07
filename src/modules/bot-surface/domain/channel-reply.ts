@@ -1,5 +1,12 @@
 import { MessagingChannel } from '../../channel-connections';
-import { escapeTelegramHtml } from '../../../core/richtext';
+import {
+    escapeTelegramHtml,
+    hasStrong,
+    stripStrong,
+    strongToTelegramEntities,
+    strongToTelegramHtml,
+    strongToWhatsApp,
+} from '../../../core/richtext';
 import { WA_LIMITS, truncate } from '../../whatsapp/constants/whatsapp-limits';
 import type { BotProductCard } from './product-card';
 
@@ -140,6 +147,35 @@ export type BotReplyIntent =
           /** A second keyboard button meaning "skip this step". Telegram only. */
           skipLabel?: string;
       }
+    /**
+     * ⭐ **A map pin the platform SENDS** — the opposite direction from `location_request`.
+     *
+     * Telegram renders `sendVenue` (a map with a title and an address line under it); WhatsApp a
+     * `location` message with the same two. Both platforms draw the map themselves from the
+     * coordinates, and a tap opens the phone's own maps app — which is the whole point: the
+     * customer gets directions without a link to copy.
+     *
+     * ⚠ **The coordinates are the only place a point leaves this surface**, and only for a place
+     * the customer is entitled to see (an appointment's address, through the same gate the
+     * website uses). They are never put into `text` anywhere, so the model's context — fed from
+     * `sentTextForIntent` — never holds them.
+     *
+     * ⚠ **`name` and `address` must be non-empty**: Telegram refuses a venue without both.
+     */
+    | { kind: 'place'; latitude: number; longitude: number; name: string; address: string }
+    /**
+     * ⭐ **Several messages for one turn, in order** — a pin, then the words that go with it; or
+     * a question with buttons, then the location request that cannot share its message.
+     *
+     * ⚠ **Why this exists:** Telegram's `reply_markup` is a union, so a message asking for a
+     * location (a reply keyboard) cannot also carry inline buttons. A turn that needs both — the
+     * appointment's "which address?" with one button per saved address, AND "or share your
+     * location" — is two messages, and only `product_list` could render to more than one.
+     *
+     * `renderBotReplies` sends every part; `renderBotReply` (a caller that can send one) sends the
+     * first. Parts are never nested sequences or product lists.
+     */
+    | { kind: 'sequence'; parts: readonly BotSingleReplyIntent[] }
     /** Pick one of a short list. */
     | {
           kind: 'choice';
@@ -203,7 +239,13 @@ export type BotReplyIntent =
            * for this intent on a proactive turn must not pass `flow`; the window will usually
            * be shut and Meta refuses the send.
            */
-          flow?: { id: string; screen?: string | null; params?: Record<string, unknown> } | null;
+          /**
+           * `token`: the screen's `ia_` handle. Present → an ENDPOINT-backed form: sent as
+           * `data_exchange` with the handle as `flow_token`, which is how the encrypted endpoint
+           * knows whose session it is serving (Meta, "Sending a Flow": `flow_message_version` "3",
+           * no `flow_action_payload`). Absent → the older `navigate` shape.
+           */
+          flow?: { id: string; token?: string | null; screen?: string | null; params?: Record<string, unknown> } | null;
       }
     /**
      * ⭐ **A LIST OF PRODUCTS, drawn rather than narrated** — and the one intent that renders
@@ -316,6 +358,9 @@ export type BotReplyIntent =
           carouselUrlSuffix?: ((card: BotProductCard) => string) | null;
       };
 
+/** One message's worth of intent — anything but a `sequence` or a `product_list`. */
+export type BotSingleReplyIntent = Exclude<BotReplyIntent, { kind: 'sequence' } | { kind: 'product_list' }>;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Platform limits this renderer is responsible for
 // ─────────────────────────────────────────────────────────────────────────────
@@ -335,6 +380,8 @@ const TG_LIMITS = {
      * `callback_data` is not rejected with an error, the keyboard simply does not work.
      */
     CALLBACK_DATA_BYTES: 64,
+    /** `sendVenue.title` / `.address`. Not documented; a venue card shows two short lines. */
+    VENUE_TEXT: 256,
 } as const;
 
 /** WhatsApp interactive maxima that are counts rather than lengths. */
@@ -596,6 +643,27 @@ function renderTelegram(intent: BotReplyIntent, chatId: string): BotChannelReply
          */
         case 'product_list':
             return telegramProductList(intent, chatId)[0];
+
+        /**
+         * `sendVenue`, not `sendLocation`: a bare location is an unlabelled dot, and a customer
+         * looking at two appointments' pins must be able to tell which is which without tapping.
+         */
+        case 'place':
+            return {
+                channel: 'telegram',
+                method: 'sendVenue',
+                body: {
+                    chat_id: chatId,
+                    latitude: intent.latitude,
+                    longitude: intent.longitude,
+                    title: truncate(intent.name, TG_LIMITS.VENUE_TEXT) as string,
+                    address: truncate(intent.address, TG_LIMITS.VENUE_TEXT) as string,
+                },
+            };
+
+        /** The first part. `renderBotReplies` sends them all. */
+        case 'sequence':
+            return renderTelegram(intent.parts[0] ?? { kind: 'text', text: '' }, chatId);
     }
 }
 
@@ -799,20 +867,29 @@ function renderWhatsApp(intent: BotReplyIntent, to: string): BotChannelReply {
                           body: { text: truncate(intent.text, WA_LIMITS.INTERACTIVE_BODY) as string },
                           action: {
                               name: 'flow',
-                              parameters: {
-                                  flow_id: intent.flow.id,
-                                  // `navigate` opens a screen with data already supplied;
-                                  // `data_exchange` would require the encrypted endpoint this
-                                  // platform has not built, so it is deliberately not offered.
-                                  flow_action: 'navigate',
-                                  flow_cta: truncate(intent.label, WA_LIMITS.CTA_DISPLAY_TEXT),
-                                  ...(intent.flow.screen
-                                      ? { flow_action_payload: {
-                                            screen: intent.flow.screen,
-                                            data: intent.flow.params ?? {},
-                                        } }
-                                      : {}),
-                              },
+                              parameters: intent.flow.token
+                                  ? {
+                                        // The endpoint-backed form: the handle IS the token the
+                                        // encrypted endpoint resolves the session from.
+                                        flow_message_version: '3',
+                                        flow_token: intent.flow.token,
+                                        flow_id: intent.flow.id,
+                                        flow_cta: truncate(intent.label, WA_LIMITS.CTA_DISPLAY_TEXT),
+                                        flow_action: 'data_exchange',
+                                    }
+                                  : {
+                                        flow_id: intent.flow.id,
+                                        // `navigate` opens a screen with data already supplied — the
+                                        // shape for a form with no endpoint behind it.
+                                        flow_action: 'navigate',
+                                        flow_cta: truncate(intent.label, WA_LIMITS.CTA_DISPLAY_TEXT),
+                                        ...(intent.flow.screen
+                                            ? { flow_action_payload: {
+                                                  screen: intent.flow.screen,
+                                                  data: intent.flow.params ?? {},
+                                              } }
+                                            : {}),
+                                    },
                           },
                       },
                   })
@@ -833,6 +910,21 @@ function renderWhatsApp(intent: BotReplyIntent, to: string): BotChannelReply {
         /** See the Telegram side: the first of several. `renderBotReplies` gets them all. */
         case 'product_list':
             return whatsappProductList(intent, to)[0];
+
+        /** The same wire body `service-message.builder.ts` sends on the notification path. */
+        case 'place':
+            return waEnvelope(to, 'location', {
+                location: {
+                    latitude: intent.latitude,
+                    longitude: intent.longitude,
+                    name: truncate(intent.name, WA_LIMITS.LOCATION_NAME) as string,
+                    address: truncate(intent.address, WA_LIMITS.LOCATION_ADDRESS) as string,
+                },
+            });
+
+        /** See the Telegram side: the first part. */
+        case 'sequence':
+            return renderWhatsApp(intent.parts[0] ?? { kind: 'text', text: '' }, to);
     }
 }
 
@@ -1409,9 +1501,64 @@ export function renderBotReply(
     channel: MessagingChannel,
     recipient: string,
 ): BotChannelReply {
-    return channel === 'telegram'
+    return resolveStrong(channel === 'telegram'
         ? renderTelegram(intent, recipient)
-        : renderWhatsApp(intent, recipient);
+        : renderWhatsApp(intent, recipient));
+}
+
+/**
+ * Turn a phrase marked bold in the copy (`core/richtext` `strong()`) into the rendered body's own
+ * form — the last step of every render, so no intent kind has to know about it.
+ *
+ * - WhatsApp: `*phrase*` where the platform draws formatting (a text body, an interactive body, a
+ *   caption); stripped everywhere else — a button title or a header prints a `*` literally.
+ * - Telegram with `parse_mode: 'HTML'`: `<b>phrase</b>` in `text` / `caption`.
+ * - Telegram with no `parse_mode`: a `bold` entity beside `text` (or `caption`), leaving every
+ *   other character exactly as it was. Switching the message to HTML instead would mean escaping
+ *   text that was never escaped before.
+ *
+ * A body with no marker is returned as the same object, so every existing reply is unchanged.
+ */
+function resolveStrong(reply: BotChannelReply): BotChannelReply {
+    if (!hasStrong(JSON.stringify(reply.body))) return reply;
+
+    if (reply.channel === 'whatsapp') {
+        const body = mapStrings(reply.body, [], (path, value) => {
+            const last = path[path.length - 1];
+            const parent = path[path.length - 2];
+            const formatted = (parent === 'text' && last === 'body')
+                || (parent === 'body' && last === 'text')
+                || last === 'caption';
+            return formatted ? strongToWhatsApp(value) : stripStrong(value);
+        });
+        return { ...reply, body: body as Record<string, unknown> };
+    }
+
+    const html = reply.body.parse_mode === 'HTML';
+    const body: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(reply.body)) {
+        if ((key === 'text' || key === 'caption') && typeof value === 'string') {
+            if (html) {
+                body[key] = strongToTelegramHtml(value);
+            } else {
+                const { text, entities } = strongToTelegramEntities(value);
+                body[key] = text;
+                if (entities.length) body[key === 'text' ? 'entities' : 'caption_entities'] = entities;
+            }
+        } else {
+            body[key] = mapStrings(value, [key], (_path, s) => stripStrong(s));
+        }
+    }
+    return { ...reply, body };
+}
+
+function mapStrings(value: unknown, path: string[], fn: (path: string[], value: string) => string): unknown {
+    if (typeof value === 'string') return fn(path, value);
+    if (Array.isArray(value)) return value.map((item, i) => mapStrings(item, [...path, String(i)], fn));
+    if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, mapStrings(v, [...path, k], fn)]));
+    }
+    return value;
 }
 
 /**
@@ -1439,9 +1586,12 @@ export function renderBotReplies(
     recipient: string,
 ): BotChannelReply[] {
     if (intent.kind === 'product_list') {
-        return channel === 'telegram'
+        return (channel === 'telegram'
             ? telegramProductList(intent, recipient)
-            : whatsappProductList(intent, recipient);
+            : whatsappProductList(intent, recipient)).map(resolveStrong);
+    }
+    if (intent.kind === 'sequence') {
+        return intent.parts.map((part) => renderBotReply(part, channel, recipient));
     }
     return [renderBotReply(intent, channel, recipient)];
 }

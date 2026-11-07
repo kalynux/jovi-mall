@@ -1,5 +1,6 @@
 import { ERROR_CATEGORIES, ErrorCategory } from '../../../core/error-category';
 import { ERROR_CODES, ErrorCode } from '../../../core/error-codes';
+import { bilingualText } from './bilingual-copy';
 
 /**
  * What the CUSTOMER is told when a bot call fails — a sentence, in their language.
@@ -525,6 +526,27 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         es: 'Esa cita ya no se puede mover. Puedo ayudarle a reservar una nueva.',
         ar: 'لم يعد بالإمكان تغيير موعد هذا الحجز. يمكنني مساعدتك في حجز موعد جديد.',
     },
+    [ERROR_CODES.BOOKING_PRICE_PROPOSAL_NOT_FOUND]: {
+        en: 'That price is no longer waiting for an answer. Your booking is as shown in your bookings.',
+        fr: "Ce prix n'attend plus de réponse. Votre réservation est celle affichée dans vos réservations.",
+        pt: 'Esse preço já não aguarda resposta. A sua marcação é a que aparece nas suas reservas.',
+        es: 'Ese precio ya no espera respuesta. Tu cita es la que aparece en tus reservas.',
+        ar: 'لم يعد هذا السعر بانتظار رد. حجزك هو المعروض في حجوزاتك.',
+    },
+    [ERROR_CODES.BOOKING_REMINDER_ALREADY_SENT]: {
+        en: 'You have already sent the provider your one reminder for this appointment.',
+        fr: "Vous avez déjà envoyé au prestataire votre unique rappel pour ce rendez-vous.",
+        pt: 'Já enviou ao prestador o seu único lembrete para este agendamento.',
+        es: 'Ya enviaste al proveedor tu único recordatorio para esta cita.',
+        ar: 'لقد أرسلت بالفعل إلى مقدم الخدمة تذكيرك الوحيد لهذا الموعد.',
+    },
+    [ERROR_CODES.BOOKING_REMINDER_NOT_APPLICABLE]: {
+        en: 'A reminder can only be sent for a confirmed appointment that has not started yet.',
+        fr: "Un rappel ne peut être envoyé que pour un rendez-vous confirmé qui n'a pas encore commencé.",
+        pt: 'Só é possível enviar um lembrete para um agendamento confirmado que ainda não começou.',
+        es: 'Solo se puede enviar un recordatorio para una cita confirmada que aún no ha empezado.',
+        ar: 'لا يمكن إرسال تذكير إلا لموعد مؤكد لم يبدأ بعد.',
+    },
     // ⚠ The dangerous one. "Try again" here is a second charge on a real handset.
     [ERROR_CODES.PAYMENT_BOOKING_IN_PROGRESS]: {
         en: 'A payment for that is already going through. Please check your phone rather than paying again.',
@@ -865,6 +887,19 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         ar: 'يجري استرداد دفعة هذا الطلب أو مراجعتها، لذا لا يمكن تغيير رسوم التوصيل الآن. تواصل مع الدعم إذا احتجت إلى مساعدة.',
     },
     /**
+     * The customer tried to propose a delivery fee on a parcel whose delivery the SHOP pays
+     * (owner, 2026-10-25: "inform the customer that it is handled by the vendor"). On the chat a
+     * customer is the only caller, so the payer is always the shop here. The generic sentence
+     * ("only the one who pays… can propose") left the customer wondering who that was.
+     */
+    [ERROR_CODES.DELIVERY_FEE_PROPOSAL_NOT_PAYER]: {
+        en: 'The shop pays the delivery of this parcel, so you have no delivery fee to pay on it — and nothing to propose. The shop and the delivery company settle it between them.',
+        fr: 'La boutique paie la livraison de ce colis : vous n’avez donc aucuns frais de livraison à payer dessus — ni rien à proposer. La boutique et la société de livraison s’arrangent entre elles.',
+        pt: 'A loja paga a entrega desta encomenda, por isso não tem taxa de entrega a pagar — nem nada a propor. A loja e a empresa de entregas acertam isso entre si.',
+        es: 'La tienda paga el envío de este paquete, así que no tienes tarifa de envío que pagar — ni nada que proponer. La tienda y la empresa de envíos lo arreglan entre ellas.',
+        ar: 'المتجر يدفع توصيل هذا الطرد، لذا لا توجد عليك رسوم توصيل — ولا شيء لتقترحه. يتفق المتجر وشركة التوصيل على ذلك فيما بينهما.',
+    },
+    /**
      * "Delivery in cash" (W-F) can no longer be honoured — a delivery company stopped taking the fee
      * in cash since the review, or no shop charges delivery. Before the spend: Pay now still works.
      */
@@ -1016,6 +1051,16 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
  * that returns the code — a raw `BOT_IDENTITY_UNRESOLVED` in a chat window is the exact
  * failure this function exists to make impossible.
  */
+/**
+ * ⭐ The refusals that can only reach someone with NO account yet — the Telegram share-your-number
+ * step, which comes before the language question (owner, 2026-10-26). Answered in English AND
+ * French whatever the guess; see `bilingual-copy.ts`.
+ */
+const BEFORE_LANGUAGE_CODES: ReadonlySet<string> = new Set<string>([
+    ERROR_CODES.BOT_IDENTITY_NEEDS_CONTACT,
+    ERROR_CODES.MAGIC_CONTACT_UNVERIFIED,
+]);
+
 export function customerMessageFor(
     code: string,
     category: ErrorCategory,
@@ -1028,6 +1073,9 @@ export function customerMessageFor(
 ): string {
     const lang = toBotCopyLanguage(language);
     const specific = CODE_COPY[code as ErrorCode];
+
+    // Said before the customer has an account, so before anybody knows their language: both.
+    if (specific && BEFORE_LANGUAGE_CODES.has(code)) return bilingualText(specific);
 
     if (specific) return fillUssd(specific[lang] ?? specific[DEFAULT_LANGUAGE], lang, details);
 

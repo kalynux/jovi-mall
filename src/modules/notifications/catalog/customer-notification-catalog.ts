@@ -1,6 +1,7 @@
 import { CustomerNotificationType } from '../models/customer-notification.model';
 import type { ShipmentFailureReason } from '../../shipments/shipment.model';
 import { renderTemplate, RenderContext } from './message-renderer';
+import { stripStrong, strongToWhatsApp } from '../../../core/richtext';
 import { Language, DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES } from './notification-i18n';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
@@ -288,6 +289,23 @@ const CANCEL_BOOKING_LABEL: Record<Language, string> = {
     en: 'Cancel booking', fr: 'Annuler', pt: 'Cancelar', es: 'Cancelar', ar: 'إلغاء الحجز'
 };
 
+/** The vendor's proposal of a new time (D-9): ≤ 20 characters in every language, WhatsApp's cap. */
+const ACCEPT_NEW_TIME_LABEL: Record<Language, string> = {
+    en: 'Accept new time', fr: 'Accepter', pt: 'Aceitar', es: 'Aceptar', ar: 'قبول الموعد'
+};
+
+const KEEP_MY_TIME_LABEL: Record<Language, string> = {
+    en: 'Keep my time', fr: 'Garder mon horaire', pt: 'Manter a hora', es: 'Mantener mi hora', ar: 'إبقاء موعدي'
+};
+
+const ACCEPT_PRICE_LABEL: Record<Language, string> = {
+    en: 'Accept price', fr: 'Accepter le prix', pt: 'Aceitar preço', es: 'Aceptar precio', ar: 'قبول السعر'
+};
+
+const DECLINE_PRICE_LABEL: Record<Language, string> = {
+    en: 'Decline price', fr: 'Refuser le prix', pt: 'Recusar preço', es: 'Rechazar precio', ar: 'رفض السعر'
+};
+
 const THAT_WORKS_LABEL: Record<Language, string> = {
     en: 'That works', fr: 'Ça me va', pt: 'Está bem', es: 'Me va bien', ar: 'يناسبني'
 };
@@ -400,6 +418,22 @@ const RETRY_BOOKING_PRICE: QuickReplyDef = { token: 'bpay:{{payPriceBookingId}}'
 const RETRY_BOOKING_BALANCE: QuickReplyDef = { token: 'bpay:{{payBalanceBookingId}}:b', label: TRY_AGAIN_LABEL, templateFallback: 'open:bl' };
 /** Reuses `PAY_BALANCE_LABEL` — the URL button's own words — rather than a second construction. */
 const PAY_BOOKING_BALANCE: QuickReplyDef = { token: 'bpay:{{bookingId}}:b', label: PAY_BALANCE_LABEL, templateFallback: 'open:bl' };
+/** The agreed price's two Pay buttons, ONE of which is drawn, by the same rule as the retry pair above. */
+const PAY_AGREED_PRICE: QuickReplyDef = { token: 'bpay:{{payPriceBookingId}}', label: PAY_NOW_LABEL, templateFallback: 'open:bl' };
+const PAY_PRICE_DIFFERENCE: QuickReplyDef = { token: 'bpay:{{payBalanceBookingId}}:b', label: PAY_NOW_LABEL, templateFallback: 'open:bl' };
+
+/**
+ * ⭐ **Show the place** (owner decision A-8, 2026-10-27) — `place:<bookingId>` sends the appointment's
+ * map pin and address (or its link) into the chat, through the website's own gates
+ * (`domain/booking-place-reply.ts`). On the "booking confirmed" message and the reminder, and on
+ * their WhatsApp templates too. For an appointment at the customer's own address it answers with
+ * that address, which is still the true answer to "where is it". Same label as the chat receipt's
+ * button (`bot-booking-place-copy.ts`), ≤ 20 characters.
+ */
+const SHOW_PLACE_LABEL: Record<Language, string> = {
+    en: 'Show the place', fr: 'Voir le lieu', pt: 'Ver o local', es: 'Ver el lugar', ar: 'عرض المكان'
+};
+const SHOW_BOOKING_PLACE: QuickReplyDef = { token: 'place:{{bookingId}}', label: SHOW_PLACE_LABEL, templateFallback: 'open:bl' };
 
 /** ≤ 20 characters in every language — WhatsApp's reply-button cap. */
 const SEE_DELIVERY_FEE_LABEL: Record<Language, string> = {
@@ -419,7 +453,21 @@ const PAY_DELIVERY_LABEL: Record<Language, string> = {
  * `parseDeliveryFeeArgument`, and `assertCustomerCatalogComplete` pins these literals to it.
  * Out of window the template button falls back to `dfee:list` — every change waiting.
  */
-const SEE_DELIVERY_FEE: QuickReplyDef = { token: 'dfee:{{orderId}}', label: SEE_DELIVERY_FEE_LABEL, templateFallback: 'dfee:list' };
+/**
+ * ⛔ **Flip to `true` ONLY once Meta has APPROVED `customer_order_delivery_fee_approval_needed_v2`
+ * in every language a customer may hold (en + fr today).** Owner request 2026-10-25: the delivery
+ * company's REASON, in bold, in the out-of-window message too.
+ *
+ * The approved v1 template carries no reason at all (it was stripped as an optional clause by
+ * `generate-whatsapp-templates.ts`). v2 adds it as a fifth parameter, which the generator wraps in
+ * `*…*`. Sending v2 before it is approved fails every out-of-window delivery of this notification,
+ * which is why this is a switch and not simply the new entry: until it flips, v1 is sent unchanged.
+ *
+ * Payload to submit: `api-doc/notifications/pending/fee-reason-template-v2.json`.
+ */
+const FEE_REASON_TEMPLATE_APPROVED = false;
+
+const SEE_DELIVERY_FEE: QuickReplyDef ={ token: 'dfee:{{orderId}}', label: SEE_DELIVERY_FEE_LABEL, templateFallback: 'dfee:list' };
 const PAY_DELIVERY_TOPUP: QuickReplyDef = { token: 'dfee:{{orderId}}', label: PAY_DELIVERY_LABEL, templateFallback: 'dfee:list' };
 const RETRY_DELIVERY_TOPUP: QuickReplyDef = { token: 'dfee:{{orderId}}', label: TRY_AGAIN_LABEL, templateFallback: 'dfee:list' };
 
@@ -624,6 +672,28 @@ const REFUND_AMOUNT_WITH_FEE_LINE: Record<Language, string> = {
     ar: 'ستستلم {{net}} {{currency}} ({{gross}} مطروحًا منها رسوم تحويل بنسبة {{percent}}٪).'
 };
 
+/**
+ * 2026-10-22 (owner F-1…F-4): the payment provider kept a fee when the customer PAID, and a
+ * transfer fee sends it back. Both are named, as amounts, so the customer can see why they
+ * receive less — "10,000 minus 200 kept by the payment provider and a 196 transfer fee".
+ */
+const REFUND_AMOUNT_WITH_BOTH_FEES_LINE: Record<Language, string> = {
+    en: 'You receive {{net}} {{currency}} ({{gross}} minus {{paymentFee}} kept by the payment provider when you paid and a {{transferFee}} transfer fee).',
+    fr: 'Vous recevez {{net}} {{currency}} ({{gross}} moins {{paymentFee}} retenus par le prestataire de paiement lors de votre paiement et {{transferFee}} de frais de transfert).',
+    pt: 'Recebe {{net}} {{currency}} ({{gross}} menos {{paymentFee}} retidos pelo prestador de pagamento quando pagou e {{transferFee}} de taxa de transferência).',
+    es: 'Recibes {{net}} {{currency}} ({{gross}} menos {{paymentFee}} que retuvo el proveedor de pago cuando pagaste y {{transferFee}} de comisión de transferencia).',
+    ar: 'ستستلم {{net}} {{currency}} ({{gross}} مطروحًا منها {{paymentFee}} احتفظ بها مزوّد الدفع عند الدفع و{{transferFee}} رسوم تحويل).'
+};
+
+/** A card refund (2026-10-22): no transfer, only the fee the payment provider kept when they paid. */
+const REFUND_AMOUNT_WITH_PAYMENT_FEE_LINE: Record<Language, string> = {
+    en: 'You receive {{net}} {{currency}} ({{gross}} minus {{paymentFee}} kept by the payment provider when you paid).',
+    fr: 'Vous recevez {{net}} {{currency}} ({{gross}} moins {{paymentFee}} retenus par le prestataire de paiement lors de votre paiement).',
+    pt: 'Recebe {{net}} {{currency}} ({{gross}} menos {{paymentFee}} retidos pelo prestador de pagamento quando pagou).',
+    es: 'Recibes {{net}} {{currency}} ({{gross}} menos {{paymentFee}} que retuvo el proveedor de pago cuando pagaste).',
+    ar: 'ستستلم {{net}} {{currency}} ({{gross}} مطروحًا منها {{paymentFee}} احتفظ بها مزوّد الدفع عند الدفع).'
+};
+
 /** …and when none was (a card refund, or a fee rate set to 0). */
 const REFUND_AMOUNT_NO_FEE_LINE: Record<Language, string> = {
     en: 'You receive {{net}} {{currency}}.',
@@ -642,15 +712,34 @@ const REFUND_AMOUNT_NO_FEE_LINE: Record<Language, string> = {
  * a card refund never mentions a fee, because there is none (Stripe returns the full amount).
  */
 export function refundAmountLine(
-    input: { netAmount: number; grossAmount: number; feeAmount: number; feePercent: number; currency: string },
+    input: {
+        netAmount: number;
+        grossAmount: number;
+        feeAmount: number;
+        feePercent: number;
+        currency: string;
+        /** 2026-10-22: the two fees apart. Absent (an older refund): the whole fee was the transfer fee. */
+        paymentFee?: number;
+        transferFee?: number;
+    },
     lang: Language
 ): string {
     const fmt = (n: number) => new Intl.NumberFormat('en-US').format(Math.round(n));
-    const variants = input.feeAmount > 0 ? REFUND_AMOUNT_WITH_FEE_LINE : REFUND_AMOUNT_NO_FEE_LINE;
+    const paymentFee = input.paymentFee ?? 0;
+    const transferFee = input.transferFee ?? (input.paymentFee === undefined ? input.feeAmount : 0);
+    const variants = !(input.feeAmount > 0)
+        ? REFUND_AMOUNT_NO_FEE_LINE
+        : paymentFee > 0 && transferFee > 0
+            ? REFUND_AMOUNT_WITH_BOTH_FEES_LINE
+            : paymentFee > 0
+                ? REFUND_AMOUNT_WITH_PAYMENT_FEE_LINE
+                : REFUND_AMOUNT_WITH_FEE_LINE;
     return renderTemplate(variants[lang] ?? variants[DEFAULT_LANGUAGE], {
         net: fmt(input.netAmount),
         gross: fmt(input.grossAmount),
         percent: String(input.feePercent),
+        paymentFee: fmt(paymentFee),
+        transferFee: fmt(transferFee),
         currency: input.currency
     });
 }
@@ -742,7 +831,8 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Cus
                 bodyParams: ['{{vendorName}}', '{{serviceName}}', '{{startAt}}']
             }
         },
-        button: BOOKING_BUTTON
+        button: BOOKING_BUTTON,
+        actions: [SHOW_BOOKING_PLACE]
     },
 
     // Both the old and the new time, always. A message carrying only the new one
@@ -800,6 +890,207 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Cus
     // `{{refundLine}}` is substituted by the handler: a paid booking must say
     // where the money went in the SAME message, not a separate one that may
     // arrive later or not at all.
+    /**
+     * The VENDOR asks to move the appointment (owner decision D-9). Until the customer answers, the
+     * appointment keeps its original time; with no answer by `{{expiresAt}}` the original stands.
+     * Says what declining buys them — cancelling with a full refund — because that is the one fact
+     * that makes "decline" a real choice.
+     *
+     * Answered in the chat with two buttons (`yes:bkprop:` / `no:bkprop:`, handled in
+     * `bot-booking.controller.ts`) — the same answer the website gives.
+     */
+    'booking.reschedule_proposed': {
+        base: {
+            en: {
+                subject: 'New time proposed: {{serviceName}}',
+                body: '{{vendorName}} asks to move your {{serviceName}} from {{previousStartAt}} to {{startAt}}. Accept or decline it in your bookings before {{expiresAt}} — with no answer, your original time stays. If you decline, you can cancel with a full refund.'
+            },
+            fr: {
+                subject: 'Nouvel horaire proposé : {{serviceName}}',
+                body: '{{vendorName}} propose de déplacer votre {{serviceName}} du {{previousStartAt}} au {{startAt}}. Acceptez ou refusez dans vos réservations avant le {{expiresAt}} — sans réponse, votre horaire initial est maintenu. Si vous refusez, vous pouvez annuler avec un remboursement intégral.'
+            },
+            pt: {
+                subject: 'Nova hora proposta: {{serviceName}}',
+                body: '{{vendorName}} pede para alterar a sua {{serviceName}} de {{previousStartAt}} para {{startAt}}. Aceite ou recuse nas suas reservas antes de {{expiresAt}} — sem resposta, mantém-se a hora original. Se recusar, pode cancelar com reembolso total.'
+            },
+            es: {
+                subject: 'Nueva hora propuesta: {{serviceName}}',
+                body: '{{vendorName}} propone mover tu {{serviceName}} del {{previousStartAt}} al {{startAt}}. Acepta o rechaza en tus reservas antes del {{expiresAt}}; sin respuesta, se mantiene tu hora original. Si rechazas, puedes cancelar con reembolso completo.'
+            },
+            ar: {
+                subject: 'موعد جديد مقترح: {{serviceName}}',
+                body: 'يقترح {{vendorName}} نقل {{serviceName}} من {{previousStartAt}} إلى {{startAt}}. اقبل أو ارفض من حجوزاتك قبل {{expiresAt}} — وبدون رد يبقى موعدك الأصلي. إذا رفضت، يمكنك الإلغاء مع استرداد كامل.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_booking_reschedule_proposed',
+                bodyParams: ['{{vendorName}}', '{{serviceName}}', '{{previousStartAt}}', '{{startAt}}', '{{expiresAt}}']
+            }
+        },
+        button: BOOKING_BUTTON,
+        actions: [
+            { token: 'yes:bkprop:{{bookingId}}', label: ACCEPT_NEW_TIME_LABEL, templateFallback: 'open:bl' },
+            { token: 'no:bkprop:{{bookingId}}', label: KEEP_MY_TIME_LABEL, templateFallback: 'open:bl' }
+        ]
+    },
+
+    /**
+     * The vendor proposes a new time AND a new price, on a manual service (BOOKING-PRICE-PROPOSAL-PLAN).
+     * One answer for both, through the same buttons as a new time alone.
+     */
+    'booking.reschedule_price_proposed': {
+        base: {
+            en: {
+                subject: 'New time and price proposed: {{serviceName}}',
+                body: '{{vendorName}} asks to move your {{serviceName}} from {{previousStartAt}} to {{startAt}}, at {{currency}} {{amountFormatted}} instead of {{currency}} {{previousFormatted}}. Accept or decline before {{expiresAt}} — with no answer, your time and price stay. If you decline, you can cancel with a full refund.'
+            },
+            fr: {
+                subject: 'Nouvel horaire et nouveau prix proposés : {{serviceName}}',
+                body: '{{vendorName}} propose de déplacer votre {{serviceName}} du {{previousStartAt}} au {{startAt}}, à {{currency}} {{amountFormatted}} au lieu de {{currency}} {{previousFormatted}}. Acceptez ou refusez avant le {{expiresAt}} — sans réponse, votre horaire et votre prix sont maintenus. Si vous refusez, vous pouvez annuler avec un remboursement intégral.'
+            },
+            pt: {
+                subject: 'Nova hora e novo preço propostos: {{serviceName}}',
+                body: '{{vendorName}} pede para alterar a sua {{serviceName}} de {{previousStartAt}} para {{startAt}}, por {{currency}} {{amountFormatted}} em vez de {{currency}} {{previousFormatted}}. Aceite ou recuse antes de {{expiresAt}} — sem resposta, mantêm-se a hora e o preço. Se recusar, pode cancelar com reembolso total.'
+            },
+            es: {
+                subject: 'Nueva hora y nuevo precio propuestos: {{serviceName}}',
+                body: '{{vendorName}} propone mover tu {{serviceName}} del {{previousStartAt}} al {{startAt}}, por {{currency}} {{amountFormatted}} en lugar de {{currency}} {{previousFormatted}}. Acepta o rechaza antes del {{expiresAt}}; sin respuesta, se mantienen tu hora y tu precio. Si rechazas, puedes cancelar con reembolso completo.'
+            },
+            ar: {
+                subject: 'موعد وسعر جديدان مقترحان: {{serviceName}}',
+                body: 'يقترح {{vendorName}} نقل {{serviceName}} من {{previousStartAt}} إلى {{startAt}} بسعر {{currency}} {{amountFormatted}} بدلًا من {{currency}} {{previousFormatted}}. اقبل أو ارفض قبل {{expiresAt}} — وبدون رد يبقى موعدك وسعرك. إذا رفضت، يمكنك الإلغاء مع استرداد كامل.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_booking_reschedule_price_proposed',
+                bodyParams: ['{{vendorName}}', '{{serviceName}}', '{{previousStartAt}}', '{{startAt}}', '{{currency}}', '{{amountFormatted}}', '{{previousFormatted}}', '{{expiresAt}}']
+            }
+        },
+        button: BOOKING_BUTTON,
+        actions: [
+            { token: 'yes:bkprop:{{bookingId}}', label: ACCEPT_NEW_TIME_LABEL, templateFallback: 'open:bl' },
+            { token: 'no:bkprop:{{bookingId}}', label: KEEP_MY_TIME_LABEL, templateFallback: 'open:bl' }
+        ]
+    },
+
+    /**
+     * The vendor proposes a different price before approving a manual booking. Always sent: it is a
+     * question the appointment waits on, and it can only ever ask for more than the customer booked.
+     */
+    'booking.price_proposed': {
+        base: {
+            en: {
+                subject: 'New price proposed: {{serviceName}}',
+                body: '{{vendorName}} proposes {{currency}} {{amountFormatted}} instead of {{currency}} {{previousFormatted}} for your {{serviceName}} on {{startAt}}. Accept to confirm your booking at that price, or decline it before {{expiresAt}}. If you decline, you can cancel with a full refund.'
+            },
+            fr: {
+                subject: 'Nouveau prix proposé : {{serviceName}}',
+                body: '{{vendorName}} propose {{currency}} {{amountFormatted}} au lieu de {{currency}} {{previousFormatted}} pour votre {{serviceName}} du {{startAt}}. Acceptez pour confirmer votre réservation à ce prix, ou refusez avant le {{expiresAt}}. Si vous refusez, vous pouvez annuler avec un remboursement intégral.'
+            },
+            pt: {
+                subject: 'Novo preço proposto: {{serviceName}}',
+                body: '{{vendorName}} propõe {{currency}} {{amountFormatted}} em vez de {{currency}} {{previousFormatted}} para a sua {{serviceName}} de {{startAt}}. Aceite para confirmar a reserva por esse preço, ou recuse antes de {{expiresAt}}. Se recusar, pode cancelar com reembolso total.'
+            },
+            es: {
+                subject: 'Nuevo precio propuesto: {{serviceName}}',
+                body: '{{vendorName}} propone {{currency}} {{amountFormatted}} en lugar de {{currency}} {{previousFormatted}} para tu {{serviceName}} del {{startAt}}. Acepta para confirmar tu reserva a ese precio, o rechaza antes del {{expiresAt}}. Si rechazas, puedes cancelar con reembolso completo.'
+            },
+            ar: {
+                subject: 'سعر جديد مقترح: {{serviceName}}',
+                body: 'يقترح {{vendorName}} مبلغ {{currency}} {{amountFormatted}} بدلًا من {{currency}} {{previousFormatted}} لـ {{serviceName}} في {{startAt}}. اقبل لتأكيد حجزك بهذا السعر، أو ارفض قبل {{expiresAt}}. إذا رفضت، يمكنك الإلغاء مع استرداد كامل.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_booking_price_proposed',
+                bodyParams: ['{{vendorName}}', '{{currency}}', '{{amountFormatted}}', '{{previousFormatted}}', '{{serviceName}}', '{{startAt}}', '{{expiresAt}}']
+            }
+        },
+        button: BOOKING_BUTTON,
+        actions: [
+            { token: 'yes:bkprice:{{bookingId}}', label: ACCEPT_PRICE_LABEL, templateFallback: 'open:bl' },
+            { token: 'no:bkprice:{{bookingId}}', label: DECLINE_PRICE_LABEL, templateFallback: 'open:bl' }
+        ]
+    },
+
+    /** The agreed price is set, and this is what is owed for it. Says when, and what happens after. */
+    'booking.price_topup_due': {
+        base: {
+            en: {
+                subject: 'Payment needed: {{currency}} {{amountFormatted}}',
+                body: 'Your {{serviceName}} booking is agreed at {{currency}} {{priceFormatted}}. Please pay {{currency}} {{amountFormatted}} by {{dueAt}}, or the booking will be cancelled.'
+            },
+            fr: {
+                subject: 'Paiement requis : {{currency}} {{amountFormatted}}',
+                body: 'Votre réservation {{serviceName}} est convenue à {{currency}} {{priceFormatted}}. Veuillez payer {{currency}} {{amountFormatted}} avant le {{dueAt}}, sinon la réservation sera annulée.'
+            },
+            pt: {
+                subject: 'Pagamento necessário: {{currency}} {{amountFormatted}}',
+                body: 'A sua reserva de {{serviceName}} ficou acordada em {{currency}} {{priceFormatted}}. Pague {{currency}} {{amountFormatted}} até {{dueAt}}, ou a reserva será cancelada.'
+            },
+            es: {
+                subject: 'Pago necesario: {{currency}} {{amountFormatted}}',
+                body: 'Tu reserva de {{serviceName}} está acordada en {{currency}} {{priceFormatted}}. Paga {{currency}} {{amountFormatted}} antes del {{dueAt}}, o la reserva se cancelará.'
+            },
+            ar: {
+                subject: 'الدفع مطلوب: {{currency}} {{amountFormatted}}',
+                body: 'تم الاتفاق على حجز {{serviceName}} بسعر {{currency}} {{priceFormatted}}. يرجى دفع {{currency}} {{amountFormatted}} قبل {{dueAt}}، وإلا فسيتم إلغاء الحجز.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_booking_price_topup_due',
+                bodyParams: ['{{serviceName}}', '{{currency}}', '{{priceFormatted}}', '{{amountFormatted}}', '{{dueAt}}']
+            }
+        },
+        button: BOOKING_BUTTON,
+        actions: [PAY_AGREED_PRICE, PAY_PRICE_DIFFERENCE]
+    },
+
+    /**
+     * The vendor declined the customer's request for a new time (D-8 — a service the vendor
+     * approves by hand). Nothing changed: the appointment is where it was.
+     *
+     */
+    'booking.reschedule_declined': {
+        base: {
+            en: {
+                subject: 'New time not accepted: {{serviceName}}',
+                body: '{{vendorName}} could not take your {{serviceName}} at {{proposedStartAt}}. Your appointment stays at {{startAt}} — you can pick another time or cancel from your bookings.'
+            },
+            fr: {
+                subject: 'Nouvel horaire non accepté : {{serviceName}}',
+                body: '{{vendorName}} ne peut pas vous recevoir pour {{serviceName}} le {{proposedStartAt}}. Votre rendez-vous reste le {{startAt}} — vous pouvez choisir un autre horaire ou annuler depuis vos réservations.'
+            },
+            pt: {
+                subject: 'Nova hora não aceite: {{serviceName}}',
+                body: '{{vendorName}} não pode fazer a sua {{serviceName}} em {{proposedStartAt}}. A sua marcação mantém-se em {{startAt}} — pode escolher outra hora ou cancelar nas suas reservas.'
+            },
+            es: {
+                subject: 'Nueva hora no aceptada: {{serviceName}}',
+                body: '{{vendorName}} no puede atender tu {{serviceName}} el {{proposedStartAt}}. Tu cita sigue el {{startAt}}; puedes elegir otra hora o cancelar desde tus reservas.'
+            },
+            ar: {
+                subject: 'لم يُقبل الموعد الجديد: {{serviceName}}',
+                body: 'لا يستطيع {{vendorName}} تقديم {{serviceName}} في {{proposedStartAt}}. يبقى موعدك في {{startAt}} — يمكنك اختيار وقت آخر أو الإلغاء من حجوزاتك.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_booking_reschedule_declined',
+                bodyParams: ['{{vendorName}}', '{{serviceName}}', '{{proposedStartAt}}', '{{startAt}}']
+            }
+        },
+        button: BOOKING_BUTTON
+    },
+
     'booking.cancelled': {
         base: {
             en: {
@@ -900,7 +1191,8 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Cus
                 bodyParams: ['{{serviceName}}', '{{vendorName}}', '{{startAt}}', '{{whenPhrase}}']
             }
         },
-        button: BOOKING_BUTTON
+        button: BOOKING_BUTTON,
+        actions: [SHOW_BOOKING_PLACE]
     },
 
     'booking.payment.received': {
@@ -1395,6 +1687,42 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Cus
             template: {
                 name: 'customer_order_payment_received',
                 bodyParams: ['{{currency}}', '{{amountFormatted}}', '{{orderNumber}}', '{{vendorName}}']
+            }
+        },
+        button: ORDER_BUTTON
+    },
+
+    // A partial order's online part arrived (2026-11-01). Its own situation rather than
+    // `order.payment.received`: that one says the payment is done, and here the customer still owes
+    // cash at the door. Money, so nobody can mute it.
+    'order.prepayment.received': {
+        base: {
+            en: {
+                subject: 'Payment received for {{orderNumber}}',
+                body: 'We received {{paidFormatted}} online for order {{orderNumber}}. {{vendorName}} is preparing it. You pay the remaining {{balanceFormatted}} {{currency}} in cash at delivery.'
+            },
+            fr: {
+                subject: 'Paiement reçu pour {{orderNumber}}',
+                body: 'Nous avons reçu {{paidFormatted}} en ligne pour la commande {{orderNumber}}. {{vendorName}} la prépare. Vous payez les {{balanceFormatted}} {{currency}} restants en espèces à la livraison.'
+            },
+            pt: {
+                subject: 'Pagamento recebido para {{orderNumber}}',
+                body: 'Recebemos {{paidFormatted}} online pela encomenda {{orderNumber}}. {{vendorName}} está a prepará-la. Paga os restantes {{balanceFormatted}} {{currency}} em dinheiro na entrega.'
+            },
+            es: {
+                subject: 'Pago recibido para {{orderNumber}}',
+                body: 'Recibimos {{paidFormatted}} en línea por el pedido {{orderNumber}}. {{vendorName}} lo está preparando. Pagas los {{balanceFormatted}} {{currency}} restantes en efectivo en la entrega.'
+            },
+            ar: {
+                subject: 'تم استلام الدفعة للطلب {{orderNumber}}',
+                body: 'استلمنا {{paidFormatted}} عبر الإنترنت للطلب {{orderNumber}}. تقوم {{vendorName}} بتجهيزه. تدفع المبلغ المتبقي {{balanceFormatted}} {{currency}} نقدًا عند التسليم.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_order_prepayment_received',
+                bodyParams: ['{{paidFormatted}}', '{{orderNumber}}', '{{vendorName}}', '{{balanceFormatted}}', '{{currency}}']
             }
         },
         button: ORDER_BUTTON
@@ -1989,10 +2317,15 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Cus
         },
         whatsapp: {
             text: {},
-            template: {
-                name: 'customer_order_delivery_fee_approval_needed',
-                bodyParams: ['{{currency}}', '{{proposedFeeFormatted}}', '{{feeBeforeFormatted}}', '{{orderNumber}}']
-            }
+            template: FEE_REASON_TEMPLATE_APPROVED
+                ? {
+                    name: 'customer_order_delivery_fee_approval_needed_v2',
+                    bodyParams: ['{{currency}}', '{{proposedFeeFormatted}}', '{{feeBeforeFormatted}}', '{{orderNumber}}', '{{reasonLine}}']
+                }
+                : {
+                    name: 'customer_order_delivery_fee_approval_needed',
+                    bodyParams: ['{{currency}}', '{{proposedFeeFormatted}}', '{{feeBeforeFormatted}}', '{{orderNumber}}']
+                }
         },
         button: ORDER_BUTTON,
         actions: [SEE_DELIVERY_FEE]
@@ -2494,7 +2827,7 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Cus
  * the customer's 24-hour window. The boot check requires a template of every situation NOT
  * listed here, so a template cannot go missing by accident; it can only be left out on purpose.
  */
-export const IN_WINDOW_ONLY_SITUATIONS: ReadonlySet<CustomerNotificationType> = new Set(['cart.abandoned']);
+export const IN_WINDOW_ONLY_SITUATIONS: ReadonlySet<CustomerNotificationType> = new Set<CustomerNotificationType>(['cart.abandoned']);
 
 /**
  * "Blue dress" · "Blue dress and 2 more", localized. The basket reminder's one value: what is
@@ -2743,9 +3076,10 @@ export function renderCustomerInApp(
     ctx: RenderContext
 ): { title: string; message: string } {
     const base = pickLang(CUSTOMER_NOTIFICATION_CATALOG[situation].base, lang)!;
+    // The inbox and push draw no bold, so a phrase marked `strong()` in the context is plain here.
     return {
-        title: renderTemplate(base.subject, ctx),
-        message: renderTemplate(base.body, ctx)
+        title: stripStrong(renderTemplate(base.subject, ctx)),
+        message: stripStrong(renderTemplate(base.body, ctx))
     };
 }
 
@@ -2771,9 +3105,18 @@ export function renderCustomerChannelText(
 
     const override = overrideMap ? pickLang(overrideMap, lang) : undefined;
 
+    const subject = stripStrong(renderTemplate(override?.subject ?? base.subject, ctx));
+    const body = renderTemplate(override?.body ?? base.body, ctx);
+
+    /**
+     * A phrase marked `strong()` in the context (the delivery-fee reason, 2026-10-25), resolved
+     * for the channel. WhatsApp: `*…*` now, because its body is sent as-is by three different
+     * message shapes. Telegram: KEPT, because its body is HTML-escaped later and only
+     * `toTelegramNotificationBody` can add a tag after that. Email: plain.
+     */
     return {
-        subject: renderTemplate(override?.subject ?? base.subject, ctx),
-        body: renderTemplate(override?.body ?? base.body, ctx)
+        subject,
+        body: channel === 'whatsapp' ? strongToWhatsApp(body) : channel === 'telegram' ? body : stripStrong(body)
     };
 }
 
@@ -2793,7 +3136,8 @@ export function renderCustomerWhatsAppTemplateParams(
     if (!tpl) return [];
     const inApp = renderCustomerInApp(situation, lang, ctx);
     const merged: RenderContext = { ...ctx, title: inApp.title, message: inApp.message };
-    return tpl.bodyParams.map(param => renderTemplate(param, merged));
+    // Plain: a template's bold lives in Meta's approved body (`*{{5}}*`), never in a parameter.
+    return tpl.bodyParams.map(param => stripStrong(renderTemplate(param, merged)));
 }
 
 /**

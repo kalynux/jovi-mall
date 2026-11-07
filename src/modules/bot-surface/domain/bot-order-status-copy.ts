@@ -339,17 +339,25 @@ export const ORDER_CASH_ON_DELIVERY_COPY: Readonly<Copy> = Object.freeze({
  * ⚠ **`cashOnDelivery` means EVERY order being described is cash on delivery** — one order for a
  * chat card, all of a checkout's orders for a listing row. A group mixing prepaid and COD orders is
  * not "cash on delivery", and saying so would hide the prepaid half's debt.
+ *
+ * ⚠ **`onlinePartDue` wins over it**: a partial order is cash on delivery by method, and until its
+ * online part is paid the customer owes money NOW and the order will not ship.
  */
 export function botPaymentStateLabel(
     state: BotOrderPaymentState,
     language: string | null | undefined,
-    options: { cashOnDelivery?: boolean } = {},
+    options: { cashOnDelivery?: boolean; onlinePartDue?: boolean } = {},
 ): string {
     if (state === 'unknown') return botOrderStatusUnavailable(language);
-    if (options.cashOnDelivery && state === 'awaiting_payment') {
+    if (options.cashOnDelivery && !options.onlinePartDue && state === 'awaiting_payment') {
         return pick(ORDER_CASH_ON_DELIVERY_COPY, language);
     }
     return pick(ORDER_PAYMENT_COPY[state], language);
+}
+
+/** A partial order whose online part is not paid yet. */
+export function onlinePartDueOf(order: { partialPayment?: { paidAt: Date | null } | null }): boolean {
+    return !!order.partialPayment && !order.partialPayment.paidAt;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -427,11 +435,46 @@ const REFUND_FEE_NOTE: Readonly<Copy> = Object.freeze({
     ar: '({{gross}} مطروحًا منها رسوم تحويل بنسبة {{percent}}٪)',
 });
 
+/** 2026-10-22: both fees, named as amounts — the payment provider's and the transfer's. */
+const REFUND_BOTH_FEES_NOTE: Readonly<Copy> = Object.freeze({
+    en: '({{gross}} minus a {{paymentFee}} payment fee and a {{transferFee}} transfer fee)',
+    fr: '({{gross}} moins {{paymentFee}} de frais de paiement et {{transferFee}} de frais de transfert)',
+    pt: '({{gross}} menos {{paymentFee}} de taxa de pagamento e {{transferFee}} de taxa de transferência)',
+    es: '({{gross}} menos {{paymentFee}} de comisión de pago y {{transferFee}} de comisión de transferencia)',
+    ar: '({{gross}} مطروحًا منها {{paymentFee}} رسوم دفع و{{transferFee}} رسوم تحويل)',
+});
+
+/** A card refund: only the payment provider's fee. */
+const REFUND_PAYMENT_FEE_NOTE: Readonly<Copy> = Object.freeze({
+    en: '({{gross}} minus a {{paymentFee}} payment fee)',
+    fr: '({{gross}} moins {{paymentFee}} de frais de paiement)',
+    pt: '({{gross}} menos {{paymentFee}} de taxa de pagamento)',
+    es: '({{gross}} menos {{paymentFee}} de comisión de pago)',
+    ar: '({{gross}} مطروحًا منها {{paymentFee}} رسوم دفع)',
+});
+
 export function botRefundFeeNote(
-    input: { feeAmount: number; feePercent: number; grossFormatted: string },
+    input: {
+        feeAmount: number;
+        feePercent: number;
+        grossFormatted: string;
+        /** 2026-10-22: the two fees apart, already formatted. Absent: the whole fee was the transfer fee. */
+        paymentFee?: number;
+        transferFee?: number;
+        formatFee?: (amount: number) => string;
+    },
     language: string | null | undefined,
 ): string {
     if (!(input.feeAmount > 0)) return '';
+    const fmt = input.formatFee ?? ((n: number) => String(n));
+    const paymentFee = input.paymentFee ?? 0;
+    const transferFee = input.transferFee ?? (input.paymentFee === undefined ? input.feeAmount : 0);
+    if (paymentFee > 0) {
+        return pick(transferFee > 0 ? REFUND_BOTH_FEES_NOTE : REFUND_PAYMENT_FEE_NOTE, language)
+            .replace('{{gross}}', input.grossFormatted)
+            .replace('{{paymentFee}}', fmt(paymentFee))
+            .replace('{{transferFee}}', fmt(transferFee));
+    }
     return pick(REFUND_FEE_NOTE, language)
         .replace('{{gross}}', input.grossFormatted)
         .replace('{{percent}}', String(input.feePercent));
@@ -445,14 +488,30 @@ export function botRefundFeeNote(
  * passed in so this module keeps its no-runtime-imports rule.
  */
 export function botRefundLine(
-    refund: { status: CustomerRefundStatus | string; grossAmount: number; feeAmount: number; feePercent: number; netAmount: number; currency: string },
+    refund: {
+        status: CustomerRefundStatus | string;
+        grossAmount: number;
+        feeAmount: number;
+        feePercent: number;
+        netAmount: number;
+        currency: string;
+        paymentFee?: number;
+        transferFee?: number;
+    },
     language: string | null | undefined,
     formatPrice: (amount: number, currency: string) => string,
 ): string {
     const label = botRefundStateLabel(refund.status, language);
     if (refund.status === 'declined') return label;
     const note = botRefundFeeNote(
-        { feeAmount: refund.feeAmount, feePercent: refund.feePercent, grossFormatted: formatPrice(refund.grossAmount, refund.currency) },
+        {
+            feeAmount: refund.feeAmount,
+            feePercent: refund.feePercent,
+            grossFormatted: formatPrice(refund.grossAmount, refund.currency),
+            paymentFee: refund.paymentFee,
+            transferFee: refund.transferFee,
+            formatFee: (n) => formatPrice(n, refund.currency),
+        },
         language,
     );
     return `${label} · ${formatPrice(refund.netAmount, refund.currency)}${note ? ` ${note}` : ''}`;

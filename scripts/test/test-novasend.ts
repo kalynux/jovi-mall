@@ -1,17 +1,18 @@
 /**
- * test:novasend — the NovaSend adapter, the `CODE_FIRST` payment code and per-route amount limits,
- * offline.
+ * test:novasend — the NovaSend adapter and its per-route amount limits, offline. What the adapter
+ * expects of NovaSend is what the live test of 2026-11-04 proved, which differs from its docs.
  *
  * What is asserted is what a reader cannot check by looking, and what fails quietly:
  *
- *   1. Conformance          — capabilities (MTN PUSH, Orange CODE_FIRST, both limited), and the
+ *   1. Conformance          — capabilities (MTN and Orange both PUSH, both limited), and the
  *                            members that must be ABSENT (refund, OTP step, balance)
  *   2. verifyWebhook        — the HMAC over the body: missing, wrong, right (raw and re-serialised)
  *   3. Status mapping       — NovaSend's inconsistent words; unknown → PENDING
- *   4. Events + ⛔ forgery  — direction, refund records ignored, a signed SUCCESS re-read from the record
- *   5. Pay-ins on the wire  — Basic auth, deterministic UUID idempotency key, the Orange code, refusals
- *   6. Payouts              — the documented body, 4xx refusals vs unknown outcomes, 409 read-back
- *   7. Routing with NovaSend active — /options, PAYMENT_CODE_REQUIRED, the amount limits, the bot pre-check
+ *   4. Events + ⛔ forgery  — direction, refund records ignored, a signed SUCCESS re-read by NovaSend's id
+ *   5. Pay-ins on the wire  — Basic auth, deterministic UUID idempotency key, no Orange code, Moon SARL, refusals
+ *   6. Payouts              — the body, 4xx refusals vs unknown outcomes, read-back by id, 409 never resends
+ *   7. Routing with NovaSend active — /options, no code asked for, the amount limits, the bot pre-check;
+ *      and the dormant `CODE_FIRST` machinery, against a synthetic capability
  *   8. Bot copy             — `{ussd}` filled from the refusal, never blank
  *   9. Boot rules           — config/env.ts, against synthetic environments
  *  10. Source scans         — structural invariants
@@ -30,7 +31,6 @@ process.env.NOVASEND_API_SECRET = 'ns-secret';
 process.env.NOVASEND_WEBHOOK_SECRET = SECRET;
 process.env.NOVASEND_BASE_URL = 'https://novasend.test';
 process.env.NOVASEND_RETURN_URL = 'https://shop.test';
-process.env.NOVASEND_ORANGE_CODE_USSD = '#144*82#';
 process.env.NOVASEND_SANDBOX_SCENARIO = 'completed';
 // The seeded settings must not be refreshed from Mongo mid-suite.
 process.env.PAYMENT_SETTINGS_CACHE_TTL_MS = '600000';
@@ -62,11 +62,12 @@ import {
   routeNeedsPreChargeFacts,
 } from '../../src/modules/bot-surface/miniapp/surfaces/checkout-payer';
 import { customerMessageFor } from '../../src/modules/bot-surface/domain/bot-error-copy';
+import { handsetStepOf, instructionLines } from '../../src/modules/bot-surface/domain/checkout-chat-reply';
 import { SENSITIVE_FIELD_NAMES } from '../../src/core/audit/redact';
 import {
   NovaSendGateway,
   NOVASEND_CM_LIMITS,
-  isNovasendCodeRefusal,
+  NOVASEND_PAYEE_NAME,
   normalizeNovasendStatus,
   novasendEventFrom,
   novasendIdempotencyKey,
@@ -158,12 +159,13 @@ function thrownSync(fn: () => unknown): any {
 
 const isAppError = (e: any, code: string): boolean => e instanceof AppError && e.code === code;
 const sign = (raw: string | Buffer, secret = SECRET) => crypto.createHmac('sha256', secret).update(raw).digest('hex');
+const LIVE_ID = 'tr_fixture';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 /** A NovaSend pay-in record, shaped like the docs' example. */
 function payinRecord(reference: string, status: string, extra: Record<string, unknown> = {}) {
   return {
-    id: 'pr_fixture', type: 'payin', reference, status, confirmationRequired: false,
+    id: LIVE_ID, type: 'payin', reference, status, confirmationRequired: false,
     confirmationStatus: 'none', paymentUrl: null, isDirect: true, payFee: false,
     createdAt: '2026-10-05T10:00:00.000Z', amount: 5000, fee: 80, chargedAmount: 5080,
     currency: 'XAF', failure: null, ...extra,
@@ -171,7 +173,7 @@ function payinRecord(reference: string, status: string, extra: Record<string, un
 }
 
 const MTN = '+237670000000';
-const ORANGE = '+237655000000';
+const ORANGE = '+237691550800';
 
 (async () => {
   const gateway = new NovaSendGateway();
@@ -181,14 +183,14 @@ const ORANGE = '+237655000000';
 
   assert('name is NOVASEND, and the registry holds this adapter', () =>
     gateway.name === 'NOVASEND' && PAYMENT_GATEWAYS.get('NOVASEND') instanceof NovaSendGateway);
-  assert('MTN is PUSH, needs a number, limited to 200–500,000', () => {
+  assert('MTN is PUSH, needs a number, limited to 301–500,000', () => {
     const c = gateway.capabilities.collect.MTN;
-    return c?.flow === 'PUSH' && c.requires.join() === 'phoneNumber' && c.limits?.min === 200 && c.limits?.max === 500_000;
+    return c?.flow === 'PUSH' && c.requires.join() === 'phoneNumber' && c.limits?.min === 301 && c.limits?.max === 500_000;
   });
-  assert('ORANGE is CODE_FIRST, needs a number AND the payment code, names what to dial', () => {
+  assert('ORANGE is PUSH too: a number and nothing else, no code to dial for (live, 2026-11-04)', () => {
     const c = gateway.capabilities.collect.ORANGE;
-    return c?.flow === 'CODE_FIRST' && c.requires.includes('phoneNumber') && c.requires.includes('paymentCode')
-      && c.codeUssd === '#144*82#' && c.limits?.max === 500_000;
+    return c?.flow === 'PUSH' && c.requires.join() === 'phoneNumber' && c.codeUssd === undefined
+      && c.limits?.min === 301 && c.limits?.max === 500_000;
   });
   assert('no CARD, settles asynchronously', () => !gateway.capabilities.collect.CARD && gateway.capabilities.settlesAsync);
   assert('refundPayment, authorizePayment and payoutBalance are ABSENT', () =>
@@ -210,9 +212,35 @@ const ORANGE = '+237655000000';
   const compact = JSON.stringify(payinRecord(ref, 'success'));
   const spaced = JSON.stringify(payinRecord(ref, 'success'), null, 2);
 
-  assert('no X-Signature-Value → missing_signature', () => {
+  assert('neither signature header → missing_signature', () => {
     const v = gateway.verifyWebhook({ rawBody: Buffer.from(compact), headers: {} });
     return !v.ok && v.reason === 'missing_signature';
+  });
+  assert('a signature on X-Webhook-Signature verifies (the docs\' header name)', () =>
+    gateway.verifyWebhook({ rawBody: Buffer.from(compact), headers: { 'x-webhook-signature': sign(compact) } }).ok);
+  assert('a wrong signature on X-Webhook-Signature → bad_signature, naming the header and not its value', () => {
+    const forged = sign(compact, 'other');
+    const v = gateway.verifyWebhook({ rawBody: Buffer.from(compact), headers: { 'x-webhook-signature': forged } });
+    return !v.ok && v.reason === 'bad_signature' && v.detail === 'presented on x-webhook-signature' && !v.detail.includes(forged);
+  });
+  assert('both headers, one wrong → the good one still verifies, whichever it is', () =>
+    gateway.verifyWebhook({ rawBody: Buffer.from(compact), headers: { 'x-signature-value': sign(compact, 'other'), 'x-webhook-signature': sign(compact) } }).ok
+    && gateway.verifyWebhook({ rawBody: Buffer.from(compact), headers: { 'x-signature-value': sign(compact), 'x-webhook-signature': sign(compact, 'other') } }).ok);
+  assert('both headers, both wrong → bad_signature', () => {
+    const v = gateway.verifyWebhook({ rawBody: Buffer.from(compact), headers: { 'x-signature-value': sign(compact, 'other'), 'x-webhook-signature': sign(compact, 'another') } });
+    return !v.ok && v.reason === 'bad_signature';
+  });
+  assert('the verified header is logged by NAME and its value is never logged', () => {
+    const lines: string[] = [];
+    const realInfo = console.info;
+    console.info = (...args: unknown[]) => { lines.push(args.join(' ')); };
+    const signature = sign(compact);
+    try {
+      gateway.verifyWebhook({ rawBody: Buffer.from(compact), headers: { 'x-webhook-signature': signature } });
+    } finally {
+      console.info = realInfo;
+    }
+    return lines.length === 1 && lines[0] === '[NOVASENDWebhook] signature verified on x-webhook-signature' && !lines[0].includes(signature);
   });
   assert('a signature made with another secret → bad_signature', () => {
     const v = gateway.verifyWebhook({ rawBody: Buffer.from(compact), headers: { 'x-signature-value': sign(compact, 'other') } });
@@ -251,9 +279,9 @@ const ORANGE = '+237655000000';
   section('4. Events, and ⛔ the forgery drill');
 
   const payoutRef = mintMerchantRef('po');
-  assert('a payin record is a collection naming our reference', () => {
+  assert('a payin record is a collection: our reference is the merchantRef, NovaSend\'s id the gatewayRef', () => {
     const e = novasendEventFrom(payinRecord(ref, 'success'), null);
-    return e?.direction === 'collection' && e.merchantRef === ref && e.gatewayRef === ref && e.status === 'SUCCEEDED' && e.currency === 'XAF';
+    return e?.direction === 'collection' && e.merchantRef === ref && e.gatewayRef === LIVE_ID && e.status === 'SUCCEEDED' && e.currency === 'XAF';
   });
   assert('a payout record is a payout', () =>
     novasendEventFrom({ type: 'payout', reference: payoutRef, status: 'processed' }, null)?.direction === 'payout');
@@ -276,7 +304,7 @@ const ORANGE = '+237655000000';
   script([[/\/v1\/payin\//, () => ({ status: 200, body: payinRecord(ref, 'failed', { failure: { message: 'Insufficient funds' } }) })]]);
   const confirmed = await gateway.confirmWebhookEvent(claimed);
   assert('⛔ the record, not the callback, is what is acted on (SUCCESS claimed, FAILED recorded)', () =>
-    confirmed?.status === 'FAILED' && seen[0]?.url.endsWith(`/v1/payin/${ref}`) && seen[0]?.method === 'GET');
+    confirmed?.status === 'FAILED' && seen[0]?.url.endsWith(`/v1/payin/${LIVE_ID}`) && seen[0]?.method === 'GET');
 
   script([[/\/v1\/payin\//, () => ({ status: 200, body: payinRecord(mintMerchantRef('pt'), 'success') })]]);
   const other = await gateway.confirmWebhookEvent(claimed);
@@ -295,11 +323,18 @@ const ORANGE = '+237655000000';
   assert('NovaSend failing → THROWS (the webhook answers 5xx; the sweep is the backstop)', () =>
     isAppError(outage, ERROR_CODES.NOVASEND_REQUEST_FAILED));
 
-  const payoutClaim = novasendEventFrom({ type: 'payout', reference: payoutRef, status: 'success' }, null)!;
-  script([[/\/v1\/direct\/payout\//, () => ({ status: 200, body: { type: 'payout', reference: payoutRef, status: 'processed' } })]]);
+  const payoutClaim = novasendEventFrom({ id: 'tr_payout', type: 'payout', reference: payoutRef, status: 'success' }, null)!;
+  script([[/\/v1\/payout\//, () => ({ status: 200, body: { id: 'tr_payout', type: 'payout', reference: payoutRef, status: 'processed' } })]]);
   const payoutConfirmed = await gateway.confirmWebhookEvent(payoutClaim);
-  assert('a payout callback is re-read on /v1/direct/payout/{ref}', () =>
-    payoutConfirmed?.status === 'SUCCEEDED' && /\/v1\/direct\/payout\//.test(seen[0]?.url ?? ''));
+  assert('a payout callback is re-read on /v1/payout/{id}, the route live answers (never /v1/direct/payout)', () =>
+    payoutConfirmed?.status === 'SUCCEEDED' && seen[0]?.url.endsWith('/v1/payout/tr_payout') && payoutConfirmed.merchantRef === payoutRef);
+
+  const idless = gateway.parseWebhookEvent({ type: 'payin', reference: ref, status: 'success' })!;
+  script([[/\/v1\/payin\//, () => ({ status: 404, body: { code: 'transaction_does_not_exist' } })]]);
+  const idlessConfirmed = await gateway.confirmWebhookEvent(idless);
+  assert('a notification with no id is looked up by reference, 404s as live does, and settles nothing (the sweep will)', () =>
+    idless.gatewayRef === ref && idless.merchantRef === ref && idlessConfirmed === null);
+
 
   // ─── 5 ──────────────────────────────────────────────────────────────────────
   section('5. Pay-ins on the wire');
@@ -323,7 +358,8 @@ const ORANGE = '+237655000000';
     channel: { phoneNumber: MTN, phoneOperator: 'MTN', customerName: 'Ada' },
   });
   const sent = seen[0];
-  assert('MTN: accepted as PENDING, gatewayRef = our reference', () => mtn.success && mtn.status === 'PENDING' && mtn.gatewayRef === mtnRef);
+  assert('MTN: accepted as PENDING, gatewayRef = NovaSend\'s id, the only value its status route answers to', () =>
+    mtn.success && mtn.status === 'PENDING' && mtn.gatewayRef === LIVE_ID);
   assert('MTN: Basic base64(KEY:SECRET), POST /v1/direct/payin', () =>
     sent?.method === 'POST' && sent.headers.Authorization === `Basic ${Buffer.from('ns-key:ns-secret').toString('base64')}`);
   assert('MTN: X-Idempotency-Key is the derived UUID for this reference', () =>
@@ -337,45 +373,39 @@ const ORANGE = '+237655000000';
   assert('MTN: no sandboxScenario while the base URL is not the sandbox host', () => sent?.body.sandboxScenario === undefined);
   assert('MTN: instructions name the handset step, and no redirect', () =>
     mtn.instructions?.ussdCode === '*126#' && !mtn.instructions?.redirectUrl);
+  assert('MTN: the customer is told who is asking, in the message and as data', () =>
+    NOVASEND_PAYEE_NAME === 'Moon SARL' && mtn.instructions?.payeeName === 'Moon SARL' && (mtn.instructions?.message ?? '').includes('Moon SARL'));
 
   const orangeRef = mintMerchantRef('pt');
   script([[/\/v1\/direct\/payin$/, () => ({ status: 201, body: payinRecord(orangeRef, 'processing') })]]);
   const orange = await gateway.initiatePayment({
     orderId: 'o2', userId: 'u1', amount: 5000, currency: 'XAF', merchantRef: orangeRef,
+    channel: { phoneNumber: ORANGE, phoneOperator: 'ORANGE' },
+  });
+  assert('ORANGE: charged with no code at all, provider ORANGE, no payin.otp (live, 2026-11-04)', () =>
+    orange.success && seen[0]?.body.payin.provider === 'ORANGE' && !('otp' in seen[0].body.payin));
+  assert('ORANGE: the customer is told to dial #150*50# and to look for Moon SARL', () =>
+    orange.instructions?.ussdCode === '#150*50#' && orange.instructions?.payeeName === 'Moon SARL'
+      && (orange.instructions?.message ?? '').includes('#150*50#') && (orange.instructions?.message ?? '').includes('Moon SARL'));
+  assert('both messages fit the bot\'s 200-character instruction clip, so the name is never cut off', () =>
+    (orange.instructions?.message ?? '').length <= 200 && (mtn.instructions?.message ?? '').length <= 200);
+
+  const staleRef = mintMerchantRef('pt');
+  script([[/\/v1\/direct\/payin$/, () => ({ status: 201, body: payinRecord(staleRef, 'processing') })]]);
+  const stale = await gateway.initiatePayment({
+    orderId: 'o3', userId: 'u1', amount: 5000, currency: 'XAF', merchantRef: staleRef,
     channel: { phoneNumber: ORANGE, phoneOperator: 'ORANGE', paymentCode: '1234' },
   });
-  assert('ORANGE: the code travels as payin.otp, provider ORANGE', () =>
-    orange.success && seen[0]?.body.payin.otp === '1234' && seen[0].body.payin.provider === 'ORANGE');
-  assert('ORANGE: the code is not in what the adapter returns', () => !JSON.stringify(orange).includes('1234'));
-
-  script([]);
-  const noCode = await thrown(() => gateway.initiatePayment({
-    orderId: 'o3', userId: 'u1', amount: 5000, currency: 'XAF', merchantRef: mintMerchantRef('pt'),
-    channel: { phoneNumber: ORANGE, phoneOperator: 'ORANGE' },
-  }));
-  assert('ORANGE without a code → PAYMENT_CODE_REQUIRED {provider, ussd, spent:false}, nothing sent', () =>
-    isAppError(noCode, ERROR_CODES.PAYMENT_CODE_REQUIRED) && seen.length === 0
-      && noCode.details?.ussd === '#144*82#' && noCode.details?.spent === false);
-
-  script([[/\/v1\/direct\/payin$/, () => ({ status: 400, body: { code: 'transaction_otp_required', message: 'OTP required', statusCode: 400 } })]]);
-  const rejected = await thrown(() => gateway.initiatePayment({
-    orderId: 'o4', userId: 'u1', amount: 5000, currency: 'XAF', merchantRef: mintMerchantRef('pt'),
-    channel: { phoneNumber: ORANGE, phoneOperator: 'ORANGE', paymentCode: '9999' },
-  }));
-  assert('an OTP refusal from NovaSend → PAYMENT_CODE_REJECTED (422), not a provider outage', () =>
-    isAppError(rejected, ERROR_CODES.PAYMENT_CODE_REJECTED) && rejected.statusCode === 422);
-  assert('…and it is one of the refusals the orchestrator lets through as itself', () => isCustomerChargeRefusal(rejected));
+  assert('ORANGE: a code a stale client still sends is ignored, neither forwarded nor echoed', () =>
+    stale.success && !('otp' in seen[0].body.payin) && !JSON.stringify(seen[0].body).includes('1234') && !JSON.stringify(stale).includes('1234'));
 
   script([[/\/v1\/direct\/payin$/, () => ({ status: 400, body: { code: 'country_not_found', message: 'nope' } })]]);
   const other4xx = await thrown(() => gateway.initiatePayment({
     orderId: 'o5', userId: 'u1', amount: 5000, currency: 'XAF', merchantRef: mintMerchantRef('pt'),
-    channel: { phoneNumber: ORANGE, phoneOperator: 'ORANGE', paymentCode: '1234' },
+    channel: { phoneNumber: ORANGE, phoneOperator: 'ORANGE' },
   }));
   assert('any other 4xx stays NOVASEND_REQUEST_FAILED (a 502, details kept for the row)', () =>
     isAppError(other4xx, ERROR_CODES.NOVASEND_REQUEST_FAILED) && other4xx.details?.status === 400);
-  assert('isNovasendCodeRefusal: only a 4xx naming the OTP', () =>
-    isNovasendCodeRefusal(rejected) === false /* already mapped */ && !isNovasendCodeRefusal(other4xx));
-
   script([]);
   const tooMuch = await thrown(() => gateway.initiatePayment({
     orderId: 'o6', userId: 'u1', amount: 600_000, currency: 'XAF', merchantRef: mintMerchantRef('pt'),
@@ -404,22 +434,22 @@ const ORANGE = '+237655000000';
       && !novasendInstructions('MTN', { confirmationRequired: false, paymentUrl: 'https://business.novasend.app/link/X' }).redirectUrl
       && !novasendInstructions('MTN', { confirmationRequired: true, paymentUrl: 'javascript:alert(1)' }).redirectUrl);
 
-  script([[/\/v1\/payin\//, () => ({ status: 200, body: payinRecord(mtnRef, 'processed') })]]);
-  const verified = await gateway.verifyPayment({ gatewayRef: mtnRef });
-  assert('verifyPayment reads GET /v1/payin/{ref}: processed → SUCCEEDED', () =>
-    verified.status === 'SUCCEEDED' && seen[0]?.url.endsWith(`/v1/payin/${mtnRef}`));
+  script([[/\/v1\/payin\//, () => ({ status: 200, body: payinRecord(mtnRef, 'processed', { amount: '301.00' }) })]]);
+  const verified = await gateway.verifyPayment({ gatewayRef: LIVE_ID });
+  assert('verifyPayment reads GET /v1/payin/{id}: processed → SUCCEEDED', () =>
+    verified.status === 'SUCCEEDED' && seen[0]?.url.endsWith(`/v1/payin/${LIVE_ID}`));
   script([[/\/v1\/payin\//, () => 'network-error']]);
-  const unreachable = await gateway.verifyPayment({ gatewayRef: mtnRef });
+  const unreachable = await gateway.verifyPayment({ gatewayRef: LIVE_ID });
   assert('verifyPayment that cannot ask → PENDING, never FAILED', () => unreachable.status === 'PENDING');
 
   // ─── 6 ──────────────────────────────────────────────────────────────────────
   section('6. Payouts');
 
   const payoutInput = { reference: payoutRef, amount: 10_000, currency: 'XAF', phone: MTN, name: 'Vendor' };
-  script([[/\/v1\/direct\/payout$/, () => ({ status: 201, body: { type: 'payout', reference: payoutRef, status: 'processing' } })]]);
+  script([[/\/v1\/direct\/payout$/, () => ({ status: 201, body: { id: 'tr_payout', type: 'payout', reference: payoutRef, status: 'processing' } })]]);
   const sentPayout = await gateway.createPayout(payoutInput);
-  assert('accepted: gatewayRef = our reference, status PENDING', () =>
-    sentPayout.success && sentPayout.gatewayRef === payoutRef && sentPayout.status === 'PENDING');
+  assert('accepted: gatewayRef = NovaSend\'s id, status PENDING', () =>
+    sentPayout.success && sentPayout.gatewayRef === 'tr_payout' && sentPayout.status === 'PENDING');
   assert('the documented body: reference, customerName, payout{amount, msisdn, MOMO, CM}', () =>
     seen[0]?.body.reference === payoutRef && seen[0].body.customerName === 'Vendor'
       && seen[0].body.payout?.amount === 10_000 && seen[0].body.payout?.msisdn === MTN
@@ -427,22 +457,47 @@ const ORANGE = '+237655000000';
   assert('the payout\'s idempotency key is derived from its reference (a retry presents the same one)', () =>
     seen[0]?.headers['X-Idempotency-Key'] === novasendIdempotencyKey('payout', payoutRef));
 
-  script([[/\/v1\/direct\/payout$/, () => ({ status: 400, body: { code: 'wallet_not_enough_cash', message: 'Solde insuffisant' } })]]);
+  script([[/\/v1\/direct\/payout$/, () => ({ status: 403, body: { code: 'wallet_not_enough_cash', message: 'Solde insuffisant' } })]]);
   const broke = await gateway.createPayout(payoutInput);
-  assert('a 4xx (short float) is a refusal that sent nothing, worded for an administrator', () =>
+  assert('a 403 short float (as documented) is a refusal that sent nothing, worded for an administrator', () =>
     !broke.success && !broke.unsupported && /enough/.test(broke.message ?? ''));
+  script([[/\/v1\/direct\/payout$/, () => ({ status: 403, body: { message: 'client_not_enough_cash' } })]]);
+  const brokeByMessage = await gateway.createPayout(payoutInput);
+  assert('a short float named only in `message` (how the SDK reads errors) is still a short float', () =>
+    !brokeByMessage.success && !brokeByMessage.unsupported && /enough/.test(brokeByMessage.message ?? ''));
 
   script([[/\/v1\/direct\/payout$/, () => ({ status: 403, body: { code: 'api_token_invalid' } })]]);
   const forbidden = await gateway.createPayout(payoutInput);
-  assert('a 403 is `unsupported` (credentials / account), nothing sent', () => !forbidden.success && forbidden.unsupported === true);
+  assert('a credential refusal is `unsupported` (credentials / account), nothing sent', () => !forbidden.success && forbidden.unsupported === true);
+  script([[/\/v1\/direct\/payout$/, () => ({ status: 403, body: { message: 'transaction_error' } })]]);
+  const txError = await gateway.createPayout(payoutInput);
+  assert('any other 403 is a plain refusal naming NovaSend\'s code, not a credentials diagnosis', () =>
+    !txError.success && !txError.unsupported && /transaction_error/.test(txError.message ?? '') && !/NOVASEND_API_KEY/.test(txError.message ?? ''));
 
   script([
     [/\/v1\/direct\/payout$/, () => ({ status: 409, body: { code: 'transaction_is_already_processed' } })],
-    [/\/v1\/direct\/payout\//, () => ({ status: 200, body: { type: 'payout', reference: payoutRef, status: 'processed' } })],
+    [/\/v1\/payout\//, () => ({ status: 200, body: { id: 'tr_payout', type: 'payout', reference: payoutRef, status: 'processed' } })],
   ]);
   const already = await gateway.createPayout(payoutInput);
-  assert('a 409 reads the existing payout back and reports it — never sends twice', () =>
-    already.success && already.status === 'SUCCEEDED' && seen.filter((s) => s.method === 'POST').length === 1);
+  assert('a 409 whose record can be read reports it, with NovaSend\'s id — never sends twice', () =>
+    already.success && already.status === 'SUCCEEDED' && already.gatewayRef === 'tr_payout' && seen.filter((s) => s.method === 'POST').length === 1);
+
+  script([
+    [/\/v1\/direct\/payout$/, () => ({ status: 409, body: { code: 'transaction_is_already_processed' } })],
+    [/\/v1\/payout\//, () => ({ status: 404, body: { code: 'transaction_does_not_exist' } })],
+  ]);
+  const conflict = await thrown(() => gateway.createPayout(payoutInput));
+  assert('a 409 whose record cannot be read (live: no id, and our reference is 404) THROWS: unknown, stays processing, never resends', () =>
+    isAppError(conflict, ERROR_CODES.NOVASEND_REQUEST_FAILED) && seen.filter((s) => s.method === 'POST').length === 1);
+
+  script([[/\/v1\/payout\//, () => ({ status: 200, body: { id: 'tr_payout', type: 'payout', reference: payoutRef, status: 'processed', amount: '301.00' } })]]);
+  const swept = await gateway.verifyPayout({ gatewayRef: 'tr_payout', reference: payoutRef });
+  assert('verifyPayout reads GET /v1/payout/{id}, preferring the id over our reference', () =>
+    swept.status === 'SUCCEEDED' && swept.gatewayRef === 'tr_payout' && seen[0]?.url.endsWith('/v1/payout/tr_payout'));
+  script([[/\/v1\/payout\//, () => ({ status: 404, body: { code: 'transaction_does_not_exist' } })]]);
+  const unread = await gateway.verifyPayout({ gatewayRef: '', reference: payoutRef });
+  assert('a payout with no stored id stays PENDING + inconclusive: a 404 never reads as failed, so it is never resent', () =>
+    unread.status === 'PENDING' && !!unread.inconclusive);
 
   script([[/\/v1\/direct\/payout$/, () => ({ status: 502, body: {} })]]);
   const fault = await thrown(() => gateway.createPayout(payoutInput));
@@ -477,48 +532,49 @@ const ORANGE = '+237655000000';
   const options = buildPaymentOptions(effective, null);
   const orangeOption = options.providers.find((p) => p.provider === 'ORANGE');
   const mtnOption = options.providers.find((p) => p.provider === 'MTN');
-  assert('/options: ORANGE is CODE_FIRST, fields include paymentCode, codeUssd projected', () =>
-    orangeOption?.flow === 'CODE_FIRST' && orangeOption.fields.includes('paymentCode') && orangeOption.codeUssd === '#144*82#'
+  assert('/options: ORANGE is PUSH, its only field is the number, no codeUssd', () =>
+    orangeOption?.flow === 'PUSH' && orangeOption.fields.join() === 'phoneNumber' && orangeOption.codeUssd === undefined
       && orangeOption.mayRequireOtp === false);
-  assert('/options: limits projected on both; MTN carries no codeUssd', () =>
-    mtnOption?.limits?.max === 500_000 && orangeOption?.limits?.min === 200 && mtnOption.codeUssd === undefined);
+  assert('/options: limits projected on both, from 301', () =>
+    mtnOption?.limits?.max === 500_000 && orangeOption?.limits?.min === 301 && mtnOption.codeUssd === undefined);
   assert('/options: a capability field is never spread (no `requires` key on the wire)', () =>
     !('requires' in (orangeOption as object)));
 
-  const codeRequired = thrownSync(() => checkChargeRequestOrThrow('ORANGE', { phoneNumber: ORANGE }, resolveCollectionRoute('ORANGE').capability));
-  assert('a charge with the number but no code → 422 PAYMENT_CODE_REQUIRED {ussd, spent:false}', () =>
+  assert('ORANGE with the number alone passes the charge check', () =>
+    checkChargeRequestOrThrow('ORANGE', { phoneNumber: ORANGE }, resolveCollectionRoute('ORANGE').capability).ok);
+
+  // No gateway is CODE_FIRST today. The machinery stays for one that is, and is pinned against a capability built here.
+  const codeFirst = { flow: 'CODE_FIRST', requires: ['phoneNumber', 'paymentCode'], codeUssd: '#144*82#' } as any;
+  const codeRequired = thrownSync(() => checkChargeRequestOrThrow('ORANGE', { phoneNumber: ORANGE }, codeFirst));
+  assert('dormant CODE_FIRST: the number but no code → 422 PAYMENT_CODE_REQUIRED {ussd, spent:false}', () =>
     isAppError(codeRequired, ERROR_CODES.PAYMENT_CODE_REQUIRED) && codeRequired.statusCode === 422
       && codeRequired.details?.ussd === '#144*82#' && codeRequired.details?.spent === false);
-  assert('no number AND no code → the door\'s own missing-number answer (code asked for next time)', () => {
-    const r = checkChargeRequestOrThrow('ORANGE', {}, resolveCollectionRoute('ORANGE').capability);
+  assert('dormant CODE_FIRST: no number AND no code → the door\'s own missing-number answer', () => {
+    const r = checkChargeRequestOrThrow('ORANGE', {}, codeFirst);
     return !r.ok && 'missing' in r && r.missing.join() === 'phoneNumber';
   });
-  assert('with the code, the check passes', () =>
-    checkChargeRequestOrThrow('ORANGE', { phoneNumber: ORANGE, paymentCode: '1234' }, resolveCollectionRoute('ORANGE').capability).ok);
+  assert('dormant CODE_FIRST: with the code, the check passes', () =>
+    checkChargeRequestOrThrow('ORANGE', { phoneNumber: ORANGE, paymentCode: '1234' }, codeFirst).ok);
   assert('MTN needs no code', () => checkChargeRequestOrThrow('MTN', { phoneNumber: MTN }, resolveCollectionRoute('MTN').capability).ok);
 
   assert('checkAmountLimits: inside / below / above', () => {
     const cap = resolveCollectionRoute('MTN').capability;
-    return checkAmountLimits(cap, 500_000).ok && !checkAmountLimits(cap, 199).ok && !checkAmountLimits(cap, 500_001).ok;
+    return checkAmountLimits(cap, 500_000).ok && !checkAmountLimits(cap, 300).ok && checkAmountLimits(cap, 301).ok && !checkAmountLimits(cap, 500_001).ok;
   });
   const overLimit = thrownSync(() => assertAmountWithinRoute(resolveCollectionRoute('MTN'), 750_000));
   assert('assertAmountWithinRoute → 422 PAYMENT_AMOUNT_OUT_OF_RANGE {amount, min, max, spent:false}', () =>
     isAppError(overLimit, ERROR_CODES.PAYMENT_AMOUNT_OUT_OF_RANGE) && overLimit.statusCode === 422
       && overLimit.details?.amount === 750_000 && overLimit.details?.spent === false && /500,000 FCFA/.test(overLimit.message));
 
-  assert('bot pre-check: code check is OPT-IN (a provider-only pre-check never refuses a code)', () =>
-    mobileMoneyRoute(ORANGE, false).provider === 'ORANGE');
-  const preCode = thrownSync(() => mobileMoneyRoute(ORANGE, false, null, { paymentCode: null }));
-  assert('bot pre-check: asked with no code → PAYMENT_CODE_REQUIRED carrying the caller\'s spent flag', () =>
-    isAppError(preCode, ERROR_CODES.PAYMENT_CODE_REQUIRED) && preCode.details?.spent === false);
-  const preCodeSpent = thrownSync(() => mobileMoneyRoute(ORANGE, true, null, { paymentCode: '' }));
-  assert('…and spent:true after the spend', () => preCodeSpent?.details?.spent === true);
-  assert('bot pre-check: with the code, it routes', () => mobileMoneyRoute(ORANGE, false, null, { paymentCode: '1234' }).provider === 'ORANGE');
+  assert('bot pre-check: Orange routes with no code, whether or not the caller asks about one', () =>
+    mobileMoneyRoute(ORANGE, false).provider === 'ORANGE'
+      && mobileMoneyRoute(ORANGE, false, null, { paymentCode: null }).provider === 'ORANGE'
+      && mobileMoneyRoute(ORANGE, true, null, { paymentCode: '' }).provider === 'ORANGE');
   const preAmount = thrownSync(() => mobileMoneyRoute(MTN, false, null, { amount: 600_000 }));
   assert('bot pre-check: an amount over the limit → PAYMENT_AMOUNT_OUT_OF_RANGE, spent:false', () =>
     isAppError(preAmount, ERROR_CODES.PAYMENT_AMOUNT_OUT_OF_RANGE) && preAmount.details?.spent === false);
-  assert('routeNeedsPreChargeFacts / paymentCodeAsk: true / {ussd} with NovaSend active', () =>
-    routeNeedsPreChargeFacts() && paymentCodeAsk()?.ussd === '#144*82#');
+  assert('with NovaSend active the door still pre-checks the amount limits, and no bot asks for a code', () =>
+    routeNeedsPreChargeFacts() && paymentCodeAsk() === null);
 
   __resetPaymentSettingsCacheForTests(DEFAULT_PAYMENT_SETTINGS, true);
   assert('…false / null with the default (NotchPay): no other aggregator\'s door does extra work', () =>
@@ -530,10 +586,9 @@ const ORANGE = '+237655000000';
   assert('the HTTP channel accepts `paymentCode`', () =>
     PaymentChannelSchema.parse({ phoneNumber: ORANGE, paymentCode: '1234' }).paymentCode === '1234');
   assert('`paymentCode` is a redacted field name in the audit log', () => SENSITIVE_FIELD_NAMES.has('paymentcode'));
-  assert('all three refusals are customer refusals; a provider failure is not', () =>
-    isCustomerChargeRefusal(codeRequired) && isCustomerChargeRefusal(overLimit) && isCustomerChargeRefusal(rejected)
-      && !isCustomerChargeRefusal(fault));
-  assert('NOVASEND_CM_LIMITS is the declared range', () => NOVASEND_CM_LIMITS.min === 200 && NOVASEND_CM_LIMITS.max === 500_000);
+  assert('these refusals are customer refusals; a provider failure is not', () =>
+    isCustomerChargeRefusal(codeRequired) && isCustomerChargeRefusal(overLimit) && !isCustomerChargeRefusal(fault));
+  assert('NOVASEND_CM_LIMITS is the declared range', () => NOVASEND_CM_LIMITS.min === 301 && NOVASEND_CM_LIMITS.max === 500_000);
 
   // ─── 8 ──────────────────────────────────────────────────────────────────────
   section('8. Bot copy');
@@ -549,6 +604,23 @@ const ORANGE = '+237655000000';
     !customerMessageFor(ERROR_CODES.PAYMENT_CODE_REQUIRED, 'business_rule', 'en', { ussd: '<b>hi</b>' }).includes('<b>'));
   assert('PAYMENT_AMOUNT_OUT_OF_RANGE has its own sentence', () =>
     /support/i.test(customerMessageFor(ERROR_CODES.PAYMENT_AMOUNT_OUT_OF_RANGE, 'business_rule', 'en')));
+
+  const orangeStep = novasendInstructions('ORANGE', {});
+  assert('the chat relays the Orange step whole: the code to dial and Moon SARL', () => {
+    const lines = instructionLines(orangeStep).join(' ');
+    return lines.includes('#150*50#') && lines.includes('Moon SARL');
+  });
+  assert('the in-app checkout gets that step, and only from a gateway that names a payee', () =>
+    handsetStepOf(orangeStep) === orangeStep.message
+      && handsetStepOf({ message: 'Confirm the payment on your phone', ussdCode: '*126#' }) === null
+      && handsetStepOf(null) === null);
+  const pageFile = (name: string) => readFileSync(join(__dirname, '..', '..', 'src', 'modules', 'bot-surface', 'miniapp', 'public', name), 'utf8');
+  assert('⛔ both in-app pages show the step and return before they close, or an Orange customer never learns to dial', () => {
+    const co = pageFile('co.html');
+    const bp = pageFile('bp.html');
+    return co.indexOf('say(handsetStep, false);') > 0 && co.indexOf('say(handsetStep, false);') < co.indexOf('tg.close(); } catch', co.indexOf('say(handsetStep, false);'))
+      && bp.indexOf('state(given.message, false);') > 0 && bp.indexOf('state(given.message, false);') < bp.indexOf('tg.close();', bp.indexOf('state(given.message, false);'));
+  });
 
   // ─── 9 ──────────────────────────────────────────────────────────────────────
   section('9. Boot rules (config/env.ts)');
@@ -590,7 +662,9 @@ const ORANGE = '+237655000000';
     !/\brefundPayment\s*\(/.test(adapter));
   assert('the signature is compared in constant time, never with ===', () =>
     adapter.includes('timingSafeEqualString(given, overRaw)') && !/given\s*===|===\s*overRaw/.test(adapter));
-  assert('the request body is never put into error details (it may carry a payment code)', () =>
+  assert('the adapter never sends an otp, and has no route left on /v1/direct/payout/{…}', () =>
+    !/\botp\b/.test(adapter) && !/\/v1\/direct\/payout\/\$\{/.test(adapter));
+  assert('the request body is never put into error details', () =>
     !/details[^;]*\bbody:\s*body\b/.test(adapter) && !/\{\s*status:\s*response\.status,\s*body:\s*body/.test(adapter));
   assert('sandboxScenario is only ever added through the sandbox-host guard', () =>
     (adapter.match(/sandboxScenario\s*=/g) ?? []).length === 1 && adapter.includes('NOVASEND_SANDBOX_BASE_URL'));

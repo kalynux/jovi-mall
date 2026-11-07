@@ -206,6 +206,11 @@ router.get('/s/bl/:handle/data', BookingScreensController.listData);
  * nothing; the payment screen it opens does that, with all of its own rules.
  */
 router.post('/s/bl/:handle/pay', BookingScreensController.openPay);
+/**
+ * **Accept** / **Decline** on a row whose proposed price waits on the customer (owner, 2026-11-03).
+ * The same answer as the website and the chat buttons, and it spends nothing.
+ */
+router.post('/s/bl/:handle/answer-price', BookingScreensController.answerPrice);
 router.get('/s/bk/:handle/data', BookingScreensController.slotData);
 router.post('/s/bk/:handle/confirm', BookingScreensController.confirm);
 

@@ -1,3 +1,4 @@
+import { stripStrong } from '../../../core/richtext';
 import type { BotReplyIntent } from './channel-reply';
 import type { PendingQuestionOwner } from './bot-pending-question';
 
@@ -138,7 +139,8 @@ export function compactSentText(
     labels: readonly string[] = [],
     max: number = RECENTLY_SENT_TEXT_MAX,
 ): string {
-    const flat = stripUrls(body).replace(/\s+/g, ' ').trim();
+    // A bold mark (`core/richtext` `strong`) means nothing to a model and draws as a box.
+    const flat = stripUrls(stripStrong(body)).replace(/\s+/g, ' ').trim();
     const chars = Array.from(flat);
     const clipped = chars.length <= max ? flat : `${chars.slice(0, max - 1).join('').trimEnd()}…`;
 
@@ -148,6 +150,22 @@ export function compactSentText(
     if (shown.length === 0) return clipped;
 
     return clipped.length > 0 ? `${clipped} (${shown.join(' · ')})` : `(${shown.join(' · ')})`;
+}
+
+/**
+ * What the model is told about a question only a button can answer (owner, 2026-11-03: a proposed
+ * price commits the customer's money, so a typed "yes" must never count). In English because the
+ * reader is the model, and short because the record is capped at `RECENTLY_SENT_TEXT_MAX`.
+ *
+ * ⚠ **This is what makes the rule true on the day of the deploy.** The backend owns this line, so it
+ * needs no change to the workflow's prompt.
+ */
+export const BUTTON_ONLY_ANSWER_NOTE =
+    'Buttons only: if they reply in words, ask them to press one. You cannot answer it for them.';
+
+/** The record of a notification that asks a button-only question. */
+export function buttonOnlySentText(subject: string): string {
+    return `${subject}. ${BUTTON_ONLY_ANSWER_NOTE}`;
 }
 
 /**
@@ -192,6 +210,16 @@ export function sentTextForIntent(intent: BotReplyIntent | null | undefined): st
                 intent.text || intent.browsePrompt,
                 intent.cards.map((card) => card.title),
             );
+        case 'place':
+            // ⚠ The name and the address line only — never the coordinates, which are the
+            // one thing this record must not carry into a model's context.
+            return compactSentText(intent.name, [intent.address]);
+        case 'sequence': {
+            const lines = intent.parts
+                .map((part) => sentTextForIntent(part))
+                .filter((line): line is string => !!line);
+            return lines.length > 0 ? compactSentText(lines.join(' · '), []) : null;
+        }
         default: {
             const exhaustive: never = intent;
             return exhaustive;

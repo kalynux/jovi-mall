@@ -6,6 +6,7 @@ import { VendorSettingsRepository } from '../../vendors/repositories/vendor-sett
 import { vendorCodTermsOf } from '../domain/cod-limits';
 import { isCodRestricted } from '../domain/cod-restriction';
 import { CodRestrictionService, codRestrictionService } from './cod-restriction.service';
+import { PrepaymentLimits, prepaymentLimitsOf, vendorPartialPaymentTermsOf } from '../../orders/domain/partial-payment';
 
 /**
  * CodEligibilityService - decides whether an order may be placed as
@@ -82,6 +83,42 @@ export class CodEligibilityService {
       }
     }
 
+    await this.assertAgenciesAcceptCash(agencyIds, totalAmount);
+  }
+
+  /**
+   * May this vendor's part of a basket be paid part online and part in cash (owner, 2026-11-01)?
+   * Returns its limits and the percentage to snapshot, or refuses as checkout would.
+   *
+   * The vendor's own setting decides, NOT their COD terms: a vendor with plain cash on delivery off
+   * may still accept this (D-5). Every carrying agency must still accept cash, measured on the most
+   * cash the order can leave at the door, because the amount is named only when paying.
+   */
+  async assertVendorOrderEligibleForPartial(params: {
+    orderType: 'physical' | 'digital';
+    totalAmount: number;
+    agencyIds: string[];
+    parcelCount: number;
+    vendorId: string;
+  }): Promise<PrepaymentLimits & { minPercent: number }> {
+    const { orderType, totalAmount, agencyIds, parcelCount, vendorId } = params;
+    if (orderType !== 'physical') {
+      throw createAppError(ERROR_CODES.PARTIAL_PAYMENT_NOT_AVAILABLE, 422, undefined, { reason: 'digital_items' });
+    }
+    const terms = vendorPartialPaymentTermsOf(await this.vendorSettings.findPartialPayment(vendorId));
+    if (!terms.enabled || terms.minPercent === null) {
+      throw createAppError(ERROR_CODES.PARTIAL_PAYMENT_NOT_AVAILABLE, 422, undefined, { reason: 'vendor_not_accepted', vendorId });
+    }
+    const limits = prepaymentLimitsOf(totalAmount, terms.minPercent, parcelCount);
+    if (!limits) {
+      throw createAppError(ERROR_CODES.PARTIAL_PAYMENT_NOT_AVAILABLE, 422, undefined, { reason: 'order_too_small', vendorId });
+    }
+    await this.assertAgenciesAcceptCash(agencyIds, totalAmount - limits.minimumAmount);
+    return { ...limits, minPercent: terms.minPercent };
+  }
+
+  /** Every carrying agency must take cash on delivery, for at least this much cash. */
+  private async assertAgenciesAcceptCash(agencyIds: string[], totalAmount: number): Promise<void> {
     const distinctIds = [...new Set(agencyIds)];
     const [agencies, magazinNames] = await Promise.all([
       this.agencyRepo.findByIds(distinctIds),

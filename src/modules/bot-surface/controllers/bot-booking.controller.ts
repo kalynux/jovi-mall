@@ -2,10 +2,15 @@ import { Request, Response } from 'express';
 import { ZodError } from 'zod';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { sendSuccess } from '../../../core/responses';
-import { createAppError } from '../../../core/errors';
+import { AppError, createAppError } from '../../../core/errors';
+import { setBotReply } from '../middlewares/bot-reply.middleware';
+import { VendorModel } from '../../vendors/vendor.model';
+import { priceAnswerCopy, proposalAnswerCopy, proposalMoment } from '../domain/bot-booking-proposal-copy';
+import { outstandingTopup } from '../../booking/domain/price-proposal';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { BookingService } from '../../booking/services/booking.service';
 import { BookingStatus } from '../../booking/types/booking.types';
+import { partyReminderService } from '../../booking/services/party-reminder.service';
 import { productBookingService } from '../../catalog/domain/services/booking/product-booking.instance';
 import { PaymentOrchestratorService } from '../../payments/services/payment-orchestrator.service';
 import { PaymentTransactionModel } from '../../payments/models/payment-transaction.model';
@@ -17,7 +22,8 @@ import { surfacePath, windowForChat } from '../domain/bot-list-window';
 import { openInAppScreen } from './bot-inapp.controller';
 import { parseBookingPayArgument } from '../domain/bot-action-id';
 import { assertSomethingDue } from '../miniapp/surfaces/booking-rows';
-import { readBookingDays } from '../miniapp/surfaces/booking.core';
+import { readBookingDays, serviceLocationKind } from '../miniapp/surfaces/booking.core';
+import { openPickerAtAddress, startBookingAddressStep } from './bot-booking-address.controller';
 import {
     BotActionHandlers,
     ParsedBotAction,
@@ -255,6 +261,7 @@ export class BotBookingController {
                     ...(input.notes ? { notes: input.notes } : {}),
                     bookedInChat: req.bot!.envelope.channel,
                 },
+                input.addressId ?? null,
             );
         } catch (error) {
             /**
@@ -353,7 +360,8 @@ export class BotBookingController {
             finalPrice: settlement?.finalPrice ?? null,
             balanceDue: settlement?.balanceDue ?? 0,
             balancePaid: settlement?.balancePaid ?? 0,
-            outstanding: Math.max(0, (settlement?.balanceDue ?? 0) - (settlement?.balancePaid ?? 0)),
+            topupDue: outstandingTopup(booking),
+            outstanding: Math.max(0, outstandingTopup(booking) + (settlement?.balanceDue ?? 0) - (settlement?.balancePaid ?? 0)),
             creditDue: settlement?.creditDue ?? 0,
             settled: Boolean(settlement?.settledAt),
         });
@@ -500,6 +508,19 @@ export class BotBookingController {
         // quotes the request's own status rather than inferring one from `payment.status`.
         sendSuccess(res, toBotBookingDto(booking, await refundOf(booking)));
     });
+
+    /**
+     * `POST /bookings/:bookingId/reminder` — the customer's one reminder to the vendor. The same
+     * service the website calls, so "once" cannot mean two things across the two doors.
+     */
+    static sendReminder = asyncHandler(async (req: Request, res: Response) => {
+        const { bookingId } = BotBookingParamSchema.parse(req.params);
+        const userId = botCallerOf(req).userId;
+        await partyReminderService.remindVendor(bookingId, userId);
+        // Re-read through the populating path, so the answer names the service and the vendor.
+        const booking = await bookingService.getUserBooking(bookingId, userId);
+        sendSuccess(res, toBotBookingDto(booking, await refundOf(booking)));
+    });
 }
 
 /**
@@ -607,10 +628,31 @@ async function bookingPayTap(req: Request, res: Response, action: ParsedBotActio
  * store slug. Never null; `BOT_MINIAPP_BASE_URL` is unset in production and this is what runs.
  */
 async function bookingPickerTap(req: Request, res: Response, action: ParsedBotAction): Promise<void> {
-    const productId = action.argument;
-    if (!/^[0-9a-f]{24}$/.test(productId)) throw unknownBotAction();
+    /**
+     * `open:bk:<productId>` or, from the appointment address step, `open:bk:<productId>:<addressId>`
+     * — a saved address the customer tapped (2026-10-27, `bot-booking-address.controller.ts`).
+     */
+    const [productId, addressId, ...rest] = action.argument.split(':');
+    if (!/^[0-9a-f]{24}$/.test(productId) || rest.length > 0) throw unknownBotAction();
+    if (addressId !== undefined && !/^[0-9a-f]{24}$/.test(addressId)) throw unknownBotAction();
 
     await readBookingDays({ productId, language: botResponseLanguageOf(req) });
+
+    if (addressId) {
+        await openPickerAtAddress(req, productId, addressId);
+        sendSuccess(res, { opened: 'booking_picker', productId, addressId });
+        return;
+    }
+
+    /**
+     * ⭐ **A service the provider travels to asks WHERE first, in the chat** (owner decision A-4):
+     * a saved address, a shared location or a typed one — then the picker opens with it chosen.
+     */
+    if ((await serviceLocationKind(productId)) === 'customer_address') {
+        await startBookingAddressStep(req, productId);
+        sendSuccess(res, { opened: 'booking_address_step', productId });
+        return;
+    }
 
     const handle = await openInAppScreen(req, {
         payload: { kind: 'bk', productId, bookingId: null },
@@ -633,10 +675,98 @@ async function bookingPickerTap(req: Request, res: Response, action: ParsedBotAc
  * with the close-account buttons; `test-bot-surface` § 20 now compares every DRAWN token against
  * every ROUTED key, and would fail `DRAWN BUT NOT ROUTED` naming the builder.
  */
+/**
+ * `yes:bkprop:<bookingId>` / `no:bkprop:<bookingId>` — the customer answers the VENDOR's proposal
+ * of a new time (owner decision D-9, 2026-10-26), from the buttons on the
+ * `booking.reschedule_proposed` message.
+ *
+ * ⚠ **The same answer as the website**, through `BookingService.answerRescheduleProposal`: it
+ * scopes the booking to the customer who tapped (another customer's id is a 404), refuses an
+ * answer to the customer's OWN request, and treats a proposal past its deadline as lapsed. No
+ * signed reference is needed, unlike cancel: the tap can only ever do what the proposal still
+ * open on the customer's own booking allows, and a stale tap finds nothing open.
+ *
+ * ⚠ **"Nothing open" is answered, not refused.** A button sits in the chat after the proposal is
+ * answered, withdrawn or lapsed; the customer is told the time is as their bookings show, which is
+ * true in all three cases, instead of the generic expired-button sentence.
+ *
+ * Sub-key `bkprop`, NOT the withdrawn `bkmove` — old "That works" buttons may still carry
+ * `yes:bkmove:` in chat histories, and they must not start accepting proposals.
+ */
+async function answerProposalTap(
+    req: Request,
+    res: Response,
+    action: ParsedBotAction,
+    answer: 'accept' | 'decline',
+): Promise<void> {
+    const bookingId = action.argument;
+    if (!/^[0-9a-f]{24}$/.test(bookingId)) throw unknownBotAction();
+
+    const caller = botCallerOf(req);
+    const language = botResponseLanguageOf(req);
+    const copy = proposalAnswerCopy(language);
+
+    let booking;
+    try {
+        booking = await bookingService.answerRescheduleProposal(bookingId, { role: 'customer', id: caller.userId }, answer);
+    } catch (error) {
+        if (error instanceof AppError && error.code === ERROR_CODES.BOOKING_PROPOSAL_NOT_FOUND) {
+            setBotReply(req, { kind: 'text', text: copy.gone });
+            sendSuccess(res, { answered: false, bookingId });
+            return;
+        }
+        throw error;
+    }
+
+    const vendor = await VendorModel.findById(booking.vendorId).select('timezone').lean();
+    const when = proposalMoment(booking.startAt, (vendor as { timezone?: string } | null)?.timezone, language);
+    setBotReply(req, { kind: 'text', text: answer === 'accept' ? copy.accepted(when) : copy.declined(when) });
+    sendSuccess(res, toBotBookingDto(booking, await refundOf(booking)));
+}
+
+/**
+ * `yes:bkprice:<bookingId>` / `no:bkprice:<bookingId>` — the customer answers the vendor's proposed
+ * price. The same answer as the website, under the same rules as `answerProposalTap`: scoped to whoever
+ * tapped, and a tap that finds nothing open is answered rather than refused, since the button stays
+ * in the chat after the proposal has ended.
+ */
+async function answerPriceTap(
+    req: Request,
+    res: Response,
+    action: ParsedBotAction,
+    answer: 'accept' | 'decline',
+): Promise<void> {
+    const bookingId = action.argument;
+    if (!/^[0-9a-f]{24}$/.test(bookingId)) throw unknownBotAction();
+
+    const caller = botCallerOf(req);
+    const copy = priceAnswerCopy(botResponseLanguageOf(req));
+
+    let booking;
+    try {
+        booking = await bookingService.answerPriceProposal(bookingId, caller.userId, answer);
+    } catch (error) {
+        if (error instanceof AppError && error.code === ERROR_CODES.BOOKING_PRICE_PROPOSAL_NOT_FOUND) {
+            setBotReply(req, { kind: 'text', text: copy.gone });
+            sendSuccess(res, { answered: false, bookingId });
+            return;
+        }
+        throw error;
+    }
+
+    const price = `${booking.currency} ${booking.priceSnapshot.toLocaleString('en-US')}`;
+    setBotReply(req, { kind: 'text', text: answer === 'accept' ? copy.accepted(price) : copy.declined(price) });
+    sendSuccess(res, toBotBookingDto(booking, await refundOf(booking)));
+}
+
 export const BOOKING_ACTION_HANDLERS: BotActionHandlers = Object.freeze({
     'open:bl': bookingsScreenTap,
     'open:bk': bookingPickerTap,
     bpay: bookingPayTap,
+    'yes:bkprop': (req: Request, res: Response, action: ParsedBotAction) => answerProposalTap(req, res, action, 'accept'),
+    'no:bkprop': (req: Request, res: Response, action: ParsedBotAction) => answerProposalTap(req, res, action, 'decline'),
+    'yes:bkprice': (req: Request, res: Response, action: ParsedBotAction) => answerPriceTap(req, res, action, 'accept'),
+    'no:bkprice': (req: Request, res: Response, action: ParsedBotAction) => answerPriceTap(req, res, action, 'decline'),
 });
 
 /**

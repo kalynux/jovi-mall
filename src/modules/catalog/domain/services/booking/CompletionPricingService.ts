@@ -1,6 +1,7 @@
 import { Booking, IBooking } from '../../../../booking/models/booking.model';
 import { BookingService } from '../../../../booking/services/booking.service';
 import { BookingStatus } from '../../../../booking/types/booking.types';
+import { amountPaidOf, manualFinalPrice } from '../../../../booking/domain/price-proposal';
 import { IProductRepository } from '../../../repositories/interfaces/product.repository.interface';
 import { BookingPriceResolver, ResolvedPrice } from './BookingPriceResolver';
 import { VendorRepository } from '../../../../vendors/vendor.repository';
@@ -76,6 +77,13 @@ export class CompletionPricingService {
       throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, 'Booking not found');
     }
 
+    // On a manual service the price was agreed before the appointment, so it is not typed here
+    // (owner decision P-4). Only time that really ran over can add to it.
+    const isManual = (await this.bookingService.modeOf(booking)) === 'manual';
+    if (isManual && input.fixedPrice !== undefined) {
+      throw createAppError(ERROR_CODES.BOOKING_PRICE_LOCKED, 422, undefined, { agreedPrice: booking.priceSnapshot });
+    }
+
     // Resolve the final price.
     let finalPrice: number;
     let recalculated: ResolvedPrice | undefined;
@@ -100,7 +108,14 @@ export class CompletionPricingService {
       }
 
       recalculated = await this.priceResolver.resolvePrice(product, { start, end });
-      finalPrice = recalculated.amount;
+      if (isManual) {
+        // ⚠ Catalog against catalog, never catalog against the agreed price: 7,000 agreed on a
+        // 5,000 service must not settle at 5,000 just because nobody typed anything.
+        const booked = await this.priceResolver.resolvePrice(product, { start, end: booking.endAt });
+        finalPrice = manualFinalPrice(booking.priceSnapshot, recalculated.amount, booked.amount);
+      } else {
+        finalPrice = recalculated.amount;
+      }
     }
 
     // What the customer has ACTUALLY paid — not what they were quoted.
@@ -108,7 +123,7 @@ export class CompletionPricingService {
     // Comparing against `priceSnapshot` (as this used to) bills an unpaid customer
     // only for the overrun and lets the original price vanish: quote 5,000, never
     // pay, vendor settles at 6,000, and the "balance" came out as 1,000.
-    const amountPaid = booking.paymentStatus === 'paid' ? booking.priceSnapshot : 0;
+    const amountPaid = amountPaidOf(booking);
     const additionalAmountDue = Math.max(0, finalPrice - amountPaid);
     const creditDue = Math.max(0, amountPaid - finalPrice);
 
@@ -120,6 +135,8 @@ export class CompletionPricingService {
       balancePaid: 0,
       creditDue,
     };
+    // A price difference still owed is now part of this balance, and is not owed twice.
+    if (booking.priceTopup?.status === 'due') booking.set({ 'priceTopup.status': 'superseded' });
 
     // The breakdown stays in metadata — it is display detail, not money owed.
     booking.metadata = {

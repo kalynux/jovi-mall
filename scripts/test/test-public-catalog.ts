@@ -129,10 +129,10 @@ const variant = (over: Partial<Variant> = {}): Variant => ({
  * assertions — none of whose variants carry a window — are unaffected: with no `bargain`,
  * the flag decides nothing and the displayed price is `variant.price` either way.
  */
-const pricingParent = { vectorisationEnabled: true };
+const pricingParent = { vectorisationEnabled: true, type: 'physical' as const };
 
 /** The same, with the AI index opted out — which makes a stored window inert. */
-const pricingParentOptedOut = { vectorisationEnabled: false };
+const pricingParentOptedOut = { vectorisationEnabled: false, type: 'physical' as const };
 
 /**
  * A bargainable variant whose FLOOR is a number that appears nowhere else in this file.
@@ -333,12 +333,25 @@ assert('an active variant is sellable', () => isSellableVariant(variant()));
 assert('an archived variant is NOT sellable', () => !isSellableVariant(variant({ status: 'archived' })));
 assert('a soft-deleted variant is NOT sellable', () => !isSellableVariant(variant({ deletedAt: new Date() })));
 
-assert('stock > 0 is in stock', () => variantInStock(variant({ stock: 3 })));
-assert('stock 0 is out of stock', () => !variantInStock(variant({ stock: 0 })));
+assert('stock > 0 is in stock', () => variantInStock(variant({ stock: 3 }), 'physical'));
+assert('stock 0 is out of stock', () => !variantInStock(variant({ stock: 0 }), 'physical'));
 assert('infinite stock is always in stock', () =>
-    variantInStock(variant({ stock: 0, isInfiniteStock: true })));
+    variantInStock(variant({ stock: 0, isInfiniteStock: true }), 'physical'));
 assert('allowOversell is always in stock — the vendor will source it', () =>
-    variantInStock(variant({ stock: 0, allowOversell: true })));
+    variantInStock(variant({ stock: 0, allowOversell: true }), 'physical'));
+// ⚠ The "Fully booked on a brand-new service" defect: a service variant keeps the schema's
+// `stock: 0, isInfiniteStock: false` forever, so the counter rule alone captioned every one.
+assert('⚠ a service is in stock at the schema defaults — it is scheduled, not stocked', () =>
+    variantInStock(variant({ stock: 0, isInfiniteStock: false, allowOversell: false }), 'service'));
+assert('⚠ the product DTO publishes a service variant as inStock', () =>
+    toPublicVariantDto(
+        variant({ stock: 0, isInfiniteStock: false }),
+        'XAF',
+        new Map(),
+        new Map(),
+        [],
+        { vectorisationEnabled: true, type: 'service' },
+    ).inStock === true);
 
 assert('a single price yields NO priceRange (the key is omitted, not degenerate)', () =>
     priceRangeOf([variant({ price: 100 })], pricingParent) === undefined);
@@ -1125,6 +1138,16 @@ assert('⚠ the public DTO reads no raw `variant.price` — every quote goes thr
     !dtoSrc.includes('variant.price')
     && dtoSrc.includes('publicDisplayPrice(')
     && dtoSrc.includes('publicCompareAtPrice('));
+
+// The service exception lives in three places — `variantInStock` above, the browse row's
+// `_inStock` and the SKU resolution's `inStock` — and the two pipelines are unreachable from
+// a DB-free suite. Losing it from either brings "Fully booked" back on that surface alone.
+assert('⚠ the browse row\'s `_inStock` carries the service exception', () =>
+    /_inStock:\s*\{\s*\$or:\s*\[\s*\{\s*\$eq:\s*\['\$type',\s*'service'\]\s*\}/.test(repoSrc));
+
+assert('⚠ the SKU resolution\'s `inStock` carries the service exception', () =>
+    /inStock:\s*\{\s*\$or:\s*\[\s*\{\s*\$eq:\s*\['\$product\.type',\s*'service'\]\s*\}/.test(repoSrc)
+    && /\$project:\s*\{[^}]*title:\s*1,\s*type:\s*1,/.test(repoSrc));
 
 // ─── Summary ─────────────────────────────────────────────────────────────────
 

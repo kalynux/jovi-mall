@@ -324,12 +324,14 @@ function main(): void {
     assert('⛔ the screen has no address input of any kind', () => {
         const html = page().replace(/<!--[\s\S]*?-->/g, '');
         const inputs = [...html.matchAll(/<input[^>]*>/g)].map((m) => m[0]);
-        // The mobile-money number, and (NovaSend `CODE_FIRST`, 2026-10-05) the numeric payment code —
-        // nothing that could hold an address.
+        // The mobile-money number, (NovaSend `CODE_FIRST`, 2026-10-05) the numeric payment code and
+        // (pay part now, 2026-11-01) a number-only amount — nothing that could hold an address.
         const code = inputs.filter((i) => i.includes('id="code"'));
-        const rest = inputs.filter((i) => !i.includes('id="code"'));
+        const amount = inputs.filter((i) => i.includes('id="partialAmount"'));
+        const rest = inputs.filter((i) => !i.includes('id="code"') && !i.includes('id="partialAmount"'));
         return rest.length === 1 && rest[0].includes('type="tel"')
-            && code.length === 1 && code[0].includes('inputmode="numeric"') && code[0].includes('maxlength="8"');
+            && code.length === 1 && code[0].includes('inputmode="numeric"') && code[0].includes('maxlength="8"')
+            && amount.length === 1 && amount[0].includes('type="number"');
     });
 
     /**
@@ -659,8 +661,11 @@ function main(): void {
         };
         const payNow = body('export async function placeCheckout(');
         const cod = body('export async function placeCheckoutCashOnDelivery(');
-        return /createOrdersFromCart\([\s\S]{0,120}'online'/.test(payNow)
-            && !payNow.includes('cash_on_delivery')
+        // Pay part now (2026-11-01) takes a payment, so it is here: `cash_on_delivery` appears ONLY when
+        // the customer named an amount, and ONLY with `partialPayment: true`. Plain COD stays apart.
+        return /createOrdersFromCart\([\s\S]{0,160}partialAmount !== null \? 'cash_on_delivery' : 'online'/.test(payNow)
+            && (payNow.match(/cash_on_delivery/g) ?? []).length === 1
+            && payNow.includes('partialAmount !== null ? { partialPayment: true } : { deliveryFeePayment }')
             && /createOrdersFromCart\([\s\S]{0,120}'cash_on_delivery'/.test(cod)
             && !cod.includes('initiatePaymentForCart(');
     });
@@ -941,7 +946,8 @@ function main(): void {
             && !retry.includes('createOrdersFromCart(')
             // Both the route and the tap reach it — one implementation, two doors.
             // `paymentCode` (NovaSend `CODE_FIRST`) rides along on the route; a tap has none.
-            && /static retryPayment[\s\S]*?retryCharge\(req, res, null, phone, paymentCode \?\? null\)/.test(src)
+            // `partialAmount` (2026-11-01) likewise: a partial order's retry may name a different amount.
+            && /static retryPayment[\s\S]*?retryCharge\(req, res, null, phone, paymentCode \?\? null, partialAmount \?\? null\)/.test(src)
             && src.includes('retryCharge(req, res, transactionId, null)');
     });
 
@@ -1578,7 +1584,8 @@ function chatDoorAssertions(): void {
         && !reviewRoute.includes('inAppSurfaceStore.') && !reviewRoute.includes('readChatCheckout(')
         // + `deliveryFeePayment` (W-F, cash for delivery) — the body's one optional choice, passed through.
         // + `paymentCode` (NovaSend `CODE_FIRST`, 2026-10-05), the same way.
-        && placeRoute.includes('await placeChatCheckout(req, res, checkoutRef, deliveryAddressId ?? null, phone, deliveryFeePayment, paymentCode ?? null)')
+        // + `partialAmount` (pay part now, 2026-11-01), the same way.
+        && placeRoute.includes('await placeChatCheckout(req, res, checkoutRef, deliveryAddressId ?? null, phone, deliveryFeePayment, paymentCode ?? null, partialAmount ?? null)')
         && !placeRoute.includes('placeCheckout(')
         // One placement in the whole chat controller — the route and the tap cannot drift.
         && (chat.match(/\bplaceCheckout\(/g) ?? []).length === 1);
@@ -1642,7 +1649,8 @@ function chatDoorAssertions(): void {
         return reviewKeys?.join(',') === 'deliveryAddressId'
             // `deliveryFeePayment` since W-F (ADR-A11 § Cash for delivery): with_order | cash_to_rider.
             // `paymentCode` since NovaSend (2026-10-05): the CODE_FIRST code, validated by PaymentCodeSchema.
-            && placeKeys?.join(',') === 'checkoutRef,deliveryAddressId,deliveryFeePayment,paymentCode,phone'
+            // `partialAmount` since 2026-11-01: a whole positive number, judged against the quote's limits.
+            && placeKeys?.join(',') === 'checkoutRef,deliveryAddressId,deliveryFeePayment,partialAmount,paymentCode,phone'
             && chat.slice(chat.indexOf('const ChatPlaceSchema')).includes('TypedPayerNumberSchema')
             && composedAt > 0 && composedAt < place.indexOf('await placeCheckout(checkoutRef, phone,');
     });

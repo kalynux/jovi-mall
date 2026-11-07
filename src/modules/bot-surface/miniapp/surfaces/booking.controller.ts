@@ -10,9 +10,11 @@ import { inAppSurfaceStore } from '../../services/inapp-surface.store';
 import { bookingChatReceipt } from '../../domain/bot-booking-copy';
 import { botChrome } from '../../domain/bot-chrome-copy';
 import { openSurfaceActionId } from '../../domain/bot-action-id';
+import { showPlaceOption } from '../../domain/booking-place-reply';
 import { toBotCopyLanguage } from '../../domain/bot-error-copy';
 import { __IN_APP_SCREEN_PATH } from '../../domain/inapp-url';
 import {
+    answerPriceFromList,
     BookingConfirmed,
     confirmBooking,
     openPaymentFromList,
@@ -22,6 +24,7 @@ import {
     readCustomerBookings,
 } from './booking.core';
 import { PaymentCodeSchema } from '../../../payments/validators/payment.validators';
+import { composeTypedNumber } from '../../../../core/validation/dial-codes';
 
 const telegramBotService = new TelegramBotService();
 
@@ -29,9 +32,13 @@ const telegramBotService = new TelegramBotService();
  * The pay screen's body. `phone` stays `unknown` and is judged inside `payBooking`, as before;
  * unknown keys are dropped (not refused) so a page from before this schema keeps working.
  * `paymentCode`: the `CODE_FIRST` code (NovaSend Orange Money), sent after `422 PAYMENT_CODE_REQUIRED`.
+ * `dial` (2026-10-27): the country picker's ISO code. It only COMPOSES a typed number
+ * (`composeTypedNumber`, the checkout's and the WhatsApp form's rule); an unknown value composes
+ * nothing, and empty `phone` still means the account's own number.
  */
 const PayBodySchema = z.object({
     phone: z.unknown().optional(),
+    dial: z.unknown().optional(),
     paymentCode: PaymentCodeSchema.optional(),
 });
 
@@ -87,7 +94,7 @@ export class BookingScreensController {
      */
     static confirm = asyncHandler(async (req: Request, res: Response) => {
         const handle = String(req.params.handle ?? '');
-        const body = (req.body ?? {}) as { slotId?: unknown; notes?: unknown };
+        const body = (req.body ?? {}) as { slotId?: unknown; notes?: unknown; addressId?: unknown };
         if (typeof body.slotId !== 'string' || body.slotId.length === 0) {
             throw createAppError(ERROR_CODES.VALIDATION_ERROR, 400, 'slotId is required');
         }
@@ -101,6 +108,8 @@ export class BookingScreensController {
         const outcome = await confirmBooking(handle, {
             slotId: body.slotId,
             notes: typeof body.notes === 'string' ? body.notes : null,
+            // Required by a service the vendor travels to — the page asks (`place` on the days read).
+            addressId: typeof body.addressId === 'string' ? body.addressId : null,
         });
 
         if (session) {
@@ -121,6 +130,15 @@ export class BookingScreensController {
         sendSuccess(res, {
             url: `${__IN_APP_SCREEN_PATH}/bp/${opened.handle}?lang=${toBotCopyLanguage(opened.language)}`,
         });
+    });
+
+    /** `POST /api/bot/miniapp/s/bl/:handle/answer-price` — Accept or Decline on a row. See the core. */
+    static answerPrice = asyncHandler(async (req: Request, res: Response) => {
+        const body = (req.body ?? {}) as { bookingId?: unknown; answer?: unknown };
+        sendSuccess(res, await answerPriceFromList(String(req.params.handle ?? ''), {
+            bookingId: body.bookingId,
+            answer: body.answer,
+        }));
     });
 
     /** `GET /api/bot/miniapp/s/bp/:handle/data` — what is owed, re-resolved now. Repeatable. */
@@ -144,7 +162,7 @@ export class BookingScreensController {
     static pay = asyncHandler(async (req: Request, res: Response) => {
         const body = PayBodySchema.parse(req.body ?? {});
         sendSuccess(res, await payBooking(String(req.params.handle ?? ''), {
-            phone: body.phone,
+            phone: composeTypedNumber(body.phone, body.dial),
             paymentCode: body.paymentCode ?? null,
         }));
     });
@@ -185,11 +203,19 @@ async function pushReceipt(
     outcome: BookingConfirmed,
 ): Promise<void> {
     const text = bookingChatReceipt(
-        { moved: outcome.moved, awaitingShop: outcome.awaitingShop },
+        { moved: outcome.moved, awaitingShop: outcome.awaitingShop, requested: outcome.requested },
         { reference: outcome.reference, when: outcome.when, service: outcome.service },
         language,
     );
     const myBookings = { label: botChrome('myBookingsButton', language), token: openSurfaceActionId('bl') };
+    /**
+     * ⭐ **Show the place** (owner decision A-8, 2026-10-27) — a map pin and the address, or the
+     * link, sent into the chat on the tap through the website's own gates. Not for an appointment
+     * at the customer's own address, nor for a move (the place did not change).
+     */
+    const place = !outcome.moved && (outcome.placeKind === 'vendor_address' || outcome.placeKind === 'online')
+        ? showPlaceOption(outcome.bookingId, language)
+        : null;
 
     if (channel === 'whatsapp') {
         try {
@@ -202,7 +228,10 @@ async function pushReceipt(
                 // Meta's bare-digit `wa_id` → strict E.164, or the messenger refuses it outright.
                 to: messagingPhoneToE164(externalId) ?? externalId,
                 body: text,
-                buttons: [{ id: myBookings.token, title: myBookings.label }],
+                buttons: [
+                    ...(place ? [{ id: place.id, title: place.label }] : []),
+                    { id: myBookings.token, title: myBookings.label },
+                ],
             });
             if (!sent.success) {
                 console.warn(`[BookingScreens] WhatsApp receipt refused: ${sent.error?.code ?? 'unknown'}`);
@@ -230,10 +259,10 @@ async function pushReceipt(
                  * a scope that belongs to them — which is also what lets the WhatsApp half say a
                  * content-free sentence and still be useful.
                  */
-                buttons: [{
-                    text: myBookings.label,
-                    callbackData: myBookings.token,
-                }],
+                buttons: [
+                    ...(place ? [{ text: place.label, callbackData: place.id }] : []),
+                    { text: myBookings.label, callbackData: myBookings.token },
+                ],
             },
         );
     } catch (error) {

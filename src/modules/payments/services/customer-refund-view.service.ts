@@ -21,7 +21,7 @@ export class CustomerRefundViewService {
 
     const rows = await RefundRequestModel.find(
       { source_kind: kind, source_id: { $in: ids } },
-      { source_id: 1, status: 1, gross_amount: 1, fee_amount: 1, fee_rate: 1, net_amount: 1, currency: 1, channel: 1, destination: 1, completed_at: 1, created_at: 1 }
+      { source_id: 1, status: 1, gross_amount: 1, fee_amount: 1, fee_rate: 1, net_amount: 1, fees: 1, currency: 1, channel: 1, destination: 1, completed_at: 1, created_at: 1 }
     )
       .sort({ created_at: -1, _id: -1 })
       .lean<Array<CustomerRefundSourceRow & { source_id: Types.ObjectId }>>()

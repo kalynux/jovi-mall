@@ -39,7 +39,13 @@
  *
  *   npm run flows:publish                    # rehearse everything, send nothing
  *   npm run flows:publish -- --upload-key    # upload the public key only
+ *   npm run flows:publish -- --draft bk      # create/reuse a DRAFT and upload its JSON — no publish
  *   npm run flows:publish -- --publish pl    # create, upload and publish one Flow
+ *
+ * ⚠ **`--draft` exists for the gap between "the definition is right" and "production serves it"**
+ * (added 2026-10-26 for the booking forms). Meta validates the uploaded JSON and reports every
+ * fault, and nothing reaches a customer — a draft has no id the backend reads. Publishing then
+ * reuses that same draft, so the validated JSON is the published JSON.
  *
  * ── ⚠ THE PUBLIC KEY IS DERIVED, NEVER CONFIGURED ──────────────────────────
  * It comes from `WHATSAPP_FLOW_PRIVATE_KEY`, so what Meta holds is provably the counterpart of
@@ -53,6 +59,11 @@ import { flowAppSecret } from '../src/modules/whatsapp/flows/domain/flow-signatu
 import { PRODUCT_LISTING_FLOW } from '../src/modules/whatsapp/flows/definitions/product-listing.flow';
 import { PRODUCT_DETAIL_FLOW } from '../src/modules/whatsapp/flows/definitions/product-detail.flow';
 import { CHECKOUT_FLOW } from '../src/modules/whatsapp/flows/definitions/checkout.flow';
+import {
+    BOOKING_LIST_FLOW,
+    BOOKING_PAY_FLOW,
+    BOOKING_SLOT_FLOW,
+} from '../src/modules/whatsapp/flows/definitions/booking.flow';
 import type { FlowDefinition } from '../src/modules/whatsapp/flows/definitions/flow-definition.types';
 import type { InAppSurfaceKind } from '../src/modules/bot-surface/services/inapp-surface.store';
 
@@ -60,6 +71,15 @@ const FLOWS: ReadonlyArray<readonly [InAppSurfaceKind, string, FlowDefinition]> 
     ['pl', 'wi-mall product listing', PRODUCT_LISTING_FLOW],
     ['pd', 'wi-mall product detail', PRODUCT_DETAIL_FLOW],
     ['co', 'wi-mall checkout', CHECKOUT_FLOW],
+    /**
+     * The booking forms (2026-10-26). In the list now that every read they project exists:
+     * `readCustomerBookings`, `readBookingPicker` (with the customer-address step) and
+     * `readBookingPayment`. ⚠ Each screen's data comes from the PRODUCTION endpoint, so publish
+     * only from a build that serves it — rehearse with `--draft` first.
+     */
+    ['bl', 'wi-mall bookings', BOOKING_LIST_FLOW],
+    ['bk', 'wi-mall booking slot', BOOKING_SLOT_FLOW],
+    ['bp', 'wi-mall booking payment', BOOKING_PAY_FLOW],
 ];
 
 const args = process.argv.slice(2);
@@ -388,6 +408,11 @@ async function main(): Promise<void> {
 
     await uploadPublicKey();
 
+    if (has('--draft')) {
+        await draftOnly();
+        return;
+    }
+
     if (!has('--publish')) {
         console.log('\n▶ Next');
         console.log('  This was a rehearsal. Nothing was published.');
@@ -519,7 +544,62 @@ function envNameFor(kind: InAppSurfaceKind): string {
     if (kind === 'pl') return 'WHATSAPP_FLOW_ID_PRODUCT_LISTING';
     if (kind === 'pd') return 'WHATSAPP_FLOW_ID_PRODUCT_DETAIL';
     if (kind === 'co') return 'WHATSAPP_FLOW_ID_CHECKOUT';
+    if (kind === 'bl') return 'WHATSAPP_FLOW_ID_BOOKING_LIST';
+    if (kind === 'bk') return 'WHATSAPP_FLOW_ID_BOOKING_SLOT';
+    if (kind === 'bp') return 'WHATSAPP_FLOW_ID_BOOKING_PAY';
     return '(no variable — this screen has no Flow)';
+}
+
+/**
+ * `--draft`: create (or reuse) each selected Flow as a DRAFT and upload its JSON, so Meta validates
+ * it — and stop. No `/publish`, so no health check and nothing a customer can open.
+ *
+ * ⚠ **The id it prints is NOT to be set in production yet.** `flowIdFor` treats a configured id as
+ * a published Flow; setting a draft's id would send customers a form Meta will not open. Set it
+ * after `--publish` reuses this same draft.
+ */
+async function draftOnly(): Promise<void> {
+    /**
+     * ⚠ **A draft needs LESS than a publish, deliberately.** No `/publish` means no health check, so
+     * the endpoint key and the app secret — production secrets a workstation should not hold — are
+     * not required. What IS required: the token, the Business Account, and the https `endpoint_uri`
+     * the draft is created with (it is what a later `--publish` of this same draft will use).
+     */
+    const missing = [
+        ...(ACCESS_TOKEN ? [] : ['WHATSAPP_ACCESS_TOKEN']),
+        ...(WABA_ID ? [] : ['WHATSAPP_BUSINESS_ACCOUNT_ID']),
+        ...(ENDPOINT_URI.startsWith('https://') ? [] : ['API_PUBLIC_URL (https)']),
+    ];
+    if (missing.length > 0) {
+        console.error(`\n❌ --draft needs: ${missing.join(', ')}\n`);
+        process.exit(1);
+    }
+    const selected = FLOWS.filter(([kind]) => only === null || kind === only);
+    if (selected.length === 0) {
+        console.error(`\n❌ '${only}' is not one of: ${FLOWS.map(([k]) => k).join(', ')}\n`);
+        process.exit(1);
+    }
+    for (const [kind, name, definition] of selected) {
+        console.log(`\n▶ Drafting ${kind} · ${name}`);
+        const flowId = await draftOrNewFlow(name);
+        if (!flowId) continue;
+
+        const form = new FormData();
+        form.append('asset_type', 'FLOW_JSON');
+        form.append('name', 'flow.json');
+        form.append('file', new Blob([JSON.stringify(definition)], { type: 'application/json' }), 'flow.json');
+        const uploaded = (await graph(`${flowId}/assets`, { method: 'POST', body: form })) as {
+            validation_errors?: unknown[];
+        };
+        if (uploaded.validation_errors?.length) {
+            console.error(`  ❌ validation errors: ${JSON.stringify(uploaded.validation_errors)}`);
+            continue;
+        }
+        console.log(`  ✅ draft ${flowId}: asset uploaded, no validation errors — NOT published`);
+        console.log(`  → after the deploy that serves it: npm run flows:publish -- --publish ${kind}`);
+        console.log(`    then set ${envNameFor(kind)}=${flowId} and redeploy`);
+    }
+    console.log('');
 }
 
 if (require.main === module) {

@@ -5,6 +5,8 @@ import { Booking } from '../models/booking.model';
 import { BookingStatus } from '../types/booking.types';
 import { BOOKING_CONFIG } from '../config/booking.config';
 import { BookingService } from '../services/booking.service';
+import { unpaidSweepFilter } from '../domain/price-proposal';
+import { PaymentTransactionModel } from '../../payments/models/payment-transaction.model';
 
 /**
  * UnpaidBookingCancelWorker — releases slots held by bookings nobody paid for.
@@ -104,26 +106,25 @@ export class UnpaidBookingCancelWorker implements ObservableWorker {
       const { afterMinutes, batchSize } = BOOKING_CONFIG.unpaidExpiry;
       const cutoff = new Date(Date.now() - afterMinutes * 60_000);
 
-      const stale = await Booking.find({
-        // Confirmed only — see the class docstring on why `pending` is excluded.
-        status: BookingStatus.CONFIRMED,
-        requiresPayment: true,
-        // 'pending' means a gateway call is in flight; leave it to resolve.
-        paymentStatus: { $in: ['unpaid', 'failed'] },
-        createdAt: { $lte: cutoff },
-        deletedAt: null,
-      })
+      const stale = await Booking.find(unpaidSweepFilter(new Date(), cutoff))
         .limit(batchSize)
-        .select('_id vendorId');
+        .select('_id vendorId priceTopup');
 
       if (stale.length === 0) return 0;
 
       let cancelled = 0;
       for (const booking of stale) {
         try {
+          // A difference being paid right now is left to resolve, like a gateway call above.
+          if (booking.priceTopup?.status === 'due' && await PaymentTransactionModel.exists({
+            bookingId: booking._id,
+            status: { $in: ['INITIATED', 'PENDING'] },
+          })) continue;
+
           // Route through the service so the calendar event is removed and
           // `booking.cancelled` is emitted — the same treatment a manual vendor
-          // cancellation gets. There is nothing to refund by definition.
+          // cancellation gets. An unpaid booking has nothing to refund; one cancelled over an
+          // unpaid price difference gets back what it did pay, through the same path.
           await this.bookingService.cancelVendorBooking(
             booking._id.toString(),
             booking.vendorId.toString(),

@@ -69,6 +69,7 @@ import {
 } from '../../src/modules/notifications/models/customer-notification.model';
 import { AGENT_NOTIFICATION_TYPES } from '../../src/modules/notifications/models/agent-notification.model';
 import { AGENT_NOTIFICATION_CATALOG } from '../../src/modules/notifications/catalog/agent-notification-catalog';
+import { REFERRAL_NOTIFICATION_CATALOG } from '../../src/modules/notifications/catalog/referral-notification-catalog';
 import { AGENCY_NOTIFICATION_CATALOG } from '../../src/modules/notifications/catalog/agency-notification-catalog';
 import { NOTIFICATION_CATALOG } from '../../src/modules/notifications/catalog/notification-catalog';
 import {
@@ -106,6 +107,11 @@ function assert(name: string, fn: () => boolean): void {
  * someone else's action here, not the owner of a dashboard.
  */
 const UNMUTABLE: CustomerNotificationType[] = [
+    // A question about money the appointment waits on, and the request for that money.
+    'booking.price_proposed',
+    'booking.reschedule_price_proposed',
+    'booking.price_topup_due',
+    'order.prepayment.received',
     'booking.cancelled',
     'booking.payment.received',
     // Money, on the same footing as the line above: it is the RECEIPT for a balance the
@@ -171,6 +177,9 @@ const EXPECTED_WA_PARAMS: Record<CustomerNotificationType, number> = {
     'booking.created': 3,
     'booking.confirmed': 3,
     'booking.rescheduled': 3,
+    'booking.reschedule_price_proposed': 8,
+    'booking.price_proposed': 7,
+    'booking.price_topup_due': 5,
     'booking.cancelled': 3,
     'booking.completed': 4,
     'booking.reminder': 4,
@@ -196,6 +205,8 @@ const EXPECTED_WA_PARAMS: Record<CustomerNotificationType, number> = {
     'booking.refund.declined': 1,
     'order.created': 5,
     'order.payment.received': 4,
+    // paid online + orderNumber + vendorName + cash due + currency: the customer must see what is left.
+    'order.prepayment.received': 5,
     'order.shipped': 3,
     'order.out_for_delivery': 1,
     'order.delivered': 1,
@@ -233,6 +244,10 @@ const EXPECTED_WA_PARAMS: Record<CustomerNotificationType, number> = {
     'ticket.resolved': 2,
     // In-window-only: no template, so no template parameters.
     'cart.abandoned': 0,
+    // Appointment moves (2026-10-26): vendorName, serviceName, previousStartAt, startAt, expiresAt.
+    'booking.reschedule_proposed': 5,
+    // vendorName, serviceName, proposedStartAt, startAt.
+    'booking.reschedule_declined': 4,
     // reason + expiresAt (ADR-A10). Both always filled — each has a localized fallback.
     'account.closure_requested': 2
 };
@@ -299,10 +314,12 @@ function main(): void {
     // 35 since 2026-10-04 (W-E2): `order.delivery_fee.refund_settled`, the confirmation refund_pending promised.
     // 46 since 2026-10-05 (refund flow, REFUND-FLOW-PLAN § 8): six `order.refund.*` + five `booking.refund.*`.
     // 46 → 47 on 2026-10-14: + order.delivery_fee.proposal_declined (the customer's own proposal).
-    assert('catalog and model enum list the same 47 situations', () => {
+    // 47 → 49 on 2026-10-26: + booking.reschedule_proposed / booking.reschedule_declined (D-8, D-9).
+    // 49 → 50 on 2026-11-01: + order.prepayment.received (partial payment).
+    assert('catalog and model enum list the same 53 situations', () => {
         const catalog = Object.keys(CUSTOMER_NOTIFICATION_CATALOG).sort();
         const model = [...CUSTOMER_NOTIFICATION_TYPES].sort();
-        return catalog.length === 47 && JSON.stringify(catalog) === JSON.stringify(model);
+        return catalog.length === 53 && JSON.stringify(catalog) === JSON.stringify(model);
     });
 
     // The aggregate enum is spread from CUSTOMER_AGGREGATE_TYPES rather than hand-kept —
@@ -741,7 +758,7 @@ function main(): void {
         // Mirrors the handler's SITUATION_PREFERENCE table by construction: these
         // situations must be absent from it, so no setting can silence them.
         const gated = new Set<CustomerNotificationType>([
-            'booking.created', 'booking.confirmed', 'booking.rescheduled', 'booking.completed',
+            'booking.created', 'booking.confirmed', 'booking.rescheduled', 'booking.completed', 'booking.reschedule_proposed', 'booking.reschedule_declined',
             'booking.reminder', 'order.created', 'order.shipped', 'order.out_for_delivery',
             'order.delivered', 'order.delivery_failed', 'cart.abandoned'
         ]);
@@ -750,7 +767,7 @@ function main(): void {
 
     assert('every situation is either gated or explicitly unmutable', () => {
         const gated = new Set<CustomerNotificationType>([
-            'booking.created', 'booking.confirmed', 'booking.rescheduled', 'booking.completed',
+            'booking.created', 'booking.confirmed', 'booking.rescheduled', 'booking.completed', 'booking.reschedule_proposed', 'booking.reschedule_declined',
             'booking.reminder', 'order.created', 'order.shipped', 'order.out_for_delivery',
             'order.delivered', 'order.delivery_failed', 'cart.abandoned'
         ]);
@@ -1139,6 +1156,10 @@ function main(): void {
                 }
             }
         }
+        // The referral catalogue is shared by all four roles, and every situation names a template.
+        for (const [situation, entry] of Object.entries(REFERRAL_NOTIFICATION_CATALOG)) {
+            out.set(entry.template.name, `referral catalogue: ${situation}`);
+        }
         return out;
     };
 
@@ -1224,11 +1245,11 @@ function main(): void {
         new Map([...catalogTemplateNames(), ...literalTemplateNames(moduleSources())]);
 
     // Non-vacuity first: an empty set on either side satisfies "every X is in Y" for nothing.
-    assert('the name scan read all four catalogues and found a send-site literal', () => {
+    assert('the name scan read all five catalogues and found a send-site literal', () => {
         const fromCatalogs = catalogTemplateNames();
         const literals = literalTemplateNames(moduleSources());
         const audiences = new Set([...fromCatalogs.values()].map(w => w.split(' ')[0]));
-        return audiences.size === 4 && literals.size > 0 && submittedNames.size > 0;
+        return audiences.size === 5 && literals.size > 0 && submittedNames.size > 0;
     });
 
     assert('⛔ every template name a send can ask for was submitted, and every submitted name is sent', () => {
@@ -1633,8 +1654,10 @@ function main(): void {
      */
     assert('all four payment result events carry the chat (cart AND booking; received AND failed)', () =>
         orchestratorSource.split('originChannel: transaction.originChat?.channel ?? undefined').length - 1 === 4);
-    assert('all four customer handlers pass it on, filtered to the two chat channels', () =>
-        originHandlerSource.split('originChat: originChatOf(p.originChannel)').length - 1 === 4
+    // Five since 2026-11-01: the partial order's online part is a payment result too. Its event is
+    // published by `OrderService`, which is why the count above stays at four.
+    assert('all five customer handlers pass it on, filtered to the two chat channels', () =>
+        originHandlerSource.split('originChat: originChatOf(p.originChannel)').length - 1 === 5
         && /value === 'whatsapp' \|\| value === 'telegram' \? value : undefined/.test(originHandlerSource));
     assert('the stored value is one of the two chats, and absent (never null) elsewhere', () =>
         /originChat: \{\s*type: \{\s*channel: \{ type: String, enum: \['whatsapp', 'telegram'\], required: true \}\s*\},\s*default: undefined/.test(modelSource));

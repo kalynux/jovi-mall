@@ -3,6 +3,7 @@ import { MODELS, COLLECTIONS } from '../../core/database/collections';
 import { GeoPointSchema, IGeoPoint } from '../../core/types/geo.types';
 import { GeoAddressSchema, IGeoAddress } from '../../core/types/geo-address.types';
 import { ACTOR_SOURCES, ActorSource } from '../../core/types/actor-source.types';
+import { EarningsPauseSchema, IEarningsPause } from '../earnings/models/earnings-pause.schema';
 
 // `handing_over` is the post-pickup reassignment state: an agent had picked the
 // parcel up but could not deliver it, so the shipment was pulled off them and is
@@ -454,6 +455,13 @@ export interface IShipment extends Document {
    */
   delivery_fee_snapshot?: number | null;
   /**
+   * The DELIVERY pause (owner decision, 2026-10-22): an administrator stopping this parcel's
+   * agency and rider money — and nothing else on the order. The order's own pause cannot do
+   * that for an agency whose terms free it (earnings/domain/courier-hold.ts). Same record and
+   * same arithmetic as the order's; written only by `EarningsPauseService`.
+   */
+  earnings_pause?: IEarningsPause | null;
+  /**
    * A per-shipment delivery fee the VENDOR approved (modules/delivery-fee-proposals),
    * replacing what the agency's `policies.pricing` formula would charge. Read by
    * `EarningsQuoteService.computeShipmentDeliveryFee` BEFORE the formula, so every consumer
@@ -484,6 +492,18 @@ export interface IShipment extends Document {
    * Null on shipments created after checkout (an item moved to another agency) and on older ones.
    */
   customer_delivery_fee?: number | null;
+  /**
+   * This parcel's share of what the customer paid online on a PARTIAL order (owner, 2026-11-01).
+   * Written when the online part is paid, and re-shared if items or fees move before the cash
+   * changes hands. 0 / absent on every other shipment. The agent collects what is left.
+   */
+  prepaid_amount?: number | null;
+  /**
+   * This parcel came back and what was prepaid on it is being dealt with (owner, 2026-11-01). `null`
+   * until then: the return path and the nightly sweep open a refund for a returned parcel carrying
+   * none. Settled parcels cannot go out again, because the customer has their money back.
+   */
+  prepaid_return?: { refund_request_id: mongoose.Types.ObjectId | null; opened_at: Date; settled_at: Date | null } | null;
   /**
    * The formula's itemisation at checkout, for display (base / weight / region / ceiling).
    * Informational only — no money path reads it; `delivery_fee_snapshot` is the number.
@@ -682,6 +702,7 @@ const ShipmentSchema = new Schema<IShipment>({
     default: [],
   },
   delivery_fee_snapshot: { type: Number, default: null, min: 0 },
+  earnings_pause: { type: EarningsPauseSchema, default: null },
   delivery_fee_override: {
     type: new Schema<IShipmentDeliveryFeeOverride>(
       {
@@ -698,6 +719,18 @@ const ShipmentSchema = new Schema<IShipment>({
   // Customer-paid delivery (ADR-A11) — see IShipment. No index: read with the shipment.
   delivery_payer: { type: String, enum: ['vendor', 'customer', null], default: null },
   customer_delivery_fee: { type: Number, default: null, min: 0 },
+  prepaid_amount: { type: Number, default: 0, min: 0 },
+  prepaid_return: {
+    type: new Schema(
+      {
+        refund_request_id: { type: Schema.Types.ObjectId, default: null },
+        opened_at: { type: Date, required: true },
+        settled_at: { type: Date, default: null },
+      },
+      { _id: false }
+    ),
+    default: null,
+  },
   fee_components: {
     type: new Schema<IShipmentFeeComponents>(
       {

@@ -1,6 +1,11 @@
 import { IMapper } from '../../../../core/database/mapper.interface';
 import { IProductVariant } from '../../models';
 import { BargainRange } from '../../domain/services/bargain-price.rule';
+import {
+  APPOINTMENT_LIMITS,
+  AppointmentAccessSetting,
+  ServiceLocationSetting,
+} from '../../../booking/domain/appointment';
 
 export interface Variant {
   id: string;
@@ -54,6 +59,10 @@ export interface Variant {
       priceType: 'fixed' | 'percentage';
       value: number;
     };
+    // Absent on services created before 2026-10-26 — see booking/domain/appointment.ts.
+    location?: ServiceLocationSetting;
+    /** ⚠ Private to the vendor and the booked customer — never published, never vectorised. */
+    access?: AppointmentAccessSetting;
   };
   createdAt: Date;
   updatedAt: Date;
@@ -105,6 +114,15 @@ export class VariantMapper implements IMapper<Variant, IProductVariant> {
           endTime: doc.serviceConfig.peakHours.endTime,
           priceType: doc.serviceConfig.peakHours.priceType,
           value: doc.serviceConfig.peakHours.value,
+        } : undefined,
+        location: doc.serviceConfig.location?.kind ? {
+          kind: doc.serviceConfig.location.kind,
+          vendorAddressId: doc.serviceConfig.location.vendorAddressId ?? null,
+        } : undefined,
+        access: doc.serviceConfig.access ? {
+          instructions: doc.serviceConfig.access.instructions ?? null,
+          meetingUrl: doc.serviceConfig.access.meetingUrl ?? null,
+          revealMinutesBefore: doc.serviceConfig.access.revealMinutesBefore ?? APPOINTMENT_LIMITS.revealMinutesDefault,
         } : undefined,
       } : undefined,
       createdAt: doc.createdAt,

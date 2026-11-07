@@ -77,6 +77,7 @@ import {
 } from '../../src/modules/whatsapp/flows/definitions/booking.flow';
 import { FLOW_SCREEN_TITLE, NOTICE_SCREEN } from '../../src/modules/whatsapp/flows/definitions/notice.screen';
 import type { FlowDefinition } from '../../src/modules/whatsapp/flows/definitions/flow-definition.types';
+import type { BookingPayView } from '../../src/modules/whatsapp/flows/screens/booking.adapter';
 // ⚠ Safe to import: the publisher runs only under `require.main === module`.
 import {
     FLOW_REQUIRED_PROPERTIES,
@@ -99,6 +100,7 @@ import type { ProductDetailView } from '../../src/modules/bot-surface/miniapp/su
 import { planCompletion } from '../../src/modules/whatsapp/flows/commands/flow-completion-plan';
 import { asFlowOutcome, FLOW_OUTCOMES } from '../../src/modules/whatsapp/flows/domain/flow-outcome';
 import { commandReplyIntent, screenReplyIntent } from '../../src/modules/command-bus/command-reply';
+import { renderBotReply } from '../../src/modules/bot-surface/domain/channel-reply';
 import { botChrome } from '../../src/modules/bot-surface/domain/bot-chrome-copy';
 import {
     handleSurvived,
@@ -909,8 +911,27 @@ async function main(): Promise<void> {
     ).replace(/\r\n/g, '\n'));
     assert('⛔ the ticket form is NOT in the publish list while its seam is unbuilt',
         /PRODUCT_LISTING_FLOW/.test(publishSource) && !/TICKET_FORM_FLOW/.test(publishSource));
-    assert('⛔ nor are the three booking forms, whose reads and screen kinds do not exist yet',
-        !/BOOKING_LIST_FLOW|BOOKING_SLOT_FLOW|BOOKING_PAY_FLOW/.test(publishSource));
+    /**
+     * ⭐ The three booking forms JOINED the publish list on 2026-10-26, once every read they project
+     * existed (`readCustomerBookings`, `readBookingPicker` with the place, `readBookingPayment`) —
+     * each under the variable `flowIdFor` reads, so a published id can actually reach a customer.
+     */
+    assert('⭐ the three booking forms are in the publish list, each with its own variable',
+        /\['bl', 'wi-mall bookings', BOOKING_LIST_FLOW\]/.test(publishSource)
+        && /\['bk', 'wi-mall booking slot', BOOKING_SLOT_FLOW\]/.test(publishSource)
+        && /\['bp', 'wi-mall booking payment', BOOKING_PAY_FLOW\]/.test(publishSource)
+        && /'WHATSAPP_FLOW_ID_BOOKING_LIST'/.test(publishSource)
+        && /'WHATSAPP_FLOW_ID_BOOKING_SLOT'/.test(publishSource)
+        && /'WHATSAPP_FLOW_ID_BOOKING_PAY'/.test(publishSource));
+    assert('⭐ … and a --draft mode that uploads for Meta\'s validation WITHOUT publishing',
+        /has\('--draft'\)/.test(publishSource)
+        && /async function draftOnly/.test(publishSource)
+        && !/draftOnly[\s\S]*?\/publish`/.test(publishSource.slice(publishSource.indexOf('async function draftOnly'))));
+    const configSource = stripComments(readSrc('flows.config.ts'));
+    assert('⭐ flowIdFor reads the three booking variables — one variable per screen',
+        /bl: \(\) => process\.env\.WHATSAPP_FLOW_ID_BOOKING_LIST \|\| ''/.test(configSource)
+        && /bk: \(\) => process\.env\.WHATSAPP_FLOW_ID_BOOKING_SLOT \|\| ''/.test(configSource)
+        && /bp: \(\) => process\.env\.WHATSAPP_FLOW_ID_BOOKING_PAY \|\| ''/.test(configSource));
 
     /**
      * ⛔ **Meta must be TOLD where the endpoint is**, as `endpoint_uri` on the Flow — from Flow JSON
@@ -942,29 +963,52 @@ async function main(): Promise<void> {
      * cannot be one screen — hence a day, then that day's times. Collapsing it back into one list
      * is the change this assertion exists to catch.
      */
-    assert('⛔ booking a slot is TWO screens — a day, then that day\'s times',
+    assert('⛔ booking a slot is TWO screens — a day, then that day\'s times (with or without WHERE)',
         !!dayScreen && !!timesScreen
-        && JSON.stringify(slotFlow.routing_model.DAY) === JSON.stringify(['TIMES', NOTICE_SCREEN]));
+        && JSON.stringify(slotFlow.routing_model.DAY) === JSON.stringify(['TIMES', 'TIMES_AT', NOTICE_SCREEN]));
     assert('⚠ times are a Dropdown (200), because a day can hold more than twenty slots',
         timesScreen?.layout.children.some((c) => c.type === 'Dropdown' && c.name === 'slot') === true
         && !timesScreen?.layout.children.some((c) => c.type === 'RadioButtonsGroup'));
     assert('⚠ the day is confirmed with the footer, so a touch cannot move the customer on',
         dayScreen?.layout.children.some((c) => c.type === 'RadioButtonsGroup' && c.name === 'day') === true
         && !JSON.stringify(dayScreen).includes('on-select-action'));
-    assert('⛔ the form hands back the opaque slot handle and nothing it computed',
-        JSON.stringify((timesScreen?.layout.children.find((c) => c.type === 'Footer') as
-            { 'on-click-action'?: { payload?: Record<string, unknown> } })?.['on-click-action']?.payload)
-            === JSON.stringify({ slotId: '${form.slot}' }));
+    const footerPayload = (screen: typeof timesScreen) => JSON.stringify((screen?.layout.children.find((c) => c.type === 'Footer') as
+        { 'on-click-action'?: { payload?: Record<string, unknown> } })?.['on-click-action']?.payload);
+    /**
+     * ⛔ **`slot`, the key the endpoint reads.** The draft sent `slotId` while the router read
+     * `data.slot` — never published, so no customer met it, but every confirm would have failed.
+     */
+    assert('⛔ the form hands back the opaque slot handle — under the key the endpoint READS',
+        footerPayload(timesScreen) === JSON.stringify({ slot: '${form.slot}' })
+        && /stringMatching\(data\.slot, SLOT_ID\)/.test(stripComments(readSrc('flow-screens.ts'))));
+
+    const timesAtScreen = slotFlow.screens.find((s) => s.id === 'TIMES_AT');
+    assert('⭐ TIMES_AT: the same times plus a REQUIRED address drop-down, nothing pre-selected',
+        timesAtScreen?.layout.children.some((c) => c.type === 'Dropdown' && c.name === 'slot') === true
+        && timesAtScreen?.layout.children.some((c) => c.type === 'Dropdown' && c.name === 'address'
+            && c.required === true && !('init-value' in c)) === true
+        && footerPayload(timesAtScreen) === JSON.stringify({ slot: '${form.slot}', address: '${form.address}' }));
 
     const payScreen = BOOKING_PAY_FLOW.screens.find((s) => s.id === 'PAY');
     const payInputs = (payScreen?.layout.children ?? []).filter((c) =>
         ['TextInput', 'TextArea', 'DatePicker', 'Dropdown', 'RadioButtonsGroup', 'CheckboxGroup', 'OptIn']
             .includes(String(c.type)));
-    assert('⛔ the booking payment screen has EXACTLY ONE input, and it is a phone number',
-        payInputs.length === 1 && payInputs[0]['input-type'] === 'phone'
-        && payInputs[0].required === false);
-    assert('⚠ … whose helper text is the masked number, never its value',
-        payInputs[0]?.['helper-text'] === '${data.phoneMasked}' && !('value' in (payInputs[0] ?? {})));
+    /**
+     * ⭐ The checkout's pair, field for field (2026-10-26): a COUNTRY picker starting on Cameroon (or
+     * the stored number's own country) and an EMPTY number field. Before, customers had to type the
+     * `+237` themselves — the defect the checkout fixed on 2026-10-01.
+     */
+    const payDial = payInputs.find((c) => c.type === 'Dropdown');
+    const payPhone = payInputs.find((c) => c.type === 'TextInput');
+    assert('⛔ the booking payment screen has EXACTLY a country picker and a phone number',
+        payInputs.length === 2 && payDial?.name === 'dial' && payPhone?.['input-type'] === 'phone'
+        && payPhone?.required === false && payDial?.required === false);
+    assert('⭐ the country picker starts on the read\'s default — Cameroon unless the number says otherwise',
+        payDial?.['init-value'] === '${data.dialDefault}' && payDial?.['data-source'] === '${data.dialOptions}');
+    assert('⚠ … the number\'s helper text is the masked number, never its value',
+        payPhone?.['helper-text'] === '${data.phoneMasked}' && !('value' in (payPhone ?? {})));
+    assert('⚠ … and Pay sends the number with the country picked, nothing it computed',
+        footerPayload(payScreen) === JSON.stringify({ phone: '${form.phone}', dial: '${form.dial}' }));
 
     // ── checkout: the four protections, each pinned on its own ───────────────
     const review = CHECKOUT_FLOW.screens.find((s) => s.id === 'REVIEW');
@@ -1079,9 +1123,9 @@ async function main(): Promise<void> {
      * ⚠ The whole vocabulary, pinned. A screen stamping a value the chat does not know reads as
      * "nothing happened" — silently — so the set is asserted rather than left to grow by habit.
      */
-    assert('the closed set is exactly the six the screens can stamp',
+    assert('the closed set is exactly the seven the screens can stamp',
         JSON.stringify([...FLOW_OUTCOMES].sort())
-        === JSON.stringify(['added', 'asked', 'booked', 'moved', 'notice', 'placed']));
+        === JSON.stringify(['added', 'asked', 'booked', 'moved', 'notice', 'placed', 'requested']));
     // ── the question a bargain or a booking asks, carried into the chat ──────
     /**
      * ⛔ THE OTHER HALF OF THE SAME GAP, now closed. These two rungs WRITE NOTHING — they start a
@@ -1109,9 +1153,22 @@ async function main(): Promise<void> {
     const booked = (outcome: string, over: Partial<Parameters<typeof planCompletion>[0]> = {}) =>
         plan({ completedScreen: 'bk', params: { screen: 'bk', outcome }, session: null, ...over });
     assert('⛔ a confirmed appointment → the chat acknowledges it',
-        JSON.stringify(booked('booked')) === JSON.stringify({ kind: 'booking_ack', moved: false }));
+        JSON.stringify(booked('booked')) === JSON.stringify({ kind: 'booking_ack', moved: false, requested: false }));
     assert('⛔ a RESCHEDULE carries `moved` — "booked" would read as a second appointment',
-        JSON.stringify(booked('moved')) === JSON.stringify({ kind: 'booking_ack', moved: true }));
+        JSON.stringify(booked('moved')) === JSON.stringify({ kind: 'booking_ack', moved: true, requested: false }));
+    assert('⭐ a move the shop must still accept carries `requested` — "moved" would be false (D-8)',
+        JSON.stringify(booked('requested')) === JSON.stringify({ kind: 'booking_ack', moved: true, requested: true }));
+    assert('⛔ the pay form\'s completion is silent — the payment path tells the chat the outcome',
+        plan({ completedScreen: 'bp', params: { screen: 'bp', outcome: 'placed' }, session: null }).kind === 'silent');
+    const listed = (over: Partial<Parameters<typeof planCompletion>[0]> = {}) => plan({
+        completedScreen: 'bl', params: { screen: 'bl', bookingId: pid }, session: live, ...over,
+    });
+    assert('⭐ a booking chosen on the list → its pay form opens in the chat (the Telegram row\'s Pay)',
+        JSON.stringify(listed()) === JSON.stringify({ kind: 'open_payment', bookingId: pid }));
+    assert('⛔ … only while the list session is live, from THIS conversation, with a real id',
+        listed({ session: null }).kind === 'expired'
+        && listed({ sender: '237000000000' }).kind === 'silent'
+        && listed({ params: { screen: 'bl', bookingId: 'nope' } }).kind === 'silent');
     assert('⚠ it needs no session: the handle was consumed by the write that made the booking',
         booked('booked', { sender: null }).kind === 'booking_ack');
     assert('a booking form that changed nothing stays silent',
@@ -1196,7 +1253,7 @@ async function main(): Promise<void> {
      * a BUTTON instead — a tap code is not caller-supplied content.
      */
     assert('⛔ the booking acknowledgement is content-free and carries a My bookings button',
-        /bookingChatAcknowledgement\(\{ moved: plan\.moved \}, language\)/.test(commandSource)
+        /bookingChatAcknowledgement\(\{ moved: plan\.moved, requested: plan\.requested \}, language\)/.test(commandSource)
         && /openSurfaceActionId\('bl'\)/.test(commandSource)
         && !/bookingChatReceipt|plan\.reference|params\.reference|params\.bookingId/.test(commandSource));
 
@@ -1458,6 +1515,61 @@ async function main(): Promise<void> {
         assert('⚠ no buttons means no empty list on the intent — the shape a channel renders is unchanged',
             !('actions' in (commandReplyIntent({ message: 'Hello' }) ?? {}))
             && !('actions' in (commandReplyIntent({ message: 'Hello', actions: [] }) ?? {})));
+
+        /**
+         * ⛔ **THE GAP BEHIND "THE BOT SENDS ME TO THE WEBSITE" (2026-10-26).** Nothing ever attached
+         * `flow` to an `inapp` intent, so even a PUBLISHED form could not reach a WhatsApp customer —
+         * they got the page as a browser link. A configured id now makes the screen open as its form,
+         * on WhatsApp only, with the handle as the Flow token.
+         */
+        const savedFlow = process.env.WHATSAPP_FLOW_ID_BOOKING_SLOT;
+        const savedKey = process.env.WHATSAPP_FLOW_PRIVATE_KEY;
+        process.env.WHATSAPP_FLOW_ID_BOOKING_SLOT = '1122334455';
+        /** ⚠ `flowIdFor` also requires the key: a form whose endpoint cannot decrypt is never offered. */
+        process.env.WHATSAPP_FLOW_PRIVATE_KEY = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+        try {
+            const onWa = screenReplyIntent({
+                kind: 'bk', handle: 'ia_bk1', language: 'fr', labelKey: 'bookChooseTimeButton',
+                fallbackPath: '/shop/p/x', channel: 'whatsapp',
+            }) as { kind: string; flow?: { id: string; token?: string } } | null;
+            assert('⭐ WhatsApp + a published form → the screen opens AS the form, the handle as its token',
+                onWa?.kind === 'inapp' && onWa.flow?.id === '1122334455' && onWa.flow?.token === 'ia_bk1');
+            const onTg = screenReplyIntent({
+                kind: 'bk', handle: 'ia_bk1', language: 'fr', labelKey: 'bookChooseTimeButton',
+                fallbackPath: '/shop/p/x', channel: 'telegram',
+            }) as { flow?: unknown } | null;
+            assert('⚠ … never on Telegram, whose screen is the page', !onTg?.flow);
+            delete process.env.WHATSAPP_FLOW_PRIVATE_KEY;
+            const noKey = screenReplyIntent({
+                kind: 'bk', handle: 'ia_bk1', language: 'fr', labelKey: 'bookChooseTimeButton',
+                fallbackPath: '/shop/p/x', channel: 'whatsapp',
+            }) as { flow?: unknown } | null;
+            assert('⛔ … and never without the endpoint key, whatever id is set', !noKey?.flow);
+            process.env.WHATSAPP_FLOW_PRIVATE_KEY = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+            assert('⛔ the command path attaches it too — ONE composition for both doors',
+                (commandReplyIntent({ screen: { kind: 'bk', handle: 'ia_bk1', labelKey: 'bookChooseTimeButton', fallbackPath: null } }, 'fr', 'whatsapp') as { flow?: { token?: string } } | null)
+                    ?.flow?.token === 'ia_bk1');
+
+            const rendered = renderBotReply(
+                { kind: 'inapp', text: 'Choisissez une heure', label: 'Choisir', url: '', flow: { id: '1122334455', token: 'ia_bk1' } },
+                'whatsapp', '237652705926',
+            ) as { body?: { interactive?: { action?: { parameters?: Record<string, unknown> } } } } | null;
+            const params = rendered?.body?.interactive?.action?.parameters ?? {};
+            assert('⭐ rendered as Meta\'s endpoint-backed form: version 3, data_exchange, the token, no payload',
+                params.flow_message_version === '3' && params.flow_action === 'data_exchange'
+                && params.flow_token === 'ia_bk1' && params.flow_id === '1122334455'
+                && !('flow_action_payload' in params));
+        } finally {
+            if (savedFlow === undefined) delete process.env.WHATSAPP_FLOW_ID_BOOKING_SLOT;
+            else process.env.WHATSAPP_FLOW_ID_BOOKING_SLOT = savedFlow;
+            if (savedKey === undefined) delete process.env.WHATSAPP_FLOW_PRIVATE_KEY;
+            else process.env.WHATSAPP_FLOW_PRIVATE_KEY = savedKey;
+        }
+        const inappSource = stripComments(fs.readFileSync(
+            path.join(__dirname, '..', '..', 'src', 'modules', 'bot-surface', 'controllers', 'bot-inapp.controller.ts'), 'utf8',
+        ).replace(/\r\n/g, '\n'));
+        assert('⛔ the chat\'s screen door delegates to the same composition, with the channel',
+            /setBotReply\(req, screenReplyIntent\(\{[\s\S]*?channel: req\.bot!\.envelope\.channel,/.test(inappSource));
     } finally {
         if (savedBase === undefined) delete process.env.BOT_MINIAPP_BASE_URL;
         else process.env.BOT_MINIAPP_BASE_URL = savedBase;
@@ -1642,6 +1754,13 @@ async function main(): Promise<void> {
         payment: { phoneMasked: '+2376••••4417', dialCountry: 'CM' }, language: 'fr', ...over,
     });
     const gone = () => createAppError(ERROR_CODES.BOT_PRODUCT_LIST_EXPIRED, 404, 'gone', { spent: false });
+    /** What `readBookingPayment` answers: the amount re-resolved, the masked number, the country. */
+    const payFixture = (over: Partial<BookingPayView> = {}): BookingPayView => ({
+        copy: { payTitle: 'Payer votre rendez-vous', payBalanceTitle: 'Payer le solde', payNumberHint: 'Laissez vide pour utiliser votre numéro.', payButton: 'Payer' },
+        purpose: 'primary', service: 'Coupe homme', when: 'Mar 22 sept 14:00', amountText: 'XAF 5,000',
+        maskedPayer: '+2376••••4417', dialCountry: 'CM', ...over,
+    });
+    type FlowPickerPlace = { kind: string; copy: { title: string; none: string } | null; addresses: Array<{ addressId: string; label: string; line: string }> | null };
     /** The words `readBookingPicker` carries, so no form holds a booking string. */
     const bookingWords = {
         pickDay: 'Choisissez un jour', pickTime: 'Choisissez une heure',
@@ -1666,8 +1785,9 @@ async function main(): Promise<void> {
             claimedWith: [] as FlowClaim[],
             sequence: [] as string[],
             picker: [] as Array<{ handle: string; date: string | null }>,
-            confirmed: [] as Array<{ handle: string; slotId: string }>,
+            confirmed: [] as Array<{ handle: string; slotId: string; addressId?: string | null }>,
             bookingList: [] as string[],
+            paid: [] as Array<{ handle: string; phone: unknown }>,
             sleeps: 0,
         };
         let refs = 0;
@@ -1706,10 +1826,12 @@ async function main(): Promise<void> {
                 calls.picker.push({ handle: bookingHandle, date: input?.date ?? null });
                 const held = sessions[bookingHandle];
                 if (!held || held.kind !== 'bk') throw gone();
+                /** The place, as the core answers it — set per test on the fake session. */
+                const place = (held as { __place?: unknown }).__place as FlowPickerPlace | undefined ?? null;
                 return input?.date
                     ? {
                         moving: null, copy: bookingWords, timezone: 'Africa/Douala',
-                        date: input.date, label: 'Tuesday 22 September',
+                        date: input.date, label: 'Tuesday 22 September', place,
                         slots: [
                             /** A capacity service: the read words the count. */
                             { slotId: 'slot_opaque_1', label: '14:00 – 15:00', description: '2 places restantes' },
@@ -1717,21 +1839,38 @@ async function main(): Promise<void> {
                             { slotId: 'slot_opaque_2', label: '15:00 – 16:00', description: null },
                         ],
                     }
-                    : { moving: (held as { bookingId?: string | null }).bookingId ?? null, copy: bookingWords, timezone: 'Africa/Douala', days: [{ date: '2026-09-22', label: 'Tue 22 Sep', description: '6 times free' }] };
+                    : { moving: (held as { bookingId?: string | null }).bookingId ?? null, copy: bookingWords, timezone: 'Africa/Douala', place, days: [{ date: '2026-09-22', label: 'Tue 22 Sep', description: '6 times free' }] };
             },
             confirmBooking: async (bookingHandle, input) => {
                 calls.sequence.push('confirm');
-                calls.confirmed.push({ handle: bookingHandle, slotId: input.slotId });
+                calls.confirmed.push({ handle: bookingHandle, slotId: input.slotId, addressId: input.addressId ?? null });
                 const held = sessions[bookingHandle];
                 if (!held || held.kind !== 'bk') throw gone();
                 delete sessions[bookingHandle]; // ⚠ the consume
-                return { bookingId: 'bkg-1', productId: PID, moved: false, reference: 'BKG-2026-000123', when: 'Tue 22 Sep 14:00', service: 'Coupe homme', awaitingShop: false };
+                return { bookingId: 'bkg-1', productId: PID, moved: false, reference: 'BKG-2026-000123', when: 'Tue 22 Sep 14:00', service: 'Coupe homme', awaitingShop: false, requested: false };
+            },
+            /**
+             * The pay core, faked at its boundary: the read re-resolves what is owed and refuses a
+             * spent handle; `payBooking` CONSUMES it.
+             */
+            readBookingPayment: async (payHandle) => {
+                const held = sessions[payHandle];
+                if (!held || held.kind !== 'bp') throw gone();
+                return payFixture();
+            },
+            payBooking: async (payHandle, input) => {
+                calls.sequence.push('pay');
+                calls.paid.push({ handle: payHandle, phone: input.phone });
+                const held = sessions[payHandle];
+                if (!held || held.kind !== 'bp') throw gone();
+                delete sessions[payHandle]; // ⚠ the consume
+                return { status: 'PENDING' };
             },
             readCustomerBookings: async ({ userId }) => {
                 calls.bookingList.push(userId);
                 return { bookings: [{ bookingId: 'bkg-1', title: 'BKG-2026-000123 · Tue 14:00', description: 'Coupe homme · 5 000 FCFA' }] };
             },
-            bookingWords: () => ({ listTitle: 'Vos rendez-vous', listEmpty: 'Aucun rendez-vous.' }),
+            bookingWords: () => ({ listTitle: 'Vos rendez-vous', listEmpty: 'Aucun rendez-vous.', paySent: 'Approuvez sur votre téléphone.', payNothingDue: 'Rien à payer.' }),
             bookingReceipt: (confirmed) => `Réservé : ${confirmed.service}, ${confirmed.when}.`,
             executePurchase: async (ctx): Promise<PurchaseResult> => {
                 calls.purchase.push(ctx);
@@ -2309,7 +2448,7 @@ async function main(): Promise<void> {
             confirmBooking: async (bookingHandle, input) => {
                 h.calls.confirmed.push({ handle: bookingHandle, slotId: input.slotId });
                 delete h.sessions[bookingHandle];
-                return { bookingId: 'bkg-existing', productId: PID, moved: true, reference: 'BKG-2026-000123', when: 'Wed 23 Sep 10:00', service: 'Coupe homme', awaitingShop: false };
+                return { bookingId: 'bkg-existing', productId: PID, moved: true, reference: 'BKG-2026-000123', when: 'Wed 23 Sep 10:00', service: 'Coupe homme', awaitingShop: false, requested: false };
             },
         });
         const moving = await serveFlowScreen(open('ia_bk'), h.ports);
@@ -2341,12 +2480,86 @@ async function main(): Promise<void> {
             h.calls.confirmed.length === 0 && h.calls.claimedWith.length === 0);
     }
 
+    // ── where it happens: a service the vendor travels to (2026-10-26) ────────
+    const ADDR = '66f1a2b3c4d5e6f708192a60';
+    const athome = (addresses: Array<{ addressId: string; label: string; line: string }>) => ({
+        kind: 'customer_address',
+        copy: { title: 'Où doit-on venir ?', none: 'Ajoutez d\'abord une adresse à votre profil.' },
+        addresses,
+    });
+
     {
-        /** ⚠ `bp` has a definition and a kind, but nothing reads what is owed — so it is refused. */
-        const h = harness({ ia_bp: { ...owned, language: 'fr', kind: 'bp' } as InAppSurfaceSession });
+        const h = harness({ ia_bk: bkSession({ __place: athome([{ addressId: ADDR, label: 'Maison', line: 'Rue 12, Douala' }]) }) });
+        const day = await serveFlowScreen(open('ia_bk'), h.ports);
+        const times = await serveFlowScreen(request('data_exchange', 'DAY', { day: '2026-09-22' }, 'ia_bk'), h.ports);
+        assert('⭐ a service the vendor travels to: the day, then TIMES_AT with the customer\'s addresses',
+            bodyOf(day).screen === 'DAY' && bodyOf(times).screen === 'TIMES_AT'
+            && (bodyOf(times).data?.addresses as Array<Record<string, string>>)[0].id === ADDR
+            && bodyOf(times).data?.placeLabel === 'Où doit-on venir ?');
+        await serveFlowScreen(request('data_exchange', 'TIMES_AT', { slot: 'slot_opaque_1', address: ADDR }, 'ia_bk'), h.ports);
+        assert('⭐ … and Confirm on TIMES_AT hands the chosen address to the booking core',
+            h.calls.confirmed.length === 1 && h.calls.confirmed[0].addressId === ADDR);
+    }
+
+    {
+        const h = harness({ ia_bk: bkSession({ __place: athome([]) }) });
+        const v = await serveFlowScreen(open('ia_bk'), h.ports);
+        assert('⛔ no saved address → the place\'s own sentence on the FIRST screen, not after two choices',
+            bodyOf(v).screen === NOTICE_SCREEN && String(bodyOf(v).data?.message).startsWith('Ajoutez'));
+    }
+
+    {
+        const h = harness({ ia_bk: bkSession() });
+        await serveFlowScreen(request('data_exchange', 'TIMES', { slot: 'slot_opaque_1', address: 'not-an-id' }, 'ia_bk'), h.ports);
+        assert('⚠ a service at the shop sends no address; a malformed one is never passed on',
+            h.calls.confirmed[0]?.addressId === null);
+    }
+
+    // ── the booking pay form — the checkout's Pay, for an appointment ─────────
+    const bpSession = (): InAppSurfaceSession =>
+        ({ ...owned, language: 'fr', kind: 'bp', bookingId: 'bkg-1', purpose: 'primary' } as InAppSurfaceSession);
+
+    {
+        const h = harness({ ia_bp: bpSession() });
         const v = await serveFlowScreen(open('ia_bp'), h.ports);
-        assert('⚠ a booking-payment handle is refused until a read can re-resolve the amount',
-            v.status === 427);
+        const options = bodyOf(v).data?.dialOptions as Array<{ id: string; title: string }>;
+        assert('⭐ a pay handle opens PAY: the amount re-resolved by the read, the masked number as the hint',
+            bodyOf(v).screen === 'PAY' && String(bodyOf(v).data?.totalText).includes('XAF 5,000')
+            && bodyOf(v).data?.phoneMasked === '+2376••••4417');
+        assert('⭐ the country picker starts on Cameroon, and Cameroon leads the list',
+            bodyOf(v).data?.dialDefault === 'CM' && options[0].id === 'CM' && options[0].title.startsWith('+237'));
+    }
+
+    {
+        const h = harness({ ia_bp: bpSession() });
+        const first = await serveFlowScreen(request('data_exchange', 'PAY', { phone: '670000000', dial: 'CM' }, 'ia_bp'), h.ports);
+        assert('⭐ Pay composes the number with the country picked — the customer typed no +237',
+            h.calls.paid.length === 1 && h.calls.paid[0].phone === '+237670000000');
+        assert('⛔ … stamped `placed` with "approve it on your phone", never "paid"',
+            bodyOf(first).screen === NOTICE_SCREEN && bodyOf(first).data?.outcome === 'placed'
+            && bodyOf(first).data?.message === 'Approuvez sur votre téléphone.');
+        assert('⭐ the claim is taken BEFORE the handle is consumed',
+            h.calls.sequence.indexOf('claim') < h.calls.sequence.indexOf('pay'));
+        const retry = await serveFlowScreen(request('data_exchange', 'PAY', { phone: '670000000', dial: 'CM' }, 'ia_bp'), h.ports);
+        assert('⛔ a retry REPLAYS the first answer — never a second charge',
+            JSON.stringify(retry) === JSON.stringify(first) && h.calls.paid.length === 1);
+    }
+
+    {
+        const h = harness({ ia_bp: bpSession() }, { readBookingPayment: async () => payFixture({ maskedPayer: null }) });
+        const v = await serveFlowScreen(request('data_exchange', 'PAY', { phone: '', dial: 'CM' }, 'ia_bp'), h.ports);
+        assert('⛔ no number on file and none typed → stays on PAY with a snackbar, BEFORE any spend',
+            bodyOf(v).screen === 'PAY' && typeof bodyOf(v).data?.error_message === 'string'
+            && h.calls.paid.length === 0 && h.calls.released.length === 1);
+    }
+
+    {
+        const h = harness({ ia_bp: bpSession() }, {
+            readBookingPayment: async () => { throw createAppError(ERROR_CODES.PAYMENT_BOOKING_ALREADY_PAID, 409, 'paid'); },
+        });
+        const v = await serveFlowScreen(open('ia_bp'), h.ports);
+        assert('⚠ nothing to pay → the read\'s own sentence, and no Pay button is ever drawn',
+            bodyOf(v).screen === NOTICE_SCREEN && bodyOf(v).data?.message === 'Rien à payer.');
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -2382,6 +2595,8 @@ async function main(): Promise<void> {
         ['placeCheckout', /^\s*placeCheckout,$/m],
         ['executePurchase', /^\s*executePurchase,$/m],
         ['claims → botIdempotencyStore', /claims:\s*botIdempotencyStore,/],
+        ['readBookingPayment', /^\s*readBookingPayment,$/m],
+        ['payBooking', /^\s*payBooking,$/m],
     ];
     const notReal = realPorts.filter(([, re]) => !re.test(portsSource)).map(([name]) => name);
     assert('⛔ every production port is the real shared export, passed through', notReal.length === 0, notReal.join(', '));

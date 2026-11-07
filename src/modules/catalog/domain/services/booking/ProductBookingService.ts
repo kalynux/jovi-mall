@@ -15,6 +15,12 @@ import { SlotLockFacade } from './SlotLockFacade';
 import { createAppError } from '../../../../../core/errors';
 import { ERROR_CODES } from '../../../../../core/error-codes';
 import { isPublishableProduct } from '../public-catalog.filter';
+import { BOOKING_CONFIG } from '../../../../booking/config/booking.config';
+import {
+  AppointmentLocationService,
+  accessSnapshotFor,
+  appointmentLocationService,
+} from '../../../../booking/services/appointment-location.service';
 
 export interface BookProductResult {
   booking: IBooking;
@@ -38,11 +44,21 @@ export interface BookProductResult {
  */
 export const AVAILABILITY_LOOKBEHIND_MS = 48 * 60 * 60 * 1000;
 
-/** A slot the caller named that the service really offers, as instants. */
+/**
+ * The slot — or run of consecutive slots — the caller named that the service really offers, as
+ * instants. `slotId` is the id of the whole interval: the caller's own id for one slot, a span id
+ * (`SlotGeneratorService.spanId`) for several. `heldSlotIds` are the ids as the caller named them,
+ * which is what each checkout hold was written under.
+ */
 export interface OfferedSlot {
   start: Date;
   end: Date;
+  slotId: string;
+  heldSlotIds: string[];
 }
+
+/** One slot id, or a run of consecutive slot ids booked as one appointment. */
+export type SlotSelection = string | readonly string[];
 
 /**
  * ProductBookingService - Product-centric orchestration for service bookings
@@ -59,7 +75,8 @@ export class ProductBookingService {
     private readonly priceResolver: BookingPriceResolver,
     private readonly variantRepository: IVariantRepository,
     private readonly slotLockFacade: SlotLockFacade = new SlotLockFacade(),
-    private readonly groupBookingService = groupBookingServiceSingleton
+    private readonly groupBookingService = groupBookingServiceSingleton,
+    private readonly locationService: AppointmentLocationService = appointmentLocationService
   ) { }
 
   /**
@@ -207,7 +224,9 @@ export class ProductBookingService {
    * Books a service product for a specific slot.
    * 
    * @param productId - The service product ID
-   * @param slotId - The slot ID to book
+   * @param slotId - The slot ID to book, or a run of CONSECUTIVE slot ids booked as ONE appointment
+   *   spanning the first slot's start to the last one's end (2026-10-26). Every slot in a run must
+   *   be offered and held by the caller; a group class takes one slot only.
    * @param userId - The user making the booking
    * @param lockOwnerId - The ID of the entity that locked the slot (typically same as userId)
    * @param metadata - Optional metadata for the booking
@@ -217,10 +236,15 @@ export class ProductBookingService {
    */
   async bookProduct(
     productId: string,
-    slotId: string,
+    slotId: SlotSelection,
     userId: string,
     lockOwnerId: string,
-    metadata?: Record<string, any>
+    metadata?: Record<string, any>,
+    /**
+     * One of the customer's `saved_addresses` — required when the service happens at the
+     * customer's address, ignored otherwise. Every booking door passes what its customer chose.
+     */
+    addressId?: string | null
   ): Promise<BookProductResult> {
     // Step 1: Fetch and validate product
     const product = await this.productRepository.findByIdUnscoped(productId);
@@ -255,7 +279,33 @@ export class ProductBookingService {
      * booked as readily as a real one. `assertOfferedSlot` is what stops that, and
      * `test:booking-slot-offer` pins that no price is resolved before it has run.
      */
-    const { start, end } = await this.assertOfferedSlot(productId, slotId);
+    const offered = await this.assertOfferedSlot(productId, slotId);
+    const { start, end } = offered;
+
+    /**
+     * A group class is a fixed session several people share — "two classes back to back" is two
+     * seats in two classes, not one longer seat, and the seat count and shared calendar event are
+     * both per class. Refused before anything is priced, like every other bad selection.
+     */
+    if (bookingMode === 'capacity' && offered.heldSlotIds.length > 1) {
+      throw createAppError(ERROR_CODES.BOOKING_MULTI_SLOT_NOT_SUPPORTED, 422, undefined, {
+        productId,
+        slotCount: offered.heldSlotIds.length,
+      });
+    }
+
+    /**
+     * Step 2b: where it happens, frozen now. After the slot check (a bad time is the more useful
+     * refusal) and before anything is written — a missing customer address must refuse the
+     * booking, not leave one with nowhere to go.
+     */
+    const location = await this.locationService.snapshotForBooking({
+      location: serviceConfig.location,
+      vendorId: product.vendorId,
+      userId,
+      addressId,
+    });
+    const access = accessSnapshotFor(serviceConfig.access);
 
     // Step 3: Resolve price — only ever from an interval the service offers.
     const price = await this.priceResolver.resolvePrice(
@@ -268,9 +318,12 @@ export class ProductBookingService {
       productId,
       userId,
       vendorId: product.vendorId,
-      slotId,
+      slotId: offered.slotId,
+      heldSlotIds: offered.heldSlotIds,
       priceSnapshot: price.amount, // Add price snapshot for booking record
       bookingMode,
+      location,
+      access,
       metadata: {
         ...metadata,
         price: price.amount,
@@ -340,32 +393,70 @@ export class ProductBookingService {
    * ⚠ **Also refuses a product the storefront would not show**, because the availability read
    * does: a draft, a suspended or a deleted service answers 404 here as it does to a browser.
    *
+   * ── A RUN OF CONSECUTIVE SLOTS (2026-10-26) ─────────────────────────────────
+   * A customer may book several slots back to back as one appointment. Each slot in the run is the
+   * same test as a single slot — every one must be listed — and the run must be contiguous: each
+   * slot starts exactly where the previous one ends. Generated slots are laid back-to-back inside a
+   * free window, so a contiguous run of offered slots is exactly a stretch of free time the service
+   * is sold in; a gap, a duplicate or an out-of-order id is `BOOKING_INVALID_SLOT_ID` 400
+   * `not_contiguous` (a client error, not a taken time). One availability read covers the run.
+   *
    * @param now Injectable for the suites; production passes nothing.
    */
-  async assertOfferedSlot(productId: string, slotId: string, now: Date = new Date()): Promise<OfferedSlot> {
-    const { start, end } = this.slotGenerator.parseSlotId(slotId);
+  async assertOfferedSlot(productId: string, slotId: SlotSelection, now: Date = new Date()): Promise<OfferedSlot> {
+    const heldSlotIds = typeof slotId === 'string' ? [slotId] : [...slotId];
+    const named = heldSlotIds.length === 1 ? { slotId: heldSlotIds[0] } : { slotIds: heldSlotIds };
+
+    if (heldSlotIds.length === 0 || heldSlotIds.length > BOOKING_CONFIG.maxSlotsPerBooking) {
+      throw createAppError(
+        ERROR_CODES.BOOKING_INVALID_SLOT_ID,
+        400,
+        `Choose between 1 and ${BOOKING_CONFIG.maxSlotsPerBooking} consecutive slots.`,
+        { ...named, reason: 'slot_count', max: BOOKING_CONFIG.maxSlotsPerBooking }
+      );
+    }
+
+    const parts = heldSlotIds.map((id) => this.slotGenerator.parseSlotId(id));
+    const start = parts[0].start;
+    const end = parts[parts.length - 1].end;
 
     const refuse = (reason: 'inverted' | 'not_future' | 'not_offered'): never => {
       throw createAppError(
         ERROR_CODES.BOOKING_SLOT_UNAVAILABLE,
         409,
         'That time is not available. Please choose another slot.',
-        { slotId, reason }
+        { ...named, reason }
       );
     };
 
     // Cheap structural refusals first: neither needs a read, and an inverted interval would
     // otherwise reach the availability computation as a range that ends before it starts.
-    if (end.getTime() <= start.getTime()) refuse('inverted');
+    if (parts.some((p) => p.end.getTime() <= p.start.getTime())) refuse('inverted');
+    for (let i = 1; i < parts.length; i++) {
+      if (parts[i].start.getTime() !== parts[i - 1].end.getTime()) {
+        throw createAppError(
+          ERROR_CODES.BOOKING_INVALID_SLOT_ID,
+          400,
+          'The slots of one booking must follow each other with no gap.',
+          { ...named, reason: 'not_contiguous' }
+        );
+      }
+    }
     if (start.getTime() <= now.getTime()) refuse('not_future');
 
     const offered = await this.getAvailability(productId, start, end);
-    const match = offered.some(
-      (slot) => slot.start.getTime() === start.getTime() && slot.end.getTime() === end.getTime()
-    );
-    if (!match) refuse('not_offered');
+    const listed = (p: { start: Date; end: Date }) =>
+      offered.some(
+        (slot) => slot.start.getTime() === p.start.getTime() && slot.end.getTime() === p.end.getTime()
+      );
+    if (!parts.every(listed)) refuse('not_offered');
 
-    return { start, end };
+    return {
+      start,
+      end,
+      slotId: heldSlotIds.length === 1 ? heldSlotIds[0] : this.slotGenerator.spanId(start, end),
+      heldSlotIds,
+    };
   }
 
   /**

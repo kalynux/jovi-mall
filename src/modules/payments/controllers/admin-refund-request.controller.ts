@@ -13,6 +13,7 @@ import {
   AdminCreateRefundRequestSchema,
   AdminRefundEligibilityQuerySchema,
   AdminRejectRefundSchema,
+  AdminSetPartialReturnFaultSchema,
   AdminResolveUnknownRefundSchema,
   AdminRetryRefundSchema,
   AdminSettleExternalRefundSchema,
@@ -74,6 +75,7 @@ export class AdminRefundRequestController {
       amount: body.amount,
       reasonKind: body.reasonKind,
       itemDefective: body.itemDefective ?? null,
+      deliveryFaultShipmentIds: body.deliveryFaultShipmentIds,
     });
     if (overrides.length > 0 && body.overridePolicy !== true) {
       throw createAppError(
@@ -99,6 +101,7 @@ export class AdminRefundRequestController {
       // ⛔ Support may hold, never send — refused here as well as in `mayApproveAtCreation`.
       approveNow: body.requestedByRole === 'admin' && body.approveNow === true,
       ticketId: body.ticketId ?? null,
+      deliveryFaultShipmentIds: body.deliveryFaultShipmentIds,
     });
     sendCreated(res, toRefundRequestDto(row));
   });
@@ -116,6 +119,19 @@ export class AdminRefundRequestController {
     const { id } = RefundRequestIdParamSchema.parse(req.params);
     const { reason } = AdminRejectRefundSchema.parse(req.body);
     const row = await refundRequestService.reject(id, actorOf(req), reason);
+    sendSuccess(res, toRefundRequestDto(row));
+  });
+
+  /**
+   * POST /:id/partial-return-fault `{ fault }` — whose fault a partial order's returned parcel is.
+   * Answers the REPLACEMENT request: the amount and who pays the fees both depend on it. Lazy import:
+   * that service reaches the ticket stack, and this controller loads with every internal-admin route.
+   */
+  static setPartialReturnFault = asyncHandler(async (req: Request, res: Response) => {
+    const { id } = RefundRequestIdParamSchema.parse(req.params);
+    const { fault } = AdminSetPartialReturnFaultSchema.parse(req.body);
+    const { partialReturnService } = await import('../services/partial-return.service');
+    const row = await partialReturnService.setFault(id, fault, actorOf(req));
     sendSuccess(res, toRefundRequestDto(row));
   });
 

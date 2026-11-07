@@ -17,7 +17,7 @@ import {
   PauseTargetParamsSchema,
   ResumeEarningsBodySchema,
 } from '../validators/admin-earnings.validator';
-import { earningsPauseService, PauseActor } from '../services/earnings-pause.service';
+import { earningsPauseService, EarningsPauseTarget, PauseActor } from '../services/earnings-pause.service';
 import { ticketEarningsHoldService } from '../../tickets/services/ticket-earnings-hold.service';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
@@ -155,7 +155,7 @@ export class AdminEarningsController {
 
   /** GET /earnings/pauses/:kind/:id — the pause record of one order or booking (null if never paused). */
   static getPause = asyncHandler(async (req: Request, res: Response) => {
-    const target = PauseTargetParamsSchema.parse(req.params);
+    const target = PauseTargetParamsSchema.parse(req.params) as EarningsPauseTarget;
     if (!(await earningsPauseService.targetExists(target))) {
       throw createAppError(ERROR_CODES.EARNINGS_PAUSE_TARGET_NOT_FOUND, 404);
     }
@@ -167,7 +167,7 @@ export class AdminEarningsController {
    * 409 when already paused: a second pause would overwrite who paused it and why.
    */
   static pause = asyncHandler(async (req: Request, res: Response) => {
-    const target = PauseTargetParamsSchema.parse(req.params);
+    const target = PauseTargetParamsSchema.parse(req.params) as EarningsPauseTarget;
     const { note } = PauseEarningsBodySchema.parse(req.body ?? {});
     if (!(await earningsPauseService.targetExists(target))) {
       throw createAppError(ERROR_CODES.EARNINGS_PAUSE_TARGET_NOT_FOUND, 404);
@@ -186,28 +186,34 @@ export class AdminEarningsController {
    * (its resume failed after a rejection) stays liftable here — refusing it would strand it.
    */
   static resume = asyncHandler(async (req: Request, res: Response) => {
-    const target = PauseTargetParamsSchema.parse(req.params);
+    const target = PauseTargetParamsSchema.parse(req.params) as EarningsPauseTarget;
     const { note } = ResumeEarningsBodySchema.parse(req.body ?? {});
     if (!(await earningsPauseService.targetExists(target))) {
       throw createAppError(ERROR_CODES.EARNINGS_PAUSE_TARGET_NOT_FOUND, 404);
     }
-    // Lazy: `payments` imports `earnings`, so a static import back would close a require cycle.
-    const { refundRequestService } = await import('../../payments/services/refund-request.service');
-    const holding = await refundRequestService.findHoldingEarningsPause(target.kind, target.id);
-    if (holding) {
-      throw createAppError(ERROR_CODES.EARNINGS_PAUSE_HELD_BY_REFUND, 409, undefined, {
-        refundRequestId: holding.id,
-        refundRequestStatus: holding.status,
-      });
+    // A delivery pause is only ever an administrator's: no refund holds one, and no customer
+    // request pauses one — so the refund guard and the ticket release below are order/booking only.
+    if (target.kind !== 'shipment') {
+      // Lazy: `payments` imports `earnings`, so a static import back would close a require cycle.
+      const { refundRequestService } = await import('../../payments/services/refund-request.service');
+      const holding = await refundRequestService.findHoldingEarningsPause(target.kind, target.id);
+      if (holding) {
+        throw createAppError(ERROR_CODES.EARNINGS_PAUSE_HELD_BY_REFUND, 409, undefined, {
+          refundRequestId: holding.id,
+          refundRequestStatus: holding.status,
+        });
+      }
     }
     const outcome = await earningsPauseService.resume(target, pauseActorOf(req), note ?? null);
     if (!outcome.changed) throw createAppError(ERROR_CODES.EARNINGS_NOT_PAUSED, 409);
     // An administrator's resume is a decision about the whole case: no customer request holds
     // this money any more, and a later one will not pause it again by itself.
-    try {
-      await ticketEarningsHoldService.releaseAll(target);
-    } catch (error) {
-      console.error(`[AdminEarnings] could not release the problem-report holds of ${target.kind} ${target.id}:`, error);
+    if (target.kind !== 'shipment') {
+      try {
+        await ticketEarningsHoldService.releaseAll(target);
+      } catch (error) {
+        console.error(`[AdminEarnings] could not release the problem-report holds of ${target.kind} ${target.id}:`, error);
+      }
     }
     sendSuccess(res, { ...target, pause: outcome.pause }, { message: 'Earnings resumed' });
   });

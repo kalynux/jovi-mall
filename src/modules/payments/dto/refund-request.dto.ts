@@ -58,6 +58,46 @@ export interface RefundRequestDto {
   earningsSettledAt: Date | null;
   /** When a completed billing refund took the plan or credits back; null until then. */
   billingReversedAt: Date | null;
+  /**
+   * The two fees and who pays them (2026-10-22, `domain/refund-fees.ts`). `feeAmount` above is
+   * their sum when the customer pays them, 0 when the seller does (`vendorCharge`). Null on
+   * requests created before: read those as a transfer fee only, paid by the customer.
+   */
+  fees: {
+    paidBy: 'customer' | 'vendor' | 'agency';
+    paymentFeePercent: number;
+    paymentFee: number;
+    transferFeePercent: number;
+    transferFee: number;
+    vendorCharge: number;
+    agencyCharge: number;
+  } | null;
+  /**
+   * A partial order's returned parcel (2026-11-01). `fault: null` means an administrator must say
+   * whose fault it is before this can be approved (`POST /:id/partial-return-fault`).
+   */
+  partialReturn: {
+    shipmentId: string;
+    fault: 'customer' | 'vendor' | 'agency' | null;
+    returnFee: number;
+    prepaidAmount: number;
+    agentReason: string | null;
+    agentNote: string | null;
+    faultSetBy: { id: string | null; name: string | null; at: Date } | null;
+  } | null;
+  /** Parcels named as delivered at fault, each judged against its agency's window (2026-10-22). */
+  deliveryFault: Array<{
+    shipmentId: string;
+    agencyId: string | null;
+    trackingNumber: string | null;
+    deliveredAt: Date | null;
+    raisedAt: Date;
+    windowDays: number;
+    insideWindow: boolean;
+    customerDeliveryAmount: number;
+    claimDeadlineDays: number | null;
+    returnsPayer: string | null;
+  }>;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -124,6 +164,42 @@ export function toRefundRequestDto(row: IRefundRequest): RefundRequestDto {
     earningsImpact: row.earnings_impact ?? 'clawback',
     earningsSettledAt: row.earnings_settled_at ?? null,
     billingReversedAt: row.billing_reversed_at ?? null,
+    fees: row.fees
+      ? {
+          paidBy: row.fees.paid_by,
+          paymentFeePercent: row.fees.payin_rate,
+          paymentFee: row.fees.payin_amount,
+          transferFeePercent: row.fees.payout_rate,
+          transferFee: row.fees.payout_amount,
+          vendorCharge: row.fees.vendor_charge,
+          agencyCharge: row.fees.agency_charge ?? 0,
+        }
+      : null,
+    partialReturn: row.partial_return
+      ? {
+          shipmentId: row.partial_return.shipment_id.toString(),
+          fault: row.partial_return.fault ?? null,
+          returnFee: row.partial_return.return_fee,
+          prepaidAmount: row.partial_return.prepaid_amount,
+          agentReason: row.partial_return.agent_reason ?? null,
+          agentNote: row.partial_return.agent_note ?? null,
+          faultSetBy: row.partial_return.fault_set_by
+            ? { id: row.partial_return.fault_set_by.id, name: row.partial_return.fault_set_by.name, at: row.partial_return.fault_set_by.at }
+            : null,
+        }
+      : null,
+    deliveryFault: (row.delivery_fault ?? []).map((d) => ({
+      shipmentId: d.shipment_id.toString(),
+      agencyId: d.agency_id ? d.agency_id.toString() : null,
+      trackingNumber: d.tracking_number ?? null,
+      deliveredAt: d.delivered_at ?? null,
+      raisedAt: d.raised_at,
+      windowDays: d.window_days,
+      insideWindow: d.inside_window,
+      customerDeliveryAmount: d.customer_delivery_amount,
+      claimDeadlineDays: d.claim_deadline_days ?? null,
+      returnsPayer: d.returns_payer ?? null,
+    })),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

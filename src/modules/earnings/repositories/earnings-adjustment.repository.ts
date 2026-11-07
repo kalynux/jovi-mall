@@ -24,6 +24,13 @@ export interface CreateAdjustmentInput {
   refund_attribution?: { goods: number; delivery: number } | null;
   actor?: { id: string | null; name: string | null } | null;
   reason?: string | null;
+  /** WHY, for the person it happened to (2026-10-22, `domain/adjustment-explanations.ts`). */
+  reason_code?: string | null;
+  reason_params?: Record<string, unknown> | null;
+  explanation?: string | null;
+  refund_request_id?: Types.ObjectId | string | null;
+  agency_claim_id?: Types.ObjectId | string | null;
+  fee_amount?: number;
 }
 
 function oid(value: Types.ObjectId | string | null): Types.ObjectId | null {
@@ -58,11 +65,37 @@ export class EarningsAdjustmentRepository {
           refund_attribution: input.refund_attribution ?? null,
           actor: input.actor ?? null,
           reason: input.reason ?? null,
+          reason_code: input.reason_code ?? null,
+          reason_params: input.reason_params ?? null,
+          explanation: input.explanation ?? null,
+          refund_request_id: input.refund_request_id && Types.ObjectId.isValid(String(input.refund_request_id))
+            ? oid(input.refund_request_id)
+            : null,
+          agency_claim_id: input.agency_claim_id ? oid(input.agency_claim_id) : null,
+          fee_amount: input.fee_amount ?? 0,
         },
       ],
       { session: session ?? undefined }
     );
     return doc;
+  }
+
+  /**
+   * One owner's movements, newest first — what a vendor, an agency or an agent reads to learn why
+   * money was taken or forgiven (2026-10-22). Rides `{ beneficiary_type, beneficiary_id, created_at }`.
+   */
+  async pageForOwner(
+    ownerType: EarningsOwnerType,
+    ownerId: string,
+    page: number,
+    limit: number
+  ): Promise<{ items: IEarningsAdjustment[]; total: number }> {
+    const filter = { beneficiary_type: ownerType, beneficiary_id: new Types.ObjectId(ownerId) };
+    const [items, total] = await Promise.all([
+      EarningsAdjustmentModel.find(filter).sort({ created_at: -1, _id: -1 }).skip((page - 1) * limit).limit(limit).lean<IEarningsAdjustment[]>(),
+      EarningsAdjustmentModel.countDocuments(filter),
+    ]);
+    return { items, total };
   }
 
   /** True when this refund already wrote its clawback (any row). */

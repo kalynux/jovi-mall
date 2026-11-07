@@ -19,6 +19,18 @@ The Vendor Profile Management API allows vendors to view and update their profil
 
 ---
 
+## Partial payment (2026-11-01)
+
+`GET /api/vendor/profile/partial-payment` · `PUT /api/vendor/profile/partial-payment`
+
+```json
+{ "enabled": true, "minPercent": 30 }
+```
+
+Whether this vendor accepts orders paid part online and part in cash, and the minimum share paid online
+(whole number, 10–90, required when `enabled`). Off by default. Independent of the COD terms below, and
+applied to new orders only. See [FRONTEND-CHANGELOG-partial-payment.md](./FRONTEND-CHANGELOG-partial-payment.md).
+
 ## COD terms (2026-10-02)
 
 `GET /api/vendor/profile/cod-terms` · `PUT /api/vendor/profile/cod-terms`
@@ -82,6 +94,8 @@ fee is documented with the customer-paid delivery changelog.
 | `PUT` | `/api/vendor/profile/auto-redirect-orders` | [below](#put-apivendorprofileauto-redirect-orders) |
 | `GET` | `/api/vendor/profile/auto-cancel-unpaid-days` | [below](#get-apivendorprofileauto-cancel-unpaid-days) |
 | `PUT` | `/api/vendor/profile/auto-cancel-unpaid-days` | [below](#put-apivendorprofileauto-cancel-unpaid-days) |
+| `GET` | `/api/vendor/profile/partial-payment` | [above](#partial-payment-2026-11-01) (2026-11-01) |
+| `PUT` | `/api/vendor/profile/partial-payment` | [above](#partial-payment-2026-11-01) (2026-11-01) |
 | `GET` | `/api/vendor/profile/cod-terms` | [above](#cod-terms-2026-10-02) (2026-10-02) |
 | `PUT` | `/api/vendor/profile/cod-terms` | [above](#cod-terms-2026-10-02) (2026-10-02) |
 | `GET` | `/api/vendor/profile/delivery-terms` | [above](#delivery-terms-2026-10-03-adr-a10) (2026-10-03) |

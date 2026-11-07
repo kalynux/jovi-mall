@@ -56,7 +56,13 @@ export type EarningsLedgerReasonCode =
   /** An inflow to available paid `clawback_balance` down. */
   | 'clawback_recovery'
   /** An administrator forgave `clawback_balance` (C-6). */
-  | 'clawback_write_off';
+  | 'clawback_write_off'
+  /** A referral reward entered a partner's pending balance (`allocation_id` is the commission). */
+  | 'referral_reward'
+  /** A referral reward finished its wait and moved to available. */
+  | 'referral_reward_matured'
+  /** A refund reduced the commission a referral reward came from. */
+  | 'referral_reward_clawback';
 
 export interface IEarningsLedger extends Document {
   account_id: mongoose.Types.ObjectId;
@@ -76,7 +82,7 @@ export interface IEarningsLedger extends Document {
 const EarningsLedgerSchema = new Schema<IEarningsLedger>(
   {
     account_id: { type: Schema.Types.ObjectId, ref: MODELS.EARNINGS_ACCOUNT, required: true },
-    owner_type: { type: String, enum: ['vendor', 'agency', 'platform', 'agent', 'platform_ai'], required: true },
+    owner_type: { type: String, enum: ['vendor', 'agency', 'platform', 'agent', 'platform_ai', 'referral_partner'], required: true },
     owner_id: { type: Schema.Types.ObjectId, default: null },
     entry_type: {
       type: String,
@@ -88,14 +94,14 @@ const EarningsLedgerSchema = new Schema<IEarningsLedger>(
     available_after: { type: Number, required: true },
     source_type: {
       type: String,
-      enum: ['order', 'booking', 'cod_collection', 'shipment'],
+      enum: ['order', 'booking', 'cod_collection', 'shipment', 'agency_claim'],
       required: true,
     },
     source_id: { type: Schema.Types.ObjectId, required: true },
     allocation_id: { type: Schema.Types.ObjectId, ref: MODELS.EARNINGS_ALLOCATION, required: true },
     reason_code: {
       type: String,
-      enum: ['order_split', 'cod_split', 'delivery_split', 'hold_release', 'refund_reversal', 'cod_rolling_reserve', 'reserve_matured', 'delivery_fee_adjustment', 'refund_clawback', 'clawback_recovery', 'clawback_write_off'],
+      enum: ['order_split', 'cod_split', 'delivery_split', 'hold_release', 'refund_reversal', 'cod_rolling_reserve', 'reserve_matured', 'delivery_fee_adjustment', 'refund_clawback', 'clawback_recovery', 'clawback_write_off', 'referral_reward', 'referral_reward_matured', 'referral_reward_clawback'],
       required: true,
     },
   },

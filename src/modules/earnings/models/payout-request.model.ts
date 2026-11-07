@@ -81,7 +81,7 @@ export const PAYOUT_HELD_STATUSES: readonly PayoutRequestStatus[] = [
  * They used to be typed out separately and drifted: the admin queue's filter stopped at
  * vendor and agency, so an agent's payout could not be filtered for at all.
  */
-export const PAYOUT_OWNER_TYPES = ['vendor', 'agency', 'agent'] as const;
+export const PAYOUT_OWNER_TYPES = ['vendor', 'agency', 'agent', 'referral_partner'] as const;
 
 /**
  * `manual` - the vendor/agency called POST .../earnings/payout themselves.

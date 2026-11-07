@@ -279,6 +279,17 @@ Languages are kept in sync with `SUPPORTED_LANGUAGES`
 | es | Nuevo pedido recibido | Has recibido un nuevo pedido n.º{{1}} por {{2}} {{3}}. | Ver pedido |
 | ar | تم استلام طلب جديد | لقد استلمت طلبًا جديدًا رقم {{1}} بقيمة {{2}} {{3}}. | عرض الطلب |
 
+## 1b. `vendor_order_created_partial`
+
+- **Body params:** `{{1}}`=order number, `{{2}}`=paid online, `{{3}}`=order total, `{{4}}`=currency, `{{5}}`=cash to collect
+- **Button:** URL → `orders/{{orderId}}`
+- **Added 2026-11-01 (partial payment). ⚠ Must be approved in Business Manager before a vendor can receive it outside the service window.**
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | New order, partly paid | Order #{{1}}: the customer paid {{2}} online out of {{3}} {{4}}. The delivery agent collects the remaining {{5}} in cash at delivery. You can prepare it now. | View order |
+| fr | Nouvelle commande, payée en partie | Commande n°{{1}} : le client a payé {{2}} en ligne sur {{3}} {{4}}. Le livreur encaisse les {{5}} restants en espèces à la livraison. Vous pouvez la préparer. | Voir la commande |
+
 ## 2. `vendor_order_cancelled`
 
 - **Body params:** `{{1}}`=order number
@@ -903,6 +914,18 @@ balance payment stays unannounced pending the proactive-message design (see
 | pt_PT | Encomenda {{1}} efetuada | A sua encomenda {{1}} em {{2}} foi registada, no valor de {{3}} {{4}}. | Ver encomenda |
 | es | Pedido {{1}} realizado | Tu pedido {{1}} con {{2}} está registrado, por {{3}} {{4}}. | Ver pedido |
 | ar | تم تسجيل الطلب {{1}} | تم تسجيل طلبك {{1}} لدى {{2}} بقيمة {{3}} {{4}}. | عرض الطلب |
+
+### `customer_order_prepayment_received`
+
+- **Situation:** `order.prepayment.received`
+- **Body params:** `{{1}}`=paid online, `{{2}}`=orderNumber, `{{3}}`=vendorName, `{{4}}`=cash due, `{{5}}`=currency
+- **Button:** URL → `orders/{{orderId}}`
+- **Added 2026-11-01 (partial payment). ⚠ Must be approved in Business Manager before a customer can receive it outside the service window.**
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Payment received for {{2}} | We received {{1}} online for order {{2}}. {{3}} is preparing it. You pay the remaining {{4}} {{5}} in cash at delivery. | View order |
+| fr | Paiement reçu pour {{2}} | Nous avons reçu {{1}} en ligne pour la commande {{2}}. {{3}} la prépare. Vous payez les {{4}} {{5}} restants en espèces à la livraison. | Voir la commande |
 
 ### `customer_order_payment_received`
 
@@ -1634,3 +1657,96 @@ Approval copy (`en`; the `fr` text is the catalog's and is in the payloads file)
 Until submitted and APPROVED these reach their audience in-app, by push, email, Telegram and
 **in-window** WhatsApp only. Submit with the working form recorded in the 2026-10-02 section:
 `npm run whatsapp:templates:submit -- --only=customer_order_delivery_fee_proposal_declined,vendor_delivery_fee_proposal_agency_approved,vendor_delivery_fee_proposal_agency_rejected,agency_delivery_fee_proposal_payer_proposed,agency_delivery_fee_proposal_payer_edited,agency_delivery_fee_proposal_payer_withdrawn,agency_delivery_fee_proposal_payer_paid,agent_delivery_fee_proposal_payer_proposed --submit`.
+
+## 2026-10-25 — the delivery-fee REASON, in bold: 1 template SUBMITTED (en + fr), PENDING Meta review
+
+Submitted 2026-10-25: en `3714309768718945`, fr `1812935133279116` — both PENDING. Command used (the `.env` names the account `WHATSAPP_BUSINESS_ACCOUNT_ID`, the script reads `WHATSAPP_WABA_ID`):
+`WHATSAPP_WABA_ID=<waba> npx ts-node -r dotenv/config scripts/submit-whatsapp-templates.ts --only=customer_order_delivery_fee_approval_needed_v2 --in=api-doc/notifications/pending/fee-reason-template-v2.json --submit`
+
+Owner request: the delivery company's reason on an approve-or-decline fee change must be bold so a
+customer cannot miss it. Everything the backend words itself is already bold (the chat question,
+the in-window WhatsApp and Telegram notification — `core/richtext` `strong()`, `test:fee-reason-bold`).
+The approved `customer_order_delivery_fee_approval_needed` carries **no reason at all** (the
+generator stripped `{{reasonLine}}` as an optional clause), so out of the 24-hour window the reason
+needs a new template:
+
+| Template name | Audience | Situation | Body params | Button |
+|---|---|---|---|---|
+| `customer_order_delivery_fee_approval_needed_v2` | customer | `order.delivery_fee.approval_needed` | currency, proposed fee, fee before, order number, **reason line** (`*{{5}}*`) | as v1 + quick reply **See the new fee** |
+
+- en — *Delivery fee change to approve — {{4}}* · The delivery company asks {{1}} {{2}} instead of {{1}} {{3}} to deliver your order {{4}}. {{5}} (bold) Open the order to approve or decline — your parcel waits for your answer.
+
+`{{5}}` is "Reason given: …" in the customer's language, or "No reason was given." — never empty,
+because Meta refuses an empty parameter. Payloads (en + fr):
+`api-doc/notifications/pending/fee-reason-template-v2.json`. Submit:
+`npm run whatsapp:templates:submit -- --submit --only=customer_order_delivery_fee_approval_needed_v2 --in=api-doc/notifications/pending/fee-reason-template-v2.json`.
+
+⛔ **Then, and only once BOTH languages are APPROVED**, flip `FEE_REASON_TEMPLATE_APPROVED` to
+`true` in `customer-notification-catalog.ts` and deploy. Sending v2 before approval fails every
+out-of-window delivery of this notification; until the flip, v1 keeps being sent unchanged.
+
+---
+
+## 2026-10-26 — appointment moves (D-8 / D-9): 6 templates SUBMITTED (en + fr), PENDING Meta review
+
+✅ **Submitted 2026-10-26: 12 created, 0 failed, every one PENDING review.** Sent with `--only=` these six
+names, so other unsubmitted payloads in the file were NOT sent. `customer_booking_refund_pending` also
+changed in this regeneration (another stream's catalog edit) and was deliberately NOT sent. Same
+production button hosts as before (`--base-customer=https://wi-mall.com`, `--base-vendor=https://vendor.wi-mall.com`, …).
+Plan: `PRODUCTION-READINESS/APPOINTMENT-LOCATION-AND-ACCESS-PLAN.md`.
+
+Until Meta approves them, an out-of-window send of these situations is refused by Meta and recorded
+as a delivery error; in-app, push, email and Telegram are unaffected.
+
+| Template name | Audience | Situation | Body params | Buttons |
+|---|---|---|---|---|
+| `vendor_booking_rescheduled` | vendor | `booking.rescheduled` (customer moved it) | customer, booking no., service, previous time, new time | View booking |
+| `vendor_booking_reschedule_requested` | vendor | `booking.reschedule_requested` (manual service) | customer, booking no., service, previous, requested, answer-by | View booking |
+| `vendor_booking_reschedule_accepted` | vendor | `booking.reschedule_accepted` | customer, booking no., service, new time | View booking |
+| `vendor_booking_reschedule_declined` | vendor | `booking.reschedule_declined` | customer, booking no., service, original time | View booking |
+| `customer_booking_reschedule_proposed` | customer | `booking.reschedule_proposed` | vendor, service, previous, proposed, answer-by | View booking + quick replies **Accept new time** (`yes:bkprop:<bookingId>`) · **Keep my time** (`no:bkprop:<bookingId>`); fallback `open:bl` |
+| `customer_booking_reschedule_declined` | customer | `booking.reschedule_declined` | vendor, service, requested time, kept time | View booking |
+| `customer_booking_price_proposed` | customer | `booking.price_proposed` (the vendor proposes a different price on a manual booking) | vendor, currency, proposed, current, service, time, answer-by | View booking + quick replies **Accept price** (`yes:bkprice:<bookingId>`) · **Decline price** (`no:bkprice:<bookingId>`); fallback `open:bl` |
+| `customer_booking_reschedule_price_proposed` | customer | `booking.reschedule_price_proposed` (a new time and a new price, one answer) | vendor, service, previous time, new time, currency, proposed, current, answer-by | View booking + quick replies **Accept new time** (`yes:bkprop:<bookingId>`) · **Keep my time** (`no:bkprop:<bookingId>`); fallback `open:bl` |
+| `customer_booking_price_topup_due` | customer | `booking.price_topup_due` (what is owed for the agreed price) | service, currency, agreed price, amount owed, deadline | View booking + quick reply **Pay now** (`bpay:<bookingId>[:b]`); fallback `open:bl` |
+| `vendor_booking_price_accepted` | vendor | `booking.price_accepted` | customer, currency, amount, booking no., service, time | View booking |
+| `vendor_booking_price_declined` | vendor | `booking.price_declined` | customer, currency, amount, booking no., service, current price | View booking |
+| `vendor_booking_reminder` | vendor | `booking.reminder` (the customer's one reminder). Submitted and measured APPROVED (UTILITY) 2026-11-03 in `en` + `fr`, ids `1620431219552107` / `2316152389208612` | customer, booking no., service, time | View booking |
+
+The five price templates above were submitted on 2026-11-03 and read **PENDING, category UTILITY**, when last measured that day. Re-measure them. `en` / `fr` ids: `vendor_booking_price_accepted` `1386574309970521` / `1131578362901876` · `vendor_booking_price_declined` `1873815500449245` / `2094312597875655` · `customer_booking_price_proposed` `1656938702742294` / `1480211947319066` · `customer_booking_reschedule_price_proposed` `2038840300109858` / `1202134775811569` · `customer_booking_price_topup_due` `1704061321278238` / `1442771877921683`.
+
+⚠ Meta refused the first English `vendor_booking_price_declined` as having too many variables for its length, while the French passed. The English body gained a closing sentence for that reason.
+
+---
+
+## 14. Referral partner templates (one set for all four roles)
+
+**Submitted 2026-11-03, `en` + `fr`.** Nine names were APPROVED as `UTILITY` that day; `referral_account_restriction_removed` was still in review when this was written. Re-measure rather than trusting this line.
+Catalog: [referral-notification-catalog.ts](../../src/modules/notifications/catalog/referral-notification-catalog.ts).
+Sender: [referral-notifications.ts](../../src/modules/referrals/services/referral-notifications.ts).
+
+⚠ **Different from every other section.** A partner is a person, not a role, so one set serves a vendor, an agency, an
+agent and a customer. They carry **no URL button**: Meta bakes a button's host in permanently, the apps are on four
+hosts, and the agent app has no web page. A button would need four sets of these.
+
+⚠ **Not gated on a preference or a connection, unlike the four stacks.** Each one says a partner's status or money
+changed. It goes to the connected WhatsApp number, else to a phone the person verified, and falls back to email when
+WhatsApp cannot deliver, which includes while these are in review. An unverified phone is never messaged.
+
+| Name | Sent when | Parameters |
+|---|---|---|
+| `referral_partner_approved` | application approved | code |
+| `referral_partner_rejected` | application rejected | none |
+| `referral_partner_suspended` | partnership suspended | none |
+| `referral_partner_reinstated` | suspended partner reinstated | none |
+| `referral_partner_terminated` | partnership ended | none |
+| `referral_balance_released` | a frozen balance is released | none |
+| `referral_account_restriction_removed` | a rejected or terminated person may apply again | none |
+| `referral_payout_paid` | withdrawal sent | currency, amount |
+| `referral_payout_rejected` | withdrawal refused | currency, amount |
+| `referral_payout_transfer_failed` | the transfer failed | currency, amount |
+
+⚠ `referral_reapply_allowed` is still on the WABA and nothing sends it. Meta approved it as MARKETING on 2026-11-03, a name keeps its category, and a recipient can opt out of MARKETING, so it was reworded as an account-status notice under the name above.
+
+The administrator's reason is **not** a parameter: it is free text, and Meta refuses a line break in one. Inside the
+24-hour window the free message and the email carry it; the template points at the referral page, which always shows it.

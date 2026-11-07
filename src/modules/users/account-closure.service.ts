@@ -11,6 +11,8 @@ import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
 import { eventBus } from '../../core/events/event-bus';
 import { auditLogger } from '../../core/audit/audit-logger';
+import { ReferralPartnerModel } from '../referrals/models/referral-partner.model';
+import { EarningsAccountModel } from '../earnings/models/earnings-account.model';
 
 /**
  * Account closure — ADR-A02 D-1, "anonymise-and-retain".
@@ -98,6 +100,16 @@ export class AccountClosureService {
       throw createAppError(ERROR_CODES.ACCOUNT_CLOSURE_ORDERS_IN_FLIGHT, 422, undefined, {
         activeOrderCount,
       });
+    }
+
+    // Refusal 3: a referral wallet still holding or owing money. It belongs to the person, and
+    // nobody could withdraw or settle it after this.
+    const partner = await ReferralPartnerModel.findOne({ user_id: user._id }).select('_id').lean();
+    const wallet = partner
+      ? await EarningsAccountModel.findOne({ owner_type: 'referral_partner', owner_id: partner._id }).lean()
+      : null;
+    if (wallet && wallet.pending_balance + wallet.available_balance + wallet.requested_balance + wallet.clawback_balance !== 0) {
+      throw createAppError(ERROR_CODES.ACCOUNT_CLOSURE_REFERRAL_BALANCE, 422);
     }
 
     /**

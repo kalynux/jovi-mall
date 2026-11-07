@@ -48,6 +48,12 @@ export const ROLE_CLOSURE_BLOCKER_CODES = [
    */
   'earnings_clawback_outstanding',
   'earnings_allocations_held',
+  /**
+   * This is the account's last open role and its referral wallet still holds or owes money. The
+   * wallet belongs to the person, whatever role they applied from, and closing the last role would
+   * leave nobody able to withdraw it (REFERRAL-PROGRAM-PLAN).
+   */
+  'referral_balance',
   'agency_stock_held',
   'storage_invoices_open',
   'negotiations_open',

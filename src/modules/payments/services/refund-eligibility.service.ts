@@ -2,7 +2,8 @@ import { OrderModel, IOrder } from '../../orders/order.model';
 import { VendorModel, IVendorReturnPolicy } from '../../vendors/vendor.model';
 import { computeVendorRefundEligibility } from '../../vendor/service/vendor-refund.service';
 import { ERROR_CODES } from '../../../core/error-codes';
-import type { CodCollectionCoverage } from '../domain/refund-ports';
+import type { CodCollectionCoverage, DeliveryFaultAssessment } from '../domain/refund-ports';
+import { getRefundEarningsPort } from '../domain/refund-ports';
 import { RefundSourceKind } from '../models/refund-request.model';
 import {
   attributeRefund,
@@ -12,7 +13,8 @@ import {
   RefundReasonKind,
   ReturnShippingPayer,
 } from '../domain/refund-attribution';
-import { computeRefundFee, RefundPaymentChannel } from '../domain/refund-fee';
+import { RefundPaymentChannel } from '../domain/refund-fee';
+import { computeRefundFees } from '../domain/refund-fees';
 import { maskRefundPhone, normalizeRefundPhone } from '../domain/refund-destination';
 import { getPaymentSettingsSync } from './payment-settings.service';
 import { refundRequestService, RefundRequestService, SourceFacts } from './refund-request.service';
@@ -44,8 +46,12 @@ export interface AttributionPreviewRow {
   maxRefundable: number;
   goods: number;
   delivery: number;
+  /** Everything deducted from the customer: payment fee + transfer fee (2026-10-22). */
   feeAmount: number;
   netAmount: number;
+  /** The two fees apart, so the screen can show both lines. */
+  paymentFee: number;
+  transferFee: number;
 }
 
 export interface RefundEligibilityDto {
@@ -75,8 +81,15 @@ export interface RefundEligibilityDto {
   returnShippingPayer: ReturnShippingPayer | null;
   overrides: VendorPolicyOverride[];
   codCoverage: CodCollectionCoverage[];
-  /** The percent applied to this source (0 for a card payment, R-3). */
+  /** The TRANSFER fee percent applied to this source (0 for a card payment, R-3). */
   feePercent: number;
+  /** 2026-10-22: the PAY-IN fee percent applied (0 for cash on delivery — no aggregator when paid). */
+  paymentFeePercent: number;
+  /**
+   * The parcels named in `deliveryFaultShipmentIds`, each judged against its agency's window: the
+   * approver sees whether the agency (and rider) will give back, and why.
+   */
+  deliveryFault: DeliveryFaultAssessment[];
 }
 
 export interface EligibilityQuery {
@@ -85,6 +98,8 @@ export interface EligibilityQuery {
   reasonKind?: RefundReasonKind;
   itemDefective?: boolean;
   amount?: number;
+  /** Parcels the caller says were delivered at fault (order sources only). */
+  deliveryFaultShipmentIds?: string[];
 }
 
 export class RefundEligibilityService {
@@ -94,14 +109,36 @@ export class RefundEligibilityService {
     const facts = await this.refunds.describeSource(query.sourceKind, query.sourceId);
     const reasonKind = query.reasonKind ?? defaultReasonKind(facts);
     const itemDefective = query.itemDefective ?? null;
-    const feePercent = facts.paymentChannel === 'card' ? 0 : getPaymentSettingsSync().refund_fee_percent;
+    const settings = getPaymentSettingsSync();
+    const faultIds = facts.kind === 'order' ? [...new Set(query.deliveryFaultShipmentIds ?? [])] : [];
+    const deliveryFault = faultIds.length > 0
+      ? await getRefundEarningsPort().assessDeliveryFault(facts.id, faultIds, new Date())
+      : [];
+    const faultDeliveryAmount = deliveryFault.reduce((sum, d) => sum + d.customerDeliveryAmount, 0);
+    const feesOf = (gross: number) => computeRefundFees({
+      gross,
+      paymentChannel: facts.paymentChannel,
+      payinRatePercent: settings.payin_fee_percent,
+      payoutRatePercent: settings.refund_fee_percent,
+      paidBy: 'customer',
+    });
+    const probe = feesOf(1_000_000);
+    const feePercent = probe.payoutRate;
 
     const row = (kind: RefundReasonKind): AttributionPreviewRow => {
-      const input = attributionInputOf(facts, kind, itemDefective);
+      const input = attributionInputOf(facts, kind, itemDefective, faultDeliveryAmount);
       const max = Math.max(0, Math.min(maxAttributable(input), facts.remaining));
       const attribution = attributeRefund(input, max) ?? { goods: 0, delivery: 0 };
-      const fee = computeRefundFee(max, feePercent, facts.paymentChannel);
-      return { maxRefundable: max, goods: attribution.goods, delivery: attribution.delivery, feeAmount: fee.feeAmount, netAmount: fee.netAmount };
+      const fees = feesOf(max);
+      return {
+        maxRefundable: max,
+        goods: attribution.goods,
+        delivery: attribution.delivery,
+        feeAmount: fees.customerFee,
+        netAmount: fees.net,
+        paymentFee: fees.payinAmount,
+        transferFee: fees.payoutAmount,
+      };
     };
     const byReasonKind = Object.fromEntries(REFUND_REASON_KINDS.map((k) => [k, row(k)])) as Record<
       RefundReasonKind,
@@ -142,6 +179,8 @@ export class RefundEligibilityService {
       overrides,
       codCoverage: facts.codCollections,
       feePercent,
+      paymentFeePercent: probe.payinRate,
+      deliveryFault,
     };
   }
 
@@ -155,15 +194,22 @@ export class RefundEligibilityService {
     amount?: number;
     reasonKind: RefundReasonKind;
     itemDefective: boolean | null;
+    deliveryFaultShipmentIds?: string[];
   }): Promise<VendorPolicyOverride[]> {
     if (input.kind !== 'order') return [];
     const facts = await this.refunds.describeSource(input.kind, input.sourceId);
+    const faultIds = [...new Set(input.deliveryFaultShipmentIds ?? [])];
+    const faultDeliveryAmount = faultIds.length > 0
+      ? (await getRefundEarningsPort().assessDeliveryFault(facts.id, faultIds, new Date())).reduce((s, d) => s + d.customerDeliveryAmount, 0)
+      : 0;
     // Absent amount = what `create` defaults to: the most the attribution and the money allow.
     const ceiling = Math.min(
-      maxAttributable(attributionInputOf(facts, input.reasonKind, input.itemDefective)),
+      maxAttributable(attributionInputOf(facts, input.reasonKind, input.itemDefective, faultDeliveryAmount)),
       facts.remaining
     );
-    return this.orderPolicyOverrides(facts, input.amount ?? ceiling);
+    // Delivery money the at-fault couriers fund is not the vendor's refund: their return policy
+    // is measured on the rest.
+    return this.orderPolicyOverrides(facts, Math.max(0, (input.amount ?? ceiling) - faultDeliveryAmount));
   }
 
   private async orderPolicyOverrides(facts: SourceFacts, amount: number): Promise<VendorPolicyOverride[]> {
@@ -206,7 +252,8 @@ export function defaultReasonKind(facts: Pick<SourceFacts, 'delivered'>): Refund
 function attributionInputOf(
   facts: SourceFacts,
   reasonKind: RefundReasonKind,
-  itemDefective: boolean | null
+  itemDefective: boolean | null,
+  faultDeliveryAmount = 0
 ): AttributionInput {
   return {
     reasonKind,
@@ -215,6 +262,7 @@ function attributionInputOf(
     goodsAmount: facts.goodsAmount,
     deliveryAmountPaid: facts.deliveryAmountPaid,
     delivered: facts.delivered,
+    faultDeliveryAmount,
   };
 }
 

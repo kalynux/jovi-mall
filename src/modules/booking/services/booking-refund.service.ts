@@ -18,6 +18,12 @@ export type BookingRefundOutcome =
    * (`awaiting_approval` — no paying number on record; `failed` — the gateway refused it).
    */
   | { status: 'refund_requested'; refundRequestId: string; requestStatus: string; amount: number; currency: string }
+  /**
+   * Somebody had already opened a request (an administrator, a retry): that request IS the refund.
+   * Kept apart from `refund_pending` because the two need different things from a person — this
+   * one nothing, that one a ticket worked by hand.
+   */
+  | { status: 'refund_already_open'; reason: string }
   /** No request could be opened (cash, or no payment on record): a person refunds it from a ticket. */
   | { status: 'refund_pending'; reason: string };
 
@@ -86,12 +92,16 @@ export class BookingRefundService {
    * @param initiatedBy The acting user's id.
    * @param initiatedByRole Who cancelled — recorded on the request's name for the audit trail.
    * @param reason Free-text reason carried onto the refund and any ticket.
+   * @param feesPaidBy Who bears the payment + transfer fees. Absent = the refund service's own
+   *   default (the customer). `vendor` gives the customer 100% back — used when a customer cancels
+   *   after declining the VENDOR's proposal of a new time (owner decision D-9).
    */
   async refundCancelledBooking(
     booking: IBooking,
     initiatedBy: string,
     initiatedByRole: 'customer' | 'vendor' | 'admin',
-    reason?: string
+    reason?: string,
+    feesPaidBy?: 'customer' | 'vendor'
   ): Promise<BookingRefundOutcome> {
     const bookingId = booking._id.toString();
 
@@ -127,13 +137,14 @@ export class BookingRefundService {
         // person who cancelled is recorded, not made the requester: a customer may not approve.
         requestedBy: { id: initiatedBy || null, role: 'system', name: `booking cancelled by ${initiatedByRole}` },
         approveNow: true,
+        ...(feesPaidBy ? { feesPaidBy } : {}),
       });
     } catch (error) {
       const code = error instanceof AppError ? error.code : undefined;
       if (code === ERROR_CODES.REFUND_ALREADY_OPEN) {
         // Somebody already opened one (an administrator, a retry): that request is the refund.
         await this.flagRefundPending(bookingId);
-        return { status: 'refund_pending', reason: 'A refund request is already open for this booking' };
+        return { status: 'refund_already_open', reason: 'A refund request is already open for this booking' };
       }
       const expected =
         code === ERROR_CODES.REFUND_PAYMENT_NOT_FOUND ||
@@ -167,6 +178,55 @@ export class BookingRefundService {
       amount: request.gross_amount,
       currency: request.currency,
     };
+  }
+
+  /**
+   * The agreed price came down on a rescheduled appointment, below what the customer has paid
+   * (owner decision P-3). The difference goes back through the normal refund engine, with the fees
+   * on the vendor, whose change it was.
+   *
+   * ⚠ **The booking stays `paid`, so `flagRefundPending` is not called.** That status says a refund
+   * is open against the booking as a whole, and here the appointment is very much on.
+   *
+   * Cash, or a request that cannot be opened: a ticket for a person. The vendor holds the notes.
+   * Best-effort and never throws, because the agreement has already committed.
+   */
+  async refundPriceDifference(booking: IBooking, amount: number): Promise<void> {
+    const bookingId = booking._id.toString();
+    if (booking.paymentMethod !== 'cash') {
+      try {
+        const refunds = await this.getRefunds();
+        await refunds.create({
+          source: { kind: 'booking', id: bookingId },
+          amount,
+          reasonKind: 'goodwill',
+          reason: 'The agreed price was lowered when the appointment was rescheduled',
+          requestedBy: { id: null, role: 'system', name: 'agreed price lowered' },
+          approveNow: true,
+          feesPaidBy: 'vendor',
+        });
+        return;
+      } catch (error) {
+        console.error(`[BookingRefundService] Could not open the price-difference refund on booking ${bookingId}:`, error);
+      }
+    }
+
+    try {
+      await ticketService.createSystemTicket({
+        type: TicketType.PAYMENT_ISSUE,
+        entityType: EntityType.BOOKING,
+        entityId: bookingId,
+        subject: `Price difference owed on booking ${booking.bookingNumber ?? bookingId}`,
+        description:
+          `The agreed price of booking ${booking.bookingNumber ?? bookingId} came down, and the customer has paid more than it.\n` +
+          `Owed back: ${amount} ${booking.currency}\n` +
+          `Payment method: ${booking.paymentMethod ?? 'unknown'}\n\n` +
+          `The appointment is still on. The customer has NOT yet been paid this.`,
+        importance: TicketImportance.HIGH,
+      });
+    } catch (error) {
+      console.error('[BookingRefundService] Failed to open the price-difference ticket:', error);
+    }
   }
 
   /** `paid → refund_pending`, as a compare-and-set: a request already completed wins. */

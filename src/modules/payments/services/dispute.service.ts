@@ -1,9 +1,13 @@
 import { PaymentTransactionModel } from '../models/payment-transaction.model';
+import { disputeVendorCharge } from '../domain/refund-fees';
+import { getPaymentSettingsSync } from './payment-settings.service';
 import { OrderModel, FulfillmentStatus } from '../../orders/order.model';
+import { amountPaidOnlineOf } from '../../orders/domain/partial-payment';
 import { OrderTimelineRepository } from '../../orders/order-timeline.repository';
 import { TimelineActorType } from '../../orders/order-timeline.model';
 import { Booking } from '../../booking/models/booking.model';
 import { BookingStatus } from '../../booking/types/booking.types';
+import { applyStatusChange } from '../../booking/domain/booking-status-history';
 import { BookingCalendarSyncService } from '../../booking/services/booking-calendar-sync.service';
 import { earningsRefundService } from '../../earnings/services/earnings-refund.service';
 import { planPurchaseService } from '../../billing/services/plan-purchase.service';
@@ -238,7 +242,8 @@ export class PaymentDisputeService {
       { _id: order._id },
       {
         $set: {
-          payment_status: 'paid',
+          // A partial order's disputed charge was only its online part: the cash is still to come.
+          payment_status: amountPaidOnlineOf(order) > 0 ? 'partially_paid' : 'paid',
           'dispute_hold.active': false,
           'dispute_hold.resolved_at': new Date(),
           updated_at: new Date(),
@@ -248,7 +253,9 @@ export class PaymentDisputeService {
 
     await this.appendTimeline(
       orderId,
-      'Dispute won — order unfrozen, payment restored to paid',
+      amountPaidOnlineOf(order) > 0
+        ? 'Dispute won — order unfrozen, online part restored'
+        : 'Dispute won — order unfrozen, payment restored to paid',
       { disputeId },
       actor
     );
@@ -311,7 +318,11 @@ export class PaymentDisputeService {
       // (REFUND-FLOW-PLAN § 4, § 6.2 "dispute lost: everything"). Keyed on the dispute so a
       // redelivered webhook, or an administrator resolving it by hand afterwards, recovers
       // nothing a second time.
-      await earningsRefundService.onOrderRefund(orderId, disputeRefundKey(disputeId, paymentIntentId, orderId));
+      await earningsRefundService.onOrderRefund(
+        orderId,
+        disputeRefundKey(disputeId, paymentIntentId, orderId),
+        await this.disputeRecovery(paymentIntentId, reason)
+      );
     } catch (error) {
       console.error('[PaymentDispute] Failed to reverse earnings on dispute loss:', error);
     }
@@ -389,7 +400,7 @@ export class PaymentDisputeService {
     if (booking.paymentStatus === 'refunded') return; // already unwound
 
     booking.paymentStatus = 'refunded';
-    booking.status = BookingStatus.CANCELLED;
+    applyStatusChange(booking, BookingStatus.CANCELLED, { role: 'system', id: null }, `Payment ${reason}`);
     booking.cancelledAt = new Date();
     booking.cancelledReason = `Payment ${reason} (Stripe dispute ${disputeId ?? 'n/a'})`;
     await booking.save();
@@ -400,7 +411,12 @@ export class PaymentDisputeService {
     );
     try {
       // The booking rows AND its balance-payment rows; same dispute key rule as the order path.
-      await earningsRefundService.onRefund('booking', bookingId, disputeRefundKey(disputeId, paymentIntentId, bookingId));
+      await earningsRefundService.onRefund(
+        'booking',
+        bookingId,
+        disputeRefundKey(disputeId, paymentIntentId, bookingId),
+        await this.disputeRecovery(paymentIntentId, reason)
+      );
     } catch (error) {
       console.error('[PaymentDispute] Failed to reverse earnings on booking dispute loss:', error);
     }
@@ -467,6 +483,21 @@ export class PaymentDisputeService {
    * must still be acknowledged, and a pause that fails is logged loudly for an administrator
    * to place by hand rather than turning the webhook into a 5xx the gateway retries forever.
    */
+  /**
+   * What a lost charge recovers beyond the shares (owner F-9, 2026-10-22): on a CHARGEBACK the
+   * vendor also carries the pay-in fee Wi-Mall already lost on that payment. A charge refunded on
+   * Stripe directly (`reason: refund`) is not a dispute and charges nothing extra.
+   */
+  private async disputeRecovery(
+    paymentIntentId: string,
+    reason: 'chargeback' | 'refund'
+  ): Promise<{ vendorCharge: number; dispute: boolean }> {
+    if (reason !== 'chargeback') return { vendorCharge: 0, dispute: false };
+    const tx: any = await PaymentTransactionModel.findOne({ gatewayRef: paymentIntentId }, { amountSnapshot: 1 }).lean();
+    const charge = disputeVendorCharge(tx?.amountSnapshot ?? 0, getPaymentSettingsSync().payin_fee_percent);
+    return { vendorCharge: charge, dispute: true };
+  }
+
   private async pauseEarnings(target: PauseTarget, note: string): Promise<void> {
     try {
       await earningsPauseService.pause(target, 'card_dispute', SYSTEM_PAUSE_ACTOR, note);

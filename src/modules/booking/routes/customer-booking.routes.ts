@@ -43,6 +43,38 @@ router.post('/:id/cancel', CustomerBookingController.cancelBooking);
 router.patch('/:id/reschedule', CustomerBookingController.rescheduleBooking);
 
 /**
+ * POST /api/customer/bookings/:id/reschedule-proposal/accept
+ * POST /api/customer/bookings/:id/reschedule-proposal/decline
+ * Answer the vendor's proposal of a new time. Decline keeps the original time and waives the
+ * cancellation policy for this booking (full refund on cancel).
+ */
+router.post('/:id/reschedule-proposal/accept', CustomerBookingController.acceptProposal);
+router.post('/:id/reschedule-proposal/decline', CustomerBookingController.declineProposal);
+
+/**
+ * DELETE /api/customer/bookings/:id/reschedule-proposal
+ * Withdraw the customer's own request for a new time (manual-approval services only).
+ */
+router.delete('/:id/reschedule-proposal', CustomerBookingController.withdrawProposal);
+
+/**
+ * POST /api/customer/bookings/:id/price-proposal/accept
+ * POST /api/customer/bookings/:id/price-proposal/decline
+ * Answer the vendor's proposed price, on a manual service. Accepting confirms the booking at that
+ * price. Declining changes nothing, and lets the customer cancel with a full refund.
+ * 404 BOOKING_PRICE_PROPOSAL_NOT_FOUND · 409 PAYMENT_BOOKING_IN_PROGRESS
+ */
+router.post('/:id/price-proposal/accept', CustomerBookingController.acceptPrice);
+router.post('/:id/price-proposal/decline', CustomerBookingController.declinePrice);
+
+/**
+ * POST /api/customer/bookings/:id/reminder
+ * Send the vendor this customer's one reminder for this appointment. No body: the message is fixed.
+ * 409 BOOKING_REMINDER_ALREADY_SENT · 409 BOOKING_REMINDER_NOT_APPLICABLE
+ */
+router.post('/:id/reminder', CustomerBookingController.sendReminder);
+
+/**
  * GET /api/customer/bookings/:id/balance
  * What is still owed on a completed booking (and what was overpaid).
  */

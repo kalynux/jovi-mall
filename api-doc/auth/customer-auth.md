@@ -135,7 +135,9 @@ POST /api/auth/magic/code
 { "identifier": "+237600000000", "code": "4B2K91QN" }
 ```
 
-- `identifier` — phone (E.164) **or** email, the same field `POST /auth/login` takes.
+- `identifier` — phone (E.164) **or** email, the same field `POST /auth/login` takes. The
+  WhatsApp number that requested the code is accepted too, even when the account is registered
+  under another number.
 - `code` — 8 characters, **case-insensitive and forgiving**: `4b2k-91qn`, `4B2K 91QN` and
   `4B2K91QN` are the same code, `O` reads as `0`, `I`/`L` as `1`. **Send whatever the user
   typed** — do not uppercase, strip or normalise it client-side.

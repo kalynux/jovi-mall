@@ -1,6 +1,12 @@
 import { Schema, model, Types } from 'mongoose';
 import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../core/base.schema';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
+import {
+  APPOINTMENT_LIMITS,
+  APPOINTMENT_LOCATION_KINDS,
+  AppointmentAccessSetting,
+  ServiceLocationSetting,
+} from '../../booking/domain/appointment';
 
 export interface IProductVariant extends IBaseDocument {
   productId: Types.ObjectId;
@@ -92,6 +98,11 @@ export interface IProductVariant extends IBaseDocument {
       priceType: 'fixed' | 'percentage';
       value: number;                        // % of the peak-portion price, or a flat amount
     };
+    // Where the appointment happens, and the access details revealed shortly before it
+    // starts. Absent on services created before 2026-10-26 ("not specified"). See
+    // booking/domain/appointment.ts.
+    location?: ServiceLocationSetting;
+    access?: AppointmentAccessSetting;
   };
 }
 
@@ -172,6 +183,28 @@ const ProductVariantSchema = new Schema<IProductVariant>({
           endTime: { type: String, required: true },
           priceType: { type: String, enum: ['fixed', 'percentage'], required: true },
           value: { type: Number, required: true, min: 0 },
+        },
+        required: false,
+        default: undefined,
+      },
+      location: {
+        type: {
+          kind: { type: String, enum: [...APPOINTMENT_LOCATION_KINDS], required: true },
+          vendorAddressId: { type: String, default: null },
+        },
+        required: false,
+        default: undefined,
+      },
+      access: {
+        type: {
+          instructions: { type: String, default: null, maxlength: APPOINTMENT_LIMITS.instructionsMax },
+          meetingUrl: { type: String, default: null, maxlength: APPOINTMENT_LIMITS.meetingUrlMax },
+          revealMinutesBefore: {
+            type: Number,
+            default: APPOINTMENT_LIMITS.revealMinutesDefault,
+            min: 0,
+            max: APPOINTMENT_LIMITS.revealMinutesMax,
+          },
         },
         required: false,
         default: undefined,

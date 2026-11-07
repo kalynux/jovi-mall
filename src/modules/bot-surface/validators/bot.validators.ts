@@ -378,7 +378,15 @@ export const BotAddressUpdateSchema = z
  * already the natural place for it. `onboarding.complete` flipping to true is the signal to
  * replay it. Product owner's decision, 2026-08-26.
  */
-export const BotIdentitySyncSchema = z.object({}).strict();
+export const BotIdentitySyncSchema = z
+    .object({
+        /**
+         * The inbound message's text. Read for a referral code on a first contact, and then
+         * forgotten: the account does not exist yet, so nothing else could use it.
+         */
+        messageText: z.string().max(4096).optional(),
+    })
+    .strict();
 
 /**
  * A Telegram `contact` payload, as the onboarding phone step accepts it.
@@ -703,6 +711,26 @@ export const BotBookingListSchema = z
     .strict();
 
 export const BotBookingParamSchema = z.object({ bookingId: objectId });
+
+/**
+ * `POST /bookings/address-step` — the customer's next message while the appointment address step
+ * is open (2026-10-27): what they typed, the location they shared, or the map match they tapped
+ * (`gc_…`). Exactly one, forwarded verbatim by the automation layer, which interprets none of it.
+ */
+export const BotBookingAddressStepSchema = z
+    .object({
+        text: z.string().trim().min(1).max(300).optional(),
+        location: z
+            .object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) })
+            .strict()
+            .optional(),
+        token: z.string().trim().min(3).max(128).optional(),
+    })
+    .strict()
+    .refine(
+        (body) => [body.text, body.location, body.token].filter((v) => v !== undefined).length === 1,
+        { message: 'Send exactly one of text, location or token' },
+    );
 export const BotBookingCancelSchema = z
     .object({ reason: z.string().trim().max(500).optional() })
     .strict();
@@ -764,6 +792,12 @@ export const BotBookingCreateSchema = z
         slotId,
         /** The customer's own words about the appointment. Reaches the vendor's calendar. */
         notes: z.string().trim().min(1).max(500).optional(),
+        /**
+         * One of the customer's saved addresses (`addresses_list`). REQUIRED when the service's
+         * `locationKind` is `customer_address` — the vendor comes to them — and ignored otherwise.
+         * Missing → `422 BOOKING_ADDRESS_REQUIRED`: ask which address, never guess the default.
+         */
+        addressId: objectId.optional(),
     })
     .strict();
 

@@ -202,6 +202,7 @@ async function main(): Promise<void> {
     'POST /',
     'POST /:id/approve',
     'POST /:id/reject',
+    'POST /:id/partial-return-fault',
     'POST /:id/retry',
     'POST /:id/settle-external',
     'POST /:id/resolve-unknown',

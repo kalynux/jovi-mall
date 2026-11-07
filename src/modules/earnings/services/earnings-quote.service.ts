@@ -17,7 +17,8 @@ import {
   shipmentWeightGrams,
 } from '../domain/delivery-pricing';
 import { CashCollectionModel } from '../../cod/models/cash-collection.model';
-import { paysDeliveryFeeInCash } from '../../orders/domain/delivery-payer';
+import { customerDeliveryFeeOf, paysDeliveryFeeInCash } from '../../orders/domain/delivery-payer';
+import { codHandlingFeeBaseOf } from '../../orders/domain/partial-payment';
 
 /**
  * Why an agent's earning is unavailable, when it is.
@@ -780,7 +781,10 @@ export class EarningsQuoteService {
     const agentCut = applyFeeSplit(contract?.fee_split, earnedFee);
     const codHandlingFee =
       order.payment_method === 'cash_on_delivery' && !isReturnedCod(order, shipment)
-        ? computeCodHandlingFee(policies.pricing?.additional_fees?.cod_handling_fee, codGross)
+        ? computeCodHandlingFee(
+            policies.pricing?.additional_fees?.cod_handling_fee,
+            codHandlingFeeBaseOf(codGross, codGross + customerDeliveryFeeOf(null, shipment) - (shipment.prepaid_amount ?? 0))
+          )
         : 0;
 
     return {

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AppointmentAccessPatchSchema, AppointmentLocationSchema } from '../../booking/domain/appointment.validators';
 
 /**
  * Variant Validation Schemas
@@ -42,6 +43,9 @@ const VariantServiceConfigSchema = z.object({
     // bookingMode === 'capacity'; ignored by calendar/manual modes.
     maxBookings: z.number().int().min(1, 'maxBookings must be at least 1').optional(),
     peakHours: VariantPeakHoursSchema.optional(),
+    // Where the appointment happens, and its access details — booking/domain/appointment.ts.
+    location: AppointmentLocationSchema.optional(),
+    access: AppointmentAccessPatchSchema.optional(),
 }).refine(
     (c) => c.bookingMode !== 'capacity' || c.maxBookings !== undefined,
     { message: "maxBookings is required when bookingMode is 'capacity'", path: ['maxBookings'] }
@@ -57,6 +61,9 @@ const VariantServiceConfigPatchSchema = z.object({
     bookingMode: z.enum(['calendar', 'manual', 'capacity']).optional(),
     maxBookings: z.number().int().min(1, 'maxBookings must be at least 1').optional(),
     peakHours: VariantPeakHoursSchema.nullable().optional(),
+    // Replaced whole when given. Access is merged field by field (`mergeAppointmentSettings`).
+    location: AppointmentLocationSchema.optional(),
+    access: AppointmentAccessPatchSchema.optional(),
 });
 
 // Variant media. Full-array replacement; duplicates are rejected so the same image

@@ -36,6 +36,7 @@ import {
 // why `vendorGross` is `P×qty − aiMargin` and never `floor×qty + 0.7·U`.
 import { computeOrderAiMargin, NegotiatedLineInput } from './negotiation-margin.service';
 import { deliveredAtOf } from '../domain/earnings-hold';
+import { courierHoldSnapshot, CourierHoldSnapshot } from '../domain/courier-hold';
 // Who pays delivery, and how much (ADR-A11) — the pure readers every money path shares.
 import {
   collectionBreakdownOf,
@@ -45,6 +46,7 @@ import {
   paysDeliveryFeeInCash,
   rtoLeftoverShares,
 } from '../../orders/domain/delivery-payer';
+import { codHandlingFeeBaseOf } from '../../orders/domain/partial-payment';
 
 // The pure fee arithmetic lives in `EarningsQuoteService` — see its header. Both
 // halves of every division are defined there (`applyFeeSplit` for the agent,
@@ -110,6 +112,8 @@ export interface CodCollectionSplitInput {
   itemsAmount: number;
   /** The customer-paid delivery fee inside the same cash. */
   deliveryFeeAmount: number;
+  /** What a partial order already paid online for this parcel; 0 otherwise. */
+  prepaidAmount?: number;
 }
 
 /** What `splitCodCollection` divides one collection into. `vendorNet` may be negative here. */
@@ -544,6 +548,7 @@ export class EarningsSplitService {
       agencyId,
       itemsAmount,
       deliveryFeeAmount: customerDeliveryCash,
+      prepaidAmount: collection.prepaid_amount ?? 0,
     });
 
     // Record it for audit. COD computes the fee once, at collection, so it cannot
@@ -593,6 +598,7 @@ export class EarningsSplitService {
         : {}),
     };
 
+    const courierHold = this.courierHoldOf((shipment._id as any).toString(), agencyId, agency?.policies ?? null);
     const allocations: CreateAllocationInput[] = [
       { ...codDefaults, beneficiary_type: 'vendor', beneficiary_id: vendorId, amount: vendorNet },
       { ...codDefaults, beneficiary_type: 'platform', beneficiary_id: null, amount: commission },
@@ -601,11 +607,15 @@ export class EarningsSplitService {
       // the agency deliberately — fee_split is defined as a share "of the delivery
       // fee", and the agency is the party carrying the cash-accountability (it is
       // their balance the rolling reserve is held against).
+      //
+      // The agency and agent rows run on their OWN clock (courier-hold.ts): their agency's
+      // terms decide how long they wait, counted from this parcel's delivery — not the order's.
       {
         ...codDefaults,
         beneficiary_type: 'agency',
         beneficiary_id: agencyId,
         amount: agencyCut,
+        courier_hold: courierHold,
       },
       // The agent is paid by the PLATFORM, like any other beneficiary — hold →
       // release → available → payout. `requires_cash_settlement` is inherited
@@ -613,7 +623,7 @@ export class EarningsSplitService {
       // they collected has physically reached the platform. That is deliberate:
       // an agent must not be able to withdraw a cut of money they are still
       // holding, or never handed back.
-      { ...codDefaults, beneficiary_type: 'agent', beneficiary_id: agentId, amount: agentCut },
+      { ...codDefaults, beneficiary_type: 'agent', beneficiary_id: agentId, amount: agentCut, courier_hold: courierHold },
       // The bargaining agent's share of THIS shipment's uplift — see the
       // docstring. Zero on an ordinary collection, and `persist` skips a
       // zero-value row, so nothing is written for one.
@@ -670,8 +680,12 @@ export class EarningsSplitService {
     // in cash (only a fee raised above the cash collected would leave a remainder).
     const shares = deliveryFeeShares(deliveryFee, input.deliveryFeeAmount);
 
-    // D-5: on the GOODS only — never on the delivery fee the agent also collects.
-    const codFee = computeCodHandlingFee(input.policies?.pricing?.additional_fees?.cod_handling_fee, gross);
+    // D-5: on the GOODS only — never on the delivery fee the agent also collects. And on a partial
+    // order, never on money the agent did not carry (`codHandlingFeeBaseOf`).
+    const codFee = computeCodHandlingFee(
+      input.policies?.pricing?.additional_fees?.cod_handling_fee,
+      codHandlingFeeBaseOf(gross, gross + input.deliveryFeeAmount - (input.prepaidAmount ?? 0))
+    );
 
     // The agent's cut comes OUT of the delivery fee, not on top of it: the
     // vendor pays the same either way, and the agency shares the fee with the
@@ -770,9 +784,11 @@ export class EarningsSplitService {
         : {}),
     };
 
+    // Both rows run on the courier clock (courier-hold.ts), like a COD collection's.
+    const courierHold = this.courierHoldOf((shipment._id as any).toString(), agencyId, agency?.policies ?? null);
     await this.persist([
-      { ...defaults, beneficiary_type: 'agency', beneficiary_id: agencyId, amount: agencyCut },
-      { ...defaults, beneficiary_type: 'agent', beneficiary_id: agentId, amount: agentCut },
+      { ...defaults, beneficiary_type: 'agency', beneficiary_id: agencyId, amount: agencyCut, courier_hold: courierHold },
+      { ...defaults, beneficiary_type: 'agent', beneficiary_id: agentId, amount: agentCut, courier_hold: courierHold },
     ]);
 
     await this.emitSplit('cod_collection', sourceId, vendorId, {
@@ -985,12 +1001,16 @@ export class EarningsSplitService {
         : {}),
     };
 
+    // The agency and agent rows run on their own clock (courier-hold.ts); the vendor's
+    // leftover below stays on the order's.
+    const courierHold = this.courierHoldOf(sourceId, agencyId, policies);
     const allocations: CreateAllocationInput[] = [
       {
         ...shipmentDefaults,
         beneficiary_type: 'agency',
         beneficiary_id: agencyId,
         amount: agencyCut,
+        courier_hold: courierHold,
       },
       // Paid by the PLATFORM like any other beneficiary — hold → release →
       // available → payout — even though it is the AGENCY that owes it under the
@@ -1002,6 +1022,7 @@ export class EarningsSplitService {
               beneficiary_type: 'agent' as const,
               beneficiary_id: agentId,
               amount: agentCut,
+              courier_hold: courierHold,
             },
           ]
         : []),
@@ -1026,6 +1047,44 @@ export class EarningsSplitService {
       vendorRefund,
       customerRefundable,
     });
+  }
+
+  /**
+   * Pay the agency and agent for a PARTIAL order's returned parcel, out of what the customer prepaid
+   * (D-2) or, when the vendor is at fault, at the vendor's charge (D-12). Called when the parcel's
+   * refund completes, so an administrator changing the fault can never leave an agency paid for a
+   * refund that went the other way.
+   *
+   * `requires_cash_settlement: false`: no cash came back with this parcel, and this money is already
+   * at the platform. Idempotent on the shipment source, like every delivery split.
+   */
+  async splitPartialReturn(order: IOrder, shipment: IShipment, amount: number): Promise<void> {
+    const sourceId = (shipment._id as any).toString();
+    if (amount <= 0) return;
+    if (await this.allocationRepo.existsForSource('shipment', sourceId)) return;
+
+    const agencyId = shipment.agency_id.toString();
+    const agency = await this.agencyRepo.findById(agencyId);
+    const agentId = shipment.agent_id ? shipment.agent_id.toString() : null;
+    const agentCut = agentId ? await this.computeAgentCut(agentId, agencyId, amount) : 0;
+    const courierHold = this.courierHoldOf(sourceId, agencyId, agency?.policies ?? null);
+    const heldFrom = deliveredAtOf(order);
+    const defaults = {
+      source_type: 'shipment' as const,
+      source_id: sourceId,
+      gross_snapshot: amount,
+      commission_percent_snapshot: 0,
+      currency: order.currency,
+      requires_cash_settlement: false,
+      ...(heldFrom ? { completed_at: heldFrom, hold_release_at: daysFromNow(EARNINGS_CONFIG.HOLD_DAYS, heldFrom) } : {}),
+    };
+
+    await this.persist([
+      { ...defaults, beneficiary_type: 'agency', beneficiary_id: agencyId, amount: computeAgencyCut(amount, agentCut), courier_hold: courierHold },
+      ...(agentId ? [{ ...defaults, beneficiary_type: 'agent' as const, beneficiary_id: agentId, amount: agentCut, courier_hold: courierHold }] : []),
+    ]);
+
+    await this.emitSplit('shipment', sourceId, order.vendor_id.toString(), { returnFee: amount, agentCut });
   }
 
   /**
@@ -1120,12 +1179,14 @@ export class EarningsSplitService {
    * Split a paid booking (service product): platform commission + vendor net.
    * Bookings have no delivery agency.
    */
-  async splitBooking(booking: IBooking): Promise<void> {
+  async splitBooking(booking: IBooking, grossPaid?: number): Promise<void> {
     const sourceId = booking._id.toString();
     if (await this.allocationRepo.existsForSource('booking', sourceId)) return; // idempotent
 
     const vendorId = booking.vendorId.toString();
-    const gross = booking.priceSnapshot;
+    // What this payment actually carried, when the caller knows: the agreed price can have moved
+    // since the charge was opened (BOOKING-PRICE-PROPOSAL-PLAN § 5).
+    const gross = grossPaid ?? booking.priceSnapshot;
     const currency = booking.currency;
 
     const { commissionPercent } = await this.entitlements.getEntitlements(vendorId);
@@ -1161,6 +1222,62 @@ export class EarningsSplitService {
     await this.persist(allocations);
 
     await this.emitSplit('booking', sourceId, vendorId, { gross, commission, vendorNet });
+  }
+
+  /**
+   * Split a payment of a price difference (BOOKING-PRICE-PROPOSAL-PLAN § 5). Commission as usual, on
+   * the whole agreed price, and under the payment's own id, for the reason `splitBookingBalance`
+   * gives.
+   *
+   * ⚠ **Unlike a balance it stays HELD until the appointment completes**, because it usually exists
+   * before then. `BookingService.updateBookingStatus` matures it from `topupTransactionIds`. Only a
+   * booking already completed matures here, since nothing would come along later to do it.
+   */
+  async splitBookingTopup(booking: IBooking, amount: number, transactionId: string): Promise<void> {
+    if (amount <= 0) return;
+    if (await this.allocationRepo.existsForSource('booking', transactionId)) return; // idempotent
+
+    const vendorId = booking.vendorId.toString();
+    const currency = booking.currency;
+    const { commissionPercent } = await this.entitlements.getEntitlements(vendorId);
+    const commission = Math.floor((amount * commissionPercent) / 100);
+    const vendorNet = amount - commission;
+    if (vendorNet < 0) {
+      throw createAppError(ERROR_CODES.EARNINGS_INVALID_SPLIT, 422, undefined, { gross: amount, commission });
+    }
+
+    await this.persist([
+      {
+        source_type: 'booking',
+        source_id: transactionId,
+        beneficiary_type: 'vendor',
+        beneficiary_id: vendorId,
+        gross_snapshot: amount,
+        commission_percent_snapshot: commissionPercent,
+        amount: vendorNet,
+        currency,
+      },
+      {
+        source_type: 'booking',
+        source_id: transactionId,
+        beneficiary_type: 'platform',
+        beneficiary_id: null,
+        gross_snapshot: amount,
+        commission_percent_snapshot: commissionPercent,
+        amount: commission,
+        currency,
+      },
+    ]);
+
+    if (booking.status === 'completed') {
+      try {
+        await earningsCompletionService.onSourceCompleted('booking', transactionId);
+      } catch (error) {
+        console.error('[EarningsSplitService] Failed to mature price-difference allocations:', error);
+      }
+    }
+
+    await this.emitSplit('booking', transactionId, vendorId, { gross: amount, commission, vendorNet });
   }
 
   /**
@@ -1238,6 +1355,19 @@ export class EarningsSplitService {
   }
 
   /** Create allocations and hold each share — all in ONE transaction. */
+  /**
+   * The terms snapshot an agency or rider row of this delivery carries (courier-hold.ts),
+   * read from the agency's policies as they stand now — the delivery. `EARNINGS_HOLD_DAYS` is
+   * the ceiling. Missing policies hold the full window.
+   */
+  private courierHoldOf(
+    shipmentId: string,
+    agencyId: string,
+    policies: IAgencyPolicies | null
+  ): CourierHoldSnapshot {
+    return courierHoldSnapshot(shipmentId, agencyId, policies, EARNINGS_CONFIG.HOLD_DAYS);
+  }
+
   private async persist(allocations: CreateAllocationInput[]): Promise<void> {
     await transactionManager.runInTransaction(async (session) => {
       for (const input of allocations) {

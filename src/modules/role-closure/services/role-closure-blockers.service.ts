@@ -20,6 +20,8 @@ import { CreditWalletModel } from '../../billing/models/credit-wallet.model';
 import { freePlanCodesForRole } from '../../billing/billing.types';
 import { debtToWriteOff } from '../../billing/domain/wallet-debt';
 import { ACTIVE_SHIPMENT_STATUSES } from '../../agents/config/agent.config';
+import { UserModel } from '../../users/user.model';
+import { ReferralPartnerModel } from '../../referrals/models/referral-partner.model';
 import {
   ClosableRole,
   RoleClosureBlocker,
@@ -97,6 +99,7 @@ export class RoleClosureBlockersService {
         await this.agent(roleEntityId, push);
         break;
     }
+    await this.referralWallet(userId, push);
     return blockers;
   }
 
@@ -121,6 +124,22 @@ export class RoleClosureBlockersService {
     const wallet = await CreditWalletModel.findOne({ owner_type: role, owner_id: roleEntityId }).lean().exec();
     out.push(...creditWarningsFor(wallet?.balance ?? 0));
     return out;
+  }
+
+  /** Only on the last open role: with another role left, the person can still reach their wallet. */
+  private async referralWallet(userId: string, push: Push): Promise<void> {
+    const user = await UserModel.findById(userId).select('roles').lean().exec();
+    if (!user || user.roles.length > 1) return;
+    const partner = await ReferralPartnerModel.findOne({ user_id: userId }).select('_id').lean().exec();
+    if (!partner) return;
+    const account = await EarningsAccountModel.findOne({ owner_type: 'referral_partner', owner_id: partner._id }).lean().exec();
+    if (!account) return;
+    const total =
+      (account.pending_balance ?? 0)
+      + (account.available_balance ?? 0)
+      + (account.requested_balance ?? 0)
+      + (account.clawback_balance ?? 0);
+    if (total !== 0) push('referral_balance', 1, { amount: total, currency: account.currency });
   }
 
   // ─── Per role ──────────────────────────────────────────────────────────────

@@ -36,17 +36,22 @@
 import { Types } from 'mongoose';
 import { productBookingService } from '../../../catalog/domain/services/booking/product-booking.instance';
 import { BookingService } from '../../../booking/services/booking.service';
+import { outstandingTopup } from '../../../booking/domain/price-proposal';
 import { Booking, IBooking } from '../../../booking/models/booking.model';
-import { ProductModel } from '../../../catalog/models';
+import { ProductModel, ProductVariantModel } from '../../../catalog/models';
+import { DEFAULT_VARIANT_SIGNATURE } from '../../../catalog/domain/services/variants/constants';
+import { appointmentLocationService } from '../../../booking/services/appointment-location.service';
+import type { AppointmentLocationKind } from '../../../booking/domain/appointment';
 import { VendorModel } from '../../../vendors/vendor.model';
 import { BOOKING_CONFIG } from '../../../booking/config/booking.config';
 import { inAppSurfaceStore } from '../../services/inapp-surface.store';
 import { inAppCopy } from '../inapp-copy';
+import { dialOptions, type DialOption } from '../../../../core/validation/dial-codes';
 import { CustomerModel, ICustomer } from '../../../customers/customer.model';
 import { PaymentOrchestratorService } from '../../../payments/services/payment-orchestrator.service';
 import {
     assertMobileMoneyOffered,
-    maskedPayerNumber,
+    payerPresentation,
     mobileMoneyRoute,
     paymentCodeAsk,
     routeNeedsPreChargeFacts,
@@ -58,11 +63,13 @@ import { ERROR_CODES } from '../../../../core/error-codes';
 import type { Slot } from '../../../booking/types/booking.types';
 import {
     bookingScreenCopy,
+    bookingPlaceCopy,
     bookingSpotsLeft,
     bookingTimesAvailable,
 } from '../../domain/bot-booking-copy';
 import {
     assertSomethingDue,
+    customerPriceQuestion,
     payPurposeOrRefuse,
     CustomerBookingRow,
     CustomerBookingSource,
@@ -272,6 +279,64 @@ export async function readBookingSlots(input: {
 }
 
 /**
+ * Where the appointment happens, for the screen to draw.
+ *
+ * For `customer_address` it lists the customer's saved addresses (default first) so the screen
+ * can ask which — `confirm` then needs the chosen `addressId` (`BOOKING_ADDRESS_REQUIRED`
+ * otherwise). The other kinds need no choice and carry no list.
+ */
+export interface BookingPlaceOption {
+    kind: AppointmentLocationKind;
+    copy: ReturnType<typeof bookingPlaceCopy> | null;
+    addresses: Array<{ addressId: string; label: string; line: string }> | null;
+    /**
+     * The address the chat already collected (2026-10-27), when the session carries one that is
+     * still the customer's. `addresses` is then that one address alone, and a screen shows it
+     * rather than asking; `confirm` uses it when the screen sends none.
+     */
+    chosenAddressId?: string | null;
+}
+
+/**
+ * Where a service happens — `null` when the vendor has not said (a service from before the
+ * appointment-location work). The ONE read of it on this surface: the chat's address step, the
+ * Book doors and the picker all ask here.
+ */
+export async function serviceLocationKind(productId: string): Promise<AppointmentLocationKind | null> {
+    const variant = await ProductVariantModel.findOne({
+        productId,
+        status: 'active',
+        optionSignature: DEFAULT_VARIANT_SIGNATURE,
+    }).select('serviceConfig.location').lean();
+    return variant?.serviceConfig?.location?.kind ?? null;
+}
+
+async function placeOf(
+    productId: string,
+    owner: string,
+    language: string | null | undefined,
+    presetAddressId: string | null = null,
+): Promise<BookingPlaceOption | null> {
+    const kind = await serviceLocationKind(productId);
+    if (!kind) return null;
+    if (kind !== 'customer_address') return { kind, copy: null, addresses: null };
+    const saved = (await appointmentLocationService.customerAddresses(owner)).map((a) => ({
+        addressId: String(a._id),
+        label: a.label ?? '',
+        line: [a.address_line1, a.city].filter(Boolean).join(', '),
+    }));
+    // ⚠ Re-checked against the customer's CURRENT addresses: one deleted since the chat chose it
+    // falls back to asking, never to booking at an address that no longer exists.
+    const chosen = presetAddressId ? saved.find((a) => a.addressId === presetAddressId) ?? null : null;
+    return {
+        kind,
+        copy: bookingPlaceCopy(language),
+        addresses: chosen ? [chosen] : saved,
+        chosenAddressId: chosen ? chosen.addressId : null,
+    };
+}
+
+/**
  * ONE call behind the `bk` screen, for whichever transport is drawing it.
  *
  * ── WHY THE HANDLE, RATHER THAN A PRODUCT ID ────────────────────────────────
@@ -294,6 +359,14 @@ export async function readBookingPicker(
     date?: string;
     label?: string;
     slots?: BookingSlotOption[];
+    /**
+     * Where it happens — on BOTH answers; `null` when moving (the place stays) or unset.
+     *
+     * ⚠ **On the times answer too**, because the WhatsApp form decides THERE whether the screen it
+     * draws carries the address picker — a form cannot hide a component, so the address is a second
+     * times screen rather than a field that sometimes shows. The page reads it from the days answer.
+     */
+    place?: BookingPlaceOption | null;
 }> {
     const session = await inAppSurfaceStore.read('bk', handle);
     if (!session) {
@@ -309,7 +382,15 @@ export async function readBookingPicker(
             date: input.date,
             language: session.language,
         });
-        return { moving, copy, timezone: times.timezone, date: times.date, label: times.label, slots: times.slots };
+        return {
+            moving,
+            copy,
+            timezone: times.timezone,
+            date: times.date,
+            label: times.label,
+            slots: times.slots,
+            place: moving ? null : await placeOf(session.productId, session.owner, session.language, session.addressId ?? null),
+        };
     }
 
     const days = await readBookingDays({
@@ -320,6 +401,7 @@ export async function readBookingPicker(
         moving,
         copy,
         timezone: days.timezone,
+        place: moving ? null : await placeOf(session.productId, session.owner, session.language, session.addressId ?? null),
         days: days.days.map((day) => ({
             ...day,
             /** "6 times free" — the row's description, built here because a form cannot count. */
@@ -358,11 +440,21 @@ export interface BookingConfirmed {
      * Every surface must say so rather than saying "booked" — see `bot-booking-copy.ts`.
      */
     awaitingShop: boolean;
+    /**
+     * True when a MOVE became a request the shop must still accept (D-8, a `manual` service):
+     * `when` is then the REQUESTED time and the appointment keeps its current one meanwhile.
+     */
+    requested: boolean;
+    /**
+     * Where it happens (2026-10-27) — decides whether the receipt carries **Show the place**:
+     * the vendor's place or an online session, never the customer's own address.
+     */
+    placeKind?: AppointmentLocationKind | null;
 }
 
 export async function confirmBooking(
     handle: string,
-    input: { slotId: string; notes?: string | null },
+    input: { slotId: string; notes?: string | null; addressId?: string | null },
 ): Promise<BookingConfirmed> {
     const session = await inAppSurfaceStore.consume('bk', handle);
     if (!session) {
@@ -401,6 +493,8 @@ export async function confirmBooking(
              * the platform's own "booking created" kept in the inbox (owner, 2026-09-27).
              */
             { ...(input.notes ? { notes: input.notes } : {}), bookedInChat: session.channel },
+            // The screen's own choice first; the address the chat collected otherwise.
+            input.addressId ?? session.addressId ?? null,
         );
         return receiptFor(created.booking, productId, false, languageOf(session.language));
     } catch (error) {
@@ -429,15 +523,19 @@ async function receiptFor(
 ): Promise<BookingConfirmed> {
     const timezone = await shopTimezone(booking.vendorId);
     const product = await ProductModel.findById(productId).select('title').lean();
+    const requested = moved && booking.rescheduleProposal?.status === 'open';
+    const at = requested ? booking.rescheduleProposal!.startAt : booking.startAt;
 
     return {
         bookingId: String(booking._id),
         productId,
         moved,
         reference: booking.bookingNumber ?? String(booking._id),
-        when: `${dayLabel(booking.startAt, timezone, language)} ${timeLabel(booking.startAt, timezone, language)}`,
+        when: `${dayLabel(at, timezone, language)} ${timeLabel(at, timezone, language)}`,
         service: (product as { title?: string } | null)?.title ?? '',
         awaitingShop: booking.status === 'pending',
+        requested,
+        placeKind: booking.location?.kind ?? null,
     };
 }
 
@@ -463,6 +561,18 @@ export async function readBookingPayment(handle: string): Promise<{
     amount: number;
     amountText: string;
     maskedPayer: string | null;
+    /**
+     * The country the number picker starts on: the stored number's own country, else Cameroon
+     * (`payerPresentation`, the checkout's rule — one customer, one default on both screens).
+     */
+    dialCountry: string;
+    /**
+     * The picker's rows and its label, in the customer's language, home country first — the
+     * checkout page's list (`co.html`), so `bp.html` draws the same control (2026-10-27). The
+     * WhatsApp form builds its own rows from `dialOptions` with its title cap, and ignores these.
+     */
+    dialOptions: DialOption[];
+    countryLabel: string;
     /**
      * NovaSend `CODE_FIRST`: non-null → draw the optional payment-code field, already worded in the
      * customer's language (`hint` has the USSD substituted). Null → no field.
@@ -495,9 +605,20 @@ export async function readBookingPayment(handle: string): Promise<{
         currency: booking.currency,
         amount,
         amountText: `${booking.currency} ${new Intl.NumberFormat('en-US').format(Math.round(amount))}`,
-        maskedPayer: await maskedPayerNumber(customer),
+        ...await payerFields(customer),
+        dialOptions: dialOptions(session.language),
+        countryLabel: inAppCopy(session.language).checkoutCountry,
         paymentCode: paymentCodeField(session.language),
     };
+}
+
+/**
+ * The payer half of the pay screen — masked number and starting country — from ONE read of the
+ * stored number, so the placeholder and the picker cannot describe two different wallets.
+ */
+async function payerFields(customer: ICustomer): Promise<{ maskedPayer: string | null; dialCountry: string }> {
+    const { phoneMasked, dialCountry } = await payerPresentation(customer);
+    return { maskedPayer: phoneMasked, dialCountry };
 }
 
 /** The payment-code field's words for the pay screen, or null when no route needs a code. */
@@ -640,6 +761,53 @@ export async function openPaymentFromList(
 }
 
 /**
+ * **Accept** / **Decline** on a row of the appointments list: answer the vendor's proposed price
+ * (owner, 2026-11-03).
+ *
+ * ⛔ **The page sends a booking id and an answer, and nothing else.** The id is checked against the
+ * LIST'S owner in the query, so another customer's is a 404. Which proposal is being answered is
+ * re-decided here from the booking as it is now, never from the row the page drew, and the answer
+ * runs through the same service as the website and the chat buttons.
+ *
+ * The `bl` handle is READ, not spent: the customer stays on the list, and pays from the same row.
+ */
+export async function answerPriceFromList(
+    handle: string,
+    input: { bookingId?: unknown; answer?: unknown },
+): Promise<{ message: string }> {
+    const session = await inAppSurfaceStore.read('bl', handle);
+    if (!session) {
+        throw createAppError(ERROR_CODES.BOT_SCREEN_SESSION_EXPIRED, 410, undefined, { kind: 'bl' });
+    }
+    const answer = input.answer;
+    if (answer !== 'accept' && answer !== 'decline') {
+        throw createAppError(ERROR_CODES.VALIDATION_ERROR, 400, 'answer must be accept or decline');
+    }
+    const bookingId = typeof input.bookingId === 'string' ? input.bookingId : '';
+    if (!Types.ObjectId.isValid(bookingId)) {
+        throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, undefined, { bookingId });
+    }
+
+    const booking = await Booking.findOne({ _id: bookingId, userId: new Types.ObjectId(session.owner), deletedAt: null });
+    if (!booking) {
+        throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, undefined, { bookingId });
+    }
+    const question = customerPriceQuestion(booking);
+    if (!question) {
+        throw createAppError(ERROR_CODES.BOOKING_PRICE_PROPOSAL_NOT_FOUND, 404, undefined, { bookingId });
+    }
+
+    if (question.kind === 'price') {
+        await bookingService.answerPriceProposal(bookingId, session.owner, answer);
+    } else {
+        await bookingService.answerRescheduleProposal(bookingId, { role: 'customer', id: session.owner }, answer);
+    }
+
+    const words = bookingScreenCopy(session.language);
+    return { message: answer === 'accept' ? words.priceAccepted : words.priceDeclined };
+}
+
+/**
  * The booking this screen may charge for, scoped to the customer whose session it is.
  *
  * ⚠ **Scoped in the QUERY**, so another customer's booking id is a 404 rather than a 403 — a 403
@@ -676,7 +844,7 @@ function amountDueFor(booking: IBooking, purpose: 'primary' | 'balance'): number
     if (purpose !== 'balance') return booking.priceSnapshot;
 
     const settlement = booking.settlement;
-    const outstanding = (settlement?.balanceDue ?? 0) - (settlement?.balancePaid ?? 0);
+    const outstanding = outstandingTopup(booking) + (settlement?.balanceDue ?? 0) - (settlement?.balancePaid ?? 0);
     if (outstanding <= 0) {
         throw createAppError(ERROR_CODES.BOOKING_BALANCE_ALREADY_SETTLED, 409, undefined, {
             bookingId: String(booking._id),

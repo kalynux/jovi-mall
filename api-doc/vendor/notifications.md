@@ -472,6 +472,13 @@ The subscribable events (`preferences.*` key → notification `type`):
 | `orderCancelled` | `order.cancelled` | `order` | An order is cancelled |
 | `bookingCreated` | `booking.created` | `booking` | A new service booking is received |
 | `bookingCancelled` | `booking.cancelled` | `booking` | A service booking is cancelled |
+| `bookingRescheduled` 🆕 | `booking.rescheduled` | `booking` | The CUSTOMER moved a booking to another open time (calendar / capacity services). Both times quoted. |
+| `bookingRescheduled` 🆕 | `booking.reschedule_requested` | `booking` | The customer asks to move a booking of a service you approve by hand. Accept or decline it. |
+| `bookingRescheduled` 🆕 | `booking.reschedule_accepted` | `booking` | The customer accepted the new time you proposed; the booking moved. |
+| `bookingRescheduled` 🆕 | `booking.reschedule_declined` | `booking` | The customer declined your new time; the original stands and they may cancel with a full refund. |
+| *(always on)* 🆕 | `booking.reminder` | `booking` | The customer used their one reminder on this appointment. No preference silences it: it is capped at one per booking. |
+| *(always on)* 🆕 | `booking.price_accepted` | `booking` | The customer accepted your proposed price. The booking is confirmed at it. |
+| *(always on)* 🆕 | `booking.price_declined` | `booking` | The customer declined your proposed price. The current price stands. |
 | `paymentReceivedPartial` | `payment.received.partial` | `payment` | A partial payment is received |
 | `paymentReceivedFull` | `payment.received.full` | `payment` | A full payment is received |
 | `storageAlert` | `storage.alert` | `storage` | Media storage crosses a threshold (80% / 90% / 100%). `aggregateId` is the vendor id. See [Storage](./storage.md). |

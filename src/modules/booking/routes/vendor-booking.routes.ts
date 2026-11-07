@@ -50,6 +50,14 @@ router.get('/:id', VendorBookingController.getBooking);
 router.patch('/:id/status', VendorBookingController.updateBookingStatus);
 
 /**
+ * PATCH /api/vendor/bookings/:id/access
+ * Change this booking's meeting link / instructions / reveal margin — this booking only.
+ * Body: { instructions?: string|null, meetingUrl?: https-url|null, revealMinutesBefore?: 0–1440 }
+ * 409 BOOKING_ACCESS_NOT_EDITABLE on a cancelled, completed or no-show booking.
+ */
+router.patch('/:id/access', VendorBookingController.updateBookingAccess);
+
+/**
  * POST /api/vendor/bookings/:id/complete
  * Mark a service appointment completed and settle its final price (recomputed from the
  * actual elapsed duration, or a flat fixedPrice).
@@ -89,6 +97,34 @@ router.post('/:id/slot-hold', VendorBookingController.holdSlot);
  * Eligibility: pending or confirmed bookings only.
  */
 router.patch('/:id/reschedule', VendorBookingController.rescheduleBooking);
+
+/**
+ * ⚠ Since 2026-10-26 the reschedule above PROPOSES rather than moves (owner decision D-9): the
+ * customer accepts or declines, and with no answer by the original start the original time stands.
+ *
+ * POST   /api/vendor/bookings/:id/reschedule-proposal/accept   — accept a CUSTOMER's request (manual-mode services)
+ * POST   /api/vendor/bookings/:id/reschedule-proposal/decline  — decline it; the original time stands
+ * DELETE /api/vendor/bookings/:id/reschedule-proposal          — withdraw the shop's own proposal
+ */
+router.post('/:id/reschedule-proposal/accept', VendorBookingController.acceptProposal);
+router.post('/:id/reschedule-proposal/decline', VendorBookingController.declineProposal);
+router.delete('/:id/reschedule-proposal', VendorBookingController.withdrawProposal);
+
+/**
+ * POST   /api/vendor/bookings/:id/price-proposal — propose a different price before approving.
+ *        Body: { price }, above what the customer booked at. Manual services only.
+ * DELETE /api/vendor/bookings/:id/price-proposal — withdraw it.
+ * 422 BOOKING_PRICE_BELOW_FLOOR · 409 BOOKING_PRICE_NOT_PROPOSABLE · 404 BOOKING_PRICE_PROPOSAL_NOT_FOUND
+ */
+router.post('/:id/price-proposal', VendorBookingController.proposePrice);
+router.delete('/:id/price-proposal', VendorBookingController.withdrawPrice);
+
+/**
+ * POST /api/vendor/bookings/:id/reminder
+ * Send the customer the shop's one reminder for this appointment. No body: the message is fixed.
+ * 409 BOOKING_REMINDER_ALREADY_SENT · 409 BOOKING_REMINDER_NOT_APPLICABLE
+ */
+router.post('/:id/reminder', VendorBookingController.sendReminder);
 
 /**
  * POST /api/vendor/bookings/:id/cancel

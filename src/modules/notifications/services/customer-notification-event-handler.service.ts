@@ -14,6 +14,7 @@ import { connectionService } from '../../channel-connections';
  * so it closes no cycle. See `noteSentToChat`.
  */
 import { botRecentlySentStore } from '../../bot-surface/services/bot-recently-sent.store';
+import { buttonOnlySentText } from '../../bot-surface/domain/bot-recently-sent';
 import { MailService } from '../../mail/mail.service';
 import { TelegramNotificationService } from '../../telegram/services/telegram-notification.service';
 import { getWhatsAppMessagingService } from '../../whatsapp/services/whatsapp-messaging.service';
@@ -49,7 +50,8 @@ import {
 import type { ShipmentFailureReason } from '../../shipments/shipment.model';
 import { ChannelText } from '../catalog/notification-catalog';
 import { Language, resolveLanguage, templateLanguage, DEFAULT_LANGUAGE } from '../catalog/notification-i18n';
-import { RenderContext, toTelegramNotificationBody, toWhatsAppNotificationBody } from '../catalog/message-renderer';
+import { RenderContext, formatMomentsInContext, toTelegramNotificationBody, toWhatsAppNotificationBody } from '../catalog/message-renderer';
+import { appointmentWhenPhrase } from '../../booking/domain/party-reminder';
 import { DomainEvent } from '../../../core/events/event-bus';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
@@ -75,6 +77,8 @@ const SITUATION_PREFERENCE: Partial<
     'booking.created': 'bookingUpdates',
     'booking.confirmed': 'bookingUpdates',
     'booking.rescheduled': 'bookingUpdates',
+    'booking.reschedule_proposed': 'bookingUpdates',
+    'booking.reschedule_declined': 'bookingUpdates',
     'booking.completed': 'bookingUpdates',
     'booking.reminder': 'bookingReminders',
     'order.created': 'orderUpdates',
@@ -102,6 +106,12 @@ const SITUATION_PREFERENCE: Partial<
     // either — one that can only sensibly hold one value is a switch with a wrong
     // position.
 };
+
+/** The questions a typed word must never answer, because the answer commits the customer's money. */
+export const BUTTON_ONLY_SITUATIONS: ReadonlySet<CustomerNotificationType> = new Set<CustomerNotificationType>([
+    'booking.price_proposed',
+    'booking.reschedule_price_proposed',
+]);
 
 /**
  * Which of the eight ticket statuses a customer is told about (GAP-012).
@@ -143,6 +153,9 @@ interface RefundedPayload {
     grossAmount?: number;
     feeAmount?: number;
     feeRate?: number;
+    /** 2026-10-22: the fee the payment provider kept when the customer paid, and the transfer fee. */
+    paymentFee?: number;
+    transferFee?: number;
     netAmount?: number;
     currency: string;
     /** `card_refund` · `payout` · `external`; absent on a legacy (orchestrator) event. */
@@ -164,6 +177,8 @@ export interface RefundStatusChangedPayload {
     grossAmount?: number;
     feeAmount?: number;
     feeRate?: number;
+    paymentFee?: number;
+    transferFee?: number;
     netAmount?: number;
     currency?: string;
     destinationMasked?: string | null;
@@ -248,6 +263,11 @@ interface DispatchParams {
      * in the chat they booked from (owner decision, 2026-09-27). Unlinked since → preference order.
      */
     alreadyToldInChat?: OriginChatChannel;
+    /**
+     * The vendor's one-time reminder: reaches a customer who muted the automatic ones, because it
+     * is someone else's action, capped at one (BOOKING-PARTY-REMINDER-PLAN D-5).
+     */
+    deliverDespiteMute?: boolean;
 }
 
 /** A chat a notification can answer in — the two the bot runs on. */
@@ -316,6 +336,39 @@ export class CustomerNotificationEventHandler {
                 error
             );
         }
+    }
+
+    /**
+     * A vendor used their one reminder on this appointment. The same `booking.reminder` the sweep
+     * sends: approved template, tested copy, and it already names the vendor.
+     *
+     * ⚠ **Throws, unlike `notify`.** The caller has already spent the reminder and releases it if
+     * the inbox row could not be written, so a failure has to reach it. A failed secondary channel
+     * still does not throw: it is recorded on the notification, as everywhere.
+     */
+    async sendBookingReminderFromVendor(p: {
+        customer: ICustomer;
+        bookingId: string;
+        serviceName?: string | null;
+        vendorName?: string | null;
+        startAt: Date;
+    }): Promise<void> {
+        const lang = resolveLanguage(p.customer);
+        await this.dispatch({
+            situation: 'booking.reminder',
+            customerId: p.customer._id.toString(),
+            aggregateType: 'booking',
+            aggregateId: p.bookingId,
+            idempotencyKey: `customer.booking.reminder.from_vendor:${p.bookingId}`,
+            deliverDespiteMute: true,
+            context: {
+                bookingId: p.bookingId,
+                serviceName: p.serviceName || this.genericService(lang),
+                vendorName: p.vendorName || this.genericVendor(lang),
+                whenPhrase: appointmentWhenPhrase(p.startAt, lang, p.customer.timezone),
+                startAt: p.startAt
+            }
+        });
     }
 
     // ─── Booking events ──────────────────────────────────────────────────────
@@ -438,13 +491,171 @@ export class CustomerNotificationEventHandler {
         });
     }
 
+    /** `booking.reschedule_proposed` — the customer hears only of the VENDOR's proposals (D-9). */
+    async handleBookingRescheduleProposed(event: DomainEvent): Promise<void> {
+        const p = event.payload as {
+            bookingId: string;
+            userId: string;
+            proposedBy: 'vendor' | 'customer';
+            productTitle?: string;
+            vendorName?: string | null;
+            startAt: string | Date;
+            previousStartAt: string | Date;
+            expiresAt: string | Date;
+            currency?: string;
+            price?: number | null;
+            previousPrice?: number | null;
+        };
+        if (p.proposedBy !== 'vendor') return;
+
+        const customer = await this.resolveCustomerByUserId(undefined, p.userId);
+        if (!customer) return;
+        const lang = resolveLanguage(customer);
+        const priced = p.price !== null && p.price !== undefined;
+
+        await this.notify({
+            situation: priced ? 'booking.reschedule_price_proposed' : 'booking.reschedule_proposed',
+            customerId: customer._id.toString(),
+            aggregateType: 'booking',
+            aggregateId: p.bookingId,
+            idempotencyKey: priced
+                ? `customer.booking.reschedule_price_proposed:${p.bookingId}:${new Date(p.startAt).getTime()}:${p.price}`
+                : `customer.booking.reschedule_proposed:${p.bookingId}:${new Date(p.startAt).getTime()}`,
+            context: {
+                bookingId: p.bookingId,
+                serviceName: p.productTitle ?? this.genericService(lang),
+                vendorName: p.vendorName ?? this.genericVendor(lang),
+                startAt: this.formatMoment(p.startAt, customer, lang),
+                previousStartAt: this.formatMoment(p.previousStartAt, customer, lang),
+                expiresAt: this.formatMoment(p.expiresAt, customer, lang),
+                currency: p.currency,
+                amountFormatted: priced ? this.formatAmount(p.price!) : undefined,
+                previousFormatted: priced ? this.formatAmount(p.previousPrice ?? 0) : undefined
+            }
+        });
+    }
+
+    /** `booking.price_proposed` — the vendor asks for a different price. No preference silences it. */
+    async handleBookingPriceProposed(event: DomainEvent): Promise<void> {
+        const p = event.payload as {
+            bookingId: string;
+            userId: string;
+            productTitle?: string | null;
+            vendorName?: string | null;
+            currency: string;
+            startAt: string | Date;
+            amount: number;
+            previousAmount: number;
+            proposedAt: string | Date;
+            expiresAt: string | Date;
+        };
+        const customer = await this.resolveCustomerByUserId(undefined, p.userId);
+        if (!customer) return;
+        const lang = resolveLanguage(customer);
+
+        await this.notify({
+            situation: 'booking.price_proposed',
+            customerId: customer._id.toString(),
+            aggregateType: 'booking',
+            aggregateId: p.bookingId,
+            idempotencyKey: `customer.booking.price_proposed:${p.bookingId}:${new Date(p.proposedAt).getTime()}`,
+            context: {
+                bookingId: p.bookingId,
+                serviceName: p.productTitle ?? this.genericService(lang),
+                vendorName: p.vendorName ?? this.genericVendor(lang),
+                currency: p.currency,
+                amountFormatted: this.formatAmount(p.amount),
+                previousFormatted: this.formatAmount(p.previousAmount),
+                startAt: this.formatMoment(p.startAt, customer, lang),
+                expiresAt: this.formatMoment(p.expiresAt, customer, lang)
+            }
+        });
+    }
+
+    /**
+     * `booking.price_topup_due` — the agreed price is set, and this is what is owed for it. `purpose`
+     * picks which of the two Pay buttons is drawn, because the two charges open differently: the first
+     * payment of an unpaid booking, or the difference on one already paid.
+     */
+    async handleBookingPriceTopupDue(event: DomainEvent): Promise<void> {
+        const p = event.payload as {
+            bookingId: string;
+            userId: string;
+            productTitle?: string | null;
+            currency: string;
+            amount: number;
+            price: number;
+            dueAt: string | Date;
+            purpose: 'primary' | 'balance';
+        };
+        const customer = await this.resolveCustomerByUserId(undefined, p.userId);
+        if (!customer) return;
+        const lang = resolveLanguage(customer);
+
+        await this.notify({
+            situation: 'booking.price_topup_due',
+            customerId: customer._id.toString(),
+            aggregateType: 'booking',
+            aggregateId: p.bookingId,
+            idempotencyKey: `customer.booking.price_topup_due:${p.bookingId}:${p.amount}:${new Date(p.dueAt).getTime()}`,
+            context: {
+                bookingId: p.bookingId,
+                serviceName: p.productTitle ?? this.genericService(lang),
+                currency: p.currency,
+                amountFormatted: this.formatAmount(p.amount),
+                priceFormatted: this.formatAmount(p.price),
+                dueAt: this.formatMoment(p.dueAt, customer, lang),
+                payPriceBookingId: p.purpose === 'primary' ? p.bookingId : '',
+                payBalanceBookingId: p.purpose === 'balance' ? p.bookingId : ''
+            }
+        });
+    }
+
+    /**
+     * `booking.reschedule_answered` — the customer hears the vendor's answer to THEIR request
+     * (D-8). An acceptance already reaches them as `booking.rescheduled` (the new time, both
+     * times quoted), so only a decline is sent from here.
+     */
+    async handleBookingRescheduleAnswered(event: DomainEvent): Promise<void> {
+        const p = event.payload as {
+            bookingId: string;
+            userId: string;
+            proposedBy: 'vendor' | 'customer';
+            answer: 'accepted' | 'declined';
+            productTitle?: string;
+            vendorName?: string | null;
+            proposedStartAt: string | Date;
+            startAt: string | Date;
+        };
+        if (p.proposedBy !== 'customer' || p.answer !== 'declined') return;
+
+        const customer = await this.resolveCustomerByUserId(undefined, p.userId);
+        if (!customer) return;
+        const lang = resolveLanguage(customer);
+
+        await this.notify({
+            situation: 'booking.reschedule_declined',
+            customerId: customer._id.toString(),
+            aggregateType: 'booking',
+            aggregateId: p.bookingId,
+            idempotencyKey: `customer.booking.reschedule_declined:${p.bookingId}:${new Date(p.proposedStartAt).getTime()}`,
+            context: {
+                bookingId: p.bookingId,
+                serviceName: p.productTitle ?? this.genericService(lang),
+                vendorName: p.vendorName ?? this.genericVendor(lang),
+                proposedStartAt: this.formatMoment(p.proposedStartAt, customer, lang),
+                startAt: this.formatMoment(p.startAt, customer, lang)
+            }
+        });
+    }
+
     async handleBookingCancelled(event: DomainEvent): Promise<void> {
         const p = event.payload as {
             bookingId: string;
             userId: string;
             productTitle?: string;
             startAt: string | Date;
-            cancelledByRole?: 'customer' | 'vendor' | 'system';
+            cancelledByRole?: 'customer' | 'vendor' | 'system' | 'admin';
             paymentStatus?: string;
             priceSnapshot?: number;
             currency?: string;
@@ -619,6 +830,7 @@ export class CustomerNotificationEventHandler {
             bookingId?: string;
             userId?: string;
             purpose?: string;
+            paymentId?: string;
             amount?: number;
             currency?: string;
             /** The chat the payment was asked for from, if any (`IPaymentTransaction.originChat`). */
@@ -652,8 +864,11 @@ export class CustomerNotificationEventHandler {
             customerId: customer._id.toString(),
             aggregateType: 'booking',
             aggregateId: p.bookingId,
+            // ⚠ A balance is keyed by its PAYMENT: since price proposals one booking can take several
+            // (a difference, another after a reschedule, a balance at completion), and a key per
+            // booking swallowed every receipt after the first.
             idempotencyKey: isBalance
-                ? `customer.booking.balance.received:${p.bookingId}`
+                ? `customer.booking.balance.received:${p.bookingId}:${p.paymentId ?? ''}`
                 : `customer.booking.payment.received:${p.bookingId}`,
             /**
              * ⭐ **In the chat the customer paid in** — the booking twin of the order fix of
@@ -798,6 +1013,8 @@ export class CustomerNotificationEventHandler {
             /** Units (sum of quantities). `itemCount` is LINES — two packs of one product are 1. */
             unitCount?: number;
             paymentStatus?: string;
+            /** Part online, part in cash (2026-11-01): the order waits for the online part. */
+            partialPayment?: boolean;
         };
 
         const customer = await this.loadCustomer(p.customerId);
@@ -820,7 +1037,15 @@ export class CustomerNotificationEventHandler {
                 currency: p.currency,
                 amountFormatted: this.formatAmount(p.totalAmount),
                 paymentLine:
-                    p.paymentStatus === 'paid'
+                    p.partialPayment === true
+                        ? this.line(lang, {
+                            en: 'Pay your part online to confirm it. The rest is paid in cash at delivery.',
+                            fr: 'Payez votre part en ligne pour la confirmer. Le reste se paie en espèces à la livraison.',
+                            pt: 'Pague a sua parte online para a confirmar. O resto paga-se em dinheiro na entrega.',
+                            es: 'Paga tu parte en línea para confirmarlo. El resto se paga en efectivo en la entrega.',
+                            ar: 'ادفع حصتك عبر الإنترنت لتأكيده. يُدفع الباقي نقدًا عند التسليم.'
+                        })
+                        : p.paymentStatus === 'paid'
                         ? this.line(lang, {
                             en: 'Payment received.',
                             fr: 'Paiement reçu.',
@@ -873,6 +1098,40 @@ export class CustomerNotificationEventHandler {
                 vendorName: p.vendorName ?? vendorName ?? this.genericVendor(lang),
                 currency: p.currency,
                 amountFormatted: this.formatAmount(p.amount)
+            }
+        });
+    }
+
+    /** A partial order's online part arrived. Answered in the chat the checkout came from, if any. */
+    async handleOrderPrepaymentReceived(event: DomainEvent): Promise<void> {
+        const p = event.payload as {
+            orderId: string;
+            customerId?: string;
+            orderNumber?: string;
+            amountPaidOnline: number;
+            balanceDue: number;
+            currency: string;
+            originChannel?: string;
+        };
+
+        const { customer, orderNumber, vendorName } = await this.customerFromOrder(p.orderId, p.customerId);
+        if (!customer) return;
+        const lang = resolveLanguage(customer);
+
+        await this.notify({
+            situation: 'order.prepayment.received',
+            customerId: customer._id.toString(),
+            aggregateType: 'order',
+            aggregateId: p.orderId,
+            idempotencyKey: `customer.order.prepayment.received:${p.orderId}`,
+            originChat: originChatOf(p.originChannel),
+            context: {
+                orderId: p.orderId,
+                orderNumber: p.orderNumber ?? orderNumber ?? p.orderId,
+                vendorName: vendorName ?? this.genericVendor(lang),
+                currency: p.currency,
+                paidFormatted: this.formatAmount(p.amountPaidOnline),
+                balanceFormatted: this.formatAmount(p.balanceDue)
             }
         });
     }
@@ -1124,7 +1383,16 @@ export class CustomerNotificationEventHandler {
 
     /** The money half of every refund message: net, destination and the R-3 fee line. */
     private refundMoneyContext(
-        p: { amount?: number; netAmount?: number; grossAmount?: number; feeAmount?: number; feeRate?: number; destinationMasked?: string | null },
+        p: {
+            amount?: number;
+            netAmount?: number;
+            grossAmount?: number;
+            feeAmount?: number;
+            feeRate?: number;
+            paymentFee?: number;
+            transferFee?: number;
+            destinationMasked?: string | null;
+        },
         currency: string,
         lang: Language
     ): RenderContext {
@@ -1135,7 +1403,15 @@ export class CustomerNotificationEventHandler {
             netFormatted: this.formatAmount(net),
             destination: refundDestinationLabel(p.destinationMasked ?? null, lang),
             amountLine: refundAmountLine(
-                { netAmount: net, grossAmount: gross, feeAmount: fee, feePercent: p.feeRate ?? feePercentOf(gross, fee), currency },
+                {
+                    netAmount: net,
+                    grossAmount: gross,
+                    feeAmount: fee,
+                    feePercent: p.feeRate ?? feePercentOf(gross, fee),
+                    currency,
+                    paymentFee: p.paymentFee,
+                    transferFee: p.transferFee,
+                },
                 lang
             )
         };
@@ -1594,6 +1870,17 @@ export class CustomerNotificationEventHandler {
                 ar: 'النظام (لم يكتمل الدفع في الوقت المحدد)'
             });
         }
+        // An administrator settling a case (ADMIN-BOOKINGS-PLAN § 4). Saying "the provider" here
+        // would blame the vendor for a decision the platform made.
+        if (role === 'admin') {
+            return this.line(lang, {
+                en: 'Wi-Mall support',
+                fr: 'le support Wi-Mall',
+                pt: 'o apoio Wi-Mall',
+                es: 'el soporte de Wi-Mall',
+                ar: 'دعم Wi-Mall'
+            });
+        }
         return this.line(lang, {
             en: 'the provider',
             fr: 'le prestataire',
@@ -1656,7 +1943,7 @@ export class CustomerNotificationEventHandler {
         // A muted group suppresses the whole notification, in-app record included.
         // Money and cancellations carry no key and therefore cannot be muted.
         const prefKey = SITUATION_PREFERENCE[params.situation];
-        if (prefKey && prefs.preferences[prefKey] === false) return;
+        if (prefKey && !params.deliverDespiteMute && prefs.preferences[prefKey] === false) return;
 
         const deliveredVia = await this.determineDeliveryChannels(
             customer,
@@ -1664,8 +1951,9 @@ export class CustomerNotificationEventHandler {
             params.originChat,
             params.alreadyToldInChat,
         );
-        const inApp = renderCustomerInApp(params.situation, lang, params.context);
-        const action = this.resolveAction(params.situation, lang, params.context);
+        const context = formatMomentsInContext(params.context, customer.timezone || 'Africa/Douala');
+        const inApp = renderCustomerInApp(params.situation, lang, context);
+        const action = this.resolveAction(params.situation, lang, context);
 
         const notification = await this.notificationRepo.createIfNotExists({
             customerId: params.customerId,
@@ -1686,7 +1974,7 @@ export class CustomerNotificationEventHandler {
             params.situation,
             lang,
             customer,
-            params.context
+            context
         );
     }
 
@@ -1832,7 +2120,7 @@ export class CustomerNotificationEventHandler {
             const delivered = await this.attemptDelivery(notification, 'telegram', () =>
                 this.sendTelegram(customer, content, button, quickReplies)
             );
-            if (delivered) this.noteSentToChat(customer, 'telegram', content, button, quickReplies);
+            if (delivered) this.noteSentToChat(customer, 'telegram', content, button, quickReplies, situation);
         }
 
         if (channels.includes('email')) {
@@ -1857,7 +2145,7 @@ export class CustomerNotificationEventHandler {
                  * byte-exact transcript of it.
                  */
                 const content = renderCustomerChannelText(situation, 'whatsapp', lang, context);
-                this.noteSentToChat(customer, 'whatsapp', content, button, quickReplies);
+                this.noteSentToChat(customer, 'whatsapp', content, button, quickReplies, situation);
             }
         }
     }
@@ -1887,7 +2175,8 @@ export class CustomerNotificationEventHandler {
         channel: 'whatsapp' | 'telegram',
         content: ChannelText,
         button: { label: string; url: string } | null,
-        quickReplies: Array<{ token: string; label: string }>
+        quickReplies: Array<{ token: string; label: string }>,
+        situation: CustomerNotificationType
     ): void {
         const labels = [
             ...(button ? [button.label] : []),
@@ -1898,8 +2187,11 @@ export class CustomerNotificationEventHandler {
             .noteSent(
                 { userId: customer.user_id.toString(), channel },
                 // Subject and body, exactly as both channels compose them — the record is one
-                // line, so the two are joined rather than kept apart.
-                `${content.subject}: ${content.body}`,
+                // line, so the two are joined rather than kept apart. A question about money only a
+                // button can answer tells the model that instead of its body (owner, 2026-11-03).
+                BUTTON_ONLY_SITUATIONS.has(situation)
+                    ? buttonOnlySentText(content.subject)
+                    : `${content.subject}: ${content.body}`,
                 labels
             )
             .catch((error: unknown) => {

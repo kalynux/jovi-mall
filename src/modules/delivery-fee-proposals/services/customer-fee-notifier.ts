@@ -1,4 +1,5 @@
 import { Language } from '../../notifications/catalog/notification-i18n';
+import { strong } from '../../../core/richtext';
 
 /**
  * Tells the CUSTOMER about a delivery-fee change on their order (ADR-A11 § Fee changes after
@@ -88,6 +89,18 @@ const LINES = {
     es: 'Motivo indicado: {{reason}}.',
     ar: 'السبب المذكور: {{reason}}.',
   },
+  /**
+   * Only for an increase that somehow carries no reason (every create and edit path requires one).
+   * It exists because the reason is now a TEMPLATE parameter (`…_approval_needed_v2`), and Meta
+   * refuses a send whose parameter is empty — an absent reason must not cost the notification.
+   */
+  no_reason: {
+    en: 'No reason was given.',
+    fr: "Aucun motif n'a été indiqué.",
+    pt: 'Nenhum motivo foi indicado.',
+    es: 'No se indicó ningún motivo.',
+    ar: 'لم يُذكر أي سبب.',
+  },
 } as const;
 
 export type CustomerFeeLine = keyof typeof LINES;
@@ -151,7 +164,11 @@ export const customerFeeNotifier = {
       context: (lang) => ({
         feeBeforeFormatted: fmt(p.feeBefore),
         proposedFeeFormatted: fmt(p.proposedFee),
-        reasonLine: p.reason ? customerFeeLine('reason', lang, { reason: p.reason }) : '',
+        // ⭐ Bold (owner, 2026-10-25) — the reason is what the customer decides on. The mark is
+        // resolved per channel by the notification renderers (`core/richtext` `strong`).
+        reasonLine: strong(p.reason?.trim()
+          ? customerFeeLine('reason', lang, { reason: p.reason.trim() })
+          : customerFeeLine('no_reason', lang, {})),
       }),
     });
   },

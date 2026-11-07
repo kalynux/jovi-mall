@@ -95,6 +95,7 @@ export interface VendorNotificationPreferencesDTO {
             agencyStorageUpdates: boolean;
             codLimitUpdates: boolean;
             deliveryFeeProposals: boolean;
+            bookingRescheduled: boolean;
         };
     };
 }

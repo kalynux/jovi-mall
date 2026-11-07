@@ -134,8 +134,9 @@ export function bookingSlotFlow(kind: InAppSurfaceKind): FlowDefinition {
         version: '6.0',
         data_api_version: '3.0',
         routing_model: {
-            DAY: ['TIMES', NOTICE_SCREEN],
+            DAY: ['TIMES', 'TIMES_AT', NOTICE_SCREEN],
             TIMES: [NOTICE_SCREEN],
+            TIMES_AT: [NOTICE_SCREEN],
             [NOTICE_SCREEN]: [],
         },
         screens: [
@@ -234,7 +235,98 @@ export function bookingSlotFlow(kind: InAppSurfaceKind): FlowDefinition {
                             label: '${data.confirmLabel}',
                             'on-click-action': {
                                 name: 'data_exchange',
-                                payload: { slotId: '${form.slot}' },
+                                /**
+                                 * ⛔ **`slot`, the key the endpoint reads** (`confirmBookingTime`). This
+                                 * said `slotId` until 2026-10-26 — the draft was never published, so no
+                                 * customer met it, but every confirm would have answered "failed".
+                                 */
+                                payload: { slot: '${form.slot}' },
+                            },
+                        },
+                    ],
+                },
+            },
+            /**
+             * `TIMES_AT` — the same times, plus WHERE, for a service the vendor travels to
+             * (`place.kind === 'customer_address'`, 2026-10-26).
+             *
+             * ⚠ **A second screen, not a field on `TIMES`**, because Meta documents no way to hide a
+             * component: an address picker that is only sometimes needed has to be a screen of its
+             * own, and the endpoint chooses which one to answer with. Same reason the product form
+             * has a no-image twin.
+             *
+             * ⚠ **Required, and nothing is pre-selected.** The vendor goes to whatever address is
+             * chosen; a default the customer forgot about is not undone by a later edit. The
+             * booking core refuses a missing one anyway (`BOOKING_ADDRESS_REQUIRED`), and a customer
+             * with NO saved address never reaches this screen — the day screen answers with the
+             * notice saying where to add one.
+             *
+             * ⛔ **The address id is the read's own handle**, re-checked against the customer's saved
+             * addresses by the core. A forged id is a 404, never somebody else's house.
+             */
+            {
+                id: 'TIMES_AT',
+                title: FLOW_SCREEN_TITLE,
+                data: {
+                    dayLine: { type: 'string', __example__: 'Tuesday 22 September' },
+                    chooseLabel: { type: 'string', __example__: 'Pick a time' },
+                    times: {
+                        type: 'array',
+                        items: {
+                            type: 'object',
+                            properties: {
+                                id: { type: 'string' },
+                                title: { type: 'string' },
+                                description: { type: 'string' },
+                            },
+                        },
+                        __example__: [
+                            { id: 'slot_opaque_1', title: '14:00 – 15:00', description: '2 spots left' },
+                            { id: 'slot_opaque_2', title: '15:00 – 16:00' },
+                        ],
+                    },
+                    /** "Where should they come?" — the read's own words. */
+                    placeLabel: { type: 'string', __example__: 'Where should they come?' },
+                    addresses: {
+                        type: 'array',
+                        items: {
+                            type: 'object',
+                            properties: {
+                                id: { type: 'string' },
+                                title: { type: 'string' },
+                                description: { type: 'string' },
+                            },
+                        },
+                        __example__: [
+                            { id: '66f1a2b3c4d5e6f708192a60', title: 'Home', description: '12 Rue de la Joie, Douala' },
+                        ],
+                    },
+                    confirmLabel: { type: 'string', __example__: 'Confirm' },
+                },
+                layout: {
+                    type: 'SingleColumnLayout',
+                    children: [
+                        { type: 'TextCaption', text: '${data.dayLine}' },
+                        {
+                            type: 'Dropdown',
+                            name: 'slot',
+                            label: '${data.chooseLabel}',
+                            required: true,
+                            'data-source': '${data.times}',
+                        },
+                        {
+                            type: 'Dropdown',
+                            name: 'address',
+                            label: '${data.placeLabel}',
+                            required: true,
+                            'data-source': '${data.addresses}',
+                        },
+                        {
+                            type: 'Footer',
+                            label: '${data.confirmLabel}',
+                            'on-click-action': {
+                                name: 'data_exchange',
+                                payload: { slot: '${form.slot}', address: '${form.address}' },
                             },
                         },
                     ],
@@ -252,8 +344,11 @@ export function bookingSlotFlow(kind: InAppSurfaceKind): FlowDefinition {
  * is pressed; a held total is a total that can disagree with the booking by the time somebody
  * pays. Nothing on this screen is computed here.
  *
- * ⚠ **One input, and it is a phone number**, with the masked number on file as its helper text and
- * empty meaning "use that one" — the same disclosure rule the checkout screen follows.
+ * ⚠ **One number, and the country it belongs to** — the checkout's pair, field for field: a
+ * country picker starting on Cameroon (or on the stored number's own country) and an EMPTY number
+ * field whose helper text is the masked number on file, empty meaning "use that one". Before
+ * 2026-10-26 this asked customers to type the `+237` themselves, which most did not — exactly the
+ * defect the checkout fixed on 2026-10-01. Composed server-side (`composeTypedNumber`), once.
  *
  * ⚠ **The result does not come back here.** No form can hold a session open while a mobile-money
  * push is approved on a handset, so this closes with "approve it on your phone, I'll tell you in
@@ -288,8 +383,23 @@ export function bookingPayFlow(kind: InAppSurfaceKind): FlowDefinition {
                     phoneLabel: { type: 'string', __example__: 'Mobile money number' },
                     phoneHint: {
                         type: 'string',
-                        __example__: 'Leave this empty to use the number on your account. If you type one, include the country code, for example +237.',
+                        __example__: 'Leave this empty to use the number on your account, or choose your country and type your number.',
                     },
+                    dialLabel: { type: 'string', __example__: 'Country' },
+                    /** ISO code as the id, "+237 Cameroon" as the title, home country first — the checkout's rows. */
+                    dialOptions: {
+                        type: 'array',
+                        items: {
+                            type: 'object',
+                            properties: { id: { type: 'string' }, title: { type: 'string' } },
+                        },
+                        __example__: [
+                            { id: 'CM', title: '+237 Cameroon' },
+                            { id: 'NG', title: '+234 Nigeria' },
+                        ],
+                    },
+                    /** The stored number's own country, else Cameroon. */
+                    dialDefault: { type: 'string', __example__: 'CM' },
                     /** ⚠ Masked upstream, shown verbatim, never re-masked. Empty when none. */
                     phoneMasked: { type: 'string', __example__: '+2376••••4417' },
                     payLabel: { type: 'string', __example__: 'Pay now' },
@@ -300,6 +410,15 @@ export function bookingPayFlow(kind: InAppSurfaceKind): FlowDefinition {
                         { type: 'TextHeading', text: '${data.totalText}' },
                         { type: 'TextBody', text: '${data.bookingLine}' },
                         { type: 'TextCaption', text: '${data.phoneHint}' },
+                        {
+                            /** ⚠ Read ONLY to compose a TYPED number; empty phone still means "my account's". */
+                            type: 'Dropdown',
+                            name: 'dial',
+                            label: '${data.dialLabel}',
+                            'data-source': '${data.dialOptions}',
+                            'init-value': '${data.dialDefault}',
+                            required: false,
+                        },
                         {
                             type: 'TextInput',
                             name: 'phone',
@@ -313,7 +432,7 @@ export function bookingPayFlow(kind: InAppSurfaceKind): FlowDefinition {
                             label: '${data.payLabel}',
                             'on-click-action': {
                                 name: 'data_exchange',
-                                payload: { phone: '${form.phone}' },
+                                payload: { phone: '${form.phone}', dial: '${form.dial}' },
                             },
                         },
                     ],
@@ -334,6 +453,9 @@ export function bookingPayFlow(kind: InAppSurfaceKind): FlowDefinition {
 export const BOOKING_LIST_SCREEN = 'BOOKINGS';
 export const BOOKING_DAY_SCREEN = 'DAY';
 export const BOOKING_TIMES_SCREEN = 'TIMES';
+/** The times screen WITH the address picker — a service the vendor travels to. */
+export const BOOKING_TIMES_AT_SCREEN = 'TIMES_AT';
+export const BOOKING_PAY_SCREEN = 'PAY';
 
 export const BOOKING_LIST_FLOW: FlowDefinition = bookingListFlow('bl');
 export const BOOKING_SLOT_FLOW: FlowDefinition = bookingSlotFlow('bk');

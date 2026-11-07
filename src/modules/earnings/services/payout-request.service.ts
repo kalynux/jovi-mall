@@ -34,6 +34,9 @@ import { DeliveryAgentModel } from '../../agents/models/agent.model';
 import { ticketService } from '../../tickets/services/ticket.service';
 import { TicketNoteService } from '../../tickets/services/ticket-note.service';
 import { ActorRole, EntityType, TicketImportance, TicketStatus, TicketType } from '../../tickets/types/ticket.types';
+import { ReferralPartnerModel } from '../../referrals/models/referral-partner.model';
+import { resolveReferralPayoutDestination } from '../../referrals/services/referral-payout-destination';
+import { SYSTEM_ACTOR_ID } from '../../../core/types/system-actor';
 
 /**
  * PayoutRequestService - orchestrates a vendor/agency's request to withdraw
@@ -81,7 +84,12 @@ export class PayoutRequestService {
     ownerId: string,
     requestedByUserId: string,
     requestedByRole: ActorRole,
-    origin: PayoutRequestOrigin = 'manual'
+    origin: PayoutRequestOrigin = 'manual',
+    /**
+     * The referral program's differences (REFERRAL-PROGRAM-PLAN § 5.7): its own minimum, and a line
+     * for the reviewer that replaces the KYC one, since a partner has no verification of their own.
+     */
+    options: { minAmount?: number; ticketNote?: string } = {}
   ): Promise<IPayoutRequest> {
     const held = await this.payoutRepo.findHeldForOwner(ownerType, ownerId);
     if (held) {
@@ -122,7 +130,8 @@ export class PayoutRequestService {
         const { amount, currency } = await this.accounts.moveAvailableToRequestedInSession(
           ownerType,
           ownerId,
-          session
+          session,
+          options.minAmount
         );
         return this.payoutRepo.create(
           {
@@ -152,7 +161,10 @@ export class PayoutRequestService {
 
     try {
       const ownerLabel =
-        ownerType === 'vendor' ? 'Vendor' : ownerType === 'agent' ? 'Agent' : 'Agency';
+        ownerType === 'vendor' ? 'Vendor'
+          : ownerType === 'agent' ? 'Agent'
+            : ownerType === 'referral_partner' ? 'Referral partner'
+              : 'Agency';
       /**
        * ⚠ **The reviewer is told, in the ticket body, whether anybody has vetted this owner.**
        *
@@ -165,7 +177,9 @@ export class PayoutRequestService {
        * It is stated, never enforced: whether to pay an unvetted owner is the reviewer's
        * call. The line exists so the call is an informed one.
        */
-      const verificationLine = verification.verified
+      const verificationLine = options.ticketNote
+        ? `\n\n${options.ticketNote}`
+        : verification.verified
         ? '\n\nKYC: verified.'
         : `\n\n⚠ KYC: NOT verified (${verification.verdict}). Check this owner's history before releasing funds.`;
 
@@ -185,11 +199,19 @@ export class PayoutRequestService {
         importance: TicketImportance.HIGH,
         entityType: EntityType.OTHER,
         entityId: ownerId,
-        createdByUserId: requestedByUserId,
+        // A partner may hold only a customer role, which has no business opening a payout ticket,
+        // so theirs is signed by the system identity. `requested_by_user_id` stays the real person.
+        createdByUserId: ownerType === 'referral_partner' ? SYSTEM_ACTOR_ID : requestedByUserId,
         createdByRole: requestedByRole,
         createdByEntityId: ownerId,
       });
-      await ticketService.assignTicket(ticket.id, ActorRole.ADMIN, null, requestedByUserId, requestedByRole);
+      await ticketService.assignTicket(
+        ticket.id,
+        ActorRole.ADMIN,
+        null,
+        ownerType === 'referral_partner' ? SYSTEM_ACTOR_ID : requestedByUserId,
+        requestedByRole
+      );
       await this.payoutRepo.setTicketId(payoutRequest.id, ticket.id);
       payoutRequest.ticket_id = ticket._id as any;
 
@@ -901,6 +923,10 @@ export class PayoutRequestService {
       const agent = await this.agentRepo.findById(ownerId);
       return agent?.payout_details?.[0] ?? null;
     }
+    if (ownerType === 'referral_partner') {
+      const partner = await ReferralPartnerModel.findById(ownerId).lean();
+      return partner ? (await resolveReferralPayoutDestination(partner)).method : null;
+    }
     return null;
   }
 
@@ -1001,7 +1027,15 @@ export class PayoutRequestService {
     const vendorIds = requests.filter((r) => r.owner_type === 'vendor').map((r) => r.owner_id);
     const agencyIds = requests.filter((r) => r.owner_type === 'agency').map((r) => r.owner_id);
     const agentIds = requests.filter((r) => r.owner_type === 'agent').map((r) => r.owner_id);
+    const partnerIds = requests.filter((r) => r.owner_type === 'referral_partner').map((r) => r.owner_id);
 
+    if (partnerIds.length > 0) {
+      // A partner is a person with a code; the code is what an administrator can look up.
+      const partners = await ReferralPartnerModel.find({ _id: { $in: partnerIds } }).select('code').lean();
+      for (const p of partners) {
+        result.set(`referral_partner:${p._id.toString()}`, p.code ?? '');
+      }
+    }
     if (vendorIds.length > 0) {
       // Business name lives on the Store; prefer the vendor's personal display name.
       const [vendors, stores] = await Promise.all([

@@ -89,6 +89,13 @@ export class RefundCashRecheckWorker implements ObservableWorker {
         if (settled > 0) {
           console.log(`[RefundCashRecheckWorker] Settled ${settled} completed refund(s) whose earnings recovery or billing reversal was missing`);
         }
+        // Step 3: partial orders' returned parcels with no refund yet. The return path opens them
+        // best-effort, and an order may have only one open, so a second parcel waits for this.
+        const { partialReturnService } = await import('../services/partial-return.service');
+        const opened = await partialReturnService.sweep(RefundCashRecheckWorker.BATCH);
+        if (opened > 0) {
+          console.log(`[RefundCashRecheckWorker] Opened ${opened} refund(s) for returned parcels of partly paid orders`);
+        }
         return released;
       } finally {
         this.sweeping = false;

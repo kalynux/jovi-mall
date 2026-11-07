@@ -10,6 +10,7 @@ import {
   PaymentSettingsRecord,
   RoutingFacts,
   REFUND_FEE_PERCENT_DEFAULT,
+  PAYIN_FEE_PERCENT_DEFAULT,
   isValidRefundFeePercent,
   SettingsIssue,
   validateSettingsChange,
@@ -50,6 +51,7 @@ export type PaymentSettingsDocument = Pick<
   | 'stripe_enabled'
   | 'providers'
   | 'refund_fee_percent'
+  | 'payin_fee_percent'
   | 'version'
   | 'updated_at'
   | 'updated_by_id'
@@ -122,6 +124,9 @@ function fromDocument(doc: PaymentSettingsDocument | null): PaymentSettingsRecor
     refund_fee_percent: isValidRefundFeePercent(doc.refund_fee_percent)
       ? doc.refund_fee_percent
       : REFUND_FEE_PERCENT_DEFAULT,
+    payin_fee_percent: isValidRefundFeePercent(doc.payin_fee_percent)
+      ? doc.payin_fee_percent
+      : PAYIN_FEE_PERCENT_DEFAULT,
     version: typeof doc.version === 'number' ? doc.version : 0,
     updated_at: doc.updated_at ?? null,
     updated_by_id: doc.updated_by_id ?? null,
@@ -184,6 +189,8 @@ export interface PaymentSettingsView {
   providers: Record<PaymentProvider, { enabled: boolean }>;
   /** REFUND-FLOW-PLAN § 11.6 — percent off a transfer or external refund (cards: never). */
   refundFeePercent: number;
+  /** 2026-10-22: the pay-in fee every aggregator is assumed to keep; a refund does not give it back. */
+  payinFeePercent: number;
   version: number;
   updatedAt: Date | null;
   updatedBy: { id: string; name: string | null } | null;
@@ -199,6 +206,7 @@ export function toPaymentSettingsView(record: PaymentSettingsRecord): PaymentSet
     stripeEnabled: record.stripe_enabled,
     providers,
     refundFeePercent: record.refund_fee_percent,
+    payinFeePercent: record.payin_fee_percent,
     version: record.version,
     updatedAt: record.updated_at,
     updatedBy: record.updated_by_id ? { id: record.updated_by_id, name: record.updated_by_name } : null,
@@ -216,6 +224,8 @@ export interface PaymentSettingsPatch {
   providers?: Readonly<Record<string, { enabled: boolean } | undefined>>;
   /** 0–20 (REFUND-FLOW-PLAN § 11.6). */
   refundFeePercent?: number;
+  /** 0–20 (2026-10-22, refund-fees.ts). */
+  payinFeePercent?: number;
 }
 
 export interface PaymentSettingsActor {
@@ -229,7 +239,8 @@ export type PaymentSettingsChangeKey =
   | 'payoutAggregator'
   | 'stripeEnabled'
   | 'providers'
-  | 'refundFeePercent';
+  | 'refundFeePercent'
+  | 'payinFeePercent';
 
 export interface SetPaymentSettingsResult {
   /** As stored before the compare-and-set; the defaults when there was no document. */
@@ -248,6 +259,7 @@ function changedKeys(before: PaymentSettingsRecord, after: PaymentSettingsRecord
   if (before.stripe_enabled !== after.stripe_enabled) out.push('stripeEnabled');
   if (PAYMENT_PROVIDERS.some((p) => before.providers[p].enabled !== after.providers[p].enabled)) out.push('providers');
   if (before.refund_fee_percent !== after.refund_fee_percent) out.push('refundFeePercent');
+  if (before.payin_fee_percent !== after.payin_fee_percent) out.push('payinFeePercent');
   return out;
 }
 
@@ -328,10 +340,20 @@ export async function setPaymentSettings(
       { errors: [{ code: 'REFUND_FEE_PERCENT_INVALID', message: 'The refund fee must be from 0 to 20 percent' }] },
     );
   }
+  const payinFeePercent = patch.payinFeePercent ?? before.payin_fee_percent;
+  if (!isValidRefundFeePercent(payinFeePercent)) {
+    throw createAppError(
+      ERROR_CODES.PAYMENT_SETTINGS_INVALID,
+      422,
+      'These payment settings cannot be applied: the pay-in fee must be a percentage from 0 to 20',
+      { errors: [{ code: 'PAYIN_FEE_PERCENT_INVALID', message: 'The pay-in fee must be from 0 to 20 percent' }] },
+    );
+  }
 
   const fields: SettingsFields = {
     ...verdict.settings,
     refund_fee_percent: refundFeePercent,
+    payin_fee_percent: payinFeePercent,
     updated_at: new Date(),
     updated_by_id: actor.id,
     updated_by_name: actor.name,

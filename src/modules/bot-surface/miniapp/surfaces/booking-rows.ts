@@ -13,12 +13,15 @@
  * moves when the shop settles the appointment.
  */
 import type { IBooking } from '../../../booking/models/booking.model';
+import { hasLivePriceProposal, outstandingTopup } from '../../../booking/domain/price-proposal';
 import { AppError, createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
 import {
     BOOKING_TEXT_CAPS,
     BookingRowStatus,
+    bookingPriceQuestionText,
     bookingRowStatusLabel,
+    bookingScreenCopy,
     fitBookingRowTitle,
 } from '../../domain/bot-booking-copy';
 
@@ -28,11 +31,15 @@ export type BookingPayPurpose = 'primary' | 'balance';
 export type BookingRowSource = Pick<
     IBooking,
     'status' | 'paymentStatus' | 'requiresPayment' | 'settlement' | 'startAt'
->;
+> & Partial<Pick<IBooking, 'priceTopup' | 'priceProposal'>>;
 
-/** What is still owed above the quote once the shop settled the appointment. Never negative. */
+/**
+ * What is still owed above the first payment: a difference on the agreed price, or what the shop
+ * settled above it. Never negative, and a difference owed before completion counts as much as a
+ * balance owed after it, since both are paid through the same second charge.
+ */
 function outstandingBalance(booking: BookingRowSource): number {
-    return (booking.settlement?.balanceDue ?? 0) - (booking.settlement?.balancePaid ?? 0);
+    return outstandingTopup(booking) + (booking.settlement?.balanceDue ?? 0) - (booking.settlement?.balancePaid ?? 0);
 }
 
 /**
@@ -57,6 +64,7 @@ export function bookingPayable(booking: BookingRowSource): BookingPayPurpose | n
     }
 
     if (booking.status === 'completed' && outstandingBalance(booking) > 0) return 'balance';
+    if (outstandingTopup(booking) > 0) return 'balance';
     return null;
 }
 
@@ -135,6 +143,9 @@ export function isNothingDue(error: unknown): boolean {
 export function bookingRowStatus(booking: BookingRowSource, payable: BookingPayPurpose | null): BookingRowStatus | null {
     if (booking.status === 'cancelled') return 'cancelled';
     if (booking.status === 'no-show') return 'missed';
+    // Waiting on the CUSTOMER, not the shop: saying "awaiting the shop" here would tell them they
+    // have nothing to do while the booking sits on their answer.
+    if (hasLivePriceProposal(booking)) return 'priceProposed';
     if (booking.status === 'pending') return 'awaitingShop';
     if (payable === 'primary') return 'unpaid';
     if (payable === 'balance') return 'balanceDue';
@@ -170,6 +181,8 @@ export interface CustomerBookingRow {
     /** The translated word in `description`, or null. */
     statusLabel: string | null;
     payable: BookingPayPurpose | null;
+    /** A proposed price waiting on this customer, with its sentence built. Null when there is none. */
+    priceQuestion: { text: string; note: string; acceptLabel: string; declineLabel: string } | null;
 }
 
 export type CustomerBookingSource = BookingRowSource & {
@@ -177,7 +190,46 @@ export type CustomerBookingSource = BookingRowSource & {
     vendorId: unknown;
     bookingNumber?: string;
     productId?: unknown;
+    priceSnapshot?: number;
+    currency?: string;
+    rescheduleProposal?: IBooking['rescheduleProposal'];
 };
+
+export interface CustomerPriceQuestion {
+    /** Which of the two answers it takes: the price alone, or a new time with a new price. */
+    kind: 'price' | 'reschedule';
+    amount: number;
+    previousAmount: number;
+    /** The proposed time, on a reschedule. */
+    startAt: Date | null;
+}
+
+/**
+ * The proposed price this booking is waiting on its customer to answer, if any. The list and the
+ * tap ask this one function, so a row can never offer an answer the tap would then refuse.
+ *
+ * A proposal of a new time with NO price is not here: it has its own chat buttons, and this is the
+ * answer to a question about money.
+ */
+export function customerPriceQuestion(
+    booking: Pick<IBooking, 'status'> & Partial<Pick<IBooking, 'priceProposal' | 'rescheduleProposal'>>,
+    now: Date = new Date(),
+): CustomerPriceQuestion | null {
+    const proposal = booking.priceProposal;
+    if (proposal && hasLivePriceProposal(booking, now)) {
+        return { kind: 'price', amount: proposal.amount, previousAmount: proposal.previousAmount, startAt: null };
+    }
+    const move = booking.rescheduleProposal;
+    const live = booking.status === 'pending' || booking.status === 'confirmed';
+    if (
+        live && move && move.status === 'open' && move.proposedBy === 'vendor'
+        && move.price !== null && move.price !== undefined
+        && move.expiresAt.getTime() > now.getTime()
+    ) {
+        return { kind: 'reschedule', amount: move.price, previousAmount: move.previousPrice ?? 0, startAt: move.startAt };
+    }
+    return null;
+}
 
 /**
  * Rows, as a screen draws them.
@@ -215,6 +267,9 @@ export async function projectCustomerBookings(
         const payable = bookingPayable(row);
         const status = bookingRowStatus(row, payable);
         const statusLabel = status ? bookingRowStatusLabel(status, options.language) : null;
+        const question = customerPriceQuestion(row as Parameters<typeof customerPriceQuestion>[0], options.now);
+        const words = bookingScreenCopy(options.language);
+        const money = (amount: number) => `${row.currency ?? 'XAF'} ${amount.toLocaleString('en-US')}`;
 
         out.push({
             bookingId: String(row._id),
@@ -234,6 +289,18 @@ export async function projectCustomerBookings(
             status: row.status,
             statusLabel,
             payable,
+            priceQuestion: question
+                ? {
+                    text: bookingPriceQuestionText(options.language, {
+                        price: money(question.amount),
+                        previous: money(question.previousAmount),
+                        when: question.startAt ? options.when(question.startAt, timezone) : null,
+                    }),
+                    note: words.priceDeclineNote,
+                    acceptLabel: words.acceptPrice,
+                    declineLabel: words.declinePrice,
+                }
+                : null,
         });
     }
     return out;

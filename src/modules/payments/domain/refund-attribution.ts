@@ -50,9 +50,22 @@ export interface AttributionInput {
   deliveryAmountPaid: number;
   /** Has the order been delivered? A `return` implies yes whatever this says. */
   delivered: boolean;
+  /**
+   * Delivery money of parcels whose DELIVERY was at fault, inside their agency's window (owner
+   * F-6/F-7, 2026-10-22): refundable whatever the vendor's return-shipping setting says, because
+   * the agency and rider fund it. Optional; 0 when nobody said the delivery was at fault.
+   */
+  faultDeliveryAmount?: number;
 }
 
 const nonNeg = (n: number) => (Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0);
+
+/** The delivery money this refund may include: all of it when refundable, else the at-fault part. */
+export function refundableDelivery(input: AttributionInput): number {
+  const paid = nonNeg(input.deliveryAmountPaid);
+  if (deliveryRefundable(input)) return paid;
+  return Math.min(paid, nonNeg(input.faultDeliveryAmount ?? 0));
+}
 
 /** Whether the customer's delivery money is part of what may be refunded. */
 export function deliveryRefundable(input: Omit<AttributionInput, 'goodsAmount' | 'deliveryAmountPaid'>): boolean {
@@ -71,7 +84,7 @@ export function deliveryRefundable(input: Omit<AttributionInput, 'goodsAmount' |
 
 /** The most this attribution allows: all goods, plus delivery when it is refundable. */
 export function maxAttributable(input: AttributionInput): number {
-  return nonNeg(input.goodsAmount) + (deliveryRefundable(input) ? nonNeg(input.deliveryAmountPaid) : 0);
+  return nonNeg(input.goodsAmount) + refundableDelivery(input);
 }
 
 /**

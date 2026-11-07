@@ -130,7 +130,19 @@ const NONE: PendingQuestionDecision = Object.freeze({ kind: 'none' });
 function buttonTokensOf(intent: BotReplyIntent): string[] {
     if (intent.kind === 'text') return (intent.actions ?? []).map((option) => option.id);
     if (intent.kind === 'choice') return intent.options.map((option) => option.id);
+    // Every message of the turn is on screen at once, so a pair split across two of them is
+    // still one question — and a confirm on any part must still supersede.
+    if (intent.kind === 'sequence') return intent.parts.flatMap((part) => buttonTokensOf(part));
     return [];
+}
+
+/** The words of the message carrying the buttons — for a sequence, the part that has them. */
+function questionTextOf(intent: BotReplyIntent): string {
+    if (intent.kind === 'sequence') {
+        const asking = intent.parts.find((part) => buttonTokensOf(part).length > 0);
+        return asking ? questionTextOf(asking) : '';
+    }
+    return 'text' in intent && typeof intent.text === 'string' ? intent.text : '';
 }
 
 /**
@@ -178,8 +190,8 @@ export function pendingQuestionDecisionFor(
         return { kind: 'supersede', reason: 'not_a_pair' };
     }
 
-    // Only `text` and `choice` carry buttons, and both carry `text`.
-    const text = 'text' in intent && typeof intent.text === 'string' ? intent.text : '';
+    // Only `text` and `choice` carry buttons (directly or as a sequence's part), and both carry `text`.
+    const text = questionTextOf(intent);
 
     return {
         kind: 'record',

@@ -9,6 +9,7 @@ import {
 import { inAppScreenUrl } from '../bot-surface/domain/inapp-url';
 import { botStorefrontLink } from '../bot-surface/domain/bot-list-window';
 import type { InAppSurfaceKind } from '../bot-surface/services/inapp-surface.store';
+import { flowIdFor } from '../whatsapp/flows/flows.config';
 
 /**
  * Turn a command result into a channel-ready request body.
@@ -116,16 +117,37 @@ export function screenReplyIntent(input: {
     fallbackPath: string | null;
     /** The sentence above the button. Defaults to the chat's browse prompt, as the doors do. */
     text?: string | null;
+    /**
+     * Which chat is asking. On WhatsApp, a screen whose Flow is PUBLISHED (its
+     * `WHATSAPP_FLOW_ID_*` set) opens as that form, with the handle as its token.
+     */
+    channel?: MessagingChannel | null;
 }): BotReplyIntent | null {
     const label = botChrome(input.labelKey, input.language);
     const text = input.text?.trim() || botChrome('browseProductsPrompt', input.language);
 
     const screenUrl = inAppScreenUrl(input.kind, input.handle, input.language);
-    if (screenUrl) return { kind: 'inapp', text, label, url: screenUrl };
-
     const fallbackUrl = input.fallbackPath
         ? botStorefrontLink(input.fallbackPath, input.language)
         : null;
+
+    /**
+     * ⛔ **THE WHATSAPP FORM, ATTACHED HERE AND NOWHERE ELSE (2026-10-26).** Until this line
+     * nothing in the backend ever set `flow` on an `inapp` intent, so even a PUBLISHED form could
+     * not reach a customer: WhatsApp got the page as a browser link — "the bot sends me to the
+     * website". A configured id is a published Flow (`flowIdFor`), so its presence is the switch.
+     *
+     * ⚠ **The handle is the Flow token**, and that is the whole link between the form and the
+     * session: the encrypted endpoint reads `flow_token` to know whose basket, booking or payment
+     * it is serving. `url` is kept so the intent's shape is unchanged; the WhatsApp renderer
+     * ignores it when `flow` is present.
+     */
+    const flowId = input.channel === 'whatsapp' ? flowIdFor(input.kind) : '';
+    if (flowId) {
+        return { kind: 'inapp', text, label, url: screenUrl ?? fallbackUrl ?? '', flow: { id: flowId, token: input.handle } };
+    }
+
+    if (screenUrl) return { kind: 'inapp', text, label, url: screenUrl };
     return fallbackUrl ? { kind: 'link', text, label, url: fallbackUrl } : null;
 }
 
@@ -141,7 +163,7 @@ export function buildCommandChannelReply(
     recipient: string,
     language: string | null = null,
 ): BotChannelReply | null {
-    const intent = commandReplyIntent(result, language);
+    const intent = commandReplyIntent(result, language, channel);
     if (!intent || !recipient) return null;
 
     return renderBotReply(intent, channel, recipient);
@@ -162,6 +184,8 @@ export function buildCommandChannelReply(
 export function commandReplyIntent(
     result: RenderableCommandResult,
     language: string | null = null,
+    /** Which chat — so a published WhatsApp form can be attached to a screen (`screenReplyIntent`). */
+    channel: MessagingChannel | null = null,
 ): BotReplyIntent | null {
     const text = typeof result?.message === 'string' ? result.message.trim() : '';
     const lang = language ?? (typeof result?.language === 'string' ? result.language : null);
@@ -173,7 +197,7 @@ export function commandReplyIntent(
      * nothing, so a customer who finished a form still gets the words.
      */
     if (result?.screen) {
-        const screenIntent = screenReplyIntent({ ...result.screen, language: lang, text });
+        const screenIntent = screenReplyIntent({ ...result.screen, language: lang, text, channel });
         if (screenIntent) return screenIntent;
     }
 

@@ -442,6 +442,114 @@ async function main(): Promise<void> {
     await assert('⛔ a shop may NOT send an inverted interval', () =>
         refused(() => vendorTarget(at(20), at(19)), 'BOOKING_INVALID_SLOT_ID', 400, 'inverted'));
 
+    console.log('\n══ § 7b · A run of consecutive slots is ONE appointment, checked slot by slot ══');
+
+    /**
+     * 2026-10-26: a customer may book several slots back to back (`slotIds`). Every slot in the run
+     * is the same test a single slot is, the run must be contiguous, and the booking is the whole
+     * interval priced over the whole interval. Nothing about a single slot may change.
+     */
+    const slotRun = (...hours: number[]) => hours.map((h) => slotId(at(h), at(h + 1)));
+
+    await assert('a run of two offered slots is offered as 10:00–12:00, under a span id', async () => {
+        const o = await world().service.assertOfferedSlot('p1', slotRun(10, 11), LAST_YEAR);
+        return o.start.getTime() === at(10).getTime()
+            && o.end.getTime() === at(12).getTime()
+            && o.heldSlotIds.length === 2
+            && o.slotId.startsWith(`slot_${at(10).getTime()}_${at(12).getTime()}_`);
+    });
+
+    await assert('a single slot is offered under its OWN id, exactly as before', async () => {
+        const id = slotId(at(10), at(11));
+        const o = await world().service.assertOfferedSlot('p1', id, LAST_YEAR);
+        return o.slotId === id && JSON.stringify(o.heldSlotIds) === JSON.stringify([id]);
+    });
+
+    await assert('a two-slot run books ONE appointment 10:00–12:00 at the prorated 12 000 XAF', async () => {
+        const w = world();
+        await w.service.bookProduct('p1', slotRun(10, 11), 'u1', 'u1');
+        return w.created.length === 1
+            && w.created[0].start.getTime() === at(10).getTime()
+            && w.created[0].end.getTime() === at(12).getTime()
+            && w.created[0].priceSnapshot === 12000;
+    });
+
+    await assert('⛔ a run with a GAP is refused as not contiguous', () =>
+        refused(() => world().service.assertOfferedSlot('p1', slotRun(10, 12), LAST_YEAR),
+            'BOOKING_INVALID_SLOT_ID', 400, 'not_contiguous'));
+
+    await assert('⛔ the same slot twice is refused as not contiguous', () =>
+        refused(() => world().service.assertOfferedSlot('p1', slotRun(10, 10), LAST_YEAR),
+            'BOOKING_INVALID_SLOT_ID', 400, 'not_contiguous'));
+
+    await assert('⛔ a run reaching past closing time is refused — every slot must be offered', () =>
+        refused(() => world().service.assertOfferedSlot('p1', slotRun(16, 17), LAST_YEAR),
+            UNAVAILABLE, 409, 'not_offered'));
+
+    await assert('⛔ a run across someone else\'s appointment is refused', async () => {
+        const w = world();
+        w.bookings.push({ start: at(11), end: at(12), count: 1 });
+        return refused(() => w.service.assertOfferedSlot('p1', slotRun(10, 11), LAST_YEAR), UNAVAILABLE, 409, 'not_offered');
+    });
+
+    await assert('⛔ an over-long list is refused before any read', () =>
+        refused(() => world().service.assertOfferedSlot('p1', Array.from({ length: 25 }, (_, i) => `slot_${i}_${i + 1}_x`), LAST_YEAR),
+            'BOOKING_INVALID_SLOT_ID', 400, 'slot_count'));
+
+    await assert('⛔ a group class refuses a run before anything is priced or written', async () => {
+        const w = world({ mode: 'capacity', seats: 3 });
+        const wasRefused = await refused(
+            () => w.service.bookProduct('p1', slotRun(10, 11), 'u1', 'u1'),
+            'BOOKING_MULTI_SLOT_NOT_SUPPORTED', 422,
+        );
+        return wasRefused && w.priceCalls === 0 && w.created.length === 0;
+    });
+
+    await assert('⛔ `createBooking` asserts AND releases the hold on every slot of the run', () => {
+        const body = methodBody(BS, /async createBooking\(/);
+        return Boolean(body)
+            && body!.includes('input.heldSlotIds')
+            && (body!.match(/for \(const held of heldSlotIds\)/g) ?? []).length === 2
+            && body!.includes('assertLocked(held,')
+            && body!.includes('release(held,');
+    });
+
+    await assert('⛔ a move asserts and releases every held slot, and a customer move keeps the length', () => {
+        const target = methodBody(BS, /private async assertRescheduleTarget\(/);
+        return (rescheduleBody!.match(/for \(const held of target\.heldSlotIds\)/g) ?? []).length === 3
+            && !rescheduleBody!.includes('(newSlotId, lockOwnerId')
+            && Boolean(target) && target!.includes("reason: 'length_changed'");
+    });
+
+    /**
+     * ⚠ **Until 2026-10-27 a shop could NOT hand the move a list**, and this pinned that refusal. A
+     * two-slot appointment is longer than any slot `GET /availability` lists, so a shop picking from
+     * that grid had no id of the right length and could never move one. The shop now names the run,
+     * as the customer does, and the shop rule judges the whole interval.
+     */
+    const shopTarget = (booking: unknown, slots: unknown) =>
+        (new BookingService() as unknown as {
+            assertRescheduleTarget: (b: unknown, s: unknown, a: unknown) => Promise<{ start: Date; end: Date; slotId: string; heldSlotIds: string[] }>;
+        }).assertRescheduleTarget(booking, slots, { role: 'vendor', id: 'v1' });
+    const twoHours = { startAt: at(10), endAt: at(12) };
+
+    await assert('a shop moves a TWO-slot appointment by a run of two — one interval, under a span id', async () => {
+        const t = await shopTarget(twoHours, slotRun(19, 20));
+        return t.start.getTime() === at(19).getTime()
+            && t.end.getTime() === at(21).getTime()
+            && t.heldSlotIds.length === 2
+            && t.slotId.startsWith(`slot_${at(19).getTime()}_${at(21).getTime()}_`);
+    });
+
+    await assert('⛔ a shop\'s run keeps the length, and must have no gap', async () => {
+        const longer = await refused(() => shopTarget(moving, slotRun(19, 20)), 'BOOKING_INVALID_SLOT_ID', 400, 'length_changed');
+        const gapped = await refused(() => shopTarget(twoHours, slotRun(13, 15)), 'BOOKING_INVALID_SLOT_ID', 400, 'not_contiguous');
+        const tooMany = await refused(
+            () => shopTarget(twoHours, Array.from({ length: 25 }, (_, i) => slotId(at(i), at(i + 1)))),
+            'BOOKING_INVALID_SLOT_ID', 400, 'slot_count');
+        return longer && gapped && tooMany;
+    });
+
     console.log('\n══ § 8 · ⛔ No door reaches a booking write around the chokepoints ══');
 
     /**
@@ -482,10 +590,21 @@ async function main(): Promise<void> {
         ]) && /\.groupBookingService\.createBooking\(/.test(BS);
     });
 
-    await assert('⛔ a group MOVE is reached only from `rescheduleBooking`', () =>
+    /**
+     * Since 2026-10-26 the move itself is `applyMove`, shared by a direct reschedule and an
+     * ACCEPTED proposal (owner decisions D-8/D-9). Both callers pass the same checks first —
+     * `rescheduleBooking` validates the target and the hold, `answerRescheduleProposal` can only
+     * apply a proposal that `rescheduleBooking` itself recorded.
+     */
+    const applyBody = methodBody(BS, /private async applyMove\(/);
+    await assert('⛔ a group MOVE is reached only through `applyMove`, from the two move doors', () =>
         JSON.stringify(productionCallers(/\.moveIntoSlot\(/))
             === JSON.stringify(['modules/booking/services/booking.service.ts'])
-        && rescheduleBody!.includes('moveIntoSlot('));
+        && !!applyBody && applyBody.includes('moveIntoSlot(')
+        && !rescheduleBody!.includes('moveIntoSlot(')
+        && (BS.match(/this\.applyMove\(/g) ?? []).length === 2
+        && rescheduleBody!.includes('this.applyMove(')
+        && (methodBody(BS, /async answerRescheduleProposal\(/) ?? '').includes('this.applyMove('));
 
     await assert('⛔ every production `parseSlotId` sits behind a chokepoint', () =>
         JSON.stringify(productionCallers(/\.parseSlotId\(/)) === JSON.stringify([
@@ -730,9 +849,11 @@ async function main(): Promise<void> {
             resolveCapacity: async () => (group ? { maxBookings: 3 } : null),
             moveIntoSlot: async () => { state.groupMoves++; },
             syncCalendarForMove: async () => undefined,
+            countSeatsTaken: async () => 0,
         };
         edges.countOverlappingBookings = async () => overlaps;
         edges.emitBookingRescheduledEvent = async () => undefined;
+        edges.emitRescheduleProposedEvent = async () => undefined;
         return state;
     };
     const target = slotId(at(12), at(13));
@@ -750,13 +871,23 @@ async function main(): Promise<void> {
         };
         (ProductModel as unknown as Record<string, unknown>).findById = async () => ({ title: 'Yoga' });
 
-        await assert('a shop moves a single-seat appointment onto a time it holds, and the hold is spent', async () => {
+        /**
+         * ⚠ Since 2026-10-26 (D-9) a shop's move is a PROPOSAL the customer answers: the booking keeps
+         * its time, the proposal records the held one, and the hold is spent because the proposal
+         * itself now holds the interval. The hold-owner rules this section pins are unchanged.
+         */
+        await assert("a shop PROPOSES a single-seat appointment's move onto a time it holds, and the hold is spent", async () => {
             redisStore.clear();
             stored = bookingOfShopA();
             const held = await world({ realLocks: true }).service.lockSlot('p1', target, shopA.user.id);
             const moved = await rescheduler(false).service.rescheduleBooking(
                 stored._id.toString(), target, shopA.user.id, asShop(shopA));
-            return held && moved.startAt.getTime() === at(12).getTime() && stored.saves === 1 && redisStore.size === 0;
+            const proposal = (moved as unknown as { rescheduleProposal?: { status: string; proposedBy: string; startAt: Date } }).rescheduleProposal;
+            return held
+                && moved.startAt.getTime() === at(10).getTime()
+                && proposal?.status === 'open' && proposal.proposedBy === 'vendor'
+                && proposal.startAt.getTime() === at(12).getTime()
+                && stored.saves === 1 && redisStore.size === 0;
         });
 
         await assert('⛔ the defect, reproduced: asserted under the VENDOR id, the shop\'s own hold is "someone else\'s"', async () => {
@@ -768,13 +899,15 @@ async function main(): Promise<void> {
             return wasRefused && stored.saves === 0;
         });
 
-        await assert('a shop moves a CLASS booking onto a class it holds (the per-owner key)', async () => {
+        await assert("a shop PROPOSES a CLASS booking's move onto a class it holds (the per-owner key)", async () => {
             redisStore.clear();
             stored = bookingOfShopA();
             await world({ mode: 'capacity', seats: 3, realLocks: true }).service.lockSlot('p1', target, shopA.user.id);
             const moving = rescheduler(true);
-            await moving.service.rescheduleBooking(stored._id.toString(), target, shopA.user.id, asShop(shopA));
-            return moving.groupMoves === 1 && [...redisStore.keys()].length === 0;
+            const moved = await moving.service.rescheduleBooking(stored._id.toString(), target, shopA.user.id, asShop(shopA));
+            const proposal = (moved as unknown as { rescheduleProposal?: { status: string } }).rescheduleProposal;
+            // Nothing MOVES until the customer accepts — the seat is held by the proposal instead.
+            return moving.groupMoves === 0 && proposal?.status === 'open' && [...redisStore.keys()].length === 0;
         });
 
         await assert('⛔ …and the class defect, reproduced: under the VENDOR id the per-owner key is never found', async () => {
@@ -848,7 +981,50 @@ async function main(): Promise<void> {
             await hold(shopA, outsideHours);
             const moved = await rescheduler(false).service.rescheduleBooking(
                 stored._id.toString(), outsideHours, shopA.user.id, asShop(shopA));
-            return moved.startAt.getTime() === at(19).getTime() && redisStore.size === 0;
+            // Proposed, not moved (D-9) — the proposal carries the held time.
+            const proposal = (moved as unknown as { rescheduleProposal?: { startAt: Date } }).rescheduleProposal;
+            return proposal?.startAt.getTime() === at(19).getTime() && redisStore.size === 0;
+        });
+
+        /**
+         * ⚠ **A run (2026-10-27): each slot held under its own id**, so the move asserts exactly the
+         * keys written here and the storefront, whose holds are per slot, sees every one.
+         */
+        const heldRun = [slotId(at(12), at(13)), slotId(at(13), at(14))];
+        const twoHourBooking = () => ({ ...bookingOfShopA(), endAt: at(12) });
+
+        await assert('a shop holds a RUN for a two-slot appointment, slot by slot, and the move accepts that run', async () => {
+            redisStore.clear();
+            stored = twoHourBooking();
+            const held = await rescheduler(false).service.holdSlotForReschedule(
+                stored._id.toString(), heldRun, shopA.user.id, asShop(shopA));
+            const heldKeys = redisStore.size;
+            const moved = await rescheduler(false).service.rescheduleBooking(
+                stored._id.toString(), heldRun, shopA.user.id, asShop(shopA));
+            const proposal = (moved as unknown as { rescheduleProposal?: { startAt: Date; endAt: Date } }).rescheduleProposal;
+            return held.slotIds.length === 2
+                && held.start.getTime() === at(12).getTime() && held.end.getTime() === at(14).getTime()
+                && heldKeys === 2
+                && proposal?.startAt.getTime() === at(12).getTime()
+                && proposal.endAt.getTime() === at(14).getTime()
+                && redisStore.size === 0;
+        });
+
+        await assert('⛔ a run with one slot already held by someone else is refused, and nothing of it stays held', async () => {
+            redisStore.clear();
+            stored = twoHourBooking();
+            await world({ realLocks: true }).service.lockSlot('p1', heldRun[1], 'a-customer');
+            const wasRefused = await refused(() => rescheduler(false).service.holdSlotForReschedule(
+                stored!._id.toString(), heldRun, shopA.user.id, asShop(shopA)), 'BOOKING_SLOT_LOCKED', 409);
+            return wasRefused && redisStore.size === 1;
+        });
+
+        await assert('⛔ a class is never held as a run — the refusal the move gives', async () => {
+            redisStore.clear();
+            stored = twoHourBooking();
+            const wasRefused = await refused(() => rescheduler(true).service.holdSlotForReschedule(
+                stored!._id.toString(), heldRun, shopA.user.id, asShop(shopA)), 'BOOKING_MULTI_SLOT_NOT_SUPPORTED', 422);
+            return wasRefused && redisStore.size === 0;
         });
 
         await assert('⛔ a shop cannot hold a time for ANOTHER shop\'s appointment', async () => {
@@ -994,10 +1170,10 @@ async function main(): Promise<void> {
             const original = BookingService.prototype.holdSlotForReschedule;
             try {
                 BookingService.prototype.holdSlotForReschedule = async function (
-                    _bookingId: string, slot: string, holdOwnerId: string, actor: { role: 'vendor'; id: string },
+                    _bookingId: string, slot: string | readonly string[], holdOwnerId: string, actor: { role: 'vendor'; id: string },
                 ) {
-                    passed = { slotId: slot, holdOwnerId, actor };
-                    return { slotId: slot, start: at(19), end: at(20), expiresAt: new Date() };
+                    passed = { slotId: String(slot), holdOwnerId, actor };
+                    return { slotId: String(slot), slotIds: [String(slot)], start: at(19), end: at(20), expiresAt: new Date() };
                 };
                 await run(VendorBookingController.holdSlot as unknown as Handler, {
                     auth: shopA.auth, params: { id: 'b1' }, body: { slotId: outsideHours },

@@ -105,10 +105,14 @@ export class UnpaidOrderCancelWorker implements ObservableWorker {
     // Cheap pre-filter: anything unpaid for less than a day can't have crossed
     // even the smallest (1-day) vendor window. COD orders are excluded — they
     // are unpaid until delivery BY DESIGN; the failed-delivery flow owns their
-    // terminal states, not this sweep.
+    // terminal states, not this sweep. ⛔ A partial order whose online part is unpaid IS in: it was
+    // never dispatched and nobody will pay it at a door, so without this it holds its stock forever.
     const candidates = await OrderModel.find({
       payment_status: { $in: ['pending', 'AWAITING_PAYMENT'] },
-      payment_method: { $ne: 'cash_on_delivery' },
+      $or: [
+        { payment_method: { $ne: 'cash_on_delivery' } },
+        { prepayment: { $ne: null }, 'prepayment.paid_at': null },
+      ],
       fulfillment_status: { $ne: 'cancelled' },
       created_at: { $lte: daysAgo(1, now) },
     }).limit(UNPAID_ORDER_CANCEL_CONFIG.BATCH_SIZE);

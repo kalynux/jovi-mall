@@ -308,13 +308,17 @@ payouts, payouts behind `NOVASEND_PAYOUTS_ENABLED` (default off). Owner decision
 
 - **One Basic-auth pair** (`base64(KEY:SECRET)`) serves both directions. Sandbox and production
   are fully separate (keys, webhooks, transactions).
-- **Lookups are by OUR reference** (`GET /v1/payin/{reference}`, `GET /v1/direct/payout/{reference}`),
-  so the `jm_…` reference is also the stored `gatewayRef`. Every write carries the documented
+- **Lookups are by NovaSend's `id`** (`GET /v1/payin/{tr_…}`, `GET /v1/payout/{tr_…}`), so that id is the
+  stored `gatewayRef` and our `jm_…` reference is the `merchantRef`. ⚠ This reverses the original
+  design, which followed the docs and SDK (`/v1/payin/{reference}`, `/v1/direct/payout/{reference}`). The
+  live test of 2026-11-04 found our reference 404 on real transactions and `/v1/direct/payout/*` no route
+  at all, so no payment or payout could ever have settled. Every write carries the documented
   REQUIRED `X-Idempotency-Key`, which must be a UUID: ours is a version-5 UUID of
   `<purpose>:<reference>`, so a resend presents the same key.
-- **The notification is HMAC-SHA256 over the body** (`X-Signature-Value`). Raw bytes (SDK) and the
-  re-serialised body (docs) are both accepted; both need the secret. `confirmWebhookEvent` re-reads
-  the record anyway, because the status words differ between the documentation's own pages.
+- **The notification is HMAC-SHA256 over the body.** Raw bytes (SDK) and the re-serialised body
+  (docs) are both accepted; both need the secret. The header is `X-Webhook-Signature`, proven live on
+  2026-11-04 (the SDK's `X-Signature-Value` is still read, and the one that verified is logged by name). `confirmWebhookEvent` re-reads the record anyway, because the
+  status words differ between the documentation's own pages.
 - **D-12 · `CODE_FIRST`, a new collect flow.** NovaSend's Direct API requires `payin.otp` for Orange
   Money: a code the customer obtains by dialling a USSD code BEFORE paying, sent WITH the charge.
   That is the reverse of `OTP` (charge, then SMS code to `/authorize`), so it is its own flow with
@@ -323,8 +327,15 @@ payouts, payouts behind `NOVASEND_PAYOUTS_ENABLED` (default off). Owner decision
   MTN alone through NovaSend. The capability is a literal like every other: should NovaSend confirm
   that Orange **Cameroon** needs no code, ORANGE becomes `PUSH` in one line and every client falls
   back to the push screen. The code is never stored, logged or echoed.
+  **✅ That happened, 2026-11-04.** Live, Orange Cameroon accepted a pay-in with no code and settled it, and
+  ORANGE is now `PUSH`. It is not a true push: no prompt arrives, the customer dials `#150*50#`, which
+  `instructions` carries. `CODE_FIRST` stays in the routing layer, dormant, with no gateway using it.
+- **D-14 · The name on the phone (2026-11-04).** The operators show **Moon SARL**, not Wi-Mall, which the
+  owner confirms is correct. Owner decision: NovaSend is the intended default, and customers are told to
+  confirm a request from Moon SARL. `instructions.payeeName` carries it as data, so apps never name an
+  aggregator; it is optional because the name other gateways show is not known yet.
 - **D-13 · Per-route amount limits, refused before any write, no failover.** A capability may
-  declare `limits: { min, max }` (NovaSend Cameroon: 200–500,000 XAF). Routing checks the amount
+  declare `limits: { min, max }` (NovaSend Cameroon: 301–500,000 XAF; the docs say 200, and live refuses it). Routing checks the amount
   once the route and the amount are both known (`prepareCharge().route(amount)`, billing's
   `resolveBillingCharge`, the bot's pre-spend check) and refuses `422 PAYMENT_AMOUNT_OUT_OF_RANGE`.
   Owner decision: a clear refusal, NOT an automatic switch to another aggregator, which D-9 rules

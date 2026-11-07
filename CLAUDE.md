@@ -1009,6 +1009,51 @@ refund obligation.
 
 **COD delivery is closed to every other path, and that is deliberate.** For COD, `delivered` ⟺ cash collected — `recomputeCodPaymentStatus` derives the order's payment status from that equivalence, and `splitCodCollection` only ever runs off a collection, so a COD shipment that reaches `delivered` without one leaves an order that is delivered, completed, and that **nobody is ever paid for** (not even the vendor), with a payment status that is a lie. Consequently: the customer's `confirm-delivery` endpoint **rejects COD** (their code is their confirmation), and the shipment auto-confirm sweep does **not** confirm COD — it routes through `CashCollectionService.autoCollectWithoutCode`, which records the cash and delivers in one transaction. Any new route to `delivered` must go through a collection too.
 
+### The referral program (`modules/referrals/`) — 2026-11-02
+
+An approved partner earns a percentage of the vendor commission Wi-Mall earns on accounts they referred. Plan and
+the owner's decisions: `../PRODUCTION-READINESS/REFERRAL-PROGRAM-PLAN.md`. Off until tier 1 switches it on. Five
+things are load-bearing:
+
+- ⛔ **Nothing here runs inside the release or refund transactions.** Three stages of `EarningsReleaseWorker`
+  (`referralRewardService.runNightlyStages`) work from marks on the `platform` row: `referral_evaluated_at` and
+  `referral_resync`. Each row gets its own transaction, in which the rewards and the mark are written together.
+- ⛔ **A reward is never an `earnings_allocations` row.** See `referral-reward.model.ts`.
+- **Only `platform` rows of `order`, `cod_collection` and `booking` pay.** So the bargain fee and a damage-claim fee never do.
+- **The wallet is an `earnings_accounts` row of owner type `referral_partner`,** keyed by the partner's id. Debt netting,
+  the ledger and the payout pipeline are reused. A new owner type has to reach the enums on the account, ledger and
+  adjustment models, `PAYOUT_OWNER_TYPES`, and wi-admin's write-off map. Allocations deliberately don't accept it.
+- **A partner's DTOs carry no order, booking, vendor or commission**, and `test:referrals` fails on those keys.
+
+Pinned by `npm run test:referrals` (offline) and `npm run verify:referrals` (the whole chain through the real sweep;
+needs a local replica set and refuses any other `MONGO_URI`, and works in its own database, which it drops).
+
+### Partial payment (`orders/domain/partial-payment.ts`) — 2026-11-01
+
+A customer pays part online and the rest in cash at the door. **There is no third payment method:** a
+partial order is `payment_method: 'cash_on_delivery'` with `order.prepayment`, so every COD mechanism keeps
+working, and `total_amount` stays the whole order. Plan and the twelve owner decisions:
+`../PRODUCTION-READINESS/PARTIAL-PAYMENT-PLAN.md`. Five things are load-bearing:
+
+- ⛔ **`purpose: 'order_prepayment'` branches first in `handlePaymentSuccess`.** Past it,
+  `OrderService.handlePaymentSuccess` would mark a 30%-paid order `paid` and split it as prepaid, and nothing
+  downstream would look wrong.
+- ⛔ **`AWAITING_PAYMENT` on COD means "dispatchable" except here.** `prepaymentIsDue` gates dispatch, the
+  stock commit and auto-dispatch at checkout, and the unpaid-cancel sweep includes these orders.
+- **Nothing is allocated when the online part is paid.** `splitCodCollection` runs at the handoff on the
+  parcel's FULL goods, with `requires_cash_settlement`, so every share waits for that parcel's cash. On the
+  collection, `items_amount` and `delivery_fee_amount` stay full, and only `expected_amount` is net of
+  `prepaid_amount`. The COD handling fee's base is `codHandlingFeeBaseOf`.
+- **A returned parcel is not `failed`** while the platform holds the money. `PartialReturnService` opens a
+  refund that waits for an administrator (one per order at a time; the nightly `RefundCashRecheckWorker` opens
+  the next). The money moves in `PartialReturnSettlementService` when that refund COMPLETES, so a changed fault
+  can never leave an agency paid for a refund that went the other way.
+- **A refund returns one channel at a time:** the online part first, then the cash once covered, so the "only
+  the fee that happened" rule still holds per request (`loadOrder`).
+
+Pinned by `npm run test:partial-payment` (offline) and `npm run verify:partial-payment` (the whole chain; needs
+a local replica set and refuses any other `MONGO_URI`, because it writes real money rows).
+
 ### COD restrictions (`cod/domain/cod-restriction.ts`) — 2026-10-10
 
 An administrator can switch cash on delivery OFF for one **customer** or one delivery **agency**,
@@ -2938,6 +2983,11 @@ read from a request or from the stored record, and a customer role is **never au
   expired-and-swept, and a code/identifier mismatch. Splitting any of them makes the endpoint a
   registration oracle answering "is this phone a customer here?" for any number, with no account.
   `MAGIC_CODE_EXPIRED` is reached only *after* the code is matched to the record's own account.
+- ⚠ **Two identifiers match a typed code, and `/login` and the code do not find an account the same
+  way** (2026-11-03). `/login` reads `channel_connections` first, so a number linked with `/connect`
+  reaches an account whose `login_phone` is a different one. So the WhatsApp number that requested
+  the code matches as well as the account's own phone or email. WhatsApp only, because a Telegram
+  chat id merely looks like a number, and the session is always the record's account.
 - ⚠ **The magic link points at `STOREFRONT_URL`, never `API_PUBLIC_URL`, and the page POSTs the
   token.** WhatsApp and Telegram *fetch* URLs to build preview cards, so a `GET` that signed you
   in would be spent by the crawler before the user tapped — a dead link, every time.

@@ -59,6 +59,7 @@ import {
     botPaymentStateLabel,
     botRefundLine,
     botShipmentStateLabel,
+    onlinePartDueOf,
     toBotOrderPaymentState,
 } from '../domain/bot-order-status-copy';
 import { botStorefrontLink, windowForChat } from '../domain/bot-list-window';
@@ -273,6 +274,7 @@ export class BotOrderController {
                                   fulfillmentStatus: dto.fulfillmentStatus,
                                   paymentStatus: dto.paymentStatus,
                                   paymentMethod: dto.paymentMethod,
+                                  partialPayment: dto.partialPayment,
                               },
                               language,
                           ),
@@ -1151,6 +1153,8 @@ interface OrderRowInput {
     paymentStatus: string;
     /** Decides whether an unpaid order reads as a debt or as "cash on delivery". */
     paymentMethod: string;
+    /** A partial order with its online part unpaid reads as a debt too. */
+    partialPayment?: { paidAt: Date | null } | null;
 }
 
 /**
@@ -1166,6 +1170,7 @@ function orderRow(order: OrderRowInput, language: string | null): BotReplyOption
     const money = formatBotPrice(order.total, order.currency);
     const payment = botPaymentStateLabel(toBotOrderPaymentState(order.paymentStatus), language, {
         cashOnDelivery: order.paymentMethod === 'cash_on_delivery',
+        onlinePartDue: onlinePartDueOf(order),
     });
 
     return {
@@ -1319,7 +1324,9 @@ function orderCardText(order: CustomerOrderDto, language: string | null): string
 
     const state = botFulfillmentStateLabel(order.fulfillmentStatus, language);
     const payment = botPaymentStateLabel(toBotOrderPaymentState(order.paymentStatus), language, {
+        // An unpaid partial order owes its online part now: it does not read as "pay on delivery".
         cashOnDelivery: order.paymentMethod === 'cash_on_delivery',
+        onlinePartDue: onlinePartDueOf(order),
     });
     const money = formatBotPrice(order.total, order.currency);
     // The fourth line, only when a refund was requested (REFUND-FLOW-PLAN § 8) — NET figure,

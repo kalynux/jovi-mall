@@ -419,6 +419,9 @@ Same, plus:
   the same normalisers.
 - Resolve code → `sessionId` → record, then **assert the record's `userId` matches the account
   the identifier resolves to.** A mismatch answers exactly like a wrong code.
+  ⚠ **Amended 2026-11-03:** the WhatsApp number that requested the code also matches, because a
+  number linked with `/connect` reaches an account whose `login_phone` is a different one, and
+  that person could never use the code. The session is still the record's account.
 - **Never distinguish** unknown identifier, wrong code, expired-and-swept, or mismatch. One
   code, one message — otherwise the endpoint is a registration oracle answering *"is this phone
   a customer here?"* for anyone, for any number.

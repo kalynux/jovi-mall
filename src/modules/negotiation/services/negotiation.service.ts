@@ -100,6 +100,15 @@ export type NegotiationRecordResult =
         verdict: 'approved';
         sessionId: string;
         round: number;
+        /**
+         * The line this verdict is about — the SESSION's product, variant and quantity.
+         *
+         * ⭐ Added 2026-10-25 for several haggles at once: the bargaining agent can move between a
+         * customer's open items inside one turn, so the item the automation layer was handed is no
+         * longer necessarily the one this verdict closed. It reads this to drop exactly that item
+         * from its open list. Ids only — nothing here touches the price window.
+         */
+        subject: { productId: string; variantId: string; quantity: number };
         /** The sentence to send, unchanged from what was submitted. */
         reply: string;
         agreedPrice: number;
@@ -435,6 +444,7 @@ export class NegotiationService {
                 verdict: 'approved',
                 sessionId: session._id.toString(),
                 round: readAtRound + 1,
+                subject: subjectOf(session),
                 reply: input.reply,
                 agreedPrice: input.agentProposedPrice,
                 lock,
@@ -542,6 +552,7 @@ export class NegotiationService {
             verdict: 'approved',
             sessionId: session._id.toString(),
             round: session.round,
+            subject: subjectOf(session),
             reply: input.reply,
             agreedPrice: lock.unit_price,
             lock: { ref: lock.ref, unitPrice: lock.unit_price, expiresAt: lock.expires_at },
@@ -720,6 +731,15 @@ export class NegotiationService {
         }
         return new Types.ObjectId(id);
     }
+}
+
+/** The `subject` of an approved verdict: which line it was about. */
+function subjectOf(session: INegotiationSession): { productId: string; variantId: string; quantity: number } {
+    return {
+        productId: session.product_id.toString(),
+        variantId: session.variant_id.toString(),
+        quantity: session.quantity,
+    };
 }
 
 export const negotiationService = new NegotiationService();

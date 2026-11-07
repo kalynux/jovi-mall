@@ -18,6 +18,11 @@ import { ERROR_CODES } from '../../../core/error-codes';
 import { vendorCodTermsOf } from '../../cod/domain/cod-limits';
 import { codLimitsService } from '../../cod/services/cod-limits.service';
 import { SetDeliveryTermsSchema, vendorDeliveryTermsOf } from '../../vendors/domain/delivery-terms';
+import {
+  PARTIAL_PAYMENT_VENDOR_MAX_PERCENT,
+  PARTIAL_PAYMENT_VENDOR_MIN_PERCENT,
+  vendorPartialPaymentTermsOf,
+} from '../../orders/domain/partial-payment';
 
 // Policy documents (return/cancellation/support policy addenda) are a standalone
 // upload path — deliberately separate from the product/ticket media pipeline in
@@ -61,6 +66,23 @@ const SetCodTermsSchema = z
   })
   .strict();
 
+/** `minPercent` is required to switch it on, and stays on file while it is off. */
+const SetPartialPaymentSchema = z
+  .object({
+    enabled: z.boolean(),
+    minPercent: z
+      .number()
+      .int()
+      .min(PARTIAL_PAYMENT_VENDOR_MIN_PERCENT)
+      .max(PARTIAL_PAYMENT_VENDOR_MAX_PERCENT)
+      .nullable(),
+  })
+  .strict()
+  .refine((body) => !body.enabled || body.minPercent !== null, {
+    message: 'minPercent is required to accept partial payment',
+    path: ['minPercent'],
+  });
+
 const vendorProfileService = new VendorProfileService();
 
 /** The wire shape of a vendor's COD terms, defaults applied when never set. */
@@ -71,6 +93,10 @@ function toCodTermsDto(stored: { cod_enabled?: boolean | null; max_cash_per_agen
 /** The wire shape of a shop's delivery terms (ADR-A11), the default `always` applied when never set. */
 function toDeliveryTermsDto(stored: { mode?: string | null; free_above_amount?: number | null; updated_at?: Date | null } | null) {
   return { ...vendorDeliveryTermsOf(stored), updatedAt: stored?.updated_at ?? null };
+}
+/** The wire shape of a vendor's partial-payment terms, off when never set. */
+function toPartialPaymentDto(stored: { enabled?: boolean | null; min_percent?: number | null; updated_at?: Date | null } | null) {
+  return { ...vendorPartialPaymentTermsOf(stored), updatedAt: stored?.updated_at ?? null };
 }
 const vendorSettingsRepository = new VendorSettingsRepository();
 
@@ -312,6 +338,28 @@ export class VendorProfileController {
     // Connected agencies are told (2026-10-02 notifications) — only on an actual change.
     void codLimitsService.publishVendorTermsChanged(vendorId, before, vendorCodTermsOf(stored));
     res.json({ success: true, data: toCodTermsDto(stored), message: 'COD terms updated' });
+  });
+
+  // ─── Partial payment (2026-11-01) ───────────────────────────────────────
+  //
+  // Whether this vendor accepts orders paid part online and part in cash, and the minimum share
+  // paid online. Independent of the COD terms (a vendor with plain COD off may accept this), and
+  // like them NOT part of `policies`. Applies to new orders only: an order keeps its snapshot.
+
+  static getPartialPayment = asyncHandler(async (req: Request, res: Response) => {
+    const vendorId = req.auth!.role_entity._id.toString();
+    const stored = await vendorSettingsRepository.findPartialPayment(vendorId);
+    res.json({ success: true, data: toPartialPaymentDto(stored) });
+  });
+
+  static setPartialPayment = asyncHandler(async (req: Request, res: Response) => {
+    const vendorId = req.auth!.role_entity._id.toString();
+    const { enabled, minPercent } = SetPartialPaymentSchema.parse(req.body);
+    const stored = await vendorSettingsRepository.setPartialPayment(vendorId, {
+      enabled,
+      min_percent: minPercent,
+    });
+    res.json({ success: true, data: toPartialPaymentDto(stored), message: 'Partial payment settings updated' });
   });
 
   // ─── Delivery terms (ADR-A11, 2026-10-03) ───────────────────────────────

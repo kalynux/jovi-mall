@@ -124,7 +124,11 @@ export class VendorNotificationEventHandler {
     /** Handle order.created event */
     async handleOrderCreated(event: DomainEvent): Promise<void> {
         try {
-            const { orderId, vendorId, orderNumber, totalAmount, currency } = event.payload;
+            const { orderId, vendorId, orderNumber, totalAmount, currency, partialPayment } = event.payload;
+
+            // A partial order: nothing is paid yet, and the vendor must not prepare it. They are
+            // told by `order.prepayment.received` when there is money behind it.
+            if (partialPayment === true) return;
 
             const prefs = await this.preferenceRepo.getByVendor(vendorId);
             if (!prefs.preferences.orderCreated) return; // Disabled
@@ -146,6 +150,35 @@ export class VendorNotificationEventHandler {
         } catch (error) {
             console.error('[NotificationHandler] Failed to handle order.created:', error);
             // Do not throw - event processing must continue
+        }
+    }
+
+    /** The online part of a partial order was paid: the vendor's "new order", with the split in it. */
+    async handleOrderPrepaymentReceived(event: DomainEvent): Promise<void> {
+        try {
+            const { orderId, vendorId, orderNumber, totalAmount, amountPaidOnline, balanceDue, currency } = event.payload;
+
+            const prefs = await this.preferenceRepo.getByVendor(vendorId);
+            if (!prefs.preferences.orderCreated) return; // Disabled
+
+            await this.dispatch({
+                situation: 'order.created.partial',
+                prefs,
+                vendorId,
+                aggregateType: 'order',
+                aggregateId: orderId,
+                idempotencyKey: `order.created.partial:${orderId}:${vendorId}`,
+                context: {
+                    orderNumber,
+                    currency,
+                    amountFormatted: Number(totalAmount).toLocaleString(),
+                    paidFormatted: Number(amountPaidOnline).toLocaleString(),
+                    balanceFormatted: Number(balanceDue).toLocaleString(),
+                    orderId
+                }
+            });
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle order.prepayment.received:', error);
         }
     }
 
@@ -373,6 +406,197 @@ export class VendorNotificationEventHandler {
         } catch (error) {
             console.error('[NotificationHandler] Failed to handle booking.cancelled:', error);
         }
+    }
+
+    /**
+     * `booking.rescheduled` — told to the shop ONLY when the CUSTOMER moved it (D-8). A move the
+     * shop proposed and the customer accepted reaches it as `booking.reschedule_accepted` instead,
+     * and `agreed` here would be the same news twice.
+     */
+    async handleBookingRescheduled(event: DomainEvent): Promise<void> {
+        try {
+            const p = event.payload;
+            if (p.movedBy !== 'customer') return;
+            await this.dispatchMove('booking.rescheduled', p, `booking.rescheduled:${p.bookingId}:${new Date(p.startAt).getTime()}`);
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle booking.rescheduled:', error);
+        }
+    }
+
+    /** `booking.reschedule_proposed` — the shop hears only of the CUSTOMER's requests (D-8). */
+    async handleBookingRescheduleProposed(event: DomainEvent): Promise<void> {
+        try {
+            const p = event.payload;
+            if (p.proposedBy !== 'customer') return;
+            await this.dispatchMove('booking.reschedule_requested', p, `booking.reschedule_requested:${p.bookingId}:${new Date(p.startAt).getTime()}`);
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle booking.reschedule_proposed:', error);
+        }
+    }
+
+    /** `booking.reschedule_answered` — the shop hears the customer's answer to the SHOP's proposal (D-9). */
+    async handleBookingRescheduleAnswered(event: DomainEvent): Promise<void> {
+        try {
+            const p = event.payload;
+            if (p.proposedBy !== 'vendor') return;
+            // A move that carried a price is told as the price: it is the one message that says both.
+            if (p.price !== null && p.price !== undefined) {
+                await this.dispatchPriceAnswer({ ...p, amount: p.price });
+                return;
+            }
+            const situation = p.answer === 'accepted' ? 'booking.reschedule_accepted' : 'booking.reschedule_declined';
+            await this.dispatchMove(situation, p, `${situation}:${p.bookingId}:${new Date(p.proposedStartAt).getTime()}`);
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle booking.reschedule_answered:', error);
+        }
+    }
+
+    /**
+     * A customer used their one reminder on this appointment.
+     *
+     * ⚠ **Throws, unlike every event handler above.** The caller has already spent the reminder and
+     * releases it if the inbox row could not be written, so a failure has to reach it. A failed
+     * secondary channel still does not throw: it is recorded on the notification, as everywhere.
+     *
+     * No preference is read as a gate — see the catalog entry.
+     */
+    async sendBookingReminderFromCustomer(p: {
+        vendorId: string;
+        bookingId: string;
+        bookingNumber?: string | null;
+        serviceName?: string | null;
+        customerName?: string | null;
+        startAt: Date;
+    }): Promise<void> {
+        await this.dispatchBookingReminder(
+            p,
+            (lang) => p.customerName || this.genericCustomer(lang),
+            `booking.reminder:${p.bookingId}:${p.vendorId}`,
+        );
+    }
+
+    /**
+     * An administrator reminded the vendor. Same message and template as the customer's, opening
+     * with the platform's name in the sender's place. A fresh key per request, because an
+     * administrator may send it again; it neither spends nor is limited by the customer's one.
+     * Throws for the same reason `sendBookingReminderFromCustomer` does.
+     */
+    async sendBookingReminderFromAdmin(p: {
+        vendorId: string;
+        bookingId: string;
+        bookingNumber?: string | null;
+        serviceName?: string | null;
+        startAt: Date;
+        requestId: string;
+    }): Promise<void> {
+        await this.dispatchBookingReminder(
+            p,
+            (lang) => ({
+                en: 'Wi-Mall support',
+                fr: 'Le support Wi-Mall',
+                pt: 'O apoio Wi-Mall',
+                es: 'El soporte de Wi-Mall',
+                ar: 'دعم Wi-Mall',
+            })[lang],
+            `booking.reminder.admin:${p.bookingId}:${p.requestId}`,
+        );
+    }
+
+    /** No preference is read as a gate — see the catalog entry. */
+    private async dispatchBookingReminder(
+        p: { vendorId: string; bookingId: string; bookingNumber?: string | null; serviceName?: string | null; startAt: Date },
+        senderName: (lang: Language) => string,
+        idempotencyKey: string,
+    ): Promise<void> {
+        const [prefs, vendor] = await Promise.all([
+            this.preferenceRepo.getByVendor(p.vendorId),
+            this.vendorRepo.findById(p.vendorId),
+        ]);
+        const lang = resolveLanguage(vendor);
+        await this.dispatch({
+            situation: 'booking.reminder',
+            prefs,
+            vendorId: p.vendorId,
+            aggregateType: 'booking',
+            aggregateId: p.bookingId,
+            idempotencyKey,
+            context: {
+                bookingNumber: p.bookingNumber || this.genericBookingRef(lang),
+                serviceName: p.serviceName || this.genericService(lang),
+                customerName: senderName(lang),
+                startDate: this.formatBookingMoment(p.startAt, vendor?.timezone),
+                bookingId: p.bookingId
+            }
+        });
+    }
+
+    /** `booking.price_answered` — the shop hears the customer's answer to its proposed price. */
+    async handleBookingPriceAnswered(event: DomainEvent): Promise<void> {
+        try {
+            await this.dispatchPriceAnswer(event.payload);
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle booking.price_answered:', error);
+        }
+    }
+
+    /** No preference silences either: the shop asked this question and is waiting on the answer. */
+    private async dispatchPriceAnswer(p: Record<string, any>): Promise<void> {
+        const situation = p.answer === 'accepted' ? 'booking.price_accepted' : 'booking.price_declined';
+        const [prefs, vendor] = await Promise.all([
+            this.preferenceRepo.getByVendor(p.vendorId),
+            this.vendorRepo.findById(String(p.vendorId)),
+        ]);
+        const lang = resolveLanguage(vendor);
+        await this.dispatch({
+            situation,
+            prefs,
+            vendorId: p.vendorId,
+            aggregateType: 'booking',
+            aggregateId: p.bookingId,
+            // The amount is in the key: a vendor may propose again, and each answer is its own news.
+            idempotencyKey: `${situation}:${p.bookingId}:${p.amount}:${Date.now()}`,
+            context: {
+                bookingNumber: p.bookingNumber || this.genericBookingRef(lang),
+                serviceName: p.productTitle || this.genericService(lang),
+                customerName: p.customerName || this.genericCustomer(lang),
+                currency: p.currency,
+                amountFormatted: Number(p.amount).toLocaleString(),
+                currentFormatted: Number(p.currentPrice).toLocaleString(),
+                startDate: this.formatBookingMoment(p.startAt, vendor?.timezone),
+                bookingId: p.bookingId
+            }
+        });
+    }
+
+    /** The four appointment-move messages share their context and their preference flag. */
+    private async dispatchMove(
+        situation: 'booking.rescheduled' | 'booking.reschedule_requested' | 'booking.reschedule_accepted' | 'booking.reschedule_declined',
+        p: Record<string, any>,
+        idempotencyKey: string
+    ): Promise<void> {
+        const prefs = await this.preferenceRepo.getByVendor(p.vendorId);
+        // Rows from before the flag existed carry no value: `undefined` is ON.
+        if (prefs.preferences.bookingRescheduled === false) return;
+
+        const vendor = await this.vendorRepo.findById(String(p.vendorId));
+        const lang = resolveLanguage(vendor);
+        await this.dispatch({
+            situation,
+            prefs,
+            vendorId: p.vendorId,
+            aggregateType: 'booking',
+            aggregateId: p.bookingId,
+            idempotencyKey,
+            context: {
+                bookingNumber: p.bookingNumber || this.genericBookingRef(lang),
+                serviceName: p.productTitle || this.genericService(lang),
+                customerName: p.customerName || this.genericCustomer(lang),
+                startDate: this.formatBookingMoment(p.startAt, p.vendorTimezone),
+                previousStartDate: this.formatBookingMoment(p.previousStartAt, p.vendorTimezone),
+                expiresDate: p.expiresAt ? this.formatBookingMoment(p.expiresAt, p.vendorTimezone) : '',
+                bookingId: p.bookingId
+            }
+        });
     }
 
     /** Handle payment.received.partial event */
@@ -1540,7 +1764,14 @@ export class VendorNotificationEventHandler {
                 );
             }
         } else {
-            // Outside the window only approved templates are deliverable.
+            // Outside the window only approved templates are deliverable — and an in-window-only
+            // situation has none yet (`VENDOR_IN_WINDOW_ONLY_SITUATIONS`). It still reached the
+            // vendor in-app, by push and on their other channels; WhatsApp is skipped, honestly.
+            const templateName = whatsAppTemplateName(situation);
+            if (!templateName) {
+                console.log(`[NotificationHandler] ${situation} has no WhatsApp template; outside the 24h window it is not sent on WhatsApp`);
+                return;
+            }
             const components: TemplateComponent[] = [
                 {
                     type: 'body',
@@ -1566,7 +1797,7 @@ export class VendorNotificationEventHandler {
                 type: 'template',
                 message: {
                     type: 'template',
-                    name: whatsAppTemplateName(situation),
+                    name: templateName,
                     /**
                      * ⛔ **`templateLanguage`, never `META_LANGUAGE_CODE[lang]`.** Templates are
                      * approved in English and French ONLY, so naming the recipient's own language

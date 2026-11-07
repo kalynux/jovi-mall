@@ -240,6 +240,19 @@ export const ERROR_CODES = Object.freeze({
      */
     PAYMENT_PAYER_NUMBER_REQUIRED: 'PAYMENT_PAYER_NUMBER_REQUIRED',
     PAYMENT_ORDER_IS_COD: 'PAYMENT_ORDER_IS_COD',
+    // ── Partial payment (2026-11-01): part online now, the rest in cash at the door ──
+    // Checkout refused. `details.reason` is one of `PARTIAL_PAYMENT_UNAVAILABLE_REASONS`. // 422
+    PARTIAL_PAYMENT_NOT_AVAILABLE: 'PARTIAL_PAYMENT_NOT_AVAILABLE',
+    // Paying a partial order with no amount. `details`: `{ minimum, maximum }`.          // 422
+    PARTIAL_PAYMENT_AMOUNT_REQUIRED: 'PARTIAL_PAYMENT_AMOUNT_REQUIRED',
+    // The amount is outside the order's limits. `details`: `{ minimum, maximum, requested }`. // 422
+    PARTIAL_PAYMENT_AMOUNT_OUT_OF_RANGE: 'PARTIAL_PAYMENT_AMOUNT_OUT_OF_RANGE',
+    // An `amount` was sent for an order that is not partial.                             // 422
+    PARTIAL_PAYMENT_NOT_APPLICABLE: 'PARTIAL_PAYMENT_NOT_APPLICABLE',
+    // Approving a returned parcel's refund before an administrator said whose fault it was. // 422
+    REFUND_PARTIAL_RETURN_FAULT_REQUIRED: 'REFUND_PARTIAL_RETURN_FAULT_REQUIRED',
+    // Setting a fault on a refund that is not a returned parcel's, or no longer awaiting approval. // 422
+    REFUND_PARTIAL_RETURN_NOT_APPLICABLE: 'REFUND_PARTIAL_RETURN_NOT_APPLICABLE',
     STRIPE_WEBHOOK_SIGNATURE_INVALID: 'STRIPE_WEBHOOK_SIGNATURE_INVALID',
     /**
      * A mobile-money charge could not be routed to MTN or Orange.
@@ -399,6 +412,18 @@ export const ERROR_CODES = Object.freeze({
     REFUND_INSUFFICIENT_GATEWAY_BALANCE: 'REFUND_INSUFFICIENT_GATEWAY_BALANCE',
     /** A refund paid outside the platform needs its picture proof (R-7b). 422. */
     REFUND_EXTERNAL_PROOF_REQUIRED: 'REFUND_EXTERNAL_PROOF_REQUIRED',
+    /** A parcel named as delivered at fault is not this order's, or the source has no parcels (2026-10-22). 422. */
+    REFUND_DELIVERY_FAULT_INVALID: 'REFUND_DELIVERY_FAULT_INVALID',
+    /** Damage claims on an agency (owner F-8, 2026-10-22). */
+    AGENCY_CLAIM_NOT_FOUND: 'AGENCY_CLAIM_NOT_FOUND',
+    /** One damage claim per parcel. 409. */
+    AGENCY_CLAIM_EXISTS: 'AGENCY_CLAIM_EXISTS',
+    /** The problem was raised outside the agency's own window (its damage-claim deadline). 422. */
+    AGENCY_CLAIM_OUTSIDE_WINDOW: 'AGENCY_CLAIM_OUTSIDE_WINDOW',
+    /** More than the agency's max refund per item × the damaged items. 422. */
+    AGENCY_CLAIM_EXCEEDS_CAP: 'AGENCY_CLAIM_EXCEEDS_CAP',
+    /** The parcel cannot carry a claim: not delivered, no agency, or the agency allows nothing per item. 422. */
+    AGENCY_CLAIM_NOT_ELIGIBLE: 'AGENCY_CLAIM_NOT_ELIGIBLE',
     /** Boot wiring: `registerRefundPorts` was never called. Never skipped silently. 500. */
     REFUND_PORT_NOT_REGISTERED: 'REFUND_PORT_NOT_REGISTERED',
     /**
@@ -1034,6 +1059,8 @@ export const ERROR_CODES = Object.freeze({
     CATALOG_PRODUCT_SERVICE_NO_DURATION: 'CATALOG_PRODUCT_SERVICE_NO_DURATION',
     CATALOG_PRODUCT_SERVICE_NO_CAPACITY: 'CATALOG_PRODUCT_SERVICE_NO_CAPACITY',
     CATALOG_PRODUCT_SERVICE_NO_AVAILABILITY: 'CATALOG_PRODUCT_SERVICE_NO_AVAILABILITY',
+    /** The service is set to happen at a vendor address that is no longer on the vendor's profile. */
+    CATALOG_PRODUCT_SERVICE_LOCATION_ADDRESS_MISSING: 'CATALOG_PRODUCT_SERVICE_LOCATION_ADDRESS_MISSING',
     CATALOG_PRODUCT_VARIANT_ZERO_PRICE: 'CATALOG_PRODUCT_VARIANT_ZERO_PRICE',
     CATALOG_PRODUCT_NOT_DIGITAL: 'CATALOG_PRODUCT_NOT_DIGITAL',
     CATALOG_PRODUCT_NO_DIGITAL_CONFIG: 'CATALOG_PRODUCT_NO_DIGITAL_CONFIG',
@@ -1484,6 +1511,25 @@ export const ERROR_CODES = Object.freeze({
      * progress" without a second call.
      */
     ACCOUNT_CLOSURE_ORDERS_IN_FLIGHT: 'ACCOUNT_CLOSURE_ORDERS_IN_FLIGHT',
+    /** The account's referral wallet still holds or owes money. */
+    ACCOUNT_CLOSURE_REFERRAL_BALANCE: 'ACCOUNT_CLOSURE_REFERRAL_BALANCE',
+
+    // ── REFERRAL PROGRAM (REFERRAL-PROGRAM-PLAN) ─────────────────────────────
+    /** The program is switched off: nobody may apply. */
+    REFERRAL_PROGRAM_DISABLED: 'REFERRAL_PROGRAM_DISABLED',
+    /** This person already has an application or a partnership. `details.status`. */
+    REFERRAL_ALREADY_APPLIED: 'REFERRAL_ALREADY_APPLIED',
+    /** Rejected or terminated, and no administrator has allowed a new application (owner R-9). */
+    REFERRAL_REAPPLY_NOT_ALLOWED: 'REFERRAL_REAPPLY_NOT_ALLOWED',
+    REFERRAL_PARTNER_NOT_FOUND: 'REFERRAL_PARTNER_NOT_FOUND',
+    /** That verb cannot run from the partner's current status. `details.status`. */
+    REFERRAL_PARTNER_STATUS_CONFLICT: 'REFERRAL_PARTNER_STATUS_CONFLICT',
+    /** Suspended or terminated: nothing may be withdrawn until an administrator decides (owner R-9). */
+    REFERRAL_BALANCE_FROZEN: 'REFERRAL_BALANCE_FROZEN',
+    /** There is no frozen balance to release, or it was already released. */
+    REFERRAL_BALANCE_NOT_FROZEN: 'REFERRAL_BALANCE_NOT_FROZEN',
+    /** A role on this account holds the destination; it is edited on that role's page. `details.source`. */
+    REFERRAL_PAYOUT_METHOD_MANAGED_ELSEWHERE: 'REFERRAL_PAYOUT_METHOD_MANAGED_ELSEWHERE',
 
     // ── ROLE CLOSURE (administrator-requested, user-confirmed — ADR-A10) ─────
     /** No pending closure request for this user + role (or for the caller's current role). */
@@ -1960,6 +2006,47 @@ export const ERROR_CODES = Object.freeze({
     BOOKING_SLOT_UNAVAILABLE: 'BOOKING_SLOT_UNAVAILABLE',
     /** The booking is past the point where it can be cancelled by its owner. */
     BOOKING_NOT_CANCELLABLE: 'BOOKING_NOT_CANCELLABLE',
+    /** The service happens at the customer's address and none was chosen. */
+    BOOKING_ADDRESS_REQUIRED: 'BOOKING_ADDRESS_REQUIRED',
+    /** The chosen address is not one of the customer's saved addresses. */
+    BOOKING_ADDRESS_NOT_FOUND: 'BOOKING_ADDRESS_NOT_FOUND',
+    /** The service's own address was removed from the vendor's profile — it cannot be booked until set again. */
+    BOOKING_LOCATION_UNAVAILABLE: 'BOOKING_LOCATION_UNAVAILABLE',
+    /** Access details cannot be changed on a cancelled, completed or no-show booking. */
+    BOOKING_ACCESS_NOT_EDITABLE: 'BOOKING_ACCESS_NOT_EDITABLE',
+    /** There is no open proposal of a new time on this booking. */
+    BOOKING_PROPOSAL_NOT_FOUND: 'BOOKING_PROPOSAL_NOT_FOUND',
+    /** A proposal of a new time is already waiting for an answer on this booking. */
+    BOOKING_PROPOSAL_PENDING: 'BOOKING_PROPOSAL_PENDING',
+    /** The proposal can only be answered by the other side — not by whoever made it. */
+    BOOKING_PROPOSAL_NOT_YOURS: 'BOOKING_PROPOSAL_NOT_YOURS',
+    /** A group class (capacity mode) is booked one class at a time — several consecutive slots are refused. */
+    BOOKING_MULTI_SLOT_NOT_SUPPORTED: 'BOOKING_MULTI_SLOT_NOT_SUPPORTED',
+    // ── Administrator decisions on a booking (ADMIN-BOOKINGS-PLAN, 2026-10-27) ──
+    /** An administrator completes a booking only once its money is held: unpaid ones are refused. */
+    BOOKING_ADMIN_COMPLETE_UNPAID: 'BOOKING_ADMIN_COMPLETE_UNPAID',
+    /** The appointment has not started yet, so it cannot be completed. */
+    BOOKING_NOT_STARTED: 'BOOKING_NOT_STARTED',
+    /** The payment re-check is for a booking whose payment reads `pending`; this one does not. */
+    BOOKING_PAYMENT_NOT_PENDING: 'BOOKING_PAYMENT_NOT_PENDING',
+    /** The provider says the payment succeeded but the booking still reads `pending` — needs an engineer. */
+    BOOKING_PAYMENT_STATE_MISMATCH: 'BOOKING_PAYMENT_STATE_MISMATCH',
+    /** A reminder is only sent for a confirmed booking that has not started yet. */
+    BOOKING_REMINDER_NOT_APPLICABLE: 'BOOKING_REMINDER_NOT_APPLICABLE',
+    /** This side already used its one reminder on this booking. */
+    BOOKING_REMINDER_ALREADY_SENT: 'BOOKING_REMINDER_ALREADY_SENT',
+    /** The proposed price is under what the customer booked at. `details.minimum` is the floor. */
+    BOOKING_PRICE_BELOW_FLOOR: 'BOOKING_PRICE_BELOW_FLOOR',
+    /** A price cannot be proposed on this booking now. `details.reason` says why. */
+    BOOKING_PRICE_NOT_PROPOSABLE: 'BOOKING_PRICE_NOT_PROPOSABLE',
+    /** No proposal of a price is waiting for an answer. */
+    BOOKING_PRICE_PROPOSAL_NOT_FOUND: 'BOOKING_PRICE_PROPOSAL_NOT_FOUND',
+    /** The vendor tried to confirm while their own price proposal is unanswered. */
+    BOOKING_PRICE_PROPOSAL_OPEN: 'BOOKING_PRICE_PROPOSAL_OPEN',
+    /** A manual service's price cannot be typed at completion, only extra time billed. */
+    BOOKING_PRICE_LOCKED: 'BOOKING_PRICE_LOCKED',
+    /** No live seat starts at that time on that service. */
+    BOOKING_SESSION_EMPTY: 'BOOKING_SESSION_EMPTY',
 
     // ── AVAILABILITY RULES (service products) ─────────────────────────────────
     AVAILABILITY_PRODUCT_NOT_FOUND: 'AVAILABILITY_PRODUCT_NOT_FOUND',

@@ -33,9 +33,15 @@ export const OwnerParamsSchema = z.object({
 
 export type OwnerParams = z.infer<typeof OwnerParamsSchema>;
 
-/** `/pauses/:kind/:id` — the order or booking whose earnings are paused or resumed. */
+/**
+ * What an administrator can pause: an order, a booking, or one delivery (`shipment` — its
+ * agency's and rider's shares only, owner decision 2026-10-22). wi-admin pins the same list.
+ */
+export const PAUSE_TARGET_KINDS = ['order', 'booking', 'shipment'] as const;
+
+/** `/pauses/:kind/:id` — the order, booking or delivery whose earnings are paused or resumed. */
 export const PauseTargetParamsSchema = z.object({
-  kind: z.enum(['order', 'booking']),
+  kind: z.enum(PAUSE_TARGET_KINDS),
   id: z.string().trim().regex(/^[a-f\d]{24}$/i, 'Not a valid id'),
 });
 
@@ -52,7 +58,7 @@ export const ResumeEarningsBodySchema = z
   .strict();
 
 export const ListPausesQuerySchema = z.object({
-  kind: z.enum(['order', 'booking']).optional(),
+  kind: z.enum(PAUSE_TARGET_KINDS).optional(),
   ...paginationFields,
 });
 

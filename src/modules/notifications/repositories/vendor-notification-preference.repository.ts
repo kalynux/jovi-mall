@@ -22,6 +22,7 @@ export interface UpdatePreferencesPayload {
         agencyStorageUpdates?: boolean;
         codLimitUpdates?: boolean;
         deliveryFeeProposals?: boolean;
+        bookingRescheduled?: boolean;
     };
 }
 
@@ -66,7 +67,8 @@ export class VendorNotificationPreferenceRepository {
                     shipmentRejected: true,
                     agencyStorageUpdates: true,
                     codLimitUpdates: true,
-                    deliveryFeeProposals: true
+                    deliveryFeeProposals: true,
+                    bookingRescheduled: true
                 }
             });
         }
@@ -150,6 +152,8 @@ export class VendorNotificationPreferenceRepository {
                 updates.preferences.codLimitUpdates ?? current.preferences.codLimitUpdates ?? true;
             updatePayload['preferences.deliveryFeeProposals'] =
                 updates.preferences.deliveryFeeProposals ?? current.preferences.deliveryFeeProposals ?? true;
+            updatePayload['preferences.bookingRescheduled'] =
+                updates.preferences.bookingRescheduled ?? current.preferences.bookingRescheduled ?? true;
         }
 
         const result = await VendorNotificationPreferenceModel.findOneAndUpdate(

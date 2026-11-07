@@ -33,6 +33,16 @@ export type CustomerNotificationType =
     | 'booking.confirmed'
     /** Moved to a different time (by either side). */
     | 'booking.rescheduled'
+    /** The VENDOR proposes a new time; the customer accepts or declines (D-9, 2026-10-26). */
+    | 'booking.reschedule_proposed'
+    /** The same, with a new price: the customer accepts or declines both (BOOKING-PRICE-PROPOSAL-PLAN). */
+    | 'booking.reschedule_price_proposed'
+    /** The vendor proposes a different price before approving a manual booking. */
+    | 'booking.price_proposed'
+    /** The agreed price is set, and this is what is owed for it. */
+    | 'booking.price_topup_due'
+    /** The vendor declined the customer's request for a new time (D-8, manual services). */
+    | 'booking.reschedule_declined'
     /** Called off. Copy differs by who did it — see the catalog. */
     | 'booking.cancelled'
     /** The appointment happened and was settled. */
@@ -103,6 +113,8 @@ export type CustomerNotificationType =
     // ── Orders (physical/digital goods) ─────────────────────────────────────
     | 'order.created'
     | 'order.payment.received'
+    /** A partial order's online part arrived; the customer still owes cash at the door (2026-11-01). */
+    | 'order.prepayment.received'
     /**
      * A card payment page is waiting to be opened (GAP-008 + GAP-012).
      *
@@ -236,6 +248,11 @@ export const CUSTOMER_NOTIFICATION_TYPES: readonly CustomerNotificationType[] = 
     'booking.created',
     'booking.confirmed',
     'booking.rescheduled',
+    'booking.reschedule_proposed',
+    'booking.reschedule_price_proposed',
+    'booking.price_proposed',
+    'booking.price_topup_due',
+    'booking.reschedule_declined',
     'booking.cancelled',
     'booking.completed',
     'booking.reminder',
@@ -252,6 +269,7 @@ export const CUSTOMER_NOTIFICATION_TYPES: readonly CustomerNotificationType[] = 
     'booking.refund.declined',
     'order.created',
     'order.payment.received',
+    'order.prepayment.received',
     'order.payment_link',
     'order.payment_failed',
     'order.shipped',

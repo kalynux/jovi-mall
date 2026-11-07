@@ -14,6 +14,7 @@ import { deliveryIncludedLine } from '../../domain/delivery-lines';
 import {
     botFulfillmentStateLabel,
     botPaymentStateLabel,
+    onlinePartDueOf,
     toBotOrderPaymentState,
 } from '../../domain/bot-order-status-copy';
 import { BotCopyLanguage, toBotCopyLanguage } from '../../domain/bot-error-copy';
@@ -427,7 +428,7 @@ function paymentTextOf(group: CustomerOrderGroup, language: BotCopyLanguage): st
     return botPaymentStateLabel(
         toBotOrderPaymentState(aggregatePaymentStatus(group.paymentStatuses)),
         language,
-        { cashOnDelivery: allCash },
+        { cashOnDelivery: allCash, onlinePartDue: group.orders.some(onlinePartDueOf) },
     );
 }
 

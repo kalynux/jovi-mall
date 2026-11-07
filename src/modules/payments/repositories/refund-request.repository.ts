@@ -76,6 +76,7 @@ export class RefundRequestRepository {
       completed_at: { $lt: before },
       $or: [
         { source_kind: { $in: ['order', 'booking'] }, earnings_impact: 'clawback', earnings_settled_at: null },
+        { partial_return: { $ne: null }, earnings_settled_at: null },
         { source_kind: { $in: ['plan_purchase', 'credit_topup'] }, billing_reversed_at: null },
       ],
     })

@@ -203,7 +203,7 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {},
-        "description": "No model-supplied parameters. The identity envelope is attached by the transport, and carries the optional `language` hint (Telegram from.language_code) used to seed a new account."
+        "description": "No model-supplied parameters. The identity envelope is attached by the transport, and carries the optional `language` hint (Telegram from.language_code) used to seed a new account. The transport also sends the inbound text as the optional `messageText`, read only for a referral code on a first contact and never stored."
       },
       "request": {
         "body": []
@@ -2299,6 +2299,10 @@
           "deliveryFeeCash.reason",
           "deliveryFeeCash.amountDueOnline",
           "deliveryFeeCash.amountDueToRider",
+          "partialPayment.available",
+          "partialPayment.reason",
+          "partialPayment.minimumAmount",
+          "partialPayment.maximumAmount",
           "perVendor[].deliveryFeeCash"
         ],
         "result_kind": "receipt",
@@ -2607,7 +2611,11 @@
           "deliveryShortfalls[].shortfallText",
           "deliveryShortfalls[].payable",
           "payment.deliveryFeeCash.onlineText",
-          "payment.deliveryFeeCash.toRiderText"
+          "payment.deliveryFeeCash.toRiderText",
+          "payment.partialPayment.minimumAmount",
+          "payment.partialPayment.maximumAmount",
+          "payment.partialPayment.minimumText",
+          "payment.partialPayment.maximumText"
         ],
         "result_kind": "cart_summary",
         "never_relay": [
@@ -2690,6 +2698,11 @@
             "type": "string",
             "pattern": "^d{4,8}$",
             "description": "Orange Money only, and only after a PAYMENT_CODE_REQUIRED refusal: the payment code the customer got by dialling details.ussd and typed back to you. Digits only. Never ask for it up front, never invent it, never repeat it back."
+          },
+          "partialAmount": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "ONLY when the review's payment.partialPayment was set and the customer said how much they want to pay now: a whole number between its minimumAmount and maximumAmount. This is charged now and the rest is paid in cash at delivery. Never invent it. On PARTIAL_PAYMENT_AMOUNT_OUT_OF_RANGE (details.spent false), tell them the limits and ask again; nothing was spent."
           }
         }
       },
@@ -2699,7 +2712,8 @@
           "deliveryAddressId",
           "phone",
           "deliveryFeePayment",
-          "paymentCode"
+          "paymentCode",
+          "partialAmount"
         ]
       },
       "response": {
@@ -2961,13 +2975,19 @@
             "type": "string",
             "pattern": "^d{4,8}$",
             "description": "Orange Money only, and only after a PAYMENT_CODE_REQUIRED refusal: the payment code the customer got by dialling details.ussd and typed back to you. Digits only. Never ask for it up front, never invent it, never repeat it back."
+          },
+          "partialAmount": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Only on a checkout paid part online, and only when the customer named a different amount to pay now (for example their wallet was short). Omit to retry the same amount."
           }
         }
       },
       "request": {
         "body": [
           "phone",
-          "paymentCode"
+          "paymentCode",
+          "partialAmount"
         ]
       },
       "response": {
@@ -3738,7 +3758,7 @@
       "service": "jovi-mall",
       "surface": "bot_internal",
       "description": "One seller's order in full: what was bought, what it cost, where it is going, and how each line is delivered.",
-      "when_to_use": "The customer names an order number or follows up on one order from a list.",
+      "when_to_use": "The customer names an order number or follows up on one order from a list — including \"who pays the delivery on my order?\" or \"how much did delivery cost me?\".",
       "when_not_to_use": "For a delivery question, pair it with orders_list_shipments.",
       "operation": {
         "method": "POST",
@@ -3823,7 +3843,7 @@
       "audit": true,
       "requires_customer_role": true,
       "platform_notes": {
-        "whatsapp": ""
+        "whatsapp": "Who pays delivery: deliveryFees[] has one row per parcel and amount is what THE CUSTOMER pays for that parcel. 0 means the shop pays that delivery and it costs the customer nothing — say so plainly. Quote only these figures; never work out a fee."
       },
       "commands": [
         "order",
@@ -4668,8 +4688,8 @@
       "service": "jovi-mall",
       "surface": "bot_internal",
       "description": "The customer proposes THEIR delivery fee — higher or lower — to the delivery company carrying a parcel whose delivery they pay. The company accepts or declines; the parcel waits for that answer. Lower and accepted: the customer pays less (cash) or gets the difference back (paid online). Higher and accepted on an online order: the customer must pay the difference (delivery_fees_list_pending then shows Pay now). The platform words the outcome — relay the reply.",
-      "when_to_use": "The customer explicitly asks to pay a different delivery fee for one of their orders and names the amount (e.g. \"can I pay 1000 for delivery instead?\").",
-      "when_not_to_use": "Never invent the amount or the reason — ask. Never for an order whose delivery the shop pays (the refusal says so). Not for one price on several parcels of one checkout — that is combined_delivery_request. Not to answer a fee the company asked for — that is delivery_fees_list_pending.",
+      "when_to_use": "The customer wants to pay a DIFFERENT delivery fee on one of their orders — lower or higher — e.g. \"can I pay 1000 for delivery instead?\", \"delivery is too expensive, I propose 1500\". If they did not say the amount, or why, ask first, then call it.",
+      "when_not_to_use": "Never invent the amount or the reason — ask. When the shop pays the delivery (orders_get_order deliveryFees amount 0), do not call it: tell the customer the shop handles that delivery and it costs them nothing — and if a call is refused for that reason, relay the refusal. Not for one price on several parcels of one checkout — that is combined_delivery_request. Not to answer a fee the company asked for — that is delivery_fees_list_pending.",
       "operation": {
         "method": "POST",
         "path": "/api/internal/bot/delivery-fees/propose"
@@ -8496,6 +8516,11 @@
             "type": "string",
             "maxLength": 500,
             "description": "The customer's own words about the appointment. This reaches the vendor's calendar, so pass what they said rather than a summary."
+          },
+          "addressId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "One of the customer's saved addresses, from addresses_list. REQUIRED when the service's locationKind is customer_address (the vendor comes to them); ignored otherwise. Ask the customer which address — never assume the default."
           }
         }
       },
@@ -8503,7 +8528,8 @@
         "body": [
           "productId",
           "slotId",
-          "notes"
+          "notes",
+          "addressId"
         ]
       },
       "response": {
@@ -8559,6 +8585,27 @@
           "details_fields": [
             "fields"
           ]
+        },
+        {
+          "code": "BOOKING_ADDRESS_REQUIRED",
+          "status": 422,
+          "category": "validation",
+          "when": "The service happens at the customer's address and no addressId was sent",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "BOOKING_ADDRESS_NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "addressId is not one of this customer's saved addresses",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "BOOKING_LOCATION_UNAVAILABLE",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The vendor removed the address this service happens at",
+          "customer_action": "explain"
         }
       ],
       "mutating": true,
@@ -8586,6 +8633,91 @@
       ]
     },
     {
+      "name": "bookings_address_step",
+      "version": 1,
+      "title": "Answer the appointment address question",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "The customer's next message while the appointment address step is open: typed text, a shared location, or a tapped map match (gc_...). The backend decides what it answers (address, town or description), saves the address to the account at the end, and opens the time picker with it chosen.",
+      "when_to_use": "ONLY from wi-mall-core's routing, when /identity/sync returns data.bookingAddress (not null) and the message is text that is not a /command, a location, or a gc_ token.",
+      "when_not_to_use": "Never from the model. Never when data.bookingAddress is null.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/bookings/address-step"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 300,
+            "description": "Exactly what the customer typed."
+          },
+          "location": {
+            "type": "object",
+            "description": "The shared location, { lat, lng }."
+          },
+          "token": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "A gc_ map-match token the customer tapped."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "text",
+          "location",
+          "token"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "active",
+          "stage",
+          "addressId",
+          "productId"
+        ],
+        "result_kind": "booking_address_step"
+      },
+      "errors": [
+        {
+          "code": "VALIDATION_ERROR",
+          "status": 400,
+          "category": "validation",
+          "when": "Not exactly one of text, location, token",
+          "customer_action": "reprompt"
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "idempotency": "A map-match handle is single-use; the step is keyed per conversation and every answer overwrites it.",
+      "requires_confirmation": false,
+      "risk": "medium",
+      "side_effects": [
+        "The last answer saves an address to the customer's account"
+      ],
+      "context_resolution": {
+        "subject": "none",
+        "policy": "not_applicable"
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "Always carries a reply; relay it.",
+        "telegram": "Always carries a reply; relay it."
+      },
+      "commands": [
+        "bookings"
+      ]
+    },
+    {
       "name": "bookings_list",
       "version": 1,
       "title": "The customer's appointments",
@@ -8594,7 +8726,7 @@
       "gap_ref": "GAP-001",
       "service": "jovi-mall",
       "surface": "bot_internal",
-      "description": "The customer's booked appointments: when, whether confirmed, whether paid.",
+      "description": "The customer's booked appointments: when, whether confirmed, whether paid. If `priceQuestion` is set, the customer must answer a proposed price by pressing a button under that message: ask them to press Accept price or Decline price. You cannot answer it for them, a typed yes does not count, and you must never say it was accepted.",
       "when_to_use": "The customer asks about an appointment or service they booked.",
       "when_not_to_use": "It cannot make a booking — booking happens on the website.",
       "operation": {
@@ -8682,7 +8814,7 @@
       "gap_ref": "GAP-001",
       "service": "jovi-mall",
       "surface": "bot_internal",
-      "description": "One appointment in full: when, who provides it, what it costs, and its payment state.",
+      "description": "One appointment in full: when, who provides it, what it costs, and its payment state. If `priceQuestion` is set, the customer must answer a proposed price by pressing a button under that message: ask them to press Accept price or Decline price. You cannot answer it for them, a typed yes does not count, and you must never say it was accepted.",
       "when_to_use": "The customer asks about a specific appointment.",
       "when_not_to_use": "Not to list (bookings_list). Not for a completed appointment's balance (bookings_get_balance).",
       "operation": {
@@ -8759,6 +8891,177 @@
       "platform_notes": {
         "whatsapp": "Read awaitingVendorApproval, NEVER status — status pending means the seller has not accepted yet; never say they are booked before that."
       },
+      "commands": [
+        "bookings"
+      ]
+    },
+    {
+      "name": "bookings_show_place",
+      "version": 1,
+      "title": "Where an appointment happens",
+      "tier": "extended",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Sends the customer where their appointment takes place: a map pin plus the address and its description for one at the shop, their own address for one at home, or the session link for one online. The shop's instructions and the link come only when the website would show them (accepted, paid, and from the shop's margin before the start).",
+      "when_to_use": "The customer asks where an appointment is, for its address, location, map, directions or link (\"where is my appointment?\", \"send me the location\", \"what is the link?\").",
+      "when_not_to_use": "Not to book or to move one. Never repeat the address, the link or the instructions in your own words: the messages are sent for you, so your whole answer is [sent].",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/bookings/{bookingId}/place"
+      },
+      "backing_endpoint": {
+        "method": "GET",
+        "path": "/api/customer/bookings/:id",
+        "doc": "customer/bookings.md#managing-your-bookings"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bookingId"
+        ],
+        "properties": {
+          "bookingId": {
+            "type": "string",
+            "description": "The appointment id, from bookings_list."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "bookingId"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "bookingId",
+          "locationKind",
+          "addressVisible",
+          "accessState"
+        ],
+        "never_relay": [
+          "coordinates"
+        ],
+        "result_kind": "booking_place"
+      },
+      "errors": [
+        {
+          "code": "NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "Not this customer's booking",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": false,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "low",
+      "context_resolution": {
+        "subject": "booking",
+        "policy": "focus_or_most_recent",
+        "must_echo": true
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "The answer carries reply/replies (a location message, then a text) and they are sent to the customer for you. Your whole answer is [sent].",
+        "telegram": "Same: a venue (map) message, then a text, sent for you."
+      },
+      "commands": [
+        "bookings"
+      ]
+    },
+    {
+      "name": "bookings_send_reminder",
+      "version": 1,
+      "title": "Remind the provider about an appointment",
+      "tier": "extended",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Sends the provider the customer's ONE reminder for a confirmed appointment that has not started. The platform writes the message; the customer cannot add text to it.",
+      "when_to_use": "The customer explicitly asks to remind the provider or the shop about their appointment (\"remind the salon about my booking\", \"can you remind them I am coming?\").",
+      "when_not_to_use": "Never on your own initiative: each appointment allows only one. Not to pass on a message, a question or a change of plan. Not when `reminder.canSend` is false on the booking.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/bookings/{bookingId}/reminder"
+      },
+      "backing_endpoint": {
+        "method": "POST",
+        "path": "/api/customer/bookings/:id/reminder",
+        "doc": "customer/bookings.md#managing-your-bookings"
+      },
+      "doc": "customer/bookings.md#managing-your-bookings",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bookingId"
+        ],
+        "properties": {
+          "bookingId": {
+            "type": "string",
+            "description": "The appointment id, from bookings_list."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "bookingId"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "id",
+          "bookingNumber",
+          "status",
+          "startAt",
+          "service",
+          "vendor",
+          "reminder"
+        ]
+      },
+      "errors": [
+        {
+          "code": "NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "Not this customer's booking",
+          "customer_action": "explain"
+        },
+        {
+          "code": "BOOKING_REMINDER_ALREADY_SENT",
+          "status": 409,
+          "category": "conflict",
+          "when": "This customer already sent their one reminder for this appointment",
+          "customer_action": "explain"
+        },
+        {
+          "code": "BOOKING_REMINDER_NOT_APPLICABLE",
+          "status": 409,
+          "category": "conflict",
+          "when": "The appointment is not confirmed, or has already started",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "requires_confirmation": false,
+      "risk": "low",
+      "context_resolution": {
+        "subject": "booking",
+        "policy": "focus_or_most_recent",
+        "must_echo": true
+      },
+      "audit": false,
+      "requires_customer_role": true,
       "commands": [
         "bookings"
       ]

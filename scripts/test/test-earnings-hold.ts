@@ -224,8 +224,9 @@ console.log('\n6. Delivery starts the hold');
 const split = code('modules/earnings/services/earnings-split.service.ts');
 assert('no split inherits the COMPLETION date any more', () =>
   !/order\.completion\?\.confirmed_at \?\? null/.test(split));
-assert('the four split paths inherit deliveredAtOf(order)', () =>
-  (split.match(/deliveredAtOf\(order\)/g) ?? []).length === 4);
+// Five since 2026-11-01: `splitPartialReturn`, a partial order's returned parcel.
+assert('the five split paths inherit deliveredAtOf(order)', () =>
+  (split.match(/deliveredAtOf\(order\)/g) ?? []).length === 5);
 
 const shipment = code('modules/shipments/shipment.service.ts');
 assert('a shipment transition syncs the hold AFTER the delivery split', () =>

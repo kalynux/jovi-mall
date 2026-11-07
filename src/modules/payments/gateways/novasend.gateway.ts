@@ -48,25 +48,34 @@ import { recordIntegrationCall } from '../../system/domain/integration-observati
  * DERIVED from our `jm_…` reference (`novasendIdempotencyKey`), so a retry of the same reference
  * presents the same key and cannot charge or pay twice. Errors are `{ code, message, statusCode }`.
  *
- * ── LOOKUPS ARE BY OUR REFERENCE ─────────────────────────────────────────────
- * `GET /v1/payin/{reference}` and `GET /v1/direct/payout/{reference}` take the MERCHANT reference,
- * so our `jm_…` reference is also the `gatewayRef` we store; NovaSend's own `id` stays in the raw
- * record. One value to look up by, and no second id to lose between the call and the row.
+ * ── LOOKUPS ARE BY NOVASEND'S OWN ID (live, 2026-11-04) ─────────────────────
+ * The docs and the SDK say `GET /v1/payin/{reference}` and `GET /v1/direct/payout/{reference}`.
+ * Live, on real transactions: `GET /v1/payin/{tr_ id}` and `GET /v1/payout/{tr_ id}` answer; our
+ * reference is 404 on both, and `/v1/direct/payout/*` is no route at all. So `gatewayRef` is
+ * NovaSend's `id`, and our `jm_…` reference is the `merchantRef`.
+ * ⚠ A send whose answer we never saw has no id, so the sweep cannot read it. It stays PENDING and
+ * the webhook, which carries both values, is what settles it.
  *
- * ── ORANGE MONEY NEEDS A CODE FIRST (`CODE_FIRST`) ───────────────────────────
- * The Direct API requires `payin.otp` for ORANGE: a code the customer gets by dialling
- * `NOVASEND_ORANGE_CODE_USSD` BEFORE paying. Routing refuses a charge without it
- * (`422 PAYMENT_CODE_REQUIRED`, nothing written); a code NovaSend refuses is
- * `422 PAYMENT_CODE_REJECTED`. The code goes to NovaSend and nowhere else.
+ * ── ORANGE IS A PUSH WITH NO CODE (live, 2026-11-04) ─────────────────────────
+ * The docs and the SDK require `payin.otp`. Live, Orange Cameroon accepted a pay-in without one and
+ * settled it, and no prompt reached the phone: the customer dialled `#150*50#`, saw the request and
+ * entered their PIN. So a `paymentCode` a stale client still sends is never forwarded.
+ *
+ * ── THE NAME ON THE PHONE ────────────────────────────────────────────────────
+ * The operator's screen names "Moon SARL", not Wi-Mall (the owner confirms that is correct), so every
+ * instruction names it and `payeeName` carries it.
  *
  * ── LIMITS ───────────────────────────────────────────────────────────────────
- * Cameroon: 200–500,000 XAF for a pay-in and for a payout. Declared on the capability so
- * routing refuses an out-of-range charge before any write; a payout out of range is refused
- * here with nothing sent.
+ * Cameroon: 301–500,000 XAF for a pay-in and for a payout. The docs say 200; live refused 200 with
+ * "supérieur à 300" and accepted 301 (300 itself is untested). Declared on the capability so routing
+ * refuses an out-of-range charge before any write; a payout out of range is refused here with
+ * nothing sent.
  *
  * ── THE NOTIFICATION IS SIGNED OVER THE WHOLE BODY ───────────────────────────
- * `X-Signature-Value: hex(HMAC-SHA256(body, webhookSecret))`. The SDK signs the raw bytes; the
- * docs' sample re-serialises (`JSON.stringify(body)`). Both are accepted, both need the secret.
+ * `hex(HMAC-SHA256(body, webhookSecret))`. The SDK signs the raw bytes; the docs' sample
+ * re-serialises (`JSON.stringify(body)`). Both are accepted, both need the secret.
+ * The header is `X-Webhook-Signature` (proven live 2026-11-04). The SDK's `X-Signature-Value` is
+ * still read, and the one that verified is logged by name.
  * `confirmWebhookEvent` still re-reads NovaSend's record: the status vocabulary differs between
  * pages (`success` / `processed` / `failed` / `expired`), and the record is what is acted on.
  *
@@ -75,15 +84,17 @@ import { recordIntegrationCall } from '../../system/domain/integration-observati
  * mobile-money refund on this platform is a PAYOUT (REFUND-FLOW-PLAN R-1). No balance endpoint is
  * documented, so `payoutBalance` is absent too.
  *
- * ⚠ ── WHAT THE DOCS LEAVE OPEN (settled by `npm run verify:novasend`) ──────────
- * - the payout body key: the docs say `payout: {…}`, the SDK sends `payin: {…}`. Built per the docs.
- * - who pays the fee: a pay-in response shows `chargedAmount = amount + fee`. We compare `amount`.
- * - NovaSend's prefix table calls 685-689 MTN; ours (`cm-operator.ts`) says Orange and stays authoritative.
+ * ⚠ ── WHAT REMAINS OPEN ───────────────────────────────────────────────────────
+ * - the payout body key: the docs' `payout: {…}` is right (proven live); the SDK's `payin` is not.
+ * - who pays the fee: live, a pay-in's `amount` and `chargedAmount` match and the fee comes out of
+ *   what reaches the wallet; a payout's fee is added to what the wallet pays. We compare `amount`.
+ * - NovaSend's prefix table calls 685-689 MTN; ours (`cm-operator.ts`) says Orange and stays
+ *   authoritative. Untested live. It also lists only 699 of 690-699, and live accepted 691.
  */
 export class NovaSendGateway implements PaymentGateway {
   readonly name: PaymentGatewayName = 'NOVASEND';
 
-  /** MTN pushes the PIN prompt; Orange needs the code first. ADR-A08 D-2. */
+  /** Both are charged with a number alone. MTN's prompt arrives; Orange's customer dials for it. */
   readonly capabilities: GatewayCapabilities = Object.freeze({
     collect: Object.freeze({
       MTN: Object.freeze({
@@ -92,10 +103,9 @@ export class NovaSendGateway implements PaymentGateway {
         limits: NOVASEND_CM_LIMITS,
       }),
       ORANGE: Object.freeze({
-        flow: 'CODE_FIRST' as const,
-        requires: Object.freeze(['phoneNumber' as const, 'paymentCode' as const]),
+        flow: 'PUSH' as const,
+        requires: Object.freeze(['phoneNumber' as const]),
         limits: NOVASEND_CM_LIMITS,
-        codeUssd: NOVASEND_CONFIG.ORANGE_CODE_USSD,
       }),
     }),
     settlesAsync: true,
@@ -121,19 +131,12 @@ export class NovaSendGateway implements PaymentGateway {
       const amount = Math.trunc(payload.amount);
       assertWithinLimits(operator, amount);
 
-      const code = (payload.channel.paymentCode ?? '').trim();
-      if (operator === 'ORANGE' && !code) {
-        // Routing refuses this before any write; reaching here means a door skipped it.
-        throw paymentCodeRequired();
-      }
-
       const payin: Record<string, unknown> = {
         amount,
         msisdn,
         provider: novasendProvider(operator),
         country: 'CM',
       };
-      if (operator === 'ORANGE') payin.otp = code;
 
       const body: Record<string, unknown> = {
         reference: payload.merchantRef,
@@ -143,15 +146,9 @@ export class NovaSendGateway implements PaymentGateway {
       };
       addSandboxScenario(body);
 
-      let response: any;
-      try {
-        response = await this.call('/v1/direct/payin', 'POST', body, novasendIdempotencyKey('payin', payload.merchantRef));
-      } catch (error) {
-        if (operator === 'ORANGE' && isNovasendCodeRefusal(error)) throw paymentCodeRejected();
-        throw error;
-      }
+      const response: any = await this.call('/v1/direct/payin', 'POST', body, novasendIdempotencyKey('payin', payload.merchantRef));
 
-      const gatewayRef = novasendReference(response) ?? (response && typeof response === 'object' ? payload.merchantRef : null);
+      const gatewayRef = novasendLookupRef(response) ?? (response && typeof response === 'object' ? payload.merchantRef : null);
       if (!gatewayRef) {
         return {
           success: false,
@@ -181,8 +178,8 @@ export class NovaSendGateway implements PaymentGateway {
         rawResponse: response,
       };
     } catch (error: any) {
-      // A typed error is a decision (unsupported currency, unknown operator, a missing or refused
-      // code, an out-of-range amount, provider refused or unreachable) and reaches the caller as itself.
+      // A typed error is a decision (unsupported currency, unknown operator, an out-of-range amount,
+      // provider refused or unreachable) and reaches the caller as itself.
       if (error instanceof AppError) throw error;
       console.error('[NovaSendGateway] initiatePayment error:', error?.message ?? error);
       return {
@@ -215,8 +212,11 @@ export class NovaSendGateway implements PaymentGateway {
     // Refuse, never skip.
     if (!secret) return { ok: false, reason: 'missing_secret' };
 
-    const presented = headerValue(input.headers, ['x-signature-value']);
-    if (!presented) return { ok: false, reason: 'missing_signature' };
+    const presented = NOVASEND_SIGNATURE_HEADERS.flatMap((name) => {
+      const value = headerValue(input.headers, [name]);
+      return value ? [{ name, value }] : [];
+    });
+    if (presented.length === 0) return { ok: false, reason: 'missing_signature' };
 
     if (!Buffer.isBuffer(input.rawBody)) {
       return {
@@ -228,10 +228,14 @@ export class NovaSendGateway implements PaymentGateway {
     const parsed = parseRawJson(input.rawBody);
     if (!parsed.ok) return { ok: false, reason: 'unparsable' };
 
-    if (!novasendSignatureMatches(input.rawBody, parsed.value, presented, secret)) {
-      return { ok: false, reason: 'bad_signature' };
+    const rawBody = input.rawBody;
+    const verifiedOn = presented.find((p) => novasendSignatureMatches(rawBody, parsed.value, p.value, secret));
+    if (!verifiedOn) {
+      return { ok: false, reason: 'bad_signature', detail: `presented on ${presented.map((p) => p.name).join(', ')}` };
     }
-    return { ok: true, payload: parsed.value, rawBody: input.rawBody };
+    // The header NAME only, never its value: this line is what settles which one live really sends.
+    console.info(`[NOVASENDWebhook] signature verified on ${verifiedOn.name}`);
+    return { ok: true, payload: parsed.value, rawBody };
   }
 
   /** The notification's claims. Re-read through `confirmWebhookEvent` before anything acts on them. */
@@ -242,8 +246,9 @@ export class NovaSendGateway implements PaymentGateway {
   /**
    * Replace a notification's claims with NovaSend's own record (ADR-A08 P2.0), read on the
    * endpoint of the direction the notification states. The record must name the same reference
-   * and direction, or the answer is null. 404 → null (NovaSend does not know it); any other
-   * failure THROWS, so the route answers 5xx and the reconciliation sweep is the backstop.
+   * and direction, or the answer is null. 404 → null (NovaSend does not know it, or a notification
+   * carried no `id`, so the stored id and the sweep settle it); any other failure THROWS, so the
+   * route answers 5xx and the reconciliation sweep is the backstop.
    */
   async confirmWebhookEvent(event: NormalizedWebhookEvent): Promise<NormalizedWebhookEvent | null> {
     let record: any;
@@ -270,11 +275,14 @@ export class NovaSendGateway implements PaymentGateway {
     return NOVASEND_CONFIG.PAYOUTS_ENABLED && novasendCredentialsSet();
   }
 
-  /** Read a sent payout back for the sweep: `GET /v1/direct/payout/{reference}`. */
+  /**
+   * Read a sent payout back for the sweep: `GET /v1/payout/{id}`. With no stored id (a send whose
+   * answer we never saw) the reference is tried, is 404 today, and the payout stays PENDING.
+   */
   async verifyPayout(payload: PayoutVerifyPayload): Promise<PayoutVerifyResult> {
-    const reference = payload.reference || payload.gatewayRef;
+    const lookup = payload.gatewayRef || payload.reference || '';
     try {
-      const record = await this.call(novasendStatusPath('payout', reference), 'GET');
+      const record = await this.call(novasendStatusPath('payout', lookup), 'GET');
       return novasendPayoutVerdict(record, payload.reference);
     } catch (error: any) {
       return {
@@ -339,7 +347,7 @@ export class NovaSendGateway implements PaymentGateway {
       throw error;
     }
 
-    const gatewayRef = novasendReference(response) ?? payload.reference;
+    const gatewayRef = novasendLookupRef(response) ?? payload.reference;
     const status = normalizeNovasendStatus(response?.status);
     if (status === 'FAILED' || status === 'CANCELLED') {
       // NovaSend credits a failed payout back to the merchant wallet (its own rule), so nothing left.
@@ -356,7 +364,11 @@ export class NovaSendGateway implements PaymentGateway {
 
   // ── Internals ─────────────────────────────────────────────────────────────
 
-  /** A 409 on send: the reference is already known to NovaSend. Report what it holds. */
+  /**
+   * A 409 on send: the reference is already known to NovaSend. Report what it holds, if it can be
+   * read. We hold no id here and the reference is 404 today, so this normally throws the conflict:
+   * unknown, the payout stays processing, and the webhook settles it. It never sends twice.
+   */
   private async existingPayout(reference: string, conflict: unknown): Promise<PayoutResult> {
     let record: any;
     try {
@@ -469,8 +481,8 @@ export class NovaSendGateway implements PaymentGateway {
 
 // ── Pure helpers (exported for test:novasend) ───────────────────────────────
 
-/** NovaSend's Cameroon range, the same for a pay-in and a payout (docs § Options de Paiement et Limites). */
-export const NOVASEND_CM_LIMITS: CollectAmountLimits = Object.freeze({ min: 200, max: 500_000 });
+/** NovaSend's Cameroon range for a pay-in and a payout: the docs' maximum, and the lowest amount seen to work live. */
+export const NOVASEND_CM_LIMITS: CollectAmountLimits = Object.freeze({ min: 301, max: 500_000 });
 
 /** Both halves of the credential pair are set. */
 export function novasendCredentialsSet(): boolean {
@@ -493,39 +505,6 @@ function assertWithinLimits(operator: CameroonMobileOperator, amount: number): v
     `Mobile money payments must be between ${NOVASEND_CM_LIMITS.min} and ${NOVASEND_CM_LIMITS.max} XAF right now.`,
     { provider: operator, amount, min: NOVASEND_CM_LIMITS.min, max: NOVASEND_CM_LIMITS.max, spent: false }
   );
-}
-
-function paymentCodeRequired(): AppError {
-  return createAppError(
-    ERROR_CODES.PAYMENT_CODE_REQUIRED,
-    422,
-    `To pay with Orange Money, dial ${NOVASEND_CONFIG.ORANGE_CODE_USSD} to get a payment code, then enter it and pay again.`,
-    { provider: 'ORANGE', ussd: NOVASEND_CONFIG.ORANGE_CODE_USSD, spent: false }
-  );
-}
-
-function paymentCodeRejected(): AppError {
-  return createAppError(
-    ERROR_CODES.PAYMENT_CODE_REJECTED,
-    422,
-    `Orange Money did not accept that payment code. Dial ${NOVASEND_CONFIG.ORANGE_CODE_USSD} for a new code and pay again. Nothing was charged.`,
-    { provider: 'ORANGE', ussd: NOVASEND_CONFIG.ORANGE_CODE_USSD }
-  );
-}
-
-/**
- * Did NovaSend refuse the request because of the OTP / payment code?
- *
- * Only a 4xx counts (a 5xx says nothing about the code). The documented code is
- * `transaction_otp_required`; any error code or message naming the OTP is treated the same,
- * because the docs list only the "required" case and a wrong code must not read as an outage.
- */
-export function isNovasendCodeRefusal(error: unknown): boolean {
-  if (!(error instanceof AppError) || error.code !== ERROR_CODES.NOVASEND_REQUEST_FAILED) return false;
-  const details = (error.details ?? {}) as { status?: number; body?: { code?: unknown; message?: unknown } };
-  if (details.status === undefined || details.status < 400 || details.status >= 500) return false;
-  const words = `${String(details.body?.code ?? '')} ${String(details.body?.message ?? '')}`;
-  return /otp/i.test(words);
 }
 
 /**
@@ -605,6 +584,17 @@ function novasendReference(record: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+/** NovaSend's own transaction id: the only value its status routes answer to (live, 2026-11-04). */
+function novasendId(record: unknown): string | null {
+  const value = (record as Record<string, unknown> | null)?.id;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+/** What a record is looked up by: its id, else (a record without one) our reference. */
+function novasendLookupRef(record: unknown): string | null {
+  return novasendId(record) ?? novasendReference(record);
+}
+
 /** NovaSend's explanation on a failed record: `failure.message`, else `failure.code`. */
 export function novasendFailureReason(record: unknown): string | null {
   const failure = (record as { failure?: unknown } | null)?.failure;
@@ -618,10 +608,10 @@ export function novasendFailureReason(record: unknown): string | null {
   return null;
 }
 
-/** The status path for a direction. Pay-ins are read without the `direct` segment (docs). */
-function novasendStatusPath(direction: 'collection' | 'payout', reference: string): string {
-  const ref = encodeURIComponent(reference);
-  return direction === 'payout' ? `/v1/direct/payout/${ref}` : `/v1/payin/${ref}`;
+/** The status path for a direction. Neither has a `direct` segment: `/v1/direct/payout/*` is no route on live. */
+function novasendStatusPath(direction: 'collection' | 'payout', lookup: string): string {
+  const ref = encodeURIComponent(lookup);
+  return direction === 'payout' ? `/v1/payout/${ref}` : `/v1/payin/${ref}`;
 }
 
 /** `action.successUrl` / `failureUrl`, required on every pay-in. */
@@ -643,11 +633,20 @@ function addSandboxScenario(body: Record<string, unknown>): void {
  * a direct handset prompt also comes back with a link, and sending the customer to a web page
  * while their phone is ringing would be the wrong instruction.
  */
+/** The name the operators show the customer. Correct, per the owner (2026-11-04). */
+export const NOVASEND_PAYEE_NAME = 'Moon SARL';
+
 export function novasendInstructions(operator: CameroonMobileOperator, record: unknown): PaymentInstructions {
   const r = (record ?? {}) as Record<string, unknown>;
+  const ussdCode = operator === 'MTN' ? '*126#' : '#150*50#';
   const instructions: PaymentInstructions = {
-    ussdCode: operator === 'MTN' ? '*126#' : '#150*50#',
-    message: 'Approve the payment request on your phone by entering your mobile money PIN.',
+    ussdCode,
+    payeeName: NOVASEND_PAYEE_NAME,
+    // French first, and both languages, because the bot relays this as written. Keep it under its
+    // 200-character clip (`INSTRUCTION_CLIP`); test:novasend asserts that.
+    message: operator === 'MTN'
+      ? `Confirmez la demande de ${NOVASEND_PAYEE_NAME} avec votre code secret. Sinon, composez ${ussdCode}. / Confirm the request from ${NOVASEND_PAYEE_NAME} with your PIN. If none appears, dial ${ussdCode}.`
+      : `Composez ${ussdCode}, vérifiez que la demande vient de ${NOVASEND_PAYEE_NAME}, puis entrez votre code secret. / Dial ${ussdCode}, check the request is from ${NOVASEND_PAYEE_NAME}, then enter your PIN.`,
   };
   if (r.confirmationRequired === true && typeof r.paymentUrl === 'string' && /^https:\/\//i.test(r.paymentUrl)) {
     instructions.redirectUrl = r.paymentUrl;
@@ -656,6 +655,8 @@ export function novasendInstructions(operator: CameroonMobileOperator, record: u
 }
 
 /** The two signature forms NovaSend's material describes: raw bytes (SDK) and re-serialised body (docs). */
+export const NOVASEND_SIGNATURE_HEADERS = Object.freeze(['x-signature-value', 'x-webhook-signature'] as const);
+
 export function novasendSignatureMatches(
   rawBody: Buffer,
   parsed: Record<string, unknown>,
@@ -682,13 +683,14 @@ export function novasendEventFrom(
   raw: unknown,
   expectedDirection?: 'collection' | 'payout'
 ): NormalizedWebhookEvent | null {
-  const gatewayRef = novasendReference(record);
-  if (!gatewayRef) return null;
+  const reference = novasendReference(record);
+  if (!reference) return null;
+  const gatewayRef = novasendId(record) ?? reference;
 
   const type = String(record.type ?? '').trim().toLowerCase();
   if (type === 'refund') return null;
-  const payout = type ? type === 'payout' : expectedDirection ? expectedDirection === 'payout' : isMoneyOutRef(gatewayRef);
-  const merchantRef = merchantRefKind(gatewayRef) ? gatewayRef : null;
+  const payout = type ? type === 'payout' : expectedDirection ? expectedDirection === 'payout' : isMoneyOutRef(reference);
+  const merchantRef = merchantRefKind(reference) ? reference : null;
   const word = String(record.status ?? '').trim().toLowerCase();
   return {
     eventId: deriveEventId(['novasend', payout ? 'payout' : 'collection', gatewayRef, word]),
@@ -729,7 +731,7 @@ export function novasendPayoutVerdict(record: unknown, reference: string | null)
   const status = normalizeNovasendStatus(r.status);
   return {
     status,
-    gatewayRef: theirs,
+    gatewayRef: novasendId(r) ?? theirs,
     reason: status === 'FAILED' || status === 'CANCELLED'
       ? novasendFailureReason(r) ?? `NovaSend reported ${String(r.status ?? 'failure')}`
       : null,
@@ -750,14 +752,16 @@ export function novasendPayoutRefusal(error: unknown): { message: string; unsupp
   const code = typeof details.body?.code === 'string' ? details.body.code : '';
   const said = typeof details.body?.message === 'string' ? details.body.message : '';
   const what = [code, said].filter(Boolean).join(': ');
-  if (status === 401 || status === 403) {
+  // NovaSend answers most refusals with 403 (docs § Erreurs Globales), a short wallet included,
+  // so the documented code decides, not the status. The SDK reads the code out of `message`.
+  if (/not_enough_cash/i.test(what)) {
+    return { message: 'The NovaSend wallet does not hold enough to send this payout. Nothing was sent; top it up and retry.' };
+  }
+  if (status === 401 || /api_token_|client_kyc_not_approved/i.test(what)) {
     return {
       unsupported: true,
       message: `NovaSend refused the payout (${status}${what ? ` ${what}` : ''}). Check NOVASEND_API_KEY / NOVASEND_API_SECRET and that payouts are enabled on the NovaSend account.`,
     };
-  }
-  if (/not_enough_cash/i.test(code)) {
-    return { message: 'The NovaSend wallet does not hold enough to send this payout. Nothing was sent; top it up and retry.' };
   }
   return { message: `NovaSend refused the payout (${status}${what ? ` ${what}` : ''}). Nothing was sent.` };
 }

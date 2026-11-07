@@ -279,7 +279,8 @@ async function main(): Promise<void> {
 
     await assert('sync consumes the press and returns it as `pendingBargain`', () =>
         SYNC.includes('pendingBargainStore.consume(envelope.channel, envelope.externalId, outcome.account.userId)')
-        && SYNC.includes('{ ...dto, pendingBargain }'));
+        // `bookingAddress` (2026-10-27, the appointment address step) rides beside it in the same spread.
+        && /{ ...dto, pendingBargain(, bookingAddress)? }/.test(SYNC));
 
     /**
      * ⛔ `describe` is shared with the onboarding route, which must never spend a hand-off.

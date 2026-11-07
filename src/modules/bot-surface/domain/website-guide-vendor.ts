@@ -547,7 +547,7 @@ export const VENDOR_GUIDE: readonly GuideTopic[] = Object.freeze([
                     'Tap "Refund {amount}". A chip on the order then shows the refund\'s progress.',
                 ],
                 notes: [
-                    'Card payments go back in full; mobile money is sent to the paying number minus a 2% transfer fee; cash on delivery waits until the agency has handed the cash to Wi-Mall.',
+                    'The customer pays the fees: a card refund loses the 2% payment fee, mobile money the 2% payment fee and a 2% transfer fee, cash on delivery the transfer fee and waits until the agency has handed the cash over. If you cancel a paid order, the customer gets everything back and both fees are charged to you.',
                     'The store\'s share is taken back from its earnings. Some refunds need approval by Wi-Mall.',
                     '"Refund" is missing when refunds are disabled in the return policy, the order is unpaid, the return window ended, or a refund is already in progress.',
                 ],
@@ -561,7 +561,7 @@ export const VENDOR_GUIDE: readonly GuideTopic[] = Object.freeze([
                     'Touchez « Rembourser {montant} ». Une puce sur la commande montre ensuite l’avancement.',
                 ],
                 notes: [
-                    'Carte : remboursée en entier ; mobile money : envoyé au numéro payeur moins 2 % de frais ; paiement à la livraison : attend que l’agence ait remis les espèces à Wi-Mall.',
+                    'Les frais sont à la charge du client : une carte perd les 2 % de frais de paiement, le mobile money ces 2 % et 2 % de frais de transfert, le paiement à la livraison les frais de transfert et attend que l’agence ait remis les espèces. Si vous annulez une commande payée, le client récupère tout et les deux frais vous sont facturés.',
                     'La part de la boutique est reprise sur ses gains. Certains remboursements demandent l’accord de Wi-Mall.',
                     '« Rembourser » manque si la politique de retour l’interdit, si la commande est impayée, si le délai de retour est passé, ou si un remboursement est déjà en cours.',
                 ],

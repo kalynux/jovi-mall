@@ -9,6 +9,7 @@ import {
 } from '../domain/refund-status';
 import { REFUND_REASON_KINDS, RefundReasonKind } from '../domain/refund-attribution';
 import type { RefundPaymentChannel } from '../domain/refund-fee';
+import { PARTIAL_RETURN_FAULTS, PartialReturnFault } from '../../orders/domain/partial-payment';
 
 /**
  * `refund_requests` — the MONEY-OUT lifecycle of a refund (REFUND-FLOW-PLAN § 3.1, § 11.1).
@@ -154,8 +155,77 @@ export interface IRefundRequest extends Document {
    * the same nightly sweep retries it.
    */
   billing_reversed_at: Date | null;
+  /**
+   * The two refund fees and who pays them (owner F-1…F-5, 2026-10-22; `domain/refund-fees.ts`).
+   * `fee_amount` above is what is deducted from the CUSTOMER (pay-in + payout when they pay, 0
+   * when the seller does), so `net_amount = gross_amount − fee_amount` still holds and the
+   * transfer plan spreads it unchanged. `fee_rate` stays the payout rate for older readers.
+   * Null on requests created before the rule: read them as payout fee only, paid by the customer.
+   */
+  fees: IRefundFees | null;
+  /**
+   * Parcels whose DELIVERY was at fault (owner F-6/F-7), decided when the request was created —
+   * one entry per parcel named, inside the agency's window or not, so the approver sees why an
+   * agency does or does not give back. Empty when nobody said the delivery was at fault.
+   */
+  delivery_fault: IRefundDeliveryFault[];
+  /**
+   * Set when this request returns a PARTIAL order's prepaid part for a parcel that came back
+   * (owner, 2026-11-01). `earnings_impact` is then `none`, because that parcel has no allocations;
+   * the return fee and any fault charge are settled when the refund completes.
+   */
+  partial_return?: IRefundPartialReturn | null;
   created_at: Date;
   updated_at: Date;
+}
+
+export interface IRefundPartialReturn {
+  shipment_id: mongoose.Types.ObjectId;
+  /** Whose fault the parcel's return is. `null`: an administrator must say before approving (D-11). */
+  fault: PartialReturnFault | null;
+  /** What the agency's return fee came to when this was opened. */
+  return_fee: number;
+  /** What the customer prepaid on this parcel. */
+  prepaid_amount: number;
+  /** The agent's report, which the administrator weighs (D-10). */
+  agent_reason: string | null;
+  agent_note: string | null;
+  /** Who chose the fault; `null` while it is only what the agent's report proposed. */
+  fault_set_by: IRefundActorStamp | null;
+}
+
+export interface IRefundFees {
+  paid_by: 'customer' | 'vendor' | 'agency';
+  payin_rate: number;
+  payin_amount: number;
+  payout_rate: number;
+  payout_amount: number;
+  /** Charged to the seller on top of their share (seller cancelled a paid order). */
+  vendor_charge: number;
+  /** Charged to the agency at fault (a partial order's returned parcel, D-12). */
+  agency_charge?: number;
+}
+
+export interface IRefundDeliveryFault {
+  shipment_id: mongoose.Types.ObjectId;
+  agency_id: mongoose.Types.ObjectId | null;
+  tracking_number: string | null;
+  /** When the agency's parcel was delivered (its clock start). Null: never delivered. */
+  delivered_at: Date | null;
+  /** The earliest moment the problem became known. */
+  raised_at: Date;
+  /** The agency's window in days (`agencyWindowDays`); 0 = it never answers. */
+  window_days: number;
+  inside_window: boolean;
+  /**
+   * The delivery money the agency and rider of this parcel fund in this refund: what the
+   * customer paid for it (0 on a vendor-paid delivery, whose courier money instead relieves the
+   * vendor at clawback). 0 when outside the window.
+   */
+  customer_delivery_amount: number;
+  /** The agency's terms as read for the window, for the explanation it is sent. */
+  claim_deadline_days: number | null;
+  returns_payer: string | null;
 }
 
 const ActorStampSchema = new Schema<IRefundActorStamp>(
@@ -268,6 +338,56 @@ const RefundRequestSchema = new Schema<IRefundRequest>(
     earnings_impact: { type: String, enum: ['clawback', 'none'], default: 'clawback' },
     earnings_settled_at: { type: Date, default: null },
     billing_reversed_at: { type: Date, default: null },
+    fees: {
+      type: new Schema(
+        {
+          paid_by: { type: String, enum: ['customer', 'vendor', 'agency'], required: true },
+          payin_rate: { type: Number, required: true, min: 0 },
+          payin_amount: { type: Number, required: true, min: 0 },
+          payout_rate: { type: Number, required: true, min: 0 },
+          payout_amount: { type: Number, required: true, min: 0 },
+          vendor_charge: { type: Number, required: true, min: 0 },
+          agency_charge: { type: Number, default: 0, min: 0 },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+    partial_return: {
+      type: new Schema(
+        {
+          shipment_id: { type: Schema.Types.ObjectId, ref: MODELS.SHIPMENT, required: true },
+          fault: { type: String, enum: [...PARTIAL_RETURN_FAULTS, null], default: null },
+          return_fee: { type: Number, required: true, min: 0 },
+          prepaid_amount: { type: Number, required: true, min: 0 },
+          agent_reason: { type: String, default: null },
+          agent_note: { type: String, default: null },
+          fault_set_by: { type: ActorStampSchema, default: null },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+    delivery_fault: {
+      type: [
+        new Schema(
+          {
+            shipment_id: { type: Schema.Types.ObjectId, required: true },
+            agency_id: { type: Schema.Types.ObjectId, default: null },
+            tracking_number: { type: String, default: null },
+            delivered_at: { type: Date, default: null },
+            raised_at: { type: Date, required: true },
+            window_days: { type: Number, required: true, min: 0 },
+            inside_window: { type: Boolean, required: true },
+            customer_delivery_amount: { type: Number, required: true, min: 0 },
+            claim_deadline_days: { type: Number, default: null },
+            returns_payer: { type: String, default: null },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );

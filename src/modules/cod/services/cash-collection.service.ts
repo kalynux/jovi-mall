@@ -36,6 +36,7 @@ import {
   collectionBreakdownOf,
   customerDeliveryFeeOf,
 } from '../../orders/domain/delivery-payer';
+import { amountPaidOnlineOf } from '../../orders/domain/partial-payment';
 
 export interface CollectInput {
   code: string;
@@ -64,6 +65,8 @@ export interface CodShipmentSummary {
   itemsAmount: number;
   /** The delivery fee the customer pays in cash on a customer-paid shipment; 0 otherwise. */
   deliveryFeeAmount: number;
+  /** What a partial order already paid online for this parcel; 0 otherwise. Not in the cash. */
+  prepaidAmount: number;
   currency: string;
   status: CashCollectionStatus | null;
   collectedAt: Date | null;
@@ -168,7 +171,7 @@ export class CashCollectionService {
     // can divide the cash without re-deriving it: the goods are its gross and the COD fee's
     // base (D-5), the delivery fee goes to the agency side. A fee-only collection (W-F) stores
     // `items_amount: 0` — the goods were paid online.
-    const { itemsAmount, deliveryFeeAmount, expectedAmount } = this.cashAmountsOf(order, shipment);
+    const { itemsAmount, deliveryFeeAmount, prepaidAmount, expectedAmount } = this.cashAmountsOf(order, shipment);
     const code = this.codes.generateCode();
 
     const collection = await this.collectionRepo.create(
@@ -183,6 +186,7 @@ export class CashCollectionService {
         expected_amount: expectedAmount,
         items_amount: itemsAmount,
         delivery_fee_amount: deliveryFeeAmount,
+        prepaid_amount: prepaidAmount,
         currency: order.currency,
         status: 'pending',
         code_hash: this.codes.hashCode(code),
@@ -221,6 +225,15 @@ export class CashCollectionService {
     session: ClientSession
   ): Promise<{ collection: ICashCollection; code: string } | { collection: null; code: null }> {
     if (!this.collectsCash(order, shipment)) return { collection: null, code: null };
+
+    // A partial order's returned parcel whose refund has been opened: what was prepaid on it is on
+    // its way back to the customer, and sending the parcel out again would ask for cash on a price
+    // nobody is holding any more.
+    if (shipment.prepaid_return) {
+      throw createAppError(ERROR_CODES.SHIPMENT_REASSIGNMENT_CONFLICT, 409, 'This parcel\'s online payment is being refunded, so it cannot be sent out again', {
+        shipmentId: (shipment._id as any).toString(),
+      });
+    }
 
     const shipmentId = (shipment._id as any).toString();
     const existing = await this.collectionRepo.findByShipmentId(shipmentId, session);
@@ -801,8 +814,10 @@ export class CashCollectionService {
       next = 'paid';
     } else if (collectedCount > 0) {
       next = 'partially_paid';
-    } else if (allSettledOrReturned) {
-      // No cash ever collected and every shipment came back.
+    } else if (allSettledOrReturned && amountPaidOnlineOf(order) <= 0) {
+      // No cash ever collected and every shipment came back. ⛔ Not on a partial order whose
+      // online part is paid: the platform holds the customer's money, so it stays `partially_paid`
+      // until its refund completes and marks it `refunded`.
       next = 'failed';
     }
 
@@ -858,9 +873,9 @@ export class CashCollectionService {
   }
 
   /** A collection's cash as goods + delivery fee (legacy rows: all goods). */
-  private breakdownOf(collection: Pick<ICashCollection, 'expected_amount' | 'items_amount' | 'delivery_fee_amount'>) {
+  private breakdownOf(collection: Pick<ICashCollection, 'expected_amount' | 'items_amount' | 'delivery_fee_amount' | 'prepaid_amount'>) {
     const { itemsAmount, deliveryFeeAmount } = collectionBreakdownOf(collection);
-    return { itemsAmount, deliveryFeeAmount };
+    return { itemsAmount, deliveryFeeAmount, prepaidAmount: collection.prepaid_amount ?? 0 };
   }
 
   /**
@@ -880,12 +895,13 @@ export class CashCollectionService {
   async getProjectedCodSummaryForShipment(order: IOrder, shipment: IShipment): Promise<CodShipmentSummary> {
     const existing = await this.getCodSummaryForShipment((shipment._id as any).toString());
     if (existing) return existing;
-    const { itemsAmount, deliveryFeeAmount, expectedAmount } = this.cashAmountsOf(order, shipment);
+    const { itemsAmount, deliveryFeeAmount, prepaidAmount, expectedAmount } = this.cashAmountsOf(order, shipment);
     return {
       kind: cashCollectionKindOf(order, shipment) ?? 'order',
       expectedAmount,
       itemsAmount,
       deliveryFeeAmount,
+      prepaidAmount,
       currency: order.currency,
       status: null,
       collectedAt: null,
@@ -935,12 +951,13 @@ export class CashCollectionService {
       }
 
       try {
-        const { itemsAmount, deliveryFeeAmount, expectedAmount } = this.cashAmountsOf(order, shipment);
+        const { itemsAmount, deliveryFeeAmount, prepaidAmount, expectedAmount } = this.cashAmountsOf(order, shipment);
         summaries.set(shipmentId, {
           kind: cashCollectionKindOf(order, shipment) ?? 'order',
           expectedAmount,
           itemsAmount,
           deliveryFeeAmount,
+          prepaidAmount,
           currency: order.currency,
           status: null,
           collectedAt: null,
@@ -1000,21 +1017,23 @@ export class CashCollectionService {
     }
     // Re-priced by the collection's OWN kind: a fee-only collection (W-F) follows the fee alone.
     const feeOnly = collectionKindOf(collection) === 'delivery_fee';
-    const { itemsAmount, deliveryFeeAmount, expectedAmount } = cashToCollectOf(
+    const { itemsAmount, deliveryFeeAmount, prepaidAmount, expectedAmount } = cashToCollectOf(
       collectionKindOf(collection),
       feeOnly ? 0 : this.computeItemsAmount(order, shipment),
-      customerDeliveryFeeOf(order, shipment)
+      customerDeliveryFeeOf(order, shipment),
+      shipment.prepaid_amount ?? 0
     );
     if (
       collection.expected_amount === expectedAmount &&
       collection.items_amount === itemsAmount &&
-      (collection.delivery_fee_amount ?? 0) === deliveryFeeAmount
+      (collection.delivery_fee_amount ?? 0) === deliveryFeeAmount &&
+      (collection.prepaid_amount ?? 0) === prepaidAmount
     ) {
       return 'unchanged';
     }
     const moved = await CashCollectionModel.updateOne(
       { _id: collection._id, status: 'pending', expected_amount: collection.expected_amount },
-      { $set: { items_amount: itemsAmount, delivery_fee_amount: deliveryFeeAmount, expected_amount: expectedAmount } },
+      { $set: { items_amount: itemsAmount, delivery_fee_amount: deliveryFeeAmount, prepaid_amount: prepaidAmount, expected_amount: expectedAmount } },
       { session }
     );
     if (moved.modifiedCount !== 1) throw createAppError(ERROR_CODES.SHIPMENT_REASSIGNMENT_CONFLICT, 409, undefined, { shipmentId });
@@ -1051,7 +1070,7 @@ export class CashCollectionService {
    * fee-only (W-F) → the customer fee alone; neither → zeros. The pure rule is
    * `cashToCollectOf`; `expectedCodAmount` (cod-limits) is the exposure twin.
    */
-  cashAmountsOf(order: IOrder, shipment: IShipment): { itemsAmount: number; deliveryFeeAmount: number; expectedAmount: number } {
+  cashAmountsOf(order: IOrder, shipment: IShipment): { itemsAmount: number; deliveryFeeAmount: number; prepaidAmount: number; expectedAmount: number } {
     // A shipment that collects no cash is priced as a COD collection would be (goods + customer
     // fee) — the meaning `expectedCodAmount`, its exposure twin, has always had. Every caller that
     // acts on the figure is gated on `collectsCash` first.
@@ -1059,7 +1078,7 @@ export class CashCollectionService {
     // A fee-only collection never prices the goods (they were paid online), so a shipment item
     // without a matching order item cannot fail it.
     const goods = kind === 'order' ? this.computeItemsAmount(order, shipment) : 0;
-    return cashToCollectOf(kind, goods, customerDeliveryFeeOf(order, shipment));
+    return cashToCollectOf(kind, goods, customerDeliveryFeeOf(order, shipment), shipment.prepaid_amount ?? 0);
   }
 
   /**

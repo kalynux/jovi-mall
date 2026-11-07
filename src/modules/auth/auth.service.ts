@@ -19,6 +19,7 @@ import {
 import { IUser } from '../users/user.model';
 import { EMAIL_VERIFY_DB, getRedisClient } from '../../infra/redis/redis.factory';
 import { MailService } from '../mail/mail.service';
+import { referralAttributionService } from '../referrals/services/referral-attribution.service';
 import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
 import { getJwtRefreshSecret } from '../../config/secrets.config';
@@ -305,6 +306,17 @@ export class AuthService {
       // CLI against the `wi-admin` database; this service must never mint one.
       default:
         throw createAppError(ERROR_CODES.AUTH_UNSUPPORTED_ROLE, 400, undefined, { role });
+    }
+
+    // Only here and in the bot's account creation, never in `addRole`: only a brand-new account
+    // can be referred (REFERRAL-PROGRAM-PLAN § 5.2). It never throws.
+    if (input.referral_code) {
+      await referralAttributionService.attach({
+        userId: String(user._id),
+        category: role,
+        code: input.referral_code,
+        channel: 'web',
+      });
     }
 
     // FRESH `auth_time` (the default) — registration is where the password is set, so this

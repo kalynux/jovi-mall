@@ -55,3 +55,14 @@ export {
   toTelegramPlain,
   type TelegramFormatOptions,
 } from './format/telegram';
+export {
+  STRONG_CLOSE,
+  STRONG_OPEN,
+  hasStrong,
+  strong,
+  stripStrong,
+  strongToTelegramEntities,
+  strongToTelegramHtml,
+  strongToWhatsApp,
+  type TelegramBoldEntity,
+} from './format/strong';

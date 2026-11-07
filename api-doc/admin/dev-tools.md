@@ -261,7 +261,7 @@ route-level summary.
 
 ```jsonc
 {
-  "settings": { "collectionAggregator": "NOTCHPAY", "payoutAggregator": "NOTCHPAY", "stripeEnabled": false, "refundFeePercent": 2,
+  "settings": { "collectionAggregator": "NOTCHPAY", "payoutAggregator": "NOTCHPAY", "stripeEnabled": false, "refundFeePercent": 2, "payinFeePercent": 2,
                 "providers": { "MTN": { "enabled": true }, "ORANGE": { "enabled": true }, "MOOV": { "enabled": false }, "CARD": { "enabled": false } },
                 "version": 0, "updatedAt": null, "updatedBy": null, "reason": null },
   "aggregators": [
@@ -305,6 +305,7 @@ Body, `.strict()`:
   "payoutAggregator": "NOTCHPAY",                   // optional
   "stripeEnabled": false,                           // optional
   "refundFeePercent": 2,                            // optional, 0..20 — the refund transfer fee (2026-10-05, R-3)
+  "payinFeePercent": 2,                             // optional, 0..20 — the payment fee kept on refunds (2026-10-22)
   "providers": { "ORANGE": { "enabled": true } },   // optional, partial, merged per provider
   "expectedVersion": 3,                             // required; 0 when no document exists
   "reason": "NotchPay outage" }                     // required, 1..500 after trim
@@ -313,7 +314,15 @@ Body, `.strict()`:
 `refundFeePercent` (🆕 2026-10-05, REFUND-FLOW-PLAN R-3) is the fee taken off every refund paid
 by **transfer** or outside the platform — never off a card refund — in percent, 0 to 20, default
 **2**. `fee = round(gross × rate / 100)`; the customer receives the rest. It changes **new** refund
-requests only: a request fixes its `fee_rate` when it is created.
+requests only: a request fixes its `fee_rate` when it is created. Since 2026-10-22 it is 2% of what
+is owed **after** the payment fee below.
+
+`payinFeePercent` (🆕 2026-10-22, owner F-1/F-2) is the fee every aggregator is ASSUMED to keep when
+a customer pays — one rate for all of them, whatever each really charges, so switching
+aggregators never changes a refund. Wi-Mall never had that money, so a refund does not give it
+back: mobile money and billing refunds lose both fees (10,000 → 200 → 9,800 → 196 → **9,604**), a
+card refund the payment fee only, a COD refund the transfer fee only. 0 to 20, default **2**; new
+requests only. `changed` names it `payinFeePercent`.
 
 Aggregator and provider names are plain strings here. The settings validator owns the lists and
 refuses an unknown one with a named issue code, which tells an operator more than an enum error

@@ -43,6 +43,8 @@ export interface CustomerOrderGroup {
     paymentMethod: string;
     paymentStatus: string;
     fulfillmentStatus: string;
+    /** Paid part online, part in cash: `paidAt` is null until the online part is paid. Otherwise null. */
+    partialPayment: { paidAt: Date | null } | null;
     itemCount: number;
     createdAt: Date;
   }>;
@@ -135,6 +137,7 @@ export class OrderRepository {
               paymentMethod: '$payment_method',
               paymentStatus: '$payment_status',
               fulfillmentStatus: '$fulfillment_status',
+              prepayment: '$prepayment',
               itemCount: { $size: '$items' },
               createdAt: '$created_at'
             }
@@ -167,6 +170,7 @@ export class OrderRepository {
         paymentMethod: o.paymentMethod ?? 'online',
         paymentStatus: o.paymentStatus,
         fulfillmentStatus: o.fulfillmentStatus,
+        partialPayment: o.prepayment ? { paidAt: o.prepayment.paid_at ?? null } : null,
         itemCount: o.itemCount,
         createdAt: o.createdAt
       }))

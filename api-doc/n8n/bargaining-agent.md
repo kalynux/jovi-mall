@@ -716,3 +716,14 @@ window where every negotiation opened with two messages.
 - **Latency moved rather than grew.** The whole 15–25 s bargaining turn now happens inside the
   main agent's tool call, so the customer waits once instead of twice — but that single wait is
   long and unacknowledged, which is § 10's typing-indicator note becoming more pressing, not less.
+
+## 13 · ⭐ Several haggles at once (2026-10-25)
+
+The routing flag used to hold ONE product, and every Bargain tap overwrote it: a customer who
+tapped the bottle, then the shoes, and replied under the bottle's question was haggled with about
+the shoes. It is now a **list of open items**, the item a message is about is chosen from the
+message the customer replied to (journal tag) before falling back to the newest, the bargainer is
+given the list as `<open_haggles>`, and a close drops only its own item (`#HANDBACK#` drops all).
+A single figure for several items is priced per item, never split (owner decision). jovi-mall adds
+`data.subject` to an approved gate verdict and `productTitle` to a Bargain tap. **Record, node
+bodies and offline test: [`multi-haggle/`](multi-haggle/README.md).**

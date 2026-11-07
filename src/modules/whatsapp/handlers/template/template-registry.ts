@@ -129,12 +129,38 @@ export class TemplateRegistry {
         const notificationTemplates: Array<[string, number, boolean, string]> = [
             // ── Vendor ───────────────────────────────────────────────────────
             ['vendor_order_created', 3, true, 'Vendor: new order received'],
+            // Referral partners, any role. No button: see referral-notification-catalog.ts.
+            ['referral_partner_approved', 1, false, 'Referral: application approved, carries the code'],
+            ['referral_partner_rejected', 0, false, 'Referral: application not approved'],
+            ['referral_partner_suspended', 0, false, 'Referral: partnership suspended, balance frozen'],
+            ['referral_partner_reinstated', 0, false, 'Referral: partnership active again'],
+            ['referral_partner_terminated', 0, false, 'Referral: partnership ended, balance frozen'],
+            ['referral_balance_released', 0, false, 'Referral: frozen balance released for withdrawal'],
+            ['referral_account_restriction_removed', 0, false, 'Referral: a new application is accepted again'],
+            ['referral_payout_paid', 2, false, 'Referral: withdrawal sent'],
+            ['referral_payout_rejected', 2, false, 'Referral: withdrawal refused, money back in the balance'],
+            ['referral_payout_transfer_failed', 2, false, 'Referral: problem sending the withdrawal'],
+            // A partial order, once its online part is paid (2026-11-01). Needs Meta's approval.
+            ['vendor_order_created_partial', 5, true, 'Vendor: new order, partly paid'],
             ['vendor_order_cancelled', 1, true, 'Vendor: order cancelled'],
             // 3 -> 5: gained the customer's name and the confirm-or-decline line.
             // Re-approve in Business Manager before deploying, in all 5 languages —
             // until then out-of-window sends for this situation fail.
             ['vendor_booking_created', 5, true, 'Vendor: new booking received'],
             ['vendor_booking_cancelled', 1, true, 'Vendor: booking cancelled'],
+            // Appointment moves (2026-10-26, owner decisions D-8 / D-9).
+            ['vendor_booking_rescheduled', 5, true, 'Vendor: a customer moved a booking'],
+            ['vendor_booking_reschedule_requested', 6, true, 'Vendor: a customer asks to move a booking'],
+            ['vendor_booking_reschedule_accepted', 4, true, 'Vendor: the customer accepted the new time'],
+            ['vendor_booking_reschedule_declined', 4, true, 'Vendor: the customer declined the new time'],
+            // A customer's one-time reminder (2026-11-03). Needs Meta's approval.
+            ['vendor_booking_reminder', 4, true, 'Vendor: the customer sent their one reminder'],
+            // The vendor's price proposal (2026-11-03). Needs Meta's approval.
+            ['vendor_booking_price_accepted', 6, true, 'Vendor: the customer accepted the proposed price'],
+            ['vendor_booking_price_declined', 6, true, 'Vendor: the customer declined the proposed price'],
+            ['customer_booking_price_proposed', 7, true, 'Customer: the vendor proposes a different price (Accept / Decline buttons)'],
+            ['customer_booking_reschedule_price_proposed', 8, true, 'Customer: the vendor proposes a new time and price (Accept / Keep buttons)'],
+            ['customer_booking_price_topup_due', 5, true, 'Customer: what is owed for the agreed price'],
             ['vendor_payment_partial', 2, true, 'Vendor: partial payment received'],
             ['vendor_payment_full', 2, true, 'Vendor: full payment received'],
             ['vendor_storage_alert', 3, true, 'Vendor: media storage threshold alert'],
@@ -196,6 +222,8 @@ export class TemplateRegistry {
             ['customer_booking_created', 3, true, 'Customer: booking requested'],
             ['customer_booking_confirmed', 3, true, 'Customer: vendor accepted the booking'],
             ['customer_booking_rescheduled', 3, true, 'Customer: booking moved to a new time'],
+            ['customer_booking_reschedule_proposed', 5, true, 'Customer: the vendor proposes a new time (Accept / Keep buttons)'],
+            ['customer_booking_reschedule_declined', 4, true, 'Customer: the vendor declined their new-time request'],
             ['customer_booking_cancelled', 3, true, 'Customer: booking cancelled'],
             ['customer_booking_completed', 3, true, 'Customer: appointment completed and settled'],
             ['customer_booking_reminder', 3, true, 'Customer: appointment reminder'],
@@ -205,6 +233,8 @@ export class TemplateRegistry {
             ['customer_booking_refund_pending', 3, true, 'Customer: refund being sent manually'],
             ['customer_order_created', 4, true, 'Customer: order placed'],
             ['customer_order_payment_received', 3, true, 'Customer: order payment received'],
+            // A partial order's online part (2026-11-01). Needs Meta's approval.
+            ['customer_order_prepayment_received', 5, true, 'Customer: online part received, cash due at delivery'],
             // GAP-008 + GAP-012: the card payment page, delivered outside the service
             // window. Its URL button carries `pay/{token}`, so approve the button with a
             // dynamic URL suffix exactly as the order templates do.

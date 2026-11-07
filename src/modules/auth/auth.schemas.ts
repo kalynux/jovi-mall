@@ -175,6 +175,8 @@ export const RegisterSchema = z.object({
   agency_name: z.string().optional(), // For agencies
   vendorKind: VendorKindSchema,         // For vendors — see VendorKindSchema
   terms_accepted: TermsAcceptedSchema,
+  // Optional, and a bad one never refuses a registration: it is simply ignored.
+  referral_code: z.string().trim().max(40).optional(),
 })
   .superRefine((value, ctx) => {
     if (value.role !== 'customer' && !value.password) {

@@ -8,9 +8,20 @@ import { MODELS, COLLECTIONS } from '../../../core/database/collections';
  */
 export type NotificationType =
     | 'order.created'
+    | 'order.created.partial'
     | 'order.cancelled'
     | 'booking.created'
     | 'booking.cancelled'
+    // Appointment moves (2026-10-26, owner decisions D-8/D-9) — see notification-catalog.ts.
+    | 'booking.rescheduled'
+    | 'booking.reschedule_requested'
+    | 'booking.reschedule_accepted'
+    | 'booking.reschedule_declined'
+    /** The customer used their one reminder on this appointment (BOOKING-PARTY-REMINDER-PLAN). */
+    | 'booking.reminder'
+    /** The customer's answer to the shop's proposed price (BOOKING-PRICE-PROPOSAL-PLAN). */
+    | 'booking.price_accepted'
+    | 'booking.price_declined'
     | 'payment.received.partial'
     | 'payment.received.full'
     | 'storage.alert'
@@ -168,9 +179,17 @@ const VendorNotificationSchema = new Schema<IVendorNotification>(
             type: String,
             enum: [
                 'order.created',
+                'order.created.partial',
                 'order.cancelled',
                 'booking.created',
                 'booking.cancelled',
+                'booking.rescheduled',
+                'booking.reschedule_requested',
+                'booking.reschedule_accepted',
+                'booking.reschedule_declined',
+                'booking.reminder',
+                'booking.price_accepted',
+                'booking.price_declined',
                 'payment.received.partial',
                 'payment.received.full',
                 'storage.alert',

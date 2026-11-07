@@ -10,6 +10,7 @@ import { buildAdminVendorRouter } from '../../modules/vendors/admin-vendor.route
 import { buildAdminCategoryRouter } from '../../modules/categories/routes/admin-category.routes';
 import { buildAdminOrderRouter } from '../../modules/orders/admin-order.routes';
 import { buildAdminShipmentRouter } from '../../modules/shipments/admin-shipment.routes';
+import { buildAdminBookingRouter } from '../../modules/booking/routes/admin-booking.routes';
 import { buildAdminBillingRouter } from '../../modules/billing/routes/admin-billing.routes';
 import { buildAdminEarningsRouter } from '../../modules/earnings/routes/admin-earnings.routes';
 import { buildAdminPayoutRequestsRouter } from '../../modules/earnings/routes/admin-payout-requests.routes';
@@ -26,6 +27,8 @@ import { buildAdminGeoRouter } from '../../modules/geo/admin-geo.routes';
 import { buildAdminStatementMailRouter } from '../../modules/mail/admin-statement-mail.routes';
 import { buildAdminRefundRequestRouter } from '../../modules/payments/routes/admin-refund-request.routes';
 import { buildAdminListingRouter } from '../../modules/listings/routes/admin-listing.routes';
+import { buildAdminAgencyClaimRouter } from '../../modules/earnings/routes/admin-agency-claims.routes';
+import { buildAdminReferralRouter } from '../../modules/referrals/routes/admin-referral.routes';
 
 /**
  * `/api/internal/admin/*` — the service-to-service surface the **wi-admin** backend calls.
@@ -189,6 +192,16 @@ router.use('/orders', buildAdminOrderRouter([requireAdminCaller], 'internal'));
  * outbox row, and a second writer would move the agent and leave the session open.
  */
 router.use('/shipments', buildAdminShipmentRouter([requireAdminCaller]));
+
+/**
+ * Bookings (ADMIN-BOOKINGS-PLAN, 2026-10-27) — the service counterpart of orders. wi-admin reads
+ * `bookings` directly; cancel, complete, the payment re-check, the cash record, withdrawing a
+ * proposal and the reminder are delegated because each rides a path with post-commit effects (a
+ * refund request, the earnings hold, the calendar, the customer's messages). Two VERDICT reads
+ * ride along: the access gate and the storefront's slot list.
+ */
+router.use('/bookings', buildAdminBookingRouter([requireAdminCaller]));
+router.use('/referrals', buildAdminReferralRouter([requireAdminCaller]));
 
 /**
  * Money (Phase 11) — billing, earnings and payouts, the three routers that still had no
@@ -374,5 +387,13 @@ router.use('/refunds', buildAdminRefundRequestRouter([requireAdminCaller]));
  * `available_fields`; reject refunds the indexing fee; suspend/unsuspend move the AI index.
  */
 router.use('/listings', buildAdminListingRouter([requireAdminCaller]));
+
+/**
+ * Damage claims on an agency (owner F-8, 2026-10-22) — no public twin. A claim charges the agency
+ * and credits the vendor in one transaction, inside the agency's own window and under its own
+ * per-item limit. wi-admin delegates the write (audited fail-closed there) and the reads.
+ * Contract: `api-doc/admin/agency-claims.md`.
+ */
+router.use('/agency-claims', buildAdminAgencyClaimRouter([requireAdminCaller]));
 
 export default router;

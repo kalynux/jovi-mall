@@ -760,7 +760,7 @@ export function validateEnv(source: NodeJS.ProcessEnv = process.env): EnvProblem
     // notifications anyway. Without it `novasendEnabled()` is false, so NovaSend cannot be chosen
     // for new charges: nothing is silently accepted unauthenticated.
     if (novasendCanCall && !has('NOVASEND_WEBHOOK_SECRET')) {
-        (isProduction ? err : warn)('NOVASEND_WEBHOOK_SECRET', 'is not set while NovaSend credentials are. It verifies the X-Signature-Value on every notification; without it every notification is refused and NovaSend cannot be selected for new charges.');
+        (isProduction ? err : warn)('NOVASEND_WEBHOOK_SECRET', 'is not set while NovaSend credentials are. It verifies the signature on every notification; without it every notification is refused and NovaSend cannot be selected for new charges.');
     }
     if (novasendCanCall && !(get('NOVASEND_RETURN_URL') || get('STOREFRONT_URL') || get('API_PUBLIC_URL'))) {
         warn('NOVASEND_RETURN_URL', 'cannot be derived: set it, or STOREFRONT_URL. NovaSend requires action.successUrl / failureUrl on every pay-in.');

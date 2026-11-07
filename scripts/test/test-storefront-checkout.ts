@@ -184,7 +184,7 @@ assert('payment success COMMITS', () =>
     /handlePaymentSuccess[\s\S]{0,2000}commitForOrder/.test(orderServiceSrc));
 
 assert('a COD order commits at CREATION — it fulfils before payment', () =>
-    /cash_on_delivery'\)\s*\{[\s\S]{0,400}commitForOrder/.test(orderServiceSrc));
+    /cash_on_delivery'(?: && !partialPayment)?\)\s*\{[\s\S]{0,400}commitForOrder/.test(orderServiceSrc));
 
 assert('cancelling RELEASES', () => orderServiceSrc.includes('releaseForOrder'));
 

@@ -39,6 +39,16 @@ export class SlotGeneratorService {
   }
 
   /**
+   * The id of the interval [start, end] — the same id `generateSlots` gives a slot with those
+   * bounds. Used for a booking that spans several consecutive slots: its interval is recorded under
+   * one id, exactly as a single slot's is, so everything keyed on "the booking's slot" (calendar
+   * idempotency, a proposal's `slotId`) needs no second shape.
+   */
+  spanId(start: Date, end: Date): string {
+    return this.generateSlotId(start, end);
+  }
+
+  /**
    * Generates a deterministic slot ID based on start and end times.
    * Format: slot_{startISO}_{endISO}_hash
    */

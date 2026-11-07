@@ -250,6 +250,10 @@ router.use('/public', publicBillingRoutes);
 import publicBlogRoutes from '../modules/blog/routes/public-blog.routes';
 router.use('/public', publicBlogRoutes);
 
+// What the page behind a referral link needs. Says nothing about the partner.
+import publicReferralRoutes from '../modules/referrals/routes/public-referral.routes';
+router.use('/public', publicReferralRoutes);
+
 // The storefront's read side — products, categories and stores, for the shop at
 // /shop/*. Same prefix, same rules: only products a vendor has deliberately put on
 // sale, only stores that sell one, five-minute cache, no identity. This is the third
@@ -644,6 +648,10 @@ router.use('/me/payment-methods', paymentMethodRoutes);
 import customerListingRoutes, { customerListingConsentRoutes } from '../modules/listings/routes/customer-listing.routes';
 router.use('/me/listings', customerListingRoutes);
 router.use('/me/listing-consents', customerListingConsentRoutes);
+
+// The referral program's page, shared across all roles. Above `/me`, like the routes before it.
+import meReferralRoutes from '../modules/referrals/routes/me-referral.routes';
+router.use('/me/referral', meReferralRoutes);
 
 // Account routes shared across all roles (password change), resolved from
 // req.auth — the password lives on the User model, not on any role entity.

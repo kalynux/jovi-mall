@@ -7,14 +7,20 @@ import type { PurchaseContext, PurchaseResult } from '../../bot-surface/controll
 import type { BookingConfirmed } from '../../bot-surface/miniapp/surfaces/booking.core';
 import {
     bookingConfirmedResponse,
+    needsAddress,
     toBookingDayScreen,
     toBookingListScreen,
+    toBookingPayScreen,
     toBookingTimesScreen,
     type BookingDayView,
+    type BookingPayView,
+    type BookingPlaceView,
     type BookingTimesView,
 } from './screens/booking.adapter';
 import {
     BOOKING_DAY_SCREEN,
+    BOOKING_PAY_SCREEN,
+    BOOKING_TIMES_AT_SCREEN,
     BOOKING_TIMES_SCREEN,
 } from './definitions/booking.flow';
 import type { CheckoutPlaced, CheckoutView } from '../../bot-surface/miniapp/surfaces/checkout.controller';
@@ -86,10 +92,10 @@ import { PaymentCodeSchema } from '../../payments/validators/payment.validators'
  */
 
 /**
- * The session kinds a WhatsApp form can open. `ol` and `sl` have no form; `bp` has a definition
- * but no read yet, so it is deliberately absent — see `openForm`.
+ * The session kinds a WhatsApp form can open. `ol`, `sl` and `tf` have no published form. `bp`
+ * joined on 2026-10-26, once `readBookingPayment` re-resolved what is owed — see `openForm`.
  */
-export type FlowSessionKind = 'pl' | 'pd' | 'co' | 'bl' | 'bk';
+export type FlowSessionKind = 'pl' | 'pd' | 'co' | 'bl' | 'bk' | 'bp';
 
 /** What `readBookingPicker` answers: the days, or one day's times — with the screens' words. */
 export interface BookingPickerView {
@@ -100,6 +106,8 @@ export interface BookingPickerView {
     date?: string;
     label?: string;
     slots?: BookingTimesView['slots'];
+    /** Where it happens — on both answers since 2026-10-26; only `customer_address` changes a screen. */
+    place?: BookingPlaceView | null;
 }
 type SessionOf<K extends FlowSessionKind> = Extract<InAppSurfaceSession, { kind: K }>;
 
@@ -144,15 +152,22 @@ export interface FlowScreenPorts {
      * second opinion about which days have times.
      */
     readBookingPicker(handle: string, input?: { date?: string | null }): Promise<BookingPickerView>;
-    /** `confirmBooking` — consumes the `bk` handle itself; one handle, one appointment. */
-    confirmBooking(handle: string, input: { slotId: string }): Promise<BookingConfirmed>;
+    /**
+     * `confirmBooking` — consumes the `bk` handle itself; one handle, one appointment.
+     * `addressId`: the customer's own saved address, for a service the vendor travels to.
+     */
+    confirmBooking(handle: string, input: { slotId: string; addressId?: string | null }): Promise<BookingConfirmed>;
+    /** `readBookingPayment` — what is owed NOW, re-resolved; never held by the form. Repeatable. */
+    readBookingPayment(handle: string): Promise<BookingPayView>;
+    /** `payBooking` — SPENDS the `bp` handle and opens the charge. Refusals carry `details.spent`. */
+    payBooking(handle: string, input: { phone?: unknown; paymentCode?: string | null }): Promise<{ status: string }>;
     readCustomerBookings(input: {
         userId: string;
         language?: string | null;
         limit?: number;
     }): Promise<{ bookings: Array<{ bookingId: string; title: string; description: string }> }>;
     /** `bookingScreenCopy` / the chat acknowledgement — the one booking vocabulary. */
-    bookingWords(language: string | null): { listTitle: string; listEmpty: string };
+    bookingWords(language: string | null): { listTitle: string; listEmpty: string; paySent: string; payNothingDue: string };
     bookingReceipt(confirmed: BookingConfirmed, language: string | null): string;
     /** `botIdempotencyStore` — atomic claim, stored answer replayed, released to retry. */
     claims: {
@@ -221,6 +236,7 @@ export const CLAIM_WAIT_MS = 750;
 export const FLOW_DETAIL_TOOL = 'whatsapp_flow_product_detail';
 export const FLOW_CHECKOUT_TOOL = 'whatsapp_flow_checkout';
 export const FLOW_BOOKING_TOOL = 'whatsapp_flow_booking';
+export const FLOW_BOOKING_PAY_TOOL = 'whatsapp_flow_booking_pay';
 
 /**
  * The claim scope for a checkout press.
@@ -253,8 +269,11 @@ export async function serveFlowScreen(
         if (request.screen === BOOKING_DAY_SCREEN) {
             return chooseBookingDay(handle, request.data, ports);
         }
-        if (request.screen === BOOKING_TIMES_SCREEN) {
+        if (request.screen === BOOKING_TIMES_SCREEN || request.screen === BOOKING_TIMES_AT_SCREEN) {
             return confirmBookingTime(handle, request.data, ports);
+        }
+        if (request.screen === BOOKING_PAY_SCREEN) {
+            return submitBookingPay(handle, request.data, ports);
         }
         // No definition sends an exchange from any other screen — the listing CLOSES on a choice.
         console.warn(`[WhatsAppFlows] data_exchange from screen '${request.screen ?? '(none)'}', which no form sends`);
@@ -293,15 +312,17 @@ async function openForm(handle: string, ports: FlowScreenPorts): Promise<FlowScr
 
         const picker = await ports.readSession('bk', handle);
         if (picker) return await drawBookingDays(handle, picker, ports);
+
+        /**
+         * The pay form. It used to be refused here because nothing re-read what a booking owed;
+         * `readBookingPayment` does now, at every open, and refuses a booking with nothing due
+         * before a Pay button is ever drawn.
+         */
+        const payment = await ports.readSession('bp', handle);
+        if (payment) return await drawBookingPay(handle, payment, ports);
     } catch (error) {
         return readFailed('open', error, null, ports);
     }
-    /**
-     * ⚠ **A `bp` handle lands here and is refused, deliberately.** Its definition exists and its
-     * screen kind does, but nothing reads a booking's outstanding amount yet — and a payment
-     * screen that cannot re-resolve what is owed is the one screen that must not be guessed at.
-     * When that read lands this becomes a branch like the others.
-     */
     return tokenUnusable(null);
 }
 
@@ -343,6 +364,16 @@ async function drawBookingDays(
 ): Promise<FlowScreenVerdict> {
     try {
         const picker = await ports.readBookingPicker(handle);
+        /**
+         * ⚠ **A service the vendor travels to, and the customer has no saved address: say so
+         * NOW**, on the first screen, with the place's own sentence. Letting them pick a day and a
+         * time first would end on a form whose required address list is empty — a dead end after
+         * two choices.
+         */
+        if (needsAddress(picker.place) && (picker.place?.addresses ?? []).length === 0) {
+            const copy = flowCopyFor(session.language);
+            return { status: 200, body: noticeResponse(picker.place?.copy?.none ?? copy.failed, copy) };
+        }
         return {
             status: 200,
             body: toBookingDayScreen(
@@ -792,6 +823,8 @@ function checkoutRefused(
 const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
 /** A slot handle is the read's own opaque string; bounded, never parsed. */
 const SLOT_ID = /^[\w:.-]{1,128}$/;
+/** An address id's SHAPE — ownership is the core's to judge. */
+const OBJECT_ID_SHAPE = /^[0-9a-f]{24}$/;
 
 /**
  * "See times" — the day is chosen, the same read answers again with that day's times.
@@ -824,7 +857,7 @@ async function chooseBookingDay(
         return {
             status: 200,
             body: toBookingTimesScreen(
-                { copy: picker.copy, label: picker.label, slots: picker.slots ?? [] },
+                { copy: picker.copy, label: picker.label, slots: picker.slots ?? [], place: picker.place },
                 copy,
             ),
         };
@@ -868,10 +901,16 @@ async function confirmBookingTime(
         console.warn('[WhatsAppFlows] a booking was confirmed without a slot');
         return { status: 200, body: noticeResponse(copy.failed, copy) };
     }
+    /**
+     * The address, from `TIMES_AT` only. Shape-checked and nothing more: whether it is THIS
+     * customer's is the core's question (`BOOKING_ADDRESS_NOT_FOUND`), asked against their own
+     * saved addresses — a form cannot vouch for an id.
+     */
+    const addressId = stringMatching(data.address, OBJECT_ID_SHAPE);
 
     const claim: FlowClaim = {
         identity: CHECKOUT_CLAIM_IDENTITY,
-        key: `wa-flow:bk:${handle}:${slotId}`,
+        key: `wa-flow:bk:${handle}:${slotId}${addressId ? `:${addressId}` : ''}`,
         fingerprint: `bk:${slotId}`,
         tool: FLOW_BOOKING_TOOL,
     };
@@ -890,7 +929,7 @@ async function confirmBookingTime(
     let verdict: FlowScreenVerdict;
     let spent: boolean;
     try {
-        const confirmed = await ports.confirmBooking(handle, { slotId });
+        const confirmed = await ports.confirmBooking(handle, { slotId, addressId });
         verdict = {
             status: 200,
             body: bookingConfirmedResponse(confirmed, ports.bookingReceipt(confirmed, language), copy),
@@ -911,6 +950,155 @@ async function confirmBookingTime(
         ? ports.claims.complete({ ...claim, response: verdict })
         : ports.claims.release(claim.identity, claim.key)));
     return verdict;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  The booking pay form — the checkout's Pay, for an appointment
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function drawBookingPay(
+    handle: string,
+    session: SessionOf<'bp'>,
+    ports: FlowScreenPorts,
+): Promise<FlowScreenVerdict> {
+    const copy = flowCopyFor(session.language);
+    try {
+        const view = await ports.readBookingPayment(handle);
+        return { status: 200, body: toBookingPayScreen(view, copy, session.language) };
+    } catch (error) {
+        /**
+         * ⚠ **Nothing to pay is a sentence, not an error.** The read refuses a cancelled, paid or
+         * settled appointment before any button is drawn; the customer is told so, in their language.
+         */
+        if (error instanceof AppError && NOTHING_DUE.has(error.code)) {
+            return { status: 200, body: noticeResponse(ports.bookingWords(session.language).payNothingDue, copy) };
+        }
+        return readFailed('open bp', error, session.language, ports);
+    }
+}
+
+/** The read's refusals that mean "there is nothing to charge" — `bp.html`'s own list. */
+const NOTHING_DUE: ReadonlySet<string> = new Set([
+    ERROR_CODES.PAYMENT_BOOKING_ALREADY_PAID,
+    ERROR_CODES.PAYMENT_BOOKING_CANCELLED,
+    ERROR_CODES.PAYMENT_BOOKING_NO_PAYMENT_REQUIRED,
+    ERROR_CODES.BOOKING_BALANCE_ALREADY_SETTLED,
+    ERROR_CODES.BOOKING_NO_BALANCE_DUE,
+]);
+
+/**
+ * Pay, on the booking pay form.
+ *
+ * ── ⛔ THE CHECKOUT'S TWO GUARDS, FOR THE CHECKOUT'S REASONS ─────────────────
+ *   1. **`payBooking` consumes the `bp` handle before it opens the charge**, so a second press
+ *      cannot charge twice, whatever the timing.
+ *   2. **The claim, taken BEFORE that consume, decides what a repeat press is TOLD** — the first
+ *      press's own answer, replayed, never "start again" (an invitation to pay twice).
+ * A refusal provably BEFORE the spend (`details.spent === false`: a mistyped number, no number on
+ * file) keeps the customer on the form with a snackbar; everything after the spend is stored.
+ *
+ * ⚠ **The number is composed ONCE, here** (`composeTypedNumber`), from the field and the country
+ * picked, so the check below and the charge judge the same number. Empty still means "my account's".
+ *
+ * ⚠ **The result does not come back here** — a mobile-money charge is approved on a handset. The
+ * form closes with `paySent` and the payment path tells the chat the outcome.
+ */
+async function submitBookingPay(
+    handle: string,
+    data: Record<string, unknown>,
+    ports: FlowScreenPorts,
+): Promise<FlowScreenVerdict> {
+    let session: SessionOf<'bp'> | null;
+    try {
+        session = await ports.readSession('bp', handle);
+    } catch (error) {
+        return readFailed('submit bp', error, null, ports);
+    }
+    const language = session?.language ?? null;
+
+    const claim: FlowClaim = {
+        identity: CHECKOUT_CLAIM_IDENTITY,
+        key: `wa-flow:bp:${handle}`,
+        fingerprint: 'bp:pay',
+        tool: FLOW_BOOKING_PAY_TOOL,
+    };
+    const gate = await claimOrWait(claim, ports);
+    if (gate.status !== 'claimed') return answerFromGate(gate, language, ports);
+
+    const release = (): Promise<void> =>
+        settle(ports, () => ports.claims.release(claim.identity, claim.key));
+
+    if (!session) {
+        await release();
+        return tokenUnusable(null);
+    }
+    const copy = flowCopyFor(language);
+
+    let view: BookingPayView;
+    try {
+        view = await ports.readBookingPayment(handle);
+    } catch (error) {
+        await release();
+        if (error instanceof AppError && NOTHING_DUE.has(error.code)) {
+            return { status: 200, body: noticeResponse(ports.bookingWords(language).payNothingDue, copy) };
+        }
+        return readFailed('submit bp', error, language, ports);
+    }
+
+    const stay = (message: string): FlowScreenVerdict => {
+        const body = toBookingPayScreen(view, copy, language);
+        return { status: 200, body: screenResponse(body.screen, body.data, message) };
+    };
+
+    const phone = composeTypedNumber(data.phone, data.dial);
+    /** No number on file and the field left empty — refused BEFORE the spend, handle still live. */
+    if (view.maskedPayer === null && isBlankValue(phone)) {
+        await release();
+        return stay(customerMessageFor(
+            ERROR_CODES.PAYMENT_PAYER_NUMBER_REQUIRED,
+            categoryFor(ERROR_CODES.PAYMENT_PAYER_NUMBER_REQUIRED, 422),
+            language,
+        ));
+    }
+
+    let verdict: FlowScreenVerdict;
+    let spent: boolean;
+    try {
+        const result = await ports.payBooking(handle, { phone, paymentCode: null });
+        /**
+         * Stamped `placed`, and the chat stays silent for it — the payment path speaks. A charge
+         * refused at open gets `failed`, never "approve it on your phone": no prompt is coming.
+         */
+        const refused = result.status === 'FAILED' || result.status === 'CANCELLED';
+        verdict = {
+            status: 200,
+            body: noticeResponse(refused ? copy.failed : ports.bookingWords(language).paySent, copy, 'placed'),
+        };
+        spent = true;
+    } catch (error) {
+        spent = !handleSurvived(error);
+        const plan = planCheckoutFailure(error);
+        if (plan.kind === 'stay') {
+            const aboutPhone = (error as { details?: { field?: unknown } }).details?.field === 'phone';
+            verdict = stay(aboutPhone
+                ? copy.flowPhoneHint
+                : customerMessageFor(plan.code, plan.category as ErrorCategory, language));
+        } else if (plan.kind === 'restart') {
+            verdict = tokenUnusable(language);
+        } else {
+            ports.reportFailure('submit bp', error);
+            verdict = { status: 200, body: noticeResponse(copy.failed, copy) };
+        }
+    }
+
+    await settle(ports, () => (spent
+        ? ports.claims.complete({ ...claim, response: verdict })
+        : ports.claims.release(claim.identity, claim.key)));
+    return verdict;
+}
+
+function isBlankValue(value: unknown): boolean {
+    return value === null || value === undefined || (typeof value === 'string' && value.trim() === '');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -47,6 +47,13 @@ export interface IVendorDeliveryTermsSub {
     updated_at: Date | null;
 }
 
+export interface IVendorPartialPaymentSub {
+    enabled: boolean;
+    /** The minimum share of an order paid online, in whole percent (10–90). */
+    min_percent: number | null;
+    updated_at: Date | null;
+}
+
 export interface IVendorSettings extends Document {
     vendor_id: mongoose.Types.ObjectId;
     customer_flags: IVendorCustomerFlagSub[];
@@ -94,6 +101,13 @@ export interface IVendorSettings extends Document {
      * pause every agency connection for re-approval.
      */
     delivery_terms?: IVendorDeliveryTermsSub | null;
+    /**
+     * Whether this vendor accepts orders paid part online and part in cash (owner, 2026-11-01).
+     * Absent reads as OFF through `vendorPartialPaymentTermsOf()`. Independent of `cod_terms`: a
+     * vendor with plain cash on delivery off may still accept this (D-5). Like `cod_terms`,
+     * deliberately NOT on `Vendor.policies`.
+     */
+    partial_payment?: IVendorPartialPaymentSub | null;
     created_at: Date;
     updated_at: Date;
 }
@@ -182,6 +196,18 @@ const VendorSettingsSchema = new Schema<IVendorSettings>(
                 {
                     mode: { type: String, enum: [...VENDOR_DELIVERY_TERMS_MODES], required: true, default: 'always' },
                     free_above_amount: { type: Number, default: null, min: 1 },
+                    updated_at: { type: Date, default: null },
+                },
+                { _id: false }
+            ),
+            default: null,
+        },
+        // Same no-default shape: absent reads as off through vendorPartialPaymentTermsOf().
+        partial_payment: {
+            type: new Schema<IVendorPartialPaymentSub>(
+                {
+                    enabled: { type: Boolean, required: true, default: false },
+                    min_percent: { type: Number, default: null, min: 0, max: 100 },
                     updated_at: { type: Date, default: null },
                 },
                 { _id: false }

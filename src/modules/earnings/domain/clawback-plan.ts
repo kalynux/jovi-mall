@@ -9,7 +9,9 @@
  *  - `goods` is spread PRO RATA over the in-scope rows' ORIGINAL amounts (C-2): the vendor, the
  *    platform commission and the AI bargain fee give back in proportion to what each was given.
  *  - `delivery` (money the customer gets back for delivery under C-1) is spread over the
- *    VENDOR's rows only. Agency and agent rows are never in scope (C-1, C-3).
+ *    VENDOR's rows only. Agency and agent rows are never in scope (C-1, C-3) — except a parcel
+ *    whose DELIVERY was at fault inside its agency's window (2026-10-22), which the service takes
+ *    from those couriers BEFORE this plan sees the rest (`earnings-clawback.service.ts` applyRefund).
  *  - Each row gives at most what it still has (`remaining = amount − clawed_amount`).
  *
  * ── Partial refunds add up to the full refund, EXACTLY ──────────────────────────────

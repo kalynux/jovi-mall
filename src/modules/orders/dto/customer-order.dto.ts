@@ -49,6 +49,7 @@ import {
     deliveryPayerOf,
     paysDeliveryFeeInCash,
 } from '../domain/delivery-payer';
+import { amountPaidOnlineOf } from '../domain/partial-payment';
 import type { DeliveryPayer, DeliveryPayerReason } from '../../vendors/domain/delivery-terms';
 import { customerRefundPosition, DeliveryFeeRefundStatus } from '../../delivery-fee-proposals/domain/customer-fee-change.rules';
 import type { CustomerRefundBlock } from '../../payments/dto/customer-refund.dto';
@@ -185,6 +186,19 @@ export interface CustomerOrderDto {
     paymentMethod: string;
     paymentStatus: string;
     fulfillmentStatus: string;
+    /**
+     * Paid part online, part in cash (2026-11-01). `null` on every other order.
+     * `amountDueOnline` is non-null until the online part is paid: pay it with
+     * `POST /api/payments/initiate { cartId, amount }`, any amount from `minimumAmount` to
+     * `maximumAmount`. After that `balanceDue` is what is paid in cash at delivery.
+     */
+    partialPayment: {
+        minimumAmount: number;
+        maximumAmount: number;
+        amountPaidOnline: number;
+        paidAt: Date | null;
+        balanceDue: number;
+    } | null;
     /**
      * Where it is going. Null on digital orders, which have no delivery — and null on
      * physical orders created before checkout began refusing an un-geocoded address.
@@ -338,6 +352,15 @@ export function toCustomerOrderDto(input: CustomerOrderDtoInput): CustomerOrderD
         paymentMethod: order.payment_method,
         paymentStatus: order.payment_status,
         fulfillmentStatus: order.fulfillment_status,
+        partialPayment: order.prepayment
+            ? {
+                minimumAmount: order.prepayment.minimum_amount,
+                maximumAmount: order.prepayment.maximum_amount,
+                amountPaidOnline: amountPaidOnlineOf(order),
+                paidAt: order.prepayment.paid_at ?? null,
+                balanceDue: order.total_amount - amountPaidOnlineOf(order),
+            }
+            : null,
         deliveryAddress: order.delivery_address ?? null,
         items: order.items.map((item) => {
             const productId = item.product_id.toString();

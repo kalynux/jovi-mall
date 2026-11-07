@@ -15,18 +15,33 @@ import { ClawbackOutcome, EarningsClawbackService, earningsClawbackService } fro
  * available, then as debt. That is the dispute-lost semantics the plan asks for.
  *
  * Two deliberate differences from the old behaviour, both owner decisions:
- *  - agency and agent shares (the delivery fee) are NEVER reversed (C-1) — the run happened;
+ *  - agency and agent shares (the delivery fee) are NEVER reversed (C-1) — the run happened. A
+ *    delivery AT FAULT is a refund request's business (`applyRefund`), never a dispute's;
  *  - the agency's COD handling fee is never reversed (C-3).
  *
  * Idempotent on `refundKey`. A caller that passes none gets a key derived from the source, so a
  * re-fired refund of the same order still recovers nothing the second time.
  */
+/**
+ * A lost card dispute (owner F-9, 2026-10-22): `vendorCharge` is the pay-in fee the vendor carries
+ * on top of their share (`payments/domain/refund-fees.ts` `disputeVendorCharge`); `dispute` makes
+ * the explanations say "dispute" rather than "refund".
+ */
+export interface DisputeRecoveryOptions {
+  vendorCharge?: number;
+  dispute?: boolean;
+}
+
 export class EarningsRefundService {
   constructor(private readonly clawback: EarningsClawbackService = earningsClawbackService) {}
 
   /** Every share of a refunded order (order rows + its goods COD collections). */
-  async onOrderRefund(orderId: string, refundKey: string = `order-refund:${orderId}`): Promise<ClawbackOutcome> {
-    return this.clawback.reverseRemaining({ kind: 'order', id: orderId }, refundKey);
+  async onOrderRefund(
+    orderId: string,
+    refundKey: string = `order-refund:${orderId}`,
+    options: DisputeRecoveryOptions = {}
+  ): Promise<ClawbackOutcome> {
+    return this.clawback.reverseRemaining({ kind: 'order', id: orderId }, refundKey, options);
   }
 
   /**
@@ -37,10 +52,11 @@ export class EarningsRefundService {
   async onRefund(
     sourceType: EarningsSourceType,
     sourceId: string,
-    refundKey: string = `${sourceType}-refund:${sourceId}`
+    refundKey: string = `${sourceType}-refund:${sourceId}`,
+    options: DisputeRecoveryOptions = {}
   ): Promise<ClawbackOutcome | null> {
-    if (sourceType === 'booking') return this.clawback.reverseRemaining({ kind: 'booking', id: sourceId }, refundKey);
-    if (sourceType === 'order') return this.onOrderRefund(sourceId, refundKey);
+    if (sourceType === 'booking') return this.clawback.reverseRemaining({ kind: 'booking', id: sourceId }, refundKey, options);
+    if (sourceType === 'order') return this.onOrderRefund(sourceId, refundKey, options);
     console.warn(`[EarningsRefundService] ${sourceType} ${sourceId} is not a refund target on its own; nothing reversed`);
     return null;
   }

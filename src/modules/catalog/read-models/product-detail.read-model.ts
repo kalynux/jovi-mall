@@ -90,6 +90,22 @@ export interface ProductListItem {
   hasVariants: boolean;
   vectorisationEnabled: boolean;
   vectorisationStatus: VectorisationStatus;
+  /**
+   * Service rows only: what the vendor's services list shows under the title.
+   * `null` on a service whose variant isn't created yet (a fresh draft); absent
+   * on physical/digital rows. Read from the single default variant.
+   */
+  service?: ServiceListSummary | null;
+}
+
+export interface ServiceListSummary {
+  /** Base price per `durationMinutes`, as the vendor typed it (5000 = 5 000 XAF). */
+  price: number;
+  currency: string;
+  durationMinutes: number | null;
+  bookingMode: 'calendar' | 'manual' | 'capacity' | null;
+  /** Seats per slot — `capacity` mode only, else `null`. */
+  maxBookings: number | null;
 }
 
 /**
@@ -108,4 +124,5 @@ export interface ProductListProjection {
   hasVariants: boolean;
   vectorisationEnabled: boolean;
   vectorisationStatus: VectorisationStatus;
+  defaultVariantId: string | null;
 }

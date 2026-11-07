@@ -40,6 +40,7 @@ import {
 } from '../../src/modules/bot-surface/miniapp/surfaces/booking-rows';
 import { inAppCopy } from '../../src/modules/bot-surface/miniapp/inapp-copy';
 import { AppError } from '../../src/core/errors';
+import { composeTypedNumber } from '../../src/core/validation/dial-codes';
 import {
     bookingPayActionId,
     parseBookingPayArgument,
@@ -365,6 +366,41 @@ async function main(): Promise<void> {
             && !/\bpaid\b|payment (failed|received|confirmed|complete)|\bsuccessful\b/i.test(page);
     });
 
+    /**
+     * ⭐ **The country picker (2026-10-27)** — the checkout page's control, on the booking pay page.
+     * Until then a customer paying from Telegram had to type `+237` themselves, which most did not:
+     * the WhatsApp form and `co.html` had a picker and this page alone did not. The read sends the
+     * rows and the starting country, the page sends `dial`, and the route composes with the same
+     * `composeTypedNumber` the checkout and the WhatsApp form use.
+     */
+    assert('⭐ the Telegram pay page has the country picker, and the route composes with it', () => {
+        const page = read('src/modules/bot-surface/miniapp/public/bp.html');
+        const core = stripped(CORE);
+        const payRead = spanOf(core, 'export async function readBookingPayment(', 'export async function payBooking(');
+        const screens = stripped(SCREENS);
+        return page.includes('<select id="dial"')
+            && page.includes('el.dial.value = data.dialCountry')
+            && /dial: el\.dial\.hidden \? null : el\.dial\.value/.test(page)
+            && payRead.includes('dialOptions: dialOptions(session.language)')
+            && /dial: z\.unknown\(\)\.optional\(\)/.test(screens)
+            && screens.includes('composeTypedNumber(body.phone, body.dial)')
+            && composeTypedNumber('672745831', 'CM') === '+237672745831';
+    });
+
+    /**
+     * ⛔ **The payment-code regexes had lost their backslashes** — `/^d{4,8}$/` on both pay pages,
+     * which matches the letter `d` four times and no real code. So an Orange Money customer typed
+     * their code, the page sent `null`, and the server asked for the code again. Found 2026-10-27.
+     */
+    assert('⛔ both pay pages read the payment code with real \\d and \\s, not a backslash-stripped copy', () =>
+        ['bp', 'co'].every((kind) => {
+            const page = read(`src/modules/bot-surface/miniapp/public/${kind}.html`);
+            return page.includes('/^\\d{4,8}$/.test(digits)')
+                && page.includes('.replace(/\\s+/g, "")')
+                && !page.includes('/^d{4,8}$/')
+                && !page.includes('replace(/s+/g');
+        }));
+
     console.log('\n══ § 5 · The words ══');
 
     assert('every screen word exists in all five languages', () =>
@@ -639,11 +675,18 @@ async function phase6(): Promise<void> {
             && c({ status: 'completed' as never, settlement: { balanceDue: 5000, balancePaid: 5000 } as never }) === null;
     });
 
-    /** M-1 on the list: `payable` names a charge and carries no figure. */
-    await assertAsync('⛔ a row carries NO amount — the figure is bp\'s to resolve', async () => {
+    /**
+     * M-1 on the list: `payable` names a charge and carries no figure.
+     *
+     * `priceQuestion` is the one exception, and it is not a charge: a proposed price is the question
+     * itself, so the customer has to read it to answer. It is null on any other row, and what a Pay
+     * button then charges is still `bp`'s to resolve (BOOKING-PRICE-PROPOSAL-PLAN § 8).
+     */
+    await assertAsync('⛔ a row carries NO amount to charge — the figure is bp\'s to resolve', async () => {
         const [out] = await project([row({ id: '10', paymentStatus: 'unpaid' })], 'en', () => 'x');
-        const keys = Object.keys(out);
+        const keys = Object.keys(out).filter((k) => k !== 'priceQuestion');
         return out.payable === 'primary'
+            && out.priceQuestion === null
             && !keys.some((k) => /amount|price|total|balance|due/i.test(k));
     });
 
@@ -761,7 +804,16 @@ async function phase6(): Promise<void> {
      * bare form `orderId: null` — a support request needs no order. Verified 2026-09-27, not
      * assumed; `pay` is absent on purpose, and that absence is this assertion.
      */
-    const SERVES_A_BOOKING = new Set(['bpay', 'book', 'open:bl', 'tkt']);
+    /*
+     * `yes:bkprop` / `no:bkprop` (2026-10-26, D-9): accept / decline the vendor's proposal of a new
+     * time, drawn by `booking.reschedule_proposed`; both take the booking id and answer it through
+     * `BookingService.answerRescheduleProposal`.
+     */
+    /*
+     * `place` (2026-10-27, A-8): Show the place, drawn by `booking.confirmed` and `booking.reminder`;
+     * `answerPlace` reads the booking owner-scoped (`getUserBooking`) and answers its place.
+     */
+    const SERVES_A_BOOKING = new Set(['bpay', 'book', 'open:bl', 'tkt', 'yes:bkprop', 'no:bkprop', 'yes:bkprice', 'no:bkprice', 'place']);
     assert('⛔ no booking.* notification draws a token whose handler cannot serve a booking', () => {
         const bookingSituations = Object.keys(CUSTOMER_NOTIFICATION_CATALOG).filter((s) => s.startsWith('booking.'));
         const tokens = bookingSituations.flatMap((s) =>
@@ -822,7 +874,7 @@ async function phase6(): Promise<void> {
      * rules here would be a second opinion — ordered, and each position must exist.
      */
     assert('⛔ open:bk: 24-hex id, then the availability read\'s own refusals, then the mint', () => {
-        const shape = pickTap.indexOf('if (!/^[0-9a-f]{24}$/.test(productId)) throw unknownBotAction();');
+        const shape = pickTap.indexOf('if (!/^[0-9a-f]{24}$/.test(productId) || rest.length > 0) throw unknownBotAction();');
         const refused = pickTap.indexOf('await readBookingDays({ productId,');
         const minted = pickTap.indexOf('openInAppScreen(req, {');
         return shape > 0 && refused > shape && minted > refused
@@ -875,7 +927,8 @@ async function phase6(): Promise<void> {
         return origin > 0 && minted > origin
             && mint.includes("kind: 'bk',") && mint.includes('bookingId: null,')
             && mint.includes('owner: ctx.userId,') && mint.includes('channel: ctx.channel,')
-            && purchase.includes('url: await mintPickerUrl(ctx, productId),');
+            && purchase.includes('url: needsAddress ? null : await mintPickerUrl(ctx, productId),')
+            && purchase.includes("const needsAddress = (await serviceLocationKind(productId)) === 'customer_address';");
     });
 
     assert('⛔ the product screen goes straight to the picker and pushes no question into the chat', () => {
@@ -914,9 +967,9 @@ async function phase6(): Promise<void> {
             && !/if \(channel !== 'telegram'\) return;[\s\S]*if \(channel === 'whatsapp'\)/.test(receipt)
             && receipt.includes('sendButtons({')
             && receipt.includes('body: text,')
-            && receipt.includes('buttons: [{ id: myBookings.token, title: myBookings.label }],')
+            && receipt.includes('{ id: myBookings.token, title: myBookings.label },')
             && receipt.includes("token: openSurfaceActionId('bl')")
-            && receipt.includes('callbackData: myBookings.token,');
+            && receipt.includes('{ text: myBookings.label, callbackData: myBookings.token },');
     });
 
     // ── #1 — one message, in the chat they booked from ──────────────────────────────────────
@@ -963,6 +1016,14 @@ async function phase6(): Promise<void> {
             && !/\b(amount|price|total)\b/.test(mint);
     });
 
+    assert('the list\'s price answer is mounted, and the page sends a booking id and an answer, nothing else', () => {
+        const routes = stripped('src/modules/bot-surface/miniapp/miniapp.routes.ts');
+        const answer = spanOf(screens, 'static answerPrice = asyncHandler', '\n    });\n');
+        return routes.includes("router.post('/s/bl/:handle/answer-price', BookingScreensController.answerPrice);")
+            && answer.includes('bookingId: body.bookingId')
+            && answer.includes('answer: body.answer');
+    });
+
     assert('the list\'s Pay route is mounted, and answers a same-origin URL', () => {
         const routes = stripped('src/modules/bot-surface/miniapp/miniapp.routes.ts');
         const open = spanOf(screens, 'static openPay = asyncHandler', '\n    });\n');
@@ -974,10 +1035,17 @@ async function phase6(): Promise<void> {
     /** The page decides nothing about money: a button only where the SERVER said payable. */
     assert('⛔ bl draws Pay only where the server said payable, and sends only the booking id', () => {
         const page = pageScript(PAGES[0]);
+        // The named words of the price answer are not a figure: their sentence arrives built.
+        const figures = page.replace(/priceQuestion|priceBusy|answerPrice|answer-price/g, '');
         return page.includes('+ (booking.payable')
             && page.includes('body: JSON.stringify({ bookingId: button.getAttribute("data-pay") })')
             && page.includes('json(base + "/pay", {')
-            && !/amount|price/i.test(page);
+            && !/amount|price/i.test(figures);
+    });
+    assert('⛔ bl sends only a booking id and an answer, and shows the sentence it was given', () => {
+        const page = pageScript(PAGES[0]);
+        return page.includes('body: JSON.stringify({ bookingId: button.getAttribute("data-booking"), answer: button.getAttribute("data-answer") })')
+            && page.includes('esc(booking.priceQuestion.text)');
     });
 }
 

@@ -86,13 +86,18 @@ other.
 
 ### When it becomes withdrawable
 
-Money is **held** (`pending`) when the split happens, and becomes **available** only after:
+Money is **held** (`pending`) when the split happens. **Since 2026-10-22 your share follows your
+agency's policy terms**, counted from the delivery of **your parcel**, not the whole order
+([FRONTEND-CHANGELOG-earnings-release-by-terms.md](./FRONTEND-CHANGELOG-earnings-release-by-terms.md)):
 
-1. the **whole order** is delivered — every parcel on it delivered (for cash on delivery: its
-   code entered) or returned, not just yours, **and**
-2. a **3-day hold window** from that delivery elapses (`EARNINGS_HOLD_DAYS`). A daily sweep moves
-   matured holds to `available`. Until 2026-10-05 this waited for the customer's confirmation
-   (or 7 days) and then held 7 more days.
+- the agency pays for returns → held **3 days**;
+- otherwise → held for the agency's damage-claim deadline, **at most 3 days**;
+- neither → released at the **next nightly run** after the delivery is **confirmed**: by the
+  customer, by the COD code, or automatically after 3 days.
+
+A daily sweep moves matured holds to `available`. Until 2026-10-22 this was 3 days after the whole
+order was delivered; until 2026-10-05 it waited for the customer's confirmation (or 7 days) and then
+held 7 more days.
 
 Paused earnings — a seller cancelled a paid order, a card dispute, a problem the customer
 reported before the money was released (2026-10-10, see
@@ -342,3 +347,41 @@ cannot GET the list, edit one entry and PUT it straight back. See
 | `EARNINGS_PAYOUT_BELOW_MINIMUM` | 409 | Available balance is under the minimum |
 | `EARNINGS_PAYOUT_METHOD_MISSING` | 409 | No payout method configured |
 | `EARNINGS_PAYOUT_ALREADY_PENDING` | 409 | A payout request is already in flight |
+
+## Why money was taken back — `GET /api/agent/earnings/adjustments` (2026-10-22)
+
+Every movement that took money from you, paid off a debt, or forgave one, newest first, **each with
+the reason in plain words**. Query: `page`, `limit` (≤ 100). Paginated envelope.
+
+```jsonc
+{
+  "id": "…",
+  "kind": "refund_clawback",        // refund_clawback (taken back) · clawback_recovery (new earnings paid a debt) · write_off (debt forgiven)
+  "amount": 1500, "currency": "XAF",
+  "takenFrom": { "pending": 1500, "reserve": 0, "available": 0, "debt": 0 },   // held money, COD reserve, available, or now owed
+  "feeAmount": 0,                   // the part that is fees (seller-cancel fees, a lost dispute's payment fee)
+  "reasonCode": "refund_delivery_fault",
+  "reasonParams": { "orderNumber": "ORD-…", "trackingNumber": "TRK-…", "windowDays": 2, "raisedAt": "…", … },
+  "explanation": "The customer was refunded on order ORD-…, parcel TRK-…, and the delivery was found at fault. …",
+  "refundRequestId": "…", "agencyClaimId": null,
+  "sourceType": "shipment", "sourceId": "…",
+  "createdAt": "…"
+}
+```
+
+Show `explanation`; switch on `reasonCode` (with `reasonParams`) to render it in another language:
+
+| `reasonCode` | Means |
+|---|---|
+| `refund_share` | A customer was refunded; this share of the sale went back |
+| `refund_beyond_share` | Charged beyond the share: delivery money under the return-shipping setting, a free delivery's courier cost, or the **payment and transfer fees of an order the seller cancelled after payment** |
+| `refund_delivery_fault` | The delivery was found at fault, inside the agency's own window: its fee for that parcel went back |
+| `dispute_share` · `dispute_payin_fee` | The customer won a card dispute: the share went back, and the 2% payment fee the provider kept |
+| `damage_claim` | A damage claim was charged to the agency for a parcel |
+| `null` | A row written before 2026-10-22 — `explanation` is a plain sentence from its `kind` |
+
+### When a refund takes your cut back (2026-10-22)
+
+Only when an administrator found the **delivery at fault** and the problem was raised **inside your
+agency's window** (its damage-claim deadline from your parcel's delivery). Your cut for that parcel
+then goes back, with your agency's fee. A damage claim is charged to your **agency**, never to you.

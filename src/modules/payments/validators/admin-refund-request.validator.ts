@@ -41,11 +41,21 @@ export const AdminCreateRefundRequestSchema = z
     approveNow: z.boolean().optional(),
     /** The support ticket the request was raised from, when there is one. */
     ticketId: objectId.optional(),
+    /**
+     * Parcels whose DELIVERY was at fault (owner F-6/F-7, 2026-10-22). Each is judged against its
+     * agency's window; inside it, the agency and rider fund that parcel's delivery money.
+     */
+    deliveryFaultShipmentIds: z.array(objectId).min(1).max(20).optional(),
   })
   .strict();
 
 export const AdminApproveRefundSchema = z.object({}).strict();
 export const AdminRetryRefundSchema = z.object({}).strict();
+
+/** POST /:id/partial-return-fault — whose fault a partial order's returned parcel is. */
+export const AdminSetPartialReturnFaultSchema = z
+  .object({ fault: z.enum(['customer', 'vendor', 'agency']) })
+  .strict();
 
 export const AdminRejectRefundSchema = z
   .object({ reason: z.string().trim().min(1, 'A reason is required').max(1000) })
@@ -75,6 +85,13 @@ export const AdminRefundEligibilityQuerySchema = z
     reasonKind: reasonKind.optional(),
     itemDefective: z.enum(['true', 'false']).transform((v) => v === 'true').optional(),
     amount: z.coerce.number().int().positive().optional(),
+    /** Comma-separated parcel ids said to be delivered at fault (2026-10-22). */
+    deliveryFaultShipmentIds: z
+      .string()
+      .trim()
+      .transform((v) => v.split(",").map((x) => x.trim()).filter(Boolean))
+      .pipe(z.array(objectId).min(1).max(20))
+      .optional(),
   })
   .strict();
 

@@ -5,9 +5,10 @@ import { UserRepository } from '../../users/user.repository';
 import { CustomerRepository } from '../../customers/customer.repository';
 import { IUser } from '../../users/user.model';
 import { normalizeLoginIdentifier } from '../domain/login-identifier';
-import { ResolvedLoginAccount } from './identity-resolver.service';
+import { messagingPhoneToE164, ResolvedLoginAccount } from './identity-resolver.service';
 import {
   IssuedLoginSession,
+  LoginSessionRecord,
   LoginSessionStore,
   loginSessionStore,
 } from './login-session.store';
@@ -154,19 +155,18 @@ export class MessagingLoginService {
       throw createAppError(ERROR_CODES.MAGIC_CODE_INVALID, 401);
     }
 
-    // Resolved AFTER the code is spent, so a wrong code costs the same work and
-    // the same answer whether or not the identifier names anybody.
-    const target = await this.findByIdentifier(identifier);
-
     /**
-     * The code must belong to the account the identifier names.
+     * The code must belong to whoever the identifier names.
      *
      * Without this, any live code signs its holder into whichever account they
      * type — which is precisely the "the code is not really a second factor"
      * problem stated in D-2, arriving from the other direction. A mismatch
      * answers exactly like a wrong code.
+     *
+     * Checked AFTER the code is spent, so a wrong code costs the same work and
+     * the same answer whether or not the identifier names anybody.
      */
-    if (!target || target.id !== outcome.record.userId) {
+    if (!(await this.identifierMatchesRecord(identifier, outcome.record))) {
       throw createAppError(ERROR_CODES.MAGIC_CODE_INVALID, 401);
     }
 
@@ -220,6 +220,36 @@ export class MessagingLoginService {
   private issueSession(user: IUser): MagicSignInResult {
     const tokens = issueTokenPair(String(user._id), 'customer');
     return { user, role: 'customer', ...tokens };
+  }
+
+  /**
+   * Whether what was typed beside the code points at this credential. Two answers count.
+   *
+   * **The account's own `login_phone` or `login_email`.** The ordinary case.
+   *
+   * **The WhatsApp number that asked for the code.** The bot finds an account through
+   * `channel_connections` first, so a number linked with `/connect` reaches an account whose
+   * `login_phone` is a different number. That person received this code on the number they then
+   * type — the storefront even asks for "the number you use with the bot" — and comparing against
+   * `login_phone` alone refused them every time, spending the code and its link with it.
+   *
+   * It gives nothing away: the session is always the RECORD's account and never the one a number
+   * names, so this reaches no account the magic link in the same message would not. Everything
+   * else still answers `MAGIC_CODE_INVALID`.
+   *
+   * ⚠ **WhatsApp only.** Its sender id IS a phone number. A Telegram chat id is merely all digits,
+   * so `messagingPhoneToE164` would make it look like one, and an `admin` record's identity is a
+   * user id. Neither is a number anybody received this code on.
+   */
+  private async identifierMatchesRecord(
+    identifier: string,
+    record: LoginSessionRecord
+  ): Promise<boolean> {
+    const target = await this.findByIdentifier(identifier);
+    if (target?.id === record.userId) return true;
+
+    return record.channel === 'whatsapp'
+      && messagingPhoneToE164(record.externalIdentity) === identifier;
   }
 
   /** The same `@` discrimination and the same lookups `POST /auth/login` uses. */

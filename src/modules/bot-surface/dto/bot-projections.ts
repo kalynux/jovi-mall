@@ -1,3 +1,16 @@
+import {
+    AppointmentAccessSetting,
+    BookingLocationSnapshot,
+    CustomerAppointmentFields,
+    ProposalLike,
+    customerAppointmentFields,
+} from '../../booking/domain/appointment';
+import { PartyReminderStamps } from '../../booking/domain/party-reminder';
+import { hasLivePriceProposal, IPriceProposal, IPriceTopup, outstandingTopup } from '../../booking/domain/price-proposal';
+import type { IRescheduleProposal } from '../../booking/models/booking.model';
+import { BookingStatus } from '../../booking/types/booking.types';
+import { customerPriceQuestion } from '../miniapp/surfaces/booking-rows';
+import { BUTTON_ONLY_ANSWER_NOTE } from '../domain/bot-recently-sent';
 import { GeoCandidate } from '../../../core/geocoding';
 import { ICustomerSavedAddress } from '../../customers/customer.model';
 import { GetCustomerProfileResponseDto } from '../../customers/dto/customer-profile.dto';
@@ -255,6 +268,14 @@ export interface BotSyncDto {
      * that never reaches the bargaining route; it waits for the next sync instead.
      */
     pendingBargain: { productId: string; variantId: string; quantity: number } | null;
+    /**
+     * ⭐ **The appointment address step is waiting for this message** (2026-10-27). Present →
+     * the automation layer sends the customer's text, shared location or `gc_…` tap to
+     * `POST /bookings/address-step` instead of to the assistant. `stage` is informational: the
+     * backend decides what the message answers. Null whenever onboarding has a question of its
+     * own, which always goes first.
+     */
+    bookingAddress: { stage: 'address' | 'city' | 'description' } | null;
 }
 
 /**
@@ -315,6 +336,8 @@ export function toBotSyncDto(input: {
         },
         // Only `/identity/sync` ever sets it, and only after reading the checklist above.
         pendingBargain: null,
+        // Only `/identity/sync` sets it, from the step store.
+        bookingAddress: null,
     };
 }
 
@@ -819,6 +842,24 @@ export interface BotBookingDto {
      * will not arrive. A card refund has `feeAmount: 0`.
      */
     refund: CustomerRefundBlock | null;
+    /**
+     * Where it happens, and the link + instructions — through the SAME gate as the website
+     * (`customerAppointmentFields`): the address once the vendor accepted, the link only from
+     * the vendor's margin before the start and only once PAID. `null` when there is none.
+     */
+    location: CustomerAppointmentFields['location'];
+    access: CustomerAppointmentFields['access'];
+    /** A new time waiting for an answer (or the last one answered). */
+    rescheduleProposal: CustomerAppointmentFields['rescheduleProposal'];
+    /** The customer's one reminder to the vendor: `canSend`, `sentAt`, `receivedAt`. */
+    reminder: CustomerAppointmentFields['reminder'];
+    /** The agreed price, the floor, what was paid, a proposal waiting for an answer, anything owed. */
+    pricing: CustomerAppointmentFields['pricing'];
+    /**
+     * Set while a proposed price waits on this customer: what the model must do about it, in words
+     * it reads rather than relays. A typed "yes" must never count (owner, 2026-11-03).
+     */
+    priceQuestion: string | null;
 }
 
 /**
@@ -862,9 +903,16 @@ export function toBotBookingDto(booking: {
     cancelledAt?: Date | string | null;
     cancelledReason?: string | null;
     settlement?: { balanceDue?: number; balancePaid?: number } | null;
-}, refund: CustomerRefundBlock | null = null): BotBookingDto {
+    location?: BookingLocationSnapshot | null;
+    access?: AppointmentAccessSetting | null;
+    rescheduleProposal?: ProposalLike | null;
+    partyReminders?: PartyReminderStamps | null;
+    originalPrice?: number | null;
+    priceProposal?: IPriceProposal | null;
+    priceTopup?: IPriceTopup | null;
+}, refund: CustomerRefundBlock | null = null, now: Date = new Date()): BotBookingDto {
     const settlement = booking.settlement ?? null;
-    const outstanding = Math.max(0, (settlement?.balanceDue ?? 0) - (settlement?.balancePaid ?? 0));
+    const outstanding = Math.max(0, outstandingTopup(booking) + (settlement?.balanceDue ?? 0) - (settlement?.balancePaid ?? 0));
 
     return {
         id: String(booking._id),
@@ -880,11 +928,34 @@ export function toBotBookingDto(booking: {
             method: booking.paymentMethod ?? null,
             required: booking.requiresPayment,
         },
-        awaitingVendorApproval: booking.status === 'pending',
+        // A booking whose open price proposal waits on the CUSTOMER is not waiting on the vendor. Said
+        // otherwise, the chat tells them there is nothing to do while it sits on their answer.
+        awaitingVendorApproval: booking.status === 'pending'
+            && !hasLivePriceProposal({ status: booking.status, priceProposal: booking.priceProposal ?? null }, now),
         outstandingBalance: outstanding,
         cancelledAt: booking.cancelledAt ? new Date(booking.cancelledAt).toISOString() : null,
         cancelledReason: booking.cancelledReason ?? null,
         refund,
+        priceQuestion: customerPriceQuestion({
+            status: booking.status as BookingStatus,
+            priceProposal: booking.priceProposal ?? null,
+            rescheduleProposal: (booking.rescheduleProposal ?? null) as IRescheduleProposal | null,
+        }, now) ? BUTTON_ONLY_ANSWER_NOTE : null,
+        ...customerAppointmentFields({
+            status: booking.status,
+            paymentStatus: booking.paymentStatus,
+            requiresPayment: booking.requiresPayment,
+            startAt: new Date(booking.startAt),
+            endAt: new Date(booking.endAt),
+            access: booking.access ?? null,
+            location: booking.location ?? null,
+            rescheduleProposal: booking.rescheduleProposal ?? null,
+            partyReminders: booking.partyReminders ?? null,
+            priceSnapshot: booking.priceSnapshot,
+            originalPrice: booking.originalPrice ?? null,
+            priceProposal: booking.priceProposal ?? null,
+            priceTopup: booking.priceTopup ?? null,
+        }, now),
     };
 }
 

@@ -374,20 +374,28 @@ export class PublicCatalogRepositoryMongo {
                     // the grid's own prices fall inside.
                     _priceMin: { $min: '$sellableVariants.displayPrice' },
                     _priceMax: { $max: '$sellableVariants.displayPrice' },
+                    // ⚠ A service is scheduled, not stocked — always `true`. See
+                    // `variantInStock` for why the counter rule alone captioned every
+                    // service "Fully booked".
                     _inStock: {
-                        $anyElementTrue: {
-                            $map: {
-                                input: '$sellableVariants',
-                                as: 'v',
-                                in: {
-                                    $or: [
-                                        { $eq: ['$$v.isInfiniteStock', true] },
-                                        { $eq: ['$$v.allow_oversell', true] },
-                                        { $gt: ['$$v.stock', 0] },
-                                    ],
+                        $or: [
+                            { $eq: ['$type', 'service'] },
+                            {
+                                $anyElementTrue: {
+                                    $map: {
+                                        input: '$sellableVariants',
+                                        as: 'v',
+                                        in: {
+                                            $or: [
+                                                { $eq: ['$$v.isInfiniteStock', true] },
+                                                { $eq: ['$$v.allow_oversell', true] },
+                                                { $gt: ['$$v.stock', 0] },
+                                            ],
+                                        },
+                                    },
                                 },
                             },
-                        },
+                        ],
                     },
                 },
             },
@@ -651,7 +659,8 @@ export class PublicCatalogRepositoryMongo {
                             // page answered with the ask would be the same defect as the
                             // filter band's, on the surface a customer reaches by typing a
                             // code off a package.
-                            { $project: { _id: 1, title: 1, vendorId: 1, vectorisationEnabled: 1 } },
+                            // `type` for the service exception in `inStock` below.
+                            { $project: { _id: 1, title: 1, type: 1, vendorId: 1, vectorisationEnabled: 1 } },
                         ],
                         as: 'product',
                     },
@@ -711,11 +720,13 @@ export class PublicCatalogRepositoryMongo {
                             bargainMaxPrice: '$bargain.maxPrice',
                             price: '$price',
                         }),
-                        // The same three-way rule `variantJoinStages` derives `_inStock` from,
-                        // and `variantInStock` states for a domain object. Note the document
-                        // spells it `allow_oversell` while the domain type says `allowOversell`.
+                        // The same rule `variantJoinStages` derives `_inStock` from, and
+                        // `variantInStock` states for a domain object — service exception
+                        // included. Note the document spells it `allow_oversell` while the
+                        // domain type says `allowOversell`.
                         inStock: {
                             $or: [
+                                { $eq: ['$product.type', 'service'] },
                                 { $eq: ['$isInfiniteStock', true] },
                                 { $eq: ['$allow_oversell', true] },
                                 { $gt: ['$stock', 0] },

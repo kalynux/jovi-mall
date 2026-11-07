@@ -89,6 +89,9 @@ export async function raiseRefundOwed(input: RefundOwedInput): Promise<void> {
       requestedBy: { id: null, role: 'system', name: `cancelled by ${input.cancelledBy}` },
       approveNow: false,
       ticketId,
+      // Owner F-5 (2026-10-22): the SELLER cancelled, so the seller pays the payment and transfer
+      // fees and the customer gets back everything they paid (refund-fees.ts).
+      feesPaidBy: 'vendor',
     });
   } catch (error) {
     // Already open (somebody raised one), nothing refundable, or no payment on record: the

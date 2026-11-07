@@ -5,6 +5,7 @@ import {
     IVendorCustomerFlagSub,
     IVendorCodTermsSub,
     IVendorDeliveryTermsSub,
+    IVendorPartialPaymentSub,
     VendorDeliveryTermsMode
 } from '../models/vendor-settings.model';
 import { createAppError } from '../../../core/errors';
@@ -142,6 +143,43 @@ export class VendorSettingsRepository {
             { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
         ).lean().exec();
         return doc!.cod_terms as IVendorCodTermsSub;
+    }
+
+    // ─── Partial payment (2026-11-01) ────────────────────────────────────────────
+
+    /**
+     * The vendor's raw partial-payment block, or null when never set. READ-ONLY, for the same
+     * reason as `findCodTerms`. Callers apply the default with `vendorPartialPaymentTermsOf()`.
+     */
+    async findPartialPayment(vendorId: string): Promise<IVendorPartialPaymentSub | null> {
+        if (!Types.ObjectId.isValid(vendorId)) return null;
+        const doc = await VendorSettingsModel.findOne(
+            { vendor_id: new Types.ObjectId(vendorId) },
+            { partial_payment: 1 }
+        ).lean().exec();
+        return (doc?.partial_payment as IVendorPartialPaymentSub | null | undefined) ?? null;
+    }
+
+    /** Replace the vendor's partial-payment terms wholesale. Upserts the settings document. */
+    async setPartialPayment(
+        vendorId: string,
+        terms: { enabled: boolean; min_percent: number | null }
+    ): Promise<IVendorPartialPaymentSub> {
+        const doc = await VendorSettingsModel.findOneAndUpdate(
+            { vendor_id: new Types.ObjectId(vendorId) },
+            {
+                $set: {
+                    partial_payment: {
+                        enabled: terms.enabled,
+                        min_percent: terms.min_percent,
+                        updated_at: new Date(),
+                    },
+                },
+                $setOnInsert: { vendor_id: new Types.ObjectId(vendorId), customer_flags: [] },
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
+        ).lean().exec();
+        return doc!.partial_payment as IVendorPartialPaymentSub;
     }
 
     // ─── Delivery terms (ADR-A11, 2026-10-03) ────────────────────────────────────

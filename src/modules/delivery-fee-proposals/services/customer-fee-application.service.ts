@@ -13,6 +13,8 @@ import { EarningsAccountService, earningsAccountService } from '../../earnings/s
 import { bargainLineOf } from '../../earnings/services/earnings-split.service';
 import { computeOrderAiMargin } from '../../earnings/services/negotiation-margin.service';
 import { customerDeliveryFeeOf, deliveryFeePaymentOf, deliveryPayerOf, orderItemsGrossOf } from '../../orders/domain/delivery-payer';
+import { isPartialOrder } from '../../orders/domain/partial-payment';
+import { partialPaymentService } from '../../orders/services/partial-payment.service';
 import { FeeChangePlan, FeeState, feeIsCash, PaymentMode, vendorBorneOf } from '../domain/customer-fee-change.rules';
 import { codShipmentVendorNet, prepaidOrderVendorNet } from '../domain/delivery-fee-proposal.rules';
 
@@ -223,7 +225,8 @@ export class CustomerFeeApplicationService {
             $set: {
               items_amount: itemsAmount,
               delivery_fee_amount: deliveryAfter,
-              expected_amount: itemsAmount + deliveryAfter,
+              // What a partial order prepaid is not cash the agent collects.
+              expected_amount: Math.max(0, itemsAmount + deliveryAfter - (collection.prepaid_amount ?? 0)),
               ...(cancelFeeOnly ? { status: 'cancelled' } : {}),
             },
           },
@@ -232,6 +235,10 @@ export class CustomerFeeApplicationService {
         if (moved.modifiedCount !== 1) throw createAppError(ERROR_CODES.DELIVERY_FEE_PROPOSAL_STALE, 409);
         codCollectionAdjusted = true;
       }
+    }
+    // A lowered fee can leave a partial order's parcel worth less than was prepaid on it.
+    if (isPartialOrder(order)) {
+      await partialPaymentService.reshareInSession(order._id.toString(), session);
     }
 
     // 3. The order's totals. Cash for delivery (W-F): `total_amount` is what was charged ONLINE

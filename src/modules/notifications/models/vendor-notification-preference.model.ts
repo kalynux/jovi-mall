@@ -64,6 +64,11 @@ export interface IVendorNotificationPreference extends Document {
          * Per-shipment delivery-fee proposals (2026-10-02). Defaults ON; `undefined` = ON.
          */
         deliveryFeeProposals: boolean;
+        /**
+         * Appointment moves (2026-10-26): a customer moved one, asked to move one, or answered the
+         * shop's proposal. Defaults ON; `undefined` = ON.
+         */
+        bookingRescheduled: boolean;
     };
 
     updatedAt: Date;
@@ -161,6 +166,10 @@ const VendorNotificationPreferenceSchema = new Schema<IVendorNotificationPrefere
                 default: true
             },
             deliveryFeeProposals: {
+                type: Boolean,
+                default: true
+            },
+            bookingRescheduled: {
                 type: Boolean,
                 default: true
             }

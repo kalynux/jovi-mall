@@ -38,7 +38,9 @@ export type OrderType = 'physical' | 'digital';
 export type OrderPaymentMethod = 'online' | 'cash_on_delivery';
 /**
  * 'partially_paid' is COD-only: at least one of the order's shipments had its
- * cash collected while others are still outstanding (or ended 'returned').
+ * cash collected while others are still outstanding (or ended 'returned'), or the
+ * online part of a partial order has been paid and cash is still to come
+ * (`IOrder.prepayment`).
  */
 export type PaymentStatus = 'pending' | 'AWAITING_PAYMENT' | 'partially_paid' | 'paid' | 'disputed' | 'failed' | 'refunded';
 /**
@@ -64,6 +66,18 @@ export interface IPriceBreakdown {
   tax: number;       // Tax amount
   discount: number;  // Discount amount
   total: number;     // Final total
+}
+
+export interface IOrderPrepayment {
+  /** The vendor's minimum at checkout. A later change of setting never touches this order. */
+  min_percent: number;
+  minimum_amount: number;
+  maximum_amount: number;
+  /** What was paid online. Null until `paid_at`: the customer names the amount when paying. */
+  amount: number | null;
+  paid_at: Date | null;
+  /** The payment that paid it. */
+  transaction_id: mongoose.Types.ObjectId | null;
 }
 
 export interface IOrderItem {
@@ -226,6 +240,12 @@ export interface IOrder extends Document {
    * `deliveryFeePaymentOf`.
    */
   delivery_fee_payment?: DeliveryFeePayment;
+  /**
+   * The online part of a PARTIAL order (owner, 2026-11-01): part paid online now, the rest in cash
+   * at the door. `null` on every other order. `payment_method` stays `cash_on_delivery` and
+   * `total_amount` stays the whole order. See `orders/domain/partial-payment.ts`.
+   */
+  prepayment?: IOrderPrepayment | null;
 
   // Payment tracking
   payment_method: OrderPaymentMethod;
@@ -482,6 +502,22 @@ const OrderSchema = new Schema<IOrder>({
   delivery_payer_reason: { type: String, enum: [...DELIVERY_PAYER_REASONS, null], default: null },
   free_delivery_shortfall: { type: Number, default: null, min: 0 },
   delivery_fee_payment: { type: String, enum: [...DELIVERY_FEE_PAYMENTS], default: 'with_order' },
+  // A partial order's online part — see IOrder. No index: read with the order; the unpaid-cancel
+  // sweep finds these through its existing payment-status filter.
+  prepayment: {
+    type: new Schema(
+      {
+        min_percent: { type: Number, required: true, min: 0, max: 100 },
+        minimum_amount: { type: Number, required: true, min: 0 },
+        maximum_amount: { type: Number, required: true, min: 0 },
+        amount: { type: Number, default: null, min: 0 },
+        paid_at: { type: Date, default: null },
+        transaction_id: { type: Schema.Types.ObjectId, ref: MODELS.PAYMENT_TRANSACTION, default: null },
+      },
+      { _id: false }
+    ),
+    default: null,
+  },
 
   // Payment tracking
   payment_method: {

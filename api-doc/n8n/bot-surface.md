@@ -20,6 +20,10 @@ customer bearer token is ever issued to the automation layer.
 
 > ### Start here if you are wiring n8n
 >
+> **Send the message's text as `messageText` on `POST /identity/sync` (added 2026-11-02, optional).** A referral link
+> puts its code into the customer's first message: `Wi-Mall ref: CODE` on WhatsApp, `/start ref_CODE` on Telegram. Without
+> this field the customer registers normally and the partner is never credited. Nothing else reads it, and it is not stored.
+>
 > **Call `POST /identity/sync` on every inbound message, before anything else.** It creates
 > the customer account if there is none, tells you whether this is their first message, and
 > tells you what is still missing from their profile. §11 is the whole flow.
@@ -269,6 +273,7 @@ twice, each time because a step added one and nobody re-counted.
 | `bookings_pay_balance` | POST | `/bookings/:bookingId/pay-balance` | ✔ |
 | `bookings_cancel` | POST | `/bookings/:bookingId/cancel` | ✔ |
 | `bookings_reschedule` | PATCH | `/bookings/:bookingId/reschedule` | ✔ |
+| `bookings_send_reminder` | POST | `/bookings/:bookingId/reminder` | ✔ |
 | `payment_methods_list` | POST | `/payment-methods/list` | |
 | `payment_methods_add` | POST | `/payment-methods` | ✔ |
 | `payment_methods_set_default` | PATCH | `/payment-methods/:methodId/default` | ✔ |
@@ -722,6 +727,8 @@ the same object and mean unrelated things.**
 | `status: "pending"` | the **vendor** has not accepted the appointment. A `manual`-mode service is held until they do. Nothing is wrong, nobody owes anything |
 | `payment.status: "pending"` | **money is in flight** — a mobile-money prompt is on the customer's handset right now |
 
+🆕 2026-11-03: `awaitingVendorApproval` is **false** while a proposed price waits on the customer (`pricing.proposal.status: "open"`), although `status` is still `pending`. The ball is in the customer's court. They answer with the **Accept price** / **Decline price** buttons under the `booking.price_proposed` message, or on the website: there is no tool for it, so never say it has been accepted. A typed "yes" never counts (owner, 2026-11-03): `priceQuestion` on the booking and the `recentlySent` line both tell the model to ask them to press a button. The appointments list (`bl`) also carries the two answers, through `POST /api/bot/miniapp/s/bl/:handle/answer-price`.
+
 A model handed both words merges them, and the two mistakes available are the two worst
 ones: telling somebody they are booked when the vendor has not looked, or telling them to
 pay again while a charge is live. So the vendor one is named explicitly and the raw `status`
@@ -755,6 +762,22 @@ Two behaviours this surface inherits from the fix, and neither is bot-specific:
   answer, where the old refusal blamed the hold whatever the real reason was.
 - Seats are counted on the **exact** window, so a move into a class that already has other
   attendees succeeds. The single-occupancy overlap check would have refused it.
+
+🆕 **2026-10-26: where it happens, the link, and moves that need agreement**
+(`PRODUCTION-READINESS/APPOINTMENT-LOCATION-AND-ACCESS-PLAN.md`):
+
+- A product's service block carries `locationKind` (`vendor_address` · `customer_address` ·
+  `online` · `null`). For `customer_address`, `bookings_create` **requires `addressId`**, one of
+  the customer's saved addresses from `addresses_list`. Ask which one; never assume the default.
+  Missing → `422 BOOKING_ADDRESS_REQUIRED`.
+- Every booking this surface returns carries `location`, `access` and `rescheduleProposal`,
+  through the **same gate as the website**. `access.meetingUrl` / `access.instructions` exist
+  only when `access.state === "open"` (from the vendor's margin before the start, only once
+  confirmed AND paid). Never invent or promise the link early: `locked` with `reason` says why.
+- `bookings_reschedule` on a `manual` service is a **request**. The booking keeps its time and
+  `rescheduleProposal.status` is `open`; the receipt says "requested", not "moved". A vendor's
+  move arrives as `rescheduleProposal.proposedBy: "vendor"`. ⚠ This surface has **no tool to
+  accept or decline it yet**: send the customer to the booking on the website.
 
 **Availability is a list, and it is capped like every other one.** `bookings_get_availability`
 returns at most five slots and its `moreUrl` is the **product's own page** — the first list
@@ -2384,9 +2407,9 @@ refusing a stale decline would refuse the one answer that is always safe.
 
 | token | drawn on | what it does | reply | data |
 |---|---|---|---|---|
-| `add:<productId>:<variantId>` | **Add to cart**, on a product card | puts one of that variant in the basket | "Added" with **View cart · Checkout · Browse more** | `{ outcome, verb, productId, variantId }` |
-| `buy:<productId>:<variantId>` | **Buy now**, on a product card | puts one in the basket and points at checkout. **It places no order**: checkout needs an address and a payment method (§ 14.8) | the same three buttons. A digital item on a deployment with screens gets one **Checkout** screen button instead | the same, plus `url` when `outcome` is `checkout` — ⛔ never relay it |
-| `bargain:<productId>:<variantId>` | **Bargain**, on a card whose variant is negotiable | **writes nothing.** It asks the customer for their offer. The customer's answer, as an ordinary message, is what starts the haggle; nothing on this side can start it | the product name and the question, no buttons | as `add:` |
+| `add:<productId>:<variantId>` | **Add to cart**, on a product card | puts one of that variant in the basket. ⭐ **On a bargainable variant (2026-10-25): puts it in the basket at the LISTED price AND opens the haggle** — a later agreed price replaces that line, never a second one | "Added" with **View cart · Checkout · Browse more**; bargainable: "Added to your basket at 7 500 XAF. Want to pay less? Make me an offer…" with the same three buttons (no Buy-at-price — it would add a second one) | `{ outcome, verb, productId, variantId }`; bargainable: `{ outcome: "chat", verb: "bargain", productTitle, addedToCart: true, … }` — n8n opens the haggle exactly as for a `bargain:` tap |
+| `buy:<productId>:<variantId>` | **Buy now**, on a product card | puts one in the basket and points at checkout. **It places no order**: checkout needs an address and a payment method (§ 14.8). ⭐ **On a bargainable variant (2026-10-25) it does the same, at the LISTED price, and opens NO haggle** (answered `verb: "buy"`) — the customer chose not to bargain | the same three buttons. A digital item on a deployment with screens gets one **Checkout** screen button instead | the same, plus `url` when `outcome` is `checkout` — ⛔ never relay it |
+| `bargain:<productId>:<variantId>` | **Bargain**, on a card whose variant is negotiable | **writes nothing.** It asks the customer for their offer. The customer's answer, as an ordinary message, is what starts the haggle; nothing on this side can start it | the product name and the question, no buttons | as `add:`, plus `productTitle` (2026-10-25 — n8n names the customer's open haggles with it; see `multi-haggle/`) |
 | `book:<productId>` | **Book**, on a service's card | **writes nothing.** It asks for a day and a time and opens the picker in the same step | the product name and the question, with one button: **Choose a time**, which OPENS the day-and-time picker directly (a screen button). Where no screen is configured, the button is the `open:bk:<productId>` tap instead (see Bookings). A customer may still just type a day and a time | as `add:`, `variantId` may be null |
 | `more:<setId>` | **See more**, under a page of cards | opens the list the cards came from as a screen. Without screens (production today) it sends the next five cards instead | a screen button, or the next cards (`replies`) | `{ opened: "listing" }`, or `{ shown, total, hasMore }` |
 | `next:<setId>` | *nothing draws it yet* | the next five cards, in the chat | the cards (`replies`) | `{ shown, total, hasMore }` |
@@ -2495,6 +2518,15 @@ happened.
 | `open:bl` | **My bookings**, under a booking receipt (Telegram and WhatsApp) | the customer's own appointments as a screen | a screen button; without screens the storefront's bookings page — **that second case is production today** | `{ handle, opened: "bookings" }`. ⛔ `handle` is a credential — § 19.5 |
 | `open:bk:<productId>` | **Choose a time**, under the Book question where no screen is configured, and after **Book** in the WhatsApp product form | the day-and-time picker for that service: the days that have times, then that day's times. **Writes nothing**: the appointment is made by the Confirm on the screen, which then sends its own receipt with **My bookings** in the same chat — Telegram and WhatsApp. That receipt is the booking's only confirmation: the platform's own `booking.created` is kept in the inbox for a booking made in a chat. An unknown, unpublished or suspended product is `404 CATALOG_BOOKING_PRODUCT_NOT_FOUND`; a product that is not a service is `422 CATALOG_BOOKING_INVALID_PRODUCT_TYPE` — the availability read's own refusals | a screen button; without screens configured, the product's own page | `{ handle, opened: "booking_picker", productId }`. ⛔ `handle` is a credential — § 19.5 |
 | `bpay:<bookingId>` · `bpay:<bookingId>:b` | **Try again**, under the `booking.payment_failed` notification (the first form for the appointment's price, the second for a balance) · **Pay balance**, under `booking.balance.due` | the payment screen for that appointment — its price, or with `:b` the balance a longer job came to. **Charges nothing by itself**: the screen shows the amount and the customer presses Pay there. Refused, with one sentence, when there is nothing to pay any more (cancelled, already paid, no payment required, balance settled) | a screen button; without screens configured, the storefront's page for that booking | `{ handle, opened: "booking_payment", purpose }`. ⛔ `handle` is a credential — § 19.5. Another customer's booking is `404 BOOKING_NOT_FOUND` |
+| `yes:bkprop:<bookingId>` | 🆕 2026-10-26 · **Accept new time**, under the `booking.reschedule_proposed` notification (the vendor proposed a new time — owner decision D-9) | accepts the vendor's proposal: the booking moves to the proposed time (occupancy re-checked, calendar mirrored), and the vendor is told. Same code as the website's accept | text: *"Done — your appointment is now Tue 3 Nov, 09:00."* in the customer's language, on the shop's clock. A proposal already answered, withdrawn or lapsed: *"That new time is no longer waiting for an answer…"* — not the expired-button sentence | the booking, as `toBotBookingDto` (with `rescheduleProposal.status: "accepted"`), or `{ answered: false, bookingId }`. Another customer's booking is `404 BOOKING_NOT_FOUND` |
+| `no:bkprop:<bookingId>` | 🆕 2026-10-26 · **Keep my time**, under the same notification | declines it: the original time stays, and the customer may now cancel with a **full refund whatever the cancellation policy says**; the vendor is told | text: *"Got it — your appointment stays … you can cancel it with a full refund."* · same "no longer waiting" sentence when nothing is open | the booking (`rescheduleProposal.status: "declined"`), or `{ answered: false, bookingId }` |
+| `yes:bkprice:<bookingId>` | 🆕 2026-11-03 · **Accept price**, under the `booking.price_proposed` notification (the vendor proposes a different price on a manual booking) | accepts it: the booking is confirmed at that price, and what is owed is asked for in its own message. An answer that finds nothing open says so rather than refusing |
+| `no:bkprice:<bookingId>` | 🆕 2026-11-03 · **Decline price**, under the same notification | declines it: the price stays, and the customer may now cancel with a **full refund** whatever the cancellation policy says |
+| `open:bk:<productId>:<addressId>` | 🆕 2026-10-27 · one of the customer's **saved addresses**, under the appointment address question (a service the provider travels to) | opens the day-and-time picker with that address already chosen; the address must still be one of the TAPPER's saved addresses (else the unknown-tap sentence). Ends the address step | as `open:bk:<productId>` | `{ opened: "booking_picker", productId, addressId }` |
+| `yes:bkadr:typed` | 🆕 2026-10-27 · **Use what I typed**, under the map matches of a typed appointment address (or the "not on the map" sentence) | keeps the typed text as the address (no map point) and asks the town | text: *"Which town or city is it in?"* + Cancel | `{ active: true, stage: "city" }` |
+| `yes:bkadr:nodesc` | 🆕 2026-10-27 · **No description**, under the description question | saves the address to the account (map point when one was chosen; the typed text and town otherwise) and opens the picker with it chosen | *"Saved: … Now choose a time."* then the picker door | `{ active: false, addressId, productId }` |
+| `no:bkadr` | 🆕 2026-10-27 · **Cancel**, on every message of the address step | ends the step; nothing is saved | text: *"OK, I've stopped. Tap Book again whenever you're ready."* | `{ active: false }` |
+| `place:<bookingId>` | 🆕 2026-10-27 · **Show the place**, under the chat booking receipt (vendor's place or online), the `booking.confirmed` message and the `booking.reminder` (chat and template) | sends where the appointment happens, through the website's own gates (`customerAppointmentFields`): a **map pin** (Telegram `sendVenue`, WhatsApp `location`) and the address + description for one at the shop; the customer's own address for one at home; the link for one online. The shop's instructions and the link only once accepted, paid and inside the shop's margin — otherwise when they will appear. Writes nothing | the pin, then a text (`replies`) | `{ bookingId, locationKind, addressVisible, accessState }`. Another customer's booking is `404 BOOKING_NOT_FOUND` |
 
 ⚠ **A button names a BOOKING or a PRODUCT, never a screen handle.** A picker handle (`bk`)
 lives fifteen minutes and a payment handle (`bp`) moves money, so neither may sit in a chat
@@ -2505,6 +2537,24 @@ again when Pay is pressed.
 
 ⚠ **`bpay:` replaced `pay:rt:` under a failed booking payment.** `pay:rt:`'s handler serves
 orders only, so a booking's Try again answered the customer about their orders.
+
+#### The appointment address step and the place (2026-10-27)
+
+Owner decisions A-1…A-8, `PRODUCTION-READINESS/BOT-BOOKING-ADDRESS-AND-PLACE-PLAN.md`.
+
+**A service the provider travels to (`customer_address`) asks WHERE before the time picker.** Both Book doors (`book:` and `open:bk:<productId>`) answer, for such a service, with the address question instead of the picker: one message with the customer's saved addresses as `open:bk:<productId>:<addressId>` rows and **Cancel**, then a location request (*"Or type a new address… or share your location"*). With no saved address, only the location request. Every other service asks nothing.
+
+⭐ **The routing rule for the automation layer.** While the step is open, `/identity/sync` returns `data.bookingAddress: { stage }` (and `null` otherwise, and always `null` while `onboarding.next` is set). When it is set, the customer's next message goes to **`POST /bookings/address-step`** — never to the assistant — if it is one of:
+
+| Message | Body |
+|---|---|
+| text that is not a `/command` | `{ "text": "<verbatim>" }` |
+| a shared location (`kind: location`) | `{ "location": { "lat": …, "lng": … } }` |
+| a tapped map match (`gc_…` token) | `{ "token": "gc_…" }` |
+
+Every answer carries `reply` (sometimes `replies`); relay it. Every other tap goes to `/catalog/action` as usual and **ends the step**, as does a command the platform answers; the step also lapses after 15 minutes. The answers, in order: a typed address → up to five map matches + **Use what I typed** (`yes:bkadr:typed`), or *"I couldn't find that on the map"* + the same button; a location → *"Is this the place?"* with one row; a match or a confirmed pin → the optional description (*No description* = `yes:bkadr:nodesc`); **Use what I typed** → *"Which town or city is it in?"* then the description. The last answer saves the address to the customer's account (map point when one was chosen, the typed text and town otherwise — never a `location` key) and replies *"Saved: … Now choose a time."* followed by the picker door, which opens with that address already chosen (the Telegram page pre-selects it; the WhatsApp form draws its plain times screen).
+
+**`bookings_show_place`** (`POST /bookings/:bookingId/place`, the model's tool) and the **`place:<bookingId>`** button send where an appointment happens, through `customerAppointmentFields`: a **map pin** (Telegram `sendVenue`, WhatsApp `type: location`) then a text with the description and, when open, the shop's instructions — or when they will appear. The model answers `[sent]`; the messages are already on their way. Coordinates never appear in any text, `recentlySent` included.
 
 #### Reviews
 

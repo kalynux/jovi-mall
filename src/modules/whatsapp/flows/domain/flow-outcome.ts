@@ -31,6 +31,11 @@ export const FLOW_OUTCOMES = Object.freeze([
     'placed',
     'booked',
     'moved',
+    /**
+     * A move that became a REQUEST the shop must accept (owner decision D-8, a `manual` service,
+     * 2026-10-26). Its own stamp, because "I've moved your appointment" would be false.
+     */
+    'requested',
 ] as const);
 
 export type FlowOutcome = (typeof FLOW_OUTCOMES)[number];

@@ -204,6 +204,7 @@ transaction rather than charging twice.
 | `provider` | string | ✅ (see below) | `MTN` \| `ORANGE` \| `MOOV` \| `CARD` — one of the providers [`/payments/options`](#get-paymentsoptions--what-the-customer-can-pay-with) lists, or `422 PAYMENT_PROVIDER_UNAVAILABLE` |
 | `channel` | object | ❌ (defaults `{}`) | `{ phoneNumber?, customerEmail?, customerName? }`. Send the fields the provider's `/options` entry lists in `fields`. `phoneOperator` and `cardToken` are still accepted and are legacy: do not send them |
 | `gateway` | string | ❌ | **Deprecated. Accepted and ignored.** Any value, including a switched-off aggregator, is not refused; the active aggregator is used. Stop sending it; it will be removed |
+| `amount` | integer | Only on a partial order | The online part of an order paid part online and part in cash (2026-11-01), between the limits the cart quote and checkout gave. On a `cartId` it is ONE amount for the whole checkout. Missing: `422 PARTIAL_PAYMENT_AMOUNT_REQUIRED`. Outside the limits: `422 PARTIAL_PAYMENT_AMOUNT_OUT_OF_RANGE`, with `details.minimum` and `details.maximum`. On any other order: `422 PARTIAL_PAYMENT_NOT_APPLICABLE`. See [the changelog](../customer/FRONTEND-CHANGELOG-partial-payment.md) |
 
 `provider` must be one of those four exact uppercase strings; anything else is `400
 VALIDATION_ERROR` on `provider`. `channel.phoneNumber` is **required** for a mobile-money provider

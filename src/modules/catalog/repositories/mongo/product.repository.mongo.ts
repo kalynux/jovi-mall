@@ -300,7 +300,7 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
     const countQuery = this.model.countDocuments(query);
     const findQuery = this.model
       .find(query)
-      .select('_id title type status mode categoryIds hasVariants vectorisationEnabled vectorisationStatus fileIds')
+      .select('_id title type status mode categoryIds hasVariants vectorisationEnabled vectorisationStatus fileIds defaultVariantId')
       .sort(sortObj)
       .skip(skip)
       .limit(limit)
@@ -328,6 +328,7 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
       fileIds: Array.isArray(doc.fileIds)
         ? doc.fileIds.map((id: any) => id.toString())
         : [],
+      defaultVariantId: doc.defaultVariantId ? doc.defaultVariantId.toString() : null,
     }));
 
     return {

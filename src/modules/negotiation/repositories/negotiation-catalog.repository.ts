@@ -313,20 +313,26 @@ export class NegotiationCatalogRepositoryMongo {
             {
                 $addFields: {
                     _reachableFloor: { $min: '$sellableVariants.price' },
+                    // The storefront's `_inStock`, service exception included (`stockOf`).
                     _sellable: {
-                        $anyElementTrue: {
-                            $map: {
-                                input: '$sellableVariants',
-                                as: 'v',
-                                in: {
-                                    $or: [
-                                        { $eq: ['$$v.isInfiniteStock', true] },
-                                        { $eq: ['$$v.allow_oversell', true] },
-                                        { $gt: ['$$v.stock', 0] },
-                                    ],
+                        $or: [
+                            { $eq: ['$type', 'service'] },
+                            {
+                                $anyElementTrue: {
+                                    $map: {
+                                        input: '$sellableVariants',
+                                        as: 'v',
+                                        in: {
+                                            $or: [
+                                                { $eq: ['$$v.isInfiniteStock', true] },
+                                                { $eq: ['$$v.allow_oversell', true] },
+                                                { $gt: ['$$v.stock', 0] },
+                                            ],
+                                        },
+                                    },
                                 },
                             },
-                        },
+                        ],
                     },
                 },
             },
