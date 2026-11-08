@@ -25,6 +25,15 @@ export class ProviderConsentRepository {
     return ProviderContactConsentModel.findOne({ customer_id: oid(customerId), vendor_id: oid(vendorId) }).lean<ProviderConsentRow>();
   }
 
+  /** Many customers' consent toward ONE provider, keyed by customer id — the lead list. */
+  async towardProvider(vendorId: string, customerIds: string[]): Promise<Map<string, ProviderConsentRow>> {
+    const ids = [...new Set(customerIds)].filter((id) => Types.ObjectId.isValid(id)).map(oid);
+    if (ids.length === 0 || !Types.ObjectId.isValid(vendorId)) return new Map();
+    const rows = await ProviderContactConsentModel.find({ vendor_id: oid(vendorId), customer_id: { $in: ids } })
+      .lean<ProviderConsentRow[]>();
+    return new Map(rows.map((r) => [r.customer_id.toString(), r]));
+  }
+
   /** Every consent row of a customer — newest change first. */
   async listForCustomer(customerId: string): Promise<ProviderConsentRow[]> {
     if (!Types.ObjectId.isValid(customerId)) return [];

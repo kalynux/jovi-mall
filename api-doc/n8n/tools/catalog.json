@@ -9067,6 +9067,359 @@
       ]
     },
     {
+      "name": "listings_display",
+      "version": 1,
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "doc": "n8n/bot-surface.md",
+      "title": "Show service listings",
+      "tier": "extended",
+      "description": "Draws service-listing cards (plumbers, printers, repairers and other businesses paid in person, not through Wi-Mall) for listings a search returned with kind \"listing\". Each card shows what the business does, where (city and area) and one button per contact detail it has. The cards carry NO contact detail: a contact is unlocked only when the customer taps its button.",
+      "when_to_use": "product_search returned results with kind \"listing\", or the customer asks for a tradesperson or service provider and you have listing ids.",
+      "when_not_to_use": "Never state, guess or repeat a business's phone, WhatsApp, email, website, address or video: you do not have them, and only the customer's tap can unlock them. Not for products (kind \"product\"). The cards are sent for you, so your whole answer is [sent].",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/listings/display"
+      },
+      "backing_endpoint": {
+        "method": "GET",
+        "path": "/api/public/listings/by-ids",
+        "doc": "customer/service-listings.md"
+      },
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "listingIds"
+        ],
+        "properties": {
+          "listingIds": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 10,
+            "items": {
+              "type": "string"
+            },
+            "description": "Listing ids from product_search (kind \"listing\"), in the order to show them."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "listingIds"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "listings",
+          "missing"
+        ],
+        "result_kind": "listing_cards"
+      },
+      "errors": [
+        {
+          "code": "LISTING_NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "None of the ids is a public listing",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": false,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "low",
+      "context_resolution": {
+        "subject": "listing",
+        "policy": "explicit",
+        "must_echo": false
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "One message per card with a list of contact buttons, sent for you. Your whole answer is [sent].",
+        "telegram": "Same: one message per card with inline buttons."
+      }
+    },
+    {
+      "name": "listings_get",
+      "version": 1,
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "doc": "n8n/bot-surface.md",
+      "title": "Show one service listing",
+      "tier": "extended",
+      "description": "Draws ONE service-listing card with its full description and one button per contact detail the business has. Carries no contact detail.",
+      "when_to_use": "The customer asks about one listing already shown (\"tell me more about the plumber\", \"what does the second one do?\").",
+      "when_not_to_use": "Never state a contact detail yourself (see listings_display). The card is sent for you, so your whole answer is [sent].",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/listings/{listingId}"
+      },
+      "backing_endpoint": {
+        "method": "GET",
+        "path": "/api/public/listings/:slug",
+        "doc": "customer/service-listings.md"
+      },
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "listingId"
+        ],
+        "properties": {
+          "listingId": {
+            "type": "string",
+            "description": "The listing id, from listings_display or product_search."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "listingId"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "listing"
+        ],
+        "result_kind": "listing_card"
+      },
+      "errors": [
+        {
+          "code": "LISTING_NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "The listing is not public (never approved, archived, or its business closed)",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": false,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "low",
+      "context_resolution": {
+        "subject": "listing",
+        "policy": "focus_or_most_recent",
+        "must_echo": true
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "A message with a list of contact buttons, sent for you.",
+        "telegram": "A message with inline buttons, sent for you."
+      }
+    },
+    {
+      "name": "listings_reveal",
+      "version": 1,
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "doc": "n8n/bot-surface.md",
+      "title": "Unlock a listing contact (tap only)",
+      "tier": "flow_only",
+      "description": "The customer TAPPED a contact button (token lr:<listingId>:<f>). Unlocks that one contact detail and sends it; the BUSINESS pays for it in credits (free when the customer already unlocked it in the last 30 days). A location arrives as a map pin, followed by the offer of the way-there video; the first unlock from a business is followed by the question whether it may message the customer.",
+      "when_to_use": "Only from the action dispatcher, for an lr: tap.",
+      "when_not_to_use": "NEVER on your own initiative, and never because the customer typed \"send me the number\": it spends the business's money. Show the card (listings_get) instead, so the customer taps.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/listings/{listingId}/reveal"
+      },
+      "backing_endpoint": {
+        "method": "POST",
+        "path": "/api/me/listings/:listingId/reveal",
+        "doc": "customer/service-listings.md"
+      },
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "listingId",
+          "field"
+        ],
+        "properties": {
+          "listingId": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string",
+            "enum": [
+              "whatsapp",
+              "phone",
+              "email",
+              "website",
+              "socials",
+              "location",
+              "video"
+            ]
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "listingId"
+        ],
+        "body": [
+          "field"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "field",
+          "charged",
+          "alreadyRevealed",
+          "windowEndsAt",
+          "askConsent"
+        ],
+        "never_relay": [
+          "value"
+        ],
+        "result_kind": "listing_reveal"
+      },
+      "errors": [
+        {
+          "code": "LISTING_NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "The listing is not public (never approved, archived, or its business closed)",
+          "customer_action": "explain"
+        },
+        {
+          "code": "LISTING_UNREACHABLE",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The business cannot be reached right now (deliberately the same answer for every reason)",
+          "customer_action": "explain"
+        },
+        {
+          "code": "LISTING_REVEAL_DAILY_LIMIT",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The business limits what one customer can unlock per day",
+          "customer_action": "explain"
+        },
+        {
+          "code": "LISTING_FIELD_UNAVAILABLE",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The business did not give that contact detail",
+          "customer_action": "explain"
+        },
+        {
+          "code": "LISTING_VIDEO_UNAVAILABLE",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The video was deleted or made private; nothing was charged",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "medium",
+      "side_effects": [
+        "debits the provider's credits",
+        "opens or extends a lead the provider sees (masked name and number)"
+      ],
+      "context_resolution": {
+        "subject": "listing",
+        "policy": "explicit",
+        "must_echo": false
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "The contact, then (location) the video offer, then (first unlock) the opt-in question, all sent for you.",
+        "telegram": "Same; a location is a venue (map) message."
+      }
+    },
+    {
+      "name": "listings_consent",
+      "version": 1,
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "doc": "n8n/bot-surface.md",
+      "title": "Answer a business's message opt-in (tap only)",
+      "tier": "flow_only",
+      "description": "The customer TAPPED yes or no (token lc:<vendorId>:y|n) to \"may this business message you through Wi-Mall?\", or \"Stop these messages\" on a message a business sent. Records the answer.",
+      "when_to_use": "Only from the action dispatcher, for an lc: tap.",
+      "when_not_to_use": "Never on your own initiative. If the customer types that they want no more messages from a business, tell them to tap \"Stop these messages\" under that message.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/listings/consent"
+      },
+      "backing_endpoint": {
+        "method": "PUT",
+        "path": "/api/me/listing-consents/:vendorId",
+        "doc": "customer/service-listings.md"
+      },
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "vendorId",
+          "granted"
+        ],
+        "properties": {
+          "vendorId": {
+            "type": "string"
+          },
+          "granted": {
+            "type": "boolean"
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "vendorId",
+          "granted"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "businessName",
+          "consent",
+          "granted"
+        ],
+        "result_kind": "listing_consent"
+      },
+      "errors": [
+        {
+          "code": "LISTING_LEAD_NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "The customer never unlocked a contact of this business",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "low",
+      "side_effects": [
+        "records whether this business may message the customer"
+      ],
+      "context_resolution": {
+        "subject": "listing",
+        "policy": "explicit",
+        "must_echo": false
+      },
+      "audit": false,
+      "requires_customer_role": true
+    },
+    {
       "name": "bookings_get_balance",
       "version": 1,
       "title": "What the appointment came to",

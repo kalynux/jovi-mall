@@ -84,6 +84,11 @@ export function initializeVendorNotificationEventConsumers(): void {
     // audience's (`role` / `closingRole`), the same pattern `connection.*` uses.
     eventBus.subscribe('role_closure.requested', handler.handleRoleClosureRequested.bind(handler));
     eventBus.subscribe('role_closure.relationships_ended', handler.handleRoleClosureRelationshipsEnded.bind(handler));
+    // Service listings (SERVICE-LISTINGS-PLAN § C-5), published post-commit by `listings/`.
+    // `listing.submitted` is deliberately absent: the provider is the one who just submitted.
+    for (const name of ['listing.approved', 'listing.rejected', 'listing.suspended', 'listing.resumed', 'listing.video_unavailable']) {
+        eventBus.subscribe(name, handler.handleListingEvent.bind(handler));
+    }
 
     console.log(
         `[VendorNotifications] Event handlers registered successfully (FCM push: ${isFcmConfigured() ? 'enabled' : 'disabled'})`

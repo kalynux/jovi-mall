@@ -116,6 +116,7 @@ grep -cE '^(GET|POST|PUT|PATCH|DELETE) /api/internal/admin/' DOC-PROGRAM/evidenc
 | `/delivery-fee-refunds/*` | 3 | **never** — added 2026-10-04 (ADR-A11 W-E2), after the count above was measured | [delivery-fee-refunds.md](./delivery-fee-refunds.md) |
 | `/refunds/*` | 9 | **never** — added 2026-10-05 (REFUND-FLOW-PLAN R7), after the count above was measured | [refunds.md](./refunds.md) |
 | `/bookings/*` | 9 | **never** — added 2026-10-27 (ADMIN-BOOKINGS-PLAN), after the count above was measured | [bookings.md](./bookings.md) |
+| `/listings/*` · `/listing-reveals/*` | 6 + 1 | **never** — service listings (SERVICE-LISTINGS-PLAN § C-3): approve · reject · suspend · unsuspend (2026-10-22), `POST`/`DELETE /listings/:id/reveal-blocks/:customerId` and `POST /listing-reveals/:revealId/refund` (2026-11-07) | [../vendor/service-listings.md](../vendor/service-listings.md) · wi-admin `api/listings.md` |
 | `/orders/*` | 6 | **partial** — only `GET /disputes` and `POST /:id/dispute/resolve` ever were | [orders.md](./orders.md) |
 | `/reviews/*` | 4 | **never** — moderation was always service-token only | [reviews.md](./reviews.md) |
 | `/tickets/*` | 19 | ~~`/api/admin/tickets/*`~~ — deleted earlier, at **Phase 17**. 18 rows moved; `POST /:ticketId/claim` is net-new | [tickets.md](./tickets.md) |

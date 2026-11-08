@@ -73,6 +73,14 @@ export interface ITicket extends Document {
     tracking_number?: string | null;
 
     /**
+     * Type-specific facts written at creation and never edited after. Today only a
+     * `LISTING_LEAD_REPORT` carries any (SERVICE-LISTINGS-PLAN § C-5):
+     * `{ listingId, wants: ('refund' | 'check_customer')[], revealIds: string[] }`, which
+     * wi-admin reads to draw the lead beside the ticket. Null on every other ticket.
+     */
+    metadata?: Record<string, unknown> | null;
+
+    /**
      * True while this request keeps its order's or booking's earnings paused: the customer
      * reported a problem before the money was released (`TicketEarningsHoldService`).
      * Cleared ONLY when an administrator or the customer who opened it resolves or closes it,
@@ -224,6 +232,10 @@ const TicketSchema = new Schema<ITicket>({
         type: String,
         default: null,
         trim: true
+    },
+    metadata: {
+        type: Schema.Types.Mixed,
+        default: null
     },
     holds_earnings: {
         type: Boolean,

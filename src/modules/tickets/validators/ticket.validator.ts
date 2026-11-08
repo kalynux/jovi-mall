@@ -66,6 +66,16 @@ export const CreateTicketSchema = z.object({
      */
     admin: AdminSnapshotSchema.optional()
 }).superRefine((data, ctx) => {
+    // A lead report is opened ONLY from the lead itself (`POST /api/vendor/leads/:leadId/report`,
+    // SERVICE-LISTINGS-PLAN L-31), which checks the lead is the caller's and that the reveals it
+    // names are on it. Through this generic form anyone could name any lead id.
+    if (data.type === 'LISTING_LEAD_REPORT' || data.entityType === EntityType.LISTING_LEAD) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['type'],
+            message: 'Report a lead from your leads list'
+        });
+    }
     if (data.entityType !== EntityType.OTHER && !data.entityId) {
         ctx.addIssue({
             code: z.ZodIssueCode.custom,

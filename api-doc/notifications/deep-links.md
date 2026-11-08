@@ -91,13 +91,14 @@ notification with no button, in an app that has not been rebuilt yet.
 
 ## Vendor — `vendor-dash`
 
-`VENDOR_APP_URL` · 9 labels.
+`VENDOR_APP_URL` · 10 labels.
 
 | `path` | Sent by | Carries |
 |---|---|---|
 | `orders/{{orderId}}` | `order.created`, `order.cancelled`, `payment.received.partial`, `payment.received.full`, `shipment.rejected`, ⭐ `shipment.cod_limit_held`, ⭐ `delivery_fee_proposal.received`, ⭐ `delivery_fee_proposal.edited`, ⭐ `delivery_fee_proposal.withdrawn`, 🆕 `delivery_fee_proposal.agency_approved`, 🆕 `delivery_fee_proposal.agency_rejected` | an Order id — the order detail is where "dispatch anyway" (force) and fee approve / reject live |
 | `bookings/{{bookingId}}` | `booking.created`, `booking.cancelled` | a Booking id |
 | `products/{{productId}}` | `storage.depot_changed`, `storage.product_suspended`, `storage.product_unsuspended` | a Product id |
+| 🆕 **`listings/{{listingId}}`** | `listing.approved`, `listing.rejected`, `listing.suspended`, `listing.resumed`, `listing.video_unavailable` (SERVICE-LISTINGS-PLAN, 2026-11-07) | a Listing id — a **provider**'s service listing (vendor kind `provider`); the provider's listing editor |
 | `agency-connections/{{connectionId}}` | `connection.request_received`, `connection.approved`, `connection.rejected`, `connection.reapproval_needed`, ⭐ `connection.ended_by_closure` | a Connection id (for `ended_by_closure` the connection has ENDED — the agency closed its account) |
 | ⭐ **`account/closure`** | **`account.closure_requested`** (ADR-A10, 2026-10-04) | — (one open closure request per role). An administrator asked to close this shop; the screen is where the owner **confirms or declines** while signed in. Must exist before the template is approved |
 | `stock-requests/{{requestId}}` | `storage.stock_request.{received,approved,rejected}` | a StockRequest id |

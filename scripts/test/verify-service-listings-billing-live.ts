@@ -131,11 +131,13 @@ const statusOf = async (id: Types.ObjectId) =>
 
 async function main(): Promise<void> {
   const dbName = new URL(MONGO_URI.replace(/^mongodb(\+srv)?:/, 'http:')).pathname.replace(/^\//, '');
-  if (dbName !== REQUIRED_DB) {
+  // Under CI the URI names the SHARED `jovi_mall_ci`: move to the sibling this suite owns and drops.
+  const underCi = !!process.env.CI;
+  if (!underCi && dbName !== REQUIRED_DB) {
     console.error(`Refusing to run: this suite DROPS its database, and '${dbName}' is not '${REQUIRED_DB}'.`);
     process.exit(1);
   }
-  await mongoose.connect(MONGO_URI);
+  await mongoose.connect(MONGO_URI, underCi ? { dbName: REQUIRED_DB } : {});
   console.log(`Connected to ${MONGO_URI.replace(/\/\/[^@]*@/, '//***@')}`);
 
   // Raw vendor rows carry a user_id: `vendors.user_id` is unique, and several nulls collide.
@@ -324,13 +326,18 @@ async function main(): Promise<void> {
     // An administrator editing the plan in place emits nothing; the stamped value is what catches it.
     await PricingPlanModel.updateOne({ _id: huge }, { $set: { max_active_listings: 1 } });
     await planQuotaReconcileWorker.runSweep();
-    // One slot, and the pinned credit suspension (d) holds it: every suspendable listing waits.
+    // One slot. The balance is 50 by now, so the sweep's funding backstop (L-10, same pass) brings
+    // the credit suspension (d) back live — corrected 2026-11-07: this asserted d stayed pinned,
+    // which contradicts "comes back live on its own" — and d holds the slot; the rest wait.
     await assert('⛔ an in-place edit of max_active_listings is caught by the reconcile sweep (drift on the stamp)', async () =>
       (await statusOf(a)).suspension?.reason === 'plan_quota_exceeded'
       && (await statusOf(b)).suspension?.reason === 'plan_quota_exceeded'
       && (await statusOf(e)).suspension?.reason === 'plan_quota_exceeded'
-      && (await statusOf(d)).suspension?.at.getTime() === creditSuspendedAt.getTime()
       && (await PlanQuotaStateModel.findOne({ owner_id: q }).lean())?.enforced_max_listings === 1);
+    await assert('…and the funded credit suspension came back live and holds the one slot', async () => {
+      const sd = await statusOf(d);
+      return sd.status === 'live' && sd.suspension === null && creditSuspendedAt instanceof Date;
+    });
 
     const sellerQ = oid();
     await col(COLLECTIONS.VENDOR).insertOne({ _id: sellerQ, user_id: oid() });

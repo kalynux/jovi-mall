@@ -180,11 +180,14 @@ const fullContacts = {
 
 async function main(): Promise<void> {
     const dbName = new URL(MONGO_URI.replace(/^mongodb(\+srv)?:/, 'http:')).pathname.replace(/^\//, '');
-    if (!/^sl_|verify|test/i.test(dbName)) {
+    // Under CI the URI names the SHARED `jovi_mall_ci`, which later suites count rows in: move to a
+    // sibling database this suite owns and drops (the verify-refund-fees pattern).
+    const ciDb = process.env.CI ? 'sl_catalog_ci' : null;
+    if (!ciDb && !/^sl_|verify|test/i.test(dbName)) {
         console.error(`Refusing to run against "${dbName}": this suite DROPS its database. Use a scratch one (sl_catalog).`);
         process.exit(2);
     }
-    await mongoose.connect(MONGO_URI);
+    await mongoose.connect(MONGO_URI, ciDb ? { dbName: ciDb } : {});
     console.log(`Connected to ${dbName}`);
     await ListingModel.syncIndexes(); // the $text index, if the migration was not run first
     await FileReferenceModel.syncIndexes();

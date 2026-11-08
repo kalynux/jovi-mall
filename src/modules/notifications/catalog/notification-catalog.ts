@@ -220,6 +220,21 @@ const PRODUCT_BUTTON: ButtonDef = {
     urlSuffix: 'products/{{productId}}'
 };
 
+const VIEW_LISTING_LABEL: Record<Language, string> = {
+    en: 'View listing',
+    fr: 'Voir l\'annonce',
+    pt: 'Ver anúncio',
+    es: 'Ver anuncio',
+    ar: 'عرض الإعلان'
+};
+
+/** A provider's listing in the vendor dashboard (SERVICE-LISTINGS-PLAN, vendor-dash route). */
+const LISTING_BUTTON: ButtonDef = {
+    type: 'url',
+    label: VIEW_LISTING_LABEL,
+    urlSuffix: 'listings/{{listingId}}'
+};
+
 
 // ─── Role closure (ADR-A10) — shared by all four stacks ────────────────────
 
@@ -1086,6 +1101,87 @@ export const NOTIFICATION_CATALOG: Record<NotificationType, VendorSituationMessa
             template: { name: 'vendor_connection_ended_closure', bodyParams: ['{{agencyName}}'] }
         },
         button: { type: 'url', label: VIEW_CONNECTION_LABEL, urlSuffix: 'agency-connections/{{connectionId}}' }
+    },
+
+    // ─── Service listings (SERVICE-LISTINGS-PLAN § C-5, 2026-11-07) ─────────────
+    // A PROVIDER's listings. Ungated: each is about whether customers can reach the business at
+    // all, which is not a notification a provider should be able to mute and then miss.
+    // `{{suspensionReason}}` and `{{rejectionReasons}}` are whole sentences the handler writes in
+    // the vendor's language, so each is one template parameter and never empty.
+
+    'listing.approved': {
+        base: {
+            en: { subject: 'Listing approved', body: 'Your service listing {{listingTitle}} was approved and is now visible to customers.' },
+            fr: { subject: 'Annonce approuvée', body: 'Votre annonce de service {{listingTitle}} a été approuvée et est maintenant visible par les clients.' },
+            pt: { subject: 'Anúncio aprovado', body: 'O seu anúncio de serviço {{listingTitle}} foi aprovado e já está visível para os clientes.' },
+            es: { subject: 'Anuncio aprobado', body: 'Tu anuncio de servicio {{listingTitle}} fue aprobado y ya es visible para los clientes.' },
+            ar: { subject: 'تمت الموافقة على الإعلان', body: 'تمت الموافقة على إعلان الخدمة {{listingTitle}} وأصبح الآن مرئيًا للعملاء.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_listing_approved', bodyParams: ['{{listingTitle}}'] }
+        },
+        button: LISTING_BUTTON
+    },
+
+    'listing.rejected': {
+        base: {
+            en: { subject: 'Listing not approved', body: 'Your service listing {{listingTitle}} was not approved. {{rejectionReasons}} Edit it and submit it again.' },
+            fr: { subject: 'Annonce non approuvée', body: 'Votre annonce de service {{listingTitle}} n\'a pas été approuvée. {{rejectionReasons}} Modifiez-la puis soumettez-la à nouveau.' },
+            pt: { subject: 'Anúncio não aprovado', body: 'O seu anúncio de serviço {{listingTitle}} não foi aprovado. {{rejectionReasons}} Edite-o e submeta-o de novo.' },
+            es: { subject: 'Anuncio no aprobado', body: 'Tu anuncio de servicio {{listingTitle}} no fue aprobado. {{rejectionReasons}} Edítalo y vuelve a enviarlo.' },
+            ar: { subject: 'لم تتم الموافقة على الإعلان', body: 'لم تتم الموافقة على إعلان الخدمة {{listingTitle}}. {{rejectionReasons}} عدّله ثم أرسله مرة أخرى.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_listing_rejected', bodyParams: ['{{listingTitle}}', '{{rejectionReasons}}'] }
+        },
+        button: LISTING_BUTTON
+    },
+
+    'listing.suspended': {
+        base: {
+            en: { subject: 'Listing paused', body: 'New customers can no longer reach your service listing {{listingTitle}}. {{suspensionReason}}' },
+            fr: { subject: 'Annonce en pause', body: 'Les nouveaux clients ne peuvent plus joindre votre annonce de service {{listingTitle}}. {{suspensionReason}}' },
+            pt: { subject: 'Anúncio em pausa', body: 'Os novos clientes já não conseguem contactar o seu anúncio de serviço {{listingTitle}}. {{suspensionReason}}' },
+            es: { subject: 'Anuncio en pausa', body: 'Los nuevos clientes ya no pueden contactar tu anuncio de servicio {{listingTitle}}. {{suspensionReason}}' },
+            ar: { subject: 'الإعلان متوقف مؤقتًا', body: 'لم يعد بإمكان العملاء الجدد التواصل عبر إعلان الخدمة {{listingTitle}}. {{suspensionReason}}' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_listing_suspended', bodyParams: ['{{listingTitle}}', '{{suspensionReason}}'] }
+        },
+        button: LISTING_BUTTON
+    },
+
+    'listing.resumed': {
+        base: {
+            en: { subject: 'Listing live again', body: 'Your service listing {{listingTitle}} is live again. New customers can see it and contact you.' },
+            fr: { subject: 'Annonce de nouveau en ligne', body: 'Votre annonce de service {{listingTitle}} est de nouveau en ligne. Les nouveaux clients peuvent la voir et vous contacter.' },
+            pt: { subject: 'Anúncio de novo ativo', body: 'O seu anúncio de serviço {{listingTitle}} está de novo ativo. Os novos clientes podem vê-lo e contactá-lo.' },
+            es: { subject: 'Anuncio activo de nuevo', body: 'Tu anuncio de servicio {{listingTitle}} vuelve a estar activo. Los nuevos clientes pueden verlo y contactarte.' },
+            ar: { subject: 'الإعلان نشط من جديد', body: 'أصبح إعلان الخدمة {{listingTitle}} نشطًا من جديد. يمكن للعملاء الجدد رؤيته والتواصل معك.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_listing_resumed', bodyParams: ['{{listingTitle}}'] }
+        },
+        button: LISTING_BUTTON
+    },
+
+    'listing.video_unavailable': {
+        base: {
+            en: { subject: 'Location video unavailable', body: 'A customer could not watch the location video of {{listingTitle}}: YouTube says it is private or deleted. You were not charged. Edit the listing to give a new link.' },
+            fr: { subject: 'Vidéo d\'accès indisponible', body: 'Un client n\'a pas pu regarder la vidéo d\'accès de {{listingTitle}} : YouTube indique qu\'elle est privée ou supprimée. Vous n\'avez pas été débité. Modifiez l\'annonce pour donner un nouveau lien.' },
+            pt: { subject: 'Vídeo de localização indisponível', body: 'Um cliente não conseguiu ver o vídeo de localização de {{listingTitle}}: o YouTube diz que é privado ou foi eliminado. Não lhe foi cobrado nada. Edite o anúncio para dar um novo link.' },
+            es: { subject: 'Vídeo de ubicación no disponible', body: 'Un cliente no pudo ver el vídeo de ubicación de {{listingTitle}}: YouTube indica que es privado o se eliminó. No se te cobró. Edita el anuncio para dar un nuevo enlace.' },
+            ar: { subject: 'فيديو الموقع غير متاح', body: 'لم يتمكن أحد العملاء من مشاهدة فيديو الموقع الخاص بـ {{listingTitle}}: يشير YouTube إلى أنه خاص أو محذوف. لم يتم خصم أي رصيد منك. عدّل الإعلان لإضافة رابط جديد.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_listing_video_unavailable', bodyParams: ['{{listingTitle}}'] }
+        },
+        button: LISTING_BUTTON
     }
 };
 

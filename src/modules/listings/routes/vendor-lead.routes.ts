@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../../api/middlewares/auth.middleware';
 import { requireVendorKind } from '../../../api/middlewares/vendor-kind.middleware';
+import { VendorLeadController } from '../controllers/vendor-lead.controller';
 
 /**
  * A provider's leads (SERVICE-LISTINGS-PLAN § C-3, walk-order steps 6, 7 and 9).
@@ -18,5 +19,10 @@ router.use(requireAuth);
 router.use(requireRole(['vendor']));
 // Vendor kind (SERVICE-LISTINGS-PLAN § C-1): PROVIDER — leads are a provider's.
 router.use(requireVendorKind('provider'));
+
+router.get('/', VendorLeadController.list);
+router.post('/:leadId/call-me', VendorLeadController.callMe);
+router.post('/:leadId/message', VendorLeadController.message);
+router.post('/:leadId/report', VendorLeadController.report);
 
 export default router;

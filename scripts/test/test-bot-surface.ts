@@ -3482,10 +3482,13 @@ async function main(): Promise<void> {
      * address, or the link — BOT-BOOKING-ADDRESS-AND-PLACE-PLAN). bookings_address_step is flow_only.
      * 71 → 72 on 2026-11-03: + bookings_send_reminder (the customer's one reminder to the vendor —
      * BOOKING-PARTY-REMINDER-PLAN).
+     * 72 → 74 on 2026-11-07: + listings_display, listings_get (service-listing cards —
+     * SERVICE-LISTINGS-PLAN § C-3a). listings_reveal and listings_consent are flow_only: they are
+     * the customer's TAPS, and a reveal spends a provider's credits, so the model never holds them.
      */
-    assert('the generator emits 72 tools — update this when one lands', () => {
-        if (emitted.length !== 72) console.error(`     ↳ emitted ${emitted.length}`);
-        return emitted.length === 72;
+    assert('the generator emits 74 tools — update this when one lands', () => {
+        if (emitted.length !== 74) console.error(`     ↳ emitted ${emitted.length}`);
+        return emitted.length === 74;
     });
 
     /**

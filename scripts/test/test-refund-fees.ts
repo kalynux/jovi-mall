@@ -285,7 +285,8 @@ assert('the damage-claim routes are mounted behind requireAdminCaller', () =>
   /router\.use\('\/agency-claims', buildAdminAgencyClaimRouter\(\[requireAdminCaller\]\)\)/.test(internal));
 for (const [role, file] of [['agency', 'agency-earnings'], ['agent', 'agent-earnings'], ['vendor', 'vendor-earnings']] as const) {
   assert(`${role}s can read why money was taken (GET /earnings/adjustments)`, () =>
-    /router\.get\('\/earnings\/adjustments', EarningsExplanationsController\.listMyAdjustments\)/.test(code(`modules/earnings/routes/${file}.routes.ts`)));
+    // `SELLER, ` on the vendor router: the vendor-kind declaration (SERVICE-LISTINGS-PLAN § C-1).
+    /router\.get\('\/earnings\/adjustments', (?:SELLER, )?EarningsExplanationsController\.listMyAdjustments\)/.test(code(`modules/earnings/routes/${file}.routes.ts`)));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

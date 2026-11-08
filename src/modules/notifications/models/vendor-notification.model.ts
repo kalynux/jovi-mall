@@ -96,7 +96,17 @@ export type NotificationType =
      * account, so the connection ended. Gated by `connectionUpdated`, like every `connection.*`.
      */
     | 'account.closure_requested'
-    | 'connection.ended_by_closure';
+    | 'connection.ended_by_closure'
+    /**
+     * A PROVIDER's service listing (SERVICE-LISTINGS-PLAN § C-5): approved, rejected, paused
+     * (out of credits, taken offline, over the plan), live again, or its YouTube video is gone.
+     * Ungated — whether customers can reach the business is not something to mute.
+     */
+    | 'listing.approved'
+    | 'listing.rejected'
+    | 'listing.suspended'
+    | 'listing.resumed'
+    | 'listing.video_unavailable';
 
 /**
  * Aggregate Types
@@ -119,7 +129,9 @@ export type AggregateType =
     | 'stock_request'
     | 'product'
     /** A role-closure request (ADR-A10) — `aggregateId` is the request id. */
-    | 'account';
+    | 'account'
+    /** A provider's service listing — `aggregateId` is the listing id. */
+    | 'listing';
 
 /**
  * Delivery Channels
@@ -223,7 +235,13 @@ const VendorNotificationSchema = new Schema<IVendorNotification>(
                 'delivery_fee_proposal.agency_rejected',
                 // ⚠ Hand-kept: every member of the union above must be here too.
                 'account.closure_requested',
-                'connection.ended_by_closure'
+                'connection.ended_by_closure',
+                // ⚠ Hand-kept: every member of the union above must be here too.
+                'listing.approved',
+                'listing.rejected',
+                'listing.suspended',
+                'listing.resumed',
+                'listing.video_unavailable'
             ],
             required: true
         },
@@ -242,7 +260,7 @@ const VendorNotificationSchema = new Schema<IVendorNotification>(
         aggregateType: {
             type: String,
             // ⚠ Hand-kept: every member of `AggregateType` must be here too.
-            enum: ['order', 'booking', 'payment', 'storage', 'connection', 'payout', 'plan', 'stock_request', 'product', 'account'],
+            enum: ['order', 'booking', 'payment', 'storage', 'connection', 'payout', 'plan', 'stock_request', 'product', 'account', 'listing'],
             required: true
         },
         aggregateId: {

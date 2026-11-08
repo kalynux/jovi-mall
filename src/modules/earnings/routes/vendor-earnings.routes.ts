@@ -29,8 +29,8 @@ router.get('/earnings', SELLER, VendorEarningsController.getEarnings);
 
 // Why money was taken back (refunds, seller-cancel fees, a lost dispute) and damage claims that
 // compensated the vendor — 2026-10-22.
-router.get('/earnings/adjustments', EarningsExplanationsController.listMyAdjustments);
-router.get('/earnings/agency-claims', EarningsExplanationsController.listVendorClaims);
+router.get('/earnings/adjustments', SELLER, EarningsExplanationsController.listMyAdjustments);
+router.get('/earnings/agency-claims', SELLER, EarningsExplanationsController.listVendorClaims);
 
 // Request a payout of the entire available balance; opens a PAYOUT_REQUEST ticket.
 router.post('/earnings/payout', SELLER, PayoutRequestController.requestPayout);

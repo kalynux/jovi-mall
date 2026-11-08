@@ -35,6 +35,7 @@ import { DomainEvent } from '../../../core/events/event-bus';
 import { renderTemplate } from '../catalog/message-renderer';
 import { VENDOR_COD_HOLD_REASON } from '../catalog/notification-catalog';
 import { MagazinRepository } from '../../magazin/repositories/magazin.repository';
+import { listingRepository } from '../../listings/repositories/listing.repository';
 import { OrderModel } from '../../orders/order.model';
 import {
     closureReasonParam,
@@ -65,6 +66,69 @@ import { ERROR_CODES } from '../../../core/error-codes';
 /**
  * Parameters for dispatching a single notification situation.
  */
+/** The five provider situations `handleListingEvent` renders (SERVICE-LISTINGS-PLAN § C-5). */
+export const LISTING_SITUATIONS: ReadonlySet<NotificationType> = new Set<NotificationType>([
+    'listing.approved',
+    'listing.rejected',
+    'listing.suspended',
+    'listing.resumed',
+    'listing.video_unavailable',
+]);
+
+const LISTING_FALLBACK_TITLE: Record<Language, string> = {
+    en: 'your listing', fr: 'votre annonce', pt: 'o seu anúncio', es: 'tu anuncio', ar: 'إعلانك',
+};
+
+/** Why a listing is paused, in the provider's language — one sentence, never empty. */
+const LISTING_SUSPENSION_SENTENCE: Record<string, Record<Language, string>> = {
+    insufficient_credits: {
+        en: 'Your credits are below the cost of one contact reveal. Top up and it comes back on its own.',
+        fr: 'Vos crédits sont inférieurs au coût d\'un contact révélé. Rechargez et elle revient d\'elle-même.',
+        pt: 'Os seus créditos estão abaixo do custo de um contacto revelado. Carregue e ele volta sozinho.',
+        es: 'Tus créditos están por debajo del costo de un contacto revelado. Recarga y vuelve por sí solo.',
+        ar: 'رصيدك أقل من تكلفة كشف جهة اتصال واحدة. اشحن رصيدك وسيعود الإعلان تلقائيًا.',
+    },
+    platform_oversight: {
+        en: 'A Wi-Mall administrator took it offline. Open the listing to see why, or contact support.',
+        fr: 'Un administrateur Wi-Mall l\'a mise hors ligne. Ouvrez l\'annonce pour savoir pourquoi, ou contactez le support.',
+        pt: 'Um administrador da Wi-Mall colocou-o offline. Abra o anúncio para ver porquê, ou contacte o suporte.',
+        es: 'Un administrador de Wi-Mall lo desconectó. Abre el anuncio para ver por qué, o contacta con soporte.',
+        ar: 'أوقف أحد مسؤولي Wi-Mall هذا الإعلان. افتح الإعلان لمعرفة السبب، أو تواصل مع الدعم.',
+    },
+    plan_quota_exceeded: {
+        en: 'Your plan allows fewer live listings. Upgrade your plan to bring it back.',
+        fr: 'Votre forfait autorise moins d\'annonces en ligne. Passez à un forfait supérieur pour la rétablir.',
+        pt: 'O seu plano permite menos anúncios ativos. Mude para um plano superior para o recuperar.',
+        es: 'Tu plan permite menos anuncios activos. Mejora tu plan para recuperarlo.',
+        ar: 'تسمح خطتك بعدد أقل من الإعلانات النشطة. قم بترقية خطتك لإعادته.',
+    },
+};
+
+function listingSuspensionSentence(reason: string | undefined, lang: Language): string {
+    const byReason = LISTING_SUSPENSION_SENTENCE[reason ?? ''] ?? LISTING_SUSPENSION_SENTENCE.platform_oversight;
+    return byReason[lang] ?? byReason.en;
+}
+
+const LISTING_REJECTION_LEAD: Record<Language, string> = {
+    en: 'The reviewer said:', fr: 'Le modérateur a indiqué :', pt: 'O revisor indicou:', es: 'El revisor indicó:', ar: 'قال المراجع:',
+};
+
+const LISTING_REJECTION_NONE: Record<Language, string> = {
+    en: 'Open the listing to see the reviewer\'s notes.',
+    fr: 'Ouvrez l\'annonce pour voir les remarques du modérateur.',
+    pt: 'Abra o anúncio para ver as notas do revisor.',
+    es: 'Abre el anuncio para ver las notas del revisor.',
+    ar: 'افتح الإعلان للاطلاع على ملاحظات المراجع.',
+};
+
+/** The reviewer's reasons as one sentence (a template takes one parameter for all of them). */
+function listingRejectionSentence(reasons: string[], lang: Language): string {
+    const kept = reasons.map((r) => String(r).trim()).filter(Boolean);
+    if (kept.length === 0) return LISTING_REJECTION_NONE[lang] ?? LISTING_REJECTION_NONE.en;
+    const joined = kept.map((r) => (/[.!?]$/.test(r) ? r : `${r}.`)).join(' ');
+    return `${LISTING_REJECTION_LEAD[lang] ?? LISTING_REJECTION_LEAD.en} ${joined}`;
+}
+
 interface DispatchParams {
     situation: NotificationType;
     prefs: IVendorNotificationPreference;
@@ -1375,6 +1439,54 @@ export class VendorNotificationEventHandler {
      * vendor↔agency connection, to the vendor. Gated by `connectionUpdated`, like every
      * other `connection.*` situation on this stack.
      */
+    // ─── Service listings (SERVICE-LISTINGS-PLAN § C-5) ─────────────────────────
+
+    /**
+     * `listing.approved` / `rejected` / `suspended` / `resumed` / `video_unavailable` → the
+     * provider. Ungated (no preference key): each is about whether customers can reach the
+     * business at all. The payload is `{ listingId, vendorId, ...extra }` (`listing-events.ts`);
+     * the title is read here, so the five publish sites stay one line each.
+     *
+     * The idempotency key carries the event's own instant: a listing is approved, paused and
+     * resumed many times over its life, and each is its own news.
+     */
+    async handleListingEvent(event: DomainEvent): Promise<void> {
+        try {
+            const situation = event.eventType as NotificationType;
+            if (!LISTING_SITUATIONS.has(situation)) return;
+            const p = event.payload as { listingId?: string; vendorId?: string; reason?: string; reasons?: string[]; note?: string };
+            if (!p.listingId || !p.vendorId) return;
+
+            const [prefs, vendor, listing] = await Promise.all([
+                this.preferenceRepo.getByVendor(p.vendorId),
+                this.vendorRepo.findById(p.vendorId),
+                listingRepository.findById(p.listingId),
+            ]);
+            const lang = resolveLanguage(vendor);
+            const listingTitle = listing?.published?.title || listing?.pending?.title || LISTING_FALLBACK_TITLE[lang];
+
+            const context: RenderContext = { listingId: p.listingId, listingTitle };
+            if (situation === 'listing.suspended') {
+                context.suspensionReason = listingSuspensionSentence(p.reason, lang);
+            }
+            if (situation === 'listing.rejected') {
+                context.rejectionReasons = listingRejectionSentence(p.reasons ?? [], lang);
+            }
+
+            await this.dispatch({
+                situation,
+                prefs,
+                vendorId: p.vendorId,
+                aggregateType: 'listing',
+                aggregateId: p.listingId,
+                idempotencyKey: `${situation}:${p.listingId}:${new Date(event.occurredAt).toISOString()}`,
+                context
+            });
+        } catch (error) {
+            console.error(`[NotificationHandler] Failed to handle ${event.eventType}:`, error);
+        }
+    }
+
     async handleRoleClosureRelationshipsEnded(event: DomainEvent): Promise<void> {
         try {
             const p = event.payload as RoleClosureRelationshipsEndedPayload;

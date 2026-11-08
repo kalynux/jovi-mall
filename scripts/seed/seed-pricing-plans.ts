@@ -114,14 +114,31 @@ const AGENT_PLANS: SeedPlan[] = [
 
 export const ALL_PLANS: ReadonlyArray<SeedPlan> = [...VENDOR_PLANS, ...PROVIDER_PLANS, ...AGENCY_PLANS, ...AGENT_PLANS];
 
+/**
+ * `--providers-only` (the service-listings deploy, 2026-11-08): INSERT the three provider plans
+ * if they are missing and touch nothing else. A full run `$set`s every role's seeded fields, so
+ * on a live database it would reset whatever an administrator tuned on the seller, agency and
+ * agent plans — a deploy of a vendor feature must not move an agency's or an agent's plan.
+ * `$setOnInsert` also means an existing provider plan an admin has edited is left alone. Seller
+ * plans need no `vendor_kind` stamp: every reader uses `SELLER_PLAN_FILTER` (`$ne: 'provider'`).
+ */
+export function plansToSeed(argv: readonly string[]): { plans: ReadonlyArray<SeedPlan>; insertOnly: boolean } {
+  return argv.includes('--providers-only')
+    ? { plans: PROVIDER_PLANS, insertOnly: true }
+    : { plans: ALL_PLANS, insertOnly: false };
+}
+
 async function run() {
   await mongoose.connect(MONGO_URI);
   console.log('[seed:plans] Connected to MongoDB');
 
-  for (const plan of ALL_PLANS) {
+  const { plans, insertOnly } = plansToSeed(process.argv.slice(2));
+  if (insertOnly) console.log('[seed:plans] --providers-only: inserting missing provider plans, overwriting nothing');
+
+  for (const plan of plans) {
     await PricingPlanModel.updateOne(
       { role: plan.role, code: plan.code, deletedAt: null },
-      { $set: { ...plan, deletedAt: null } },
+      insertOnly ? { $setOnInsert: { ...plan, deletedAt: null } } : { $set: { ...plan, deletedAt: null } },
       { upsert: true }
     );
     console.log(

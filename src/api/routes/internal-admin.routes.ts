@@ -26,7 +26,7 @@ import { buildAdminStaffIdentityRouter } from '../../modules/staff-identity/rout
 import { buildAdminGeoRouter } from '../../modules/geo/admin-geo.routes';
 import { buildAdminStatementMailRouter } from '../../modules/mail/admin-statement-mail.routes';
 import { buildAdminRefundRequestRouter } from '../../modules/payments/routes/admin-refund-request.routes';
-import { buildAdminListingRouter } from '../../modules/listings/routes/admin-listing.routes';
+import { buildAdminListingRouter, buildAdminListingRevealRouter } from '../../modules/listings/routes/admin-listing.routes';
 import { buildAdminAgencyClaimRouter } from '../../modules/earnings/routes/admin-agency-claims.routes';
 import { buildAdminReferralRouter } from '../../modules/referrals/routes/admin-referral.routes';
 
@@ -387,6 +387,9 @@ router.use('/refunds', buildAdminRefundRequestRouter([requireAdminCaller]));
  * `available_fields`; reject refunds the indexing fee; suspend/unsuspend move the AI index.
  */
 router.use('/listings', buildAdminListingRouter([requireAdminCaller]));
+// The reveal refund from a provider's report (L-25): credits the provider's wallet and stamps
+// the reveal in one transaction, idempotent per reveal. wi-admin: `catalog.listings.reveals.refund`.
+router.use('/listing-reveals', buildAdminListingRevealRouter([requireAdminCaller]));
 
 /**
  * Damage claims on an agency (owner F-8, 2026-10-22) — no public twin. A claim charges the agency

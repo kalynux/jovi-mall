@@ -14,6 +14,7 @@ import { eventBus } from '../../../core/events/event-bus';
 import { OrderModel } from '../../orders/order.model';
 import { Booking } from '../../booking/models/booking.model';
 import { ProductModel } from '../../catalog/models/product.model';
+import { ListingLeadModel } from '../../listings/models/listing-lead.model';
 import { VendorRepository } from '../../vendors/vendor.repository';
 import mongoose from 'mongoose';
 import { SYSTEM_ACTOR_ID, SYSTEM_ADMIN_SNAPSHOT, isSystemActor } from '../../../core/types/system-actor';
@@ -89,6 +90,8 @@ export class TicketService {
          * order, for one (owner, 2026-10-05).
          */
         priority?: TicketPriority;
+        /** Type-specific facts (`Ticket.metadata`) — only a LISTING_LEAD_REPORT sets them today. */
+        metadata?: Record<string, unknown> | null;
     }): Promise<ITicket> {
         // Polymorphic entity validation → also resolves the vendor behind the entity.
         const vendorId = await this.validateEntityReference(input.entityType, input.entityId);
@@ -113,6 +116,7 @@ export class TicketService {
             entity_type: input.entityType,
             entity_id: input.entityId,
             tracking_number: input.trackingNumber ?? null,
+            metadata: input.metadata ?? null,
             created_by_role: input.createdByRole,
             created_by_user_id: new mongoose.Types.ObjectId(input.createdByUserId),
             // A ticket the platform opens on its own (an automatic payout request, too) is
@@ -695,6 +699,13 @@ export class TicketService {
                 const product = await ProductModel.findById(entityId).select('vendorId').lean();
                 if (!product) throw createAppError(ERROR_CODES.TICKET_ENTITY_NOT_FOUND, 404, 'Referenced product not found');
                 return product.vendorId?.toString() ?? null;
+            }
+            case EntityType.LISTING_LEAD: {
+                // A provider's report on one of their leads (SERVICE-LISTINGS-PLAN L-31). The vendor
+                // is returned like any other, but a provider has no support policy to enforce.
+                const lead = await ListingLeadModel.findById(entityId).select('vendor_id').lean();
+                if (!lead) throw createAppError(ERROR_CODES.TICKET_ENTITY_NOT_FOUND, 404, 'Referenced lead not found');
+                return lead.vendor_id?.toString() ?? null;
             }
             default:
                 return null;

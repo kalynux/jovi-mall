@@ -194,6 +194,23 @@ export const BOT_ACTION_VERBS = Object.freeze([
      * `bpay:` precedent. 30 bytes.
      */
     'place',
+    // ── Service listings (SERVICE-LISTINGS-PLAN § C-3a, 2026-11-07) ───────────
+    /**
+     * `ls:<listingId>` — show this listing's card. Charges nothing. 27 bytes.
+     */
+    'ls',
+    /**
+     * `lr:<listingId>:<f>` — unlock ONE contact field; the PROVIDER pays in credits. 29 bytes.
+     * `f` is one letter (`LISTING_FIELD_CODES`). ⛔ **Only a tap spends a provider's money**: this
+     * token is drawn on buttons and never offered to the model as a tool.
+     */
+    'lr',
+    /**
+     * `lc:<vendorId>:y` / `lc:<vendorId>:n` — opt in to, or out of, one provider's messages
+     * (L-14): the question after a first reveal, and "Stop these messages" on every relayed
+     * message. 29 bytes.
+     */
+    'lc',
 ] as const);
 export type BotActionVerb = (typeof BOT_ACTION_VERBS)[number];
 
@@ -591,6 +608,62 @@ export function bookingPayActionId(bookingId: string, purpose: 'primary' | 'bala
 /** `place:<bookingId>` — see the verb's note in `BOT_ACTION_VERBS`. */
 export function bookingPlaceActionId(bookingId: string): string {
     return token('place', bookingId);
+}
+
+// ─── Service listings (§ C-3a) ───────────────────────────────────────────────
+
+/**
+ * The one-letter field codes of `lr:` (§ C-3a). Kept here, beside the parser, rather than
+ * imported from the listings module: this file describes token grammar and imports nothing.
+ * `test:service-listings-messaging` asserts the seven agree with `LISTING_CONTACT_FIELDS`.
+ */
+export const LISTING_FIELD_CODES = Object.freeze({
+    whatsapp: 'w',
+    phone: 'p',
+    email: 'e',
+    website: 'u',
+    socials: 's',
+    location: 'l',
+    video: 'v',
+} as const);
+export type ListingFieldName = keyof typeof LISTING_FIELD_CODES;
+
+const OBJECT_ID = /^[0-9a-f]{24}$/;
+
+/** `ls:<listingId>` — the card. */
+export function listingShowActionId(listingId: string): string {
+    return token('ls', listingId);
+}
+
+/** `lr:<listingId>:<f>` — unlock one field. */
+export function listingRevealActionId(listingId: string, field: ListingFieldName): string {
+    return token('lr', `${listingId}:${LISTING_FIELD_CODES[field]}`);
+}
+
+/** `lc:<vendorId>:y|n` — the opt-in to one provider's messages. */
+export function listingConsentActionId(vendorId: string, granted: boolean): string {
+    return token('lc', `${vendorId}:${granted ? 'y' : 'n'}`);
+}
+
+/** `ls:` argument → listing id, or null. */
+export function parseListingShowArgument(argument: string): string | null {
+    return OBJECT_ID.test(argument) ? argument : null;
+}
+
+/** `lr:` argument → `{ listingId, field }`, or null for anything malformed. */
+export function parseListingRevealArgument(argument: string): { listingId: string; field: ListingFieldName } | null {
+    const [listingId, code, ...rest] = argument.split(':');
+    if (rest.length > 0 || !listingId || !OBJECT_ID.test(listingId)) return null;
+    const field = (Object.keys(LISTING_FIELD_CODES) as ListingFieldName[]).find((f) => LISTING_FIELD_CODES[f] === code);
+    return field ? { listingId, field } : null;
+}
+
+/** `lc:` argument → `{ vendorId, granted }`, or null. */
+export function parseListingConsentArgument(argument: string): { vendorId: string; granted: boolean } | null {
+    const [vendorId, answer, ...rest] = argument.split(':');
+    if (rest.length > 0 || !vendorId || !OBJECT_ID.test(vendorId)) return null;
+    if (answer !== 'y' && answer !== 'n') return null;
+    return { vendorId, granted: answer === 'y' };
 }
 
 /**

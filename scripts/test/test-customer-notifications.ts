@@ -70,6 +70,7 @@ import {
 import { AGENT_NOTIFICATION_TYPES } from '../../src/modules/notifications/models/agent-notification.model';
 import { AGENT_NOTIFICATION_CATALOG } from '../../src/modules/notifications/catalog/agent-notification-catalog';
 import { REFERRAL_NOTIFICATION_CATALOG } from '../../src/modules/notifications/catalog/referral-notification-catalog';
+import { LISTING_MESSAGE_CATALOG } from '../../src/modules/notifications/catalog/listing-message-catalog';
 import { AGENCY_NOTIFICATION_CATALOG } from '../../src/modules/notifications/catalog/agency-notification-catalog';
 import { NOTIFICATION_CATALOG } from '../../src/modules/notifications/catalog/notification-catalog';
 import {
@@ -1156,6 +1157,11 @@ function main(): void {
                 }
             }
         }
+        // A provider's call-me to a customer (SERVICE-LISTINGS-PLAN L-15) — its own catalogue, sent by
+        // `provider-message.sender.ts`; the free text names no template (in-window only).
+        for (const [situation, entry] of Object.entries(LISTING_MESSAGE_CATALOG)) {
+            if (entry.template) out.set(entry.template.name, `listing message catalogue: ${situation}`);
+        }
         // The referral catalogue is shared by all four roles, and every situation names a template.
         for (const [situation, entry] of Object.entries(REFERRAL_NOTIFICATION_CATALOG)) {
             out.set(entry.template.name, `referral catalogue: ${situation}`);
@@ -1245,11 +1251,12 @@ function main(): void {
         new Map([...catalogTemplateNames(), ...literalTemplateNames(moduleSources())]);
 
     // Non-vacuity first: an empty set on either side satisfies "every X is in Y" for nothing.
-    assert('the name scan read all five catalogues and found a send-site literal', () => {
+    // Six since 2026-11-07: the provider-message catalogue (`listing message catalogue: …`).
+    assert('the name scan read all six catalogues and found a send-site literal', () => {
         const fromCatalogs = catalogTemplateNames();
         const literals = literalTemplateNames(moduleSources());
         const audiences = new Set([...fromCatalogs.values()].map(w => w.split(' ')[0]));
-        return audiences.size === 5 && literals.size > 0 && submittedNames.size > 0;
+        return audiences.size === 6 && literals.size > 0 && submittedNames.size > 0;
     });
 
     assert('⛔ every template name a send can ask for was submitted, and every submitted name is sent', () => {

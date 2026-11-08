@@ -226,8 +226,9 @@ assert('the detail DTO derives freeDelivery from input.deliveryTerms, not the pr
 
 const routes = stripComments(read('modules/vendor/routes.ts'));
 assert('GET and PUT /profile/delivery-terms are mounted', () =>
-  routes.includes("router.get('/profile/delivery-terms', VendorProfileController.getDeliveryTerms)")
-  && routes.includes("router.put('/profile/delivery-terms', VendorProfileController.setDeliveryTerms)"));
+  // `SELLER, ` is the vendor-kind declaration (SERVICE-LISTINGS-PLAN § C-1): delivery terms are a seller's.
+  routes.includes("router.get('/profile/delivery-terms', SELLER, VendorProfileController.getDeliveryTerms)")
+  && routes.includes("router.put('/profile/delivery-terms', SELLER, VendorProfileController.setDeliveryTerms)"));
 
 const controller = stripComments(read('modules/vendor/controller/vendor-profile.controller.ts'));
 assert('the PUT parses with SetDeliveryTermsSchema', () =>

@@ -2,8 +2,14 @@ import { Request, Response } from 'express';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { actorFromRequest } from '../../../core/types/actor-source.types';
 import { listingReviewService } from '../domain/services/listing-review.service';
+import { listingReportAdminService } from '../domain/services/listing-report-admin.service';
 import {
   AdminApproveSchema,
+  AdminBlockCustomerSchema,
+  AdminLiftBlockSchema,
+  AdminRefundRevealSchema,
+  RevealBlockParamsSchema,
+  RevealIdParamSchema,
   AdminRejectSchema,
   AdminSuspendSchema,
   AdminUnsuspendSchema,
@@ -39,5 +45,28 @@ export class AdminListingController {
     const { id } = ListingIdParamSchema.parse(req.params);
     AdminUnsuspendSchema.parse(req.body ?? {});
     res.json({ success: true, data: await listingReviewService.unsuspend(id, actorFromRequest(req)) });
+  });
+
+  // ─── Lead reports (L-25, L-29, L-31 — step 7) ─────────────────────────────
+
+  /** POST /api/internal/admin/listing-reveals/:revealId/refund `{ ticketId?, note }` */
+  static refundReveal = asyncHandler(async (req: Request, res: Response) => {
+    const { revealId } = RevealIdParamSchema.parse(req.params);
+    const body = AdminRefundRevealSchema.parse(req.body ?? {});
+    res.json({ success: true, data: await listingReportAdminService.refundReveal(revealId, body, actorFromRequest(req)) });
+  });
+
+  /** POST /api/internal/admin/listings/:id/reveal-blocks/:customerId `{ reason, ticketId? }` */
+  static blockCustomer = asyncHandler(async (req: Request, res: Response) => {
+    const { id, customerId } = RevealBlockParamsSchema.parse(req.params);
+    const body = AdminBlockCustomerSchema.parse(req.body ?? {});
+    res.status(201).json({ success: true, data: await listingReportAdminService.blockCustomer(id, customerId, body, actorFromRequest(req)) });
+  });
+
+  /** DELETE /api/internal/admin/listings/:id/reveal-blocks/:customerId `{ note? }` */
+  static liftBlock = asyncHandler(async (req: Request, res: Response) => {
+    const { id, customerId } = RevealBlockParamsSchema.parse(req.params);
+    const { note } = AdminLiftBlockSchema.parse(req.body ?? {});
+    res.json({ success: true, data: await listingReportAdminService.liftBlock(id, customerId, note ?? null, actorFromRequest(req)) });
   });
 }

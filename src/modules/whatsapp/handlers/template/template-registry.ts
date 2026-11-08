@@ -172,6 +172,12 @@ export class TemplateRegistry {
             ['vendor_storage_depot_changed', 3, true, 'Vendor: storage agency moved the product to another depot'],
             ['vendor_storage_product_suspended', 3, true, 'Vendor: storage agency suspended the product'],
             ['vendor_storage_product_unsuspended', 2, true, 'Vendor: storage agency lifted the suspension'],
+            // Service listings (SERVICE-LISTINGS-PLAN § C-5, 2026-11-07) — a PROVIDER's listing.
+            ['vendor_listing_approved', 1, true, 'Vendor (provider): service listing approved'],
+            ['vendor_listing_rejected', 2, true, 'Vendor (provider): service listing not approved, with the reasons'],
+            ['vendor_listing_suspended', 2, true, 'Vendor (provider): service listing paused (out of credits, taken offline, over the plan)'],
+            ['vendor_listing_resumed', 1, true, 'Vendor (provider): service listing live again'],
+            ['vendor_listing_video_unavailable', 1, true, 'Vendor (provider): the listing\'s YouTube location video is gone'],
 
             // ── Agency (button base: AGENCY_APP_URL) ─────────────────────────
             ['agency_connection_request_received', 1, true, 'Agency: vendor requested a connection'],

@@ -533,6 +533,44 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         es: 'Ese precio ya no espera respuesta. Tu cita es la que aparece en tus reservas.',
         ar: 'لم يعد هذا السعر بانتظار رد. حجزك هو المعروض في حجوزاتك.',
     },
+    // ─── Service listings — the reveal (SERVICE-LISTINGS-PLAN § The reveal) ───
+    // ⚠ LISTING_UNREACHABLE is NEUTRAL by decision: the same sentence for "not live", "blocked
+    // on this listing" (L-29) and "out of credits". A drainer must learn nothing from it.
+    [ERROR_CODES.LISTING_UNREACHABLE]: {
+        en: 'This business can’t be reached right now. Please try again later.',
+        fr: 'Cette entreprise ne peut pas être jointe pour le moment. Réessayez plus tard.',
+        pt: 'Esta empresa não pode ser contactada neste momento. Tente mais tarde.',
+        es: 'No se puede contactar con este negocio en este momento. Inténtalo más tarde.',
+        ar: 'لا يمكن التواصل مع هذا النشاط التجاري حاليًا. حاول مرة أخرى لاحقًا.',
+    },
+    [ERROR_CODES.LISTING_REVEAL_DAILY_LIMIT]: {
+        en: 'You’ve reached today’s limit for this business. Try again tomorrow.',
+        fr: 'Vous avez atteint la limite du jour pour cette entreprise. Réessayez demain.',
+        pt: 'Atingiu o limite de hoje para esta empresa. Tente amanhã.',
+        es: 'Has alcanzado el límite de hoy para este negocio. Inténtalo mañana.',
+        ar: 'لقد بلغت الحد المسموح به اليوم لهذا النشاط التجاري. حاول غدًا.',
+    },
+    [ERROR_CODES.LISTING_FIELD_UNAVAILABLE]: {
+        en: 'This business hasn’t given that contact detail.',
+        fr: 'Cette entreprise n’a pas indiqué ce moyen de contact.',
+        pt: 'Esta empresa não indicou esse contacto.',
+        es: 'Este negocio no ha indicado ese dato de contacto.',
+        ar: 'لم يقدّم هذا النشاط التجاري وسيلة الاتصال هذه.',
+    },
+    [ERROR_CODES.LISTING_VIDEO_UNAVAILABLE]: {
+        en: 'This video is no longer available. Nothing was charged to the business.',
+        fr: 'Cette vidéo n’est plus disponible. Rien n’a été facturé à l’entreprise.',
+        pt: 'Este vídeo já não está disponível. Nada foi cobrado à empresa.',
+        es: 'Este vídeo ya no está disponible. No se cobró nada al negocio.',
+        ar: 'هذا الفيديو لم يعد متاحًا. لم يتم خصم أي شيء من النشاط التجاري.',
+    },
+    [ERROR_CODES.LISTING_NOT_FOUND]: {
+        en: 'This listing is no longer available.',
+        fr: 'Cette annonce n’est plus disponible.',
+        pt: 'Este anúncio já não está disponível.',
+        es: 'Este anuncio ya no está disponible.',
+        ar: 'هذا الإعلان لم يعد متاحًا.',
+    },
     [ERROR_CODES.BOOKING_REMINDER_ALREADY_SENT]: {
         en: 'You have already sent the provider your one reminder for this appointment.',
         fr: "Vous avez déjà envoyé au prestataire votre unique rappel pour ce rendez-vous.",

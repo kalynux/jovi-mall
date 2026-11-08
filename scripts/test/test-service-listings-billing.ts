@@ -23,7 +23,7 @@
 import { readFileSync, readdirSync, statSync } from 'fs';
 import path from 'path';
 
-import { ALL_PLANS, SeedPlan } from '../seed/seed-pricing-plans';
+import { ALL_PLANS, SeedPlan, plansToSeed } from '../seed/seed-pricing-plans';
 import {
   FREE_PLAN_CODE_BY_ROLE,
   PROVIDER_FREE_PLAN_CODE,
@@ -257,6 +257,18 @@ async function main(): Promise<void> {
   assert('the seed stays an idempotent upsert by role + code, and runs only as an entry point', () =>
     /updateOne\(\s*\{ role: plan\.role, code: plan\.code, deletedAt: null \}[\s\S]*?\{ upsert: true \}/.test(seedSrc)
     && /if \(require\.main === module\)/.test(seedSrc));
+  // The deploy runs `seed:plans -- --providers-only` (2026-11-08): a full run on a live database
+  // would reset what an administrator tuned on the seller, agency and agent plans.
+  assert('--providers-only seeds the three provider plans and nothing else, insert-only', () => {
+    const only = plansToSeed(['--providers-only']);
+    return only.insertOnly && only.plans.length === 3 && only.plans.every((p) => p.vendor_kind === 'provider');
+  });
+  assert('without the flag the seed is the full upsert it always was', () => {
+    const full = plansToSeed([]);
+    return !full.insertOnly && full.plans.length === ALL_PLANS.length;
+  });
+  assert('insert-only means $setOnInsert — an existing plan is never overwritten', () =>
+    /insertOnly \? \{ \$setOnInsert: \{ \.\.\.plan, deletedAt: null \} \}/.test(seedSrc));
 
   // ─── § 2 Free plan per role AND kind ────────────────────────────────────
   console.log('\n§ 2 the free plan is per role AND kind, and every fallback resolves the kind');
@@ -483,18 +495,17 @@ async function main(): Promise<void> {
   // ─── § 5 ⛔ debitAllowingDebt has one caller ─────────────────────────────
   console.log('\n§ 5 ⛔ debitAllowingDebt is reachable from the listing reveal alone');
 
-  const REVEAL_SERVICE = 'src/modules/listings/services/listing-reveal.service.ts';
+  const REVEAL_SERVICE = 'src/modules/listings/domain/services/listing-reveal.service.ts';
   const BILLING_DIR = 'src/modules/billing/';
   const debtCallers = tsFiles(SRC)
     .map((f) => ({ f: rel(f), src: stripComments(readFileSync(f, 'utf8')) }))
     .filter(({ src }) => /\bdebitAllowingDebt(InSession)?\b/.test(src));
   const outside = debtCallers.filter(({ f }) => !f.startsWith(BILLING_DIR)).map(({ f }) => f);
   if (outside.length) console.log(`      debitAllowingDebt callers outside billing: ${outside.join(', ')}`);
-  // Wave 1: ZERO callers (the reveal is wave 2). The lead tightens this to `=== 1` once
-  // ListingRevealService lands, so an accidental second caller AND a reveal that stopped using
-  // it both fail.
-  assert('⛔ outside billing, only ListingRevealService may name debitAllowingDebt (⊆ {reveal}, ≤ 1)', () =>
-    outside.every((f) => f === REVEAL_SERVICE) && outside.length <= 1);
+  // Tightened to EXACTLY one on 2026-11-07, when ListingRevealService landed: an accidental
+  // second caller AND a reveal that stopped using it both fail.
+  assert('⛔ outside billing, ListingRevealService is the ONE caller of debitAllowingDebt', () =>
+    outside.length === 1 && outside[0] === REVEAL_SERVICE);
   const insideBilling = debtCallers.filter(({ f }) => f.startsWith(BILLING_DIR)).map(({ f }) => f).sort();
   assert('⛔ inside billing, only the wallet repository (the write) and the wallet service (the door) name it', () =>
     JSON.stringify(insideBilling) === JSON.stringify([
@@ -518,6 +529,11 @@ async function main(): Promise<void> {
    * the listings refund, wave 2 — fails this until it is registered AND publishes.
    */
   const IN_SESSION_CALLERS: Record<string, { publishers: string[]; exempt?: string[] }> = {
+    // The reveal refund (L-25, 2026-11-07): credits the provider and stamps the reveal in one
+    // transaction, and publishes after it — a refund may bring credit-paused listings back.
+    'src/modules/listings/domain/services/listing-report-admin.service.ts': {
+      publishers: ['async refundReveal('],
+    },
     'src/modules/billing/services/credit-topup.service.ts': {
       publishers: ['async completeTopup('],
       exempt: ['async reverseTopup('], // a NEGATIVE credit: the balance goes down, nothing resumes

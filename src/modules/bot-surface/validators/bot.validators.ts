@@ -1201,3 +1201,22 @@ export const BotCombinedListSchema = z
     .strict();
 
 export const BotCombinedParamSchema = z.object({ requestId: objectId });
+
+// ─── Service listings (SERVICE-LISTINGS-PLAN § C-3 "Bot", § C-3a) ─────────────
+
+/** `listings_display` — the cards for listings a search returned (`kind: 'listing'`). */
+export const BotListingDisplaySchema = z
+    .object({ listingIds: z.array(objectId).min(1).max(10) })
+    .strict();
+
+export const BotListingParamSchema = z.object({ listingId: objectId });
+
+/** `listings_reveal` — the `lr:` tap. Never model-facing (§ C-3a). */
+export const BotListingRevealSchema = z
+    .object({ field: z.enum(['whatsapp', 'phone', 'email', 'website', 'socials', 'location', 'video']) })
+    .strict();
+
+/** `listings_consent` — the `lc:` tap. Never model-facing (§ C-3a). */
+export const BotListingConsentSchema = z
+    .object({ vendorId: objectId, granted: z.boolean() })
+    .strict();

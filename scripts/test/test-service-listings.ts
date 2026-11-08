@@ -241,6 +241,7 @@ async function main(): Promise<void> {
         'src/modules/payments/routes/payment.routes.ts': 'customer order payments, owner-checked; a provider has no orders',
         'src/modules/tracking-integration/routes/tracking.routes.ts': 'visible-agents answers nothing for a vendor',
         'src/modules/users/user.routes.ts': '/api/me — password, contact, closure, consents: every role',
+        'src/modules/referrals/routes/me-referral.routes.ts': '/api/me/referral — the referral program is open to every role (REFERRAL-PROGRAM-PLAN), a provider included',
     };
 
     const VENDOR_ROLE = /requireRole\(\s*\[[^\]]*'vendor'/;

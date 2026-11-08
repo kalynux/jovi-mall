@@ -1,12 +1,12 @@
 {
-  "generatedAt": "2026-11-03T16:58:56.936Z",
+  "generatedAt": "2026-11-07T22:53:59.918Z",
   "note": "GENERATED from the notification catalogs by scripts/generate-whatsapp-templates.ts. Do not hand-edit: names, placeholder counts and placeholder ORDER are derived from the same functions the send path uses, and editing them here makes the approved template disagree with what is sent.",
   "languages": [
     "en",
     "fr"
   ],
-  "templateCount": 189,
-  "submissionCount": 378,
+  "templateCount": 195,
+  "submissionCount": 390,
   "needsCopyReview": [
     {
       "name": "vendor_delivery_fee_proposal_agency_rejected",
@@ -2827,6 +2827,320 @@
             {
               "type": "URL",
               "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_listing_approved",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Listing approved*\n\nYour service listing *{{1}}* was approved and is now visible to customers.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "View listing",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_listing_approved",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Annonce approuvée*\n\nVotre annonce de service *{{1}}* a été approuvée et est maintenant visible par les clients.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Voir l'annonce",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_listing_rejected",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Listing not approved*\n\nYour service listing *{{1}}* was not approved. *{{2}}* Edit it and submit it again.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "View listing",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_listing_rejected",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Annonce non approuvée*\n\nVotre annonce de service *{{1}}* n'a pas été approuvée. *{{2}}* Modifiez-la puis soumettez-la à nouveau.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Voir l'annonce",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_listing_suspended",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Listing paused*\n\nNew customers can no longer reach your service listing *{{1}}*. *{{2}}*\n\nTap Open below for the full details.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_listing_suspended",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Annonce en pause*\n\nLes nouveaux clients ne peuvent plus joindre votre annonce de service *{{1}}*. *{{2}}*\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_listing_resumed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Listing live again*\n\nYour service listing *{{1}}* is live again. New customers can see it and contact you.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "View listing",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_listing_resumed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Annonce de nouveau en ligne*\n\nVotre annonce de service *{{1}}* est de nouveau en ligne. Les nouveaux clients peuvent la voir et vous contacter.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Voir l'annonce",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_listing_video_unavailable",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Location video unavailable*\n\nA customer could not watch the location video of *{{1}}*: YouTube says it is private or deleted. You were not charged. Edit the listing to give a new link.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Edit listing",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_listing_video_unavailable",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Vidéo d'accès indisponible*\n\nUn client n'a pas pu regarder la vidéo d'accès de *{{1}}*: YouTube indique qu'elle est privée ou supprimée. Vous n'avez pas été débité. Modifiez l'annonce pour donner un nouveau lien.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Modifier l'annonce",
               "url": "https://vendor.wi-mall.com/{{1}}",
               "example": [
                 "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
@@ -11819,6 +12133,62 @@
               "example": [
                 "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
               ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_listing_call_me",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Call request from {{1}}*\n\nYou unlocked the contact of *{{1}}* on Wi-Mall, and they would like to talk to you. Call them or message them on WhatsApp at *{{2}}*. Tap the number to start.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "QUICK_REPLY",
+              "text": "Stop these messages"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_listing_call_me",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Demande d'appel de {{1}}*\n\nVous avez débloqué le contact de *{{1}}* sur Wi-Mall, et cette entreprise souhaite vous parler. Appelez-la ou écrivez-lui sur WhatsApp au *{{2}}*. Touchez le numéro pour commencer.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "QUICK_REPLY",
+              "text": "Ne plus recevoir"
             }
           ]
         }

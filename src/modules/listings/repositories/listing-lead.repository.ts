@@ -79,6 +79,30 @@ export class ListingLeadRepository {
     return (await ListingLeadModel.exists({ customer_id: oid(customerId), listing_id: oid(listingId) })) !== null;
   }
 
+  /** One lead, scoped to the provider who owns it — another provider's lead reads as absent. */
+  async findOwned(leadId: string, vendorId: string): Promise<ListingLeadRow | null> {
+    if (!Types.ObjectId.isValid(leadId) || !Types.ObjectId.isValid(vendorId)) return null;
+    return ListingLeadModel.findOne({ _id: oid(leadId), vendor_id: oid(vendorId) }).lean<ListingLeadRow>();
+  }
+
+  /** A provider's leads, newest first (`listing_lead_vendor_recent`), optionally for one listing. */
+  async pageForVendor(
+    vendorId: string,
+    q: { listingId?: string; page: number; limit: number },
+  ): Promise<{ data: ListingLeadRow[]; total: number }> {
+    const filter: Record<string, unknown> = { vendor_id: oid(vendorId) };
+    if (q.listingId) filter.listing_id = oid(q.listingId);
+    const [data, total] = await Promise.all([
+      ListingLeadModel.find(filter)
+        .sort({ created_at: -1, _id: -1 })
+        .skip((q.page - 1) * q.limit)
+        .limit(q.limit)
+        .lean<ListingLeadRow[]>(),
+      ListingLeadModel.countDocuments(filter),
+    ]);
+    return { data, total };
+  }
+
   /** Has this customer ever revealed anything from this provider (any listing, any window)? */
   async existsForVendor(customerId: string, vendorId: string): Promise<boolean> {
     if (!Types.ObjectId.isValid(customerId) || !Types.ObjectId.isValid(vendorId)) return false;

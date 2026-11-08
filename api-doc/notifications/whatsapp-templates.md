@@ -1750,3 +1750,31 @@ WhatsApp cannot deliver, which includes while these are in review. An unverified
 
 The administrator's reason is **not** a parameter: it is free text, and Meta refuses a line break in one. Inside the
 24-hour window the free message and the email carry it; the template points at the referral page, which always shows it.
+
+---
+
+## 2026-11-07 — service listings: 6 templates SUBMITTED (en + fr), PENDING Meta review
+
+✅ **12 created, every one PENDING review**, sent with `--only=` these six names at the owner's instruction
+(other unsubmitted payloads in the file were NOT sent). Production button hosts as before. Plan:
+`PRODUCTION-READINESS/SERVICE-LISTINGS-PLAN.md` § C-5.
+
+⛔ **Meta refuses a template URL button that opens WhatsApp** (`https://wa.me/{{1}}` → code 100, *« Les liens
+directs vers WhatsApp ne sont pas autorisés pour les boutons »*, both languages, measured on the first submission).
+`customer_listing_call_me` was therefore regenerated with **no URL button**: the provider's number is in the
+body, where WhatsApp makes it tappable ("Chat with…" / "Call"), and its one button is the opt-out quick reply.
+Owner's choice the same day, over a Wi-Mall forwarding page. In-window and on Telegram the message still links
+the provider's WhatsApp.
+
+| Template name | Audience | Situation | Body params | Buttons | ids `en` / `fr` |
+|---|---|---|---|---|---|
+| `vendor_listing_approved` | vendor (provider) | `listing.approved` | listing title | View listing | `1101436312930792` / `1837684107567410` |
+| `vendor_listing_rejected` | vendor (provider) | `listing.rejected` | listing title, the reviewer's reasons (one sentence) | View listing | `1693201619122603` / `1121238777397920` |
+| `vendor_listing_suspended` | vendor (provider) | `listing.suspended` | listing title, why (one sentence per reason) | Open (the body ends on a value, so it carries the "Tap Open below" tail) | `1656151929483167` / `1081207578273673` |
+| `vendor_listing_resumed` | vendor (provider) | `listing.resumed` | listing title | View listing | `1611645190020315` / `1844374406565997` |
+| `vendor_listing_video_unavailable` | vendor (provider) | `listing.video_unavailable` | listing title | Edit listing | `1301854285472164` / `1828011198401043` |
+| `customer_listing_call_me` | customer | a provider's "Ask them to call me" (`listing-message-catalog.ts`, not the customer stack) | business name, provider phone | quick reply **Stop these messages** (`lc:<vendorId>:n`) | `986889414487714` / `1958435751795924` |
+
+⚠ `customer_listing_call_me` will probably be re-filed as MARKETING by Meta (the plan expected it): dearer per
+message, and a customer who opted out of marketing receives nothing while the send records as delivered.
+Re-measure once review completes.

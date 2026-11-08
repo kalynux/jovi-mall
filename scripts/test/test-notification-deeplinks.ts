@@ -86,6 +86,8 @@ const VENDOR_VOCABULARY = [
     'account/closure',
     'agency-connections/{{connectionId}}',
     'bookings/{{bookingId}}',
+    /** ⚠ **NEW 2026-11-07** — a PROVIDER's service listing (SERVICE-LISTINGS-PLAN § C-5). */
+    'listings/{{listingId}}',
     'orders/{{orderId}}',
     'plans',
     'products/{{productId}}',
@@ -170,7 +172,7 @@ const AGENT_VOCABULARY = [
 function main(): void {
     console.log('\n── The vocabulary each app translates (the contract) ──');
 
-    assert('the VENDOR app is offered exactly the 9 documented paths', () =>
+    assert('the VENDOR app is offered exactly the 10 documented paths', () =>
         JSON.stringify(vocabularyOf(NOTIFICATION_CATALOG as unknown as Catalog))
         === JSON.stringify(VENDOR_VOCABULARY));
 
@@ -226,6 +228,8 @@ function main(): void {
         const known = new Set([
             'connectionId', 'bookingId', 'orderId', 'productId', 'requestId', 'ticketId',
             'contractId', 'depositId', 'shipmentId', 'offerId',
+            // A provider's listing (2026-11-07): `handleListingEvent` puts it in the context.
+            'listingId',
         ]);
         return allPaths.every((p) => {
             const m = p.match(/\{\{([a-zA-Z]+)\}\}/);

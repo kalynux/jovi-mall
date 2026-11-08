@@ -17,6 +17,7 @@ import { DIGITAL_ACTION_HANDLERS } from './bot-catalog.controller';
 import { REVIEW_ACTION_HANDLERS } from './bot-review.controller';
 import { BOOKING_ACTION_HANDLERS } from './bot-booking.controller';
 import { BOOKING_ADDRESS_ACTION_HANDLERS } from './bot-booking-address.controller';
+import { LISTING_ACTION_HANDLERS } from './bot-listing.controller';
 import { bookingAddressStepStore } from '../services/booking-address-step.store';
 import { continuesBookingAddressStep } from '../domain/bot-action-id';
 import { IDENTITY_ACTION_HANDLERS } from './bot-identity.controller';
@@ -125,6 +126,8 @@ const HANDLERS = mergeActionHandlers([
      * step's buttons, and Show the place. `open:bk:<productId>:<addressId>` stays with `bookings`.
      */
     ['appointments', BOOKING_ADDRESS_ACTION_HANDLERS],
+    /** ls · lr · lc — service listings (§ C-3a). `lr:` charges the PROVIDER, on the tap only. */
+    ['listings', LISTING_ACTION_HANDLERS],
     /** yes:tos — the Accept button on the last onboarding step (terms of service). */
     ['identity', IDENTITY_ACTION_HANDLERS],
     /**

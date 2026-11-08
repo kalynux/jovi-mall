@@ -552,7 +552,7 @@ function main(): void {
   assert('a change-agency difference does not spend the agency’s two-proposal cap', () =>
     src('src/modules/delivery-fee-proposals/repositories/delivery-fee-proposal.repository.ts').includes("origin: { $ne: 'change_agency' }"));
   assert('vendor cover route exists', () =>
-    src('src/modules/vendor/routes.ts').includes("router.post('/orders/:id/delivery-fee-proposals/:proposalId/cover', VendorDeliveryFeeProposalController.cover)"));
+    src('src/modules/vendor/routes.ts').includes("router.post('/orders/:id/delivery-fee-proposals/:proposalId/cover', SELLER, VendorDeliveryFeeProposalController.cover)"));
   for (const code of ['DELIVERY_FEE_PROPOSAL_DIRECTION_CHANGED', 'DELIVERY_FEE_TOPUP_IN_PROGRESS', 'DELIVERY_FEE_TOPUP_NOT_DUE', 'DELIVERY_FEE_PROPOSAL_ORDER_NOT_PAID']) {
     assert(`${code} exists and has a default message`, () =>
       (ERROR_CODES as Record<string, string>)[code] === code && !!(DEFAULT_ERROR_MESSAGES as Record<string, string>)[code]);
@@ -642,9 +642,10 @@ function main(): void {
     rules14.includes("['vendor', 'customer', 'none', 'agency']") && rules14.includes("['agency', 'change_agency', 'combined_request', 'payer']"));
 
   const routes14: Array<[string, string]> = [
-    ['src/modules/vendor/routes.ts', "router.post('/orders/:id/shipments/:shipmentId/delivery-fee-proposals', VendorPayerProposalController.propose)"],
-    ['src/modules/vendor/routes.ts', "router.patch('/orders/:id/delivery-fee-proposals/:proposalId', VendorPayerProposalController.edit)"],
-    ['src/modules/vendor/routes.ts', "router.post('/orders/:id/delivery-fee-proposals/:proposalId/withdraw', VendorPayerProposalController.withdraw)"],
+    // `SELLER, ` is the vendor-kind declaration (SERVICE-LISTINGS-PLAN § C-1): orders are a seller's.
+    ['src/modules/vendor/routes.ts', "router.post('/orders/:id/shipments/:shipmentId/delivery-fee-proposals', SELLER, VendorPayerProposalController.propose)"],
+    ['src/modules/vendor/routes.ts', "router.patch('/orders/:id/delivery-fee-proposals/:proposalId', SELLER, VendorPayerProposalController.edit)"],
+    ['src/modules/vendor/routes.ts', "router.post('/orders/:id/delivery-fee-proposals/:proposalId/withdraw', SELLER, VendorPayerProposalController.withdraw)"],
     ['src/modules/orders/customer-order.routes.ts', "router.post('/:id/shipments/:shipmentId/delivery-fee-proposals', CustomerPayerProposalController.propose)"],
     ['src/modules/orders/customer-order.routes.ts', "router.patch('/:id/delivery-fee-proposals/:proposalId', CustomerPayerProposalController.edit)"],
     ['src/modules/orders/customer-order.routes.ts', "router.post('/:id/delivery-fee-proposals/:proposalId/withdraw', CustomerPayerProposalController.withdraw)"],

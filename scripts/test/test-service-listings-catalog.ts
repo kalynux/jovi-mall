@@ -526,10 +526,18 @@ async function main(): Promise<void> {
     console.log('\n§ 9 ⛔ every listings router declares its kind (or is public / internal)');
 
     const routeFiles = walkTs(path.join(ROOT, 'src/modules/listings/routes')).map(rel);
-    assert('four listings routers exist', () => routeFiles.length === 4);
+    // Six since 2026-11-07: the customer router (reveal + consents) and the provider's leads.
+    assert('six listings routers exist', () => routeFiles.length === 6);
     for (const file of routeFiles) {
         const src = code(file);
-        if (/requireRole\(/.test(src)) {
+        if (/requireRole\(\['customer'\]\)/.test(src)) {
+            // The customer side: BOTH routers in the file are customer-session only, and neither
+            // admits a vendor — a vendor session on the same account unlocks nothing.
+            assert(`⛔ ${file}: every router is requireAuth + requireRole(['customer']), and no vendor kind`, () =>
+                (src.match(/\.use\(requireAuth\)/g) ?? []).length === 2
+                && (src.match(/\.use\(requireRole\(\['customer'\]\)\)/g) ?? []).length === 2
+                && !/'vendor'/.test(src) && !/requireVendorKind/.test(src));
+        } else if (/requireRole\(/.test(src)) {
             assert(`⛔ ${file}: requireAuth + requireRole(['vendor']) + router-level requireVendorKind('provider')`, () =>
                 /router\.use\(requireAuth\)/.test(src) && /router\.use\(requireRole\(\['vendor'\]\)\)/.test(src)
                 && /router\.use\(requireVendorKind\('provider'\)\)/.test(src));
@@ -574,6 +582,8 @@ async function main(): Promise<void> {
         'src/modules/listings/domain/services/listing-content.mapper.ts',   // types only
         'src/modules/listings/domain/services/listing-provider.service.ts', // the provider's own data
         'src/modules/listings/domain/services/listing-review.service.ts',   // approve: pending → published
+        'src/modules/listings/domain/services/listing-reveal.service.ts',   // the reveal: ONE published field
+        'src/modules/listings/domain/services/listing-lead.service.ts',     // call-me: the provider's OWN numbers (not a reveal)
         'src/modules/listings/dto/vendor-listing.dto.ts',                   // types only: the provider's own detail
         'src/modules/listings/index.ts',                                    // re-export for the closure eraser
     ];

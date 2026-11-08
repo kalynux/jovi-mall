@@ -394,6 +394,17 @@ export const BOT_ROUTES: readonly BotRouteSpec[] = Object.freeze([
     { tool: 'bookings_get', method: 'POST', path: '/bookings/:bookingId', mutating: false, requiresCustomerRole: true },
     /** Where it happens — a map pin and the address, or the link — sent as the reply (2026-10-27). */
     { tool: 'bookings_show_place', method: 'POST', path: '/bookings/:bookingId/place', mutating: false, requiresCustomerRole: true },
+    /**
+     * Service listings (SERVICE-LISTINGS-PLAN § C-3 "Bot", § C-3a). The two displays are
+     * model-facing and charge nothing. ⛔ `listings_reveal` SPENDS A PROVIDER'S CREDITS and
+     * `listings_consent` answers for the customer, so both are mutating and NEVER model-facing:
+     * they are reached by the customer's tap (`lr:` / `lc:`). `display` and `consent` are
+     * declared before `/:listingId` so neither word is read as an id.
+     */
+    { tool: 'listings_display', method: 'POST', path: '/listings/display', mutating: false, requiresCustomerRole: true },
+    { tool: 'listings_consent', method: 'POST', path: '/listings/consent', mutating: true, requiresCustomerRole: true },
+    { tool: 'listings_get', method: 'POST', path: '/listings/:listingId', mutating: false, requiresCustomerRole: true },
+    { tool: 'listings_reveal', method: 'POST', path: '/listings/:listingId/reveal', mutating: true, requiresCustomerRole: true },
     /** The customer's one reminder to the vendor. `mutating` because it spends it (BOOKING-PARTY-REMINDER-PLAN). */
     { tool: 'bookings_send_reminder', method: 'POST', path: '/bookings/:bookingId/reminder', mutating: true, requiresCustomerRole: true },
     { tool: 'bookings_get_balance', method: 'POST', path: '/bookings/:bookingId/balance', mutating: false, requiresCustomerRole: true },

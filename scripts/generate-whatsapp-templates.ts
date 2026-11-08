@@ -82,6 +82,15 @@ import {
     renderReferralWhatsAppTemplateParams,
     renderReferralChannelText,
 } from '../src/modules/notifications/catalog/referral-notification-catalog';
+import {
+    LISTING_MESSAGE_CATALOG,
+    ListingMessageSituation,
+    listingMessageTemplateName,
+    listingMessageTemplateQuickReplyLabels,
+    renderListingMessageButton,
+    renderListingMessageTemplateParams,
+    renderListingMessageText,
+} from '../src/modules/notifications/catalog/listing-message-catalog';
 import { META_LANGUAGE_CODE } from '../src/modules/notifications/catalog/notification-i18n';
 import { otpFallbackTemplateBody, otpExpiryMinutes } from '../src/modules/phone-verification/domain/otp-copy';
 import { OTP_LIMITS } from '../src/modules/phone-verification/config/phone-verification.config';
@@ -252,7 +261,9 @@ function collect(
             hasUrlButton: Boolean(safe(() => buttonOf(situation, 'en', SENTINEL, 'https://wi-mall.com'), null)),
             quickReplyLabels: audience === 'customer'
                 ? customerTemplateQuickReplyLabels(situation as CustomerNotificationType)
-                : [],
+                : audience === 'listing'
+                    ? listingMessageTemplateQuickReplyLabels(situation as ListingMessageSituation)
+                    : [],
             unsuppliedValues: [...unsupplied],
         });
     }
@@ -359,6 +370,13 @@ const BUTTON_LABEL: Record<string, Record<string, string>> = {
     vendor_booking_reschedule_requested: { en: 'View booking', fr: 'Voir la réservation' },
     vendor_booking_reschedule_accepted: { en: 'View booking', fr: 'Voir la réservation' },
     vendor_booking_reschedule_declined: { en: 'View booking', fr: 'Voir la réservation' },
+    // Service listings (2026-11-07). New names, so the labels are free to be specific.
+    vendor_listing_approved: { en: 'View listing', fr: "Voir l'annonce" },
+    vendor_listing_rejected: { en: 'View listing', fr: "Voir l'annonce" },
+    // vendor_listing_suspended keeps "Open": its body ends on a value, so it carries the
+    // "Tap Open below…" tail, and the button must say what that sentence says.
+    vendor_listing_resumed: { en: 'View listing', fr: "Voir l'annonce" },
+    vendor_listing_video_unavailable: { en: 'Edit listing', fr: "Modifier l'annonce" },
     // A customer's one-time reminder (2026-11-03). Needs Meta's approval.
     vendor_booking_reminder: { en: 'View booking', fr: 'Voir la réservation' },
     // The vendor's price proposal (2026-11-03). Needs Meta's approval.
@@ -434,6 +452,15 @@ collect('vendor', NOTIFICATION_CATALOG as Record<string, unknown>, whatsAppTempl
 collect('customer', CUSTOMER_NOTIFICATION_CATALOG as Record<string, unknown>, customerWhatsAppTemplateName as never, renderCustomerChannelText as never, renderCustomerWhatsAppTemplateParams as never, renderCustomerButton as never);
 collect('agency', AGENCY_NOTIFICATION_CATALOG as Record<string, unknown>, agencyWhatsAppTemplateName as never, renderAgencyChannelText as never, renderAgencyWhatsAppTemplateParams as never, renderAgencyButton as never);
 collect('agent', AGENT_NOTIFICATION_CATALOG as Record<string, unknown>, agentWhatsAppTemplateName as never, renderAgentChannelText as never, renderAgentWhatsAppTemplateParams as never, renderAgentButton as never);
+/**
+ * A PROVIDER's call-me message to a customer (SERVICE-LISTINGS-PLAN L-15). No URL button: Meta
+ * refuses a template button that opens WhatsApp (code 100, 2026-11-07), so the provider's number
+ * is in the body and the one button is the opt-out quick reply. The free text has no template.
+ */
+collect('listing', LISTING_MESSAGE_CATALOG as Record<string, unknown>, listingMessageTemplateName as never,
+    ((s: string, _c: string, lang: Lang, ctx: Record<string, string>) => renderListingMessageText(s as ListingMessageSituation, lang as Language, ctx)) as never,
+    ((s: string, lang: Lang, ctx: Record<string, string>) => renderListingMessageTemplateParams(s as ListingMessageSituation, lang as Language, ctx)) as never,
+    ((s: string, lang: Lang, ctx: Record<string, string>) => renderListingMessageButton(s as ListingMessageSituation, lang as Language, ctx)) as never);
 // One set for all four roles, with no button: see `referral-notification-catalog.ts` for why.
 collect('referral', REFERRAL_NOTIFICATION_CATALOG as Record<string, unknown>, referralWhatsAppTemplateName as never, renderReferralChannelText as never, renderReferralWhatsAppTemplateParams as never, (() => null) as never);
 

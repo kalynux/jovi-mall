@@ -6,6 +6,7 @@ import { botIdempotency } from './middlewares/bot-idempotency.middleware';
 import { attachBotReply } from './middlewares/bot-reply.middleware';
 import { holdBargainEntryForUnregisteredSender } from './middlewares/bargain-entry-hold.middleware';
 import { BOT_ROUTES } from './domain/bot-route-table';
+import { BotListingController } from './controllers/bot-listing.controller';
 import { BotIdentityController } from './controllers/bot-identity.controller';
 import { BotInAppController } from './controllers/bot-inapp.controller';
 import { BotCartController } from './controllers/bot-cart.controller';
@@ -238,6 +239,10 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
     bookings_address_step: BotBookingAddressController.answer,
     bookings_show_place: BotBookingAddressController.place,
     bookings_send_reminder: BotBookingController.sendReminder,
+    listings_display: BotListingController.display,
+    listings_get: BotListingController.get,
+    listings_reveal: BotListingController.reveal,
+    listings_consent: BotListingController.consent,
 
     // ── Saved payment methods ────────────────────────────────────────────────
     payment_methods_list: BotPaymentMethodController.list,

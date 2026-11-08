@@ -14,6 +14,8 @@ import {
   LISTING_TITLE_MAX,
   LISTING_COMPANY_MAX,
   LISTING_DESCRIPTION_MAX,
+  LISTING_CONTACT_FIELDS,
+  LISTING_REPORT_WANTS,
 } from '../domain/listing.types';
 import { isHttpUrl } from '../domain/listing-rules';
 
@@ -168,3 +170,66 @@ export const PublicListingsByIdsQuerySchema = z.object({
 export const PublicListingSlugParamSchema = z.object({
   slug: z.string().trim().min(1).max(200).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'A listing slug is lowercase letters, digits and single hyphens'),
 });
+
+// ─── Customer (§ C-3, step 6) ────────────────────────────────────────────────
+
+export const ListingIdOnlyParamSchema = z.object({ listingId: ObjectIdSchema });
+
+/** `POST /api/me/listings/:listingId/reveal` — one field per tap. */
+export const RevealBodySchema = z.object({
+  field: z.enum(LISTING_CONTACT_FIELDS),
+}).strict();
+
+export const VendorIdParamSchema = z.object({ vendorId: ObjectIdSchema });
+
+/** `PUT /api/me/listing-consents/:vendorId` */
+export const ConsentBodySchema = z.object({
+  granted: z.boolean(),
+}).strict();
+
+// ─── Provider leads (§ C-3, steps 6, 7, 9) ───────────────────────────────────
+
+export const LeadIdParamSchema = z.object({ leadId: ObjectIdSchema });
+
+export const VendorLeadListQuerySchema = z.object({
+  listingId: ObjectIdSchema.optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+}).strict();
+export type VendorLeadListQuery = z.infer<typeof VendorLeadListQuerySchema>;
+
+/** `POST /api/vendor/leads/:leadId/message` — free text, relayed (L-15). */
+export const LeadMessageBodySchema = z.object({
+  body: z.string().trim().min(1).max(1000),
+}).strict();
+
+/** `POST /api/vendor/leads/:leadId/report` — ONE ticket for a refund, a check, or both (L-31). */
+export const LeadReportBodySchema = z.object({
+  wants: z.array(z.enum(LISTING_REPORT_WANTS)).min(1).max(2)
+    .refine((w) => new Set(w).size === w.length, { message: 'Each choice may appear once' }),
+  revealIds: z.array(ObjectIdSchema).max(LISTING_CONTACT_FIELDS.length).default([]),
+  // 700, not § C-3's original 2000: the reason IS the ticket's description, which every ticket
+  // caps at 700 (`ticket.model.ts`). A longer one would fail at the ticket write.
+  reason: z.string().trim().min(10).max(700),
+}).strict();
+export type LeadReportBody = z.infer<typeof LeadReportBodySchema>;
+
+// ─── Internal admin, lead reports (§ C-3, step 7) ────────────────────────────
+
+export const RevealIdParamSchema = z.object({ revealId: ObjectIdSchema });
+
+export const AdminRefundRevealSchema = z.object({
+  ticketId: ObjectIdSchema.nullable().optional(),
+  note: z.string().trim().min(3).max(500),
+}).strict();
+
+export const RevealBlockParamsSchema = z.object({ id: ObjectIdSchema, customerId: ObjectIdSchema });
+
+export const AdminBlockCustomerSchema = z.object({
+  reason: z.string().trim().min(3).max(500),
+  ticketId: ObjectIdSchema.nullable().optional(),
+}).strict();
+
+export const AdminLiftBlockSchema = z.object({
+  note: z.string().trim().min(3).max(500).nullable().optional(),
+}).strict();

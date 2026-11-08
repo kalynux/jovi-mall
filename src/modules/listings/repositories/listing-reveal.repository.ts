@@ -115,14 +115,48 @@ export class ListingRevealRepository {
    * The id of the ledger row the reveal's debit wrote (`reason_code: 'listing_reveal'`,
    * `ref: revealId`), read back inside the same transaction so the reveal row can name it.
    */
-  async ledgerRefFor(vendorId: string, revealId: Types.ObjectId, session: ClientSession): Promise<string | null> {
+  async ledgerRefFor(
+    vendorId: string,
+    revealId: Types.ObjectId,
+    session: ClientSession,
+    reasonCode: 'listing_reveal' | 'listing_reveal_refund' = 'listing_reveal',
+  ): Promise<string | null> {
     const row = await CreditTransactionModel.findOne(
-      { owner_type: 'vendor', owner_id: oid(vendorId), reason_code: 'listing_reveal', ref: revealId.toString() },
+      { owner_type: 'vendor', owner_id: oid(vendorId), reason_code: reasonCode, ref: revealId.toString() },
       { _id: 1 },
     )
       .session(session)
       .lean<{ _id: Types.ObjectId }>();
     return row ? row._id.toString() : null;
+  }
+
+  // ─── Beyond the reveal: the lead list, the report and the refund (steps 6, 7) ──
+
+  /** Every reveal of the given leads, oldest first — the lead list's `fields[]`. */
+  async findByLeadIds(leadIds: Types.ObjectId[]): Promise<ListingRevealRow[]> {
+    if (leadIds.length === 0) return [];
+    return ListingRevealModel.find({ lead_id: { $in: leadIds } }).sort({ at: 1, _id: 1 }).lean<ListingRevealRow[]>();
+  }
+
+  async findById(revealId: string, session?: ClientSession): Promise<ListingRevealRow | null> {
+    if (!Types.ObjectId.isValid(revealId)) return null;
+    const query = ListingRevealModel.findById(revealId);
+    if (session) query.session(session);
+    return query.lean<ListingRevealRow>();
+  }
+
+  /**
+   * Stamp the refund — a compare-and-set on `refund: null`, so of two administrators refunding
+   * the same reveal one wins and the other's transaction aborts with nothing moved. Returns
+   * false when the reveal was already refunded.
+   */
+  async markRefunded(
+    revealId: Types.ObjectId,
+    refund: Record<string, unknown>,
+    session: ClientSession,
+  ): Promise<boolean> {
+    const res = await ListingRevealModel.updateOne({ _id: revealId, refund: null }, { $set: { refund } }, { session });
+    return res.modifiedCount === 1;
   }
 
   /** Owner, status, kind and listing settings of a provider — the reveal's vendor facts. */
