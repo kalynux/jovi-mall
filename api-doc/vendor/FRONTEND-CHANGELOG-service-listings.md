@@ -45,5 +45,7 @@ deployed**. Full contract: [service-listings.md](service-listings.md). Cross-rol
 8. **Notifications**: five new situations — `listing.approved`, `listing.rejected`,
    `listing.suspended`, `listing.resumed`, `listing.video_unavailable` — with `aggregateType:
    "listing"` and the deep link `listings/:listingId`.
-9. **Plans**: provider plans (`vendorKind: "provider"`, `maxActiveListings`) come back from the plan
-   list beside seller plans; show only the provider's own kind.
+9. **Plans**: `GET /api/vendor/plans` returns only the signed-in vendor's own kind
+   (`VendorBillingController.listPlans` → `listForVendorKind`), so the dashboard filters nothing. Provider
+   plans carry `vendorKind: "provider"` and `maxActiveListings` (live listings at once); show the latter.
+   Only the public `GET /api/public/plans` returns both kinds together (the landing pricing page's concern).
