@@ -2,45 +2,9 @@
   [
     {
       "type": "updateNodeParameters",
-      "nodeName": "combined_delivery_request",
-      "parameters": {
-        "toolDescription": "Ask one delivery company for a combined (lower) price on several of the customer's parcels from one checkout. The company answers later, by lowering fees or declining; fees can never go up from this. The platform words the confirmation — relay the reply. USE IT WHEN: After combined_delivery_eligible, once the customer confirmed which group (company) they want to ask. NOT THIS TOOL: Never with ids that did not come from combined_delivery_eligible. Not when that group already has an openRequestId.",
-        "method": "POST",
-        "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/delivery-fees/combined",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpBearerAuth",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "X-Webhook-Secret",
-              "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
-            },
-            {
-              "name": "Idempotency-Key",
-              "value": "={{ $execution.id }}-{{ $now.toMillis() }}-combined_delivery_request"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, cartId: $fromAI(\"cartId\", \"groups[].cartId from combined_delivery_eligible, verbatim. A 24-character hexadecimal id.\", \"string\"), agencyId: $fromAI(\"agencyId\", \"groups[].agencyId from the SAME group, verbatim. A 24-character hexadecimal id.\", \"string\"), shipmentIds: (function (v) { if (Array.isArray(v)) return v; if (v == null || v === \"\") return undefined; var s = String(v).trim(); if (s.charAt(0) === \"[\") { try { var a = JSON.parse(s); if (Array.isArray(a)) return a; } catch (e) {} } var parts = s.split(/[ ,;]+/).filter(function (x) { return x !== \"\"; }); return parts.length ? parts : undefined; })($fromAI(\"shipmentIds\", \"Optional: a subset of that group's shipments[].shipmentId (at least two). Omit for every parcel in the group.\", \"string\")) || undefined, note: $fromAI(\"note\", \"Optional: the customer's own words to the company. At most 500 characters.\", \"string\") || undefined }) }}",
-        "options": {
-          "response": {
-            "response": {
-              "neverError": true
-            }
-          },
-          "timeout": 20000
-        }
-      },
-      "replace": true
-    },
-    {
-      "type": "updateNodeParameters",
       "nodeName": "inapp_open_listing",
       "parameters": {
-        "toolDescription": "Opens a scrollable product grid — a category, a whole shop or their saved items — with picture, price and buy button on every card. Sends its own button. USE IT WHEN: The customer wants to BROWSE a whole shelf, or asks to see everything after a page of cards. NOT THIS TOOL: Not for a specific question with a short answer — five cards via Show-Products are better. Not for one product (inapp_open_product). ⚠ Never describe the button in your own words — the customer would read it twice.",
+        "toolDescription": "Opens a scrollable product grid — a category, a whole shop or their saved items — with picture, price and buy button on every card. Sends its own button. USE IT WHEN: The customer wants to BROWSE a whole shop, a category or their saved items, or asks to see everything after a page of cards. For a KIND of product (\"shoes\", \"phones\", \"something for my kitchen\"), find them with Search-Products first, then open the grid with their ids in productIds. NOT THIS TOOL: Not for a specific question with a short answer — five cards via Show-Products are better. Not for one product (inapp_open_product). ⚠ Never put a kind of product in q: q matches WHOLE WORDS in titles, tags and descriptions, so \"shoes\" does not find a \"Nike Air Max 90\" and the customer opens an empty grid. ⚠ Never describe the button in your own words — the customer would read it twice.",
         "method": "POST",
         "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/inapp/listing",
         "authentication": "genericCredentialType",
@@ -60,7 +24,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, q: $fromAI(\"q\", \"Free-text search. Omit to show everything. At most 120 characters.\", \"string\") || undefined, category: $fromAI(\"category\", \"Category slug or name, as the catalogue publishes it. At most 120 characters.\", \"string\") || undefined, storeSlug: $fromAI(\"storeSlug\", \"Narrow to one store. At most 160 characters.\", \"string\") || undefined, productIds: (function (v) { if (Array.isArray(v)) return v; if (v == null || v === \"\") return undefined; var s = String(v).trim(); if (s.charAt(0) === \"[\") { try { var a = JSON.parse(s); if (Array.isArray(a)) return a; } catch (e) {} } var parts = s.split(/[ ,;]+/).filter(function (x) { return x !== \"\"; }); return parts.length ? parts : undefined; })($fromAI(\"productIds\", \"Pin an exact set instead of filtering — for saved items, or a selection you chose yourself. Up to 50, far more than a chat can show.\", \"string\")) || undefined }) }}",
+        "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, q: $fromAI(\"q\", \"Whole-word text search over titles, tags and descriptions: shoes does NOT find Nike Air Max 90. Only for a word the customer wants matched literally. Omit to show everything; for a kind of product pass productIds from Search-Products instead. At most 120 characters.\", \"string\") || undefined, category: $fromAI(\"category\", \"Category slug or name, as the catalogue publishes it. At most 120 characters.\", \"string\") || undefined, storeSlug: $fromAI(\"storeSlug\", \"Narrow to one store. At most 160 characters.\", \"string\") || undefined, productIds: (function (v) { if (Array.isArray(v)) return v; if (v == null || v === \"\") return undefined; var s = String(v).trim(); if (s.charAt(0) === \"[\") { try { var a = JSON.parse(s); if (Array.isArray(a)) return a; } catch (e) {} } var parts = s.split(/[ ,;]+/).filter(function (x) { return x !== \"\"; }); return parts.length ? parts : undefined; })($fromAI(\"productIds\", \"Pin an exact set instead of filtering — for saved items, or a selection you chose yourself. Up to 50, far more than a chat can show.\", \"string\")) || undefined }) }}",
         "options": {
           "response": {
             "response": {
@@ -71,108 +35,6 @@
         }
       },
       "replace": true
-    },
-    {
-      "type": "addNode",
-      "node": {
-        "name": "listings_display",
-        "type": "n8n-nodes-base.httpRequestTool",
-        "typeVersion": 4.5,
-        "position": [
-          3800,
-          3560
-        ],
-        "parameters": {
-          "toolDescription": "Draws service-listing cards (plumbers, printers, repairers and other businesses paid in person, not through Wi-Mall) for listings a search returned with kind \"listing\". Each card shows what the business does, where (city and area) and one button per contact detail it has. The cards carry NO contact detail: a contact is unlocked only when the customer taps its button. USE IT WHEN: product_search returned results with kind \"listing\", or the customer asks for a tradesperson or service provider and you have listing ids. NOT THIS TOOL: Never state, guess or repeat a business's phone, WhatsApp, email, website, address or video: you do not have them, and only the customer's tap can unlock them. Not for products (kind \"product\"). The cards are sent for you, so your whole answer is [sent]. ⚠ One message per card with a list of contact buttons, sent for you. Your whole answer is [sent].",
-          "method": "POST",
-          "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/listings/display",
-          "authentication": "genericCredentialType",
-          "genericAuthType": "httpBearerAuth",
-          "sendHeaders": true,
-          "headerParameters": {
-            "parameters": [
-              {
-                "name": "X-Webhook-Secret",
-                "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
-              }
-            ]
-          },
-          "sendBody": true,
-          "specifyBody": "json",
-          "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, listingIds: (function (v) { if (Array.isArray(v)) return v; if (v == null || v === \"\") return undefined; var s = String(v).trim(); if (s.charAt(0) === \"[\") { try { var a = JSON.parse(s); if (Array.isArray(a)) return a; } catch (e) {} } var parts = s.split(/[ ,;]+/).filter(function (x) { return x !== \"\"; }); return parts.length ? parts : undefined; })($fromAI(\"listingIds\", \"Listing ids from product_search (kind \\\"listing\\\"), in the order to show them.\", \"string\")) }) }}",
-          "options": {
-            "response": {
-              "response": {
-                "neverError": true
-              }
-            },
-            "timeout": 20000
-          }
-        },
-        "credentials": {
-          "httpBearerAuth": {
-            "id": "lz5ivIop9DF8mPHa",
-            "name": "jovi-mall-Bearer Auth account"
-          }
-        }
-      }
-    },
-    {
-      "type": "addConnection",
-      "source": "listings_display",
-      "target": "AI Agent",
-      "connectionType": "ai_tool"
-    },
-    {
-      "type": "addNode",
-      "node": {
-        "name": "listings_get",
-        "type": "n8n-nodes-base.httpRequestTool",
-        "typeVersion": 4.5,
-        "position": [
-          4020,
-          3560
-        ],
-        "parameters": {
-          "toolDescription": "Draws ONE service-listing card with its full description and one button per contact detail the business has. Carries no contact detail. USE IT WHEN: The customer asks about one listing already shown (\"tell me more about the plumber\", \"what does the second one do?\"). NOT THIS TOOL: Never state a contact detail yourself (see listings_display). The card is sent for you, so your whole answer is [sent]. ⚠ A message with a list of contact buttons, sent for you.",
-          "method": "POST",
-          "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/listings/{{ encodeURIComponent(String($fromAI(\"listingId\", \"The listing id, from listings_display or product_search.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}",
-          "authentication": "genericCredentialType",
-          "genericAuthType": "httpBearerAuth",
-          "sendHeaders": true,
-          "headerParameters": {
-            "parameters": [
-              {
-                "name": "X-Webhook-Secret",
-                "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
-              }
-            ]
-          },
-          "sendBody": true,
-          "specifyBody": "json",
-          "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language } }) }}",
-          "options": {
-            "response": {
-              "response": {
-                "neverError": true
-              }
-            },
-            "timeout": 20000
-          }
-        },
-        "credentials": {
-          "httpBearerAuth": {
-            "id": "lz5ivIop9DF8mPHa",
-            "name": "jovi-mall-Bearer Auth account"
-          }
-        }
-      }
-    },
-    {
-      "type": "addConnection",
-      "source": "listings_get",
-      "target": "AI Agent",
-      "connectionType": "ai_tool"
     }
   ]
 ]

@@ -7471,8 +7471,8 @@
       "service": "jovi-mall",
       "surface": "bot_internal",
       "description": "Opens a scrollable product grid — a category, a whole shop or their saved items — with picture, price and buy button on every card. Sends its own button.",
-      "when_to_use": "The customer wants to BROWSE a whole shelf, or asks to see everything after a page of cards.",
-      "when_not_to_use": "Not for a specific question with a short answer — five cards via Show-Products are better. Not for one product (inapp_open_product).",
+      "when_to_use": "The customer wants to BROWSE a whole shop, a category or their saved items, or asks to see everything after a page of cards. For a KIND of product (\"shoes\", \"phones\", \"something for my kitchen\"), find them with Search-Products first, then open the grid with their ids in productIds.",
+      "when_not_to_use": "Not for a specific question with a short answer — five cards via Show-Products are better. Not for one product (inapp_open_product). ⚠ Never put a kind of product in q: q matches WHOLE WORDS in titles, tags and descriptions, so \"shoes\" does not find a \"Nike Air Max 90\" and the customer opens an empty grid.",
       "operation": {
         "method": "POST",
         "path": "/api/internal/bot/inapp/listing"
@@ -7486,7 +7486,7 @@
           "q": {
             "type": "string",
             "maxLength": 120,
-            "description": "Free-text search. Omit to show everything."
+            "description": "Whole-word text search over titles, tags and descriptions: shoes does NOT find Nike Air Max 90. Only for a word the customer wants matched literally. Omit to show everything; for a kind of product pass productIds from Search-Products instead."
           },
           "category": {
             "type": "string",
