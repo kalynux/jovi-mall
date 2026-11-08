@@ -1,0 +1,1 @@
+={{ [$json.body.kind === 'listing' ? 'listing:' + String($json.body.listing_id || '') : $json.body.product_id] }}

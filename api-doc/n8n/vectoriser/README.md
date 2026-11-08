@@ -1435,3 +1435,34 @@ it was the only node that changed.
 | 22398 | `"water bottle"`, no budget | hybrid, count 1 — unchanged |
 
 Published: search `c49f46a1`, core `d578b0a3`. Rollback: search `1157a7e5`, core `8e724e6e`.
+
+
+## 18. Service listings — 2026-11-08  ✅ PUBLISHED (harness-proven; live proof needs the first approved listing)
+
+jovi-mall sends a listing as `{ kind: 'listing', listing_id, slug, title, company_name, description, category,
+categories, country, city, area, images, opening_hours }` (`listings/domain/listing-vectoriser.payload.ts`) —
+**public fields only, no contact, no vendor block** (SERVICE-LISTINGS-PLAN L-26). Before this change the
+vectoriser refused it (`no product_id`), and jovi-mall marked the listing `failed` and refunded the fee.
+
+**The design: a listing is a `product_vectors` row keyed `listing:<id>`.** No SQL changed. The upsert
+(`ON CONFLICT (product_id)`), the delete and `product_search()` work unchanged, and a listing id can never collide
+with a product id. Its metadata carries `kind: 'listing'`, `listing_id`, `type: 'listing'` (so a product-type filter
+never returns it), `status: 'active'` (so the search's status filter keeps it), no price and no stock (so a budget or
+in-stock filter excludes it — correct, nothing is sold), and **no `image_files`**, so the image trigger queues no
+listing photo (v1: listings are found by words only).
+
+| Workflow | Change | Published | Rollback |
+|---|---|---|---|
+| `UP-wi-mall-vectoriser` | `normalise json payload` accepts `kind: 'listing'` (full payload, key `listing:<id>`); `build all texts` gains `buildListingText`; the accept response returns the BARE listing id (jovi-mall checks `accepted.has(listingId)`); `compose report` emits `{ kind: 'listing', listing_id, status, vectorised_id }` rows, which the callback splits off to the listing service; `apply delete` reads `listing_id` | `9aac2b9a` | `677326ee` |
+| `UP-wi-mall-product-search` | `Collect Ids` keeps `listing:` rows out of the price hydration (a placeholder id when only listings matched — an empty `ids` is a 400 and would drop the answer to the keyword fallback); new `Add Listings` after `Shape Result` returns them as `listings[]` with a note telling the model to use `listings_display`. `Shape Result` (the allowlist that keeps the bargaining floor from the model) is untouched | `66d02e67` | `d5c08828` |
+| `UP-wi-mall-core` | `listings_display` / `listings_get` tool nodes (`gen:mcp-workflow --existing`); array arguments coerced to arrays | `d9a38bae` | `25dc2638` |
+
+Sources and harnesses: `listings/` — `node listings/test-vectoriser.js` (18/0: listing correct, **product path
+byte-identical to the live code**) and `node listings/test-search.js` (10/0: with no listing the answer passes through
+unchanged). `listings/vectoriser-before-677326ee.json` is the pre-change workflow the generator patches. Every edit
+was compared byte for byte with the published draft before publishing.
+
+⚠ **Not live-proven yet**: no provider can register until the provider plans are created (`seed:plans --
+--providers-only`, the last release step), so no listing has been indexed. The first approved listing is the test:
+its callback must land `completed`, a search for its title must return it under `listings`, and `listings_display`
+must draw its card.
