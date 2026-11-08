@@ -11,6 +11,7 @@
  *
  *   MONGO_URI="mongodb://127.0.0.1:27117/sl_reveal?replicaSet=rs0" npm run verify:service-listings
  */
+import dotenv from 'dotenv';
 import mongoose, { Types } from 'mongoose';
 import { COLLECTIONS } from '../../src/core/database/collections';
 import { ERROR_CODES } from '../../src/core/error-codes';
@@ -26,6 +27,9 @@ import { listingRevealService } from '../../src/modules/listings/domain/services
 import { listingReportAdminService } from '../../src/modules/listings/domain/services/listing-report-admin.service';
 import { registerListingSubscribers } from '../../src/modules/listings';
 
+// Under CI the URI is in `.env` (the job writes it there, not into the environment), so CI alone
+// loads it: locally a stray `.env` MONGO_URI is the real database, and this suite stays off it.
+if (process.env.CI) dotenv.config();
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27117/sl_reveal?replicaSet=rs0';
 const REQUIRED_DB = 'sl_reveal';
 

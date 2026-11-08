@@ -21,6 +21,7 @@
  *        `insufficient_credits` is never touched, a seller is never swept, the real
  *        `plan.activated` chain triggers it, and an in-place plan edit is caught by the sweep.
  */
+import dotenv from 'dotenv';
 import mongoose, { Types } from 'mongoose';
 import { COLLECTIONS } from '../../src/core/database/collections';
 import { eventBus, DomainEvent } from '../../src/core/events/event-bus';
@@ -41,6 +42,9 @@ import { registerPlanQuotaConsumer } from '../../src/modules/plan-quota/events/p
 import { planQuotaReconcileWorker } from '../../src/modules/plan-quota/workers/plan-quota-reconcile.worker';
 import { LISTING_REVEAL_FIRST_COST } from '../../src/modules/billing/config/credit.config';
 
+// Under CI the URI is in `.env` (the job writes it there, not into the environment), so CI alone
+// loads it: locally a stray `.env` MONGO_URI is the real database, and this suite stays off it.
+if (process.env.CI) dotenv.config();
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27117/sl_billing?replicaSet=rs0';
 const REQUIRED_DB = 'sl_billing';
 
