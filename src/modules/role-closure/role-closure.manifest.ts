@@ -81,6 +81,13 @@ import { ClosableRole } from './role-closure.types';
  *                               from them. Each carries the PROVIDER's own text, which the customer
  *                               already holds.
  *
+ * ── The saved list (owner RS-10, 2026-11-08) ─────────────────────────────────
+ *   wishlist_items              DELETED on a customer closure, products and listings both
+ *                               (`AccountClosureRepository.deleteSavedItems`, shared with ADR-A02's
+ *                               account closure). Until 2026-11-08 nothing deleted it.
+ *   recently_viewed_items       ⚠ Still KEPT, unchanged and unasked: RS-10 named the saved list
+ *                               only. Ids and timestamps, readable by nobody once the role closes.
+ *
  * ── User-scoped rows survive a ROLE closure ───────────────────────────────────
  * Messaging connections and device tokens belong to the person, and their remaining roles
  * still use them. They go only in `closeAccountIfLastRole`, i.e. when nothing is left.
@@ -135,6 +142,8 @@ export class RoleClosureManifest {
     await this.accountClosure.deletePaymentMethods(customerId, session);
     await this.accountClosure.deleteNotifications(customerId, session);
     await this.accountClosure.clearVendorAnnotations(customerId, session);
+    // Owner RS-10 (2026-11-08): saved products and listings go with the account.
+    await this.accountClosure.deleteSavedItems(customerId, session);
     await CustomerNotificationPreferenceModel.deleteMany({ customerId }, { session }).exec();
     // L-14: a closed customer can no longer be messaged by any provider. See the header.
     await ProviderContactConsentModel.updateMany(

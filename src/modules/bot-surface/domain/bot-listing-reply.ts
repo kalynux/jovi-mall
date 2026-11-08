@@ -5,6 +5,7 @@ import {
     ListingFieldName,
     listingConsentActionId,
     listingRevealActionId,
+    listingSaveActionId,
 } from './bot-action-id';
 
 /**
@@ -35,6 +36,10 @@ const FIELD_LABEL: Copy<Record<ListingFieldName, string>> = {
 interface CardCopy {
     /** Under the card: the L-13 disclosure (stated defaults), above the buttons. */
     disclosure: string;
+    /** The last row: save the listing (2026-11-08, `lv:`). ≤ 24 characters. */
+    save: string;
+    /** The rating line, when the listing has published reviews (2026-11-08). */
+    rating: (average: string, count: number) => string;
     chooseContact: string;
     listButton: string;
     sectionTitle: string;
@@ -45,6 +50,8 @@ interface CardCopy {
 const CARD: Copy<CardCopy> = {
     en: {
         disclosure: 'Tap a contact to see it. This business will see your first name and part of your number.',
+        save: 'Save for later',
+        rating: (a, n) => `★ ${a} · ${n} ${n === 1 ? 'review' : 'reviews'}`,
         chooseContact: 'Which contact would you like?',
         listButton: 'See contacts',
         sectionTitle: 'Contact this business',
@@ -53,6 +60,8 @@ const CARD: Copy<CardCopy> = {
     },
     fr: {
         disclosure: 'Touchez un contact pour le voir. Cette entreprise verra votre prénom et une partie de votre numéro.',
+        save: 'Enregistrer',
+        rating: (a, n) => `★ ${a} · ${n} avis`,
         chooseContact: 'Quel contact souhaitez-vous ?',
         listButton: 'Voir les contacts',
         sectionTitle: 'Contacter l’entreprise',
@@ -61,6 +70,8 @@ const CARD: Copy<CardCopy> = {
     },
     pt: {
         disclosure: 'Toque num contacto para o ver. Esta empresa verá o seu primeiro nome e parte do seu número.',
+        save: 'Guardar',
+        rating: (a, n) => `★ ${a} · ${n} ${n === 1 ? 'avaliação' : 'avaliações'}`,
         chooseContact: 'Que contacto pretende?',
         listButton: 'Ver contactos',
         sectionTitle: 'Contactar a empresa',
@@ -69,6 +80,8 @@ const CARD: Copy<CardCopy> = {
     },
     es: {
         disclosure: 'Toca un contacto para verlo. Este negocio verá tu nombre y parte de tu número.',
+        save: 'Guardar',
+        rating: (a, n) => `★ ${a} · ${n} ${n === 1 ? 'reseña' : 'reseñas'}`,
         chooseContact: '¿Qué contacto quieres?',
         listButton: 'Ver contactos',
         sectionTitle: 'Contactar al negocio',
@@ -77,6 +90,8 @@ const CARD: Copy<CardCopy> = {
     },
     ar: {
         disclosure: 'اضغط على وسيلة اتصال لعرضها. سيرى هذا النشاط التجاري اسمك الأول وجزءًا من رقمك.',
+        save: 'حفظ',
+        rating: (a, n) => `★ ${a} · ${n} تقييم`,
         chooseContact: 'أي وسيلة اتصال تريد؟',
         listButton: 'عرض جهات الاتصال',
         sectionTitle: 'التواصل مع النشاط التجاري',
@@ -93,6 +108,8 @@ export interface ListingCardInput {
     area: string;
     description?: string | null;
     availableFields: readonly string[];
+    /** The published customer rating (2026-11-08). Null or absent: no line is drawn. */
+    rating?: { average: number; count: number } | null;
 }
 
 const KNOWN_FIELDS = Object.keys(LISTING_FIELD_CODES) as ListingFieldName[];
@@ -114,17 +131,20 @@ export function listingCardIntent(card: ListingCardInput, language: string | nul
         card.companyName,
         copy.areaIn(card.area, card.city),
     ];
+    if (card.rating && card.rating.count > 0) {
+        lines.push(copy.rating(card.rating.average.toFixed(1), card.rating.count));
+    }
     const description = (card.description ?? '').trim();
     if (description) {
         lines.push('', description.length > DESCRIPTION_PREVIEW ? `${description.slice(0, DESCRIPTION_PREVIEW - 1)}…` : description);
     }
-    const options = fieldOptions(card.id, card.availableFields, language);
-    if (options.length === 0) {
-        return { kind: 'text', text: [...lines, '', copy.noContact].join('\n') };
-    }
+    const contacts = fieldOptions(card.id, card.availableFields, language);
+    // The Save row is last, after the contacts, and is drawn even when there is no contact: a
+    // business can be worth keeping before it lists a number. Seven contacts + Save = 8 ≤ 10 rows.
+    const options = [...contacts, { id: listingSaveActionId(card.id), label: copy.save }];
     return {
         kind: 'choice',
-        text: [...lines, '', copy.disclosure].join('\n'),
+        text: [...lines, '', contacts.length === 0 ? copy.noContact : copy.disclosure].join('\n'),
         options,
         listButton: copy.listButton,
         sectionTitle: copy.sectionTitle,
@@ -143,6 +163,8 @@ interface RevealCopy {
     whatsapp: (business: string, number: string) => string;
     chatButton: string;
     phone: (business: string, number: string) => string;
+    /** Two numbers (2026-11-08). */
+    phones: (business: string, numbers: string[]) => string;
     email: (business: string, address: string) => string;
     website: (business: string) => string;
     websiteButton: string;
@@ -163,6 +185,7 @@ const REVEAL: Copy<RevealCopy> = {
         whatsapp: (b, n) => `WhatsApp of ${b}: ${n}`,
         chatButton: 'Chat on WhatsApp',
         phone: (b, n) => `Phone number of ${b}: ${n}`,
+        phones: (b, ns) => [`Phone numbers of ${b}:`, ...ns.map((n) => `• ${n}`)].join('\n'),
         email: (b, a) => `Email of ${b}: ${a}`,
         website: (b) => `Website of ${b}:`,
         websiteButton: 'Open the website',
@@ -181,6 +204,7 @@ const REVEAL: Copy<RevealCopy> = {
         whatsapp: (b, n) => `WhatsApp de ${b} : ${n}`,
         chatButton: 'Discuter WhatsApp',
         phone: (b, n) => `Téléphone de ${b} : ${n}`,
+        phones: (b, ns) => [`Téléphones de ${b} :`, ...ns.map((n) => `• ${n}`)].join('\n'),
         email: (b, a) => `E-mail de ${b} : ${a}`,
         website: (b) => `Site web de ${b} :`,
         websiteButton: 'Ouvrir le site',
@@ -199,6 +223,7 @@ const REVEAL: Copy<RevealCopy> = {
         whatsapp: (b, n) => `WhatsApp de ${b}: ${n}`,
         chatButton: 'Conversar WhatsApp',
         phone: (b, n) => `Telefone de ${b}: ${n}`,
+        phones: (b, ns) => [`Telefones de ${b}:`, ...ns.map((n) => `• ${n}`)].join('\n'),
         email: (b, a) => `E-mail de ${b}: ${a}`,
         website: (b) => `Site de ${b}:`,
         websiteButton: 'Abrir o site',
@@ -217,6 +242,7 @@ const REVEAL: Copy<RevealCopy> = {
         whatsapp: (b, n) => `WhatsApp de ${b}: ${n}`,
         chatButton: 'Chatear WhatsApp',
         phone: (b, n) => `Teléfono de ${b}: ${n}`,
+        phones: (b, ns) => [`Teléfonos de ${b}:`, ...ns.map((n) => `• ${n}`)].join('\n'),
         email: (b, a) => `Correo de ${b}: ${a}`,
         website: (b) => `Sitio web de ${b}:`,
         websiteButton: 'Abrir el sitio',
@@ -235,6 +261,7 @@ const REVEAL: Copy<RevealCopy> = {
         whatsapp: (b, n) => `واتساب ${b}: ${n}`,
         chatButton: 'دردشة واتساب',
         phone: (b, n) => `رقم هاتف ${b}: ${n}`,
+        phones: (b, ns) => [`أرقام هاتف ${b}:`, ...ns.map((n) => `• ${n}`)].join('\n'),
         email: (b, a) => `البريد الإلكتروني لـ ${b}: ${a}`,
         website: (b) => `الموقع الإلكتروني لـ ${b}:`,
         websiteButton: 'فتح الموقع',
@@ -254,7 +281,7 @@ const REVEAL: Copy<RevealCopy> = {
 /** The stored value shapes of § C-3 `RevealResult.value`. */
 export type RevealedValue =
     | { number: string; link: string }
-    | { number: string }
+    | { number: string; numbers?: string[] }
     | { address: string }
     | { url: string }
     | { links: Array<{ network: string; url: string }> }
@@ -306,9 +333,12 @@ export function revealReplyIntent(input: RevealReplyInput, language: string | nu
         case 'whatsapp':
             parts.push({ kind: 'link', text: copy.whatsapp(b, String(v.number)), label: copy.chatButton, url: String(v.link) });
             break;
-        case 'phone':
-            parts.push({ kind: 'text', text: copy.phone(b, String(v.number)) });
+        case 'phone': {
+            // Both numbers when the provider gave two (2026-11-08): one unlock, one message.
+            const numbers = Array.isArray(v.numbers) && v.numbers.length ? (v.numbers as string[]) : [String(v.number)];
+            parts.push({ kind: 'text', text: numbers.length > 1 ? copy.phones(b, numbers) : copy.phone(b, numbers[0]) });
             break;
+        }
         case 'email':
             parts.push({ kind: 'text', text: copy.email(b, String(v.address)) });
             break;

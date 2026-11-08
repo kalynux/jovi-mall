@@ -9,6 +9,7 @@ import { ReviewAuthorRole } from '../../reviews/models/review.model';
 import { ReviewAuthor } from '../../reviews/domain/services/review-eligibility.service';
 import { toAuthorReviewDto } from '../../reviews/dto/review.dto';
 import { publicCatalogService } from '../../catalog/services/public-catalog.service';
+import { publicListingService } from '../../listings/domain/services/public-listing.service';
 import { OrderModel } from '../../orders/order.model';
 import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
 import { setBotReply } from '../middlewares/bot-reply.middleware';
@@ -100,8 +101,15 @@ export class BotReviewController {
         const productIds = chat.items
             .filter((r) => r.subject_type === 'product')
             .map((r) => r.subject_id.toString());
-        const cards = await publicCatalogService.listByIds(productIds);
+        const listingIds = chat.items
+            .filter((r) => r.subject_type === 'listing')
+            .map((r) => r.subject_id.toString());
+        const [cards, listingCards] = await Promise.all([
+            publicCatalogService.listByIds(productIds),
+            listingIds.length ? publicListingService.byIds(listingIds) : Promise.resolve({ data: [], missing: [] }),
+        ]);
         const titles = new Map([...cards].map(([id, card]) => [id, card.title]));
+        const listingTitles = new Map(listingCards.data.map((c) => [c.id, c.title]));
 
         sendSuccess(
             res,
@@ -119,6 +127,7 @@ export class BotReviewController {
                     },
                     titles,
                     review.order_id ? review.order_id.toString() : null,
+                    listingTitles,
                 ),
             ),
             {

@@ -77,6 +77,7 @@ export function findMissing(
 export interface ContactPresence {
   whatsapp?: string | null;
   phone?: string | null;
+  phone2?: string | null;
   email?: string | null;
   website?: string | null;
   socials?: ReadonlyArray<unknown> | null;
@@ -86,8 +87,10 @@ export interface ContactPresence {
 
 function hasField(set: ContactPresence, field: ListingContactField): boolean {
   switch (field) {
-    case 'whatsapp':
     case 'phone':
+      // The second number counts too (2026-11-08); normally it is never set alone.
+      return filled(set.phone).length > 0 || filled(set.phone2).length > 0;
+    case 'whatsapp':
     case 'email':
     case 'website':
       return filled(set[field]).length > 0;

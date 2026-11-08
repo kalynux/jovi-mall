@@ -1,5 +1,6 @@
 import { PublicProductListItemDto } from '../../catalog/dto/public-product.dto';
 import { publicCatalogService, PublicCatalogService } from '../../catalog/services/public-catalog.service';
+import type { PublicListingCard } from '../../listings/dto/public-listing.dto';
 
 /**
  * The shape of one entry in a customer's own list of products — saved, or recently viewed
@@ -48,6 +49,29 @@ export interface CustomerCatalogEntryDto {
    */
   product: PublicProductListItemDto | null;
 }
+
+/**
+ * One entry of the SAVED list, which since 2026-11-08 holds products and service listings side
+ * by side (owner RS-1). `kind` tells them apart; a product entry is exactly the shape above plus
+ * `kind`, so a client written for products keeps working on product rows.
+ *
+ * A listing entry follows the same degrade rule: `listing` is the public card, or `null` when the
+ * listing is no longer publishable (paused, archived, taken down) — never dropped, never a 500,
+ * and no hint of WHY, since that would be the provider's state leaking to anyone who saved it.
+ */
+export type SavedProductEntryDto = CustomerCatalogEntryDto & { kind: 'product' };
+
+export interface SavedListingEntryDto {
+  kind: 'listing';
+  /** Always present. The remove verb needs it. */
+  listingId: string;
+  /** When it was saved. Re-saving does not move it. */
+  at: Date;
+  /** The public listing card — the same projection as `/api/public/listings` — or `null`. */
+  listing: PublicListingCard | null;
+}
+
+export type SavedEntryDto = SavedProductEntryDto | SavedListingEntryDto;
 
 /**
  * Turn `(productId, timestamp)` pairs into entries, preserving the caller's order.

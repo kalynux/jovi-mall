@@ -169,6 +169,7 @@ export class AccountClosureService {
       const paymentMethods = await this.closureRepo.deletePaymentMethods(customerId, session);
       const notifications = await this.closureRepo.deleteNotifications(customerId, session);
       const vendorRelationships = await this.closureRepo.clearVendorAnnotations(customerId, session);
+      const savedItems = await this.closureRepo.deleteSavedItems(customerId, session);
 
       return {
         channelConnections,
@@ -176,6 +177,7 @@ export class AccountClosureService {
         paymentMethods,
         notifications,
         vendorRelationships,
+        savedItems,
       };
     });
 

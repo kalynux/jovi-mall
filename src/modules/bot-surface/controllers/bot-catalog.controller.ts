@@ -17,7 +17,9 @@ import {
     BotNoArgsSchema,
     BotPageSchema,
     BotProductIdSchema,
-    BotProductParamSchema,
+    BotWishlistAddSchema,
+    BotWishlistItemParamSchema,
+    BotWishlistListSchema,
 } from '../validators/bot.validators';
 
 const entitlementService = new DigitalEntitlementService();
@@ -33,10 +35,10 @@ const downloadLinkService = new DownloadLinkService();
  * looks like public data until you notice whose it is.
  */
 export class BotCatalogController {
-    /** `POST /wishlist/list` — saved products, newest save first. */
+    /** `POST /wishlist/list` — saved products and listings, newest save first; `kind` narrows it. */
     static listWishlist = asyncHandler(async (req: Request, res: Response) => {
-        const { page, limit } = BotPageSchema.parse(req.body ?? {});
-        const { data, meta } = await wishlistService.list(botCallerOf(req).customerId, page, limit);
+        const { page, limit, kind } = BotWishlistListSchema.parse(req.body ?? {});
+        const { data, meta } = await wishlistService.list(botCallerOf(req).customerId, page, limit, kind);
 
         const chat = windowForChat({
             items: data,
@@ -58,22 +60,30 @@ export class BotCatalogController {
      * retry beyond the key the surface demands anyway.
      */
     static addWishlist = asyncHandler(async (req: Request, res: Response) => {
-        const { productId } = BotProductIdSchema.parse(req.body ?? {});
-        const entry = await wishlistService.add(botCallerOf(req).customerId, productId);
+        const { productId, listingId } = BotWishlistAddSchema.parse(req.body ?? {});
+        const customerId = botCallerOf(req).customerId;
+        // A listing since 2026-11-08 (owner RS-1). Saving one reaches nobody (RS-2).
+        const entry = listingId
+            ? await wishlistService.addListing(customerId, listingId)
+            : { kind: 'product' as const, ...(await wishlistService.add(customerId, productId!)) };
         sendSuccess(res, entry, { message: 'Saved to your wishlist.' });
     });
 
     /**
-     * `DELETE /wishlist/:productId` — remove a save.
+     * `DELETE /wishlist/:itemId` — remove a save, product or listing.
      *
-     * Answers `{ removed: true }` rather than the customer API's `null`, matching the
+     * The id is whatever `wishlist_list` gave (`productId` or `listingId`); the server finds which
+     * kind it is (`removeAny`). The segment was `:productId` before 2026-11-08, and a product id
+     * still lands on the same path and the same row, so the live tool keeps working unchanged.
+     *
+     * Answers `{ removed: true, kind }` rather than the customer API's `null`, matching the
      * catalogue's `important_fields`. A chat has to say something happened, and `data: null`
      * gives a model nothing to say it with.
      */
     static removeWishlist = asyncHandler(async (req: Request, res: Response) => {
-        const { productId } = BotProductParamSchema.parse(req.params);
-        await wishlistService.remove(botCallerOf(req).customerId, productId);
-        sendSuccess(res, { removed: true }, { message: 'Removed from your wishlist.' });
+        const { itemId } = BotWishlistItemParamSchema.parse(req.params);
+        const kind = await wishlistService.removeAny(botCallerOf(req).customerId, itemId);
+        sendSuccess(res, { removed: true, kind }, { message: 'Removed from your wishlist.' });
     });
 
     /**

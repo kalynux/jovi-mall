@@ -39,7 +39,8 @@ Everything the page needs to decide what to show.
   "terms": {
     "vendor": { "ratePercent": 3, "durationMonths": 6 },
     "customer": { "ratePercent": 3, "durationMonths": 6 },
-    "agency": { "ratePercent": 3, "durationMonths": 6 }
+    "agency": { "ratePercent": 3, "durationMonths": 6 },
+    "provider": { "ratePercent": 3, "durationMonths": 6 }
   },
   "balances": { "pending": 630, "available": 2100, "reserve": 0, "requested": 0, "clawback": 0, "currency": "XAF" },
   "balanceFrozen": false,
@@ -130,7 +131,8 @@ activity never earns.
       "status": "released",
       "earnedAt": "2026-11-02T10:00:00.000Z",
       "availableFrom": "2026-11-16T10:00:00.000Z",
-      "adjusted": true
+      "adjusted": true,
+      "paymentKind": null
     }
   ],
   "meta": { "total": 1, "page": 1, "limit": 20, "totalPages": 1 }
@@ -141,6 +143,8 @@ activity never earns.
 |---|---|
 | `amount` | What this reward is worth **now**, after any refund |
 | `adjusted` | A refund reduced it |
+| `category` | Who the referred account is. 🆕 `provider` (2026-11-08): a service provider |
+| `paymentKind` | 🆕 2026-11-08. On a **provider** reward, what the provider paid for: `plan` or `credits` (owner RS-7). `null` on every other reward. The **amount** the provider paid is never shown |
 | `status` | `held` (waiting) · `released` (counted in available) · `reversed` (the whole commission was refunded; show it as 0) |
 
 ⛔ There is deliberately no order, product, vendor or commission figure on this list or the one above.

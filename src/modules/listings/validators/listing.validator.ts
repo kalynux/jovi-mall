@@ -85,6 +85,12 @@ const SocialLinkSchema = z.object({
 export const ListingContactsInputSchema = z.object({
   whatsapp: ClearablePhoneNumberSchema,
   phone: ClearablePhoneNumberSchema,
+  /**
+   * A second phone number (2026-11-08), E.164, `null` clears it. Unlocked together with `phone`
+   * as ONE field. A second number equal to the first is dropped, and a second number sent with no
+   * first becomes the first (`applyContactsPatch`), so the stored pair is always clean.
+   */
+  phone2: ClearablePhoneNumberSchema,
   email: ClearableEmailAddressSchema,
   website: clearable(HttpUrlSchema),
   socials: z.array(SocialLinkSchema).max(LISTING_MAX_SOCIALS).optional(),
@@ -108,6 +114,11 @@ export const ListingIdParamSchema = z.object({ id: ObjectIdSchema });
 
 export const VendorListingListQuerySchema = z.object({
   status: z.enum(LISTING_STATUSES).optional(),
+  /**
+   * Text search (2026-11-08): the title and the company name, on the working copy AND the live
+   * one, case- and accent-insensitive. Combines with `status`.
+   */
+  q: z.string().trim().min(1).max(200).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 }).strict();

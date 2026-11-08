@@ -9,6 +9,8 @@ import { resolveFileDetails } from '../../../catalog/read-models/file-detail.res
 import { isRenderableImage } from '../../../catalog/read-models/product-image.resolver';
 import type { FileDetail } from '../../../catalog/read-models/product-detail.read-model';
 import { listingRepository, ListingRepository, ListingRow } from '../../repositories/listing.repository';
+import { reviewAggregateRepository } from '../../../reviews/repositories/review-aggregate.repository';
+import type { ReviewAggregateView } from '../../../reviews/repositories/review-aggregate.repository';
 import type { PublicListingListQuery } from '../../validators/listing.validator';
 import {
   PublicListingCard,
@@ -31,6 +33,7 @@ export class PublicListingService {
   constructor(
     private readonly repo: ListingRepository = listingRepository,
     private readonly fileRepo: FileRepositoryMongo = new FileRepositoryMongo(),
+    private readonly ratings: ListingRatingReader = reviewAggregateRepository,
   ) {}
 
   async list(query: PublicListingListQuery): Promise<{ data: PublicListingCard[]; meta: { total: number; page: number; limit: number; pages: number } }> {
@@ -79,12 +82,16 @@ export class PublicListingService {
     return rows.map((row, i) => toPublicListingCard(row, ctxs[i]));
   }
 
-  /** Categories, renderable photos (first only for a card), costs and the rating seam, batched. */
+  /** Categories, renderable photos (first only for a card), costs and the rating, batched. */
   private async contexts(rows: ListingRow[], firstPhotoOnly: boolean): Promise<PublicListingContext[]> {
     // Every photo is resolved even for a card: the first may be quota-blocked or not an image,
     // and the card shows the first one that renders.
     const photoIds = rows.flatMap((r) => (r.published?.photo_file_ids ?? []).map((id) => id.toString()));
-    const details = await resolveFileDetails(photoIds, this.fileRepo, getStorageProvider());
+    // One query for the whole page's ratings, the product grid's rule (no query per card).
+    const [details, ratings] = await Promise.all([
+      resolveFileDetails(photoIds, this.fileRepo, getStorageProvider()),
+      rows.length ? this.ratings.findMany('listing', rows.map((r) => r._id.toString()), 'customer') : Promise.resolve(new Map()),
+    ]);
     const out: PublicListingContext[] = [];
     for (const r of rows) {
       const photos = (r.published?.photo_file_ids ?? [])
@@ -94,19 +101,26 @@ export class PublicListingService {
         categories: await categoryCatalogCache.refsFor(r.published?.category_ids ?? []),
         photos: firstPhotoOnly ? photos.slice(0, 1) : photos,
         revealCosts: { first: LISTING_REVEAL_FIRST_COST, next: LISTING_REVEAL_NEXT_COST },
-        rating: ratingSeam(r),
+        rating: listingRatingOf(ratings.get(r._id.toString())),
       });
     }
     return out;
   }
 }
 
+/** The one read of the reviews module this service needs: a page of listings' ratings at once. */
+export interface ListingRatingReader {
+  findMany(targetType: 'listing', ids: string[], authorRole: 'customer'): Promise<Map<string, ReviewAggregateView>>;
+}
+
 /**
- * ⚠ SEAM — the listing's rating. `null` until the review aggregate learns `target: 'listing'`
- * (wave 2, L-27: only customers with a lead may review). Replace this body, not the call sites.
+ * A listing's public rating (2026-11-08, was the wave-1 seam): the customers' published reviews,
+ * or `null` when there are none. Null rather than `{ 0, 0 }` is the product card's contract: a
+ * client draws no stars for "nobody has said anything".
  */
-export function ratingSeam(_row: ListingRow): PublicListingRating | null {
-  return null;
+export function listingRatingOf(aggregate: ReviewAggregateView | undefined): PublicListingRating | null {
+  if (!aggregate || aggregate.count <= 0) return null;
+  return { average: aggregate.average, count: aggregate.count };
 }
 
 export const publicListingService = new PublicListingService();

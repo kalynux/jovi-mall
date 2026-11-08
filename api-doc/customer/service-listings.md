@@ -31,6 +31,12 @@ A page of `PublicListingCard`:
 `availableFields` names which contact buttons to draw — **never a value**. No vendor id and no map
 pin are ever public. `kind: "listing"` tells a listing apart from a product in mixed results.
 
+🆕 **`rating`** (2026-11-08) is the customers' published rating, `{ "average": 4.5, "count": 12 }`,
+or `null` when nobody has reviewed the listing — draw no stars then. Reviews: `GET
+/api/public/listings/:listingId/reviews` (see `../reviews.md`). A signed-in customer can save a
+listing from the card (`POST /api/customer/wishlist` `{ listingId }`, see `saved-and-viewed.md`);
+the business is never told.
+
 ### `GET /api/public/listings/by-ids?ids=a,b` → `{ data: PublicListingCard[], missing[] }`
 In the order asked (at most 50).
 
@@ -63,10 +69,21 @@ Show this line at the buttons: *"This business will see your first name and part
 }
 ```
 
-`value` by field: whatsapp `{ number, link }` · phone `{ number }` · email `{ address }` ·
+`value` by field: whatsapp `{ number, link }` · phone `{ number, numbers }` · email `{ address }` ·
 website `{ url }` · socials `{ links[{ network, url }] }` · location `{ address, latitude,
 longitude, mapUrl }` · video `{ url, host: "youtube" | "google_drive" }` (the link itself — open
 it; YouTube plays it).
+
+🆕 **Phone, 2026-11-08:** a business may give **two** phone numbers. One tap on "Phone" unlocks both,
+for one charge:
+
+```json
+{ "field": "phone", "value": { "number": "+237671234531", "numbers": ["+237671234531", "+237699000111"] } }
+```
+
+`numbers` is every number, first first (one entry when the business gave one). `number` is always
+`numbers[0]`, so a client that shows only `number` keeps working. **Show every entry of `numbers`**,
+each with its own call button.
 
 The same field again within 30 days returns the value with `alreadyRevealed: true` and is free.
 

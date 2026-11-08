@@ -29,6 +29,7 @@ export interface ReviewTargetInput {
   productId?: string | null;
   agentId?: string | null;
   agencyId?: string | null;
+  listingId?: string | null;
 }
 
 /**
@@ -40,6 +41,7 @@ export interface ReviewTargetInput {
  *   delivery + customer  →  the agent AND the agency
  *   delivery + vendor    →  the agent AND the agency
  *   delivery + agency    →  the agent alone
+ *   listing  + customer  →  the listing (2026-11-08)
  *
  * All three roles rate the *same subject* — one shipment — and the aggregate they
  * move is keyed by `(target, author_role)`, so the three land in three separate rows
@@ -70,6 +72,13 @@ export function targetsOf(input: ReviewTargetInput): ReviewTarget[] {
     return targets;
   }
 
+  // A listing review moves the listing's own rating and nothing else (2026-11-08). Not the
+  // provider's: no surface reads a vendor rating, for the reason given above for products.
+  if (input.subjectType === 'listing') {
+    if (input.listingId) targets.push({ type: 'listing', id: input.listingId });
+    return targets;
+  }
+
   // subjectType === 'delivery'
   if (input.agentId) targets.push({ type: 'agent', id: input.agentId });
   if (input.authorRole !== 'agency' && input.agencyId) {
@@ -87,7 +96,9 @@ export function targetsOf(input: ReviewTargetInput): ReviewTarget[] {
  * recipient's experience, the seller's handover, the employer's supervision).
  */
 export function roleMayReview(subjectType: ReviewSubjectType, authorRole: ReviewAuthorRole): boolean {
-  if (subjectType === 'product') return authorRole === 'customer';
+  // A listing is reviewed by the customer who contacted the business (L-27), never by a vendor
+  // or an agency, for the reason a product is.
+  if (subjectType === 'product' || subjectType === 'listing') return authorRole === 'customer';
   return true;
 }
 

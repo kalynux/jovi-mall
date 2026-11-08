@@ -609,6 +609,27 @@ export const BotSupportContextSchema = z
 export const BotPageSchema = z.object({ ...chatPage }).strict();
 export const BotProductIdSchema = z.object({ productId: objectId }).strict();
 export const BotProductParamSchema = z.object({ productId: objectId });
+
+/**
+ * `wishlist_add` — a product OR a service listing (2026-11-08, owner RS-1), exactly one. A model
+ * sending both is told so rather than having one silently win.
+ */
+export const BotWishlistAddSchema = z
+    .object({ productId: objectId.optional(), listingId: objectId.optional() })
+    .strict()
+    .refine((v) => (v.productId === undefined) !== (v.listingId === undefined), {
+        message: 'Send exactly one of productId and listingId',
+        path: ['productId'],
+    });
+
+/** `wishlist_list` — a chat page, plus an optional kind (both kinds when absent). */
+export const BotWishlistListSchema = z
+    .object({ ...chatPage, kind: z.enum(['product', 'listing']).optional() })
+    .strict();
+
+/** `wishlist_remove` — the id `wishlist_list` gave, product or listing; the server finds which. */
+export const BotWishlistItemParamSchema = z.object({ itemId: objectId });
+
 export const BotEntitlementSchema = z.object({ entitlementId: objectId }).strict();
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -839,7 +860,8 @@ export const BotBookingPaySchema = z
 /** ⚠ `delivery` takes a SHIPMENT id, never an order id. Same rule as the customer API. */
 export const BotReviewEligibilitySchema = z
     .object({
-        subjectType: z.enum(['product', 'delivery']),
+        // `listing` takes a LISTING id (2026-11-08): earned by unlocking one of its contacts.
+        subjectType: z.enum(['product', 'delivery', 'listing']),
         subjectId: objectId,
     })
     .strict();
@@ -858,7 +880,7 @@ export const BotReviewEligibilitySchema = z
  */
 export const BotReviewCreateSchema = z
     .object({
-        subjectType: z.enum(['product', 'delivery']),
+        subjectType: z.enum(['product', 'delivery', 'listing']),
         subjectId: objectId,
         rating: z.number().int().min(1).max(5),
         body: z.string().trim().min(1).max(2000).optional(),

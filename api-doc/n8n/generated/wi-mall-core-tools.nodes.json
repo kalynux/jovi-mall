@@ -1742,7 +1742,7 @@
     "type": "n8n-nodes-base.httpRequestTool",
     "typeVersion": 4.5,
     "parameters": {
-      "toolDescription": "Products the customer saved for later, newest first. USE IT WHEN: They ask what they saved, or want to buy something saved earlier. To show them, pass the ids to Show-Products. NOT THIS TOOL: Not as a way to browse the catalogue. ⚠ product null means it went off sale — say 'no longer available' and offer to remove it; never skip the row or say why.",
+      "toolDescription": "What the customer saved for later, newest first: products and service listings (businesses such as plumbers or printers) in one list. Each entry has kind \"product\" or \"listing\". USE IT WHEN: They ask what they saved, or want to buy something saved earlier. To show them, pass the productIds to Show-Products and the listingIds to listings_display. NOT THIS TOOL: Not as a way to browse the catalogue. ⚠ product or listing null means it is no longer available — say 'no longer available' and offer to remove it; never skip the row or say why.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/wishlist/list",
       "authentication": "genericCredentialType",
@@ -1758,7 +1758,7 @@
       },
       "sendBody": true,
       "specifyBody": "json",
-      "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language } }) }}",
+      "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, kind: $fromAI(\"kind\", \"Only one kind. Leave it out for both. One of: product, listing.\", \"string\") || undefined }) }}",
       "options": {
         "response": {
           "response": {
@@ -1780,7 +1780,7 @@
     "type": "n8n-nodes-base.httpRequestTool",
     "typeVersion": 4.5,
     "parameters": {
-      "toolDescription": "Adds a product to the customer's saved list. USE IT WHEN: They like something but are not buying it now. NOT THIS TOOL: Not instead of the basket when they said they want to buy it.",
+      "toolDescription": "Adds a product or a service listing to the customer's saved list. Send exactly one of productId and listingId. Saving a listing reveals no contact, costs nothing and tells the business nothing. USE IT WHEN: They like something but are not buying it now, or want to keep a business to contact later. NOT THIS TOOL: Not instead of the basket when they said they want to buy it.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/wishlist",
       "authentication": "genericCredentialType",
@@ -1800,7 +1800,7 @@
       },
       "sendBody": true,
       "specifyBody": "json",
-      "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, productId: $fromAI(\"productId\", \"The 24-character product id to save, from catalog_get_product or a product search result.\", \"string\") }) }}",
+      "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, productId: $fromAI(\"productId\", \"The 24-character product id to save, from catalog_get_product or a product search result. Not with listingId.\", \"string\") || undefined, listingId: $fromAI(\"listingId\", \"The 24-character listing id to save, from a search result with kind \\\"listing\\\" or listings_get. Not with productId.\", \"string\") || undefined }) }}",
       "options": {
         "response": {
           "response": {
@@ -1822,9 +1822,9 @@
     "type": "n8n-nodes-base.httpRequestTool",
     "typeVersion": 4.5,
     "parameters": {
-      "toolDescription": "Takes a product off the customer's saved list. USE IT WHEN: They are no longer interested, or clear an unavailable entry. NOT THIS TOOL: Not just because they added it to the basket — they did not ask.",
+      "toolDescription": "Takes a product or a service listing off the customer's saved list. USE IT WHEN: They are no longer interested, or clear an unavailable entry. NOT THIS TOOL: Not just because they added it to the basket — they did not ask.",
       "method": "DELETE",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/wishlist/{{ encodeURIComponent(String($fromAI(\"productId\", \"The 24-character product id to drop, from wishlist_list productId.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}",
+      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/wishlist/{{ encodeURIComponent(String($fromAI(\"itemId\", \"The 24-character id to drop: productId for a product, listingId for a listing, from wishlist_list.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}",
       "authentication": "genericCredentialType",
       "genericAuthType": "httpBearerAuth",
       "sendHeaders": true,
@@ -2438,7 +2438,7 @@
     "type": "n8n-nodes-base.httpRequestTool",
     "typeVersion": 4.5,
     "parameters": {
-      "toolDescription": "Whether the customer may review a product or a delivery, and if not, why. USE IT WHEN: Before offering to take a review, so nobody ineligible is asked for one. NOT THIS TOOL: Not after a failed submission — this is the check that avoids one. ⚠ eligible false is a normal answer, not a failure.",
+      "toolDescription": "Whether the customer may review a product, a delivery or a service listing, and if not, why. A listing can be reviewed once the customer has unlocked at least one of its contacts. USE IT WHEN: Before offering to take a review, so nobody ineligible is asked for one. NOT THIS TOOL: Not after a failed submission — this is the check that avoids one. ⚠ eligible false is a normal answer, not a failure.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/reviews/eligibility",
       "authentication": "genericCredentialType",
@@ -2454,7 +2454,7 @@
       },
       "sendBody": true,
       "specifyBody": "json",
-      "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, subjectType: $fromAI(\"subjectType\", \"delivery takes a SHIPMENT id, not an order id. One of: product, delivery.\", \"string\"), subjectId: $fromAI(\"subjectId\", \"The id of the thing being reviewed: a product id when subjectType is product, a SHIPMENT id when it is delivery — never an order id.\", \"string\") }) }}",
+      "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, subjectType: $fromAI(\"subjectType\", \"delivery takes a SHIPMENT id, not an order id. listing takes the listing id. One of: product, delivery, listing.\", \"string\"), subjectId: $fromAI(\"subjectId\", \"The id of the thing being reviewed: a product id when subjectType is product, a SHIPMENT id when it is delivery — never an order id — and a LISTING id when it is listing.\", \"string\") }) }}",
       "options": {
         "response": {
           "response": {
@@ -2476,7 +2476,7 @@
     "type": "n8n-nodes-base.httpRequestTool",
     "typeVersion": 4.5,
     "parameters": {
-      "toolDescription": "Reviews the customer wrote, newest first — products and deliveries, including any an administrator hid. USE IT WHEN: 'What have I reviewed', 'did my review go up', 'why can't I see my review', or to check whether they already rated something. NOT THIS TOOL: Not other people's reviews (catalog_list_product_reviews). ⚠ Whether a review is visible is publiclyVisible, NEVER status — a delivery review shows status published but appears nowhere, it is internal. subjectLabel null: refer to the order instead of reading an id aloud.",
+      "toolDescription": "Reviews the customer wrote, newest first — products, deliveries and service listings, including any an administrator hid. USE IT WHEN: 'What have I reviewed', 'did my review go up', 'why can't I see my review', or to check whether they already rated something. NOT THIS TOOL: Not other people's reviews (catalog_list_product_reviews). ⚠ Whether a review is visible is publiclyVisible, NEVER status — a delivery review shows status published but appears nowhere, it is internal. subjectLabel null: refer to the order instead of reading an id aloud.",
       "method": "POST",
       "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/reviews/list",
       "authentication": "genericCredentialType",

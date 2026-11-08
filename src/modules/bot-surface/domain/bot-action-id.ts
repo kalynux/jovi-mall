@@ -211,6 +211,11 @@ export const BOT_ACTION_VERBS = Object.freeze([
      * message. 29 bytes.
      */
     'lc',
+    /**
+     * `lv:<listingId>` — save this listing in the customer's saved list (2026-11-08, owner RS-1).
+     * Charges nothing and tells the provider nothing (RS-2). Idempotent by index. 27 bytes.
+     */
+    'lv',
 ] as const);
 export type BotActionVerb = (typeof BOT_ACTION_VERBS)[number];
 
@@ -638,6 +643,11 @@ export function listingShowActionId(listingId: string): string {
 /** `lr:<listingId>:<f>` — unlock one field. */
 export function listingRevealActionId(listingId: string, field: ListingFieldName): string {
     return token('lr', `${listingId}:${LISTING_FIELD_CODES[field]}`);
+}
+
+/** `lv:<listingId>` — save the listing. Its argument parses with `parseListingShowArgument`. */
+export function listingSaveActionId(listingId: string): string {
+    return token('lv', listingId);
 }
 
 /** `lc:<vendorId>:y|n` — the opt-in to one provider's messages. */

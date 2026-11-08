@@ -40,6 +40,7 @@ export interface CreateReviewInput {
   targetProductId: string | null;
   targetAgentId: string | null;
   targetAgencyId: string | null;
+  targetListingId?: string | null;
   targetVendorId: string | null;
 }
 
@@ -66,6 +67,7 @@ export class ReviewRepository {
       target_product_id: oid(input.targetProductId),
       target_agent_id: oid(input.targetAgentId),
       target_agency_id: oid(input.targetAgencyId),
+      target_listing_id: oid(input.targetListingId ?? null),
       target_vendor_id: oid(input.targetVendorId),
     });
   }

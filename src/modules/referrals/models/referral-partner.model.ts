@@ -114,6 +114,7 @@ const ReferralPartnerSchema = new Schema<IReferralPartner>(
       vendor: { type: OverrideSchema, default: null },
       customer: { type: OverrideSchema, default: null },
       agency: { type: OverrideSchema, default: null },
+      provider: { type: OverrideSchema, default: null },
     },
     status_history: { type: [StatusChangeSchema], default: [] },
   },

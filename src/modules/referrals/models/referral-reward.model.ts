@@ -2,7 +2,8 @@ import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 import { EarningsSourceType } from '../../earnings/models/earnings-allocation.model';
 import { AdjustmentTakenFrom } from '../../earnings/models/earnings-adjustment.model';
-import { EARNING_CATEGORIES, EarningCategory, RewardShare } from '../domain/referral-rules';
+import { BILLING_REWARD_SOURCES, EARNING_CATEGORIES, EarningCategory, RewardShare } from '../domain/referral-rules';
+import type { EarningsLedgerSourceType } from '../../earnings/models/earnings-ledger.model';
 
 /**
  * One partner's reward for one referred account on one commission.
@@ -35,9 +36,14 @@ export interface IReferralReward extends Document {
   referred_user_id: mongoose.Types.ObjectId;
   category: EarningCategory;
 
-  /** The commission this came from. */
-  commission_allocation_id: mongoose.Types.ObjectId;
-  source_type: EarningsSourceType;
+  /**
+   * The commission this came from. NULL on a provider reward (2026-11-08, RS-3), whose source is
+   * the provider's own payment: `source_type` `plan_purchase` | `credit_topup` and `source_id`
+   * that row. `commission_earned` then holds the PRICE paid (the base, RS-6), which no DTO a
+   * partner sees may carry (RS-7).
+   */
+  commission_allocation_id: mongoose.Types.ObjectId | null;
+  source_type: EarningsSourceType | Extract<EarningsLedgerSourceType, 'plan_purchase' | 'credit_topup'>;
   source_id: mongoose.Types.ObjectId;
   /** The order or booking behind the source, which a COD collection's own id does not say. */
   order_id: mongoose.Types.ObjectId | null;
@@ -81,8 +87,13 @@ const ReferralRewardSchema = new Schema<IReferralReward>(
     referred_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, required: true },
     category: { type: String, enum: EARNING_CATEGORIES, required: true },
 
-    commission_allocation_id: { type: Schema.Types.ObjectId, ref: MODELS.EARNINGS_ALLOCATION, required: true },
-    source_type: { type: String, enum: ['order', 'booking', 'cod_collection'], required: true },
+    commission_allocation_id: {
+      type: Schema.Types.ObjectId,
+      ref: MODELS.EARNINGS_ALLOCATION,
+      default: null,
+      required: function (this: IReferralReward) { return !(BILLING_REWARD_SOURCES as readonly string[]).includes(this.source_type); },
+    },
+    source_type: { type: String, enum: ['order', 'booking', 'cod_collection', ...BILLING_REWARD_SOURCES], required: true },
     source_id: { type: Schema.Types.ObjectId, required: true },
     order_id: { type: Schema.Types.ObjectId, ref: MODELS.ORDER, default: null },
     booking_id: { type: Schema.Types.ObjectId, default: null },
@@ -131,7 +142,19 @@ const ReferralRewardSchema = new Schema<IReferralReward>(
 );
 
 // A retried evaluation cannot pay the same account twice on the same commission (document § 6).
-ReferralRewardSchema.index({ commission_allocation_id: 1, relationship_id: 1 }, { unique: true });
+// ⚠ PARTIAL since 2026-11-08: a provider reward has no commission, and a plain unique index reads
+// that as null, so a provider's second payment would collide with their first. The swap is
+// `migrate:referral-billing-rewards`.
+ReferralRewardSchema.index(
+  { commission_allocation_id: 1, relationship_id: 1 },
+  { unique: true, name: 'referral_reward_one_per_commission', partialFilterExpression: { commission_allocation_id: { $type: 'objectId' } } }
+);
+// …and the same guarantee for a provider's payment (RS-3): one reward per (payment, relationship).
+ReferralRewardSchema.index(
+  { source_type: 1, source_id: 1, relationship_id: 1 },
+  { unique: true, name: 'referral_reward_one_per_payment', partialFilterExpression: { source_type: { $in: [...BILLING_REWARD_SOURCES] } } }
+);
+ReferralRewardSchema.index({ source_type: 1, source_id: 1 }, { name: 'referral_reward_by_source' });
 ReferralRewardSchema.index({ status: 1, matures_at: 1 });
 ReferralRewardSchema.index({ partner_id: 1, earned_at: -1 });
 ReferralRewardSchema.index({ relationship_id: 1, earned_at: -1 });

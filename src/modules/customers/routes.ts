@@ -91,6 +91,9 @@ router.delete('/payment-methods/:id', PaymentMethodController.remove);
 router.get('/wishlist', CustomerCatalogController.listWishlist);
 router.post('/wishlist', CustomerCatalogController.addWishlistItem);
 router.post('/wishlist/saved-among', CustomerCatalogController.savedAmong);
+// A saved service listing (2026-11-08). Three segments, so `/:productId` cannot capture it; it
+// sits above anyway, for the reason the comment above gives.
+router.delete('/wishlist/listings/:listingId', CustomerCatalogController.removeWishlistListing);
 router.delete('/wishlist/:productId', CustomerCatalogController.removeWishlistItem);
 
 router.get('/recently-viewed', CustomerCatalogController.listRecentlyViewed);

@@ -240,9 +240,36 @@ max-age=300` like the rest of `/api/public`.
   said about this id" is a truthful answer, and a 404 would make the route an existence
   oracle for draft products.
 
+### 🆕 Service listings — `subjectType: 'listing'` (2026-11-08)
+
+A customer may review a **service listing** (a business paid in person, not through Wi-Mall) once
+they have **unlocked at least one of its contacts** (owner L-27). Saving or viewing it earns nothing.
+`subjectId` is the listing id. Only `/api/customer/reviews` takes it; from a vendor or an agency it
+is `400 REVIEW_ROLE_NOT_ALLOWED`. One live review per customer per listing, as everywhere.
+
+| Case | Answer |
+|---|---|
+| The listing does not exist, or was never published | `404 REVIEW_SUBJECT_NOT_FOUND` |
+| Live or paused, but this customer unlocked no contact | `422 REVIEW_NOT_ELIGIBLE` |
+| Archived (the provider removed it or closed their account) | `422 REVIEW_SUBJECT_NOT_REVIEWABLE`, `details.reason: "listing_archived"`. Its existing reviews stay |
+
+Like every review it publishes at once, text included, and moves the listing's public rating. The
+provider is notified of each one (in the dashboard, by email, and on WhatsApp only inside the
+24-hour window — no template, owner RS-11) and **cannot reply** (RS-8).
+
+**Public:** `GET /api/public/listings/:listingId/reviews` — the same body and rules as the product
+route above, `meta.rating` included. A listing the public cannot see (paused, archived) answers the
+**empty page**. The listing card's `rating` (`{ average, count }` or `null`) now comes from the same
+aggregate, on `/api/public/listings*` and in the bot.
+
+**The provider's own:** `GET /api/vendor/listings/:id/reviews` — provider session only. Their own
+listing in **any** status, paused and archived included (RS-12); another vendor's listing is
+`404 LISTING_NOT_FOUND`. The same anonymous rows the public sees: what was said, never who said it.
+
 ### Moderation — `/api/internal/admin/reviews`
 
-wi-admin only, behind the service token. See [admin/reviews.md](./admin/reviews.md).
+wi-admin only, behind the service token. See [admin/reviews.md](./admin/reviews.md). The
+`subjectType` filter accepts `listing` (2026-11-08).
 
 ---
 

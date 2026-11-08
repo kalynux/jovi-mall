@@ -26,12 +26,15 @@ import {
     isProviderVendor,
     vendorKindForRole,
     newVendorKindFields,
+    providerCountryOf,
     SELLER_VENDOR_FILTER,
 } from '../../src/modules/vendors/domain/vendor-kind';
 import { requireVendorKind } from '../../src/api/middlewares/vendor-kind.middleware';
 import { RegisterSchema, AddRoleSchema } from '../../src/modules/auth/auth.schemas';
 import { StoreProvisioningService } from '../../src/modules/store/service/store-provisioning.service';
 import { ERROR_CODES } from '../../src/core/error-codes';
+import { buildAccentInsensitiveSearchRegex } from '../../src/core/utils/regex.util';
+import { VendorListingListQuerySchema } from '../../src/modules/listings/validators/listing.validator';
 import { COLLECTIONS, MODELS } from '../../src/core/database/collections';
 import { CREDIT_REASON_CODES } from '../../src/modules/billing/models/credit-transaction.model';
 import { TicketType, EntityType } from '../../src/modules/tickets/types/ticket.types';
@@ -174,10 +177,18 @@ async function main(): Promise<void> {
         && vendorKindForRole('customer', { kind: 'provider' }) === null
         && vendorKindForRole(undefined, null) === null);
     assert('a NEW provider starts COMPLETED (onboarding_step 0) with the default listing settings', () => {
-        const f = newVendorKindFields('provider');
+        const f = newVendorKindFields('provider', '+237672745831');
         return f.kind === 'provider' && f.onboarding_step === 0
             && JSON.stringify(f.listing_settings) === JSON.stringify(DEFAULT_LISTING_SETTINGS);
     });
+    // 2026-11-08: a provider never sees onboarding Step 1, where a seller sets the country.
+    assert('a NEW provider gets its country from the sign-up phone (+237 → CM, +225 → CI)', () =>
+        newVendorKindFields('provider', '+237672745831').country === 'CM'
+        && newVendorKindFields('provider', '+2250701020304').country === 'CI'
+        && providerCountryOf('+33612345678') === 'FR');
+    assert('…and Cameroon when there is no phone, or it matches no country', () =>
+        providerCountryOf(null) === 'CM' && providerCountryOf(undefined) === 'CM' && providerCountryOf('+999123456') === 'CM'
+        && newVendorKindFields('provider').country === 'CM');
     assert('a NEW seller gets its kind written explicitly and nothing else changed', () =>
         JSON.stringify(newVendorKindFields('seller')) === JSON.stringify({ kind: 'seller' }));
     assert('the default on-empty behaviour is continue_engaged, no floor, no daily cap (L-10, L-11, L-30)', () =>
@@ -338,7 +349,9 @@ async function main(): Promise<void> {
     const authSrc = stripComments(read('src/modules/auth/auth.service.ts'));
     const vendorCases = authSrc.split("case 'vendor':").slice(1).map((s) => s.slice(0, 900));
     assert('⛔ register AND add-role write the kind fields on the new vendor row', () =>
-        vendorCases.length === 2 && vendorCases.every((c) => c.includes('...newVendorKindFields(kind)')));
+        vendorCases.length === 2
+        && vendorCases[0].includes('...newVendorKindFields(kind, input.phone)')
+        && vendorCases[1].includes('...newVendorKindFields(kind, user.login_phone)'));
     assert('⛔ register AND add-role provision a Store only for a seller', () =>
         vendorCases.every((c) => /if \(kind === 'seller'\) \{\s*await this\.storeProvisioning\.ensureStoreForVendor/.test(c)));
 
@@ -537,6 +550,27 @@ async function main(): Promise<void> {
         /ListingModel\.countDocuments\(LISTING_HOLDS_CATEGORY\(oid\)\)/.test(removeSpan)
         && /productCount > 0 \|\| listingCount > 0/.test(removeSpan)
         && /status: \{ \$ne: 'archived' \}/.test(catAdmin));
+
+    // ── The provider's text search, GET /api/vendor/listings?q (2026-11-08) ──
+    console.log('\n── Provider search: ?q on the listings list (2026-11-08) ──');
+    const m = (q: string, s: string) => buildAccentInsensitiveSearchRegex(q).test(s);
+    assert('?q is case- AND accent-insensitive, in both directions', () =>
+        m('electricite', 'Électricité Akwa') && m('ÉLECTRICITÉ', 'electricite') && m('plomb', 'PLOMBERIE')
+        && m('cafe', 'Café du Port') && m('nino', 'Niño') && !m('electricite', 'Plomberie'));
+    assert('?q is matched LITERALLY: regex characters are escaped, never interpreted', () =>
+        !m('a.b', 'axb') && m('a.b', 'a.b') && m('(x', 'Bar (x)') && !m('.*', 'anything'));
+    assert('?q is 1–200 characters, trimmed, and combines with status', () =>
+        VendorListingListQuerySchema.safeParse({ q: 'plomb', status: 'live' }).success
+        && !VendorListingListQuerySchema.safeParse({ q: '' }).success
+        && !VendorListingListQuerySchema.safeParse({ q: '   ' }).success
+        && !VendorListingListQuerySchema.safeParse({ q: 'x'.repeat(201) }).success
+        && VendorListingListQuerySchema.parse({ q: '  plomb ' }).q === 'plomb');
+    const listOwned = stripComments(read('src/modules/listings/repositories/listing.repository.ts'));
+    const listOwnedBody = listOwned.slice(listOwned.indexOf('async listOwned('), listOwned.indexOf('async countOccupyingSlots('));
+    assert('⛔ the search stays scoped to the caller\'s own listings, and reads the working AND the live copy', () =>
+        /const filter: Record<string, unknown> = \{ vendor_id: oid\(vendorId\) \};/.test(listOwnedBody)
+        && /\['pending\.title', 'pending\.company_name', 'published\.title', 'published\.company_name'\]/.test(listOwnedBody)
+        && /buildAccentInsensitiveSearchRegex\(q\)/.test(listOwnedBody) && !/new RegExp/.test(listOwnedBody));
 
     console.log(`\n${passed} passed, ${failed} failed\n`);
     if (failed > 0) process.exit(1);

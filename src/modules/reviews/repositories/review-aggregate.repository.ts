@@ -28,6 +28,14 @@ export interface AggregateKey {
   authorRole: ReviewAuthorRole;
 }
 
+/** Which review field carries each target type. A record, so a new target type is a compile error here. */
+const TARGET_FIELD: Record<ReviewTargetType, string> = {
+  product: 'target_product_id',
+  agent: 'target_agent_id',
+  agency: 'target_agency_id',
+  listing: 'target_listing_id',
+};
+
 const emptyDistribution = (): IReviewRatingDistribution => ({ '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 });
 
 const toView = (row: Pick<IReviewAggregate, 'count' | 'average' | 'distribution'> | null): ReviewAggregateView =>
@@ -58,8 +66,7 @@ export class ReviewAggregateRepository {
    * and "we have not checked".
    */
   async recompute(key: AggregateKey): Promise<ReviewAggregateView> {
-    const targetField =
-      key.targetType === 'product' ? 'target_product_id' : key.targetType === 'agent' ? 'target_agent_id' : 'target_agency_id';
+    const targetField = TARGET_FIELD[key.targetType];
 
     const rows = await ReviewModel.aggregate<{ _id: number; n: number }>([
       {

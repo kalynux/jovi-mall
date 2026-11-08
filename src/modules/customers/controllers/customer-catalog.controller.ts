@@ -6,9 +6,11 @@ import { recentlyViewedService } from '../services/recently-viewed.service';
 import {
   AddWishlistItemSchema,
   CustomerCatalogListQuerySchema,
+  ListingIdParamSchema,
   ProductIdParamSchema,
   RecordProductViewSchema,
   SavedAmongSchema,
+  WishlistListQuerySchema,
 } from '../validators/customer-catalog.validator';
 
 /**
@@ -35,15 +37,18 @@ function customerIdOf(req: Request): string {
 export class CustomerCatalogController {
   // ── Wishlist ──────────────────────────────────────────────────────────────
 
-  /** GET /api/customer/wishlist — saved products, newest save first. */
+  /**
+   * GET /api/customer/wishlist?kind= — saved products AND service listings, newest save first
+   * (2026-11-08). Each entry carries `kind`; `?kind=product|listing` narrows it to one.
+   */
   static listWishlist = asyncHandler(async (req: Request, res: Response) => {
-    const { page, limit } = CustomerCatalogListQuerySchema.parse(req.query);
-    const { data, meta } = await wishlistService.list(customerIdOf(req), page, limit);
+    const { page, limit, kind } = WishlistListQuerySchema.parse(req.query);
+    const { data, meta } = await wishlistService.list(customerIdOf(req), page, limit, kind);
     sendSuccess(res, data, { meta });
   });
 
   /**
-   * POST /api/customer/wishlist — save a product.
+   * POST /api/customer/wishlist — save a product (`{ productId }`) or a listing (`{ listingId }`).
    *
    * **200, not 201, and idempotent.** Saving something already saved is not an error and not
    * a new resource: from the customer's side "it is saved" was already true, and answering
@@ -51,8 +56,17 @@ export class CustomerCatalogController {
    */
   static addWishlistItem = asyncHandler(async (req: Request, res: Response) => {
     const input = AddWishlistItemSchema.parse(req.body);
-    const entry = await wishlistService.add(customerIdOf(req), input.productId);
+    const entry = input.listingId
+      ? await wishlistService.addListing(customerIdOf(req), input.listingId)
+      : { kind: 'product' as const, ...(await wishlistService.add(customerIdOf(req), input.productId!)) };
     sendSuccess(res, entry, { message: 'Saved to your wishlist.' });
+  });
+
+  /** DELETE /api/customer/wishlist/listings/:listingId — remove a saved listing. 404 if absent. */
+  static removeWishlistListing = asyncHandler(async (req: Request, res: Response) => {
+    const { listingId } = ListingIdParamSchema.parse(req.params);
+    await wishlistService.removeListing(customerIdOf(req), listingId);
+    sendSuccess(res, null, { message: 'Removed from your wishlist.' });
   });
 
   /** DELETE /api/customer/wishlist/:productId — remove a save. 404 if it is not on the list. */
@@ -70,8 +84,11 @@ export class CustomerCatalogController {
    */
   static savedAmong = asyncHandler(async (req: Request, res: Response) => {
     const input = SavedAmongSchema.parse(req.body);
-    const savedProductIds = await wishlistService.savedAmong(customerIdOf(req), input.productIds);
-    sendSuccess(res, { savedProductIds });
+    const [savedProductIds, savedListingIds] = await Promise.all([
+      wishlistService.savedAmong(customerIdOf(req), input.productIds ?? []),
+      wishlistService.savedListingsAmong(customerIdOf(req), input.listingIds ?? []),
+    ]);
+    sendSuccess(res, { savedProductIds, savedListingIds });
   });
 
   // ── Recently viewed ───────────────────────────────────────────────────────

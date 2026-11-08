@@ -1,6 +1,7 @@
 import { ClientSession } from 'mongoose';
 import { UserModel, IUser } from './user.model';
 import { CustomerModel } from '../customers/customer.model';
+import { WishlistItemModel } from '../customers/models/wishlist-item.model';
 import { ChannelConnectionModel } from '../channel-connections/channel-connection.model';
 import { UserPaymentMethodModel } from '../payment-methods/models/user-payment-method.model';
 import { CustomerNotificationModel } from '../notifications/models/customer-notification.model';
@@ -54,6 +55,8 @@ export interface ClosureCounts {
   paymentMethods: number;
   notifications: number;
   vendorRelationships: number;
+  /** Saved products and listings (owner RS-10, 2026-11-08). */
+  savedItems: number;
 }
 
 export class AccountClosureRepository {
@@ -192,6 +195,18 @@ export class AccountClosureRepository {
       { owner_role: 'customer', owner_id: customerId },
       { session },
     ).exec();
+    return result.deletedCount ?? 0;
+  }
+
+  /**
+   * Delete the saved list — products and service listings (owner RS-10, 2026-11-08).
+   *
+   * Not an identifier, but a list of what one person wanted, whose only reader is an account that
+   * can no longer sign in. Before 2026-11-08 nothing deleted it, and the listings plan said
+   * otherwise; this is what makes that sentence true.
+   */
+  async deleteSavedItems(customerId: string, session: ClientSession): Promise<number> {
+    const result = await WishlistItemModel.deleteMany({ customer_id: customerId }, { session }).exec();
     return result.deletedCount ?? 0;
   }
 

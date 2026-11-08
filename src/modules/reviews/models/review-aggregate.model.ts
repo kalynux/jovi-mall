@@ -13,9 +13,10 @@ import { ReviewAuthorRole, REVIEW_AUTHOR_ROLES } from './review.model';
  * Keeping the two axes apart is what lets one delivery review move two aggregates
  * without either collection having to know about the other.
  */
-export type ReviewTargetType = 'product' | 'agent' | 'agency';
+export type ReviewTargetType = 'product' | 'agent' | 'agency' | 'listing';
 
-export const REVIEW_TARGET_TYPES: ReviewTargetType[] = ['product', 'agent', 'agency'];
+/** `listing` since 2026-11-08: a service listing's public rating, from customers only. */
+export const REVIEW_TARGET_TYPES: ReviewTargetType[] = ['product', 'agent', 'agency', 'listing'];
 
 /** The 1–5 histogram, as the storefront's rating breakdown renders it. */
 export interface IReviewRatingDistribution {

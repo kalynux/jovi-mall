@@ -73,27 +73,52 @@ would leak a vendor's catalogue state to anyone who once saved a product.
 
 # Wishlist
 
+> 🆕 **2026-11-08 — the saved list holds service listings too** (LISTING-REVIEWS-SAVES-REFERRALS-PLAN
+> § 3.2, owner RS-1). One "Saved" place, products and listings side by side. Every entry now carries
+> **`kind`**: `"product"` (exactly the shape below) or `"listing"`. Saving a listing reveals no
+> contact, costs nothing, and the business is never told (no count, no notification — RS-2). When a
+> customer closes their account, both kinds are deleted (RS-10).
+
 ## GET /api/customer/wishlist
 
-Saved products, **newest save first**. Paginated (`?page`, `?limit`, max 100).
+Saved items, **newest save first**, both kinds interleaved by when each was saved. Paginated
+(`?page`, `?limit`, max 100). `?kind=product` or `?kind=listing` narrows the list to one kind.
 
 ```json
 {
   "success": true,
-  "data": [ { "productId": "…", "at": "…", "product": { } } ],
+  "data": [
+    { "kind": "product", "productId": "…", "at": "…", "product": { } },
+    { "kind": "listing", "listingId": "…", "at": "…", "listing": { } }
+  ],
   "meta": { "total": 12, "page": 1, "limit": 20, "pages": 1 }
 }
 ```
+
+`listing` is the public listing card (the same shape as `GET /api/public/listings`, see
+`service-listings.md`), or **`null`** when the listing is no longer visible (paused, archived or
+taken down). Render it the way you render `product: null`: "no longer available", with a working
+remove button. Never say why.
+
+⚠ **Branch on `kind`, not on which id is present.** A client written for products only will find
+listing rows (no `productId`) once anyone saves a listing, from the bot as well as the web.
 
 An empty wishlist is `data: []` with `meta.total: 0` — a successful answer, never a 404.
 
 ## POST /api/customer/wishlist
 
-Save a product.
+Save a product **or** a listing — exactly one of the two ids.
 
 ```json
 { "productId": "68a1f0c2e4b0a1d2c3e4f5a6" }
 ```
+
+```json
+{ "listingId": "68b2f0c2e4b0a1d2c3e4f5a7" }
+```
+
+Both, or neither, is a `400 VALIDATION_ERROR`. The answer is the entry with its `kind`. A listing
+must be publicly visible to be saved; otherwise `404 LISTING_NOT_FOUND`.
 
 **Idempotent, and answers `200`.** Saving something already saved is not an error and not a new
 resource — from the customer's side it was already true. Double-tapping a heart must not produce a
@@ -124,20 +149,26 @@ Remove a save.
 Never a `403`. Every query is scoped to the caller, so another customer's row simply is not found;
 a 403 would confirm it exists.
 
+## DELETE /api/customer/wishlist/listings/:listingId
+
+🆕 2026-11-08. Remove a saved listing. Same rules as the product route: `404 WISHLIST_ITEM_NOT_FOUND`
+when it is not on **your** list.
+
 ## POST /api/customer/wishlist/saved-among
 
-Which of these products are saved? One call per rendered grid, rather than one per card.
+Which of these products, or listings, are saved? One call per rendered grid, rather than one per card.
 
 ```json
-{ "productIds": ["68a1…", "68a2…"] }
+{ "productIds": ["68a1…", "68a2…"], "listingIds": ["68b2…"] }
 ```
 
 ```json
-{ "success": true, "data": { "savedProductIds": ["68a1…"] } }
+{ "success": true, "data": { "savedProductIds": ["68a1…"], "savedListingIds": [] } }
 ```
 
-**One to 100 ids per call** — `productIds: []` is a `400 VALIDATION_ERROR`, not an empty result,
-so guard the call rather than firing it for an empty grid. A `POST` because 100 ids is ~2.5 KB of
+Send `productIds`, `listingIds`, or both (2026-11-08). **One to 100 ids per list** — an empty list
+is a `400 VALIDATION_ERROR`, not an empty result, so guard the call rather than firing it for an
+empty grid. Both arrays always come back. A `POST` because 100 ids is ~2.5 KB of
 query string; it reads nothing and writes nothing.
 
 ---

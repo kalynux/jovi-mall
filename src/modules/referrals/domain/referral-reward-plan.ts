@@ -127,3 +127,48 @@ export function agencySharesByParcelValue(
   }
   return shares;
 }
+
+/**
+ * What a partner earns on ONE payment a referred provider made to Wi-Mall (LISTING-REVIEWS-SAVES-
+ * REFERRALS-PLAN § 3.3; owner RS-3, RS-5, RS-6, 2026-11-08). PURE, like `planCommissionRewards`.
+ *
+ *  - Only a `provider` relationship earns here; a seller's `vendor` relationship earns on commission
+ *    and never on what the seller pays for a plan.
+ *  - Judged AT THE PAYMENT (RS-5): the relationship must be inside its period and the partner
+ *    active at `paidAt`, read from the history, so a sweep running late judges the day it was paid.
+ *  - The base is the FULL price paid (RS-6), the whole share; the rate is the provider category's,
+ *    or the partner's own override. Under 1 FCFA after flooring is no reward at all.
+ *
+ * Null whenever nothing is earned. The caller still marks the payment judged.
+ */
+export function planProviderPaymentReward(input: {
+  relationship: PlanRelationship | null;
+  partner: PlanPartner | null;
+  globalTerms: GlobalTerms;
+  pricePaid: number;
+  paidAt: Date;
+}): PlannedReward | null {
+  const { relationship, partner } = input;
+  if (!relationship || !partner || relationship.category !== 'provider') return null;
+  if (relationship.partnerId !== partner.id) return null;
+  // A partner cannot earn on their own payment. Attribution already refuses that; kept as the rule.
+  if (relationship.partnerUserId === relationship.referredUserId) return null;
+  if (!isWithinEarningPeriod(relationship.expiresAt, input.paidAt)) return null;
+  if (!wasPartnerActiveAt(partner.statusHistory, input.paidAt)) return null;
+  if (!(input.pricePaid > 0)) return null;
+
+  const { ratePercent, source } = resolveRate('provider', input.globalTerms, partner.customTerms);
+  const amount = rewardAmount(Math.floor(input.pricePaid), ratePercent);
+  if (amount < 1) return null;
+
+  return {
+    relationshipId: relationship.id,
+    partnerId: partner.id,
+    referredUserId: relationship.referredUserId,
+    category: 'provider',
+    share: { numerator: 1, denominator: 1 },
+    ratePercent,
+    rateSource: source,
+    amount,
+  };
+}

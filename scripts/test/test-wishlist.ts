@@ -24,12 +24,19 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { WishlistService } from '../../src/modules/customers/services/wishlist.service';
-import { hydrateCustomerCatalogEntries } from '../../src/modules/customers/dto/customer-catalog.dto';
+import {
+  hydrateCustomerCatalogEntries,
+  SavedEntryDto,
+  SavedListingEntryDto,
+  SavedProductEntryDto,
+} from '../../src/modules/customers/dto/customer-catalog.dto';
 import {
   AddWishlistItemSchema,
   CustomerCatalogListQuerySchema,
+  ListingIdParamSchema,
   ProductIdParamSchema,
   SavedAmongSchema,
+  WishlistListQuerySchema,
 } from '../../src/modules/customers/validators/customer-catalog.validator';
 import { AppError } from '../../src/core/errors';
 import { ERROR_CODES } from '../../src/core/error-codes';
@@ -64,9 +71,13 @@ async function codeOf(fn: () => Promise<unknown>): Promise<string | null> {
 
 interface Row {
   customer_id: { toString(): string };
-  product_id: { toString(): string };
+  kind?: 'product' | 'listing';
+  product_id?: { toString(): string };
+  listing_id?: { toString(): string };
   created_at: Date;
 }
+
+const idOf = (r: Row): string => String(r.kind === 'listing' ? r.listing_id : r.product_id);
 
 /**
  * An in-memory `wishlist_items`.
@@ -83,7 +94,7 @@ class FakeWishlistRepo {
   async add(customerId: string, productId: string) {
     this.calls.push('add');
     const existing = this.rows.find(
-      (r) => r.customer_id.toString() === customerId && r.product_id.toString() === productId
+      (r) => r.customer_id.toString() === customerId && r.kind !== 'listing' && idOf(r) === productId
     );
     if (existing) return existing; // $setOnInsert: the timestamp does NOT move
     const row: Row = {
@@ -98,14 +109,47 @@ class FakeWishlistRepo {
   async remove(customerId: string, productId: string) {
     const before = this.rows.length;
     this.rows = this.rows.filter(
-      (r) => !(r.customer_id.toString() === customerId && r.product_id.toString() === productId)
+      (r) => !(r.customer_id.toString() === customerId && r.kind !== 'listing' && idOf(r) === productId)
     );
     return this.rows.length < before;
   }
 
-  async listPage(customerId: string, page: number, limit: number) {
+  async addListing(customerId: string, listingId: string) {
+    const existing = this.rows.find(
+      (r) => r.customer_id.toString() === customerId && r.kind === 'listing' && idOf(r) === listingId
+    );
+    if (existing) return existing;
+    const row: Row = {
+      customer_id: { toString: () => customerId },
+      kind: 'listing',
+      listing_id: { toString: () => listingId },
+      created_at: new Date(Date.now() + this.rows.length),
+    };
+    this.rows.push(row);
+    return row;
+  }
+
+  async removeListing(customerId: string, listingId: string) {
+    const before = this.rows.length;
+    this.rows = this.rows.filter(
+      (r) => !(r.customer_id.toString() === customerId && r.kind === 'listing' && idOf(r) === listingId)
+    );
+    return this.rows.length < before;
+  }
+
+  async savedListingIdsAmong(customerId: string, listingIds: string[]) {
+    return new Set(
+      this.rows
+        .filter((r) => r.customer_id.toString() === customerId && r.kind === 'listing')
+        .map(idOf)
+        .filter((id) => listingIds.includes(id))
+    );
+  }
+
+  async listPage(customerId: string, page: number, limit: number, kind?: 'product' | 'listing') {
     const all = this.rows
       .filter((r) => r.customer_id.toString() === customerId)
+      .filter((r) => !kind || (kind === 'listing') === (r.kind === 'listing'))
       .sort((a, b) => b.created_at.getTime() - a.created_at.getTime());
     return { rows: all.slice((page - 1) * limit, page * limit), total: all.length };
   }
@@ -113,8 +157,8 @@ class FakeWishlistRepo {
   async savedIdsAmong(customerId: string, productIds: string[]) {
     return new Set(
       this.rows
-        .filter((r) => r.customer_id.toString() === customerId)
-        .map((r) => r.product_id.toString())
+        .filter((r) => r.customer_id.toString() === customerId && r.kind !== 'listing')
+        .map(idOf)
         .filter((id) => productIds.includes(id))
     );
   }
@@ -132,17 +176,42 @@ class FakeCatalog {
   }
 }
 
+/** The listings read side: only the ids given to it are publicly visible. */
+class FakeListings {
+  public calls = 0;
+  constructor(public visible: Set<string> = new Set()) {}
+  async byIds(ids: string[]) {
+    this.calls++;
+    const data = ids.filter((id) => this.visible.has(id)).map((id) => ({ id, kind: 'listing', title: `Listing ${id}` } as never));
+    return { data, missing: ids.filter((id) => !this.visible.has(id)) };
+  }
+}
+
 const CUSTOMER = 'cust-1';
 const OTHER = 'cust-2';
 const P1 = 'aaaaaaaaaaaaaaaaaaaaaaa1';
 const P2 = 'aaaaaaaaaaaaaaaaaaaaaaa2';
 const P3 = 'aaaaaaaaaaaaaaaaaaaaaaa3';
 
-function harness(publishable: string[] = [P1, P2, P3]) {
+const L1 = 'bbbbbbbbbbbbbbbbbbbbbbb1';
+const L2 = 'bbbbbbbbbbbbbbbbbbbbbbb2';
+
+function harness(publishable: string[] = [P1, P2, P3], visibleListings: string[] = [L1, L2]) {
   const repo = new FakeWishlistRepo();
   const catalog = new FakeCatalog(new Set(publishable));
-  return { repo, catalog, service: new WishlistService(repo as never, catalog as never) };
+  const listings = new FakeListings(new Set(visibleListings));
+  return { repo, catalog, listings, service: new WishlistService(repo as never, catalog as never, listings) };
 }
+
+/** A product entry, narrowed — every product assertion below reads one. */
+const asProduct = (e: SavedEntryDto): SavedProductEntryDto => {
+  if (e.kind !== 'product') throw new Error(`expected a product entry, got ${e.kind}`);
+  return e;
+};
+const asListing = (e: SavedEntryDto): SavedListingEntryDto => {
+  if (e.kind !== 'listing') throw new Error(`expected a listing entry, got ${e.kind}`);
+  return e;
+};
 
 const SRC = join(__dirname, '..', '..', 'src');
 const read = (rel: string): string => readFileSync(join(SRC, rel), 'utf8');
@@ -181,7 +250,7 @@ assert('⚠ re-saving does NOT move the entry to the head — a wishlist is orde
 
   const { data } = await h.service.list(CUSTOMER, 1, 10);
   // P2 was saved last, so it stays first. This is the OPPOSITE of recently-viewed.
-  return data[0].productId === P2 && data[1].productId === P1;
+  return asProduct(data[0]).productId === P2 && asProduct(data[1]).productId === P1;
 });
 
 assert('the add returns the hydrated card, so a client need not re-fetch', async () => {
@@ -218,7 +287,7 @@ assert('⚠ an unpublished product degrades to product: null rather than 500ing 
   h.catalog.publishable.delete(P1); // the vendor archives it
 
   const { data } = await h.service.list(CUSTOMER, 1, 10);
-  const degraded = data.find((e) => e.productId === P1);
+  const degraded = data.map(asProduct).find((e) => e.productId === P1);
   return data.length === 2 && degraded?.product === null;
 });
 
@@ -238,7 +307,7 @@ assert('a degraded entry keeps its productId, so the remove button still works',
   h.catalog.publishable.clear();
 
   const { data } = await h.service.list(CUSTOMER, 1, 10);
-  return data[0].productId === P1 && data[0].product === null;
+  return asProduct(data[0]).productId === P1 && asProduct(data[0]).product === null;
 });
 
 section('Ownership — not found, never forbidden');
@@ -299,7 +368,7 @@ assert('the page boundary splits without repeating or losing a row', async () =>
 
   const first = await h.service.list(CUSTOMER, 1, 2);
   const second = await h.service.list(CUSTOMER, 2, 2);
-  const seen = [...first.data, ...second.data].map((e) => e.productId);
+  const seen = [...first.data, ...second.data].map((e) => asProduct(e).productId);
 
   return first.data.length === 2
     && second.data.length === 1
@@ -348,15 +417,150 @@ assert('page and limit default rather than being required', () => {
   return parsed.page === 1 && parsed.limit === 20;
 });
 
+section('Saved listings — one list, two kinds (2026-11-08, owner RS-1)');
+
+assert('a listing can be saved, and comes back as kind "listing" with its public card', async () => {
+  const h = harness();
+  const entry = await h.service.addListing(CUSTOMER, L1);
+  const { data } = await h.service.list(CUSTOMER, 1, 10);
+  return entry.kind === 'listing' && entry.listingId === L1 && entry.listing !== null
+    && data.length === 1 && asListing(data[0]).listingId === L1 && asListing(data[0]).listing !== null;
+});
+
+assert('saving a listing twice keeps one row (the same upsert rule as products)', async () => {
+  const h = harness();
+  await h.service.addListing(CUSTOMER, L1);
+  await h.service.addListing(CUSTOMER, L1);
+  return h.repo.rows.length === 1;
+});
+
+assert('⚠ a customer can save SEVERAL listings — the defect the partial index swap exists for', async () => {
+  const h = harness();
+  await h.service.addListing(CUSTOMER, L1);
+  await h.service.addListing(CUSTOMER, L2);
+  return h.repo.rows.filter((r) => r.kind === 'listing').length === 2;
+});
+
+assert('products and listings interleave by save time, newest first, in one list', async () => {
+  const h = harness();
+  await h.service.add(CUSTOMER, P1);
+  await h.service.addListing(CUSTOMER, L1);
+  await h.service.add(CUSTOMER, P2);
+  const { data, meta } = await h.service.list(CUSTOMER, 1, 10);
+  return meta.total === 3 && data.map((e) => e.kind).join() === 'product,listing,product'
+    && asProduct(data[0]).productId === P2 && asListing(data[1]).listingId === L1;
+});
+
+assert('kind narrows the list to one kind', async () => {
+  const h = harness();
+  await h.service.add(CUSTOMER, P1);
+  await h.service.addListing(CUSTOMER, L1);
+  const listings = await h.service.list(CUSTOMER, 1, 10, 'listing');
+  const products = await h.service.list(CUSTOMER, 1, 10, 'product');
+  return listings.data.length === 1 && listings.data[0].kind === 'listing'
+    && products.data.length === 1 && products.data[0].kind === 'product';
+});
+
+assert('a listing no longer visible cannot be saved — 404 LISTING_NOT_FOUND, no row', async () => {
+  const h = harness([P1], []);
+  const code = await codeOf(() => h.service.addListing(CUSTOMER, L1));
+  return code === ERROR_CODES.LISTING_NOT_FOUND && h.repo.rows.length === 0;
+});
+
+assert('⚠ a saved listing that is later paused degrades to listing: null, keeping its id', async () => {
+  const h = harness();
+  await h.service.addListing(CUSTOMER, L1);
+  h.listings.visible.delete(L1);
+  const { data, meta } = await h.service.list(CUSTOMER, 1, 10);
+  return meta.total === 1 && asListing(data[0]).listingId === L1 && asListing(data[0]).listing === null;
+});
+
+assert('a list holding only products never asks the listings module anything', async () => {
+  const h = harness();
+  await h.service.add(CUSTOMER, P1);
+  await h.service.list(CUSTOMER, 1, 10);
+  return h.listings.calls === 0;
+});
+
+assert('removing a listing is scoped to its owner: another customer\'s is NOT FOUND', async () => {
+  const h = harness();
+  await h.service.addListing(OTHER, L1);
+  const code = await codeOf(() => h.service.removeListing(CUSTOMER, L1));
+  return code === ERROR_CODES.WISHLIST_ITEM_NOT_FOUND && h.repo.rows.length === 1;
+});
+
+assert('the bot\'s removeAny finds the kind from the id alone, product first', async () => {
+  const h = harness();
+  await h.service.add(CUSTOMER, P1);
+  await h.service.addListing(CUSTOMER, L1);
+  const a = await h.service.removeAny(CUSTOMER, L1);
+  const b = await h.service.removeAny(CUSTOMER, P1);
+  const missing = await codeOf(() => h.service.removeAny(CUSTOMER, P2));
+  return a === 'listing' && b === 'product' && h.repo.rows.length === 0 && missing === ERROR_CODES.WISHLIST_ITEM_NOT_FOUND;
+});
+
+assert('saved-among answers listings separately from products', async () => {
+  const h = harness();
+  await h.service.add(CUSTOMER, P1);
+  await h.service.addListing(CUSTOMER, L1);
+  const listings = await h.service.savedListingsAmong(CUSTOMER, [L1, L2, P1]);
+  const products = await h.service.savedAmong(CUSTOMER, [P1, L1]);
+  return listings.join() === L1 && products.join() === P1;
+});
+
+assert('the add schema takes EXACTLY one of productId and listingId', () =>
+  AddWishlistItemSchema.safeParse({ listingId: L1 }).success
+  && AddWishlistItemSchema.safeParse({ productId: P1 }).success
+  && !AddWishlistItemSchema.safeParse({ productId: P1, listingId: L1 }).success
+  && !AddWishlistItemSchema.safeParse({}).success
+  && !AddWishlistItemSchema.safeParse({ listingId: 'nope' }).success);
+
+assert('saved-among takes product ids, listing ids, or both — never neither', () =>
+  SavedAmongSchema.safeParse({ listingIds: [L1] }).success
+  && SavedAmongSchema.safeParse({ productIds: [P1], listingIds: [L1] }).success
+  && !SavedAmongSchema.safeParse({}).success
+  && !SavedAmongSchema.safeParse({ listingIds: new Array(101).fill(L1) }).success);
+
+assert('the list query accepts kind=product|listing and nothing else; the listing param is 24 hex', () =>
+  WishlistListQuerySchema.parse({ kind: 'listing' }).kind === 'listing'
+  && !WishlistListQuerySchema.safeParse({ kind: 'store' }).success
+  && ListingIdParamSchema.safeParse({ listingId: L1 }).success
+  && !ListingIdParamSchema.safeParse({ listingId: 'x' }).success);
+
 section('Structure — what no fake can see');
 
-assert('⚠ the unique compound index is declared on the model', () =>
-  /index\(\s*\{\s*customer_id:\s*1,\s*product_id:\s*1\s*\}\s*,\s*\{\s*unique:\s*true\s*\}\s*\)/.test(modelSrc));
+assert('⚠ each kind has its OWN unique index, partial on its id — a plain one would collide on a missing product_id', () =>
+  /index\(\s*\{\s*customer_id:\s*1,\s*product_id:\s*1\s*\}\s*,\s*\{\s*unique:\s*true,\s*name:\s*'wishlist_one_product_per_customer',\s*partialFilterExpression:\s*\{\s*product_id:\s*\{\s*\$type:\s*'objectId'\s*\}\s*\}\s*\}/.test(modelSrc)
+  && /index\(\s*\{\s*customer_id:\s*1,\s*listing_id:\s*1\s*\}\s*,\s*\{\s*unique:\s*true,\s*name:\s*'wishlist_one_listing_per_customer',\s*partialFilterExpression:\s*\{\s*listing_id:\s*\{\s*\$type:\s*'objectId'\s*\}\s*\}\s*\}/.test(modelSrc));
 
 assert(
-  '⚠ …AND it is registered as a migration — autoIndex is off in production, so an unregistered unique index is enforced by NOTHING',
-  () => MIGRATIONS.some((m) => m.name === 'migrate:customer-catalog-indexes'),
+  '⚠ …AND both are built by a registered migration — autoIndex is off in production, so an unregistered unique index is enforced by NOTHING',
+  () => MIGRATIONS.some((m) => m.name === 'migrate:customer-catalog-indexes')
+    && MIGRATIONS.some((m) => m.name === 'migrate:wishlist-listing-kind'),
 );
+
+assert('…and the swap runs BEFORE migrate:customer-catalog-indexes, which would otherwise build the old index on a fresh database', () => {
+  const swap = MIGRATIONS.findIndex((m) => m.name === 'migrate:wishlist-listing-kind');
+  const build = MIGRATIONS.findIndex((m) => m.name === 'migrate:customer-catalog-indexes');
+  return swap > -1 && build > -1 && swap < build;
+});
+
+assert('a row written before `kind` existed reads as a product', () =>
+  /kind === 'listing' \? 'listing' : 'product'/.test(modelSrc));
+
+assert('⛔ saving a listing reaches nobody: the service names no notification, lead or event (RS-2)', () => {
+  const serviceSrc = stripComments(read('modules/customers/services/wishlist.service.ts'));
+  return !/eventBus|publish\(|notification|listingLead|LeadRepository/i.test(serviceSrc);
+});
+
+assert('RS-10: both closure paths delete the saved list, through one repository method', () => {
+  const closureRepo = stripComments(read('modules/users/account-closure.repository.ts'));
+  const accountClosure = stripComments(read('modules/users/account-closure.service.ts'));
+  const roleClosure = stripComments(read('modules/role-closure/role-closure.manifest.ts'));
+  return /async deleteSavedItems\([\s\S]{0,200}WishlistItemModel\.deleteMany\(\{\s*customer_id: customerId\s*\},\s*\{\s*session\s*\}/.test(closureRepo)
+    && /deleteSavedItems\(customerId, session\)/.test(accountClosure)
+    && /deleteSavedItems\(customerId, session\)/.test(roleClosure);
+});
 
 assert('the list read has its own index, so one customer\'s page is not a collection scan', () =>
   /index\(\s*\{\s*customer_id:\s*1,\s*created_at:\s*-1\s*\}\s*\)/.test(modelSrc));

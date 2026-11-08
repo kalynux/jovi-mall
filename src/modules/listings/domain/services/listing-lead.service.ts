@@ -349,7 +349,9 @@ export class ListingLeadService {
       this.contacts.readPublishedField(listingId, 'phone'),
       this.contacts.readPublishedField(listingId, 'whatsapp'),
     ]);
-    return callMeNumbers(typeof phone === 'string' ? phone : null, typeof whatsapp === 'string' ? whatsapp : null);
+    // `phone` reads as the list of both numbers (2026-11-08); call-me sends the FIRST, as before.
+    const first = Array.isArray(phone) ? phone[0] : phone;
+    return callMeNumbers(typeof first === 'string' ? first : null, typeof whatsapp === 'string' ? whatsapp : null);
   }
 
   private async customersById(ids: string[]): Promise<Map<string, LeadCustomer>> {

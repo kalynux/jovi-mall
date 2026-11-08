@@ -32,6 +32,12 @@ import {
   revealValueOf,
   shouldSuspendAfterDebit,
 } from '../../src/modules/listings/domain/reveal-rules';
+import { applyContactsPatch, normalisePhones } from '../../src/modules/listings/domain/services/listing-content.mapper';
+import { availableFieldsOf } from '../../src/modules/listings/domain/listing-rules';
+import { LISTING_CONTACT_FIELDS } from '../../src/modules/listings/domain/listing.types';
+import { ListingContactsInputSchema } from '../../src/modules/listings/validators/listing.validator';
+
+const EMPTY_CONTACTS = { whatsapp: null, phone: null, phone2: null, email: null, website: null, socials: [], location: null, video: null };
 import { ListingRevealService } from '../../src/modules/listings/domain/services/listing-reveal.service';
 
 let passed = 0;
@@ -256,7 +262,50 @@ async function main(): Promise<void> {
   assert('values: a location without coordinates is no value (treated as absent)', () =>
     revealValueOf('location', { formatted_address: 'x' }) === null && revealValueOf('socials', []) === null && revealValueOf('phone', '  ') === null);
   assert('fingerprint: one number as WhatsApp on one listing and phone on another is recognisably one', () =>
-    revealFingerprint('whatsapp', { number: '+237 671234531', link: '' }) === revealFingerprint('phone', { number: '237671234531' }));
+    revealFingerprint('whatsapp', { number: '+237 671234531', link: '' }) === revealFingerprint('phone', { number: '237671234531', numbers: ['237671234531'] }));
+
+  // ── A second phone number (2026-11-08, vendor-dashboard request) ──
+  assert('phone2: one stored number reads as { number, numbers: [it] } — the old renderers keep working', () => {
+    const v = revealValueOf('phone', '+237671234531') as { number: string; numbers: string[] };
+    return v.number === '+237671234531' && v.numbers.length === 1 && v.numbers[0] === '+237671234531';
+  });
+  assert('phone2: two numbers are ONE value, first first — one unlock, one charge', () => {
+    const v = revealValueOf('phone', ['+237671234531', '+237699000111']) as { number: string; numbers: string[] };
+    return v.number === '+237671234531' && v.numbers.join() === '+237671234531,+237699000111';
+  });
+  assert('phone2: a one-number fingerprint is EXACTLY what it was before; two join in order', () =>
+    normaliseForFingerprint('phone', { number: '+237 671234531', numbers: ['+237 671234531'] }) === 'tel:237671234531'
+    && normaliseForFingerprint('phone', { number: '+237671234531', numbers: ['+237671234531', '+237699000111'] }) === 'tel:237671234531|tel:237699000111');
+  assert('phone2: a lone second number becomes the first; an equal second number is dropped', () => {
+    const lone = { phone: null as string | null, phone2: '+237699000111' as string | null };
+    normalisePhones(lone);
+    const same = { phone: '+237671234531' as string | null, phone2: '+237 671 23 45 31' as string | null };
+    normalisePhones(same);
+    const two = { phone: '+237671234531' as string | null, phone2: '+237699000111' as string | null };
+    normalisePhones(two);
+    return lone.phone === '+237699000111' && lone.phone2 === null
+      && same.phone === '+237671234531' && same.phone2 === null
+      && two.phone2 === '+237699000111';
+  });
+  assert('phone2: a PATCH clearing the first number keeps the second as the only one', () => {
+    const next = applyContactsPatch({ ...EMPTY_CONTACTS, phone: '+237671234531', phone2: '+237699000111' } as never, { phone: null } as never);
+    return next.phone === '+237699000111' && next.phone2 === null;
+  });
+  assert('phone2: the validator takes an E.164 second number, null clears it, a bad one is refused', () =>
+    ListingContactsInputSchema.safeParse({ phone2: '+237699000111' }).success
+    && ListingContactsInputSchema.safeParse({ phone2: null }).success
+    && !ListingContactsInputSchema.safeParse({ phone2: '699000111' }).success);
+  assert('phone2: the phone button shows when either number is set (the field list is unchanged: 7)', () =>
+    availableFieldsOf({ phone: null, phone2: '+237699000111' }).includes('phone') && LISTING_CONTACT_FIELDS.length === 7);
+  assert('phone2: call-me still sends the FIRST number', () => {
+    const src = code('src/modules/listings/domain/services/listing-lead.service.ts');
+    return src.includes('const first = Array.isArray(phone) ? phone[0] : phone;')
+      && src.includes('callMeNumbers(typeof first === \'string\' ? first : null');
+  });
+  assert('phone2: the repository reads BOTH numbers for the one phone field, never another field', () => {
+    const src = code('src/modules/listings/repositories/listing-contact.repository.ts');
+    return /field === 'phone'\s*\?\s*\{ 'published\.phone': 1, 'published\.phone2': 1 \}/.test(src);
+  });
   assert('fingerprint: sha256 hex, never the value', () => {
     const fp = revealFingerprint('email', { address: 'Hello@Akwa.cm' });
     return /^[0-9a-f]{64}$/.test(fp) && !fp.includes('akwa') && normaliseForFingerprint('email', { address: ' Hello@Akwa.cm ' }) === 'email:hello@akwa.cm';

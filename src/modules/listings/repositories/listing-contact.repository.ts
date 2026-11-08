@@ -105,12 +105,19 @@ export class ListingContactRepository {
    */
   async readPublishedField(listingId: string, field: ListingContactField, session?: ClientSession): Promise<unknown | null> {
     if (!Types.ObjectId.isValid(listingId)) return null;
-    const query = ListingContactModel.findOne(
-      { listing_id: new Types.ObjectId(listingId) },
-      { [`published.${field}`]: 1 },
-    );
+    // `phone` is BOTH numbers (2026-11-08): one field, one charge, one value carrying the list.
+    const projection: Record<string, 1> = field === 'phone'
+      ? { 'published.phone': 1, 'published.phone2': 1 }
+      : { [`published.${field}`]: 1 };
+    const query = ListingContactModel.findOne({ listing_id: new Types.ObjectId(listingId) }, projection);
     if (session) query.session(session);
     const row = await query.lean<{ published?: Record<string, unknown> | null }>();
+    if (field === 'phone') {
+      const numbers = [row?.published?.phone, row?.published?.phone2]
+        .filter((n): n is string => typeof n === 'string' && n.trim().length > 0)
+        .map((n) => n.trim());
+      return numbers.length > 0 ? [...new Set(numbers)] : null;
+    }
     const value = row?.published?.[field];
     if (value === undefined || value === null) return null;
     if (Array.isArray(value) && value.length === 0) return null;

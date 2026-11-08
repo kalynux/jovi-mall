@@ -17,7 +17,7 @@ const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB 
  */
 export const SubmitReviewSchema = z
   .object({
-    subjectType: z.enum(['product', 'delivery']),
+    subjectType: z.enum(['product', 'delivery', 'listing']),
     subjectId: objectId,
     rating: z.number().int().min(1, 'Rating must be between 1 and 5').max(5, 'Rating must be between 1 and 5'),
     title: z.string().trim().min(1).max(120).optional(),
@@ -30,7 +30,7 @@ export type SubmitReviewInputDto = z.infer<typeof SubmitReviewSchema>;
 /** `GET /eligibility` — the "may I write one?" pre-flight. */
 export const ReviewEligibilityQuerySchema = z
   .object({
-    subjectType: z.enum(['product', 'delivery']),
+    subjectType: z.enum(['product', 'delivery', 'listing']),
     subjectId: objectId,
   })
   .strict();
@@ -58,7 +58,7 @@ export const AdminReviewQuerySchema = z
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
     status: z.enum(['published', 'unpublished']).optional(),
-    subjectType: z.enum(['product', 'delivery']).optional(),
+    subjectType: z.enum(['product', 'delivery', 'listing']).optional(),
     authorRole: z.enum(['customer', 'vendor', 'agency']).optional(),
   })
   .strict();
@@ -89,3 +89,5 @@ export const RepublishReviewSchema = z
 export const ReviewIdParamSchema = z.object({ id: objectId });
 
 export const ProductIdParamSchema = z.object({ productId: objectId });
+
+export const ListingIdParamSchema = z.object({ listingId: objectId });

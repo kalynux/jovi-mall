@@ -133,7 +133,8 @@ const distribution = (over: Partial<Record<'1' | '2' | '3' | '4' | '5', number>>
 function main(): void {
   console.log('\n── The vocabulary ─────────────────────────────────────────────────────\n');
 
-  assert('two subject types, and only two', () => REVIEW_SUBJECT_TYPES.join(',') === 'product,delivery');
+  // `listing` since 2026-11-08 (LISTING-REVIEWS-SAVES-REFERRALS-PLAN § 3.1).
+  assert('three subject types, and only three', () => REVIEW_SUBJECT_TYPES.join(',') === 'product,delivery,listing');
 
   assert('three author roles', () => REVIEW_AUTHOR_ROLES.join(',') === 'customer,vendor,agency');
 
@@ -633,6 +634,93 @@ function main(): void {
   assert('publishing a review still does NOT write the live score (Phase 6 D-2 holds)', () => {
     const worker = stripComments(read('modules/agents/workers/agent-trust-recompute.worker.ts'));
     return worker.includes('setTrustSignalsShadow') && !worker.includes("'cod.trust_score'");
+  });
+
+  // ─── Listing reviews (2026-11-08, LISTING-REVIEWS-SAVES-REFERRALS-PLAN § 3.1) ───
+  console.log('\n── Listing reviews (L-27, RS-8, RS-11, RS-12) ─────────────────────────\n');
+
+  const LISTING_ID = '507f1f77bcf86cd7994390aa';
+
+  assert('a listing review moves the LISTING aggregate and nothing else — not the provider, not an agent', () => {
+    const t = targetsOf({ subjectType: 'listing', authorRole: 'customer', listingId: LISTING_ID });
+    return t.length === 1 && t[0].type === 'listing' && t[0].id === LISTING_ID;
+  });
+
+  assert('only a customer may review a listing (L-27); a vendor or an agency may not', () =>
+    roleMayReview('listing', 'customer') && !roleMayReview('listing', 'vendor') && !roleMayReview('listing', 'agency'));
+
+  assert('the aggregate knows the `listing` target, through a total field map', () => {
+    const repo = stripComments(read('modules/reviews/repositories/review-aggregate.repository.ts'));
+    return /listing:\s*'target_listing_id'/.test(repo) && /Record<ReviewTargetType, string>/.test(repo);
+  });
+
+  assert('the review row carries target_listing_id, and its recompute has an index', () => {
+    const model = read('modules/reviews/models/review.model.ts');
+    return /target_listing_id:\s*\{\s*type:\s*Schema\.Types\.ObjectId/.test(model)
+      && /index\(\{\s*target_listing_id:\s*1,\s*author_role:\s*1,\s*status:\s*1\s*\}/.test(model);
+  });
+
+  const eligibility = stripComments(read('modules/reviews/domain/services/review-eligibility.service.ts'));
+  const resolveListing = eligibility.slice(eligibility.indexOf('private async resolveListing'), eligibility.indexOf('private async resolveDelivery'));
+
+  assert('⛔ eligibility is a LEAD on that listing by that customer — the reveal record, not a save or a view', () =>
+    /ListingLeadModel\.exists\(\{\s*customer_id: new Types\.ObjectId\(author\.roleEntityId\),\s*listing_id: new Types\.ObjectId\(listingId\)/.test(resolveListing)
+    && !/Wishlist|RecentlyViewed/.test(resolveListing));
+
+  assert('a listing never past review is NOT FOUND, and lead-less is NOT ELIGIBLE (the two refusals keep their meaning)', () =>
+    /\['live', 'suspended', 'archived'\]\.includes\(listing\.status\)/.test(resolveListing)
+    && /REVIEW_SUBJECT_NOT_FOUND, 404/.test(resolveListing)
+    && /REVIEW_NOT_ELIGIBLE, 422, undefined, \{ subjectType: 'listing' \}/.test(resolveListing));
+
+  assert('an archived listing takes no new review, and says so AFTER the lead check (no oracle for strangers)', () => {
+    const lead = resolveListing.indexOf('REVIEW_NOT_ELIGIBLE');
+    const archived = resolveListing.indexOf("reason: 'listing_archived'");
+    return lead > -1 && archived > lead;
+  });
+
+  const listingReviewSvc = stripComments(read('modules/reviews/services/review.service.ts'));
+  assert('the provider is told on SUBMISSION (RS-8), and never on an administrator\'s republish', () => {
+    const submit = listingReviewSvc.slice(listingReviewSvc.indexOf('async submit('), listingReviewSvc.indexOf('async listMine('));
+    const changeStatus = listingReviewSvc.slice(listingReviewSvc.indexOf('private async changeStatus('));
+    return /publishListingEvent\(LISTING_EVENTS\.REVIEW_PUBLISHED/.test(submit) && !/publishListingEvent/.test(changeStatus);
+  });
+
+  const publicCtl = stripComments(read('modules/reviews/controllers/public-review.controller.ts'));
+  assert('⛔ the public listing reviews read checks the listing is publicly visible first, and answers an empty page otherwise', () => {
+    const body = publicCtl.slice(publicCtl.indexOf('static listForListing'), publicCtl.indexOf('static listForOwnListing'));
+    return /listingRepository\.findPublishableByIds\(\[listingId\]\)/.test(body) && /EMPTY_PAGE/.test(body)
+      && body.indexOf('findPublishableByIds') < body.indexOf('listPublishedForListing');
+  });
+
+  assert('RS-12: the provider read is scoped to THEIR listing (findOwned), any status, and 404s another\'s', () => {
+    const body = publicCtl.slice(publicCtl.indexOf('static listForOwnListing'));
+    return /listingRepository\.findOwned\(listingId, vendorId\)/.test(body) && /LISTING_NOT_FOUND, 404/.test(body)
+      && /req\.auth!\.role_entity\._id\.toString\(\)/.test(body);
+  });
+
+  assert('…and it sits behind the provider-only listings router', () => {
+    const routes = stripComments(read('modules/listings/routes/vendor-listing.routes.ts'));
+    return /requireVendorKind\('provider'\)/.test(routes) && /router\.get\('\/:id\/reviews', PublicReviewController\.listForOwnListing\)/.test(routes);
+  });
+
+  assert('both listing reads return the anonymous public row — no author identity reaches a provider', () =>
+    /data: page\.data\.map\(toPublicReviewDto\)/.test(publicCtl) && !/toAuthorReviewDto|toAdminReviewDto/.test(publicCtl));
+
+  assert('the listing card\'s rating comes from the aggregate, in ONE batched read; the wave-1 seam is gone', () => {
+    const svc = stripComments(read('modules/listings/domain/services/public-listing.service.ts'));
+    return /this\.ratings\.findMany\('listing'/.test(svc) && !/ratingSeam/.test(svc) && /listingRatingOf\(/.test(svc);
+  });
+
+  assert('RS-11: the review notice has no Meta template and is in-window only', () => {
+    const catalog = read('modules/notifications/catalog/notification-catalog.ts');
+    const entry = catalog.slice(catalog.indexOf("'listing.review_published': {"));
+    return /VENDOR_IN_WINDOW_ONLY_SITUATIONS[\s\S]{0,400}'listing\.review_published'/.test(catalog)
+      && /whatsapp: \{ text: \{\} \}/.test(entry.slice(0, 1600));
+  });
+
+  assert('one review is one notice: the idempotency key is the review id', () => {
+    const handler = read('modules/notifications/services/vendor-notification-event-handler.service.ts');
+    return /\$\{situation\}:\$\{p\.reviewId\}/.test(handler);
   });
 
   console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed\n`);

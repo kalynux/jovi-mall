@@ -4,9 +4,9 @@ import {
   IEarningsLedger,
   EarningsLedgerEntryType,
   EarningsLedgerReasonCode,
+  EarningsLedgerSourceType,
 } from '../models/earnings-ledger.model';
 import { EarningsOwnerType, isPlatformOwnerType } from '../models/earnings-account.model';
-import { EarningsSourceType } from '../models/earnings-allocation.model';
 
 export interface CreateLedgerInput {
   account_id: Types.ObjectId;
@@ -16,9 +16,11 @@ export interface CreateLedgerInput {
   amount: number;
   pending_after: number;
   available_after: number;
-  source_type: EarningsSourceType;
+  /** A billing source (`plan_purchase` | `credit_topup`) only on a referral reward (2026-11-08). */
+  source_type: EarningsLedgerSourceType;
   source_id: string;
-  allocation_id: Types.ObjectId;
+  /** Null only with a billing source — see `LEDGER_SOURCES_WITHOUT_ALLOCATION`. */
+  allocation_id: Types.ObjectId | null;
   reason_code: EarningsLedgerReasonCode;
 }
 

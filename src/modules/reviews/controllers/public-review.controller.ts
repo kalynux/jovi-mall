@@ -1,9 +1,31 @@
 import { Request, Response } from 'express';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 import { reviewService } from '../services/review.service';
 import { reviewAggregateRepository } from '../repositories/review-aggregate.repository';
 import { toPublicReviewDto, toRatingBreakdownDto } from '../dto/review.dto';
-import { ProductIdParamSchema, PublicReviewQuerySchema } from '../validators/review.validator';
+import { ListingIdParamSchema, ProductIdParamSchema, PublicReviewQuerySchema } from '../validators/review.validator';
+import { listingRepository } from '../../listings/repositories/listing.repository';
+import { ReviewPage } from '../repositories/review.repository';
+import { ReviewAggregateView } from '../repositories/review-aggregate.repository';
+
+/** The list body every review reader answers: rows, page meta, and the breakdown in `meta.rating`. */
+function reviewListBody(page: ReviewPage, aggregate: ReviewAggregateView) {
+  return {
+    success: true,
+    data: page.data.map(toPublicReviewDto),
+    meta: {
+      total: page.meta.total,
+      page: page.meta.page,
+      limit: page.meta.limit,
+      totalPages: page.meta.pages,
+      rating: toRatingBreakdownDto(aggregate),
+    },
+  };
+}
+
+const EMPTY_PAGE = (page: number, limit: number): ReviewPage => ({ data: [], meta: { total: 0, page, limit, pages: 0 } });
 
 /**
  * The storefront's review reader — unauthenticated, like every other `/api/public`
@@ -48,16 +70,55 @@ export class PublicReviewController {
       reviewAggregateRepository.find({ targetType: 'product', targetId: productId, authorRole: 'customer' }),
     ]);
 
-    cacheable(res).json({
-      success: true,
-      data: page.data.map(toPublicReviewDto),
-      meta: {
-        total: page.meta.total,
-        page: page.meta.page,
-        limit: page.meta.limit,
-        totalPages: page.meta.pages,
-        rating: toRatingBreakdownDto(aggregate),
-      },
-    });
+    cacheable(res).json(reviewListBody(page, aggregate));
+  });
+
+  /**
+   * GET /api/public/listings/:listingId/reviews (2026-11-08)
+   *
+   * A service listing's published reviews, newest first, with `meta.rating`. Only for a listing
+   * the public can see: a paused or archived one answers the EMPTY page, never a 404 and never
+   * its reviews — the route must not tell a stranger that a listing exists, or that it was paused.
+   * Rows carry no author identity (`toPublicReviewDto`), as for products.
+   */
+  static listForListing = asyncHandler(async (req: Request, res: Response) => {
+    const { listingId } = ListingIdParamSchema.parse(req.params);
+    const query = PublicReviewQuerySchema.parse(req.query);
+
+    const [visible] = await listingRepository.findPublishableByIds([listingId]);
+    if (!visible) {
+      cacheable(res).json(reviewListBody(EMPTY_PAGE(query.page, query.limit), { count: 0, average: 0, distribution: { '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 } }));
+      return;
+    }
+
+    const [page, aggregate] = await Promise.all([
+      reviewService.listPublishedForListing(listingId, query.page, query.limit),
+      reviewAggregateRepository.find({ targetType: 'listing', targetId: listingId, authorRole: 'customer' }),
+    ]);
+    cacheable(res).json(reviewListBody(page, aggregate));
+  });
+
+  /**
+   * GET /api/vendor/listings/:id/reviews — the PROVIDER's own listing (owner RS-12, 2026-11-08).
+   *
+   * Mounted on the provider router (`requireRole(['vendor'])` + `requireVendorKind('provider')`).
+   * Their own listing in ANY status, paused and archived included — the reviews exist whether or
+   * not the public can see them. Another vendor's listing is a 404. The same anonymous rows the
+   * public sees: a provider learns what was said, never who said it (they reply nowhere, RS-8).
+   */
+  static listForOwnListing = asyncHandler(async (req: Request, res: Response) => {
+    const { id } = req.params as { id: string };
+    const { listingId } = ListingIdParamSchema.parse({ listingId: id });
+    const query = PublicReviewQuerySchema.parse(req.query);
+    const vendorId = req.auth!.role_entity._id.toString();
+
+    const owned = await listingRepository.findOwned(listingId, vendorId);
+    if (!owned) throw createAppError(ERROR_CODES.LISTING_NOT_FOUND, 404, 'Listing not found');
+
+    const [page, aggregate] = await Promise.all([
+      reviewService.listPublishedForListing(listingId, query.page, query.limit),
+      reviewAggregateRepository.find({ targetType: 'listing', targetId: listingId, authorRole: 'customer' }),
+    ]);
+    res.json(reviewListBody(page, aggregate));
   });
 }

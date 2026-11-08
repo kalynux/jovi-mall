@@ -4,6 +4,8 @@ import { ERROR_CODES } from '../../../../core/error-codes';
 import { OrderModel } from '../../../orders/order.model';
 import { ShipmentModel } from '../../../shipments/shipment.model';
 import { ProductModel } from '../../../catalog/models/product.model';
+import { ListingModel } from '../../../listings/models/listing.model';
+import { ListingLeadModel } from '../../../listings/models/listing-lead.model';
 import { ReviewAuthorRole, ReviewSubjectType } from '../../models/review.model';
 import { roleMayReview } from '../review-targets';
 
@@ -27,6 +29,8 @@ export interface ReviewEligibility {
   productId: string | null;
   agentId: string | null;
   agencyId: string | null;
+  /** Listing reviews (2026-11-08): the listing, which is subject and target at once. */
+  listingId?: string | null;
   vendorId: string | null;
 }
 
@@ -62,9 +66,9 @@ export class ReviewEligibilityService {
       });
     }
 
-    return subjectType === 'product'
-      ? await this.resolveProduct(author, subjectId)
-      : await this.resolveDelivery(author, subjectId);
+    if (subjectType === 'product') return await this.resolveProduct(author, subjectId);
+    if (subjectType === 'listing') return await this.resolveListing(author, subjectId);
+    return await this.resolveDelivery(author, subjectId);
   }
 
   /**
@@ -114,6 +118,53 @@ export class ReviewEligibilityService {
       // The seller as recorded on the ORDER, not on the product. A product may change
       // hands or be re-owned; the sale it was reviewed for did not.
       vendorId: order.vendor_id?.toString() ?? null,
+    };
+  }
+
+  /**
+   * A listing review is earned by a **lead** (owner L-27, 2026-10-19): the customer unlocked at
+   * least one of the business's contacts, in any window, so they actually reached it. A save, a
+   * view or a search result is not a lead and earns nothing. The provider can never review their
+   * own listing: a lead is opened only by a customer's reveal.
+   *
+   * The two refusals keep their meaning. A listing that does not exist, or was never past review
+   * (draft, pending, rejected — no customer can have seen it), is `REVIEW_SUBJECT_NOT_FOUND`, the
+   * same answer whether or not it exists. A live or paused listing without this customer's lead
+   * is `REVIEW_NOT_ELIGIBLE`.
+   *
+   * ⚠ An ARCHIVED listing (the provider removed it, or closed their account) takes no NEW review —
+   * `REVIEW_SUBJECT_NOT_REVIEWABLE`, reason `listing_archived` — and keeps the ones it has (plan
+   * § 3.1). A paused one does take reviews: the customer did contact the business, and a pause for
+   * credits says nothing about how it served them. (Stated default, 2026-11-08.)
+   */
+  private async resolveListing(author: ReviewAuthor, listingId: string): Promise<ReviewEligibility> {
+    if (author.role !== 'customer') {
+      throw createAppError(ERROR_CODES.REVIEW_ROLE_NOT_ALLOWED, 400);
+    }
+
+    const listing = await ListingModel.findById(listingId, { _id: 1, vendor_id: 1, status: 1 }).lean();
+    if (!listing || !['live', 'suspended', 'archived'].includes(listing.status)) {
+      throw createAppError(ERROR_CODES.REVIEW_SUBJECT_NOT_FOUND, 404);
+    }
+
+    const lead = await ListingLeadModel.exists({
+      customer_id: new Types.ObjectId(author.roleEntityId),
+      listing_id: new Types.ObjectId(listingId),
+    });
+    if (!lead) throw createAppError(ERROR_CODES.REVIEW_NOT_ELIGIBLE, 422, undefined, { subjectType: 'listing' });
+
+    if (listing.status === 'archived') {
+      throw createAppError(ERROR_CODES.REVIEW_SUBJECT_NOT_REVIEWABLE, 422, undefined, { reason: 'listing_archived' });
+    }
+
+    return {
+      orderId: null,
+      shipmentId: null,
+      productId: null,
+      agentId: null,
+      agencyId: null,
+      listingId,
+      vendorId: listing.vendor_id?.toString() ?? null,
     };
   }
 

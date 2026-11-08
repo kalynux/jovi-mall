@@ -118,7 +118,14 @@ export interface ListingVideoLink {
 /** The SENSITIVE contact set. Stored only in `listing_contacts`, never indexed (L-6). */
 export interface ListingContactSet {
   whatsapp: string | null;   // E.164
-  phone: string | null;      // E.164
+  phone: string | null;      // E.164 — the FIRST number; call-me sends this one
+  /**
+   * A second phone number (2026-11-08): many providers hold an MTN and an Orange or Camtel line.
+   * E.164, never equal to `phone`, and only ever set beside it (`applyContactsPatch` promotes a
+   * lone second number to first). Unlocked TOGETHER with `phone`: one field, one charge, so the
+   * seven-field bound on what one customer can cost a provider is unchanged.
+   */
+  phone2?: string | null;    // E.164
   email: string | null;
   website: string | null;
   socials: ListingSocialLink[];
@@ -155,6 +162,12 @@ export const LISTING_EVENTS = Object.freeze({
   SUSPENDED: 'listing.suspended',
   RESUMED: 'listing.resumed',
   VIDEO_UNAVAILABLE: 'listing.video_unavailable',
+  /**
+   * A customer's review of the listing went public (2026-11-08, owner RS-8 / RS-11). Published by
+   * the REVIEWS module on submission, never on an administrator's republish. Payload adds
+   * `{ reviewId, rating }`.
+   */
+  REVIEW_PUBLISHED: 'listing.review_published',
 } as const);
 
 /** Length rules judged at SUBMIT (a draft may be saved half-written). */

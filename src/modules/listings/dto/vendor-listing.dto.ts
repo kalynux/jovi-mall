@@ -34,6 +34,8 @@ export interface VendorListingContentDto {
 export interface VendorListingContactsDto {
   whatsapp: string | null;
   phone: string | null;
+  /** The second phone number (2026-11-08), or null. Unlocked together with `phone`. */
+  phone2: string | null;
   email: string | null;
   website: string | null;
   socials: Array<{ network: string; url: string }>;
@@ -147,6 +149,7 @@ export function toVendorContactsDto(set: ListingContactSetDoc | null): VendorLis
   return {
     whatsapp: set.whatsapp ?? null,
     phone: set.phone ?? null,
+    phone2: set.phone2 ?? null,
     email: set.email ?? null,
     website: set.website ?? null,
     socials: (set.socials ?? []).map((s) => ({ network: s.network, url: s.url })),

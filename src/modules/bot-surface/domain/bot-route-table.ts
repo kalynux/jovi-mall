@@ -347,7 +347,7 @@ export const BOT_ROUTES: readonly BotRouteSpec[] = Object.freeze([
     // ── Wishlist and recently viewed ─────────────────────────────────────────
     { tool: 'wishlist_list', method: 'POST', path: '/wishlist/list', mutating: false, requiresCustomerRole: true },
     { tool: 'wishlist_add', method: 'POST', path: '/wishlist', mutating: true, requiresCustomerRole: true },
-    { tool: 'wishlist_remove', method: 'DELETE', path: '/wishlist/:productId', mutating: true, requiresCustomerRole: true },
+    { tool: 'wishlist_remove', method: 'DELETE', path: '/wishlist/:itemId', mutating: true, requiresCustomerRole: true },
     // Naturally idempotent — re-viewing moves the entry to the head rather than adding a
     // second one — but it WRITES, and a read-only window must not accept it.
     { tool: 'recently_viewed_record', method: 'POST', path: '/recently-viewed', mutating: true, requiresCustomerRole: true },

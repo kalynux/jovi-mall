@@ -39,6 +39,8 @@ export interface IListingVideoDoc {
 export interface IListingContactSetDoc {
   whatsapp: string | null;
   phone: string | null;
+  /** The second phone number (2026-11-08). See `ListingContactSet.phone2`. */
+  phone2?: string | null;
   email: string | null;
   website: string | null;
   socials: IListingSocialLinkDoc[];
@@ -76,6 +78,7 @@ const ContactSetSchema = new Schema<IListingContactSetDoc>(
   {
     whatsapp: { type: String, default: null, trim: true },
     phone: { type: String, default: null, trim: true },
+    phone2: { type: String, default: null, trim: true },
     email: { type: String, default: null, trim: true, lowercase: true },
     website: { type: String, default: null, trim: true, maxlength: 500 },
     socials: {

@@ -12,6 +12,7 @@
  * middleware, the auth service and the tests can share it without a cycle.
  */
 import { DEFAULT_LISTING_SETTINGS } from '../../listings/domain/listing.types';
+import { DEFAULT_DIAL_COUNTRY, dialCountryOfNumber } from '../../../core/validation/dial-codes';
 
 export const VENDOR_KINDS = ['seller', 'provider'] as const;
 export type VendorKind = (typeof VENDOR_KINDS)[number];
@@ -48,10 +49,26 @@ export function vendorKindForRole(role: string | undefined, roleEntity: unknown)
  * The kind is written explicitly for sellers too, so a row created from today on is never
  * ambiguous; only pre-2026-10-19 rows lack it.
  */
-export function newVendorKindFields(kind: VendorKind): Record<string, unknown> {
+export function newVendorKindFields(kind: VendorKind, signUpPhone?: string | null): Record<string, unknown> {
   return kind === 'provider'
-    ? { kind: 'provider', onboarding_step: 0, listing_settings: { ...DEFAULT_LISTING_SETTINGS } }
+    ? {
+      kind: 'provider',
+      onboarding_step: 0,
+      listing_settings: { ...DEFAULT_LISTING_SETTINGS },
+      country: providerCountryOf(signUpPhone),
+    }
     : { kind: 'seller' };
+}
+
+/**
+ * A PROVIDER's country, set at registration (2026-11-08). A seller chooses it in onboarding
+ * Step 1; a provider starts with onboarding complete and never sees that step, so without this
+ * their country stayed null for good. It is the sign-up phone's country, by the platform's own
+ * dial-code table (`+237…` → `CM`), with Cameroon when the number matches nothing. Country is
+ * set-once (`assertCountryUnchangedOrFirstSet`), so this is the value the provider keeps.
+ */
+export function providerCountryOf(signUpPhone: string | null | undefined): string {
+  return dialCountryOfNumber(signUpPhone) ?? DEFAULT_DIAL_COUNTRY;
 }
 
 /** Mongo filter for sellers that is correct for vendors with no `kind` at all. */

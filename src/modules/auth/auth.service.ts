@@ -20,6 +20,7 @@ import { IUser } from '../users/user.model';
 import { EMAIL_VERIFY_DB, getRedisClient } from '../../infra/redis/redis.factory';
 import { MailService } from '../mail/mail.service';
 import { referralAttributionService } from '../referrals/services/referral-attribution.service';
+import { referredCategoryOf } from '../referrals/domain/referral-rules';
 import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
 import { getJwtRefreshSecret } from '../../config/secrets.config';
@@ -277,7 +278,7 @@ export class AuthService {
         roleEntity = await this.vendorRepo.create({
           user_id: user._id, display_name: input.name,
           email: input.email, phone: input.phone, email_verified: false, phone_verified: false,
-          ...newVendorKindFields(kind),
+          ...newVendorKindFields(kind, input.phone),
         });
         // The business name lives on the Store (source of truth) — provision it now.
         // A PROVIDER gets no Store (L-2): it is the store page that would publish their
@@ -313,7 +314,8 @@ export class AuthService {
     if (input.referral_code) {
       await referralAttributionService.attach({
         userId: String(user._id),
-        category: role,
+        // A provider vendor is referred as `provider` (2026-11-08, RS-3); the kind is fixed here.
+        category: referredCategoryOf(role, input.vendorKind),
         code: input.referral_code,
         channel: 'web',
       });
@@ -526,7 +528,7 @@ export class AuthService {
           user_id: user._id, display_name: input.name || undefined,
           email: user.login_email, phone: user.login_phone,
           email_verified: false, phone_verified: false,
-          ...newVendorKindFields(kind),
+          ...newVendorKindFields(kind, user.login_phone),
         });
         // The business name lives on the Store (source of truth) — provision it now.
         // Not for a provider: no Store (L-2), see `register`.

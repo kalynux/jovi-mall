@@ -383,7 +383,11 @@ export interface VendorSituationMessages extends Omit<SituationMessages, 'whatsa
  * mechanism stays for the next situation whose template is not approved yet — the boot check
  * refuses a template-less situation that is not listed here.
  */
-export const VENDOR_IN_WINDOW_ONLY_SITUATIONS: ReadonlySet<NotificationType> = new Set<NotificationType>([]);
+export const VENDOR_IN_WINDOW_ONLY_SITUATIONS: ReadonlySet<NotificationType> = new Set<NotificationType>([
+    // Owner RS-11 (2026-11-08): no Meta template for a review notice. Inside the 24-hour window it
+    // goes by WhatsApp text; outside it, in-app, push and email still carry it.
+    'listing.review_published',
+]);
 
 export const NOTIFICATION_CATALOG: Record<NotificationType, VendorSituationMessages> = {
     'order.created': {
@@ -1181,6 +1185,21 @@ export const NOTIFICATION_CATALOG: Record<NotificationType, VendorSituationMessa
             text: {},
             template: { name: 'vendor_listing_video_unavailable', bodyParams: ['{{listingTitle}}'] }
         },
+        button: LISTING_BUTTON
+    },
+
+    // A customer's review of a provider's listing went public (2026-11-08, owner RS-8 / RS-11).
+    // In-window only on WhatsApp — see VENDOR_IN_WINDOW_ONLY_SITUATIONS. The provider reads the
+    // review on the listing's page in the dashboard (RS-12); there is no reply (RS-8).
+    'listing.review_published': {
+        base: {
+            en: { subject: 'New review', body: 'A customer rated {{listingTitle}} {{rating}} out of 5. Open the listing to read the review.' },
+            fr: { subject: 'Nouvel avis', body: 'Un client a noté {{listingTitle}} {{rating}} sur 5. Ouvrez l\'annonce pour lire son avis.' },
+            pt: { subject: 'Nova avaliação', body: 'Um cliente avaliou {{listingTitle}} com {{rating}} de 5. Abra o anúncio para ler a avaliação.' },
+            es: { subject: 'Nueva reseña', body: 'Un cliente valoró {{listingTitle}} con {{rating}} de 5. Abre el anuncio para leer la reseña.' },
+            ar: { subject: 'تقييم جديد', body: 'قيّم أحد العملاء {{listingTitle}} بـ {{rating}} من 5. افتح الإعلان لقراءة التقييم.' }
+        },
+        whatsapp: { text: {} },
         button: LISTING_BUTTON
     }
 };

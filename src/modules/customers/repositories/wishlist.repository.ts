@@ -45,13 +45,41 @@ export class WishlistRepository {
     return result.deletedCount > 0;
   }
 
-  /** One page of a customer's saves, newest first, served by the `(customer_id, created_at)` index. */
+  /**
+   * Save a service listing. Idempotent, by the same upsert against its own partial unique index
+   * (`wishlist_one_listing_per_customer`), and for the same reasons as `add`. `kind` is in the
+   * filter so the upsert writes it on insert.
+   */
+  async addListing(customerId: string, listingId: string): Promise<IWishlistItem> {
+    const now = new Date();
+    return (await WishlistItemModel.findOneAndUpdate(
+      { customer_id: toId(customerId), listing_id: toId(listingId), kind: 'listing' },
+      { $setOnInsert: { created_at: now } },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    ).exec()) as IWishlistItem;
+  }
+
+  /** Remove a saved listing. Returns whether a row was there. */
+  async removeListing(customerId: string, listingId: string): Promise<boolean> {
+    const result = await WishlistItemModel.deleteOne({
+      customer_id: toId(customerId),
+      listing_id: toId(listingId),
+    }).exec();
+    return result.deletedCount > 0;
+  }
+
+  /**
+   * One page of a customer's saves, newest first, served by the `(customer_id, created_at)` index.
+   * `kind` narrows it to one kind; absent, both kinds come back interleaved by save time. A row
+   * written before `kind` existed is a product, which is why the product filter is `$ne`.
+   */
   async listPage(
     customerId: string,
     page: number,
-    limit: number
+    limit: number,
+    kind?: 'product' | 'listing'
   ): Promise<{ rows: IWishlistItem[]; total: number }> {
-    const filter = { customer_id: toId(customerId) };
+    const filter = { customer_id: toId(customerId), ...kindFilter(kind) };
     const [rows, total] = await Promise.all([
       WishlistItemModel.find(filter)
         .sort({ created_at: -1, _id: -1 })
@@ -78,8 +106,26 @@ export class WishlistRepository {
       { product_id: 1, _id: 0 }
     ).exec();
 
-    return new Set(rows.map((r) => r.product_id.toString()));
+    return new Set(rows.map((r) => String(r.product_id)));
   }
+
+  /** Which of these listings this customer has saved — the listing grid's hearts. */
+  async savedListingIdsAmong(customerId: string, listingIds: string[]): Promise<Set<string>> {
+    if (listingIds.length === 0) return new Set();
+
+    const rows = await WishlistItemModel.find(
+      { customer_id: toId(customerId), listing_id: { $in: listingIds.map(toId) } },
+      { listing_id: 1, _id: 0 }
+    ).exec();
+
+    return new Set(rows.map((r) => String(r.listing_id)));
+  }
+}
+
+function kindFilter(kind?: 'product' | 'listing'): Record<string, unknown> {
+  if (kind === 'listing') return { kind: 'listing' };
+  if (kind === 'product') return { kind: { $ne: 'listing' } };
+  return {};
 }
 
 /**

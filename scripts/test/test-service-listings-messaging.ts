@@ -36,6 +36,7 @@ import {
   listingConsentActionId,
   listingRevealActionId,
   listingShowActionId,
+  listingSaveActionId,
   parseBotActionId,
   parseListingConsentArgument,
   parseListingRevealArgument,
@@ -48,7 +49,7 @@ import {
   listingStopToken,
   renderListingMessageButton,
 } from '../../src/modules/notifications/catalog/listing-message-catalog';
-import { NOTIFICATION_CATALOG } from '../../src/modules/notifications/catalog/notification-catalog';
+import { NOTIFICATION_CATALOG, VENDOR_IN_WINDOW_ONLY_SITUATIONS } from '../../src/modules/notifications/catalog/notification-catalog';
 import { LISTING_SITUATIONS } from '../../src/modules/notifications/services/vendor-notification-event-handler.service';
 
 let passed = 0;
@@ -401,9 +402,19 @@ async function main(): Promise<void> {
   assert('the opt-out quick reply in relayed messages IS the lc:<vendorId>:n token', () => listingStopToken(VENDOR) === listingConsentActionId(VENDOR, false));
 
   const card = listingCardIntent({ id, title: 'Plumbing', companyName: 'Akwa Plumbers', city: 'Douala', area: 'Akwa', availableFields: ['phone', 'video', 'whatsapp'] }, 'en') as unknown as { kind: string; options: Array<{ id: string; label: string }>; text: string };
-  assert('a card is a choice with one row per AVAILABLE field, in the plan\'s order, carrying names only', () =>
-    card.kind === 'choice' && card.options.map((o) => o.id).join() === [listingRevealActionId(id, 'whatsapp'), listingRevealActionId(id, 'phone'), listingRevealActionId(id, 'video')].join()
+  assert('a card is a choice with one row per AVAILABLE field, in the plan\'s order, carrying names only — then the Save row (lv:)', () =>
+    card.kind === 'choice' && card.options.map((o) => o.id).join() === [listingRevealActionId(id, 'whatsapp'), listingRevealActionId(id, 'phone'), listingRevealActionId(id, 'video'), listingSaveActionId(id)].join()
     && card.text.includes('first name and part of your number'));
+  const bare = listingCardIntent({ id, title: 't', companyName: 'c', city: 'x', area: 'y', availableFields: [] }, 'en') as unknown as { kind: string; options: Array<{ id: string }>; text: string };
+  assert('a listing with no contact still offers Save, and says it has no contact to show', () =>
+    bare.kind === 'choice' && bare.options.map((o) => o.id).join() === listingSaveActionId(id) && bare.text.includes('no contact detail'));
+  assert('all seven contacts plus Save fit a WhatsApp list (≤ 10 rows)', () =>
+    (listingCardIntent({ id, title: 't', companyName: 'c', city: 'x', area: 'y', availableFields: [...LISTING_CONTACT_FIELDS] }, 'en') as unknown as { options: unknown[] }).options.length <= 10);
+  assert('lv:<listingId> is 27 bytes and parses back to the listing id', () =>
+    Buffer.byteLength(listingSaveActionId(id)) === 27 && parseListingShowArgument(listingSaveActionId(id).slice(3)) === id);
+  const rated = listingCardIntent({ id, title: 't', companyName: 'c', city: 'x', area: 'y', availableFields: ['phone'], rating: { average: 4.25, count: 3 } }, 'en') as unknown as { text: string };
+  assert('a rated listing shows its stars and count on the card; an unrated one shows no rating line', () =>
+    rated.text.includes('★ 4.3 · 3 reviews') && !card.text.includes('★'));
   assert('every row label fits WhatsApp\'s 24-character list title, in every language', () =>
     ['en', 'fr', 'pt', 'es', 'ar'].every((lang) => (listingCardIntent({ id, title: 't', companyName: 'c', city: 'x', area: 'y', availableFields: [...LISTING_CONTACT_FIELDS] }, lang) as unknown as { options: Array<{ label: string }> })
       .options.every((o) => [...o.label].length <= 24)));
@@ -414,6 +425,12 @@ async function main(): Promise<void> {
     && loc.parts[2].options?.map((o) => o.id).join() === [listingConsentActionId(VENDOR, true), listingConsentActionId(VENDOR, false)].join());
   const wa = revealReplyIntent({ listingId: id, vendorId: VENDOR, businessName: 'Akwa Plumbers', field: 'whatsapp', value: { number: '+237671234531', link: 'https://wa.me/237671234531' }, hasVideo: false, videoAlreadyRevealed: false, askConsent: false }, 'fr') as unknown as { kind: string; url: string };
   assert('a WhatsApp reveal is a link to wa.me; no opt-in question when not asked', () => wa.kind === 'link' && wa.url === 'https://wa.me/237671234531');
+  // A second phone number (2026-11-08): one unlock shows both, in every language.
+  const twoPhones = (lang: string) => revealReplyIntent({ listingId: id, vendorId: VENDOR, businessName: 'Akwa Plumbers', field: 'phone', value: { number: '+237671234531', numbers: ['+237671234531', '+237699000111'] }, hasVideo: false, videoAlreadyRevealed: false, askConsent: false }, lang) as unknown as { kind: string; text: string };
+  const onePhone = revealReplyIntent({ listingId: id, vendorId: VENDOR, businessName: 'Akwa Plumbers', field: 'phone', value: { number: '+237671234531' }, hasVideo: false, videoAlreadyRevealed: false, askConsent: false }, 'en') as unknown as { text: string };
+  assert('a phone reveal with two numbers shows BOTH in one message, in every language; one number reads as before', () =>
+    ['en', 'fr', 'pt', 'es', 'ar'].every((lang) => { const r = twoPhones(lang); return r.kind === 'text' && r.text.includes('+237671234531') && r.text.includes('+237699000111'); })
+    && onePhone.text === 'Phone number of Akwa Plumbers: +237671234531');
 
   // ─── § 7 ───────────────────────────────────────────────────────────────────
   console.log('\n§ 7 catalogue, templates and wiring');
@@ -433,12 +450,16 @@ async function main(): Promise<void> {
     && LISTING_MESSAGE_CATALOG['listing.provider_message'].template === null);
   assert('the opt-out label fits the 20-character quick-reply limit in every language', () =>
     Object.values(LISTING_STOP_LABEL).every((l) => [...l].length <= 20));
-  assert('the five provider situations are catalogued, each with a vendor_listing_* template', () =>
-    [...LISTING_SITUATIONS].every((s) => (NOTIFICATION_CATALOG[s].whatsapp.template?.name ?? '').startsWith('vendor_listing_'))
-    && LISTING_SITUATIONS.size === 5);
+  // Six since 2026-11-08: the review notice has NO template, by owner decision RS-11.
+  assert('the six provider situations are catalogued: five with a vendor_listing_* template, the review notice in-window only', () =>
+    [...LISTING_SITUATIONS].filter((s) => s !== 'listing.review_published')
+      .every((s) => (NOTIFICATION_CATALOG[s].whatsapp.template?.name ?? '').startsWith('vendor_listing_'))
+    && LISTING_SITUATIONS.size === 6
+    && NOTIFICATION_CATALOG['listing.review_published'].whatsapp.template === undefined
+    && VENDOR_IN_WINDOW_ONLY_SITUATIONS.has('listing.review_published'));
   const consumer = code('src/modules/notifications/vendor-notification-event-consumer.ts');
-  assert('the vendor consumer subscribes the five listing events (and not listing.submitted)', () =>
-    ['listing.approved', 'listing.rejected', 'listing.suspended', 'listing.resumed', 'listing.video_unavailable'].every((e) => consumer.includes(`'${e}'`))
+  assert('the vendor consumer subscribes the six listing events (and not listing.submitted)', () =>
+    ['listing.approved', 'listing.rejected', 'listing.suspended', 'listing.resumed', 'listing.video_unavailable', 'listing.review_published'].every((e) => consumer.includes(`'${e}'`))
     && !consumer.includes("'listing.submitted'"));
   const leadRoutes = code('src/modules/listings/routes/vendor-lead.routes.ts');
   assert('⛔ the lead router is provider-only at router level and carries the four routes', () =>

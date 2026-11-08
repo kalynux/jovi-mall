@@ -57,6 +57,9 @@ const ReferralSettingsSchema = new Schema<IReferralSettings>(
       vendor: { type: CategoryTermsSchema, required: true, default: () => ({}) },
       customer: { type: CategoryTermsSchema, required: true, default: () => ({}) },
       agency: { type: CategoryTermsSchema, required: true, default: () => ({}) },
+      // 2026-11-08 (RS-3). The live document predates it, so `ReferralSettingsService.get` fills
+      // the defaults for a missing category rather than trusting the stored shape.
+      provider: { type: CategoryTermsSchema, required: true, default: () => ({}) },
     },
     min_payout_amount: { type: Number, required: true, min: 1, default: REFERRAL_DEFAULTS.minPayoutAmount },
     reward_wait_days: { type: Number, required: true, min: 0, default: REFERRAL_DEFAULTS.rewardWaitDays },

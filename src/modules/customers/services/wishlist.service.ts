@@ -3,12 +3,22 @@ import { ERROR_CODES } from '../../../core/error-codes';
 import { WishlistRepository, wishlistRepository } from '../repositories/wishlist.repository';
 import {
   CustomerCatalogEntryDto,
-  hydrateCustomerCatalogEntries,
+  SavedEntryDto,
+  SavedListingEntryDto,
 } from '../dto/customer-catalog.dto';
+import { kindOfWishlistRow, WishlistItemKind } from '../models/wishlist-item.model';
 import { PublicCatalogService, publicCatalogService } from '../../catalog/services/public-catalog.service';
+import type { PublicListingCard } from '../../listings/dto/public-listing.dto';
+import { publicListingService } from '../../listings/domain/services/public-listing.service';
+
+/** The one read of the listings module this service needs: public cards by id, in the order asked. */
+export interface SavedListingReader {
+  byIds(ids: string[]): Promise<{ data: PublicListingCard[]; missing: string[] }>;
+}
 
 /**
- * Saved products — a customer's wishlist (Phase 6 · 6.E.1).
+ * Saved items — a customer's wishlist (Phase 6 · 6.E.1): products, and since 2026-11-08 service
+ * listings in the same list (LISTING-REVIEWS-SAVES-REFERRALS-PLAN § 3.2, owner RS-1).
  *
  * Three verbs and no more: list, add, remove. `/shop/saved` in the storefront works from
  * `localStorage` today and does not survive a device change; this is the same list, kept
@@ -35,26 +45,43 @@ import { PublicCatalogService, publicCatalogService } from '../../catalog/servic
 export class WishlistService {
   constructor(
     private readonly repo: WishlistRepository = wishlistRepository,
-    private readonly catalog: PublicCatalogService = publicCatalogService
+    private readonly catalog: PublicCatalogService = publicCatalogService,
+    private readonly listings: SavedListingReader = publicListingService
   ) {}
 
   /**
-   * One page of saved products, newest save first.
+   * One page of saved items, newest save first — products and service listings interleaved by
+   * when each was saved (owner RS-1), or one kind when `kind` is given.
    *
-   * `at` is when the product was **saved**. Re-saving does not move it — see the
-   * repository's `$setOnInsert`.
+   * `at` is when the item was **saved**. Re-saving does not move it — see the repository's
+   * `$setOnInsert`. Each kind is hydrated in ONE query, and an item that no longer resolves
+   * degrades to a `null` card rather than vanishing (see `customer-catalog.dto.ts`).
    */
   async list(
     customerId: string,
     page: number,
-    limit: number
-  ): Promise<{ data: CustomerCatalogEntryDto[]; meta: { total: number; page: number; limit: number; pages: number } }> {
-    const { rows, total } = await this.repo.listPage(customerId, page, limit);
+    limit: number,
+    kind?: WishlistItemKind
+  ): Promise<{ data: SavedEntryDto[]; meta: { total: number; page: number; limit: number; pages: number } }> {
+    const { rows, total } = await this.repo.listPage(customerId, page, limit, kind);
 
-    const data = await hydrateCustomerCatalogEntries(
-      rows.map((row) => ({ productId: row.product_id.toString(), at: row.created_at })),
-      this.catalog
-    );
+    const productIds = rows.filter((r) => kindOfWishlistRow(r) === 'product').map((r) => String(r.product_id));
+    const listingIds = rows.filter((r) => kindOfWishlistRow(r) === 'listing').map((r) => String(r.listing_id));
+
+    const [products, listingCards] = await Promise.all([
+      productIds.length ? this.catalog.listByIds(productIds) : Promise.resolve(new Map()),
+      listingIds.length ? this.listings.byIds(listingIds) : Promise.resolve({ data: [], missing: [] }),
+    ]);
+    const listings = new Map(listingCards.data.map((c) => [c.id, c]));
+
+    const data: SavedEntryDto[] = rows.map((row) => {
+      if (kindOfWishlistRow(row) === 'listing') {
+        const listingId = String(row.listing_id);
+        return { kind: 'listing', listingId, at: row.created_at, listing: listings.get(listingId) ?? null };
+      }
+      const productId = String(row.product_id);
+      return { kind: 'product', productId, at: row.created_at, product: products.get(productId) ?? null };
+    });
 
     return {
       data,
@@ -79,10 +106,44 @@ export class WishlistService {
     return { productId, at: row.created_at, product: card };
   }
 
+  /**
+   * Save a service listing (2026-11-08). The same gate as a product: only a listing the public
+   * can see may enter the list, so the row is never a handle on one this customer was not shown.
+   *
+   * ⛔ **Nothing reaches the provider** (owner RS-2): no count, no notification, no lead, and no
+   * contact is revealed. A save is the customer's private bookmark.
+   */
+  async addListing(customerId: string, listingId: string): Promise<SavedListingEntryDto> {
+    const { data } = await this.listings.byIds([listingId]);
+    const card = data.find((c) => c.id === listingId);
+    if (!card) throw createAppError(ERROR_CODES.LISTING_NOT_FOUND, 404, 'Listing not found');
+
+    const row = await this.repo.addListing(customerId, listingId);
+    return { kind: 'listing', listingId, at: row.created_at, listing: card };
+  }
+
   /** Remove a save. A row that is not this customer's simply is not found. */
   async remove(customerId: string, productId: string): Promise<void> {
     const removed = await this.repo.remove(customerId, productId);
     if (!removed) throw createAppError(ERROR_CODES.WISHLIST_ITEM_NOT_FOUND, 404);
+  }
+
+  /** Remove a saved listing. Not this customer's is not found. */
+  async removeListing(customerId: string, listingId: string): Promise<void> {
+    const removed = await this.repo.removeListing(customerId, listingId);
+    if (!removed) throw createAppError(ERROR_CODES.WISHLIST_ITEM_NOT_FOUND, 404);
+  }
+
+  /**
+   * Remove a saved item by its id, whichever kind it is — the bot's `wishlist_remove`, which is
+   * handed one id from `wishlist_list`. An ObjectId names one document platform-wide, so a product
+   * id and a listing id cannot both match this customer's rows. Product first: the commoner case,
+   * and what every id this tool received before 2026-11-08 was.
+   */
+  async removeAny(customerId: string, itemId: string): Promise<WishlistItemKind> {
+    if (await this.repo.remove(customerId, itemId)) return 'product';
+    if (await this.repo.removeListing(customerId, itemId)) return 'listing';
+    throw createAppError(ERROR_CODES.WISHLIST_ITEM_NOT_FOUND, 404);
   }
 
   /**
@@ -93,6 +154,12 @@ export class WishlistService {
    */
   async savedAmong(customerId: string, productIds: string[]): Promise<string[]> {
     const saved = await this.repo.savedIdsAmong(customerId, productIds);
+    return [...saved];
+  }
+
+  /** Which of these listings the customer has saved — for hearts on a listing grid. */
+  async savedListingsAmong(customerId: string, listingIds: string[]): Promise<string[]> {
+    const saved = await this.repo.savedListingIdsAmong(customerId, listingIds);
     return [...saved];
   }
 }

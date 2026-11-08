@@ -4,6 +4,14 @@ import { EarningsOwnerType } from './earnings-account.model';
 import { EarningsSourceType } from './earnings-allocation.model';
 
 /**
+ * What a ledger row's money came from. The allocation sources, plus — for a REFERRAL partner's
+ * wallet only — a provider's payment to Wi-Mall (2026-11-08, RS-3): a plan purchase or a credit
+ * top-up. Those two have no allocation, so `allocation_id` is required only for the others.
+ */
+export type EarningsLedgerSourceType = EarningsSourceType | 'plan_purchase' | 'credit_topup';
+export const LEDGER_SOURCES_WITHOUT_ALLOCATION: readonly string[] = ['plan_purchase', 'credit_topup'];
+
+/**
  * EarningsLedger - Append-only audit of every money movement on an
  * EarningsAccount. Written inside the SAME transaction as the balance update so
  * balances and history can never diverge.
@@ -57,7 +65,10 @@ export type EarningsLedgerReasonCode =
   | 'clawback_recovery'
   /** An administrator forgave `clawback_balance` (C-6). */
   | 'clawback_write_off'
-  /** A referral reward entered a partner's pending balance (`allocation_id` is the commission). */
+  /**
+   * A referral reward entered a partner's pending balance (`allocation_id` is the commission, or
+   * null when the source is a provider's plan purchase or credit top-up).
+   */
   | 'referral_reward'
   /** A referral reward finished its wait and moved to available. */
   | 'referral_reward_matured'
@@ -72,9 +83,10 @@ export interface IEarningsLedger extends Document {
   amount: number;
   pending_after: number;
   available_after: number;
-  source_type: EarningsSourceType;
+  source_type: EarningsLedgerSourceType;
   source_id: mongoose.Types.ObjectId;
-  allocation_id: mongoose.Types.ObjectId;
+  /** Null only on a referral reward from a provider's payment (`LEDGER_SOURCES_WITHOUT_ALLOCATION`). */
+  allocation_id: mongoose.Types.ObjectId | null;
   reason_code: EarningsLedgerReasonCode;
   created_at: Date;
 }
@@ -94,11 +106,16 @@ const EarningsLedgerSchema = new Schema<IEarningsLedger>(
     available_after: { type: Number, required: true },
     source_type: {
       type: String,
-      enum: ['order', 'booking', 'cod_collection', 'shipment', 'agency_claim'],
+      enum: ['order', 'booking', 'cod_collection', 'shipment', 'agency_claim', 'plan_purchase', 'credit_topup'],
       required: true,
     },
     source_id: { type: Schema.Types.ObjectId, required: true },
-    allocation_id: { type: Schema.Types.ObjectId, ref: MODELS.EARNINGS_ALLOCATION, required: true },
+    allocation_id: {
+      type: Schema.Types.ObjectId,
+      ref: MODELS.EARNINGS_ALLOCATION,
+      default: null,
+      required: function (this: IEarningsLedger) { return !LEDGER_SOURCES_WITHOUT_ALLOCATION.includes(this.source_type); },
+    },
     reason_code: {
       type: String,
       enum: ['order_split', 'cod_split', 'delivery_split', 'hold_release', 'refund_reversal', 'cod_rolling_reserve', 'reserve_matured', 'delivery_fee_adjustment', 'refund_clawback', 'clawback_recovery', 'clawback_write_off', 'referral_reward', 'referral_reward_matured', 'referral_reward_clawback'],

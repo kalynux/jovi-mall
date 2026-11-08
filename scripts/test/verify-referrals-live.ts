@@ -51,6 +51,8 @@ import { ReferralPartnerModel } from '../../src/modules/referrals/models/referra
 import { ReferralRelationshipModel } from '../../src/modules/referrals/models/referral-relationship.model';
 import { ReferralRewardModel } from '../../src/modules/referrals/models/referral-reward.model';
 import { ReferralSettingsModel } from '../../src/modules/referrals/models/referral-settings.model';
+import { PlanPurchaseModel } from '../../src/modules/billing/models/plan-purchase.model';
+import { CreditTopupModel } from '../../src/modules/billing/models/credit-topup.model';
 import { referralAttributionService } from '../../src/modules/referrals/services/referral-attribution.service';
 import { referralPartnerService } from '../../src/modules/referrals/services/referral-partner.service';
 import { referralPayoutService } from '../../src/modules/referrals/services/referral-payout.service';
@@ -139,7 +141,7 @@ async function codeOf(partnerId: string): Promise<string> {
   return (await ReferralPartnerModel.findById(partnerId).lean())!.code as string;
 }
 
-async function refer(partnerId: string, userId: Types.ObjectId, category: 'vendor' | 'customer' | 'agency' | 'agent', registeredAt?: Date): Promise<void> {
+async function refer(partnerId: string, userId: Types.ObjectId, category: 'vendor' | 'customer' | 'agency' | 'agent' | 'provider', registeredAt?: Date): Promise<void> {
   await referralAttributionService.attach({
     userId: userId.toString(),
     category,
@@ -250,6 +252,7 @@ async function main(): Promise<void> {
     UserModel, CustomerModel, VendorModel, DeliveryAgencyModel, OrderModel, ShipmentModel, CashCollectionModel, Booking,
     EarningsAllocationModel, EarningsAccountModel, EarningsLedgerModel, EarningsAdjustmentModel, PayoutRequestModel,
     ReferralPartnerModel, ReferralRelationshipModel, ReferralRewardModel, ReferralSettingsModel,
+    PlanPurchaseModel, CreditTopupModel,
   ]) {
     await (model as typeof UserModel).createCollection();
     await (model as typeof UserModel).syncIndexes();
@@ -523,6 +526,72 @@ async function main(): Promise<void> {
   check('a custom rate is saved on its own', withTerms.custom_terms.vendor?.rate_percent === 5 && withTerms.custom_terms.vendor?.duration_months == null);
   const reset = await referralPartnerService.updateTerms(david, { terms: { vendor: { ratePercent: null } } });
   check('null resets it', reset.custom_terms.vendor?.rate_percent == null);
+
+  // ── 11 ─────────────────────────────────────────────────────────────────────────────
+  out('\n11. A referred provider\'s payments (LISTING-REVIEWS-SAVES-REFERRALS-PLAN § 3.3, 2026-11-08)');
+  {
+    const paula = await makePartner('Paula Partner');
+    const provider = await makeVendor('Prisca Plumbing');
+    const seller = await makeVendor('Sam Seller');
+    const agencyPayer = await makeAgency('Beta Agency');
+    await refer(paula, provider.userId, 'provider');
+    await refer(paula, seller.userId, 'vendor');
+    const before = await wallet(paula);
+
+    // After Paula's approval and the referral: a payment is judged against the partner's status
+    // AT the payment (RS-5), so one dated before she was approved would rightly earn nothing.
+    const paidAt = new Date(Date.now() + 1_000);
+    const insertPayment = async (model: typeof PlanPurchaseModel | typeof CreditTopupModel, ownerType: string, ownerId: Types.ObjectId, price: number) => {
+      const _id = new Types.ObjectId();
+      await (model as typeof PlanPurchaseModel).collection.insertOne({
+        _id, owner_type: ownerType, owner_id: ownerId, price, currency: 'XAF', status: 'paid', paid_at: paidAt,
+        merchant_ref: `verify-${_id.toString()}`, plan_id: new Types.ObjectId(), plan_code: 'pro', pack_code: 'p', credits: 100,
+        created_at: paidAt, updated_at: paidAt,
+      });
+      return _id;
+    };
+    const topup = await insertPayment(CreditTopupModel, 'vendor', provider.id, 3_000);
+    const plan = await insertPayment(PlanPurchaseModel, 'vendor', provider.id, 5_000);
+    const sellerPlan = await insertPayment(PlanPurchaseModel, 'vendor', seller.id, 10_000);
+    const agencyPlan = await insertPayment(PlanPurchaseModel, 'agency', agencyPayer.id, 10_000);
+
+    await sweep();
+    const onTopup = await ReferralRewardModel.find({ source_type: 'credit_topup', source_id: topup }).lean();
+    const onPlan = await ReferralRewardModel.find({ source_type: 'plan_purchase', source_id: plan }).lean();
+    check('RS-6: 3% of a 3,000 XAF credit pack is 90, held, on the provider category', onTopup.length === 1
+      && onTopup[0].amount === 90 && onTopup[0].status === 'held' && onTopup[0].category === 'provider'
+      && onTopup[0].commission_allocation_id === null && onTopup[0].commission_earned === 3_000, onTopup);
+    check('⚠ a SECOND payment by the same provider earns too — the partial indexes let it in', onPlan.length === 1 && onPlan[0].amount === 150, onPlan);
+    check('RS-5: earned at the payment, available after the program\'s wait', onTopup[0]?.earned_at.getTime() === paidAt.getTime()
+      && onTopup[0]?.matures_at.getTime() === paidAt.getTime() + 14 * DAY);
+    const afterEarn = await wallet(paula);
+    check('both rewards entered the partner\'s PENDING balance', afterEarn.pending - before.pending === 240 && afterEarn.available === before.available);
+    const holdRows = await EarningsLedgerModel.find({ owner_type: 'referral_partner', owner_id: new Types.ObjectId(paula), reason_code: 'referral_reward' }).lean();
+    check('each has a ledger row naming the payment, with no allocation', holdRows.length === 2
+      && holdRows.every((r) => r.allocation_id === null && ['credit_topup', 'plan_purchase'].includes(r.source_type)));
+    check('⛔ a seller\'s plan earns nothing — a `vendor` referral earns on commission only',
+      (await ReferralRewardModel.countDocuments({ source_id: sellerPlan })) === 0
+      && !!(await PlanPurchaseModel.findById(sellerPlan).lean())?.referral_evaluated_at);
+    check('an agency\'s plan is never even read', !(await PlanPurchaseModel.findById(agencyPlan).lean())?.referral_evaluated_at);
+
+    await sweep();
+    check('a second sweep pays nothing twice', (await ReferralRewardModel.countDocuments({ partner_id: paula })) === 2);
+    const duplicate = await refusalOf(() => ReferralRewardModel.create({ ...onTopup[0], _id: new Types.ObjectId() }));
+    check('…and the database refuses a second reward on one payment for one referral', duplicate !== null && /E11000/.test(duplicate), duplicate);
+
+    // A refund or a lost dispute: billing flips the payment to `reversed`, nothing else.
+    await CreditTopupModel.collection.updateOne({ _id: topup }, { $set: { status: 'reversed' } });
+    await sweep();
+    const reversed = await ReferralRewardModel.findOne({ source_type: 'credit_topup', source_id: topup }).lean();
+    const afterClaw = await wallet(paula);
+    check('a reversed payment claws its reward back whole, from pending', reversed?.status === 'reversed'
+      && reversed.clawed_amount === 90 && afterClaw.pending - before.pending === 150, { reversed, afterClaw });
+    check('the reversal is marked synced, and the other payment\'s reward is untouched',
+      !!(await CreditTopupModel.findById(topup).lean())?.referral_reversal_synced_at
+      && (await ReferralRewardModel.findOne({ source_id: plan }).lean())?.status === 'held');
+    await sweep();
+    check('a second sweep claws nothing twice', (await wallet(paula)).pending - before.pending === 150);
+  }
 
   // The program switched off.
   await referralSettingsService.update({ enabled: false }, ADMIN);

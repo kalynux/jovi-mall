@@ -83,6 +83,7 @@ export interface AdminReviewDto extends AuthorReviewDto {
     productId: string | null;
     agentId: string | null;
     agencyId: string | null;
+    listingId: string | null;
     vendorId: string | null;
   };
   /** The evidence eligibility resolved, so an administrator can check the claim. */
@@ -137,6 +138,7 @@ export function toAdminReviewDto(review: IReview): AdminReviewDto {
       productId: review.target_product_id?.toString() ?? null,
       agentId: review.target_agent_id?.toString() ?? null,
       agencyId: review.target_agency_id?.toString() ?? null,
+      listingId: review.target_listing_id?.toString() ?? null,
       vendorId: review.target_vendor_id?.toString() ?? null,
     },
     evidence: {

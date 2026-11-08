@@ -1,3 +1,4 @@
+import { buildAccentInsensitiveSearchRegex } from '../../../core/utils/regex.util';
 import { ClientSession, Types, PipelineStage, UpdateQuery } from 'mongoose';
 import { ListingModel, IListing } from '../models/listing.model';
 import { ListingStatus } from '../domain/listing.types';
@@ -101,9 +102,18 @@ export class ListingRepository {
     status: ListingStatus | undefined,
     page: number,
     limit: number,
+    q?: string,
   ): Promise<{ data: ListingRow[]; total: number }> {
     const filter: Record<string, unknown> = { vendor_id: oid(vendorId) };
     if (status) filter.status = status;
+    // The provider's own search (2026-11-08): title and company name, on the working copy and
+    // the live one — a draft has only `pending`, a live listing mid-revision has both, and the
+    // provider must find it by either name. Scoped by `vendor_id` above, like every read here.
+    if (q) {
+      const match = buildAccentInsensitiveSearchRegex(q);
+      filter.$or = ['pending.title', 'pending.company_name', 'published.title', 'published.company_name']
+        .map((path) => ({ [path]: match }));
+    }
     const [data, total] = await Promise.all([
       ListingModel.find(filter).sort({ created_at: -1, _id: -1 }).skip((page - 1) * limit).limit(limit).lean<ListingRow[]>(),
       ListingModel.countDocuments(filter),

@@ -24,6 +24,12 @@ seller route (products, orders, store, earnings…) gets the same error with `"s
 | Read | `GET /api/auth/me`, `/auth/auth-me/vendor`, `GET /api/vendor/profile`, and the access token claim `vendor_kind` |
 | Change | never by the vendor. Admin-only, not built in v1 |
 
+🆕 **A provider's country is set at sign-up** (2026-11-08). A seller chooses it in onboarding Step 1, which a
+provider never sees (they start at `onboarding_step: 0`). So register and add-role set `country` from the sign-up
+phone number's country code (`+237…` → `CM`, `+225…` → `CI`), or `CM` when it matches no country. Country is
+set-once (`403 PROFILE_COUNTRY_IMMUTABLE` on a change), and providers registered earlier receive the same value
+from `backfill:provider-country`. The dashboard does not need to set it.
+
 A provider has **no store**: no public store page, no products, orders, delivery agencies, stock,
 bookings, bargaining, earnings or payouts. A provider has a profile, listings, billing (plans and
 credits), storage, a credit transaction history and their leads.
@@ -65,7 +71,13 @@ copy (`pending`) waits for review (`review.state`: `editing` → `pending_review
 
 ## 3. Listings
 
-### `GET /api/vendor/listings?status&page&limit`
+### `GET /api/vendor/listings?status&q&page&limit`
+🆕 **`q`** (2026-11-08): 1–200 characters, trimmed. Matches the **title** and the **company name** on
+the working copy (`pending`) **and** the live copy (`published`), so a draft and a live listing in
+revision are found by either name. **Case- and accent-insensitive** both ways (`electricite` finds
+"Électricité", `ÉLEC` finds "Akwa Elec"). Typed characters are matched literally. Combines with
+`status`. `q: ""` or over 200 characters is `400 VALIDATION_ERROR`; send no `q` for the whole list.
+
 A page of `VendorListingSummary`:
 `{ id, slug, status, title, companyName, hasRevision, review, suspension, availableFields[], vectorisationStatus, publishedAt, createdAt, updatedAt }`.
 
@@ -77,8 +89,19 @@ Saving is partial: a half-written draft saves. Completeness is judged at submit.
 city, area (neighbourhood — public), description (20–5000 at submit), descriptionRich, photoFileIds[≤10],
 openingHours[{ day, openTime, closeTime, isClosed }] | null }`.
 
-`contacts` (**never public**): `{ whatsapp (E.164), phone (E.164), email, website, socials[≤5 { network, url }],
+`contacts` (**never public**): `{ whatsapp (E.164), phone (E.164), phone2 (E.164), email, website, socials[≤5 { network, url }],
 location (the GeoAddress the address search returned: address + pin), video: { url } }`.
+
+🆕 **`phone2`** (2026-11-08) is an optional **second phone number** (e.g. an MTN and an Orange line).
+`whatsapp` stays a single number. Rules:
+- `phone` and `phone2` are **one contact field**: the "Phone" button unlocks both, for **one** charge,
+  so a customer can still cost a provider at most seven fields.
+- A `phone2` equal to `phone` (same digits) is dropped. A `phone2` with no `phone` becomes `phone`.
+  Clearing `phone` while `phone2` is set moves the second number up. So the stored pair is
+  always "first, optional second".
+- "Ask them to call me" sends the **first** number, as before.
+- `VendorListingDetail.contacts.{published,pending}` carry `phone2` (`null` when unset).
+- Changing either number on a live listing is a revision reviewed like any other edit.
 Any contact may be cleared with `null`. The video is a **link** — YouTube (make it *unlisted*) or
 Google Drive (*anyone with the link*); Wi-Mall stores no video. Another host is
 `422 LISTING_VIDEO_LINK_INVALID`.
@@ -170,7 +193,7 @@ at any time (every relayed message carries **"Stop these messages"**). When `con
 **At most 3 messages per customer per 30 days**, of which **at most 1 call-me**.
 
 ### `POST /api/vendor/leads/:leadId/call-me` → `{ message }`
-Sends "Ask them to call me": the business name and the listing's phone (else WhatsApp number).
+Sends "Ask them to call me": the business name and the listing's **first** phone number (else WhatsApp number).
 Works at any time. **Costs 2 credits** (`CREDIT_COST_WHATSAPP_TEMPLATE`), on every channel. If
 the message cannot be delivered, `message.status` is `"failed"` and the credits are returned.
 

@@ -187,6 +187,31 @@ export const MIGRATIONS: Migration[] = [
         dryRun: true,
         note: 'EVERY WRITTEN REVIEW STAYS INVISIBLE — held `pending` rows never publish, their stars never count, and a deleted review still blocks its author from writing again',
     },
+    // LISTING-REVIEWS-SAVES-REFERRALS-PLAN § 3.2 (2026-11-08). An index swap and no data, sitting
+    // with the swaps above for the same reason: `migrate:customer-catalog-indexes` below must find
+    // the key already present, or a fresh database gets the old non-partial index after this one.
+    {
+        name: 'migrate:wishlist-listing-kind',
+        file: 'scripts/migrate-wishlist-listing-kind.ts',
+        dryRun: true,
+        note: "A CUSTOMER CAN SAVE ONLY ONE SERVICE LISTING — the old wishlist unique index reads a listing row's missing product_id as null, so the second saved listing collides with the first and the save fails",
+    },
+    // LISTING-REVIEWS-SAVES-REFERRALS-PLAN § 3.3 (2026-11-08). The same shape: an index swap and no
+    // data, above the catch-all, which then finds both new keys present.
+    {
+        name: 'migrate:referral-billing-rewards',
+        file: 'scripts/migrate-referral-billing-rewards.ts',
+        dryRun: true,
+        note: "A REFERRED PROVIDER EARNS THEIR PARTNER ONE REWARD, EVER — the old unique index reads a provider reward's missing commission as null, so the second plan or credit pack collides with the first and its evaluation is refused every night",
+    },
+    // 2026-11-08 (vendor-dashboard request): providers never see onboarding Step 1, where a seller sets
+    // the country. Data only, and independent of every other row.
+    {
+        name: 'backfill:provider-country',
+        file: 'scripts/backfill-provider-country.ts',
+        dryRun: true,
+        note: 'EVERY PROVIDER REGISTERED BEFORE 2026-11-08 HAS NO COUNTRY — registration now sets it from the sign-up phone, and these rows stay null until the vendor dashboard happens to set it',
+    },
     {
         name: 'backfill:actor-source',
         file: 'scripts/backfill-actor-source.ts',

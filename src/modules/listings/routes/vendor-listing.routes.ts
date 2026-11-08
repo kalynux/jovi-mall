@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requireAuth, requireRole } from '../../../api/middlewares/auth.middleware';
 import { requireVendorKind } from '../../../api/middlewares/vendor-kind.middleware';
 import { VendorListingController } from '../controllers/vendor-listing.controller';
+import { PublicReviewController } from '../../reviews/controllers/public-review.controller';
 
 /**
  * `/api/vendor/listings` — a service provider's listings (SERVICE-LISTINGS-PLAN § C-3).
@@ -24,5 +25,8 @@ router.post('/:id/submit', VendorListingController.submit);
 router.post('/:id/withdraw', VendorListingController.withdraw);
 router.delete('/:id/revision', VendorListingController.discardRevision);
 router.post('/:id/archive', VendorListingController.archive);
+// The provider's reviews of their own listing, any status (owner RS-12, 2026-11-08). The rows and
+// the rating are the reviews module's; this router only lends it the provider guards above.
+router.get('/:id/reviews', PublicReviewController.listForOwnListing);
 
 export default router;

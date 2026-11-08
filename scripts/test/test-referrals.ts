@@ -16,6 +16,7 @@
  *  10. What a partner may see: the DTO keys.
  *  11. SOURCE SCANS: the wiring no behavioural test can see.
  *  12. What a partner is told: the copy, the templates, and WhatsApp before email.
+ *  13. Provider payments (2026-11-08): the second reward source, RS-3 … RS-7.
  *
  * Run: npm run test:referrals
  */
@@ -23,6 +24,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import {
   commissionEarnedAt,
+  EARNING_CATEGORIES,
   isBalanceFrozen,
   isValidDurationMonths,
   isValidRatePercent,
@@ -32,6 +34,9 @@ import {
   GlobalTerms,
   PARTNER_TRANSITIONS,
   parseReferralCodeFromMessage,
+  paymentKindOf,
+  REFERRED_CATEGORIES,
+  referredCategoryOf,
   RATE_MAX_PERCENT,
   REFERRAL_DEFAULTS,
   referralCodeStem,
@@ -49,6 +54,7 @@ import {
   CommissionParticipant,
   planCommissionRewards,
   PlanPartner,
+  planProviderPaymentReward,
   PlanRelationship,
 } from '../../src/modules/referrals/domain/referral-reward-plan';
 import {
@@ -85,6 +91,7 @@ const THREE_PERCENT: GlobalTerms = {
   vendor: { rate_percent: 3, duration_months: 6 },
   customer: { rate_percent: 3, duration_months: 6 },
   agency: { rate_percent: 3, duration_months: 6 },
+  provider: { rate_percent: 3, duration_months: 6 },
 };
 
 const EARNED = new Date('2026-06-01T10:00:00.000Z');
@@ -550,6 +557,77 @@ console.log('\n13. The bot guide');
     REFERRAL_GUIDE_TOPICS.length === 3 && REFERRAL_GUIDE_TOPICS.every((t) => WEBSITE_GUIDE_KEYS.includes(t.key)));
   assert('the agent topic is not served until the app ships its screens: no route check can catch it',
     HELD_REFERRAL_GUIDE_TOPICS.every((t) => t.app === 'agent' && !WEBSITE_GUIDE_KEYS.includes(t.key)));
+}
+
+console.log('\n13. Provider payments (LISTING-REVIEWS-SAVES-REFERRALS-PLAN § 3.3, 2026-11-08)');
+{
+  const PAID = new Date('2026-06-01T10:00:00.000Z');
+  const providerRel = relationship('rel-p', 'partner-1', 'provider-user', 'provider');
+  const base = { relationship: providerRel, partner: activePartner('partner-1'), globalTerms: THREE_PERCENT, pricePaid: 3_000, paidAt: PAID };
+
+  const r = planProviderPaymentReward(base);
+  assert('RS-6: 3% of a 3,000 XAF plan is 90 XAF, on the FULL price', r?.amount === 90 && r.category === 'provider' && r.share.numerator === 1 && r.share.denominator === 1);
+  assert('the rate is the provider category\'s, not the vendor one', planProviderPaymentReward({
+    ...base, globalTerms: { ...THREE_PERCENT, provider: { rate_percent: 10, duration_months: 6 } },
+  })?.amount === 300);
+  assert('a partner\'s own provider rate overrides the global one', planProviderPaymentReward({
+    ...base, partner: activePartner('partner-1', { provider: { rate_percent: 5, duration_months: null } }),
+  })?.rateSource === 'custom');
+  assert('⛔ a seller\'s VENDOR relationship never earns on what they pay for a plan (commission is its basis)',
+    planProviderPaymentReward({ ...base, relationship: relationship('rel-v', 'partner-1', 'provider-user', 'vendor') }) === null);
+  assert('RS-5: judged AT THE PAYMENT — after the period ends, nothing',
+    planProviderPaymentReward({ ...base, relationship: relationship('rel-p', 'partner-1', 'provider-user', 'provider', new Date('2026-05-01T00:00:00.000Z')) }) === null);
+  assert('…and not while the partner was suspended at the payment, whatever their status today',
+    planProviderPaymentReward({ ...base, partner: { id: 'partner-1', statusHistory: [{ to: 'active', at: LONG_AGO }, { to: 'suspended', at: new Date('2026-05-15T00:00:00.000Z') }], customTerms: null } }) === null);
+  assert('under 1 FCFA after flooring is no reward (a 30 XAF pack at 3%)', planProviderPaymentReward({ ...base, pricePaid: 30 }) === null);
+  assert('a relationship that is not this partner\'s, or no partner, earns nothing',
+    planProviderPaymentReward({ ...base, partner: activePartner('someone-else') }) === null && planProviderPaymentReward({ ...base, partner: null }) === null);
+
+  assert('a provider vendor is referred as `provider`; a seller and every other role as itself',
+    referredCategoryOf('vendor', 'provider') === 'provider' && referredCategoryOf('vendor', 'seller') === 'vendor'
+    && referredCategoryOf('vendor', undefined) === 'vendor' && referredCategoryOf('customer', 'provider') === 'customer');
+  assert('`provider` is a referred AND an earning category; `agent` still earns nothing',
+    (REFERRED_CATEGORIES as readonly string[]).includes('provider') && (EARNING_CATEGORIES as readonly string[]).includes('provider')
+    && !(EARNING_CATEGORIES as readonly string[]).includes('agent'));
+  assert('RS-7: a partner sees the KIND — plan or credits — and nothing on a commission reward',
+    paymentKindOf('plan_purchase') === 'plan' && paymentKindOf('credit_topup') === 'credits' && paymentKindOf('order') === null);
+
+  const dto = stripComments(read('modules/referrals/dto/referral-partner.dto.ts'));
+  assert('RS-7: the reward DTO carries paymentKind and never the price paid (commission_earned / price)',
+    /paymentKind: paymentKindOf\(row\.source_type\)/.test(dto) && !/price|commission_earned/.test(dto));
+
+  const service = stripComments(read('modules/referrals/services/referral-reward.service.ts'));
+  const evaluate = service.slice(service.indexOf('async evaluateProviderPayments('), service.indexOf('private async planProviderReward('));
+  assert('only a VENDOR\'s paid, unjudged payments are read — agency and agent plans never',
+    evaluate.includes("{ owner_type: 'vendor', status: 'paid', referral_evaluated_at: null }"));
+  assert('⛔ the mark and the reward are written in ONE transaction, the claim filtering on status paid',
+    /runInTransactionWithRetry\(async \(session\) => \{[\s\S]*findOneAndUpdate\(\s*\{ _id: row\._id, status: 'paid', referral_evaluated_at: null \}[\s\S]*ReferralRewardModel\.create\(\s*\[/.test(evaluate));
+  assert('a provider reward has no commission, holds the PRICE as its base, and its ledger row no allocation',
+    /commission_allocation_id: null/.test(evaluate) && /commission_earned: Math\.floor\(row\.price\)/.test(evaluate)
+    && /allocation_id: null \}, session\)/.test(evaluate));
+  const claw = service.slice(service.indexOf('async clawBackReversedProviderPayments('));
+  assert('a REVERSED payment (dispute or completed refund) claws every reward on it back to zero',
+    claw.includes("{ status: 'reversed', referral_evaluated_at: { $ne: null }, referral_reversal_synced_at: null }")
+    && /this\.clawReward\(reward, before, 0, 0,/.test(claw));
+  const stages = service.slice(service.indexOf('async runNightlyStages('), service.indexOf('async evaluateProviderPayments('));
+  assert('the stages run earn → follow reversals → release, so a reversal beats the release',
+    stages.indexOf('evaluateProviderPayments') < stages.indexOf('clawBackReversedProviderPayments')
+    && stages.indexOf('clawBackReversedProviderPayments') < stages.indexOf('releaseMaturedRewards'));
+  const billing = stripComments(read('modules/billing/services/credit-topup.service.ts')) + stripComments(read('modules/billing/services/plan-purchase.service.ts'));
+  assert('⛔ billing knows nothing of referrals: the status is the mark, and no billing transaction carries a reward',
+    !/referral/i.test(billing));
+
+  const model = read('modules/referrals/models/referral-reward.model.ts');
+  assert('⚠ both reward uniqueness indexes are PARTIAL, by source — a plain one collides on the missing commission',
+    /name: 'referral_reward_one_per_commission', partialFilterExpression: \{ commission_allocation_id: \{ \$type: 'objectId' \} \}/.test(model)
+    && /name: 'referral_reward_one_per_payment', partialFilterExpression: \{ source_type: \{ \$in: \[\.\.\.BILLING_REWARD_SOURCES\] \} \}/.test(model));
+  const migrate = readFileSync(join(ROOT, 'scripts', 'migrate.ts'), 'utf8');
+  assert('…and the swap is a registered migration, before the catch-all',
+    migrate.indexOf("'migrate:referral-billing-rewards'") > -1
+    && migrate.indexOf("'migrate:referral-billing-rewards'") < migrate.indexOf("name: 'migrate:declared-indexes'"));
+  const auth = stripComments(read('modules/auth/auth.service.ts'));
+  assert('registration attaches a provider vendor under `provider` (the kind is fixed there)',
+    /category: referredCategoryOf\(role, input\.vendorKind\)/.test(auth));
 }
 
 console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed\n`);

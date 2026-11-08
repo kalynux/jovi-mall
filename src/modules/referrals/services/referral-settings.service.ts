@@ -42,9 +42,15 @@ export class ReferralSettingsService {
         updatedAt: null,
       };
     }
+    // A category added after the document was written (`provider`, 2026-11-08) reads its defaults.
+    const terms = defaultTerms();
+    for (const category of EARNING_CATEGORIES) {
+      const stored = (row.terms as Partial<GlobalTerms> | undefined)?.[category];
+      if (stored) terms[category] = { rate_percent: stored.rate_percent, duration_months: stored.duration_months };
+    }
     return {
       enabled: row.enabled,
-      terms: row.terms,
+      terms,
       minPayoutAmount: row.min_payout_amount,
       rewardWaitDays: row.reward_wait_days,
       updatedAt: row.updated_at,

@@ -48,9 +48,8 @@ export interface PublicListingCard {
 }
 
 /**
- * ⚠ SEAM — always `null` in wave 1. The review aggregate learns `target: 'listing'` in wave 2
- * (plan § Shared pieces: `REVIEW_TARGET_TYPES` gains `listing`, L-27); fill this from it then.
- * The shape mirrors the product card's rating block.
+ * The customers' published rating of the listing (since 2026-11-08; `listingRatingOf`), or `null`
+ * when nobody has reviewed it. The shape mirrors the product card's rating block.
  */
 export interface PublicListingRating {
   average: number;

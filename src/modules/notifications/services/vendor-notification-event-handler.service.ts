@@ -66,13 +66,14 @@ import { ERROR_CODES } from '../../../core/error-codes';
 /**
  * Parameters for dispatching a single notification situation.
  */
-/** The five provider situations `handleListingEvent` renders (SERVICE-LISTINGS-PLAN § C-5). */
+/** The six provider situations `handleListingEvent` renders (SERVICE-LISTINGS-PLAN § C-5; reviews 2026-11-08). */
 export const LISTING_SITUATIONS: ReadonlySet<NotificationType> = new Set<NotificationType>([
     'listing.approved',
     'listing.rejected',
     'listing.suspended',
     'listing.resumed',
     'listing.video_unavailable',
+    'listing.review_published',
 ]);
 
 const LISTING_FALLBACK_TITLE: Record<Language, string> = {
@@ -1454,7 +1455,10 @@ export class VendorNotificationEventHandler {
         try {
             const situation = event.eventType as NotificationType;
             if (!LISTING_SITUATIONS.has(situation)) return;
-            const p = event.payload as { listingId?: string; vendorId?: string; reason?: string; reasons?: string[]; note?: string };
+            const p = event.payload as {
+                listingId?: string; vendorId?: string; reason?: string; reasons?: string[]; note?: string;
+                reviewId?: string; rating?: number;
+            };
             if (!p.listingId || !p.vendorId) return;
 
             const [prefs, vendor, listing] = await Promise.all([
@@ -1472,6 +1476,13 @@ export class VendorNotificationEventHandler {
             if (situation === 'listing.rejected') {
                 context.rejectionReasons = listingRejectionSentence(p.reasons ?? [], lang);
             }
+            if (situation === 'listing.review_published') {
+                // A review carries a 1–5 integer; anything else is a producer bug, and an empty
+                // star count would read as copy rather than as a fault (test:booking-notification's
+                // lesson), so it is refused rather than rendered.
+                if (!p.reviewId || !Number.isInteger(p.rating) || p.rating! < 1 || p.rating! > 5) return;
+                context.rating = String(p.rating);
+            }
 
             await this.dispatch({
                 situation,
@@ -1479,7 +1490,11 @@ export class VendorNotificationEventHandler {
                 vendorId: p.vendorId,
                 aggregateType: 'listing',
                 aggregateId: p.listingId,
-                idempotencyKey: `${situation}:${p.listingId}:${new Date(event.occurredAt).toISOString()}`,
+                // One review is one notice, however often the event is replayed; the other five
+                // are keyed on their instant because a listing is approved and paused many times.
+                idempotencyKey: situation === 'listing.review_published'
+                    ? `${situation}:${p.reviewId}`
+                    : `${situation}:${p.listingId}:${new Date(event.occurredAt).toISOString()}`,
                 context
             });
         } catch (error) {

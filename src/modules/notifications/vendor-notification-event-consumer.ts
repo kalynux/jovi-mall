@@ -86,7 +86,8 @@ export function initializeVendorNotificationEventConsumers(): void {
     eventBus.subscribe('role_closure.relationships_ended', handler.handleRoleClosureRelationshipsEnded.bind(handler));
     // Service listings (SERVICE-LISTINGS-PLAN § C-5), published post-commit by `listings/`.
     // `listing.submitted` is deliberately absent: the provider is the one who just submitted.
-    for (const name of ['listing.approved', 'listing.rejected', 'listing.suspended', 'listing.resumed', 'listing.video_unavailable']) {
+    // `listing.review_published` comes from the reviews module (2026-11-08, owner RS-8).
+    for (const name of ['listing.approved', 'listing.rejected', 'listing.suspended', 'listing.resumed', 'listing.video_unavailable', 'listing.review_published']) {
         eventBus.subscribe(name, handler.handleListingEvent.bind(handler));
     }
 

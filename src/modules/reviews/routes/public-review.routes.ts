@@ -29,4 +29,11 @@ const router = Router();
  */
 router.get('/products/:productId/reviews', PublicReviewController.listForProduct);
 
+/**
+ * GET /api/public/listings/:listingId/reviews (2026-11-08) — a SERVICE LISTING's reviews, which
+ * are public like a product's. A listing the public cannot see answers an empty page. Three
+ * segments, so the listings router's `/listings/:slug` never captures it.
+ */
+router.get('/listings/:listingId/reviews', PublicReviewController.listForListing);
+
 export default router;

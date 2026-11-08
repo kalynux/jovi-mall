@@ -2,11 +2,43 @@
   [
     {
       "type": "updateNodeParameters",
-      "nodeName": "inapp_open_listing",
+      "nodeName": "wishlist_list",
       "parameters": {
-        "toolDescription": "Opens a scrollable product grid — a category, a whole shop or their saved items — with picture, price and buy button on every card. Sends its own button. USE IT WHEN: The customer wants to BROWSE a whole shop, a category or their saved items, or asks to see everything after a page of cards. For a KIND of product (\"shoes\", \"phones\", \"something for my kitchen\"), find them with Search-Products first, then open the grid with their ids in productIds. NOT THIS TOOL: Not for a specific question with a short answer — five cards via Show-Products are better. Not for one product (inapp_open_product). ⚠ Never put a kind of product in q: q matches WHOLE WORDS in titles, tags and descriptions, so \"shoes\" does not find a \"Nike Air Max 90\" and the customer opens an empty grid. ⚠ Never describe the button in your own words — the customer would read it twice.",
+        "toolDescription": "What the customer saved for later, newest first: products and service listings (businesses such as plumbers or printers) in one list. Each entry has kind \"product\" or \"listing\". USE IT WHEN: They ask what they saved, or want to buy something saved earlier. To show them, pass the productIds to Show-Products and the listingIds to listings_display. NOT THIS TOOL: Not as a way to browse the catalogue. ⚠ product or listing null means it is no longer available — say 'no longer available' and offer to remove it; never skip the row or say why.",
         "method": "POST",
-        "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/inapp/listing",
+        "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/wishlist/list",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Webhook-Secret",
+              "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, kind: $fromAI(\"kind\", \"Only one kind. Leave it out for both. One of: product, listing.\", \"string\") || undefined }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "replace": true
+    },
+    {
+      "type": "updateNodeParameters",
+      "nodeName": "wishlist_add",
+      "parameters": {
+        "toolDescription": "Adds a product or a service listing to the customer's saved list. Send exactly one of productId and listingId. Saving a listing reveals no contact, costs nothing and tells the business nothing. USE IT WHEN: They like something but are not buying it now, or want to keep a business to contact later. NOT THIS TOOL: Not instead of the basket when they said they want to buy it.",
+        "method": "POST",
+        "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/wishlist",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpBearerAuth",
         "sendHeaders": true,
@@ -18,13 +50,113 @@
             },
             {
               "name": "Idempotency-Key",
-              "value": "={{ $execution.id }}-{{ $now.toMillis() }}-inapp_open_listing"
+              "value": "={{ $execution.id }}-{{ $now.toMillis() }}-wishlist_add"
             }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, q: $fromAI(\"q\", \"Whole-word text search over titles, tags and descriptions: shoes does NOT find Nike Air Max 90. Only for a word the customer wants matched literally. Omit to show everything; for a kind of product pass productIds from Search-Products instead. At most 120 characters.\", \"string\") || undefined, category: $fromAI(\"category\", \"Category slug or name, as the catalogue publishes it. At most 120 characters.\", \"string\") || undefined, storeSlug: $fromAI(\"storeSlug\", \"Narrow to one store. At most 160 characters.\", \"string\") || undefined, productIds: (function (v) { if (Array.isArray(v)) return v; if (v == null || v === \"\") return undefined; var s = String(v).trim(); if (s.charAt(0) === \"[\") { try { var a = JSON.parse(s); if (Array.isArray(a)) return a; } catch (e) {} } var parts = s.split(/[ ,;]+/).filter(function (x) { return x !== \"\"; }); return parts.length ? parts : undefined; })($fromAI(\"productIds\", \"Pin an exact set instead of filtering — for saved items, or a selection you chose yourself. Up to 50, far more than a chat can show.\", \"string\")) || undefined }) }}",
+        "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, productId: $fromAI(\"productId\", \"The 24-character product id to save, from catalog_get_product or a product search result. Not with listingId.\", \"string\") || undefined, listingId: $fromAI(\"listingId\", \"The 24-character listing id to save, from a search result with kind \\\"listing\\\" or listings_get. Not with productId.\", \"string\") || undefined }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "replace": true
+    },
+    {
+      "type": "updateNodeParameters",
+      "nodeName": "wishlist_remove",
+      "parameters": {
+        "toolDescription": "Takes a product or a service listing off the customer's saved list. USE IT WHEN: They are no longer interested, or clear an unavailable entry. NOT THIS TOOL: Not just because they added it to the basket — they did not ask.",
+        "method": "DELETE",
+        "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/wishlist/{{ encodeURIComponent(String($fromAI(\"itemId\", \"The 24-character id to drop: productId for a product, listingId for a listing, from wishlist_list.\", \"string\")).trim()).replace(/^\\.*$/, \"_\") }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Webhook-Secret",
+              "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $execution.id }}-{{ $now.toMillis() }}-wishlist_remove"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language } }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "replace": true
+    },
+    {
+      "type": "updateNodeParameters",
+      "nodeName": "reviews_check_eligibility",
+      "parameters": {
+        "toolDescription": "Whether the customer may review a product, a delivery or a service listing, and if not, why. A listing can be reviewed once the customer has unlocked at least one of its contacts. USE IT WHEN: Before offering to take a review, so nobody ineligible is asked for one. NOT THIS TOOL: Not after a failed submission — this is the check that avoids one. ⚠ eligible false is a normal answer, not a failure.",
+        "method": "POST",
+        "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/reviews/eligibility",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Webhook-Secret",
+              "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, subjectType: $fromAI(\"subjectType\", \"delivery takes a SHIPMENT id, not an order id. listing takes the listing id. One of: product, delivery, listing.\", \"string\"), subjectId: $fromAI(\"subjectId\", \"The id of the thing being reviewed: a product id when subjectType is product, a SHIPMENT id when it is delivery — never an order id — and a LISTING id when it is listing.\", \"string\") }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "replace": true
+    },
+    {
+      "type": "updateNodeParameters",
+      "nodeName": "reviews_list_mine",
+      "parameters": {
+        "toolDescription": "Reviews the customer wrote, newest first — products, deliveries and service listings, including any an administrator hid. USE IT WHEN: 'What have I reviewed', 'did my review go up', 'why can't I see my review', or to check whether they already rated something. NOT THIS TOOL: Not other people's reviews (catalog_list_product_reviews). ⚠ Whether a review is visible is publiclyVisible, NEVER status — a delivery review shows status published but appears nowhere, it is internal. subjectLabel null: refer to the order instead of reading an id aloud.",
+        "method": "POST",
+        "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/reviews/list",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Webhook-Secret",
+              "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ identity: { channel: $('Inbound').first().json.channel, externalId: $('Inbound').first().json.externalId, displayName: $('Inbound').first().json.displayName, handle: $('Inbound').first().json.handle, language: $('Inbound').first().json.language }, status: $fromAI(\"status\", \"Narrow to one state: published, or unpublished (an administrator hid it). Leave empty unless the customer asked for one — the default returns both, which is usually what they mean. One of: published, unpublished.\", \"string\") || undefined }) }}",
         "options": {
           "response": {
             "response": {

@@ -11,15 +11,49 @@
  *    so a later change reaches new referrals only and can never reactivate an expired one.
  */
 
-export const REFERRED_CATEGORIES = ['vendor', 'customer', 'agency', 'agent'] as const;
+/**
+ * `provider` since 2026-11-08 (LISTING-REVIEWS-SAVES-REFERRALS-PLAN § 3.3, owner RS-3): a vendor
+ * who registered as a SERVICE PROVIDER. It earns on what the provider pays Wi-Mall (plans and
+ * credit packs), never on commission, which a provider does not generate. A seller stays `vendor`.
+ */
+export const REFERRED_CATEGORIES = ['vendor', 'customer', 'agency', 'agent', 'provider'] as const;
 export type ReferredCategory = (typeof REFERRED_CATEGORIES)[number];
 
 /** The categories that can earn. An `agent` relationship is recorded and never earns (document § 13). */
-export const EARNING_CATEGORIES = ['vendor', 'customer', 'agency'] as const;
+export const EARNING_CATEGORIES = ['vendor', 'customer', 'agency', 'provider'] as const;
 export type EarningCategory = (typeof EARNING_CATEGORIES)[number];
 
 export function isEarningCategory(value: string): value is EarningCategory {
   return (EARNING_CATEGORIES as readonly string[]).includes(value);
+}
+
+/** The category a NEW account is referred under: a provider vendor is `provider`, every other role itself. */
+export function referredCategoryOf(role: 'customer' | 'vendor' | 'agency' | 'agent', vendorKind?: string | null): ReferredCategory {
+  return role === 'vendor' && vendorKind === 'provider' ? 'provider' : role;
+}
+
+/**
+ * The second reward source (owner RS-3, 2026-11-08): a provider's own payment to Wi-Mall. A
+ * `plan_purchases` row (a plan) or a `credit_topups` row (a credit pack), `paid`. The commission
+ * sources stay `order` · `cod_collection` · `booking`.
+ */
+export const BILLING_REWARD_SOURCES = ['plan_purchase', 'credit_topup'] as const;
+export type BillingRewardSource = (typeof BILLING_REWARD_SOURCES)[number];
+
+export function isBillingRewardSource(value: string): value is BillingRewardSource {
+  return (BILLING_REWARD_SOURCES as readonly string[]).includes(value);
+}
+
+/**
+ * What a partner is told a provider reward came from (owner RS-7): the KIND, never the amount the
+ * provider paid. `null` on a commission reward, which carries no kind.
+ */
+export type RewardPaymentKind = 'plan' | 'credits';
+
+export function paymentKindOf(sourceType: string): RewardPaymentKind | null {
+  if (sourceType === 'plan_purchase') return 'plan';
+  if (sourceType === 'credit_topup') return 'credits';
+  return null;
 }
 
 export const PARTNER_STATUSES = ['pending', 'active', 'rejected', 'suspended', 'terminated'] as const;

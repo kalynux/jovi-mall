@@ -2006,8 +2006,14 @@ assert('MIGRATIONS covers every migrate:*/backfill:* binding, and every row has 
 // ⚠ 33 -> 34 with `migrate:service-listings-indexes` (2026-10-19, SERVICE-LISTINGS-PLAN § C-7):
 // a named index build above the catch-all — the unique (lead_id, field) on `listing_reveals` is
 // the reveal's only guard against charging a provider twice for one double tap.
-assert('all thirty-four are registered — the count is the count on disk', () =>
-    MIGRATIONS.length === 34);
+// ⚠ 34 -> 36 with `migrate:wishlist-listing-kind` and `migrate:referral-billing-rewards` (2026-11-08,
+// LISTING-REVIEWS-SAVES-REFERRALS-PLAN): two index SWAPS with no data, among the data rows like
+// `migrate:reviews-publish-all` — each old unique index read a missing id as null, refusing a second
+// saved listing and a referred provider's second reward.
+// ⚠ 36 -> 37 with `backfill:provider-country` (2026-11-08): a DATA backfill — providers never see
+// onboarding Step 1, so every one registered before then has no country. Among the data rows.
+assert('all thirty-seven are registered — the count is the count on disk', () =>
+    MIGRATIONS.length === 37);
 
 // The catch-all is LAST, and unlike the general index-after-data rule below this is a
 // dependency on the OTHER INDEX MIGRATIONS: it builds only what the declared-vs-live diff

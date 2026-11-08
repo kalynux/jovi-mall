@@ -106,7 +106,12 @@ export type NotificationType =
     | 'listing.rejected'
     | 'listing.suspended'
     | 'listing.resumed'
-    | 'listing.video_unavailable';
+    | 'listing.video_unavailable'
+    /**
+     * A customer's review of the provider's listing went public (2026-11-08, owner RS-8). No
+     * WhatsApp template (RS-11): in-window only, every other channel delivers.
+     */
+    | 'listing.review_published';
 
 /**
  * Aggregate Types
@@ -241,7 +246,8 @@ const VendorNotificationSchema = new Schema<IVendorNotification>(
                 'listing.rejected',
                 'listing.suspended',
                 'listing.resumed',
-                'listing.video_unavailable'
+                'listing.video_unavailable',
+                'listing.review_published'
             ],
             required: true
         },

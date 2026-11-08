@@ -33,8 +33,30 @@ export const CustomerCatalogListQuerySchema = z
 
 export const ProductIdParamSchema = z.object({ productId: ProductIdSchema });
 
-/** `POST /api/customer/wishlist` — save a product. */
-export const AddWishlistItemSchema = z.object({ productId: ProductIdSchema }).strict();
+/** A service listing id, 24 hex — for the same reasons as `ProductIdSchema`. */
+export const ListingIdSchema = z
+  .string()
+  .trim()
+  .regex(/^[0-9a-fA-F]{24}$/, 'A listing id is 24 hexadecimal characters');
+
+export const ListingIdParamSchema = z.object({ listingId: ListingIdSchema });
+
+/** `GET /api/customer/wishlist` — both kinds by default, or one (2026-11-08). */
+export const WishlistListQuerySchema = z
+  .object({ page: PageSchema, limit: LimitSchema, kind: z.enum(['product', 'listing']).optional() })
+  .strip();
+
+/**
+ * `POST /api/customer/wishlist` — save a product OR a service listing (2026-11-08): exactly one
+ * of the two ids. Both or neither is a 400 naming the rule, never a guess at which was meant.
+ */
+export const AddWishlistItemSchema = z
+  .object({ productId: ProductIdSchema.optional(), listingId: ListingIdSchema.optional() })
+  .strict()
+  .refine((v) => (v.productId === undefined) !== (v.listingId === undefined), {
+    message: 'Send exactly one of productId and listingId',
+    path: ['productId'],
+  });
 
 /**
  * `POST /api/customer/wishlist/saved-among` — which of these are saved?
@@ -45,8 +67,16 @@ export const AddWishlistItemSchema = z.object({ productId: ProductIdSchema }).st
  * nothing and writes nothing; the verb is transport, not semantics.
  */
 export const SavedAmongSchema = z
-  .object({ productIds: z.array(ProductIdSchema).min(1).max(100) })
-  .strict();
+  .object({
+    productIds: z.array(ProductIdSchema).min(1).max(100).optional(),
+    // 2026-11-08: a listing grid asks the same question about its own cards.
+    listingIds: z.array(ListingIdSchema).min(1).max(100).optional(),
+  })
+  .strict()
+  .refine((v) => v.productIds !== undefined || v.listingIds !== undefined, {
+    message: 'Send productIds, listingIds, or both',
+    path: ['productIds'],
+  });
 
 /**
  * `POST /api/customer/recently-viewed` — record a view.
@@ -60,5 +90,6 @@ export const RecordProductViewSchema = z.object({ productId: ProductIdSchema }).
 
 export type CustomerCatalogListQuery = z.infer<typeof CustomerCatalogListQuerySchema>;
 export type AddWishlistItemInput = z.infer<typeof AddWishlistItemSchema>;
+export type WishlistListQuery = z.infer<typeof WishlistListQuerySchema>;
 export type SavedAmongInput = z.infer<typeof SavedAmongSchema>;
 export type RecordProductViewInput = z.infer<typeof RecordProductViewSchema>;

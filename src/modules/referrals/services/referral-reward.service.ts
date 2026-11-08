@@ -14,13 +14,17 @@ import { Booking } from '../../booking/models/booking.model';
 import { VendorModel } from '../../vendors/vendor.model';
 import { CustomerModel } from '../../customers/customer.model';
 import { DeliveryAgencyModel } from '../../delivery/delivery-agency.model';
-import { commissionEarnedAt, rewardAmount, WHOLE_SHARE } from '../domain/referral-rules';
+import { BillingRewardSource, commissionEarnedAt, rewardAmount, WHOLE_SHARE } from '../domain/referral-rules';
 import {
   agencySharesByParcelValue,
   CommissionParticipant,
   planCommissionRewards,
   PlannedReward,
+  planProviderPaymentReward,
 } from '../domain/referral-reward-plan';
+import { PlanPurchaseModel } from '../../billing/models/plan-purchase.model';
+import { CreditTopupModel } from '../../billing/models/credit-topup.model';
+import type { EarningsLedgerSourceType } from '../../earnings/models/earnings-ledger.model';
 import { ReferralPartnerModel } from '../models/referral-partner.model';
 import { ReferralRelationshipModel } from '../models/referral-relationship.model';
 import { IReferralReward, ReferralRewardModel } from '../models/referral-reward.model';
@@ -43,6 +47,38 @@ function partnerOwnerId(partnerId: Types.ObjectId | string): string {
   return partnerId.toString();
 }
 
+/** Where a ledger row says the money came from. A provider reward has no allocation. */
+interface LedgerSource {
+  source_type: EarningsLedgerSourceType;
+  source_id: string;
+  allocation_id: Types.ObjectId | null;
+}
+
+/**
+ * A provider's payment to Wi-Mall, as the two billing collections hold it (2026-11-08, RS-3).
+ * Both are `pending → paid → reversed` with `price` and `paid_at`, so one shape serves both.
+ */
+interface BillingPaymentRow {
+  _id: Types.ObjectId;
+  owner_type: string;
+  owner_id: Types.ObjectId;
+  price: number;
+  currency: string;
+  status: string;
+  paid_at?: Date | null;
+  updated_at?: Date;
+  created_at?: Date;
+}
+
+/** Either billing model, through the few calls these stages make (both schemas share the fields). */
+type BillingModel = typeof PlanPurchaseModel;
+
+/** The two collections, by the source name a reward and its ledger rows carry. */
+const BILLING_COLLECTIONS: ReadonlyArray<{ kind: BillingRewardSource; model: BillingModel }> = [
+  { kind: 'plan_purchase', model: PlanPurchaseModel },
+  { kind: 'credit_topup', model: CreditTopupModel as unknown as BillingModel },
+];
+
 /**
  * Earns, matures and adjusts rewards (REFERRAL-PROGRAM-PLAN §§ 5.4–5.6). Three stages of the nightly
  * earnings sweep, each row in its own transaction.
@@ -63,10 +99,181 @@ export class ReferralRewardService {
     private readonly ledger: EarningsLedgerRepository = new EarningsLedgerRepository()
   ) {}
 
+  /**
+   * The order is load-bearing: earn, then follow refunds and reversals, then release. A reward
+   * whose payment was reversed today is clawed back from PENDING before the release would have
+   * made it available.
+   */
   async runNightlyStages(now: Date, batchSize: number): Promise<void> {
     await this.evaluateReleasedCommissions(now, batchSize);
+    await this.evaluateProviderPayments(now, batchSize);
     await this.syncPendingCommissions(batchSize);
+    await this.clawBackReversedProviderPayments(now, batchSize);
     await this.releaseMaturedRewards(now, batchSize);
+  }
+
+  // ── Earning on a provider's payment (2026-11-08, RS-3 / RS-5 / RS-6) ──────────────────
+
+  /**
+   * Judge every `paid` plan purchase and credit top-up of a VENDOR not yet judged, once each. The
+   * mark (`referral_evaluated_at`) and any reward are written in ONE transaction, as for a
+   * commission, so a payment is judged exactly once. Agency and agent payments are never read.
+   * With the program off a payment is still marked: a reward is earned at the payment or never.
+   */
+  async evaluateProviderPayments(now: Date, batchSize: number): Promise<number> {
+    const settings = await this.settings.get();
+    let created = 0;
+    for (const { kind, model } of BILLING_COLLECTIONS) {
+      let after: Types.ObjectId | null = null;
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const filter: Record<string, unknown> = { owner_type: 'vendor', status: 'paid', referral_evaluated_at: null };
+        if (after) filter._id = { $gt: after };
+        const rows = (await model.find(filter).sort({ _id: 1 }).limit(batchSize).lean()) as unknown as BillingPaymentRow[];
+        if (rows.length === 0) break;
+        after = rows[rows.length - 1]._id;
+        for (const row of rows) {
+          try {
+            created += await this.evaluatePayment(kind, model, row, settings, now);
+          } catch (error) {
+            console.error(`[ReferralReward] Could not evaluate ${kind} ${String(row._id)}:`, error);
+          }
+        }
+        if (rows.length < batchSize) break;
+      }
+    }
+    return created;
+  }
+
+  private async evaluatePayment(
+    kind: BillingRewardSource,
+    model: BillingModel,
+    row: BillingPaymentRow,
+    settings: ReferralSettingsView,
+    now: Date
+  ): Promise<number> {
+    const paidAt = row.paid_at ?? row.updated_at ?? row.created_at ?? now;
+    const planned = settings.enabled ? await this.planProviderReward(row, settings, paidAt) : null;
+    const maturesAt = new Date(paidAt.getTime() + settings.rewardWaitDays * DAY_MS);
+
+    await transactionManager.runInTransactionWithRetry(async (session) => {
+      // `status: 'paid'` in the filter: a payment reversed since it was read earns nothing.
+      const claimed = await model.findOneAndUpdate(
+        { _id: row._id, status: 'paid', referral_evaluated_at: null },
+        { $set: { referral_evaluated_at: now } },
+        { session }
+      );
+      if (!claimed) {
+        throw createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 500, 'Referral evaluation lost a race on a provider payment', {
+          source: kind,
+          id: String(row._id),
+        });
+      }
+      if (!planned) return;
+      // ⚠ ARRAY form: Mongoose reads `{ session }` only when the first argument is an array.
+      await ReferralRewardModel.create(
+        [
+          {
+            partner_id: planned.partnerId,
+            relationship_id: planned.relationshipId,
+            referred_user_id: planned.referredUserId,
+            category: planned.category,
+            commission_allocation_id: null,
+            source_type: kind,
+            source_id: row._id,
+            order_id: null,
+            booking_id: null,
+            vendor_id: row.owner_id,
+            // The base: the full price paid (RS-6). No partner DTO may carry it (RS-7).
+            commission_earned: Math.floor(row.price),
+            share: planned.share,
+            rate_percent: planned.ratePercent,
+            rate_source: planned.rateSource,
+            amount: planned.amount,
+            currency: row.currency,
+            earned_at: paidAt,
+            matures_at: maturesAt,
+          },
+        ],
+        { session }
+      );
+      await this.holdForPartner(planned, { source_type: kind, source_id: row._id.toString(), allocation_id: null }, session);
+    });
+    return planned ? 1 : 0;
+  }
+
+  private async planProviderReward(
+    row: BillingPaymentRow,
+    settings: ReferralSettingsView,
+    paidAt: Date
+  ): Promise<PlannedReward | null> {
+    const vendor = await VendorModel.findById(row.owner_id).select('user_id').lean();
+    if (!vendor?.user_id) return null;
+    const relationship = await ReferralRelationshipModel.findOne({ referred_user_id: vendor.user_id, category: 'provider' }).lean();
+    if (!relationship) return null;
+    const partner = await ReferralPartnerModel.findById(relationship.partner_id).select('status_history custom_terms').lean();
+    return planProviderPaymentReward({
+      relationship: {
+        id: relationship._id.toString(),
+        partnerId: relationship.partner_id.toString(),
+        partnerUserId: relationship.partner_user_id.toString(),
+        referredUserId: relationship.referred_user_id.toString(),
+        category: relationship.category,
+        expiresAt: relationship.expires_at,
+      },
+      partner: partner
+        ? { id: partner._id.toString(), statusHistory: partner.status_history, customTerms: partner.custom_terms ?? null }
+        : null,
+      globalTerms: settings.terms,
+      pricePaid: row.price,
+      paidAt,
+    });
+  }
+
+  /**
+   * A reversed provider payment takes its rewards back, whole (RS-5). Both collections go
+   * `paid → reversed` on a lost dispute AND on a completed refund (the refund queue reverses the
+   * whole benefit), so the status is the mark and billing writes nothing for the program. Held
+   * money leaves pending; released money comes out of available, and what that cannot cover is
+   * debt the partner's next rewards pay down — the commission clawback's rule.
+   */
+  async clawBackReversedProviderPayments(now: Date, batchSize: number): Promise<number> {
+    let changed = 0;
+    for (const { kind, model } of BILLING_COLLECTIONS) {
+      const rows = (await model
+        .find({ status: 'reversed', referral_evaluated_at: { $ne: null }, referral_reversal_synced_at: null })
+        .select('_id')
+        .limit(batchSize)
+        .lean()) as unknown as Array<{ _id: Types.ObjectId }>;
+      for (const row of rows) {
+        try {
+          changed += await transactionManager.runInTransactionWithRetry(async (session) => {
+            const rewards = await ReferralRewardModel.find(
+              { source_type: kind, source_id: row._id, status: { $ne: 'reversed' } },
+              null,
+              { session }
+            );
+            for (const reward of rewards) {
+              const before = reward.amount - reward.clawed_amount;
+              if (before <= 0) continue;
+              await this.clawReward(reward, before, 0, 0, `${kind}_reversed`, now, {
+                source_type: kind,
+                source_id: row._id.toString(),
+                allocation_id: null,
+              }, session);
+            }
+            await model.updateOne(
+              { _id: row._id, referral_reversal_synced_at: null },
+              { $set: { referral_reversal_synced_at: now } },
+              { session }
+            );
+            return rewards.length;
+          });
+        } catch (error) {
+          console.error(`[ReferralReward] Could not claw back the rewards on reversed ${kind} ${String(row._id)}:`, error);
+        }
+      }
+    }
+    return changed;
   }
 
   // ── Earning ───────────────────────────────────────────────────────────────────────────
@@ -204,6 +411,15 @@ export class ReferralRewardService {
       ],
       { session }
     );
+    await this.holdForPartner(
+      planned,
+      { source_type: row.source_type, source_id: row.source_id.toString(), allocation_id: row._id as Types.ObjectId },
+      session
+    );
+  }
+
+  /** A new reward enters the partner's PENDING balance, with its ledger row, in the caller's transaction. */
+  private async holdForPartner(planned: PlannedReward, source: LedgerSource, session: ClientSession): Promise<void> {
     const account = await this.accounts.getOrCreate(PARTNER_OWNER, planned.partnerId, session);
     const updated = await this.accounts.hold(account._id as Types.ObjectId, planned.amount, session);
     await this.ledger.create(
@@ -215,9 +431,7 @@ export class ReferralRewardService {
         amount: planned.amount,
         pending_after: updated.pending_balance,
         available_after: updated.available_balance,
-        source_type: row.source_type,
-        source_id: row.source_id.toString(),
-        allocation_id: row._id as Types.ObjectId,
+        ...source,
         reason_code: 'referral_reward',
       },
       session
@@ -420,7 +634,11 @@ export class ReferralRewardService {
         const before = reward.amount - reward.clawed_amount;
         const after = Math.min(before, rewardAmount(retained, reward.rate_percent, reward.share));
         if (after === before) continue;
-        await this.clawReward(reward, before, after, retained, refundKey, now, row, session);
+        await this.clawReward(reward, before, after, retained, refundKey, now, {
+          source_type: reward.source_type,
+          source_id: row.source_id.toString(),
+          allocation_id: row._id as Types.ObjectId,
+        }, session);
         changed += 1;
       }
       await EarningsAllocationModel.updateOne(
@@ -439,7 +657,7 @@ export class ReferralRewardService {
     retained: number,
     refundKey: string | null,
     now: Date,
-    row: IEarningsAllocation,
+    source: LedgerSource,
     session: ClientSession
   ): Promise<void> {
     const claw = before - after;
@@ -505,9 +723,7 @@ export class ReferralRewardService {
         amount: claw,
         pending_after: pendingAfter,
         available_after: availableAfter,
-        source_type: reward.source_type,
-        source_id: row.source_id.toString(),
-        allocation_id: row._id as Types.ObjectId,
+        ...source,
         reason_code: 'referral_reward_clawback',
       },
       session

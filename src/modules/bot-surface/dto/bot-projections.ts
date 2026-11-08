@@ -655,8 +655,9 @@ export interface BotReviewDto {
      *
      * `{ type: 'product', id }` is exactly `catalog_get_product`'s argument. A `delivery`
      * id is a SHIPMENT id and no tool takes one — `orderId` below is the handle for those.
+     * `{ type: 'listing', id }` (2026-11-08) is `listings_get`'s.
      */
-    subject: { type: 'product' | 'delivery'; id: string };
+    subject: { type: 'product' | 'delivery' | 'listing'; id: string };
     /**
      * The product's title, so a chat can name what the review is about.
      *
@@ -710,13 +711,15 @@ export function toBotReviewDto(
         body: string | null;
         status: 'published' | 'unpublished';
         createdAt: string;
-        subjectType: 'product' | 'delivery';
+        subjectType: 'product' | 'delivery' | 'listing';
         subjectId: string;
     },
     /** `subject_id` → product title, for the publishable ones only. Empty for a delivery. */
     productTitles: ReadonlyMap<string, string>,
-    /** `order_id` off the stored row. Set on both subject types — see `resolveDelivery`. */
+    /** `order_id` off the stored row. Set on product and delivery reviews; null on a listing one. */
     orderId: string | null,
+    /** `subject_id` → listing title, for the publicly visible listings only (2026-11-08). */
+    listingTitles: ReadonlyMap<string, string> = new Map(),
 ): BotReviewDto {
     return {
         id: review.id,
@@ -727,9 +730,16 @@ export function toBotReviewDto(
         createdAt: review.createdAt,
         subject: { type: review.subjectType, id: review.subjectId },
         subjectLabel:
-            review.subjectType === 'product' ? productTitles.get(review.subjectId) ?? null : null,
+            review.subjectType === 'product' ? productTitles.get(review.subjectId) ?? null
+                : review.subjectType === 'listing' ? listingTitles.get(review.subjectId) ?? null
+                    : null,
         orderId,
-        publiclyVisible: review.subjectType === 'product' && review.status === 'published',
+        publiclyVisible:
+            review.status === 'published'
+            && (review.subjectType === 'product'
+                // A listing review is public only while its listing is (2026-11-08): the titles
+                // map holds visible listings only, so "on the listing page" is a lookup here.
+                || (review.subjectType === 'listing' && listingTitles.has(review.subjectId))),
     };
 }
 

@@ -8,6 +8,8 @@ import { listingRevealService } from '../../listings/domain/services/listing-rev
 import { providerConsentService } from '../../listings/domain/services/listing-consent.service';
 import { listingRepository } from '../../listings/repositories/listing.repository';
 import { listingLeadRepository } from '../../listings/repositories/listing-lead.repository';
+import { wishlistService } from '../../customers/services/wishlist.service';
+import { botChrome } from '../domain/bot-chrome-copy';
 import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
 import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { ParsedBotAction, unknownBotAction, type BotActionHandlers } from '../domain/bot-action-dispatch';
@@ -133,7 +135,7 @@ export class BotListingController {
     });
 }
 
-/** `ls:` · `lr:` · `lc:` (§ C-3a). Malformed arguments are the one unknown-token refusal. */
+/** `ls:` · `lr:` · `lc:` (§ C-3a) · `lv:` (saved listings). Malformed arguments are the one unknown-token refusal. */
 export const LISTING_ACTION_HANDLERS: BotActionHandlers = Object.freeze({
     ls: async (req: Request, res: Response, action: ParsedBotAction) => {
         const listingId = parseListingShowArgument(action.argument);
@@ -149,5 +151,16 @@ export const LISTING_ACTION_HANDLERS: BotActionHandlers = Object.freeze({
         const parsed = parseListingConsentArgument(action.argument);
         if (!parsed) throw unknownBotAction();
         await answerConsent(req, res, parsed.vendorId, parsed.granted);
+    },
+    /**
+     * `lv:<listingId>` — the card's "Save" row (2026-11-08). Saves and says so; reveals nothing,
+     * charges nothing, tells the provider nothing (RS-2). A double tap answers the same sentence.
+     */
+    lv: async (req: Request, res: Response, action: ParsedBotAction) => {
+        const listingId = parseListingShowArgument(action.argument);
+        if (!listingId) throw unknownBotAction();
+        await wishlistService.addListing(botCallerOf(req).customerId, listingId);
+        setBotReply(req, { kind: 'text', text: botChrome('savedForLaterPrompt', botResponseLanguageOf(req)) });
+        sendSuccess(res, { saved: true, listingId });
     },
 });

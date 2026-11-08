@@ -44,6 +44,14 @@ export interface IPlanPurchase extends Document {
    * `paid`, for account statements. `null` until then and on rows written before the field.
    */
   paid_at: Date | null;
+  /**
+   * The referral program's marks (2026-11-08, LISTING-REVIEWS-SAVES-REFERRALS-PLAN § 3.3). Written
+   * ONLY by `ReferralRewardService`, never by billing: `referral_evaluated_at` when a paid row was
+   * judged for a provider reward (with or without one), `referral_reversal_synced_at` when a
+   * reversed row's rewards were clawed back. Absent on older rows, read as null.
+   */
+  referral_evaluated_at?: Date | null;
+  referral_reversal_synced_at?: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -64,11 +72,15 @@ const PlanPurchaseSchema = new Schema<IPlanPurchase>(
     otp_attempts: { type: Number, default: 0, min: 0 },
     subscriber_plan_id: { type: Schema.Types.ObjectId, ref: MODELS.SUBSCRIBER_PLAN, default: null },
     paid_at: { type: Date, default: null },
+    referral_evaluated_at: { type: Date, default: null },
+    referral_reversal_synced_at: { type: Date, default: null },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );
 
 PlanPurchaseSchema.index({ owner_type: 1, owner_id: 1, created_at: -1 });
+// The referral stages' two scans (2026-11-08): paid-and-unjudged, and reversed-and-unsynced.
+PlanPurchaseSchema.index({ status: 1, referral_evaluated_at: 1 }, { name: 'referral_billing_scan' });
 // wi-admin’s platform transactions list (BR-027) walks this collection by `(created, _id)` keyset,
 // platform-wide. Without it that walk is a collection scan and an in-memory sort.
 PlanPurchaseSchema.index({ created_at: -1, _id: -1 }, { name: 'admin_transactions_feed' });

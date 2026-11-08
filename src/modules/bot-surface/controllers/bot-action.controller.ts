@@ -126,7 +126,7 @@ const HANDLERS = mergeActionHandlers([
      * step's buttons, and Show the place. `open:bk:<productId>:<addressId>` stays with `bookings`.
      */
     ['appointments', BOOKING_ADDRESS_ACTION_HANDLERS],
-    /** ls · lr · lc — service listings (§ C-3a). `lr:` charges the PROVIDER, on the tap only. */
+    /** ls · lr · lc · lv — service listings (§ C-3a; lv saves one, 2026-11-08). `lr:` charges the PROVIDER, on the tap only. */
     ['listings', LISTING_ACTION_HANDLERS],
     /** yes:tos — the Accept button on the last onboarding step (terms of service). */
     ['identity', IDENTITY_ACTION_HANDLERS],

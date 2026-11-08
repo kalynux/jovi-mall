@@ -195,7 +195,7 @@ envelope is a body and a messaging identifier in a query string is a real person
 number written into every access log on the path.
 
 ⚠ **NINE routes are `DELETE` WITH A BODY** — `/cart`, `/cart/items/:variantId`,
-`/wishlist/:productId`, `/addresses/:addressId`, `/recently-viewed`,
+`/wishlist/:itemId`, `/addresses/:addressId`, `/recently-viewed`,
 `/payment-methods/:methodId`, `/contact/email/pending`, `/contact/phone/pending` and
 `/connections/:channel`.
 Express parses one without complaint, but some HTTP clients and intermediaries drop it. A
@@ -257,7 +257,7 @@ twice, each time because a step added one and nobody re-counted.
 | `support_resolve_contacts` | POST | `/support/context` | |
 | `wishlist_list` | POST | `/wishlist/list` | |
 | `wishlist_add` | POST | `/wishlist` | ✔ |
-| `wishlist_remove` | DELETE | `/wishlist/:productId` | ✔ |
+| `wishlist_remove` | DELETE | `/wishlist/:itemId` (a product OR a listing id, 2026-11-08) | ✔ |
 | `recently_viewed_record` | POST | `/recently-viewed` | ✔ |
 | `recently_viewed_list` | POST | `/recently-viewed/list` | |
 | `recently_viewed_clear` | DELETE | `/recently-viewed` | ✔ |
@@ -2528,7 +2528,8 @@ happened.
 | `no:bkadr` | 🆕 2026-10-27 · **Cancel**, on every message of the address step | ends the step; nothing is saved | text: *"OK, I've stopped. Tap Book again whenever you're ready."* | `{ active: false }` |
 | `place:<bookingId>` | 🆕 2026-10-27 · **Show the place**, under the chat booking receipt (vendor's place or online), the `booking.confirmed` message and the `booking.reminder` (chat and template) | sends where the appointment happens, through the website's own gates (`customerAppointmentFields`): a **map pin** (Telegram `sendVenue`, WhatsApp `location`) and the address + description for one at the shop; the customer's own address for one at home; the link for one online. The shop's instructions and the link only once accepted, paid and inside the shop's margin — otherwise when they will appear. Writes nothing | the pin, then a text (`replies`) | `{ bookingId, locationKind, addressVisible, accessState }`. Another customer's booking is `404 BOOKING_NOT_FOUND` |
 | `ls:<listingId>` | 🆕 2026-11-07 · a service-listing card's own button (SERVICE-LISTINGS-PLAN § C-3a) | `listings_get` — the card again, with its description and one row per contact detail the listing has (names only). Charges nothing, writes nothing | a `choice` (a list on WhatsApp) | `{ listing }` (`PublicListingDetail`) — no contact, no vendor id, no pin. A listing that is no longer public is `404 LISTING_NOT_FOUND` |
-| `lr:<listingId>:<f>` | 🆕 2026-11-07 · each contact row of a listing card; `lr:<id>:v` is also the "Get the video" offer after a location | `listings_reveal` `{ field }` — ⛔ **charges the PROVIDER** (7 credits for the first field of a 30-day window, 4 after; free when already unlocked in the window). `f`: `w` WhatsApp · `p` phone · `e` email · `u` website · `s` socials · `l` location · `v` video. The ONLY way a contact value reaches the chat | WhatsApp/website/video: a `link`; phone/email/socials: a `text`; location: a **map pin** (Telegram `sendVenue`, WhatsApp `location`) then the video offer; after the first reveal from a provider, the opt-in question (`lc:`) | `RevealResult` + `askConsent`. Refusals: `422 LISTING_UNREACHABLE` (neutral: offline, blocked or out of credits), `LISTING_REVEAL_DAILY_LIMIT`, `LISTING_FIELD_UNAVAILABLE`, `LISTING_VIDEO_UNAVAILABLE` (nothing charged) |
+| `lr:<listingId>:<f>` | 🆕 2026-11-07 · each contact row of a listing card; `lr:<id>:v` is also the "Get the video" offer after a location | `listings_reveal` `{ field }` — ⛔ **charges the PROVIDER** (7 credits for the first field of a 30-day window, 4 after; free when already unlocked in the window). `f`: `w` WhatsApp · `p` phone · `e` email · `u` website · `s` socials · `l` location · `v` video. The ONLY way a contact value reaches the chat | WhatsApp/website/video: a `link`; phone/email/socials: a `text`; location: a **map pin** (Telegram `sendVenue`, WhatsApp `location`) then the video offer; after the first reveal from a provider, the opt-in question (`lc:`) · 🆕 2026-11-08: `lr:<id>:p` shows BOTH numbers when the business gave two (one charge) | `RevealResult` + `askConsent`. Refusals: `422 LISTING_UNREACHABLE` (neutral: offline, blocked or out of credits), `LISTING_REVEAL_DAILY_LIMIT`, `LISTING_FIELD_UNAVAILABLE`, `LISTING_VIDEO_UNAVAILABLE` (nothing charged) |
+| `lv:<listingId>` | 🆕 2026-11-08 · **Save for later**, the last row of every service-listing card (LISTING-REVIEWS-SAVES-REFERRALS-PLAN § 3.2) | puts the listing in the customer's saved list, beside their saved products (`wishlist_add` `{ listingId }`). Charges nothing, reveals no contact, and tells the business nothing (RS-2). Idempotent: a second tap answers the same sentence | text: *"Saved. You'll find it in your saved items."* | `{ saved: true, listingId }`. A listing no longer visible is `404 LISTING_NOT_FOUND` |
 | `lc:<vendorId>:y` · `lc:<vendorId>:n` | 🆕 2026-11-07 · the opt-in question after a first reveal, and "Stop these messages" on every message a provider relays | `listings_consent` `{ vendorId, granted }` — may this business message the customer through Wi-Mall (L-14). Default No; changeable at any time | a `text` confirming the answer | `ConsentView`. A provider the customer never revealed from is `404 LISTING_LEAD_NOT_FOUND` |
 
 ⚠ **A button names a BOOKING or a PRODUCT, never a screen handle.** A picker handle (`bk`)

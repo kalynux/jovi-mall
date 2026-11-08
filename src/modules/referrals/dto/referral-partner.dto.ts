@@ -4,7 +4,14 @@ import { VendorModel } from '../../vendors/vendor.model';
 import { CustomerModel } from '../../customers/customer.model';
 import { DeliveryAgencyModel } from '../../delivery/delivery-agency.model';
 import { DeliveryAgentModel } from '../../agents/models/agent.model';
-import { maskDisplayName, referralTelegramStart, referralWhatsappText, ReferredCategory } from '../domain/referral-rules';
+import {
+  maskDisplayName,
+  paymentKindOf,
+  referralTelegramStart,
+  referralWhatsappText,
+  ReferredCategory,
+  RewardPaymentKind,
+} from '../domain/referral-rules';
 import { IReferralRelationship } from '../models/referral-relationship.model';
 import { IReferralReward } from '../models/referral-reward.model';
 
@@ -35,6 +42,11 @@ export interface PartnerRewardDto {
   earnedAt: string;
   availableFrom: string;
   adjusted: boolean;
+  /**
+   * A provider reward's source KIND (owner RS-7, 2026-11-08): `plan` or `credits`. Never the price
+   * the provider paid, which would reveal another business's spending. Null on a commission reward.
+   */
+  paymentKind: RewardPaymentKind | null;
 }
 
 export interface PartnerPayoutDto {
@@ -76,6 +88,7 @@ export function toPartnerRewardDto(row: IReferralReward, name: string | null): P
     earnedAt: row.earned_at.toISOString(),
     availableFrom: row.matures_at.toISOString(),
     adjusted: row.clawed_amount > 0,
+    paymentKind: paymentKindOf(row.source_type),
   };
 }
 
@@ -97,9 +110,11 @@ export async function referredNames(
   people: ReadonlyArray<{ userId: string; category: string }>
 ): Promise<Map<string, string>> {
   const ids = (category: string) => people.filter((p) => p.category === category).map((p) => p.userId);
+  // A provider is a vendor whose kind is `provider` (2026-11-08): named from the same rows.
+  const sellerAndProviderUsers = [...ids('vendor'), ...ids('provider')];
   const [customers, vendors, agencies, agents] = await Promise.all([
     CustomerModel.find({ user_id: { $in: ids('customer') } }).select('user_id name').lean(),
-    VendorModel.find({ user_id: { $in: ids('vendor') } }).select('user_id display_name').lean(),
+    VendorModel.find({ user_id: { $in: sellerAndProviderUsers } }).select('user_id display_name').lean(),
     DeliveryAgencyModel.find({ user_id: { $in: ids('agency') } }).select('user_id display_name').lean(),
     DeliveryAgentModel.find({ user_id: { $in: ids('agent') } }).select('user_id name').lean(),
   ]);

@@ -148,8 +148,8 @@ export class ListingProviderService {
 
   // ── Reads ──────────────────────────────────────────────────────────────────
 
-  async list(vendorId: string, query: { status?: ListingStatus; page: number; limit: number }) {
-    const { data, total } = await this.repo.listOwned(vendorId, query.status, query.page, query.limit);
+  async list(vendorId: string, query: { status?: ListingStatus; q?: string; page: number; limit: number }) {
+    const { data, total } = await this.repo.listOwned(vendorId, query.status, query.page, query.limit, query.q);
     return {
       data: data.map(toVendorListingSummary) as VendorListingSummary[],
       meta: { total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) },

@@ -163,7 +163,7 @@ export interface RevealSocialLink {
 
 export type RevealValue =
   | { number: string; link: string }                                            // whatsapp
-  | { number: string }                                                          // phone
+  | { number: string; numbers: string[] }                                       // phone: first + all (2026-11-08)
   | { address: string }                                                         // email
   | { url: string }                                                             // website
   | { links: RevealSocialLink[] }                                               // socials
@@ -196,8 +196,14 @@ export function revealValueOf(field: ListingContactField, raw: unknown): RevealV
   switch (field) {
     case 'whatsapp':
       return typeof raw === 'string' && raw.trim() ? { number: raw.trim(), link: whatsappLinkFor(raw) } : null;
-    case 'phone':
-      return typeof raw === 'string' && raw.trim() ? { number: raw.trim() } : null;
+    case 'phone': {
+      // One number (a row written before 2026-11-08, or a provider with one line) or both. `number`
+      // stays the first so every renderer written for one keeps working; `numbers` is all of them.
+      const numbers = (Array.isArray(raw) ? raw : [raw])
+        .filter((n): n is string => typeof n === 'string' && n.trim().length > 0)
+        .map((n) => n.trim());
+      return numbers.length > 0 ? { number: numbers[0], numbers } : null;
+    }
     case 'email':
       return typeof raw === 'string' && raw.trim() ? { address: raw.trim() } : null;
     case 'website':
@@ -252,8 +258,12 @@ export function normaliseForFingerprint(field: ListingContactField, value: Revea
   const url = (u: string): string => u.trim().toLowerCase().replace(/\/+$/, '');
   switch (field) {
     case 'whatsapp':
-    case 'phone':
       return `tel:${digitsOf((value as { number: string }).number)}`;
+    case 'phone': {
+      // One number fingerprints exactly as before 2026-11-08; two join in stored order.
+      const v = value as { number: string; numbers?: string[] };
+      return (v.numbers?.length ? v.numbers : [v.number]).map((n) => `tel:${digitsOf(n)}`).join('|');
+    }
     case 'email':
       return `email:${(value as { address: string }).address.trim().toLowerCase()}`;
     case 'website':

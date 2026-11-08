@@ -54,6 +54,7 @@ export function cloneContacts(c: ListingContactSetDoc | null | undefined): Listi
   return {
     whatsapp: c.whatsapp ?? null,
     phone: c.phone ?? null,
+    phone2: c.phone2 ?? null,
     email: c.email ?? null,
     website: c.website ?? null,
     socials: (c.socials ?? []).map((s) => ({ network: s.network, url: s.url })),
@@ -91,6 +92,22 @@ export function applyContentPatch(
  * Drive link is `422 LISTING_VIDEO_LINK_INVALID`. An unchanged link keeps its `checked_at`; a
  * new one starts unchecked (the oEmbed check runs at submit).
  */
+/**
+ * Keep the two phone numbers clean whatever a PATCH sent (2026-11-08): a lone second number
+ * becomes the first (call-me and every reader of `phone` see a number), and a second number equal
+ * to the first, compared by digits, is dropped. Applied after every patch, so a provider who clears
+ * the first number keeps the second as their only one.
+ */
+export function normalisePhones(set: { phone?: string | null; phone2?: string | null }): void {
+  const digits = (v: string | null | undefined) => (v ?? '').replace(/\D/g, '');
+  if (!digits(set.phone) && digits(set.phone2)) {
+    set.phone = set.phone2 ?? null;
+    set.phone2 = null;
+  }
+  if (digits(set.phone2) && digits(set.phone2) === digits(set.phone)) set.phone2 = null;
+  if (!digits(set.phone2)) set.phone2 = null;
+}
+
 export function applyContactsPatch(
   base: ListingContactSetDoc | null | undefined,
   input: ListingContactsInput | undefined,
@@ -99,6 +116,8 @@ export function applyContactsPatch(
   if (!input) return next;
   if (input.whatsapp !== undefined) next.whatsapp = input.whatsapp ?? null;
   if (input.phone !== undefined) next.phone = input.phone ?? null;
+  if (input.phone2 !== undefined) next.phone2 = input.phone2 ?? null;
+  normalisePhones(next);
   if (input.email !== undefined) next.email = input.email ?? null;
   if (input.website !== undefined) next.website = input.website ?? null;
   if (input.socials !== undefined) next.socials = input.socials.map((s) => ({ network: s.network, url: s.url }));

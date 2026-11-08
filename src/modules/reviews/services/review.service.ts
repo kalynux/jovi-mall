@@ -3,6 +3,8 @@ import { ERROR_CODES } from '../../../core/error-codes';
 import { agentTrustRecomputeWorker } from '../../agents/workers/agent-trust-recompute.worker';
 import { IReview, ReviewAuthorRole, ReviewStatus, ReviewSubjectType } from '../models/review.model';
 import { targetsOf } from '../domain/review-targets';
+import { publishListingEvent } from '../../listings/domain/services/listing-events';
+import { LISTING_EVENTS } from '../../listings/domain/listing.types';
 import {
   ReviewAuthor,
   ReviewEligibility,
@@ -132,6 +134,7 @@ export class ReviewService {
         targetProductId: resolved.productId,
         targetAgentId: resolved.agentId,
         targetAgencyId: resolved.agencyId,
+        targetListingId: resolved.listingId ?? null,
         targetVendorId: resolved.vendorId,
       });
     } catch (error) {
@@ -143,6 +146,15 @@ export class ReviewService {
 
     // Every review lands `published`, so every submission moves its aggregates.
     await this.refreshTargets(review);
+
+    // The provider is told of each published review of their listing (owner RS-8), post-commit
+    // and fire-and-forget. Never from republish: undoing an administrator's action is not news.
+    if (review.subject_type === 'listing' && resolved.listingId && resolved.vendorId) {
+      publishListingEvent(LISTING_EVENTS.REVIEW_PUBLISHED, resolved.listingId, resolved.vendorId, {
+        reviewId: review._id.toString(),
+        rating: review.rating,
+      });
+    }
 
     return review;
   }
@@ -166,6 +178,15 @@ export class ReviewService {
    */
   async listPublicForProduct(productId: string, page: number, limit: number): Promise<ReviewPage> {
     return await this.reviews.listPublishedForSubject('product', productId, page, limit);
+  }
+
+  /**
+   * A service listing's published reviews (2026-11-08). Public like a product's; the caller decides
+   * whether the listing itself may be shown (the storefront route: only a publicly visible one;
+   * the provider's route: their own, paused included — owner RS-12).
+   */
+  async listPublishedForListing(listingId: string, page: number, limit: number): Promise<ReviewPage> {
+    return await this.reviews.listPublishedForSubject('listing', listingId, page, limit);
   }
 
   // ─── Moderation (after the fact) ──────────────────────────────────────────
@@ -265,6 +286,7 @@ export class ReviewService {
       productId: review.target_product_id?.toString() ?? null,
       agentId: review.target_agent_id?.toString() ?? null,
       agencyId: review.target_agency_id?.toString() ?? null,
+      listingId: review.target_listing_id?.toString() ?? null,
     });
 
     for (const target of targets) {

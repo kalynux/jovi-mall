@@ -7754,14 +7754,14 @@
     {
       "name": "wishlist_list",
       "version": 1,
-      "title": "The customer's saved products",
+      "title": "The customer's saved products and service listings",
       "tier": "extended",
       "status": "available",
       "gap_ref": "GAP-001",
       "service": "jovi-mall",
       "surface": "bot_internal",
-      "description": "Products the customer saved for later, newest first.",
-      "when_to_use": "They ask what they saved, or want to buy something saved earlier. To show them, pass the ids to Show-Products.",
+      "description": "What the customer saved for later, newest first: products and service listings (businesses such as plumbers or printers) in one list. Each entry has kind \"product\" or \"listing\".",
+      "when_to_use": "They ask what they saved, or want to buy something saved earlier. To show them, pass the productIds to Show-Products and the listingIds to listings_display.",
       "when_not_to_use": "Not as a way to browse the catalogue.",
       "operation": {
         "method": "POST",
@@ -7786,13 +7786,22 @@
             "minimum": 1,
             "maximum": 100,
             "default": 5
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "product",
+              "listing"
+            ],
+            "description": "Only one kind. Leave it out for both."
           }
         }
       },
       "request": {
         "body": [
           "page",
-          "limit"
+          "limit",
+          "kind"
         ]
       },
       "response": {
@@ -7800,13 +7809,19 @@
         "type": "array",
         "paginated": true,
         "important_fields": [
+          "kind",
           "productId",
+          "listingId",
           "at",
           "product.title",
           "product.price",
           "product.currency",
           "product.inStock",
-          "product.store.slug"
+          "product.store.slug",
+          "listing.title",
+          "listing.companyName",
+          "listing.city",
+          "listing.rating.average"
         ],
         "result_kind": "product_list"
       },
@@ -7822,7 +7837,7 @@
       "audit": false,
       "requires_customer_role": true,
       "platform_notes": {
-        "whatsapp": "product null means it went off sale — say 'no longer available' and offer to remove it; never skip the row or say why."
+        "whatsapp": "product or listing null means it is no longer available — say 'no longer available' and offer to remove it; never skip the row or say why."
       },
       "commands": [
         "saved"
@@ -7831,14 +7846,14 @@
     {
       "name": "wishlist_add",
       "version": 1,
-      "title": "Save a product for later",
+      "title": "Save a product or a service listing for later",
       "tier": "extended",
       "status": "available",
       "gap_ref": "GAP-001",
       "service": "jovi-mall",
       "surface": "bot_internal",
-      "description": "Adds a product to the customer's saved list.",
-      "when_to_use": "They like something but are not buying it now.",
+      "description": "Adds a product or a service listing to the customer's saved list. Send exactly one of productId and listingId. Saving a listing reveals no contact, costs nothing and tells the business nothing.",
+      "when_to_use": "They like something but are not buying it now, or want to keep a business to contact later.",
       "when_not_to_use": "Not instead of the basket when they said they want to buy it.",
       "operation": {
         "method": "POST",
@@ -7853,29 +7868,35 @@
       "parameters": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "productId"
-        ],
         "properties": {
           "productId": {
             "type": "string",
             "pattern": "^[a-f0-9]{24}$",
-            "description": "The 24-character product id to save, from catalog_get_product or a product search result."
+            "description": "The 24-character product id to save, from catalog_get_product or a product search result. Not with listingId."
+          },
+          "listingId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "The 24-character listing id to save, from a search result with kind \"listing\" or listings_get. Not with productId."
           }
         }
       },
       "request": {
         "body": [
-          "productId"
+          "productId",
+          "listingId"
         ]
       },
       "response": {
         "source": "body.data",
         "type": "object",
         "important_fields": [
+          "kind",
           "productId",
+          "listingId",
           "at",
-          "product.title"
+          "product.title",
+          "listing.title"
         ],
         "result_kind": "status"
       },
@@ -7885,6 +7906,13 @@
           "status": 404,
           "category": "not_found",
           "when": "Not on sale, or does not exist",
+          "customer_action": "explain"
+        },
+        {
+          "code": "LISTING_NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "The listing is not visible to customers, or does not exist",
           "customer_action": "explain"
         }
       ],
@@ -7907,18 +7935,18 @@
     {
       "name": "wishlist_remove",
       "version": 1,
-      "title": "Remove a saved product",
+      "title": "Remove a saved product or listing",
       "tier": "extended",
       "status": "available",
       "gap_ref": "GAP-001",
       "service": "jovi-mall",
       "surface": "bot_internal",
-      "description": "Takes a product off the customer's saved list.",
+      "description": "Takes a product or a service listing off the customer's saved list.",
       "when_to_use": "They are no longer interested, or clear an unavailable entry.",
       "when_not_to_use": "Not just because they added it to the basket — they did not ask.",
       "operation": {
         "method": "DELETE",
-        "path": "/api/internal/bot/wishlist/{productId}"
+        "path": "/api/internal/bot/wishlist/{itemId}"
       },
       "backing_endpoint": {
         "method": "DELETE",
@@ -7930,26 +7958,27 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "productId"
+          "itemId"
         ],
         "properties": {
-          "productId": {
+          "itemId": {
             "type": "string",
             "pattern": "^[a-f0-9]{24}$",
-            "description": "The 24-character product id to drop, from wishlist_list productId."
+            "description": "The 24-character id to drop: productId for a product, listingId for a listing, from wishlist_list."
           }
         }
       },
       "request": {
         "path": [
-          "productId"
+          "itemId"
         ]
       },
       "response": {
         "source": "body.data",
         "type": "object",
         "important_fields": [
-          "removed"
+          "removed",
+          "kind"
         ],
         "result_kind": "status"
       },
@@ -11367,7 +11396,7 @@
       "gap_ref": "GAP-001",
       "service": "jovi-mall",
       "surface": "bot_internal",
-      "description": "Whether the customer may review a product or a delivery, and if not, why.",
+      "description": "Whether the customer may review a product, a delivery or a service listing, and if not, why. A listing can be reviewed once the customer has unlocked at least one of its contacts.",
       "when_to_use": "Before offering to take a review, so nobody ineligible is asked for one.",
       "when_not_to_use": "Not after a failed submission — this is the check that avoids one.",
       "operation": {
@@ -11392,13 +11421,14 @@
             "type": "string",
             "enum": [
               "product",
-              "delivery"
+              "delivery",
+              "listing"
             ],
-            "description": "delivery takes a SHIPMENT id, not an order id."
+            "description": "delivery takes a SHIPMENT id, not an order id. listing takes the listing id."
           },
           "subjectId": {
             "type": "string",
-            "description": "The id of the thing being reviewed: a product id when subjectType is product, a SHIPMENT id when it is delivery — never an order id."
+            "description": "The id of the thing being reviewed: a product id when subjectType is product, a SHIPMENT id when it is delivery — never an order id — and a LISTING id when it is listing."
           }
         }
       },
@@ -11445,7 +11475,7 @@
       "status": "available",
       "service": "jovi-mall",
       "surface": "bot_internal",
-      "description": "Reviews the customer wrote, newest first — products and deliveries, including any an administrator hid.",
+      "description": "Reviews the customer wrote, newest first — products, deliveries and service listings, including any an administrator hid.",
       "when_to_use": "'What have I reviewed', 'did my review go up', 'why can't I see my review', or to check whether they already rated something.",
       "when_not_to_use": "Not other people's reviews (catalog_list_product_reviews).",
       "operation": {
@@ -11548,7 +11578,7 @@
       "gap_ref": "GAP-001",
       "service": "jovi-mall",
       "surface": "bot_internal",
-      "description": "Record the customer's rating, and their words if they gave any, about a product they bought or a delivery they received.",
+      "description": "Record the customer's rating, and their words if they gave any, about a product they bought, a delivery they received, or a service listing (a business) they contacted.",
       "when_to_use": "Only from the review flow, after eligibility was checked and the customer confirmed what will be published.",
       "when_not_to_use": "Never write prose on the customer's behalf, never infer a rating from their tone, and never review a delivery against an order id — the subject is a shipment.",
       "operation": {
@@ -11574,11 +11604,13 @@
             "type": "string",
             "enum": [
               "product",
-              "delivery"
+              "delivery",
+              "listing"
             ]
           },
           "subjectId": {
-            "type": "string"
+            "type": "string",
+            "description": "The id of the thing being reviewed: a product id when subjectType is product, a SHIPMENT id when it is delivery — never an order id — and a LISTING id when it is listing."
           },
           "rating": {
             "type": "integer",

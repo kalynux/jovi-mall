@@ -19,9 +19,15 @@ import { MODELS, COLLECTIONS } from '../../../core/database/collections';
  * identified thing, moderated once. So they share a collection, a moderation
  * pipeline and an aggregate mechanism, and are told apart by `subject_type`.
  */
-export type ReviewSubjectType = 'product' | 'delivery';
+export type ReviewSubjectType = 'product' | 'delivery' | 'listing';
 
-export const REVIEW_SUBJECT_TYPES: ReviewSubjectType[] = ['product', 'delivery'];
+/**
+ * `listing` since 2026-11-08 (LISTING-REVIEWS-SAVES-REFERRALS-PLAN § 3.1, owner L-27): a
+ * customer's review of a SERVICE LISTING — a business paid in person, not through Wi-Mall. It is
+ * earned by a lead (the customer unlocked at least one contact), never by an order, and like a
+ * product review it is public.
+ */
+export const REVIEW_SUBJECT_TYPES: ReviewSubjectType[] = ['product', 'delivery', 'listing'];
 
 /**
  * Who wrote it. Three roles, and on a DELIVERY all three rate the same shipment while
@@ -90,7 +96,7 @@ export interface IReviewModeration {
 
 export interface IReview extends IBaseDocument {
   subject_type: ReviewSubjectType;
-  /** `Product._id` for a product review, `Shipment._id` for a delivery review. */
+  /** `Product._id` for a product review, `Shipment._id` for a delivery review, `Listing._id` for a listing review. */
   subject_id: Types.ObjectId;
 
   /**
@@ -131,6 +137,8 @@ export interface IReview extends IBaseDocument {
   target_product_id: Types.ObjectId | null;
   target_agent_id: Types.ObjectId | null;
   target_agency_id: Types.ObjectId | null;
+  /** The service listing, on a listing review (2026-11-08). Its subject and its target coincide. */
+  target_listing_id: Types.ObjectId | null;
   /**
    * The seller, on a product review. **Recorded, not aggregated** — no surface reads
    * a vendor's rating today, and writing an aggregate nobody reads is a second thing
@@ -173,6 +181,7 @@ const ReviewSchema = new Schema<IReview>(
     target_product_id: { type: Schema.Types.ObjectId, ref: MODELS.PRODUCT, default: null },
     target_agent_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENT, default: null },
     target_agency_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENCY, default: null },
+    target_listing_id: { type: Schema.Types.ObjectId, ref: MODELS.LISTING, default: null },
     target_vendor_id: { type: Schema.Types.ObjectId, ref: MODELS.VENDOR, default: null },
 
     ...BaseSchemaFields,
@@ -223,5 +232,7 @@ ReviewSchema.index({ author_user_id: 1, createdAt: -1 }, { name: 'review_by_auth
  */
 ReviewSchema.index({ target_agent_id: 1, author_role: 1, status: 1 }, { name: 'review_by_agent_target' });
 ReviewSchema.index({ target_agency_id: 1, author_role: 1, status: 1 }, { name: 'review_by_agency_target' });
+/** The listing recompute (2026-11-08). Built by `migrate:declared-indexes`; non-unique. */
+ReviewSchema.index({ target_listing_id: 1, author_role: 1, status: 1 }, { name: 'review_by_listing_target' });
 
 export const ReviewModel = model<IReview>(MODELS.REVIEW, ReviewSchema, COLLECTIONS.REVIEW);
